@@ -102,8 +102,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  \"type\": \"module\",\n" +
       "  \"description\": \"Iterate project worker and packaged full-stack apps.\",\n" +
       "  \"dependencies\": {\n" +
-      "    \"@iterate-com/tasks\": \"https://pkg.pr.new/iterate/iterate/@iterate-com/tasks@main\",\n" +
-      "    \"iterate\": \"https://pkg.pr.new/iterate/iterate@main\",\n" +
+      "    \"iterate\": \"https://pkg.pr.new/iterate/iterate/iterate@main\",\n" +
       "    \"react\": \"19.2.4\",\n" +
       "    \"react-dom\": \"19.2.4\",\n" +
       "    \"zod\": \"4.3.6\"\n" +
@@ -189,7 +188,6 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
   {
     path: "worker.ts",
     content:
-      "import { TasksApp } from \"@iterate-com/tasks\";\n" +
       "import { GithubAiLinter } from \"iterate/starter-apps/github-ai-linter\";\n" +
       "import { GuestbookApp } from \"iterate/starter-apps/guestbook\";\n" +
       "import { IterateWorkerEntrypoint, type StreamEvent } from \"iterate/sdk\";\n" +
@@ -214,13 +212,6 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    },\n" +
       "  });\n" +
       "  #guestbookApp = GuestbookApp.create(this.env);\n" +
-      "  #tasksApp = TasksApp.create(this.env, {\n" +
-      "    auth: { policy: \"project-member\" },\n" +
-      "    proxy: {\n" +
-      "      origin: \"https://tasks.iterate.workers.dev\",\n" +
-      "      originOverrideKvKey: \"tasks-app-origin\",\n" +
-      "    },\n" +
-      "  });\n" +
       "  #todoApp = TodoApp.create(this.env);\n" +
       "\n" +
       "  // The base class delivers committed events on ANY stream here at least once and in\n" +
@@ -242,7 +233,26 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      return this.#guestbookApp.fetch(req);\n" +
       "    }\n" +
       "    if (app === \"tasks\") {\n" +
-      "      return this.#tasksApp.fetch(req);\n" +
+      "      // Member-gated reverse proxy (pages, assets, WebSockets) to the hosted\n" +
+      "      // tasks board (github.com/iterate/tasks), which authenticates each\n" +
+      "      // visitor back to os.iterate.com. The kv knob targets a dev tunnel\n" +
+      "      // while developing the tasks app itself.\n" +
+      "      using itx = await this.env.ITX.get();\n" +
+      "      const denied = await itx.auth.get({ policy: \"project-member\" }).fetch(req);\n" +
+      "      if (denied) return denied;\n" +
+      "      const tasksUrl = new URL(req.url);\n" +
+      "      tasksUrl.protocol = \"https:\";\n" +
+      "      const origin = await itx.kv.get(\"tasks-app-origin\");\n" +
+      "      tasksUrl.host =\n" +
+      "        typeof origin === \"string\" && origin !== \"\" ? origin : \"tasks.iterate.workers.dev\";\n" +
+      "      return fetch(\n" +
+      "        new Request(tasksUrl, {\n" +
+      "          method: req.method,\n" +
+      "          headers: req.headers,\n" +
+      "          body: req.body,\n" +
+      "          redirect: \"manual\",\n" +
+      "        }),\n" +
+      "      );\n" +
       "    }\n" +
       "    if (app) return new Response(`unknown app: ${app}`, { status: 404 });\n" +
       "\n" +

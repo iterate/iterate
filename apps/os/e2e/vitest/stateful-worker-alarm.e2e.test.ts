@@ -48,7 +48,7 @@ test(
             files: {
               "package.json": JSON.stringify({
                 dependencies: {
-                  iterate: "https://pkg.pr.new/iterate/iterate@main",
+                  iterate: "https://pkg.pr.new/iterate/iterate/iterate@main",
                 },
               }),
               "alarm-probe.js": `

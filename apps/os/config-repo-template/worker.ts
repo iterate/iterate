@@ -1,4 +1,3 @@
-import { TasksApp } from "@iterate-com/tasks";
 import { GithubAiLinter } from "iterate/starter-apps/github-ai-linter";
 import { GuestbookApp } from "iterate/starter-apps/guestbook";
 import { IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
@@ -23,13 +22,6 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     },
   });
   #guestbookApp = GuestbookApp.create(this.env);
-  #tasksApp = TasksApp.create(this.env, {
-    auth: { policy: "project-member" },
-    proxy: {
-      origin: "https://tasks.iterate.workers.dev",
-      originOverrideKvKey: "tasks-app-origin",
-    },
-  });
   #todoApp = TodoApp.create(this.env);
 
   // The base class delivers committed events on ANY stream here at least once and in
@@ -51,7 +43,26 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       return this.#guestbookApp.fetch(req);
     }
     if (app === "tasks") {
-      return this.#tasksApp.fetch(req);
+      // Member-gated reverse proxy (pages, assets, WebSockets) to the hosted
+      // tasks board (github.com/iterate/tasks), which authenticates each
+      // visitor back to os.iterate.com. The kv knob targets a dev tunnel
+      // while developing the tasks app itself.
+      using itx = await this.env.ITX.get();
+      const denied = await itx.auth.get({ policy: "project-member" }).fetch(req);
+      if (denied) return denied;
+      const tasksUrl = new URL(req.url);
+      tasksUrl.protocol = "https:";
+      const origin = await itx.kv.get("tasks-app-origin");
+      tasksUrl.host =
+        typeof origin === "string" && origin !== "" ? origin : "tasks.iterate.workers.dev";
+      return fetch(
+        new Request(tasksUrl, {
+          method: req.method,
+          headers: req.headers,
+          body: req.body,
+          redirect: "manual",
+        }),
+      );
     }
     if (app) return new Response(`unknown app: ${app}`, { status: 404 });
 

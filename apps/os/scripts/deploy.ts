@@ -59,9 +59,9 @@ import { ensureR2Bucket } from "./ensure-resources.ts";
 import { ensureInboundEmailRouting } from "./email-routing-resources.ts";
 
 const PREVIEW_PETSHOP_CONFIG = "APP_CONFIG_INTEGRATIONS__PETSHOP";
-const PREVIEW_PACKAGE_AVAILABILITY_TIMEOUT_MS = 120_000;
-const PREVIEW_PACKAGE_POLL_MS = 1_000;
-const PREVIEW_PACKAGE_REQUEST_TIMEOUT_MS = 10_000;
+const PREVIEW_ITERATE_PACKAGE_AVAILABILITY_TIMEOUT_MS = 120_000;
+const PREVIEW_ITERATE_PACKAGE_POLL_MS = 1_000;
+const PREVIEW_ITERATE_PACKAGE_REQUEST_TIMEOUT_MS = 10_000;
 const RETIRED_QUEUE_PAGE_SIZE = 100;
 const RETIRED_WORKER_QUEUE_CONSUMERS = [
   { label: "Artifact event", suffix: "-events" },
@@ -85,7 +85,7 @@ const RetiredQueueConsumer = z.object({
  * explicit deployment prerequisite. This runs beside the Vite build and
  * sidecar uploads; the healthy path adds no critical-path work.
  */
-export async function waitForPreviewPackage(
+export async function waitForPreviewIteratePackage(
   packageSpec: string,
   dependencies: {
     fetch?: typeof fetch;
@@ -99,7 +99,7 @@ export async function waitForPreviewPackage(
   const sleep =
     dependencies.sleep ??
     (async (ms: number) => await new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  const timeoutMs = dependencies.timeoutMs ?? PREVIEW_PACKAGE_AVAILABILITY_TIMEOUT_MS;
+  const timeoutMs = dependencies.timeoutMs ?? PREVIEW_ITERATE_PACKAGE_AVAILABILITY_TIMEOUT_MS;
   const deadline = now() + timeoutMs;
   let lastFailure = "No response received.";
 
@@ -110,11 +110,11 @@ export async function waitForPreviewPackage(
         method: "HEAD",
         redirect: "follow",
         signal: AbortSignal.timeout(
-          Math.max(1, Math.min(PREVIEW_PACKAGE_REQUEST_TIMEOUT_MS, deadline - now())),
+          Math.max(1, Math.min(PREVIEW_ITERATE_PACKAGE_REQUEST_TIMEOUT_MS, deadline - now())),
         ),
       });
       if (response.ok) {
-        console.log(`preview package available: ${packageSpec}`);
+        console.log(`preview iterate package available: ${packageSpec}`);
         return;
       }
       lastFailure = `HTTP ${response.status}`;
@@ -122,11 +122,11 @@ export async function waitForPreviewPackage(
       lastFailure = error instanceof Error ? error.message : String(error);
     }
 
-    await sleep(Math.min(PREVIEW_PACKAGE_POLL_MS, Math.max(0, deadline - now())));
+    await sleep(Math.min(PREVIEW_ITERATE_PACKAGE_POLL_MS, Math.max(0, deadline - now())));
   }
 
   throw new Error(
-    `Timed out waiting ${timeoutMs}ms for the preview package ${packageSpec}. Last check: ${lastFailure}. The pkg.pr.new GitHub Actions publish must succeed before this preview can deploy.`,
+    `Timed out waiting ${timeoutMs}ms for the preview iterate package ${packageSpec}. Last check: ${lastFailure}. The pkg.pr.new GitHub Actions publish must succeed before this preview can deploy.`,
   );
 }
 
@@ -348,8 +348,7 @@ export default async function deploy(
       // direct doppler-run deploys), leaving the template untouched.
       const previewHeadSha = process.env.PREVIEW_PULL_REQUEST_HEAD_SHA;
       if (previewHeadSha) {
-        secretValues.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC = `https://pkg.pr.new/iterate/iterate@${previewHeadSha}`;
-        secretValues.APP_CONFIG_TASKS_PACKAGE_SPEC = `https://pkg.pr.new/iterate/iterate/@iterate-com/tasks@${previewHeadSha}`;
+        secretValues.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC = `https://pkg.pr.new/iterate/iterate/iterate@${previewHeadSha}`;
       }
 
       assertPreviewPetshopIntegrationConfigured(ctx.name, secretValues);
@@ -426,11 +425,9 @@ export default async function deploy(
           }
         })(),
       ];
-      for (const packageSpec of [
-        secretValues.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC,
-        secretValues.APP_CONFIG_TASKS_PACKAGE_SPEC,
-      ]) {
-        if (packageSpec) tasks.push(waitForPreviewPackage(packageSpec));
+      const packageSpec = secretValues.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC;
+      if (packageSpec) {
+        tasks.push(waitForPreviewIteratePackage(packageSpec));
       }
 
       const results = await Promise.allSettled(tasks);

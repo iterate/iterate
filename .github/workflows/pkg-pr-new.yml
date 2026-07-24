@@ -1,17 +1,24 @@
-# Continuous preview publishing of first-party project packages via
-# https://pkg.pr.new.
+# Continuous preview publishing of first-party packages via https://pkg.pr.new.
 #
-# Every push to main and every PR publishes a tarball to pkg.pr.new's CDN
+# Every push to main and every PR publishes tarballs to pkg.pr.new's CDN
 # (no npm token involved), installable as:
 #
-#   https://pkg.pr.new/iterate/iterate@main             (latest main SDK build)
-#   https://pkg.pr.new/iterate/iterate/@iterate-com/tasks@main
+#   https://pkg.pr.new/iterate/iterate/iterate@main            (latest main build)
+#   https://pkg.pr.new/iterate/iterate/iterate@<sha>           (specific commit)
+#   https://pkg.pr.new/iterate/iterate/iterate@<pr>            (latest build of a PR)
+#   https://pkg.pr.new/iterate/iterate/@iterate-com/tasks@main (Tasks config connector)
 #
-# pkg.pr.new prints the scoped @iterate-com/tasks URL; keep the config template
-# pinned to that generated shape rather than deriving it here. Preview deploys
-# re-point both packages to @<pr-head-sha>, so this workflow must run on EVERY
-# pull request — do not add a `paths:` filter, or previews of unrelated PRs
-# would seed repos with dangling @<sha> refs.
+# The seeded project-repo-template depends on the iterate @main URL — that's how
+# customer repos get `iterate/sdk` types without a manual npm release.
+# Preview deploys re-point seeded repos at @<pr-head-sha> (see
+# iterateSdkPackageSpec in apps/os/src/config.ts), so this workflow must run
+# on EVERY pull request — do not add a `paths:` filter, or previews of
+# unrelated PRs would seed repos with a dangling @<sha> ref.
+#
+# @iterate-com/tasks is the config-side connector for the Tasks app. OS itself
+# never depends on it — it exists for external project config repos (e.g.
+# iterate/config), which install it from the @main URL above. Keeping it out
+# of the seeded template keeps the OS kernel free of any tasks-app knowledge.
 #
 # This lives in .github/workflows (real GitHub Actions, like
 # claude-assistant.yml) rather than .depot/workflows: pkg.pr.new's backend

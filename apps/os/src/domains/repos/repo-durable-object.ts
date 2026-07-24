@@ -1761,14 +1761,10 @@ export class RepoDurableObject extends DurableObject<Env> {
         artifactToken(this.requireArtifacts(), artifactName),
       ));
 
-    const appConfig = parseConfig(this.env);
     const seeded = await timedStep("create-timing", timing, "artifact-seed", () =>
       seedArtifactRepo({
         branch: defaultBranch,
-        files: projectRepoSeedFiles({
-          iterate: appConfig.iterateSdkPackageSpec,
-          tasks: appConfig.tasksPackageSpec,
-        }),
+        files: projectRepoSeedFiles(parseConfig(this.env).iterateSdkPackageSpec),
         remote,
         token,
       }),

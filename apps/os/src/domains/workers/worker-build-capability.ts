@@ -3,13 +3,12 @@ import { itxEnv as env, type Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { KvWorkerBuildArtifactStore, type WorkerBuildArtifact } from "./artifact-store.ts";
 import { executeWorkerBuild } from "./build-backend.ts";
-import type { FirstPartyPackageSpecs } from "./build-backend.ts";
 import type { ResolvedWorkerFileSource } from "./build-key.ts";
 import type { DynamicWorkerSource } from "./schemas.ts";
 
 export type WorkerBuildRequest = {
   buildKey: string;
-  packageSpecs: FirstPartyPackageSpecs;
+  iteratePackageSpec?: string;
   projectId: string;
   resolved: ResolvedWorkerFileSource;
   source: DynamicWorkerSource;
@@ -51,7 +50,7 @@ export async function executeCoordinatedWorkerBuild(
   const files = await resolvedSourceFiles(buildEnv, request.projectId, request.resolved);
   const built = await executeWorkerBuild({
     files,
-    packageSpecs: request.packageSpecs,
+    iteratePackageSpec: request.iteratePackageSpec,
     source: request.source,
     workerBundler: buildEnv.WORKER_BUNDLER,
   });

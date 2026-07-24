@@ -1,6 +1,6 @@
 ---
 status: in-progress
-size: large
+size: medium
 branch: tasks-app-package-bridge
 ---
 
@@ -8,10 +8,12 @@ branch: tasks-app-package-bridge
 
 ## Status
 
-The connector, tiny package artifact, seeded config use, preview lockstep
-pinning, and docs are implemented. Repo-wide lint, typecheck, and tests pass.
-Only the companion `iterate/config` PR and published-package install proof
-remain.
+The connector, tiny package artifact, pkg.pr.new publishing, and docs are
+implemented. Repo-wide lint, typecheck, and tests pass. The PR was reshaped
+mid-flight: an earlier revision wired `@iterate-com/tasks` into the OS seeded
+template and taught the kernel (config, env, seeding, dynamic builds, deploy)
+to preview-pin it; that was all reverted — `apps/os` is now untouched. Only
+the companion `iterate/config` PR and its install proof remain.
 
 ## Goal
 
@@ -42,6 +44,18 @@ Durable Object, or their dependency graph.
 
 ## Locked decisions
 
+- **The OS kernel stays tasks-free.** `@iterate-com/tasks` is a package for
+  external config repos (`iterate/config` first); OS never depends on it, the
+  seeded template doesn't reference it, and no kernel code (config schema,
+  env, repo seeding, dynamic worker builds, deploy) knows its name. The only
+  in-repo consumers are `apps/tasks` itself and the pkg.pr.new workflow that
+  publishes it.
+- Consequence: no preview pinning for the tasks package. Config repos install
+  it from `https://pkg.pr.new/iterate/iterate/@iterate-com/tasks@main` (or a
+  pinned `@<sha>`); preview environments don't co-test bridge changes. That's
+  acceptable for a thin proxy connector — if it ever isn't, generic (name-
+  agnostic) pkg.pr.new ref pinning is the follow-up, not per-package kernel
+  knobs.
 - The public name is `TasksApp`; “bridge” is only an internal term.
 - Export `TasksApp` from the root of `@iterate-com/tasks`. The package has no
   other public export.
@@ -82,15 +96,18 @@ Durable Object, or their dependency graph.
       allowlist plus README/license is checked after `pnpm pack`._
 - [x] Publish `packages/iterate` and `apps/tasks` in one locked
       `pkg-pr-new` invocation. _The workflow uses locked `pkg-pr-new@0.0.79`;
-      its first CI run will supply the generated scoped-package URL._
-- [x] Add `@iterate-com/tasks` to the OS project-config template and replace
-      the hand-written Tasks branch with `TasksApp`. _The generated seed now
-      imports the package and delegates its Tasks route to one configured
-      connector._
-- [x] Pin both `iterate` and `@iterate-com/tasks` to the same exact PR SHA in
-      preview-created and preview-rebuilt config repos. _Seed substitution,
-      dynamic builds, build keys, and deploy readiness checks carry both
-      immutable specs._
+      both long-form URLs (`.../iterate/iterate/iterate@<ref>` and
+      `.../iterate/iterate/@iterate-com/tasks@<ref>`) verified resolving._
+- ~~Add `@iterate-com/tasks` to the OS project-config template and replace
+  the hand-written Tasks branch with `TasksApp`.~~ _Reverted by decision: the
+  template (and everything under `apps/os`) stays tasks-free. The template
+  keeps its inline proxy; `iterate/config` is the package's consumer. A
+  follow-up could switch the template to the package after this merges (once
+  `@main` exists), if wanted._
+- ~~Pin both `iterate` and `@iterate-com/tasks` to the same exact PR SHA in
+  preview-created and preview-rebuilt config repos.~~ _Reverted by decision:
+  no kernel knowledge of the tasks package. Preview pinning remains
+  iterate-only, exactly as on main._
 - [x] Update Tasks and remote-app docs, including full-origin KV examples.
       _The README, vessel landing page, and remote-app guide use `TasksApp`
       and complete HTTPS KV values._
@@ -100,22 +117,19 @@ Durable Object, or their dependency graph.
       build, package contents, member denial, HTTP proxying, KV override
       proxying, and WebSocket forwarding.
 - [x] Run scoped tests/typechecks/lint/format, then the repo-required validation
-      appropriate to the touched packages. _`pnpm lint`, `pnpm typecheck`, and
-      `pnpm test` pass; the Tasks build and exact packed-artifact test also
-      pass._
+      appropriate to the touched packages.
 
 ## Implementation notes
 
-- `tasks-app-origin` currently contains bare hostnames in examples. This is a
-  clean cutover to full origins; update the scripts/docs rather than adding a
-  compatibility parser.
-- Preview pinning is part of the feature. Testing a preview against the
-  connector from `@main` would not prove the PR.
-- The companion config PR must follow the Iterate PR because its dependency
-  needs the scoped package URL emitted by `pkg.pr.new`.
+- `tasks-app-origin` values are full HTTPS origins in all examples now; the
+  package throws on non-HTTPS or non-origin values, and a falsy/absent KV
+  value falls back to the configured origin.
 - The structural ITX input type keeps `@iterate-com/tasks` completely
   dependency-free while accepting the platform's real `env.ITX` binding.
-- Publishing both packages in one pkg.pr.new invocation makes the canonical
-  main URLs `https://pkg.pr.new/iterate/iterate@main` and
-  `https://pkg.pr.new/iterate/iterate/@iterate-com/tasks@main`; the old
-  compact Iterate-only URL is no longer the stream updated by this workflow.
+- Publishing two packages in one pkg.pr.new invocation keeps the existing
+  long-form iterate URL (`https://pkg.pr.new/iterate/iterate/iterate@<ref>`)
+  working — verified against this PR's own head SHA — so the kernel's
+  `TEMPLATE_ITERATE_PACKAGE_SPEC` needed no change.
+- The companion config PR must follow the Iterate PR because its dependency
+  needs the scoped package URL emitted by `pkg.pr.new` (from `@main` after
+  merge, or a `@<sha>`/`@<pr>` channel before).

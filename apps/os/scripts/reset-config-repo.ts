@@ -52,10 +52,7 @@ export async function reset(options: ResetOptions) {
   // PR-head build. An explicit `--sdk-spec` overrides both.
   const sdkSpec =
     options.sdkSpec?.trim() || process.env.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC?.trim() || undefined;
-  const templateFiles = projectRepoSeedFiles({
-    iterate: sdkSpec,
-    tasks: process.env.APP_CONFIG_TASKS_PACKAGE_SPEC?.trim() || undefined,
-  });
+  const templateFiles = projectRepoSeedFiles(sdkSpec);
   const templatePaths = new Set(templateFiles.map((file) => file.path));
 
   const connection = adminConnection(options);

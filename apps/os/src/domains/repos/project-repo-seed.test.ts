@@ -1,35 +1,24 @@
 import { expect, test } from "vitest";
-import {
-  projectRepoSeedFiles,
-  TEMPLATE_ITERATE_PACKAGE_SPEC,
-  TEMPLATE_TASKS_PACKAGE_SPEC,
-} from "./project-repo-seed.ts";
+import { projectRepoSeedFiles, TEMPLATE_ITERATE_PACKAGE_SPEC } from "./project-repo-seed.ts";
 import { PROJECT_REPO_INITIAL_FILES } from "./config-repo-template.generated.ts";
 
 test("no override seeds the template verbatim", () => {
-  expect(projectRepoSeedFiles({ iterate: undefined, tasks: undefined })).toBe(
-    PROJECT_REPO_INITIAL_FILES,
-  );
+  expect(projectRepoSeedFiles(undefined)).toBe(PROJECT_REPO_INITIAL_FILES);
 });
 
 test("the seed keeps the root worker and tasks app proxy", () => {
-  const worker = projectRepoSeedFiles({ iterate: undefined, tasks: undefined }).find(
-    (file) => file.path === "worker.ts",
-  );
+  const worker = projectRepoSeedFiles(undefined).find((file) => file.path === "worker.ts");
   expect(worker?.content).toContain('if (app === "tasks")');
-  expect(worker?.content).toContain('from "@iterate-com/tasks"');
-  expect(worker?.content).toContain("TasksApp.create(this.env");
+  expect(worker?.content).toContain('itx.kv.get("tasks-app-origin")');
+  expect(worker?.content).toContain('"tasks.iterate.workers.dev"');
 });
 
-test("preview overrides re-point both first-party packages", () => {
-  const iterate = "https://pkg.pr.new/iterate/iterate@abc123";
-  const tasks = "https://pkg.pr.new/iterate/iterate/@iterate-com/tasks@abc123";
-  const files = projectRepoSeedFiles({ iterate, tasks });
+test("an override re-points the iterate dependency in every manifest that carries it", () => {
+  const spec = "https://pkg.pr.new/iterate/iterate/iterate@1758";
+  const files = projectRepoSeedFiles(spec);
 
   const packageJson = JSON.parse(files.find((file) => file.path === "package.json")!.content);
-  expect(packageJson).toMatchObject({
-    dependencies: { "@iterate-com/tasks": tasks, iterate },
-  });
+  expect(packageJson).toMatchObject({ dependencies: { iterate: spec } });
 
   // Every non-manifest file is untouched, and nothing still carries @main.
   const others = files.filter((file) => !file.path.endsWith("package.json"));
@@ -37,7 +26,6 @@ test("preview overrides re-point both first-party packages", () => {
     PROJECT_REPO_INITIAL_FILES.filter((file) => !file.path.endsWith("package.json")),
   );
   expect(files.some((file) => file.content.includes(TEMPLATE_ITERATE_PACKAGE_SPEC))).toBe(false);
-  expect(files.some((file) => file.content.includes(TEMPLATE_TASKS_PACKAGE_SPEC))).toBe(false);
 });
 
 test("the template's own spec matches what the substitution looks for", () => {
@@ -47,9 +35,6 @@ test("the template's own spec matches what the substitution looks for", () => {
     PROJECT_REPO_INITIAL_FILES.find((file) => file.path === "package.json")!.content,
   );
   expect(packageJson).toMatchObject({
-    dependencies: {
-      "@iterate-com/tasks": TEMPLATE_TASKS_PACKAGE_SPEC,
-      iterate: TEMPLATE_ITERATE_PACKAGE_SPEC,
-    },
+    dependencies: { iterate: TEMPLATE_ITERATE_PACKAGE_SPEC },
   });
 });
