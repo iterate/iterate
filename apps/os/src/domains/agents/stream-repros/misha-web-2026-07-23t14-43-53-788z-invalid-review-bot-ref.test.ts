@@ -7,15 +7,15 @@ import fixture from "./misha-web-2026-07-23t14-43-53-788z-invalid-review-bot-ref
 
 test("re-linking the packaged linter replaces Misha's rejected subscription with a valid worker ref", async () => {
   const appended: Array<{ events: StreamEventInput[]; path: string }> = [];
-  const app = GithubAiLinter.create({
-    policyVersion: "1",
-    rules: { glob: "rules/**/*.md", repoPath: "/repos/iterate" },
-  });
-
-  await app.processEvent(
-    githubLinkConfigured(fixture.connection),
+  const app = GithubAiLinter.create(
     projectEnv((path, ...events) => appended.push({ events, path })),
+    {
+      policyVersion: "1",
+      rules: { glob: "rules/**/*.md", repoPath: "/repos/iterate" },
+    },
   );
+
+  await app.processEvent(githubLinkConfigured(fixture.connection));
 
   const subscription: any = appended[0]?.events[0];
   const ref = subscription.payload.delivery.expression[1][1];
@@ -31,15 +31,15 @@ test("re-linking the packaged linter replaces Misha's rejected subscription with
 
 test("worker-bundler accepts the packaged linter's installed entry point", async () => {
   const appended: Array<{ events: StreamEventInput[]; path: string }> = [];
-  const app = GithubAiLinter.create({
-    policyVersion: "misha-smoke-1",
-    rules: { glob: "rules/**/*.md", repoPath: "/repos/config" },
-  });
-
-  await app.processEvent(
-    githubLinkConfigured(fixture.connection),
+  const app = GithubAiLinter.create(
     projectEnv((path, ...events) => appended.push({ events, path })),
+    {
+      policyVersion: "misha-smoke-1",
+      rules: { glob: "rules/**/*.md", repoPath: "/repos/config" },
+    },
   );
+
+  await app.processEvent(githubLinkConfigured(fixture.connection));
 
   const subscription: any = appended[0]?.events[0];
   const ref = subscription.payload.delivery.expression[1][1];

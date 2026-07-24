@@ -1,22 +1,22 @@
-status: fixing-production-smoke
+status: complete
 size: large
 
 # Move the GitHub review bot into the iterate package
 
-Status: The standalone artifact reached rule loading in production. The package now uses production's existing `Repo.listFiles()` API and bundles local glob matching; another Misha smoke remains.
+Status: Complete. The packaged linter connected and caught up to Misha's production GitHub stream. Config now binds the project environment once at app creation, and subscription v4 safely migrates every GitHub connection slug to a runtime-valid durable identity.
 
 ## Plan
 
-- [x] Add a public `iterate/github-ai-linter` module with a declarative `GithubAiLinter.create(...)` app definition. *Implemented in `packages/iterate/src/github-ai-linter/index.ts`.*
+- [x] Add a public `iterate/github-ai-linter` module with an environment-bound `GithubAiLinter.create(env, config)` app definition. *Implemented in `packages/iterate/src/github-ai-linter/index.ts`.*
 - [x] Keep event routing explicit in config while packaging the linter-specific reaction. *The worker keeps a private `#aiLintApp` and calls it from its existing `processEvent` hook; the SDK stays unchanged.*
-- [x] Move the review processor, durable host, subscription bootstrap, and GitHub webhook routing from `iterate/config` into the package while preserving durable keys, subscription keys, freshness, and idempotency. *The packaged worker keeps the existing review-bot identities and routing tests.*
+- [x] Move the review processor, durable host, subscription bootstrap, and GitHub webhook routing from `iterate/config` into the package while preserving subscription keys, freshness, and idempotency. *The packaged worker keeps stable per-connection identities behind a revisioned migration and retains the routing tests.*
 - [x] Load review rules from a repo glob descriptor; keep Iterate's canonical rule Markdown under root `rules/**/*.md` for both ordinary coding agents and the hosted linter. *Rule reads are pinned to the commit returned by `Repo.listFiles`; the package filters paths locally and root agent instructions point to the same files.*
 - [x] Export/build/type the package submodule and cover its public behavior with integration-style package tests. *Both public exports build and the focused package suite passes.*
 - [x] Update the seeded config template and generated seed to import/register the package app; keep unrelated app routing and schedules out of scope. *The real template and generated file now contain the declaration.*
 - [x] Update `iterate/config` from `main` to the same declaration and remove its local review-bot source. *The clean main checkout imports the package and deletes `apps/review-bot`.*
 - [x] Run focused tests/typechecks plus config typecheck; record any production-shaped verification that cannot run locally. *Full monorepo typecheck, lint, format check, and tests pass; 29 focused OS tests, the package build, and the preview-10 deployment/E2E suite pass.*
 - [x] Repair the production-derived Misha failure and ensure an existing v1 subscription can migrate. *Changed the invalid colon to a hyphen, bumped the subscription config revision to v2, and verified the emitted ref through the OS runtime schema.*
-- [ ] Make the packaged worker build through the real worker-bundler contract. *The physical configured worker bundles `yaml`, `zod`, Cap'n Web, and `minimatch`, passes the package graph gate, and uses only production-deployed Repo RPCs; another production workerd smoke remains.*
+- [x] Make the packaged worker build through the real worker-bundler contract. *The physical configured worker bundles `yaml`, `zod`, Cap'n Web, and `minimatch`, passes the package graph gate, uses only production-deployed Repo RPCs, and connected successfully in the Misha production smoke.*
 - [x] Preserve terminal source-build errors for subscribers and stop retrying them. *The keyed coordinator stores a bounded one-shot failure receipt across actor eviction; the loader marks it non-retryable and the stream parks immediately with the exact error.*
 
 ## Approved decisions
@@ -24,7 +24,7 @@ Status: The standalone artifact reached rule loading in production. The package 
 1. `packages/iterate` owns the generic GitHub AI linter runtime; config only composes it.
 2. Root `rules/**/*.md` is the one rule source. Config points the app at `/repos/iterate`; package artifacts do not duplicate the rule text.
 3. The package owns dynamic-worker refs and subscription bootstrap; config explicitly routes project events to the configured linter.
-4. Existing durable identities and idempotency semantics are migration invariants.
+4. Subscription keys and idempotency semantics are invariants; any durable identity change ships as an explicit subscription revision.
 5. PR iterate/config#17 is design input, not code to merge.
 
 ## Implementation log
@@ -51,3 +51,4 @@ Status: The standalone artifact reached rule loading in production. The package 
 - 2026-07-23: Misha's next retry loaded the standalone worker, then failed with `The RPC receiver does not implement the method "glob"`. Production already exposes the equivalent snapshot primitive as `Repo.listFiles()`; added a production-shaped regression before removing the new host-only method.
 - 2026-07-23: The package now filters the production `Repo.listFiles()` snapshot with bundled `minimatch`, preserving commit-pinned reads without requiring a coordinated OS deployment. The focused spec, package graph gate, and package/OS typechecks pass.
 - 2026-07-23: Updated the OS review-routing harness to expose the same `listFiles()` RPC; its 19 tests pass after CI caught the stale fake.
+- 2026-07-24: Misha's v3 subscriber connected and caught up to the GitHub integration stream head with the packaged worker. Bound `env` once through `GithubAiLinter.create(env, config)`, and fixed underscore-bearing connection slugs with a readable collision-free durable-key escape plus a v4 subscription migration.

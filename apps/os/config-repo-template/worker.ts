@@ -13,7 +13,7 @@ import { guestbookAppRef } from "./apps/guestbook/ref.ts";
 // { fetch, processEvent }
 
 export default class ProjectWorker extends IterateWorkerEntrypoint {
-  #aiLintApp = GithubAiLinter.create({
+  #aiLintApp = GithubAiLinter.create(this.env, {
     policyVersion: "2",
     rules: {
       glob: "rules/**/*.md",
@@ -24,7 +24,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
   // The base class delivers committed events on ANY stream here at least once and in
   // per-stream order.
   protected override async processEvent(event: StreamEvent): Promise<void> {
-    await this.#aiLintApp.processEvent(event, this.env);
+    await this.#aiLintApp.processEvent(event);
   }
 
   async fetch(req: Request): Promise<Response> {

@@ -820,7 +820,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "// { fetch, processEvent }\n" +
       "\n" +
       "export default class ProjectWorker extends IterateWorkerEntrypoint {\n" +
-      "  #aiLintApp = GithubAiLinter.create({\n" +
+      "  #aiLintApp = GithubAiLinter.create(this.env, {\n" +
       "    policyVersion: \"2\",\n" +
       "    rules: {\n" +
       "      glob: \"rules/**/*.md\",\n" +
@@ -831,7 +831,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  // The base class delivers committed events on ANY stream here at least once and in\n" +
       "  // per-stream order.\n" +
       "  protected override async processEvent(event: StreamEvent): Promise<void> {\n" +
-      "    await this.#aiLintApp.processEvent(event, this.env);\n" +
+      "    await this.#aiLintApp.processEvent(event);\n" +
       "  }\n" +
       "\n" +
       "  async fetch(req: Request): Promise<Response> {\n" +

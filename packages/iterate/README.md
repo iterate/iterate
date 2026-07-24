@@ -194,13 +194,13 @@ import { GithubAiLinter } from "iterate/github-ai-linter";
 import { IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
 
 export default class ProjectWorker extends IterateWorkerEntrypoint {
-  #aiLintApp = GithubAiLinter.create({
+  #aiLintApp = GithubAiLinter.create(this.env, {
     policyVersion: "2",
     rules: { glob: "rules/**/*.md", repoPath: "/repos/iterate" },
   });
 
   protected override async processEvent(event: StreamEvent): Promise<void> {
-    await this.#aiLintApp.processEvent(event, this.env);
+    await this.#aiLintApp.processEvent(event);
   }
 }
 ```

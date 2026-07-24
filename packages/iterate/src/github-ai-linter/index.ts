@@ -6,21 +6,20 @@ export type GithubAiLinterConfig = {
   rules: GithubAiLinterRuleSource;
 };
 
-const reviewBotSubscriptionConfigVersion = 3;
+const reviewBotSubscriptionConfigVersion = 4;
 const configuredWorkerEntrypoint =
   "node_modules/iterate/dist/github-ai-linter/configured-worker.mjs";
 
 export const GithubAiLinter = {
-  create(config: GithubAiLinterConfig) {
+  create(env: { ITX: ItxBinding }, config: GithubAiLinterConfig) {
     return {
-      async processEvent(event: StreamEvent, env: { ITX: ItxBinding }) {
+      async processEvent(event: StreamEvent) {
         if (event.type !== "events.iterate.com/repo/github-link-configured") return;
         const connection = event.payload?.connection;
         if (typeof connection !== "string" || connection.length === 0) return;
+        const subscriptionEvents = reviewBotSubscriptionEvents(connection, config);
         using itx = await env.ITX.get();
-        await itx.streams
-          .get(`/integrations/github/${connection}`)
-          .append(...reviewBotSubscriptionEvents(connection, config));
+        await itx.streams.get(`/integrations/github/${connection}`).append(...subscriptionEvents);
       },
     };
   },
@@ -52,11 +51,14 @@ function reviewBotSubscriptionEvents(
 }
 
 function reviewBotAppRef(connection: string, config: GithubAiLinterConfig) {
+  const durableConnection = connection.replaceAll("-", "--").replaceAll("_", "-u");
   return {
     type: "stateful",
     path: "/",
     className: "ReviewBotApp",
-    durableWorkerKey: `app-review-bot-${connection}`,
+    // Connection slugs admit `_`, but durable keys do not. Escaping both
+    // separator characters keeps the identity readable and collision-free.
+    durableWorkerKey: `app-review-bot-${durableConnection}`,
     source: {
       createWorker: {
         entryPoint: configuredWorkerEntrypoint,

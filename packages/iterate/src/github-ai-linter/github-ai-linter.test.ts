@@ -4,30 +4,27 @@ import { GithubAiLinter } from "./index.ts";
 
 test("a declared GitHub AI linter subscribes each linked connection without config-owned plumbing", async () => {
   const appended: Array<{ events: StreamEventInput[]; path: string }> = [];
-  const app = GithubAiLinter.create({
-    policyVersion: "2",
-    rules: { glob: "rules/**/*.md", repoPath: "/repos/iterate" },
-  });
+  const app = GithubAiLinter.create(
+    projectEnv((path, ...events) => appended.push({ events, path })),
+    {
+      policyVersion: "2",
+      rules: { glob: "rules/**/*.md", repoPath: "/repos/iterate" },
+    },
+  );
 
-  await app.processEvent(
-    { ...githubLinkConfigured("ignored"), type: "events.iterate.com/project/heartbeat" },
-    projectEnv((path, ...events) => appended.push({ events, path })),
-  );
-  await app.processEvent(
-    { ...githubLinkConfigured("ignored"), payload: { connection: "" } },
-    projectEnv((path, ...events) => appended.push({ events, path })),
-  );
-  await app.processEvent(
-    githubLinkConfigured("iterate-installation"),
-    projectEnv((path, ...events) => appended.push({ events, path })),
-  );
+  await app.processEvent({
+    ...githubLinkConfigured("ignored"),
+    type: "events.iterate.com/project/heartbeat",
+  });
+  await app.processEvent({ ...githubLinkConfigured("ignored"), payload: { connection: "" } });
+  await app.processEvent(githubLinkConfigured("iterate-installation"));
 
   expect(appended).toMatchObject([
     {
       path: "/integrations/github/iterate-installation",
       events: [
         {
-          idempotencyKey: "review-bot/subscription:v3",
+          idempotencyKey: "review-bot/subscription:v4",
           payload: {
             delivery: {
               mode: "wake",
@@ -37,7 +34,7 @@ test("a declared GitHub AI linter subscribes each linked connection without conf
                   "get",
                   {
                     className: "ReviewBotApp",
-                    durableWorkerKey: "app-review-bot-iterate-installation",
+                    durableWorkerKey: "app-review-bot-iterate--installation",
                     path: "/",
                     type: "stateful",
                   },
@@ -72,6 +69,29 @@ test("a declared GitHub AI linter subscribes each linked connection without conf
   expect(virtualConfig).toContain('"policyVersion":"2"');
   expect(virtualConfig).toContain('"glob":"rules/**/*.md"');
   expect(virtualConfig).toContain('"repoPath":"/repos/iterate"');
+});
+
+test("connection slugs with underscores produce distinct runtime-valid durable keys", async () => {
+  const appended: Array<{ events: StreamEventInput[]; path: string }> = [];
+  const app = GithubAiLinter.create(
+    projectEnv((path, ...events) => appended.push({ events, path })),
+    {
+      policyVersion: "2",
+      rules: { glob: "rules/**/*.md", repoPath: "/repos/iterate" },
+    },
+  );
+
+  await app.processEvent(githubLinkConfigured("install-42-a_b"));
+  await app.processEvent(githubLinkConfigured("install-42-a-ub"));
+
+  const durableWorkerKeys = appended.map((append) => {
+    const subscription: any = append.events[0];
+    return subscription.payload.delivery.expression[1][1].durableWorkerKey;
+  });
+  expect(durableWorkerKeys).toEqual([
+    "app-review-bot-install--42--a-ub",
+    "app-review-bot-install--42--a--ub",
+  ]);
 });
 
 function githubLinkConfigured(connection: string): StreamEvent {
