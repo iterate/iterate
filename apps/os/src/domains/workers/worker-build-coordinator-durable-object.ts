@@ -51,10 +51,9 @@ export class WorkerBuildCoordinatorDurableObject extends DurableObject<Env> {
     if (terminalFailure !== undefined) throw terminalFailure;
 
     const operation = this.#coordinator.build(request);
-    if (buildBudgetMs === undefined) return await operation;
-
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
+      if (buildBudgetMs === undefined) return await operation;
       return await Promise.race([
         operation,
         new Promise<never>((_, reject) => {
@@ -63,6 +62,14 @@ export class WorkerBuildCoordinatorDurableObject extends DurableObject<Env> {
           }, buildBudgetMs);
         }),
       ]);
+    } catch (error) {
+      // The foreground caller received this exact terminal result, so there is
+      // no later caller to inform. Receipts remain only when timeout/alarm
+      // ownership outlives the caller that started the operation.
+      if (isWorkerBuildFailedError(error)) {
+        this.ctx.storage.kv.delete(TERMINAL_BUILD_FAILURE_STORAGE_KEY);
+      }
+      throw error;
     } finally {
       clearTimeout(timer);
     }

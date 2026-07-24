@@ -121,6 +121,20 @@ describe("WorkerBuildCoordinatorDurableObject background handoff", () => {
     ]);
   });
 
+  it("does not replay a terminal failure already delivered to a foreground caller", async () => {
+    const { records, value } = coordinator(new Map());
+    h.execute.mockRejectedValueOnce(new WorkerBuildFailedError("invalid source"));
+
+    await expect(value.build(request)).rejects.toMatchObject({
+      message: "invalid source",
+      name: "WorkerBuildFailedError",
+    });
+    expect(records.size).toBe(0);
+
+    await expect(value.build(request)).resolves.toBe(artifact);
+    expect(h.execute).toHaveBeenCalledTimes(2);
+  });
+
   it("surfaces an alarm's terminal source failure after coordinator eviction", async () => {
     const records = new Map<string, unknown>();
     const first = coordinator(records);

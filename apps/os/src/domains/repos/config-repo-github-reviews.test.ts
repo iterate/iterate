@@ -16,27 +16,25 @@ const testAndSpecFileGlobs = [
   "!**/*.{test,spec}.{js,jsx,mjs,cjs,ts,tsx,mts,cts}",
   "!**/{__tests__,test,tests,spec,specs}/**",
 ];
-const policy = {
-  policyVersion: "2",
-  rules: {
-    "structure/no-small-single-use-helper": {
-      files: ["**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}", ...testAndSpecFileGlobs],
-      invariant:
-        "Do not introduce a small helper used only once when keeping the logic at its call site would be clearer.",
-    },
-    "typescript/no-inferable-type-annotation": {
-      files: ["**/*.{ts,tsx,mts,cts}", ...testAndSpecFileGlobs],
-      invariant: "Do not declare a type annotation that TypeScript can infer from the value.",
-    },
-    "typescript/explain-type-cast": {
-      files: ["**/*.{ts,tsx,mts,cts}", ...testAndSpecFileGlobs],
-      invariant:
-        "Every type cast must have a nearby explanation of why it is safe and cannot reasonably be avoided.",
-    },
+const rules = {
+  "structure/no-small-single-use-helper": {
+    files: ["**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}", ...testAndSpecFileGlobs],
+    invariant:
+      "Do not introduce a small helper used only once when keeping the logic at its call site would be clearer.",
+  },
+  "typescript/no-inferable-type-annotation": {
+    files: ["**/*.{ts,tsx,mts,cts}", ...testAndSpecFileGlobs],
+    invariant: "Do not declare a type annotation that TypeScript can infer from the value.",
+  },
+  "typescript/explain-type-cast": {
+    files: ["**/*.{ts,tsx,mts,cts}", ...testAndSpecFileGlobs],
+    invariant:
+      "Every type cast must have a nearby explanation of why it is safe and cannot reasonably be avoided.",
   },
 };
+const policy = { loadRules: async () => rules, policyVersion: "2" };
 const ruleFiles = Object.fromEntries(
-  Object.entries(policy.rules).map(([id, rule]) => [
+  Object.entries(rules).map(([id, rule]) => [
     `rules/${id}.md`,
     ["---", `id: ${id}`, `files: ${JSON.stringify(rule.files)}`, "---", rule.invariant].join("\n"),
   ]),
@@ -127,6 +125,7 @@ function webhook(input?: {
 
 function harness(input?: {
   agentExists?: boolean;
+  ruleFiles?: Record<string, string>;
   route?: GithubRepoLink | null;
   routes?: Record<string, GithubRepoLink | null>;
 }) {
@@ -176,11 +175,12 @@ function harness(input?: {
   const routes = input?.routes ?? {
     "/repos/config": input?.route === undefined ? route : input.route,
   };
+  const availableRuleFiles = input?.ruleFiles || ruleFiles;
   const repoList = vi.fn(async () => Object.keys(routes).map((path) => ({ path })));
   const repoGet = vi.fn((path: string) => ({
-    listFiles: async () => ({ commitOid: "rules-abc", paths: Object.keys(ruleFiles) }),
+    listFiles: async () => ({ commitOid: "rules-abc", paths: Object.keys(availableRuleFiles) }),
     readFile: async ({ path: filePath }: { path: string }) => {
-      const content = ruleFiles[filePath];
+      const content = availableRuleFiles[filePath];
       return content === undefined ? null : { commitOid: "rules-abc", content, path: filePath };
     },
     processor: {
@@ -533,6 +533,23 @@ describe("userspace GitHub pull-request routing", () => {
     });
   });
 
+  it("routes a trusted mention without loading structural review rules", async () => {
+    const test = harness();
+    const loadRules = vi.fn(async () => {
+      throw new Error("rules are unavailable");
+    });
+
+    await handleGithubPullRequestWebhookWithPolicy(
+      test.itx,
+      webhook({ action: "created", mentionedUsers: ["iterate"], name: "issue_comment" }),
+      { loadRules, policyVersion: "2" },
+    );
+
+    expect(loadRules).not.toHaveBeenCalled();
+    expect(test.create).toHaveBeenCalledOnce();
+    expect(test.appendBatches[0]?.events).toHaveLength(4);
+  });
+
   it("creates draft history without waking a review", async () => {
     const test = harness();
     await handleGithubPullRequestWebhook(test.itx, webhook({ draft: true }));
@@ -608,6 +625,24 @@ describe("userspace review-bot stream processor", () => {
     });
     await replay.bot.settle();
     expect(fake.appendBatches).toHaveLength(2);
+  });
+
+  it("routes a trusted mention when structural review rules are unavailable", async () => {
+    const fake = harness({ ruleFiles: {} });
+    const { bot } = reviewBotHarness({ fake });
+
+    await bot.append({
+      type: "events.iterate.com/github/webhook-received",
+      payload:
+        webhook({
+          action: "created",
+          mentionedUsers: ["iterate"],
+          name: "issue_comment",
+        }).payload || {},
+    });
+
+    expect(fake.create).toHaveBeenCalledOnce();
+    expect(fake.appendBatches[0]?.events).toHaveLength(4);
   });
 
   it("skips cross-posted copies", async () => {
