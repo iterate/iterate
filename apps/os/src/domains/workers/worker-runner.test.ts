@@ -241,12 +241,10 @@ describe("createApp asset dispatch", () => {
 
 it("turns a stateful source-build result into a local terminal delivery error", async () => {
   h.statefulInvokeCapability.mockImplementation(
-    async ({ buildFailureNonce }: { buildFailureNonce: string }) => ({
-      workerBuildFailure: {
-        failure: { kind: "source", message: 'No such module "yaml".' },
-        nonce: buildFailureNonce,
-      },
-    }),
+    async ({ buildFailureNonce }: { buildFailureNonce: string }) => [
+      buildFailureNonce,
+      { kind: "source", message: 'No such module "yaml".' },
+    ],
   );
   const runner = new DynamicWorkerRunner({
     streamContext: { kind: "scope", scopePath: statefulRef.path },
@@ -298,14 +296,15 @@ it("returns a stateful worker's successful value without wrapping its live stubs
 });
 
 it("returns a bare stateful RPC stub without probing it for a build failure", async () => {
-  const returned = new Proxy(() => {}, {
-    get(target, property, receiver) {
-      if (property === "workerBuildFailure") {
-        throw new Error("bare RPC stub was probed for a build failure");
-      }
-      return Reflect.get(target, property, receiver);
+  const returned = new Proxy(
+    {},
+    {
+      get(target, property, receiver) {
+        if (property === "workerBuildFailure") throw new Error("bare RPC stub was probed");
+        return Reflect.get(target, property, receiver);
+      },
     },
-  });
+  );
   h.statefulInvokeCapability.mockResolvedValue(returned);
   const runner = new DynamicWorkerRunner({
     streamContext: { kind: "scope", scopePath: statefulRef.path },

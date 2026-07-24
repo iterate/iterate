@@ -260,9 +260,9 @@ export class DynamicWorkerRunner {
         // point where source loading, version-marker writes, and facet restarts are
         // allowed to mutate durable runtime state.
         // Successful values pass through untouched because they may contain
-        // live RPC stubs whose ownership transfers to our caller. A nonce the
-        // worker never sees lets the host return only the build-failure branch
-        // as plain data without confusing arbitrary user values for failures.
+        // live RPC stubs whose ownership transfers to our caller. A nonce-tagged
+        // array lets the host return the build-failure branch as plain data:
+        // Array.isArray can distinguish it without probing an RPC stub property.
         const buildFailureNonce = crypto.randomUUID();
         const result = await this.#statefulWorker(ref).invokeCapability({
           args,
@@ -272,26 +272,11 @@ export class DynamicWorkerRunner {
           path,
           ref,
         });
-        // Workers RPC stubs can be callable proxies: reading an unknown property
-        // from one starts promise pipelining. Inspect only the plain-data shape
-        // emitted by StatefulWorkerDurableObject, leaving every live stub untouched.
-        if (typeof result === "object" && result !== null) {
-          const prototype = Object.getPrototypeOf(result);
-          if (prototype === Object.prototype || prototype === null) {
-            // The hosted DO is the only writer of this nonce-matched envelope,
-            // so this narrow structural view avoids exporting its private type.
-            const envelope = (
-              result as {
-                workerBuildFailure?: {
-                  failure?: WorkerBuildFailure;
-                  nonce?: string;
-                };
-              }
-            ).workerBuildFailure;
-            if (envelope?.nonce === buildFailureNonce && envelope.failure !== undefined) {
-              throw new WorkerBuildFailedError(envelope.failure);
-            }
-          }
+        if (Array.isArray(result) && result[0] === buildFailureNonce) {
+          // The worker never sees the random nonce, so only the hosting DO can
+          // produce this tuple; successful customer arrays cannot collide.
+          const failure = result[1] as WorkerBuildFailure;
+          throw new WorkerBuildFailedError(failure);
         }
         return result;
       }

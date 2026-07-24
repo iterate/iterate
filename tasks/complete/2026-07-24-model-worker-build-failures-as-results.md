@@ -3,7 +3,7 @@ size: medium
 
 # Model worker source-build failures as results
 
-Status: Complete. Source failures stay as plain data through both RPC hops, successful live capabilities pass through without wrapping or property probes, and all local and preview checks pass.
+Status: Complete. Source failures stay as plain data through both RPC hops, successful live capabilities pass through without wrapping or property probes, and final-head verification is running.
 
 ## Plan
 
@@ -33,4 +33,4 @@ The outcome must remain plain data until it has crossed the final stateful-worke
 - 2026-07-24: Converted worker-bundler source rejection, coordinator flights, durable receipts, source resolution, and stateful invocation to discriminated results.
 - 2026-07-24: Kept the public capability API unchanged: source failures become a local `WorkerBuildFailedError` with `retryable: false` only after the final stateful RPC hop. A private nonce distinguishes that failure data without wrapping successful values or changing live-stub ownership.
 - 2026-07-24: Documented the internal result boundary and verified focused tests, the full OS unit suite, OS typecheck, and repository lint.
-- 2026-07-24: Review follow-up restricts failure-envelope inspection to plain data so a bare RPC stub is returned without starting an orphaned property pipeline; removed the redundant error factory.
+- 2026-07-24: Review follow-up uses a nonce-tagged array for the private failure envelope, so it can be detected with `Array.isArray` without starting an orphaned property pipeline on object- or function-shaped RPC stubs; removed the redundant error factory.
