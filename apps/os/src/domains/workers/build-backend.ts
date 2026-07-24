@@ -1,3 +1,4 @@
+import { parseIterateRepoPkgSpec, pinIterateRepoPkgRef } from "../../pkg-pr-new.ts";
 import {
   buildFailureMessageFromError,
   type WorkerBuildFailure,
@@ -120,13 +121,19 @@ const PACKAGE_DEPENDENCY_FIELDS = [
 type PackageManifest = Record<string, unknown> &
   Partial<Record<(typeof PACKAGE_DEPENDENCY_FIELDS)[number], Record<string, unknown>>>;
 
-/** Prepare declared `iterate` specs for worker-bundler. A deployment preview
- * pin replaces every declaration; the root declaration is always promoted to
- * a runtime dependency because worker-bundler deliberately ignores
+/** Prepare this repo's pkg.pr.new dependency specs for worker-bundler
+ * (src/pkg-pr-new.ts has the URL grammar and the uniform-usage assumption).
+ * A deployment ref pin swaps the `@<ref>` of every matching spec; spec
+ * overrides (local dev's SDK tarball) replace named specs wholesale. Every
+ * matched package's root declaration is promoted to a runtime dependency —
+ * even with no knobs set — because worker-bundler deliberately ignores
  * devDependencies. The rewrite is build-local and never changes the repo. */
-function applyIteratePackageSpecOverride(
+function applyIterateRepoPkgOverrides(
   files: Record<string, string>,
-  iteratePackageSpec: string | undefined,
+  overrides: {
+    ref: string | undefined;
+    specOverrides: Record<string, string> | undefined;
+  },
 ): Record<string, string> {
   const content = files["package.json"];
   if (content === undefined) return files;
@@ -141,34 +148,43 @@ function applyIteratePackageSpecOverride(
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return files;
   // Safe after the object guard; dependency fields get their own shape checks below.
   const manifest = parsed as PackageManifest;
+  const specOverrides = overrides.specOverrides || {};
 
-  let declaredPackageSpec: unknown;
+  // Matched packages' effective specs, first declaration wins (field order).
+  const runtimeSpecs = new Map<string, string>();
   let changed = false;
   for (const field of PACKAGE_DEPENDENCY_FIELDS) {
     const dependencies = manifest[field];
-    if (
-      dependencies === null ||
-      typeof dependencies !== "object" ||
-      Array.isArray(dependencies) ||
-      !Object.hasOwn(dependencies, "iterate")
-    ) {
+    if (dependencies === null || typeof dependencies !== "object" || Array.isArray(dependencies)) {
       continue;
     }
-    declaredPackageSpec ??= dependencies.iterate;
-    if (iteratePackageSpec !== undefined && dependencies.iterate !== iteratePackageSpec) {
-      dependencies.iterate = iteratePackageSpec;
-      changed = true;
+    for (const [name, declared] of Object.entries(dependencies)) {
+      if (typeof declared !== "string") continue;
+      let next = declared;
+      let matched = parseIterateRepoPkgSpec(declared) !== null;
+      if (matched && overrides.ref !== undefined) {
+        next = pinIterateRepoPkgRef(declared, overrides.ref)!;
+      }
+      if (specOverrides[name] !== undefined) {
+        next = specOverrides[name];
+        matched = true;
+      }
+      if (matched && !runtimeSpecs.has(name)) runtimeSpecs.set(name, next);
+      if (next !== declared) {
+        dependencies[name] = next;
+        changed = true;
+      }
     }
   }
-  if (declaredPackageSpec === undefined) return files;
 
-  const runtimeSpec = iteratePackageSpec ?? declaredPackageSpec;
-  if (manifest.dependencies?.iterate !== runtimeSpec) {
-    manifest.dependencies = {
-      ...manifest.dependencies,
-      iterate: runtimeSpec,
-    };
-    changed = true;
+  for (const [name, spec] of runtimeSpecs) {
+    if (manifest.dependencies?.[name] !== spec) {
+      manifest.dependencies = {
+        ...manifest.dependencies,
+        [name]: spec,
+      };
+      changed = true;
+    }
   }
   if (!changed) return files;
 
@@ -193,11 +209,15 @@ type WorkerBuildBackendResult =
 
 export async function executeWorkerBuild(input: {
   files: Record<string, string>;
-  iteratePackageSpec?: string;
+  iterateRepoPkgRef?: string;
+  iterateRepoPkgSpecOverrides?: Record<string, string>;
   source: DynamicWorkerSource;
   workerBundler: Pick<import("../../worker-bundler.ts").default, "createApp" | "createWorker">;
 }): Promise<WorkerBuildBackendResult> {
-  const files = applyIteratePackageSpecOverride(input.files, input.iteratePackageSpec);
+  const files = applyIterateRepoPkgOverrides(input.files, {
+    ref: input.iterateRepoPkgRef,
+    specOverrides: input.iterateRepoPkgSpecOverrides,
+  });
   if ("createApp" in input.source) {
     const { files: _files, ...options } = input.source.createApp;
     return classifyBuildResult(

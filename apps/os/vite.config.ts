@@ -14,7 +14,7 @@ import { serveDevSdkTarball } from "./scripts/lib/dev-sdk-tarball.ts";
 
 // Local dev pins dynamic worker builds to THIS worktree's iterate sdk (the
 // tarball dev.ts packed) — must happen before the wrangler config below bakes
-// APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC. No-op without the dev.ts env.
+// APP_CONFIG_ITERATE_REPO_PKG_SPEC_OVERRIDES. No-op without the dev.ts env.
 await serveDevSdkTarball();
 
 // wrangler.jsonc is generated (gitignored) — refresh it from envs.ts before

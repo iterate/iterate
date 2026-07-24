@@ -10,10 +10,11 @@
 #
 # The seeded project-repo-template depends on the iterate @main URL — that's how
 # customer repos get `iterate/sdk` types without a manual npm release.
-# Preview deploys re-point seeded repos at @<pr-head-sha> (see
-# iterateSdkPackageSpec in apps/os/src/config.ts), so this workflow must run
-# on EVERY pull request — do not add a `paths:` filter, or previews of
-# unrelated PRs would seed repos with a dangling @<sha> ref.
+# Preview deploys pin every iterate/iterate pkg.pr.new spec in seeded repos to
+# @<pr-head-sha> (see iterateRepoPkgRef in apps/os/src/config.ts and
+# apps/os/src/pkg-pr-new.ts), so this workflow must run on EVERY pull request
+# — do not add a `paths:` filter, or previews of unrelated PRs would seed
+# repos with a dangling @<sha> ref.
 #
 # @iterate-com/tasks is the config-side connector for the Tasks app. OS itself
 # never depends on it — it exists for external project config repos (e.g.
