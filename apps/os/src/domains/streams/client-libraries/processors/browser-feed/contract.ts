@@ -12,7 +12,7 @@ import {
   type BrowserFeedState,
 } from "./projector.ts";
 
-const EmptyBrowserFeedState = z.strictObject({});
+const Empty = z.strictObject({});
 
 export const BrowserFeedContract = defineProcessorContract({
   slug: "browser-feed",
@@ -25,8 +25,7 @@ export const BrowserFeedContract = defineProcessorContract({
   // and rebuilt rather than adapted.
   stateSchema: z
     .preprocess(
-      (value) =>
-        EmptyBrowserFeedState.safeParse(value).success ? initialBrowserFeedState() : value,
+      (value) => (Empty.safeParse(value).success ? initialBrowserFeedState() : value),
       z.custom<BrowserFeedState>(isCurrentBrowserFeedState, {
         message: "browser-feed state is not from the current schema",
       }),
