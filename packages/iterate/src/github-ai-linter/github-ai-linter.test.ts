@@ -13,19 +13,18 @@ test("a declared GitHub AI linter subscribes each linked connection without conf
   );
 
   await app.processEvent({
-    ...githubLinkConfigured("ignored"),
+    ...githubLinkConfigured("ignored", 1),
     type: "events.iterate.com/project/heartbeat",
   });
-  await app.processEvent({ ...githubLinkConfigured("ignored"), payload: { connection: "" } });
-  await app.processEvent(githubLinkConfigured("iterate-installation"));
+  await app.processEvent({ ...githubLinkConfigured("ignored", 2), payload: { connection: "" } });
+  await app.processEvent(githubLinkConfigured("iterate-installation", 3));
 
   expect(appended).toMatchObject([
     {
       path: "/integrations/github/iterate-installation",
       events: [
         {
-          idempotencyKey:
-            'review-bot/subscription:v4:{"policyVersion":"2","rules":{"glob":"rules/**/*.md","repoPath":"/repos/iterate"}}',
+          idempotencyKey: "review-bot/subscription:v4:/:3",
           payload: {
             delivery: {
               mode: "wake",
@@ -72,18 +71,22 @@ test("a declared GitHub AI linter subscribes each linked connection without conf
   expect(virtualConfig).toContain('"repoPath":"/repos/iterate"');
 });
 
-test("configuration changes produce a new event identity for the stable subscription", async () => {
+test("each link event can replace the stable subscription, including a config rollback", async () => {
   const appended: Array<{ events: StreamEventInput[]; path: string }> = [];
   const env = projectEnv((path, ...events) => appended.push({ events, path }));
 
   await GithubAiLinter.create(env, {
     policyVersion: "2",
     rules: { glob: "rules/**/*.md", repoPath: "/repos/iterate" },
-  }).processEvent(githubLinkConfigured("iterate-installation"));
+  }).processEvent(githubLinkConfigured("iterate-installation", 41));
   await GithubAiLinter.create(env, {
     policyVersion: "3",
     rules: { glob: "review-rules/**/*.md", repoPath: "/repos/product" },
-  }).processEvent(githubLinkConfigured("iterate-installation"));
+  }).processEvent(githubLinkConfigured("iterate-installation", 42));
+  await GithubAiLinter.create(env, {
+    policyVersion: "2",
+    rules: { glob: "rules/**/*.md", repoPath: "/repos/iterate" },
+  }).processEvent(githubLinkConfigured("iterate-installation", 43));
 
   expect(
     appended.map(({ events }) => ({
@@ -92,13 +95,15 @@ test("configuration changes produce a new event identity for the stable subscrip
     })),
   ).toEqual([
     {
-      idempotencyKey:
-        'review-bot/subscription:v4:{"policyVersion":"2","rules":{"glob":"rules/**/*.md","repoPath":"/repos/iterate"}}',
+      idempotencyKey: "review-bot/subscription:v4:/:41",
       subscriptionKey: "app-review-bot#review-bot",
     },
     {
-      idempotencyKey:
-        'review-bot/subscription:v4:{"policyVersion":"3","rules":{"glob":"review-rules/**/*.md","repoPath":"/repos/product"}}',
+      idempotencyKey: "review-bot/subscription:v4:/:42",
+      subscriptionKey: "app-review-bot#review-bot",
+    },
+    {
+      idempotencyKey: "review-bot/subscription:v4:/:43",
       subscriptionKey: "app-review-bot#review-bot",
     },
   ]);
@@ -114,8 +119,8 @@ test("connection slugs with underscores produce distinct runtime-valid durable k
     },
   );
 
-  await app.processEvent(githubLinkConfigured("install-42-a_b"));
-  await app.processEvent(githubLinkConfigured("install-42-a-ub"));
+  await app.processEvent(githubLinkConfigured("install-42-a_b", 1));
+  await app.processEvent(githubLinkConfigured("install-42-a-ub", 2));
 
   const durableWorkerKeys = appended.map((append) => {
     const subscription: any = append.events[0];
@@ -127,10 +132,10 @@ test("connection slugs with underscores produce distinct runtime-valid durable k
   ]);
 });
 
-function githubLinkConfigured(connection: string): StreamEvent {
+function githubLinkConfigured(connection: string, offset: number): StreamEvent {
   return {
     createdAt: "2026-07-22T12:00:00.000Z",
-    offset: 1,
+    offset,
     path: "/",
     payload: { connection },
     type: "events.iterate.com/repo/github-link-configured",

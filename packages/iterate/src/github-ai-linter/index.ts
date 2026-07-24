@@ -17,7 +17,7 @@ export const GithubAiLinter = {
         if (event.type !== "events.iterate.com/repo/github-link-configured") return;
         const connection = event.payload?.connection;
         if (typeof connection !== "string" || connection.length === 0) return;
-        const subscriptionEvents = reviewBotSubscriptionEvents(connection, config);
+        const subscriptionEvents = reviewBotSubscriptionEvents(event, connection, config);
         using itx = await env.ITX.get();
         await itx.streams.get(`/integrations/github/${connection}`).append(...subscriptionEvents);
       },
@@ -26,6 +26,7 @@ export const GithubAiLinter = {
 };
 
 function reviewBotSubscriptionEvents(
+  sourceEvent: StreamEvent,
   connection: string,
   config: GithubAiLinterConfig,
 ): StreamEventInput[] {
@@ -45,7 +46,7 @@ function reviewBotSubscriptionEvents(
           processorSlug: "review-bot",
         },
       },
-      idempotencyKey: `review-bot/subscription:v${reviewBotSubscriptionConfigVersion}:${JSON.stringify(config)}`,
+      idempotencyKey: `review-bot/subscription:v${reviewBotSubscriptionConfigVersion}:${sourceEvent.path}:${sourceEvent.offset}`,
     },
   ];
 }
