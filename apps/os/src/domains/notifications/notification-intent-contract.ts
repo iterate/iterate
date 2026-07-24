@@ -67,6 +67,24 @@ export const NotificationIntentContract = defineProcessorContract({
               .meta({ description: "The approvals screen, focused on one held egress request." }),
             z
               .strictObject({
+                kind: z.literal("approvals-group"),
+                executionId: z
+                  .string()
+                  .trim()
+                  .min(1)
+                  .meta({
+                    description:
+                      "The Script Execution whose held requests this push summarizes — the " +
+                      "Approval Group's identity (CONTEXT.md).",
+                  }),
+              })
+              .meta({
+                description:
+                  "The approvals screen, focused on one script run's Approval Group of held " +
+                  "egress requests.",
+              }),
+            z
+              .strictObject({
                 kind: z.literal("agent-chat"),
                 path: z
                   .string()

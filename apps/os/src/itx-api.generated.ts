@@ -3390,6 +3390,7 @@ export type DeviceAppendInput =
         destination:
           | { kind: "project" }
           | { kind: "approvals"; approvalRequestEventOffset: number }
+          | { kind: "approvals-group"; executionId: string }
           | { kind: "agent-chat"; path: string };
         expiresAt: number;
         title: string;

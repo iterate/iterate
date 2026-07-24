@@ -1,7 +1,11 @@
 import { DurableObject } from "cloudflare:workers";
 import { LiveStateRpcTarget } from "iterate/sdk/capnweb";
 import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
-import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
+import type {
+  ProcessorSnapshot,
+  StreamSubscriberWakeRequest,
+  StreamSubscriberWakeResponse,
+} from "iterate/processors";
 import type { StreamEvent } from "iterate/processors";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { parseConfig } from "../../config.ts";
@@ -39,6 +43,7 @@ import { readProjectById } from "../../project-directory.ts";
 import { EmailProcessor } from "../email/email-processor-implementation.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
 import { NotificationProcessor } from "../notifications/notification-processor-implementation.ts";
+import type { NotificationProcessorState } from "../notifications/notification-processor-contract.ts";
 import type { ProjectEgressIntercept, ProjectEgressInterceptor } from "./egress.ts";
 import {
   buildApprovalMessage,
@@ -140,6 +145,20 @@ export class ProjectDurableObject extends DurableObject<Env> {
       stream: this.#stream,
       path: this.#name.path,
       projectId: this.#name.projectId,
+      now: () => Date.now(),
+      // The DO alarm is SHARED with the runners' keepalives, so the Approval
+      // Group debounce states its desire through a named slice and the
+      // registry arms the earliest across all of them. Early fires (another
+      // slice's) run alarm() below, which is idempotent and re-arms this one.
+      repointAlarm: (atMs) => this.#registry.setAlarmSlice("notification", atMs),
+      // Runner-backed committed-state read for fire-time decisions: lazy
+      // closure because #notificationReads is built from the registered
+      // processor below. The explicit return annotation breaks the
+      // field-initializer inference cycle.
+      reads: {
+        snapshot: (): Promise<ProcessorSnapshot<NotificationProcessorState>> =>
+          this.#notificationReads.snapshot(),
+      },
     }),
   );
   readonly #notificationReads = this.#registry.reads(this.#notificationProcessor);
@@ -239,9 +258,25 @@ export class ProjectDurableObject extends DurableObject<Env> {
     return this.#registry.wakeStreamSubscriber(args);
   }
 
-  /** The registry's shared DO alarm (runner keepalives) — see stream-processor-registry.ts. */
-  alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
-    return this.#registry.handleAlarm(alarmInfo);
+  /** The registry's shared DO alarm (runner keepalives), plus the notification
+   * processor's Approval Group debounce slice — see stream-processor-registry.ts
+   * and NotificationProcessor.fireDueApprovalGroupWindows. Both handlers are
+   * idempotent and re-derive their own next fire time, so an early fire for
+   * either slice is harmless. */
+  async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
+    await this.#registry.handleAlarm(alarmInfo);
+    try {
+      await this.#registry.catchUp("notification");
+      await this.#notificationProcessor.fireDueApprovalGroupWindows();
+      await this.#registry.catchUp("notification");
+    } catch (error) {
+      // Cloudflare retries a throwing alarm handler only a bounded number of
+      // times; a Stream DO outage must not end with due debounce windows and
+      // no armed alarm. Arm a coarse fallback — AWAITED, so it is durable
+      // before the rethrow surrenders to the platform's bounded retry.
+      await this.#registry.setAlarmSlice("notification", Date.now() + 60_000);
+      throw error;
+    }
   }
 
   get slackProcessor() {
