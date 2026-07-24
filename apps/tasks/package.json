@@ -37,7 +37,7 @@
     "build:package": "tsc --project tsconfig.package.json",
     "typecheck": "tsc --noEmit",
     "deploy": "vite build && wrangler deploy",
-    "test": "vitest run --reporter=default --reporter=../../packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
+    "test": "pnpm build:package && vitest run --reporter=default --reporter=../../packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
     "prepack": "pnpm build:package"
   },
   "devDependencies": {

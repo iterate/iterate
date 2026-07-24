@@ -12,10 +12,14 @@ test("the published package contains only the config bridge", async () => {
     },
   };
 
-  execFileSync("pnpm", ["pack", "--pack-destination", directory], {
-    cwd: process.cwd(),
-    stdio: "pipe",
-  });
+  execFileSync(
+    "pnpm",
+    ["pack", "--config.ignore-scripts=true", "--pack-destination", directory],
+    {
+      cwd: process.cwd(),
+      stdio: "pipe",
+    },
+  );
   const archives = (await readdir(directory)).filter((file) => file.endsWith(".tgz"));
   expect(archives).toHaveLength(1);
   const archive = path.join(directory, archives[0]!);
