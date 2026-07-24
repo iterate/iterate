@@ -49,12 +49,15 @@ describe("executeWorkerBuild", () => {
     };
 
     await expect(execute(files, source)).resolves.toEqual({
-      assetManifest: {},
-      assets: {},
-      mainModule: "bundle.js",
-      modules: { "bundle.js": "built" },
-      warnings: [],
-      wranglerConfig: { compatibilityDate: "2026-07-01" },
+      ok: true,
+      output: {
+        assetManifest: {},
+        assets: {},
+        mainModule: "bundle.js",
+        modules: { "bundle.js": "built" },
+        warnings: [],
+        wranglerConfig: { compatibilityDate: "2026-07-01" },
+      },
     });
     expect(createWorker).toHaveBeenCalledWith({
       bundle: false,
@@ -97,8 +100,11 @@ describe("executeWorkerBuild", () => {
     };
 
     await expect(execute(files, source)).resolves.toMatchObject({
-      assets: { "/client.js": "client" },
-      warnings: ["upstream warning"],
+      ok: true,
+      output: {
+        assets: { "/client.js": "client" },
+        warnings: ["upstream warning"],
+      },
     });
     expect(createApp).toHaveBeenCalledWith({
       client: "apps/todo/client/index.tsx",
@@ -174,9 +180,9 @@ describe("executeWorkerBuild", () => {
 
   it("classifies returned build errors while transport failures remain retryable", async () => {
     createWorker.mockResolvedValueOnce({ error: "Could not resolve package" });
-    await expect(execute({ "worker.ts": "export default {};" })).rejects.toMatchObject({
-      message: "Could not resolve package",
-      name: "WorkerBuildFailedError",
+    await expect(execute({ "worker.ts": "export default {};" })).resolves.toEqual({
+      failure: { kind: "source", message: "Could not resolve package" },
+      ok: false,
     });
 
     const transportFailure = new Error("service binding disconnected");
@@ -189,20 +195,23 @@ describe("executeWorkerBuild", () => {
     "Could not resolve version for example@next",
     "Version 9.9.9 not found for example",
     "Failed to install iterate: Failed to fetch tarball: 404 Not Found",
-  ])("rejects unusable output after a dependency-install warning: %s", async (warning) => {
-    createWorker.mockResolvedValueOnce({
-      result: {
-        mainModule: "bundle.js",
-        modules: { "bundle.js": 'export * from "iterate/sdk";' },
-        warnings: [warning],
-      },
-    });
+  ])(
+    "returns a source failure for unusable output after a dependency-install warning: %s",
+    async (warning) => {
+      createWorker.mockResolvedValueOnce({
+        result: {
+          mainModule: "bundle.js",
+          modules: { "bundle.js": 'export * from "iterate/sdk";' },
+          warnings: [warning],
+        },
+      });
 
-    await expect(execute({ "worker.ts": 'export * from "iterate/sdk";' })).rejects.toMatchObject({
-      message: warning,
-      name: "WorkerBuildFailedError",
-    });
-  });
+      await expect(execute({ "worker.ts": 'export * from "iterate/sdk";' })).resolves.toEqual({
+        failure: { kind: "source", message: warning },
+        ok: false,
+      });
+    },
+  );
 
   it("preserves ordinary compiler warnings on a usable build", async () => {
     createWorker.mockResolvedValueOnce({
@@ -214,7 +223,8 @@ describe("executeWorkerBuild", () => {
     });
 
     await expect(execute({ "worker.ts": "export default {};" })).resolves.toMatchObject({
-      warnings: ["This comparison is always false"],
+      ok: true,
+      output: { warnings: ["This comparison is always false"] },
     });
   });
 
@@ -230,7 +240,7 @@ describe("executeWorkerBuild", () => {
     // A traversed file the transform lane could not read.
     "File not found: apps/todo/shared/model.ts",
   ])(
-    "rejects output whose imports would fail at startup with No such module: %s",
+    "returns a source failure for output whose imports would fail at startup with No such module: %s",
     async (warning) => {
       createWorker.mockResolvedValueOnce({
         result: {
@@ -240,13 +250,14 @@ describe("executeWorkerBuild", () => {
         },
       });
 
-      const error = await execute({ "worker.ts": "source" }).then(
-        () => Promise.reject(new Error("build unexpectedly succeeded")),
-        (thrown: Error) => thrown,
-      );
-      expect(error).toMatchObject({ name: "WorkerBuildFailedError" });
-      expect(error.message).toContain(warning);
-      expect(error.message).toContain("No such module");
+      const result = await execute({ "worker.ts": "source" });
+      expect(result).toMatchObject({
+        failure: { kind: "source" },
+        ok: false,
+      });
+      if (result.ok) throw new Error("build unexpectedly succeeded");
+      expect(result.failure.message).toContain(warning);
+      expect(result.failure.message).toContain("No such module");
     },
   );
 
@@ -268,7 +279,8 @@ describe("executeWorkerBuild", () => {
     });
 
     await expect(execute({ "worker.ts": "source" })).resolves.toMatchObject({
-      warnings: [warning],
+      ok: true,
+      output: { warnings: [warning] },
     });
   });
 });

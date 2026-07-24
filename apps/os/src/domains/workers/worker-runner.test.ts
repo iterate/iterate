@@ -182,14 +182,17 @@ describe("dynamic worker spans", () => {
 describe("createApp asset dispatch", () => {
   it("serves a stateful app asset before waking its Durable Object", async () => {
     h.resolveWorkerSource.mockResolvedValue({
-      assetConfig: undefined,
-      assetManifest: { "/client.js": { etag: "asset-etag" } },
-      assets: { "client.js": "console.log('client')" },
-      cacheKey: "build-key",
-      commitOid: "commit-1",
-      mainModule: "server.js",
-      modules: {},
-      wranglerConfig: undefined,
+      ok: true,
+      source: {
+        assetConfig: undefined,
+        assetManifest: { "/client.js": { etag: "asset-etag" } },
+        assets: { "client.js": "console.log('client')" },
+        cacheKey: "build-key",
+        commitOid: "commit-1",
+        mainModule: "server.js",
+        modules: {},
+        wranglerConfig: undefined,
+      },
     });
     h.handleAssetRequest.mockResolvedValue(
       new Response("console.log('client')", {
@@ -236,10 +239,11 @@ describe("createApp asset dispatch", () => {
   });
 });
 
-it("restores the terminal source-build verdict after stateful Worker RPC strips it", async () => {
-  const sourceFailure = new Error('No such module "yaml".');
-  sourceFailure.name = "WorkerBuildFailedError";
-  h.statefulInvokeCapability.mockRejectedValue(sourceFailure);
+it("turns a stateful source-build result into a local terminal delivery error", async () => {
+  h.statefulInvokeCapability.mockResolvedValue({
+    failure: { kind: "source", message: 'No such module "yaml".' },
+    ok: false,
+  });
   const runner = new DynamicWorkerRunner({
     streamContext: { kind: "scope", scopePath: statefulRef.path },
     exports: {} as ExecutionContext["exports"],

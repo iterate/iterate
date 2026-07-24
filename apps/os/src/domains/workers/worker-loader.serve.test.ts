@@ -40,18 +40,22 @@ const h = vi.hoisted(() => {
     state.buildCalls.push(input.files["worker.ts"] ?? input.files["main.js"] ?? "unknown source");
     if (state.buildGate !== undefined) await state.buildGate;
     if (state.failBuilds) {
-      const failure = new Error("esbuild exploded");
-      failure.name = "WorkerBuildFailedError";
-      throw failure;
+      return {
+        failure: { kind: "source" as const, message: "esbuild exploded" },
+        ok: false as const,
+      };
     }
     if (state.failRuntime) throw new Error("build runtime interrupted");
     return {
-      assetManifest: {},
-      assets: {},
-      mainModule: "worker.js",
-      modules: { "worker.js": `// build of ${input.files["worker.ts"]}` },
-      warnings: [],
-      wranglerConfig: state.wranglerConfig,
+      ok: true as const,
+      output: {
+        assetManifest: {},
+        assets: {},
+        mainModule: "worker.js",
+        modules: { "worker.js": `// build of ${input.files["worker.ts"]}` },
+        warnings: [],
+        wranglerConfig: state.wranglerConfig,
+      },
     };
   };
   const itxEnv = {
@@ -169,10 +173,12 @@ beforeEach(async () => {
 describe("resolveWorkerSource", () => {
   test("builds once, stores one immutable record, and returns its repo commit", async () => {
     setCommit("c1", "fresh-build", "A1");
-    const first = await resolveWorkerSource({
-      projectId: "prj_a",
-      source: repoSource("/repos/fresh-build"),
-    });
+    const first = sourceFrom(
+      await resolveWorkerSource({
+        projectId: "prj_a",
+        source: repoSource("/repos/fresh-build"),
+      }),
+    );
 
     expect(first.commitOid).toBe("c1");
     expect(first.modules["worker.js"]).toContain("A1");
@@ -182,10 +188,12 @@ describe("resolveWorkerSource", () => {
     expect(h.state.snapshotDisposals).toBe(1);
     expect([...h.kv.data.keys()]).toEqual([expect.stringMatching(artifactKeyPattern)]);
 
-    const second = await resolveWorkerSource({
-      projectId: "prj_a",
-      source: repoSource("/repos/fresh-build"),
-    });
+    const second = sourceFrom(
+      await resolveWorkerSource({
+        projectId: "prj_a",
+        source: repoSource("/repos/fresh-build"),
+      }),
+    );
     expect(second.cacheKey).toBe(first.cacheKey);
     expect(h.state.buildCalls).toEqual(["A1"]);
   });
@@ -193,26 +201,28 @@ describe("resolveWorkerSource", () => {
   test("shares deterministic artifacts across projects", async () => {
     setCommit("c1", "shared-build", "SHARED");
     const source = repoSource("/repos/shared-build");
-    const first = await resolveWorkerSource({ projectId: "prj_1", source });
-    const second = await resolveWorkerSource({ projectId: "prj_2", source });
+    const first = sourceFrom(await resolveWorkerSource({ projectId: "prj_1", source }));
+    const second = sourceFrom(await resolveWorkerSource({ projectId: "prj_2", source }));
 
     expect(second.cacheKey).toBe(first.cacheKey);
     expect(h.state.buildCalls).toEqual(["SHARED"]);
   });
 
-  test("does not cache an unclassified worker-bundler failure", async () => {
+  test("returns and does not cache a source-build failure", async () => {
     setCommit("c1", "broken-build", "BROKEN");
     const source = repoSource("/repos/broken-build");
     h.state.failBuilds = true;
 
-    const first = resolveWorkerSource({ projectId: "prj_broken", source });
-    await expect(first).rejects.toSatisfy(isWorkerBuildFailedError);
-    await expect(first).rejects.toMatchObject({ retryable: false });
+    const first = await resolveWorkerSource({ projectId: "prj_broken", source });
+    expect(first).toEqual({
+      failure: { kind: "source", message: "esbuild exploded" },
+      ok: false,
+    });
     expect(h.state.buildCalls).toEqual(["BROKEN"]);
     expect(h.kv.data.size).toBe(0);
 
     h.state.failBuilds = false;
-    const recovered = await resolveWorkerSource({ projectId: "prj_broken", source });
+    const recovered = sourceFrom(await resolveWorkerSource({ projectId: "prj_broken", source }));
     expect(recovered.modules["worker.js"]).toContain("BROKEN");
     expect(h.state.buildCalls).toEqual(["BROKEN", "BROKEN"]);
   });
@@ -227,7 +237,7 @@ describe("resolveWorkerSource", () => {
     expect(h.kv.data.size).toBe(0);
 
     h.state.failRuntime = false;
-    const recovered = await resolveWorkerSource({ projectId: "prj_retry", source });
+    const recovered = sourceFrom(await resolveWorkerSource({ projectId: "prj_retry", source }));
     expect(recovered.modules["worker.js"]).toContain("RETRY");
     expect(h.state.buildCalls).toEqual(["RETRY", "RETRY"]);
   });
@@ -278,25 +288,29 @@ describe("resolveWorkerSource", () => {
     expect(h.state.snapshotDisposals).toBe(1);
     expect([...h.kv.data.keys()]).toEqual([expect.stringMatching(artifactKeyPattern)]);
 
-    const ready = await resolveWorkerSource({
-      projectId: "prj_slow",
-      source: repoSource("/repos/budgeted-build"),
-    });
+    const ready = sourceFrom(
+      await resolveWorkerSource({
+        projectId: "prj_slow",
+        source: repoSource("/repos/budgeted-build"),
+      }),
+    );
     expect(ready.modules["worker.js"]).toContain("SLOW");
     expect(h.state.buildCalls).toEqual(["SLOW"]);
   });
 
   test("passes bundle: false through the normal worker-bundler build path", async () => {
-    const resolved = await resolveWorkerSource({
-      projectId: "prj_inline",
-      source: {
-        createWorker: {
-          bundle: false,
-          entryPoint: "main.js",
-          files: { files: { "main.js": "export default {};" }, type: "inline" },
+    const resolved = sourceFrom(
+      await resolveWorkerSource({
+        projectId: "prj_inline",
+        source: {
+          createWorker: {
+            bundle: false,
+            entryPoint: "main.js",
+            files: { files: { "main.js": "export default {};" }, type: "inline" },
+          },
         },
-      },
-    });
+      }),
+    );
 
     expect(resolved.commitOid).toBeUndefined();
     expect(resolved.mainModule).toBe("worker.js");
@@ -308,14 +322,16 @@ describe("resolveWorkerSource", () => {
       compatibilityDate: "2026-07-01",
       compatibilityFlags: ["nodejs_compat_v2"],
     };
-    const resolved = await resolveWorkerSource({
-      projectId: "prj_wrangler",
-      source: {
-        createWorker: {
-          files: { files: { "main.js": "export default {};" }, type: "inline" },
+    const resolved = sourceFrom(
+      await resolveWorkerSource({
+        projectId: "prj_wrangler",
+        source: {
+          createWorker: {
+            files: { files: { "main.js": "export default {};" }, type: "inline" },
+          },
         },
-      },
-    });
+      }),
+    );
 
     loadResolvedWorker({
       bindings: {},
@@ -334,14 +350,16 @@ describe("resolveWorkerSource", () => {
   });
 
   test("does not reuse a loaded isolate across parent deployments", async () => {
-    const resolved = await resolveWorkerSource({
-      projectId: "prj_rollout",
-      source: {
-        createWorker: {
-          files: { files: { "main.js": "export default {};" }, type: "inline" },
+    const resolved = sourceFrom(
+      await resolveWorkerSource({
+        projectId: "prj_rollout",
+        source: {
+          createWorker: {
+            files: { files: { "main.js": "export default {};" }, type: "inline" },
+          },
         },
-      },
-    });
+      }),
+    );
     const load = () =>
       loadResolvedWorker({
         bindings: {},
@@ -363,14 +381,16 @@ describe("resolveWorkerSource", () => {
   });
 
   test("does not reuse stream-context-bound workers across script executions", async () => {
-    const resolved = await resolveWorkerSource({
-      projectId: "prj_context",
-      source: {
-        createWorker: {
-          files: { files: { "main.js": "export default {};" }, type: "inline" },
+    const resolved = sourceFrom(
+      await resolveWorkerSource({
+        projectId: "prj_context",
+        source: {
+          createWorker: {
+            files: { files: { "main.js": "export default {};" }, type: "inline" },
+          },
         },
-      },
-    });
+      }),
+    );
     const load = (streamContext: StreamContext) =>
       loadResolvedWorker({
         bindings: {},
@@ -400,3 +420,9 @@ describe("resolveWorkerSource", () => {
     expect(h.state.loaderCalls[2]?.key).toBe(h.state.loaderCalls[1]?.key);
   });
 });
+
+function sourceFrom(result: Awaited<ReturnType<typeof resolveWorkerSource>>) {
+  expect(result).toMatchObject({ ok: true });
+  if (!result.ok) throw new Error(result.failure.message);
+  return result.source;
+}

@@ -51,15 +51,31 @@ export type WorkerBuildArtifact = {
   wranglerConfig?: WorkerBuildWranglerConfig;
 };
 
+/** Plain-data terminal outcome for source which the compiler cannot build. */
+export type WorkerBuildFailure = {
+  kind: "source";
+  message: string;
+};
+
+/** JSON-safe result carried across every Worker build RPC boundary. */
+export type WorkerBuildResult =
+  | { artifact: WorkerBuildArtifact; ok: true }
+  | { failure: WorkerBuildFailure; ok: false };
+
 /** An expected source-build failure; repo, KV, and sidecar transport errors stay distinct. */
 export class WorkerBuildFailedError extends Error {
   override readonly name = "WorkerBuildFailedError";
+  readonly retryable = false;
 }
 
 export function isWorkerBuildFailedError(
   error: unknown,
-): error is { name: "WorkerBuildFailedError" } {
+): error is { name: "WorkerBuildFailedError"; retryable?: false } {
   return (error as { name?: string } | null)?.name === "WorkerBuildFailedError";
+}
+
+export function workerBuildFailedError(failure: WorkerBuildFailure): WorkerBuildFailedError {
+  return new WorkerBuildFailedError(failure.message);
 }
 
 const BUILD_FAILURE_MESSAGE_LIMIT = 2_000;

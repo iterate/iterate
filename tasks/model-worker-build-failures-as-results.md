@@ -3,18 +3,18 @@ size: medium
 
 # Model worker source-build failures as results
 
-Status: Planning complete; implementation has not started. The target is to carry expected source-build failures as plain data across both Workers RPC boundaries while leaving infrastructure failures exceptional and retryable.
+Status: Implementation and local verification are complete. Source failures now stay as plain data through both RPC hops; preview CI is the only remaining check.
 
 ## Plan
 
-- [ ] Define a JSON-safe discriminated build result for either a completed artifact or a deterministic source failure.
-- [ ] Return source failures as data from the keyed build coordinator; keep infrastructure failures and programming defects throwing.
-- [ ] Carry the result through worker loading and the outer stateful-worker invocation boundary before interpreting it.
-- [ ] Remove the name/property reconstruction used to preserve `retryable: false` across lossy RPC errors.
-- [ ] Prove a source failure parks its stream subscription on attempt one with the exact compiler message.
-- [ ] Prove an infrastructure failure still enters bounded delivery backoff.
-- [ ] Preserve timeout/alarm terminal-failure receipts and successful build coalescing.
-- [ ] Run focused worker/stream tests, OS typecheck and lint, then production-shaped preview CI.
+- [x] Define a JSON-safe discriminated build result for either a completed artifact or a deterministic source failure. _`WorkerBuildResult` is the coordinator contract; the bundler adapter uses the same failure shape._
+- [x] Return source failures as data from the keyed build coordinator; keep infrastructure failures and programming defects throwing. _Coordinator source outcomes resolve; transport and storage errors still reject._
+- [x] Carry the result through worker loading and the outer stateful-worker invocation boundary before interpreting it. _The stateful host returns an invocation envelope and the caller unwraps it after RPC._
+- [x] Remove the name/property reconstruction used to preserve `retryable: false` across lossy RPC errors. _A local terminal error is created once, after the final hop._
+- [x] Prove a source failure parks its stream subscription on attempt one with the exact compiler message. _Runner and delivery-spine tests cover the final error and immediate park._
+- [x] Prove an infrastructure failure still enters bounded delivery backoff. _Coordinator and existing delivery tests retain the throwing path._
+- [x] Preserve timeout/alarm terminal-failure receipts and successful build coalescing. _Focused coordinator tests cover timeout, eviction, receipt replay, coalescing, and retry._
+- [ ] Run focused worker/stream tests, OS typecheck and lint, then production-shaped preview CI. _159 focused tests, all 2,337 OS unit tests, typecheck, and lint pass locally; preview CI pending._
 
 ## Design notes
 
@@ -27,3 +27,9 @@ type WorkerBuildResult =
 ```
 
 The outcome must remain plain data until it has crossed the final stateful-worker RPC hop. Unavailable Durable Objects, repo/KV failures, compiler transport failures, and unexpected defects continue to throw so existing retry and observability behavior stays intact.
+
+## Implementation log
+
+- 2026-07-24: Converted worker-bundler source rejection, coordinator flights, durable receipts, source resolution, and stateful invocation to discriminated results.
+- 2026-07-24: Kept the public capability API unchanged: source failures become a local `WorkerBuildFailedError` with `retryable: false` only after the final stateful RPC hop.
+- 2026-07-24: Documented the internal result boundary and verified focused tests, the full OS unit suite, OS typecheck, and repository lint.

@@ -7,9 +7,11 @@ import {
   isMissingInvokeCapabilityError,
   replayPath,
 } from "../capability-host/live-capability.ts";
+import { workerBuildFailedError, type WorkerBuildFailure } from "./artifact-store.ts";
 import { takeWorkerFetchDispatch, workerBuildStatus } from "./worker-fetch-dispatch.ts";
 import type { StatefulDynamicWorkerRef } from "./schemas.ts";
 import { withWorkerCommit } from "./worker-serve-info.ts";
+import { workerBuildFailedResponse } from "./worker-serve-overlay.ts";
 import { DynamicWorkerRunner } from "./worker-runner.ts";
 
 const FACET_NAME = "target";
@@ -69,22 +71,30 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     if (ref.type !== "stateful") {
       throw new Error("StatefulWorkerDurableObject.fetch dispatched with a non-stateful ref.");
     }
-    let loaded: { commitOid?: string; target: unknown };
+    let loaded:
+      | { commitOid?: string; ok: true; target: unknown }
+      | { failure: WorkerBuildFailure; ok: false };
     try {
       loaded = await tracing.enterSpan(
         "dynamic_worker.stateful.resolve_facet",
         async () => await this.#facet(ref, taken.dispatch.buildBudgetMs),
       );
     } catch (error) {
-      // Answer the building/failed cases HERE rather than relying on the
-      // error name surviving the Durable Object fetch hop back to the
-      // dispatching entrypoint — same pages every fetch-lane hop serves.
+      // Answer exceptional build states HERE rather than relying on an error
+      // name surviving the Durable Object fetch hop back to the dispatching
+      // entrypoint — same pages every fetch-lane hop serves.
       const buildStatus = workerBuildStatus(
         error,
         taken.request.headers.get("x-iterate-url-prefix") ?? "",
       );
       if (buildStatus !== null) return buildStatus.response;
       throw error;
+    }
+    if (!loaded.ok) {
+      return workerBuildFailedResponse(
+        loaded.failure.message,
+        taken.request.headers.get("x-iterate-url-prefix") ?? "",
+      );
     }
     return await tracing.enterSpan("dynamic_worker.stateful.target_fetch", async (span) => {
       const response = withWorkerCommit(
@@ -117,10 +127,12 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     // ownership boundary boring: the outer DO receives a call, resolves the
     // current ref, restarts the facet if the source changed, and performs the
     // method replay without leaking the inner facet reference.
-    const { target } = await this.#facet(ref, buildBudgetMs);
-    return flattenNestedPath
-      ? await invokePreferringFlattenedPath({ args, path, target })
-      : await replayPath({ args, path, target });
+    const loaded = await this.#facet(ref, buildBudgetMs);
+    if (!loaded.ok) return loaded;
+    const value = flattenNestedPath
+      ? await invokePreferringFlattenedPath({ args, path, target: loaded.target })
+      : await replayPath({ args, path, target: loaded.target });
+    return { ok: true as const, value };
   }
 
   /**
@@ -166,14 +178,15 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
       alarmInfo === undefined
         ? undefined
         : { isRetry: alarmInfo.isRetry, retryCount: alarmInfo.retryCount };
-    const { target } = await this.#facet(ref);
+    const loaded = await this.#facet(ref);
+    if (!loaded.ok) throw workerBuildFailedError(loaded.failure);
     try {
       // Flattened on purpose: workerd reserves `alarm` as an RPC method name
       // on Durable Object stubs, so the fire rides the worker's own
       // `invokeCapability` dispatcher, whose userland walk calls the class's
       // `alarm()` locally — where the name is ordinary. Failures rethrow
       // into the platform's native alarm retry.
-      await invokeFlattenedPath({ args: [info], path: ["alarm"], target });
+      await invokeFlattenedPath({ args: [info], path: ["alarm"], target: loaded.target });
     } catch (error) {
       if (isMissingInvokeCapabilityError(error)) {
         throw new Error(
@@ -205,9 +218,13 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
   async #facet(
     ref: StatefulDynamicWorkerRef,
     buildBudgetMs?: number,
-  ): Promise<{ commitOid?: string; target: unknown }> {
+  ): Promise<
+    { commitOid?: string; ok: true; target: unknown } | { failure: WorkerBuildFailure; ok: false }
+  > {
     this.#assertRefMatchesName(ref);
-    const { klass, resolved } = await this.#workerRunner.loadStatefulClass(ref, buildBudgetMs);
+    const loaded = await this.#workerRunner.loadStatefulClass(ref, buildBudgetMs);
+    if (!loaded.ok) return loaded;
+    const { klass, resolved } = loaded;
     const version = statefulWorkerVersion(ref, resolved.cacheKey);
     const previous = this.ctx.storage.kv.get<string>(VERSION_STORAGE_KEY);
     if (previous && previous !== version) {
@@ -233,6 +250,7 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
 
     return {
       ...(resolved.commitOid === undefined ? {} : { commitOid: resolved.commitOid }),
+      ok: true,
       target,
     };
   }

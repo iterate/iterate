@@ -1,6 +1,6 @@
 import {
   buildFailureMessageFromError,
-  WorkerBuildFailedError,
+  type WorkerBuildFailure,
   type WorkerBuildModule,
   type WorkerBuildAssetMetadata,
   type WorkerBuildWranglerConfig,
@@ -177,12 +177,7 @@ function applyIteratePackageSpecOverride(
 
 /** Resolve `files`, then make one direct createWorker/createApp call in the
  * isolated compiler sidecar. */
-export async function executeWorkerBuild(input: {
-  files: Record<string, string>;
-  iteratePackageSpec?: string;
-  source: DynamicWorkerSource;
-  workerBundler: Pick<import("../../worker-bundler.ts").default, "createApp" | "createWorker">;
-}): Promise<{
+type WorkerBuildOutput = {
   assetConfig?: WorkerBundlerAssetConfig;
   assetManifest: Record<string, WorkerBuildAssetMetadata>;
   assets: Record<string, string>;
@@ -190,11 +185,22 @@ export async function executeWorkerBuild(input: {
   modules: Record<string, WorkerBuildModule>;
   warnings: string[];
   wranglerConfig?: WorkerBuildWranglerConfig;
-}> {
+};
+
+export type WorkerBuildBackendResult =
+  | { ok: true; output: WorkerBuildOutput }
+  | { failure: WorkerBuildFailure; ok: false };
+
+export async function executeWorkerBuild(input: {
+  files: Record<string, string>;
+  iteratePackageSpec?: string;
+  source: DynamicWorkerSource;
+  workerBundler: Pick<import("../../worker-bundler.ts").default, "createApp" | "createWorker">;
+}): Promise<WorkerBuildBackendResult> {
   const files = applyIteratePackageSpecOverride(input.files, input.iteratePackageSpec);
   if ("createApp" in input.source) {
     const { files: _files, ...options } = input.source.createApp;
-    return unwrapBuildResult(
+    return classifyBuildResult(
       await input.workerBundler.createApp({
         ...options,
         files,
@@ -203,18 +209,25 @@ export async function executeWorkerBuild(input: {
   }
 
   const { files: _files, ...options } = input.source.createWorker;
-  const built = unwrapBuildResult(
+  const built = classifyBuildResult(
     await input.workerBundler.createWorker({
       ...options,
       files,
     }),
   );
-  return { assetManifest: {}, assets: {}, ...built };
+  return built.ok
+    ? {
+        ok: true,
+        output: { assetManifest: {}, assets: {}, ...built.output },
+      }
+    : built;
 }
 
-function unwrapBuildResult<T>(result: { error: string } | { result: T }): T {
+function classifyBuildResult<T>(
+  result: { error: string } | { result: T },
+): { ok: true; output: T } | { failure: WorkerBuildFailure; ok: false } {
   if ("error" in result) {
-    throw new WorkerBuildFailedError(buildFailureMessageFromError(result.error));
+    return sourceFailure(result.error);
   }
   const built = result.result;
   if (
@@ -230,22 +243,25 @@ function unwrapBuildResult<T>(result: { error: string } | { result: T }): T {
       DEPENDENCY_INSTALL_FAILURE_WARNING_PATTERNS.some((pattern) => pattern.test(warning)),
     );
     if (dependencyInstallFailures.length > 0) {
-      throw new WorkerBuildFailedError(
-        buildFailureMessageFromError(dependencyInstallFailures.join("\n")),
-      );
+      return sourceFailure(dependencyInstallFailures.join("\n"));
     }
     const unresolvedImports = unresolvedImportFailures(warnings);
     if (unresolvedImports.length > 0) {
-      throw new WorkerBuildFailedError(
-        buildFailureMessageFromError(
-          [
-            "The built worker would fail at startup with `No such module` — it contains imports that do not resolve:",
-            ...unresolvedImports.map((warning) => `  ${warning}`),
-            "Declare the missing dependency in package.json, or update the import if the installed package no longer provides that entry. Node builtins can be imported with the `node:` prefix.",
-          ].join("\n"),
-        ),
+      return sourceFailure(
+        [
+          "The built worker would fail at startup with `No such module` — it contains imports that do not resolve:",
+          ...unresolvedImports.map((warning) => `  ${warning}`),
+          "Declare the missing dependency in package.json, or update the import if the installed package no longer provides that entry. Node builtins can be imported with the `node:` prefix.",
+        ].join("\n"),
       );
     }
   }
-  return built;
+  return { ok: true, output: built };
+}
+
+function sourceFailure(error: unknown): { failure: WorkerBuildFailure; ok: false } {
+  return {
+    failure: { kind: "source", message: buildFailureMessageFromError(error) },
+    ok: false,
+  };
 }

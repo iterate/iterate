@@ -5,7 +5,7 @@ import type { StreamContext } from "../projects/stream-context.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { invokePreferringFlattenedPath, replayPath } from "../capability-host/live-capability.ts";
-import { isWorkerBuildFailedError } from "./artifact-store.ts";
+import { workerBuildFailedError, type WorkerBuildFailure } from "./artifact-store.ts";
 import type {
   StatefulDynamicWorkerRef,
   StatelessDynamicWorkerRef,
@@ -20,6 +20,7 @@ import {
   loadResolvedWorker,
   resolveWorkerSource,
   type ResolvedWorkerSource,
+  type ResolvedWorkerSourceResult,
   type WorkerBindings,
 } from "./worker-loader.ts";
 
@@ -36,7 +37,7 @@ type StatefulWorkerRpc = {
     flattenNestedPath?: boolean;
     path: string[];
     ref: StatefulDynamicWorkerRef;
-  }): Promise<unknown>;
+  }): Promise<{ ok: true; value: unknown } | { failure: WorkerBuildFailure; ok: false }>;
   kill(): Promise<void>;
   setAlarm(input: { atMs: number | null; ref: StatefulDynamicWorkerRef }): Promise<void>;
   getAlarm(): Promise<number | null>;
@@ -92,9 +93,13 @@ export class DynamicWorkerRunner {
   async #getStatelessEntrypoint<T = unknown>(
     ref: StatelessDynamicWorkerRef,
     buildBudgetMs?: number,
-  ): Promise<T> {
-    const { worker } = await this.#load(ref, buildBudgetMs);
-    return worker.getEntrypoint(ref.entrypoint, { props: ref.props ?? {} }) as T;
+  ): Promise<{ ok: true; target: T } | { failure: WorkerBuildFailure; ok: false }> {
+    const loaded = await this.#load(ref, buildBudgetMs);
+    if (!loaded.ok) return loaded;
+    return {
+      ok: true,
+      target: loaded.worker.getEntrypoint(ref.entrypoint, { props: ref.props ?? {} }) as T,
+    };
   }
 
   /**
@@ -105,9 +110,17 @@ export class DynamicWorkerRunner {
   async loadStatefulClass<T extends DurableObjectClass = DurableObjectClass>(
     ref: StatefulDynamicWorkerRef,
     buildBudgetMs?: number,
-  ): Promise<{ klass: T; resolved: ResolvedWorkerSource }> {
-    const { resolved, worker } = await this.#load(ref, buildBudgetMs);
-    return { klass: this.#durableObjectClass<T>(ref, worker), resolved };
+  ): Promise<
+    | { klass: T; ok: true; resolved: ResolvedWorkerSource }
+    | { failure: WorkerBuildFailure; ok: false }
+  > {
+    const loaded = await this.#load(ref, buildBudgetMs);
+    if (!loaded.ok) return loaded;
+    return {
+      klass: this.#durableObjectClass<T>(ref, loaded.worker),
+      ok: true,
+      resolved: loaded.resolved,
+    };
   }
 
   #durableObjectClass<T extends DurableObjectClass>(
@@ -151,11 +164,13 @@ export class DynamicWorkerRunner {
         !isWebSocketUpgradeRequest(request) &&
         (request.method === "GET" || request.method === "HEAD")
       ) {
-        resolved = await resolveWorkerSource({
+        const result = await resolveWorkerSource({
           buildBudgetMs,
           projectId: this.#projectId,
           source: ref.source,
         });
+        if (!result.ok) throw workerBuildFailedError(result.failure);
+        resolved = result.source;
         const asset = await env.WORKER_BUNDLER.handleAssetRequest(
           request,
           resolved.assetManifest,
@@ -179,11 +194,15 @@ export class DynamicWorkerRunner {
           ) as unknown as Fetcher
         ).fetch(withWorkerFetchDispatchHeader(request, { buildBudgetMs, ref }));
       } else {
-        resolved ??= await resolveWorkerSource({
-          buildBudgetMs,
-          projectId: this.#projectId,
-          source: ref.source,
-        });
+        if (resolved === undefined) {
+          const result = await resolveWorkerSource({
+            buildBudgetMs,
+            projectId: this.#projectId,
+            source: ref.source,
+          });
+          if (!result.ok) throw workerBuildFailedError(result.failure);
+          resolved = result.source;
+        }
         // The serve header is trusted platform output on the fetch lane —
         // stamped (and any user-set value dropped) at this authority boundary.
         const entrypoint = this.#loadResolved(resolved).getEntrypoint(ref.entrypoint, {
@@ -239,27 +258,22 @@ export class DynamicWorkerRunner {
         // commits the ref to the stream, while this first real invocation is the
         // point where source loading, version-marker writes, and facet restarts are
         // allowed to mutate durable runtime state.
-        try {
-          return await this.#statefulWorker(ref).invokeCapability({
-            args,
-            buildBudgetMs,
-            flattenNestedPath,
-            path,
-            ref,
-          });
-        } catch (error) {
-          // The hosted Durable Object already restored this verdict after its
-          // coordinator hop, but Workers RPC strips arbitrary properties on
-          // the outer DO hop. Restore it at the caller-side authority boundary.
-          if (isWorkerBuildFailedError(error)) Object.assign(error, { retryable: false });
-          throw error;
-        }
+        const result = await this.#statefulWorker(ref).invokeCapability({
+          args,
+          buildBudgetMs,
+          flattenNestedPath,
+          path,
+          ref,
+        });
+        if (!result.ok) throw workerBuildFailedError(result.failure);
+        return result.value;
       }
 
-      const target = await this.#getStatelessEntrypoint(ref, buildBudgetMs);
+      const loaded = await this.#getStatelessEntrypoint(ref, buildBudgetMs);
+      if (!loaded.ok) throw workerBuildFailedError(loaded.failure);
       return flattenNestedPath
-        ? await invokePreferringFlattenedPath({ args, path, target })
-        : await replayPath({ args, path, target });
+        ? await invokePreferringFlattenedPath({ args, path, target: loaded.target })
+        : await replayPath({ args, path, target: loaded.target });
     });
   }
 
@@ -281,13 +295,21 @@ export class DynamicWorkerRunner {
   async #load(
     ref: DynamicWorkerRef,
     buildBudgetMs?: number,
-  ): Promise<{ resolved: ResolvedWorkerSource; worker: WorkerStub }> {
-    const resolved = await resolveWorkerSource({
+  ): Promise<
+    | { ok: true; resolved: ResolvedWorkerSource; worker: WorkerStub }
+    | { failure: WorkerBuildFailure; ok: false }
+  > {
+    const result: ResolvedWorkerSourceResult = await resolveWorkerSource({
       buildBudgetMs,
       projectId: this.#projectId,
       source: ref.source,
     });
-    return { resolved, worker: this.#loadResolved(resolved) };
+    if (!result.ok) return result;
+    return {
+      ok: true,
+      resolved: result.source,
+      worker: this.#loadResolved(result.source),
+    };
   }
 
   #loadResolved(resolved: ResolvedWorkerSource): WorkerStub {
