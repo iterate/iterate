@@ -108,12 +108,14 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
 
   async invokeCapability({
     args = [],
+    buildFailureNonce,
     buildBudgetMs,
     flattenNestedPath = false,
     path,
     ref,
   }: {
     args?: unknown[];
+    buildFailureNonce: string;
     buildBudgetMs?: number;
     flattenNestedPath?: boolean;
     path: string[];
@@ -128,11 +130,14 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     // current ref, restarts the facet if the source changed, and performs the
     // method replay without leaking the inner facet reference.
     const loaded = await this.#facet(ref, buildBudgetMs);
-    if (!loaded.ok) return loaded;
-    const value = flattenNestedPath
+    if (!loaded.ok) {
+      return {
+        workerBuildFailure: { failure: loaded.failure, nonce: buildFailureNonce },
+      };
+    }
+    return flattenNestedPath
       ? await invokePreferringFlattenedPath({ args, path, target: loaded.target })
       : await replayPath({ args, path, target: loaded.target });
-    return { ok: true as const, value };
   }
 
   /**

@@ -240,10 +240,14 @@ describe("createApp asset dispatch", () => {
 });
 
 it("turns a stateful source-build result into a local terminal delivery error", async () => {
-  h.statefulInvokeCapability.mockResolvedValue({
-    failure: { kind: "source", message: 'No such module "yaml".' },
-    ok: false,
-  });
+  h.statefulInvokeCapability.mockImplementation(
+    async ({ buildFailureNonce }: { buildFailureNonce: string }) => ({
+      workerBuildFailure: {
+        failure: { kind: "source", message: 'No such module "yaml".' },
+        nonce: buildFailureNonce,
+      },
+    }),
+  );
   const runner = new DynamicWorkerRunner({
     streamContext: { kind: "scope", scopePath: statefulRef.path },
     exports: {} as ExecutionContext["exports"],
@@ -261,4 +265,34 @@ it("turns a stateful source-build result into a local terminal delivery error", 
     name: "WorkerBuildFailedError",
     retryable: false,
   });
+});
+
+it("returns a stateful worker's successful value without wrapping its live stubs", async () => {
+  const liveStub = {
+    [Symbol.dispose]: vi.fn(),
+    dup: vi.fn(),
+    poke: vi.fn(),
+  };
+  const returned = {
+    checkpointOffset: 12,
+    sink: liveStub,
+    workerBuildFailure: {
+      failure: { kind: "source", message: "customer data" },
+      nonce: "customer-controlled",
+    },
+  };
+  h.statefulInvokeCapability.mockResolvedValue(returned);
+  const runner = new DynamicWorkerRunner({
+    streamContext: { kind: "scope", scopePath: statefulRef.path },
+    exports: {} as ExecutionContext["exports"],
+    projectId: "prj_private",
+    scopePath: statefulRef.path,
+  });
+
+  await expect(
+    runner.invokeCapability({
+      path: ["processor", "wakeStreamSubscriber"],
+      ref: statefulRef,
+    }),
+  ).resolves.toBe(returned);
 });

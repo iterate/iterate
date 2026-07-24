@@ -33,11 +33,12 @@ export type DynamicWorkerTraceRole = "project_config" | "run_script" | "schedule
 type StatefulWorkerRpc = {
   invokeCapability(input: {
     args?: unknown[];
+    buildFailureNonce: string;
     buildBudgetMs?: number;
     flattenNestedPath?: boolean;
     path: string[];
     ref: StatefulDynamicWorkerRef;
-  }): Promise<{ ok: true; value: unknown } | { failure: WorkerBuildFailure; ok: false }>;
+  }): Promise<unknown>;
   kill(): Promise<void>;
   setAlarm(input: { atMs: number | null; ref: StatefulDynamicWorkerRef }): Promise<void>;
   getAlarm(): Promise<number | null>;
@@ -258,15 +259,22 @@ export class DynamicWorkerRunner {
         // commits the ref to the stream, while this first real invocation is the
         // point where source loading, version-marker writes, and facet restarts are
         // allowed to mutate durable runtime state.
+        // Successful values pass through untouched because they may contain
+        // live RPC stubs whose ownership transfers to our caller. A nonce the
+        // worker never sees lets the host return only the build-failure branch
+        // as plain data without confusing arbitrary user values for failures.
+        const buildFailureNonce = crypto.randomUUID();
         const result = await this.#statefulWorker(ref).invokeCapability({
           args,
+          buildFailureNonce,
           buildBudgetMs,
           flattenNestedPath,
           path,
           ref,
         });
-        if (!result.ok) throw workerBuildFailedError(result.failure);
-        return result.value;
+        const failure = statefulWorkerBuildFailure(result, buildFailureNonce);
+        if (failure !== undefined) throw workerBuildFailedError(failure);
+        return result;
       }
 
       const loaded = await this.#getStatelessEntrypoint(ref, buildBudgetMs);
@@ -348,6 +356,21 @@ export class DynamicWorkerRunner {
       return await callback(span);
     });
   }
+}
+
+function statefulWorkerBuildFailure(
+  result: unknown,
+  nonce: string,
+): WorkerBuildFailure | undefined {
+  const envelope = (
+    result as {
+      workerBuildFailure?: {
+        failure?: WorkerBuildFailure;
+        nonce?: string;
+      };
+    } | null
+  )?.workerBuildFailure;
+  return envelope?.nonce === nonce ? envelope.failure : undefined;
 }
 
 /**
