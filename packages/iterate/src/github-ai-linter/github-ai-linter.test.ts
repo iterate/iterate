@@ -24,7 +24,8 @@ test("a declared GitHub AI linter subscribes each linked connection without conf
       path: "/integrations/github/iterate-installation",
       events: [
         {
-          idempotencyKey: "review-bot/subscription:v4",
+          idempotencyKey:
+            'review-bot/subscription:v4:{"policyVersion":"2","rules":{"glob":"rules/**/*.md","repoPath":"/repos/iterate"}}',
           payload: {
             delivery: {
               mode: "wake",
@@ -69,6 +70,38 @@ test("a declared GitHub AI linter subscribes each linked connection without conf
   expect(virtualConfig).toContain('"policyVersion":"2"');
   expect(virtualConfig).toContain('"glob":"rules/**/*.md"');
   expect(virtualConfig).toContain('"repoPath":"/repos/iterate"');
+});
+
+test("configuration changes produce a new event identity for the stable subscription", async () => {
+  const appended: Array<{ events: StreamEventInput[]; path: string }> = [];
+  const env = projectEnv((path, ...events) => appended.push({ events, path }));
+
+  await GithubAiLinter.create(env, {
+    policyVersion: "2",
+    rules: { glob: "rules/**/*.md", repoPath: "/repos/iterate" },
+  }).processEvent(githubLinkConfigured("iterate-installation"));
+  await GithubAiLinter.create(env, {
+    policyVersion: "3",
+    rules: { glob: "review-rules/**/*.md", repoPath: "/repos/product" },
+  }).processEvent(githubLinkConfigured("iterate-installation"));
+
+  expect(
+    appended.map(({ events }) => ({
+      idempotencyKey: events[0]?.idempotencyKey,
+      subscriptionKey: events[0]?.payload?.subscriptionKey,
+    })),
+  ).toEqual([
+    {
+      idempotencyKey:
+        'review-bot/subscription:v4:{"policyVersion":"2","rules":{"glob":"rules/**/*.md","repoPath":"/repos/iterate"}}',
+      subscriptionKey: "app-review-bot#review-bot",
+    },
+    {
+      idempotencyKey:
+        'review-bot/subscription:v4:{"policyVersion":"3","rules":{"glob":"review-rules/**/*.md","repoPath":"/repos/product"}}',
+      subscriptionKey: "app-review-bot#review-bot",
+    },
+  ]);
 });
 
 test("connection slugs with underscores produce distinct runtime-valid durable keys", async () => {

@@ -45,7 +45,7 @@ function reviewBotSubscriptionEvents(
           processorSlug: "review-bot",
         },
       },
-      idempotencyKey: `review-bot/subscription:v${reviewBotSubscriptionConfigVersion}`,
+      idempotencyKey: `review-bot/subscription:v${reviewBotSubscriptionConfigVersion}:${JSON.stringify(config)}`,
     },
   ];
 }
