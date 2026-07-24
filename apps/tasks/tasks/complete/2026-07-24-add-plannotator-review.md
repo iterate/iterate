@@ -44,7 +44,7 @@ the collaborative editor remains the markdown source of truth.
 - [x] Prove verified authorship cannot be spoofed by the browser.
   *The journal test submits Mallory and observes the authenticated Iterate identity Ada.*
 - [x] Verify tests, typecheck, production build, and two-browser live behavior.
-  *Twenty-eight tests pass; scoped lint, typecheck, and build pass. Two headed browsers observed
+  *Thirty-five tests pass; scoped lint, typecheck, and build pass. Two headed browsers observed
   global, selected-text, and deletion annotations live and after refresh, then removed the proof
   annotations.*
 
