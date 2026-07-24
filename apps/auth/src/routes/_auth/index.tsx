@@ -4,7 +4,9 @@ import { Avatar, AvatarFallback, AvatarImage } from "@iterate-com/ui/components/
 import { Separator } from "@iterate-com/ui/components/separator";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { z } from "zod/v4";
 import { authClient, useSession } from "../../utils/auth-client.ts";
+import { AuthRedirectError } from "../../components/auth-redirect-error.tsx";
 import {
   oauthClientQueryOptions,
   oauthConsentsQueryOptions,
@@ -13,12 +15,17 @@ import { getInitials } from "../../utils/initials.ts";
 import { InfoRow } from "../../utils/info-row.tsx";
 
 export const Route = createFileRoute("/_auth/")({
+  validateSearch: z.looseObject({
+    error: z.string().optional(),
+    error_description: z.string().optional(),
+  }),
   component: RouteComponent,
 });
 
 function RouteComponent() {
   const session = useSession();
   const navigate = Route.useNavigate();
+  const search = Route.useSearch();
 
   const signOut = useMutation({
     mutationFn: () => authClient.signOut(),
@@ -33,6 +40,7 @@ function RouteComponent() {
   return (
     <div className="flex min-h-screen items-center justify-center p-4">
       <div className="w-full max-w-sm space-y-4">
+        <AuthRedirectError error={search.error} errorDescription={search.error_description} />
         <Card>
           <CardHeader className="items-center justify-items-center text-center">
             <Avatar size="lg">

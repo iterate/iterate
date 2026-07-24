@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { WorkerBuildArtifact } from "./artifact-store.ts";
+import type { WorkerBuildArtifact, WorkerBuildResult } from "./artifact-store.ts";
 import type { WorkerBuildRequest } from "./worker-build-capability.ts";
 import {
   WorkerBuildCoordinator,
@@ -28,7 +28,7 @@ const artifact: WorkerBuildArtifact = {
 
 describe("WorkerBuildCoordinator", () => {
   it("gives concurrent followers their own answer from one build", async () => {
-    const build = Promise.withResolvers<WorkerBuildArtifact>();
+    const build = Promise.withResolvers<WorkerBuildResult>();
     const execute = vi.fn(async () => await build.promise);
     const coordinator = new WorkerBuildCoordinator(execute);
 
@@ -37,24 +37,24 @@ describe("WorkerBuildCoordinator", () => {
     const secondFollower = coordinator.build(request);
     expect(execute).toHaveBeenCalledOnce();
 
-    build.resolve(artifact);
+    build.resolve({ artifact, ok: true });
     await expect(Promise.all([leader, firstFollower, secondFollower])).resolves.toEqual([
-      artifact,
-      artifact,
-      artifact,
+      { artifact, ok: true },
+      { artifact, ok: true },
+      { artifact, ok: true },
     ]);
     expect(execute).toHaveBeenCalledOnce();
   });
 
   it("reuses a successful artifact after its flight settles", async () => {
-    const execute = vi.fn(async () => artifact);
+    const execute = vi.fn(async () => ({ artifact, ok: true }) satisfies WorkerBuildResult);
     const events: WorkerBuildCoordinatorEvent[] = [];
     const coordinator = new WorkerBuildCoordinator(execute, {
       observe: (event) => events.push(event),
     });
 
-    await expect(coordinator.build(request)).resolves.toBe(artifact);
-    await expect(coordinator.build(request)).resolves.toBe(artifact);
+    await expect(coordinator.build(request)).resolves.toEqual({ artifact, ok: true });
+    await expect(coordinator.build(request)).resolves.toEqual({ artifact, ok: true });
 
     expect(execute).toHaveBeenCalledOnce();
     // Every event names what's building; sizes appear once the bundle exists
@@ -74,7 +74,7 @@ describe("WorkerBuildCoordinator", () => {
   });
 
   it("describes createApp builds by their server and client entries", async () => {
-    const execute = vi.fn(async () => artifact);
+    const execute = vi.fn(async () => ({ artifact, ok: true }) satisfies WorkerBuildResult);
     const events: WorkerBuildCoordinatorEvent[] = [];
     const coordinator = new WorkerBuildCoordinator(execute, {
       observe: (event) => events.push(event),
@@ -97,11 +97,11 @@ describe("WorkerBuildCoordinator", () => {
   });
 
   it("fans infrastructure failure out and permits a clean retry", async () => {
-    const firstBuild = Promise.withResolvers<WorkerBuildArtifact>();
+    const firstBuild = Promise.withResolvers<WorkerBuildResult>();
     const execute = vi
-      .fn<(input: WorkerBuildRequest) => Promise<WorkerBuildArtifact>>()
+      .fn<(input: WorkerBuildRequest) => Promise<WorkerBuildResult>>()
       .mockImplementationOnce(async () => await firstBuild.promise)
-      .mockResolvedValue(artifact);
+      .mockResolvedValue({ artifact, ok: true });
     const coordinator = new WorkerBuildCoordinator(execute);
 
     const leader = coordinator.build(request);
@@ -118,12 +118,34 @@ describe("WorkerBuildCoordinator", () => {
       message: "bundler unavailable",
       name: "WorkerBuildTransportError",
     });
-    await expect(coordinator.build(request)).resolves.toBe(artifact);
+    await expect(coordinator.build(request)).resolves.toEqual({ artifact, ok: true });
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
+  it("fans a source failure out as data and permits a clean retry", async () => {
+    const firstBuild = Promise.withResolvers<WorkerBuildResult>();
+    const sourceFailure = {
+      failure: { kind: "source" as const, message: "invalid source" },
+      ok: false as const,
+    };
+    const execute = vi
+      .fn<(input: WorkerBuildRequest) => Promise<WorkerBuildResult>>()
+      .mockImplementationOnce(async () => await firstBuild.promise)
+      .mockResolvedValue({ artifact, ok: true });
+    const coordinator = new WorkerBuildCoordinator(execute);
+
+    const leader = coordinator.build(request);
+    const follower = coordinator.build(request);
+    firstBuild.resolve(sourceFailure);
+
+    await expect(leader).resolves.toEqual(sourceFailure);
+    await expect(follower).resolves.toEqual(sourceFailure);
+    await expect(coordinator.build(request)).resolves.toEqual({ artifact, ok: true });
     expect(execute).toHaveBeenCalledTimes(2);
   });
 
   it("rejects a mismatched key instead of silently joining unrelated work", async () => {
-    const build = Promise.withResolvers<WorkerBuildArtifact>();
+    const build = Promise.withResolvers<WorkerBuildResult>();
     const coordinator = new WorkerBuildCoordinator(async () => await build.promise);
     const leader = coordinator.build(request);
 
@@ -131,12 +153,12 @@ describe("WorkerBuildCoordinator", () => {
       /received/,
     );
 
-    build.resolve(artifact);
+    build.resolve({ artifact, ok: true });
     await leader;
   });
 
   it("rejects a mismatched key after retaining a completed artifact", async () => {
-    const coordinator = new WorkerBuildCoordinator(async () => artifact);
+    const coordinator = new WorkerBuildCoordinator(async () => ({ artifact, ok: true }));
     await coordinator.build(request);
 
     await expect(coordinator.build({ ...request, buildKey: "b".repeat(64) })).rejects.toThrow(
