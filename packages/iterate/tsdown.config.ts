@@ -105,6 +105,7 @@ export default defineConfig([
       resolver: "tsc",
     },
     sourcemap: true,
+    clean: false,
     // The native half of `iterate approve` ships as Swift source, compiled
     // on the user's Mac on first use (see approval-keys.ts).
     copy: [{ from: "src/enclave-approver.swift", to: "dist" }],

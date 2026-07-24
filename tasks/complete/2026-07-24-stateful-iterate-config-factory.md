@@ -36,7 +36,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
 
 - [x] Replace the task stub with an implementation-ready spec and explicit guesses. *This file is the agreed Phase 2 handoff.*
 - [x] Add a failing package contract test for `TodoApp.create(env).fetch(request)`. It must assert a real `env.ITX.fetch` dispatch with a private stateful ref, `durableWorkerKey: "app-todo-live"`, and no config-owned Todo source paths. *The red/green contract lives in `packages/iterate/src/starter-apps/todo/todo.test.ts`.*
-- [x] Add a failing build gate for the physical Todo worker artifact. It must reject unsupported bare imports and prove the prebuilt browser client is present. *`check-todo-bundle.ts` first failed on the missing artifact, then caught an external `zod` leak before going green.*
+- [x] Add a failing build gate for the physical Todo worker artifact. It must reject unsupported bare imports and prove the prebuilt browser client is present. *The manifest-driven bundle checker first failed on the missing artifact, then caught an external `zod` leak before going green.*
 - [x] Add the public `iterate/starter-apps/todo` export and declaration/build entries. *Package exports, publish exports, tsdown entries, and tsc declarations now expose only the factory.*
 - [x] Move the Todo Durable Object, HTML, Cap'n Web API, and browser client under `packages/iterate/src/starter-apps/todo/`. *The config-owned three-file app was deleted after the package artifact built.*
 - [x] Replace raw SQL with `sqlfu` definitions, migration, and typed queries while preserving the existing `todos(id, title, done, created_at)` table and rows. *The idempotent `20260718000001_create_todos` migration keeps the prior table shape.*
