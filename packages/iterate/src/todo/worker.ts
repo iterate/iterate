@@ -1,3 +1,5 @@
+import todoClientSource from "iterate:todo-client-source";
+import { createDurableObjectClient, defineConfig, sql } from "sqlfu";
 import {
   LiveState,
   LiveStateRpcTarget,
@@ -6,8 +8,6 @@ import {
   type LiveStateRpc,
 } from "../sdk/capnweb/index.ts";
 import { IterateDurableObject } from "../sdk.ts";
-import { createDurableObjectClient, defineConfig, sql } from "sqlfu";
-import todoClientSource from "iterate:todo-client-source";
 
 export type Todo = {
   createdAt: string;

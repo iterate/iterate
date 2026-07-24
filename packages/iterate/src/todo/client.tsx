@@ -2,10 +2,10 @@
  * Todo UI — one reconnectable Cap'n Web provider, consumed by useLiveState.
  * @jsxImportSource react
  */
-import { newWebSocketRpcSession, type RpcStub } from "../sdk/capnweb/index.ts";
-import { CapnWebProvider, useCapnWebRoot, useLiveState } from "../sdk/capnweb/react.tsx";
 import React, { type FormEvent, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { newWebSocketRpcSession, type RpcStub } from "../sdk/capnweb/index.ts";
+import { CapnWebProvider, useCapnWebRoot, useLiveState } from "../sdk/capnweb/react.tsx";
 import type { TodoApi } from "./worker.ts";
 
 function makeConnection() {
