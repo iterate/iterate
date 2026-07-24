@@ -8,9 +8,9 @@ branch: tasks-app-package-bridge
 
 ## Status
 
-The contract and package boundary are locked. Implementation, publishing,
-config-template consumption, preview pinning, and the companion
-`iterate/config` update remain.
+The connector, connector-only package artifact, and joint pkg.pr.new workflow
+are implemented and locally green. OS config-template consumption, preview
+pinning, docs, and the companion `iterate/config` update remain.
 
 ## Goal
 
@@ -59,21 +59,29 @@ Durable Object, or their dependency graph.
 
 ## Checklist
 
-- [ ] Add a public-interface spec for
+- [x] Add a public-interface spec for
       `TasksApp.create(env, { auth, proxy }).fetch(request)`, starting with
-      member denial and successful proxying.
-- [ ] Implement the connector with required options and runtime validation of
-      configured/default and KV override origins.
-- [ ] Preserve the trusted project ID header and project auth cookie across
-      normal HTTP and WebSocket proxy requests.
-- [ ] Give `apps/tasks` a separate connector-only package build and root
-      export while preserving its existing Vite/Cloudflare app build.
-- [ ] Make all Tasks app packages development-only for publication; keep only
-      the minimal `iterate` peer metadata needed by the connector declaration.
-- [ ] Add a packed-tarball test proving no app source, client/server bundles,
-      Durable Objects, or app dependency graph ships.
-- [ ] Publish `packages/iterate` and `apps/tasks` in one locked
-      `pkg-pr-new` invocation, and use the generated scoped-package URL.
+      member denial and successful proxying. _`config-bridge.test.ts` covers
+      both branches, full-origin overrides, and malformed origins._
+- [x] Implement the connector with required options and runtime validation of
+      configured/default and KV override origins. _`config-bridge.ts` exposes
+      only `TasksApp.create(...).fetch`._
+- [x] Preserve the trusted project ID header and project auth cookie across
+      normal HTTP and WebSocket proxy requests. _The transparent-proxy spec
+      checks body, routing headers, cookie, and upgrade._
+- [x] Give `apps/tasks` a separate connector-only package build and root
+      export while preserving its existing Vite/Cloudflare app build. _A
+      separate `tsconfig.package.json` emits the package; the full Vite build
+      remains green._
+- [x] Make all Tasks app packages development-only for publication. _The
+      connector uses a self-contained structural ITX type, so the tarball has
+      no runtime or peer dependencies._
+- [x] Add a packed-tarball test proving no app source, client/server bundles,
+      Durable Objects, or app dependency graph ships. _The exact four-artifact
+      allowlist plus README/license is checked after `pnpm pack`._
+- [x] Publish `packages/iterate` and `apps/tasks` in one locked
+      `pkg-pr-new` invocation. _The workflow uses locked `pkg-pr-new@0.0.79`;
+      its first CI run will supply the generated scoped-package URL._
 - [ ] Add `@iterate-com/tasks` to the OS project-config template and replace
       the hand-written Tasks branch with `TasksApp`.
 - [ ] Pin both `iterate` and `@iterate-com/tasks` to the same exact PR SHA in
@@ -96,3 +104,5 @@ Durable Object, or their dependency graph.
   connector from `@main` would not prove the PR.
 - The companion config PR must follow the Iterate PR because its dependency
   needs the scoped package URL emitted by `pkg.pr.new`.
+- The structural ITX input type keeps `@iterate-com/tasks` completely
+  dependency-free while accepting the platform's real `env.ITX` binding.
