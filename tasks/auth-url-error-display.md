@@ -1,5 +1,5 @@
 ---
-status: complete
+status: in-progress
 size: small
 ---
 
@@ -7,8 +7,8 @@ size: small
 
 ## Status
 
-The error notice, regression tests, package checks, and Preview 2 browser proof
-are complete.
+The signed-in error notice is complete. Follow-up work is in progress to show
+the same error to signed-out users without preserving it after sign-in.
 
 ## Problem
 
@@ -38,6 +38,9 @@ normal visits without an error remain unchanged.
 - [x] Run Auth tests, typecheck, lint, and formatting checks. _All 75 Auth tests pass, including the three new UI cases; Auth typecheck and touched-file lint/format checks pass._
 - [x] Verify the error notice against a production-shaped preview. _Auth Preview 2 renders the screenshot error and prefers a supplied `error_description`._
 - [x] Update the draft PR with browser proof. _PR #2291 includes the exact preview URL and an inline screenshot._
+- [x] Show redirect errors immediately on the public login page. _The protected-route handoff and legacy nested redirects now put the error fields directly on `/login`, which renders the shared notice._
+- [x] Remove handled error fields from the post-login destination while preserving its other path, query, and hash. _A pure redirect regression test covers the screenshot URL plus a destination with unrelated query and hash state._
+- [ ] Verify both signed-in and signed-out error paths against the preview.
 
 ## Implementation notes
 
@@ -47,6 +50,9 @@ normal visits without an error remain unchanged.
   values and may also supply `error_description`.
 - The root cause was the Auth home route having no search validation or
   rendering path for Better Auth's redirect error fields.
+- Follow-up review found that a signed-out request to the protected home nests
+  its error URL in `/login?redirect=...`; this hides the error until after
+  sign-in and then displays stale failure state.
 - The original clipboard URL used Preview 14; PR #2291 was assigned Preview 2.
   Verifying the allocated slot avoided mistaking Preview 14's old build for a
   regression in the new route.
