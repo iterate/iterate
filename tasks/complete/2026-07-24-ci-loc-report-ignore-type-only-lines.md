@@ -8,7 +8,7 @@ size: small
 ## Status summary
 
 Complete in PR #2302. TypeScript source maps remove type-only lines without changing source-line
-counts; Bugbot's declaration-file edge case is fixed and locally verified, with final CI pending.
+counts; both Bugbot findings are fixed, every check passes, and no review threads remain open.
 
 ## Motivation
 
@@ -62,3 +62,5 @@ column.
   reproduced all three declaration extensions; the early empty representation makes them raw-only.
 - Bugbot's re-review caught an unexplained source-map JSON cast. The compiler boundary now validates
   `mappings` from `unknown` and fails clearly on malformed output, with no cast.
+- At `5472bb1dd`, preview, LOC report, lint/typecheck, tests, autofix, publish, continuous release,
+  and Bugbot all pass; all review threads are resolved.
