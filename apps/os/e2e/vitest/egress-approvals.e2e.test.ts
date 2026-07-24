@@ -29,6 +29,7 @@ const REQUESTED = "events.iterate.com/project/human-approval-requested";
 const GRANTED = "events.iterate.com/project/human-approval-granted";
 const REJECTED = "events.iterate.com/project/human-approval-rejected";
 const SETTLED = "events.iterate.com/project/human-approval-settled";
+const NOTIFICATION_REQUESTED = "events.iterate.com/notification/requested";
 
 test("hold → grant releases, hold → reject refuses, short timeouts expire", async () => {
   const echo = await startEgressEcho();
@@ -383,6 +384,85 @@ test("approved worker WebSocket egress stays on the fetch-native transport", asy
 
   await expect(execution).resolves.toMatchObject({ result: echoedMessage });
 });
+
+test("a script's burst of holds debounces into ONE approvals-group notification intent", async () => {
+  const echo = await startEgressEcho();
+  using session = withItxSession();
+  using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+
+  try {
+    using project = await itx.projects
+      .get(`egress-approval-group-${crypto.randomUUID()}`)
+      .create({});
+    const root = project.streams.get("/");
+    const agent = await project.agents.get("/agents/burst-agent").create();
+    const echoHost = new URL(echo.url).hostname;
+    await root.append({
+      type: RULES_CONFIGURED,
+      payload: {
+        rules: [
+          {
+            ruleKey: "burst-needs-a-human",
+            description: "Echo POSTs need a human",
+            match: { hosts: [echoHost], methods: ["POST"] },
+            verdict: "hold",
+            approvalTimeoutMs: 120_000,
+          },
+        ],
+      },
+    });
+    await waitForCondition(
+      async () => (await project.processor.snapshot()).state.egressRules.length === 1,
+      { description: "project processor to fold the burst hold rule" },
+    );
+
+    const execution = agent.capabilityHost.runScript(`async () => {
+      const responses = await Promise.all(
+        Array.from({ length: 4 }, (_, index) =>
+          fetch(${JSON.stringify(echo.url)}, { method: "POST", body: "burst " + index }),
+        ),
+      );
+      return responses.map((response) => response.status);
+    }`);
+
+    // One grouped intent lands one debounce window (~3s) after the last hold
+    // — never a per-request push for script-scoped holds.
+    const intent = await root.waitForEvent({
+      afterOffset: 0,
+      eventTypes: [NOTIFICATION_REQUESTED],
+      timeoutMs: 60_000,
+    });
+    expect(intent.payload).toMatchObject({
+      audience: { kind: "project" },
+      destination: { kind: "approvals-group", executionId: expect.any(String) },
+      body: expect.stringMatching(/^Script run waiting: \d+ requests \(\d+x /),
+    });
+
+    const requested = await root.getEvents({ eventTypes: [REQUESTED] });
+    expect(requested).toHaveLength(4);
+    await root.append(
+      ...requested.map((event) => ({
+        type: GRANTED,
+        payload: { approvalRequestEventOffset: event.offset },
+      })),
+    );
+    await expect(execution).resolves.toMatchObject({ result: [200, 200, 200, 200] });
+
+    // Every intent for the burst is a grouped one (never per-request), and
+    // the burst collapsed: far fewer pushes than holds. Normally exactly one;
+    // a CI-slow burst whose holds straggle past a debounce window may
+    // legitimately produce a second window's push.
+    const intents = await root.getEvents({ eventTypes: [NOTIFICATION_REQUESTED] });
+    const kinds = intents.map(
+      (event) => (event.payload as { destination: { kind: string } }).destination.kind,
+    );
+    expect(kinds.length).toBeGreaterThanOrEqual(1);
+    expect(kinds.length).toBeLessThan(requested.length);
+    expect(new Set(kinds)).toEqual(new Set(["approvals-group"]));
+  } finally {
+    await echo.close();
+  }
+}, 120_000);
 
 test("enrolled approval keys make unsigned grants inert; a signed grant releases", async () => {
   const echo = await startEgressEcho();
