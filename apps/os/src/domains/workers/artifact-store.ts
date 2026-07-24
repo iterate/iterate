@@ -4,9 +4,14 @@ import type { WorkerBundlerAssetConfig } from "./schemas.ts";
 
 // v10 invalidates artifacts emitted after dependency-install warnings. Those
 // bundles could retain unresolved bare imports and were never runnable.
+// v11 invalidates artifacts built before the worker-bundler patch that warns
+// on every unresolved import (#2292): pre-patch bundles could carry silently
+// externalized imports that fail at instantiation with `No such module`, and
+// without a bump their build keys would keep serving them from KV for up to
+// the 30-day TTL, never reaching the new build-time gate.
 // Failures are deliberately not cached: the bundler cannot distinguish
 // broken source from transient infrastructure.
-export const WORKER_BUILD_ARTIFACT_SCHEMA_VERSION = 10;
+export const WORKER_BUILD_ARTIFACT_SCHEMA_VERSION = 11;
 
 const ARTIFACT_TTL_SECONDS = 30 * 24 * 60 * 60;
 const KV_PREFIX = `worker-build/v${WORKER_BUILD_ARTIFACT_SCHEMA_VERSION}`;
