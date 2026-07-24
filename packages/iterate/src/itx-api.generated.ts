@@ -2965,11 +2965,18 @@ export type CollectSecretLink = {
 /** The `repos/create-requested` payload — the creation saga's durable intent. */
 export type RepoCreateInput =
   | { type: "empty" }
-  | { type: "github-private"; connection: string; owner: string; repo: string }
+  | {
+      type: "github-private";
+      connection: string;
+      defaultBranch?: string | undefined;
+      owner: string;
+      repo: string;
+    }
   | {
       type: "github-public";
       connection: string;
-      depth?: number;
+      defaultBranch?: string | undefined;
+      depth?: number | undefined;
       owner: string;
       repo: string;
     };

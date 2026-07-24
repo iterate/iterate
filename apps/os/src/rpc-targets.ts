@@ -376,13 +376,7 @@ import {
 import { EmailProcessorContract } from "./domains/email/email-processor-contract.ts";
 import { EmailAgentProcessorContract } from "./domains/email/email-agent-processor-contract.ts";
 import { agentCreationForPath, type AgentCreateInput } from "./domains/agents/agent-defaults.ts";
-import {
-  parseRepoCreateInput,
-  repoCreateInputFromRequest,
-  repoCreationEvents,
-  resolveRepoCreateRequest,
-  type RepoCreateInput,
-} from "./domains/repos/repo-defaults.ts";
+import { repoCreationEvents, type RepoCreateInput } from "./domains/repos/repo-defaults.ts";
 
 /**
  * The root of every itx-facing RpcTarget. Extending it (directly, or through
@@ -1196,7 +1190,7 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
       RepoProcessorContract.events["events.iterate.com/repos/create-requested"].payloadSchema;
     const failureSchema =
       RepoProcessorContract.events["events.iterate.com/repos/create-failed"].payloadSchema;
-    const input = parseRepoCreateInput(payload || { type: "empty" });
+    const input = requestSchema.parse(payload || { type: "empty" });
     const path = normalizePath(this.props.path);
     const stream = new StreamRpcTarget({
       auth: this.props.auth,
@@ -1211,19 +1205,28 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
       existingRequestEvent === undefined ? null : requestSchema.parse(existingRequestEvent.payload);
     if (
       existingRequest !== null &&
-      !jsonValuesEqual(repoCreateInputFromRequest(existingRequest), input)
+      !jsonValuesEqual(
+        existingRequest,
+        existingRequest.type === "empty"
+          ? input
+          : { ...input, defaultBranch: existingRequest.defaultBranch },
+      )
     ) {
       throw new Error(`${path} was already requested with a different creation source.`);
     }
-    const request =
-      existingRequest ||
-      (await resolveRepoCreateRequest(input, (github) =>
-        resolveGithubRepoDefaultBranch({
-          ...github,
+    let request = existingRequest || input;
+    if (existingRequest === null && input.type !== "empty") {
+      request = requestSchema.parse({
+        ...input,
+        defaultBranch: await resolveGithubRepoDefaultBranch({
+          connection: input.connection,
+          owner: input.owner,
           projectId: this.#requireProjectId(),
+          repo: input.repo,
           repoPath: path,
         }),
-      ));
+      });
+    }
     const timing = { projectId: this.props.projectId, path };
     const committed = await timedStep("create-timing", timing, "repo-request-append", () =>
       stream.append(
@@ -1247,7 +1250,7 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
     // An idempotency hit returns the FIRST request at its old offset — the
     // loud duplicate-create failure is this comparison, not the stream.
     const recordedRequest = requestSchema.parse(committed[0]?.payload);
-    if (!jsonValuesEqual(repoCreateInputFromRequest(recordedRequest), input)) {
+    if (!jsonValuesEqual(recordedRequest, request)) {
       throw new Error(`${path} was already requested with a different creation source.`);
     }
     const terminal = await timedStep("create-timing", timing, "wait-repo-created", () =>

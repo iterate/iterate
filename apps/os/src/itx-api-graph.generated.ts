@@ -1687,7 +1687,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "RepoCreateInput",
     kind: "typeAlias",
     sourceText:
-      '/** The `repos/create-requested` payload — the creation saga\'s durable intent. */\nexport type RepoCreateInput =\n  | { type: "empty" }\n  | { type: "github-private"; connection: string; owner: string; repo: string }\n  | {\n      type: "github-public";\n      connection: string;\n      depth?: number;\n      owner: string;\n      repo: string;\n    };',
+      '/** The `repos/create-requested` payload — the creation saga\'s durable intent. */\nexport type RepoCreateInput =\n  | { type: "empty" }\n  | {\n      type: "github-private";\n      connection: string;\n      defaultBranch?: string | undefined;\n      owner: string;\n      repo: string;\n    }\n  | {\n      type: "github-public";\n      connection: string;\n      defaultBranch?: string | undefined;\n      depth?: number | undefined;\n      owner: string;\n      repo: string;\n    };',
     summary: "The `repos/create-requested` payload — the creation saga's durable intent.",
     memberSummaries: {},
     referencedTypeNames: [],
