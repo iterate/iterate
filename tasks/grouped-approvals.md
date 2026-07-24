@@ -7,7 +7,7 @@ size: medium
 
 ## Status summary
 
-Implemented end to end; PR #2309. Server: NotificationProcessor debounces script-scoped holds into one `approvals-group` push per window (unit-tested with virtual time, plus one real-time e2e smoke that passed against a live dev server). Mobile: grouped cards with Approve-all behind one Face ID, batch progress, deep link. Demo CLI: `pnpm cli demo-grouped-approvals run`. Remaining: on-device phone trial (one-unlock-covers-N confirmation) — needs Misha's phone; a pre-existing local-env failure of the *unrelated* WebSocket-egress e2e is noted below.
+Implemented end to end; PR #2309. Server: NotificationProcessor debounces script-scoped holds into one `approvals-group` push per window (unit-tested with virtual time, plus one real-time e2e smoke that passed against a live dev server). Mobile: grouped cards with Approve-all behind one Face ID, batch progress, deep link. Demo: itx catalogue example **"Grouped approvals demo: a 12-request burst, ONE push"** — runnable from the phone's Examples screen against ANY deployment (hits dummy-petshop.iterate.com; the CLI wrapper `pnpm cli demo-grouped-approvals run` executes the same entry). Verified end to end against a live dev server: burst → one grouped push intent → grant-all → 200s. Remaining: on-device phone trial (one-unlock-covers-N confirmation) — needs Misha's phone; a pre-existing local-env failure of the *unrelated* WebSocket-egress e2e is noted below.
 
 ## Problem
 
@@ -35,21 +35,21 @@ Enabling a `hold` egress rule (e.g. gmail) floods the approver: a script run doi
 - [x] Demo recipe: hold rule on disposable echo host + itx script doing `Promise.all` of ~12 POSTs; PR body gets phone-trial instructions (metro + OS dev server over tailscale; captun fallback) _`apps/os/scripts/demo-grouped-approvals.ts`, registered as `pnpm cli demo-grouped-approvals run`; commands below_
 - [x] Verify (not change) CLI `iterate approve` and menubar behave sanely on a grouped burst _verified by inspection: `approve-core.ts:191` watches only the four `human-approval-*` types (never notification intents), so a burst is just N ordinary requests to it; the menubar (`Iterate.swift:320-344`) drives its own per-request local banners from the same unchanged vocabulary — its banner flood remains the named follow-up. Zero code changes._
 
-## Demo recipe (local dev)
+## Demo recipe
+
+**Phone-only, any deployment (preview included)** — no laptop step: open a DISPOSABLE project in the mobile app → Examples screen (chat list header) → run **"Grouped approvals demo: a 12-request burst, ONE push"** (catalogue id `grouped-approvals-demo`). It REPLACES the project's egress rules with one hold on `dummy-petshop.iterate.com`, waits ~6s for the egress gate's rules cache, then fires 12 GETs in one `Promise.all` burst from the run-script isolate. Expect ONE push ("Script run waiting: 12 requests (12x dummy-petshop.iterate.com)") ~3s after the burst; tapping it deep-links to the expanded group; Approve all = one Face ID; the example then shows twelve 200s. Device must be enrolled for push + an approval key on the project. Holds expire after 10 minutes.
+
+**Laptop wrapper** (same catalogue entry, via `capabilityHost.runScript` — one source of truth):
 
 ```bash
-# 0. dev server running in this worktree
-pnpm dev start --detach
-
-# 1. a disposable project to demo against (its egress rules get REPLACED)
+# a disposable project to demo against (its egress rules get REPLACED)
 doppler run --config dev -- pnpm cli itx run -e 'return (await itx.projects.get("grouped-approvals-demo").create({})).__describe()'
 
-# 2. fire the burst (starts its own localhost echo; default 12 POSTs)
 cd apps/os
 doppler run --config dev -- pnpm cli demo-grouped-approvals run --project prj_… [--requests 12]
 ```
 
-The command prints the collapsed push intent as the window fires, then blocks until the holds are decided. Phone side (Misha's setup): phone on the tailnet, dev client + metro running, app pointed at this dev server's base URL over tailscale (captun as fallback for a public URL), device enrolled for push + approval key on the project. Expect ONE push ~3s after the burst; tapping it deep-links to the expanded group; Approve all = one Face ID; the script then resolves with twelve 200s. Laptop-only fallback: `iterate approve` grants them individually.
+The wrapper prints the collapsed push intent as the window fires, then blocks until the holds are decided (fallback without a phone: `iterate approve`, or grant via `pnpm cli itx run`). Point it at other deployments with the matching doppler config / `--base-url`.
 
 ## Out of scope
 
@@ -71,6 +71,7 @@ The command prints the collapsed push intent as the window fires, then blocks un
 - Design deviation (small): pruning does NOT wait for the window to fire — a group whose members are all resolved/expired has nothing left to push, so the suppress-if-empty outcome is reached by pruning early; the alarm's fire pass then finds no due group. Same observable behavior, simpler fold.
 - The summary intent closes its window by being consumed back through the processor (it's in `consumes`), keeping the whole state machine a pure fold; a fire-time crash replays into an observe-and-skip on the idempotency key.
 - Pre-existing, unrelated: `egress-approvals.e2e.test.ts` › "approved worker WebSocket egress stays on the fetch-native transport" fails on THIS laptop's local dev servers ("WebSocket echo failed") — reproduced identically at the merge-base commit `109a5714c` in a clean control worktree, so not introduced by this branch.
+- Follow-up (coordinator): the demo is now the itx catalogue example `grouped-approvals-demo` (`apps/os/src/itx/examples-source.ts`) so Misha can trial it from the PHONE against a PREVIEW — `context: "project"`, `runtimes: ["run-script"]` only (grouping needs the isolate's script-execution provenance; any other runtime would take the 12-push per-request path). Target host: `dummy-petshop.iterate.com` (our deployed fake service — no localhost echo, so it works from deployed workers; the echo-based CLI demo was dropped). Rule propagation: read-your-writes via `processor.waitUntilProcessed` + a 6s sleep to outwait the egress gate's ~5s rules cache. `e2eProven: false` with rationale in `e2e/examples/example-cases.ts` (blocks on a human by design). The CLI script became a thin wrapper running the same entry through `capabilityHost.runScript`. Verified live on a dev server: burst of 5 → `push intent fired: Script run waiting: 5 requests (5x dummy-petshop.iterate.com) → {"kind":"approvals-group",…}` → grant-all → `{"statuses":[200,200,200,200,200]}`.
 
 ## For the next pass (follow-ups)
 

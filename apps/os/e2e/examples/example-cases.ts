@@ -52,6 +52,12 @@
 //   email-send      sends real outbound mail through Cloudflare Email Service;
 //                   needs an onboarded sender domain and a real recipient
 //                   mailbox, so keep it interactive.
+//   grouped-approvals-demo
+//                   parks a burst of egress holds that only a HUMAN approval
+//                   (phone push → Approve all) releases, and it REPLACES the
+//                   project's egress rules; interactive by definition. The
+//                   debounced-push pipeline it demos is covered by
+//                   egress-approvals.e2e.test.ts's grouped-burst smoke.
 
 import { ITX_EXAMPLES } from "../../src/itx/examples.ts";
 
