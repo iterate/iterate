@@ -22,6 +22,22 @@ test("opening the same notification retries the same durable observation", () =>
   });
 });
 
+test("an approval-group push opens the project's approval queue at that script run's group", () => {
+  expect(
+    pushNotificationRoute({
+      destination: { kind: "approvals-group", executionId: "agent-output:8" },
+      projectId: "prj_test",
+      requestOffset: 42,
+    }),
+  ).toEqual({
+    pathname: "/project/[projectId]/approvals",
+    params: { projectId: "prj_test", approvalGroupExecutionId: "agent-output:8" },
+  });
+  expect(
+    pushNotificationRoute({ destination: { kind: "approvals-group" }, projectId: "prj_test" }),
+  ).toBeNull();
+});
+
 test("an agent push opens only a well-formed agent path", () => {
   expect(
     pushNotificationRoute({

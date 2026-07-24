@@ -20,7 +20,12 @@ import {
   View,
 } from "react-native";
 import { CodeBlock } from "../../../components/activity-card.tsx";
-import { enrollApproverKey, loadApproverKey, signWithApproverKey } from "../../../lib/approver.ts";
+import {
+  enrollApproverKey,
+  loadApproverKey,
+  signManyWithApproverKey,
+  signWithApproverKey,
+} from "../../../lib/approver.ts";
 import {
   deriveOpenRequests,
   deriveRecentResolvedRequests,
@@ -28,12 +33,18 @@ import {
   focusOpenRequest,
   approvalBodyForDisplay,
   grant,
+  grantMany,
+  groupHostBreakdown,
+  groupOpenRequests,
   reject,
+  rejectMany,
   safeHost,
   scriptCodeForApproval,
+  type ApprovalListItem,
   type OpenRequest,
   type RequestedPayload,
   type ResolvedRequest,
+  type ScriptExecutionContext,
 } from "../../../lib/approvals.ts";
 import { getProjectItx } from "../../../lib/itx.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
@@ -44,14 +55,18 @@ import { useLiveEvents } from "../../../lib/use-live-events.ts";
 const APPROVAL_EVENT_TYPES = [EVENT.requested, EVENT.granted, EVENT.rejected, EVENT.settled];
 
 export default function ApprovalsScreen() {
-  const { projectId, approvalRequestEventOffset, slug } = useLocalSearchParams<{
-    projectId: string;
-    approvalRequestEventOffset?: string;
-    slug?: string;
-  }>();
+  const { projectId, approvalRequestEventOffset, approvalGroupExecutionId, slug } =
+    useLocalSearchParams<{
+      projectId: string;
+      approvalRequestEventOffset?: string;
+      approvalGroupExecutionId?: string;
+      slug?: string;
+    }>();
   const parsedTargetOffset = Number(approvalRequestEventOffset);
   const targetOffset =
     Number.isSafeInteger(parsedTargetOffset) && parsedTargetOffset > 0 ? parsedTargetOffset : null;
+  const targetExecutionId = approvalGroupExecutionId || null;
+  const queryClient = useQueryClient();
 
   const server = useQuery({
     queryKey: ["server"],
@@ -95,6 +110,18 @@ export default function ApprovalsScreen() {
     () => focusOpenRequest(deriveOpenRequests(events.data || []), targetOffset),
     [events.data, targetOffset],
   );
+  // Bucket into Approval Groups (2+ open holds from one script run); a
+  // deep-linked group floats to the front like a focused single request.
+  const items = useMemo(() => {
+    const grouped = groupOpenRequests(open);
+    if (targetExecutionId === null) return grouped;
+    const isTarget = (item: ApprovalListItem) =>
+      item.kind === "group"
+        ? item.executionId === targetExecutionId
+        : item.request.payload.streamContext?.kind === "script-execution" &&
+          item.request.payload.streamContext.executionId === targetExecutionId;
+    return [...grouped.filter(isTarget), ...grouped.filter((item) => !isTarget(item))];
+  }, [open, targetExecutionId]);
   const recentResolved = useMemo(
     () => deriveRecentResolvedRequests(events.data || [], 5),
     [events.data],
@@ -124,6 +151,40 @@ export default function ApprovalsScreen() {
     },
   });
 
+  // Whole-group decisions: one Face ID unlock signs every pending member
+  // (signManyWithApproverKey), then per-request events append sequentially,
+  // best-effort — a mid-batch failure leaves the remainder visibly pending.
+  // Progress lands in the query cache so the group header can say
+  // "granting 3/12…" without useState.
+  const respondAll = useMutation({
+    mutationFn: async (input: {
+      decision: "grant" | "reject";
+      executionId: string;
+      requests: OpenRequest[];
+    }) => {
+      const project = await getProjectItx(baseUrl!, projectId);
+      const stream = project.streams.get("/");
+      const pending = input.requests.filter((request) => !request.submitted);
+      const onProgress = (done: number) =>
+        queryClient.setQueryData(batchProgressKey(input.executionId), {
+          done,
+          total: pending.length,
+        });
+      if (input.decision === "reject") {
+        await rejectMany({ stream, requests: pending, onProgress });
+        return;
+      }
+      if (!key.data) throw new Error("Enroll this device before approving.");
+      await grantMany({
+        stream,
+        projectId,
+        requests: pending,
+        signMany: (messages) => signManyWithApproverKey(projectId, messages),
+        onProgress,
+      });
+    },
+  });
+
   return (
     <View style={styles.screen}>
       <Stack.Screen options={{ title: "Approvals" }} />
@@ -146,6 +207,9 @@ export default function ApprovalsScreen() {
       ) : null}
       {enroll.isError ? <Text style={styles.error}>{String(enroll.error.message)}</Text> : null}
       {respond.isError ? <Text style={styles.error}>{String(respond.error.message)}</Text> : null}
+      {respondAll.isError ? (
+        <Text style={styles.error}>{String(respondAll.error.message)}</Text>
+      ) : null}
 
       {events.isPending ? (
         <View style={styles.center}>
@@ -160,31 +224,66 @@ export default function ApprovalsScreen() {
         </View>
       ) : (
         <FlatList
-          data={open}
-          keyExtractor={(request) => String(request.offset)}
+          data={items}
+          keyExtractor={(item) =>
+            item.kind === "group" ? `group:${item.executionId}` : `request:${item.request.offset}`
+          }
           contentContainerStyle={{ padding: spacing.md, gap: spacing.sm }}
           ListEmptyComponent={
             <Text style={styles.empty}>No held requests right now — nothing needs you.</Text>
           }
           refreshing={events.isRefetching}
           onRefresh={() => events.refetch()}
-          renderItem={({ item: request }) => {
-            const pending =
-              respond.isPending && respond.variables?.request.offset === request.offset;
+          renderItem={({ item }) => {
+            const memberCard = (request: OpenRequest) => {
+              const batchPending =
+                respondAll.isPending &&
+                item.kind === "group" &&
+                respondAll.variables?.executionId === item.executionId;
+              const pending =
+                (respond.isPending && respond.variables?.request.offset === request.offset) ||
+                batchPending;
+              return (
+                <ApprovalCard
+                  baseUrl={baseUrl!}
+                  interaction={{
+                    kind: "pending",
+                    canApprove: Boolean(key.data),
+                    onRespond: (decision) => respond.mutate({ request, decision }),
+                    pending,
+                    submitted: request.submitted,
+                  }}
+                  key={request.offset}
+                  projectId={projectId}
+                  projectSlug={slug || ""}
+                  request={request}
+                  targeted={request.offset === targetOffset}
+                />
+              );
+            };
+            if (item.kind === "single") return memberCard(item.request);
             return (
-              <ApprovalCard
+              <ApprovalGroupCard
                 baseUrl={baseUrl!}
-                interaction={{
-                  kind: "pending",
+                batch={{
                   canApprove: Boolean(key.data),
-                  onRespond: (decision) => respond.mutate({ request, decision }),
-                  pending,
-                  submitted: request.submitted,
+                  decision: respondAll.variables?.decision || "grant",
+                  inFlight:
+                    respondAll.isPending && respondAll.variables?.executionId === item.executionId,
+                  onRespondAll: (decision) =>
+                    respondAll.mutate({
+                      decision,
+                      executionId: item.executionId,
+                      requests: item.requests,
+                    }),
                 }}
+                group={item}
                 projectId={projectId}
-                projectSlug={slug || ""}
-                request={request}
-                targeted={request.offset === targetOffset}
+                renderMember={memberCard}
+                targeted={
+                  item.executionId === targetExecutionId ||
+                  item.requests.some((request) => request.offset === targetOffset)
+                }
               />
             );
           }}
@@ -470,6 +569,161 @@ function ApprovalCard({
   );
 }
 
+/**
+ * One Approval Group (2+ open holds from one script run): a collapsed header
+ * carrying everything that justifies a one-tap decision — pending count, host
+ * breakdown, rule descriptions, and the originating script — with Approve all
+ * / Reject all right on it (the Face ID sheet is the confirm step). Expanding
+ * reveals the individual cards, each still individually actionable.
+ */
+function ApprovalGroupCard({
+  baseUrl,
+  batch,
+  group,
+  projectId,
+  renderMember,
+  targeted,
+}: {
+  baseUrl: string;
+  batch: {
+    canApprove: boolean;
+    decision: "grant" | "reject";
+    inFlight: boolean;
+    onRespondAll(decision: "grant" | "reject"): void;
+  };
+  group: { executionId: string; requests: OpenRequest[]; streamContext: ScriptExecutionContext };
+  projectId: string;
+  renderMember(request: OpenRequest): React.ReactElement;
+  targeted: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const detailsKey = ["approval-group-details", projectId, group.executionId];
+  const initialDetails = { expanded: targeted, script: false };
+  const details = useQuery({
+    queryKey: detailsKey,
+    queryFn: async () => initialDetails,
+    initialData: initialDetails,
+    staleTime: Infinity,
+  });
+  const progress = useQuery({
+    queryKey: batchProgressKey(group.executionId),
+    queryFn: async () => ({ done: 0, total: 0 }),
+    initialData: { done: 0, total: 0 },
+    staleTime: Infinity,
+  });
+  const streamContext = group.streamContext;
+  const script = useQuery({
+    queryKey: [
+      "approval-source-script",
+      baseUrl,
+      projectId,
+      streamContext.streamPath,
+      streamContext.scriptRunRequestedEventOffset,
+    ],
+    queryFn: async () => {
+      const project = await getProjectItx(baseUrl, projectId);
+      const event = await project.streams.get(streamContext.streamPath).getEvent({
+        offset: streamContext.scriptRunRequestedEventOffset,
+      });
+      return scriptCodeForApproval(group.requests[0]!.payload, event);
+    },
+    enabled: details.data.script,
+    staleTime: Infinity,
+  });
+  const toggle = (section: "expanded" | "script") => {
+    queryClient.setQueryData(detailsKey, { ...details.data, [section]: !details.data[section] });
+  };
+
+  const pendingRequests = group.requests.filter((request) => !request.submitted);
+  const ruleDescriptions = [
+    ...new Set(
+      group.requests.map((request) => request.payload.ruleDescription || request.payload.ruleKey),
+    ),
+  ];
+
+  return (
+    <View style={[styles.card, targeted && styles.targetedCard]}>
+      {targeted ? (
+        <Text style={styles.targetedLabel}>Opened from notification · script run</Text>
+      ) : null}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded: details.data.expanded }}
+        onPress={() => toggle("expanded")}
+        style={styles.compactSummary}
+      >
+        <Text numberOfLines={1} style={[styles.method, styles.compactMethod]}>
+          Script run · {pendingRequests.length} pending
+        </Text>
+        <Text style={styles.compactChevron}>{details.data.expanded ? "▾" : "▸"}</Text>
+      </Pressable>
+      <Text style={styles.groupHosts}>{groupHostBreakdown(group.requests)}</Text>
+      <Text style={styles.policyDescription}>{ruleDescriptions.join(" · ")}</Text>
+      <Text style={styles.sourceMeta} selectable>
+        {streamContext.streamPath} · script event #{streamContext.scriptRunRequestedEventOffset}
+      </Text>
+
+      <Pressable
+        accessibilityRole="button"
+        onPress={() => toggle("script")}
+        style={styles.detailHeader}
+      >
+        <Text style={styles.chevron}>{details.data.script ? "▾" : "▸"}</Text>
+        <Text style={styles.detailTitle}>Script</Text>
+      </Pressable>
+      {details.data.script ? (
+        script.isPending ? (
+          <ActivityIndicator color={colors.textMuted} size="small" />
+        ) : script.isError ? (
+          <Text style={styles.error}>{script.error.message}</Text>
+        ) : (
+          <CodeBlock language="typescript" muted={false} text={script.data} />
+        )
+      ) : null}
+
+      {batch.inFlight ? (
+        <Text style={styles.submitted}>
+          {batch.decision === "grant" ? "granting" : "rejecting"} {progress.data.done}/
+          {progress.data.total}…
+        </Text>
+      ) : pendingRequests.length === 0 ? (
+        <Text style={styles.submitted}>submitted — awaiting the egress door…</Text>
+      ) : (
+        <View style={styles.actions}>
+          <Pressable
+            style={[styles.button, styles.reject]}
+            disabled={batch.inFlight}
+            onPress={() => batch.onRespondAll("reject")}
+          >
+            <Text style={styles.rejectText}>Reject all</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.button, styles.approve, !batch.canApprove && styles.buttonDisabled]}
+            disabled={batch.inFlight || !batch.canApprove}
+            onPress={() => batch.onRespondAll("grant")}
+          >
+            <Text style={styles.approveText}>
+              {batch.canApprove
+                ? `Approve all ${pendingRequests.length} (Face ID)`
+                : "Enroll to approve"}
+            </Text>
+          </Pressable>
+        </View>
+      )}
+
+      {details.data.expanded ? (
+        <View style={styles.groupMembers}>{group.requests.map(renderMember)}</View>
+      ) : null}
+    </View>
+  );
+}
+
+/** Where a group's in-flight batch progress lives in the query cache — the
+ * respondAll mutation writes it, the group header reads it live. */
+function batchProgressKey(executionId: string) {
+  return ["approval-group-progress", executionId];
+}
+
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
   center: {
@@ -595,6 +849,14 @@ const styles = StyleSheet.create({
   approve: { backgroundColor: colors.accent },
   buttonDisabled: { opacity: 0.4 },
   approveText: { color: colors.background, fontSize: 14, fontWeight: "600" },
+  groupHosts: { color: colors.textMuted, fontFamily: "Menlo", fontSize: 11 },
+  groupMembers: {
+    borderTopColor: colors.border,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+    paddingTop: spacing.sm,
+  },
   recent: { marginTop: spacing.lg, gap: spacing.sm },
   recentTitle: { color: colors.textFaint, fontSize: 11, textTransform: "uppercase" },
   empty: { color: colors.textMuted, fontSize: 14 },

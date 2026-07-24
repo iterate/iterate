@@ -1,5 +1,10 @@
 export type PushNotificationData = {
-  destination?: { kind?: string; path?: string; approvalRequestEventOffset?: number };
+  destination?: {
+    kind?: string;
+    path?: string;
+    approvalRequestEventOffset?: number;
+    executionId?: string;
+  };
   projectId?: string;
   requestOffset?: number;
 };
@@ -13,6 +18,18 @@ export function pushNotificationRoute(data: PushNotificationData) {
       params: {
         projectId: data.projectId,
         approvalRequestEventOffset: String(data.destination.approvalRequestEventOffset),
+      },
+    };
+  }
+  if (data.destination?.kind === "approvals-group") {
+    if (typeof data.destination.executionId !== "string" || !data.destination.executionId) {
+      return null;
+    }
+    return {
+      pathname: "/project/[projectId]/approvals" as const,
+      params: {
+        projectId: data.projectId,
+        approvalGroupExecutionId: data.destination.executionId,
       },
     };
   }
