@@ -12,43 +12,31 @@ import {
 } from "../../../config-repo-template/apps/guestbook/ref.ts";
 import { GuestbookProcessorContract } from "../../../config-repo-template/apps/guestbook/processor.ts";
 import { GuestbookApp } from "../../../config-repo-template/apps/guestbook/server.tsx";
-import { ReviewBotApp } from "../../../config-repo-template/apps/review-bot/src/review-bot-app.ts";
-import {
-  reviewBotAppRef,
-  reviewBotSubscriptionConfigVersion,
-  reviewBotSubscriptionEvents,
-} from "../../../config-repo-template/apps/review-bot/src/review-bot-ref.ts";
-import { ReviewBotProcessorContract } from "../../../config-repo-template/apps/review-bot/src/review-bot.ts";
 import { PROJECT_REPO_INITIAL_FILES } from "./config-repo-template.generated.ts";
 
 function templateFile(path: string): string {
   return PROJECT_REPO_INITIAL_FILES.find((file) => file.path === path)!.content;
 }
 
-test("template ships modular apps under apps/ and a thin worker router", () => {
+test("template ships project-owned apps under apps/ and a thin worker router", () => {
   // Vendor SDK surfaces are NOT seeded (built-ins live at
   // itx.integrations.<slug>), projects grow their own apps/ and
-  // integrations/ by editing their repo, and the complete GitHub review
-  // workflow is userspace code in apps/review-bot.
+  // integrations/ by editing their repo. Shared apps such as the GitHub
+  // linter come from the iterate package instead of copied source.
   const paths = PROJECT_REPO_INITIAL_FILES.map((file) => file.path);
   expect(paths).not.toContain("sdk.ts");
   expect(paths.filter((path) => path.startsWith("integrations/"))).toEqual([]);
   expect(paths.filter((path) => path.startsWith("agents/"))).toEqual([]);
   expect(paths).not.toContain("github-reviews.ts");
+  expect(paths.filter((path) => path.startsWith("apps/review-bot/"))).toEqual([]);
 
   const appPaths = paths.filter((path) => path.startsWith("apps/"));
   expect(appPaths.length).toBeGreaterThan(0);
   expect(
-    appPaths.every(
-      (path) =>
-        path.startsWith("apps/todo/") ||
-        path.startsWith("apps/guestbook/") ||
-        path.startsWith("apps/review-bot/"),
-    ),
+    appPaths.every((path) => path.startsWith("apps/todo/") || path.startsWith("apps/guestbook/")),
   ).toBe(true);
   expect(paths).toEqual(
     expect.arrayContaining([
-      "apps/review-bot/src/review-bot-app.ts",
       "apps/todo/client.tsx",
       "apps/todo/server.tsx",
       "apps/guestbook/client.tsx",
@@ -62,9 +50,8 @@ test("template ships modular apps under apps/ and a thin worker router", () => {
     dependencies: Record<string, string>;
   };
   // Worker builds npm-install from the ROOT manifest (the platform rewrites
-  // its `iterate` spec in-memory per deploy), so every app's runtime deps —
-  // the review bot's zod included — live here, never in per-app manifests
-  // the rewrite would miss.
+  // its `iterate` spec in-memory per deploy), so every project-owned app's
+  // runtime deps live here, never in per-app manifests the rewrite would miss.
   expect(templatePackageJson.dependencies).toMatchObject({
     iterate: expect.any(String),
     react: expect.any(String),
@@ -104,10 +91,7 @@ test("guestbook wake subscription names the hosted processor", () => {
   });
 });
 
-test("modular createWorker refs point at apps/ entrypoints, not the root worker file", () => {
-  expect(reviewBotAppRef("install-789").source.createWorker.entryPoint).toBe(
-    "apps/review-bot/src/review-bot-app.ts",
-  );
+test("modular createApp refs point at apps/ entrypoints, not the root worker file", () => {
   expect("createApp" in guestbookAppRef.source).toBe(true);
 });
 
@@ -117,40 +101,7 @@ test("app modules load and export the classes their refs name", () => {
   // ref's entrypoint/className string to the class the entry module actually
   // exports — a rename can never strand a persisted ref or wake expression
   // pointing at a class the build no longer exports.
-  expect(reviewBotAppRef("install-789").className).toBe(ReviewBotApp.name);
   expect(guestbookAppRef.className).toBe(GuestbookApp.name);
-});
-
-test("review-bot wake subscriptions are per-connection and name the hosted processor", () => {
-  // Webhook streams are per connection and a wake subscription names one
-  // exact stream, so the durable identity must fork per connection — two
-  // connections sharing one host would fence on mismatched registry
-  // coordinates.
-  expect(reviewBotAppRef("install-789").durableWorkerKey).not.toBe(
-    reviewBotAppRef("install-999").durableWorkerKey,
-  );
-
-  const [subscription] = reviewBotSubscriptionEvents("install-789");
-  expect(subscription).toMatchObject({
-    type: "events.iterate.com/stream/subscription-configured",
-    payload: {
-      subscriptionKey: "app-review-bot#review-bot",
-      delivery: {
-        mode: "wake",
-        expression: [
-          "workers",
-          ["get", reviewBotAppRef("install-789")],
-          "processor",
-          "wakeStreamSubscriber",
-        ],
-        // The ref module is dependency-free, so it repeats the slug as a
-        // string; this is the drift guard — a mismatch would make the spine
-        // wake a processor slug the host never registered.
-        processorSlug: ReviewBotProcessorContract.slug,
-      },
-    },
-    idempotencyKey: `review-bot/subscription:v${reviewBotSubscriptionConfigVersion}`,
-  });
 });
 
 test("template gets the platform sdk from iterate/sdk, not a committed snapshot", () => {
@@ -160,6 +111,7 @@ test("template gets the platform sdk from iterate/sdk, not a committed snapshot"
   // latest build from main; preview deploys pin their PR's build through the
   // in-memory manifest rewrite).
   expect(templateFile("worker.ts")).toContain('from "iterate/sdk"');
+  expect(templateFile("worker.ts")).toContain('from "iterate/github-ai-linter"');
 
   const templatePackageJson = JSON.parse(templateFile("package.json")) as {
     dependencies: Record<string, string>;
@@ -167,4 +119,19 @@ test("template gets the platform sdk from iterate/sdk, not a committed snapshot"
   expect(templatePackageJson.dependencies).toMatchObject({
     iterate: "https://pkg.pr.new/iterate/iterate/iterate@main",
   });
+});
+
+test("seeded GitHub AI linter reads editable rules shipped in the config repo", () => {
+  expect(templateFile("worker.ts")).toContain(
+    'glob: "rules/**/*.md",\n      repoPath: "/repos/config"',
+  );
+
+  const rulePaths = PROJECT_REPO_INITIAL_FILES.map((file) => file.path).filter((path) =>
+    path.startsWith("rules/"),
+  );
+  expect(rulePaths).toEqual([
+    "rules/structure/no-small-single-use-helper.md",
+    "rules/typescript/explain-type-cast.md",
+    "rules/typescript/no-inferable-type-annotation.md",
+  ]);
 });

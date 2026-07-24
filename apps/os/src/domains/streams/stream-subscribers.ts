@@ -862,6 +862,10 @@ export class StreamSubscribers {
   #onDeliveryFailure(subscriptionKey: string, error: unknown, previousAttempts?: number): void {
     const attempts = previousAttempts ?? this.#hooks.store.get(subscriptionKey)?.attempt ?? 0;
     const attempt = attempts + 1;
+    if ((error as { retryable?: unknown } | null)?.retryable === false) {
+      this.#park(subscriptionKey, attempt, error);
+      return;
+    }
     if (attempt >= MAX_DELIVERY_ATTEMPTS) {
       this.#park(subscriptionKey, attempt, error);
       return;

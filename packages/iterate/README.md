@@ -184,6 +184,42 @@ Config resolution priority: `--config` flag > workspace match (walk up from cwd)
 If you run inside an `iterate/iterate` clone, the CLI auto-detects it and
 delegates to the local source instead of the published build.
 
+## GitHub AI linter
+
+Project workers can configure the packaged pull-request linter and call it
+explicitly from their event hook:
+
+```ts
+import { GithubAiLinter } from "iterate/github-ai-linter";
+import { IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
+
+export default class ProjectWorker extends IterateWorkerEntrypoint {
+  #aiLintApp = GithubAiLinter.create(this.env, {
+    policyVersion: "2",
+    rules: { glob: "rules/**/*.md", repoPath: "/repos/iterate" },
+  });
+
+  protected override async processEvent(event: StreamEvent): Promise<void> {
+    await this.#aiLintApp.processEvent(event);
+  }
+}
+```
+
+Each matched Markdown file supplies one rule. Its frontmatter contains a stable
+ID and JSON file globs; its body is the review invariant:
+
+```md
+---
+id: typescript/no-inferable-type-annotation
+files: ["**/*.{ts,tsx,mts,cts}", "!**/*.test.ts"]
+---
+
+Do not declare a type annotation that TypeScript can infer from the value.
+```
+
+The package owns GitHub event routing and the durable processor. Rules are read
+from one pinned repository commit for each webhook.
+
 ## Publishing (maintainers)
 
 From repo root:

@@ -518,6 +518,38 @@ describe("StreamSubscribers", () => {
     });
   });
 
+  it("parks a terminal wake target failure immediately with the exact error", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 0);
+    h.append(evt(1, "event"));
+    h.dialImpl.poke = async () => {
+      throw Object.assign(
+        new Error('Entry point "github-ai-linter-worker.ts" was not found in files.'),
+        { retryable: false },
+      );
+    };
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.pokes).toHaveLength(1);
+    expect(h.factsOfType(PARKED)).toMatchObject([
+      {
+        payload: {
+          subscriptionKey: "k",
+          attempts: 1,
+          error: 'Entry point "github-ai-linter-worker.ts" was not found in files.',
+        },
+      },
+    ]);
+    expect(h.row("k")).toMatchObject({
+      attempt: 1,
+      nextAttemptAt: null,
+      lastError: 'Entry point "github-ai-linter-worker.ts" was not found in files.',
+    });
+    expect(h.armedAlarms).toHaveLength(0);
+  });
+
   it("d. parks at MAX_DELIVERY_ATTEMPTS with one state-guarded parked fact, then goes silent", async () => {
     const h = makeHarness();
     h.configure(pushPayload(), 0);

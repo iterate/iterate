@@ -2,6 +2,40 @@ import { defineConfig } from "tsdown";
 
 export default defineConfig([
   {
+    // This is installed as the dynamic worker's PHYSICAL entry point. The
+    // worker-bundler host installs the root config repo's dependencies, not
+    // transitive dependencies declared inside an installed tarball, so this
+    // artifact must carry its complete runtime graph. The only imports left
+    // for workerd to resolve are its built-in API and the per-install config
+    // virtual supplied by GithubAiLinter.create().
+    entry: {
+      "github-ai-linter/configured-worker": "src/github-ai-linter/configured-worker.ts",
+    },
+    format: "esm",
+    fixedExtension: true,
+    platform: "neutral",
+    inputOptions: {
+      resolve: {
+        conditionNames: ["workerd", "worker", "import", "default"],
+      },
+    },
+    deps: {
+      alwaysBundle: ["@iterate-com/capnweb", "minimatch", "yaml", "zod"],
+      neverBundle: ["cloudflare:workers", "iterate:github-ai-linter-config"],
+      onlyBundle: [
+        "@iterate-com/capnweb",
+        "balanced-match",
+        "brace-expansion",
+        "minimatch",
+        "yaml",
+        "zod",
+      ],
+    },
+    dts: false,
+    sourcemap: true,
+    clean: false,
+  },
+  {
     entry: ["src/index.ts", "src/stream-tui/agent-chat-terminal.tsx"],
     format: "esm",
     // The CLI + TUI are STANDALONE PROCESS artifacts (bin/iterate spawns the
@@ -49,6 +83,8 @@ export default defineConfig([
     // in the build script instead.
     entry: {
       sdk: "src/sdk.ts",
+      "github-ai-linter/index": "src/github-ai-linter/index.ts",
+      "github-ai-linter/worker": "src/github-ai-linter/worker.ts",
       processors: "src/processors/index.ts",
       "processors-cloudflare": "src/processors/cloudflare.ts",
       "processors-testing": "src/processors/testing.ts",
