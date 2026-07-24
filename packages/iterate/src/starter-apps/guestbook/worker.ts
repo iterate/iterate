@@ -24,6 +24,13 @@ export class GuestbookApp extends IterateDurableObject {
     await this.#host.handleAlarm(alarmInfo);
   }
 
+  /** Compatibility door for the former config-owned WAKE subscription.
+   * Initialization removes that persisted subscription, but it may still dial
+   * this source once while the removal fact and source upgrade cross. */
+  get processor() {
+    return this.#host.wakeSubscriber;
+  }
+
   /** Lazily initialize the stream and retire the former config-owned WAKE
    * subscription. The idempotency-keyed facts may be offered by every caller. */
   async #ensureInitialized(): Promise<StreamProcessorRegistry<GuestbookState>> {
