@@ -7,7 +7,9 @@ size: medium
 
 ## Status
 
-About 70% complete. The public factory, self-contained worker/client artifact, sqlfu migration, config template, generated seed, focused tests, package build, and package/OS typechecks are done. Preview migration/E2E/trace proof, the separate config-repo update, and review/CI cleanup remain.
+About 90% complete. The package, config template, real config consumer, exact
+legacy-row migration spec, and all local verification are done. The new preview
+run, trace/log audit, and final CI/review cleanup remain.
 
 ## Why
 
@@ -47,10 +49,11 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
 - [x] Regenerate `config-repo-template.generated.ts` and update seeded file-tree assertions which currently require `apps/todo/client.tsx` and `apps/todo/server.tsx`. *The generated seed and unit/E2E tree assertions contain only the project-owned guestbook files.*
 - [x] Keep `specs/seeded-apps.spec.ts`'s existing Todo assertions unchanged. *No changes were made to the Playwright acceptance flow.*
 - [x] Document the `iterate/todo` usage and its package/config ownership boundary. *The package README shows routing/auth and states the durable/runtime boundary.*
-- [ ] Run focused package tests, package build and artifact gates, template tests, typecheck, lint, format, and the relevant full test lanes.
+- [x] Add a deployed migration spec which writes the legacy raw-SQL schema through config-owned source, swaps only the source to the package worker under `app-todo-live`, and reads the same row back. *`todo-package-migration.e2e.test.ts` went red on the package worker's missing `getTodos` RPC probe; the green preview run follows the new deployment.*
+- [x] Run focused package tests, package build and artifact gates, template tests, typecheck, lint, format, and the relevant full test lanes. *Package build and 169 tests pass; root typecheck, lint, format, and test all pass.*
 - [ ] Deploy a preview and run the unchanged seeded Todo Playwright flow through real auth, ingress, WebSocket, Durable Object SQLite, mutation, and reload.
 - [ ] Audit preview traces/logs for the Todo flow; classify or fix every error before calling the proof healthy.
-- [ ] Update the separate `iterate/config` repo to consume the package artifact, preserving `app-todo-live`, or record a concrete stacked follow-up if the package artifact is not yet consumable.
+- [x] Update the separate `iterate/config` repo to consume the package artifact, preserving `app-todo-live`, or record a concrete stacked follow-up if the package artifact is not yet consumable. *The branch artifact typechecks in [iterate/config#19](https://github.com/iterate/config/pull/19), which deletes config-owned Todo source.*
 
 ## Invariants
 
@@ -84,3 +87,5 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
 - 2026-07-24: Factory TDD proved the `env.ITX.fetch` lane and private `app-todo-live` ref.
 - 2026-07-24: The artifact gate caught both the initially absent build and an external `zod` leak; the final worker bundles sqlfu, Cap'n Web, the migration, and the prebuilt browser client.
 - 2026-07-24: Package build/typecheck/169 tests, config-template typecheck, and 11 focused OS template/seed tests pass.
+- 2026-07-24: Root typecheck, lint, format, and full test pass. The first CI run also exposed and fixed an internal type accidentally exported to knip.
+- 2026-07-24: A real deployed red migration spec proved the legacy SQLite row exists before the package source takes over; `getTodos()` is an internal RPC probe for the green half.

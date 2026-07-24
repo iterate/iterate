@@ -83,6 +83,11 @@ export class TodoApp extends IterateDurableObject {
     this.#live.setState({ todos: this.#load() });
   }
 
+  /** Internal worker RPC surface used to verify state continuity across source upgrades. */
+  getTodos(): Todo[] {
+    return this.#load();
+  }
+
   add(title: string): void {
     const trimmed = title.trim().slice(0, 200);
     if (trimmed.length === 0) return;
