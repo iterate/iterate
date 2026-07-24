@@ -7,8 +7,8 @@ size: small
 
 ## Status summary
 
-Implementation and local checks are complete. TypeScript source maps now remove type-only lines
-without changing source-line counts; the PR self-report and CI/review remain.
+Implementation, local checks, and PR self-report proof are complete. TypeScript source maps remove
+type-only lines without changing source-line counts; CI/review remain.
 
 ## Motivation
 
@@ -29,7 +29,8 @@ column.
 - [x] Tests cover a type-only change, mixed type/runtime code, runtime-emitting TypeScript, and
       unchanged behavior outside TypeScript. _`scripts/ci/loc-report.test.ts` has five integration
       cases._
-- [ ] Verify the report against this PR and record the observed raw/significant split.
+- [x] Verify the report against this PR and record the observed raw/significant split. _At
+      `4e5e7fc29`, the branch reports +250/−19 Lines and +216/−11 Significant._
 
 ## Decisions / assumptions
 
@@ -50,3 +51,5 @@ column.
 - The first compiler-output prototype exposed synthetic `export {};` churn and enum expansion.
   Source maps fixed both: they act only as a runtime-line stencil over the original source.
 - `pnpm --dir scripts typecheck` and all 274 scripts workspace tests pass.
+- Running the changed report over `origin/main...4e5e7fc29` produced +250/−19 raw versus +216/−11
+  Significant, exercising TypeScript, tests, docs, and the lockfile together.
