@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { readFile, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { createCli } from "trpc-cli";
+import { build as tsdown } from "tsdown";
 
 type BundleManifestEntry = {
   allowedImports: string[];
@@ -19,15 +20,10 @@ const distRoot = fileURLToPath(new URL("../dist", import.meta.url));
 export default async function build(): Promise<void> {
   await rm(distRoot, { force: true, recursive: true });
 
-  await runPhase("build browser clients", [
-    "exec",
-    "tsdown",
-    "--config",
-    "tsdown.app-clients.config.ts",
-  ]);
+  await tsdown({ config: "tsdown.app-clients.config.ts", cwd: packageRoot });
   await checkClientBundles();
 
-  await runPhase("build package and physical workers", ["exec", "tsdown"]);
+  await tsdown({ config: "tsdown.config.ts", cwd: packageRoot });
   await checkPhysicalWorkerBundles();
 
   await runPhase("emit declarations", ["exec", "tsc", "-p", "tsconfig.sdk.json"]);
