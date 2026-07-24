@@ -1,14 +1,14 @@
-status: in-progress
+status: done pending review
 size: small
 
 # Fix the guestbook-package-migration e2e source-flip race
 
 ## Status summary
 
-Root cause diagnosed and reproduced locally (6/6 failures with warm build
-caches). Fix: make the test simulate the pre-packaging world for real by
-parking the project worker during the createApp phase. Remaining: verify with
-the local repro loop, run checks, open PR.
+Done. Root cause diagnosed and reproduced locally (6/6 warm-cache failures),
+fixed by making the test simulate the pre-packaging world for real (park the
+project worker during the createApp phase, restore it as the migration
+moment). 8/8 warm reruns pass post-fix; typecheck/lint/knip/format green.
 
 ## Problem
 
@@ -43,13 +43,18 @@ after dev-server boot passes (~7.7s), every warm rerun fails (~1.8s).
 
 ## Fix
 
-- [ ] Park the project worker before the createApp phase: commit a minimal
+- [x] Park the project worker before the createApp phase: commit a minimal
       `worker.ts` with no packaged-app delivery, so no packaged-ref
-      invocations can race the createApp calls.
-- [ ] Restore the original template `worker.ts` before the packaged phase —
-      this restore IS the migration moment the test is about.
-- [ ] Verify with the local repro loop (>= 6 warm runs).
-- [ ] typecheck / lint / knip.
+      invocations can race the createApp calls. _Original worker.ts read back
+      first via `project.repo.readFile`, stand-in committed with
+      `project.repo.commitFiles`._
+- [x] Restore the original template `worker.ts` before the packaged phase —
+      this restore IS the migration moment the test is about. _Restore commit
+      between the two phases in the test._
+- [x] Verify with the local repro loop (>= 6 warm runs). _8/8 warm passes
+      (~2s each) against the same dev server that failed 6/6 (~1.8s each)
+      before the fix._
+- [x] typecheck / lint / knip. _All green, format clean._
 
 ## Notes
 
