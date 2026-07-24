@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { expect, test } from "vitest";
 
@@ -10,9 +10,6 @@ import { computeReport, getChangedFiles, renderBodySection } from "./loc-report.
 test("type-only TypeScript changes remain in Lines but disappear from Significant", () => {
   using repo = createGitRepo();
   const base = repo.commit({
-    "src/user.ts": ["export interface User {", "  id: string", "}", ""].join("\n"),
-  });
-  const head = repo.commit({
     "src/user.ts": [
       "export interface User {",
       "  id: string",
@@ -21,12 +18,17 @@ test("type-only TypeScript changes remain in Lines but disappear from Significan
       "",
     ].join("\n"),
   });
+  const head = repo.commit({
+    "src/user.ts": ["export interface User {", "  id: string", "  name: string", "}", ""].join(
+      "\n",
+    ),
+  });
 
   expect(getChangedFiles(base, head, repo.path)).toMatchObject([
     {
       path: "src/user.ts",
       added: 1,
-      removed: 0,
+      removed: 1,
       significantAdded: 0,
       significantRemoved: 0,
     },
@@ -36,15 +38,15 @@ test("type-only TypeScript changes remain in Lines but disappear from Significan
 test("mixed TypeScript changes count only emitted runtime lines as Significant", () => {
   using repo = createGitRepo();
   const base = repo.commit({
-    "src/user.ts": ["export interface User {", "  id: string", "}", ""].join("\n"),
+    "src/user.tsx": ["export interface User {", "  id: string", "}", ""].join("\n"),
   });
   const head = repo.commit({
-    "src/user.ts": [
+    "src/user.tsx": [
       "export interface User {",
       "  id: string",
       "  displayName: string",
       "}",
-      "export const getDisplayName = (user: User) => user.displayName",
+      "export const Avatar = (user: User) => <span>{user.displayName}</span>",
       "",
     ].join("\n"),
   });
@@ -113,7 +115,7 @@ function createGitRepo() {
     commit(files: Record<string, string>) {
       for (const [file, content] of Object.entries(files)) {
         const fullPath = join(path, file);
-        mkdirSync(join(fullPath, ".."), { recursive: true });
+        mkdirSync(dirname(fullPath), { recursive: true });
         writeFileSync(fullPath, content);
       }
       execFileSync("git", ["add", "."], { cwd: path });
