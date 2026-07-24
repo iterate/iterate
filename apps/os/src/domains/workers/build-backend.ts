@@ -187,7 +187,7 @@ type WorkerBuildOutput = {
   wranglerConfig?: WorkerBuildWranglerConfig;
 };
 
-export type WorkerBuildBackendResult =
+type WorkerBuildBackendResult =
   | { ok: true; output: WorkerBuildOutput }
   | { failure: WorkerBuildFailure; ok: false };
 

@@ -63,7 +63,7 @@ export type WorkerBuildResult =
   | { failure: WorkerBuildFailure; ok: false };
 
 /** An expected source-build failure; repo, KV, and sidecar transport errors stay distinct. */
-export class WorkerBuildFailedError extends Error {
+class WorkerBuildFailedError extends Error {
   override readonly name = "WorkerBuildFailedError";
   readonly retryable = false;
 }
