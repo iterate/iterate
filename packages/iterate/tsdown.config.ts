@@ -2,10 +2,13 @@ import { readFileSync } from "node:fs";
 import { defineConfig } from "tsdown";
 
 const guestbookClientSource = readFileSync(
-  new URL("./dist/guestbook/client.mjs", import.meta.url),
+  new URL("./dist/starter-apps/guestbook/client.mjs", import.meta.url),
   "utf8",
 );
-const todoClientSource = readFileSync(new URL("./dist/todo/client.mjs", import.meta.url), "utf8");
+const todoClientSource = readFileSync(
+  new URL("./dist/starter-apps/todo/client.mjs", import.meta.url),
+  "utf8",
+);
 
 const appClientSourcePlugin = {
   name: "app-client-sources",
@@ -30,8 +33,8 @@ export default defineConfig([
     // Cap'n Web servers, and separately prebuilt browser clients. Config
     // supplies only package.json so worker-bundler can resolve these files.
     entry: {
-      "guestbook/configured-worker": "src/guestbook/configured-worker.ts",
-      "todo/configured-worker": "src/todo/configured-worker.ts",
+      "starter-apps/guestbook/configured-worker": "src/starter-apps/guestbook/configured-worker.ts",
+      "starter-apps/todo/configured-worker": "src/starter-apps/todo/configured-worker.ts",
     },
     format: "esm",
     fixedExtension: true,
@@ -59,7 +62,8 @@ export default defineConfig([
     // for workerd to resolve are its built-in API and the per-install config
     // virtual supplied by GithubAiLinter.create().
     entry: {
-      "github-ai-linter/configured-worker": "src/github-ai-linter/configured-worker.ts",
+      "starter-apps/github-ai-linter/configured-worker":
+        "src/starter-apps/github-ai-linter/configured-worker.ts",
     },
     format: "esm",
     fixedExtension: true,
@@ -133,11 +137,11 @@ export default defineConfig([
     // in the build script instead.
     entry: {
       sdk: "src/sdk.ts",
-      "guestbook/index": "src/guestbook/index.ts",
-      "guestbook/worker": "src/guestbook/worker.ts",
-      "github-ai-linter/index": "src/github-ai-linter/index.ts",
-      "github-ai-linter/worker": "src/github-ai-linter/worker.ts",
-      "todo/index": "src/todo/index.ts",
+      "starter-apps/guestbook/index": "src/starter-apps/guestbook/index.ts",
+      "starter-apps/guestbook/worker": "src/starter-apps/guestbook/worker.ts",
+      "starter-apps/github-ai-linter/index": "src/starter-apps/github-ai-linter/index.ts",
+      "starter-apps/github-ai-linter/worker": "src/starter-apps/github-ai-linter/worker.ts",
+      "starter-apps/todo/index": "src/starter-apps/todo/index.ts",
       processors: "src/processors/index.ts",
       "processors-cloudflare": "src/processors/cloudflare.ts",
       "processors-testing": "src/processors/testing.ts",

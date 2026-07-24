@@ -51,13 +51,15 @@ test("packaged apps stay behind the thin router", () => {
   expect(worker).not.toContain("clientEntryPoint");
   expect(worker).not.toContain("pipeline:");
   expect(worker).not.toContain("tanstack");
-  expect(worker).toContain('from "iterate/guestbook"');
+  expect(worker).toContain('from "iterate/starter-apps/guestbook"');
   expect(worker).toContain("this.#guestbookApp.processEvent(event)");
   expect(worker).toContain("this.#guestbookApp.fetch(req)");
   expect(templateFile("apps/guestbook/server.tsx")).toContain(
-    'from "iterate/guestbook/configured-worker"',
+    'from "iterate/starter-apps/guestbook/configured-worker"',
   );
-  expect(templateFile("apps/guestbook/client.tsx")).toContain('import "iterate/guestbook/client"');
+  expect(templateFile("apps/guestbook/client.tsx")).toContain(
+    'import "iterate/starter-apps/guestbook/client"',
+  );
 });
 
 test("template gets the platform sdk from iterate/sdk, not a committed snapshot", () => {
@@ -67,9 +69,9 @@ test("template gets the platform sdk from iterate/sdk, not a committed snapshot"
   // latest build from main; preview deploys pin their PR's build through the
   // in-memory manifest rewrite).
   expect(templateFile("worker.ts")).toContain('from "iterate/sdk"');
-  expect(templateFile("worker.ts")).toContain('from "iterate/github-ai-linter"');
-  expect(templateFile("worker.ts")).toContain('from "iterate/guestbook"');
-  expect(templateFile("worker.ts")).toContain('from "iterate/todo"');
+  expect(templateFile("worker.ts")).toContain('from "iterate/starter-apps/github-ai-linter"');
+  expect(templateFile("worker.ts")).toContain('from "iterate/starter-apps/guestbook"');
+  expect(templateFile("worker.ts")).toContain('from "iterate/starter-apps/todo"');
 
   const templatePackageJson = JSON.parse(templateFile("package.json")) as {
     dependencies: Record<string, string>;

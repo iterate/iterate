@@ -1,7 +1,7 @@
 // The Guestbook's physical identity. Keeping the durable key stable preserves
 // its processor storage while the implementation moves out of config repos.
-import type { StreamEventInput } from "../processors/index.ts";
-import type { StatefulDynamicWorkerRef } from "../sdk.ts";
+import type { StreamEventInput } from "../../processors/index.ts";
+import type { StatefulDynamicWorkerRef } from "../../sdk.ts";
 
 export const guestbookStreamPath = "/guestbook";
 
@@ -12,7 +12,7 @@ export const guestbookWorkerRef = {
   path: "/",
   source: {
     createWorker: {
-      entryPoint: "node_modules/iterate/dist/guestbook/configured-worker.mjs",
+      entryPoint: "node_modules/iterate/dist/starter-apps/guestbook/configured-worker.mjs",
       files: {
         include: ["package.json"],
         repoPath: "/repos/config",

@@ -10,7 +10,7 @@ import {
   ReviewBotProcessor,
   ReviewBotProcessorContract,
   reviewBotFreshnessHorizonMs,
-} from "iterate/github-ai-linter/worker";
+} from "iterate/starter-apps/github-ai-linter/worker";
 
 const testAndSpecFileGlobs = [
   "!**/*.{test,spec}.{js,jsx,mjs,cjs,ts,tsx,mts,cts}",
@@ -571,7 +571,7 @@ describe("userspace GitHub pull-request routing", () => {
   });
 });
 
-// The processor half (`iterate/github-ai-linter/worker`)
+// The processor half (`iterate/starter-apps/github-ai-linter/worker`)
 // driven by the REAL runner over an in-memory journal via the shared
 // `iterate/processors/testing` harness. The router itself is covered above;
 // these prove the delivery skin around it: which events reach it at all, and

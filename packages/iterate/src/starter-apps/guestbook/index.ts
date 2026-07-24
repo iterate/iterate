@@ -1,4 +1,4 @@
-import type { DynamicWorkerCapability, ItxBinding, StreamEvent } from "../sdk.ts";
+import type { DynamicWorkerCapability, ItxBinding, StreamEvent } from "../../sdk.ts";
 import { guestbookStreamPath, guestbookWorkerRef } from "./app-ref.ts";
 import type { GuestbookApp as GuestbookWorker } from "./worker.ts";
 

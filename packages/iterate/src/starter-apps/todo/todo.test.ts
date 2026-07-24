@@ -36,7 +36,7 @@ test("a packaged Todo forwards HTTP to its private stateful worker", async () =>
       path: "/",
       source: {
         createWorker: {
-          entryPoint: "node_modules/iterate/dist/todo/configured-worker.mjs",
+          entryPoint: "node_modules/iterate/dist/starter-apps/todo/configured-worker.mjs",
           files: {
             include: ["package.json"],
             repoPath: "/repos/config",
@@ -47,5 +47,5 @@ test("a packaged Todo forwards HTTP to its private stateful worker", async () =>
       type: "stateful",
     },
   });
-  expect(JSON.stringify(dispatch.ref)).not.toContain("apps/todo");
+  expect(JSON.stringify(dispatch.ref)).not.toContain('"apps/todo/');
 });

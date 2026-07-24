@@ -190,7 +190,7 @@ Project workers can configure the packaged pull-request linter and call it
 explicitly from their event hook:
 
 ```ts
-import { GithubAiLinter } from "iterate/github-ai-linter";
+import { GithubAiLinter } from "iterate/starter-apps/github-ai-linter";
 import { IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
 
 export default class ProjectWorker extends IterateWorkerEntrypoint {
@@ -225,7 +225,7 @@ from one pinned repository commit for each webhook.
 Project workers can route authenticated HTTP to the packaged Todo app:
 
 ```ts
-import { TodoApp } from "iterate/todo";
+import { TodoApp } from "iterate/starter-apps/todo";
 import { IterateWorkerEntrypoint } from "iterate/sdk";
 
 export default class ProjectWorker extends IterateWorkerEntrypoint {

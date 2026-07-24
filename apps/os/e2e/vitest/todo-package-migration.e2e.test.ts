@@ -36,7 +36,7 @@ const packagedTodoRef = {
   path: "/",
   source: {
     createWorker: {
-      entryPoint: "node_modules/iterate/dist/todo/configured-worker.mjs",
+      entryPoint: "node_modules/iterate/dist/starter-apps/todo/configured-worker.mjs",
       files: {
         include: ["package.json"],
         repoPath: "/repos/config",

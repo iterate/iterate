@@ -10,7 +10,7 @@ pull_request: https://github.com/iterate/iterate/pull/2303
 
 Done. Guestbook is packaged behind one combined fetch/event factory, config retains only migration bridges, source and state migrations pass, and the live browser, ingress, preview, and telemetry proofs are clean.
 
-Move the Guestbook implementation from generated config repos into `iterate/guestbook`. This is the combined app case: one factory instance must expose both HTTP `fetch` and committed project-stream `processEvent`.
+Move the Guestbook implementation from generated config repos into `iterate/starter-apps/guestbook`. This is the combined app case: one factory instance must expose both HTTP `fetch` and committed project-stream `processEvent`.
 
 ## Decisions
 
@@ -26,7 +26,7 @@ Move the Guestbook implementation from generated config repos into `iterate/gues
 ## Checklist
 
 - [x] Add a failing public contract test for one factory exposing both `fetch` and `processEvent`. _Red import failure, then green dispatch + event-delivery contract in `guestbook.test.ts`._
-- [x] Export the packaged Guestbook runtime and physical configured-worker artifact. _`iterate/guestbook` owns the factory; `dist/guestbook/configured-worker.mjs` owns the stateful runtime._
+- [x] Export the packaged Guestbook runtime and physical configured-worker artifact. _`iterate/starter-apps/guestbook` owns the factory; `dist/starter-apps/guestbook/configured-worker.mjs` owns the stateful runtime._
 - [x] Embed a browser-ready Guestbook client with a guard against bare browser imports. _The client build emits one self-contained asset and `check-guestbook-client-bundle.ts` rejects imports._
 - [x] Preserve durable identity, stream history, processor state, and subscription migration. _The deployed createApp→createWorker test kept `app-guestbook-stream`, its folded entry, and retired `app-guestbook#guestbook`._
 - [x] Compose both Guestbook methods in the generated config-repo worker. _One `GuestbookApp.create(this.env)` instance receives routed HTTP and committed events._

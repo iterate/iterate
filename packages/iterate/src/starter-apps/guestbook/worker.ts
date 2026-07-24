@@ -5,9 +5,9 @@ import {
   RpcTarget,
   newWorkersWebSocketRpcResponse,
   type LiveStateRpc,
-} from "../sdk/capnweb/index.ts";
-import type { StreamProcessorRegistry } from "../processors/cloudflare.ts";
-import { IterateDurableObject, createProcessorHost, type StreamEvent } from "../sdk.ts";
+} from "../../sdk/capnweb/index.ts";
+import type { StreamProcessorRegistry } from "../../processors/cloudflare.ts";
+import { IterateDurableObject, createProcessorHost, type StreamEvent } from "../../sdk.ts";
 import { guestbookCreationEvents, guestbookStreamPath } from "./app-ref.ts";
 import { GuestbookProcessor, type GuestbookState } from "./processor.ts";
 

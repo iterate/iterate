@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 
-const browserEntrypoint = new URL("../dist/todo/client.mjs", import.meta.url);
+const browserEntrypoint = new URL("../dist/starter-apps/todo/client.mjs", import.meta.url);
 const browserSource = await readFile(browserEntrypoint, "utf8");
 const browserImports = [
   ...browserSource.matchAll(/^(?:import|export)(?:[^"'\n]*?from)?["']([^"']+)["'];?/gm),

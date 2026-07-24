@@ -71,7 +71,7 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
     path: "/",
     source: {
       createWorker: {
-        entryPoint: "node_modules/iterate/dist/guestbook/configured-worker.mjs",
+        entryPoint: "node_modules/iterate/dist/starter-apps/guestbook/configured-worker.mjs",
         files: {
           include: ["package.json"],
           repoPath: "/repos/config",

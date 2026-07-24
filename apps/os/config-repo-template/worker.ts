@@ -1,7 +1,7 @@
-import { GithubAiLinter } from "iterate/github-ai-linter";
-import { GuestbookApp } from "iterate/guestbook";
+import { GithubAiLinter } from "iterate/starter-apps/github-ai-linter";
+import { GuestbookApp } from "iterate/starter-apps/guestbook";
 import { IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
-import { TodoApp } from "iterate/todo";
+import { TodoApp } from "iterate/starter-apps/todo";
 
 // An iterate project is, in the abstract, just a fetch function.
 // HTTP clients on the internet can send us Requests, and we will send responses and

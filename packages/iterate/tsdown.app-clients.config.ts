@@ -17,10 +17,10 @@ const clientConfig = {
 export default defineConfig([
   {
     ...clientConfig,
-    entry: { "guestbook/client": "src/guestbook/client.tsx" },
+    entry: { "starter-apps/guestbook/client": "src/starter-apps/guestbook/client.tsx" },
   },
   {
     ...clientConfig,
-    entry: { "todo/client": "src/todo/client.tsx" },
+    entry: { "starter-apps/todo/client": "src/starter-apps/todo/client.tsx" },
   },
 ]);

@@ -63,15 +63,15 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
     path: "apps/guestbook/client.tsx",
     content:
       "// Temporary source-upgrade bridge paired with server.tsx. It keeps an old\n" +
-      "// createApp ref buildable until iterate/guestbook removes that subscription.\n" +
-      "import \"iterate/guestbook/client\";\n",
+      "// createApp ref buildable until iterate/starter-apps/guestbook removes that subscription.\n" +
+      "import \"iterate/starter-apps/guestbook/client\";\n",
   },
   {
     path: "apps/guestbook/server.tsx",
     content:
       "// Temporary source-upgrade bridge for Guestbook subscriptions persisted by\n" +
-      "// older config revisions. New routing uses GuestbookApp from iterate/guestbook.\n" +
-      "export { GuestbookApp } from \"iterate/guestbook/configured-worker\";\n",
+      "// older config revisions. New routing uses GuestbookApp from iterate/starter-apps/guestbook.\n" +
+      "export { GuestbookApp } from \"iterate/starter-apps/guestbook/configured-worker\";\n",
   },
   {
     path: "apps/guestbook/tsconfig.json",
@@ -188,10 +188,10 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
   {
     path: "worker.ts",
     content:
-      "import { GithubAiLinter } from \"iterate/github-ai-linter\";\n" +
-      "import { GuestbookApp } from \"iterate/guestbook\";\n" +
+      "import { GithubAiLinter } from \"iterate/starter-apps/github-ai-linter\";\n" +
+      "import { GuestbookApp } from \"iterate/starter-apps/guestbook\";\n" +
       "import { IterateWorkerEntrypoint, type StreamEvent } from \"iterate/sdk\";\n" +
-      "import { TodoApp } from \"iterate/todo\";\n" +
+      "import { TodoApp } from \"iterate/starter-apps/todo\";\n" +
       "\n" +
       "// An iterate project is, in the abstract, just a fetch function.\n" +
       "// HTTP clients on the internet can send us Requests, and we will send responses and\n" +

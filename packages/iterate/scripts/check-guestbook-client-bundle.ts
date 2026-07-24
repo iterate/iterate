@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 
-const browserEntrypoint = new URL("../dist/guestbook/client.mjs", import.meta.url);
+const browserEntrypoint = new URL("../dist/starter-apps/guestbook/client.mjs", import.meta.url);
 const browserSource = await readFile(browserEntrypoint, "utf8");
 const browserImports = [
   ...browserSource.matchAll(/^(?:import|export)(?:[^"'\n]*?from)?["']([^"']+)["'];?/gm),

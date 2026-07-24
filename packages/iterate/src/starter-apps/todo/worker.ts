@@ -6,8 +6,8 @@ import {
   RpcTarget,
   newWorkersWebSocketRpcResponse,
   type LiveStateRpc,
-} from "../sdk/capnweb/index.ts";
-import { IterateDurableObject } from "../sdk.ts";
+} from "../../sdk/capnweb/index.ts";
+import { IterateDurableObject } from "../../sdk.ts";
 
 type Todo = {
   createdAt: string;

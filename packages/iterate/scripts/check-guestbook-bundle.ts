@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 
-const entrypoint = new URL("../dist/guestbook/configured-worker.mjs", import.meta.url);
+const entrypoint = new URL("../dist/starter-apps/guestbook/configured-worker.mjs", import.meta.url);
 const pending = [entrypoint];
 const visited = new Set<string>();
 const unsupported = new Set<string>();

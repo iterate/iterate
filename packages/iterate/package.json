@@ -28,12 +28,12 @@
     ".": "./src/index.ts",
     "./client": "./src/client.ts",
     "./node": "./src/node.ts",
-    "./github-ai-linter": "./src/github-ai-linter/index.ts",
-    "./github-ai-linter/worker": "./src/github-ai-linter/worker.ts",
-    "./guestbook": "./src/guestbook/index.ts",
-    "./guestbook/client": "./src/guestbook/client.tsx",
-    "./guestbook/configured-worker": "./src/guestbook/configured-worker.ts",
-    "./todo": "./src/todo/index.ts",
+    "./starter-apps/github-ai-linter": "./src/starter-apps/github-ai-linter/index.ts",
+    "./starter-apps/github-ai-linter/worker": "./src/starter-apps/github-ai-linter/worker.ts",
+    "./starter-apps/guestbook": "./src/starter-apps/guestbook/index.ts",
+    "./starter-apps/guestbook/client": "./src/starter-apps/guestbook/client.tsx",
+    "./starter-apps/guestbook/configured-worker": "./src/starter-apps/guestbook/configured-worker.ts",
+    "./starter-apps/todo": "./src/starter-apps/todo/index.ts",
     "./processors": "./src/processors/index.ts",
     "./processors/cloudflare": "./src/processors/cloudflare.ts",
     "./processors/testing": "./src/processors/testing.ts",
@@ -61,35 +61,35 @@
         "import": "./dist/node.mjs",
         "default": "./dist/node.mjs"
       },
-      "./github-ai-linter": {
-        "types": "./dist/github-ai-linter/index.d.ts",
-        "import": "./dist/github-ai-linter/index.mjs",
-        "default": "./dist/github-ai-linter/index.mjs"
+      "./starter-apps/github-ai-linter": {
+        "types": "./dist/starter-apps/github-ai-linter/index.d.ts",
+        "import": "./dist/starter-apps/github-ai-linter/index.mjs",
+        "default": "./dist/starter-apps/github-ai-linter/index.mjs"
       },
-      "./github-ai-linter/worker": {
-        "types": "./dist/github-ai-linter/worker.d.ts",
-        "import": "./dist/github-ai-linter/worker.mjs",
-        "default": "./dist/github-ai-linter/worker.mjs"
+      "./starter-apps/github-ai-linter/worker": {
+        "types": "./dist/starter-apps/github-ai-linter/worker.d.ts",
+        "import": "./dist/starter-apps/github-ai-linter/worker.mjs",
+        "default": "./dist/starter-apps/github-ai-linter/worker.mjs"
       },
-      "./guestbook": {
-        "types": "./dist/guestbook/index.d.ts",
-        "import": "./dist/guestbook/index.mjs",
-        "default": "./dist/guestbook/index.mjs"
+      "./starter-apps/guestbook": {
+        "types": "./dist/starter-apps/guestbook/index.d.ts",
+        "import": "./dist/starter-apps/guestbook/index.mjs",
+        "default": "./dist/starter-apps/guestbook/index.mjs"
       },
-      "./guestbook/client": {
-        "types": "./dist/guestbook/client.d.ts",
-        "import": "./dist/guestbook/client.mjs",
-        "default": "./dist/guestbook/client.mjs"
+      "./starter-apps/guestbook/client": {
+        "types": "./dist/starter-apps/guestbook/client.d.ts",
+        "import": "./dist/starter-apps/guestbook/client.mjs",
+        "default": "./dist/starter-apps/guestbook/client.mjs"
       },
-      "./guestbook/configured-worker": {
-        "types": "./dist/guestbook/worker.d.ts",
-        "import": "./dist/guestbook/configured-worker.mjs",
-        "default": "./dist/guestbook/configured-worker.mjs"
+      "./starter-apps/guestbook/configured-worker": {
+        "types": "./dist/starter-apps/guestbook/worker.d.ts",
+        "import": "./dist/starter-apps/guestbook/configured-worker.mjs",
+        "default": "./dist/starter-apps/guestbook/configured-worker.mjs"
       },
-      "./todo": {
-        "types": "./dist/todo/index.d.ts",
-        "import": "./dist/todo/index.mjs",
-        "default": "./dist/todo/index.mjs"
+      "./starter-apps/todo": {
+        "types": "./dist/starter-apps/todo/index.d.ts",
+        "import": "./dist/starter-apps/todo/index.mjs",
+        "default": "./dist/starter-apps/todo/index.mjs"
       },
       "./processors": {
         "types": "./dist/processors/index.d.ts",

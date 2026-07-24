@@ -1,4 +1,4 @@
-import type { ItxBinding } from "../sdk.ts";
+import type { ItxBinding } from "../../sdk.ts";
 
 const todoWorkerRef = {
   className: "TodoApp",
@@ -6,7 +6,7 @@ const todoWorkerRef = {
   path: "/",
   source: {
     createWorker: {
-      entryPoint: "node_modules/iterate/dist/todo/configured-worker.mjs",
+      entryPoint: "node_modules/iterate/dist/starter-apps/todo/configured-worker.mjs",
       files: {
         include: ["package.json"],
         repoPath: "/repos/config",

@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import type { StreamEvent } from "../sdk.ts";
+import type { StreamEvent } from "../../sdk.ts";
 import { GuestbookApp } from "./index.ts";
 
 test("one packaged Guestbook handles HTTP and committed stream events", async () => {
@@ -54,7 +54,7 @@ test("one packaged Guestbook handles HTTP and committed stream events", async ()
       path: "/",
       source: {
         createWorker: {
-          entryPoint: "node_modules/iterate/dist/guestbook/configured-worker.mjs",
+          entryPoint: "node_modules/iterate/dist/starter-apps/guestbook/configured-worker.mjs",
           files: {
             include: ["package.json"],
             repoPath: "/repos/config",
