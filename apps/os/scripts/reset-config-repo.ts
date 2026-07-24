@@ -6,8 +6,8 @@
 //   doppler run --config prd -- pnpm cli config-repo reset --project iterate
 //
 // It seeds the exact same file map a freshly created project on this
-// deployment would get (`projectRepoSeedFiles`, including the `iterate` SDK
-// spec swap), then commits ONE batch that writes every template file and
+// deployment would get (`projectRepoSeedFiles`, including the pkg.pr.new
+// ref/spec swaps), then commits ONE batch that writes every template file and
 // deletes anything the project still carries that the template no longer
 // ships. Config-repo commits land on main and redeploy the project worker
 // automatically, so the reset takes effect on the next build — no extra step.
@@ -18,18 +18,19 @@ import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test
 import { connectItx } from "iterate/node";
 
 import { projectRepoSeedFiles } from "../src/domains/repos/project-repo-seed.ts";
+import { parseIterateRepoPkgSpecOverridesEnv } from "../src/pkg-pr-new.ts";
 import { readDevServerInfo } from "./lib/dev-server-info.ts";
 
 type ResetOptions = {
   /** Project slug or `prj_` ID whose `/repos/config` to reset. */
   project: string;
   /**
-   * The `iterate` package spec to bake into the seeded `package.json`. Defaults
-   * to the deployment's own `APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC` (unset on prd
-   * → the template's `@main` pkg.pr.new build), so a reset matches exactly what
-   * a new project on this deployment would install.
+   * The pkg.pr.new ref to pin the seeded manifests' iterate/iterate specs to.
+   * Defaults to the deployment's own `APP_CONFIG_ITERATE_REPO_PKG_REF` (unset
+   * on prd → the template's `@main` pkg.pr.new builds), so a reset matches
+   * exactly what a new project on this deployment would install.
    */
-  sdkSpec?: string;
+  pkgRef?: string;
   /** Commit message. Defaults to a descriptive template-reset line. */
   message?: string;
   /** Print the plan (files to write / delete) without committing. */
@@ -47,12 +48,18 @@ export async function reset(options: ResetOptions) {
   const project = options.project?.trim();
   if (!project) throw new Error("--project <slug-or-id> is required.");
 
-  // Match the deployment's seed exactly. On prd this env var is unset, so the
-  // template ships its canonical `iterate@main` spec; preview passes the
-  // PR-head build. An explicit `--sdk-spec` overrides both.
-  const sdkSpec =
-    options.sdkSpec?.trim() || process.env.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC?.trim() || undefined;
-  const templateFiles = projectRepoSeedFiles(sdkSpec);
+  // Match the deployment's seed exactly. On prd these env vars are unset, so
+  // the template ships its canonical `@main` specs; preview passes the
+  // PR-head ref, local dev its tarball overrides. An explicit `--pkg-ref`
+  // overrides the deployment ref.
+  const pkgRef =
+    options.pkgRef?.trim() || process.env.APP_CONFIG_ITERATE_REPO_PKG_REF?.trim() || undefined;
+  const templateFiles = projectRepoSeedFiles({
+    iterateRepoPkgRef: pkgRef,
+    iterateRepoPkgSpecOverrides: parseIterateRepoPkgSpecOverridesEnv(
+      process.env.APP_CONFIG_ITERATE_REPO_PKG_SPEC_OVERRIDES,
+    ),
+  });
   const templatePaths = new Set(templateFiles.map((file) => file.path));
 
   const connection = adminConnection(options);
@@ -72,7 +79,7 @@ export async function reset(options: ResetOptions) {
   const plan = {
     project,
     fromCommit: commitOid,
-    sdkSpec: sdkSpec ?? "(template default: iterate@main)",
+    pkgRef: pkgRef || "(template default: @main)",
     writes: writes.length,
     deletes: deletes.map((change) => change.path),
   };

@@ -238,47 +238,17 @@ export async function deployWithSecrets(input: {
 }
 
 /**
- * Refuse to deploy while a forbidden secret remains bound to the Worker.
- *
- * `wrangler deploy --secrets-file` deliberately preserves omitted secrets, so
- * removing a name from generated config is not enough to prove it is absent.
- * This is an assertion, not migration machinery: remediation is an explicit
- * operator action, and a normal deploy never mutates credential state.
- *
- * Omitted-secret semantics: https://developers.cloudflare.com/workers/configuration/secrets/#upload-secrets-alongside-code
- */
-export async function assertWorkerSecretAbsent(input: {
-  cf: (path: string, init?: RequestInit) => Promise<unknown>;
-  workerName: string;
-  secretName: string;
-}): Promise<void> {
-  const scriptPath = `/workers/scripts/${encodeURIComponent(input.workerName)}/secrets`;
-  let current: z.infer<typeof SecretBindings>;
-  try {
-    current = SecretBindings.parse(await input.cf(scriptPath));
-  } catch (error) {
-    if (error instanceof CloudflareApiError && error.status === 404) {
-      console.log(
-        `Worker not created; forbidden secret absent: ${input.workerName}/${input.secretName}`,
-      );
-      return;
-    }
-    throw error;
-  }
-  if (current.some((binding) => binding.name === input.secretName)) {
-    throw new Error(
-      `Forbidden Worker secret is present: ${input.workerName}/${input.secretName}. Remove it explicitly before deploying.`,
-    );
-  }
-
-  console.log(`forbidden Worker secret absent: ${input.workerName}/${input.secretName}`);
-}
-
-/**
  * Remove an explicit allowlist of retired secrets from an existing Worker and
- * prove they are absent afterwards. This belongs only in destructive
- * erase/handover flows; normal deploys use {@link assertWorkerSecretAbsent}
- * and never mutate credential state.
+ * prove they are absent afterwards (fails if a deletion does not stick).
+ *
+ * `wrangler deploy --secrets-file` deliberately preserves omitted secrets
+ * (https://developers.cloudflare.com/workers/configuration/secrets/#upload-secrets-alongside-code),
+ * so removing a name from generated config is not enough. Deploy scripts are
+ * the ONLY writers of Worker secrets, which is why normal deploys may run
+ * this convergence rather than fail closed: a lingering retired name can
+ * only mean the Worker was last deployed by older code. Doppler-side
+ * retirement stays an assertion ({@link assertDopplerSecretAbsent}) because
+ * Doppler is human-edited — a reappearance there is drift for a human.
  */
 export async function removeWorkerSecrets(input: {
   cf: (path: string, init?: RequestInit) => Promise<unknown>;

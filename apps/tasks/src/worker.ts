@@ -114,28 +114,21 @@ function landingPage(): Response {
           against <code>os.iterate.com</code> per connection; no secrets or
           state live here.
         </p>
-        <pre><code>if (app === "tasks") {
-  using itx = await this.env.ITX.get();
-  const denied = await itx.auth.get({ policy: "project-member" }).fetch(req);
-  if (denied) return denied;
-  const tasksUrl = new URL(req.url);
-  tasksUrl.protocol = "https:";
-  const origin = await itx.kv.get("tasks-app-origin");
-  tasksUrl.host =
-    typeof origin === "string" &amp;&amp; origin !== "" ? origin : "tasks.iterate.workers.dev";
-  return fetch(
-    new Request(tasksUrl, {
-      method: req.method,
-      headers: req.headers,
-      body: req.body,
-      redirect: "manual",
-    }),
-  );
-}</code></pre>
+        <pre><code>import { TasksApp } from "@iterate-com/tasks";
+
+const tasksApp = TasksApp.create(this.env, {
+  auth: { policy: "project-member" },
+  proxy: {
+    origin: "https://tasks.iterate.workers.dev",
+    originOverrideKvKey: "tasks-app-origin",
+  },
+});
+
+if (app === "tasks") return tasksApp.fetch(req);</code></pre>
         <p class="hint">
           The <code>tasks-app-origin</code> kv knob points the proxy at a dev
-          tunnel while hacking on the tasks app itself; leave it unset for the
-          deployed vessel.
+          tunnel using a complete HTTPS origin while hacking on the tasks app
+          itself; leave it unset for the deployed vessel.
         </p>
       </div>
     </details>

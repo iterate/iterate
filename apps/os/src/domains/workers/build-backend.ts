@@ -1,6 +1,7 @@
+import { parseIterateRepoPkgSpec, pinIterateRepoPkgRef } from "../../pkg-pr-new.ts";
 import {
   buildFailureMessageFromError,
-  WorkerBuildFailedError,
+  type WorkerBuildFailure,
   type WorkerBuildModule,
   type WorkerBuildAssetMetadata,
   type WorkerBuildWranglerConfig,
@@ -120,13 +121,19 @@ const PACKAGE_DEPENDENCY_FIELDS = [
 type PackageManifest = Record<string, unknown> &
   Partial<Record<(typeof PACKAGE_DEPENDENCY_FIELDS)[number], Record<string, unknown>>>;
 
-/** Prepare declared `iterate` specs for worker-bundler. A deployment preview
- * pin replaces every declaration; the root declaration is always promoted to
- * a runtime dependency because worker-bundler deliberately ignores
+/** Prepare this repo's pkg.pr.new dependency specs for worker-bundler
+ * (src/pkg-pr-new.ts has the URL grammar and the uniform-usage assumption).
+ * A deployment ref pin swaps the `@<ref>` of every matching spec; spec
+ * overrides (local dev's SDK tarball) replace named specs wholesale. Every
+ * matched package's root declaration is promoted to a runtime dependency —
+ * even with no knobs set — because worker-bundler deliberately ignores
  * devDependencies. The rewrite is build-local and never changes the repo. */
-function applyIteratePackageSpecOverride(
+function applyIterateRepoPkgOverrides(
   files: Record<string, string>,
-  iteratePackageSpec: string | undefined,
+  overrides: {
+    ref: string | undefined;
+    specOverrides: Record<string, string> | undefined;
+  },
 ): Record<string, string> {
   const content = files["package.json"];
   if (content === undefined) return files;
@@ -141,34 +148,43 @@ function applyIteratePackageSpecOverride(
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return files;
   // Safe after the object guard; dependency fields get their own shape checks below.
   const manifest = parsed as PackageManifest;
+  const specOverrides = overrides.specOverrides || {};
 
-  let declaredPackageSpec: unknown;
+  // Matched packages' effective specs, first declaration wins (field order).
+  const runtimeSpecs = new Map<string, string>();
   let changed = false;
   for (const field of PACKAGE_DEPENDENCY_FIELDS) {
     const dependencies = manifest[field];
-    if (
-      dependencies === null ||
-      typeof dependencies !== "object" ||
-      Array.isArray(dependencies) ||
-      !Object.hasOwn(dependencies, "iterate")
-    ) {
+    if (dependencies === null || typeof dependencies !== "object" || Array.isArray(dependencies)) {
       continue;
     }
-    declaredPackageSpec ??= dependencies.iterate;
-    if (iteratePackageSpec !== undefined && dependencies.iterate !== iteratePackageSpec) {
-      dependencies.iterate = iteratePackageSpec;
-      changed = true;
+    for (const [name, declared] of Object.entries(dependencies)) {
+      if (typeof declared !== "string") continue;
+      let next = declared;
+      let matched = parseIterateRepoPkgSpec(declared) !== null;
+      if (matched && overrides.ref !== undefined) {
+        next = pinIterateRepoPkgRef(declared, overrides.ref)!;
+      }
+      if (specOverrides[name] !== undefined) {
+        next = specOverrides[name];
+        matched = true;
+      }
+      if (matched && !runtimeSpecs.has(name)) runtimeSpecs.set(name, next);
+      if (next !== declared) {
+        dependencies[name] = next;
+        changed = true;
+      }
     }
   }
-  if (declaredPackageSpec === undefined) return files;
 
-  const runtimeSpec = iteratePackageSpec ?? declaredPackageSpec;
-  if (manifest.dependencies?.iterate !== runtimeSpec) {
-    manifest.dependencies = {
-      ...manifest.dependencies,
-      iterate: runtimeSpec,
-    };
-    changed = true;
+  for (const [name, spec] of runtimeSpecs) {
+    if (manifest.dependencies?.[name] !== spec) {
+      manifest.dependencies = {
+        ...manifest.dependencies,
+        [name]: spec,
+      };
+      changed = true;
+    }
   }
   if (!changed) return files;
 
@@ -177,12 +193,7 @@ function applyIteratePackageSpecOverride(
 
 /** Resolve `files`, then make one direct createWorker/createApp call in the
  * isolated compiler sidecar. */
-export async function executeWorkerBuild(input: {
-  files: Record<string, string>;
-  iteratePackageSpec?: string;
-  source: DynamicWorkerSource;
-  workerBundler: Pick<import("../../worker-bundler.ts").default, "createApp" | "createWorker">;
-}): Promise<{
+type WorkerBuildOutput = {
   assetConfig?: WorkerBundlerAssetConfig;
   assetManifest: Record<string, WorkerBuildAssetMetadata>;
   assets: Record<string, string>;
@@ -190,11 +201,26 @@ export async function executeWorkerBuild(input: {
   modules: Record<string, WorkerBuildModule>;
   warnings: string[];
   wranglerConfig?: WorkerBuildWranglerConfig;
-}> {
-  const files = applyIteratePackageSpecOverride(input.files, input.iteratePackageSpec);
+};
+
+type WorkerBuildBackendResult =
+  | { ok: true; output: WorkerBuildOutput }
+  | { failure: WorkerBuildFailure; ok: false };
+
+export async function executeWorkerBuild(input: {
+  files: Record<string, string>;
+  iterateRepoPkgRef?: string;
+  iterateRepoPkgSpecOverrides?: Record<string, string>;
+  source: DynamicWorkerSource;
+  workerBundler: Pick<import("../../worker-bundler.ts").default, "createApp" | "createWorker">;
+}): Promise<WorkerBuildBackendResult> {
+  const files = applyIterateRepoPkgOverrides(input.files, {
+    ref: input.iterateRepoPkgRef,
+    specOverrides: input.iterateRepoPkgSpecOverrides,
+  });
   if ("createApp" in input.source) {
     const { files: _files, ...options } = input.source.createApp;
-    return unwrapBuildResult(
+    return classifyBuildResult(
       await input.workerBundler.createApp({
         ...options,
         files,
@@ -203,18 +229,25 @@ export async function executeWorkerBuild(input: {
   }
 
   const { files: _files, ...options } = input.source.createWorker;
-  const built = unwrapBuildResult(
+  const built = classifyBuildResult(
     await input.workerBundler.createWorker({
       ...options,
       files,
     }),
   );
-  return { assetManifest: {}, assets: {}, ...built };
+  return built.ok
+    ? {
+        ok: true,
+        output: { assetManifest: {}, assets: {}, ...built.output },
+      }
+    : built;
 }
 
-function unwrapBuildResult<T>(result: { error: string } | { result: T }): T {
+function classifyBuildResult<T>(
+  result: { error: string } | { result: T },
+): { ok: true; output: T } | { failure: WorkerBuildFailure; ok: false } {
   if ("error" in result) {
-    throw new WorkerBuildFailedError(buildFailureMessageFromError(result.error));
+    return sourceFailure(result.error);
   }
   const built = result.result;
   if (
@@ -230,22 +263,25 @@ function unwrapBuildResult<T>(result: { error: string } | { result: T }): T {
       DEPENDENCY_INSTALL_FAILURE_WARNING_PATTERNS.some((pattern) => pattern.test(warning)),
     );
     if (dependencyInstallFailures.length > 0) {
-      throw new WorkerBuildFailedError(
-        buildFailureMessageFromError(dependencyInstallFailures.join("\n")),
-      );
+      return sourceFailure(dependencyInstallFailures.join("\n"));
     }
     const unresolvedImports = unresolvedImportFailures(warnings);
     if (unresolvedImports.length > 0) {
-      throw new WorkerBuildFailedError(
-        buildFailureMessageFromError(
-          [
-            "The built worker would fail at startup with `No such module` — it contains imports that do not resolve:",
-            ...unresolvedImports.map((warning) => `  ${warning}`),
-            "Declare the missing dependency in package.json, or update the import if the installed package no longer provides that entry. Node builtins can be imported with the `node:` prefix.",
-          ].join("\n"),
-        ),
+      return sourceFailure(
+        [
+          "The built worker would fail at startup with `No such module` — it contains imports that do not resolve:",
+          ...unresolvedImports.map((warning) => `  ${warning}`),
+          "Declare the missing dependency in package.json, or update the import if the installed package no longer provides that entry. Node builtins can be imported with the `node:` prefix.",
+        ].join("\n"),
       );
     }
   }
-  return built;
+  return { ok: true, output: built };
+}
+
+function sourceFailure(error: unknown): { failure: WorkerBuildFailure; ok: false } {
+  return {
+    failure: { kind: "source", message: buildFailureMessageFromError(error) },
+    ok: false,
+  };
 }

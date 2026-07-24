@@ -7,20 +7,31 @@
 import { describe, expect, it } from "vitest";
 import {
   assertDopplerSecretAbsent,
-  assertWorkerSecretAbsent,
+  removeWorkerSecrets,
 } from "../../../scripts/lib/deploy-helpers.ts";
+import { RETIRED_WORKER_SECRETS } from "./generate-wrangler-config.ts";
 import {
   assertPreviewPetshopIntegrationConfigured,
   detachRetiredWorkerQueueConsumers,
   isExactOsProjectMiss,
   posthogBuildEnv,
+  previewPackageSpecsToAwait,
   resolveOsContainerDeployArgs,
-  waitForPreviewIteratePackage,
+  waitForPreviewPackage,
 } from "./deploy.ts";
 
 const secretName = "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN";
 
-describe("preview iterate package prerequisite", () => {
+describe("preview package prerequisite", () => {
+  it("derives the URLs to await from the template's pkg.pr.new specs", () => {
+    const sha = "f".repeat(40);
+    // Name-agnostic: whatever iterate/iterate packages the template declares
+    // are awaited at their pinned URLs — today that is exactly `iterate`.
+    expect(previewPackageSpecsToAwait(sha)).toEqual([
+      `https://pkg.pr.new/iterate/iterate/iterate@${sha}`,
+    ]);
+  });
+
   it("polls the exact immutable package with HEAD until it is available", async () => {
     const packageSpec = "https://pkg.pr.new/iterate/iterate/iterate@abc123";
     let now = 0;
@@ -31,7 +42,7 @@ describe("preview iterate package prerequisite", () => {
       return responses.shift() ?? new Response(null, { status: 200 });
     };
 
-    await waitForPreviewIteratePackage(packageSpec, {
+    await waitForPreviewPackage(packageSpec, {
       fetch: fetchPackage,
       now: () => now,
       sleep: async (ms) => {
@@ -51,7 +62,7 @@ describe("preview iterate package prerequisite", () => {
     let now = 0;
 
     await expect(
-      waitForPreviewIteratePackage(packageSpec, {
+      waitForPreviewPackage(packageSpec, {
         fetch: async () => new Response(null, { status: 404 }),
         now: () => now,
         sleep: async (ms) => {
@@ -60,7 +71,7 @@ describe("preview iterate package prerequisite", () => {
         timeoutMs: 2_500,
       }),
     ).rejects.toThrow(
-      `Timed out waiting 2500ms for the preview iterate package ${packageSpec}. Last check: HTTP 404.`,
+      `Timed out waiting 2500ms for the preview package ${packageSpec}. Last check: HTTP 404.`,
     );
     expect(now).toBe(2_500);
   });
@@ -236,7 +247,7 @@ describe("PostHog source-map build credentials", () => {
   );
 });
 
-describe("forbidden auth service-token invariants (secret-leak protection)", () => {
+describe("retired secret invariants (secret-leak protection)", () => {
   it("refuses when the resolved Doppler config carries the retired secret", () => {
     expect(() =>
       assertDopplerSecretAbsent({
@@ -257,23 +268,45 @@ describe("forbidden auth service-token invariants (secret-leak protection)", () 
     ).not.toThrow();
   });
 
-  it("refuses while the live Worker still binds the secret (omitted secrets survive uploads)", async () => {
+  // Worker-side retirement converges instead of failing closed: deploy
+  // scripts are the only writers of Worker secrets, so a lingering retired
+  // binding only ever means "last deployed by older code" — and an assert
+  // proved sticky for previews, where a failed deploy renews the slot lease
+  // and so never reaches the erase-on-acquire that removes retired secrets.
+  it("deletes a lingering retired Worker secret and verifies removal (omitted secrets survive uploads)", async () => {
     const workerName = "os-preview-4";
-    await expect(
-      assertWorkerSecretAbsent({
-        cf: async () => [{ name: secretName, type: "secret_text" }],
-        workerName,
-        secretName,
-      }),
-    ).rejects.toThrow(/Forbidden Worker secret is present/);
+    const staleSecret = "APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC";
+    expect(RETIRED_WORKER_SECRETS).toContain(staleSecret);
+
+    const calls: Array<{ init?: RequestInit; path: string }> = [];
+    let bindings = [
+      { name: staleSecret, type: "secret_text" },
+      { name: "APP_CONFIG_OPEN_AI_API_KEY", type: "secret_text" },
+    ];
+    const cf = async <T>(path: string, init?: RequestInit): Promise<T> => {
+      calls.push({ init, path });
+      if (init?.method === "DELETE") {
+        bindings = bindings.filter((binding) => !path.endsWith(`/${binding.name}`));
+        return {} as T;
+      }
+      return bindings as T;
+    };
 
     await expect(
-      assertWorkerSecretAbsent({
-        cf: async () => [{ name: "SOME_OTHER_SECRET", type: "secret_text" }],
-        workerName,
-        secretName,
-      }),
-    ).resolves.toBeUndefined();
+      removeWorkerSecrets({ cf, workerName, secretNames: RETIRED_WORKER_SECRETS }),
+    ).resolves.toEqual([staleSecret]);
+    expect(calls).toContainEqual({
+      init: { method: "DELETE" },
+      path: `/workers/scripts/${workerName}/secrets/${staleSecret}`,
+    });
+    expect(bindings).toEqual([{ name: "APP_CONFIG_OPEN_AI_API_KEY", type: "secret_text" }]);
+
+    // Already-converged Workers are a read-only no-op.
+    calls.length = 0;
+    await expect(
+      removeWorkerSecrets({ cf, workerName, secretNames: RETIRED_WORKER_SECRETS }),
+    ).resolves.toEqual([]);
+    expect(calls).toEqual([{ init: undefined, path: `/workers/scripts/${workerName}/secrets` }]);
   });
 });
 
