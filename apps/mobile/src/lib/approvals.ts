@@ -266,9 +266,73 @@ export function groupOpenRequests(requests: OpenRequest[]): ApprovalListItem[] {
   return items;
 }
 
+/** One row of the Recent list: a flat resolved request exactly as before, or
+ * a resolved Approval Group of 2+ requests from one Script Execution. */
+export type ResolvedListItem =
+  | { kind: "single"; request: ResolvedRequest }
+  | {
+      kind: "group";
+      executionId: string;
+      streamContext: ScriptExecutionContext;
+      requests: ResolvedRequest[];
+      /** "12 approved" / "9 approved · 3 rejected" — the header's outcome badge. */
+      decisionSummary: string;
+    };
+
+/**
+ * The Recent list's mirror of {@link groupOpenRequests}: bucket resolved
+ * requests by Script Execution, singletons and scope/legacy holds stay flat.
+ * Item order follows each bucket's first request in the input, so the
+ * newest-first order of deriveRecentResolvedRequests sorts a group at its
+ * most recently resolved member. Group BEFORE capping the rendered list —
+ * capping the flat derivation truncates mid-group (five identical "GET host ·
+ * Approved" cards was exactly the bug).
+ */
+export function groupResolvedRequests(requests: ResolvedRequest[]): ResolvedListItem[] {
+  const buckets = new Map<string, ResolvedRequest[]>();
+  for (const request of requests) {
+    const streamContext = request.payload.streamContext;
+    if (streamContext?.kind !== "script-execution") continue;
+    const bucket = buckets.get(streamContext.executionId);
+    if (bucket) bucket.push(request);
+    else buckets.set(streamContext.executionId, [request]);
+  }
+  const items: ResolvedListItem[] = [];
+  const placed = new Set<string>();
+  for (const request of requests) {
+    const streamContext = request.payload.streamContext;
+    if (streamContext?.kind !== "script-execution") {
+      items.push({ kind: "single", request });
+      continue;
+    }
+    if (placed.has(streamContext.executionId)) continue;
+    placed.add(streamContext.executionId);
+    const bucket = buckets.get(streamContext.executionId)!;
+    if (bucket.length === 1) items.push({ kind: "single", request: bucket[0]! });
+    else {
+      const approved = bucket.filter((member) => member.outcome.decision === "approved").length;
+      const rejected = bucket.length - approved;
+      items.push({
+        kind: "group",
+        executionId: streamContext.executionId,
+        streamContext,
+        requests: bucket,
+        decisionSummary: [
+          approved > 0 ? `${approved} approved` : "",
+          rejected > 0 ? `${rejected} rejected` : "",
+        ]
+          .filter(Boolean)
+          .join(" · "),
+      });
+    }
+  }
+  return items;
+}
+
 /** "3x gmail.googleapis.com, 1x api.stripe.com" — busiest host first, the same
- * host-only summary shape the server's group push body uses. */
-export function groupHostBreakdown(requests: OpenRequest[]): string {
+ * host-only summary shape the server's group push body uses. Takes anything
+ * payload-bearing so open and resolved groups share it. */
+export function groupHostBreakdown(requests: { payload: RequestedPayload }[]): string {
   const counts = new Map<string, number>();
   for (const request of requests) {
     const host = safeHost(request.payload.url);

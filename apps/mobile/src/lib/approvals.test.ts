@@ -9,6 +9,7 @@ import {
   grantMany,
   groupHostBreakdown,
   groupOpenRequests,
+  groupResolvedRequests,
   rejectMany,
   safeHost,
   scriptCodeForApproval,
@@ -207,6 +208,67 @@ test("the group header host breakdown counts hosts, busiest first", () => {
   ]);
 
   expect(groupHostBreakdown(open)).toBe("2x gmail.googleapis.com, 1x api.stripe.com");
+});
+
+test("resolved requests group by script run with a mixed-outcome decision summary", () => {
+  const resolved = deriveRecentResolvedRequests(
+    [
+      scriptRequested(1, "exec-a"),
+      scriptRequested(2, "exec-a"),
+      scriptRequested(3, "exec-a"),
+      requested(4, "manual-scope"),
+      granted(5, 1),
+      settled(6, 1, 200),
+      granted(7, 2),
+      settled(8, 2, 200),
+      rejected(9, 3),
+      rejected(10, 4),
+    ],
+    50,
+  );
+
+  expect(groupResolvedRequests(resolved)).toMatchObject([
+    // Newest resolution first, and the whole run is one row.
+    { kind: "single", request: { offset: 4 } },
+    {
+      kind: "group",
+      executionId: "exec-a",
+      decisionSummary: "2 approved · 1 rejected",
+      requests: [{ offset: 3 }, { offset: 2 }, { offset: 1 }],
+    },
+  ]);
+});
+
+test("a lone resolved script request stays a flat card, like scope holds", () => {
+  const resolved = deriveRecentResolvedRequests(
+    [scriptRequested(1, "exec-a"), requested(2, "manual-scope"), rejected(3, 1), rejected(4, 2)],
+    50,
+  );
+
+  expect(groupResolvedRequests(resolved)).toMatchObject([
+    { kind: "single", request: { offset: 2 } },
+    { kind: "single", request: { offset: 1 } },
+  ]);
+});
+
+test("recents truncate AFTER grouping: a 6-member run is one row, never five clones", () => {
+  // The bug this pins: deriving with limit 5 sliced a 6-request run
+  // mid-group into identical flat cards. The screen derives a deep window,
+  // groups, THEN caps rendered rows.
+  const events = [
+    ...[1, 2, 3, 4, 5, 6].map((offset) => scriptRequested(offset, "exec-burst")),
+    requested(7, "manual-scope"),
+    ...[1, 2, 3, 4, 5, 6].map((offset) => granted(10 + offset, offset)),
+    ...[1, 2, 3, 4, 5, 6].map((offset) => settled(20 + offset, offset, 200)),
+    rejected(30, 7),
+  ];
+
+  const items = groupResolvedRequests(deriveRecentResolvedRequests(events, 50)).slice(0, 5);
+  expect(items).toMatchObject([
+    { kind: "single", request: { offset: 7 } },
+    { kind: "group", executionId: "exec-burst", decisionSummary: "6 approved" },
+  ]);
+  expect((items[1] as { requests: unknown[] }).requests).toHaveLength(6);
 });
 
 test("grantMany signs everything up front (one unlock), then appends one ordinary grant per request", async () => {

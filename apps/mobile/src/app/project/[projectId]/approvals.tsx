@@ -36,6 +36,7 @@ import {
   grantMany,
   groupHostBreakdown,
   groupOpenRequests,
+  groupResolvedRequests,
   reject,
   rejectMany,
   safeHost,
@@ -43,6 +44,7 @@ import {
   type ApprovalListItem,
   type OpenRequest,
   type RequestedPayload,
+  type ResolvedListItem,
   type ResolvedRequest,
   type ScriptExecutionContext,
 } from "../../../lib/approvals.ts";
@@ -122,8 +124,11 @@ export default function ApprovalsScreen() {
           item.request.payload.streamContext.executionId === targetExecutionId;
     return [...grouped.filter(isTarget), ...grouped.filter((item) => !isTarget(item))];
   }, [open, targetExecutionId]);
-  const recentResolved = useMemo(
-    () => deriveRecentResolvedRequests(events.data || [], 5),
+  // Derive a deep window, GROUP, then cap the rendered rows: capping the flat
+  // derivation at 5 truncated a 12-request run mid-group into five identical
+  // resolved cards.
+  const recentItems = useMemo(
+    () => groupResolvedRequests(deriveRecentResolvedRequests(events.data || [], 50)).slice(0, 5),
     [events.data],
   );
 
@@ -288,20 +293,31 @@ export default function ApprovalsScreen() {
             );
           }}
           ListFooterComponent={
-            recentResolved.length === 0 ? null : (
+            recentItems.length === 0 ? null : (
               <View style={styles.recent}>
                 <Text style={styles.recentTitle}>Recent</Text>
-                {recentResolved.map((request) => (
-                  <ApprovalCard
-                    baseUrl={baseUrl!}
-                    interaction={{ kind: "resolved", outcome: request.outcome }}
-                    key={request.offset}
-                    projectId={projectId}
-                    projectSlug={slug || ""}
-                    request={request}
-                    targeted={request.offset === targetOffset}
-                  />
-                ))}
+                {recentItems.map((item) => {
+                  const resolvedCard = (request: ResolvedRequest) => (
+                    <ApprovalCard
+                      baseUrl={baseUrl!}
+                      interaction={{ kind: "resolved", outcome: request.outcome }}
+                      key={request.offset}
+                      projectId={projectId}
+                      projectSlug={slug || ""}
+                      request={request}
+                      targeted={request.offset === targetOffset}
+                    />
+                  );
+                  if (item.kind === "single") return resolvedCard(item.request);
+                  return (
+                    <ResolvedGroupCard
+                      group={item}
+                      key={`resolved-group:${item.executionId}`}
+                      projectId={projectId}
+                      renderMember={resolvedCard}
+                    />
+                  );
+                })}
               </View>
             )
           }
@@ -711,6 +727,57 @@ function ApprovalGroupCard({
         </View>
       )}
 
+      {details.data.expanded ? (
+        <View style={styles.groupMembers}>{group.requests.map(renderMember)}</View>
+      ) : null}
+    </View>
+  );
+}
+
+/**
+ * One resolved Approval Group in the Recent section: a collapsed header —
+ * resolved count, host breakdown, outcome badge ("12 approved" / "9 approved
+ * · 3 rejected") — expandable to the individual resolved cards. Read-only:
+ * the decisions already happened.
+ */
+function ResolvedGroupCard({
+  group,
+  projectId,
+  renderMember,
+}: {
+  group: Extract<ResolvedListItem, { kind: "group" }>;
+  projectId: string;
+  renderMember(request: ResolvedRequest): React.ReactElement;
+}) {
+  const queryClient = useQueryClient();
+  const detailsKey = ["resolved-group-details", projectId, group.executionId];
+  const details = useQuery({
+    queryKey: detailsKey,
+    queryFn: async () => ({ expanded: false }),
+    initialData: { expanded: false },
+    staleTime: Infinity,
+  });
+  const allApproved = group.requests.every((request) => request.outcome.decision === "approved");
+
+  return (
+    <View style={styles.card}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded: details.data.expanded }}
+        onPress={() => queryClient.setQueryData(detailsKey, { expanded: !details.data.expanded })}
+        style={styles.compactSummary}
+      >
+        <Text numberOfLines={1} style={[styles.method, styles.compactMethod]}>
+          Script run · {group.requests.length} resolved
+        </Text>
+        <Text
+          style={[styles.outcomeBadge, allApproved ? styles.approvedBadge : styles.rejectedBadge]}
+        >
+          {group.decisionSummary}
+        </Text>
+        <Text style={styles.compactChevron}>{details.data.expanded ? "▾" : "▸"}</Text>
+      </Pressable>
+      <Text style={styles.groupHosts}>{groupHostBreakdown(group.requests)}</Text>
       {details.data.expanded ? (
         <View style={styles.groupMembers}>{group.requests.map(renderMember)}</View>
       ) : null}
