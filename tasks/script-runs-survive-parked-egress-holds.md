@@ -7,10 +7,12 @@ size: medium
 
 ## Status summary
 
-Spec + root-cause analysis done; reproduction test and fix in progress. The
-failing seam is identified in code (the egress door's hold loop treats a
-transient stream Durable Object restart as fatal). Missing: the committed
-red test, then the fix commit.
+Done pending review (PR #2312). Reproduction e2e committed red (script run
+dies with `stream-unavailable: kill requested`, mirroring production's
+`stream-unavailable: Network connection lost`), then the fix commit makes it
+green: the egress door's hold loop now re-arms on retryable stream
+availability errors with bounded backoff. Remaining: CI + review, and the
+named out-of-scope follow-ups below.
 
 ## Problem
 
@@ -65,24 +67,30 @@ busiest/most likely to recycle connections; B was a mid-chunk connection loss.
 
 New e2e test alongside `apps/os/e2e/vitest/egress-approvals.e2e.test.ts`:
 
-- [ ] park a fetch on a hold rule; observe `human-approval-requested`
-- [ ] `stream.kill()` the project root stream — the public chaos operator
+- [x] park a fetch on a hold rule; observe `human-approval-requested` _a
+      full `runScript` with a bare held fetch, matching the incident shape —
+      "a script run's parked hold survives a stream Durable Object restart"
+      in `apps/os/e2e/vitest/egress-approvals.e2e.test.ts`_
+- [x] `stream.kill()` the project root stream — the public chaos operator
       that injects the same DO-lifecycle rejection class the incidents hit
       ("Abort the current Durable Object incarnation; the next request boots
-      it again")
-- [ ] grant the approval afterwards
-- [ ] assert the parked fetch still resolves 200 with the upstream response
-      and `human-approval-settled` lands
-- [ ] confirm the test is RED before the fix (fetch fails with
-      `stream-unavailable`), commit it, then fix in a follow-up commit
+      it again") _kill lands deterministically mid-hold: the test first waits
+      for the door's ephemeral "waitForEvent" connection in `runtimeState()`_
+- [x] grant the approval afterwards _plain grant, no keys enrolled_
+- [x] assert the parked fetch still resolves 200 with the upstream response
+      and `human-approval-settled` lands _asserts the run's `result: 200` too_
+- [x] confirm the test is RED before the fix (fetch fails with
+      `stream-unavailable`), commit it, then fix in a follow-up commit _red
+      confirmed twice: run rejected `stream-unavailable: kill requested`_
 
 ## Fix (follow-up commit)
 
-- [ ] `#awaitApprovalResolution`: also re-arm from the same cursor on
+- [x] `#awaitApprovalResolution`: also re-arm from the same cursor on
       retryable availability errors (`isRetryableDurableObjectAvailabilityError`),
       with the existing `#sleep` backoff pattern (cf. `#judgeResolution`'s
       key-state catch-up loop) so a hard-down stream doesn't hot-loop; the
       hold deadline still bounds everything, expiry stays the safe direction
+      _200ms doubling to a 5s cap, reset once a wait yields an event_
 
 ## Out of scope (named residual risks, follow-up tasks)
 
@@ -109,3 +117,20 @@ New e2e test alongside `apps/os/e2e/vitest/egress-approvals.e2e.test.ts`:
   already get one availability retry via `retryLoggedIdempotentOperation`;
   the unkeyed `human-approval-requested` append happens before parking, so a
   failure there fails fast without stranding anything.
+- The test's `kill()` call itself rejects with "kill requested" (aborting the
+  DO rejects the in-flight RPC) — every existing kill-using e2e swallows
+  that; ours does too.
+- Incidentally observed: `CapabilityHostRpcTarget.runScript`'s
+  `retryLoggedIdempotentOperation` classifies a run whose SETTLEMENT ERROR
+  TEXT merely contains `stream-unavailable: ` (e.g. a script whose own fetch
+  died that way) as an availability failure of the runScript call and
+  replays it — the replay dedupes on the request key and re-reads the same
+  failed settlement, so it's two wasted round trips and a misleading
+  "script run rejoining after stream Durable Object reset" log, not
+  corruption. Message-prefix classification can't tell "transport failed"
+  from "result faithfully reports a nested failure". Left alone: harmless
+  today, worth keeping in mind if the tag ever drives bigger decisions.
+- Local-laptop pre-existing failure (documented in tasks/grouped-approvals.md
+  too): `egress-approvals.e2e.test.ts › approved worker WebSocket egress...`
+  fails with "WebSocket echo failed" on this machine's dev servers,
+  reproducing at merge-base — unrelated to this change.
