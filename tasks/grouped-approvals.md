@@ -1,5 +1,5 @@
 ---
-status: in-progress (v2 rewrite)
+status: implemented (v2)
 size: large
 ---
 
@@ -7,7 +7,7 @@ size: large
 
 ## Status summary
 
-v1 (computed Approval Groups over per-request events) was implemented and confirmed on-device, then Misha redirected during PR review: make the batch the ONLY shape — an approval request carries a `requests` array, a singular approval is an array of length 1, and the group concept disappears entirely. Non-backwards-compatible by design ("no real users right now", no legacy parsing). v2 is now being implemented on this same branch/PR (#2309); the v1 sections below are kept as history.
+v1 (computed Approval Groups over per-request events) was implemented and confirmed on-device, then Misha redirected during PR review: make the batch the ONLY shape — an approval request carries a `requests` array, a singular approval is an array of length 1, and the group concept disappears entirely. Non-backwards-compatible by design ("no real users right now", no legacy parsing). v2 is now IMPLEMENTED on this same branch/PR (#2309): typecheck/lint/knip/unit tests green across the repo, egress e2e passing against a live local dev server (burst → ONE batch event → ONE push → ONE decision releases all; mixed verdicts; signed decisions; only the WebSocket-egress lane fails locally, the KNOWN pre-existing laptop-env issue), mobile approver e2e 5/5 live. Remaining: fresh on-device phone trial of the v2 UI (JS-only change — metro reload suffices). The v1 sections below are kept as history.
 
 ## v2 design (approved by Misha, 2026-07-26)
 
@@ -35,19 +35,19 @@ The ADR 0006 debounce state machine (NotificationProcessor returns to stateless 
 
 ### v2 checklist
 
-- [ ] Contract: requested payload → `requests[]`; `human-approval-decided`; settled gains `index`; egress rule `debounceMs`
-- [ ] Pure half: `buildApprovalMessage` v2 (requests+verdicts), `evaluateDecision` replacing `evaluateGrant`
-- [ ] Egress door: pending-batch dataloader, one requested append per flush, shared decision waiter, per-index release/settle, expiry decided event
-- [ ] NotificationProcessor: stateless again — one intent per requested event (singular body unchanged, batch body "Script run waiting: N requests (Nx host)"), destination always `{kind: "approvals", approvalRequestEventOffset}`; delete state machine + DO alarm slice
-- [ ] Intent contract: drop `approvals-group` destination kind
-- [ ] CLI approver: approve-core/approve/approve-json reshaped (decide-with-verdicts, batch rows keyed by offset, per-index settlement readback)
-- [ ] Menubar Swift: render batch rows (count + summary), decisions unchanged `{offset, decision}`
-- [ ] Mobile: approvals lib derives open/resolved BATCHES; decide() single signature; screen renders one card per batch (singleton = today's card, N>1 = group-style card with Approve all/Reject all); recents mirror; routing loses `approvals-group`
-- [ ] Tests: egress-approvals unit, notification-processor (stateless), device-processor, project-processor, mobile approvals/routing, approve-core, e2e egress-approvals (burst → ONE requested event with 4 requests → one decided releases all), mobile e2e roundtrip
-- [ ] Scripts: `demo-grouped-approvals.ts` → `approvals.ts` exporting `demoGrouping` (`pnpm cli approvals demo-grouping`); examples entry text updated
-- [ ] Docs: ADR 0007 supersedes 0006; CONTEXT.md Approval Group term replaced by the batch-shaped approval
-- [ ] Regenerate itx-api generated files if schemas leak into them
-- [ ] `pnpm typecheck && pnpm lint && pnpm knip && pnpm test`; push; update PR body; resolve the three review threads
+- [x] Contract: requested payload → `requests[]`; `human-approval-decided`; settled gains `index`; egress rule `debounceMs` _project-processor-contract.ts; granted/rejected schemas deleted; `HeldRequest` type exported_
+- [x] Pure half: `buildApprovalMessage` v2 (requests+verdicts), `evaluateDecision` replacing `evaluateGrant` _egress-approvals.ts; all-reject always accepted unsigned; unit tests rewritten incl. order-is-identity and mixed-verdict cases_
+- [x] Egress door: pending-batch dataloader, one requested append per flush, shared decision waiter, per-index release/settle, expiry decided event _project-durable-object.ts `#pendingHoldBatches`/`#flushHoldBatch`/`#awaitBatchDecision`/`#judgeDecision`; in-memory Map + timers keyed (executionId, ruleKey); cap = 3x debounceMs_
+- [x] NotificationProcessor: stateless again — one intent per requested event (singular body unchanged, batch body "Script run waiting: N requests (Nx host)"), destination always `{kind: "approvals", approvalRequestEventOffset}`; delete state machine + DO alarm slice _implementation + contract rewritten; DO alarm() back to registry-only_
+- [x] Intent contract: drop `approvals-group` destination kind _notification-intent-contract.ts; itx-api regenerated_
+- [x] CLI approver: approve-core/approve/approve-json reshaped (decide-with-verdicts, batch rows keyed by offset, per-index settlement readback) _decide()/summarizeRequests(); NDJSON rows carry requests[]+summary+count, stdin decisions now approve|reject; awaitSettlement waits for every approved index and surfaces the door's expiry decision_
+- [x] Menubar Swift: render batch rows (count + summary), decisions unchanged `{offset, decision}` _Iterate.swift HeldRequest → {summary,count}; Approve all N / Reject all buttons; enclave-approver.swift dialog lists the batch and signs once_
+- [x] Mobile: approvals lib derives open/resolved BATCHES; decide() single signature; screen renders one card per batch (singleton = today's card, N>1 = group-style card with Approve all/Reject all); recents mirror; routing loses `approvals-group` _approvals.ts rewritten (OpenBatch/ResolvedBatch/indexApprovalEvents); approver.ts back to signWithApproverKey only; approvals.tsx BatchCard + RequestDetails; notification-routing.ts simplified_
+- [x] Tests: egress-approvals unit, notification-processor (stateless), device-processor, project-processor, mobile approvals/routing, approve-core, e2e egress-approvals (burst → ONE requested event with 4 requests → one decided releases all), mobile e2e roundtrip _all rewritten; new mixed-verdicts e2e lane; e2e verified against a live local dev server (6/7 — WebSocket lane is the pre-existing local-env failure); mobile e2e 5/5 live_
+- [x] Scripts: `demo-grouped-approvals.ts` → `approvals.ts` exporting `demoGrouping` (`pnpm cli approvals demo-grouping`); examples entry text updated _per the review threads; examples regenerated_
+- [x] Docs: ADR 0007 supersedes 0006; CONTEXT.md Approval Group term replaced by the batch-shaped approval _adr/0007-approval-batches-at-the-egress-door.md; 0006 stamped Superseded; CONTEXT.md term is now **Approval Batch** (ambiguity log notes the reversal)_
+- [x] Regenerate itx-api generated files if schemas leak into them _generate:itx-api + generate:itx-examples_
+- [x] `pnpm typecheck && pnpm lint && pnpm knip && pnpm test`; push; update PR body; resolve the three review threads _all green locally; PR body + threads handled post-push_
 
 ### Follow-up (post-merge, first thing): rejection reasons
 

@@ -581,7 +581,9 @@ test("a script's burst coalesces into ONE batch event, one push, and one decisio
     expect(intent.payload).toMatchObject({
       audience: { kind: "project" },
       destination: { kind: "approvals", approvalRequestEventOffset: requested.offset },
-      body: `Script run waiting: 4 requests (4x ${echoHost})`,
+      // The push body names hosts with their ports — that's what identifies a
+      // local destination.
+      body: `Script run waiting: 4 requests (4x ${new URL(echo.url).host})`,
     });
 
     // ONE decision releases all four.
