@@ -1,13 +1,63 @@
 ---
-status: implemented
-size: medium
+status: in-progress (v2 rewrite)
+size: large
 ---
 
-# Group egress approvals by script run (Approval Groups)
+# Group egress approvals by script run → approvals ARE batches (v2)
 
 ## Status summary
 
-Implemented end to end; PR #2309. Server: NotificationProcessor debounces script-scoped holds into one `approvals-group` push per window (unit-tested with virtual time, plus one real-time e2e smoke that passed against a live dev server). Mobile: grouped cards with Approve-all behind one Face ID, batch progress, deep link. Demo: itx catalogue example **"Grouped approvals demo: a 12-request burst, ONE push"** — runnable from the phone's Examples screen against ANY deployment (hits dummy-petshop.iterate.com; the CLI wrapper `pnpm cli demo-grouped-approvals run` executes the same entry). Verified end to end against a live dev server: burst → one grouped push intent → grant-all → 200s. Remaining: on-device phone trial (one-unlock-covers-N confirmation) — needs Misha's phone; a pre-existing local-env failure of the *unrelated* WebSocket-egress e2e is noted below.
+v1 (computed Approval Groups over per-request events) was implemented and confirmed on-device, then Misha redirected during PR review: make the batch the ONLY shape — an approval request carries a `requests` array, a singular approval is an array of length 1, and the group concept disappears entirely. Non-backwards-compatible by design ("no real users right now", no legacy parsing). v2 is now being implemented on this same branch/PR (#2309); the v1 sections below are kept as history.
+
+## v2 design (approved by Misha, 2026-07-26)
+
+Batching moves UPSTREAM into the egress door (the dataloader), and the notification layer goes back to stateless. One request event per burst, one signed decision event per verdict set.
+
+### Events (breaking rewrite, same type names where shapes allow)
+
+- `human-approval-requested`: payload becomes `{requests: [{method, url, headers, body?, secretPaths}], ruleKey, ruleDescription, streamContext?, expiresAt}` — the per-request fields move into the `requests` array (min 1); rule/provenance/expiry are batch-level because a batch never spans rules or executions.
+- `human-approval-decided` REPLACES `human-approval-granted` + `human-approval-rejected`: `{approvalRequestEventOffset, verdicts: ("approve"|"reject")[], decidedBy: "human"|"expiry", keyId?, signature?}`. One event, one signature, mixed verdicts allowed. `decidedBy: "expiry"` is the door's own auto-reject (all verdicts "reject", never signed). First decided event at the batch's offset wins; later ones are ignored.
+- `human-approval-settled` stays per released request: `{approvalRequestEventOffset, index, status?/error?}` — approval and outcome remain separate facts, and upstream fetches finish at different times.
+
+### approval.v2 canonical message
+
+`{v: "approval.v2", projectId, approvalRequestEventOffset, requests: [{method, url, headers, bodySha256, secretPaths}], verdicts}` — one ECDSA P-256 signature covers the whole decision. Signature policy (evaluateDecision): all-reject decisions are always accepted unsigned (deny stays fail-safe); once any active key is enrolled, a decision containing any "approve" verdict must carry a valid signature from an active key or the WHOLE event is ignored (a bad decision never kills a hold). Malformed (verdict count ≠ request count) → ignored.
+
+### Egress door dataloader (project-durable-object.ts)
+
+- Hold rules gain `debounceMs: number|null` (default **100**; cap = 3×debounceMs; `null` disables batching). 100 is enough because debounce can only ever catch CONCURRENT requests — a sequential loop's next fetch starts only after the previous one resolves, which requires approval — and simultaneous bursts land within milliseconds.
+- Pending batches are in-memory per (executionId, ruleKey), only for holds with script-execution provenance; scope holds and `debounceMs: null` flush immediately as singletons. First arrival opens the batch and schedules the flush; each arrival extends by debounceMs, capped. Flush: stamp the deadline, append ONE requested event, park every caller on one shared resolution waiter. DO death pre-flush kills the queued fetches with the DO — nothing recorded, nothing stranded.
+- On decision: approve-indexes release through the egress lanes concurrently, each appending its own settled event; reject-indexes return 403 `approval_rejected`; expiry appends the decided event (`decidedBy: "expiry"`, idempotency-keyed) and returns 403 `approval_expired`.
+
+### What gets DELETED
+
+The ADR 0006 debounce state machine (NotificationProcessor returns to stateless one-event-one-push, `approvalGroups` state gone, DO alarm slice + `fireDueApprovalGroupWindows` gone), the `approvals-group` destination kind (one `approvals` kind pointing at the batch event offset), mobile's `groupOpenRequests`/`groupResolvedRequests`/`grantMany`/`rejectMany`/`signManyWithApproverKey` (one decision = one signature = one append — the best-effort sequential append loop dies), and the granted/rejected event vocabulary everywhere (CLI, menubar NDJSON, mobile, e2e).
+
+### v2 checklist
+
+- [ ] Contract: requested payload → `requests[]`; `human-approval-decided`; settled gains `index`; egress rule `debounceMs`
+- [ ] Pure half: `buildApprovalMessage` v2 (requests+verdicts), `evaluateDecision` replacing `evaluateGrant`
+- [ ] Egress door: pending-batch dataloader, one requested append per flush, shared decision waiter, per-index release/settle, expiry decided event
+- [ ] NotificationProcessor: stateless again — one intent per requested event (singular body unchanged, batch body "Script run waiting: N requests (Nx host)"), destination always `{kind: "approvals", approvalRequestEventOffset}`; delete state machine + DO alarm slice
+- [ ] Intent contract: drop `approvals-group` destination kind
+- [ ] CLI approver: approve-core/approve/approve-json reshaped (decide-with-verdicts, batch rows keyed by offset, per-index settlement readback)
+- [ ] Menubar Swift: render batch rows (count + summary), decisions unchanged `{offset, decision}`
+- [ ] Mobile: approvals lib derives open/resolved BATCHES; decide() single signature; screen renders one card per batch (singleton = today's card, N>1 = group-style card with Approve all/Reject all); recents mirror; routing loses `approvals-group`
+- [ ] Tests: egress-approvals unit, notification-processor (stateless), device-processor, project-processor, mobile approvals/routing, approve-core, e2e egress-approvals (burst → ONE requested event with 4 requests → one decided releases all), mobile e2e roundtrip
+- [ ] Scripts: `demo-grouped-approvals.ts` → `approvals.ts` exporting `demoGrouping` (`pnpm cli approvals demo-grouping`); examples entry text updated
+- [ ] Docs: ADR 0007 supersedes 0006; CONTEXT.md Approval Group term replaced by the batch-shaped approval
+- [ ] Regenerate itx-api generated files if schemas leak into them
+- [ ] `pnpm typecheck && pnpm lint && pnpm knip && pnpm test`; push; update PR body; resolve the three review threads
+
+### Follow-up (post-merge, first thing): rejection reasons
+
+Reject in the app prompts for an optional free-text reason; it rides the decided event's verdicts (`{verdict: "reject", reason}` — needs verdicts to become objects, or a parallel `reasons` array decided at implementation time); the door settles rejected indexes with a synthetic 403 whose JSON body carries `{deniedBy: "human", reason}` + an `x-iterate-egress-denied` header, so the script's error output contains the reason verbatim and the calling agent can decide whether to retry differently.
+
+---
+
+# v1 history (superseded by the v2 rewrite above)
+
+Implemented end to end; PR #2309. Server: NotificationProcessor debounces script-scoped holds into one `approvals-group` push per window (unit-tested with virtual time, plus one real-time e2e smoke that passed against a live dev server). Mobile: grouped cards with Approve-all behind one Face ID, batch progress, deep link. Demo: itx catalogue example **"Grouped approvals demo: a 12-request burst, ONE push"** — runnable from the phone's Examples screen against ANY deployment (hits dummy-petshop.iterate.com; the CLI wrapper `pnpm cli demo-grouped-approvals run` executes the same entry). Verified end to end against a live dev server: burst → one grouped push intent → grant-all → 200s. On-device phone trial CONFIRMED (see bottom).
 
 ## Problem
 
