@@ -4,7 +4,7 @@ export interface SlugifyOptions {
 }
 
 export function slugify(input: string, options: SlugifyOptions = {}) {
-  const fallback = options.fallback ?? "unnamed";
+  const fallback = options.fallback || "unnamed";
   const normalized = input
     .trim()
     .toLowerCase()

@@ -44,6 +44,7 @@ import { EmailProcessor } from "../email/email-processor-implementation.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
 import { NotificationProcessor } from "../notifications/notification-processor-implementation.ts";
 import type { NotificationProcessorState } from "../notifications/notification-processor-contract.ts";
+import { isRetryableDurableObjectAvailabilityError } from "../streams/stream-unavailable.ts";
 import type { ProjectEgressIntercept, ProjectEgressInterceptor } from "./egress.ts";
 import {
   buildApprovalMessage,
@@ -551,6 +552,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     let cursor = input.approvalRequestEventOffset;
 
     // Live phase: chunked one-shot waits until the wall-clock deadline.
+    let availabilityBackoffMs = 200;
     while (Date.now() < input.deadline) {
       let event;
       try {
@@ -561,15 +563,30 @@ export class ProjectDurableObject extends DurableObject<Env> {
         });
       } catch (error) {
         // waitForEvent is a one-shot, not a durable waiter: chunk timeouts
-        // (and transient stream restarts) just re-arm from the same cursor.
+        // just re-arm from the same cursor.
         if (
           error instanceof Error &&
           error.message.includes("Timed out waiting for stream event")
         ) {
           continue;
         }
+        // A hold spans minutes of human latency, so the stream DO behind the
+        // wait WILL sometimes restart mid-chunk (connection recycle, eviction,
+        // deploy reset, explicit kill). By the stream-unavailable contract
+        // those rejections are retryable — the incarnation reboots on the next
+        // call and durable resolutions replay from the cursor — so re-arm
+        // instead of failing the parked fetch (which killed whole script runs:
+        // tasks/script-runs-survive-parked-egress-holds.md). Backoff keeps a
+        // hard-down stream from hot-looping; the deadline still bounds the
+        // hold, and expiry remains the safe direction.
+        if (isRetryableDurableObjectAvailabilityError(error)) {
+          await this.#sleep(Math.min(availabilityBackoffMs, input.deadline - Date.now()));
+          availabilityBackoffMs = Math.min(availabilityBackoffMs * 2, 5_000);
+          continue;
+        }
         throw error;
       }
+      availabilityBackoffMs = 200;
       cursor = event.offset;
       const verdict = await this.#judgeResolution(event, input);
       if (verdict !== null) return verdict;
