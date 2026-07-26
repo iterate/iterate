@@ -309,6 +309,93 @@ test("an agent codemode script carries one durable source through bare and scope
   }
 }, 120_000);
 
+// The incident this reproduces (tasks/script-runs-survive-parked-egress-holds.md):
+// a script run's fetch parks at the egress door for however long a human takes
+// to answer — minutes, not milliseconds. If the stream Durable Object behind
+// the door's resolution wait restarts meanwhile (connection recycle, eviction,
+// deploy reset), the door must re-arm from its durable cursor, not fail the
+// parked fetch and with it the whole run. `kill()` is the public chaos
+// operator injecting exactly that rejection class deterministically.
+test("a script run's parked hold survives a stream Durable Object restart", async () => {
+  const echo = await startEgressEcho();
+  using session = withItxSession();
+  using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+
+  try {
+    using project = await itx.projects.get(`egress-hold-restart-${crypto.randomUUID()}`).create({});
+    const root = project.streams.get("/");
+    const agent = await project.agents.get("/agents/patient-agent").create();
+    const echoHost = new URL(echo.url).hostname;
+    await root.append({
+      type: RULES_CONFIGURED,
+      payload: {
+        rules: [
+          {
+            ruleKey: "needs-human",
+            description: "POSTs to the echo need a human",
+            match: { hosts: [echoHost], methods: ["POST"] },
+            verdict: "hold",
+            approvalTimeoutMs: 60_000,
+          },
+        ],
+      },
+    });
+    await waitForCondition(
+      async () => (await project.processor.snapshot()).state.egressRules.length === 1,
+      { description: "project processor to fold the hold rule" },
+    );
+
+    const code = `async (itx) => {
+      const response = await fetch(${JSON.stringify(echo.url)}, {
+        method: "POST",
+        body: "still here after the restart",
+      });
+      return response.status;
+    }`;
+    const execution = agent.capabilityHost.runScript(code);
+
+    const requested = await root.waitForEvent({
+      afterOffset: 0,
+      eventTypes: [REQUESTED],
+      timeoutMs: 30_000,
+    });
+
+    // Restart only once the door's resolution wait is armed on the stream DO
+    // (its one-shot waiter is an ephemeral "waitForEvent" connection; this
+    // test holds no live wait of its own here), so the restart deterministically
+    // lands mid-hold instead of racing the arming.
+    await waitForCondition(
+      async () => {
+        const state = await root.runtimeState();
+        return Object.values(state.runtime.connections).some(
+          (connection) => connection.subscriber?.description === "waitForEvent",
+        );
+      },
+      { description: "the egress door's resolution wait to be armed" },
+    );
+    // The abort rejects the in-flight kill() call itself — expected.
+    await root.kill().catch(() => undefined);
+
+    await root.append({
+      type: GRANTED,
+      payload: { approvalRequestEventOffset: requested.offset },
+    });
+
+    await expect(execution).resolves.toMatchObject({ result: 200 });
+    const settled = await root.waitForEvent({
+      afterOffset: requested.offset,
+      eventTypes: [SETTLED],
+      timeoutMs: 30_000,
+    });
+    expect(settled.payload).toMatchObject({
+      approvalRequestEventOffset: requested.offset,
+      status: 200,
+    });
+  } finally {
+    await echo.close();
+  }
+}, 120_000);
+
 test("approved worker WebSocket egress stays on the fetch-native transport", async () => {
   await using echo = await startWebSocketEcho();
   using session = withItxSession();
