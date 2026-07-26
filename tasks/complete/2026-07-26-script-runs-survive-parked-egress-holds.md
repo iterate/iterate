@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 size: medium
 ---
 
@@ -7,7 +7,7 @@ size: medium
 
 ## Status summary
 
-Done pending review (PR #2312). Reproduction e2e committed red (script run
+Done (PR #2312, merged). Reproduction e2e committed red (script run
 dies with `stream-unavailable: kill requested`, mirroring production's
 `stream-unavailable: Network connection lost`), then the fix commit makes it
 green: the egress door's hold loop now re-arms on retryable stream
