@@ -1880,6 +1880,7 @@ export type ProjectProcessorState = {
     };
     verdict: "deny" | "hold";
     approvalTimeoutMs: number;
+    debounceMs: number | null;
   }[];
   humanApprovalKeys: {
     keyId: string;
@@ -3390,7 +3391,6 @@ export type DeviceAppendInput =
         destination:
           | { kind: "project" }
           | { kind: "approvals"; approvalRequestEventOffset: number }
-          | { kind: "approvals-group"; executionId: string }
           | { kind: "agent-chat"; path: string };
         expiresAt: number;
         title: string;

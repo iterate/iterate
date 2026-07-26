@@ -1,11 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { LiveStateRpcTarget } from "iterate/sdk/capnweb";
 import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
-import type {
-  ProcessorSnapshot,
-  StreamSubscriberWakeRequest,
-  StreamSubscriberWakeResponse,
-} from "iterate/processors";
+import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
 import type { StreamEvent } from "iterate/processors";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { parseConfig } from "../../config.ts";
@@ -43,16 +39,16 @@ import { readProjectById } from "../../project-directory.ts";
 import { EmailProcessor } from "../email/email-processor-implementation.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
 import { NotificationProcessor } from "../notifications/notification-processor-implementation.ts";
-import type { NotificationProcessorState } from "../notifications/notification-processor-contract.ts";
 import { isRetryableDurableObjectAvailabilityError } from "../streams/stream-unavailable.ts";
 import type { ProjectEgressIntercept, ProjectEgressInterceptor } from "./egress.ts";
 import {
   buildApprovalMessage,
   approvalRequestBody,
-  evaluateGrant,
+  evaluateDecision,
   matchEgressRule,
   sha256Hex,
   type EgressRule,
+  type HeldRequest,
   type HumanApprovalRequestedPayload,
 } from "./egress-approvals.ts";
 import {
@@ -146,20 +142,6 @@ export class ProjectDurableObject extends DurableObject<Env> {
       stream: this.#stream,
       path: this.#name.path,
       projectId: this.#name.projectId,
-      now: () => Date.now(),
-      // The DO alarm is SHARED with the runners' keepalives, so the Approval
-      // Group debounce states its desire through a named slice and the
-      // registry arms the earliest across all of them. Early fires (another
-      // slice's) run alarm() below, which is idempotent and re-arms this one.
-      repointAlarm: (atMs) => this.#registry.setAlarmSlice("notification", atMs),
-      // Runner-backed committed-state read for fire-time decisions: lazy
-      // closure because #notificationReads is built from the registered
-      // processor below. The explicit return annotation breaks the
-      // field-initializer inference cycle.
-      reads: {
-        snapshot: (): Promise<ProcessorSnapshot<NotificationProcessorState>> =>
-          this.#notificationReads.snapshot(),
-      },
     }),
   );
   readonly #notificationReads = this.#registry.reads(this.#notificationProcessor);
@@ -259,25 +241,9 @@ export class ProjectDurableObject extends DurableObject<Env> {
     return this.#registry.wakeStreamSubscriber(args);
   }
 
-  /** The registry's shared DO alarm (runner keepalives), plus the notification
-   * processor's Approval Group debounce slice — see stream-processor-registry.ts
-   * and NotificationProcessor.fireDueApprovalGroupWindows. Both handlers are
-   * idempotent and re-derive their own next fire time, so an early fire for
-   * either slice is harmless. */
+  /** The registry's shared DO alarm — runner keepalives only. */
   async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
     await this.#registry.handleAlarm(alarmInfo);
-    try {
-      await this.#registry.catchUp("notification");
-      await this.#notificationProcessor.fireDueApprovalGroupWindows();
-      await this.#registry.catchUp("notification");
-    } catch (error) {
-      // Cloudflare retries a throwing alarm handler only a bounded number of
-      // times; a Stream DO outage must not end with due debounce windows and
-      // no armed alarm. Arm a coarse fallback — AWAITED, so it is durable
-      // before the rethrow surrenders to the platform's bounded retry.
-      await this.#registry.setAlarmSlice("notification", Date.now() + 60_000);
-      throw error;
-    }
   }
 
   get slackProcessor() {
@@ -379,12 +345,13 @@ export class ProjectDurableObject extends DurableObject<Env> {
 
   /**
    * The human-approval gate in front of the egress lanes. Requests matching a
-   * `hold` rule park HERE — the caller's fetch promise stays open — until a
-   * grant/rejection lands on the project stream or the rule's timeout
-   * auto-rejects. Everything the gate sees and records is placeholder form:
-   * it runs before secret substitution, so approval events (and the approval
-   * UI reading them) can honestly say "this request spends /secrets/x"
-   * without material ever leaving the platform.
+   * `hold` rule park HERE — the caller's fetch promise stays open — batched
+   * per (script run, rule), until a decision lands on the project stream or
+   * the rule's timeout auto-rejects the batch. Everything the gate sees and
+   * records is placeholder form: it runs before secret substitution, so
+   * approval events (and the approval UI reading them) can honestly say
+   * "this request spends /secrets/x" without material ever leaving the
+   * platform.
    */
   async #egressWithApprovalGate(request: Request, streamContext: StreamContext): Promise<Response> {
     const rules = await this.#egressRules();
@@ -427,13 +394,22 @@ export class ProjectDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * Park one held request: append `human-approval-requested`, then live-tail
-   * the project stream for a resolution referencing that event's offset (the
-   * held request's identity — no minted ids). The wait is chunked so no
-   * single cross-DO call stays open longer than ~25s; the deadline spans the
-   * chunks. A Durable Object restart mid-hold fails the caller's fetch — the
-   * requested event survives and the audit trail stays truthful, but the
-   * MVP deliberately has no reconciler re-executing approved requests.
+   * Requests parked at the egress door but not yet committed as a batch: a
+   * script run's concurrent burst at one hold rule coalesces here for the
+   * rule's debounce window before ONE `human-approval-requested` event
+   * records the whole batch. In-memory on purpose — the queued fetch
+   * promises die with this Durable Object anyway, so a restart loses
+   * nothing durable and strands nothing visible.
+   */
+  #pendingHoldBatches = new Map<string, PendingHoldBatch>();
+
+  /**
+   * Park one held request into its approval batch. Only a script run's
+   * concurrent burst at one rule ever coalesces — anything without
+   * script-execution provenance, or a rule with `debounceMs: null`, commits
+   * immediately as a batch of one. The returned promise is the caller's
+   * fetch outcome, resolved by {@link #flushHoldBatch} once a human (or the
+   * expiry) decides the batch.
    */
   async #holdForHumanApproval(input: {
     request: Request;
@@ -442,113 +418,200 @@ export class ProjectDurableObject extends DurableObject<Env> {
     streamContext: StreamContext;
   }): Promise<Response> {
     const { request, rule } = input;
-    // ONE deadline drives both the `expiresAt` the approver UI reads and the
-    // server's own hold — stamped now so they can't drift (body buffering and
-    // the append below take time).
-    const deadline = Date.now() + rule.approvalTimeoutMs;
     // Buffer the body up front: hashing consumes the stream, and the released
     // request is re-built from these bytes after the human answers.
     const bodyBytes = request.body === null ? null : new Uint8Array(await request.arrayBuffer());
-    const requestedPayload: HumanApprovalRequestedPayload = {
-      method: request.method,
-      url: request.url,
-      headers: Object.fromEntries(request.headers),
-      body: bodyBytes === null ? null : approvalRequestBody(bodyBytes, await sha256Hex(bodyBytes)),
-      secretPaths: input.secretPaths,
-      ruleKey: rule.ruleKey,
-      ruleDescription: rule.description,
-      streamContext: input.streamContext,
-      expiresAt: new Date(deadline).toISOString(),
-    };
-
-    const stream = this.#stream;
-    const [requested] = await stream.append({
-      type: "events.iterate.com/project/human-approval-requested",
-      payload: requestedPayload,
-    });
-    const approvalRequestEventOffset = requested!.offset;
-
-    const resolution = await this.#awaitApprovalResolution({
-      approvalRequestEventOffset,
-      deadline,
-      requestedPayload,
-    });
-
-    if (resolution === "expired") {
-      await stream.append({
-        type: "events.iterate.com/project/human-approval-rejected",
-        idempotencyKey: `human-approval-expired:${approvalRequestEventOffset}`,
-        payload: { approvalRequestEventOffset, reason: "expired" },
-      });
-      return approvalGateResponse({
-        approvalRequestEventOffset,
-        code: "approval_expired",
-        detail: `No human answered within ${rule.approvalTimeoutMs}ms (rule "${rule.ruleKey}").`,
-        ruleKey: rule.ruleKey,
-      });
-    }
-    if (resolution === "rejected") {
-      return approvalGateResponse({
-        approvalRequestEventOffset,
-        code: "approval_rejected",
-        detail: `A human rejected this request (rule "${rule.ruleKey}").`,
-        ruleKey: rule.ruleKey,
-      });
-    }
-
-    // Granted: release the buffered request through the ordinary egress
-    // lanes, then record what actually happened — approval and outcome are
-    // separate facts.
-    const released = new Request(request.url, {
-      method: request.method,
-      headers: request.headers,
-      body: bodyBytes as BodyInit | null,
+    const entry: PendingHoldEntry = {
+      bodyBytes,
+      held: {
+        method: request.method,
+        url: request.url,
+        headers: Object.fromEntries(request.headers),
+        body:
+          bodyBytes === null ? null : approvalRequestBody(bodyBytes, await sha256Hex(bodyBytes)),
+        secretPaths: input.secretPaths,
+      },
       redirect: request.redirect,
+      resolve: () => {},
+      reject: () => {},
+    };
+    const response = new Promise<Response>((resolve, reject) => {
+      entry.resolve = resolve;
+      entry.reject = reject;
     });
-    // Settling is bookkeeping about the outcome and must never CHANGE the
-    // outcome: a failed append logs, but the caller still gets whatever
-    // upstream truly returned (or the true upstream error).
-    const settle = (payload: { status?: number; error?: string }) =>
-      stream
-        .append({
-          type: "events.iterate.com/project/human-approval-settled",
-          idempotencyKey: `human-approval-settled:${approvalRequestEventOffset}`,
-          payload: { approvalRequestEventOffset, ...payload },
-        })
-        .catch((error: unknown) => {
-          console.warn("egress approval: settle append failed", {
-            approvalRequestEventOffset,
-            error,
-            projectId: this.#name.projectId,
-          });
-        });
-    let response: Response;
-    try {
-      response = await this.#egress(released);
-    } catch (error) {
-      await settle({ error: error instanceof Error ? error.message : String(error) });
-      throw error;
+
+    const executionId =
+      input.streamContext.kind === "script-execution" ? input.streamContext.executionId : null;
+    if (rule.debounceMs === null || executionId === null) {
+      void this.#flushHoldBatch({
+        entries: [entry],
+        opensAtMs: Date.now(),
+        rule,
+        streamContext: input.streamContext,
+        timer: null,
+      });
+      return response;
     }
-    await settle({ status: response.status });
+
+    // The dataloader: one pending batch per (script run, rule). Each arrival
+    // extends the flush by one debounce window, capped from the batch's
+    // opening so a drip-feed cannot postpone the human forever. Batches
+    // never span rules, so mixed hold policies are structurally impossible.
+    const batchKey = `${executionId}\u0000${rule.ruleKey}`;
+    let batch = this.#pendingHoldBatches.get(batchKey);
+    if (batch === undefined) {
+      batch = {
+        entries: [],
+        opensAtMs: Date.now(),
+        rule,
+        streamContext: input.streamContext,
+        timer: null,
+      };
+      this.#pendingHoldBatches.set(batchKey, batch);
+    }
+    batch.entries.push(entry);
+    if (batch.timer !== null) clearTimeout(batch.timer);
+    const committed = batch;
+    const flushAt = Math.min(
+      Date.now() + rule.debounceMs,
+      batch.opensAtMs + rule.debounceMs * HOLD_DEBOUNCE_CAP_FACTOR,
+    );
+    batch.timer = setTimeout(
+      () => {
+        this.#pendingHoldBatches.delete(batchKey);
+        void this.#flushHoldBatch(committed);
+      },
+      Math.max(0, flushAt - Date.now()),
+    );
     return response;
   }
 
   /**
-   * Live-tail resolutions for one held request. Grants verify against the
-   * enrolled key set: once ANY active approval key exists, an unsigned or
-   * badly-signed grant is ignored (the hold keeps waiting) — deny stays
-   * cheap, forging an approval requires the enrolled private key.
+   * Commit one batch and see it through: append the ONE
+   * `human-approval-requested` event recording every held request, await the
+   * decision (or expiry), then release / refuse each request per its
+   * verdict. Every parked caller's promise is settled HERE — resolved with
+   * its response, or rejected with the true failure — so this method itself
+   * never throws.
    */
-  async #awaitApprovalResolution(input: {
+  async #flushHoldBatch(batch: PendingHoldBatch): Promise<void> {
+    const { entries, rule } = batch;
+    // ONE deadline drives both the `expiresAt` the approver UI reads and the
+    // server's own hold — stamped at commit time so they can't drift.
+    const deadline = Date.now() + rule.approvalTimeoutMs;
+    const requestedPayload: HumanApprovalRequestedPayload = {
+      requests: entries.map((held) => held.held),
+      ruleKey: rule.ruleKey,
+      ruleDescription: rule.description,
+      streamContext: batch.streamContext,
+      expiresAt: new Date(deadline).toISOString(),
+    };
+    try {
+      const stream = this.#stream;
+      const [requested] = await stream.append({
+        type: "events.iterate.com/project/human-approval-requested",
+        payload: requestedPayload,
+      });
+      const approvalRequestEventOffset = requested!.offset;
+
+      const verdicts = await this.#awaitBatchDecision({
+        approvalRequestEventOffset,
+        deadline,
+        requestedPayload,
+      });
+
+      if (verdicts === "expired") {
+        await stream.append({
+          type: "events.iterate.com/project/human-approval-decided",
+          idempotencyKey: `human-approval-expired:${approvalRequestEventOffset}`,
+          payload: {
+            approvalRequestEventOffset,
+            decidedBy: "expiry",
+            verdicts: entries.map(() => "reject" as const),
+          },
+        });
+        for (const entry of entries) {
+          entry.resolve(
+            approvalGateResponse({
+              approvalRequestEventOffset,
+              code: "approval_expired",
+              detail: `No human answered within ${rule.approvalTimeoutMs}ms (rule "${rule.ruleKey}").`,
+              ruleKey: rule.ruleKey,
+            }),
+          );
+        }
+        return;
+      }
+
+      // Decided: rejected indexes refuse, approved indexes release through
+      // the ordinary egress lanes CONCURRENTLY — they were concurrent when
+      // the rule caught them. Settling is bookkeeping about each outcome and
+      // must never CHANGE it: a failed append logs, but the caller still
+      // gets whatever upstream truly returned (or the true upstream error).
+      await Promise.all(
+        entries.map(async (entry, index) => {
+          if (verdicts[index] === "reject") {
+            entry.resolve(
+              approvalGateResponse({
+                approvalRequestEventOffset,
+                code: "approval_rejected",
+                detail: `A human rejected this request (rule "${rule.ruleKey}").`,
+                ruleKey: rule.ruleKey,
+              }),
+            );
+            return;
+          }
+          const settle = (outcome: { status?: number; error?: string }) =>
+            stream
+              .append({
+                type: "events.iterate.com/project/human-approval-settled",
+                idempotencyKey: `human-approval-settled:${approvalRequestEventOffset}:${index}`,
+                payload: { approvalRequestEventOffset, index, ...outcome },
+              })
+              .catch((error: unknown) => {
+                console.warn("egress approval: settle append failed", {
+                  approvalRequestEventOffset,
+                  index,
+                  error,
+                  projectId: this.#name.projectId,
+                });
+              });
+          const released = new Request(entry.held.url, {
+            method: entry.held.method,
+            headers: entry.held.headers,
+            body: entry.bodyBytes as BodyInit | null,
+            redirect: entry.redirect,
+          });
+          try {
+            const response = await this.#egress(released);
+            await settle({ status: response.status });
+            entry.resolve(response);
+          } catch (error) {
+            await settle({ error: error instanceof Error ? error.message : String(error) });
+            entry.reject(error);
+          }
+        }),
+      );
+    } catch (error) {
+      // A failure before the verdicts fanned out (the requested append, the
+      // decision wait) fails every parked caller with the true error.
+      for (const entry of entries) entry.reject(error);
+    }
+  }
+
+  /**
+   * Live-tail the ONE decided event for a batch. Decisions verify against
+   * the enrolled key set: once ANY active approval key exists, an unsigned
+   * or badly-signed approval is ignored (the hold keeps waiting) — deny
+   * stays cheap, forging an approval requires the enrolled private key.
+   */
+  async #awaitBatchDecision(input: {
     approvalRequestEventOffset: number;
     deadline: number;
     requestedPayload: HumanApprovalRequestedPayload;
-  }): Promise<"granted" | "rejected" | "expired"> {
+  }): Promise<readonly ("approve" | "reject")[] | "expired"> {
     const stream = this.#stream;
-    const resolutionEventTypes = [
-      "events.iterate.com/project/human-approval-granted",
-      "events.iterate.com/project/human-approval-rejected",
-    ];
+    const resolutionEventTypes = ["events.iterate.com/project/human-approval-decided"];
     let cursor = input.approvalRequestEventOffset;
 
     // Live phase: chunked one-shot waits until the wall-clock deadline.
@@ -588,14 +651,14 @@ export class ProjectDurableObject extends DurableObject<Env> {
       }
       availabilityBackoffMs = 200;
       cursor = event.offset;
-      const verdict = await this.#judgeResolution(event, input);
-      if (verdict !== null) return verdict;
+      const verdicts = await this.#judgeDecision(event, input);
+      if (verdicts !== null) return verdicts;
     }
 
-    // Expiry sweep: a verdict appended in the last chunk's shadow must still
-    // win — a human who granted just in time is honored. Scan whole pages and
-    // STOP at the first event created after the deadline, so other holds'
-    // ongoing resolutions on a busy stream can't delay this expiry.
+    // Expiry sweep: a decision appended in the last chunk's shadow must still
+    // win — a human who answered just in time is honored. Scan whole pages and
+    // STOP at the first event created after the deadline, so other batches'
+    // ongoing decisions on a busy stream can't delay this expiry.
     while (true) {
       const page = await stream.getEvents({
         afterOffset: cursor,
@@ -605,68 +668,70 @@ export class ProjectDurableObject extends DurableObject<Env> {
       for (const event of page) {
         if (Date.parse(event.createdAt) > input.deadline) return "expired";
         cursor = event.offset;
-        const verdict = await this.#judgeResolution(event, input);
-        if (verdict !== null) return verdict;
+        const verdicts = await this.#judgeDecision(event, input);
+        if (verdicts !== null) return verdicts;
       }
     }
   }
 
   /**
-   * Judge one resolution event for a specific held request: "rejected" for our
-   * matching rejection, "granted" for a matching grant that passes signature
-   * policy against FRESH key state, or null (not ours, or an ignored grant —
-   * unsigned/bad-sig/catch-up-failed — which is never fatal to the hold).
+   * Judge one decided event for a specific batch: its verdicts when it
+   * references this batch and passes signature policy against FRESH key
+   * state, or null (not ours, or an ignored decision — malformed/unsigned/
+   * bad-sig/catch-up-failed — which is never fatal to the hold).
    */
-  async #judgeResolution(
+  async #judgeDecision(
     event: StreamEvent,
     input: {
       approvalRequestEventOffset: number;
       deadline: number;
       requestedPayload: HumanApprovalRequestedPayload;
     },
-  ): Promise<"granted" | "rejected" | null> {
-    if (event.type === "events.iterate.com/project/human-approval-rejected") {
-      const rejection = ProjectProcessorContract.events[
-        "events.iterate.com/project/human-approval-rejected"
-      ].payloadSchema.safeParse(event.payload);
-      return rejection.success &&
-        rejection.data.approvalRequestEventOffset === input.approvalRequestEventOffset
-        ? "rejected"
-        : null;
-    }
-
-    const grant = ProjectProcessorContract.events[
-      "events.iterate.com/project/human-approval-granted"
+  ): Promise<readonly ("approve" | "reject")[] | null> {
+    const decided = ProjectProcessorContract.events[
+      "events.iterate.com/project/human-approval-decided"
     ].payloadSchema.safeParse(event.payload);
     if (
-      !grant.success ||
-      grant.data.approvalRequestEventOffset !== input.approvalRequestEventOffset
+      !decided.success ||
+      decided.data.approvalRequestEventOffset !== input.approvalRequestEventOffset
     ) {
+      return null;
+    }
+    // A verdict per request or nothing: acting on a short/long verdict list
+    // would silently decide requests its signer never saw.
+    if (decided.data.verdicts.length !== input.requestedPayload.requests.length) {
+      console.warn("egress approval: decision ignored — verdict count mismatch", {
+        approvalRequestEventOffset: input.approvalRequestEventOffset,
+        expected: input.requestedPayload.requests.length,
+        got: decided.data.verdicts.length,
+        projectId: this.#name.projectId,
+      });
       return null;
     }
     const message = buildApprovalMessage({
       projectId: this.#name.projectId,
       approvalRequestEventOffset: input.approvalRequestEventOffset,
-      requested: input.requestedPayload,
-      decision: "granted",
+      requests: input.requestedPayload.requests,
+      verdicts: decided.data.verdicts,
     });
 
-    // A grant is judged exactly once at its offset — the resolution cursor
+    // A decision is judged exactly once at its offset — the resolution cursor
     // moves past it. So a transient key-state catch-up failure must NOT be
-    // mistaken for a bad signature and silently drop a real human grant: retry
-    // with backoff until the catch-up succeeds (then verify against FRESH keys)
-    // or the hold's deadline passes — at which point it expires anyway, the
-    // safe deny direction. A verdict that verifies but isn't accepted (unsigned,
-    // bad signature, unknown/revoked key) is a real ignore, no retry.
+    // mistaken for a bad signature and silently drop a real human approval:
+    // retry with backoff until the catch-up succeeds (then verify against
+    // FRESH keys) or the hold's deadline passes — at which point it expires
+    // anyway, the safe deny direction. A decision that verifies but isn't
+    // accepted (unsigned, bad signature, unknown/revoked key) is a real
+    // ignore, no retry.
     let backoffMs = 200;
     while (true) {
       try {
         await this.#registry.catchUp(ProjectProcessorContract.slug);
       } catch (error) {
         if (Date.now() >= input.deadline) {
-          console.warn("egress approval: grant unverifiable — key-state catch-up kept failing", {
+          console.warn("egress approval: decision unverifiable — key-state catch-up kept failing", {
             approvalRequestEventOffset: input.approvalRequestEventOffset,
-            keyId: grant.data.keyId,
+            keyId: decided.data.keyId,
             projectId: this.#name.projectId,
             error: error instanceof Error ? error.message : String(error),
           });
@@ -676,15 +741,15 @@ export class ProjectDurableObject extends DurableObject<Env> {
         backoffMs *= 2;
         continue;
       }
-      const verdict = await evaluateGrant({
-        grant: grant.data,
+      const verdict = await evaluateDecision({
+        decision: decided.data,
         keys: this.#projectReads.currentState.humanApprovalKeys,
         message,
       });
-      if (verdict.accepted) return "granted";
-      console.warn("egress approval: grant ignored", {
+      if (verdict.accepted) return decided.data.verdicts;
+      console.warn("egress approval: decision ignored", {
         approvalRequestEventOffset: input.approvalRequestEventOffset,
-        keyId: grant.data.keyId,
+        keyId: decided.data.keyId,
         projectId: this.#name.projectId,
         reason: verdict.reason,
       });
@@ -833,3 +898,29 @@ function approvalGateResponse(body: {
 }): Response {
   return Response.json({ error: body.code, ...body }, { status: 403 });
 }
+
+/** One parked caller inside a pending batch: its buffered request, its
+ * placeholder-form record for the event, and the promise handles its fetch
+ * outcome settles through. */
+type PendingHoldEntry = {
+  bodyBytes: Uint8Array | null;
+  held: HeldRequest;
+  redirect: RequestRedirect;
+  resolve: (response: Response) => void;
+  reject: (error: unknown) => void;
+};
+
+/** One un-committed approval batch: the entries of one script run's burst at
+ * one rule, plus the debounce timer that will flush them as ONE
+ * `human-approval-requested` event. */
+type PendingHoldBatch = {
+  entries: PendingHoldEntry[];
+  opensAtMs: number;
+  rule: EgressRule;
+  streamContext: StreamContext;
+  timer: ReturnType<typeof setTimeout> | null;
+};
+
+/** Total debounce wait is capped at this multiple of the rule's debounceMs,
+ * however steadily new requests keep extending the window. */
+const HOLD_DEBOUNCE_CAP_FACTOR = 3;

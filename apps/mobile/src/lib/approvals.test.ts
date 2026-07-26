@@ -2,90 +2,139 @@ import { expect, test, vi } from "vitest";
 import type { StreamEvent } from "iterate/sdk/itx/react";
 import {
   approvalBodyForDisplay,
-  deriveOpenRequests,
-  deriveRecentResolvedRequests,
+  decide,
+  deriveOpenBatches,
+  deriveRecentResolvedBatches,
   EVENT,
-  focusOpenRequest,
-  grantMany,
-  groupHostBreakdown,
-  groupOpenRequests,
-  groupResolvedRequests,
-  rejectMany,
+  focusOpenBatch,
+  hostBreakdown,
   safeHost,
   scriptCodeForApproval,
   type RequestedPayload,
 } from "./approvals.ts";
 
-test("an unresolved request is open", () => {
-  const open = deriveOpenRequests([requested(1, "post-echo")]);
+test("an undecided batch is open", () => {
+  const open = deriveOpenBatches([requested(1, "post-echo")]);
   expect(open).toEqual([
-    { offset: 1, payload: expect.objectContaining({ ruleKey: "post-echo" }), submitted: false },
+    {
+      offset: 1,
+      payload: expect.objectContaining({ ruleKey: "post-echo" }),
+      submitted: false,
+      verdicts: null,
+    },
   ]);
 });
 
-test("a granted-but-not-yet-settled request is open and submitted", () => {
-  const open = deriveOpenRequests([requested(1, "post-echo"), granted(2, 1)]);
-  expect(open).toEqual([{ offset: 1, payload: expect.anything(), submitted: true }]);
+test("a decided-but-not-yet-settled batch is open and submitted", () => {
+  const open = deriveOpenBatches([requested(1, "post-echo"), decided(2, 1, ["approve"])]);
+  expect(open).toEqual([
+    { offset: 1, payload: expect.anything(), submitted: true, verdicts: ["approve"] },
+  ]);
 });
 
-test("a settled request is no longer open", () => {
-  const open = deriveOpenRequests([requested(1, "post-echo"), granted(2, 1), settled(3, 1, 200)]);
+test("a fully settled batch is no longer open", () => {
+  const open = deriveOpenBatches([
+    requested(1, "post-echo"),
+    decided(2, 1, ["approve"]),
+    settled(3, 1, 0, 200),
+  ]);
   expect(open).toEqual([]);
 });
 
-test("a rejected request is no longer open", () => {
-  const open = deriveOpenRequests([requested(1, "post-echo"), rejected(2, 1)]);
+test("a burst batch stays open until EVERY approved index settles", () => {
+  const events = [
+    requestedBurst(1, "gmail-sends", 3),
+    decided(2, 1, ["approve", "approve", "reject"]),
+    settled(3, 1, 0, 200),
+  ];
+  expect(deriveOpenBatches(events)).toMatchObject([{ offset: 1, submitted: true }]);
+  expect(deriveOpenBatches([...events, settled(4, 1, 1, 200)])).toEqual([]);
+});
+
+test("an all-reject decision closes the batch", () => {
+  const open = deriveOpenBatches([requested(1, "post-echo"), decided(2, 1, ["reject"])]);
   expect(open).toEqual([]);
 });
 
-test("recent resolved requests retain their request details and decision", () => {
+test("only the FIRST decision counts — a later contradiction is dead weight", () => {
+  const open = deriveOpenBatches([
+    requested(1, "post-echo"),
+    decided(2, 1, ["reject"]),
+    decided(3, 1, ["approve"]),
+  ]);
+  expect(open).toEqual([]);
+});
+
+test("recent resolved batches retain their request details and decision", () => {
   const events = [
     requested(1, "approved-rule"),
     requested(2, "rejected-rule"),
-    granted(3, 1),
-    rejected(4, 2),
-    settled(5, 1, 200),
+    decided(3, 1, ["approve"]),
+    decided(4, 2, ["reject"]),
+    settled(5, 1, 0, 200),
   ];
 
-  expect(deriveRecentResolvedRequests(events, 5)).toEqual([
-    {
-      offset: 1,
-      payload: expect.objectContaining({ ruleKey: "approved-rule" }),
-      outcome: { decision: "approved", deliveryError: null, upstreamStatus: 200 },
-      resolutionEventOffset: 5,
-    },
+  expect(deriveRecentResolvedBatches(events, 5)).toMatchObject([
     {
       offset: 2,
       payload: expect.objectContaining({ ruleKey: "rejected-rule" }),
-      outcome: { decision: "rejected", reason: "human" },
+      decisionSummary: "Rejected",
+      outcomes: [null],
       resolutionEventOffset: 4,
+    },
+    {
+      offset: 1,
+      payload: expect.objectContaining({ ruleKey: "approved-rule" }),
+      decisionSummary: "Approved",
+      outcomes: [{ status: 200, error: null }],
+      resolutionEventOffset: 3,
     },
   ]);
 });
 
-test("recent resolved requests are limited by newest outcome, not request order", () => {
+test("a mixed decision summarizes both sides and keeps per-index outcomes", () => {
+  const resolved = deriveRecentResolvedBatches(
+    [
+      requestedBurst(1, "gmail-sends", 3),
+      decided(2, 1, ["approve", "reject", "approve"]),
+      settled(3, 1, 0, 200),
+      settled(4, 1, 2, 502),
+    ],
+    5,
+  );
+
+  expect(resolved).toMatchObject([
+    {
+      offset: 1,
+      decisionSummary: "2 approved · 1 rejected",
+      outcomes: [{ status: 200, error: null }, null, { status: 502, error: null }],
+    },
+  ]);
+});
+
+test("the door's expiry decision reads as Expired", () => {
+  const resolved = deriveRecentResolvedBatches([requested(1, "impatient"), expiryDecided(2, 1)], 5);
+  expect(resolved).toMatchObject([{ offset: 1, decidedBy: "expiry", decisionSummary: "Expired" }]);
+});
+
+test("recents order by newest decision, not request order", () => {
   const events = [
     requested(1, "resolved-last"),
     requested(2, "resolved-first"),
-    rejected(3, 2),
-    rejected(4, 1),
+    decided(3, 2, ["reject"]),
+    decided(4, 1, ["reject"]),
   ];
 
-  expect(deriveRecentResolvedRequests(events, 1)).toMatchObject([
-    { offset: 1, outcome: { decision: "rejected" }, resolutionEventOffset: 4 },
+  expect(deriveRecentResolvedBatches(events, 1)).toMatchObject([
+    { offset: 1, resolutionEventOffset: 4 },
   ]);
 });
 
-test("an expired request is no longer open even with no resolution event", () => {
-  const open = deriveOpenRequests([
+test("an expired undecided batch is no longer open even with no decision event", () => {
+  const open = deriveOpenBatches([
     requested(1, "post-echo", { expiresAt: "2000-01-01T00:00:00Z" }),
   ]);
   expect(open).toEqual([]);
-});
-
-test("a stray reject after a winning grant does not close the hold (the door decides on settled)", () => {
-  const open = deriveOpenRequests([requested(1, "post-echo"), granted(2, 1), rejected(3, 1)]);
-  expect(open).toEqual([{ offset: 1, payload: expect.anything(), submitted: true }]);
 });
 
 test("safeHost falls back to the raw string for an unparseable URL", () => {
@@ -93,21 +142,35 @@ test("safeHost falls back to the raw string for an unparseable URL", () => {
   expect(safeHost("not a url")).toBe("not a url");
 });
 
-test("a notification-targeted approval is focused at the front of the queue", () => {
-  const open = deriveOpenRequests([requested(10, "first"), requested(20, "from-notification")]);
+test("a notification-targeted batch is focused at the front of the queue", () => {
+  const open = deriveOpenBatches([requested(10, "first"), requested(20, "from-notification")]);
 
-  expect(focusOpenRequest(open, 20).map((request) => request.offset)).toEqual([20, 10]);
+  expect(focusOpenBatch(open, 20).map((batch) => batch.offset)).toEqual([20, 10]);
+});
+
+test("the host breakdown counts a burst's hosts, busiest first", () => {
+  const payload = requestedBurst(1, "gmail-sends", 3).payload as RequestedPayload;
+  payload.requests[2]!.url = "https://api.stripe.com/v1/transfers";
+  expect(hostBreakdown(payload.requests)).toBe("2x gmail.googleapis.com, 1x api.stripe.com");
 });
 
 test("the approval view resolves the exact script event and complete request body", () => {
   const request = requested(10, "refund", {
-    body: {
-      encoding: "utf8",
-      content: '{"orderId":1234}',
-      originalByteLength: 16,
-      sha256: "body-sha256",
-      truncated: false,
-    },
+    requests: [
+      {
+        method: "POST",
+        url: "https://api.stripe.com/v1/transfers",
+        headers: {},
+        secretPaths: [],
+        body: {
+          encoding: "utf8",
+          content: '{"orderId":1234}',
+          originalByteLength: 16,
+          sha256: "body-sha256",
+          truncated: false,
+        },
+      },
+    ],
     streamContext: {
       kind: "script-execution",
       executionId: "agent-output:8",
@@ -129,7 +192,7 @@ test("the approval view resolves the exact script event and complete request bod
   } satisfies StreamEvent;
 
   expect(scriptCodeForApproval(payload, scriptEvent)).toBe("async () => fetch('/refund')");
-  expect(approvalBodyForDisplay(payload)).toEqual({
+  expect(approvalBodyForDisplay(payload.requests[0]!)).toEqual({
     language: "json",
     originalByteLength: 16,
     text: '{"orderId":1234}',
@@ -139,16 +202,24 @@ test("the approval view resolves the exact script event and complete request bod
 
 test("the approval view labels a capped request body as truncated", () => {
   const payload = requested(10, "upload", {
-    body: {
-      encoding: "utf8",
-      content: "readable prefix",
-      originalByteLength: 100_000,
-      sha256: "body-sha256",
-      truncated: true,
-    },
+    requests: [
+      {
+        method: "POST",
+        url: "https://api.stripe.com/v1/transfers",
+        headers: {},
+        secretPaths: [],
+        body: {
+          encoding: "utf8",
+          content: "readable prefix",
+          originalByteLength: 100_000,
+          sha256: "body-sha256",
+          truncated: true,
+        },
+      },
+    ],
   }).payload as RequestedPayload;
 
-  expect(approvalBodyForDisplay(payload)).toEqual({
+  expect(approvalBodyForDisplay(payload.requests[0]!)).toEqual({
     language: "text",
     originalByteLength: 100_000,
     text: "readable prefix",
@@ -156,202 +227,61 @@ test("the approval view labels a capped request body as truncated", () => {
   });
 });
 
-test("open requests bucket into Approval Groups by executionId; scope holds and singletons stay flat", () => {
-  const open = deriveOpenRequests([
-    scriptRequested(1, "exec-a"),
-    requested(2, "manual-scope"),
-    scriptRequested(3, "exec-a"),
-    scriptRequested(4, "exec-b"),
-    scriptRequested(5, "exec-a"),
-  ]);
-
-  expect(groupOpenRequests(open)).toMatchObject([
-    {
-      kind: "group",
-      executionId: "exec-a",
-      requests: [{ offset: 1 }, { offset: 3 }, { offset: 5 }],
-    },
-    { kind: "single", request: { offset: 2 } },
-    // A one-member bucket renders exactly as an ungrouped request.
-    { kind: "single", request: { offset: 4 } },
-  ]);
-});
-
-test("a group shrinks back to a flat singleton once only one member is still open", () => {
-  const open = deriveOpenRequests([
-    scriptRequested(1, "exec-a"),
-    scriptRequested(2, "exec-a"),
-    rejected(3, 1),
-  ]);
-
-  expect(groupOpenRequests(open)).toMatchObject([{ kind: "single", request: { offset: 2 } }]);
-});
-
-test("focusing a notification-targeted member floats its whole group to the front", () => {
-  const open = deriveOpenRequests([
-    requested(1, "first"),
-    scriptRequested(2, "exec-a"),
-    scriptRequested(3, "exec-a"),
-  ]);
-
-  expect(groupOpenRequests(focusOpenRequest(open, 3))).toMatchObject([
-    { kind: "group", executionId: "exec-a" },
-    { kind: "single", request: { offset: 1 } },
-  ]);
-});
-
-test("the group header host breakdown counts hosts, busiest first", () => {
-  const open = deriveOpenRequests([
-    scriptRequested(1, "exec-a", "https://api.stripe.com/v1/transfers"),
-    scriptRequested(2, "exec-a"),
-    scriptRequested(3, "exec-a"),
-  ]);
-
-  expect(groupHostBreakdown(open)).toBe("2x gmail.googleapis.com, 1x api.stripe.com");
-});
-
-test("resolved requests group by script run with a mixed-outcome decision summary", () => {
-  const resolved = deriveRecentResolvedRequests(
-    [
-      scriptRequested(1, "exec-a"),
-      scriptRequested(2, "exec-a"),
-      scriptRequested(3, "exec-a"),
-      requested(4, "manual-scope"),
-      granted(5, 1),
-      settled(6, 1, 200),
-      granted(7, 2),
-      settled(8, 2, 200),
-      rejected(9, 3),
-      rejected(10, 4),
-    ],
-    50,
-  );
-
-  expect(groupResolvedRequests(resolved)).toMatchObject([
-    // Newest resolution first, and the whole run is one row.
-    { kind: "single", request: { offset: 4 } },
-    {
-      kind: "group",
-      executionId: "exec-a",
-      decisionSummary: "2 approved · 1 rejected",
-      requests: [{ offset: 3 }, { offset: 2 }, { offset: 1 }],
-    },
-  ]);
-});
-
-test("a lone resolved script request stays a flat card, like scope holds", () => {
-  const resolved = deriveRecentResolvedRequests(
-    [scriptRequested(1, "exec-a"), requested(2, "manual-scope"), rejected(3, 1), rejected(4, 2)],
-    50,
-  );
-
-  expect(groupResolvedRequests(resolved)).toMatchObject([
-    { kind: "single", request: { offset: 2 } },
-    { kind: "single", request: { offset: 1 } },
-  ]);
-});
-
-test("recents truncate AFTER grouping: a 6-member run is one row, never five clones", () => {
-  // The bug this pins: deriving with limit 5 sliced a 6-request run
-  // mid-group into identical flat cards. The screen derives a deep window,
-  // groups, THEN caps rendered rows.
-  const events = [
-    ...[1, 2, 3, 4, 5, 6].map((offset) => scriptRequested(offset, "exec-burst")),
-    requested(7, "manual-scope"),
-    ...[1, 2, 3, 4, 5, 6].map((offset) => granted(10 + offset, offset)),
-    ...[1, 2, 3, 4, 5, 6].map((offset) => settled(20 + offset, offset, 200)),
-    rejected(30, 7),
-  ];
-
-  const items = groupResolvedRequests(deriveRecentResolvedRequests(events, 50)).slice(0, 5);
-  expect(items).toMatchObject([
-    { kind: "single", request: { offset: 7 } },
-    { kind: "group", executionId: "exec-burst", decisionSummary: "6 approved" },
-  ]);
-  expect((items[1] as { requests: unknown[] }).requests).toHaveLength(6);
-});
-
-test("grantMany signs everything up front (one unlock), then appends one ordinary grant per request", async () => {
-  const open = deriveOpenRequests([scriptRequested(1, "exec-a"), scriptRequested(2, "exec-a")]);
+test("decide signs ONCE over the whole batch and appends ONE decided event", async () => {
+  const open = deriveOpenBatches([requestedBurst(1, "gmail-sends", 3)]);
   const appended: any[] = [];
-  const progress: number[] = [];
-  const signMany = vi.fn(async (messages: Uint8Array[]) => ({
-    keyId: "key-1",
-    signatures: messages.map((_, index) => `sig-${index}`),
-  }));
+  const sign = vi.fn(async (_message: Uint8Array) => ({ keyId: "key-1", signature: "sig" }));
 
-  await grantMany({
+  await decide({
     stream: { append: async (event: any) => void appended.push(event) } as any,
     projectId: "prj_test",
-    requests: open,
-    signMany,
-    onProgress: (granted) => progress.push(granted),
+    offset: open[0]!.offset,
+    payload: open[0]!.payload,
+    verdicts: ["approve", "approve", "approve"],
+    sign,
   });
 
-  expect(signMany).toHaveBeenCalledTimes(1);
-  expect(signMany.mock.calls[0]![0]).toHaveLength(2);
+  expect(sign).toHaveBeenCalledTimes(1);
   expect(appended).toMatchObject([
     {
-      type: EVENT.granted,
-      payload: { approvalRequestEventOffset: 1, keyId: "key-1", signature: "sig-0" },
-    },
-    {
-      type: EVENT.granted,
-      payload: { approvalRequestEventOffset: 2, keyId: "key-1", signature: "sig-1" },
-    },
-  ]);
-  expect(progress).toEqual([0, 1, 2]);
-});
-
-test("a mid-batch append failure leaves earlier grants standing and the remainder pending", async () => {
-  const open = deriveOpenRequests([
-    scriptRequested(1, "exec-a"),
-    scriptRequested(2, "exec-a"),
-    scriptRequested(3, "exec-a"),
-  ]);
-  const appended: any[] = [];
-  const progress: number[] = [];
-
-  await expect(
-    grantMany({
-      stream: {
-        append: async (event: any) => {
-          if (appended.length === 1) throw new Error("stream unreachable");
-          appended.push(event);
-        },
-      } as any,
-      projectId: "prj_test",
-      requests: open,
-      signMany: async (messages) => ({
+      type: EVENT.decided,
+      payload: {
+        approvalRequestEventOffset: 1,
+        verdicts: ["approve", "approve", "approve"],
+        decidedBy: "human",
         keyId: "key-1",
-        signatures: messages.map(() => "sig"),
-      }),
-      onProgress: (granted) => progress.push(granted),
-    }),
-  ).rejects.toThrow("stream unreachable");
-
-  // No rollback exists on a stream: the first grant stands, offsets 2 and 3
-  // stay visibly pending for retry.
-  expect(appended).toMatchObject([{ payload: { approvalRequestEventOffset: 1 } }]);
-  expect(progress).toEqual([0, 1]);
+        signature: "sig",
+      },
+    },
+  ]);
 });
 
-test("rejectMany appends unsigned rejections sequentially with progress", async () => {
-  const open = deriveOpenRequests([scriptRequested(1, "exec-a"), scriptRequested(2, "exec-a")]);
+test("an all-reject decision never signs — deny is the fail-safe direction", async () => {
+  const open = deriveOpenBatches([requestedBurst(1, "gmail-sends", 2)]);
   const appended: any[] = [];
-  const progress: number[] = [];
+  const sign = vi.fn(async () => ({ keyId: "key-1", signature: "sig" }));
 
-  await rejectMany({
+  await decide({
     stream: { append: async (event: any) => void appended.push(event) } as any,
-    requests: open,
-    onProgress: (rejectedCount) => progress.push(rejectedCount),
+    projectId: "prj_test",
+    offset: open[0]!.offset,
+    payload: open[0]!.payload,
+    verdicts: ["reject", "reject"],
+    sign,
   });
 
+  expect(sign).not.toHaveBeenCalled();
   expect(appended).toMatchObject([
-    { type: EVENT.rejected, payload: { approvalRequestEventOffset: 1, reason: "human" } },
-    { type: EVENT.rejected, payload: { approvalRequestEventOffset: 2, reason: "human" } },
+    {
+      type: EVENT.decided,
+      payload: {
+        approvalRequestEventOffset: 1,
+        verdicts: ["reject", "reject"],
+        decidedBy: "human",
+      },
+    },
   ]);
-  expect(progress).toEqual([0, 1, 2]);
+  expect(appended[0].payload).not.toHaveProperty("signature");
 });
 
 function requested(
@@ -365,11 +295,15 @@ function requested(
     createdAt: new Date(2026, 0, 1, 0, 0, offset).toISOString(),
     path: "/",
     payload: {
-      method: "POST",
-      url: "https://api.stripe.com/v1/transfers",
-      headers: {},
-      body: null,
-      secretPaths: [],
+      requests: [
+        {
+          method: "POST",
+          url: "https://api.stripe.com/v1/transfers",
+          headers: {},
+          body: null,
+          secretPaths: [],
+        },
+      ],
       ruleKey,
       ruleDescription: "",
       expiresAt: overrides.expiresAt ?? "2099-01-01T00:00:00Z",
@@ -378,49 +312,60 @@ function requested(
   };
 }
 
-/** A held request carrying script-execution provenance — an Approval Group member. */
-function scriptRequested(
-  offset: number,
-  executionId: string,
-  url = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
-): StreamEvent {
-  return requested(offset, "gmail-sends", {
-    url,
+/** A script run's burst committed as one batch of `count` gmail sends. */
+function requestedBurst(offset: number, ruleKey: string, count: number): StreamEvent {
+  return requested(offset, ruleKey, {
+    requests: Array.from({ length: count }, () => ({
+      method: "POST",
+      url: "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+      headers: {},
+      body: null,
+      secretPaths: [],
+    })),
     streamContext: {
       kind: "script-execution",
-      executionId,
+      executionId: "exec-a",
       scriptRunRequestedEventOffset: 1,
       streamPath: "/agents/demo",
     },
   });
 }
 
-function granted(offset: number, approvalRequestEventOffset: number): StreamEvent {
+function decided(
+  offset: number,
+  approvalRequestEventOffset: number,
+  verdicts: ("approve" | "reject")[],
+): StreamEvent {
   return {
-    type: EVENT.granted,
+    type: EVENT.decided,
     offset,
     createdAt: new Date(2026, 0, 1, 0, 0, offset).toISOString(),
     path: "/",
-    payload: { approvalRequestEventOffset },
+    payload: { approvalRequestEventOffset, verdicts, decidedBy: "human" },
   };
 }
 
-function rejected(offset: number, approvalRequestEventOffset: number): StreamEvent {
+function expiryDecided(offset: number, approvalRequestEventOffset: number): StreamEvent {
   return {
-    type: EVENT.rejected,
+    type: EVENT.decided,
     offset,
     createdAt: new Date(2026, 0, 1, 0, 0, offset).toISOString(),
     path: "/",
-    payload: { approvalRequestEventOffset, reason: "human" },
+    payload: { approvalRequestEventOffset, verdicts: ["reject"], decidedBy: "expiry" },
   };
 }
 
-function settled(offset: number, approvalRequestEventOffset: number, status: number): StreamEvent {
+function settled(
+  offset: number,
+  approvalRequestEventOffset: number,
+  index: number,
+  status: number,
+): StreamEvent {
   return {
     type: EVENT.settled,
     offset,
     createdAt: new Date(2026, 0, 1, 0, 0, offset).toISOString(),
     path: "/",
-    payload: { approvalRequestEventOffset, status },
+    payload: { approvalRequestEventOffset, index, status },
   };
 }

@@ -737,9 +737,9 @@ return await itx.projects.get(pid).__describe();
   projectExample({
     id: "grouped-approvals-demo",
     e2eProven: false,
-    title: "Grouped approvals demo: a 12-request burst, ONE push",
+    title: "Grouped approvals demo: a 12-request burst, ONE approval",
     description:
-      'DESTRUCTIVE: REPLACES this project\'s egress rules — run it in a disposable project. Installs one `hold` rule on dummy-petshop.iterate.com (our deployed fake pet-shop service), waits for the egress gate to see it, then fires 12 GETs in one Promise.all burst. The requests park at the egress door and collapse into ONE push a few seconds later ("Script run waiting: 12 requests (12x dummy-petshop.iterate.com)") that deep-links to the Approval Group — Approve all costs a single Face ID, and the script then resolves with every status code. Holds expire after 10 minutes. Interactive by definition: it blocks on a human.',
+      'DESTRUCTIVE: REPLACES this project\'s egress rules — run it in a disposable project. Installs one `hold` rule on dummy-petshop.iterate.com (our deployed fake pet-shop service), waits for the egress gate to see it, then fires 12 GETs in one Promise.all burst. The egress door coalesces the burst into ONE approval batch event and ONE push ("Script run waiting: 12 requests (12x dummy-petshop.iterate.com)") that deep-links to the batch — Approve all is a single Face ID and a single signed decision, and the script then resolves with every status code. Holds expire after 10 minutes. Interactive by definition: it blocks on a human.',
     runtimes: ["run-script"],
     fn: async (itx, vars: { requests?: number; url?: string }) => {
       // The grouping needs script-execution provenance, which only the

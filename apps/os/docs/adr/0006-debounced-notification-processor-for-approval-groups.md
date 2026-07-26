@@ -1,5 +1,9 @@
 # Debounce Approval Group pushes in NotificationProcessor, don't rely on APNs threading or batch signatures
 
+**Superseded by ADR 0007**: batching moved upstream into the egress door —
+one `human-approval-requested` event per burst, one signed decided event —
+which deleted this state machine entirely.
+
 A `Promise.all` script run can hold N egress requests at once; notifying on
 each one individually floods the device. We collapse them into one push per
 Approval Group by giving `NotificationProcessor` a small, explicit exception

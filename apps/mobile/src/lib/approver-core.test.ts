@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import {
   buildApprovalMessage,
-  evaluateGrant,
+  evaluateDecision,
   verifyApprovalSignature,
 } from "../../../os/src/domains/projects/egress-approvals.ts";
 import { generateApproverKey, keyIdFor, signApprovalMessage } from "./approver-core.ts";
@@ -11,14 +11,16 @@ test("a phone-generated key signs a message the OS's real verifier accepts", asy
   const message = buildApprovalMessage({
     projectId: "prj_test",
     approvalRequestEventOffset: 42,
-    requested: {
-      method: "POST",
-      url: "https://api.stripe.com/v1/transfers",
-      headers: {},
-      body: null,
-      secretPaths: ["/secrets/stripe/prod"],
-    },
-    decision: "granted",
+    requests: [
+      {
+        method: "POST",
+        url: "https://api.stripe.com/v1/transfers",
+        headers: {},
+        body: null,
+        secretPaths: ["/secrets/stripe/prod"],
+      },
+    ],
+    verdicts: ["approve"],
   });
   const signature = signApprovalMessage(key.privateKey, message);
 
@@ -27,9 +29,9 @@ test("a phone-generated key signs a message the OS's real verifier accepts", asy
   ).resolves.toBe(true);
 });
 
-test("evaluateGrant accepts a phone key's signed grant and rejects an unenrolled one", async () => {
+test("evaluateDecision accepts a phone key's signed approval and rejects an unenrolled one", async () => {
   const key = generateApproverKey();
-  const message = new TextEncoder().encode("approval.v1 fixture message");
+  const message = new TextEncoder().encode("approval.v2 fixture message");
   const signature = signApprovalMessage(key.privateKey, message);
   const enrolled = [
     {
@@ -42,12 +44,20 @@ test("evaluateGrant accepts a phone key's signed grant and rejects an unenrolled
   ];
 
   await expect(
-    evaluateGrant({ grant: { keyId: key.keyId, signature }, keys: enrolled, message }),
+    evaluateDecision({
+      decision: { keyId: key.keyId, signature, verdicts: ["approve"] },
+      keys: enrolled,
+      message,
+    }),
   ).resolves.toEqual({ accepted: true });
 
   const otherKey = generateApproverKey();
   await expect(
-    evaluateGrant({ grant: { keyId: otherKey.keyId, signature }, keys: enrolled, message }),
+    evaluateDecision({
+      decision: { keyId: otherKey.keyId, signature, verdicts: ["approve"] },
+      keys: enrolled,
+      message,
+    }),
   ).resolves.toMatchObject({ accepted: false });
 });
 

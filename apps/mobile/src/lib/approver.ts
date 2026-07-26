@@ -56,39 +56,25 @@ export async function enrollApproverKey(
   return info;
 }
 
-/** Sign one approval message — prompts Face ID / Touch ID / passcode to unlock the private key. */
+/**
+ * Sign one approval message — prompts Face ID / Touch ID / passcode to
+ * unlock the private key. One decision covers a whole batch (the approval.v2
+ * message binds every request plus the verdicts), so approving 12 requests
+ * is still exactly one prompt and one signature.
+ */
 export async function signWithApproverKey(
   projectId: string,
   message: Uint8Array,
 ): Promise<{ keyId: string; signature: string }> {
-  const { keyId, signatures } = await signManyWithApproverKey(projectId, [message]);
-  return { keyId, signature: signatures[0]! };
-}
-
-/**
- * Sign a batch of approval messages behind ONE Face ID / Touch ID prompt: a
- * single authenticated Keychain retrieval, then N in-memory @noble/curves
- * signatures, then the key reference is dropped. Approving an Approval Group
- * of 12 must not mean 12 biometric prompts — but the output stays N ordinary
- * per-request signatures, never a batch signature (ADR 0006).
- */
-export async function signManyWithApproverKey(
-  projectId: string,
-  messages: Uint8Array[],
-): Promise<{ keyId: string; signatures: string[] }> {
   const info = await loadApproverKey(projectId);
   if (!info) throw new Error("This device has no enrolled approval key for this project.");
   const privateKey = await SecureStore.getItemAsync(privateKey_(projectId), {
     requireAuthentication: true,
-    authenticationPrompt:
-      messages.length === 1 ? "Approve this request" : `Approve ${messages.length} requests`,
+    authenticationPrompt: "Approve this request",
   });
   if (!privateKey)
     throw new Error("Enrolled key's public half exists but the private half is gone.");
-  return {
-    keyId: info.keyId,
-    signatures: messages.map((message) => signApprovalMessage(privateKey, message)),
-  };
+  return { keyId: info.keyId, signature: signApprovalMessage(privateKey, message) };
 }
 
 /** Local key material only — the caller still needs to append `human-approval-key-revoked` for the platform to stop trusting it. */

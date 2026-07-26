@@ -53,11 +53,13 @@ struct MenuBarConfig: Codable {
 
 // MARK: - Model
 
+/// One held approval BATCH (a lone request is a batch of one), keyed by its
+/// requested event's offset. `summary` comes from the CLI ("POST api.stripe.com"
+/// or "12 requests (12x gmail.googleapis.com)"); one decision answers it all.
 struct HeldRequest: Identifiable, Equatable {
   let offset: Int
-  let method: String
-  let host: String
-  let url: String
+  let summary: String
+  let count: Int
   let secretPaths: [String]
   let ruleKey: String
   let body: String?
@@ -252,22 +254,24 @@ final class ApprovalController: ObservableObject {
       }
     case "requested":
       guard let offset = event["offset"] as? Int else { return }
-      let url = event["url"] as? String ?? ""
-      let body = event["body"] as? [String: Any]
-      var bodyContent = body?["content"] as? String
-      if body?["encoding"] as? String == "base64", let content = bodyContent {
-        bodyContent = "[base64] \(content)"
+      let held = event["requests"] as? [[String: Any]] ?? []
+      // A body preview only makes sense for a batch of one.
+      var bodyContent: String?
+      if held.count == 1, let body = held[0]["body"] as? [String: Any] {
+        bodyContent = body["content"] as? String
+        if body["encoding"] as? String == "base64", let content = bodyContent {
+          bodyContent = "[base64] \(content)"
+        }
       }
       var request = HeldRequest(
         offset: offset,
-        method: event["method"] as? String ?? "?",
-        host: event["host"] as? String ?? url,
-        url: url,
+        summary: event["summary"] as? String ?? "held egress request",
+        count: event["count"] as? Int ?? held.count,
         secretPaths: event["secretPaths"] as? [String] ?? [],
         ruleKey: event["ruleKey"] as? String ?? "",
         body: bodyContent
       )
-      // A backlog request that already has a grant is shown awaiting the door
+      // A backlog batch that already has a decision is shown awaiting the door
       // (spinner), not as a fresh Approve prompt.
       request.submitting = event["submitted"] as? Bool ?? false
       if !requests.contains(where: { $0.offset == offset }) {
@@ -275,9 +279,9 @@ final class ApprovalController: ObservableObject {
         if !request.submitting { notify(request) }
       }
     case "submitted":
-      // A grant landed (this app's or another approver's): show the row
+      // A decision landed (this app's or another approver's): show the row
       // awaiting the door rather than a fresh prompt, and pull any delivered
-      // banner so its Reject can't fire a stray veto against the winning grant.
+      // banner — the door only honors the first decision anyway.
       if let offset = event["offset"] as? Int {
         setSubmitting(offset, true)
         ApprovalNotifications.withdraw(offset)
@@ -288,12 +292,12 @@ final class ApprovalController: ObservableObject {
         ApprovalNotifications.withdraw(offset)
       }
     case "unsettled":
-      // The door ignored the grant (key not enrolled / revoked) and the hold is
+      // The door ignored the decision (key not enrolled / revoked) and the hold is
       // still open — clear the spinner so Approve/Reject return, and say why.
       if let offset = event["offset"] as? Int {
         setSubmitting(offset, false)
       }
-      lastError = "A grant wasn’t accepted — is this Mac’s approval key enrolled? (iterate approve --keys)"
+      lastError = "A decision wasn’t accepted — is this Mac’s approval key enrolled? (iterate approve --keys)"
     case "error":
       lastError = event["message"] as? String
       // A signing/append failure (e.g. cancelled Touch ID) leaves the request
@@ -319,10 +323,10 @@ final class ApprovalController: ObservableObject {
   /// and Approve/Reject actions that come back through `decide`. Otherwise fall
   /// back to a plain osascript notification — zero setup, works everywhere.
   private func notify(_ request: HeldRequest) {
-    let title = "Approval needed"
+    let title = request.count == 1 ? "Approval needed" : "Approvals needed"
     let secrets =
       request.secretPaths.isEmpty ? "" : " · spends \(request.secretPaths.joined(separator: ", "))"
-    let body = "\(request.method) \(request.host)\(secrets)"
+    let body = "\(request.summary)\(secrets)"
 
     if notificationsAuthorized {
       let content = UNMutableNotificationContent()
@@ -677,7 +681,7 @@ struct DropdownView: View {
         if let project = controller.project {
           Text(project).font(.caption).foregroundStyle(.secondary)
         }
-        Text(controller.keyLabel.map { "signing with \($0)" } ?? "grants are unsigned — enroll a key")
+        Text(controller.keyLabel.map { "signing with \($0)" } ?? "approvals are unsigned — enroll a key")
           .font(.caption2).foregroundStyle(.secondary)
       }
     }
@@ -690,7 +694,7 @@ struct RequestRow: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
-      Text("\(request.method) \(request.host)").font(.system(.body, design: .monospaced)).bold()
+      Text(request.summary).font(.system(.body, design: .monospaced)).bold()
       if !request.secretPaths.isEmpty {
         Text("spends \(request.secretPaths.joined(separator: ", "))")
           .font(.caption).foregroundStyle(.orange)
@@ -704,10 +708,14 @@ struct RequestRow: View {
         if request.submitting {
           ProgressView().controlSize(.small)
         } else {
-          Button("Reject") { controller.decide(offset: request.offset, "rejected") }
-            .buttonStyle(.bordered)
-          Button("Approve") { controller.decide(offset: request.offset, "granted") }
-            .buttonStyle(.borderedProminent)
+          Button(request.count == 1 ? "Reject" : "Reject all") {
+            controller.decide(offset: request.offset, "reject")
+          }
+          .buttonStyle(.bordered)
+          Button(request.count == 1 ? "Approve" : "Approve all \(request.count)") {
+            controller.decide(offset: request.offset, "approve")
+          }
+          .buttonStyle(.borderedProminent)
         }
       }
     }
@@ -737,8 +745,8 @@ enum ApprovalNotifications {
   }
 
   /// Pull a delivered banner once its request is no longer answerable here — a
-  /// grant landed or it settled — so a stale Reject tap can't append a veto the
-  /// door has already passed (egress released on the winning grant).
+  /// decision landed or it settled — so a stale Reject tap can't send a
+  /// dead-weight contradiction (the door only honors the first decision).
   static func withdraw(_ offset: Int) {
     UNUserNotificationCenter.current().removeDeliveredNotifications(
       withIdentifiers: [identifier(offset)])
@@ -790,8 +798,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
   ) {
     if let offset = response.notification.request.content.userInfo["offset"] as? Int {
       switch response.actionIdentifier {
-      case "APPROVE": ApprovalController.shared.decide(offset: offset, "granted")
-      case "REJECT": ApprovalController.shared.decide(offset: offset, "rejected")
+      case "APPROVE": ApprovalController.shared.decide(offset: offset, "approve")
+      case "REJECT": ApprovalController.shared.decide(offset: offset, "reject")
       default: break
       }
     }

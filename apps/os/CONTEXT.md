@@ -531,13 +531,15 @@ _Avoid_: Function, tool, provider, execution
 One attempt to run a Script against an itx Handle.
 _Avoid_: Script, execution ID, script ID
 
-**Approval Group**:
-The set of held egress approval requests sharing one Script Execution's
-`executionId`, presented and acted on together in approver surfaces (the
-mobile approvals screen, the collapsed push notification). A held request
-with no Script Execution streamContext is its own singleton Approval Group
-and renders identically to an ungrouped request.
-_Avoid_: Batch, approval batch, notification group
+**Approval Batch**:
+The unit of egress approval: one `project/human-approval-requested` event
+carrying an ordered list of held requests — a Script Execution's concurrent
+burst at one egress rule, coalesced at the egress door within the rule's
+debounce window — decided by exactly one `human-approval-decided` event with
+a verdict per index and at most one signature (approval.v2). A lone request
+is an Approval Batch of one and renders identically to how a single request
+always has.
+_Avoid_: Approval Group, notification group
 
 **Provider Bridge**:
 An adapter that exposes an external system, such as OpenAPI or MCP, as an itx
@@ -608,12 +610,13 @@ _Avoid_: Project MCP route, inbound MCP
   handler.
 - Project-scoped MCP tools select one **Project** per invocation before touching
   project-local capabilities.
-- An **Approval Group** is identified by exactly one **Script Execution**'s
-  `executionId`; it is not a new persisted entity, only a grouping computed
-  over held `project/human-approval-requested` events.
-- Approving or rejecting every member of an **Approval Group** still appends
-  one grant/reject event per held request — an **Approval Group** is never
-  signed or decided as a single unit.
+- An **Approval Batch** never spans egress rules or **Script Executions**: the
+  egress door coalesces only one Script Execution's concurrent requests at one
+  rule, so mixed hold policies inside a batch are structurally impossible.
+- An **Approval Batch** is decided as a single unit: one
+  `human-approval-decided` event carries a verdict per request index, and one
+  signature (approval.v2) covers the request subjects plus the verdicts.
+  Settlement stays per released request.
 - OS exposes one global MCP resource; it does not expose per-project MCP
   hostnames.
 - The OS Worker classifies every request by **Ingress Hostname** before invoking the **OS App**.
@@ -971,4 +974,4 @@ context while the provider remains connected.
 - "base repo" sounded like a Cloudflare Artifact name or special case. Resolved: the **Iterate Config Base Repo** is a global **Repo Reference** with `projectId: null`.
 - Repo creation source used Artifact names and README bootstrap modes. Resolved: **Repo Creation Source** is only empty repo or fork from a **Repo Reference**; README writes are normal repo writes after creation.
 - The **Project Lifecycle Stream** path was ambiguous between `/project` and `/`. Resolved: use root `/`; resource streams such as `/repos/project` are child streams under the same Project ID.
-- "batch" implied one signed transaction covering many requests. Resolved: use **Approval Group** for requests presented/acted on together; each member is still an individually signed grant event.
+- "batch" implied one signed transaction covering many requests, so "Approval Group" was briefly used for requests presented together over per-request grant events. Resolved (reversed, ADR 0007): one signed transaction covering many requests is exactly the model — use **Approval Batch**; the requested event carries the request list and one decided event answers it.

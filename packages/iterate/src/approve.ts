@@ -3,11 +3,13 @@
 // terminal front-end).
 //
 // The project's egress door parks outbound requests that match a `hold` rule
-// and appends `project/human-approval-requested` to the project stream. This
-// command live-tails those events, shows each held request, and appends the
-// verdict — a signed `human-approval-granted` (Touch ID on the enclave path)
-// or `human-approval-rejected`. The moment the verdict lands, the Project DO
-// releases (or refuses) the held fetch, whose caller has been waiting.
+// as an approval BATCH (a script run's concurrent burst coalesces into one;
+// a lone request is a batch of one) and appends
+// `project/human-approval-requested` to the project stream. This command
+// live-tails those events, shows each held batch, and appends the verdict —
+// ONE signed `human-approval-decided` covering every request (Touch ID on
+// the enclave path). The moment the decision lands, the Project DO releases
+// (or refuses) the held fetches, whose callers have been waiting.
 //
 // Transport, signing, and stream logic live in approve-core.ts; this file is
 // only the clack rendering. The machine (menu-bar) front-end is approve-json.ts.
@@ -26,15 +28,15 @@ import {
 import {
   awaitSettlement,
   connectApproval,
+  decide,
   enrollKey,
   EVENT,
-  grant,
   messageFor,
   reconcileBacklog,
-  reject,
-  safeHost,
+  summarizeRequests,
   type RequestedPayload,
   type Settlement,
+  type Verdict,
 } from "./approve-core.ts";
 
 export async function runApprovalCli(input: {
@@ -83,41 +85,45 @@ export async function runApprovalCli(input: {
       log: (message) => prompts.log.info(message),
     });
     prompts.log.success(
-      `Enrolled ${key.kind} key ${key.keyId}. Grants from this machine now require ${
+      `Enrolled ${key.kind} key ${key.keyId}. Approvals from this machine now require ${
         key.kind === "secure-enclave" ? "Touch ID" : "this key file"
       }.`,
     );
   }
   prompts.log.info(
     key === null
-      ? "No local approval key: grants will be plain events. Run with --enroll to sign approvals."
-      : `Grants are signed with ${key.kind} key ${key.keyId} (${key.label}).`,
+      ? "No local approval key: decisions will be plain events. Run with --enroll to sign approvals."
+      : `Approvals are signed with ${key.kind} key ${key.keyId} (${key.label}).`,
   );
-  // Offer one held request until a terminal outcome, or return "stop" if the
+  // Offer one held batch until a terminal outcome, or return "stop" if the
   // human cancels (Ctrl-C) so the caller can exit. Shared by the backlog pass
-  // and the live tail. A grant the door ignores (unenrolled/revoked key →
+  // and the live tail. A decision the door ignores (unenrolled/revoked key →
   // "unsettled") is re-offered rather than dropped; declining leaves it held.
-  const offerHeldRequest = async (
+  const offerHeldBatch = async (
     offset: number,
     payload: RequestedPayload,
   ): Promise<"stop" | "next"> => {
     if (Date.parse(payload.expiresAt) <= Date.now()) {
-      prompts.log.warn(`Skipping #${offset} ${payload.method} ${payload.url} — expired.`);
+      prompts.log.warn(`Skipping #${offset} ${summarizeRequests(payload.requests)} — expired.`);
       return "next";
     }
 
-    renderHeldRequest(offset, payload);
+    renderHeldBatch(offset, payload);
+    const allApprove = payload.requests.map((): Verdict => "approve");
+    const allReject = payload.requests.map((): Verdict => "reject");
 
     while (Date.parse(payload.expiresAt) > Date.now()) {
       // The human moment. Native mode: one dialog whose Approve button leads
       // straight into the Touch ID sheet. Terminal mode: y/n, then sign.
+      // Either way the whole batch gets one verdict set — approve all or
+      // reject all (per-index splits are the mobile app's territory).
       let signature: string | undefined;
       if (native) {
         // A cancelled Touch ID sheet comes back as "ignored"; anything else
         // thrown is structural — broken helper, bad blob — and stops the loop.
         const verdict = await promptNativeApproval({
           key: key as Extract<StoredApprovalKey, { kind: "secure-enclave" }>,
-          message: messageFor(input.projectId, offset, payload),
+          message: messageFor(input.projectId, offset, payload, allApprove),
           request: payload,
         });
         if (verdict.decision === "granted") {
@@ -126,21 +132,35 @@ export async function runApprovalCli(input: {
           prompts.log.info(`Ignored #${offset} — it can be answered elsewhere or expire.`);
           return "next";
         } else {
-          await reject(stream, offset);
+          await decide({
+            stream,
+            projectId: input.projectId,
+            key,
+            offset,
+            payload,
+            verdicts: allReject,
+          });
           prompts.log.warn(`Rejected #${offset}.`);
           return "next";
         }
       } else {
         const approved = await prompts.confirm({
-          message: `Approve ${payload.method} ${safeHost(payload.url)}?`,
+          message: `Approve ${summarizeRequests(payload.requests)}?`,
           initialValue: false,
         });
         if (prompts.isCancel(approved)) {
-          prompts.outro("Stopped. Held requests will auto-reject on their timeouts.");
+          prompts.outro("Stopped. Held batches will auto-reject on their timeouts.");
           return "stop";
         }
         if (!approved) {
-          await reject(stream, offset);
+          await decide({
+            stream,
+            projectId: input.projectId,
+            key,
+            offset,
+            payload,
+            verdicts: allReject,
+          });
           prompts.log.warn(`Rejected #${offset}.`);
           return "next";
         }
@@ -157,7 +177,15 @@ export async function runApprovalCli(input: {
             : "Signing...",
       );
       try {
-        await grant({ stream, projectId: input.projectId, key, offset, payload, signature });
+        await decide({
+          stream,
+          projectId: input.projectId,
+          key,
+          offset,
+          payload,
+          verdicts: allApprove,
+          signature,
+        });
         spinner.stop("Signed.");
       } catch (error) {
         spinner.stop("Signing failed.");
@@ -165,14 +193,14 @@ export async function runApprovalCli(input: {
         return "next";
       }
 
-      // Granting is a claim, not a fact — the door verifies and settles.
-      const settlement = await settleWithRetry(stream, offset);
+      // Deciding is a claim, not a fact — the door verifies and settles.
+      const settlement = await settleWithRetry(stream, offset, allApprove);
       reportSettlement(offset, settlement);
       if (settlement.kind !== "unsettled") return "next"; // released / rejected → done
 
-      // The door didn't accept the grant. Let the human retry or leave it held.
+      // The door didn't accept the decision. Let the human retry or leave it held.
       const retry = await prompts.confirm({
-        message: `Grant for #${offset} wasn't accepted (key enrolled? \`--keys\`). Retry?`,
+        message: `Decision for #${offset} wasn't accepted (key enrolled? \`--keys\`). Retry?`,
         initialValue: false,
       });
       if (prompts.isCancel(retry) || !retry) {
@@ -183,31 +211,34 @@ export async function runApprovalCli(input: {
     return "next";
   };
 
-  // A backlog request that already carries a grant — don't offer a fresh
-  // Approve/Reject (a second approver rejecting or duplicate-granting could
-  // race the door already honoring a valid grant). Wait for the door; only if
-  // it stays unsettled — an ignored/unverifiable grant — offer it afresh.
+  // A backlog batch that already carries a decision — don't offer a fresh
+  // Approve/Reject (the door honors only the FIRST decision, so a second
+  // would be dead weight at best). Wait for the door; only if it stays
+  // unsettled — an ignored/unverifiable decision — offer it afresh.
   const awaitSubmitted = async (
     offset: number,
     payload: RequestedPayload,
+    verdicts: Verdict[],
   ): Promise<"stop" | "next"> => {
     if (Date.parse(payload.expiresAt) <= Date.now()) return "next";
     prompts.log.info(
-      `#${offset} ${payload.method} ${safeHost(payload.url)} already has a grant — awaiting the egress door...`,
+      `#${offset} ${summarizeRequests(payload.requests)} already has a decision — awaiting the egress door...`,
     );
-    const settlement = await settleWithRetry(stream, offset);
+    const settlement = await settleWithRetry(stream, offset, verdicts);
     reportSettlement(offset, settlement);
-    return settlement.kind === "unsettled" ? offerHeldRequest(offset, payload) : "next";
+    return settlement.kind === "unsettled" ? offerHeldBatch(offset, payload) : "next";
   };
 
-  // Answer requests already held before we connected (oldest first), THEN live-
+  // Answer batches already held before we connected (oldest first), THEN live-
   // tail new ones. Without this backlog pass a hold parked before the command
   // started would never surface — its caller's fetch left hanging until expiry.
   // The --json front-end reconciles through the same shared function.
   const { open, cursor: from } = await reconcileBacklog(stream);
-  for (const request of open) {
-    const handle = request.submitted ? awaitSubmitted : offerHeldRequest;
-    if ((await handle(request.offset, request.payload)) === "stop") return;
+  for (const batch of open) {
+    const outcome = batch.submitted
+      ? await awaitSubmitted(batch.offset, batch.payload, batch.verdicts!)
+      : await offerHeldBatch(batch.offset, batch.payload);
+    if (outcome === "stop") return;
   }
 
   prompts.log.step(
@@ -235,7 +266,7 @@ export async function runApprovalCli(input: {
       throw error;
     }
     cursor = event.offset;
-    if ((await offerHeldRequest(event.offset, event.payload as RequestedPayload)) === "stop") {
+    if ((await offerHeldBatch(event.offset, event.payload as RequestedPayload)) === "stop") {
       return;
     }
   }
@@ -248,7 +279,7 @@ async function listKeys(input: {
 }): Promise<void> {
   const keys = (await input.project.processor.snapshot()).state.humanApprovalKeys;
   if (keys.length === 0) {
-    prompts.outro("No approval keys enrolled — grants are plain events. Enroll with --enroll.");
+    prompts.outro("No approval keys enrolled — decisions are plain events. Enroll with --enroll.");
     return;
   }
   for (const key of keys) {
@@ -266,7 +297,7 @@ async function listKeys(input: {
 /**
  * `--revoke`: stop the platform accepting this machine's key, then destroy the
  * local material. Order matters — the event is the act that changes what
- * grants are accepted; local deletion is just hygiene after it.
+ * approvals are accepted; local deletion is just hygiene after it.
  */
 async function revokeKey(input: {
   key: StoredApprovalKey | null;
@@ -281,7 +312,7 @@ async function revokeKey(input: {
   await deleteApprovalKey(input.projectId);
   prompts.outro(
     `Revoked ${input.key.kind} key ${input.key.keyId} and destroyed the local material. ` +
-      "If it was the last active key, grants fall back to plain events.",
+      "If it was the last active key, approvals fall back to plain events.",
   );
 }
 
@@ -290,17 +321,18 @@ const SETTLEMENT_RETRY_MS = 2_000;
 
 /**
  * awaitSettlement, but a transient read `error` re-arms rather than resolving.
- * A grant has been appended, so it still stands at the door — a blip reading the
- * outcome must not abandon the watch (and skip the ignored-grant retry path) as
- * if it had settled. Loops until a real outcome: released, delivery-failed,
- * rejected, or unsettled (the door ignored an unverifiable grant).
+ * A decision has been appended, so it still stands at the door — a blip reading
+ * the outcome must not abandon the watch (and skip the ignored-decision retry
+ * path) as if it had settled. Loops until a real outcome: released, rejected,
+ * or unsettled (the door ignored an unverifiable decision).
  */
 async function settleWithRetry(
   stream: RpcStub<Stream>,
   offset: number,
+  verdicts: readonly Verdict[],
 ): Promise<Exclude<Settlement, { kind: "error" }>> {
   while (true) {
-    const settlement = await awaitSettlement(stream, offset);
+    const settlement = await awaitSettlement(stream, offset, verdicts);
     if (settlement.kind !== "error") return settlement;
     await new Promise((resolve) => setTimeout(resolve, SETTLEMENT_RETRY_MS));
   }
@@ -308,33 +340,52 @@ async function settleWithRetry(
 
 function reportSettlement(offset: number, settlement: Exclude<Settlement, { kind: "error" }>) {
   switch (settlement.kind) {
-    case "released":
-      return prompts.log.success(`Released #${offset} — upstream ${settlement.status}.`);
-    case "delivery-failed":
-      return prompts.log.error(`Released #${offset} but delivery failed: ${settlement.error}`);
+    case "released": {
+      const failures = settlement.outcomes.filter((outcome) => outcome.error !== null);
+      if (failures.length === 0) {
+        const statuses = [...new Set(settlement.outcomes.map((outcome) => outcome.status))];
+        return prompts.log.success(
+          `Released #${offset} — ${settlement.outcomes.length} request${settlement.outcomes.length === 1 ? "" : "s"}, upstream ${statuses.join(", ")}.`,
+        );
+      }
+      return prompts.log.error(
+        `Released #${offset} but ${failures.length}/${settlement.outcomes.length} deliveries failed: ${failures
+          .map((failure) => `[${failure.index}] ${failure.error}`)
+          .join("; ")}`,
+      );
+    }
     case "rejected":
       return prompts.log.warn(
-        `#${offset} was rejected (${settlement.reason}) before the grant landed.`,
+        settlement.decidedBy === "expiry"
+          ? `#${offset} expired before the decision landed.`
+          : `Rejected #${offset}.`,
       );
     case "unsettled":
       return prompts.log.warn(
-        `Grant appended, but #${offset} has not settled — the egress door may have ignored an unverifiable signature, or the hold already expired.`,
+        `Decision appended, but #${offset} has not settled — the egress door may have ignored an unverifiable signature, or the hold already expired.`,
       );
   }
 }
 
-function renderHeldRequest(offset: number, payload: RequestedPayload): void {
-  const lines = [`${payload.method} ${payload.url}`];
-  if (payload.secretPaths.length > 0) {
-    const noun = payload.secretPaths.length > 1 ? "secrets" : "secret";
-    lines.push(`spends ${noun}: ${payload.secretPaths.join(", ")}`);
+function renderHeldBatch(offset: number, payload: RequestedPayload): void {
+  const lines: string[] = [];
+  for (const request of payload.requests.slice(0, 6)) {
+    lines.push(`${request.method} ${request.url}`);
   }
-  if (payload.body) {
-    let content = payload.body.content;
-    if (payload.body.encoding === "base64") content = `[base64] ${content}`;
-    if (payload.body.truncated || content.length > 200) content = `${content.slice(0, 200)}…`;
+  if (payload.requests.length > 6) lines.push(`… and ${payload.requests.length - 6} more`);
+  const secretPaths = [...new Set(payload.requests.flatMap((request) => request.secretPaths))];
+  if (secretPaths.length > 0) {
+    const noun = secretPaths.length > 1 ? "secrets" : "secret";
+    lines.push(`spends ${noun}: ${secretPaths.join(", ")}`);
+  }
+  const only = payload.requests.length === 1 ? payload.requests[0]! : null;
+  if (only?.body) {
+    let content = only.body.content;
+    if (only.body.encoding === "base64") content = `[base64] ${content}`;
+    if (only.body.truncated || content.length > 200) content = `${content.slice(0, 200)}…`;
     lines.push(`body: ${content}`);
   }
   lines.push(`rule: ${payload.ruleKey}`, `expires: ${payload.expiresAt}`);
-  prompts.note(lines.join("\n"), `Held egress request #${offset}`);
+  const noun = payload.requests.length === 1 ? "request" : `batch (${payload.requests.length})`;
+  prompts.note(lines.join("\n"), `Held egress ${noun} #${offset}`);
 }

@@ -1,11 +1,13 @@
-// Proves human-in-the-loop egress approvals end-to-end: a request matching a
-// `hold` rule parks at the Project DO egress door with the caller's fetch
-// promise open, a "human" (this test, playing the `iterate approve` CLI's
-// role over the same itx surface) grants or rejects on the project stream,
-// and the door releases the real upstream call / refuses / auto-expires.
-// Once an approval key is enrolled, grants must carry a valid P-256
-// signature over the canonical approval.v1 message — an unsigned grant is
-// ignored and only the signed one releases.
+// Proves human-in-the-loop egress approvals end-to-end: requests matching a
+// `hold` rule park at the Project DO egress door as an approval BATCH (a
+// lone request is a batch of one; a script run's concurrent burst coalesces
+// into one event) with the callers' fetch promises open, a "human" (this
+// test, playing the `iterate approve` CLI's role over the same itx surface)
+// decides the batch with ONE `human-approval-decided` event, and the door
+// releases the real upstream calls / refuses / auto-expires per verdict.
+// Once an approval key is enrolled, decisions containing any approve verdict
+// must carry a valid P-256 signature over the canonical approval.v2 message
+// — an unsigned decision is ignored and only the signed one releases.
 
 import { expect, test } from "vitest";
 import {
@@ -26,12 +28,11 @@ import { adminSecret, withItxSession } from "./test-helpers.ts";
 const RULES_CONFIGURED = "events.iterate.com/project/egress-rules-configured";
 const KEY_ADDED = "events.iterate.com/project/human-approval-key-added";
 const REQUESTED = "events.iterate.com/project/human-approval-requested";
-const GRANTED = "events.iterate.com/project/human-approval-granted";
-const REJECTED = "events.iterate.com/project/human-approval-rejected";
+const DECIDED = "events.iterate.com/project/human-approval-decided";
 const SETTLED = "events.iterate.com/project/human-approval-settled";
 const NOTIFICATION_REQUESTED = "events.iterate.com/notification/requested";
 
-test("hold → grant releases, hold → reject refuses, short timeouts expire", async () => {
+test("hold → approve releases, hold → reject refuses, short timeouts expire", async () => {
   const echo = await startEgressEcho();
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
@@ -73,7 +74,7 @@ test("hold → grant releases, hold → reject refuses, short timeouts expire", 
       { description: "project processor to fold the egress rules" },
     );
 
-    // ── grant lane: the held fetch resolves with the real upstream response.
+    // ── approve lane: the held fetch resolves with the real upstream response.
     const heldFetch = project.egress.fetch(
       new Request(echo.url, {
         method: "POST",
@@ -88,22 +89,30 @@ test("hold → grant releases, hold → reject refuses, short timeouts expire", 
     });
     const requestedPayload = requested.payload as HumanApprovalRequestedPayload;
     expect(requestedPayload).toMatchObject({
-      method: "POST",
+      requests: [
+        {
+          method: "POST",
+          body: {
+            encoding: "utf8",
+            content: "please approve",
+            originalByteLength: 14,
+            truncated: false,
+          },
+          secretPaths: [],
+        },
+      ],
       ruleKey: "post-echo",
-      body: {
-        encoding: "utf8",
-        content: "please approve",
-        originalByteLength: 14,
-        truncated: false,
-      },
-      secretPaths: [],
     });
-    expect(requestedPayload.headers["x-approval-proof"]).toBe("hold-me");
-    expect(requestedPayload.body?.sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(requestedPayload.requests[0]!.headers["x-approval-proof"]).toBe("hold-me");
+    expect(requestedPayload.requests[0]!.body?.sha256).toMatch(/^[0-9a-f]{64}$/);
 
     await stream.append({
-      type: GRANTED,
-      payload: { approvalRequestEventOffset: requested.offset },
+      type: DECIDED,
+      payload: {
+        approvalRequestEventOffset: requested.offset,
+        verdicts: ["approve"],
+        decidedBy: "human",
+      },
     });
     const releasedResponse = await heldFetch;
     expect(releasedResponse).toMatchObject({ status: 200 });
@@ -117,6 +126,7 @@ test("hold → grant releases, hold → reject refuses, short timeouts expire", 
     });
     expect(settled.payload).toMatchObject({
       approvalRequestEventOffset: requested.offset,
+      index: 0,
       status: 200,
     });
 
@@ -132,16 +142,24 @@ test("hold → grant releases, hold → reject refuses, short timeouts expire", 
       timeoutMs: 30_000,
     });
     expect(rejectedRequested.payload as HumanApprovalRequestedPayload).toMatchObject({
-      body: {
-        encoding: "utf8",
-        content: "r".repeat(APPROVAL_BODY_INSPECTION_LIMIT_BYTES),
-        originalByteLength: oversizedBody.length,
-        truncated: true,
-      },
+      requests: [
+        {
+          body: {
+            encoding: "utf8",
+            content: "r".repeat(APPROVAL_BODY_INSPECTION_LIMIT_BYTES),
+            originalByteLength: oversizedBody.length,
+            truncated: true,
+          },
+        },
+      ],
     });
     await stream.append({
-      type: REJECTED,
-      payload: { approvalRequestEventOffset: rejectedRequested.offset, reason: "human" },
+      type: DECIDED,
+      payload: {
+        approvalRequestEventOffset: rejectedRequested.offset,
+        verdicts: ["reject"],
+        decidedBy: "human",
+      },
     });
     const rejectedResponse = await rejectedFetch;
     expect(rejectedResponse).toMatchObject({ status: 403 });
@@ -184,7 +202,8 @@ test("hold → grant releases, hold → reject refuses, short timeouts expire", 
       ruleKey: "never-delete",
     });
 
-    // ── expiry lane: nobody answers and the hold auto-rejects.
+    // ── expiry lane: nobody answers and the batch auto-rejects with the
+    // door's own decided event.
     const expiredResponse = await project.egress.fetch(
       new Request(echo.url, { method: "PUT", body: "too slow" }),
     );
@@ -193,14 +212,14 @@ test("hold → grant releases, hold → reject refuses, short timeouts expire", 
       error: "approval_expired",
       ruleKey: "impatient",
     });
-    // The expiry rejection is committed before the 403 returns, so a plain
+    // The expiry decision is committed before the 403 returns, so a plain
     // page read (no live wait) must already see it.
-    const rejections = await stream.getEvents({
+    const decisions = await stream.getEvents({
       afterOffset: rejectedRequested.offset,
-      eventTypes: [REJECTED],
+      eventTypes: [DECIDED],
     });
-    expect(rejections.map((event) => (event.payload as { reason?: string }).reason)).toContain(
-      "expired",
+    expect(decisions.map((event) => (event.payload as { decidedBy?: string }).decidedBy)).toContain(
+      "expiry",
     );
   } finally {
     await echo.close();
@@ -239,6 +258,8 @@ test("an agent codemode script carries one durable source through bare and scope
       { description: "project processor to fold the approval rule" },
     );
 
+    // The two fetches are SEQUENTIAL, so each becomes its own batch of one —
+    // the second can't coalesce with a request that had to be approved first.
     const code = `async (itx) => {
       const bare = await fetch(${JSON.stringify(echo.url)}, {
         method: "POST",
@@ -259,10 +280,14 @@ test("an agent codemode script carries one durable source through bare and scope
     });
     const barePayload = bareRequest.payload as HumanApprovalRequestedPayload;
     expect(barePayload).toMatchObject({
-      body: {
-        encoding: "utf8",
-        content: JSON.stringify({ orderId: 1234, via: "bare fetch" }),
-      },
+      requests: [
+        {
+          body: {
+            encoding: "utf8",
+            content: JSON.stringify({ orderId: 1234, via: "bare fetch" }),
+          },
+        },
+      ],
       ruleDescription: "Refunds require confirmation",
       ruleKey: "refunds-need-confirmation",
       streamContext: {
@@ -284,8 +309,12 @@ test("an agent codemode script carries one durable source through bare and scope
     });
 
     await root.append({
-      type: GRANTED,
-      payload: { approvalRequestEventOffset: bareRequest.offset },
+      type: DECIDED,
+      payload: {
+        approvalRequestEventOffset: bareRequest.offset,
+        verdicts: ["approve"],
+        decidedBy: "human",
+      },
     });
     const scopedRequest = await root.waitForEvent({
       afterOffset: bareRequest.offset,
@@ -293,15 +322,23 @@ test("an agent codemode script carries one durable source through bare and scope
       timeoutMs: 30_000,
     });
     expect(scopedRequest.payload).toMatchObject({
-      body: {
-        encoding: "utf8",
-        content: JSON.stringify({ orderId: 1234, via: "itx egress" }),
-      },
+      requests: [
+        {
+          body: {
+            encoding: "utf8",
+            content: JSON.stringify({ orderId: 1234, via: "itx egress" }),
+          },
+        },
+      ],
       streamContext: barePayload.streamContext,
     });
     await root.append({
-      type: GRANTED,
-      payload: { approvalRequestEventOffset: scopedRequest.offset },
+      type: DECIDED,
+      payload: {
+        approvalRequestEventOffset: scopedRequest.offset,
+        verdicts: ["approve"],
+        decidedBy: "human",
+      },
     });
 
     await expect(execution).resolves.toMatchObject({ result: [200, 200] });
@@ -378,8 +415,12 @@ test("a script run's parked hold survives a stream Durable Object restart", asyn
     await root.kill().catch(() => undefined);
 
     await root.append({
-      type: GRANTED,
-      payload: { approvalRequestEventOffset: requested.offset },
+      type: DECIDED,
+      payload: {
+        approvalRequestEventOffset: requested.offset,
+        verdicts: ["approve"],
+        decidedBy: "human",
+      },
     });
 
     await expect(execution).resolves.toMatchObject({ result: 200 });
@@ -390,6 +431,7 @@ test("a script run's parked hold survives a stream Durable Object restart", asyn
     });
     expect(settled.payload).toMatchObject({
       approvalRequestEventOffset: requested.offset,
+      index: 0,
       status: 200,
     });
   } finally {
@@ -454,32 +496,36 @@ test("approved worker WebSocket egress stays on the fetch-native transport", asy
     timeoutMs: 30_000,
   });
   expect(requested.payload).toMatchObject({
-    method: "GET",
+    requests: [{ method: "GET" }],
     ruleKey: "websockets-need-confirmation",
     streamContext: {
       kind: "script-execution",
       streamPath: "/agents/websocket-agent",
     },
   });
-  expect((requested.payload as HumanApprovalRequestedPayload).headers).not.toHaveProperty(
-    STREAM_CONTEXT_HEADER,
-  );
+  expect(
+    (requested.payload as HumanApprovalRequestedPayload).requests[0]!.headers,
+  ).not.toHaveProperty(STREAM_CONTEXT_HEADER);
   await root.append({
-    type: GRANTED,
-    payload: { approvalRequestEventOffset: requested.offset },
+    type: DECIDED,
+    payload: {
+      approvalRequestEventOffset: requested.offset,
+      verdicts: ["approve"],
+      decidedBy: "human",
+    },
   });
 
   await expect(execution).resolves.toMatchObject({ result: echoedMessage });
 });
 
-test("a script's burst of holds debounces into ONE approvals-group notification intent", async () => {
+test("a script's burst coalesces into ONE batch event, one push, and one decision releases all", async () => {
   const echo = await startEgressEcho();
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
 
   try {
     using project = await itx.projects
-      .get(`egress-approval-group-${crypto.randomUUID()}`)
+      .get(`egress-approval-batch-${crypto.randomUUID()}`)
       .create({});
     const root = project.streams.get("/");
     const agent = await project.agents.get("/agents/burst-agent").create();
@@ -494,6 +540,9 @@ test("a script's burst of holds debounces into ONE approvals-group notification 
             match: { hosts: [echoHost], methods: ["POST"] },
             verdict: "hold",
             approvalTimeoutMs: 120_000,
+            // Generous window so a CI-slow burst still lands in ONE batch —
+            // the default 100ms is tuned for production burst latencies.
+            debounceMs: 2_000,
           },
         ],
       },
@@ -512,46 +561,127 @@ test("a script's burst of holds debounces into ONE approvals-group notification 
       return responses.map((response) => response.status);
     }`);
 
-    // One grouped intent lands one debounce window (~3s) after the last hold
-    // — never a per-request push for script-scoped holds.
+    // The dataloader commits the whole burst as ONE requested event.
+    const requested = await root.waitForEvent({
+      afterOffset: 0,
+      eventTypes: [REQUESTED],
+      timeoutMs: 60_000,
+    });
+    const payload = requested.payload as HumanApprovalRequestedPayload;
+    expect(payload.requests).toHaveLength(4);
+    expect(payload.streamContext).toMatchObject({ kind: "script-execution" });
+
+    // ONE push intent, straight off the batch event — no debounce state
+    // machine anywhere downstream.
     const intent = await root.waitForEvent({
       afterOffset: 0,
       eventTypes: [NOTIFICATION_REQUESTED],
-      timeoutMs: 60_000,
+      timeoutMs: 30_000,
     });
     expect(intent.payload).toMatchObject({
       audience: { kind: "project" },
-      destination: { kind: "approvals-group", executionId: expect.any(String) },
-      body: expect.stringMatching(/^Script run waiting: \d+ requests \(\d+x /),
+      destination: { kind: "approvals", approvalRequestEventOffset: requested.offset },
+      body: `Script run waiting: 4 requests (4x ${echoHost})`,
     });
 
-    const requested = await root.getEvents({ eventTypes: [REQUESTED] });
-    expect(requested).toHaveLength(4);
-    await root.append(
-      ...requested.map((event) => ({
-        type: GRANTED,
-        payload: { approvalRequestEventOffset: event.offset },
-      })),
-    );
+    // ONE decision releases all four.
+    await root.append({
+      type: DECIDED,
+      payload: {
+        approvalRequestEventOffset: requested.offset,
+        verdicts: ["approve", "approve", "approve", "approve"],
+        decidedBy: "human",
+      },
+    });
     await expect(execution).resolves.toMatchObject({ result: [200, 200, 200, 200] });
 
-    // Every intent for the burst is a grouped one (never per-request), and
-    // the burst collapsed: far fewer pushes than holds. Normally exactly one;
-    // a CI-slow burst whose holds straggle past a debounce window may
-    // legitimately produce a second window's push.
-    const intents = await root.getEvents({ eventTypes: [NOTIFICATION_REQUESTED] });
-    const kinds = intents.map(
-      (event) => (event.payload as { destination: { kind: string } }).destination.kind,
+    // Exactly one requested event and one intent for the whole burst.
+    await waitForCondition(
+      async () => (await root.getEvents({ eventTypes: [SETTLED] })).length === 4,
+      { description: "all four released requests to settle" },
     );
-    expect(kinds.length).toBeGreaterThanOrEqual(1);
-    expect(kinds.length).toBeLessThan(requested.length);
-    expect(new Set(kinds)).toEqual(new Set(["approvals-group"]));
+    expect(await root.getEvents({ eventTypes: [REQUESTED] })).toHaveLength(1);
+    expect(await root.getEvents({ eventTypes: [NOTIFICATION_REQUESTED] })).toHaveLength(1);
   } finally {
     await echo.close();
   }
 }, 120_000);
 
-test("enrolled approval keys make unsigned grants inert; a signed grant releases", async () => {
+test("mixed verdicts in one decision: approved indexes release, rejected indexes refuse", async () => {
+  const echo = await startEgressEcho();
+  using session = withItxSession();
+  using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+
+  try {
+    using project = await itx.projects
+      .get(`egress-approval-mixed-${crypto.randomUUID()}`)
+      .create({});
+    const root = project.streams.get("/");
+    const agent = await project.agents.get("/agents/mixed-agent").create();
+    const echoHost = new URL(echo.url).hostname;
+    await root.append({
+      type: RULES_CONFIGURED,
+      payload: {
+        rules: [
+          {
+            ruleKey: "mixed-feelings",
+            match: { hosts: [echoHost], methods: ["POST"] },
+            verdict: "hold",
+            approvalTimeoutMs: 60_000,
+            debounceMs: 2_000,
+          },
+        ],
+      },
+    });
+    await waitForCondition(
+      async () => (await project.processor.snapshot()).state.egressRules.length === 1,
+      { description: "project processor to fold the mixed hold rule" },
+    );
+
+    const execution = agent.capabilityHost.runScript(`async () => {
+      const responses = await Promise.all([
+        fetch(${JSON.stringify(echo.url)}, { method: "POST", body: "the good one" }),
+        fetch(${JSON.stringify(echo.url)}, { method: "POST", body: "the bad one" }),
+      ]);
+      return responses.map((response) => response.status);
+    }`);
+
+    const requested = await root.waitForEvent({
+      afterOffset: 0,
+      eventTypes: [REQUESTED],
+      timeoutMs: 60_000,
+    });
+    const payload = requested.payload as HumanApprovalRequestedPayload;
+    expect(payload.requests).toHaveLength(2);
+    // Verdicts are by index: approve whichever slot holds "the good one".
+    const goodIndex = payload.requests.findIndex(
+      (request) => request.body?.content === "the good one",
+    );
+    await root.append({
+      type: DECIDED,
+      payload: {
+        approvalRequestEventOffset: requested.offset,
+        verdicts: goodIndex === 0 ? ["approve", "reject"] : ["reject", "approve"],
+        decidedBy: "human",
+      },
+    });
+
+    const { result } = (await execution) as { result: number[] };
+    expect([...result].sort()).toEqual([200, 403]);
+    // Only the approved index settles; the rejected one has no outcome to record.
+    const settled = await root.getEvents({ eventTypes: [SETTLED] });
+    expect(settled).toHaveLength(1);
+    expect(settled[0]!.payload).toMatchObject({
+      approvalRequestEventOffset: requested.offset,
+      index: goodIndex,
+      status: 200,
+    });
+  } finally {
+    await echo.close();
+  }
+}, 120_000);
+
+test("enrolled approval keys make unsigned approvals inert; a signed decision releases", async () => {
   const echo = await startEgressEcho();
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
@@ -609,13 +739,22 @@ test("enrolled approval keys make unsigned grants inert; a signed grant releases
     });
     const requestedPayload = requested.payload as HumanApprovalRequestedPayload;
 
-    // An unsigned grant (and one with a bad signature) must NOT release.
+    // An unsigned approval (and one with a bad signature) must NOT release.
     await stream.append(
-      { type: GRANTED, payload: { approvalRequestEventOffset: requested.offset } },
       {
-        type: GRANTED,
+        type: DECIDED,
         payload: {
           approvalRequestEventOffset: requested.offset,
+          verdicts: ["approve"],
+          decidedBy: "human",
+        },
+      },
+      {
+        type: DECIDED,
+        payload: {
+          approvalRequestEventOffset: requested.offset,
+          verdicts: ["approve"],
+          decidedBy: "human",
           keyId,
           signature: bytesToBase64(new Uint8Array(64)),
         },
@@ -625,8 +764,8 @@ test("enrolled approval keys make unsigned grants inert; a signed grant releases
     const message = buildApprovalMessage({
       projectId,
       approvalRequestEventOffset: requested.offset,
-      requested: requestedPayload,
-      decision: "granted",
+      requests: requestedPayload.requests,
+      verdicts: ["approve"],
     });
     const signature = bytesToBase64(
       new Uint8Array(
@@ -638,16 +777,22 @@ test("enrolled approval keys make unsigned grants inert; a signed grant releases
       ),
     );
     await stream.append({
-      type: GRANTED,
-      payload: { approvalRequestEventOffset: requested.offset, keyId, signature },
+      type: DECIDED,
+      payload: {
+        approvalRequestEventOffset: requested.offset,
+        verdicts: ["approve"],
+        decidedBy: "human",
+        keyId,
+        signature,
+      },
     });
 
     const releasedResponse = await heldFetch;
     expect(releasedResponse).toMatchObject({ status: 200 });
 
-    // The settled event proves release happened via the SIGNED grant path:
-    // it appends strictly after the signed grant's offset. (Had either
-    // unsigned/bad grant released, settle would have landed before it.)
+    // The settled event proves release happened via the SIGNED decision path:
+    // it appends strictly after the signed decision's offset. (Had either
+    // unsigned/bad decision released, settle would have landed before it.)
     const settled = await stream.waitForEvent({
       afterOffset: requested.offset,
       eventTypes: [SETTLED],
@@ -655,16 +800,17 @@ test("enrolled approval keys make unsigned grants inert; a signed grant releases
     });
     expect(settled.payload).toMatchObject({
       approvalRequestEventOffset: requested.offset,
+      index: 0,
       status: 200,
     });
-    const grants = await stream.getEvents({
+    const decisions = await stream.getEvents({
       afterOffset: requested.offset,
-      eventTypes: [GRANTED],
+      eventTypes: [DECIDED],
     });
-    const signedGrantOffset = grants.find(
+    const signedDecisionOffset = decisions.find(
       (event) => (event.payload as { signature?: string }).signature === signature,
     )!.offset;
-    expect(settled.offset).toBeGreaterThan(signedGrantOffset);
+    expect(settled.offset).toBeGreaterThan(signedDecisionOffset);
   } finally {
     await echo.close();
   }

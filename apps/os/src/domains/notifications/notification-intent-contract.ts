@@ -60,29 +60,11 @@ export const NotificationIntentContract = defineProcessorContract({
                   .positive()
                   .meta({
                     description:
-                      "The held egress request's identity: the offset of its " +
+                      "The held approval batch's identity: the offset of its " +
                       "project/human-approval-requested event on the project root stream.",
                   }),
               })
-              .meta({ description: "The approvals screen, focused on one held egress request." }),
-            z
-              .strictObject({
-                kind: z.literal("approvals-group"),
-                executionId: z
-                  .string()
-                  .trim()
-                  .min(1)
-                  .meta({
-                    description:
-                      "The Script Execution whose held requests this push summarizes — the " +
-                      "Approval Group's identity (CONTEXT.md).",
-                  }),
-              })
-              .meta({
-                description:
-                  "The approvals screen, focused on one script run's Approval Group of held " +
-                  "egress requests.",
-              }),
+              .meta({ description: "The approvals screen, focused on one held approval batch." }),
             z
               .strictObject({
                 kind: z.literal("agent-chat"),

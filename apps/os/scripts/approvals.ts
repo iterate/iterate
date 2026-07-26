@@ -1,10 +1,11 @@
-// Thin CLI wrapper around the "grouped-approvals-demo" catalogue example
-// (src/itx/examples-source.ts) — the SAME entry the phone's Examples screen
-// runs, executed through the same capabilityHost.runScript door, so there is
-// one source of truth for the demo. Works against any deployment: the burst
-// targets our deployed dummy-petshop service, not a laptop-local echo.
+// Approval-related CLI subcommands. `demo-grouping` is a thin wrapper around
+// the "grouped-approvals-demo" catalogue example (src/itx/examples-source.ts)
+// — the SAME entry the phone's Examples screen runs, executed through the
+// same capabilityHost.runScript door, so there is one source of truth for
+// the demo. Works against any deployment: the burst targets our deployed
+// dummy-petshop service, not a laptop-local echo.
 //
-//   doppler run --config dev -- pnpm cli demo-grouped-approvals run --project prj_…
+//   doppler run --config dev -- pnpm cli approvals demo-grouping --project prj_…
 //
 // CAUTION: the example REPLACES the project's egress rule list — use a
 // disposable/dev project.
@@ -30,7 +31,7 @@ type DemoOptions = {
 };
 
 /** Run the grouped-approvals catalogue example against a project, from the laptop. */
-export async function run(options: DemoOptions) {
+export async function demoGrouping(options: DemoOptions) {
   const baseUrl =
     options.baseUrl ||
     process.env.APP_CONFIG_BASE_URL?.trim() ||
@@ -53,9 +54,9 @@ export async function run(options: DemoOptions) {
   });
   const root = itx.streams.get("/");
 
-  // Log the collapsed push intent when the debounce window fires, so the
-  // laptop shows the same summary the phone buzzes with. Start past any
-  // pre-existing intents on a reused project.
+  // Log the batch's push intent when it fires, so the laptop shows the same
+  // summary the phone buzzes with. Start past any pre-existing intents on a
+  // reused project.
   let lastIntentOffset = 0;
   while (true) {
     const page = await root.getEvents({
@@ -69,9 +70,13 @@ export async function run(options: DemoOptions) {
     .waitForEvent({
       afterOffset: lastIntentOffset,
       eventTypes: [NOTIFICATION_REQUESTED],
-      predicate: (event) =>
-        (event.payload as { destination?: { kind?: string } }).destination?.kind ===
-        "approvals-group",
+      predicate: (event) => {
+        const payload = event.payload as { body?: string; destination?: { kind?: string } };
+        return (
+          payload.destination?.kind === "approvals" &&
+          /^Script run waiting/.test(payload.body || "")
+        );
+      },
       timeoutMs: 300_000,
     })
     .then((event) => {
@@ -88,8 +93,9 @@ export async function run(options: DemoOptions) {
   };
   process.stdout.write(
     `running catalogue example "${example.id}" (${JSON.stringify(vars)}) — the burst fires\n` +
-      `after a ~6s rule-propagation wait; expect ONE push ~3s after the burst. Approve all\n` +
-      `from the phone (the push deep-links to the group), then the script resolves.\n`,
+      `after a ~6s rule-propagation wait; the egress door commits it as ONE batch event and\n` +
+      `ONE push right after. Approve all from the phone (one Face ID, one signed decision),\n` +
+      `then the script resolves.\n`,
   );
   // The same run-script envelope the phone's Examples screen and the e2e
   // matrix use (e2e/test-support/run-example.ts runScriptEnvelope).
@@ -103,7 +109,7 @@ export async function run(options: DemoOptions) {
 }
 
 if (isMainModule(import.meta.url)) {
-  void createCli({ ...import.meta, name: "demo-grouped-approvals", jsonInput: "auto" }).run({
+  void createCli({ ...import.meta, name: "approvals", jsonInput: "auto" }).run({
     logger: yamlTableConsoleLogger,
     prompts: isAgent() ? undefined : createBuiltInPrompts(),
   });
