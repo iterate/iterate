@@ -24,9 +24,12 @@ export const guestbookWorkerRef = {
 } satisfies StatefulDynamicWorkerRef;
 
 /**
- * The Guestbook's creation and migration facts. The project worker now owns
- * committed event delivery through GuestbookApp.processEvent, so the former
- * app-specific WAKE subscription is explicitly removed by key.
+ * The Guestbook's creation facts. The project worker owns committed event
+ * delivery through GuestbookApp.processEvent; no stream ever carries an
+ * app-specific subscription for the Guestbook (streams that predate the
+ * current subscription model are recreated, not migrated), so there is no
+ * retirement fact to append — removing a key that was never configured is a
+ * hard error.
  */
 export function guestbookCreationEvents(): StreamEventInput[] {
   return [
@@ -34,11 +37,6 @@ export function guestbookCreationEvents(): StreamEventInput[] {
       type: "events.iterate.com/guestbook/created",
       payload: { config: { title: "Guestbook" } },
       idempotencyKey: "guestbook/created",
-    },
-    {
-      type: "events.iterate.com/stream/subscription-removed",
-      payload: { subscriptionKey: "app-guestbook#guestbook", reason: "requested" },
-      idempotencyKey: "guestbook/subscription-removed:v2",
     },
   ];
 }
