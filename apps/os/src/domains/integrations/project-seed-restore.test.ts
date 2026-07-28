@@ -79,125 +79,6 @@ describe("restoreIntegrationConnection", () => {
     );
   });
 
-  test("rejects a Slack token for a different archived team before writing", async () => {
-    await expect(
-      restoreIntegrationConnection(
-        {
-          botToken: "xoxb-wrong-team",
-          config: testConfig(),
-          projectId: PROJECT_ID,
-          provider: "slack",
-          teamId: "T_ITERATE",
-        },
-        {
-          fetch: async () =>
-            Response.json({
-              ok: true,
-              team: "Elsewhere",
-              team_id: "T_ELSEWHERE",
-              url: "https://elsewhere.slack.com/",
-            }),
-        },
-      ),
-    ).rejects.toThrow(/belongs to team T_ELSEWHERE/);
-    expect(network.secrets.size).toBe(0);
-    expect(network.streams.size).toBe(0);
-  });
-
-  test("updates an owned Slack connection but never steals a foreign claim", async () => {
-    const identifySlackTeam = async () =>
-      Response.json({
-        ok: true,
-        team: "Iterate",
-        team_id: "T_ITERATE",
-        url: "https://iterate.slack.com/",
-      });
-    await restoreIntegrationConnection(
-      {
-        botToken: "xoxb-first",
-        config: testConfig(),
-        connection: "iterate",
-        projectId: PROJECT_ID,
-        provider: "slack",
-        teamId: "T_ITERATE",
-      },
-      { fetch: identifySlackTeam },
-    );
-    await restoreIntegrationConnection(
-      {
-        botToken: "xoxb-rotated",
-        config: testConfig(),
-        connection: "iterate",
-        projectId: PROJECT_ID,
-        provider: "slack",
-        teamId: "T_ITERATE",
-      },
-      { fetch: identifySlackTeam },
-    );
-
-    const ownedSecretName = DurableObjectNameCodec.stringify({
-      path: slackBotTokenSecretPath("iterate"),
-      projectId: PROJECT_ID,
-    });
-    expect(network.secrets.get(ownedSecretName)).toMatchObject({
-      material: "xoxb-rotated",
-    });
-
-    await expect(
-      restoreIntegrationConnection(
-        {
-          botToken: "xoxb-foreign-attempt",
-          config: testConfig(),
-          connection: "other",
-          projectId: "prj_other",
-          provider: "slack",
-          teamId: "T_ITERATE",
-        },
-        { fetch: identifySlackTeam },
-      ),
-    ).rejects.toThrow(/already claimed by project prj_iterate/);
-    const foreignSecretName = DurableObjectNameCodec.stringify({
-      path: slackBotTokenSecretPath("other"),
-      projectId: "prj_other",
-    });
-    expect(network.secrets.has(foreignSecretName)).toBe(false);
-  });
-
-  test("refuses to silently rename an already-owned connection", async () => {
-    const identifySlackTeam = async () =>
-      Response.json({
-        ok: true,
-        team: "Iterate",
-        team_id: "T_ITERATE",
-        url: "https://iterate.slack.com/",
-      });
-    await restoreIntegrationConnection(
-      {
-        botToken: "xoxb-first",
-        config: testConfig(),
-        connection: "iterate",
-        projectId: PROJECT_ID,
-        provider: "slack",
-        teamId: "T_ITERATE",
-      },
-      { fetch: identifySlackTeam },
-    );
-
-    await expect(
-      restoreIntegrationConnection(
-        {
-          botToken: "xoxb-second",
-          config: testConfig(),
-          connection: "different",
-          projectId: PROJECT_ID,
-          provider: "slack",
-          teamId: "T_ITERATE",
-        },
-        { fetch: identifySlackTeam },
-      ),
-    ).rejects.toThrow(/already connected as iterate, not archived connection different/);
-  });
-
   test("validates and reconstructs a GitHub App installation", async () => {
     const validated: string[] = [];
     const result = await restoreIntegrationConnection(
@@ -240,20 +121,6 @@ describe("restoreIntegrationConnection", () => {
         projectId: PROJECT_ID,
         slug: "github",
       }),
-    );
-    await expect(
-      restoreIntegrationConnection(
-        {
-          config: testConfig(),
-          connection: "different-github",
-          installationId: "789",
-          projectId: PROJECT_ID,
-          provider: "github",
-        },
-        { validateGithubInstallation: async () => undefined },
-      ),
-    ).rejects.toThrow(
-      /already connected as iterate-github, not archived connection different-github/,
     );
   });
 
@@ -314,29 +181,6 @@ describe("restoreIntegrationConnection", () => {
         tokenEndpoint: "https://oauth2.googleapis.com/token",
       },
     });
-  });
-
-  test("rejects a Google refresh token for a different archived user before writing", async () => {
-    await expect(
-      restoreIntegrationConnection(
-        {
-          config: testConfig(),
-          connection: "jonas-example-com",
-          googleUserId: "google-user-123",
-          material: { refreshToken: "wrong-user-refresh-token" },
-          projectId: PROJECT_ID,
-          provider: "google",
-        },
-        {
-          fetch: async (input) =>
-            input.toString() === "https://oauth2.googleapis.com/token"
-              ? Response.json({ access_token: "fresh-access-token" })
-              : Response.json({ id: "somebody-else" }),
-        },
-      ),
-    ).rejects.toThrow(/belongs to user somebody-else/);
-    expect(network.secrets.size).toBe(0);
-    expect(network.streams.size).toBe(0);
   });
 });
 

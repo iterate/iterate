@@ -1503,6 +1503,8 @@ export interface Secret {
   __describe(): Promise<Description & SecretDescription>;
   /** Egress fetch with this secret's placeholders substituted server-side. */
   fetch(request: Request): Promise<Response>;
+  /** Admin-only recovery read of the current encrypted cell. */
+  exportForProjectSeed(): Promise<SecretProjectSeedExport>;
   /** Restart the secret's server-side object; the next request boots it fresh. */
   kill(): Promise<void>;
   /**
@@ -3857,6 +3859,19 @@ export type SecretDescription = {
   visibility: SecretVisibility;
   /** The configured refresh strategy's kind, or null when none is configured. */
   refresh: SecretRefresh["kind"] | null;
+};
+
+/** Encrypted current-value snapshot used only by the admin project-seed CLI. */
+export type SecretProjectSeedExport = {
+  egressUrls: string[];
+  encrypted: {
+    algorithm: string;
+    ciphertext: string;
+    iv: string;
+  };
+  offset: number;
+  refresh: SecretRefresh | null;
+  visibility: SecretVisibility;
 };
 
 /** Input to `itx.secrets.get(path).create` — the birth policy (egress pin,

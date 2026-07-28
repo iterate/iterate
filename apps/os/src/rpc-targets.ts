@@ -338,6 +338,7 @@ import type {
   CollectSecretLink,
   SecretDescription,
   SecretCreateInput,
+  SecretProjectSeedExport,
   SecretUpdateInput,
 } from "./domains/secrets/types.ts";
 import type {
@@ -2539,6 +2540,8 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
           "Create this secret with its initial egress, material, and refresh config; returns this same secret handle.",
         fetch:
           "Egress fetch with secret placeholders substituted server-side (HTTP headers/URL, including Upgrade handshake).",
+        exportForProjectSeed:
+          "Admin-only recovery read of the current encrypted cell; never returns plaintext or stream history.",
         kill: "Restart the secret's server-side object; the next request boots it fresh.",
         reveal:
           "Read the material back — only for a secret born readable (the project ingress key); write-only secrets throw.",
@@ -2568,6 +2571,14 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
   /** Egress fetch with this secret's placeholders substituted server-side. */
   fetch(request: Request): Promise<Response> {
     return this.durableObjectStub.fetch(request);
+  }
+
+  /** Admin-only recovery read of the current encrypted cell. */
+  exportForProjectSeed(): Promise<SecretProjectSeedExport> {
+    if (!this.props.auth.isAdmin()) {
+      throw new Error("Exporting a secret for a project seed requires an admin principal.");
+    }
+    return this.durableObjectStub.exportForProjectSeed();
   }
 
   /** Restart the secret's server-side object; the next request boots it fresh. */

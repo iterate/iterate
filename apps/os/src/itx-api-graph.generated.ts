@@ -885,12 +885,13 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "Secret",
     kind: "interface",
     sourceText:
-      "/** Path-addressed secret capability. Secret material has no public read API:\n * material never leaves the Secret Durable Object except substituted into a\n * request bound for one of the secret's pinned egress hosts. */\nexport interface Secret {\n  /** Like every other node, the secret's self-report IS `__describe()`: the\n   * discovery Description merged with the secret's public SecretDescription\n   * (audit, egress, whether material is present, the refresh strategy). The\n   * raw value is never part of it. */\n  __describe(): Promise<Description & SecretDescription>;\n  /** Egress fetch with this secret's placeholders substituted server-side. */\n  fetch(request: Request): Promise<Response>;\n  /** Restart the secret's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  /**\n   * Create this secret and wait until its processor has reduced the birth\n   * certificate, then return this same secret handle, so create chains. The\n   * Secret Durable Object owns the birth semantics: it encrypts the material\n   * bound to the exact commit offset and appends `secret/created` plus the\n   * secret's processor subscription in one atomic batch. An identical-policy\n   * retry over an existing secret resolves fine (material is write-only and\n   * not comparable — it is kept, never replaced; rotate through `update()`);\n   * a create with a DIFFERENT egress/refresh/visibility policy fails loudly.\n   */\n  create(input: SecretCreateInput): Promise<Secret>;\n  /**\n   * Read the material back — only for a secret born `readable: true` (an\n   * immutable birth-certificate fact; every other secret stays write-only\n   * and this throws). The born project ingress key at\n   * /secrets/project-api-key is the canonical readable secret: show it to an\n   * external app as often as needed.\n   */\n  reveal(): Promise<unknown>;\n  /** Set secret material, its egress allowlist, and/or refresh strategy.\n   * Replacement material requires its complete egress policy in the same\n   * update. Every update without replacement material clears stored material. */\n  update(input: SecretUpdateInput): Promise<StreamEvent>;\n  /** The secret stream processor; its public state IS the SecretDescription. */\n  processor: StreamProcessorRpc<SecretDescription>;\n  /** The secret's live state — its public SecretDescription (never the ciphertext). See {@link LiveStateRpc}. */\n  liveState: LiveStateRpc<SecretDescription>;\n}",
+      "/** Path-addressed secret capability. Secret material has no public read API:\n * material never leaves the Secret Durable Object except substituted into a\n * request bound for one of the secret's pinned egress hosts. */\nexport interface Secret {\n  /** Like every other node, the secret's self-report IS `__describe()`: the\n   * discovery Description merged with the secret's public SecretDescription\n   * (audit, egress, whether material is present, the refresh strategy). The\n   * raw value is never part of it. */\n  __describe(): Promise<Description & SecretDescription>;\n  /** Egress fetch with this secret's placeholders substituted server-side. */\n  fetch(request: Request): Promise<Response>;\n  /** Admin-only recovery read of the current encrypted cell. */\n  exportForProjectSeed(): Promise<SecretProjectSeedExport>;\n  /** Restart the secret's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  /**\n   * Create this secret and wait until its processor has reduced the birth\n   * certificate, then return this same secret handle, so create chains. The\n   * Secret Durable Object owns the birth semantics: it encrypts the material\n   * bound to the exact commit offset and appends `secret/created` plus the\n   * secret's processor subscription in one atomic batch. An identical-policy\n   * retry over an existing secret resolves fine (material is write-only and\n   * not comparable — it is kept, never replaced; rotate through `update()`);\n   * a create with a DIFFERENT egress/refresh/visibility policy fails loudly.\n   */\n  create(input: SecretCreateInput): Promise<Secret>;\n  /**\n   * Read the material back — only for a secret born `readable: true` (an\n   * immutable birth-certificate fact; every other secret stays write-only\n   * and this throws). The born project ingress key at\n   * /secrets/project-api-key is the canonical readable secret: show it to an\n   * external app as often as needed.\n   */\n  reveal(): Promise<unknown>;\n  /** Set secret material, its egress allowlist, and/or refresh strategy.\n   * Replacement material requires its complete egress policy in the same\n   * update. Every update without replacement material clears stored material. */\n  update(input: SecretUpdateInput): Promise<StreamEvent>;\n  /** The secret stream processor; its public state IS the SecretDescription. */\n  processor: StreamProcessorRpc<SecretDescription>;\n  /** The secret's live state — its public SecretDescription (never the ciphertext). See {@link LiveStateRpc}. */\n  liveState: LiveStateRpc<SecretDescription>;\n}",
     summary: "Path-addressed secret capability.",
     memberSummaries: {
       __describe:
         "Like every other node, the secret's self-report IS `__describe()`: the discovery Description merged with the secret's public SecretDescription (audit, egress, whether material is present, the refresh strategy).",
       fetch: "Egress fetch with this secret's placeholders substituted server-side.",
+      exportForProjectSeed: "Admin-only recovery read of the current encrypted cell.",
       kill: "Restart the secret's server-side object; the next request boots it fresh.",
       create:
         "Create this secret and wait until its processor has reduced the birth certificate, then return this same secret handle, so create chains.",
@@ -903,6 +904,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [
       "Description",
       "SecretDescription",
+      "SecretProjectSeedExport",
       "SecretCreateInput",
       "SecretUpdateInput",
       "StreamEvent",
@@ -2150,6 +2152,15 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "A stored secret's public face — its live state and what `__describe()` merges in: usage audit counters, pinned egress URLs, whether material is present, and the configured refresh strategy's kind.",
     memberSummaries: {},
     referencedTypeNames: ["SecretVisibility", "SecretRefresh"],
+  },
+  {
+    name: "SecretProjectSeedExport",
+    kind: "typeAlias",
+    sourceText:
+      "/** Encrypted current-value snapshot used only by the admin project-seed CLI. */\nexport type SecretProjectSeedExport = {\n  egressUrls: string[];\n  encrypted: {\n    algorithm: string;\n    ciphertext: string;\n    iv: string;\n  };\n  offset: number;\n  refresh: SecretRefresh | null;\n  visibility: SecretVisibility;\n};",
+    summary: "Encrypted current-value snapshot used only by the admin project-seed CLI.",
+    memberSummaries: {},
+    referencedTypeNames: ["SecretRefresh", "SecretVisibility"],
   },
   {
     name: "SecretCreateInput",
