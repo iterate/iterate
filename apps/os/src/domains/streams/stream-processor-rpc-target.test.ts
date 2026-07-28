@@ -328,6 +328,121 @@ describe("StreamRpcTarget", () => {
     }
   });
 
+  it("replays a keyed root append once after a deployment reset", async () => {
+    const lifecycleError = Object.assign(new Error("code updated"), {
+      durableObjectReset: true,
+    });
+    const event = {
+      createdAt: new Date(0).toISOString(),
+      idempotencyKey: "root-birth",
+      offset: 3,
+      path: "/",
+      type: "events.iterate.com/test/root-birth",
+    } satisfies StreamEvent;
+    let acquisitions = 0;
+
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get durableObjectStub() {
+        acquisitions += 1;
+        return {
+          append: () =>
+            acquisitions === 1 ? Promise.reject(lifecycleError) : Promise.resolve([event]),
+        } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/",
+      projectId: "prj_test",
+    });
+
+    await expect(
+      stream.append({
+        idempotencyKey: event.idempotencyKey,
+        type: event.type,
+      }),
+    ).resolves.toEqual([event]);
+    expect(acquisitions).toBe(2);
+  });
+
+  it("keeps a second keyed root append deployment reset terminal", async () => {
+    const lifecycleError = Object.assign(new Error("code updated"), {
+      durableObjectReset: true,
+    });
+    let acquisitions = 0;
+
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get durableObjectStub() {
+        acquisitions += 1;
+        return { append: () => Promise.reject(lifecycleError) } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/",
+      projectId: "prj_test",
+    });
+
+    await expect(
+      stream.append({
+        idempotencyKey: "root-birth",
+        type: "events.iterate.com/test/root-birth",
+      }),
+    ).rejects.toThrow(`${STREAM_UNAVAILABLE_MESSAGE_PREFIX}code updated`);
+    expect(acquisitions).toBe(2);
+  });
+
+  it("does not lifecycle-replay an unkeyed append", async () => {
+    const lifecycleError = Object.assign(new Error("code updated"), {
+      durableObjectReset: true,
+    });
+    let acquisitions = 0;
+
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get durableObjectStub() {
+        acquisitions += 1;
+        return { append: () => Promise.reject(lifecycleError) } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/events",
+      projectId: "prj_test",
+    });
+
+    await expect(stream.append({ type: "events.iterate.com/test/unkeyed-reset" })).rejects.toThrow(
+      `${STREAM_UNAVAILABLE_MESSAGE_PREFIX}code updated`,
+    );
+    expect(acquisitions).toBe(1);
+  });
+
+  it("does not replay a keyed append after an explicit stream kill", async () => {
+    const explicitKill = Object.assign(new Error(STREAM_KILL_REASON), {
+      durableObjectReset: true,
+    });
+    let acquisitions = 0;
+
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get durableObjectStub() {
+        acquisitions += 1;
+        return { append: () => Promise.reject(explicitKill) } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/",
+      projectId: "prj_test",
+    });
+
+    await expect(
+      stream.append({
+        idempotencyKey: "explicit-kill",
+        type: "events.iterate.com/test/explicit-kill",
+      }),
+    ).rejects.toThrow(`${STREAM_UNAVAILABLE_MESSAGE_PREFIX}${STREAM_KILL_REASON}`);
+    expect(acquisitions).toBe(1);
+  });
+
   it("re-acquires when a remote stream waiter is orphaned", async () => {
     vi.useFakeTimers();
     const firstWait = Promise.withResolvers<StreamEvent>();

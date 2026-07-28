@@ -96,9 +96,43 @@ refused to hide the delay behind a long wait. The packaged Guestbook now
 renders an accessible `Signing…` status with `data-spinner="true"` for the
 whole action, matching the sibling Todo app's mutation-progress contract.
 
-The new immutable-head proof remains at 0/25 until the next exact-head preview
-passes with zero retries. As in every current round, each counted iteration is
-a separate canonical Depot run with ordinary artifacts and PostHog telemetry.
+An exact-head preflight on `ed86898b6` then passed with zero framework retries:
+Depot run `d1d3gtdx21` finished in 4 minutes 55 seconds from creation (GitHub's
+check interval was 4 minutes 32 seconds), all expected telemetry sources
+finalized, and both Guestbook and Todo passed first try.
+
+The first strict iteration correctly rejected another finally-green run
+(`dd57pvnv7c`, 3 minutes 24 seconds) because it absorbed two Vitest retries.
+A UUID-deduplicated 30-day PostHog query showed that neither retry was unique
+to that run: the nested live-capability test had retried twice in 306 Depot
+executions, while the 20-script concurrency test had retried eight times in
+306 Depot executions. Both always passed after retry, which made them easy to
+miss in final-status-only CI reviews.
+
+Cloudflare traces and the durable script journal tied both retries to the same
+rollout boundary. A keyed project-root append was rejected on the previous
+Worker version 49 seconds after the new deployment completed; root appends
+were excluded from the silent-ack deadline but accidentally excluded from
+classified lifecycle replay too. Keyed root appends now retain the intentional
+no-deadline rule while replaying one deploy/eviction reset. Unkeyed appends,
+explicit `kill()`, application errors, and a second reset remain terminal.
+
+The concurrency failure was importantly different: 19 scripts completed, but
+one durable settlement recorded `executionMayHaveOccurred: true` after its
+CapabilityHost incarnation was reset for a code update. Re-running arbitrary
+code could duplicate external effects, so `runScript` still never does that.
+Instead it now performs a bounded read-only exact-version handshake with its
+CapabilityHost before journaling the request. A stale incarnation may converge
+or survive one lifecycle reset; persistent mismatch, probe failure, or a
+second reset fails explicitly while the durable history still proves that the
+script was never requested and never ran. The concurrency assertion also
+prints every rejected script index and reason instead of a generic object
+diff.
+
+The new immutable-head proof remains at 0/25 until these fixes pass a fresh
+exact-head preview with zero retries. As in every current round, each counted
+iteration is a separate canonical Depot run with ordinary artifacts and
+PostHog telemetry.
 
 ## Round 15 (2026-07-23, post-#2284)
 

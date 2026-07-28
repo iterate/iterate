@@ -66,7 +66,7 @@ import {
   userPrincipalOf,
   widenProjectAccess,
 } from "./auth.ts";
-import { itxEnv as env } from "./env.ts";
+import { itxEnv as env, workerVersion } from "./env.ts";
 import {
   listProjectDirectory,
   primeProjectDirectory,
@@ -265,6 +265,7 @@ import {
   type CapabilityHostCreateInput,
 } from "./domains/capability-host/capability-host-defaults.ts";
 import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "./domains/capability-host/capability-host-processor-contract.ts";
+import { waitForCapabilityHostDeploymentVersion } from "./domains/capability-host/capability-host-deployment-readiness.ts";
 import { runCapabilityHostScript } from "./domains/capability-host/capability-host-script-run.ts";
 import {
   settleByDeadline,
@@ -581,6 +582,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     const isKeyed = events.every(
       (event) => typeof event.idempotencyKey === "string" && event.idempotencyKey.length > 0,
     );
+    const canLifecycleReplay = isKeyed;
     const canDeadlineReplay = isKeyed && this.props.path !== "/";
     const append = async () => {
       const invocation = Promise.resolve(this.durableObjectStub.append(...events));
@@ -604,11 +606,12 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       );
     };
     const result = await (
-      canDeadlineReplay
+      canLifecycleReplay
         ? retryLoggedIdempotentOperation({
             context: { path: this.props.path, projectId: this.props.projectId },
             message: "keyed stream append retrying after Durable Object unavailability",
             operation: append,
+            retryWhen: (error) => !isExplicitStreamKillLifecycleError(error),
           })
         : append()
     ).catch(rethrowStreamUnavailable);
@@ -5018,6 +5021,25 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
       executionId: crypto.randomUUID(),
       expiresAt: Date.now() + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
     };
+    const expectedDeploymentVersion = workerVersion(env);
+    const readiness = await waitForCapabilityHostDeploymentVersion({
+      executionId: command.executionId,
+      expectedVersion: expectedDeploymentVersion,
+      path: this.#props.path,
+      readVersion: () => Promise.resolve(this.#durableObject.deploymentVersion()),
+    });
+    if (readiness.probes > 1) {
+      console.info("capability host deployment version converged before script request", {
+        executionId: command.executionId,
+        expectedDeploymentVersion,
+        lifecycleFailures: readiness.lifecycleFailures,
+        mismatches: readiness.mismatches,
+        path: this.#props.path,
+        probes: readiness.probes,
+        projectId: this.#props.projectId,
+        waitedMs: readiness.waitedMs,
+      });
+    }
     return await retryLoggedIdempotentOperation({
       context: {
         executionId: command.executionId,

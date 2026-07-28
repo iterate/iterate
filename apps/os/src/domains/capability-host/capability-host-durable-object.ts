@@ -40,7 +40,7 @@ type ScriptExecutionLoopbackExports = {
  * host) on a local miss.
  */
 export class CapabilityHostDurableObject extends DurableObject<Env> {
-  /** Report this incarnation's code version for the deployment rollout gate. */
+  /** Report the incarnation version at the safe pre-script-request boundary. */
   deploymentVersion(): string {
     return workerVersion(this.env);
   }

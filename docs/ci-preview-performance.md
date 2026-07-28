@@ -95,9 +95,14 @@ serially because they intentionally share one warm container.
   truncated/unavailable comparisons, and relevant changes use the full
   rollout.
 - **Recovery never crosses an unsafe boundary.** Identity minting, unkeyed
-  writes, and whole fixture creation are not replayed. Recovery belongs inside
-  the read-only or idempotency-keyed operation that can prove the same request
-  is safe to issue again.
+  writes, arbitrary script execution, and whole fixture creation are not
+  replayed. Recovery belongs inside the read-only or idempotency-keyed
+  operation that can prove the same request is safe to issue again. Before an
+  arbitrary script is durably requested, a bounded read-only handshake
+  verifies that its CapabilityHost incarnation runs the same exact Worker
+  version as the edge. A persistent mismatch fails with an explicit
+  never-requested outcome instead of allowing a rollout reset to turn into an
+  ambiguous may-have-executed retry.
 - **Readiness retries are bounded and diagnostic.** Each request has a short
   watchdog, the overall deploy check has a hard deadline, and the final HTTP
   response body or transport error is retained in the failure message.

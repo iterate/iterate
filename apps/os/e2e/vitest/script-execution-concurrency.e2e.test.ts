@@ -74,13 +74,13 @@ test(
       durationMs: Math.max(0, executionDurationMs - SCRIPT_HOLD_MS),
     });
 
-    expect({ fulfilled, rejected }).toEqual({
-      fulfilled: Array.from({ length: SCRIPT_COUNT }, (_, index) => ({
+    expect(rejected, `concurrent scripts rejected:\n${rejected.join("\n")}`).toEqual([]);
+    expect(fulfilled).toEqual(
+      Array.from({ length: SCRIPT_COUNT }, (_, index) => ({
         index,
         marker,
       })),
-      rejected: [],
-    });
+    );
     expect(elapsedMs).toBeLessThan(MAX_CONCURRENT_COMPLETION_MS);
   },
 );
@@ -104,10 +104,16 @@ function formatSettledExecutions(
   return {
     fulfilled: successful.map(({ index, marker }) => ({ index, marker })),
     observedSettledAtMs: successful.map(({ observedSettledAtMs }) => observedSettledAtMs),
-    rejected: executions
-      .filter((execution) => execution.status === "rejected")
-      .map((execution) =>
-        execution.reason instanceof Error ? execution.reason.message : String(execution.reason),
-      ),
+    rejected: executions.flatMap((execution, index) =>
+      execution.status === "rejected"
+        ? [
+            `script ${index}: ${
+              execution.reason instanceof Error
+                ? execution.reason.message
+                : String(execution.reason)
+            }`,
+          ]
+        : [],
+    ),
   };
 }
