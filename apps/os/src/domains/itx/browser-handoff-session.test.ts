@@ -60,6 +60,8 @@ class FakeCdp {
 
 class FakeBrowser {
   closed = false;
+  closeCalls = 0;
+  disconnected = false;
   disconnectedListener: (() => void) | undefined;
 
   on(event: string, listener: () => void): FakeBrowser {
@@ -76,10 +78,13 @@ class FakeBrowser {
   }
 
   async close(): Promise<void> {
+    this.closeCalls += 1;
+    if (this.disconnected) throw new Error("Cannot close a disconnected browser.");
     this.closed = true;
   }
 
   disconnect(): void {
+    this.disconnected = true;
     this.disconnectedListener?.();
   }
 }
@@ -232,6 +237,8 @@ describe("BrowserHandoffSession", () => {
       success: true,
       targetId: "target-1",
     });
+    await expect(session.close()).resolves.toBeUndefined();
+    expect(browser.closeCalls).toBe(0);
   });
 
   it("closes the browser and rejects a handoff waiter on disposal", async () => {
@@ -250,9 +257,9 @@ describe("BrowserHandoffSession", () => {
     await expect(
       session.startHandoff({
         instructions: "Complete the challenge.",
-        timeoutMs: 10 * 60_000 + 1,
+        timeoutMs: 9 * 60_000 + 1,
       }),
-    ).rejects.toThrow(/timeoutMs must be an integer from 1 to 600000/);
+    ).rejects.toThrow(/timeoutMs must be an integer from 1 to 540000/);
   });
 
   it("fails boundedly if Browser Run omits the completion event", async () => {

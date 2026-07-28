@@ -3638,7 +3638,7 @@ export type CfBrowserTextInput = {
 export type CfBrowserHandoffInput = {
   /** The concrete task the human should complete in the Live View. */
   instructions: string;
-  /** Bounded wait for the human. Defaults to five minutes; maximum ten minutes. */
+  /** Bounded wait for the human. Defaults to five minutes; maximum nine minutes. */
   timeoutMs?: number;
 };
 

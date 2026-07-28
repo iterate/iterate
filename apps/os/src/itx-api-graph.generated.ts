@@ -2022,7 +2022,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "CfBrowserHandoffInput",
     kind: "typeAlias",
     sourceText:
-      "/** Input for pausing Browser Run automation for a human. */\nexport type CfBrowserHandoffInput = {\n  /** The concrete task the human should complete in the Live View. */\n  instructions: string;\n  /** Bounded wait for the human. Defaults to five minutes; maximum ten minutes. */\n  timeoutMs?: number;\n};",
+      "/** Input for pausing Browser Run automation for a human. */\nexport type CfBrowserHandoffInput = {\n  /** The concrete task the human should complete in the Live View. */\n  instructions: string;\n  /** Bounded wait for the human. Defaults to five minutes; maximum nine minutes. */\n  timeoutMs?: number;\n};",
     summary: "Input for pausing Browser Run automation for a human.",
     memberSummaries: {},
     referencedTypeNames: [],

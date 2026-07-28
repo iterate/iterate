@@ -2913,7 +2913,7 @@ class CfBrowserSessionRpcTarget extends IterateRpcTarget<"CfBrowserSession"> {
         pageInfo: "Read the current page URL and title.",
         screenshot: "Capture the current page as PNG bytes.",
         startHandoff:
-          "Pause automation and create an expiring human Live View (default 5 minutes, maximum 10).",
+          "Pause automation and create an expiring human Live View (default 5 minutes, maximum 9).",
         text: "Extract bounded visible body text from the current page.",
         waitForHandoff:
           "Wait for the human's explicit Done/Failed result, then continue on the same page.",

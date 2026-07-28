@@ -16,8 +16,11 @@ import type {
 } from "./cf-capabilities.ts";
 
 const DEFAULT_HANDOFF_TIMEOUT_MS = 5 * 60_000;
-const MAX_HANDOFF_TIMEOUT_MS = 10 * 60_000;
+const BROWSER_KEEP_ALIVE_MS = 10 * 60_000;
 const HANDOFF_COMPLETION_GRACE_MS = 5_000;
+const HANDOFF_SETUP_HEADROOM_MS = 55_000;
+const MAX_HANDOFF_TIMEOUT_MS =
+  BROWSER_KEEP_ALIVE_MS - HANDOFF_COMPLETION_GRACE_MS - HANDOFF_SETUP_HEADROOM_MS;
 const DEFAULT_TEXT_CHARACTERS = 20_000;
 const MAX_TEXT_CHARACTERS = 100_000;
 const HandoffComplete = z.object({
@@ -131,6 +134,7 @@ export class BrowserHandoffSession {
         expiresInMs: timeoutMs,
         mode: "tab",
       });
+      const expiresAt = Date.now() + timeoutMs;
       let resolveCompletion: (event: HandoffCompleteResponse) => void = () => undefined;
       let rejectCompletion: (error: Error) => void = () => undefined;
       const completion = new Promise<HandoffCompleteResponse>((resolve, reject) => {
@@ -184,7 +188,7 @@ export class BrowserHandoffSession {
         });
         pending.handoffId = handoff.handoffId;
         return {
-          expiresAt: Date.now() + timeoutMs,
+          expiresAt,
           handoffId: handoff.handoffId,
           liveViewUrl: liveView.devtoolsFrontendUrl,
         };
@@ -200,7 +204,7 @@ export class BrowserHandoffSession {
             handoffId: pending.handoffId,
           });
           return {
-            expiresAt: Date.now() + timeoutMs,
+            expiresAt,
             handoffId: pending.handoffId,
             liveViewUrl: liveView.devtoolsFrontendUrl,
           };
@@ -286,6 +290,7 @@ export class BrowserHandoffSession {
   readonly #handleBrowserDisconnected = (): void => {
     if (this.#closed) return;
     this.#closed = true;
+    this.#closePromise = Promise.resolve();
     this.#failPendingHandoff(new Error("Browser Run disconnected during human handoff."));
   };
 }
@@ -297,7 +302,7 @@ export async function openBrowserHandoffSession(
 ): Promise<BrowserHandoffSession> {
   assertBrowserUrl(input.url);
   const browser = await puppeteer.launch(binding, {
-    keep_alive: MAX_HANDOFF_TIMEOUT_MS,
+    keep_alive: BROWSER_KEEP_ALIVE_MS,
     recording: input.recording ?? false,
   });
   try {
