@@ -39,6 +39,11 @@ const WorkspaceTaskPreview = lazy(() =>
     default: module.WorkspaceTaskPreview,
   })),
 );
+const TaskComments = lazy(() =>
+  import("./task-comments.tsx").then((module) => ({
+    default: module.TaskComments,
+  })),
+);
 
 /**
  * The task detail sheet on the WORKSPACE lane: the shared collab-editor
@@ -58,6 +63,8 @@ export function WorkspaceTaskSheet({
   redline,
   liveSource,
   editorApiRef,
+  commentIdentity,
+  onApplyTransform,
   onLiveContent,
   onChangeState,
   onChangeLabels,
@@ -82,6 +89,10 @@ export function WorkspaceTaskSheet({
   /** Live document text when a session is open (Preview must not lag). */
   liveSource?: () => string | null;
   editorApiRef?: { current: import("../lib/collab-editor-api.ts").CollabEditorApi | null };
+  /** Who authors discussion comments (null → comments are read-only). */
+  commentIdentity: import("./task-comments.tsx").CommentIdentity | null;
+  /** Route a whole-file transform to the live editor or the write lane. */
+  onApplyTransform: (transform: (source: string) => string) => void;
   onLiveContent: (path: string, content: string) => void;
   onChangeState: (state: string) => void;
   onChangeLabels: (labels: string[]) => void;
@@ -110,6 +121,8 @@ export function WorkspaceTaskSheet({
             redline={redline}
             liveSource={liveSource}
             editorApiRef={editorApiRef}
+            commentIdentity={commentIdentity}
+            onApplyTransform={onApplyTransform}
             onLiveContent={onLiveContent}
             onChangeState={onChangeState}
             onChangeLabels={onChangeLabels}
@@ -136,6 +149,8 @@ function SheetBody({
   redline,
   liveSource,
   editorApiRef,
+  commentIdentity,
+  onApplyTransform,
   onLiveContent,
   onChangeState,
   onChangeLabels,
@@ -160,6 +175,10 @@ function SheetBody({
   /** Live document text when a session is open (Preview must not lag). */
   liveSource?: () => string | null;
   editorApiRef?: { current: import("../lib/collab-editor-api.ts").CollabEditorApi | null };
+  /** Who authors discussion comments (null → comments are read-only). */
+  commentIdentity: import("./task-comments.tsx").CommentIdentity | null;
+  /** Route a whole-file transform to the live editor or the write lane. */
+  onApplyTransform: (transform: (source: string) => string) => void;
   onLiveContent: (path: string, content: string) => void;
   onChangeState: (state: string) => void;
   onChangeLabels: (labels: string[]) => void;
@@ -338,6 +357,15 @@ function SheetBody({
       </Suspense>
         </TabsContent>
       </Tabs>
+      <div className="flex max-h-[45%] shrink-0 flex-col border-t">
+        <Suspense fallback={null}>
+          <TaskComments
+            source={liveSource?.() ?? task.source}
+            identity={commentIdentity}
+            onTransform={onApplyTransform}
+          />
+        </Suspense>
+      </div>
     </div>
   );
 }

@@ -26,6 +26,7 @@
   },
   "exports": {
     ".": "./src/index.ts",
+    "./annotated-markdown": "./src/annotated-markdown/index.ts",
     "./client": "./src/client.ts",
     "./node": "./src/node.ts",
     "./processors": "./src/processors/index.ts",
@@ -44,6 +45,11 @@
         "types": "./dist/index.d.mts",
         "import": "./dist/index.mjs",
         "default": "./dist/index.mjs"
+      },
+      "./annotated-markdown": {
+        "types": "./dist/annotated-markdown/index.d.ts",
+        "import": "./dist/annotated-markdown.mjs",
+        "default": "./dist/annotated-markdown.mjs"
       },
       "./client": {
         "types": "./dist/client.d.ts",
@@ -118,6 +124,7 @@
     "react": "^19.2.7",
     "trpc-cli": "0.15.1",
     "ws": "8.19.0",
+    "yaml": "^2.8.3",
     "zod": "4.3.6"
   },
   "optionalDependencies": {

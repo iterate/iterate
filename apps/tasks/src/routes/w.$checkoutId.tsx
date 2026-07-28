@@ -25,6 +25,7 @@ import { taskPathInFolder, unclaimedPath, type BoardTask, type RowField } from "
 import { DEFAULT_REPO_PATH, normalizeRepoPath } from "../lib/checkout-shared.ts";
 import {
   columnsForTasks,
+  commentAuthorFor,
   fallbackCommitMessage,
   isTaskFilePath,
   newTaskFile,
@@ -147,6 +148,11 @@ function WorkspaceBoardPage() {
   // sheet-open's critical path.
   // Durable attribution for cards created here: "Name <email>".
   const createdByRef = useRef<string | undefined>(undefined);
+  // Discussion-comment identity (sentinel author token + display name).
+  const [commentIdentity, setCommentIdentity] = useState<{
+    author: string;
+    authorDisplay?: string;
+  } | null>(null);
   useEffect(() => {
     void import("../lib/use-collab-editor.ts").then(
       (module) => void module.ensureCollabIdentity(),
@@ -158,6 +164,7 @@ function WorkspaceBoardPage() {
           me.name && me.email
             ? `${me.name} <${me.email}>`
             : (me.email ?? me.name ?? me.userId ?? undefined);
+        setCommentIdentity(commentAuthorFor(me));
       })
       .catch(() => {});
   }, []);
@@ -590,6 +597,10 @@ function WorkspaceBoardPage() {
         editorEpoch={editorEpoch}
         redline={trackChanges}
         editorApiRef={editorApiRef}
+        commentIdentity={commentIdentity}
+        onApplyTransform={(transform) => {
+          if (openTask !== null) mutateTask(openTask, transform);
+        }}
         focusHeadline={
           openTask !== null && openTask.path === draftPath ? draftFocusRef.current : undefined
         }

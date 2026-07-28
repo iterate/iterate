@@ -1,5 +1,6 @@
 import { MessageResponse } from "@iterate-com/ui/components/ai-elements/message";
 import { Table, TableBody, TableCell, TableRow } from "@iterate-com/ui/components/table";
+import { parseAnnotatedMarkdown } from "iterate/annotated-markdown";
 import { projectMarkdownPreview } from "~/components/repo-ide/markdown-frontmatter.ts";
 
 /**
@@ -10,7 +11,13 @@ import { projectMarkdownPreview } from "~/components/repo-ide/markdown-frontmatt
  * the os pane): don't pass `rehypePlugins` without re-checking sanitization.
  */
 export function WorkspaceTaskPreview({ source }: { source: string }) {
-  const preview = projectMarkdownPreview(source);
+  // The EOF discussion store renders in the Comments section, not here.
+  const parsed = parseAnnotatedMarkdown(source);
+  const withoutDiscussion =
+    parsed.kind === "structured" && parsed.discussion !== null
+      ? source.slice(0, parsed.discussion.range.start)
+      : source;
+  const preview = projectMarkdownPreview(withoutDiscussion);
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto w-full max-w-3xl px-8 py-6 text-sm">

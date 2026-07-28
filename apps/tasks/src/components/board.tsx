@@ -6,6 +6,7 @@ import {
   CircleDotIcon,
   CircleEllipsisIcon,
   FolderIcon,
+  MessageSquareIcon,
   PlusIcon,
   TagIcon,
 } from "lucide-react";
@@ -330,7 +331,9 @@ function BoardCard({
           {task.summary}
         </p>
       )}
-      {(showTags && task.labels.length > 0) || (showFolder && task.folder !== "tasks") ? (
+      {(showTags && task.labels.length > 0) ||
+      (showFolder && task.folder !== "tasks") ||
+      task.commentCount > 0 ? (
         <div className="mt-3 flex min-w-0 flex-wrap items-center gap-1.5">
           {showFolder && task.folder !== "tasks" ? (
             <Badge variant="outline" className="gap-1 font-mono">
@@ -345,6 +348,15 @@ function BoardCard({
                 </Badge>
               ))
             : null}
+          {task.commentCount > 0 ? (
+            <span
+              title={`${task.commentCount} comment${task.commentCount === 1 ? "" : "s"}`}
+              className="flex items-center gap-1 text-[11px] text-muted-foreground"
+            >
+              <MessageSquareIcon aria-hidden className="size-3" />
+              {task.commentCount}
+            </span>
+          ) : null}
         </div>
       ) : null}
     </button>
