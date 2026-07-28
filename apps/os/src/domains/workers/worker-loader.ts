@@ -191,6 +191,7 @@ async function resolveFileSource({
 
 export function loadResolvedWorker({
   bindings,
+  freshInstanceNonce,
   globalOutbound,
   projectId,
   resolved,
@@ -198,6 +199,8 @@ export function loadResolvedWorker({
   streamContext,
 }: {
   bindings: WorkerBindings;
+  /** Force a one-off loader isolate instead of reusing the normal cache hit. */
+  freshInstanceNonce?: string;
   globalOutbound: Fetcher;
   projectId: string;
   resolved: ResolvedWorkerSource;
@@ -219,6 +222,7 @@ export function loadResolvedWorker({
     scopePath,
     JSON.stringify(StreamContext.parse(streamContext)),
     resolved.cacheKey,
+    freshInstanceNonce ?? "shared",
   ].join(":");
   return env.LOADER.get(cacheKey, () => ({
     compatibilityDate: resolved.wranglerConfig?.compatibilityDate ?? WORKER_COMPATIBILITY_DATE,

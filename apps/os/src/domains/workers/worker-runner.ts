@@ -26,6 +26,9 @@ import {
 
 export type DynamicWorkerTraceRole = "project_config" | "run_script" | "scheduler_action";
 
+const WORKERS_RPC_CLONE_VERSION_ERROR =
+  "Unable to deserialize cloned data due to invalid or unsupported version.";
+
 // Structural shadow of StatefulWorkerDurableObject.invokeCapability instead
 // of the DO's own type: the DO imports this module (cycle), and a typed
 // DurableObjectStub of it deep-instantiates the stub's self-referential type
@@ -94,8 +97,9 @@ export class DynamicWorkerRunner {
   async #getStatelessEntrypoint<T = unknown>(
     ref: StatelessDynamicWorkerRef,
     buildBudgetMs?: number,
+    freshInstanceNonce?: string,
   ): Promise<{ ok: true; target: T } | { failure: WorkerBuildFailure; ok: false }> {
-    const loaded = await this.#load(ref, buildBudgetMs);
+    const loaded = await this.#load(ref, buildBudgetMs, freshInstanceNonce);
     if (!loaded.ok) return loaded;
     return {
       ok: true,
@@ -159,42 +163,43 @@ export class DynamicWorkerRunner {
     traceRole?: DynamicWorkerTraceRole;
   }): Promise<Response> {
     return this.#trace(ref, "fetch", traceRole, async (span) => {
-      let resolved: ResolvedWorkerSource | undefined;
-      if (
-        "createApp" in ref.source &&
-        !isWebSocketUpgradeRequest(request) &&
-        (request.method === "GET" || request.method === "HEAD")
-      ) {
-        const result = await resolveWorkerSource({
-          buildBudgetMs,
-          projectId: this.#projectId,
-          source: ref.source,
-        });
-        if (!result.ok) throw new WorkerBuildFailedError(result.failure);
-        resolved = result.source;
-        const asset = await env.WORKER_BUNDLER.handleAssetRequest(
-          request,
-          resolved.assetManifest,
-          resolved.assets,
-          resolved.assetConfig,
-        );
-        if (asset !== null) {
-          const response = withWorkerCommit(asset, resolved.commitOid);
-          span.setAttribute("http.response.status_code", response.status);
-          return response;
+      const dispatch = async (
+        currentRequest: Request,
+        freshInstanceNonce?: string,
+      ): Promise<Response> => {
+        let resolved: ResolvedWorkerSource | undefined;
+        if (
+          "createApp" in ref.source &&
+          !isWebSocketUpgradeRequest(currentRequest) &&
+          (currentRequest.method === "GET" || currentRequest.method === "HEAD")
+        ) {
+          const result = await resolveWorkerSource({
+            buildBudgetMs,
+            projectId: this.#projectId,
+            source: ref.source,
+          });
+          if (!result.ok) throw new WorkerBuildFailedError(result.failure);
+          resolved = result.source;
+          const asset = await env.WORKER_BUNDLER.handleAssetRequest(
+            currentRequest,
+            resolved.assetManifest,
+            resolved.assets,
+            resolved.assetConfig,
+          );
+          if (asset !== null) {
+            return withWorkerCommit(asset, resolved.commitOid);
+          }
         }
-      }
 
-      let response: Response;
-      if (ref.type === "stateful") {
-        // The hosting DO resolves the facet and stamps its trusted build
-        // header after the user response returns.
-        response = await (
-          env.WORKER.getByName(
-            statefulWorkerDurableObjectName(this.#projectId, ref),
-          ) as unknown as Fetcher
-        ).fetch(withWorkerFetchDispatchHeader(request, { buildBudgetMs, ref }));
-      } else {
+        if (ref.type === "stateful") {
+          // The hosting DO resolves the facet and stamps its trusted build
+          // header after the user response returns.
+          return await (
+            env.WORKER.getByName(
+              statefulWorkerDurableObjectName(this.#projectId, ref),
+            ) as unknown as Fetcher
+          ).fetch(withWorkerFetchDispatchHeader(currentRequest, { buildBudgetMs, ref }));
+        }
         if (resolved === undefined) {
           const result = await resolveWorkerSource({
             buildBudgetMs,
@@ -206,10 +211,41 @@ export class DynamicWorkerRunner {
         }
         // The serve header is trusted platform output on the fetch lane —
         // stamped (and any user-set value dropped) at this authority boundary.
-        const entrypoint = this.#loadResolved(resolved).getEntrypoint(ref.entrypoint, {
-          props: ref.props ?? {},
-        }) as Fetcher;
-        response = withWorkerCommit(await entrypoint.fetch(request), resolved.commitOid);
+        const entrypoint = this.#loadResolved(resolved, freshInstanceNonce).getEntrypoint(
+          ref.entrypoint,
+          {
+            props: ref.props ?? {},
+          },
+        ) as Fetcher;
+        return withWorkerCommit(await entrypoint.fetch(currentRequest), resolved.commitOid);
+      };
+
+      const retryRequest =
+        ref.type === "stateless" &&
+        !isWebSocketUpgradeRequest(request) &&
+        (request.method === "GET" || request.method === "HEAD")
+          ? // Cloudflare's clone() widens the Request metadata generics even
+            // though the runtime value remains the same Fetch API request.
+            (request.clone() as typeof request)
+          : undefined;
+      let response: Response;
+      try {
+        response = await dispatch(request);
+      } catch (error) {
+        if (
+          retryRequest === undefined ||
+          !(error instanceof Error) ||
+          !error.message.includes(WORKERS_RPC_CLONE_VERSION_ERROR)
+        ) {
+          throw error;
+        }
+        span.setAttribute("iterate.worker.rpc_clone_version_retry", true);
+        console.warn("Workers RPC clone-version skew; retrying stateless fetch once", {
+          projectId: this.#projectId,
+          rayId: request.headers.get("cf-ray") ?? undefined,
+          traceRole,
+        });
+        response = await dispatch(retryRequest, crypto.randomUUID());
       }
       span.setAttribute("http.response.status_code", response.status);
       return response;
@@ -249,7 +285,7 @@ export class DynamicWorkerRunner {
       );
     }
 
-    return this.#trace(ref, "call", traceRole, async () => {
+    return this.#trace(ref, "call", traceRole, async (span) => {
       if (ref.type === "stateful") {
         // Method replay must happen inside StatefulWorkerDurableObject. Returning
         // a dynamic facet stub through one DO and then invoking it from another RPC
@@ -281,11 +317,31 @@ export class DynamicWorkerRunner {
         return result;
       }
 
-      const loaded = await this.#getStatelessEntrypoint(ref, buildBudgetMs);
-      if (!loaded.ok) throw new WorkerBuildFailedError(loaded.failure);
-      return flattenNestedPath
-        ? await invokePreferringFlattenedPath({ args, path, target: loaded.target })
-        : await replayPath({ args, path, target: loaded.target });
+      const dispatch = async (freshInstanceNonce?: string) => {
+        const loaded = await this.#getStatelessEntrypoint(ref, buildBudgetMs, freshInstanceNonce);
+        if (!loaded.ok) throw new WorkerBuildFailedError(loaded.failure);
+        return flattenNestedPath
+          ? await invokePreferringFlattenedPath({ args, path, target: loaded.target })
+          : await replayPath({ args, path, target: loaded.target });
+      };
+      try {
+        return await dispatch();
+      } catch (error) {
+        if (
+          path.length !== 1 ||
+          path[0] !== "processEventBatch" ||
+          !(error instanceof Error) ||
+          !error.message.includes(WORKERS_RPC_CLONE_VERSION_ERROR)
+        ) {
+          throw error;
+        }
+        span.setAttribute("iterate.worker.rpc_clone_version_retry", true);
+        console.warn("Workers RPC clone-version skew; retrying stateless event batch once", {
+          projectId: this.#projectId,
+          traceRole,
+        });
+        return await dispatch(crypto.randomUUID());
+      }
     });
   }
 
@@ -307,6 +363,7 @@ export class DynamicWorkerRunner {
   async #load(
     ref: DynamicWorkerRef,
     buildBudgetMs?: number,
+    freshInstanceNonce?: string,
   ): Promise<
     | { ok: true; resolved: ResolvedWorkerSource; worker: WorkerStub }
     | { failure: WorkerBuildFailure; ok: false }
@@ -320,13 +377,14 @@ export class DynamicWorkerRunner {
     return {
       ok: true,
       resolved: result.source,
-      worker: this.#loadResolved(result.source),
+      worker: this.#loadResolved(result.source, freshInstanceNonce),
     };
   }
 
-  #loadResolved(resolved: ResolvedWorkerSource): WorkerStub {
+  #loadResolved(resolved: ResolvedWorkerSource, freshInstanceNonce?: string): WorkerStub {
     return loadResolvedWorker({
       bindings: this.#bindings,
+      freshInstanceNonce,
       globalOutbound: this.#globalOutbound,
       projectId: this.#projectId,
       resolved,
