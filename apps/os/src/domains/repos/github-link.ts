@@ -94,6 +94,7 @@ async function removeGithubWebhookSubscription(
 }
 
 type LinkRepoToGithubOptions = {
+  createIfMissing?: boolean;
   repo?: {
     configureGithubLink(link: GithubRepoLink): Promise<GithubRepoLink>;
     getGithubLink(): GithubRepoLink | null | Promise<GithubRepoLink | null>;
@@ -145,6 +146,11 @@ export async function linkRepoToGithub(
   } catch (error) {
     if ((error as { status?: number }).status !== 404) {
       throw normalizeGithubError(error, input.connection);
+    }
+    if (options.createIfMissing === false) {
+      throw new Error(
+        `GitHub repository ${owner}/${repo} must already exist and be accessible through connection "${input.connection}".`,
+      );
     }
     // Create-on-link: private by default. Installation tokens can only create
     // repositories under an ORG the App is installed on (with Administration

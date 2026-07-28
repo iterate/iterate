@@ -216,10 +216,14 @@ provider-neutral rendering boundary do not need to change.
 ## Production Reset
 
 This contract starts against an empty production data set. Before deploying
-it, erase the production OS domain data and recreate production through the
-normal recreation procedure, including regenerating project config repos from
-the current template. Do not add a journal migration, compatibility reducer,
-fallback parser, heal path, or tests for the discarded contract.
+it, erase the production OS domain data only when the rollout explicitly
+authorizes that destructive step, then restore retained projects from their
+stable [semantic seeds](./project-seeds.md). Linked GitHub repositories remain
+the project-config authority: check them for compatibility with this contract,
+then import their current default-branch contents; never regenerate an existing
+project repo from the template or replay its old OS stream. Do not add a journal
+migration, compatibility reducer, fallback parser, heal path, or tests for the
+discarded contract.
 
 The reset and recreation are part of this change's acceptance proof. Verify
 that newly created agents contain the v2 birth/config/context events, can run a

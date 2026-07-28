@@ -106,6 +106,20 @@ export interface Project {
    */
   identity(): Promise<ProjectIdentity>;
   /**
+   * Admin-only project-seed repair for a platform-owned apex that already
+   * reaches this worker through Worker routes. Primes the routing directory,
+   * records a fresh current-version direct-observed fact, and waits until the
+   * project state reports the hostname active.
+   */
+  restoreDirectHostname(input: { hostname: string }): Promise<{ hostname: string }>;
+  /**
+   * Admin-only project-seed command for a Cloudflare-managed custom hostname.
+   * This submits a fresh current-version provision/refresh intent through the
+   * normal project processor, uses the hostname routing directory as the
+   * ownership authority, and proves active routing before returning.
+   */
+  restoreCloudflareHostname(input: { hostname: string }): Promise<{ hostname: string }>;
+  /**
    * Resolve once the bootstrap saga has committed `project/ready`. Replays
    * stream history first, so an already-ready project resolves immediately,
    * and dialing the processor here heals a lost birth wake rather than just
@@ -651,7 +665,13 @@ export interface EmailCapability {
    * Object at /integrations/email, whose EmailProcessor routes inbound mail.
    * Subscriptions that wake it persist `["email", "processor",
    * "wakeStreamProcessor"]`. */
-  processor: StreamProcessorRpc;
+  processor: StreamProcessorRpc<EmailProcessorState>;
+  /**
+   * Admin-only project-seed restore for inbound email policy. The archive is a
+   * minimum desired set: this adds or proves every declared sender, but never
+   * removes a sender omitted from an older seed.
+   */
+  restoreAllowedSenders(input: { patterns: string[] }): Promise<{ allowedSenders: string[] }>;
   /**
    * Send one email from the project's own address (`<slug>@<hostname base>`).
    * From ANY agent scope, send binds the conversation to the calling agent:
@@ -817,6 +837,7 @@ export interface ProjectIntegrations {
         gmail: string;
         list: string;
         parallel: string;
+        restoreConnection: string;
         slack: string;
         startOAuthFlow: string;
         telegram: string;
@@ -852,6 +873,15 @@ export interface ProjectIntegrations {
    * disconnected first; possession of the token is the authorization).
    */
   connectTelegram(input: { botToken: string; steal?: boolean }): Promise<ConnectTelegramResult>;
+  /**
+   * Admin-only project-seed restore. Unlike hand-appending connected facts,
+   * this validates the provider identity, writes a fresh secret and lifecycle
+   * journal through the owning connect boundary, claims webhook routing, and
+   * proves the resulting claim before returning.
+   */
+  restoreConnection(
+    input: RestoreIntegrationConnectionInput,
+  ): Promise<RestoreIntegrationConnectionResult>;
   /** Begin the OAuth connect flow; returns the authorization URL. */
   startOAuthFlow(input: {
     callbackUrl?: string;
@@ -1068,7 +1098,17 @@ export interface Repo {
    * repositories, it is created private. Re-linking replaces the previous
    * link.
    */
-  linkGithub(input: { connection: string; owner: string; repo: string }): Promise<LinkGithubResult>;
+  linkGithub(input: {
+    connection: string;
+    /** Refuse to create a missing remote. Project-seed restore uses this
+     * because GitHub must already be the config authority. */
+    createIfMissing?: boolean;
+    /** Disable the usual starter-history push when GitHub is already the
+     * authority and the caller will immediately resetFromGithub(). */
+    initialPush?: boolean;
+    owner: string;
+    repo: string;
+  }): Promise<LinkGithubResult>;
   /** Remove the GitHub link and the subscription that copies its webhooks here. */
   unlinkGithub(): Promise<{ unlinked: boolean }>;
   /**
@@ -1463,6 +1503,8 @@ export interface Secret {
   __describe(): Promise<Description & SecretDescription>;
   /** Egress fetch with this secret's placeholders substituted server-side. */
   fetch(request: Request): Promise<Response>;
+  /** Admin-only recovery read of the current encrypted cell. */
+  exportForProjectSeed(): Promise<SecretProjectSeedExport>;
   /** Restart the secret's server-side object; the next request boots it fresh. */
   kill(): Promise<void>;
   /**
@@ -2628,6 +2670,14 @@ export type EgressResponse = {
 /** Live replacement for project egress. It sees getSecret(...) placeholders, never material. */
 export type ProjectEgressInterceptor = (req: Request) => Promise<Response>;
 
+/** Reduced project email-routing state exposed through the processor capability. */
+export type EmailProcessorState = {
+  birthCertificate: { config: Record<string, never> } | null;
+  threads: Record<string, string>;
+  threadByMessageId: Record<string, string>;
+  allowedSenders: string[];
+};
+
 /**
  * One outbound email attachment as the CALLER passes it: either a stored
  * project file addressed by its `itx.files` path, or inline base64 content
@@ -2792,6 +2842,40 @@ export type ConnectTelegramResult =
   /** The bot is claimed by another project (never named — the caller may be a
    * different org). Retry with `steal: true` to move it. */
   | { botUsername: string | null; error: "telegram_bot_already_claimed"; ok: false };
+
+/**
+ * Narrow operator-only input for rebuilding a connection from a durable
+ * project seed. Each arm carries enough provider identity to validate the
+ * credential before any project state is written.
+ */
+export type RestoreIntegrationConnectionInput =
+  | {
+      botToken: string;
+      connection?: string;
+      provider: "slack";
+      teamId: string;
+    }
+  | {
+      connection?: string;
+      installationId: string;
+      provider: "github";
+    }
+  | {
+      connection: string;
+      googleUserId: string;
+      material: {
+        accessToken?: string;
+        refreshToken: string;
+      };
+      provider: "google";
+    };
+
+/** Proven provider identity returned after an integration seed restore succeeds. */
+export type RestoreIntegrationConnectionResult = {
+  connection: string;
+  externalId: string;
+  provider: "github" | "google" | "slack";
+};
 
 /** The built-ins that connect via a redirect flow (OAuth code exchange or
  * GitHub App installation) — the `startOAuthFlow`/`completeConnect` pair.
@@ -3775,6 +3859,19 @@ export type SecretDescription = {
   visibility: SecretVisibility;
   /** The configured refresh strategy's kind, or null when none is configured. */
   refresh: SecretRefresh["kind"] | null;
+};
+
+/** Encrypted current-value snapshot used only by the admin project-seed CLI. */
+export type SecretProjectSeedExport = {
+  egressUrls: string[];
+  encrypted: {
+    algorithm: string;
+    ciphertext: string;
+    iv: string;
+  };
+  offset: number;
+  refresh: SecretRefresh | null;
+  visibility: SecretVisibility;
 };
 
 /** Input to `itx.secrets.get(path).create` — the birth policy (egress pin,

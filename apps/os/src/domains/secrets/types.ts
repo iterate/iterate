@@ -164,3 +164,16 @@ export type SecretDescription = {
   /** The configured refresh strategy's kind, or null when none is configured. */
   refresh: SecretRefresh["kind"] | null;
 };
+
+/** Encrypted current-value snapshot used only by the admin project-seed CLI. */
+export type SecretProjectSeedExport = {
+  egressUrls: string[];
+  encrypted: {
+    algorithm: string;
+    ciphertext: string;
+    iv: string;
+  };
+  offset: number;
+  refresh: SecretRefresh | null;
+  visibility: SecretVisibility;
+};
