@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  isExplicitStreamKillLifecycleError,
   isDurableObjectLifecycleError,
   isRetryableDurableObjectAvailabilityError,
   isStreamWaitTimeoutError,
   isStreamUnavailableError,
   rethrowStreamUnavailable,
   retryIdempotentDurableObjectOperation,
+  STREAM_KILL_REASON,
   STREAM_UNAVAILABLE_MESSAGE_PREFIX,
   STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX,
 } from "./stream-unavailable.ts";
@@ -33,6 +35,22 @@ describe("isDurableObjectLifecycleError", () => {
     ["undefined", undefined, false],
   ])("%s → %s", (_name, error, expected) => {
     expect(isDurableObjectLifecycleError(error)).toBe(expected);
+  });
+});
+
+describe("isExplicitStreamKillLifecycleError", () => {
+  it("recognises only our direct flagged kill rejection", () => {
+    expect(
+      isExplicitStreamKillLifecycleError(
+        Object.assign(new Error(STREAM_KILL_REASON), { durableObjectReset: true }),
+      ),
+    ).toBe(true);
+    expect(
+      isExplicitStreamKillLifecycleError(
+        Object.assign(new Error("code updated"), { durableObjectReset: true }),
+      ),
+    ).toBe(false);
+    expect(isExplicitStreamKillLifecycleError(new Error(STREAM_KILL_REASON))).toBe(false);
   });
 });
 
@@ -87,6 +105,21 @@ describe("retryIdempotentDurableObjectOperation", () => {
     const operation = vi.fn<() => Promise<string>>().mockRejectedValue(overload);
 
     await expect(retryIdempotentDurableObjectOperation({ operation })).rejects.toBe(overload);
+    expect(operation).toHaveBeenCalledOnce();
+  });
+
+  it("allows an idempotent operation to veto an otherwise retryable failure", async () => {
+    const explicitKill = Object.assign(new Error(STREAM_KILL_REASON), {
+      durableObjectReset: true,
+    });
+    const operation = vi.fn<() => Promise<string>>().mockRejectedValue(explicitKill);
+
+    await expect(
+      retryIdempotentDurableObjectOperation({
+        operation,
+        retryWhen: (error) => !isExplicitStreamKillLifecycleError(error),
+      }),
+    ).rejects.toBe(explicitKill);
     expect(operation).toHaveBeenCalledOnce();
   });
 });

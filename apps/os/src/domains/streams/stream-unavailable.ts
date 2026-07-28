@@ -25,6 +25,13 @@
 export const STREAM_UNAVAILABLE_MESSAGE_PREFIX = "stream-unavailable: ";
 
 /**
+ * Stable operator-requested abort reason for a stream incarnation. Unlike
+ * workerd's internal reset wording, this message is ours and is part of the
+ * observable `kill()` contract.
+ */
+export const STREAM_KILL_REASON = "kill requested";
+
+/**
  * Identifies the stream DO's own one-shot waiter timeout across Workers RPC.
  * The public facade uses shorter one-shot waits under one caller deadline, so
  * it must distinguish an exhausted internal slice from a predicate failure.
@@ -46,6 +53,19 @@ export function isDurableObjectLifecycleError(error: unknown): boolean {
   };
   return (
     flags.overloaded !== true && (flags.durableObjectReset === true || flags.retryable === true)
+  );
+}
+
+/**
+ * Whether a direct stub rejection came from the public stream `kill()` door.
+ * Long-lived read waits keep that explicit operator action observable instead
+ * of silently turning it into deploy/eviction recovery.
+ */
+export function isExplicitStreamKillLifecycleError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message === STREAM_KILL_REASON &&
+    isDurableObjectLifecycleError(error)
   );
 }
 
@@ -80,11 +100,14 @@ export function isRetryableDurableObjectAvailabilityError(error: unknown): boole
 export async function retryIdempotentDurableObjectOperation<Result>(args: {
   operation: () => Promise<Result>;
   onRetry?: (context: { attempt: number; error: unknown; maxAttempts: 2 }) => void;
+  retryWhen?: (error: unknown) => boolean;
 }): Promise<Result> {
   try {
     return await args.operation();
   } catch (error) {
-    if (!isRetryableDurableObjectAvailabilityError(error)) throw error;
+    if (!isRetryableDurableObjectAvailabilityError(error) || args.retryWhen?.(error) === false) {
+      throw error;
+    }
     args.onRetry?.({ attempt: 1, error, maxAttempts: 2 });
     return await args.operation();
   }

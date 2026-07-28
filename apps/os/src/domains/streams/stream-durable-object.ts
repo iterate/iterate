@@ -33,6 +33,7 @@ import type { StreamRuntimeDebugState } from "./stream-runtime-state.ts";
 import { createSubscriberDial } from "./subscriber-sinks.ts";
 import {
   isDurableObjectLifecycleError,
+  STREAM_KILL_REASON,
   STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX,
 } from "./stream-unavailable.ts";
 import {
@@ -1465,7 +1466,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   /** Kills the current Durable Object incarnation so experiments can observe restart behavior. */
   kill(): void {
-    this.ctx.abort("kill requested");
+    this.ctx.abort(STREAM_KILL_REASON);
   }
 }
 

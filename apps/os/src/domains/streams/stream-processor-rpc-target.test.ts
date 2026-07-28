@@ -6,6 +6,7 @@ import {
   StreamProcessorRpcTarget,
   StreamRpcTarget,
 } from "../../rpc-targets.ts";
+import { STREAM_KILL_REASON, STREAM_UNAVAILABLE_MESSAGE_PREFIX } from "./stream-unavailable.ts";
 
 describe("StreamRpcTarget", () => {
   it("relays the stream runtime LiveState property without polling runtimeState", async () => {
@@ -537,7 +538,7 @@ describe("StreamRpcTarget", () => {
   });
 
   it("replays one stream lifecycle rejection on a fresh stub from the same offset", async () => {
-    const lifecycleError = Object.assign(new Error("kill requested"), {
+    const lifecycleError = Object.assign(new Error("code updated"), {
       durableObjectReset: true,
     });
     const event = {
@@ -574,7 +575,7 @@ describe("StreamRpcTarget", () => {
   });
 
   it("keeps a second stream lifecycle rejection terminal", async () => {
-    const lifecycleError = Object.assign(new Error("kill requested"), {
+    const lifecycleError = Object.assign(new Error("code updated"), {
       durableObjectReset: true,
     });
     let acquisitions = 0;
@@ -591,9 +592,32 @@ describe("StreamRpcTarget", () => {
     });
 
     await expect(stream.waitForEvent({ afterOffset: 0, timeoutMs: 30_000 })).rejects.toThrow(
-      "stream-unavailable: kill requested",
+      "stream-unavailable: code updated",
     );
     expect(acquisitions).toBe(2);
+  });
+
+  it("keeps an explicit stream kill observable without replaying it", async () => {
+    const explicitKill = Object.assign(new Error(STREAM_KILL_REASON), {
+      durableObjectReset: true,
+    });
+    let acquisitions = 0;
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get durableObjectStub() {
+        acquisitions += 1;
+        return { waitForEvent: () => Promise.reject(explicitKill) } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/events",
+      projectId: "prj_test",
+    });
+
+    await expect(stream.waitForEvent({ afterOffset: 0, timeoutMs: 30_000 })).rejects.toThrow(
+      `${STREAM_UNAVAILABLE_MESSAGE_PREFIX}${STREAM_KILL_REASON}`,
+    );
+    expect(acquisitions).toBe(1);
   });
 
   it("keeps one public timeout across orphaned stream waiters", async () => {

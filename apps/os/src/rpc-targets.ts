@@ -186,6 +186,7 @@ import type {
 } from "./domains/workers/schemas.ts";
 import { retainProcessEventBatch } from "./domains/streams/subscriber-sinks.ts";
 import {
+  isExplicitStreamKillLifecycleError,
   isRetryableDurableObjectAvailabilityError,
   isStreamWaitTimeoutError,
   rethrowStreamUnavailable,
@@ -498,9 +499,11 @@ function retryLoggedIdempotentOperation<Result>(input: {
   context: Record<string, unknown>;
   message: string;
   operation: () => Promise<Result>;
+  retryWhen?: (error: unknown) => boolean;
 }): Promise<Result> {
   return retryIdempotentDurableObjectOperation({
     operation: input.operation,
+    retryWhen: input.retryWhen,
     onRetry: ({ error }) => {
       console.info(input.message, { error, ...input.context });
     },
@@ -720,6 +723,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       const wait = retryLoggedIdempotentOperation({
         message: "stream wait retrying after Durable Object reset",
         context: { path: this.props.path, projectId: this.props.projectId },
+        retryWhen: (error) => !isExplicitStreamKillLifecycleError(error),
         operation: async () => {
           const result = await this.durableObjectStub.waitForEvent({
             ...args,
@@ -734,8 +738,9 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       // subscription cannot replay. Let that success win. Likewise, retain a
       // late predicate/application failure as the terminal result; only the
       // explicitly modelled slice timeout is safe to replace with a fresh
-      // durable replay. A classified lifecycle reset gets one immediate replay
-      // on a fresh stub inside `wait`; its second failure remains terminal.
+      // durable replay. A deploy/eviction lifecycle reset gets one immediate
+      // replay on a fresh stub inside `wait`; an explicit public kill and a
+      // second availability failure remain terminal.
       void wait.then(terminal.resolve, (error: unknown) => {
         if (!isStreamWaitTimeoutError(error)) terminal.reject(error);
       });

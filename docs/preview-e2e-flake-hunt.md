@@ -72,11 +72,12 @@ barrier nor a targeted recovery mechanism.
 
 This round therefore deletes the gate and its test/fixture plumbing. A
 read-only `waitForEvent` with a stable durable cursor now replays one classified
-reset on a fresh stub; a second reset and every predicate/application failure
-remain terminal. Raw overload is explicitly non-retryable even if workerd also
-sets `retryable`, so recovery cannot amplify a saturated object. Preview retry
-annotations also distinguish passed-after-retry from still-failed records
-instead of claiming every retry passed.
+deploy/eviction reset on a fresh stub; an explicit public `kill()`, a second
+reset, and every predicate/application failure remain terminal. Raw overload is
+explicitly non-retryable even if workerd also sets `retryable`, so recovery
+cannot amplify a saturated object. Preview retry annotations also distinguish
+passed-after-retry from still-failed records instead of claiming every retry
+passed.
 
 The new immutable-head proof starts at 0/25 after the draft PR's preview has
 passed. As in every current round, each counted iteration is a separate
