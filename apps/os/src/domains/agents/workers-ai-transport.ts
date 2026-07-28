@@ -307,7 +307,7 @@ async function drainSseResponse(input: {
   const handleChunk = async (chunk: unknown) => {
     text += extractChunkText(chunk);
     usage = extractUsage(chunk) ?? usage;
-    await input.onChunk(chunk, chunkCount);
+    await input.deadline.race(input.onChunk(chunk, chunkCount));
     chunkCount += 1;
   };
 
