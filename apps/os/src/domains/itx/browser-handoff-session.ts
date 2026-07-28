@@ -9,7 +9,6 @@ import type {
   CfBrowserHandoffInput,
   CfBrowserHandoffResult,
   CfBrowserHandoffStarted,
-  CfBrowserNavigationResult,
   CfBrowserOpenInput,
   CfBrowserPageInfo,
   CfBrowserTextInput,
@@ -32,16 +31,19 @@ const HandoffComplete = z.object({
 });
 
 type PendingHandoff = {
-  completion: Promise<HandoffCompleteResponse>;
-  completionEvent: HandoffCompleteResponse | undefined;
+  completion: Promise<HandoffCompletion>;
   handoffId: string | undefined;
   listener: (event: unknown) => void;
+  outcome: HandoffCompletion | undefined;
   protocolAnomaly: CfBrowserHandoffResult["protocolAnomaly"];
-  reject: (error: Error) => void;
-  settled: boolean;
+  resolve: (outcome: HandoffCompletion) => void;
   timeoutId: ReturnType<typeof setTimeout> | undefined;
   waiting: boolean;
 };
+
+type HandoffCompletion =
+  | { event: HandoffCompleteResponse; status: "completed" }
+  | { error: Error; status: "failed" };
 
 /**
  * Owns one stateful Browser Run page while an agent alternates between
@@ -64,24 +66,6 @@ export class BrowserHandoffSession {
     this.#browser.on("disconnected", this.#handleBrowserDisconnected);
   }
 
-  async pageInfo(): Promise<CfBrowserPageInfo> {
-    this.#assertOpen();
-    return {
-      title: await this.#page.title(),
-      url: this.#page.url(),
-    };
-  }
-
-  async goto(url: string): Promise<CfBrowserNavigationResult> {
-    this.#assertOpen();
-    assertBrowserUrl(url);
-    const response = await this.#page.goto(url, { waitUntil: "domcontentloaded" });
-    return {
-      ...(await this.pageInfo()),
-      status: response?.status() ?? null,
-    };
-  }
-
   async text(input: CfBrowserTextInput = {}): Promise<string> {
     this.#assertOpen();
     const maxCharacters = input.maxCharacters ?? DEFAULT_TEXT_CHARACTERS;
@@ -96,11 +80,6 @@ export class BrowserHandoffSession {
     }
     const text = await this.#page.evaluate(() => document.body?.innerText ?? "");
     return text.slice(0, maxCharacters);
-  }
-
-  async screenshot(): Promise<Uint8Array> {
-    this.#assertOpen();
-    return new Uint8Array(await this.#page.screenshot({ type: "png" }));
   }
 
   async startHandoff(input: CfBrowserHandoffInput): Promise<CfBrowserHandoffStarted> {
@@ -130,42 +109,33 @@ export class BrowserHandoffSession {
         );
       }
 
+      const liveViewRequestedAt = Date.now();
       const liveView = await this.#cdp.send("Cloudflare.getLiveView", {
         expiresInMs: timeoutMs,
         mode: "tab",
       });
-      const expiresAt = Date.now() + timeoutMs;
-      let resolveCompletion: (event: HandoffCompleteResponse) => void = () => undefined;
-      let rejectCompletion: (error: Error) => void = () => undefined;
-      const completion = new Promise<HandoffCompleteResponse>((resolve, reject) => {
-        resolveCompletion = resolve;
-        rejectCompletion = reject;
-      });
-      // A browser disconnect can reject before the caller enters
-      // waitForHandoff(); observe it here while preserving the rejection for
-      // the eventual waiter.
-      void completion.catch(() => undefined);
+      const expiresAt = liveViewRequestedAt + timeoutMs;
+      const completion = Promise.withResolvers<HandoffCompletion>();
       const pending: PendingHandoff = {
-        completion,
-        completionEvent: undefined,
+        completion: completion.promise,
         handoffId: undefined,
         listener: (event) => {
-          if (pending.settled) return;
-          pending.settled = true;
+          if (pending.outcome !== undefined) return;
           clearTimeout(pending.timeoutId);
           const result = HandoffComplete.safeParse(event);
-          if (result.success) {
-            pending.completionEvent = result.data;
-            resolveCompletion(result.data);
-          } else {
-            rejectCompletion(
-              new Error(`Browser Run returned an invalid handoff completion: ${result.error}`),
-            );
-          }
+          pending.outcome = result.success
+            ? { event: result.data, status: "completed" }
+            : {
+                error: new Error(
+                  `Browser Run returned an invalid handoff completion: ${result.error}`,
+                ),
+                status: "failed",
+              };
+          completion.resolve(pending.outcome);
         },
+        outcome: undefined,
         protocolAnomaly: undefined,
-        reject: rejectCompletion,
-        settled: false,
+        resolve: completion.resolve,
         timeoutId: undefined,
         waiting: false,
       };
@@ -193,14 +163,16 @@ export class BrowserHandoffSession {
           liveViewUrl: liveView.devtoolsFrontendUrl,
         };
       } catch (error) {
-        if (pending.completionEvent !== undefined) {
+        const startError =
+          error instanceof Error ? error : new Error("Browser Run handoff failed to start.");
+        if (pending.outcome?.status === "completed") {
           // The explicit completion is the stronger fact, but a rejected
           // start acknowledgement is still a protocol anomaly agents and
           // operators must be able to classify.
-          pending.handoffId = pending.completionEvent.handoffId ?? crypto.randomUUID();
+          pending.handoffId = pending.outcome.event.handoffId ?? crypto.randomUUID();
           pending.protocolAnomaly = "start-command-rejected-after-completion";
           console.error("Browser Run handoff command rejected after completion", {
-            error,
+            error: startError,
             handoffId: pending.handoffId,
           });
           return {
@@ -209,11 +181,17 @@ export class BrowserHandoffSession {
             liveViewUrl: liveView.devtoolsFrontendUrl,
           };
         }
-        this.#failPendingHandoff(
-          error instanceof Error ? error : new Error("Browser Run handoff failed to start."),
-        );
+        if (pending.outcome?.status === "failed") {
+          console.error("Browser Run handoff command rejected after invalid completion", {
+            completionError: pending.outcome.error,
+            startError,
+          });
+          this.#pendingHandoff = undefined;
+          throw pending.outcome.error;
+        }
+        this.#failPendingHandoff(startError);
         this.#pendingHandoff = undefined;
-        throw error;
+        throw startError;
       }
     } finally {
       this.#handoffStarting = false;
@@ -230,7 +208,9 @@ export class BrowserHandoffSession {
     }
     pending.waiting = true;
     try {
-      const result = await pending.completion;
+      const completion = await pending.completion;
+      if (completion.status === "failed") throw completion.error;
+      const result = completion.event;
       if (result.handoffId !== undefined && result.handoffId !== handoffId) {
         throw new Error(
           `Browser Run completed unexpected handoff ${result.handoffId}; expected ${handoffId}.`,
@@ -280,11 +260,11 @@ export class BrowserHandoffSession {
 
   #failPendingHandoff(error: Error): void {
     const pending = this.#pendingHandoff;
-    if (pending === undefined || pending.settled) return;
-    pending.settled = true;
+    if (pending === undefined || pending.outcome !== undefined) return;
     clearTimeout(pending.timeoutId);
     this.#cdp.off("Cloudflare.handoffComplete", pending.listener);
-    pending.reject(error);
+    pending.outcome = { error, status: "failed" };
+    pending.resolve(pending.outcome);
   }
 
   readonly #handleBrowserDisconnected = (): void => {

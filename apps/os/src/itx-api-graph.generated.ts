@@ -795,15 +795,13 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "CfBrowserSession",
     kind: "interface",
     sourceText:
-      "/** One stateful Browser Run page that can pause for a human and then resume. */\nexport interface CfBrowserSession {\n  __describe(): Promise<Description>;\n  pageInfo(): Promise<CfBrowserPageInfo>;\n  goto(url: string): Promise<CfBrowserNavigationResult>;\n  text(input?: CfBrowserTextInput): Promise<string>;\n  screenshot(): Promise<Uint8Array>;\n  startHandoff(input: CfBrowserHandoffInput): Promise<CfBrowserHandoffStarted>;\n  waitForHandoff(handoffId: string): Promise<CfBrowserHandoffResult>;\n  /** Close the Browser Run session; safe to call more than once. */\n  close(): Promise<void>;\n  [Symbol.dispose](): void;\n}",
+      "/** One stateful Browser Run page that can pause for a human and then resume. */\nexport interface CfBrowserSession {\n  __describe(): Promise<Description>;\n  text(input?: CfBrowserTextInput): Promise<string>;\n  startHandoff(input: CfBrowserHandoffInput): Promise<CfBrowserHandoffStarted>;\n  waitForHandoff(handoffId: string): Promise<CfBrowserHandoffResult>;\n  /** Close the Browser Run session; safe to call more than once. */\n  close(): Promise<void>;\n  [Symbol.dispose](): void;\n}",
     summary: "One stateful Browser Run page that can pause for a human and then resume.",
     memberSummaries: {
       close: "Close the Browser Run session; safe to call more than once.",
     },
     referencedTypeNames: [
       "Description",
-      "CfBrowserPageInfo",
-      "CfBrowserNavigationResult",
       "CfBrowserTextInput",
       "CfBrowserHandoffInput",
       "CfBrowserHandoffStarted",
@@ -2034,24 +2032,6 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
-    name: "CfBrowserPageInfo",
-    kind: "typeAlias",
-    sourceText:
-      "/** The current page identity in a stateful Browser Run session. */\nexport type CfBrowserPageInfo = {\n  url: string;\n  title: string;\n};",
-    summary: "The current page identity in a stateful Browser Run session.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "CfBrowserNavigationResult",
-    kind: "typeAlias",
-    sourceText:
-      "/** Result of navigating the stateful Browser Run session. */\nexport type CfBrowserNavigationResult = CfBrowserPageInfo & {\n  status: number | null;\n};",
-    summary: "Result of navigating the stateful Browser Run session.",
-    memberSummaries: {},
-    referencedTypeNames: ["CfBrowserPageInfo"],
-  },
-  {
     name: "CfBrowserTextInput",
     kind: "typeAlias",
     sourceText:
@@ -2452,6 +2432,15 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     sourceText:
       "/** Stable identity for one live connection to a processEventBatch callback. */\nexport type ConnectionKey = string;",
     summary: "Stable identity for one live connection to a processEventBatch callback.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "CfBrowserPageInfo",
+    kind: "typeAlias",
+    sourceText:
+      "/** The current page identity in a stateful Browser Run session. */\nexport type CfBrowserPageInfo = {\n  url: string;\n  title: string;\n};",
+    summary: "The current page identity in a stateful Browser Run session.",
     memberSummaries: {},
     referencedTypeNames: [],
   },

@@ -106,11 +106,6 @@ export type CfBrowserPageInfo = {
   title: string;
 };
 
-/** Result of navigating the stateful Browser Run session. */
-export type CfBrowserNavigationResult = CfBrowserPageInfo & {
-  status: number | null;
-};
-
 /** Input for pausing Browser Run automation for a human. */
 export type CfBrowserHandoffInput = {
   /** The concrete task the human should complete in the Live View. */

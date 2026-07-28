@@ -1,10 +1,4 @@
-import type {
-  Browser,
-  CDPSession,
-  HandoffCompleteResponse,
-  HTTPResponse,
-  Page,
-} from "@cloudflare/puppeteer";
+import type { Browser, CDPSession, HandoffCompleteResponse, Page } from "@cloudflare/puppeteer";
 import { describe, expect, it, vi } from "vitest";
 import { BrowserHandoffSession } from "./browser-handoff-session.ts";
 
@@ -52,9 +46,13 @@ class FakeCdp {
   }
 
   complete(response: HandoffCompleteResponse): void {
+    this.completeUnknown(response);
+  }
+
+  completeUnknown(response: unknown): void {
     const listener = this.handoffListener;
     this.handoffListener = undefined;
-    listener?.(response);
+    listener?.(response as HandoffCompleteResponse);
   }
 }
 
@@ -101,17 +99,8 @@ class FakePage {
     return this.currentTitle;
   }
 
-  async goto(url: string): Promise<HTTPResponse | null> {
-    this.currentUrl = url;
-    return null;
-  }
-
   async evaluate(): Promise<string> {
     return "page text";
-  }
-
-  async screenshot(): Promise<Uint8Array> {
-    return new Uint8Array([1, 2, 3]);
   }
 }
 
@@ -216,6 +205,16 @@ describe("BrowserHandoffSession", () => {
       sessionActive: true,
       success: false,
     });
+  });
+
+  it("rejects malformed completion events at the external protocol boundary", async () => {
+    const { cdp, session } = createSession();
+    const handoff = await session.startHandoff({ instructions: "Complete the challenge." });
+    cdp.completeUnknown({ success: true, targetId: 42 });
+
+    await expect(session.waitForHandoff(handoff.handoffId)).rejects.toThrow(
+      /invalid handoff completion/,
+    );
   });
 
   it("preserves a settled human result if Browser Run disconnects before consumption", async () => {

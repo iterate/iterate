@@ -296,9 +296,7 @@ import type {
   CfBrowserHandoffInput,
   CfBrowserHandoffResult,
   CfBrowserHandoffStarted,
-  CfBrowserNavigationResult,
   CfBrowserOpenInput,
-  CfBrowserPageInfo,
   CfBrowserQuickAction,
   CfBrowserQuickActionOptions,
   CfBrowserTextInput,
@@ -2943,9 +2941,6 @@ class CfBrowserSessionRpcTarget extends IterateRpcTarget<"CfBrowserSession"> {
         'A scoped Browser Run page for agent automation with explicit human intervention. Call startHandoff({ instructions, timeoutMs? }), send the returned expiring liveViewUrl to the human, then waitForHandoff(handoffId) to resume on the same page. Always close() the session (or use `using`). Failed human completion is returned as success:false with its reason; infrastructure failures throw. If an explicit completion races a rejected start acknowledgement, the result is preserved with protocolAnomaly:"start-command-rejected-after-completion".',
       children: {
         close: "Close the Browser Run session; safe to call more than once.",
-        goto: "Navigate the current page to an absolute http(s) URL.",
-        pageInfo: "Read the current page URL and title.",
-        screenshot: "Capture the current page as PNG bytes.",
         startHandoff:
           "Pause automation and create an expiring human Live View (default 5 minutes, maximum 9).",
         text: "Extract bounded visible body text from the current page.",
@@ -2956,20 +2951,8 @@ class CfBrowserSessionRpcTarget extends IterateRpcTarget<"CfBrowserSession"> {
     });
   }
 
-  pageInfo(): Promise<CfBrowserPageInfo> {
-    return this.#session.pageInfo();
-  }
-
-  goto(url: string): Promise<CfBrowserNavigationResult> {
-    return this.#session.goto(url);
-  }
-
   text(input?: CfBrowserTextInput): Promise<string> {
     return this.#session.text(input);
-  }
-
-  screenshot(): Promise<Uint8Array> {
-    return this.#session.screenshot();
   }
 
   startHandoff(input: CfBrowserHandoffInput): Promise<CfBrowserHandoffStarted> {

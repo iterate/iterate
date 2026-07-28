@@ -1388,10 +1388,7 @@ export interface Stream {
 /** One stateful Browser Run page that can pause for a human and then resume. */
 export interface CfBrowserSession {
   __describe(): Promise<Description>;
-  pageInfo(): Promise<CfBrowserPageInfo>;
-  goto(url: string): Promise<CfBrowserNavigationResult>;
   text(input?: CfBrowserTextInput): Promise<string>;
-  screenshot(): Promise<Uint8Array>;
   startHandoff(input: CfBrowserHandoffInput): Promise<CfBrowserHandoffStarted>;
   waitForHandoff(handoffId: string): Promise<CfBrowserHandoffResult>;
   /** Close the Browser Run session; safe to call more than once. */
@@ -3701,17 +3698,6 @@ export type LiveStatePatch =
   | { set: unknown }
   | { fields?: Record<string, LiveStatePatch>; drop?: string[] };
 
-/** The current page identity in a stateful Browser Run session. */
-export type CfBrowserPageInfo = {
-  url: string;
-  title: string;
-};
-
-/** Result of navigating the stateful Browser Run session. */
-export type CfBrowserNavigationResult = CfBrowserPageInfo & {
-  status: number | null;
-};
-
 /** Bounds extraction from the current Browser Run page. */
 export type CfBrowserTextInput = {
   /** Maximum returned characters. Defaults to 20,000; maximum 100,000. */
@@ -4295,6 +4281,12 @@ export type StreamPingReply = { t0: number; t1: number; t2: number };
 
 /** Stable identity for one live connection to a processEventBatch callback. */
 export type ConnectionKey = string;
+
+/** The current page identity in a stateful Browser Run session. */
+export type CfBrowserPageInfo = {
+  url: string;
+  title: string;
+};
 
 /** `StreamEventInput` with `type`/`payload` narrowed to one event definition. */
 type TypedStreamEventInput<Type extends string = string, Payload = Record<string, unknown>> = Omit<
