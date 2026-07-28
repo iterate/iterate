@@ -46,10 +46,12 @@ describe("fetchFromDeploymentReadySecret", () => {
         expectedDeploymentVersion: "version-new",
         lifecycleFailures: 0,
         mismatches: 1,
+        observedDeploymentVersion: { id: "version-new" },
         path: "/integrations/petshop/alice",
         probeTimeouts: 0,
         probes: 2,
         projectId: "prj_test",
+        targetNewer: false,
         waitedMs: 250,
       },
     );

@@ -66,7 +66,7 @@ import {
   userPrincipalOf,
   widenProjectAccess,
 } from "./auth.ts";
-import { itxEnv as env, workerVersion } from "./env.ts";
+import { itxEnv as env, workerDeploymentVersion } from "./env.ts";
 import {
   listProjectDirectory,
   primeProjectDirectory,
@@ -5019,23 +5019,25 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
       executionId: crypto.randomUUID(),
       expiresAt: Date.now() + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
     };
-    const expectedDeploymentVersion = workerVersion(env);
+    const expectedDeploymentVersion = workerDeploymentVersion(env);
     const readiness = await waitForCapabilityHostDeploymentVersion({
       executionId: command.executionId,
       expectedVersion: expectedDeploymentVersion,
       path: this.#props.path,
       readVersion: () => Promise.resolve(this.#durableObject.deploymentVersion()),
     });
-    if (readiness.probes > 1) {
+    if (readiness.probes > 1 || readiness.targetNewer) {
       console.info("capability host deployment version converged before script request", {
         executionId: command.executionId,
         expectedDeploymentVersion,
         lifecycleFailures: readiness.lifecycleFailures,
         mismatches: readiness.mismatches,
+        observedDeploymentVersion: readiness.observedVersion,
         path: this.#props.path,
         probeTimeouts: readiness.probeTimeouts,
         probes: readiness.probes,
         projectId: this.#props.projectId,
+        targetNewer: readiness.targetNewer,
         waitedMs: readiness.waitedMs,
       });
     }
@@ -6391,7 +6393,7 @@ class ProjectEgressRpcTarget extends IterateRpcTarget<"ProjectEgress"> {
    * values in an `application/json` (or `+json`) body. */
   async fetch(request: Request): Promise<EgressResponse> {
     return await fetchFromDeploymentReadyProject({
-      expectedVersion: workerVersion(env),
+      expectedVersion: workerDeploymentVersion(env),
       project: projectStub(env.PROJECT, this.props.projectId),
       projectId: this.props.projectId,
       request: withStreamContext(request, this.props.streamContext),

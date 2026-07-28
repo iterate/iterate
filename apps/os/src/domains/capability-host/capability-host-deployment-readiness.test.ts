@@ -6,8 +6,31 @@ const BASE_INPUT = {
   expectedVersion: "version-new",
   path: "/",
 };
+const OLD_DEPLOYMENT = {
+  id: "version-old",
+  timestamp: "2026-07-28T12:46:58.341806Z",
+};
+const NEW_DEPLOYMENT = {
+  id: "version-new",
+  timestamp: "2026-07-28T12:48:43.221246Z",
+};
 
 describe("waitForCapabilityHostDeploymentVersion", () => {
+  it("accepts a target that has already advanced beyond the caller", async () => {
+    await expect(
+      waitForCapabilityHostDeploymentVersion({
+        ...BASE_INPUT,
+        expectedVersion: OLD_DEPLOYMENT,
+        readVersion: async () => NEW_DEPLOYMENT,
+      }),
+    ).resolves.toMatchObject({
+      mismatches: 0,
+      observedVersion: NEW_DEPLOYMENT,
+      probes: 1,
+      targetNewer: true,
+    });
+  });
+
   it("returns immediately when the hosting object already runs the edge version", async () => {
     const readVersion = vi.fn(async () => "version-new");
 
@@ -19,8 +42,10 @@ describe("waitForCapabilityHostDeploymentVersion", () => {
     ).resolves.toEqual({
       lifecycleFailures: 0,
       mismatches: 0,
+      observedVersion: { id: "version-new" },
       probeTimeouts: 0,
       probes: 1,
+      targetNewer: false,
       waitedMs: expect.any(Number),
     });
     expect(readVersion).toHaveBeenCalledOnce();
@@ -29,13 +54,14 @@ describe("waitForCapabilityHostDeploymentVersion", () => {
   it("waits for a stale hosting object to converge before work is requested", async () => {
     let time = 0;
     const readVersion = vi
-      .fn<() => Promise<string>>()
-      .mockResolvedValueOnce("version-old")
-      .mockResolvedValueOnce("version-new");
+      .fn<() => Promise<{ id: string; timestamp: string }>>()
+      .mockResolvedValueOnce(OLD_DEPLOYMENT)
+      .mockResolvedValueOnce(NEW_DEPLOYMENT);
 
     await expect(
       waitForCapabilityHostDeploymentVersion({
         ...BASE_INPUT,
+        expectedVersion: NEW_DEPLOYMENT,
         now: () => time,
         pollIntervalMs: 250,
         readVersion,
@@ -47,9 +73,38 @@ describe("waitForCapabilityHostDeploymentVersion", () => {
     ).resolves.toEqual({
       lifecycleFailures: 0,
       mismatches: 1,
+      observedVersion: NEW_DEPLOYMENT,
       probeTimeouts: 0,
       probes: 2,
+      targetNewer: false,
       waitedMs: 250,
+    });
+  });
+
+  it("waits rather than guessing the order of a legacy target id", async () => {
+    let time = 0;
+    const readVersion = vi
+      .fn<() => Promise<string | typeof NEW_DEPLOYMENT>>()
+      .mockResolvedValueOnce("version-old")
+      .mockResolvedValueOnce(NEW_DEPLOYMENT);
+
+    await expect(
+      waitForCapabilityHostDeploymentVersion({
+        ...BASE_INPUT,
+        expectedVersion: NEW_DEPLOYMENT,
+        now: () => time,
+        pollIntervalMs: 250,
+        readVersion,
+        sleep: async (durationMs) => {
+          time += durationMs;
+        },
+        timeoutMs: 1_000,
+      }),
+    ).resolves.toMatchObject({
+      mismatches: 1,
+      observedVersion: NEW_DEPLOYMENT,
+      probes: 2,
+      targetNewer: false,
     });
   });
 
@@ -77,8 +132,10 @@ describe("waitForCapabilityHostDeploymentVersion", () => {
     ).resolves.toEqual({
       lifecycleFailures: 1,
       mismatches: 0,
+      observedVersion: { id: "version-new" },
       probeTimeouts: 0,
       probes: 2,
+      targetNewer: false,
       waitedMs: 100,
     });
   });
@@ -103,8 +160,10 @@ describe("waitForCapabilityHostDeploymentVersion", () => {
       await expect(readiness).resolves.toEqual({
         lifecycleFailures: 0,
         mismatches: 0,
+        observedVersion: { id: "version-new" },
         probeTimeouts: 1,
         probes: 2,
+        targetNewer: false,
         waitedMs: 300,
       });
     } finally {

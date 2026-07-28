@@ -1,7 +1,12 @@
 import { DurableObject } from "cloudflare:workers";
 import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
 import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
-import { workerVersion, type Env } from "../../env.ts";
+import {
+  workerDeploymentVersion,
+  workerVersion,
+  type Env,
+  type WorkerDeploymentVersion,
+} from "../../env.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
@@ -41,8 +46,8 @@ type ScriptExecutionLoopbackExports = {
  */
 export class CapabilityHostDurableObject extends DurableObject<Env> {
   /** Report the incarnation version at the safe pre-script-request boundary. */
-  deploymentVersion(): string {
-    return workerVersion(this.env);
+  deploymentVersion(): WorkerDeploymentVersion {
+    return workerDeploymentVersion(this.env);
   }
 
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);

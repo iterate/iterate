@@ -5,7 +5,12 @@ import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "
 import type { StreamEvent } from "iterate/processors";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { parseConfig } from "../../config.ts";
-import { workerVersion, type Env } from "../../env.ts";
+import {
+  workerDeploymentVersion,
+  workerVersion,
+  type Env,
+  type WorkerDeploymentVersion,
+} from "../../env.ts";
 import {
   itxForScope,
   ProjectEgressInterceptRpcTarget,
@@ -67,8 +72,8 @@ import { createCloudflareProjectCustomDomainDeps } from "./custom-domains.ts";
 
 export class ProjectDurableObject extends DurableObject<Env> {
   /** Report this incarnation's code version for the deployment rollout gate. */
-  deploymentVersion(): string {
-    return workerVersion(this.env);
+  deploymentVersion(): WorkerDeploymentVersion {
+    return workerDeploymentVersion(this.env);
   }
 
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
@@ -710,7 +715,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
         }),
       );
       const response = await fetchFromDeploymentReadySecret({
-        expectedVersion: workerVersion(this.env),
+        expectedVersion: workerDeploymentVersion(this.env),
         path: secretPath,
         projectId: this.#name.projectId,
         request,

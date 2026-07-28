@@ -202,10 +202,33 @@ request or refresh ran. The retry fixture also retains its two minted client
 identities across Vitest attempts so a diagnostic retry never compares
 durable write-only state with unrelated credentials.
 
-The new immutable-head proof remains at 0/25 until these fixes pass a fresh
-exact-head preview with zero retries. As in every current round, each counted
-iteration is a separate canonical Depot run on the normal 16-core runner, with
-ordinary artifacts and the PostHog finalizer.
+The first exact-head preflight for those fixes (`470c34212`, Depot run
+`xnwg1jt8jm`, attempt `1qhxbg07m2`) was rejected after 4 minutes 5 seconds
+with 15 framework retries. The finalizer still normalized all ten artifacts
+into 7,137 PostHog events. This was not isolated-head evidence: the manual
+dispatch began while the automatic PR run was still deploying, and the shared
+workflow concurrency group cancelled that automatic run one second later.
+Cloudflare had created version `461906ad-e4be-48ed-be91-21831bb1eda5` for the
+automatic run and version `912796f7-37c7-4a85-9c19-d9c4c1391302` for the
+manual run. Both versions then appeared across the test traffic.
+
+That collision nevertheless exposed a real symmetry error in the new guards.
+They waited whenever Worker version ids differed, including when an older edge
+caller reached a Project or Secret that had already advanced. Rollout safety
+is directional: a target older than the caller must wait, while a target whose
+Cloudflare version creation timestamp is newer already owns the safe
+side-effect boundary. The handshake now carries id plus creation timestamp,
+accepts only the same or a provably newer target, records both identities and
+the relation in convergence telemetry, and retains string-id compatibility
+while old Durable Object incarnations drain. Missing or invalid ordering
+metadata never guesses that unequal versions are safe.
+
+The new immutable-head proof remains at 0/25 until this correction passes a
+fresh exact-head preview with zero retries. The automatic run must finish
+before any manual iteration starts; `workflow_dispatch` and automatic PR
+events intentionally cancel each other for the same slot. As in every current
+round, each counted iteration is a separate canonical Depot run on the normal
+16-core runner, with ordinary artifacts and the PostHog finalizer.
 
 ## Round 15 (2026-07-23, post-#2284)
 

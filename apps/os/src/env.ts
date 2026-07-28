@@ -164,10 +164,12 @@ export interface Env {
    * Deploy identity (wrangler `version_metadata` binding). The stream
    * processor hosts' crash-loop breaker keys its backoff budget on the version
    * id so a fresh deploy — the usual antidote to a deterministic crash loop —
-   * retries immediately instead of waiting out the plateau. Optional because
-   * local dev may not provide it; read through {@link workerVersion}.
+   * retries immediately instead of waiting out the plateau. Its creation
+   * timestamp orders directional Durable Object rollout gates. Optional
+   * because local dev may not provide it; read through {@link workerVersion}
+   * or {@link workerDeploymentVersion}.
    */
-  CF_VERSION_METADATA?: { id: string; tag?: string };
+  CF_VERSION_METADATA?: { id: string; tag?: string; timestamp?: string };
   SCHEDULER: DurableObjectNamespace<
     import("./domains/scheduler/scheduler-durable-object.ts").SchedulerDurableObject
   >;
@@ -187,8 +189,27 @@ export interface Env {
 
 export const itxEnv = workerEnv as unknown as Env;
 
+export type WorkerDeploymentVersion = {
+  id: string;
+  timestamp?: string;
+};
+
 /** The deploy's version id, for the processor hosts' crash-loop breaker.
  * "unversioned" in environments without the version_metadata binding. */
 export function workerVersion(env: Env): string {
   return env.CF_VERSION_METADATA?.id ?? "unversioned";
+}
+
+/**
+ * Immutable deploy identity and creation time for directional rollout gates.
+ * Older deployed Durable Objects report only their string id; gate readers
+ * retain that compatibility while a rollout upgrades both sides.
+ */
+export function workerDeploymentVersion(env: Env): WorkerDeploymentVersion {
+  const metadata = env.CF_VERSION_METADATA;
+  if (metadata === undefined) return { id: "unversioned" };
+  return {
+    id: metadata.id,
+    ...(metadata.timestamp === undefined ? {} : { timestamp: metadata.timestamp }),
+  };
 }

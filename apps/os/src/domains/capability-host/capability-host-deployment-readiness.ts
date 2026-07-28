@@ -1,13 +1,16 @@
 import {
+  describeDeploymentVersion,
   waitForDurableObjectDeploymentVersion,
+  type DeploymentVersionReadiness,
   type DeploymentVersionReadinessOptions,
+  type WorkerDeploymentVersionLike,
 } from "../durable-object-deployment-readiness.ts";
 
 type WaitForCapabilityHostDeploymentVersionInput = DeploymentVersionReadinessOptions & {
   executionId: string;
-  expectedVersion: string;
+  expectedVersion: WorkerDeploymentVersionLike;
   path: string;
-  readVersion: () => Promise<string>;
+  readVersion: () => Promise<WorkerDeploymentVersionLike>;
 };
 
 function notStartedError(
@@ -17,8 +20,9 @@ function notStartedError(
 ): Error {
   const message =
     `Capability host at "${input.path}" was not ready for deployment version ` +
-    `"${input.expectedVersion}" before script execution "${input.executionId}" was requested: ` +
-    `${detail}. The script was not requested and did not run.`;
+    `${describeDeploymentVersion(input.expectedVersion)} before script execution ` +
+    `"${input.executionId}" was requested: ${detail}. ` +
+    "The script was not requested and did not run.";
   return cause === undefined ? new Error(message) : new Error(message, { cause });
 }
 
@@ -34,13 +38,7 @@ function notStartedError(
  */
 export async function waitForCapabilityHostDeploymentVersion(
   input: WaitForCapabilityHostDeploymentVersionInput,
-): Promise<{
-  lifecycleFailures: number;
-  mismatches: number;
-  probeTimeouts: number;
-  probes: number;
-  waitedMs: number;
-}> {
+): Promise<DeploymentVersionReadiness> {
   return await waitForDurableObjectDeploymentVersion({
     ...input,
     notReadyError: (detail, cause) => notStartedError(input, detail, cause),

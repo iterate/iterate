@@ -1,15 +1,17 @@
 import {
+  describeDeploymentVersion,
   waitForDurableObjectDeploymentVersion,
   type DeploymentVersionReadinessOptions,
+  type WorkerDeploymentVersionLike,
 } from "../durable-object-deployment-readiness.ts";
 
 type ProjectDeploymentTarget = {
-  deploymentVersion: () => PromiseLike<string> | string;
+  deploymentVersion: () => PromiseLike<WorkerDeploymentVersionLike> | WorkerDeploymentVersionLike;
   fetch: (request: Request) => Promise<Response>;
 };
 
 type FetchFromDeploymentReadyProjectInput = {
-  expectedVersion: string;
+  expectedVersion: WorkerDeploymentVersionLike;
   project: ProjectDeploymentTarget;
   projectId: string;
   request: Request;
@@ -22,7 +24,8 @@ function requestNotForwardedError(
 ): Error {
   const message =
     `Project "${input.projectId}" was not ready for deployment version ` +
-    `"${input.expectedVersion}" before outbound egress was requested: ${detail}. ` +
+    `${describeDeploymentVersion(input.expectedVersion)} before outbound egress was requested: ` +
+    `${detail}. ` +
     "The request was not forwarded and no external side effect ran.";
   return cause === undefined ? new Error(message) : new Error(message, { cause });
 }
@@ -30,8 +33,9 @@ function requestNotForwardedError(
 /**
  * Keep outbound work behind the edge-to-Project rollout boundary. A stale
  * Project can be reset while awaiting a Secret request, which could cancel a
- * credential refresh after the provider accepted it. The exact Project must
- * therefore run the edge's immutable Worker version before egress starts.
+ * credential refresh after the provider accepted it. The Project must
+ * therefore run the edge's immutable Worker version or a provably newer one
+ * before egress starts.
  */
 export async function fetchFromDeploymentReadyProject(
   input: FetchFromDeploymentReadyProjectInput,
@@ -43,14 +47,16 @@ export async function fetchFromDeploymentReadyProject(
     notReadyError: (detail, cause) => requestNotForwardedError(input, detail, cause),
     readVersion: () => Promise.resolve(input.project.deploymentVersion()),
   });
-  if (readiness.probes > 1) {
+  if (readiness.probes > 1 || readiness.targetNewer) {
     console.info("project deployment version converged before outbound egress", {
       expectedDeploymentVersion: input.expectedVersion,
       lifecycleFailures: readiness.lifecycleFailures,
       mismatches: readiness.mismatches,
+      observedDeploymentVersion: readiness.observedVersion,
       probeTimeouts: readiness.probeTimeouts,
       probes: readiness.probes,
       projectId: input.projectId,
+      targetNewer: readiness.targetNewer,
       waitedMs: readiness.waitedMs,
     });
   }

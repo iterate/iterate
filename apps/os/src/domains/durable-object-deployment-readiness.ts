@@ -1,3 +1,4 @@
+import type { WorkerDeploymentVersion } from "../env.ts";
 import { settleByDeadline } from "./execution-deadline.ts";
 import { isRetryableDurableObjectAvailabilityError } from "./streams/stream-unavailable.ts";
 
@@ -13,26 +14,58 @@ export type DeploymentVersionReadinessOptions = {
   timeoutMs?: number;
 };
 
-type DeploymentVersionReadiness = {
+export type WorkerDeploymentVersionLike = WorkerDeploymentVersion | string;
+
+export type DeploymentVersionReadiness = {
   lifecycleFailures: number;
   mismatches: number;
+  observedVersion: WorkerDeploymentVersion;
   probeTimeouts: number;
   probes: number;
+  targetNewer: boolean;
   waitedMs: number;
 };
 
+function normalizeDeploymentVersion(version: WorkerDeploymentVersionLike): WorkerDeploymentVersion {
+  return typeof version === "string" ? { id: version } : version;
+}
+
+export function describeDeploymentVersion(version: WorkerDeploymentVersionLike): string {
+  const normalized = normalizeDeploymentVersion(version);
+  return normalized.timestamp === undefined
+    ? `"${normalized.id}"`
+    : `"${normalized.id}" (created at "${normalized.timestamp}")`;
+}
+
+function deploymentRelation(
+  expected: WorkerDeploymentVersion,
+  observed: WorkerDeploymentVersion,
+): "same" | "newer" | undefined {
+  if (observed.id === expected.id) return "same";
+  if (expected.timestamp === undefined || observed.timestamp === undefined) return undefined;
+
+  const expectedTimestamp = Date.parse(expected.timestamp);
+  const observedTimestamp = Date.parse(observed.timestamp);
+  if (!Number.isFinite(expectedTimestamp) || !Number.isFinite(observedTimestamp)) {
+    return undefined;
+  }
+  return observedTimestamp > expectedTimestamp ? "newer" : undefined;
+}
+
 type WaitForDurableObjectDeploymentVersionInput = DeploymentVersionReadinessOptions & {
-  expectedVersion: string;
+  expectedVersion: WorkerDeploymentVersionLike;
   notReadyError: (detail: string, cause?: unknown) => Error;
-  readVersion: () => Promise<string>;
+  readVersion: () => Promise<WorkerDeploymentVersionLike>;
 };
 
 /**
- * Wait at a read-only boundary until one exact Durable Object runs the
- * caller's deployment version. A mismatch, a bounded probe timeout, and one
- * rollout reset are expected convergence states; a second reset, application
- * failure, or total deadline remains explicit through the caller's
- * domain-specific error.
+ * Wait at a read-only boundary until one Durable Object runs the caller's
+ * deployment version or a provably newer one. An older target is unsafe; a
+ * newer target already owns the post-rollout side-effect boundary and must not
+ * be mistaken for stale. A mismatch, a bounded probe timeout, and one rollout
+ * reset are expected convergence states; a second reset, application failure,
+ * invalid/missing ordering metadata, or total deadline remains explicit
+ * through the caller's domain-specific error.
  */
 export async function waitForDurableObjectDeploymentVersion(
   input: WaitForDurableObjectDeploymentVersionInput,
@@ -45,7 +78,8 @@ export async function waitForDurableObjectDeploymentVersion(
   const deadline = startedAt + (input.timeoutMs ?? DEPLOYMENT_WAIT_TIMEOUT_MS);
   const probeTimeoutMs = input.probeTimeoutMs ?? DEPLOYMENT_PROBE_TIMEOUT_MS;
   const pollIntervalMs = input.pollIntervalMs ?? DEPLOYMENT_POLL_INTERVAL_MS;
-  let lastObservedVersion: string | undefined;
+  const expectedVersion = normalizeDeploymentVersion(input.expectedVersion);
+  let lastObservedVersion: WorkerDeploymentVersion | undefined;
   let lifecycleFailures = 0;
   let mismatches = 0;
   let probeTimeouts = 0;
@@ -59,13 +93,16 @@ export async function waitForDurableObjectDeploymentVersion(
       now,
     );
     if (outcome.status === "fulfilled") {
-      lastObservedVersion = outcome.value;
-      if (outcome.value === input.expectedVersion) {
+      lastObservedVersion = normalizeDeploymentVersion(outcome.value);
+      const relation = deploymentRelation(expectedVersion, lastObservedVersion);
+      if (relation !== undefined) {
         return {
           lifecycleFailures,
           mismatches,
+          observedVersion: lastObservedVersion,
           probeTimeouts,
           probes,
+          targetNewer: relation === "newer",
           waitedMs: now() - startedAt,
         };
       }
@@ -92,7 +129,7 @@ export async function waitForDurableObjectDeploymentVersion(
   const lastObservation =
     lastObservedVersion === undefined
       ? "no deployment version was returned"
-      : `the last observed version was "${lastObservedVersion}"`;
+      : `the last observed version was ${describeDeploymentVersion(lastObservedVersion)}`;
   throw input.notReadyError(
     `it did not converge within ${Math.max(0, now() - startedAt)}ms; ${lastObservation}`,
   );

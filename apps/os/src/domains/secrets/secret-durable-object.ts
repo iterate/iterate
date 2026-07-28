@@ -5,7 +5,12 @@ import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "
 import { isStreamOffsetConflictError } from "iterate/processors";
 import type { StreamEventInput } from "iterate/processors";
 import type { ProcessorState } from "iterate/processors";
-import { workerVersion, type Env } from "../../env.ts";
+import {
+  workerDeploymentVersion,
+  workerVersion,
+  type Env,
+  type WorkerDeploymentVersion,
+} from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
@@ -62,8 +67,8 @@ const INGEST_WAIT_TIMEOUT_MS = 15_000;
  */
 export class SecretDurableObject extends DurableObject<Env> {
   /** Report this incarnation's code version for the deployment rollout gate. */
-  deploymentVersion(): string {
-    return workerVersion(this.env);
+  deploymentVersion(): WorkerDeploymentVersion {
+    return workerDeploymentVersion(this.env);
   }
 
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
