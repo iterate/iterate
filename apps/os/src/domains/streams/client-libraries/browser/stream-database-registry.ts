@@ -1,4 +1,4 @@
-// One shared OPFS SQLite mirror per (projectId, streamPath): every runtime and
+// One shared OPFS SQLite database per (projectId, streamPath): every runtime and
 // view of a stream shares one wa-sqlite worker. Refcounted by the runtimes
 // holding it; the database is disposed when the last one releases.
 

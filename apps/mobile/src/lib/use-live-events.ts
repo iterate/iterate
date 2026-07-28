@@ -1,11 +1,12 @@
 import { useQuery, useQueryClient, type QueryKey } from "@tanstack/react-query";
-import { useItxSubscription, type StreamEvent, type StreamEventBatch } from "iterate/sdk/itx/react";
+import type { StreamEventBatch } from "iterate/processors";
+import { useStreamConnection, type StreamEvent } from "iterate/sdk/itx/react";
 import { mergeEventsByOffset } from "./chat.ts";
 
 /**
  * Read one stream into TanStack Query, then keep that cache live through the
- * shared reconnecting itx subscription hook. The replay cursor is read at
- * subscription time, closing the read-then-subscribe race without owning any
+ * shared reconnecting stream-connection hook. The replay cursor is read when
+ * opening the connection, closing the read-then-connect race without owning any
  * transport lifecycle in the app.
  */
 export function useLiveEvents(input: {
@@ -28,10 +29,10 @@ export function useLiveEvents(input: {
     staleTime: Infinity,
   });
 
-  const subscription = useItxSubscription(
+  const connection = useStreamConnection(
     async (itx) => {
       const existing = queryClient.getQueryData<StreamEvent[]>(input.queryKey) || [];
-      return await itx.streams.get(input.streamPath).subscribe({
+      return await itx.streams.get(input.streamPath).openConnection({
         replayAfterOffset: existing.reduce((max, event) => Math.max(max, event.offset), 0),
         ...(input.eventTypes === undefined ? {} : { eventTypes: input.eventTypes }),
         processEventBatch: (batch: StreamEventBatch) => {
@@ -45,18 +46,17 @@ export function useLiveEvents(input: {
     { enabled: input.enabled && query.isSuccess, slug: input.projectId },
   );
 
-  const subscriptionError =
-    subscription.status === "error" ? new Error(subscription.error) : undefined;
-  const error = query.error || subscriptionError;
+  const connectionError = connection.status === "error" ? new Error(connection.error) : undefined;
+  const error = query.error || connectionError;
   return {
     ...query,
     // `isError` is the discriminant consumed by both screens. TanStack's
-    // generic result cannot express the subscription half of that union, so
+    // generic result cannot express the connection half of that union, so
     // retain the runtime invariant explicitly.
     error: error!,
     isError: error !== undefined,
     refetch: () => {
-      subscription.refresh();
+      connection.refresh();
       return query.refetch();
     },
   };

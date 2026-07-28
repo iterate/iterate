@@ -66,7 +66,7 @@ describe("itx REPL TypeScript declarations", () => {
       "const recipe: ProvideCapabilityInput = {",
       '  expression: ["streams", ["get", "/x"]],',
       '  path: ["alias"],',
-      '  type: "itx-expression",',
+      '  type: "itx-call",',
       "};",
       "const previous: unknown[] = [$_, _, vars.anything, recipe];",
       "[projectScoped, target, read, previous];",
@@ -108,7 +108,7 @@ describe("itx REPL TypeScript declarations", () => {
     });
 
     const labels = new Set(result?.options.map((option) => option.label));
-    for (const member of ["append", "getEvents", "subscribe", "waitForEvent"]) {
+    for (const member of ["append", "getEvents", "openConnection", "waitForEvent"]) {
       expect(labels, `expected completion "${member}"`).toContain(member);
     }
   });

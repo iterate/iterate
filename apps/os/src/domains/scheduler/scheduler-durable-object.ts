@@ -2,8 +2,8 @@ import { DurableObject } from "cloudflare:workers";
 import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
 import type {
   ProcessorSnapshot,
-  StreamSubscriberWakeRequest,
-  StreamSubscriberWakeResponse,
+  StreamProcessorWakeRequest,
+  StreamProcessorWakeResponse,
 } from "iterate/processors";
 import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
@@ -197,8 +197,8 @@ export class SchedulerDurableObject extends DurableObject<Env> {
     return await this.#schedulerProcessor.listScheduleViews();
   }
 
-  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
-    return this.#registry.wakeStreamSubscriber(args);
+  wakeStreamProcessor(args: StreamProcessorWakeRequest): Promise<StreamProcessorWakeResponse> {
+    return this.#registry.wakeStreamProcessor(args);
   }
 
   /** Abort the current Durable Object incarnation; the next request boots it again. */

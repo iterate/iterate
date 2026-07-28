@@ -1,5 +1,5 @@
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
+import { buildHostedProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { DEFAULT_SANDBOX_INSTANCE_TYPE, SandboxInstanceType } from "./instance-types.ts";
 import { SandboxProcessorContract } from "./sandbox-processor-contract.ts";
 import { assertValidSleepAfter, sandboxCreateClaimKey, type SandboxCreateInput } from "./utils.ts";
@@ -51,7 +51,7 @@ export function sandboxCreationEvents(input: {
             },
           }),
         ]),
-    buildDurableObjectProcessorSubscriptionConfiguredEvent({
+    buildHostedProcessorSubscriptionConfiguredEvent({
       durableObjectName,
       idempotencyKey: `stream/subscription-configured:${durableObjectName}#${SandboxProcessorContract.slug}`,
       processor: ["sandboxes", ["get", path], "processor"],

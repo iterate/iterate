@@ -1,4 +1,4 @@
-# Collapsing the browser stream mirror into itx live-state
+# Replacing the browser stream database with server reads and live state
 
 The design for retiring the browser-hosted stream database/processor host so a
 stream feed is just `useLiveState` + `useItxQuery` like every other screen.
@@ -14,19 +14,19 @@ The browser consumes streams via two models:
 - **Model 1 (itx-native, thin):** `useLiveState((itx) => itx.liveState, sel)` —
   the server owns a reduced view and pushes snapshot + diffs. The ⌘K stream
   switcher and the stream tree use it.
-- **Model 2 (the mirror, heavy):** `useStreamMirror()` + `useStreamQuery(db,
+- **Model 2 (the browser database, heavy):** `useBrowserStreamStore()` + `useStreamQuery(db,
 sql)` — download the whole event log once per `(projectId, streamPath)` and run
   two processors client-side into an OPFS SQLite database, with cross-tab
   Web-Locks leader election, two-cursor durable checkpoints, a transactional
   write buffer, and a self-healing connection state machine. **~4,850 LOC**:
   `client-libraries/browser/` (~4,140) + the two canonical processors (~706).
 
-The seam: the mirror bypasses the itx hooks. `ProjectStreamView`
+The seam: the browser database bypasses the itx hooks. `ProjectStreamView`
 (`apps/os/src/components/project-stream-view.tsx:133-182`) builds a
 `createStreamClient` factory that imperatively dials
 `connectItx()`/`connectIterateSession()` and hands the stub to
-`acquireStreamRuntime`, which drives its own subscribe/leader/processor/
-checkpoint stack. PR #2048 unified the **socket** (the mirror rides the shared
+`acquireStreamRuntime`, which drives its own React listeners, cross-tab writer
+election, processors, and checkpoints. PR #2048 unified the **socket** (the browser writer uses the shared
 session and only _reports_ transport suspicion) but not the **consumption
 model**.
 
@@ -107,7 +107,7 @@ limit })`, reading the feed processor's own settled rows — recommended, so the
 
 ### Why the live view must be bounded
 
-The live-state engine snapshots the whole state to each new subscriber and
+The live-state engine sends the whole state to each new listener and
 re-broadcasts on change — an unbounded array can't ride it. So the live view
 carries a bounded recent window and older history is a paged read, stitched in
 the UI. That is the correct shape, not a compromise: history is immutable, and
@@ -118,14 +118,14 @@ immutable data is a finite read (the frontend guide's first rule of thumb).
 `ProjectStreamView` keeps its shell, URL state, composer, header, and panels;
 only the data plumbing changes:
 
-- **One `useLiveState` subscription** replaces `useAgentUiReducedState` (→
+- **One `useLiveState` listener** replaces `useAgentUiReducedState` (→
   `feed.agent`), the counts (→ `tailLocalIndex`), and the pause read (→
   `feed.paused`).
 - **Paged `useItxQuery`** over `getFeedItems`/`getEvents` replaces
   `useStreamQuery(db, sql)` in the feed and both inspectors.
 - **Mutations become direct capability calls** (`append` on the stream / the
-  agent chat door); `noteExternalAppend`/`nudge` disappear — the subscription's
-  next push is the confirmation, and `useItxSubscription`'s watchdog already
+  agent chat door); `noteExternalAppend`/`nudge` disappear — the listener's
+  next push is the confirmation, and `useStreamConnection`'s watchdog already
   owns silent-death recovery.
 - `StreamFeedView` keeps the virtualizer, stick-to-bottom, retention
   (`useRetainedFeedRows`) machinery verbatim — the row _source_ changes from a
@@ -133,14 +133,14 @@ only the data plumbing changes:
 
 ## What gets deleted (~4,850 LOC)
 
-Once nothing reads the mirrored database: `stream-browser-store.ts` (2,215),
+Once nothing reads the browser database: `stream-browser-store.ts` (2,215),
 `stream-browser-db.ts` (520) + `stream-db.worker.ts` (212) +
 `stream-database-registry.ts` (31) + `wa-sqlite.d.ts` (11),
 `processor-state-storage.ts` (403) + `projection-write-buffer.ts` (123),
-`composite-mirror-drive.ts` (182), `stream-leader.ts` (101),
-`canonical-mirror-processors.ts` (65), `catch-up-page.ts`,
+`browser-stream-processor-group.ts` (182),
+`browser-stream-processors.ts` (65), `catch-up-page.ts`,
 `core-processor-state.ts`, `ensure-schema-once.ts`, `stream-runtime-utils.ts`,
-`stream-transport.ts`, `hooks/use-stream-mirror.ts`, `hooks/use-stream-query.ts`;
+`stream-transport.ts`, `hooks/use-browser-stream-store.ts`, `hooks/use-stream-query.ts`;
 `processors/browser-feed/` + `processors/browser-raw-events/`; and the consumer
 plumbing (`useAgentUiReducedState`, `useStreamPauseState`,
 `clearClientDatabases`, the `streamClientFactory`/`resetTransport` wiring, all
@@ -153,7 +153,7 @@ a packaging concern, not a rewrite.
 ## What we lose (honest)
 
 - **Cross-tab single-download** (Web-Locks leader). Matters little: N tabs cost
-  N cheap bounded subscriptions, and the fold is shared by ALL tabs everywhere
+  N cheap bounded live-state listeners, and the fold is shared by ALL tabs everywhere
   (it runs once, in the DO) — better in aggregate.
 - **Cold-reload instant paint from OPFS.** The main honest regression, and it's
   minor: first paint becomes one round trip, like every other itx surface.
@@ -167,11 +167,11 @@ a packaging concern, not a rewrite.
 - **`event_type_counts`.** Free to replace: totals from `tailLocalIndex`;
   per-type filter counts (if still wanted) become a server aggregate.
 - **Measured browser RTT metrics.** Re-source from `stream.runtimeState()`; the
-  consume-own-append metric existed to debug the mirror being deleted.
+  consume-own-append metric existed to debug the browser database being deleted.
 
 ## Phasing + risks
 
-Incremental, **not** a flag-day — the mirror is acquired per-view and
+Incremental, **not** a flag-day — the browser database is acquired per-view and
 refcounted; keep it until the last reader migrates.
 
 - **Phase A — raw events → `useItxQuery`** (low risk, no server work). Rewire
@@ -206,7 +206,7 @@ composite drive, the connection state machine — is replaceable and should go.
 - `apps/os/src/rpc-targets.ts` (`StreamRpcTarget`; copy the repo `liveState`
   getter + relay pattern)
 - `apps/os/src/domains/streams/stream-durable-object.ts` (host the feed
-  processor, mirroring `project-durable-object.ts:86-108`)
+  processor, following the pattern in `project-durable-object.ts:86-108`)
 - `packages/ui/src/components/events/agent-ui-reducer.ts` +
   `apps/os/src/domains/streams/client-libraries/processors/browser-feed/projector.ts`
   (the fold that moves server-side)

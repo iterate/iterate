@@ -368,7 +368,7 @@ test("a script run's parked hold survives a stream Durable Object restart", asyn
       async () => {
         const state = await root.runtimeState();
         return Object.values(state.runtime.connections).some(
-          (connection) => connection.subscriber?.description === "waitForEvent",
+          (connection) => connection.openedBy?.description === "waitForEvent",
         );
       },
       { description: "the egress door's resolution wait to be armed" },

@@ -21,7 +21,7 @@ import {
 export { BrowserFeedContract } from "./contract.ts";
 export { BROWSER_FEED_SCHEMA_VERSION } from "./projector.ts";
 
-/** The table this processor owns — the ONLY rendered-feed table in the mirror. */
+/** The table this processor owns — the only rendered-feed table in the browser database. */
 export const BROWSER_FEED_TABLE = "feed_items";
 
 type VolatileAgentState = { state: AgentUiState; throughOffset: number };
@@ -33,14 +33,14 @@ type VolatileAgentState = { state: AgentUiState; throughOffset: number };
  * `processEvent` keeps its `ops` — so state and projection stay in lockstep by
  * construction. The ops are buffered into {@link projectionBuffer}; the
  * browser progress store (processor-state-storage.ts) flushes them and the
- * two-cursor progress record in ONE SQLite transaction per delivered frame.
+ * two-cursor progress record in ONE SQLite transaction per delivered batch.
  *
  * The open raw-group row grows with every reduced event; its per-event ops are
  * COALESCED in the buffer to one upsert per commit carrying the row's final
  * data (matching the legacy batch override's one-statement-per-touched-row
  * serialization cost — without it a monotype catch-up would serialize the
  * group's cumulative events array once per event, O(n²) bytes on the exact
- * deep-replay path the mirror's flow control protects).
+ * deep-replay path the browser database's flow control protects).
  */
 export class BrowserFeedProcessor extends StreamProcessor<BrowserFeedContract, { sql: SqlClient }> {
   readonly contract = BrowserFeedContract;
@@ -59,14 +59,14 @@ export class BrowserFeedProcessor extends StreamProcessor<BrowserFeedContract, {
   }
 
   /**
-   * Build (without publishing) the transient agent-tail candidate for one
-   * genuinely live frame. The durable runners still receive only durable
-   * events; this overlay reduces in the original event order so a chunk before a
-   * completion cannot be replayed after that completion. A frame with no
-   * ephemeral event starts no overlay, while later durable frames continue an
+   * Build (without publishing) the transient agent-state candidate for one
+   * genuinely live batch. The durable runners still receive only durable
+   * events; this overlay folds the original event order so a chunk before a
+   * completion cannot be replayed after that completion. A batch with no
+   * ephemeral event starts no overlay, while later durable batches continue an
    * already-live overlay until reconnect clears it.
    */
-  prepareVolatileFrame(args: {
+  prepareVolatileBatch(args: {
     events: readonly StreamEvent[];
     persistedState: unknown;
     persistedThroughOffset: number;
@@ -94,7 +94,7 @@ export class BrowserFeedProcessor extends StreamProcessor<BrowserFeedContract, {
     };
   }
 
-  commitVolatileFrame(candidate: VolatileAgentState | null): void {
+  commitVolatileBatch(candidate: VolatileAgentState | null): void {
     if (candidate !== null) this.#volatileAgentState = candidate;
   }
 
@@ -115,9 +115,9 @@ export class BrowserFeedProcessor extends StreamProcessor<BrowserFeedContract, {
     const { event } = args;
     if (event === null) return;
     const { ops } = planBrowserFeedOps(args.previousState, [event]);
-    // A drained buffer means a new frame has started. Pending rows exist only
-    // to make late corrections inside ONE uncommitted frame visible; SQLite
-    // is authoritative after the preceding frame commits.
+    // A drained buffer means a new batch has started. Pending rows exist only
+    // to make late corrections inside ONE uncommitted batch visible; SQLite
+    // is authoritative after the preceding batch commits.
     if (this.projectionBuffer.pendingCount === 0) this.#pendingActivityRows.clear();
 
     const executionId =
@@ -323,8 +323,8 @@ export const ensureBrowserFeedSchema = createSchemaEnsurer({
     await ensureBrowserProcessorProgressSchema(sql);
     // No PRAGMA user_version here: feed_items shares the per-stream OPFS
     // database with the raw-events `events` table, which owns user_version.
-    // Version resets ride the store's resetOnSchemaVersionChange lane
-    // (mirror meta keyed by slug) instead.
+    // Version resets use the store's resetOnSchemaVersionChange path
+    // (`processor_metadata`, keyed by slug) instead.
     //
     await sql.batch(
       [

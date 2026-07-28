@@ -43,13 +43,17 @@ export const PROJECT_CREATED = {
     processor: {
       slug: ProjectProcessorContract.slug,
       version: ProjectProcessorContract.version,
-      stream: { path: "/", projectId: "prj_test" },
+      stream: {
+        path: "/",
+        projectId: "prj_test",
+        streamId: "00000000-0000-4000-8000-000000000001",
+      },
       whileProcessing: { offset: 2, type: "events.iterate.com/repos/created" },
     },
   },
 } satisfies ProjectEventInput;
 
-/** The cross-posted config repo creation certificate as it lands on `/`. */
+/** The copied config repo creation certificate as it lands on `/`. */
 export const CONFIG_REPO_CREATED = {
   type: "events.iterate.com/repos/created",
   payload: {
@@ -59,9 +63,12 @@ export const CONFIG_REPO_CREATED = {
     remote: "https://example.artifacts.cloudflare.net/git/ns/x.git",
   },
   source: {
-    crossPostedFrom: [
+    copiedFrom: [
       {
-        subscriptionKey: "cross-post:/",
+        subscriptionKey: "project-config-to-root",
+        streamId: "00000000-0000-4000-8000-000000000002",
+        streamCreatedAt: new Date(1).toISOString(),
+        cursorChangedAtSourceOffset: 3,
         createdAt: new Date(2).toISOString(),
         offset: 4,
         path: "/repos/config",
@@ -72,7 +79,7 @@ export const CONFIG_REPO_CREATED = {
   },
 } satisfies ProjectEventInput;
 
-/** The cross-posted config repo terminal failure as it lands on `/`. */
+/** The copied config repo terminal failure as it lands on `/`. */
 export const CONFIG_REPO_CREATE_FAILED = {
   type: "events.iterate.com/repos/create-failed",
   payload: {
@@ -80,9 +87,12 @@ export const CONFIG_REPO_CREATE_FAILED = {
     request: { type: "empty" },
   },
   source: {
-    crossPostedFrom: [
+    copiedFrom: [
       {
-        subscriptionKey: "cross-post:/",
+        subscriptionKey: "project-config-to-root",
+        streamId: "00000000-0000-4000-8000-000000000002",
+        streamCreatedAt: new Date(1).toISOString(),
+        cursorChangedAtSourceOffset: 3,
         createdAt: new Date(2).toISOString(),
         offset: 4,
         path: "/repos/config",
@@ -102,9 +112,12 @@ export const CONFIG_REPO_COMMIT_COMPLETED = {
     commitOid: "b".repeat(40),
   },
   source: {
-    crossPostedFrom: [
+    copiedFrom: [
       {
-        subscriptionKey: "cross-post:/",
+        subscriptionKey: "project-config-to-root",
+        streamId: "00000000-0000-4000-8000-000000000002",
+        streamCreatedAt: new Date(1).toISOString(),
+        cursorChangedAtSourceOffset: 3,
         createdAt: new Date(3).toISOString(),
         offset: 5,
         path: "/repos/config",
@@ -148,6 +161,8 @@ export function makeProjectHarness(
     substrate?: HarnessSubstrate;
     /** Served/thrown by successive worker probes; a 204 after the list runs out. */
     workerOutcomes?: (Response | Error)[];
+    /** Trusted source identity stamped on each successful worker probe. */
+    workerCommitOids?: string[];
     /** Parks the named sibling's waitUntilProcessed until the promise resolves. */
     siblingWaitBarriers?: Partial<Record<SiblingName, Promise<void>>>;
     /** Advances the virtual clock inside the named sibling's wait. */
@@ -200,7 +215,11 @@ export function makeProjectHarness(
     const response = outcome ?? new Response(null, { status: 204 });
     return response.headers.get(WORKER_BUILDING_HEADER) === "1"
       ? response
-      : withWorkerCommit(response, CONFIG_REPO_COMMIT_COMPLETED.payload.commitOid);
+      : withWorkerCommit(
+          response,
+          options.workerCommitOids?.[workerFetchCalls - 1] ??
+            CONFIG_REPO_COMMIT_COMPLETED.payload.commitOid,
+        );
   };
   const Processor = options.processorClass ?? ProjectProcessor;
   const harness = makeProcessorHarness<ProjectProcessorContract>({

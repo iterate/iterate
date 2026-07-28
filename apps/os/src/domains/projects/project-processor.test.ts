@@ -67,6 +67,24 @@ describe("ProjectProcessor worker lifecycle", () => {
     ]);
   });
 
+  it("publishes the worker identity actually served when HEAD advances past the triggering commit", async () => {
+    const servedCommitOid = "c".repeat(40);
+    const h = makeProjectHarness({ workerCommitOids: [servedCommitOid] });
+    await h.play([
+      "append",
+      PROJECT_CREATE_REQUESTED,
+      PROJECT_CREATED,
+      CONFIG_REPO_COMMIT_COMPLETED,
+    ]);
+
+    expect(h.events("events.iterate.com/project/worker-updated")).toMatchObject([
+      {
+        idempotencyKey: `project/worker-update:${servedCommitOid}`,
+        payload: { commitOid: servedCommitOid },
+      },
+    ]);
+  });
+
   it("does not probe again when a committed worker update is redelivered", async () => {
     const h = makeProjectHarness();
     await h.play([
@@ -78,7 +96,11 @@ describe("ProjectProcessor worker lifecycle", () => {
     expect(h.workerFetchCalls()).toBe(1);
 
     const replay = makeProjectHarness({
-      substrate: { clock: h.clock, stream: h.stream, progress: makeMemoryProgressStore() },
+      substrate: {
+        clock: h.clock,
+        stream: h.stream,
+        progress: makeMemoryProgressStore(ProjectProcessorContract),
+      },
     });
     await replay.settle();
 
@@ -95,9 +117,9 @@ describe("ProjectProcessor worker lifecycle", () => {
       {
         ...CONFIG_REPO_COMMIT_COMPLETED,
         source: {
-          crossPostedFrom: [
+          copiedFrom: [
             {
-              ...CONFIG_REPO_COMMIT_COMPLETED.source.crossPostedFrom[0],
+              ...CONFIG_REPO_COMMIT_COMPLETED.source.copiedFrom[0],
               path: "/repos/application",
             },
           ],
@@ -118,9 +140,9 @@ describe("ProjectProcessor worker lifecycle", () => {
         commitOid: "c".repeat(40),
       },
       source: {
-        crossPostedFrom: [
+        copiedFrom: [
           {
-            ...CONFIG_REPO_COMMIT_COMPLETED.source.crossPostedFrom[0],
+            ...CONFIG_REPO_COMMIT_COMPLETED.source.copiedFrom[0],
             offset: 6,
           },
         ],
@@ -131,6 +153,7 @@ describe("ProjectProcessor worker lifecycle", () => {
         new WorkerBuildFailedError({ kind: "source", message: "Expected ; but found is" }),
         Response.json({ app: "fixed" }),
       ],
+      workerCommitOids: ["b".repeat(40), "c".repeat(40)],
     });
     await h.play(
       ["append", PROJECT_CREATE_REQUESTED, PROJECT_CREATED, CONFIG_REPO_COMMIT_COMPLETED],
@@ -206,8 +229,12 @@ describe("ProjectProcessor bootstrap", () => {
     ]);
     expect(h.network.eventsAt("/repos/config")[2]).toMatchObject({
       payload: {
-        deliver: "new",
-        subscriptionKey: "cross-post:/",
+        subscriptionKey: "project-config-to-root",
+        receiver: {
+          action: "copy-to-stream",
+          receivingStreamPath: "/",
+          delivery: { start: "now" },
+        },
       },
     });
     expect(h.network.eventsAt("/integrations/email").map((event) => event.type)).toEqual([
@@ -329,8 +356,14 @@ describe("ProjectProcessor bootstrap", () => {
       {
         idempotencyKey: "project-worker-subscription:prj_test",
         payload: {
-          deliver: { afterOffset: 1 },
-          onPoison: "skip",
+          receiver: {
+            action: "itx-call",
+            expression: ["processEventBatch"],
+            delivery: {
+              start: "now",
+              onFailingEvent: "skip",
+            },
+          },
         },
       },
     ]);
@@ -376,7 +409,11 @@ describe("ProjectProcessor bootstrap", () => {
     // The default worker would now answer successfully if the reaction
     // incorrectly ran it again.
     const replay = makeProjectHarness({
-      substrate: { clock: h.clock, stream: h.stream, progress: makeMemoryProgressStore() },
+      substrate: {
+        clock: h.clock,
+        stream: h.stream,
+        progress: makeMemoryProgressStore(ProjectProcessorContract),
+      },
     });
     await replay.settle();
 
@@ -481,15 +518,22 @@ describe("ProjectProcessor bootstrap", () => {
       processor: {
         slug: "not-project",
         version: ProjectProcessorContract.version,
-        stream: { path: "/", projectId: "prj_test" },
+        stream: {
+          path: "/",
+          projectId: "prj_test",
+          streamId: "00000000-0000-4000-8000-000000000001",
+        },
         whileProcessing: { offset: 2, type: "events.iterate.com/repos/created" },
       },
     } as const;
-    const crossPostSource = {
+    const copiedSource = {
       ...PROJECT_CREATED.source,
-      crossPostedFrom: [
+      copiedFrom: [
         {
-          subscriptionKey: "cross-post:/",
+          subscriptionKey: "project-config-to-root",
+          streamId: "00000000-0000-4000-8000-000000000003",
+          streamCreatedAt: new Date(1).toISOString(),
+          cursorChangedAtSourceOffset: 1,
           createdAt: new Date(2).toISOString(),
           offset: 2,
           path: "/elsewhere",
@@ -502,7 +546,7 @@ describe("ProjectProcessor bootstrap", () => {
     for (const counterfeit of [
       { ...PROJECT_CREATED, source: undefined },
       { ...PROJECT_CREATED, source: wrongProcessorSource },
-      { ...PROJECT_CREATED, source: crossPostSource },
+      { ...PROJECT_CREATED, source: copiedSource },
       failure,
       { ...failure, source: wrongProcessorSource },
     ] satisfies ProjectEventInput[]) {
@@ -574,7 +618,7 @@ describe("ProjectProcessor bootstrap", () => {
 // =============================================================================
 
 describe("ProjectProcessor catalogs", () => {
-  it("catalogs physical paths and cross-posted domain objects without reducing agent collection facts", async () => {
+  it("catalogs physical paths and received domain objects without reducing agent collection facts", async () => {
     const h = makeProjectHarness();
     await h.play(
       ["append", PROJECT_CREATE_REQUESTED, PROJECT_CREATED],
@@ -588,9 +632,12 @@ describe("ProjectProcessor catalogs", () => {
           type: "events.iterate.com/agent/created",
           payload: {},
           source: {
-            crossPostedFrom: [
+            copiedFrom: [
               {
-                subscriptionKey: "cross-post:/",
+                subscriptionKey: "agent-catalog",
+                streamId: "11111111-1111-4111-8111-111111111111",
+                streamCreatedAt: new Date(1).toISOString(),
+                cursorChangedAtSourceOffset: 1,
                 createdAt: new Date(3).toISOString(),
                 offset: 1,
                 path: "/agents/slack/main/C123/ts-1",
@@ -609,9 +656,12 @@ describe("ProjectProcessor catalogs", () => {
             remote: "https://example.artifacts.cloudflare.net/git/ns/side.git",
           },
           source: {
-            crossPostedFrom: [
+            copiedFrom: [
               {
                 subscriptionKey: "repo-catalog",
+                streamId: "11111111-1111-4111-8111-111111111111",
+                streamCreatedAt: new Date(1).toISOString(),
+                cursorChangedAtSourceOffset: 1,
                 createdAt: new Date(4).toISOString(),
                 offset: 1,
                 path: "/repos/side-repo",
@@ -1060,7 +1110,11 @@ describe("ProjectProcessor full replay", () => {
     });
 
     const replay = makeProjectHarness({
-      substrate: { clock: h.clock, stream: h.stream, progress: makeMemoryProgressStore() },
+      substrate: {
+        clock: h.clock,
+        stream: h.stream,
+        progress: makeMemoryProgressStore(ProjectProcessorContract),
+      },
     });
     await replay.settle(); // replays the whole stream; a wedge would throw here
 

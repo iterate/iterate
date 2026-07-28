@@ -2,53 +2,67 @@ import type { StreamEventInput } from "../itx-api.generated.ts";
 
 /**
  * An unhealthy subscription the sidebar warning surfaces, read from the root
- * stream's own runtime state. `parked` = delivery gave up and stopped;
- * `backoff` = delivery is failing and retrying (not stopped yet).
+ * stream's reduced configuration and runtime cursor. `halted` means delivery
+ * gave up and stopped; `backoff` means delivery is failing and retrying.
  *
- * `attempt` / `lastError` are meaningful for both states: parking keeps the
- * failure evidence on the spine row (mirroring the `subscription-parked`
- * fact), so the UI can show WHY delivery stopped. Rows parked before that
- * behavior shipped carry `attempt: 0` / `lastError: null` — display must
- * fall back gracefully when they are absent.
+ * Halted attempts and errors come from the durable
+ * `subscription-delivery-halted` fact. Backoff attempts and errors come from
+ * the mutable delivery cursor.
  */
 export type SubscriptionHealth = {
   subscriptionKey: string;
-  status: "parked" | "backoff";
+  status: "halted" | "backoff";
   /** Exclusive delivery cursor: the last offset delivered. The next (stuck)
-   * event is `ackedOffset + 1`; the skip verb seeks past it. Equals
-   * `parkedAtOffset` once parked. */
-  ackedOffset: number;
-  parkedAtOffset: number | null;
+   * event is `acknowledgedOffset + 1`; the skip verb seeks past it. */
+  acknowledgedOffset: number;
+  haltedAfterOffset: number | null;
   lag: number;
   attempt: number;
   lastError: string | null;
+  canSetCursor: boolean;
 };
 
-/** The per-subscription runtime shape this warning reads — a subset of the
- * stream's `SubscriptionRuntimeState`. */
+/** The per-subscription runtime cursor fields this warning reads. */
 type SubscriptionRuntimeFacts = {
-  ackedOffset: number;
-  parkedAtOffset: number | null;
+  acknowledgedOffset: number;
   lag: number;
   attempt: number;
   nextAttemptAt: number | null;
   lastError: string | null;
 };
 
+/** The durable stop fact reduced from `subscription-delivery-halted`. */
+type ConfiguredSubscriptionFacts = {
+  configuration: {
+    receiver: { action: string };
+  };
+  deliveryHalted?: {
+    afterOffset: number;
+    attempts: number;
+    error?: string;
+  };
+};
+
 /**
- * The unhealthy subscriptions among a stream's runtime subscriptions: PARKED
- * (delivery gave up, `parkedAtOffset` set) or in BACKOFF (delivery failing and
- * a retry scheduled, `nextAttemptAt` set). Healthy subscriptions — caught up or
- * quietly idle — are omitted. Parked outranks backoff.
+ * The unhealthy subscriptions on a stream: HALTED (a durable event says delivery
+ * gave up) or in BACKOFF (the cursor row has a retry time). Healthy subscriptions are
+ * omitted. The durable halt fact outranks transient retry state.
  */
 export function selectStrugglingSubscriptions(
-  subscriptions: Record<string, SubscriptionRuntimeFacts> | undefined,
+  args:
+    | {
+        configured: Record<string, ConfiguredSubscriptionFacts> | undefined;
+        runtime: Record<string, SubscriptionRuntimeFacts> | undefined;
+      }
+    | undefined,
 ): SubscriptionHealth[] {
-  return Object.entries(subscriptions ?? {}).flatMap(([subscriptionKey, subscription]) => {
+  return Object.entries(args?.configured ?? {}).flatMap(([subscriptionKey, configured]) => {
+    const runtime = args?.runtime?.[subscriptionKey];
+    if (runtime === undefined) return [];
     const status: SubscriptionHealth["status"] | null =
-      subscription.parkedAtOffset !== null
-        ? "parked"
-        : subscription.nextAttemptAt !== null
+      configured.deliveryHalted !== undefined
+        ? "halted"
+        : runtime.nextAttemptAt !== null
           ? "backoff"
           : null;
     if (status === null) return [];
@@ -56,25 +70,26 @@ export function selectStrugglingSubscriptions(
       {
         subscriptionKey,
         status,
-        ackedOffset: subscription.ackedOffset,
-        parkedAtOffset: subscription.parkedAtOffset,
-        lag: subscription.lag,
-        attempt: subscription.attempt,
-        lastError: subscription.lastError,
+        acknowledgedOffset: runtime.acknowledgedOffset,
+        haltedAfterOffset: configured.deliveryHalted?.afterOffset ?? null,
+        lag: runtime.lag,
+        attempt: configured.deliveryHalted?.attempts ?? runtime.attempt,
+        lastError: configured.deliveryHalted?.error ?? runtime.lastError,
+        canSetCursor: configured.configuration.receiver.action !== "processor-wake",
       },
     ];
   });
 }
 
 /**
- * The events to append to unstick a subscription. `resume` un-parks and kicks
+ * The events to append to unstick a subscription. `resume` clears the halt and kicks
  * delivery (retry from the stopped cursor). `skip` first moves the cursor past
  * the stuck event so it does not just fail on the same one again, then resumes.
  *
- * Delivery reads events STRICTLY after the cursor, so `ackedOffset` is the last
- * delivered offset and the stuck event is `ackedOffset + 1`. Setting the cursor
- * to `ackedOffset + 1` (`subscription-cursor-set` is exclusive too) is what
- * actually skips it — setting it to `ackedOffset` would be a no-op and behave
+ * Delivery reads events STRICTLY after the cursor, so `acknowledgedOffset` is the last
+ * delivered offset and the stuck event is `acknowledgedOffset + 1`. Setting the cursor
+ * to `acknowledgedOffset + 1` is what actually skips it — setting it to the
+ * existing cursor would be a no-op and behave
  * like a plain resume.
  */
 export function buildRedriveEvents(
@@ -82,16 +97,21 @@ export function buildRedriveEvents(
   subscription: SubscriptionHealth,
 ): StreamEventInput[] {
   const resumed: StreamEventInput = {
-    type: "events.iterate.com/stream/subscription-resumed",
+    type: "events.iterate.com/stream/subscription-delivery-resumed",
     payload: { subscriptionKey: subscription.subscriptionKey },
   };
   if (action === "skip") {
+    if (!subscription.canSetCursor) {
+      throw new Error(
+        `subscription "${subscription.subscriptionKey}" owns its cursor at the receiver`,
+      );
+    }
     return [
       {
         type: "events.iterate.com/stream/subscription-cursor-set",
         payload: {
           subscriptionKey: subscription.subscriptionKey,
-          afterOffset: subscription.ackedOffset + 1,
+          afterOffset: subscription.acknowledgedOffset + 1,
         },
       },
       resumed,

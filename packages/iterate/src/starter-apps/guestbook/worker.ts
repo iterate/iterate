@@ -24,15 +24,15 @@ export class GuestbookApp extends IterateDurableObject {
     await this.#host.handleAlarm(alarmInfo);
   }
 
-  /** Compatibility door for the former config-owned WAKE subscription.
-   * Initialization removes that persisted subscription, but it may still dial
-   * this source once while the removal fact and source upgrade cross. */
+  /** The processor wake door. The packaged Guestbook is driven by the project
+   * worker's processEvent, so nothing configures a subscription that dials
+   * this — it exists so `workers.get(ref).processor` stays a real RpcTarget. */
   get processor() {
-    return this.#host.wakeSubscriber;
+    return this.#host.wakeProcessor;
   }
 
-  /** Lazily initialize the stream and retire the former config-owned WAKE
-   * subscription. The idempotency-keyed facts may be offered by every caller. */
+  /** Lazily initialize the stream. The idempotency-keyed creation fact may be
+   * offered by every caller. */
   async #ensureInitialized(): Promise<StreamProcessorRegistry<GuestbookState>> {
     const registry = await this.#host.registry();
     await registry.catchUp("guestbook");

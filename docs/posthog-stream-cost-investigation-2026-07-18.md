@@ -160,9 +160,9 @@ The largest staging event types were lifecycle fan-out:
 | `stream/subscription-configured` | 745,146 |
 | `stream/child-stream-created`    | 395,367 |
 | `stream/woken`                   | 309,080 |
-| `stream/subscriber-connected`    | 308,572 |
+| `stream/connection-opened`       | 308,572 |
 | `stream/created`                 | 266,311 |
-| `stream/subscriber-disconnected` |  97,981 |
+| `stream/connection-closed`       |  97,981 |
 | `repo/created`                   |  64,099 |
 | `repo/ready`                     |  61,536 |
 
@@ -218,7 +218,7 @@ GitHub webhooks were the largest event type by bytes and count:
 | `github/webhook-received`                 |  8,440 |         174,716,705 |
 | `stream/woken`                            |  6,547 |           1,219,238 |
 | `stream/subscription-configured`          |  2,328 |             965,524 |
-| `stream/subscriber-connected`             |  2,175 |           7,476,991 |
+| `stream/connection-opened`                |  2,175 |           7,476,991 |
 | `stream/child-stream-created`             |  1,429 |             344,264 |
 | `repo/cloudflare-artifact-event-received` |  1,252 |           1,076,110 |
 

@@ -95,7 +95,7 @@ function makeSchedulerHarness(options?: {
   const substrate: HarnessSubstrate = {
     clock: { now: T0 },
     stream: new MemoryStream("/scheduler/primary"),
-    progress: makeMemoryProgressStore(),
+    progress: makeMemoryProgressStore(SchedulerProcessorContract),
   };
   const harness = makeProcessorHarness<SchedulerProcessorContract, SchedulerProcessor>({
     createProcessor: (deps) =>
@@ -620,7 +620,9 @@ describe("recovery and alarm derivation", () => {
       processor,
       stream: h.stream,
       durability: {
-        progress: makeMemoryProgressStore() as ProcessorProgressStore<SchedulerProcessorState>,
+        progress: makeMemoryProgressStore(
+          SchedulerProcessorContract,
+        ) as ProcessorProgressStore<SchedulerProcessorState>,
       },
       now: () => h.clock.now,
       keepAlive: (work) => {
@@ -631,8 +633,9 @@ describe("recovery and alarm derivation", () => {
 
     const completedOffset = h.events(COMPLETED)[0]!.offset;
     const firstPage = h.events().filter((event) => event.offset < completedOffset);
-    const opened = await runner.openDelivery();
-    await opened.sink({
+    const opened = await runner.openEventBatchCallback();
+    await opened.processEventBatch({
+      streamId: h.stream.streamId,
       events: firstPage,
       scannedAfterOffset: opened.checkpointOffset,
       scannedThroughOffset: firstPage.at(-1)!.offset,

@@ -1341,7 +1341,7 @@ describe("AgentProcessor script execution", () => {
     const replay = makeAgentHarness({
       clock: h.clock,
       stream: h.stream,
-      progress: makeMemoryProgressStore(),
+      progress: makeMemoryProgressStore(AgentProcessorContract),
     });
     await replay.settle(); // replays the whole journal; a wedge would throw here
 
@@ -1360,14 +1360,14 @@ describe("AgentProcessor stream facts", () => {
       ...NEW_AGENT_EVENTS,
       {
         type: "events.iterate.com/stream/error-occurred",
-        payload: { message: 'subscription "worker" skipped poison event at offset 7' },
+        payload: { message: 'subscription "worker" skipped failing event at offset 7' },
       },
     ]);
 
     expect(h.state().contextItems.at(-1)).toMatchObject({
       payload: {
         role: "developer",
-        content: expect.stringContaining("skipped poison"),
+        content: expect.stringContaining("skipped failing event"),
         actor: { type: "integration", name: "stream-error" },
         llmRequestPolicy: { behaviour: "dont-trigger-request" },
       },
@@ -2138,7 +2138,7 @@ describe("AgentProcessor compaction", () => {
     const replay = makeAgentHarness({
       clock: h.clock,
       stream: h.stream,
-      progress: makeMemoryProgressStore(),
+      progress: makeMemoryProgressStore(AgentProcessorContract),
     });
     await replay.settle();
     expect(replay.llm.calls).toHaveLength(0);

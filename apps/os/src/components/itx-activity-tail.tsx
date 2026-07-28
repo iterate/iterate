@@ -11,7 +11,7 @@
 import { useState } from "react";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
-import { useItxSubscription } from "iterate/sdk/itx/react";
+import { useStreamConnection } from "iterate/sdk/itx/react";
 import type { StreamEvent } from "iterate/processors";
 
 const MAX_BUFFERED_EVENTS = 500;
@@ -38,9 +38,9 @@ export function ItxActivityTail() {
   const [raw, setRaw] = useState(false);
   const [events, setEvents] = useState<readonly StreamEvent[]>([]);
 
-  const { error, status } = useItxSubscription(
+  const { error, status } = useStreamConnection(
     (itx) =>
-      itx.streams.get(PROJECT_CONTEXT_PATH).subscribe({
+      itx.streams.get(PROJECT_CONTEXT_PATH).openConnection({
         replayAfterOffset: 0,
         processEventBatch: (batch) => {
           setEvents((previous) => {

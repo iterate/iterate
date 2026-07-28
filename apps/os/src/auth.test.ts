@@ -11,7 +11,7 @@ vi.mock("./auth/iterate-auth-client.ts", () => ({
   createOsIterateAuth: () => ({ authenticateSession: authClient.authenticateSession }),
 }));
 
-import { resolveItxAuth } from "./auth.ts";
+import { isStreamDeliveryAuth, resolveItxAuth, streamDeliveryAuthContext } from "./auth.ts";
 
 const ORIGIN = "https://os.example.test";
 
@@ -192,5 +192,25 @@ describe("resolveItxAuth", () => {
         requestUrl: `${ORIGIN}/api`,
       }),
     ).rejects.toThrow(/missing or invalid auth/);
+  });
+});
+
+describe("streamDeliveryAuthContext", () => {
+  it("brands project delivery without granting another project or platform scope", () => {
+    const auth = streamDeliveryAuthContext("prj_one");
+
+    expect(isStreamDeliveryAuth(auth)).toBe(true);
+    expect(auth.isAdmin()).toBe(false);
+    expect(auth.canAccessProject("prj_one")).toBe(true);
+    expect(auth.canAccessProject("prj_other")).toBe(false);
+    expect(() => auth.assertCanAccessProject(null)).toThrow(/cannot access the platform project/);
+  });
+
+  it("grants platform scope only to a deployment-global stream", () => {
+    const auth = streamDeliveryAuthContext(null);
+
+    expect(isStreamDeliveryAuth(auth)).toBe(true);
+    expect(auth.isAdmin()).toBe(true);
+    expect(() => auth.assertCanAccessProject(null)).not.toThrow();
   });
 });

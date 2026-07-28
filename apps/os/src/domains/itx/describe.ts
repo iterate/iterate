@@ -57,6 +57,6 @@ export type CapabilityDescription = {
    * built-ins (they exist at every scope).
    */
   scope?: string;
-  type: "builtin" | "live" | "itx-expression";
+  type: "builtin" | "live" | "itx-call";
   types?: string;
 };

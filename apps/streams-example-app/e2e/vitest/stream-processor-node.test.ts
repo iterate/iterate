@@ -1,4 +1,4 @@
-// Node runtime over a REAL WebSocket subscription: hosts a class-based stream
+// Node runtime over a REAL WebSocket event callback: hosts a class-based stream
 // processor in-process against a running worker — the playground named by
 // WORKER_URL (deployed, as in the preview CI lane) or the local `pnpm dev`
 // server when WORKER_URL is unset. Runs unconditionally; an unreachable
@@ -73,7 +73,7 @@ class EchoExampleProcessor extends StreamProcessor<EchoExampleContract> {
 async function hostEcho(args: {
   stream: Stream;
   path: string;
-  subscriptionKey: string;
+  connectionKey: string;
   storage: {
     load: () => ProcessorProgress<EchoExampleState> | undefined;
     save: (progress: ProcessorProgress<EchoExampleState>) => void;
@@ -94,19 +94,19 @@ async function hostEcho(args: {
       },
     },
   });
-  const opened = await runner.openDelivery();
-  const handle = await args.stream.subscribe({
-    subscriptionKey: args.subscriptionKey,
+  const opened = await runner.openEventBatchCallback();
+  const handle = await args.stream.openConnection({
+    connectionKey: args.connectionKey,
     replayAfterOffset: opened.checkpointOffset,
     // The contract is the delivery filter: only consumed types arrive.
     eventTypes: processor.contract.consumes,
-    processEventBatch: opened.sink,
+    processEventBatch: opened.processEventBatch,
   });
   return { processor, runner, handle };
 }
 
 describe("node-hosted stream processor (e2e)", () => {
-  it("hosts echo in-process over a plain subscription", async () => {
+  it("hosts echo in-process over an event callback connection", async () => {
     const path = e2eStreamPathLabel("node-echo");
     using connection = withStreamConnectionFromNode({
       url: toStreamWebSocketUrl({ path }),
@@ -117,7 +117,7 @@ describe("node-hosted stream processor (e2e)", () => {
     const { handle } = await hostEcho({
       stream,
       path,
-      subscriptionKey: "node-echo",
+      connectionKey: "node-echo",
       storage: { load: () => saved, save: (progress) => void (saved = progress) },
     });
     try {
@@ -139,12 +139,12 @@ describe("node-hosted stream processor (e2e)", () => {
       }
       expect(outputs.length).toBeGreaterThan(0);
       // The echo append is blocking work that completes before the runner's
-      // frame commit. Seeing the echo therefore does not, by itself, prove
+      // batch commit. Seeing the echo therefore does not, by itself, prove
       // that the reduction has been persisted yet.
       await waitUntil(() => saved?.reduction.state.seen === 1, 5_000);
       expect(saved?.reduction.state.seen).toBe(1);
     } finally {
-      handle.unsubscribe();
+      handle.close();
     }
   });
 
@@ -165,7 +165,7 @@ describe("node-hosted stream processor (e2e)", () => {
       const { handle } = await hostEcho({
         stream,
         path,
-        subscriptionKey: "resume",
+        connectionKey: "resume",
         storage,
       });
       try {
@@ -175,14 +175,14 @@ describe("node-hosted stream processor (e2e)", () => {
         });
         await waitUntil(() => saved?.reduction.state.seen === 1, 5_000);
       } finally {
-        handle.unsubscribe();
+        handle.close();
       }
     }
     const offsetAfterFirst = saved?.processing.acknowledgedThroughOffset ?? -1;
     expect(saved?.reduction.state.seen).toBe(1);
 
     // Session 2: fresh connection + fresh processor, SAME persisted snapshot.
-    // It must resume (subscribe afterOffset = stored offset), not reprocess.
+    // It must reopen after the stored offset, not reprocess earlier events.
     {
       using connection = withStreamConnectionFromNode({
         url: toStreamWebSocketUrl({ path }),
@@ -191,7 +191,7 @@ describe("node-hosted stream processor (e2e)", () => {
       const { handle } = await hostEcho({
         stream,
         path,
-        subscriptionKey: "resume",
+        connectionKey: "resume",
         storage,
       });
       try {
@@ -201,7 +201,7 @@ describe("node-hosted stream processor (e2e)", () => {
         });
         await waitUntil(() => (saved?.reduction.state.seen ?? 0) === 2, 5_000);
       } finally {
-        handle.unsubscribe();
+        handle.close();
       }
     }
     expect(saved?.reduction.state.seen).toBe(2); // resumed from 1; second input counted exactly once

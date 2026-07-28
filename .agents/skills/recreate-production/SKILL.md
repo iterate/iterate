@@ -22,7 +22,7 @@ user at consequential forks unless they explicitly waive consultation.
   sheet, and map them to freshly constructed current-version event inputs or
   public API calls. The export itself is never an executable replay payload.
 - Do not replay stream control facts, processor outputs, old idempotency keys,
-  cross-post provenance, or encrypted secret payloads. Recreate subscriptions
+  copy provenance, or encrypted secret payloads. Recreate subscriptions
   through their owning domain commands.
 - Secret values and integration credentials must come from an authoritative
   external source or a deliberately audited local conversion. Old ciphertext

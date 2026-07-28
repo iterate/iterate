@@ -80,7 +80,7 @@ away from.
    keys and offset gaps; eviction is an operator: `h.crash()`), every
    vendor-touching processor suite has a refold test, and a harness that
    structurally cannot catch a bug class says so in its file header (the
-   `stream-subscribers.teardown.test.ts` pattern).
+   `stream-event-sender.teardown.test.ts` pattern).
 
 6. **No workerd test runtime.** There is deliberately no
    `@cloudflare/vitest-pool-workers` lane: unit tests run in plain node

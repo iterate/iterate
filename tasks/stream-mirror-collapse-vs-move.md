@@ -15,7 +15,7 @@ SQLite database and having feed items and all that jazz".
 The tension: moving the mirror (~6k LOC movable core per the #2063-era sweep)
 drags the `stream-processor` / `stream-processor-runner` family with it (the
 browser hosts processors via the same runner the DOs use) — while
-`apps/os/docs/stream-mirror-collapse.md` (written during #2048) designs the
+`apps/os/docs/replace-browser-stream-database.md` (written during #2048) designs the
 OPPOSITE: server-owned feed live view + cursor-paged history, then DELETE
 ~4,850 LOC of the mirror. Moving code that is slated for deletion is churn.
 

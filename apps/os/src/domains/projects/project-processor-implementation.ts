@@ -40,37 +40,38 @@ const SIBLING_BIRTH_BARRIER_TIMEOUT_MS = 75_000;
  * BOOTSTRAP. `project/create-requested` is the durable intent. Its blocking
  * reaction creates every sibling processor a project is born with — the root
  * capability host on `/`, the primary scheduler on `/scheduler/primary`, the
- * config repo on `/repos/config` (its `repos/create-requested` batch also arms
- * the `cross-post:/` rule that copies later config-repo events back onto `/`),
- * and the email router on `/integrations/email` (seeded with the creator's
- * email as the first sender-allowlist entry). Every append has a deterministic
- * idempotency key, so redelivery dedupes instead of double-creating. The frame
- * then WAITS (bounded by
+ * config repo on `/repos/config` (its `repos/create-requested` batch also
+ * arms the `project-config-to-root` subscription that copies later
+ * config-repo events onto `/`), and the email router on
+ * `/integrations/email` (seeded with the creator's email as the first
+ * sender-allowlist entry). Every appended event carries a deterministic
+ * idempotency key, so a redelivered birth frame dedupes instead of
+ * double-creating. The frame then WAITS (bounded by
  * SIBLING_BIRTH_BARRIER_TIMEOUT_MS) for each sibling to reduce its own birth
  * batch.
  *
  * TERMINAL. The config repo's creation saga commits `repos/created` on its own
- * stream; the cross-post rule copies it here. The reaction probes the default
- * project worker, then atomically installs the ordinary root `project-worker`
- * feed and appends the terminal `project/created` certificate that create()
- * callers await plus the first `project/worker-updated` lifecycle fact. The
- * feed begins after `project/create-requested`: creation facts belong to this
- * platform saga, while the clean worker-update fact is userspace input.
+ * stream; the copy subscription sends it here. The reaction probes the
+ * default project worker, then atomically installs the ordinary root
+ * `project-worker` feed and appends the terminal `project/created`
+ * certificate that create() callers await plus the first
+ * `project/worker-updated` lifecycle fact. The feed begins at its own
+ * configuration event, after the platform's preceding creation facts.
  *
  * A config-repo failure or deterministic worker source-build failure closes
  * the saga with `project/create-failed`. Transient worker availability errors
  * and an in-progress build leave the reaction open for durable redelivery.
  *
  * WORKER LIFECYCLE. After terminal creation, every later config-repo
- * `repo/commit-completed` fact is copied onto `/` by that same cross-post
- * rule. Once the current default worker answers its readiness probe, this
- * processor translates the raw repo fact into `project/worker-updated`;
- * deterministic source-build failures become `project/worker-update-failed`,
- * while transient availability remains open for durable redelivery. The
- * trusted seed commit is creation input and is deliberately not translated;
+ * `repo/commit-completed` fact is copied onto `/` by that same subscription.
+ * Once the current default worker answers its readiness probe, this processor
+ * translates the raw repo fact into `project/worker-updated`; deterministic
+ * source-build failures become `project/worker-update-failed`, while
+ * transient availability remains open for durable redelivery. The trusted
+ * seed commit is creation input and is deliberately not translated;
  * creation's successful probe publishes its worker-update certificate.
  *
- * CATALOGS. `reduce` projects cross-posted domain facts into list state:
+ * CATALOGS. `reduce` projects received domain facts into list state:
  * physical streams (`stream/created`, `stream/child-stream-created`),
  * devices, repos and secrets (their `created` facts, keyed by the source
  * stream's path). Purely physical bookkeeping — a path in the catalog never
@@ -118,16 +119,16 @@ export class ProjectProcessor extends StreamProcessor<
       }
       case "events.iterate.com/repos/created":
       case "events.iterate.com/repos/create-failed": {
-        // Arrives as a cross-posted copy: the config repo commits its
-        // terminal result on its own stream, and the `cross-post:/` rule
-        // armed at create copies it here — this saga only ever reacts to
-        // events ON `/`. The payload carries no path, so the config repo is
-        // recognized by exact cross-post provenance.
-        const origin = event.source?.crossPostedFrom?.at(-1);
+        // Arrives as a copied event: the config repo commits its terminal
+        // certificate on its own stream, and the `project-config-to-root`
+        // subscription copies it here — this saga only ever reacts
+        // to events ON `/`. The certificate payload carries no path, so the
+        // config repo is recognized by its recorded source coordinates.
+        const origin = event.source?.copiedFrom?.at(-1);
         if (
           origin?.projectId !== this.deps.itx.projectId ||
           origin.path !== CONFIG_REPO_PATH ||
-          origin.subscriptionKey !== "cross-post:/" ||
+          origin.subscriptionKey !== "project-config-to-root" ||
           origin.type !== event.type ||
           state.birthCertificate !== null ||
           state.createRequest === null ||
@@ -223,9 +224,14 @@ export class ProjectProcessor extends StreamProcessor<
                   subscriptionKey: "project-worker",
                   description:
                     "Default project worker: every later root event; project creation remains platform-owned.",
-                  delivery: { mode: "push", expression: ["processEventBatch"] },
-                  deliver: { afterOffset: createRequestedAtOffset },
-                  onPoison: "skip",
+                  receiver: {
+                    action: "itx-call",
+                    expression: ["processEventBatch"],
+                    delivery: {
+                      start: "now",
+                      onFailingEvent: "skip",
+                    },
+                  },
                 },
               },
               {
@@ -244,11 +250,11 @@ export class ProjectProcessor extends StreamProcessor<
         break;
       }
       case "events.iterate.com/repo/commit-completed": {
-        const origin = event.source?.crossPostedFrom?.at(-1);
+        const origin = event.source?.copiedFrom?.at(-1);
         if (
           origin?.projectId !== this.deps.itx.projectId ||
           origin.path !== CONFIG_REPO_PATH ||
-          origin.subscriptionKey !== "cross-post:/" ||
+          origin.subscriptionKey !== "project-config-to-root" ||
           origin.type !== event.type ||
           state.birthCertificate === null
         ) {
@@ -272,8 +278,9 @@ export class ProjectProcessor extends StreamProcessor<
             return;
           }
 
+          let servedCommitOid: string;
           try {
-            await this.#waitForDefaultProjectWorker();
+            servedCommitOid = await this.#waitForDefaultProjectWorker();
           } catch (error) {
             if (!isWorkerBuildFailedError(error)) throw error;
             await append({
@@ -286,10 +293,11 @@ export class ProjectProcessor extends StreamProcessor<
             });
             return;
           }
+          const servedOutcomeIdempotencyKey = `project/worker-update:${servedCommitOid}`;
           await append({
             type: "events.iterate.com/project/worker-updated",
-            idempotencyKey: outcomeIdempotencyKey,
-            payload: { commitOid: event.payload.commitOid },
+            idempotencyKey: servedOutcomeIdempotencyKey,
+            payload: { commitOid: servedCommitOid },
           });
         });
         break;
@@ -415,11 +423,11 @@ export class ProjectProcessor extends StreamProcessor<
       ),
       // The config repo is an ordinary repo on its own stream. Its request
       // batch contains the creation intent (`repos/create-requested`, empty
-      // starter seed), the repo processor subscription, and the cross-post
-      // rule that copies subsequent config-repo events onto the project
-      // stream `/` — including the saga's terminal `repos/created`
+      // starter seed), the repo processor subscription, and the stream
+      // subscription that copies subsequent config-repo events onto the
+      // project stream `/` — including the saga's terminal `repos/created`
       // certificate, which is what starts the worker delivery barrier and
-      // catalogs the repo (so no dedicated catalog subscription here).
+      // catalogs the repo (so no separate catalog subscription is needed).
       timedStep("create-timing", timing, "config-repo-append", () =>
         appendTo(
           CONFIG_REPO_PATH,
@@ -429,18 +437,19 @@ export class ProjectProcessor extends StreamProcessor<
           }),
           {
             type: "events.iterate.com/stream/subscription-configured",
-            idempotencyKey: `config-repo-cross-post:${this.deps.itx.projectId}`,
+            idempotencyKey: `config-repo-subscription:${this.deps.itx.projectId}`,
             payload: {
-              // The key crossPostTo would pick for destination "/", so
-              // `removeCrossPost({ path: "/" })` can manage this rule.
-              subscriptionKey: "cross-post:/",
+              subscriptionKey: "project-config-to-root",
               description:
-                "Special project config repo: every event after the birth/setup batch is cross-posted to the project root so the project processor can react when config changes.",
-              delivery: {
-                mode: "push",
-                expression: ["streams", ["get", "/"], "acceptCrossPost"],
+                "Sends every config-repo event after the birth batch to the project root so the project processor can react when configuration changes.",
+              receiver: {
+                action: "copy-to-stream",
+                receivingStreamPath: "/",
+                delivery: {
+                  start: "now",
+                  onFailingEvent: "halt",
+                },
               },
-              deliver: "new",
             },
           },
         ),
@@ -801,7 +810,7 @@ function recordDomainObject<
   State extends { devices: StreamListItem[]; repos: StreamListItem[]; secrets: StreamListItem[] },
   Key extends "devices" | "repos" | "secrets",
 >(state: State, key: Key, event: StreamEvent): State {
-  const path = event.source?.processor?.stream.path ?? event.source?.crossPostedFrom?.[0]?.path;
+  const path = event.source?.processor?.stream.path ?? event.source?.copiedFrom?.[0]?.path;
   if (path === undefined) return state;
   return {
     ...state,

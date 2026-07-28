@@ -394,9 +394,9 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
 // The stream view mounts ONE browser mirror runtime on the agent stream — it
 // downloads once and fans out to the canonical processors (raw events cache +
 // feed projector). Its debug-registry key is `${projectId} ${streamPath}
-// browser-stream-mirror` (stream-browser-store.ts).
+// browser-stream-processors` (stream-browser-store.ts).
 function runtimeDebugKeys(projectId: string) {
-  return [`${projectId} ${ONBOARDING_AGENT_PATH} browser-stream-mirror`];
+  return [`${projectId} ${ONBOARDING_AGENT_PATH} browser-stream-processors`];
 }
 
 type RuntimeDebug = {
@@ -420,10 +420,10 @@ async function waitForSubscribed(page: Page, keys: string[], timeoutMs = 90_000)
   let last: DebugSnapshot = {};
   for (;;) {
     last = await readDebugSnapshot(page);
-    if (keys.every((key) => last[key]?.connectionStatus === "subscribed")) return last;
+    if (keys.every((key) => last[key]?.connectionStatus === "receiving-events")) return last;
     if (Date.now() > deadline) {
       throw new Error(
-        `Timed out waiting for runtimes ${keys.join(", ")} to reach "subscribed". Last __streamRuntimeDebug:\n${JSON.stringify(last, null, 2)}`,
+        `Timed out waiting for runtimes ${keys.join(", ")} to reach "receiving-events". Last __streamRuntimeDebug:\n${JSON.stringify(last, null, 2)}`,
       );
     }
     await page.waitForTimeout(500);

@@ -3,12 +3,12 @@ import { streamRpcPath, withStreamConnectionFromBrowser } from "./stream-rpc.ts"
 /**
  * One-shot playground operator verb against the `/api/streams` endpoint.
  *
- * The itx browser mirror has no `kill()`/`reset()` (they are not part
- * of the public `Stream` capability), so the sidebar buttons dial their own
- * short-lived connection to the playground RPC target instead. Both verbs
+ * The itx browser database has no `kill()`/`reset()` (they are not part
+ * of the public `Stream` capability), so the sidebar buttons open their own
+ * short-lived WebSocket connection to the playground RPC target instead. Both verbs
  * `ctx.abort()` the Durable Object mid-call, so a rejected RPC is the expected
  * success shape — the caller follows up with `streamStore.nudge()` so the
- * mirror notices the new incarnation and reconciles quickly.
+ * browser writer notices the new incarnation and rebuilds quickly.
  */
 export async function runStreamControl(args: {
   path: string;

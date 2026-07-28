@@ -35,13 +35,13 @@ function reviewBotSubscriptionEvents(
       type: "events.iterate.com/stream/subscription-configured",
       payload: {
         subscriptionKey: "app-review-bot#review-bot",
-        delivery: {
-          mode: "wake",
+        receiver: {
+          action: "processor-wake",
           expression: [
             "workers",
             ["get", reviewBotAppRef(connection, config)],
             "processor",
-            "wakeStreamSubscriber",
+            "wakeStreamProcessor",
           ],
           processorSlug: "review-bot",
         },

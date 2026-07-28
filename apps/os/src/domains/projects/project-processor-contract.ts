@@ -86,7 +86,7 @@ export const ProjectProcessorContract = defineProcessorContract({
       .default([])
       .meta({
         description:
-          "Catalog of device streams, recorded from cross-posted device/created facts; what " +
+          "Catalog of device streams, recorded from copied device/created facts; what " +
           "the devices collection's list() reads.",
       }),
     repos: z
@@ -94,7 +94,7 @@ export const ProjectProcessorContract = defineProcessorContract({
       .default([])
       .meta({
         description:
-          "Catalog of repo streams, recorded from cross-posted repos/created certificates; " +
+          "Catalog of repo streams, recorded from copied repos/created certificates; " +
           "what the repos collection's list() reads.",
       }),
     secrets: z
@@ -102,7 +102,7 @@ export const ProjectProcessorContract = defineProcessorContract({
       .default([])
       .meta({
         description:
-          "Catalog of secret streams, recorded from cross-posted secret/created facts; what " +
+          "Catalog of secret streams, recorded from copied secret/created facts; what " +
           "the secrets collection's list() reads.",
       }),
     streams: z
@@ -554,7 +554,7 @@ export function parseProjectCreationTerminal(input: {
   // discard an otherwise valid historical terminal.
   if (
     event.path !== "/" ||
-    event.source?.crossPostedFrom !== undefined ||
+    event.source?.copiedFrom !== undefined ||
     processor === undefined ||
     processor.slug !== ProjectProcessorContract.slug ||
     processor.stream.path !== "/" ||

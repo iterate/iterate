@@ -26,9 +26,9 @@ test("empty agent feeds distinguish waiting from filtered zero matches", async (
           ).__streamRuntimeDebug;
           const entry = read?.()[key] as { connectionStatus?: string } | undefined;
           return entry?.connectionStatus;
-        }, `${fixture.project.id} ${agentPath} browser-stream-mirror`),
+        }, `${fixture.project.id} ${agentPath} browser-stream-processors`),
       )
-      .toBe("subscribed");
+      .toBe("receiving-events");
 
     await page.getByText("Waiting for events…", { exact: true }).waitFor({ timeout: 5_000 });
     await page.getByText("Nothing here yet").waitFor({ state: "hidden" });

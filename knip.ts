@@ -31,10 +31,6 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       // Seeded as a standalone worker entry outside apps/os/src. Tests import
       // parts of it, but the deployed config-repo worker uses the whole file.
       "config-repo-template/worker.ts",
-      // Used by apps/streams-example-app through its `~` alias into apps/os
-      // src; knip does not resolve that cross-workspace alias.
-      "src/domains/streams/client-libraries/processors/browser-event-feed/contract.ts",
-      "src/domains/streams/client-libraries/processors/browser-event-feed/implementation.ts",
     ],
     ignoreDependencies: [
       ...(base.ignoreDependencies ?? []),

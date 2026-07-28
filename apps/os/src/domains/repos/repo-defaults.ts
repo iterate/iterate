@@ -6,15 +6,14 @@
 // fact — `repos/created` (the birth certificate with the backing Artifacts
 // coordinates) or `repos/create-failed` (fail-closed).
 //
-// The batch deliberately does NOT route the terminal fact to the project
-// catalog — that lane is the creator's choice: `repos.get(path).create()`
-// arms a dedicated `repos/created` cross-post subscription, while the
-// project bootstrap's config repo already has the `cross-post:/` rule that
-// copies every post-setup event onto `/`.
+// The batch deliberately does NOT send the terminal fact to the project
+// catalog. `repos.get(path).create()` adds a `repo-catalog` subscription for
+// `repos/created`; project bootstrap instead adds `project-config-to-root`,
+// which sends every later config-repo event to `/`.
 
 import type { z } from "zod";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
+import { buildHostedProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { RepoProcessorContract } from "./repo-processor-contract.ts";
 
 /** Every creation mode targets this branch — commit and task facts, worker
@@ -28,7 +27,7 @@ export type RepoCreateInput = z.input<
 
 /**
  * The atomic creation-request batch for one repo: the `repos/create-requested`
- * intent plus the subscription that arms the repo's own processor (which
+ * intent plus the subscription that wakes the repo's own processor (which
  * drives the saga — seeding or importing the backing Cloudflare Artifacts
  * repository — and appends the terminal `repos/created` / `repos/create-failed`
  * fact). Append the whole array in ONE `stream.append` call — the batch
@@ -59,7 +58,7 @@ export function repoCreationEvents(input: {
       idempotencyKey: `repo-create-requested:${projectId}:${path}`,
       payload: input.payload ?? { type: "empty" },
     }),
-    buildDurableObjectProcessorSubscriptionConfiguredEvent({
+    buildHostedProcessorSubscriptionConfiguredEvent({
       durableObjectName,
       idempotencyKey: `stream/subscription-configured:${durableObjectName}#${RepoProcessorContract.slug}`,
       processor: ["repos", ["get", path], "processor"],

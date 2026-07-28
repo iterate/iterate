@@ -19,16 +19,6 @@ function deliver(
     type: string;
     path: string;
     payload?: Record<string, unknown>;
-    source?: {
-      crossPostedFrom?: Array<{
-        subscriptionKey: string;
-        createdAt: string;
-        offset: number;
-        path: string;
-        projectId: string | null;
-        type: string;
-      }>;
-    };
   },
 ): Promise<void> {
   return worker.processEventBatch({ events: [event] } as never);

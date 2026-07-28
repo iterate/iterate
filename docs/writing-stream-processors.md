@@ -103,7 +103,7 @@ context. This is deliberately not a Durable Object lifetime contract.
 - `project/worker-updated` on `/` is the config-application hook.
   Creation's successful worker probe publishes the first one using the
   OS-stamped seed commit; the platform does not separately translate the raw
-  seed commit. For each later cross-posted config repo
+  seed commit. For each later copied config repo
   `repo/commit-completed`, the Project processor first waits for the
   authoritative current worker to build, load, and answer. Head convergence
   and in-progress builds keep the platform processor cursor behind for retry;

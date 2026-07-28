@@ -1,16 +1,16 @@
 // Table tests for the host-side self-measured metrics: own-append loop
 // correlation, ingest accounting, and the ping-derived clock-offset
-// correction. Host wiring is covered by stream-processor-host.test.ts and
-// the browser store's tests.
+// correction. Runner wiring is covered by stream-processor-runner.test.ts;
+// browser wiring is covered by the browser store tests.
 
 import { describe, expect, it } from "vitest";
-import { SubscriberMetrics } from "iterate/processors";
+import { EventConsumptionMetrics } from "iterate/processors";
 
 const T0 = 1_700_000_000_000;
 
-describe("SubscriberMetrics", () => {
+describe("EventConsumptionMetrics", () => {
   it("reports nulls and zero counters until something is measured", () => {
-    expect(new SubscriberMetrics(T0).report()).toEqual({
+    expect(new EventConsumptionMetrics(T0).report()).toEqual({
       measuredSince: new Date(T0).toISOString(),
       consumeOwnAppendMs: null,
       appendRoundTripMs: null,
@@ -23,7 +23,7 @@ describe("SubscriberMetrics", () => {
   });
 
   it("closes the consume-own-append loop when ingest passes the committed offset", () => {
-    const metrics = new SubscriberMetrics(T0);
+    const metrics = new EventConsumptionMetrics(T0);
     metrics.noteAppendCommitted({ maxCommittedOffset: 10, t0: T0, atMs: T0 + 40 });
     expect(metrics.report().appendRoundTripMs).toMatchObject({ last: 40, samples: 1 });
     // Ingest through offset 9: the loop is still open.
@@ -47,7 +47,7 @@ describe("SubscriberMetrics", () => {
   });
 
   it("one catch-up ingest settles several pending appends; reconnect clears them", () => {
-    const metrics = new SubscriberMetrics(T0);
+    const metrics = new EventConsumptionMetrics(T0);
     metrics.noteAppendCommitted({ maxCommittedOffset: 5, t0: T0, atMs: T0 + 10 });
     metrics.noteAppendCommitted({ maxCommittedOffset: 8, t0: T0 + 20, atMs: T0 + 30 });
     metrics.noteAppendCommitted({ maxCommittedOffset: 20, t0: T0 + 40, atMs: T0 + 50 });
@@ -70,8 +70,8 @@ describe("SubscriberMetrics", () => {
     expect(metrics.report().consumeOwnAppendMs).toMatchObject({ samples: 2 });
   });
 
-  it("closes the loop immediately when ingest already passed the offset (fan-out beats the append ack)", () => {
-    const metrics = new SubscriberMetrics(T0);
+  it("closes the loop immediately when event delivery already passed the offset before append returns", () => {
+    const metrics = new EventConsumptionMetrics(T0);
     // The stream fans out post-commit BEFORE answering the appender: this
     // host ingests offset 7 before its own append call returns.
     metrics.noteBatchIngested({
@@ -94,7 +94,7 @@ describe("SubscriberMetrics", () => {
   });
 
   it("caps pending own-append correlations, dropping oldest first", () => {
-    const metrics = new SubscriberMetrics(T0);
+    const metrics = new EventConsumptionMetrics(T0);
     for (let index = 0; index < 20; index += 1) {
       metrics.noteAppendCommitted({ maxCommittedOffset: index + 1, t0: T0, atMs: T0 + 1 });
     }
@@ -109,7 +109,7 @@ describe("SubscriberMetrics", () => {
   });
 
   it("corrects delivery age by the ping-derived clock offset", () => {
-    const metrics = new SubscriberMetrics(T0);
+    const metrics = new EventConsumptionMetrics(T0);
     // Host clock runs 500ms ahead of the stream: stream sent at t0, host saw
     // it 510ms later on its own clock, with a 10ms one-way estimate.
     metrics.notePingObserved({ t0: T0, t1: T0 + 510, oneWayEstimateMs: 10 });
@@ -127,7 +127,7 @@ describe("SubscriberMetrics", () => {
   });
 
   it("uses the raw age when no ping has been observed (estimate, never fabricate)", () => {
-    const metrics = new SubscriberMetrics(T0);
+    const metrics = new EventConsumptionMetrics(T0);
     metrics.noteBatchIngested({
       ingestedThroughOffset: 1,
       newestEventCreatedAtMs: T0,
@@ -139,7 +139,7 @@ describe("SubscriberMetrics", () => {
   });
 
   it("skips delivery age for batches with no events (state-only deliveries)", () => {
-    const metrics = new SubscriberMetrics(T0);
+    const metrics = new EventConsumptionMetrics(T0);
     metrics.noteBatchIngested({
       ingestedThroughOffset: 0,
       eventCount: 0,

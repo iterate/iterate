@@ -54,11 +54,6 @@ const ALLOWED_UNDATED: AllowedUndated[] = [
   // Do NOT add entries here — date new parked markers instead. This list
   // only shrinks.
   {
-    file: "apps/os/e2e/vitest/stream-lifecycle.e2e.test.ts",
-    match: "dropping a WebSocket waitForEvent caller cleans up",
-    note: "KNOWN GAP 2026-07-02: waitForEvent has no abort on transport drop",
-  },
-  {
     file: "apps/streams-example-app/e2e/playwright/stream-browser.spec.ts",
     match: "expanded tail rows can grow under the sticky composer",
     note: "known tail re-pin regression, evidence in the spec comment (PR #2024)",

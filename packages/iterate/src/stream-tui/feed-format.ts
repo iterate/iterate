@@ -40,7 +40,7 @@ export function formatStepLine(step: AgentUiStep): string {
 }
 
 /**
- * Live spinner label for the in-flight activity. Mirrors the web feed:
+ * Live spinner label for the in-flight activity. Matches the web feed:
  * reasoning tokens → Thinking; otherwise Waiting for a response; code →
  * Running code (caller may append a live `0.9s` counter).
  */

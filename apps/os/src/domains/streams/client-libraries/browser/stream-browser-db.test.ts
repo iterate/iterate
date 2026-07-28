@@ -4,7 +4,7 @@
 // result used to notify React as soon as its own worker round-trip resolved.
 // Views composing several queries over the same database (the agent feed's
 // item count + visible rows + live processor state) would render inconsistent
-// intermediate frames — e.g. the settled feed row already counted while the
+// intermediate snapshots — e.g. the settled feed row already counted while the
 // live activity still showed the same content — visible as flicker on every
 // live→settled handoff. The pass must apply every refreshed snapshot first and
 // only then notify, so React commits one consistent frame.
@@ -121,21 +121,21 @@ it("applies every live query before notifying any listener for one change", asyn
 
   const countHandle = database.query(`SELECT COUNT(*) AS count FROM feed_items`, []);
   const stateHandle = database.query(`SELECT label FROM activity`, []);
-  // Every notification records the pair of snapshots a subscriber would render
-  // from — the flicker is any frame where they disagree about the handoff.
-  const observedFrames: string[] = [];
-  const recordFrame = () =>
-    observedFrames.push(
+  // Every notification records the pair of snapshots a React listener would render
+  // from — the flicker is any snapshot where they disagree about the handoff.
+  const observedSnapshots: string[] = [];
+  const recordSnapshot = () =>
+    observedSnapshots.push(
       `${countHandle.getSnapshot().data[0]?.count}:${stateHandle.getSnapshot().data[0]?.label}`,
     );
-  countHandle.subscribe(recordFrame);
-  stateHandle.subscribe(recordFrame);
+  countHandle.subscribe(recordSnapshot);
+  stateHandle.subscribe(recordSnapshot);
 
   await waitFor(
     () => countHandle.getSnapshot().status === "ok" && stateHandle.getSnapshot().status === "ok",
     "initial query results",
   );
-  observedFrames.length = 0;
+  observedSnapshots.length = 0;
 
   // The settle handoff: the feed row lands and the live activity clears in one
   // write batch, followed by a single change notification.
@@ -148,13 +148,13 @@ it("applies every live query before notifying any listener for one change", asyn
   );
   database.notifyChanged();
 
-  await waitFor(() => observedFrames.length >= 2, "both listeners to observe the change");
+  await waitFor(() => observedSnapshots.length >= 2, "both listeners to observe the change");
   // Let any straggling notification land before asserting.
   await new Promise((resolve) => setTimeout(resolve, 25));
 
-  expect(observedFrames.length).toBeGreaterThanOrEqual(2);
-  for (const frame of observedFrames) {
-    expect(frame).toBe("1:settled");
+  expect(observedSnapshots.length).toBeGreaterThanOrEqual(2);
+  for (const snapshot of observedSnapshots) {
+    expect(snapshot).toBe("1:settled");
   }
 });
 
@@ -185,4 +185,29 @@ it("does not notify queries whose results did not change", async () => {
   await waitFor(() => changingNotifications > changingBaseline, "the changed query to notify");
   await new Promise((resolve) => setTimeout(resolve, 25));
   expect(constantNotifications).toBe(constantBaseline);
+});
+
+it("stores the exact stream lifetime ID independently for each processor cache", async () => {
+  database = createDatabase();
+  const firstStreamId = "11111111-1111-4111-8111-111111111111";
+  const recreatedStreamId = "22222222-2222-4222-8222-222222222222";
+
+  // A creation timestamp from the old cache format is deliberately not an
+  // identity fallback: two recreated streams can have the same millisecond.
+  await database.exec(
+    `CREATE TABLE processor_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
+  );
+  await database.exec(
+    `INSERT INTO processor_metadata (key, value) VALUES ('created-at:raw-events', '2026-07-22T12:00:00.000Z')`,
+  );
+  expect(await database.readProcessorStreamId("raw-events")).toBeUndefined();
+
+  await database.writeProcessorStreamId("raw-events", firstStreamId);
+  await database.writeProcessorStreamId("feed", recreatedStreamId);
+  expect(await database.readProcessorStreamId("raw-events")).toBe(firstStreamId);
+  expect(await database.readProcessorStreamId("feed")).toBe(recreatedStreamId);
+
+  await database.writeProcessorStreamId("raw-events", recreatedStreamId);
+  expect(await database.readProcessorStreamId("raw-events")).toBe(recreatedStreamId);
+  expect(await database.readProcessorStreamId("feed")).toBe(recreatedStreamId);
 });
