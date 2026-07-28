@@ -27,12 +27,13 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  periodic itx calls directly in this case.\n" +
       "- root `stream/woken` is available for work that should run when the project\n" +
       "  stream wakes after hibernation or an OS deployment.\n" +
-      "- `project/worker-updated` is the config-application hook. The platform\n" +
-      "  translates a config repo commit into this root event only after the current\n" +
-      "  default worker has built, loaded, and answered a readiness probe. If several\n" +
-      "  commits land quickly, a later HEAD may reconcile earlier commit facts too.\n" +
-      "  This is deliberately a reconcile-current-config hook, not an exact\n" +
-      "  per-commit activation callback. The seeded example calls\n" +
+      "- `project/worker-updated` is the post-creation config-application hook. The\n" +
+      "  platform does not translate the trusted seed commit. For each later config\n" +
+      "  repo commit, it appends this root event only after the current default worker\n" +
+      "  has built, loaded, and answered a readiness probe. If several commits land\n" +
+      "  quickly, a later HEAD may reconcile earlier commit facts too. This is\n" +
+      "  deliberately a reconcile-current-config hook, not an exact per-commit\n" +
+      "  activation callback. The seeded example calls\n" +
       "  `itx.scheduler.set(...)` here to install one 15-minute heartbeat.\n" +
       "\n" +
       "`project/create-requested` and `project/created` belong to the platform's\n" +
@@ -113,12 +114,13 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  periodic itx calls directly in this case.\n" +
       "- root `stream/woken` is available for work that should run when the project\n" +
       "  stream wakes after hibernation or an OS deployment.\n" +
-      "- `project/worker-updated` is the config-application hook. The platform\n" +
-      "  translates a config repo commit into this root event only after the current\n" +
-      "  default worker has built, loaded, and answered a readiness probe. If several\n" +
-      "  commits land quickly, a later HEAD may reconcile earlier commit facts too.\n" +
-      "  This is deliberately a reconcile-current-config hook, not an exact\n" +
-      "  per-commit activation callback. The seeded example calls\n" +
+      "- `project/worker-updated` is the post-creation config-application hook. The\n" +
+      "  platform does not translate the trusted seed commit. For each later config\n" +
+      "  repo commit, it appends this root event only after the current default worker\n" +
+      "  has built, loaded, and answered a readiness probe. If several commits land\n" +
+      "  quickly, a later HEAD may reconcile earlier commit facts too. This is\n" +
+      "  deliberately a reconcile-current-config hook, not an exact per-commit\n" +
+      "  activation callback. The seeded example calls\n" +
       "  `itx.scheduler.set(...)` here to install one 15-minute heartbeat.\n" +
       "\n" +
       "`project/create-requested` and `project/created` belong to the platform's\n" +

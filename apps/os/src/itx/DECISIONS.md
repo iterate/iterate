@@ -365,12 +365,13 @@ been circling:
   project's durable state (with a pure `projectFacts()` + D1-slug fallback
   for cold snapshots), and "config worker" is now just **the worker**
   (`durable-objects/worker.ts`, `callWorkerFunction`, `itx.worker`).
-- **Worker source changes become a platform lifecycle fact.** The config
-  repo's `repo/commit-completed` is cross-posted onto `/`; the Project
-  processor recognizes its exact provenance and probes the authoritative
-  current default worker. Success appends root `project/worker-updated`, which
-  is the plain userspace switch case for arbitrary direct ITX code.
-  Deterministic source failure appends
+- **Post-creation worker source changes become a platform lifecycle fact.**
+  The trusted seed commit remains creation input and is not translated. Each
+  later config repo `repo/commit-completed` is cross-posted onto `/`; the
+  Project processor recognizes its exact provenance and probes the
+  authoritative current default worker. Success appends root
+  `project/worker-updated`, which is the plain userspace switch case for
+  arbitrary direct ITX code. Deterministic source failure appends
   `project/worker-update-failed`; transient build or availability states keep
   the processor cursor open. This keeps repo topology out of userspace without
   inventing a lifecycle framework or reusing the one-shot creation facts.

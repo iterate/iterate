@@ -97,14 +97,15 @@ framework: each case can get `itx` and run arbitrary project code directly.
   script and carries only `{ scheduleKey }`.
 - `stream/woken` on `/` exposes project-stream wakes, including after an OS
   deployment.
-- `project/worker-updated` on `/` is the config-application hook. The platform
-  Project processor translates the config repo's cross-posted
-  `repo/commit-completed` only after the authoritative current worker has
-  built, loaded, and answered. Head convergence and in-progress builds keep
-  the platform processor cursor behind for retry; deterministic source failure
-  becomes `project/worker-update-failed`. A later HEAD may satisfy an earlier
-  commit fact, so this certifies runnable current configuration rather than
-  activating one exact artifact.
+- `project/worker-updated` on `/` is the post-creation config-application hook.
+  The platform does not translate the trusted seed commit. For each later
+  cross-posted config repo `repo/commit-completed`, the Project processor first
+  waits for the authoritative current worker to build, load, and answer. Head
+  convergence and in-progress builds keep the platform processor cursor behind
+  for retry; deterministic source failure becomes
+  `project/worker-update-failed`. A later HEAD may satisfy an earlier commit
+  fact, so this certifies runnable current configuration rather than activating
+  one exact artifact.
 
 `project/create-requested` and `project/created` belong to the platform's
 creation saga; the userspace worker does not handle them. The seeded

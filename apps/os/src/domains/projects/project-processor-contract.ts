@@ -206,8 +206,9 @@ export const ProjectProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/project/worker-updated": {
       description:
-        "The config repo advanced and the platform successfully built, loaded, and probed the " +
-        "current default project worker. This is the userspace configuration lifecycle hook.",
+        "After project creation, the config repo advanced and the platform successfully built, " +
+        "loaded, and probed the current default project worker. This is the userspace " +
+        "configuration lifecycle hook; the trusted seed commit is not translated.",
       payloadSchema: z.object({
         commitOid: z.string().trim().min(1).meta({
           description: "The config-repo commit that triggered the readiness check.",
@@ -216,8 +217,9 @@ export const ProjectProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/project/worker-update-failed": {
       description:
-        "A config repo commit deterministically failed to build as the default project worker. " +
-        "A later config commit can repair it; transient availability remains open for redelivery.",
+        "A post-creation config repo commit deterministically failed to build as the default " +
+        "project worker. A later config commit can repair it; transient availability remains " +
+        "open for redelivery.",
       payloadSchema: z.object({
         commitOid: z.string().trim().min(1).meta({
           description: "The config-repo commit that triggered the failed readiness check.",

@@ -225,10 +225,11 @@ carries a `cross-post:/` subscription from birth, so every config-repo event
 project stream `/` with provenance. Streams are the coordination layer for all
 of this — bootstrap is events and processors, not a setup RPC.
 
-The Project processor recognizes the exact `/repos/config`
-`repo/commit-completed` cross-post, waits for the authoritative current default
-worker to build, load, and answer, then appends root
-`project/worker-updated`. A deterministic source-build failure instead appends
+After terminal creation, the Project processor recognizes each exact
+`/repos/config` `repo/commit-completed` cross-post, waits for the authoritative
+current default worker to build, load, and answer, then appends root
+`project/worker-updated`. The trusted seed commit is creation input and is not
+translated. A deterministic source-build failure instead appends
 `project/worker-update-failed`; head convergence, in-progress builds, and
 transient availability leave the processor cursor behind for redelivery. A
 later HEAD may satisfy an earlier commit fact, so this certifies that current

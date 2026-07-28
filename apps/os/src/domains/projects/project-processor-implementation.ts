@@ -60,12 +60,13 @@ const SIBLING_BIRTH_BARRIER_TIMEOUT_MS = 75_000;
  * the saga with `project/create-failed`. Transient worker availability errors
  * and an in-progress build leave the reaction open for durable redelivery.
  *
- * WORKER LIFECYCLE. Every later config-repo `repo/commit-completed` fact is
- * copied onto `/` by that same cross-post rule. Once the current default
- * worker answers its readiness probe, this processor translates the raw repo
- * fact into `project/worker-updated`; deterministic source-build failures
- * become `project/worker-update-failed`, while transient availability remains
- * open for durable redelivery.
+ * WORKER LIFECYCLE. After terminal creation, every later config-repo
+ * `repo/commit-completed` fact is copied onto `/` by that same cross-post
+ * rule. Once the current default worker answers its readiness probe, this
+ * processor translates the raw repo fact into `project/worker-updated`;
+ * deterministic source-build failures become `project/worker-update-failed`,
+ * while transient availability remains open for durable redelivery. The
+ * trusted seed commit is creation input and is deliberately not translated.
  *
  * CATALOGS. `reduce` projects cross-posted domain facts into list state:
  * physical streams (`stream/created`, `stream/child-stream-created`),
@@ -240,7 +241,8 @@ export class ProjectProcessor extends StreamProcessor<
           origin?.projectId !== this.deps.itx.projectId ||
           origin.path !== CONFIG_REPO_PATH ||
           origin.subscriptionKey !== "cross-post:/" ||
-          origin.type !== event.type
+          origin.type !== event.type ||
+          state.birthCertificate === null
         ) {
           break;
         }

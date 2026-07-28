@@ -17,12 +17,13 @@ them.
   periodic itx calls directly in this case.
 - root `stream/woken` is available for work that should run when the project
   stream wakes after hibernation or an OS deployment.
-- `project/worker-updated` is the config-application hook. The platform
-  translates a config repo commit into this root event only after the current
-  default worker has built, loaded, and answered a readiness probe. If several
-  commits land quickly, a later HEAD may reconcile earlier commit facts too.
-  This is deliberately a reconcile-current-config hook, not an exact
-  per-commit activation callback. The seeded example calls
+- `project/worker-updated` is the post-creation config-application hook. The
+  platform does not translate the trusted seed commit. For each later config
+  repo commit, it appends this root event only after the current default worker
+  has built, loaded, and answered a readiness probe. If several commits land
+  quickly, a later HEAD may reconcile earlier commit facts too. This is
+  deliberately a reconcile-current-config hook, not an exact per-commit
+  activation callback. The seeded example calls
   `itx.scheduler.set(...)` here to install one 15-minute heartbeat.
 
 `project/create-requested` and `project/created` belong to the platform's
