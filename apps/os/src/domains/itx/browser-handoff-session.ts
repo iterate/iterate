@@ -2,6 +2,7 @@ import puppeteer, {
   type Browser,
   type CDPSession,
   type HandoffCompleteResponse,
+  type HandoffResponse,
   type Page,
 } from "@cloudflare/puppeteer";
 import { z } from "zod";
@@ -151,17 +152,12 @@ export class BrowserHandoffSession {
           ),
         );
       }, timeoutMs + HANDOFF_COMPLETION_GRACE_MS);
+      let handoff: HandoffResponse;
       try {
-        const handoff = await this.#cdp.send("Cloudflare.handoff", {
+        handoff = await this.#cdp.send("Cloudflare.handoff", {
           instructions,
           timeout: timeoutMs,
         });
-        pending.handoffId = handoff.handoffId;
-        return {
-          expiresAt,
-          handoffId: handoff.handoffId,
-          liveViewUrl: liveView.devtoolsFrontendUrl,
-        };
       } catch (error) {
         const startError =
           error instanceof Error ? error : new Error("Browser Run handoff failed to start.");
@@ -193,6 +189,16 @@ export class BrowserHandoffSession {
         this.#pendingHandoff = undefined;
         throw startError;
       }
+      if (pending.outcome?.status === "failed") {
+        this.#pendingHandoff = undefined;
+        throw pending.outcome.error;
+      }
+      pending.handoffId = handoff.handoffId;
+      return {
+        expiresAt,
+        handoffId: handoff.handoffId,
+        liveViewUrl: liveView.devtoolsFrontendUrl,
+      };
     } finally {
       this.#handoffStarting = false;
     }

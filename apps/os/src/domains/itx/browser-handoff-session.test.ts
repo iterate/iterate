@@ -4,7 +4,7 @@ import { BrowserHandoffSession } from "./browser-handoff-session.ts";
 
 class FakeCdp {
   active = false;
-  completeDuringHandoff: HandoffCompleteResponse | undefined;
+  completeDuringHandoff: unknown;
   handoffError: Error | undefined;
   handoffListener: ((event: HandoffCompleteResponse) => void) | undefined;
   listenerWasInstalledBeforeHandoff = false;
@@ -24,7 +24,7 @@ class FakeCdp {
     if (command === "Cloudflare.handoff") {
       this.listenerWasInstalledBeforeHandoff = this.handoffListener !== undefined;
       if (this.completeDuringHandoff !== undefined) {
-        this.complete(this.completeDuringHandoff);
+        this.completeUnknown(this.completeDuringHandoff);
       }
       if (this.handoffError !== undefined) throw this.handoffError;
       return { handoffId: "handoff-1", targetId: "target-1" };
@@ -213,6 +213,15 @@ describe("BrowserHandoffSession", () => {
     cdp.completeUnknown({ success: true, targetId: 42 });
 
     await expect(session.waitForHandoff(handoff.handoffId)).rejects.toThrow(
+      /invalid handoff completion/,
+    );
+  });
+
+  it("rejects a malformed completion that races a successful start acknowledgement", async () => {
+    const { cdp, session } = createSession();
+    cdp.completeDuringHandoff = { success: true, targetId: 42 };
+
+    await expect(session.startHandoff({ instructions: "Complete the challenge." })).rejects.toThrow(
       /invalid handoff completion/,
     );
   });
