@@ -359,9 +359,25 @@ function selfAlarmState<State extends DurableObjectState>(ctx: State, env: Itera
 export class IterateWorkerEntrypoint<
   Env extends IterateEnv = IterateEnv,
 > extends WorkerEntrypoint<Env> {
+  #itx: Promise<Project> | undefined;
+
   constructor(ctx: ConstructorParameters<typeof WorkerEntrypoint<Env>>[0], env: Env) {
     super(ctx, env);
     this.env = wrapIterateEnv(env);
+  }
+
+  /**
+   * This invocation's project-root itx. Cloudflare constructs one
+   * WorkerEntrypoint per invocation and releases its RPC stubs when that
+   * execution context ends, so every handler can simply `await this.itx`;
+   * repeated access within one event batch or fetch reuses the same session.
+   *
+   * Durable Objects have a longer, multi-invocation lifetime and no eviction
+   * callback, so IterateDurableObject deliberately does not expose this
+   * memoized getter.
+   */
+  protected get itx(): Promise<Project> {
+    return (this.#itx ??= this.env.ITX.get());
   }
 
   /** See `fetchDynamicWorker` at module level: a real fetch hop into a

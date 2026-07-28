@@ -69,26 +69,36 @@ test("template ships packaged apps behind a thin router", () => {
 
 test("project lifecycle cases directly install and handle the default heartbeat", async () => {
   const set = vi.fn(async (input: { key: string; recurrence: unknown; script: string }) => input);
-  const dispose = vi.fn();
   const project = {
     scheduler: { set },
-    [Symbol.dispose]: dispose,
+    [Symbol.dispose]: vi.fn(),
   };
+  const get = vi.fn(async () => project);
   const worker = new ProjectWorker(
     {} as never,
     {
       ITERATE_WORKER_VERSION: "test",
-      ITX: { get: async () => project },
+      ITX: { get },
     } as never,
   );
 
-  await deliver(worker, {
-    type: "events.iterate.com/project/worker-updated",
-    path: "/",
-    payload: { commitOid: "b".repeat(40) },
-  });
+  await worker.processEventBatch({
+    events: [
+      {
+        type: "events.iterate.com/project/worker-updated",
+        path: "/",
+        payload: { commitOid: "b".repeat(40) },
+      },
+      {
+        type: "events.iterate.com/project/worker-updated",
+        path: "/",
+        payload: { commitOid: "c".repeat(40) },
+      },
+    ],
+  } as never);
 
-  expect(set).toHaveBeenCalledOnce();
+  expect(set).toHaveBeenCalledTimes(2);
+  expect(get).toHaveBeenCalledOnce();
   const configured = set.mock.calls[0]![0];
   expect(configured).toMatchObject({
     key: "iterate/config/heartbeat/every-15-minutes",
@@ -102,7 +112,6 @@ test("project lifecycle cases directly install and handle the default heartbeat"
     'idempotencyKey: "iterate/config/heartbeat:" + trigger.executionId',
   );
   expect(configured.script).toContain("payload: { scheduleKey: schedule.key }");
-  expect(dispose).toHaveBeenCalledOnce();
 
   const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
   await deliver(worker, {
@@ -119,7 +128,7 @@ test("project lifecycle cases directly install and handle the default heartbeat"
   });
   // Heartbeat and wake cases are independent literal hooks; neither silently
   // re-runs the worker-update case's Scheduler call.
-  expect(set).toHaveBeenCalledOnce();
+  expect(set).toHaveBeenCalledTimes(2);
 
   const ignored = [
     {
@@ -144,7 +153,7 @@ test("project lifecycle cases directly install and handle the default heartbeat"
     },
   ];
   for (const event of ignored) await deliver(worker, event);
-  expect(set).toHaveBeenCalledOnce();
+  expect(set).toHaveBeenCalledTimes(2);
   expect(log).toHaveBeenCalledOnce();
 });
 

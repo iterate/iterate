@@ -21,7 +21,7 @@ import { ProjectProcessorContract } from "./project-processor-contract.ts";
 // =============================================================================
 
 describe("ProjectProcessor worker lifecycle", () => {
-  it("does not translate the trusted seed commit while project creation is open", async () => {
+  it("publishes the seed worker update from the creation terminal without reacting to its raw commit", async () => {
     const h = makeProjectHarness();
     await h.play([
       "append",
@@ -32,9 +32,15 @@ describe("ProjectProcessor worker lifecycle", () => {
 
     // Only the repos/created terminal probes the seed worker. Translating the
     // earlier seed commit would add a second probe and could hold the project
-    // processor cursor ahead of the event that terminalizes creation.
+    // processor cursor ahead of the event that terminalizes creation. The
+    // successful creation probe supplies the first clean lifecycle fact.
     expect(h.workerFetchCalls()).toBe(1);
-    expect(h.events("events.iterate.com/project/worker-updated")).toEqual([]);
+    expect(h.events("events.iterate.com/project/worker-updated")).toMatchObject([
+      {
+        idempotencyKey: `project/worker-update:${"b".repeat(40)}`,
+        payload: { commitOid: "b".repeat(40) },
+      },
+    ]);
     expect(h.events("events.iterate.com/project/created")).toHaveLength(1);
   });
 

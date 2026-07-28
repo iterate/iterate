@@ -214,8 +214,9 @@ codegen keeps the seeded file map in
 `domains/repos/config-repo-template.generated.ts` in sync). Once that trusted
 seed worker builds and answers a readiness probe, the Project processor
 atomically installs the ordinary root worker feed (starting after the creation
-request) and emits terminal `project/created`. It does not wait for userspace to
-consume a platform creation event. A config-repo or deterministic worker
+request), emits terminal `project/created`, and appends the first
+`project/worker-updated` with the OS-stamped seed commit. It does not wait for
+userspace to consume either event. A config-repo or deterministic worker
 source-build failure emits terminal `project/create-failed`; transient
 infrastructure availability and in-progress builds stay open for durable
 redelivery. The onboarding agent is created separately and explicitly when its
@@ -229,7 +230,8 @@ After terminal creation, the Project processor recognizes each exact
 `/repos/config` `repo/commit-completed` cross-post, waits for the authoritative
 current default worker to build, load, and answer, then appends root
 `project/worker-updated`. The trusted seed commit is creation input and is not
-translated. A deterministic source-build failure instead appends
+translated; creation's worker probe publishes its first certificate instead. A
+deterministic source-build failure instead appends
 `project/worker-update-failed`; head convergence, in-progress builds, and
 transient availability leave the processor cursor behind for redelivery. A
 later HEAD may satisfy an earlier commit fact, so this certifies that current

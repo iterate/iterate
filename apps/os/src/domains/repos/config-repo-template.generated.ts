@@ -18,20 +18,22 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "## Project lifecycle hooks\n" +
       "\n" +
       "The `processEvent` switch in `worker.ts` exposes the lifecycle events. Each\n" +
-      "case is ordinary userspace TypeScript: get `itx` there and write whatever calls\n" +
-      "the project needs. There is no configuration-reconciliation framework around\n" +
-      "them.\n" +
+      "case is ordinary userspace TypeScript: `const itx = await this.itx` gives that\n" +
+      "stateless invocation one memoized project-root session, then write whatever\n" +
+      "calls the project needs. There is no configuration-reconciliation framework\n" +
+      "around them.\n" +
       "\n" +
       "- `project/heartbeat-triggered` is the ordinary event appended by that\n" +
       "  Scheduler script. Its payload is only `{ scheduleKey }`. Put arbitrary\n" +
       "  periodic itx calls directly in this case.\n" +
       "- root `stream/woken` is available for work that should run when the project\n" +
       "  stream wakes after hibernation or an OS deployment.\n" +
-      "- `project/worker-updated` is the post-creation config-application hook. The\n" +
-      "  platform does not translate the trusted seed commit. For each later config\n" +
-      "  repo commit, it appends this root event only after the current default worker\n" +
-      "  has built, loaded, and answered a readiness probe. If several commits land\n" +
-      "  quickly, a later HEAD may reconcile earlier commit facts too. This is\n" +
+      "- `project/worker-updated` is the config-application hook. The\n" +
+      "  project-creation terminal publishes the first one after probing the trusted\n" +
+      "  seed worker; it does not react to the raw seed commit. For each later config\n" +
+      "  repo commit, the platform appends another only after the current default\n" +
+      "  worker has built, loaded, and answered a readiness probe. If several commits\n" +
+      "  land quickly, a later HEAD may reconcile earlier commit facts too. This is\n" +
       "  deliberately a reconcile-current-config hook, not an exact per-commit\n" +
       "  activation callback. The seeded example calls\n" +
       "  `itx.scheduler.set(...)` here to install one 15-minute heartbeat.\n" +
@@ -105,20 +107,22 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "## Project lifecycle hooks\n" +
       "\n" +
       "The `processEvent` switch in `worker.ts` exposes the lifecycle events. Each\n" +
-      "case is ordinary userspace TypeScript: get `itx` there and write whatever calls\n" +
-      "the project needs. There is no configuration-reconciliation framework around\n" +
-      "them.\n" +
+      "case is ordinary userspace TypeScript: `const itx = await this.itx` gives that\n" +
+      "stateless invocation one memoized project-root session, then write whatever\n" +
+      "calls the project needs. There is no configuration-reconciliation framework\n" +
+      "around them.\n" +
       "\n" +
       "- `project/heartbeat-triggered` is the ordinary event appended by that\n" +
       "  Scheduler script. Its payload is only `{ scheduleKey }`. Put arbitrary\n" +
       "  periodic itx calls directly in this case.\n" +
       "- root `stream/woken` is available for work that should run when the project\n" +
       "  stream wakes after hibernation or an OS deployment.\n" +
-      "- `project/worker-updated` is the post-creation config-application hook. The\n" +
-      "  platform does not translate the trusted seed commit. For each later config\n" +
-      "  repo commit, it appends this root event only after the current default worker\n" +
-      "  has built, loaded, and answered a readiness probe. If several commits land\n" +
-      "  quickly, a later HEAD may reconcile earlier commit facts too. This is\n" +
+      "- `project/worker-updated` is the config-application hook. The\n" +
+      "  project-creation terminal publishes the first one after probing the trusted\n" +
+      "  seed worker; it does not react to the raw seed commit. For each later config\n" +
+      "  repo commit, the platform appends another only after the current default\n" +
+      "  worker has built, loaded, and answered a readiness probe. If several commits\n" +
+      "  land quickly, a later HEAD may reconcile earlier commit facts too. This is\n" +
       "  deliberately a reconcile-current-config hook, not an exact per-commit\n" +
       "  activation callback. The seeded example calls\n" +
       "  `itx.scheduler.set(...)` here to install one 15-minute heartbeat.\n" +
@@ -304,13 +308,13 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        if (event.path !== \"/\") break;\n" +
       "        console.log(\"Project heartbeat fired\", { scheduleKey: event.payload?.scheduleKey });\n" +
       "        // Write arbitrary periodic work against itx here:\n" +
-      "        // using itx = await this.env.ITX.get();\n" +
+      "        // const itx = await this.itx;\n" +
       "        break;\n" +
       "      }\n" +
       "      case \"events.iterate.com/stream/woken\": {\n" +
       "        if (event.path !== \"/\") break;\n" +
       "        // Write arbitrary project-stream wake work against itx here:\n" +
-      "        // using itx = await this.env.ITX.get();\n" +
+      "        // const itx = await this.itx;\n" +
       "        break;\n" +
       "      }\n" +
       "      case \"events.iterate.com/project/worker-updated\": {\n" +
@@ -318,7 +322,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        // The platform appends this only after the current config worker has\n" +
       "        // built, loaded, and answered. Put arbitrary idempotent ITX calls\n" +
       "        // directly in this case.\n" +
-      "        using itx = await this.env.ITX.get();\n" +
+      "        const itx = await this.itx;\n" +
       "        await itx.scheduler.set({\n" +
       "          key: \"iterate/config/heartbeat/every-15-minutes\",\n" +
       "          recurrence: { every: 15 * 60 },\n" +
@@ -343,7 +347,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  async fetch(req: Request): Promise<Response> {\n" +
       "    const app = req.headers.get(\"x-iterate-app\");\n" +
       "    if (app === \"todo\") {\n" +
-      "      using itx = await this.env.ITX.get();\n" +
+      "      const itx = await this.itx;\n" +
       "      const authResponse = await itx.auth.get({ policy: \"project-member\" }).fetch(req);\n" +
       "      if (authResponse) return authResponse;\n" +
       "      return this.#todoApp.fetch(req);\n" +
@@ -356,7 +360,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      // tasks board (github.com/iterate/tasks), which authenticates each\n" +
       "      // visitor back to os.iterate.com. The kv knob targets a dev tunnel\n" +
       "      // while developing the tasks app itself.\n" +
-      "      using itx = await this.env.ITX.get();\n" +
+      "      const itx = await this.itx;\n" +
       "      const denied = await itx.auth.get({ policy: \"project-member\" }).fetch(req);\n" +
       "      if (denied) return denied;\n" +
       "      const tasksUrl = new URL(req.url);\n" +

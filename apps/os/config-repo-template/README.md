@@ -8,20 +8,22 @@ lives under `apps/`, and the packaged linter reads editable policy from `rules/`
 ## Project lifecycle hooks
 
 The `processEvent` switch in `worker.ts` exposes the lifecycle events. Each
-case is ordinary userspace TypeScript: get `itx` there and write whatever calls
-the project needs. There is no configuration-reconciliation framework around
-them.
+case is ordinary userspace TypeScript: `const itx = await this.itx` gives that
+stateless invocation one memoized project-root session, then write whatever
+calls the project needs. There is no configuration-reconciliation framework
+around them.
 
 - `project/heartbeat-triggered` is the ordinary event appended by that
   Scheduler script. Its payload is only `{ scheduleKey }`. Put arbitrary
   periodic itx calls directly in this case.
 - root `stream/woken` is available for work that should run when the project
   stream wakes after hibernation or an OS deployment.
-- `project/worker-updated` is the post-creation config-application hook. The
-  platform does not translate the trusted seed commit. For each later config
-  repo commit, it appends this root event only after the current default worker
-  has built, loaded, and answered a readiness probe. If several commits land
-  quickly, a later HEAD may reconcile earlier commit facts too. This is
+- `project/worker-updated` is the config-application hook. The
+  project-creation terminal publishes the first one after probing the trusted
+  seed worker; it does not react to the raw seed commit. For each later config
+  repo commit, the platform appends another only after the current default
+  worker has built, loaded, and answered a readiness probe. If several commits
+  land quickly, a later HEAD may reconcile earlier commit facts too. This is
   deliberately a reconcile-current-config hook, not an exact per-commit
   activation callback. The seeded example calls
   `itx.scheduler.set(...)` here to install one 15-minute heartbeat.

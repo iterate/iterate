@@ -206,12 +206,12 @@ export const ProjectProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/project/worker-updated": {
       description:
-        "After project creation, the config repo advanced and the platform successfully built, " +
-        "loaded, and probed the current default project worker. This is the userspace " +
-        "configuration lifecycle hook; the trusted seed commit is not translated.",
+        "The platform successfully built, loaded, and probed the current default project " +
+        "worker, during creation or after a later config repo commit. This is the userspace " +
+        "configuration lifecycle hook; the raw trusted seed commit is not translated.",
       payloadSchema: z.object({
         commitOid: z.string().trim().min(1).meta({
-          description: "The config-repo commit that triggered the readiness check.",
+          description: "The config-repo commit associated with the readiness certificate.",
         }),
       }),
     },

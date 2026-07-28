@@ -11,6 +11,8 @@ import {
 } from "iterate/processors/testing";
 import type { ProjectDirectoryRecord } from "../../project-directory.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
+import { WORKER_BUILDING_HEADER } from "../workers/worker-fetch-dispatch.ts";
+import { withWorkerCommit } from "../workers/worker-serve-info.ts";
 import {
   ProjectProcessorContract,
   type ProjectCustomDomainCloudflareSnapshot,
@@ -195,7 +197,10 @@ export function makeProjectHarness(
         const outcome = options.workerOutcomes?.[workerFetchCalls];
         workerFetchCalls += 1;
         if (outcome instanceof Error) throw outcome;
-        return outcome ?? new Response(null, { status: 204 });
+        const response = outcome ?? new Response(null, { status: 204 });
+        return response.headers.get(WORKER_BUILDING_HEADER) === "1"
+          ? response
+          : withWorkerCommit(response, CONFIG_REPO_COMMIT_COMPLETED.payload.commitOid);
       },
     },
   } as unknown as ProjectRpcTarget;

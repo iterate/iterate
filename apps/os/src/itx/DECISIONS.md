@@ -340,8 +340,10 @@ been circling:
   births the root capability host, scheduler, config repo, and email router.
   After the trusted seeded config worker builds and answers a readiness probe,
   the saga atomically installs its permanent root feed (starting after the
-  request) and appends terminal `project/created`. Userspace does not consume a
-  creation hook. A config-repo or deterministic worker source-build failure
+  request), appends terminal `project/created`, and publishes the first
+  `project/worker-updated` using the OS-stamped seed commit. Userspace does not
+  consume a creation hook, and creation does not wait for it to consume the
+  worker-update. A config-repo or deterministic worker source-build failure
   appends terminal `project/create-failed`; availability and build-in-progress
   outcomes stay open for durable redelivery. The subscription and terminal
   event keys are ordinary coordination conventions rather than a separate
@@ -366,12 +368,14 @@ been circling:
   for cold snapshots), and "config worker" is now just **the worker**
   (`durable-objects/worker.ts`, `callWorkerFunction`, `itx.worker`).
 - **Post-creation worker source changes become a platform lifecycle fact.**
-  The trusted seed commit remains creation input and is not translated. Each
-  later config repo `repo/commit-completed` is cross-posted onto `/`; the
-  Project processor recognizes its exact provenance and probes the
-  authoritative current default worker. Success appends root
-  `project/worker-updated`, which is the plain userspace switch case for
-  arbitrary direct ITX code. Deterministic source failure appends
+  Creation's successful worker probe publishes the first
+  `project/worker-updated`; the trusted seed commit remains creation input and
+  is not separately translated. Each later config repo
+  `repo/commit-completed` is cross-posted onto `/`; the Project processor
+  recognizes its exact provenance and probes the authoritative current default
+  worker. Success appends the same root `project/worker-updated`, which is the
+  plain userspace switch case for arbitrary direct ITX code. Deterministic
+  source failure appends
   `project/worker-update-failed`; transient build or availability states keep
   the processor cursor open. This keeps repo topology out of userspace without
   inventing a lifecycle framework or reusing the one-shot creation facts.

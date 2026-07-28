@@ -91,21 +91,25 @@ different settle policy).
 
 The default worker in each project's config repo handles raw lifecycle events
 in its literal `processEvent` switch. There is no userspace configuration
-framework: each case can get `itx` and run arbitrary project code directly.
+framework: each case can `await this.itx` and run arbitrary project code
+directly. `IterateWorkerEntrypoint` memoizes that project-root session for its
+one stateless invocation; Cloudflare releases the RPC stubs with the execution
+context. This is deliberately not a Durable Object lifetime contract.
 
 - `project/heartbeat-triggered` is appended to `/` by a project-owned Scheduler
   script and carries only `{ scheduleKey }`.
 - `stream/woken` on `/` exposes project-stream wakes, including after an OS
   deployment.
-- `project/worker-updated` on `/` is the post-creation config-application hook.
-  The platform does not translate the trusted seed commit. For each later
-  cross-posted config repo `repo/commit-completed`, the Project processor first
-  waits for the authoritative current worker to build, load, and answer. Head
-  convergence and in-progress builds keep the platform processor cursor behind
-  for retry; deterministic source failure becomes
-  `project/worker-update-failed`. A later HEAD may satisfy an earlier commit
-  fact, so this certifies runnable current configuration rather than activating
-  one exact artifact.
+- `project/worker-updated` on `/` is the config-application hook.
+  Creation's successful worker probe publishes the first one using the
+  OS-stamped seed commit; the platform does not separately translate the raw
+  seed commit. For each later cross-posted config repo
+  `repo/commit-completed`, the Project processor first waits for the
+  authoritative current worker to build, load, and answer. Head convergence
+  and in-progress builds keep the platform processor cursor behind for retry;
+  deterministic source failure becomes `project/worker-update-failed`. A later
+  HEAD may satisfy an earlier commit fact, so this certifies runnable current
+  configuration rather than activating one exact artifact.
 
 `project/create-requested` and `project/created` belong to the platform's
 creation saga; the userspace worker does not handle them. The seeded

@@ -12,6 +12,7 @@ import { emailRouterCreationEvents } from "../email/email-defaults.ts";
 import { EMAIL_INTEGRATION_STREAM_PATH } from "../email/utils.ts";
 import { isWorkerBuildFailedError } from "../workers/artifact-store.ts";
 import { WORKER_BUILDING_HEADER } from "../workers/worker-fetch-dispatch.ts";
+import { WORKER_SERVE_HEADER } from "../workers/worker-serve-info.ts";
 import type { ProjectCustomDomainDeps } from "./custom-domains.ts";
 import {
   parseProjectCreationTerminal,
@@ -52,9 +53,9 @@ const SIBLING_BIRTH_BARRIER_TIMEOUT_MS = 75_000;
  * stream; the cross-post rule copies it here. The reaction probes the default
  * project worker, then atomically installs the ordinary root `project-worker`
  * feed and appends the terminal `project/created` certificate that create()
- * callers await. The feed begins after `project/create-requested`: creation
- * facts belong to this platform saga, while later root facts are userspace
- * input.
+ * callers await plus the first `project/worker-updated` lifecycle fact. The
+ * feed begins after `project/create-requested`: creation facts belong to this
+ * platform saga, while the clean worker-update fact is userspace input.
  *
  * A config-repo failure or deterministic worker source-build failure closes
  * the saga with `project/create-failed`. Transient worker availability errors
@@ -66,7 +67,8 @@ const SIBLING_BIRTH_BARRIER_TIMEOUT_MS = 75_000;
  * processor translates the raw repo fact into `project/worker-updated`;
  * deterministic source-build failures become `project/worker-update-failed`,
  * while transient availability remains open for durable redelivery. The
- * trusted seed commit is creation input and is deliberately not translated.
+ * trusted seed commit is creation input and is deliberately not translated;
+ * creation's successful probe publishes its worker-update certificate.
  *
  * CATALOGS. `reduce` projects cross-posted domain facts into list state:
  * physical streams (`stream/created`, `stream/child-stream-created`),
@@ -157,9 +159,9 @@ export class ProjectProcessor extends StreamProcessor<
                 `idempotency key "${projectCreatedIdempotencyKey}" is not this creation request's certificate`,
               );
             }
-            // The permanent feed and certificate are one append batch. Seeing
-            // the certificate therefore also proves the feed was committed;
-            // this is the lost-ack retry path.
+            // The permanent feed, certificate, and initial worker-update are
+            // one append batch. Seeing the certificate therefore proves all
+            // three committed; this is the lost-ack retry path.
             return;
           }
           if (existingProjectCreateFailed !== undefined) {
@@ -194,8 +196,9 @@ export class ProjectProcessor extends StreamProcessor<
           }
 
           const timing = { projectId: this.deps.itx.projectId };
+          let seedCommitOid: string;
           try {
-            await timedStep("create-timing", timing, "worker-probe", () =>
+            seedCommitOid = await timedStep("create-timing", timing, "worker-probe", () =>
               this.#waitForDefaultProjectWorker(),
             );
           } catch (error) {
@@ -229,6 +232,11 @@ export class ProjectProcessor extends StreamProcessor<
                 type: "events.iterate.com/project/created",
                 idempotencyKey: projectCreatedIdempotencyKey,
                 payload: { ...createRequest, createRequestedAtOffset },
+              },
+              {
+                type: "events.iterate.com/project/worker-updated",
+                idempotencyKey: `project/worker-update:${seedCommitOid}`,
+                payload: { commitOid: seedCommitOid },
               },
             ),
           );
@@ -518,8 +526,8 @@ export class ProjectProcessor extends StreamProcessor<
     );
   }
 
-  /** Probe until the default worker answers without its still-building marker. */
-  async #waitForDefaultProjectWorker(): Promise<void> {
+  /** Probe until the default worker answers and return OS-stamped source identity. */
+  async #waitForDefaultProjectWorker(): Promise<string> {
     for (let attempt = 1; attempt <= PROJECT_WORKER_READY_ATTEMPTS; attempt += 1) {
       // Capability dispatch, on purpose: `worker.fetch` here is an ordinary
       // method call whose Response comes back as a serialized copy — exactly
@@ -533,7 +541,13 @@ export class ProjectProcessor extends StreamProcessor<
         if (response.headers.get(WORKER_BUILDING_HEADER) !== "1") {
           // Any application response proves the module built and loaded. Its
           // HTTP status belongs to userspace fetch behavior, not bootstrap.
-          return;
+          const commitOid = response.headers.get(WORKER_SERVE_HEADER);
+          if (commitOid === null) {
+            throw new Error(
+              `Default project worker response is missing trusted "${WORKER_SERVE_HEADER}" source identity.`,
+            );
+          }
+          return commitOid;
         }
       } finally {
         // The returned Response can be a Cap'n Web RPC stub, and keeping that
