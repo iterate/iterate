@@ -1,4 +1,4 @@
-import { test, type Page, type TestInfo } from "@playwright/test";
+import { test, type Page } from "@playwright/test";
 import { z } from "zod/v4";
 import type {
   IterateAuthAccessTokenOrganizationClaim,
@@ -6,7 +6,6 @@ import type {
 } from "@iterate-com/shared/auth-claims";
 import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
-import { waitForPreviewRolloutBeforeProjectCreation } from "@iterate-com/shared/test-support/preview-rollout-gate";
 import { connectItxReady, type ItxInitialConnectionRetry } from "iterate/node";
 import { doppler } from "../../apps/os/scripts/dev.ts";
 import { mintForgedAccessToken, mintForgedIdToken } from "../../scripts/auth/forge-token.ts";
@@ -57,22 +56,16 @@ export async function createProjectFixture(
     baseURL: string | undefined;
     page: Page;
     projectCount?: number;
-    testInfo: TestInfo;
   },
 ) {
   const baseUrl = input.baseURL;
   if (!baseUrl) throw new Error("Playwright baseURL fixture is required.");
 
-  const [config] = await Promise.all([
-    resolveOsPlaywrightAuthConfig(),
-    waitForPreviewRolloutBeforeProjectCreation({
-      beforeWait: (waitMs) => input.testInfo.setTimeout(input.testInfo.timeout + waitMs),
-    }),
-  ]);
+  const config = await resolveOsPlaywrightAuthConfig();
   const projectSlug = uniqueFixtureSlug(slugPrefix);
   const projectFixtures = await Promise.all(
     Array.from({ length: input.projectCount ?? 1 }, (_, index) =>
-      createAdminProjectAfterPreviewRollout({
+      createAdminProject({
         baseUrl,
         config,
         slug: index === 0 ? projectSlug : uniqueFixtureSlug(`${slugPrefix}-${index + 1}`),
@@ -140,7 +133,7 @@ export async function connectAdminItx(baseUrl: string) {
   return connectPlaywrightAdminItx({ baseUrl, config });
 }
 
-async function createAdminProjectAfterPreviewRollout(input: {
+async function createAdminProject(input: {
   baseUrl: string;
   config: OsPlaywrightAuthConfig;
   slug: string;

@@ -2155,7 +2155,7 @@ function createStreamRuntime(
       //
       // Durability: every event gets an idempotency key (unless the caller set
       // one), which makes retrying safe — a batch that COMMITTED but lost its
-      // ack (socket died, DO evicted/killed/overloaded mid-response) returns
+      // ack (socket died, DO evicted/killed mid-response) returns
       // the same committed events on retry instead of appending duplicates.
       // Combined with callWhenReady's reconnect-wait, an appendBatch caller
       // survives a stream DO eviction mid-blast with zero loss and zero dupes.

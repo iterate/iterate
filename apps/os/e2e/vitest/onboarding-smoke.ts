@@ -28,7 +28,6 @@ import {
   type TestTelemetryAttempt,
 } from "@iterate-com/shared/test-support/ci-telemetry";
 import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
-import { waitForPreviewRolloutBeforeProjectCreation } from "@iterate-com/shared/test-support/preview-rollout-gate";
 import { connectItx } from "iterate/node";
 import {
   ensureOnboardingAgentReady,
@@ -49,11 +48,6 @@ type SmokePhase = { name: string; durationMs: number; category: string };
 async function attemptOnboardingSmoke(phases: SmokePhase[]): Promise<void> {
   const marker = Math.random().toString(36).slice(2, 8);
 
-  // Edge readiness does not mean a freshly deployed Durable Object namespace
-  // has finished propagating globally. Use the same absolute deployment
-  // boundary as Playwright so this early lane cannot create an object while
-  // Cloudflare is still replacing its assigned worker version.
-  await waitForPreviewRolloutBeforeProjectCreation();
   using session = connectItx({
     baseUrl,
     headers: cloudflareWorkerVersionOverrideHeaders(process.env),

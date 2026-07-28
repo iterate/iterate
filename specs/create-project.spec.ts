@@ -12,7 +12,7 @@ import { test } from "./test-support/test.ts";
 // freshly signed-up user, not a forged session. Creating a project mints new
 // auth claims, and only a real session can refresh its access token to pick
 // up the new project claim the post-create navigation authorizes with.
-test("a new user can create a project through the UI form", async ({ page }, testInfo) => {
+test("a new user can create a project through the UI form", async ({ page }) => {
   test.skip(
     !(await startEmailOtpSignIn(page)),
     "Email OTP sign-in is disabled for this deployment (APP_CONFIG_EMAIL_OTP_ENABLED on auth / APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED on OS).",
@@ -21,7 +21,6 @@ test("a new user can create a project through the UI form", async ({ page }, tes
   await signUpWithEmailOtp(page, {
     email: uniqueSignupEmail("create-project"),
     projectSlug: firstSlug,
-    testInfo,
   });
 
   const slug = uniqueFixtureSlug("create-project");

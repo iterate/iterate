@@ -15,13 +15,11 @@ The preview lifecycle has two barriers:
    and readiness check finishes.
 2. Start every selected app test lane together; wait until every lane finishes.
 
-Every freshly deployed live suite that addresses Durable Objects respects one
-bounded deployment-age clock. Short Semaphore, Streams, and Petshop suites wait
-at their own command boundary. OS starts its onboarding smoke, explicit TUI
-quarantine marker, Chromium setup, and Playwright immediately; browser and auth
-setup continue while project-backed Playwright fixture creation and high-fanout
-Vitest wait for the same absolute boundary. The clock normally finishes under
-Playwright's longer critical path. Therefore, healthy wall time should approach:
+Once the fleet's exact Worker versions pass readiness, app suites start without
+a synthetic deployment-age delay. OS starts its onboarding smoke, explicit TUI
+quarantine marker, Chromium setup, and Playwright together; high-fanout Vitest
+starts after the production-shaped onboarding smoke has exercised project
+birth. Therefore, healthy wall time should approach:
 
 ```text
 pickup + setup + slowest deploy + slowest test lane + reporting
@@ -38,14 +36,10 @@ raise the budget automatically.
   it is not a deployment-order edge. Each deploy owns its readiness check, and
   tests start only after the whole selected fleet is ready.
 - Different app suites run concurrently.
-- The short Semaphore, Streams, and Petshop commands wait independently at
-  their own rollout boundary; this does not serialize them with OS or with one
-  another. Auth has no live Durable Object suite and starts immediately.
-- OS smoke, the explicit TUI quarantine marker, Chromium setup, Playwright, and
-  the rollout-age clock run concurrently. Playwright workers may perform
-  browser/auth setup immediately, but their shared project-creation helpers
-  wait on the clock's absolute deadline before addressing fresh project-backed
-  Durable Objects. High-fanout Vitest waits only for the smoke and clock; every
+- The short Semaphore, Streams, Petshop, and Auth commands start together with
+  the OS command after the deployed fleet is ready.
+- OS smoke, the explicit TUI quarantine marker, Chromium setup, and Playwright
+  run concurrently. High-fanout Vitest waits only for the smoke; every
   background process is joined even if another one fails, so a failure cannot
   orphan work or discard another lane's result.
 - Chromium installation begins before the four OS lanes and overlaps their
@@ -84,18 +78,14 @@ serially because they intentionally share one warm container.
   final version on the health probe (no multi-second dwell after first match).
   The probe is a cheap public health request and never wakes synthetic Durable
   Objects.
-- **Global Durable Object rollout gets a bounded age gate.** Cloudflare
-  documents that Worker/DO updates are globally eventually consistent even
-  after the new edge Worker answers, and changing an object's assigned version
-  resets that object. Every freshly deployed app whose live suite calls Durable
-  Objects therefore waits until 90 seconds after its successful deploy command.
-  Short suites wait immediately before their command. Root Playwright receives
-  OS's absolute deadline instead: its process and non-project work begin
-  immediately, while forged-session and real-signup helpers wait at the
-  project-create operation; OS Vitest waits at its fan-out boundary. All app
-  lanes remain concurrent, and reused old deployments wait zero seconds. This
-  is one visible lifecycle boundary per deployment, not a retry or a synthetic
-  placement sample.
+- **Durable Object rollout is handled at the operation boundary.** Edge
+  readiness cannot prove the version a future Durable Object placement will
+  receive, so a fixed sleep is neither a convergence barrier nor a recovery
+  mechanism. The previous 90-second clock charged every fresh live suite and
+  still did not rule out later resets. An explicitly idempotent product
+  operation may replay one classified reset on a fresh stub from the same
+  durable cursor; a second reset, application error, or raw overload outcome is
+  terminal and observable.
 - **Warm OS deploys skip only proven-unchanged container work.** Wrangler
   otherwise builds and reconciles the six stock sandbox image applications
   serially even when all six report `no changes`. The orchestrator requests
@@ -104,11 +94,10 @@ serially because they intentionally share one warm container.
   cap, package, or Wrangler-config input. New slots, bootstraps, force-pushes,
   truncated/unavailable comparisons, and relevant changes use the full
   rollout.
-- **Product operations still handle lifecycle resets.** The CI age gate avoids
-  deliberately launching the densest test burst during the documented rollout
-  window; it cannot make arbitrary in-flight product operations replay-safe.
-  Idempotent operations must still redeliver after an explicit lifecycle
-  outcome without committing terminal failure state.
+- **Recovery never crosses an unsafe boundary.** Identity minting, unkeyed
+  writes, and whole fixture creation are not replayed. Recovery belongs inside
+  the read-only or idempotency-keyed operation that can prove the same request
+  is safe to issue again.
 - **Readiness retries are bounded and diagnostic.** Each request has a short
   watchdog, the overall deploy check has a hard deadline, and the final HTTP
   response body or transport error is retained in the failure message.
@@ -138,10 +127,8 @@ serially because they intentionally share one warm container.
 - `depot ci metrics --run <run-id> --org 0p91s0lz49` shows host CPU and memory.
 - `[preview] deploy passed: <app> (Ns)` and `[preview] test passed: <app> (Ns)`
   in the run log show phase wall times.
-- `[preview:os] lane start/finish` lines show the overlapping OS work, including
-  the visible `rollout-settle` clock and when Vitest was released.
-- `[preview] rollout settle start/finish` lines expose the independent boundary
-  for each short Durable Object-backed app suite.
+- `[preview:os] lane start/finish` lines show the overlapping OS work and when
+  Vitest was released after the onboarding smoke.
 - The managed preview block in the PR body records per-app deploy duration,
   test duration, and consumed retries.
 - The reporting tail remains part of the end-to-end budget. Test events are

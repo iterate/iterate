@@ -536,7 +536,44 @@ describe("StreamRpcTarget", () => {
     expect(acquisitions).toBe(1);
   });
 
-  it("tags an explicit stream lifecycle rejection without hiding it behind recovery", async () => {
+  it("replays one stream lifecycle rejection on a fresh stub from the same offset", async () => {
+    const lifecycleError = Object.assign(new Error("kill requested"), {
+      durableObjectReset: true,
+    });
+    const event = {
+      createdAt: new Date(0).toISOString(),
+      offset: 9,
+      path: "/events",
+      type: "events.iterate.com/test/recovered-after-reset",
+    } satisfies StreamEvent;
+    let acquisitions = 0;
+    const inputs: { afterOffset?: number; timeoutMs: number }[] = [];
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get durableObjectStub() {
+        acquisitions += 1;
+        return {
+          waitForEvent: (input: { afterOffset?: number; timeoutMs: number }) => {
+            inputs.push(input);
+            return acquisitions === 1 ? Promise.reject(lifecycleError) : Promise.resolve(event);
+          },
+        } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/events",
+      projectId: "prj_test",
+    });
+
+    await expect(stream.waitForEvent({ afterOffset: 0, timeoutMs: 30_000 })).resolves.toEqual(
+      event,
+    );
+    expect(acquisitions).toBe(2);
+    expect(inputs).toHaveLength(2);
+    expect(inputs.map(({ afterOffset }) => afterOffset)).toEqual([0, 0]);
+  });
+
+  it("keeps a second stream lifecycle rejection terminal", async () => {
     const lifecycleError = Object.assign(new Error("kill requested"), {
       durableObjectReset: true,
     });
@@ -556,7 +593,7 @@ describe("StreamRpcTarget", () => {
     await expect(stream.waitForEvent({ afterOffset: 0, timeoutMs: 30_000 })).rejects.toThrow(
       "stream-unavailable: kill requested",
     );
-    expect(acquisitions).toBe(1);
+    expect(acquisitions).toBe(2);
   });
 
   it("keeps one public timeout across orphaned stream waiters", async () => {

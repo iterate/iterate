@@ -717,26 +717,25 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
         1,
         Math.min(deadline - Date.now(), STREAM_WAIT_REACQUIRE_MS * 2),
       );
-      let wait: Promise<StreamEvent>;
-      try {
-        wait = Promise.resolve(
-          this.durableObjectStub.waitForEvent({
+      const wait = retryLoggedIdempotentOperation({
+        message: "stream wait retrying after Durable Object reset",
+        context: { path: this.props.path, projectId: this.props.projectId },
+        operation: async () => {
+          const result = await this.durableObjectStub.waitForEvent({
             ...args,
             afterOffset: replayAfterOffset,
             timeoutMs: remoteTimeoutMs,
-          }),
-        ).then((result) => detachPlainRpcResult(result));
-      } catch (error) {
-        rethrowStreamUnavailable(error);
-      }
+          });
+          return detachPlainRpcResult(result);
+        },
+      });
 
       // A superseded call can still report an ephemeral match that a fresh
       // subscription cannot replay. Let that success win. Likewise, retain a
-      // late predicate/application/lifecycle failure as the terminal result;
-      // only the explicitly modelled slice timeout is safe to replace with a
-      // fresh durable replay. In particular, an explicit kill must retain the
-      // public `stream-unavailable` rejection contract rather than being
-      // hidden behind recovery until the caller's deadline.
+      // late predicate/application failure as the terminal result; only the
+      // explicitly modelled slice timeout is safe to replace with a fresh
+      // durable replay. A classified lifecycle reset gets one immediate replay
+      // on a fresh stub inside `wait`; its second failure remains terminal.
       void wait.then(terminal.resolve, (error: unknown) => {
         if (!isStreamWaitTimeoutError(error)) terminal.reject(error);
       });
@@ -6960,11 +6959,11 @@ export class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = Pro
       if (outcome.status === "rejected") {
         if (!isRetryableDurableObjectAvailabilityError(outcome.error)) throw outcome.error;
 
-        // Waiting for durable progress is idempotent. A short run of overload
-        // or lifecycle resets must therefore reacquire the processor facade
-        // under the SAME caller deadline, just like an orphaned remote waiter.
-        // Exponential backoff caps the retry rate; the public deadline caps
-        // both total attempts and elapsed recovery time.
+        // Waiting for durable progress is idempotent. A short run of tagged
+        // availability failures or lifecycle resets must therefore reacquire
+        // the processor facade under the SAME caller deadline, just like an
+        // orphaned remote waiter. Exponential backoff caps the retry rate; the
+        // public deadline caps both total attempts and elapsed recovery time.
         consecutiveAvailabilityFailures += 1;
         const remainingMs = deadline - Date.now();
         if (remainingMs <= 0) break;

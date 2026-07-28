@@ -71,12 +71,12 @@ export const test = base.extend<{
     }
     await use(context);
   },
-  helpers: async ({ baseURL, page }, use, testInfo) => {
+  helpers: async ({ baseURL, page }, use) => {
     if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
     await use({
       createFixture: (slugPrefix, options) =>
         base.step("create project fixture", () =>
-          createForgedProjectFixture(slugPrefix, { baseURL, page, testInfo, ...options }),
+          createForgedProjectFixture(slugPrefix, { baseURL, page, ...options }),
         ),
     });
   },

@@ -42,10 +42,7 @@ test("the seeded guestbook app works after creating a project", async ({
 // and organization: project-member auth deliberately checks the live Auth
 // directory on every request, not merely the OS access-token claims used by
 // the suite's usual forged-session fixture.
-test("the seeded todo app authenticates a real project member", async ({
-  baseURL,
-  page,
-}, testInfo) => {
+test("the seeded todo app authenticates a real project member", async ({ baseURL, page }) => {
   test.setTimeout(E2E_HEAVY_TEST_TIMEOUT_MS);
   test.skip(
     !(await startEmailOtpSignIn(page)),
@@ -56,7 +53,6 @@ test("the seeded todo app authenticates a real project member", async ({
   await signUpWithEmailOtp(page, {
     email: uniqueSignupEmail("todo-app-auth"),
     projectSlug: slug,
-    testInfo,
   });
 
   // First-run onboarding creates the Auth directory membership and the

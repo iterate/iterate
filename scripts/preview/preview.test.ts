@@ -48,6 +48,7 @@ const {
   readPreviewAppConfig,
   reconcileEnvironmentConfigLeaseResources,
   releaseLeaseDespiteTeardownFailure,
+  announceRetryTelemetry,
   renderCloudflarePreviewPullRequestBody,
   resolveAuthPreviewRootSecret,
   resolveSharedPreviewRootSecret,
@@ -56,8 +57,6 @@ const {
   resolvePreviewCompareBaseSha,
   resolvePreviewOsContainerRollout,
   resolvePreviewReadinessUrls,
-  resolvePreviewRolloutReadyAtMs,
-  resolvePreviewRolloutRemainingSeconds,
   resolvePreviewTestBaseUrlEnvironment,
   resolvePreviewTestTargetPlan,
   resolvePreviewTestTelemetryEnvironment,
@@ -880,7 +879,7 @@ describe("preview test commands", () => {
     expect(collector).not.toContain("runner-telemetry");
   });
 
-  test("starts Playwright early while gating project-backed work and Vitest", () => {
+  test("starts independent OS lanes immediately and gates Vitest only on the smoke", () => {
     const script = cloudflarePreviewApps.os.previewTestCommandArgs[2];
     const playwrightInstall = "pnpm --dir ../.. exec playwright install chromium";
     const smokeLane = "pnpm exec tsx e2e/vitest/onboarding-smoke.ts";
@@ -898,89 +897,39 @@ describe("preview test commands", () => {
     );
     expect(script).toContain('wait "$PW_INSTALL_PID"');
     expect(script).toContain("SMOKE_PID");
-    expect(script).toContain("ROLLOUT_PID");
     expect(script).toContain("TUI_PID");
     expect(script).toContain("E2E_PID");
     expect(script).toContain("SPEC_PID");
     expect(script).toContain('wait "$SMOKE_PID"');
-    expect(script).toContain('wait "$ROLLOUT_PID"');
     expect(script).toContain('wait "$TUI_PID"');
     expect(script).toContain('wait "$E2E_PID"');
     expect(script).toContain('[ "$SMOKE_OK" -eq 0 ]');
     expect(script).toContain('[ "$TUI_OK" -eq 0 ]');
     expect(script).toContain('[ "$E2E_OK" -eq 0 ]');
     // Independent setup starts immediately. Playwright begins as soon as
-    // Chromium is ready. Its project fixture and the smoke consume the
-    // absolute deadline from the environment, while the age clock gates
-    // Vitest here.
-    for (const lane of ["run_visible_lane rollout-settle sleep", smokeLane, tuiLane]) {
+    // Chromium is ready, while Vitest starts only after the production-shaped
+    // smoke has exercised project birth.
+    for (const lane of [smokeLane, tuiLane]) {
       expect(script.indexOf(lane)).toBeLessThan(script.indexOf('wait "$PW_INSTALL_PID"'));
     }
     expect(script.indexOf('wait "$PW_INSTALL_PID"')).toBeLessThan(script.indexOf(playwrightSpec));
     expect(script.indexOf(playwrightSpec)).toBeLessThan(script.indexOf('wait "$SMOKE_PID"'));
-    expect(script.indexOf('wait "$SMOKE_PID"')).toBeLessThan(script.indexOf('wait "$ROLLOUT_PID"'));
-    expect(script.indexOf('wait "$ROLLOUT_PID"')).toBeLessThan(script.indexOf(e2eLane));
     expect(script.indexOf('wait "$SMOKE_PID"')).toBeLessThan(script.indexOf(e2eLane));
     expect(script.indexOf(playwrightSpec)).toBeLessThan(script.indexOf('wait "$E2E_PID"'));
-    expect(script).toContain(
-      'run_visible_lane rollout-settle sleep "$PREVIEW_APP_ROLLOUT_REMAINING_SECONDS"',
-    );
-  });
-
-  test("waits at most 90 seconds for fresh deployments whose live suites call Durable Objects", () => {
-    const deployedAt = "2026-07-22T23:05:30.000Z";
-    const now = Date.parse(deployedAt);
-
-    expect(resolvePreviewRolloutRemainingSeconds({ appSlug: "os", deployedAt, nowMs: now })).toBe(
-      90,
-    );
-    expect(
-      resolvePreviewRolloutRemainingSeconds({
-        appSlug: "os",
-        deployedAt,
-        nowMs: now + 20_001,
-      }),
-    ).toBe(70);
-    expect(
-      resolvePreviewRolloutRemainingSeconds({
-        appSlug: "os",
-        deployedAt,
-        nowMs: now + 90_000,
-      }),
-    ).toBe(0);
-    for (const appSlug of ["semaphore", "streams-example-app", "dummy-petshop"] as const) {
-      expect(resolvePreviewRolloutRemainingSeconds({ appSlug, deployedAt, nowMs: now })).toBe(90);
-      expect(resolvePreviewRolloutReadyAtMs({ appSlug, deployedAt })).toBe(now + 90_000);
-    }
-    expect(resolvePreviewRolloutRemainingSeconds({ appSlug: "auth", deployedAt, nowMs: now })).toBe(
-      0,
-    );
-    expect(resolvePreviewRolloutRemainingSeconds({ appSlug: "os", nowMs: now })).toBe(0);
-    expect(resolvePreviewRolloutReadyAtMs({ appSlug: "os", deployedAt })).toBe(now + 90_000);
-    expect(resolvePreviewRolloutReadyAtMs({ appSlug: "auth", deployedAt })).toBe(0);
-    expect(() =>
-      resolvePreviewRolloutRemainingSeconds({
-        appSlug: "os",
-        deployedAt: "not-a-timestamp",
-        nowMs: now,
-      }),
-    ).toThrow(/Invalid preview deployment timestamp/);
+    expect(script).not.toContain("ROLLOUT_PID");
+    expect(script).not.toContain("PREVIEW_APP_ROLLOUT");
+    expect(script).not.toContain("rollout-settle");
   });
 
   test("guards the parallel OS preview lane with target budgets", () => {
     expect(cloudflarePreviewApps.os).toMatchObject({
       previewDeployBudgetMs: 90_000,
       previewReadyWorkerVersion: true,
-      previewTestRolloutGate: "inside-suite",
       previewTestBudgetMs: 100_000,
     });
     expect(cloudflarePreviewApps["streams-example-app"]).toMatchObject({
       previewReadyWorkerVersion: true,
-      previewTestRolloutGate: "before-suite",
     });
-    expect(cloudflarePreviewApps.semaphore.previewTestRolloutGate).toBe("before-suite");
-    expect(cloudflarePreviewApps["dummy-petshop"].previewTestRolloutGate).toBe("before-suite");
-    expect(cloudflarePreviewApps.auth.previewTestRolloutGate).toBeUndefined();
 
     const workflow = parseYaml(
       readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
@@ -988,6 +937,45 @@ describe("preview test commands", () => {
     // This is a diagnostic backstop, not the expected duration. Individual
     // lanes retain tighter watchdogs and only tests own retries.
     expect(workflow.jobs.preview["timeout-minutes"]).toBe(20);
+  });
+
+  test("reports whether listed retries recovered without rewriting the command outcome", () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      announceRetryTelemetry("os", {
+        retried: [
+          {
+            lane: "playwright",
+            name: "reconnects",
+            retryCount: 1,
+            passedAfterRetry: true,
+          },
+        ],
+      });
+      expect(log).toHaveBeenLastCalledWith(
+        expect.stringContaining(
+          "::notice title=Preview e2e retries::os: 1 retried: reconnects (playwright x1). Every listed retry passed;",
+        ),
+      );
+
+      announceRetryTelemetry("os", {
+        retried: [
+          {
+            lane: "vitest",
+            name: "creates a project",
+            retryCount: 1,
+            passedAfterRetry: false,
+          },
+        ],
+      });
+      expect(log).toHaveBeenLastCalledWith(
+        expect.stringContaining(
+          "::warning title=Preview e2e retries::os: 1 retried: creates a project (vitest x1, still failed). At least one listed retry still failed;",
+        ),
+      );
+    } finally {
+      log.mockRestore();
+    }
   });
 });
 

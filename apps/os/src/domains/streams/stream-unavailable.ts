@@ -15,10 +15,12 @@
 /**
  * Prefix on rejections from stream capability calls that failed because the
  * stream's Durable Object incarnation died mid-call — explicit `kill()`,
- * eviction, deploy reset, overload — rather than because the call itself was
- * bad. By contract these are RETRYABLE: the incarnation reboots on the next
- * call, and appends carry idempotency keys, so a batch that
+ * eviction, or deploy reset — rather than because the call itself was bad.
+ * By contract these are RETRYABLE: the incarnation reboots on the next call,
+ * and appends carry idempotency keys, so a batch that
  * committed-but-lost-its-ack dedupes on retry instead of double-appending.
+ * Overload is deliberately excluded: replaying into an overloaded object
+ * amplifies the pressure and workerd marks that outcome terminal.
  */
 export const STREAM_UNAVAILABLE_MESSAGE_PREFIX = "stream-unavailable: ";
 
@@ -42,7 +44,9 @@ export function isDurableObjectLifecycleError(error: unknown): boolean {
     overloaded?: unknown;
     retryable?: unknown;
   };
-  return flags.durableObjectReset === true || flags.overloaded === true || flags.retryable === true;
+  return (
+    flags.overloaded !== true && (flags.durableObjectReset === true || flags.retryable === true)
+  );
 }
 
 /**

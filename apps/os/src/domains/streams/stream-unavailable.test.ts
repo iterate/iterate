@@ -20,7 +20,12 @@ describe("isDurableObjectLifecycleError", () => {
     // [stack, message, durableObjectReset]).
     ["durableObjectReset flag", withFlag("durableObjectReset"), true],
     ["retryable flag", withFlag("retryable"), true],
-    ["overloaded flag", withFlag("overloaded"), true],
+    ["overloaded flag", withFlag("overloaded"), false],
+    [
+      "overloaded wins over a simultaneous retryable flag",
+      Object.assign(withFlag("retryable"), { overloaded: true }),
+      false,
+    ],
     ["flag present but not literally true", withFlag("retryable", "yes"), false],
     ["plain Error (app-level throw from the DO)", new Error("kill requested"), false],
     ["string rejection", "kill requested", false],
@@ -75,6 +80,14 @@ describe("retryIdempotentDurableObjectOperation", () => {
     );
     expect(operation).toHaveBeenCalledOnce();
     expect(isRetryableDurableObjectAvailabilityError(first)).toBe(false);
+  });
+
+  it("never retries overload, even when workerd also marks it retryable", async () => {
+    const overload = Object.assign(withFlag("overloaded"), { retryable: true });
+    const operation = vi.fn<() => Promise<string>>().mockRejectedValue(overload);
+
+    await expect(retryIdempotentDurableObjectOperation({ operation })).rejects.toBe(overload);
+    expect(operation).toHaveBeenCalledOnce();
   });
 });
 

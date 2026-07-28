@@ -52,6 +52,36 @@ normal telemetry; if the workstation sleeps or exits, no running test is
 misclassified and no later run is silently counted. Resume by explicitly
 starting a new proof—accepted streaks are never inferred across ledgers.
 
+## Round 16 (2026-07-28, rollout recovery)
+
+This round starts from merged `origin/main` at
+`02c089ec2e8c3fbcd69a1211c4b92dc7030b56ef`. A deduplicated PostHog review of
+the preceding three days found 36,900 completed test executions with zero hard
+failures and one absorbed retry. The ten most recent executed preview runs were
+all finally green, but only seven were strict zero-retry/error runs and the
+current strict streak was two. Over seven days, preview end-to-end duration was
+259.8 seconds at p50 and 373.5 seconds at p95; the latest complete sample took
+4 minutes 39 seconds.
+
+The leading deterministic cost was the synthetic rollout gate, not useful
+work: the latest run's 15 Playwright `create project fixture` phases each spent
+83–86 seconds behind the same 90-second deployment-age clock. Round 15 had
+already observed an exact-version Durable Object reset about 140 seconds after
+deployment, proving that the clock was neither a sufficient convergence
+barrier nor a targeted recovery mechanism.
+
+This round therefore deletes the gate and its test/fixture plumbing. A
+read-only `waitForEvent` with a stable durable cursor now replays one classified
+reset on a fresh stub; a second reset and every predicate/application failure
+remain terminal. Raw overload is explicitly non-retryable even if workerd also
+sets `retryable`, so recovery cannot amplify a saturated object. Preview retry
+annotations also distinguish passed-after-retry from still-failed records
+instead of claiming every retry passed.
+
+The new immutable-head proof starts at 0/25 after the draft PR's preview has
+passed. As in every current round, each counted iteration is a separate
+canonical Depot run with ordinary artifacts and PostHog telemetry.
+
 ## Round 15 (2026-07-23, post-#2284)
 
 This round starts from merged `origin/main` at

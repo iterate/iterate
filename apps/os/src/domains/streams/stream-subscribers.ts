@@ -1338,13 +1338,14 @@ export class StreamSubscribers {
       isDurableObjectLifecycleError(error) ||
       isStreamReceiverUnavailableError(error)
     ) {
-      // A killed, evicted, deployed, or overloaded subscriber is a modelled
-      // availability transition. `onRpcBroken` is itself the transport's
-      // authoritative availability signal even when its Error lost workerd's
-      // lifecycle flags crossing an RPC boundary. The durable cursor stays
-      // put and the bounded backoff below reconnects it; keep that expected
-      // transition out of the error signal while retaining an observable
-      // warning.
+      // A killed, evicted, or deployed subscriber is a modelled availability
+      // transition. `onRpcBroken` is itself the transport's authoritative
+      // availability signal even when its Error lost workerd's lifecycle
+      // flags crossing an RPC boundary. The durable cursor stays put and the
+      // bounded backoff below reconnects it; keep that expected transition out
+      // of the error signal while retaining an observable warning. A raw
+      // overload flag is deliberately not a lifecycle classification and
+      // remains in the error signal.
       console.warn("stream durable sink unavailable; backing off before re-poke", details);
     } else {
       console.error("stream durable sink delivery failed; backing off before re-poke", details);
