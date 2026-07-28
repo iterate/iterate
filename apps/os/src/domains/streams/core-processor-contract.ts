@@ -208,6 +208,9 @@ type MutuallyAssignable<Left, Right> = [Left] extends [Right]
  * Compile-time proof that the app's validating schema and the delivery
  * envelope's shared payload type have exactly the same fields in both
  * directions.
+ *
+ * @public — never imported; the export exists so the compiler must evaluate
+ * the assertion.
  */
 export type SubscriptionConfiguredDeliveryPayloadContractMatches = AssertTrue<
   MutuallyAssignable<
