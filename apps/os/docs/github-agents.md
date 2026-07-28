@@ -2,15 +2,15 @@
 
 Pull-request agents are project policy. The platform verifies and records
 GitHub webhooks, stores a linked-repository fact, and exposes authenticated
-Octokit. The project's seeded review bot (`config-repo-template/apps/review-bot`)
-decides whether a webhook creates or wakes an agent and what the agent should
-do.
+Octokit. The config worker declares the packaged `GithubAiLinter` app and its
+rule source. The app decides whether a webhook creates or wakes an agent and
+what the agent should do.
 
 ```text
 GitHub App webhook
   -> /integrations/github/<connection>       verified original fact
        |-> /repos/<project path>              default-branch pushes only
-       `-> ReviewBotApp (userspace DO, wake subscription per connection)
+       `-> ReviewBotApp (packaged userspace DO, wake subscription per connection)
             -> ReviewBotProcessor -> handleGithubPullRequestWebhook
                  -> match itx.repos.list() links
                       -> /agents/repos/<project path>/pr/<n>
@@ -77,9 +77,9 @@ userspace consumes the original connection event and rejects every received copy
 
 ## The userspace router
 
-The whole proof of concept lives in the seeded
-[`apps/review-bot`](../config-repo-template/apps/review-bot/src/review-bot.ts):
-the policy, the `ReviewBotProcessorContract` (consuming
+The router and its host live in
+[`iterate/starter-apps/github-ai-linter`](../../../packages/iterate/src/starter-apps/github-ai-linter/review-bot.ts).
+The package contains the `ReviewBotProcessorContract` (consuming
 `events.iterate.com/github/webhook-received`), the processor, and the
 `handleGithubPullRequestWebhook` router it runs per delivered webhook inside
 `blockProcessorWhile` — short must-happen work, so the cursor is held, a crash
@@ -88,13 +88,15 @@ re-run.
 
 Event processing uses the guestbook's hosted-processor wake mechanism, with one difference: webhook streams
 are per connection and no user action touches them directly, so nothing can
-configure the subscription at creation time. Instead the seeded `worker.ts`
-keeps a small bootstrap lane — on a `repo/github-link-configured` event
-(whose payload names the connection) it idempotently appends the bot's
-`stream/subscription-configured` event (from `review-bot-ref.ts`) to that
-connection's webhook stream, once per (re-)link rather than once per
-webhook. The source stream wakes the processor immediately, and a new
-processor starts from its checkpoint (zero on first use), so pull requests opened shortly
+configure the subscription at creation time. Instead the config worker passes
+its environment and app config to `GithubAiLinter.create`, keeps the returned
+app in a private field, and calls its dependency-free `processEvent(event)`
+method explicitly. On a `repo/github-link-configured` event
+(whose payload names the connection), it idempotently appends the bot's
+`stream/subscription-configured` event to that
+connection's webhook stream, once per (re-)link rather than once per webhook.
+The stream spine wakes the newly configured hosted processor immediately, and
+a fresh subscription replays from offset zero, so pull requests opened shortly
 before the link are still delivered. Because that replay covers the stream's
 whole history, the processor drops webhooks older than a freshness horizon
 (`reviewBotFreshnessHorizonMs`) — attaching to an old stream must not review
@@ -142,29 +144,25 @@ directly rather than spending an agent turn fetching the same webhook again.
 
 ## Structural reviews
 
-Rules are ordinary typed policy in `apps/review-bot/src/review-bot.ts`.
-Record keys are stable rule
-IDs used in suppressions, comments, idempotency, and future analytics:
+Rules are Markdown files in the repo and glob declared by the config worker.
+Frontmatter IDs are stable keys used in suppressions, comments, idempotency,
+and future analytics:
 
-```ts
-const githubPullRequests = {
-  policyVersion: "2",
-  rules: {
-    "typescript/explain-type-cast": {
-      files: [
-        "**/*.{ts,tsx,mts,cts}",
-        "!**/*.{test,spec}.{js,jsx,mjs,cjs,ts,tsx,mts,cts}",
-        "!**/{__tests__,test,tests,spec,specs}/**",
-      ],
-      invariant:
-        "Every type cast must have a nearby explanation of why it is safe and cannot reasonably be avoided.",
-    },
-  },
-};
+```md
+---
+id: typescript/explain-type-cast
+files:
+  - "**/*.{ts,tsx,mts,cts}"
+  - "!**/*.{test,spec}.{js,jsx,mjs,cjs,ts,tsx,mts,cts}"
+  - "!**/{__tests__,test,tests,spec,specs}/**"
+---
+
+Every type cast must have a nearby explanation of why it is safe and cannot
+reasonably be avoided.
 ```
 
 A rule applies only when a changed path matches at least one positive glob and
-none of its `!`-prefixed negative globs. The seeded policy excludes conventional
+none of its `!`-prefixed negative globs. The current rules exclude conventional
 test and spec filenames and directories from every structural rule.
 
 The same project policy applies to every GitHub-linked repo. The router derives

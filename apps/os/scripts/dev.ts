@@ -69,15 +69,16 @@ export default async function start(options: StartOptions = {}) {
   // Dynamic worker builds (seeded template apps included) npm-install the
   // `iterate` package. Pack the WORKSPACE package so local dev exercises this
   // branch's SDK, exactly like preview deploys pin their PR's published
-  // build. The spec env var MUST be set here in the parent — the wrangler
-  // config generator captures process.env at import time, before any code in
-  // vite.config.ts could set it — while the tarball HTTP server itself lives
-  // in the vite process (vite.config.ts serveDevSdkTarball), which owns the
-  // long-running lifetime. An explicit APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC
-  // wins (see lib/dev-sdk-tarball.ts for the whole story).
-  if (!process.env.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC) {
+  // build. The overrides env var MUST be set here in the parent — the
+  // wrangler config generator captures process.env at import time, before
+  // any code in vite.config.ts could set it — while the tarball HTTP server
+  // itself lives in the vite process (vite.config.ts serveDevSdkTarball),
+  // which owns the long-running lifetime. Explicit
+  // APP_CONFIG_ITERATE_REPO_PKG_SPEC_OVERRIDES wins (see
+  // lib/dev-sdk-tarball.ts for the whole story).
+  if (!process.env.APP_CONFIG_ITERATE_REPO_PKG_SPEC_OVERRIDES) {
     const { specUrl, tarball } = await packLocalIterateSdk(APP_ROOT);
-    process.env.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC = specUrl;
+    process.env.APP_CONFIG_ITERATE_REPO_PKG_SPEC_OVERRIDES = JSON.stringify({ iterate: specUrl });
     process.env.ITERATE_DEV_SDK_TARBALL = tarball;
   }
   const viteArgs = ["exec", "vite", "dev", "--port", String(port), "--strictPort"];

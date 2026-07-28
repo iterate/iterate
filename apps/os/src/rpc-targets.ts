@@ -203,6 +203,7 @@ import {
   isStreamWaitTimeoutError,
   rethrowStreamUnavailable,
   retryIdempotentDurableObjectOperation,
+  STREAM_UNAVAILABLE_MESSAGE_PREFIX,
   STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX,
 } from "./domains/streams/stream-unavailable.ts";
 import {
@@ -472,6 +473,14 @@ function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): Op
 }
 
 const STREAM_WAIT_REACQUIRE_MS = 10_000;
+// Keyed non-root appends are safe to replay after an acknowledgement is lost.
+// Bound each DO invocation below the outer e2e/client watchdog so a half-open
+// native RPC cannot park the public call forever; two attempts still fit
+// comfortably inside the standard 30-second operation budget. Root appends
+// are excluded: project/capability-host birth can legitimately spend longer
+// than this under load, and those callers already own explicit end-to-ready
+// deadlines around the whole durable saga.
+const KEYED_STREAM_APPEND_ATTEMPT_TIMEOUT_MS = 10_000;
 
 function detachPlainRpcResult<T>(result: T[]): T[];
 function detachPlainRpcResult<T extends object>(result: T): T;
@@ -495,8 +504,8 @@ function detachPlainRpcResult(result: object): object {
 /**
  * One replay of an idempotent Durable Object call with the absorbed first
  * failure logged — the single onRetry shape shared by every retrying door in
- * this file (stream reads, keyed appends, workspace reads, script rejoins,
- * the agent-create wait).
+ * this file (stream reads, keyed appends, workspace reads, project
+ * descriptions, script rejoins, the agent-create wait).
  */
 function retryLoggedIdempotentOperation<Result>(input: {
   context: Record<string, unknown>;
@@ -602,14 +611,36 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   // so a read cannot inherit the surrounding wake connection's lifetime.
   /** Commit events; resolves with the same events carrying offsets and timestamps. */
   async append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
-    const append = () => Promise.resolve(this[STREAM_DURABLE_OBJECT_STUB].append(...events));
+    const isKeyed = events.every(
+      (event) => typeof event.idempotencyKey === "string" && event.idempotencyKey.length > 0,
+    );
+    const canDeadlineReplay = isKeyed && this.props.path !== "/";
+    const append = async () => {
+      const invocation = Promise.resolve(this[STREAM_DURABLE_OBJECT_STUB].append(...events));
+      if (!canDeadlineReplay) return await invocation;
+
+      const outcome = await settleByDeadline(
+        invocation,
+        Date.now() + KEYED_STREAM_APPEND_ATTEMPT_TIMEOUT_MS,
+        Date.now,
+      );
+      if (outcome.status === "fulfilled") return outcome.value;
+      if (outcome.status === "rejected") throw outcome.error;
+
+      // The late invocation may have committed and may eventually return a
+      // native disposable. Observe and release it; the replay uses the same
+      // idempotency keys, so either completion order yields one durable batch.
+      void invocation.then(disposeIgnoredRpcResult, () => undefined);
+      throw new Error(
+        `${STREAM_UNAVAILABLE_MESSAGE_PREFIX}keyed stream append received no response within ` +
+          `${KEYED_STREAM_APPEND_ATTEMPT_TIMEOUT_MS}ms`,
+      );
+    };
     const result = await (
-      events.every(
-        (event) => typeof event.idempotencyKey === "string" && event.idempotencyKey.length > 0,
-      )
+      canDeadlineReplay
         ? retryLoggedIdempotentOperation({
             context: { path: this.props.path, projectId: this.props.projectId },
-            message: "keyed stream append retrying after Durable Object reset",
+            message: "keyed stream append retrying after Durable Object unavailability",
             operation: append,
           })
         : append()
@@ -2561,7 +2592,11 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
    * a create with a DIFFERENT egress/refresh/visibility policy fails loudly.
    */
   async create(input: SecretCreateInput): Promise<SecretRpcTarget> {
-    await this.durableObjectStub.create(input);
+    await retryLoggedIdempotentOperation({
+      context: { path: this.props.path, projectId: this.props.projectId },
+      message: "secret create retrying after Durable Object reset",
+      operation: () => Promise.resolve(this.durableObjectStub.create(input)),
+    });
     return this;
   }
 
@@ -5697,10 +5732,12 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    */
   async __describe(): Promise<ProjectDescription> {
     const scopePath = this.#capabilityHost.path;
-    const [project, hostDescription] = await Promise.all([
-      this.durableObjectStub.describe(),
-      this.#capabilityHost.__describe(),
-    ]);
+    const [project, hostDescription] = await retryLoggedIdempotentOperation({
+      context: { projectId: this.#projectId, scopePath },
+      message: "project description retrying after Durable Object reset",
+      operation: () =>
+        Promise.all([this.durableObjectStub.describe(), this.#capabilityHost.__describe()]),
+    });
     const mountedCapabilities = hostDescription.capabilities;
     return describeNode({
       instructions:

@@ -3,6 +3,7 @@ import { expect, test } from "vitest";
 import WebSocket from "ws";
 import type { StreamProcessorWakeRequest, StreamProcessorWakeResponse } from "iterate/processors";
 import type { StatefulDynamicWorkerRef } from "iterate/sdk";
+import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
 
 /** The Response surface these tests read — what both lanes of fetchApp
@@ -47,7 +48,7 @@ test("project ingress serves the static seeded homepage at the root", async () =
 
 // Multi-app routing: the seeded root worker.ts is a router over the project's
 // apps (repo-backed dynamic workers), selected by ingress from the host
-// (guestbook--<slug>.<base>, a stateful createApp Durable Object). Locally the
+// (guestbook--<slug>.<base>, a packaged stateful Durable Object). Locally the
 // app host rides on the HTTP Host header via node:http (see
 // fetchWithHostHeader); against a deployed preview the real wildcard
 // hostnames are used.
@@ -61,7 +62,7 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
     secret: adminSecret(),
   });
   using project = await itx.projects.get(slug).create({});
-  const { projectId } = await project.__describe();
+  await project.__describe();
 
   // The app owns its birth invariant even when called directly, before the
   // userspace root route has had an opportunity to initialize the stream.
@@ -70,15 +71,19 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
     durableWorkerKey: "app-guestbook-stream",
     path: "/",
     source: {
-      createApp: {
-        client: "apps/guestbook/client.tsx",
-        files: { repoPath: "/repos/config", type: "repo" },
-        server: "apps/guestbook/server.tsx",
+      createWorker: {
+        entryPoint: "node_modules/iterate/dist/starter-apps/guestbook/configured-worker.mjs",
+        files: {
+          include: ["package.json"],
+          repoPath: "/repos/config",
+          type: "repo",
+        },
       },
     },
     type: "stateful",
   } satisfies StatefulDynamicWorkerRef;
   using directGuestbook = project.workers.get(guestbookAppRef) as unknown as {
+    getState(): Promise<{ entries: { message: string; name: string }[] }>;
     processor: {
       wakeStreamProcessor(
         request: StreamProcessorWakeRequest,
@@ -111,6 +116,21 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
       subscriptionKey: "app-guestbook#guestbook",
     }),
   ).rejects.toThrow("wakeStreamProcessor coordinate mismatch");
+  const externalName = `External ${marker}`;
+  await guestbookStream.append({
+    type: "events.iterate.com/guestbook/entry-signed",
+    payload: { message: "Delivered by ProjectWorker.processEvent", name: externalName },
+    idempotencyKey: `guestbook/external:${marker}`,
+  });
+  await waitForCondition(
+    async () =>
+      (await directGuestbook.getState()).entries.some(({ name }) => name === externalName),
+    {
+      description: "the packaged Guestbook to process an externally appended event",
+      intervalMs: 250,
+      timeoutMs: 30_000,
+    },
+  );
 
   const fetchApp = (
     appHostPrefix: string,
@@ -147,9 +167,7 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
     }
   };
 
-  // createApp compiles the browser entry at its unchanged repo path, resolves
-  // ordinary package.json dependencies (including iterate/sdk/capnweb/react),
-  // and lets worker-bundler's asset handler serve the result. The app rides
+  // The packaged physical worker serves its embedded browser entry. The app rides
   // the `--` single-label host form (the one platform wildcard certs can
   // serve), and a spoofed x-iterate-app header must not override the host's
   // selection.
@@ -182,13 +200,11 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
       "AGENTS.md",
       "apps/guestbook/client.tsx",
       "apps/guestbook/server.tsx",
-      "apps/review-bot/src/review-bot.ts",
-      "apps/todo/client.tsx",
-      "apps/todo/server.tsx",
       "package.json",
       "worker.ts",
     ]),
   });
+  expect(tree.paths.some((path) => path.startsWith("apps/review-bot/"))).toBe(false);
   expect(tree.paths).not.toContain("sdk.ts");
   expect(await project.repo.readFile({ path: "nope.md" })).toBeNull();
 
@@ -202,7 +218,7 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
 // Cap'n Web /api. This is the regression proof for the fetch-native dispatch
 // lane: an upgrade's 101 response cannot cross RPC method calls (workerd
 // DataCloneError on the socket), so ingress, the userspace router
-// (env.ITX.fetch + x-iterate-worker-dispatch), the createApp DO, and the
+// (env.ITX.fetch + x-iterate-worker-dispatch), the packaged app DO, and the
 // facet must all forward it over real fetch hops. (The live snapshot/patch
 // traffic that rides this socket is proven browser-side in
 // specs/seeded-apps.spec.ts.) Locally the app host rides on the HTTP Host

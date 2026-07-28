@@ -120,6 +120,26 @@ describe("RepoProcessor eviction recovery", () => {
     expect(h.events("events.iterate.com/repos/created")).toHaveLength(1);
   });
 
+  it("redelivers the property-stripped Artifacts 503 observed during preview bootstrap", async () => {
+    const h = makeHarness();
+    let calls = 0;
+    h.createEmpty.impl = async () => {
+      calls += 1;
+      if (calls === 1) throw new Error("HTTP Error: 503 Service Unavailable");
+      return CREATED_ARTIFACT;
+    };
+    await h.stream.append(EMPTY_REQUEST);
+
+    await expect(h.settle()).rejects.toThrow("HTTP Error: 503 Service Unavailable");
+    expect(calls).toBe(1);
+    expect(h.events("events.iterate.com/repos/create-failed")).toHaveLength(0);
+
+    await h.settle();
+
+    expect(calls).toBe(2);
+    expect(h.events("events.iterate.com/repos/created")).toHaveLength(1);
+  });
+
   it("re-drives an interrupted creation obligation after the keepalive alarm", async () => {
     const h = makeHarness();
     h.createEmpty.impl = () => new Promise<never>(() => {});

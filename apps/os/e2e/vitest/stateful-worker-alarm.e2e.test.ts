@@ -38,8 +38,8 @@ test(
       // `invokeCapability` dispatcher, because workerd reserves `alarm` as
       // an RPC method name, and the SDK base class carries that dispatcher.
       // Like every bundled package import, the SDK is declared in the inline
-      // source's package.json. Preview builds replace this moving main spec
-      // with the deployment's exact APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC.
+      // source's package.json. Preview builds pin this moving @main ref to
+      // the deployment's exact APP_CONFIG_ITERATE_REPO_PKG_REF.
       source: {
         createWorker: {
           entryPoint: "alarm-probe.js",

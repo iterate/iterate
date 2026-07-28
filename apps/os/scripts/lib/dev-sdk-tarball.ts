@@ -3,16 +3,19 @@
  *
  * WHY THIS EXISTS: dynamic worker builds (the seeded template apps included)
  * npm-install the `iterate` package from the spec in the template's
- * package.json — published `iterate@main` by default. Preview deploys
- * override that spec to the PR head's published build
- * (APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC in deploy.ts), so preview e2e always
+ * package.json — published `iterate@main` by default. Preview deploys pin
+ * that spec's ref to the PR head's published build
+ * (APP_CONFIG_ITERATE_REPO_PKG_REF in deploy.ts), so preview e2e always
  * tests template + SDK in lockstep. Local dev had no such override: a branch
  * that adds an SDK export and uses it from template code was silently broken
  * under plain `pnpm dev` — the template built against yesterday's @main,
  * failed in a background worker build, and the page just sat on the
  * "building" overlay. (Exactly how this branch's createProcessorHost
  * regression hid.) These two halves give local dev preview's semantics: the
- * spec points at THIS worktree's packed SDK.
+ * `iterate` dependency points at THIS worktree's packed SDK, via the
+ * name-keyed APP_CONFIG_ITERATE_REPO_PKG_SPEC_OVERRIDES map (a ref cannot
+ * express a local tarball, and name-keying re-points repos still carrying a
+ * stale tarball URL from before an SDK edit).
  *
  * HOW THE PIECES FIT (the ordering is load-bearing):
  *
@@ -20,19 +23,19 @@
  *   server spawns. It builds packages/iterate, packs it into a
  *   content-named tarball under .dev-server/sdk, picks a free loopback port,
  *   and returns the finished spec URL. dev.ts then exports
- *   APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC (+ ITERATE_DEV_SDK_TARBALL) into the
- *   child's environment. Setting the spec in the parent is NOT an
- *   implementation detail: generate-wrangler-config.ts reads process.env in
- *   module-level constants, which ES import hoisting evaluates before any
+ *   APP_CONFIG_ITERATE_REPO_PKG_SPEC_OVERRIDES (+ ITERATE_DEV_SDK_TARBALL)
+ *   into the child's environment. Setting the overrides in the parent is NOT
+ *   an implementation detail: generate-wrangler-config.ts reads process.env
+ *   in module-level constants, which ES import hoisting evaluates before any
  *   code in vite.config.ts runs — an env var set inside the vite process
  *   would be captured too late and silently never reach the worker's vars.
  *
  * - `serveDevSdkTarball` runs at the top of vite.config.ts — the CHILD
  *   process, which owns the long-lived server — and binds the pre-chosen
- *   port from the spec URL, serving the one tarball file. worker-bundler
- *   installs direct HTTP(S) tarball URLs, so no registry is involved. Bound
- *   to 127.0.0.1 explicitly ("localhost" can resolve to ::1 and break the
- *   workerd-side dial).
+ *   port from the overridden spec URL, serving the one tarball file.
+ *   worker-bundler installs direct HTTP(S) tarball URLs, so no registry is
+ *   involved. Bound to 127.0.0.1 explicitly ("localhost" can resolve to ::1
+ *   and break the workerd-side dial).
  *
  * - The tarball name carries a content hash of the BUILT package (dist +
  *   manifest, not the tarball bytes — pack embeds mtimes, which would rotate
@@ -41,8 +44,8 @@
  *   restarts and any SDK change is a new spec → a fresh build, never a stale
  *   cached artifact.
  *
- * An explicit APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC in the environment wins:
- * dev.ts skips all of this so a developer can pin any published build.
+ * An explicit APP_CONFIG_ITERATE_REPO_PKG_SPEC_OVERRIDES in the environment
+ * wins: dev.ts skips all of this so a developer can pin any published build.
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -86,14 +89,19 @@ export async function packLocalIterateSdk(
   return { specUrl: `http://127.0.0.1:${port}/${path.basename(tarball)}`, tarball };
 }
 
-/** Serve the packed tarball on the port dev.ts baked into the spec URL.
- * Child-process (vite.config.ts) half; no-op without the dev.ts env. */
+/** Serve the packed tarball on the port dev.ts baked into the override spec
+ * URL. Child-process (vite.config.ts) half; no-op without the dev.ts env. */
 export async function serveDevSdkTarball(): Promise<void> {
   const tarball = process.env.ITERATE_DEV_SDK_TARBALL;
-  const spec = process.env.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC;
-  if (!tarball || !spec) return;
+  const overrides = process.env.APP_CONFIG_ITERATE_REPO_PKG_SPEC_OVERRIDES;
+  if (!tarball || !overrides) return;
+  // The loopback URL among the override specs is the tarball dev.ts packed;
+  // an explicit developer-provided overrides map may not carry one.
+  const spec = Object.values(JSON.parse(overrides) as Record<string, string>).find(
+    (candidate) => URL.canParse(candidate) && new URL(candidate).hostname === "127.0.0.1",
+  );
+  if (!spec) return;
   const url = new URL(spec);
-  if (url.hostname !== "127.0.0.1") return;
 
   // Vite re-evaluates this config module on change; keep one server per
   // process (the port is taken after the first listen).

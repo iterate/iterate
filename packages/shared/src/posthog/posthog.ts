@@ -6,8 +6,8 @@ export interface ProxyPosthogRequestOptions {
 }
 
 export async function proxyPosthogRequest(options: ProxyPosthogRequestOptions): Promise<Response> {
-  const apiHost = options.apiHost ?? "eu.i.posthog.com";
-  const assetHost = options.assetHost ?? "eu-assets.i.posthog.com";
+  const apiHost = options.apiHost || "eu.i.posthog.com";
+  const assetHost = options.assetHost || "eu-assets.i.posthog.com";
   const url = new URL(options.request.url);
   const posthogPath = url.pathname.slice(options.proxyPrefix.length);
   const isAsset = posthogPath.startsWith("/static/") || posthogPath.startsWith("/array/");

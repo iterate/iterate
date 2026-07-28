@@ -102,11 +102,12 @@ async function cloudflareContainerApplicationId(input: {
   const matches = (body.result as Array<{ id?: unknown; name?: unknown }>).filter(
     (application) => application.name === input.applicationName,
   );
-  if (matches.length !== 1) {
+  if (matches.length === 0) {
+    throw new Error(`Cloudflare container application "${input.applicationName}" was not found.`);
+  }
+  if (matches.length > 1) {
     throw new Error(
-      matches.length === 0
-        ? `Cloudflare container application "${input.applicationName}" was not found.`
-        : `Cloudflare returned multiple container applications named "${input.applicationName}".`,
+      `Cloudflare returned multiple container applications named "${input.applicationName}".`,
     );
   }
   const applicationId = matches[0]?.id;
