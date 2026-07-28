@@ -35,9 +35,11 @@ describe("ProjectRpcTarget create deployment readiness", () => {
     vi.restoreAllMocks();
   });
 
-  it("does not append root birth facts until the Project Durable Object is current", async () => {
-    const notReady = new Error("Project Durable Object did not converge");
-    waitForProjectBirthDeploymentVersion.mockRejectedValueOnce(notReady);
+  it("does not append root birth facts until the Project and root Stream objects are current", async () => {
+    const notReady = new Error("Stream Durable Object did not converge");
+    waitForProjectBirthDeploymentVersion
+      .mockResolvedValueOnce({ readiness: {}, target: {} })
+      .mockRejectedValueOnce(notReady);
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     const target = new ProjectRpcTarget({
       auth: {
@@ -56,10 +58,17 @@ describe("ProjectRpcTarget create deployment readiness", () => {
     ).rejects.toBe(notReady);
 
     expect(projectDirectoryPut).toHaveBeenCalledTimes(2);
-    expect(waitForProjectBirthDeploymentVersion).toHaveBeenCalledWith({
+    expect(waitForProjectBirthDeploymentVersion).toHaveBeenNthCalledWith(1, {
       expectedVersion: { id: "version-new" },
       getTarget: expect.any(Function),
       projectId: "prj_rollout_race",
+      targetKind: "Project Durable Object",
+    });
+    expect(waitForProjectBirthDeploymentVersion).toHaveBeenNthCalledWith(2, {
+      expectedVersion: { id: "version-new" },
+      getTarget: expect.any(Function),
+      projectId: "prj_rollout_race",
+      targetKind: "Stream Durable Object",
     });
     expect(streamGetByName).not.toHaveBeenCalled();
   });

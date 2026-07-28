@@ -11,8 +11,12 @@ describe("waitForProjectBirthDeploymentVersion", () => {
         expectedVersion: "version-new",
         getTarget: () => ({ deploymentVersion }),
         projectId: "prj_test",
+        targetKind: "Project Durable Object",
       }),
-    ).resolves.toMatchObject({ probes: 1, targetNewer: false });
+    ).resolves.toMatchObject({
+      readiness: { probes: 1, targetNewer: false },
+      target: { deploymentVersion },
+    });
     expect(deploymentVersion).toHaveBeenCalledWith(WORKER_DEPLOYMENT_VERSION_METADATA_FORMAT);
   });
 
@@ -29,6 +33,7 @@ describe("waitForProjectBirthDeploymentVersion", () => {
           expectedVersion: "version-new",
           getTarget,
           projectId: "prj_test",
+          targetKind: "Stream Durable Object",
         },
         {
           now: () => time,
@@ -39,14 +44,18 @@ describe("waitForProjectBirthDeploymentVersion", () => {
           timeoutMs: 1_000,
         },
       ),
-    ).resolves.toMatchObject({ mismatches: 1, probes: 2, waitedMs: 250 });
+    ).resolves.toMatchObject({
+      readiness: { mismatches: 1, probes: 2, waitedMs: 250 },
+      target: newProject,
+    });
     expect(getTarget).toHaveBeenCalledTimes(2);
     expect(info).toHaveBeenCalledWith(
-      "project Durable Object deployment version converged before birth append",
+      "project birth Durable Object deployment version converged before append",
       expect.objectContaining({
         mismatches: 1,
         probes: 2,
         projectId: "prj_test",
+        targetKind: "Stream Durable Object",
       }),
     );
     info.mockRestore();
@@ -61,6 +70,7 @@ describe("waitForProjectBirthDeploymentVersion", () => {
           expectedVersion: "version-new",
           getTarget: () => ({ deploymentVersion: async () => "version-old" }),
           projectId: "prj_test",
+          targetKind: "Stream Durable Object",
         },
         {
           now: () => time,
@@ -72,7 +82,7 @@ describe("waitForProjectBirthDeploymentVersion", () => {
         },
       ),
     ).rejects.toThrow(
-      'Project "prj_test" has an identity and directory entry, but its Project Durable Object ' +
+      'Project "prj_test" has an identity and directory entry, but its Stream Durable Object ' +
         'was not ready for deployment version "version-new" before this create attempt appended ' +
         "root birth facts: it did not converge within 500ms; the last observed version was " +
         '"version-old". This attempt appended no new birth facts; facts from any earlier identical ' +

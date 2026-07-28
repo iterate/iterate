@@ -541,6 +541,11 @@ function retryLoggedIdempotentOperation<Result>(input: {
  * native authority unreachable by Cap'n Web property traversal while still
  * allowing in-process domains and focused tests to use the exact stub. */
 export const STREAM_DURABLE_OBJECT_STUB = Symbol("stream-durable-object-stub");
+export const STREAM_DURABLE_OBJECT_APPEND = Symbol("stream-durable-object-append");
+
+type StreamDurableObjectAppendTarget = {
+  append: (...events: StreamEventInput[]) => PromiseLike<StreamEvent[]> | StreamEvent[];
+};
 
 /**
  * Durable event stream capability.
@@ -624,15 +629,20 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   // ride the tagged methods. Native Workers RPC also makes every object-valued
   // result disposable: detach its plain data, then release the invocation here
   // so a read cannot inherit the surrounding wake connection's lifetime.
-  /** Commit events; resolves with the same events carrying offsets and timestamps. */
-  async append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
+  async #append(
+    events: StreamEventInput[],
+    initialTarget?: StreamDurableObjectAppendTarget,
+  ): Promise<StreamEvent[]> {
     const isKeyed = events.every(
       (event) => typeof event.idempotencyKey === "string" && event.idempotencyKey.length > 0,
     );
     const canLifecycleReplay = isKeyed;
     const canDeadlineReplay = isKeyed && this.props.path !== "/";
+    let nextTarget = initialTarget;
     const append = async () => {
-      const invocation = Promise.resolve(this[STREAM_DURABLE_OBJECT_STUB].append(...events));
+      const target = nextTarget ?? this[STREAM_DURABLE_OBJECT_STUB];
+      nextTarget = undefined;
+      const invocation = Promise.resolve(target.append(...events));
       if (!canDeadlineReplay) return await invocation;
 
       const outcome = await settleByDeadline(
@@ -663,6 +673,26 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
         : append()
     ).catch(rethrowStreamUnavailable);
     return detachPlainRpcResult(result);
+  }
+
+  /** Commit events; resolves with the same events carrying offsets and timestamps. */
+  async append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
+    return await this.#append(events);
+  }
+
+  /**
+   * Server-only append through the exact stub that passed a read-only rollout
+   * probe. A symbol keeps the native authority unreachable by Cap'n Web. If
+   * that incarnation resets after the probe, keyed events retain the ordinary
+   * single replay on a freshly acquired stub.
+   *
+   * @internal
+   */
+  async [STREAM_DURABLE_OBJECT_APPEND](
+    target: StreamDurableObjectAppendTarget,
+    ...events: StreamEventInput[]
+  ): Promise<StreamEvent[]> {
+    return await this.#append(events, target);
   }
 
   /** Commit only if this path still names the supplied stream lifetime. */
@@ -5671,18 +5701,38 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     }
 
     const timing = { projectId: registered.projectId };
-    await timedStep("create-timing", timing, "wait-project-deployment-before-birth", () =>
-      waitForProjectBirthDeploymentVersion({
-        expectedVersion: workerDeploymentVersion(env),
-        getTarget: () => this.durableObjectStub,
-        projectId: registered.projectId,
-      }),
+    const birthStream = rootStream({
+      auth: this.#props.auth,
+      projectId: registered.projectId,
+    });
+    const expectedDeploymentVersion = workerDeploymentVersion(env);
+    const [, { target: readyBirthStream }] = await timedStep(
+      "create-timing",
+      timing,
+      "wait-project-deployment-before-birth",
+      () =>
+        Promise.all([
+          waitForProjectBirthDeploymentVersion({
+            expectedVersion: expectedDeploymentVersion,
+            getTarget: () => this.durableObjectStub,
+            projectId: registered.projectId,
+            targetKind: "Project Durable Object",
+          }),
+          waitForProjectBirthDeploymentVersion({
+            expectedVersion: expectedDeploymentVersion,
+            getTarget: () => birthStream[STREAM_DURABLE_OBJECT_STUB],
+            projectId: registered.projectId,
+            targetKind: "Stream Durable Object",
+          }),
+        ]),
     );
     const creatorEmail = userPrincipalOf(this.#props.auth)?.email;
     // Every birth event carries an idempotency key, so the keyed-append door
-    // retry in StreamRpcTarget.append is the single deploy-reset recovery.
+    // uses the exact rollout-proven Stream stub first, then at most one fresh
+    // stub if that incarnation resets after the read-only probe.
     const committed = await timedStep("create-timing", timing, "root-append", () =>
-      rootStream({ auth: this.#props.auth, projectId: registered.projectId }).append(
+      birthStream[STREAM_DURABLE_OBJECT_APPEND](
+        readyBirthStream,
         ...projectCreationEvents({
           projectId: registered.projectId,
           payload: {

@@ -4,6 +4,7 @@ import type { ProcessorReads } from "iterate/processors";
 import { streamDeliveryAuthContext } from "../../auth.ts";
 import {
   ProcessorRelayRpcTarget,
+  STREAM_DURABLE_OBJECT_APPEND,
   STREAM_DURABLE_OBJECT_STUB,
   StreamProcessorRpcTarget,
   StreamRpcTarget,
@@ -405,6 +406,83 @@ describe("StreamRpcTarget", () => {
       }),
     ).resolves.toEqual([event]);
     expect(acquisitions).toBe(2);
+  });
+
+  it("starts a rollout-gated append on the exact Stream stub that passed readiness", async () => {
+    const event = {
+      createdAt: new Date(0).toISOString(),
+      idempotencyKey: "root-birth",
+      offset: 3,
+      path: "/",
+      type: "events.iterate.com/test/root-birth",
+    } satisfies StreamEvent;
+    const readyAppend = vi.fn(async () => [event]);
+    let freshAcquisitions = 0;
+
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
+        freshAcquisitions += 1;
+        return { append: vi.fn(async () => [event]) } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/",
+      projectId: "prj_test",
+    });
+
+    await expect(
+      stream[STREAM_DURABLE_OBJECT_APPEND](
+        { append: readyAppend },
+        {
+          idempotencyKey: event.idempotencyKey,
+          type: event.type,
+        },
+      ),
+    ).resolves.toEqual([event]);
+    expect(readyAppend).toHaveBeenCalledOnce();
+    expect(freshAcquisitions).toBe(0);
+  });
+
+  it("re-acquires once when a rollout-proven Stream stub resets after its probe", async () => {
+    const lifecycleError = Object.assign(new Error("code updated"), {
+      durableObjectReset: true,
+    });
+    const event = {
+      createdAt: new Date(0).toISOString(),
+      idempotencyKey: "root-birth",
+      offset: 3,
+      path: "/",
+      type: "events.iterate.com/test/root-birth",
+    } satisfies StreamEvent;
+    const readyAppend = vi.fn(async () => Promise.reject(lifecycleError));
+    const freshAppend = vi.fn(async () => [event]);
+    let freshAcquisitions = 0;
+
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
+        freshAcquisitions += 1;
+        return { append: freshAppend } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/",
+      projectId: "prj_test",
+    });
+
+    await expect(
+      stream[STREAM_DURABLE_OBJECT_APPEND](
+        { append: readyAppend },
+        {
+          idempotencyKey: event.idempotencyKey,
+          type: event.type,
+        },
+      ),
+    ).resolves.toEqual([event]);
+    expect(readyAppend).toHaveBeenCalledOnce();
+    expect(freshAppend).toHaveBeenCalledOnce();
+    expect(freshAcquisitions).toBe(1);
   });
 
   it("keeps a second keyed root append deployment reset terminal", async () => {
