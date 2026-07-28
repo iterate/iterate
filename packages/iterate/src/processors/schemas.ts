@@ -5,7 +5,7 @@ import { z } from "zod";
  * Cycles normally stop a chain earlier; this bounds acyclic graphs and the
  * serialized event growth they can produce.
  */
-export const MAX_CROSS_POSTED_FROM_HOPS = 32;
+export const MAX_COPIED_FROM_HOPS = 32;
 
 /** Append input before the stream assigns offset and timestamp. */
 export const StreamEventInput = z.strictObject({
@@ -38,7 +38,7 @@ export const StreamEventInput = z.strictObject({
             .optional(),
         })
         .optional(),
-      crossPostedFrom: z
+      copiedFrom: z
         .array(
           z.strictObject({
             /** The source stream's subscription that copied this event. */
@@ -57,7 +57,7 @@ export const StreamEventInput = z.strictObject({
           }),
         )
         .min(1)
-        .max(MAX_CROSS_POSTED_FROM_HOPS)
+        .max(MAX_COPIED_FROM_HOPS)
         .optional(),
     })
     .optional(),
@@ -67,7 +67,7 @@ export const StreamEventInput = z.strictObject({
    * any event, but EXCLUDED from range reads unless explicitly requested
    * (`includeEphemeral: true`; point reads by offset or idempotency key
    * always return them). Durable subscriptions exclude them by default;
-   * cross-post, ITX-call, and webhook subscriptions may explicitly set
+   * copy, ITX-call, and webhook subscriptions may explicitly set
    * `includeEphemeral: true`, while hosted processors can never opt in. Session connections (`openConnection()`)
    * receive them only when appended after that exact connection opens;
    * historical ephemeral rows are never replayed. The stream may EVICT their
@@ -108,7 +108,7 @@ export const StreamListItem = z.object({
  * metadata, provenance source, and idempotency key — everything before the
  * stream assigns offset and timestamp at commit. `ephemeral: true` commits a
  * second-class row: excluded from range reads unless `includeEphemeral`,
- * excluded from durable delivery unless a cross-post, ITX-call, or webhook subscription opts in, and evictable —
+ * excluded from durable delivery unless a copy, ITX-call, or webhook subscription opts in, and evictable —
  * for transient signals (LLM streaming chunks) whose durable truth lands as
  * its own event. */
 export type StreamEventInput = z.infer<typeof StreamEventInput>;

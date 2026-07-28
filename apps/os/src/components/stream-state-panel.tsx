@@ -109,7 +109,7 @@ export function PresenceAvatar({
  */
 /** Stored instruction for sending matching events to one receiver. */
 type SubscriptionDetails = {
-  subscriptionAction: "processor-wake" | "cross-post" | "itx-call" | "webhook-post";
+  subscriptionAction: "processor-wake" | "copy-to-stream" | "itx-call" | "webhook-post";
   configuredAtOffset?: number;
   halted?: {
     reason: "delivery-failed";
@@ -119,7 +119,7 @@ type SubscriptionDetails = {
   };
   /** The delivery target as the itx call (or webhook POST) it actually is. */
   deliveryLabel?: string;
-  /** Destination path for a cross-post. */
+  /** Destination path for a copy. */
   destinationStream?: string;
   /**
    * Optional operator-facing note from the subscription payload
@@ -131,7 +131,7 @@ type SubscriptionDetails = {
   eventTypes?: string[];
   /** Optional JSONata filter over the whole event. */
   condition?: string;
-  /** Optional JSONata constructor for a cross-post. */
+  /** Optional JSONata constructor for a copy. */
   transform?: string;
   start?: "beginning" | "now" | { afterOffset: number };
   includeEphemeral?: boolean;
@@ -139,7 +139,7 @@ type SubscriptionDetails = {
   webhookUrl?: string;
 };
 
-type ReceivingStreamCrossPostListState =
+type ReceivingStreamCopyListState =
   | {
       sourceOffset: number;
       status: "pending" | "confirmed";
@@ -168,12 +168,12 @@ type ProcessorPanelEntry = {
   config?: SubscriptionDetails;
   subscriptionProgress?: StreamRuntimeDebugState["runtime"]["subscriptions"][string];
   runtimeConnection?: StreamRuntimeDebugState["runtime"]["connections"][string];
-  crossPostListRetry?: StreamRuntimeDebugState["runtime"]["crossPostListRetries"][string];
+  copyListRetry?: StreamRuntimeDebugState["runtime"]["copyListRetries"][string];
   receivingStreamPath?: string;
-  crossPostListState?: ReceivingStreamCrossPostListState;
+  copyListState?: ReceivingStreamCopyListState;
   waitingForSubscriptionRemovalFrom?: Array<{
     receivingStreamPath: string;
-    state: ReceivingStreamCrossPostListState;
+    state: ReceivingStreamCopyListState;
   }>;
 };
 
@@ -188,8 +188,8 @@ const CORE_PROCESSOR_ANNOUNCEMENT: AgentUiProcessorAnnouncement = {
     "events.iterate.com/stream/connection-opened",
     "events.iterate.com/stream/connection-closed",
     "events.iterate.com/stream/subscription-configured",
-    "events.iterate.com/stream/cross-post-list-recorded",
-    "events.iterate.com/stream/cross-post-list-delivery-blocked",
+    "events.iterate.com/stream/copy-list-recorded",
+    "events.iterate.com/stream/copy-list-delivery-blocked",
     "events.iterate.com/stream/subscription-delivery-halted",
     "events.iterate.com/stream/subscription-delivery-resumed",
   ],
@@ -198,12 +198,12 @@ const CORE_PROCESSOR_ANNOUNCEMENT: AgentUiProcessorAnnouncement = {
     { type: "events.iterate.com/stream/woken" },
     { type: "events.iterate.com/stream/configured" },
     { type: "events.iterate.com/stream/subscription-configured" },
-    { type: "events.iterate.com/stream/cross-post-list-recorded" },
+    { type: "events.iterate.com/stream/copy-list-recorded" },
     { type: "events.iterate.com/stream/subscription-removed" },
-    { type: "events.iterate.com/stream/cross-post-list-confirmed" },
-    { type: "events.iterate.com/stream/cross-post-list-delivery-blocked" },
-    { type: "events.iterate.com/stream/cross-post-list-resend-requested" },
-    { type: "events.iterate.com/stream/cross-posted-events-dropped" },
+    { type: "events.iterate.com/stream/copy-list-confirmed" },
+    { type: "events.iterate.com/stream/copy-list-delivery-blocked" },
+    { type: "events.iterate.com/stream/copy-list-resend-requested" },
+    { type: "events.iterate.com/stream/copied-events-dropped" },
     { type: "events.iterate.com/stream/connection-opened" },
     { type: "events.iterate.com/stream/connection-closed" },
     { type: "events.iterate.com/stream/paused" },
@@ -818,7 +818,7 @@ function buildProcessorPanelEntries(
 ): ProcessorPanelEntry[] {
   const entries = new Map<string, ProcessorPanelEntry>();
   const configured = readConfiguredSubscriptions(streamRuntime?.coreProcessorState);
-  const crossPostLists = readCrossPostListsByReceivingStream(streamRuntime?.coreProcessorState);
+  const copyLists = readCopyListsByReceivingStream(streamRuntime?.coreProcessorState);
 
   entries.set(CORE_PROCESSOR_KEY, {
     key: CORE_PROCESSOR_KEY,
@@ -859,7 +859,7 @@ function buildProcessorPanelEntries(
             config,
           }),
       subscriptionProgress: streamRuntime?.runtime.subscriptions[key],
-      crossPostListRetry: readCrossPostListRetry(streamRuntime, config?.destinationStream),
+      copyListRetry: readCopyListRetry(streamRuntime, config?.destinationStream),
     });
   }
 
@@ -895,7 +895,7 @@ function buildProcessorPanelEntries(
             config,
           }),
       subscriptionProgress: streamRuntime?.runtime.subscriptions[entryKey],
-      crossPostListRetry: readCrossPostListRetry(streamRuntime, config?.destinationStream),
+      copyListRetry: readCopyListRetry(streamRuntime, config?.destinationStream),
     });
   }
 
@@ -915,7 +915,7 @@ function buildProcessorPanelEntries(
         // Prefer the receiver label over a generic presence description.
         description: config.deliveryLabel ?? current.description,
         subscriptionProgress,
-        crossPostListRetry: readCrossPostListRetry(streamRuntime, config.destinationStream),
+        copyListRetry: readCopyListRetry(streamRuntime, config.destinationStream),
         connected: runtimeConnection !== undefined,
       });
       continue;
@@ -933,21 +933,21 @@ function buildProcessorPanelEntries(
       configuredAtOffset: config.configuredAtOffset,
       config,
       subscriptionProgress,
-      crossPostListRetry: readCrossPostListRetry(streamRuntime, config.destinationStream),
+      copyListRetry: readCopyListRetry(streamRuntime, config.destinationStream),
       ...(runtimeConnection === undefined
         ? {}
         : { runtimeConnection, connectionKind: runtimeConnection.kind }),
     });
   }
 
-  // Add durable cross-post-list state after merging configuration and live
+  // Add durable copy-list state after merging configuration and live
   // callbacks. A moved key can be waiting for one or more old receivers to
   // acknowledge its removal; the last acknowledged key list makes that wait
   // explicit without consulting SQLite retry rows or rereading the event log.
   for (const [key, entry] of entries) {
     const destinationStream = entry.config?.destinationStream;
     if (destinationStream === undefined) continue;
-    const waitingForSubscriptionRemovalFrom = Object.entries(crossPostLists).flatMap(
+    const waitingForSubscriptionRemovalFrom = Object.entries(copyLists).flatMap(
       ([receivingStreamPath, state]) =>
         receivingStreamPath !== destinationStream &&
         state.status !== "confirmed" &&
@@ -958,7 +958,7 @@ function buildProcessorPanelEntries(
     entries.set(key, {
       ...entry,
       receivingStreamPath: destinationStream,
-      crossPostListState: crossPostLists[destinationStream],
+      copyListState: copyLists[destinationStream],
       ...(waitingForSubscriptionRemovalFrom.length === 0
         ? {}
         : { waitingForSubscriptionRemovalFrom }),
@@ -968,7 +968,7 @@ function buildProcessorPanelEntries(
   // A pending empty list remains a durable fact after its final subscription has
   // gone. Keep the receiving stream visible even if the retry scheduler row is
   // temporarily missing or being repaired.
-  for (const [receivingStreamPath, listState] of Object.entries(crossPostLists)) {
+  for (const [receivingStreamPath, listState] of Object.entries(copyLists)) {
     if (listState.status === "confirmed") continue;
     const matchingEntry = [...entries.values()].some(
       (entry) => entry.receivingStreamPath === receivingStreamPath,
@@ -981,23 +981,23 @@ function buildProcessorPanelEntries(
       connected: false,
       description: `Pending subscription removal from ${receivingStreamPath}`,
       receivingStreamPath,
-      crossPostListState: listState,
-      crossPostListRetry: readCrossPostListRetry(streamRuntime, receivingStreamPath),
+      copyListState: listState,
+      copyListRetry: readCopyListRetry(streamRuntime, receivingStreamPath),
     });
   }
 
   // A retry row with no corresponding reduced-state entry is a repairable
   // scheduler anomaly, not proof that a list is owed. Surface it explicitly.
-  for (const listRetry of Object.values(streamRuntime?.runtime.crossPostListRetries ?? {})) {
-    if (crossPostLists[listRetry.receivingStreamPath] !== undefined) continue;
-    const entryKey = `orphaned-cross-post-list-retry:${listRetry.receivingStreamPath}`;
+  for (const listRetry of Object.values(streamRuntime?.runtime.copyListRetries ?? {})) {
+    if (copyLists[listRetry.receivingStreamPath] !== undefined) continue;
+    const entryKey = `orphaned-copy-list-retry:${listRetry.receivingStreamPath}`;
     entries.set(entryKey, {
       key: entryKey,
       rowKind: "durable-subscription",
       connected: false,
-      description: `Retry row without durable cross-post-list state for ${listRetry.receivingStreamPath}`,
+      description: `Retry row without durable copy-list state for ${listRetry.receivingStreamPath}`,
       receivingStreamPath: listRetry.receivingStreamPath,
-      crossPostListRetry: listRetry,
+      copyListRetry: listRetry,
     });
   }
 
@@ -1027,7 +1027,7 @@ function processorEntrySections(entries: readonly ProcessorPanelEntry[]): Array<
     },
     {
       title: "Durable subscriptions",
-      emptyLabel: "No cross-post, ITX-call, or webhook-post subscriptions are configured.",
+      emptyLabel: "No copy, ITX-call, or webhook-post subscriptions are configured.",
       entries: entries.filter((entry) => entry.rowKind === "durable-subscription"),
     },
     {
@@ -1054,7 +1054,7 @@ function compareProcessorEntries(a: ProcessorPanelEntry, b: ProcessorPanelEntry)
 
 /**
  * A missing live connection is normal: hosted processors are woken when their
- * checkpoint lags; cross-post, ITX-call, and webhook subscriptions are caught
+ * checkpoint lags; copy, ITX-call, and webhook subscriptions are caught
  * up, sending, waiting to retry, or halted.
  */
 function processorEntryStatus(entry: ProcessorPanelEntry, busy: boolean): string {
@@ -1063,7 +1063,7 @@ function processorEntryStatus(entry: ProcessorPanelEntry, busy: boolean): string
     if (busy && isLlmish(entry)) return "processing";
     return entry.connectionKind === "hosted" ? "hosted callback open" : "session callback open";
   }
-  const listRetry = entry.crossPostListRetry;
+  const listRetry = entry.copyListRetry;
   const removalWaits = entry.waitingForSubscriptionRemovalFrom ?? [];
   if (removalWaits.length > 0) {
     const blocked = removalWaits.filter(({ state }) => state.status === "blocked");
@@ -1074,8 +1074,8 @@ function processorEntryStatus(entry: ProcessorPanelEntry, busy: boolean): string
       ? `waiting for blocked subscription removal from ${paths}`
       : `waiting for subscription removal from ${paths}`;
   }
-  if (entry.crossPostListState?.status === "blocked") {
-    return `subscription list blocked (attempt ${entry.crossPostListState.attempts})`;
+  if (entry.copyListState?.status === "blocked") {
+    return `subscription list blocked (attempt ${entry.copyListState.attempts})`;
   }
   if (listRetry?.nextAttemptAt != null) {
     return `subscription list retry (attempt ${listRetry.attempt})`;
@@ -1103,12 +1103,12 @@ function processorEntryStatus(entry: ProcessorPanelEntry, busy: boolean): string
   return "disconnected";
 }
 
-function readCrossPostListRetry(
+function readCopyListRetry(
   streamRuntime: StreamRuntimeDebugState | undefined,
   receivingStreamPath: string | undefined,
-): StreamRuntimeDebugState["runtime"]["crossPostListRetries"][string] | undefined {
+): StreamRuntimeDebugState["runtime"]["copyListRetries"][string] | undefined {
   if (receivingStreamPath === undefined) return undefined;
-  return streamRuntime?.runtime.crossPostListRetries[receivingStreamPath];
+  return streamRuntime?.runtime.copyListRetries[receivingStreamPath];
 }
 
 function readHostedConnectionForSubscription(
@@ -1120,23 +1120,21 @@ function readHostedConnectionForSubscription(
   );
 }
 
-function readCrossPostListsByReceivingStream(
+function readCopyListsByReceivingStream(
   value: unknown,
-): Record<string, ReceivingStreamCrossPostListState> {
+): Record<string, ReceivingStreamCopyListState> {
   const state = readRuntimeRecord(value);
-  const crossPostLists = readRuntimeRecord(state?.crossPostListDeliveriesByReceivingStream);
-  if (crossPostLists == null) return {};
+  const copyLists = readRuntimeRecord(state?.copyListDeliveriesByReceivingStream);
+  if (copyLists == null) return {};
   return Object.fromEntries(
-    Object.entries(crossPostLists).flatMap(([receivingStreamPath, candidate]) => {
-      const parsed = readReceivingStreamCrossPostListState(candidate);
+    Object.entries(copyLists).flatMap(([receivingStreamPath, candidate]) => {
+      const parsed = readReceivingStreamCopyListState(candidate);
       return parsed === null ? [] : [[receivingStreamPath, parsed]];
     }),
   );
 }
 
-function readReceivingStreamCrossPostListState(
-  value: unknown,
-): ReceivingStreamCrossPostListState | null {
+function readReceivingStreamCopyListState(value: unknown): ReceivingStreamCopyListState | null {
   const state = readRuntimeRecord(value);
   if (state === undefined) return null;
   const sourceOffset = readNumber(state, "sourceOffset");
@@ -1185,7 +1183,7 @@ function readSubscriptionDetails(entry: unknown): SubscriptionDetails | null {
   const subscriptionAction = receiver?.action;
   if (
     subscriptionAction !== "processor-wake" &&
-    subscriptionAction !== "cross-post" &&
+    subscriptionAction !== "copy-to-stream" &&
     subscriptionAction !== "itx-call" &&
     subscriptionAction !== "webhook-post"
   ) {
@@ -1214,13 +1212,13 @@ function readSubscriptionDetails(entry: unknown): SubscriptionDetails | null {
       ? typeof receiver?.url === "string"
         ? `POST ${receiver.url}`
         : undefined
-      : subscriptionAction === "cross-post"
+      : subscriptionAction === "copy-to-stream"
         ? typeof receiver?.receivingStreamPath === "string"
-          ? `cross-post to ${receiver.receivingStreamPath}`
+          ? `copy to ${receiver.receivingStreamPath}`
           : undefined
         : formatItxExpression(receiver?.expression);
   const destinationStream =
-    subscriptionAction === "cross-post" && typeof receiver?.receivingStreamPath === "string"
+    subscriptionAction === "copy-to-stream" && typeof receiver?.receivingStreamPath === "string"
       ? receiver.receivingStreamPath
       : undefined;
   const filter = readRuntimeRecord(payload?.filter);
@@ -1230,7 +1228,7 @@ function readSubscriptionDetails(entry: unknown): SubscriptionDetails | null {
       ? filter.condition
       : undefined;
   const transform =
-    subscriptionAction === "cross-post" &&
+    subscriptionAction === "copy-to-stream" &&
     typeof receiver?.transform === "string" &&
     receiver.transform.trim() !== ""
       ? receiver.transform
@@ -1651,8 +1649,8 @@ function shouldShowConfiguredDetail(
 /** Human-readable configuration for one stored subscription. */
 function SubscriptionDetail({ config }: { config: SubscriptionDetails }) {
   const heading =
-    config.subscriptionAction === "cross-post"
-      ? "Cross-post destination"
+    config.subscriptionAction === "copy-to-stream"
+      ? "Copy destination"
       : config.subscriptionAction === "webhook-post"
         ? "Webhook POST"
         : config.subscriptionAction === "itx-call"
@@ -1669,7 +1667,7 @@ function SubscriptionDetail({ config }: { config: SubscriptionDetails }) {
           ? "now (from configure time)"
           : `after offset #${config.start.afterOffset}`;
   const genericBlurb =
-    config.subscriptionAction === "cross-post"
+    config.subscriptionAction === "copy-to-stream"
       ? "Matching events are appended to the destination stream in order with source provenance."
       : config.subscriptionAction === "webhook-post"
         ? "Each matching event is POSTed as JSON to the configured URL."
@@ -1874,8 +1872,8 @@ function EventDeliverySummary({ entry }: { entry: ProcessorPanelEntry }) {
     entry.connectionKind == null &&
     entry.subscriptionAction == null &&
     entry.subscriptionProgress == null &&
-    entry.crossPostListRetry == null &&
-    entry.crossPostListState == null &&
+    entry.copyListRetry == null &&
+    entry.copyListState == null &&
     entry.waitingForSubscriptionRemovalFrom == null &&
     entry.configuredAtOffset == null
   ) {
@@ -1883,8 +1881,8 @@ function EventDeliverySummary({ entry }: { entry: ProcessorPanelEntry }) {
   }
   const runtime = entry.subscriptionProgress;
   const connection = entry.runtimeConnection;
-  const listRetry = entry.crossPostListRetry;
-  const listState = entry.crossPostListState;
+  const listRetry = entry.copyListRetry;
+  const listState = entry.copyListState;
   const removalWaits = entry.waitingForSubscriptionRemovalFrom ?? [];
   const hasLatency =
     connection != null ||
@@ -1949,7 +1947,7 @@ function EventDeliverySummary({ entry }: { entry: ProcessorPanelEntry }) {
           />
           <RuntimeStateStat
             label="delivered"
-            // Live connections report events; cross-post, ITX-call, and webhook
+            // Live connections report events; copy, ITX-call, and webhook
             // subscriptions report bytes this incarnation (the durable sending row
             // does not count events).
             value={
@@ -1965,7 +1963,7 @@ function EventDeliverySummary({ entry }: { entry: ProcessorPanelEntry }) {
       {listState == null && listRetry == null ? null : (
         <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
           <RuntimeStateStat
-            label="cross-post-list source offset"
+            label="copy-list source offset"
             value={`#${listState?.sourceOffset ?? listRetry?.sourceOffset ?? 0}`}
           />
           <RuntimeStateStat

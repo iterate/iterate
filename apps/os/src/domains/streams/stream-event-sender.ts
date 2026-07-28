@@ -9,7 +9,7 @@
 // |------------------|------------------------------------------------|-----------------------|
 // | session callback | call the callback from `openConnection()`      | result stays unpulled |
 // | hosted processor | wake it, retain its returned callback          | processor checkpoint  |
-// | cross-post       | append copies to another Stream Durable Object | receiving append      |
+// | copy       | append copies to another Stream Durable Object | receiving append      |
 // | ITX expression   | evaluate and await the named method             | method result          |
 // | webhook          | send one attributed HTTP POST per event         | 2xx response           |
 //
@@ -25,7 +25,7 @@
 // Runtime metrics: every connection carries real counters (events/bytes
 // sent, lag from cursor), durable sends record commit→acknowledgement
 // latency on the stream's own clock (hosted: the processor reports its result;
-// cross-post/ITX/webhook: the receiver call returns), and callback owners that hand over a ping capability
+// copy/ITX/webhook: the receiver call returns), and callback owners that hand over a ping capability
 // get NTP-style RTT sampled when runtime observation begins, throttled, and
 // purely observational (a failed ping drops the sample, nothing else).
 // Session-callback consumption is deliberately NOT measured here: those results stay
@@ -44,7 +44,7 @@ import type {
   ProcessEventBatch,
   ProcessorRuntimeState,
   StreamDeliveryBatch,
-  CrossPostReceipt,
+  CopyReceipt,
   StreamConnectionPing,
   StreamProcessorWakeRequest,
   StreamWebhookDelivery,
@@ -111,16 +111,16 @@ export type SubscriptionRuntimeState = {
   nextAttemptAt: number | null;
   inFlightDeadlineAt: number | null;
   lastError: string | null;
-  /** Serialized payload bytes delivered by cross-post, ITX-call, and webhook subscriptions. */
+  /** Serialized payload bytes delivered by copy, ITX-call, and webhook subscriptions. */
   bytesSent?: number;
   /** Commit-to-acked latency (stream clock): newest event `createdAt` → awaited delivery resolved. */
   completionLatencyMs?: LatencyStats;
-  /** Duration of the awaited cross-post, ITX, or webhook call itself. */
+  /** Duration of the awaited copy, ITX, or webhook call itself. */
   deliveryDurationMs?: LatencyStats;
 };
 
 /**
- * A complete cross-post list may reach a new receiver before the old receiver has
+ * A complete copy list may reach a new receiver before the old receiver has
  * recorded its removal. That is safe only while matching-event delivery stays
  * stopped. The last acknowledged key list in core state makes this check
  * replayable and per-key, avoiding global ordering between unrelated list
@@ -131,7 +131,7 @@ function subscriptionStillRecordedByAnotherStream(
   subscriptionKey: string,
   currentReceivingStreamPath?: string,
 ): boolean {
-  return Object.entries(state.crossPostListDeliveriesByReceivingStream).some(
+  return Object.entries(state.copyListDeliveriesByReceivingStream).some(
     ([otherReceivingStreamPath, list]) =>
       otherReceivingStreamPath !== currentReceivingStreamPath &&
       list.subscriptionKeysRecordedByReceiver.includes(subscriptionKey),
@@ -152,8 +152,8 @@ export type SubscriptionReceiverCalls = {
   ): Promise<RetainedProcessorWakeResponse>;
   /** Evaluate an ITX receiver expression and invoke it. Resolve = acknowledgement. */
   deliverToItx(expression: ItxExpression, batch: StreamDeliveryBatch): Promise<void>;
-  /** Deliver a batch to a stream, which appends source.crossPostedFrom to each event. */
-  crossPostToStream(path: string, batch: StreamDeliveryBatch): Promise<CrossPostReceipt>;
+  /** Deliver a batch to a stream, which appends source.copiedFrom to each event. */
+  copyToStream(path: string, batch: StreamDeliveryBatch): Promise<CopyReceipt>;
   /** POST one event to the webhook URL. Resolve (2xx) = ack; non-2xx rejects. */
   deliverToWebhook(url: string, delivery: StreamWebhookDelivery): Promise<void>;
 };
@@ -230,7 +230,7 @@ export class StreamEventSender {
   /** Bisect state for onFailingEvent:"skip" — current batch ceiling per key. */
   readonly #batchLimits = new Map<string, number>();
   /**
-   * Per-subscription delivery metrics for cross-post, ITX-call, and webhook
+   * Per-subscription delivery metrics for copy, ITX-call, and webhook
    * actions: the awaited call is the acknowledgement, so the stream is the only
    * observer of these callback owners' consumption. In-memory like every other
    * runtime metric; cleaned up with the subscription.
@@ -283,7 +283,7 @@ export class StreamEventSender {
   /**
    * Ask every live callback to send queued events and start each durable send
    * that is due: wake lagging hosted processors without a callback and send
-   * pending cross-post, ITX-call, or webhook events. Never throws; never blocks the append.
+   * pending copy, ITX-call, or webhook events. Never throws; never blocks the append.
    *
    * `justCommittedEvents` is the new-event fast path: append passes what it just
    * committed (already sized by the log write) so caught-up callbacks skip the
@@ -359,7 +359,7 @@ export class StreamEventSender {
   }
 
   // ===========================================================================
-  // Durable sending: hosted-processor wake, cross-post/ITX/webhook sends, retries,
+  // Durable sending: hosted-processor wake, copy/ITX/webhook sends, retries,
   // and halting.
   // ===========================================================================
 
@@ -422,16 +422,17 @@ export class StreamEventSender {
       // Do not send matching source events until the receiving stream has durably
       // recorded this source's current list. End conditions still run while it is
       // unavailable, so an expired subscription is removed from that set.
-      if (config.receiver.action === "cross-post") {
-        const list =
-          state.crossPostListDeliveriesByReceivingStream[config.receiver.receivingStreamPath];
+      if (config.receiver.action === "copy-to-stream") {
+        const list = state.copyListDeliveriesByReceivingStream[config.receiver.receivingStreamPath];
         if (list === undefined || list.status !== "confirmed") continue;
       }
       if (
         subscriptionStillRecordedByAnotherStream(
           state,
           subscriptionKey,
-          config.receiver.action === "cross-post" ? config.receiver.receivingStreamPath : undefined,
+          config.receiver.action === "copy-to-stream"
+            ? config.receiver.receivingStreamPath
+            : undefined,
         )
       ) {
         continue;
@@ -477,7 +478,7 @@ export class StreamEventSender {
    * then send events after that checkpoint. The entire
    * wake response is this single call — the stream initiated it and owns the
    * returned callback, so there is no second callback-registration race. If wake resolves
-   * after its subscription was replaced (or switched to cross-post, ITX-call, or webhook),
+   * after its subscription was replaced (or switched to copy, ITX-call, or webhook),
    * drop that callback rather than open a dead connection or acknowledge the new cursor.
    */
   #wakeStreamProcessor(
@@ -619,7 +620,7 @@ export class StreamEventSender {
   }
 
   /**
-   * Send pending events for one cross-post, ITX-call, or webhook configuration:
+   * Send pending events for one copy, ITX-call, or webhook configuration:
    * read after the cursor, apply the filter (skip-not-defer — the
    * cursor advances past non-matching events), deliver, and advance the
    * cursor when the awaited call resolves. That resolution IS the
@@ -639,16 +640,15 @@ export class StreamEventSender {
           const config = entry.configuration;
           const receiver = config.receiver;
           if (receiver.action === "processor-wake") return;
-          if (receiver.action === "cross-post") {
-            const list =
-              state.crossPostListDeliveriesByReceivingStream[receiver.receivingStreamPath];
+          if (receiver.action === "copy-to-stream") {
+            const list = state.copyListDeliveriesByReceivingStream[receiver.receivingStreamPath];
             if (list === undefined || list.status !== "confirmed") return;
           }
           if (
             subscriptionStillRecordedByAnotherStream(
               state,
               subscriptionKey,
-              receiver.action === "cross-post" ? receiver.receivingStreamPath : undefined,
+              receiver.action === "copy-to-stream" ? receiver.receivingStreamPath : undefined,
             )
           ) {
             return;
@@ -723,15 +723,15 @@ export class StreamEventSender {
           const deliverable = visible.filter((event) => {
             // This source-private acknowledgement must not consume a finite
             // send count or reach any receiver through a wildcard filter.
-            if (event.type === "events.iterate.com/stream/cross-post-list-confirmed") {
+            if (event.type === "events.iterate.com/stream/copy-list-confirmed") {
               return false;
             }
-            // A receiver writes this audit event without `source.crossPostedFrom`.
+            // A receiver writes this audit event without `source.copiedFrom`.
             // Copying it to another stream would start a fresh provenance chain;
             // a wildcard cycle could then manufacture drop records forever.
             return !(
-              receiver.action === "cross-post" &&
-              event.type === "events.iterate.com/stream/cross-posted-events-dropped"
+              receiver.action === "copy-to-stream" &&
+              event.type === "events.iterate.com/stream/copied-events-dropped"
             );
           });
           const { matched, failure: filterFailure } = this.#applyFilter(
@@ -859,9 +859,9 @@ export class StreamEventSender {
                 attempt: row.attempt + 1,
                 configuredEvent,
               };
-              if (receiver.action === "cross-post") {
+              if (receiver.action === "copy-to-stream") {
                 const receipt = await withDeliveryTimeout(
-                  this.#hooks.receiverCalls.crossPostToStream(receiver.receivingStreamPath, batch),
+                  this.#hooks.receiverCalls.copyToStream(receiver.receivingStreamPath, batch),
                   `stream ${subscriptionKey}`,
                 );
                 const droppedOffsets = Array.isArray(receipt.dropped)
@@ -881,7 +881,7 @@ export class StreamEventSender {
                   receipt.accepted + receipt.dropped.length !== matched.length
                 ) {
                   throw new Error(
-                    `cross-post receiver returned an invalid receipt for ${matched.length} delivered events`,
+                    `copy receiver returned an invalid receipt for ${matched.length} delivered events`,
                   );
                 }
                 // Appended events and cycle/hop-limit drops are both terminal
@@ -1065,7 +1065,7 @@ export class StreamEventSender {
   }
 
   /**
-   * A cross-post, ITX-call, or webhook delivery failed. `halt` policy (and every hosted wake
+   * A copy, ITX-call, or webhook delivery failed. `halt` policy (and every hosted wake
    * failure) goes through the shared backoff/halt machine. `skip` policy first bisects the batch to
    * isolate the failing event, requires FAILING_EVENT_CONFIRM_ATTEMPTS consecutive
    * failures of that lone event before stepping over it, and still halts when
@@ -1098,9 +1098,9 @@ export class StreamEventSender {
     // A stream transform is evaluated by the receiving stream so the source
     // cannot know the failing offset up front. Narrow a failed batch until
     // healthy prefixes commit and the exact poison event is the only retry
-    // left. Cross-post subscriptions halt rather than skip once that event is isolated.
+    // left. Copy subscriptions halt rather than skip once that event is isolated.
     if (
-      config.receiver.action === "cross-post" &&
+      config.receiver.action === "copy-to-stream" &&
       config.receiver.transform !== undefined &&
       matched.length > 1
     ) {

@@ -97,7 +97,7 @@ export const TelegramProcessorContract = defineProcessorContract({
       .meta({
         description:
           "Bot-message provenance, reduced from the message-sent claims the telegram-agent " +
-          "processor cross-posts here after each journaled send. Replies to bot messages get " +
+          "processor copies here after each journaled send. Replies to bot messages get " +
           "EXACT thread hints from this map; replies to user messages fall back to the " +
           "sessionsByChat date ordering.",
       }),

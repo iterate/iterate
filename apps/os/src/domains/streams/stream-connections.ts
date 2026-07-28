@@ -73,7 +73,7 @@ export type ConnectionRuntimeState = ConnectionRuntimeDetails &
       }
   );
 
-/** One live event-batch callback. Cross-post, ITX-call, and webhook subscriptions do not appear here. */
+/** One live event-batch callback. Copy, ITX-call, and webhook subscriptions do not appear here. */
 export type StreamConnection = {
   readonly kind: StreamConnectionKind;
   readonly expectedHostedDelivery?: ExpectedHostedDeliveryState;
@@ -545,7 +545,7 @@ export class StreamConnections {
                   ? readEvents.filter(
                       (entry) =>
                         entry.event.ephemeral !== true &&
-                        entry.event.type !== "events.iterate.com/stream/cross-post-list-confirmed",
+                        entry.event.type !== "events.iterate.com/stream/copy-list-confirmed",
                     )
                   : readEvents.filter(
                       (entry) =>

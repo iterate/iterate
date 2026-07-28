@@ -146,7 +146,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
       }
       case "events.iterate.com/github/webhook-received": {
         const push = repoGithubPushFromWebhookPayload(event.payload);
-        const origin = event.source?.crossPostedFrom?.at(-1);
+        const origin = event.source?.copiedFrom?.at(-1);
         if (
           push === null ||
           state.github === null ||

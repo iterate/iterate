@@ -62,7 +62,7 @@ export function computeBackoffMs(attempt: number, random: number): number {
 }
 
 /**
- * The initial exclusive cursor for a cross-post, ITX-call, or webhook subscription.
+ * The initial exclusive cursor for a copy, ITX-call, or webhook subscription.
  */
 function initialCursor(start: SubscriptionStart, configuredEventOffset: number): number {
   if (start === "now") return configuredEventOffset;
@@ -80,7 +80,7 @@ function initialCursor(start: SubscriptionStart, configuredEventOffset: number):
  * The one place receiver-specific initial cursor policy is spelled out:
  * hosted-processor rows start at 0 (the stored value means "the processor reported
  * a checkpoint through N", and a processor that has never been woken has observed nothing);
- * cross-post, ITX-call, and webhook rows start where their delivery policy says.
+ * copy, ITX-call, and webhook rows start where their delivery policy says.
  */
 export function initialCursorFor(
   config: SubscriptionConfiguredPayload,

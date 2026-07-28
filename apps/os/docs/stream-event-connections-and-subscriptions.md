@@ -41,11 +41,11 @@ The independent choices are:
 | State-only live view           | no               | browser/client             | when callback opens       | not applicable            |
 | `waitForEvent()`               | no               | caller                     | now or explicit offset    | new ephemeral events only |
 | Hosted processor               | yes              | hosted processor           | its checkpoint            | no                        |
-| Cross-post to another stream   | yes              | source stream              | beginning, now, or offset | opt-in                    |
+| Copy to another stream         | yes              | source stream              | beginning, now, or offset | opt-in                    |
 | Call an ITX method             | yes              | source stream              | beginning, now, or offset | opt-in                    |
 | POST a webhook                 | yes              | source stream              | beginning, now, or offset | opt-in                    |
 
-Only `cross-post` copies subscription information to another stream. An ITX
+Only `copy-to-stream` copies subscription information to another stream. An ITX
 method, webhook, and hosted processor have no receiving stream on which to
 record an inbound subscription.
 
@@ -157,25 +157,25 @@ await source.append({
 
 The four actions are deliberately concrete:
 
-- `cross-post`: append copies to another stream;
+- `copy-to-stream`: append copies to another stream;
 - `itx-call`: call an ITX method with event batches;
 - `webhook-post`: make an HTTP POST;
 - `processor-wake`: ask a hosted processor for its checkpoint and callback.
 
-There is no `subscribeTo()` API with an implicit direction. Cross-post setup is
+There is no `subscribeTo()` API with an implicit direction. Copy setup is
 called on the receiving stream and explicitly names the source. The other
 actions are source-side event configuration because they do not have a
 receiving stream capability.
 
-## Cross-post matching events to another stream
+## Copy matching events to another stream
 
-Call `receiveCrossPostsFrom()` on the stream that should receive the appended
+Call `subscribeToEventsFrom()` on the stream that should receive the appended
 copies:
 
 ```ts
 const receiver = project.streams.get("/agents/reviewer");
 
-const configured = await receiver.receiveCrossPostsFrom({
+const configured = await receiver.subscribeToEventsFrom({
   sourceStreamPath: "/integrations/github/main",
   subscriptionKey: "github-for-reviewer",
   description: "Copy pull-request webhooks to the reviewer agent.",
@@ -203,12 +203,12 @@ The result exposes the three committed facts for the named receiver:
 ```ts
 configured.subscriptionKey;
 configured.subscriptionConfiguredEvent; // source stream
-configured.crossPostListRecordedEvent; // receiving stream
-configured.crossPostListConfirmedEvent; // source stream
+configured.copyListRecordedEvent; // receiving stream
+configured.copyListConfirmedEvent; // source stream
 ```
 
 The method does not report success after only changing the source. It waits
-until the receiving stream has stored the source's complete current cross-post
+until the receiving stream has stored the source's complete current copy
 list and the source has committed the confirmation. Replacing a key that
 previously sent to another stream also records and confirms that old stream's
 replacement list before returning; those additional audit events remain in the
@@ -219,7 +219,7 @@ two event logs rather than being duplicated in this result.
 The smallest generated-key call supplies the source and a retry identity:
 
 ```ts
-const configured = await receiver.receiveCrossPostsFrom({
+const configured = await receiver.subscribeToEventsFrom({
   sourceStreamPath: "/all-events",
   idempotencyKey: "reviewer/all-events/v1",
 });
@@ -232,7 +232,7 @@ The defaults are:
 - `includeEphemeral: false`;
 - no transform;
 - no automatic removal;
-- halt after bounded failures, because a cross-post may not silently leave a
+- halt after bounded failures, because a copy may not silently leave a
   hole in the receiving stream.
 
 With no caller-supplied key, the source derives the effective key from the
@@ -264,7 +264,7 @@ For example, a configuration committed at source offset 42 is
 When a caller omits `subscriptionKey`, it supplies an event `idempotencyKey`:
 
 ```ts
-await receiver.receiveCrossPostsFrom({
+await receiver.subscribeToEventsFrom({
   sourceStreamPath: "/all-events",
   idempotencyKey: "reviewer/all-events/v1",
 });
@@ -278,7 +278,7 @@ different idempotency keys create two different generated subscriptions.
 ### Transform the copied event
 
 ```ts
-await receiver.receiveCrossPostsFrom({
+await receiver.subscribeToEventsFrom({
   sourceStreamPath: "/raw-readings",
   idempotencyKey: "normalized-readings/v1",
   filter: { eventTypes: ["events.example/raw-reading"] },
@@ -290,20 +290,20 @@ await receiver.receiveCrossPostsFrom({
 ```
 
 The JSONata expression constructs `{ type?, payload?, metadata? }`. The
-platform adds `source.crossPostedFrom` afterwards.
+platform adds `source.copiedFrom` afterwards.
 
 ### Stop receiving
 
 ```ts
-const result = await receiver.stopReceivingCrossPostsFrom({
+const result = await receiver.unsubscribeFromEvents({
   sourceStreamPath: "/integrations/github/main",
   subscriptionKey: "github-for-reviewer",
 });
 ```
 
 The source appends `subscription-removed`, sends a complete replacement list,
-the receiver appends `cross-post-list-recorded`, and the source appends
-`cross-post-list-confirmed`. A repeated call returns
+the receiver appends `copy-list-recorded`, and the source appends
+`copy-list-confirmed`. A repeated call returns
 `{ status: "already-absent" }` only when no further receiver update is owed.
 
 ## Call an ITX method
@@ -409,7 +409,7 @@ is JSONata over the complete event and must evaluate to exactly `true`.
 
 ### Start position
 
-Cross-post, ITX-call, and webhook actions use one of:
+Copy, ITX-call, and webhook actions use one of:
 
 ```ts
 start: "beginning"; // after offset 0
@@ -429,7 +429,7 @@ await source.setSubscriptionCursorAndResume({ subscriptionKey, afterOffset: 42 }
 
 ### Ephemeral rows
 
-`includeEphemeral` controls whether a cross-post, ITX-call, or webhook action
+`includeEphemeral` controls whether a copy, ITX-call, or webhook action
 may read currently retained ephemeral rows. It does not make those rows durable. A hosted
 processor always excludes them. A live callback can see only ephemeral events
 appended while that exact callback is open.
@@ -450,9 +450,9 @@ The first satisfied condition appends `subscription-removed`. Event-count and
 source-offset conditions are valid only when the source owns the cursor.
 Hosted processors may use only a time condition.
 
-## Cross-post provenance and loop prevention
+## Copy provenance and loop prevention
 
-Every copied event records its immediate source in `source.crossPostedFrom`:
+Every copied event records its immediate source in `source.copiedFrom`:
 
 ```ts
 {
@@ -471,11 +471,11 @@ Every copied event records its immediate source in `source.crossPostedFrom`:
 This proves which source event the platform copied through which subscription.
 It does not authenticate who originally authored the source event.
 
-If a reciprocal cross-post would send an event back through a stream already in
+If a reciprocal copy would send an event back through a stream already in
 that array, the receiver acknowledges it as dropped with reason `cycle`.
-Cross-post chains are also bounded; the next copy is acknowledged as dropped
+Copy chains are also bounded; the next copy is acknowledged as dropped
 with reason `hop-limit`. Both outcomes append
-`cross-posted-events-dropped` instead of retrying forever.
+`copied-events-dropped` instead of retrying forever.
 
 ## Failure boundaries
 
@@ -484,9 +484,9 @@ with reason `hop-limit`. Both outcomes append
 - Receiver calls and retries happen after the configuration event commits.
 - Selected-event retries are bounded. Exhaustion appends
   `subscription-delivery-halted`.
-- Cross-post-list retries are separate from matching-event retries. Exhaustion
-  appends `cross-post-list-delivery-blocked`.
+- Copy-list retries are separate from matching-event retries. Exhaustion
+  appends `copy-list-delivery-blocked`.
 - After fixing a blocked receiving stream, call
-  `source.resendCrossPostList({ receivingStreamPath })`.
+  `source.resendCopyList({ receivingStreamPath })`.
 - No error is swallowed, retried forever, or represented only by a volatile
   scheduler row.

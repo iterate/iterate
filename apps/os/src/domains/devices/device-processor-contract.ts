@@ -7,7 +7,7 @@
 // below the contract, so the contract still opens the file. The one
 // cross-domain shape — the notification DESTINATION — is reached through the
 // notification-intent contract that owns it, because a device reduces
-// cross-posted `notification/requested` intents straight into its own state:
+// copied `notification/requested` intents straight into its own state:
 // if the two unions drifted, intents would stop reducing.
 //
 // Push credentials never appear on this stream: the Expo push token lives in
@@ -162,7 +162,7 @@ export const DeviceProcessorContract = defineProcessorContract({
     "events.iterate.com/device/created": {
       description:
         "Birth certificate for one authenticated mobile installation. The processor " +
-        "cross-posts this fact to the project root stream (catalog) and configures the " +
+        "copies this fact to the project root stream (catalog) and configures the " +
         "notification-intent subscription that copies project-level notification/requested " +
         "intents onto this device stream.",
       payloadSchema: deviceBirthCertificateSchema(),
@@ -360,7 +360,7 @@ export const DeviceProcessorContract = defineProcessorContract({
     "events.iterate.com/device/created",
     "events.iterate.com/device/notification-requested",
     // The project-level intent (owned by the notification-intent contract),
-    // cross-posted onto this stream by the subscription the created/updated
+    // copied onto this stream by the subscription the created/updated
     // lanes configure. It reduces into the same obligation slot as a direct
     // device request.
     "events.iterate.com/notification/requested",
@@ -378,7 +378,7 @@ export const DeviceProcessorContract = defineProcessorContract({
     // final at-head pass makes them redundant.
   ],
   emits: [
-    // The catalog cross-post: device/created is re-appended onto the project
+    // The catalog copy: device/created is re-appended onto the project
     // root stream so the project processor can list this device.
     "events.iterate.com/device/created",
     "events.iterate.com/device/notification-attempt-started",
@@ -471,7 +471,7 @@ function deviceNotificationRequestSchema() {
       .max(4_000)
       .meta({ description: "Notification body text (Expo caps total payload size)." }),
     // Reached through the notification-intent contract that OWNS the union:
-    // cross-posted `notification/requested` intents reduce into this same
+    // copied `notification/requested` intents reduce into this same
     // state slot, so the two shapes must be the one schema and can never drift.
     destination: NotificationIntentContract.events[
       "events.iterate.com/notification/requested"

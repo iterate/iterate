@@ -40,7 +40,7 @@ function coreProcessorStateByteLength(state: CoreProcessorState): number {
  * to core state. Ordinary product events and fixed-shape lifecycle facts only
  * advance bounded bookkeeping, so they must not pay an O(state) JSON scan or
  * fail merely because a counter gained a digit. `subscription-removed` is not a
- * growth event: configuring a cross-post subscription always creates its cross-post-list
+ * growth event: configuring a copy subscription always creates its copy-list
  * entry, and an empty-list acknowledgement can delete that entry only after no
  * configured subscription points at the receiver, so removal can refresh but not add a
  * receiver path.
@@ -49,9 +49,9 @@ const CHECKPOINT_GROWTH_EVENT_TYPES = new Set<string>([
   "events.iterate.com/stream/created",
   "events.iterate.com/stream/child-stream-created",
   "events.iterate.com/stream/subscription-configured",
-  "events.iterate.com/stream/cross-post-list-recorded",
-  "events.iterate.com/stream/cross-post-list-confirmed",
-  "events.iterate.com/stream/cross-post-list-delivery-blocked",
+  "events.iterate.com/stream/copy-list-recorded",
+  "events.iterate.com/stream/copy-list-confirmed",
+  "events.iterate.com/stream/copy-list-delivery-blocked",
   "events.iterate.com/stream/subscription-delivery-halted",
   "events.iterate.com/stream/paused",
 ]);
@@ -70,8 +70,7 @@ export function assertCoreProcessorCheckpointGrowthFits(args: {
   if (
     !args.events.some(
       (event) =>
-        event.source?.crossPostedFrom === undefined &&
-        CHECKPOINT_GROWTH_EVENT_TYPES.has(event.type),
+        event.source?.copiedFrom === undefined && CHECKPOINT_GROWTH_EVENT_TYPES.has(event.type),
     )
   ) {
     return;
@@ -89,8 +88,8 @@ const CORE_AUTHORED_EVENT_TYPES = new Set<string>([
   "events.iterate.com/stream/created",
   "events.iterate.com/stream/woken",
   "events.iterate.com/stream/child-stream-created",
-  "events.iterate.com/stream/cross-post-list-confirmed",
-  "events.iterate.com/stream/cross-post-list-delivery-blocked",
+  "events.iterate.com/stream/copy-list-confirmed",
+  "events.iterate.com/stream/copy-list-delivery-blocked",
   "events.iterate.com/stream/subscription-delivery-halted",
   "events.iterate.com/stream/connection-opened",
   "events.iterate.com/stream/connection-closed",
@@ -142,7 +141,7 @@ function currentInboundSubscription(
 
 function currentInboundSubscriptionForHop(
   state: CoreProcessorState,
-  hop: NonNullable<NonNullable<StreamEvent["source"]>["crossPostedFrom"]>[number] | undefined,
+  hop: NonNullable<NonNullable<StreamEvent["source"]>["copiedFrom"]>[number] | undefined,
 ) {
   return hop === undefined ? undefined : currentInboundSubscription(state, hop);
 }
@@ -153,12 +152,12 @@ function currentInboundSubscriptionForHop(
  * current configuration. Otherwise removing and later recreating the key can
  * leave matching-event sending permanently held by a stale acknowledged list.
  */
-function markCrossPostListsPending(args: {
+function markCopyListsPending(args: {
   directlyChangedPaths: Iterable<string>;
-  lists: CoreProcessorState["crossPostListDeliveriesByReceivingStream"];
+  lists: CoreProcessorState["copyListDeliveriesByReceivingStream"];
   subscriptionKey: string;
   sourceOffset: number;
-}): CoreProcessorState["crossPostListDeliveriesByReceivingStream"] {
+}): CoreProcessorState["copyListDeliveriesByReceivingStream"] {
   const pathsToRefresh = new Set(args.directlyChangedPaths);
   for (const [receivingStreamPath, list] of Object.entries(args.lists)) {
     if (list.subscriptionKeysRecordedByReceiver.includes(args.subscriptionKey)) {
@@ -230,7 +229,7 @@ export class StreamCoreProcessor {
     // this stream's own commands. Preserve its historical body verbatim: the
     // receiver-side provenance is what makes it inert, even when its payload
     // no longer matches the current first-hand control-event schema.
-    if (event.source?.crossPostedFrom !== undefined) return event;
+    if (event.source?.copiedFrom !== undefined) return event;
     if (!Object.hasOwn(CoreProcessorContract.events, event.type)) return event;
     return CoreProcessorContract.parseEventInput(event as never) as StreamEventInput;
   }
@@ -238,7 +237,7 @@ export class StreamCoreProcessor {
   validate(args: {
     event: StreamEventInput;
     state: CoreProcessorState;
-    authority: "public" | "core-event" | "cross-post-list" | "cross-post";
+    authority: "public" | "core-event" | "copy-list" | "copy";
   }): void {
     if (args.event.ephemeral && args.event.type.startsWith("events.iterate.com/stream/")) {
       throw new Error("stream control events cannot be ephemeral");
@@ -248,16 +247,16 @@ export class StreamCoreProcessor {
       throw new Error("iterate-internal idempotency keys are platform-authored");
     }
 
-    const isFirstHand = args.event.source?.crossPostedFrom === undefined;
-    if (!isFirstHand && args.authority !== "cross-post") {
-      throw new Error("cross-post source information is platform-authored");
+    const isFirstHand = args.event.source?.copiedFrom === undefined;
+    if (!isFirstHand && args.authority !== "copy") {
+      throw new Error("copy source information is platform-authored");
     }
     if (
       !isFirstHand &&
-      currentInboundSubscriptionForHop(args.state, args.event.source?.crossPostedFrom?.at(-1)) ===
+      currentInboundSubscriptionForHop(args.state, args.event.source?.copiedFrom?.at(-1)) ===
         undefined
     ) {
-      const hop = args.event.source?.crossPostedFrom?.at(-1);
+      const hop = args.event.source?.copiedFrom?.at(-1);
       throw new Error(
         hop === undefined
           ? "received event has no source hop"
@@ -266,26 +265,26 @@ export class StreamCoreProcessor {
     }
     if (
       isFirstHand &&
-      args.event.type === "events.iterate.com/stream/cross-post-list-recorded" &&
-      args.authority !== "cross-post-list"
+      args.event.type === "events.iterate.com/stream/copy-list-recorded" &&
+      args.authority !== "copy-list"
     ) {
-      throw new Error("cross-post lists from source streams are platform-authored");
+      throw new Error("copy lists from source streams are platform-authored");
     }
     if (
       isFirstHand &&
-      args.event.type === "events.iterate.com/stream/cross-posted-events-dropped" &&
-      args.authority !== "cross-post"
+      args.event.type === "events.iterate.com/stream/copied-events-dropped" &&
+      args.authority !== "copy"
     ) {
-      throw new Error("cross-post drop records are platform-authored");
+      throw new Error("copy drop records are platform-authored");
     }
     if (
       isFirstHand &&
-      args.event.type === "events.iterate.com/stream/cross-posted-events-dropped" &&
-      args.authority === "cross-post"
+      args.event.type === "events.iterate.com/stream/copied-events-dropped" &&
+      args.authority === "copy"
     ) {
       const event = parseCoreEventInput(
         args.event,
-        "events.iterate.com/stream/cross-posted-events-dropped",
+        "events.iterate.com/stream/copied-events-dropped",
       );
       if (
         currentInboundSubscription(args.state, {
@@ -299,11 +298,8 @@ export class StreamCoreProcessor {
       }
     }
 
-    if (isFirstHand && args.event.type === "events.iterate.com/stream/cross-post-list-recorded") {
-      const event = parseCoreEventInput(
-        args.event,
-        "events.iterate.com/stream/cross-post-list-recorded",
-      );
+    if (isFirstHand && args.event.type === "events.iterate.com/stream/copy-list-recorded") {
+      const event = parseCoreEventInput(args.event, "events.iterate.com/stream/copy-list-recorded");
       const existing = args.state.subscriptions.inbound.bySourcePath[event.payload.source.path];
       if (
         existing === undefined &&
@@ -324,7 +320,7 @@ export class StreamCoreProcessor {
       for (const [subscriptionKey, record] of Object.entries(event.payload.subscriptionsByKey)) {
         if (record.configuredAtSourceOffset > event.payload.sourceOffset) {
           throw new Error(
-            `subscription "${subscriptionKey}" was configured after this cross-post list's source offset`,
+            `subscription "${subscriptionKey}" was configured after this copy list's source offset`,
           );
         }
         compileEventFilter(record.configuration.filter);
@@ -369,19 +365,19 @@ export class StreamCoreProcessor {
         );
       }
       if (
-        event.payload.receiver.action === "cross-post" &&
+        event.payload.receiver.action === "copy-to-stream" &&
         event.payload.receiver.receivingStreamPath === args.state.path
       ) {
         throw new Error("a stream cannot receive events from itself");
       }
       compileEventFilter(event.payload.filter);
       if (
-        event.payload.receiver.action === "cross-post" &&
+        event.payload.receiver.action === "copy-to-stream" &&
         event.payload.receiver.transform !== undefined
       ) {
         compileJsonataExpression(event.payload.receiver.transform);
       }
-      if (event.payload.receiver.action === "cross-post") {
+      if (event.payload.receiver.action === "copy-to-stream") {
         const receivingStreamPath = event.payload.receiver.receivingStreamPath;
         const existingSubscriptionsForReceiver = Object.entries(
           args.state.subscriptions.outbound.byKey,
@@ -389,7 +385,7 @@ export class StreamCoreProcessor {
           ([subscriptionKey, configured]) =>
             (event.payload.subscriptionKey === undefined ||
               subscriptionKey !== event.payload.subscriptionKey) &&
-            configured.configuration.receiver.action === "cross-post" &&
+            configured.configuration.receiver.action === "copy-to-stream" &&
             configured.configuration.receiver.receivingStreamPath === receivingStreamPath,
         ).length;
         if (existingSubscriptionsForReceiver >= MAX_SUBSCRIPTIONS_PER_RECEIVING_STREAM) {
@@ -461,19 +457,16 @@ export class StreamCoreProcessor {
       }
     }
 
-    if (
-      isFirstHand &&
-      args.event.type === "events.iterate.com/stream/cross-post-list-resend-requested"
-    ) {
+    if (isFirstHand && args.event.type === "events.iterate.com/stream/copy-list-resend-requested") {
       const event = parseCoreEventInput(
         args.event,
-        "events.iterate.com/stream/cross-post-list-resend-requested",
+        "events.iterate.com/stream/copy-list-resend-requested",
       );
       const receiver =
-        args.state.crossPostListDeliveriesByReceivingStream[event.payload.receivingStreamPath];
+        args.state.copyListDeliveriesByReceivingStream[event.payload.receivingStreamPath];
       if (receiver?.status !== "blocked") {
         throw new Error(
-          `receiving stream "${event.payload.receivingStreamPath}" has no blocked cross-post list to resend`,
+          `receiving stream "${event.payload.receivingStreamPath}" has no blocked copy list to resend`,
         );
       }
     }
@@ -485,13 +478,13 @@ export class StreamCoreProcessor {
       case "events.iterate.com/stream/woken":
       case "events.iterate.com/stream/connection-opened":
       case "events.iterate.com/stream/connection-closed":
-      case "events.iterate.com/stream/cross-post-list-recorded":
+      case "events.iterate.com/stream/copy-list-recorded":
       case "events.iterate.com/stream/subscription-removed":
       case "events.iterate.com/stream/subscription-delivery-halted":
-      case "events.iterate.com/stream/cross-post-list-delivery-blocked":
-      case "events.iterate.com/stream/cross-post-list-confirmed":
-      case "events.iterate.com/stream/cross-post-list-resend-requested":
-      case "events.iterate.com/stream/cross-posted-events-dropped":
+      case "events.iterate.com/stream/copy-list-delivery-blocked":
+      case "events.iterate.com/stream/copy-list-confirmed":
+      case "events.iterate.com/stream/copy-list-resend-requested":
+      case "events.iterate.com/stream/copied-events-dropped":
         return;
       default:
         throw new StreamReceiverUnavailableError(
@@ -502,7 +495,7 @@ export class StreamCoreProcessor {
 
   reduce(args: { event: StreamEvent; state: CoreProcessorState }): CoreProcessorState {
     const state = this.#reduceState(args);
-    return args.event.source?.crossPostedFrom === undefined &&
+    return args.event.source?.copiedFrom === undefined &&
       CIRCUIT_BREAKER_FREE_CONTROL_EVENT_TYPES.has(args.event.type)
       ? state
       : this.#reduceCircuitBreaker({ event: args.event, state });
@@ -515,9 +508,9 @@ export class StreamCoreProcessor {
       maxOffset: args.event.offset,
     };
 
-    const crossPostedFrom = args.event.source?.crossPostedFrom?.at(-1);
-    const receivedSubscription = currentInboundSubscriptionForHop(next, crossPostedFrom);
-    if (crossPostedFrom !== undefined && receivedSubscription !== undefined) {
+    const copiedFrom = args.event.source?.copiedFrom?.at(-1);
+    const receivedSubscription = currentInboundSubscriptionForHop(next, copiedFrom);
+    if (copiedFrom !== undefined && receivedSubscription !== undefined) {
       const { subscription, source } = receivedSubscription;
       next = {
         ...next,
@@ -527,11 +520,11 @@ export class StreamCoreProcessor {
             ...next.subscriptions.inbound,
             bySourcePath: {
               ...next.subscriptions.inbound.bySourcePath,
-              [crossPostedFrom.path]: {
+              [copiedFrom.path]: {
                 ...source,
                 byKey: {
                   ...source.byKey,
-                  [crossPostedFrom.subscriptionKey]: {
+                  [copiedFrom.subscriptionKey]: {
                     ...subscription,
                     numEventsReceived: subscription.numEventsReceived + 1,
                     lastEventReceivedAt: args.event.createdAt,
@@ -546,7 +539,7 @@ export class StreamCoreProcessor {
 
     if (
       args.event.type.startsWith("events.iterate.com/stream/") &&
-      args.event.source?.crossPostedFrom !== undefined
+      args.event.source?.copiedFrom !== undefined
     ) {
       return next;
     }
@@ -624,14 +617,14 @@ export class StreamCoreProcessor {
           event.payload.subscriptionKey === undefined ||
           existing?.subscriptionKeyWasGenerated === true;
         const changedPaths = new Set<string>();
-        if (existing?.configuration.receiver.action === "cross-post") {
+        if (existing?.configuration.receiver.action === "copy-to-stream") {
           changedPaths.add(existing.configuration.receiver.receivingStreamPath);
         }
-        if (event.payload.receiver.action === "cross-post") {
+        if (event.payload.receiver.action === "copy-to-stream") {
           changedPaths.add(event.payload.receiver.receivingStreamPath);
         }
-        const crossPostListDeliveriesByReceivingStream = markCrossPostListsPending({
-          lists: next.crossPostListDeliveriesByReceivingStream,
+        const copyListDeliveriesByReceivingStream = markCopyListsPending({
+          lists: next.copyListDeliveriesByReceivingStream,
           subscriptionKey,
           sourceOffset: event.offset,
           directlyChangedPaths: changedPaths,
@@ -653,19 +646,16 @@ export class StreamCoreProcessor {
               },
             },
           },
-          crossPostListDeliveriesByReceivingStream,
+          copyListDeliveriesByReceivingStream,
         };
       }
-      case "events.iterate.com/stream/cross-post-list-recorded": {
-        const event = parseCoreEvent(
-          args.event,
-          "events.iterate.com/stream/cross-post-list-recorded",
-        );
+      case "events.iterate.com/stream/copy-list-recorded": {
+        const event = parseCoreEvent(args.event, "events.iterate.com/stream/copy-list-recorded");
         const sourcePath = event.payload.source.path;
         const existing = next.subscriptions.inbound.bySourcePath[sourcePath];
         // This state check orders lists while a non-empty record exists.
         // Recording an empty list removes that record, so
-        // recordCrossPostListFromSource also compares against the latest matching
+        // recordCopyListFromSource also compares against the latest matching
         // journal event before appending. That log check is authoritative
         // across an empty-list removal.
         if (
@@ -729,11 +719,11 @@ export class StreamCoreProcessor {
         const { [event.payload.subscriptionKey]: _removed, ...byKey } =
           next.subscriptions.outbound.byKey;
         const changedPaths = new Set<string>();
-        if (existing?.configuration.receiver.action === "cross-post") {
+        if (existing?.configuration.receiver.action === "copy-to-stream") {
           changedPaths.add(existing.configuration.receiver.receivingStreamPath);
         }
-        const crossPostListDeliveriesByReceivingStream = markCrossPostListsPending({
-          lists: next.crossPostListDeliveriesByReceivingStream,
+        const copyListDeliveriesByReceivingStream = markCopyListsPending({
+          lists: next.copyListDeliveriesByReceivingStream,
           subscriptionKey: event.payload.subscriptionKey,
           sourceOffset: event.offset,
           directlyChangedPaths: changedPaths,
@@ -747,16 +737,12 @@ export class StreamCoreProcessor {
               byKey,
             },
           },
-          crossPostListDeliveriesByReceivingStream,
+          copyListDeliveriesByReceivingStream,
         };
       }
-      case "events.iterate.com/stream/cross-post-list-confirmed": {
-        const event = parseCoreEvent(
-          args.event,
-          "events.iterate.com/stream/cross-post-list-confirmed",
-        );
-        const current =
-          next.crossPostListDeliveriesByReceivingStream[event.payload.receivingStreamPath];
+      case "events.iterate.com/stream/copy-list-confirmed": {
+        const event = parseCoreEvent(args.event, "events.iterate.com/stream/copy-list-confirmed");
+        const current = next.copyListDeliveriesByReceivingStream[event.payload.receivingStreamPath];
         if (current?.sourceOffset !== event.payload.sourceOffset) {
           return next;
         }
@@ -766,43 +752,42 @@ export class StreamCoreProcessor {
         // separate invariant that every intervening key change bumps the path.
         const receivingStreamEvent = parseCoreEvent(
           event.payload.receivingStreamEvent,
-          "events.iterate.com/stream/cross-post-list-recorded",
+          "events.iterate.com/stream/copy-list-recorded",
         );
         const currentSubscriptionKeys = Object.keys(
           receivingStreamEvent.payload.subscriptionsByKey,
         ).sort();
         const hasCurrentSubscriptions = currentSubscriptionKeys.length > 0;
-        const crossPostListDeliveriesByReceivingStream = {
-          ...next.crossPostListDeliveriesByReceivingStream,
+        const copyListDeliveriesByReceivingStream = {
+          ...next.copyListDeliveriesByReceivingStream,
         };
         if (hasCurrentSubscriptions) {
-          crossPostListDeliveriesByReceivingStream[event.payload.receivingStreamPath] = {
+          copyListDeliveriesByReceivingStream[event.payload.receivingStreamPath] = {
             sourceOffset: current.sourceOffset,
             status: "confirmed",
             subscriptionKeysRecordedByReceiver: currentSubscriptionKeys,
           };
         } else {
-          delete crossPostListDeliveriesByReceivingStream[event.payload.receivingStreamPath];
+          delete copyListDeliveriesByReceivingStream[event.payload.receivingStreamPath];
         }
         return {
           ...next,
-          crossPostListDeliveriesByReceivingStream,
+          copyListDeliveriesByReceivingStream,
         };
       }
-      case "events.iterate.com/stream/cross-post-list-delivery-blocked": {
+      case "events.iterate.com/stream/copy-list-delivery-blocked": {
         const event = parseCoreEvent(
           args.event,
-          "events.iterate.com/stream/cross-post-list-delivery-blocked",
+          "events.iterate.com/stream/copy-list-delivery-blocked",
         );
-        const current =
-          next.crossPostListDeliveriesByReceivingStream[event.payload.receivingStreamPath];
+        const current = next.copyListDeliveriesByReceivingStream[event.payload.receivingStreamPath];
         if (current?.sourceOffset !== event.payload.sourceOffset || current.status !== "pending") {
           return next;
         }
         return {
           ...next,
-          crossPostListDeliveriesByReceivingStream: {
-            ...next.crossPostListDeliveriesByReceivingStream,
+          copyListDeliveriesByReceivingStream: {
+            ...next.copyListDeliveriesByReceivingStream,
             [event.payload.receivingStreamPath]: {
               sourceOffset: event.payload.sourceOffset,
               status: "blocked",
@@ -814,11 +799,8 @@ export class StreamCoreProcessor {
           },
         };
       }
-      case "events.iterate.com/stream/cross-posted-events-dropped": {
-        const event = parseCoreEvent(
-          args.event,
-          "events.iterate.com/stream/cross-posted-events-dropped",
-        );
+      case "events.iterate.com/stream/copied-events-dropped": {
+        const event = parseCoreEvent(args.event, "events.iterate.com/stream/copied-events-dropped");
         const current = currentInboundSubscription(next, {
           ...event.payload.source,
           subscriptionKey: event.payload.subscriptionKey,
@@ -932,20 +914,19 @@ export class StreamCoreProcessor {
           },
         };
       }
-      case "events.iterate.com/stream/cross-post-list-resend-requested": {
+      case "events.iterate.com/stream/copy-list-resend-requested": {
         const event = parseCoreEvent(
           args.event,
-          "events.iterate.com/stream/cross-post-list-resend-requested",
+          "events.iterate.com/stream/copy-list-resend-requested",
         );
-        const current =
-          next.crossPostListDeliveriesByReceivingStream[event.payload.receivingStreamPath];
+        const current = next.copyListDeliveriesByReceivingStream[event.payload.receivingStreamPath];
         return {
           ...next,
-          crossPostListDeliveriesByReceivingStream:
+          copyListDeliveriesByReceivingStream:
             current === undefined
-              ? next.crossPostListDeliveriesByReceivingStream
+              ? next.copyListDeliveriesByReceivingStream
               : {
-                  ...next.crossPostListDeliveriesByReceivingStream,
+                  ...next.copyListDeliveriesByReceivingStream,
                   [event.payload.receivingStreamPath]: {
                     sourceOffset: event.offset,
                     status: "pending",

@@ -130,8 +130,8 @@ export function CorePrettyState({
               const condition =
                 typeof filter?.condition === "string" ? filter.condition : undefined;
               const deliveryHint =
-                kind === "cross-post" && typeof receiver?.receivingStreamPath === "string"
-                  ? `cross-post → ${receiver.receivingStreamPath}`
+                kind === "copy" && typeof receiver?.receivingStreamPath === "string"
+                  ? `copy → ${receiver.receivingStreamPath}`
                   : kind === "webhook-post" && typeof receiver?.url === "string"
                     ? `POST ${receiver.url}`
                     : formatItxExpressionHint(receiver?.expression);
@@ -177,7 +177,7 @@ export function CorePrettyState({
 
       {inboundSubscriptions.length === 0 ? null : (
         <div>
-          <SectionHeading>Inbound cross-post subscriptions</SectionHeading>
+          <SectionHeading>Inbound copy subscriptions</SectionHeading>
           <div className="flex flex-col gap-1.5">
             {inboundSubscriptions.map(
               ({ sourcePath, sourceProjectId, sourceOffset, subscriptionKey, value }) => {

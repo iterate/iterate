@@ -558,7 +558,7 @@ export abstract class StreamProcessor<
   /**
    * The provenance stamp for one append. Always overwrites any
    * caller-supplied `source.processor`: the stamp describes THIS append, and
-   * ancestry stays walkable through `whileProcessing` (and `crossPostedFrom`
+   * ancestry stays walkable through `whileProcessing` (and `copiedFrom`
    * for subscription copies, which preserve the original stamp).
    */
   #processorStamp(streamId: string, whileProcessing?: Pick<StreamEvent, "offset" | "type">) {

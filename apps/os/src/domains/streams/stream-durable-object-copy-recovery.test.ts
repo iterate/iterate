@@ -3,24 +3,24 @@ import type {
   StreamDeliveryBatch,
   StreamEvent,
   StreamEventInput,
-  CrossPostReceipt,
+  CopyReceipt,
 } from "iterate/processors";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
   CORE_STATE_VERSION,
-  recordedSubscriptionForCrossPost,
+  recordedSubscriptionForCopy,
   subscriptionConfigurationForDelivery,
   type SubscriptionConfiguredPayload,
 } from "./core-processor-contract.ts";
 import { MAX_CORE_PROCESSOR_STATE_BYTES } from "./core-processor.ts";
 import { computeBackoffMs } from "./delivery-math.ts";
-import { MAX_CROSS_POST_LIST_ATTEMPTS } from "./cross-post-list-retry-store.ts";
+import { MAX_COPY_LIST_ATTEMPTS } from "./copy-list-retry-store.ts";
 import { internalStreamId } from "./stream-delivery-utils.ts";
 import { StreamDurableObject } from "./stream-durable-object.ts";
 
-const PROJECT_ID = "prj_cross_post_recovery";
+const PROJECT_ID = "prj_copy_recovery";
 const SOURCE_PATH = "/";
 const RECEIVING_STREAM_PATH = "/reviewer";
 const SUBSCRIPTION_KEY = "review-issues";
@@ -30,8 +30,8 @@ const SOURCE_STREAM_CREATED_AT = "2026-07-21T12:00:00.000Z";
 
 type StreamStub = {
   appendCoreEvent(event: StreamEventInput): Promise<StreamEvent>;
-  recordCrossPostListFromSource(event: StreamEventInput): Promise<StreamEvent>;
-  receiveCrossPostedEvents(batch: StreamDeliveryBatch): Promise<CrossPostReceipt>;
+  recordCopyListFromSource(event: StreamEventInput): Promise<StreamEvent>;
+  receiveCopiedEvents(batch: StreamDeliveryBatch): Promise<CopyReceipt>;
 };
 
 function streamName(path: string): string {
@@ -171,7 +171,7 @@ function subscriptionConfiguration(): SubscriptionConfiguredPayload {
     subscriptionKey: SUBSCRIPTION_KEY,
     filter: { eventTypes: [MATCHING_EVENT_TYPE] },
     receiver: {
-      action: "cross-post",
+      action: "copy-to-stream",
       receivingStreamPath: RECEIVING_STREAM_PATH,
       delivery: {
         start: "beginning",
@@ -211,8 +211,8 @@ async function receiverWithRecordedSubscription() {
     createdAt: SOURCE_STREAM_CREATED_AT,
     payload: configuration,
   };
-  receiver.recordCrossPostListFromSource({
-    type: "events.iterate.com/stream/cross-post-list-recorded",
+  receiver.recordCopyListFromSource({
+    type: "events.iterate.com/stream/copy-list-recorded",
     payload: {
       source: {
         projectId: PROJECT_ID,
@@ -228,7 +228,7 @@ async function receiverWithRecordedSubscription() {
             filter: configuration.filter,
             ...(configuration.endWhen === undefined ? {} : { endWhen: configuration.endWhen }),
             delivery:
-              configuration.receiver.action === "cross-post"
+              configuration.receiver.action === "copy-to-stream"
                 ? configuration.receiver.delivery
                 : undefined,
           },
@@ -385,8 +385,8 @@ describe("StreamDurableObject receiving retries", () => {
 
     try {
       expect(
-        receiver.recordCrossPostListFromSource({
-          type: "events.iterate.com/stream/cross-post-list-recorded",
+        receiver.recordCopyListFromSource({
+          type: "events.iterate.com/stream/copy-list-recorded",
           payload: {
             source: {
               projectId: PROJECT_ID,
@@ -423,14 +423,14 @@ describe("StreamDurableObject receiving retries", () => {
     };
 
     try {
-      expect(receiver.receiveCrossPostedEvents({ ...batch, events: [copiedControl] })).toEqual({
+      expect(receiver.receiveCopiedEvents({ ...batch, events: [copiedControl] })).toEqual({
         accepted: 1,
         dropped: [],
       });
       expect(receiver.getEvent({ offset: receiver.getEventPage().streamMaxOffset })).toMatchObject({
         type: copiedControl.type,
         payload: copiedControl.payload,
-        source: { crossPostedFrom: [expect.objectContaining({ path: SOURCE_PATH, offset: 6 })] },
+        source: { copiedFrom: [expect.objectContaining({ path: SOURCE_PATH, offset: 6 })] },
       });
       expect(receiver.runtimeState().coreProcessorState.paused).toBe(false);
     } finally {
@@ -447,7 +447,7 @@ describe("StreamDurableObject receiving retries", () => {
       createdAt: "2026-07-21T12:00:01.000Z",
       payload: { issue: 42 },
       source: {
-        crossPostedFrom: [
+        copiedFrom: [
           {
             subscriptionKey: "earlier-hop",
             streamId: "22222222-2222-4222-8222-222222222222",
@@ -465,17 +465,17 @@ describe("StreamDurableObject receiving retries", () => {
     const delivered = { ...batch, events: [cycle] };
 
     try {
-      expect(receiver.receiveCrossPostedEvents(delivered)).toEqual({
+      expect(receiver.receiveCopiedEvents(delivered)).toEqual({
         accepted: 0,
         dropped: [{ offset: 6, reason: "cycle" }],
       });
-      expect(receiver.receiveCrossPostedEvents(delivered)).toEqual({
+      expect(receiver.receiveCopiedEvents(delivered)).toEqual({
         accepted: 0,
         dropped: [{ offset: 6, reason: "cycle" }],
       });
       expect(
         receiver.getEvents({
-          eventTypes: ["events.iterate.com/stream/cross-posted-events-dropped"],
+          eventTypes: ["events.iterate.com/stream/copied-events-dropped"],
         }),
       ).toHaveLength(1);
     } finally {
@@ -548,12 +548,12 @@ describe("StreamDurableObject reconciliation recovery", () => {
           async appendCoreEvent(event) {
             return target.appendCoreEvent(event);
           },
-          async recordCrossPostListFromSource(event) {
-            return target.recordCrossPostListFromSource(event);
+          async recordCopyListFromSource(event) {
+            return target.recordCopyListFromSource(event);
           },
-          async receiveCrossPostedEvents(batch) {
+          async receiveCopiedEvents(batch) {
             receivedBatches.push(structuredClone(batch));
-            return target.receiveCrossPostedEvents(batch);
+            return target.receiveCopiedEvents(batch);
           },
         };
       },
@@ -567,7 +567,7 @@ describe("StreamDurableObject reconciliation recovery", () => {
 
     try {
       await expect(
-        source.setCrossPostSubscription({ configuration: subscriptionConfiguration() }),
+        source.setCopySubscription({ configuration: subscriptionConfiguration() }),
       ).resolves.toMatchObject({
         status: "configured",
       });
@@ -612,7 +612,7 @@ describe("StreamDurableObject reconciliation recovery", () => {
         },
       });
       expect(
-        source.runtimeState().coreProcessorState.crossPostListDeliveriesByReceivingStream,
+        source.runtimeState().coreProcessorState.copyListDeliveriesByReceivingStream,
       ).toMatchObject({
         [RECEIVING_STREAM_PATH]: {
           status: "confirmed",
@@ -827,7 +827,7 @@ describe("StreamDurableObject reconciliation recovery", () => {
   });
 });
 
-describe("StreamDurableObject cross-post list recovery", () => {
+describe("StreamDurableObject copy list recovery", () => {
   it("requires retry identity for a keyless subscription and reuses its committed key after a failed handshake", async () => {
     let now = 1_000_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -846,16 +846,16 @@ describe("StreamDurableObject cross-post list recovery", () => {
           async appendCoreEvent(event) {
             return target.appendCoreEvent(event);
           },
-          async recordCrossPostListFromSource(event) {
+          async recordCopyListFromSource(event) {
             if (name === streamName(RECEIVING_STREAM_PATH) && receiverListFailuresRemaining > 0) {
               receiverListFailuresRemaining -= 1;
-              throw new Error("synthetic first cross-post-list failure");
+              throw new Error("synthetic first copy-list failure");
             }
-            return target.recordCrossPostListFromSource(event);
+            return target.recordCopyListFromSource(event);
           },
-          async receiveCrossPostedEvents(batch) {
+          async receiveCopiedEvents(batch) {
             receivedBatches.push(structuredClone(batch));
-            return target.receiveCrossPostedEvents(batch);
+            return target.receiveCopiedEvents(batch);
           },
         };
       },
@@ -871,32 +871,32 @@ describe("StreamDurableObject cross-post list recovery", () => {
     try {
       const offsetBeforeRejectedSetup = source.runtimeState().coreProcessorState.maxOffset;
       await expect(
-        source.setCrossPostSubscription({ configuration: keylessConfiguration }),
+        source.setCopySubscription({ configuration: keylessConfiguration }),
       ).rejects.toThrow(
-        "a keyless cross-post subscription requires idempotencyKey so setup is safe to retry",
+        "a keyless copy subscription requires idempotencyKey so setup is safe to retry",
       );
       expect(source.runtimeState().coreProcessorState.maxOffset).toBe(offsetBeforeRejectedSetup);
 
-      const firstAttempt = source.setCrossPostSubscription({
+      const firstAttempt = source.setCopySubscription({
         configuration: keylessConfiguration,
         idempotencyKey: "configure-review-feed-once",
       });
-      await expect(firstAttempt).rejects.toThrow("synthetic first cross-post-list failure");
+      await expect(firstAttempt).rejects.toThrow("synthetic first copy-list failure");
       await sourceContext.settle();
-      const retryState = source.runtimeState().runtime.crossPostListRetries[RECEIVING_STREAM_PATH];
+      const retryState = source.runtimeState().runtime.copyListRetries[RECEIVING_STREAM_PATH];
       expect(retryState).toMatchObject({ attempt: 1, sourceOffset: expect.any(Number) });
       now = retryState!.nextAttemptAt!;
 
-      const first = await source.setCrossPostSubscription({
+      const first = await source.setCopySubscription({
         configuration: keylessConfiguration,
         idempotencyKey: "configure-review-feed-once",
       });
-      const retry = await source.setCrossPostSubscription({
+      const retry = await source.setCopySubscription({
         configuration: keylessConfiguration,
         idempotencyKey: "configure-review-feed-once",
       });
       if (first.status !== "configured" || retry.status !== "configured") {
-        throw new Error("test setup unexpectedly blocked cross-post-list delivery");
+        throw new Error("test setup unexpectedly blocked copy-list delivery");
       }
       expect(retry.subscriptionKey).toBe(first.subscriptionKey);
       expect(retry.subscriptionConfiguredEvent.offset).toBe(
@@ -906,7 +906,7 @@ describe("StreamDurableObject cross-post list recovery", () => {
         `subscription:${first.subscriptionConfiguredEvent.offset}`,
       );
 
-      const [crossPostedEvent] = source.append({
+      const [copiedEvent] = source.append({
         type: MATCHING_EVENT_TYPE,
         payload: { issue: "generated-key-delivery" },
       });
@@ -920,23 +920,23 @@ describe("StreamDurableObject cross-post list recovery", () => {
           offset: first.subscriptionConfiguredEvent.offset,
           payload: keylessConfiguration,
         },
-        events: [{ offset: crossPostedEvent!.offset, type: MATCHING_EVENT_TYPE }],
+        events: [{ offset: copiedEvent!.offset, type: MATCHING_EVENT_TYPE }],
       });
       expect(
         receiver.runtimeState().coreProcessorState.subscriptions.inbound.bySourcePath[SOURCE_PATH]
           ?.byKey[first.subscriptionKey],
       ).toMatchObject({ numEventsReceived: 1, lastEventReceivedAt: expect.any(String) });
 
-      const second = await source.setCrossPostSubscription({
+      const second = await source.setCopySubscription({
         configuration: keylessConfiguration,
         idempotencyKey: "configure-review-feed-twice",
       });
-      const third = await source.setCrossPostSubscription({
+      const third = await source.setCopySubscription({
         configuration: keylessConfiguration,
         idempotencyKey: "configure-review-feed-three-times",
       });
       if (second.status !== "configured" || third.status !== "configured") {
-        throw new Error("test setup unexpectedly blocked cross-post-list delivery");
+        throw new Error("test setup unexpectedly blocked copy-list delivery");
       }
       expect(
         new Set([first.subscriptionKey, second.subscriptionKey, third.subscriptionKey]).size,
@@ -954,7 +954,7 @@ describe("StreamDurableObject cross-post list recovery", () => {
       try {
         expect(source.runtimeState().coreProcessorState.maxOffset).toBe(offsetBeforeOpen + 1);
         await expect(
-          source.setCrossPostSubscription({
+          source.setCopySubscription({
             configuration: keylessConfiguration,
             idempotencyKey: "configure-review-feed-with-colliding-generated-key",
           }),
@@ -990,17 +990,17 @@ describe("StreamDurableObject cross-post list recovery", () => {
           async appendCoreEvent(event) {
             return target.appendCoreEvent(event);
           },
-          async recordCrossPostListFromSource(event) {
+          async recordCopyListFromSource(event) {
             if (name === streamName(oldReceiverPath)) {
               oldReceiverListCalls += 1;
               if (oldReceiverListCalls > 1) {
                 throw new Error("synthetic old-receiver outage");
               }
             }
-            return target.recordCrossPostListFromSource(event);
+            return target.recordCopyListFromSource(event);
           },
-          async receiveCrossPostedEvents(batch) {
-            return target.receiveCrossPostedEvents(batch);
+          async receiveCopiedEvents(batch) {
+            return target.receiveCopiedEvents(batch);
           },
         };
       },
@@ -1021,7 +1021,7 @@ describe("StreamDurableObject cross-post list recovery", () => {
     const configurationFor = (path: string): SubscriptionConfiguredPayload => ({
       ...subscriptionConfiguration(),
       receiver: {
-        action: "cross-post",
+        action: "copy-to-stream",
         receivingStreamPath: path,
         delivery: {
           start: "beginning",
@@ -1033,7 +1033,7 @@ describe("StreamDurableObject cross-post list recovery", () => {
 
     try {
       await expect(
-        source.setCrossPostSubscription({ configuration: configurationFor(oldReceiverPath) }),
+        source.setCopySubscription({ configuration: configurationFor(oldReceiverPath) }),
       ).resolves.toMatchObject({
         status: "configured",
       });
@@ -1044,8 +1044,8 @@ describe("StreamDurableObject cross-post list recovery", () => {
         payload: newConfiguration,
       });
       const sourceState = source.runtimeState().coreProcessorState;
-      const receivingStreamEvent = newReceiver.recordCrossPostListFromSource({
-        type: "events.iterate.com/stream/cross-post-list-recorded",
+      const receivingStreamEvent = newReceiver.recordCopyListFromSource({
+        type: "events.iterate.com/stream/copy-list-recorded",
         payload: {
           source: {
             projectId: PROJECT_ID,
@@ -1057,15 +1057,15 @@ describe("StreamDurableObject cross-post list recovery", () => {
           subscriptionsByKey: {
             [SUBSCRIPTION_KEY]: {
               configuredAtSourceOffset: move!.offset,
-              configuration: recordedSubscriptionForCrossPost(newConfiguration),
+              configuration: recordedSubscriptionForCopy(newConfiguration),
             },
           },
         },
       });
       source.appendCoreEvent({
-        type: "events.iterate.com/stream/cross-post-list-confirmed",
+        type: "events.iterate.com/stream/copy-list-confirmed",
         idempotencyKey: internalStreamId(
-          "cross-post-list-confirmed",
+          "copy-list-confirmed",
           newReceiverPath,
           sourceState.streamId!,
           move!.offset,
@@ -1083,7 +1083,7 @@ describe("StreamDurableObject cross-post list recovery", () => {
       ]);
 
       expect(
-        source.runtimeState().coreProcessorState.crossPostListDeliveriesByReceivingStream[
+        source.runtimeState().coreProcessorState.copyListDeliveriesByReceivingStream[
           oldReceiverPath
         ],
       ).toMatchObject({
@@ -1092,7 +1092,7 @@ describe("StreamDurableObject cross-post list recovery", () => {
         subscriptionKeysRecordedByReceiver: [SUBSCRIPTION_KEY],
       });
       expect(
-        source.runtimeState().coreProcessorState.crossPostListDeliveriesByReceivingStream[
+        source.runtimeState().coreProcessorState.copyListDeliveriesByReceivingStream[
           newReceiverPath
         ],
       ).toMatchObject({
@@ -1102,21 +1102,21 @@ describe("StreamDurableObject cross-post list recovery", () => {
       });
 
       source.appendCoreEvent({
-        type: "events.iterate.com/stream/cross-post-list-delivery-blocked",
+        type: "events.iterate.com/stream/copy-list-delivery-blocked",
         payload: {
           receivingStreamPath: oldReceiverPath,
           sourceOffset: move!.offset,
-          attempts: MAX_CROSS_POST_LIST_ATTEMPTS,
+          attempts: MAX_COPY_LIST_ATTEMPTS,
           error: "synthetic old-receiver outage",
         },
       });
       const [resend] = source.append({
-        type: "events.iterate.com/stream/cross-post-list-resend-requested",
+        type: "events.iterate.com/stream/copy-list-resend-requested",
         payload: { receivingStreamPath: oldReceiverPath },
       });
 
       expect(
-        source.runtimeState().coreProcessorState.crossPostListDeliveriesByReceivingStream[
+        source.runtimeState().coreProcessorState.copyListDeliveriesByReceivingStream[
           oldReceiverPath
         ],
       ).toMatchObject({
@@ -1125,9 +1125,9 @@ describe("StreamDurableObject cross-post list recovery", () => {
         subscriptionKeysRecordedByReceiver: [SUBSCRIPTION_KEY],
       });
       await expect(
-        source.setCrossPostSubscription({ configuration: configurationFor(newReceiverPath) }),
+        source.setCopySubscription({ configuration: configurationFor(newReceiverPath) }),
       ).rejects.toThrow(
-        /sending cross-post list to "\/old-reviewer" failed: synthetic old-receiver outage|backing off/,
+        /sending copy list to "\/old-reviewer" failed: synthetic old-receiver outage|backing off/,
       );
     } finally {
       newReceiverContext.close();
@@ -1146,7 +1146,7 @@ describe("StreamDurableObject cross-post list recovery", () => {
     const sourceContext = durableObjectContext(streamName(SOURCE_PATH));
     const receiverContext = durableObjectContext(streamName(RECEIVING_STREAM_PATH));
     const streams = new Map<string, StreamDurableObject>();
-    let receiverFailuresRemaining = MAX_CROSS_POST_LIST_ATTEMPTS;
+    let receiverFailuresRemaining = MAX_COPY_LIST_ATTEMPTS;
     const receivedBatches: StreamDeliveryBatch[] = [];
 
     const streamNamespace = {
@@ -1157,16 +1157,16 @@ describe("StreamDurableObject cross-post list recovery", () => {
           async appendCoreEvent(event) {
             return target.appendCoreEvent(event);
           },
-          async recordCrossPostListFromSource(event) {
+          async recordCopyListFromSource(event) {
             if (name === streamName(RECEIVING_STREAM_PATH) && receiverFailuresRemaining > 0) {
               receiverFailuresRemaining -= 1;
               throw new Error("synthetic receiving-stream outage");
             }
-            return target.recordCrossPostListFromSource(event);
+            return target.recordCopyListFromSource(event);
           },
-          async receiveCrossPostedEvents(batch) {
+          async receiveCopiedEvents(batch) {
             receivedBatches.push(structuredClone(batch));
-            return target.receiveCrossPostedEvents(batch);
+            return target.receiveCopiedEvents(batch);
           },
         };
       },
@@ -1181,14 +1181,14 @@ describe("StreamDurableObject cross-post list recovery", () => {
     try {
       const configuration = subscriptionConfiguration();
       let configuredAtSourceOffset: number | undefined;
-      for (let attempt = 1; attempt <= MAX_CROSS_POST_LIST_ATTEMPTS; attempt += 1) {
-        await expect(source.setCrossPostSubscription({ configuration })).rejects.toThrow(
+      for (let attempt = 1; attempt <= MAX_COPY_LIST_ATTEMPTS; attempt += 1) {
+        await expect(source.setCopySubscription({ configuration })).rejects.toThrow(
           "synthetic receiving-stream outage",
         );
         const runtime = source.runtimeState();
-        const retry = runtime.runtime.crossPostListRetries[RECEIVING_STREAM_PATH];
+        const retry = runtime.runtime.copyListRetries[RECEIVING_STREAM_PATH];
         configuredAtSourceOffset ??= retry?.sourceOffset;
-        if (attempt < MAX_CROSS_POST_LIST_ATTEMPTS) {
+        if (attempt < MAX_COPY_LIST_ATTEMPTS) {
           expect(retry).toMatchObject({ attempt, sourceOffset: configuredAtSourceOffset });
           expect(retry?.nextAttemptAt).toBe(now + computeBackoffMs(attempt, 0.5));
           expect(sourceContext.alarms.some((alarmAt) => alarmAt <= retry!.nextAttemptAt!)).toBe(
@@ -1203,7 +1203,7 @@ describe("StreamDurableObject cross-post list recovery", () => {
             await sourceContext.settle();
 
             expect(
-              source.runtimeState().runtime.crossPostListRetries[RECEIVING_STREAM_PATH],
+              source.runtimeState().runtime.copyListRetries[RECEIVING_STREAM_PATH],
             ).toMatchObject({
               attempt,
               sourceOffset: configuredAtSourceOffset,
@@ -1222,38 +1222,38 @@ describe("StreamDurableObject cross-post list recovery", () => {
 
       const blockedRuntime = source.runtimeState();
       expect(
-        blockedRuntime.coreProcessorState.crossPostListDeliveriesByReceivingStream[
+        blockedRuntime.coreProcessorState.copyListDeliveriesByReceivingStream[
           RECEIVING_STREAM_PATH
         ],
       ).toMatchObject({
         sourceOffset: configuredAtSourceOffset,
         status: "blocked",
-        attempts: MAX_CROSS_POST_LIST_ATTEMPTS,
+        attempts: MAX_COPY_LIST_ATTEMPTS,
         subscriptionKeysRecordedByReceiver: [],
       });
-      expect(blockedRuntime.runtime.crossPostListRetries[RECEIVING_STREAM_PATH]).toBeUndefined();
+      expect(blockedRuntime.runtime.copyListRetries[RECEIVING_STREAM_PATH]).toBeUndefined();
       expect(
         source.getEvents({
-          eventTypes: ["events.iterate.com/stream/cross-post-list-delivery-blocked"],
+          eventTypes: ["events.iterate.com/stream/copy-list-delivery-blocked"],
         }),
       ).toHaveLength(1);
-      await expect(source.setCrossPostSubscription({ configuration })).resolves.toMatchObject({
+      await expect(source.setCopySubscription({ configuration })).resolves.toMatchObject({
         status: "blocked",
         receivingStreamPath: RECEIVING_STREAM_PATH,
-        attempts: MAX_CROSS_POST_LIST_ATTEMPTS,
+        attempts: MAX_COPY_LIST_ATTEMPTS,
         message: expect.stringMatching(/blocked after .* attempts/),
       });
 
       receiverFailuresRemaining = 0;
       const [resend] = source.append({
-        type: "events.iterate.com/stream/cross-post-list-resend-requested",
+        type: "events.iterate.com/stream/copy-list-resend-requested",
         payload: { receivingStreamPath: RECEIVING_STREAM_PATH },
       });
       expect(resend).toMatchObject({
-        type: "events.iterate.com/stream/cross-post-list-resend-requested",
+        type: "events.iterate.com/stream/copy-list-resend-requested",
       });
       expect(
-        source.runtimeState().coreProcessorState.crossPostListDeliveriesByReceivingStream[
+        source.runtimeState().coreProcessorState.copyListDeliveriesByReceivingStream[
           RECEIVING_STREAM_PATH
         ],
       ).toEqual({
@@ -1265,7 +1265,7 @@ describe("StreamDurableObject cross-post list recovery", () => {
       source.alarm();
       await Promise.all([sourceContext.settle(), receiverContext.settle()]);
       expect(
-        source.runtimeState().coreProcessorState.crossPostListDeliveriesByReceivingStream[
+        source.runtimeState().coreProcessorState.copyListDeliveriesByReceivingStream[
           RECEIVING_STREAM_PATH
         ],
       ).toEqual({
@@ -1277,9 +1277,7 @@ describe("StreamDurableObject cross-post list recovery", () => {
         receiver.runtimeState().coreProcessorState.subscriptions.inbound.bySourcePath[SOURCE_PATH]
           ?.byKey[SUBSCRIPTION_KEY],
       ).toMatchObject({ configuredAtSourceOffset, numEventsReceived: 0 });
-      expect(
-        source.runtimeState().runtime.crossPostListRetries[RECEIVING_STREAM_PATH],
-      ).toBeUndefined();
+      expect(source.runtimeState().runtime.copyListRetries[RECEIVING_STREAM_PATH]).toBeUndefined();
 
       const [productEvent] = source.append({
         type: MATCHING_EVENT_TYPE,
@@ -1306,7 +1304,7 @@ describe("StreamDurableObject cross-post list recovery", () => {
 
       const oldConfigurationBatch = structuredClone(receivedBatches[0]!);
       await expect(
-        source.removeCrossPostSubscription({
+        source.removeCopySubscription({
           subscriptionKey: SUBSCRIPTION_KEY,
           expectedReceiverPath: RECEIVING_STREAM_PATH,
         }),
@@ -1314,17 +1312,17 @@ describe("StreamDurableObject cross-post list recovery", () => {
       expect(
         receiver.runtimeState().coreProcessorState.subscriptions.inbound.bySourcePath[SOURCE_PATH],
       ).toBeUndefined();
-      expect(() => receiver.receiveCrossPostedEvents(oldConfigurationBatch)).toThrow(
+      expect(() => receiver.receiveCopiedEvents(oldConfigurationBatch)).toThrow(
         /has no current subscription/,
       );
 
-      expect(warn).toHaveBeenCalledTimes(MAX_CROSS_POST_LIST_ATTEMPTS - 1);
+      expect(warn).toHaveBeenCalledTimes(MAX_COPY_LIST_ATTEMPTS - 1);
       expect(error).toHaveBeenCalledTimes(1);
       expect(error).toHaveBeenCalledWith(
-        "sending cross-post list to receiving stream is blocked",
+        "sending copy list to receiving stream is blocked",
         expect.objectContaining({
           receivingStreamPath: RECEIVING_STREAM_PATH,
-          attempt: MAX_CROSS_POST_LIST_ATTEMPTS,
+          attempt: MAX_COPY_LIST_ATTEMPTS,
         }),
       );
     } finally {

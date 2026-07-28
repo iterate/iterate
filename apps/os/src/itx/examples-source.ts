@@ -1279,13 +1279,13 @@ return {
     id: "stream-receive-events-from",
     title: "Receive matching events from another stream",
     description:
-      "receiver.receiveCrossPostsFrom({ sourceStreamPath: source, subscriptionKey, filter?, description? }) starts durable cross-posting from the named source into this receiving stream. filter.eventTypes selects event types and filter.condition is a JSONata expression over the whole event that must evaluate to exactly true. Each received event records every stream hop in source.crossPostedFrom; self-receive is rejected and multi-hop cycles stop before appending to a stream already in that list.",
+      "receiver.subscribeToEventsFrom({ sourceStreamPath: source, subscriptionKey, filter?, description? }) starts durable copying from the named source into this receiving stream. filter.eventTypes selects event types and filter.condition is a JSONata expression over the whole event that must evaluate to exactly true. Each received event records every stream hop in source.copiedFrom; self-receive is rejected and multi-hop cycles stop before appending to a stream already in that list.",
     runtimes: ALL_RUNTIMES,
     fn: async (itx, vars: { source?: string; target?: string }) => {
       const source = itx.streams.get(vars.source ?? "/examples/receive-events/source");
       const target = itx.streams.get(vars.target ?? "/examples/receive-events/target");
 
-      await target.receiveCrossPostsFrom({
+      await target.subscribeToEventsFrom({
         sourceStreamPath: vars.source ?? "/examples/receive-events/source",
         subscriptionKey: "example/high-importance-notes",
         description: "Demo: high-importance notes land on the target stream.",
@@ -1305,7 +1305,7 @@ return {
         afterOffset: 0,
         timeoutMs: 10_000,
       });
-      return { copied: copied.payload, crossPostedFrom: copied.source?.crossPostedFrom };
+      return { copied: copied.payload, copiedFrom: copied.source?.copiedFrom };
     },
   }),
   projectExample<{

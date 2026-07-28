@@ -85,7 +85,7 @@ function harness(args: {
   configuration?: SubscriptionConfiguredPayload;
   wakeProcessor: SubscriptionReceiverCalls["wakeStreamProcessor"];
   deliverToItx?: SubscriptionReceiverCalls["deliverToItx"];
-  crossPostToStream?: SubscriptionReceiverCalls["crossPostToStream"];
+  copyToStream?: SubscriptionReceiverCalls["copyToStream"];
   deliverToWebhook?: SubscriptionReceiverCalls["deliverToWebhook"];
   appendDeliveryEvent?: ConstructorParameters<
     typeof StreamEventSender
@@ -122,7 +122,7 @@ function harness(args: {
       return args.wakeProcessor(...wakeArgs);
     },
     deliverToItx: args.deliverToItx ?? (async () => undefined),
-    crossPostToStream: args.crossPostToStream ?? (async () => ({ accepted: 0, dropped: [] })),
+    copyToStream: args.copyToStream ?? (async () => ({ accepted: 0, dropped: [] })),
     deliverToWebhook: args.deliverToWebhook ?? (async () => undefined),
   };
   const eventSender = new StreamEventSender({
@@ -202,14 +202,14 @@ describe("StreamEventSender hosted processor delivery", () => {
     const h = harness({
       events: [event(2, "b", { keep: true }), event(3, "b", { keep: true })],
       wakeProcessor: async () => {
-        throw new Error("a cross-post must not wake a hosted processor");
+        throw new Error("a copy must not wake a hosted processor");
       },
     });
     h.state.subscriptions.outbound.byKey[PROCESSOR_KEY] = {
       configuration: {
         subscriptionKey: PROCESSOR_KEY,
         receiver: {
-          action: "cross-post",
+          action: "copy-to-stream",
           receivingStreamPath: "/receiver",
           delivery: {
             start: "beginning",
@@ -222,7 +222,7 @@ describe("StreamEventSender hosted processor delivery", () => {
       configuredAt: new Date(1).toISOString(),
       cursorSet: { afterOffset: 2, setAtSourceOffset: 4 },
     };
-    h.state.crossPostListDeliveriesByReceivingStream["/receiver"] = {
+    h.state.copyListDeliveriesByReceivingStream["/receiver"] = {
       sourceOffset: 1,
       status: "pending",
       subscriptionKeysRecordedByReceiver: [],
@@ -461,15 +461,13 @@ describe("StreamEventSender hosted processor delivery", () => {
 describe("StreamEventSender stream delivery", () => {
   it("bisects a transformed stream batch so a poison event cannot strand its healthy prefix", async () => {
     const attemptedOffsets: number[][] = [];
-    const crossPostToStream = vi.fn<SubscriptionReceiverCalls["crossPostToStream"]>(
-      async (_path, batch) => {
-        attemptedOffsets.push(batch.events.map(({ offset }) => offset));
-        if (batch.events.some(({ offset }) => offset === 3)) {
-          throw new Error("cross-post transform failed at offset 3");
-        }
-        return { accepted: batch.events.length, dropped: [] };
-      },
-    );
+    const copyToStream = vi.fn<SubscriptionReceiverCalls["copyToStream"]>(async (_path, batch) => {
+      attemptedOffsets.push(batch.events.map(({ offset }) => offset));
+      if (batch.events.some(({ offset }) => offset === 3)) {
+        throw new Error("copy transform failed at offset 3");
+      }
+      return { accepted: batch.events.length, dropped: [] };
+    });
     const h = harness({
       events: [
         event(2, "example.com/issue-created", { issue: 1 }),
@@ -479,7 +477,7 @@ describe("StreamEventSender stream delivery", () => {
       configuration: {
         subscriptionKey: PROCESSOR_KEY,
         receiver: {
-          action: "cross-post",
+          action: "copy-to-stream",
           receivingStreamPath: "/agents/b",
           transform: '{"payload": payload}',
           delivery: {
@@ -489,12 +487,12 @@ describe("StreamEventSender stream delivery", () => {
           },
         },
       },
-      crossPostToStream,
+      copyToStream,
       wakeProcessor: async () => {
-        throw new Error("a cross-post must not wake a hosted processor");
+        throw new Error("a copy must not wake a hosted processor");
       },
     });
-    h.state.crossPostListDeliveriesByReceivingStream["/agents/b"] = {
+    h.state.copyListDeliveriesByReceivingStream["/agents/b"] = {
       sourceOffset: 1,
       status: "confirmed",
       subscriptionKeysRecordedByReceiver: [PROCESSOR_KEY],
@@ -662,19 +660,17 @@ describe("StreamEventSender stream delivery", () => {
   );
 
   it("rearms the earliest stored retry before a later finite-lifetime deadline", async () => {
-    const crossPostToStream = vi.fn<SubscriptionReceiverCalls["crossPostToStream"]>(
-      async (_path, batch) => ({
-        accepted: batch.events.length,
-        dropped: [],
-      }),
-    );
+    const copyToStream = vi.fn<SubscriptionReceiverCalls["copyToStream"]>(async (_path, batch) => ({
+      accepted: batch.events.length,
+      dropped: [],
+    }));
     const h = harness({
       events: [event(2, "example.com/issue-created", { issue: 42 })],
       configuration: {
         subscriptionKey: PROCESSOR_KEY,
         endWhen: { any: [{ kind: "time", at: new Date(1_000_000).toISOString() }] },
         receiver: {
-          action: "cross-post",
+          action: "copy-to-stream",
           receivingStreamPath: "/agents/b",
           delivery: {
             start: "beginning",
@@ -683,12 +679,12 @@ describe("StreamEventSender stream delivery", () => {
           },
         },
       },
-      crossPostToStream,
+      copyToStream,
       wakeProcessor: async () => {
-        throw new Error("a cross-post must not wake a hosted processor");
+        throw new Error("a copy must not wake a hosted processor");
       },
     });
-    h.state.crossPostListDeliveriesByReceivingStream["/agents/b"] = {
+    h.state.copyListDeliveriesByReceivingStream["/agents/b"] = {
       sourceOffset: 1,
       status: "confirmed",
       subscriptionKeysRecordedByReceiver: [PROCESSOR_KEY],
@@ -702,23 +698,21 @@ describe("StreamEventSender stream delivery", () => {
     h.eventSender.sendDue();
     await h.settle();
 
-    expect(crossPostToStream).not.toHaveBeenCalled();
+    expect(copyToStream).not.toHaveBeenCalled();
     expect(h.alarms).toContain(11_000);
   });
 
   it("redelivers after the receiver accepts but committing the source cursor fails", async () => {
-    const crossPostToStream = vi.fn<SubscriptionReceiverCalls["crossPostToStream"]>(
-      async (_path, batch) => ({
-        accepted: batch.events.length,
-        dropped: [],
-      }),
-    );
+    const copyToStream = vi.fn<SubscriptionReceiverCalls["copyToStream"]>(async (_path, batch) => ({
+      accepted: batch.events.length,
+      dropped: [],
+    }));
     const h = harness({
       events: [event(2, "example.com/issue-created", { issue: 42 })],
       configuration: {
         subscriptionKey: PROCESSOR_KEY,
         receiver: {
-          action: "cross-post",
+          action: "copy-to-stream",
           receivingStreamPath: "/agents/b",
           delivery: {
             start: "beginning",
@@ -727,12 +721,12 @@ describe("StreamEventSender stream delivery", () => {
           },
         },
       },
-      crossPostToStream,
+      copyToStream,
       wakeProcessor: async () => {
-        throw new Error("a cross-post must not wake a hosted processor");
+        throw new Error("a copy must not wake a hosted processor");
       },
     });
-    h.state.crossPostListDeliveriesByReceivingStream["/agents/b"] = {
+    h.state.copyListDeliveriesByReceivingStream["/agents/b"] = {
       sourceOffset: 1,
       status: "confirmed",
       subscriptionKeysRecordedByReceiver: [PROCESSOR_KEY],
@@ -748,7 +742,7 @@ describe("StreamEventSender stream delivery", () => {
     h.eventSender.sendDue();
     await h.settle();
 
-    expect(crossPostToStream).toHaveBeenCalledOnce();
+    expect(copyToStream).toHaveBeenCalledOnce();
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
       acknowledgedOffset: 0,
       attempt: 1,
@@ -761,7 +755,7 @@ describe("StreamEventSender stream delivery", () => {
     h.eventSender.onAlarm();
     await h.settle();
 
-    expect(crossPostToStream).toHaveBeenCalledTimes(2);
+    expect(copyToStream).toHaveBeenCalledTimes(2);
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
       acknowledgedOffset: 2,
       acknowledgedEvents: 1,
@@ -773,18 +767,16 @@ describe("StreamEventSender stream delivery", () => {
 
   it("withholds receiver drop audits from stream copies and acknowledges a hop-limit verdict", async () => {
     const delivered: StreamEvent[][] = [];
-    const crossPostToStream = vi.fn<SubscriptionReceiverCalls["crossPostToStream"]>(
-      async (_path, batch) => {
-        delivered.push(batch.events);
-        return {
-          accepted: 0,
-          dropped: batch.events.map(({ offset }) => ({ offset, reason: "hop-limit" as const })),
-        };
-      },
-    );
+    const copyToStream = vi.fn<SubscriptionReceiverCalls["copyToStream"]>(async (_path, batch) => {
+      delivered.push(batch.events);
+      return {
+        accepted: 0,
+        dropped: batch.events.map(({ offset }) => ({ offset, reason: "hop-limit" as const })),
+      };
+    });
     const h = harness({
       events: [
-        event(2, "events.iterate.com/stream/cross-posted-events-dropped", {
+        event(2, "events.iterate.com/stream/copied-events-dropped", {
           reason: "cycle",
         }),
         event(3, "example.com/issue-created", { issue: 42 }),
@@ -792,7 +784,7 @@ describe("StreamEventSender stream delivery", () => {
       configuration: {
         subscriptionKey: PROCESSOR_KEY,
         receiver: {
-          action: "cross-post",
+          action: "copy-to-stream",
           receivingStreamPath: "/agents/b",
           delivery: {
             start: "beginning",
@@ -801,12 +793,12 @@ describe("StreamEventSender stream delivery", () => {
           },
         },
       },
-      crossPostToStream,
+      copyToStream,
       wakeProcessor: async () => {
-        throw new Error("a cross-post must not wake a hosted processor");
+        throw new Error("a copy must not wake a hosted processor");
       },
     });
-    h.state.crossPostListDeliveriesByReceivingStream["/agents/b"] = {
+    h.state.copyListDeliveriesByReceivingStream["/agents/b"] = {
       sourceOffset: 1,
       status: "confirmed",
       subscriptionKeysRecordedByReceiver: [PROCESSOR_KEY],
@@ -827,19 +819,17 @@ describe("StreamEventSender stream delivery", () => {
 
   it("completes an event-count subscription when the receiving stream terminally drops the event", async () => {
     const appendDeliveryEvent = vi.fn(() => true);
-    const crossPostToStream = vi.fn<SubscriptionReceiverCalls["crossPostToStream"]>(
-      async (_path, batch) => ({
-        accepted: 0,
-        dropped: batch.events.map(({ offset }) => ({ offset, reason: "cycle" as const })),
-      }),
-    );
+    const copyToStream = vi.fn<SubscriptionReceiverCalls["copyToStream"]>(async (_path, batch) => ({
+      accepted: 0,
+      dropped: batch.events.map(({ offset }) => ({ offset, reason: "cycle" as const })),
+    }));
     const h = harness({
       events: [event(2, "example.com/issue-created", { issue: 42 })],
       configuration: {
         subscriptionKey: PROCESSOR_KEY,
         endWhen: { any: [{ kind: "acknowledged-events", count: 1 }] },
         receiver: {
-          action: "cross-post",
+          action: "copy-to-stream",
           receivingStreamPath: "/agents/b",
           delivery: {
             start: "beginning",
@@ -849,12 +839,12 @@ describe("StreamEventSender stream delivery", () => {
         },
       },
       appendDeliveryEvent,
-      crossPostToStream,
+      copyToStream,
       wakeProcessor: async () => {
-        throw new Error("a cross-post must not wake a hosted processor");
+        throw new Error("a copy must not wake a hosted processor");
       },
     });
-    h.state.crossPostListDeliveriesByReceivingStream["/agents/b"] = {
+    h.state.copyListDeliveriesByReceivingStream["/agents/b"] = {
       sourceOffset: 1,
       status: "confirmed",
       subscriptionKeysRecordedByReceiver: [PROCESSOR_KEY],
@@ -876,7 +866,7 @@ describe("StreamEventSender stream delivery", () => {
 
   it("counts a mixed accepted and multi-drop receipt as one acknowledgement per event", async () => {
     const appendDeliveryEvent = vi.fn(() => true);
-    const crossPostToStream = vi.fn<SubscriptionReceiverCalls["crossPostToStream"]>(async () => ({
+    const copyToStream = vi.fn<SubscriptionReceiverCalls["copyToStream"]>(async () => ({
       accepted: 1,
       dropped: [
         { offset: 3, reason: "cycle" },
@@ -893,7 +883,7 @@ describe("StreamEventSender stream delivery", () => {
         subscriptionKey: PROCESSOR_KEY,
         endWhen: { any: [{ kind: "acknowledged-events", count: 3 }] },
         receiver: {
-          action: "cross-post",
+          action: "copy-to-stream",
           receivingStreamPath: "/agents/b",
           delivery: {
             start: "beginning",
@@ -903,12 +893,12 @@ describe("StreamEventSender stream delivery", () => {
         },
       },
       appendDeliveryEvent,
-      crossPostToStream,
+      copyToStream,
       wakeProcessor: async () => {
-        throw new Error("a cross-post must not wake a hosted processor");
+        throw new Error("a copy must not wake a hosted processor");
       },
     });
-    h.state.crossPostListDeliveriesByReceivingStream["/agents/b"] = {
+    h.state.copyListDeliveriesByReceivingStream["/agents/b"] = {
       sourceOffset: 1,
       status: "confirmed",
       subscriptionKeysRecordedByReceiver: [PROCESSOR_KEY],
@@ -930,7 +920,7 @@ describe("StreamEventSender stream delivery", () => {
 
   it("halts after bounded retries when the receiving stream reports itself paused", async () => {
     const appendDeliveryEvent = vi.fn(() => true);
-    const crossPostToStream = vi.fn<SubscriptionReceiverCalls["crossPostToStream"]>(async () => {
+    const copyToStream = vi.fn<SubscriptionReceiverCalls["copyToStream"]>(async () => {
       throw new StreamReceiverUnavailableError("receiving stream is paused");
     });
     const h = harness({
@@ -938,7 +928,7 @@ describe("StreamEventSender stream delivery", () => {
       configuration: {
         subscriptionKey: PROCESSOR_KEY,
         receiver: {
-          action: "cross-post",
+          action: "copy-to-stream",
           receivingStreamPath: "/agents/b",
           delivery: {
             start: "beginning",
@@ -948,12 +938,12 @@ describe("StreamEventSender stream delivery", () => {
         },
       },
       appendDeliveryEvent,
-      crossPostToStream,
+      copyToStream,
       wakeProcessor: async () => {
-        throw new Error("a cross-post must not wake a hosted processor");
+        throw new Error("a copy must not wake a hosted processor");
       },
     });
-    h.state.crossPostListDeliveriesByReceivingStream["/agents/b"] = {
+    h.state.copyListDeliveriesByReceivingStream["/agents/b"] = {
       sourceOffset: 1,
       status: "confirmed",
       subscriptionKeysRecordedByReceiver: [PROCESSOR_KEY],
@@ -967,7 +957,7 @@ describe("StreamEventSender stream delivery", () => {
     h.eventSender.sendDue();
     await h.settle();
 
-    expect(crossPostToStream).toHaveBeenCalledOnce();
+    expect(copyToStream).toHaveBeenCalledOnce();
     expect(appendDeliveryEvent).toHaveBeenCalledWith({
       type: "events.iterate.com/stream/subscription-delivery-halted",
       payload: {
@@ -1005,17 +995,15 @@ describe("StreamEventSender stream delivery", () => {
     ["out-of-batch dropped offset", { accepted: 0, dropped: [{ offset: 3, reason: "cycle" }] }],
     ["unaccounted delivered event", { accepted: 0, dropped: [] }],
   ])("rejects an invalid receiver receipt: %s", async (_description, receipt) => {
-    const crossPostToStream = vi.fn<SubscriptionReceiverCalls["crossPostToStream"]>(async () =>
-      Promise.resolve(
-        receipt as Awaited<ReturnType<SubscriptionReceiverCalls["crossPostToStream"]>>,
-      ),
+    const copyToStream = vi.fn<SubscriptionReceiverCalls["copyToStream"]>(async () =>
+      Promise.resolve(receipt as Awaited<ReturnType<SubscriptionReceiverCalls["copyToStream"]>>),
     );
     const h = harness({
       events: [event(2, "example.com/issue-created", { issue: 42 })],
       configuration: {
         subscriptionKey: PROCESSOR_KEY,
         receiver: {
-          action: "cross-post",
+          action: "copy-to-stream",
           receivingStreamPath: "/agents/b",
           delivery: {
             start: "beginning",
@@ -1024,12 +1012,12 @@ describe("StreamEventSender stream delivery", () => {
           },
         },
       },
-      crossPostToStream,
+      copyToStream,
       wakeProcessor: async () => {
-        throw new Error("a cross-post must not wake a hosted processor");
+        throw new Error("a copy must not wake a hosted processor");
       },
     });
-    h.state.crossPostListDeliveriesByReceivingStream["/agents/b"] = {
+    h.state.copyListDeliveriesByReceivingStream["/agents/b"] = {
       sourceOffset: 1,
       status: "confirmed",
       subscriptionKeysRecordedByReceiver: [PROCESSOR_KEY],
@@ -1039,28 +1027,26 @@ describe("StreamEventSender stream delivery", () => {
     h.eventSender.sendDue();
     await h.settle();
 
-    expect(crossPostToStream).toHaveBeenCalledOnce();
+    expect(copyToStream).toHaveBeenCalledOnce();
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
       acknowledgedOffset: 0,
       acknowledgedEvents: 0,
       attempt: 1,
       nextAttemptAt: 11_000,
-      lastError: "cross-post receiver returned an invalid receipt for 1 delivered events",
+      lastError: "copy receiver returned an invalid receipt for 1 delivered events",
     });
     expect(h.alarms).toContain(11_000);
   });
 
   it("does not send a moved key until no old receiver list still contains it", async () => {
-    const crossPostToStream = vi.fn<SubscriptionReceiverCalls["crossPostToStream"]>(
-      async (_path, batch) => ({
-        accepted: batch.events.length,
-        dropped: [],
-      }),
-    );
+    const copyToStream = vi.fn<SubscriptionReceiverCalls["copyToStream"]>(async (_path, batch) => ({
+      accepted: batch.events.length,
+      dropped: [],
+    }));
     const configuration: SubscriptionConfiguredPayload = {
       subscriptionKey: PROCESSOR_KEY,
       receiver: {
-        action: "cross-post",
+        action: "copy-to-stream",
         receivingStreamPath: "/agents/b",
         delivery: {
           start: "beginning",
@@ -1072,12 +1058,12 @@ describe("StreamEventSender stream delivery", () => {
     const h = harness({
       events: [event(2, "example.com/issue-created", { issue: 42 })],
       configuration,
-      crossPostToStream,
+      copyToStream,
       wakeProcessor: async () => {
-        throw new Error("a cross-post must not wake a hosted processor");
+        throw new Error("a copy must not wake a hosted processor");
       },
     });
-    h.state.crossPostListDeliveriesByReceivingStream["/agents/a"] = {
+    h.state.copyListDeliveriesByReceivingStream["/agents/a"] = {
       sourceOffset: 1,
       status: "blocked",
       attempts: 8,
@@ -1085,7 +1071,7 @@ describe("StreamEventSender stream delivery", () => {
       blockedAt: "2026-07-21T12:00:00.000Z",
       subscriptionKeysRecordedByReceiver: [PROCESSOR_KEY],
     };
-    h.state.crossPostListDeliveriesByReceivingStream["/agents/b"] = {
+    h.state.copyListDeliveriesByReceivingStream["/agents/b"] = {
       sourceOffset: 1,
       status: "confirmed",
       subscriptionKeysRecordedByReceiver: [PROCESSOR_KEY],
@@ -1093,15 +1079,15 @@ describe("StreamEventSender stream delivery", () => {
 
     h.eventSender.sendDue();
     await h.settle();
-    expect(crossPostToStream).not.toHaveBeenCalled();
+    expect(copyToStream).not.toHaveBeenCalled();
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({ acknowledgedOffset: 0 });
 
-    delete h.state.crossPostListDeliveriesByReceivingStream["/agents/a"];
+    delete h.state.copyListDeliveriesByReceivingStream["/agents/a"];
     h.eventSender.sendDue();
     await h.settle();
 
-    expect(crossPostToStream).toHaveBeenCalledOnce();
-    expect(crossPostToStream).toHaveBeenCalledWith(
+    expect(copyToStream).toHaveBeenCalledOnce();
+    expect(copyToStream).toHaveBeenCalledWith(
       "/agents/b",
       expect.objectContaining({
         subscriptionKey: PROCESSOR_KEY,
@@ -1113,13 +1099,11 @@ describe("StreamEventSender stream delivery", () => {
 
   it("discards a late acknowledgement after the same key moves to a new receiver", async () => {
     const receipt = Promise.withResolvers<{ accepted: number; dropped: [] }>();
-    const crossPostToStream = vi.fn<SubscriptionReceiverCalls["crossPostToStream"]>(
-      () => receipt.promise,
-    );
+    const copyToStream = vi.fn<SubscriptionReceiverCalls["copyToStream"]>(() => receipt.promise);
     const configuration: SubscriptionConfiguredPayload = {
       subscriptionKey: PROCESSOR_KEY,
       receiver: {
-        action: "cross-post",
+        action: "copy-to-stream",
         receivingStreamPath: "/agents/b",
         delivery: {
           start: "beginning",
@@ -1131,19 +1115,19 @@ describe("StreamEventSender stream delivery", () => {
     const h = harness({
       events: [event(2, "example.com/issue-created", { issue: 42 })],
       configuration,
-      crossPostToStream,
+      copyToStream,
       wakeProcessor: async () => {
-        throw new Error("a cross-post must not wake a hosted processor");
+        throw new Error("a copy must not wake a hosted processor");
       },
     });
-    h.state.crossPostListDeliveriesByReceivingStream["/agents/b"] = {
+    h.state.copyListDeliveriesByReceivingStream["/agents/b"] = {
       sourceOffset: 1,
       status: "confirmed",
       subscriptionKeysRecordedByReceiver: [PROCESSOR_KEY],
     };
 
     h.eventSender.sendDue();
-    expect(crossPostToStream).toHaveBeenCalledOnce();
+    expect(copyToStream).toHaveBeenCalledOnce();
 
     h.state.maxOffset = 3;
     h.state.subscriptions.outbound.byKey[PROCESSOR_KEY] = {
@@ -1151,7 +1135,7 @@ describe("StreamEventSender stream delivery", () => {
         ...configuration,
         subscriptionKey: PROCESSOR_KEY,
         receiver: {
-          action: "cross-post",
+          action: "copy-to-stream",
           receivingStreamPath: "/agents/c",
           delivery: {
             start: "beginning",
@@ -1163,12 +1147,12 @@ describe("StreamEventSender stream delivery", () => {
       configuredAtOffset: 3,
       configuredAt: new Date(3).toISOString(),
     };
-    h.state.crossPostListDeliveriesByReceivingStream["/agents/b"] = {
+    h.state.copyListDeliveriesByReceivingStream["/agents/b"] = {
       sourceOffset: 3,
       status: "confirmed",
       subscriptionKeysRecordedByReceiver: [],
     };
-    h.state.crossPostListDeliveriesByReceivingStream["/agents/c"] = {
+    h.state.copyListDeliveriesByReceivingStream["/agents/c"] = {
       sourceOffset: 3,
       status: "pending",
       subscriptionKeysRecordedByReceiver: [],
@@ -1182,7 +1166,7 @@ describe("StreamEventSender stream delivery", () => {
     receipt.resolve({ accepted: 1, dropped: [] });
     await h.settle();
 
-    expect(crossPostToStream).toHaveBeenCalledOnce();
+    expect(copyToStream).toHaveBeenCalledOnce();
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
       configuredAtOffset: 3,
       acknowledgedOffset: 0,
@@ -1195,19 +1179,17 @@ describe("StreamEventSender stream delivery", () => {
       .fn<NonNullable<Parameters<typeof harness>[0]["appendDeliveryEvent"]>>()
       .mockReturnValueOnce(false)
       .mockReturnValue(true);
-    const crossPostToStream = vi.fn<SubscriptionReceiverCalls["crossPostToStream"]>(
-      async (_path, batch) => ({
-        accepted: batch.events.length,
-        dropped: [],
-      }),
-    );
+    const copyToStream = vi.fn<SubscriptionReceiverCalls["copyToStream"]>(async (_path, batch) => ({
+      accepted: batch.events.length,
+      dropped: [],
+    }));
     const h = harness({
       events: [event(2, "example.com/issue-created", { issue: 42 })],
       configuration: {
         subscriptionKey: PROCESSOR_KEY,
         endWhen: { any: [{ kind: "time", at: new Date(5_000).toISOString() }] },
         receiver: {
-          action: "cross-post",
+          action: "copy-to-stream",
           receivingStreamPath: "/agents/b",
           delivery: {
             start: "beginning",
@@ -1217,12 +1199,12 @@ describe("StreamEventSender stream delivery", () => {
         },
       },
       appendDeliveryEvent,
-      crossPostToStream,
+      copyToStream,
       wakeProcessor: async () => {
-        throw new Error("a cross-post must not wake a hosted processor");
+        throw new Error("a copy must not wake a hosted processor");
       },
     });
-    h.state.crossPostListDeliveriesByReceivingStream["/agents/b"] = {
+    h.state.copyListDeliveriesByReceivingStream["/agents/b"] = {
       sourceOffset: 1,
       status: "pending",
       subscriptionKeysRecordedByReceiver: [],
@@ -1230,7 +1212,7 @@ describe("StreamEventSender stream delivery", () => {
 
     h.eventSender.sendDue();
     await h.settle();
-    expect(crossPostToStream).not.toHaveBeenCalled();
+    expect(copyToStream).not.toHaveBeenCalled();
     expect(appendDeliveryEvent).toHaveBeenCalledOnce();
     expect(h.alarms).toContain(11_000);
 
@@ -1247,7 +1229,7 @@ describe("StreamEventSender stream delivery", () => {
 
 describe("StreamEventSender receiver changes", () => {
   function recordOldStream(h: ReturnType<typeof harness>) {
-    h.state.crossPostListDeliveriesByReceivingStream["/agents/a"] = {
+    h.state.copyListDeliveriesByReceivingStream["/agents/a"] = {
       sourceOffset: 1,
       status: "blocked",
       attempts: 8,
@@ -1282,7 +1264,7 @@ describe("StreamEventSender receiver changes", () => {
     await h.settle();
     expect(deliverToWebhook).not.toHaveBeenCalled();
 
-    delete h.state.crossPostListDeliveriesByReceivingStream["/agents/a"];
+    delete h.state.copyListDeliveriesByReceivingStream["/agents/a"];
     h.eventSender.sendDue();
     await h.settle();
     expect(deliverToWebhook).toHaveBeenCalledOnce();
@@ -1311,7 +1293,7 @@ describe("StreamEventSender receiver changes", () => {
     await h.settle();
     expect(deliverToItx).not.toHaveBeenCalled();
 
-    delete h.state.crossPostListDeliveriesByReceivingStream["/agents/a"];
+    delete h.state.copyListDeliveriesByReceivingStream["/agents/a"];
     h.eventSender.sendDue();
     await h.settle();
     expect(deliverToItx).toHaveBeenCalledOnce();
@@ -1332,7 +1314,7 @@ describe("StreamEventSender receiver changes", () => {
     await h.settle();
     expect(h.wakeCalls).toHaveLength(0);
 
-    delete h.state.crossPostListDeliveriesByReceivingStream["/agents/a"];
+    delete h.state.copyListDeliveriesByReceivingStream["/agents/a"];
     h.eventSender.sendDue();
     await h.settle();
     expect(h.wakeCalls).toHaveLength(1);

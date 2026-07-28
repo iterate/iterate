@@ -535,7 +535,7 @@ export function agentCreationForPath<
         eventTypes: ["events.iterate.com/agent/created", AGENT_SUMMARY_UPDATED_EVENT_TYPE],
       },
       receiver: {
-        action: "cross-post",
+        action: "copy-to-stream",
         receivingStreamPath: AGENT_COLLECTION_PATH,
         delivery: {
           // The subscription is configured in the same birth batch as created.

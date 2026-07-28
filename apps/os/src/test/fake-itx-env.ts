@@ -32,7 +32,7 @@ type FakeSecretRecord = {
   refresh?: unknown;
 };
 
-type FakeCrossPostReceiver = {
+type FakeCopyReceiver = {
   action?: unknown;
   receivingStreamPath?: unknown;
   delivery?: unknown;
@@ -155,9 +155,9 @@ export function createFakeItxEnv(options?: {
       const payload = event.payload as Record<string, unknown>;
       if (payload.subscriptionKey !== subscriptionKey) continue;
       if (event.type === "events.iterate.com/stream/subscription-configured") {
-        const receiver = payload.receiver as FakeCrossPostReceiver | undefined;
+        const receiver = payload.receiver as FakeCopyReceiver | undefined;
         activeReceiverPath =
-          receiver?.action === "cross-post" && typeof receiver.receivingStreamPath === "string"
+          receiver?.action === "copy-to-stream" && typeof receiver.receivingStreamPath === "string"
             ? receiver.receivingStreamPath
             : null;
       } else if (
@@ -207,14 +207,15 @@ export function createFakeItxEnv(options?: {
       }
     }
     return [...active.values()].filter(({ payload }) => {
-      const receiver = payload.receiver as FakeCrossPostReceiver | undefined;
+      const receiver = payload.receiver as FakeCopyReceiver | undefined;
       return (
-        receiver?.action === "cross-post" && receiver.receivingStreamPath === receivingStreamPath
+        receiver?.action === "copy-to-stream" &&
+        receiver.receivingStreamPath === receivingStreamPath
       );
     });
   }
 
-  function appendCrossPostList(
+  function appendCopyList(
     sourceName: string,
     receivingStreamPath: string,
     sourceOffset: number,
@@ -230,7 +231,7 @@ export function createFakeItxEnv(options?: {
         ({ event, payload, subscriptionKey }) => {
           const receiver = payload.receiver as {
             delivery: unknown;
-            action: "cross-post";
+            action: "copy-to-stream";
             transform?: unknown;
           };
           return [
@@ -251,8 +252,8 @@ export function createFakeItxEnv(options?: {
     );
     return appendStored(receiverStreamName(sourceName, receivingStreamPath), [
       {
-        type: "events.iterate.com/stream/cross-post-list-recorded",
-        idempotencyKey: `fake-cross-post-list:${sourceName}:${sourceStreamId}:${receivingStreamPath}:${sourceOffset}`,
+        type: "events.iterate.com/stream/copy-list-recorded",
+        idempotencyKey: `fake-copy-list:${sourceName}:${sourceStreamId}:${receivingStreamPath}:${sourceOffset}`,
         payload: {
           source: {
             projectId: source.projectId,
@@ -267,7 +268,7 @@ export function createFakeItxEnv(options?: {
     ])[0]!;
   }
 
-  function appendCrossPostListConfirmed(
+  function appendCopyListConfirmed(
     sourceName: string,
     receivingStreamPath: string,
     sourceOffset: number,
@@ -275,8 +276,8 @@ export function createFakeItxEnv(options?: {
   ): FakeStreamEvent {
     return appendStored(sourceName, [
       {
-        type: "events.iterate.com/stream/cross-post-list-confirmed",
-        idempotencyKey: `fake-cross-post-list-confirmed:${receivingStreamPath}:${sourceOffset}`,
+        type: "events.iterate.com/stream/copy-list-confirmed",
+        idempotencyKey: `fake-copy-list-confirmed:${receivingStreamPath}:${sourceOffset}`,
         payload: { receivingStreamPath, sourceOffset, receivingStreamEvent },
       },
     ])[0]!;
@@ -322,7 +323,7 @@ export function createFakeItxEnv(options?: {
             }
             return appended;
           },
-          async setCrossPostSubscription(input: {
+          async setCopySubscription(input: {
             configuration: Record<string, unknown>;
             idempotencyKey?: string;
           }) {
@@ -331,18 +332,16 @@ export function createFakeItxEnv(options?: {
             if (requestedKey !== undefined && typeof requestedKey !== "string") {
               throw new Error("fake subscriptionKey must be a string when supplied");
             }
-            const receiver = configuration.receiver as FakeCrossPostReceiver;
+            const receiver = configuration.receiver as FakeCopyReceiver;
             if (
-              receiver.action !== "cross-post" ||
+              receiver.action !== "copy-to-stream" ||
               typeof receiver.receivingStreamPath !== "string"
             ) {
-              throw new Error("fake expected a cross-post receiver");
+              throw new Error("fake expected a copy receiver");
             }
             const existing =
               typeof requestedKey === "string" ? activeSubscription(name, requestedKey) : null;
-            const previousReceiver = existing?.payload.receiver as
-              | FakeCrossPostReceiver
-              | undefined;
+            const previousReceiver = existing?.payload.receiver as FakeCopyReceiver | undefined;
             const subscriptionConfiguredEvent =
               existing !== null &&
               JSON.stringify(existing.payload) === JSON.stringify(configuration)
@@ -365,42 +364,42 @@ export function createFakeItxEnv(options?: {
                 ? storedConfiguration.subscriptionKey
                 : `subscription:${subscriptionConfiguredEvent.offset}`;
             if (
-              previousReceiver?.action === "cross-post" &&
+              previousReceiver?.action === "copy-to-stream" &&
               typeof previousReceiver.receivingStreamPath === "string" &&
               previousReceiver.receivingStreamPath !== receiver.receivingStreamPath
             ) {
-              const removed = appendCrossPostList(
+              const removed = appendCopyList(
                 name,
                 previousReceiver.receivingStreamPath,
                 subscriptionConfiguredEvent.offset,
               );
-              appendCrossPostListConfirmed(
+              appendCopyListConfirmed(
                 name,
                 previousReceiver.receivingStreamPath,
                 subscriptionConfiguredEvent.offset,
                 removed,
               );
             }
-            const crossPostListRecordedEvent = appendCrossPostList(
+            const copyListRecordedEvent = appendCopyList(
               name,
               receiver.receivingStreamPath,
               subscriptionConfiguredEvent.offset,
             );
-            const crossPostListConfirmedEvent = appendCrossPostListConfirmed(
+            const copyListConfirmedEvent = appendCopyListConfirmed(
               name,
               receiver.receivingStreamPath,
               subscriptionConfiguredEvent.offset,
-              crossPostListRecordedEvent,
+              copyListRecordedEvent,
             );
             return {
               status: "configured" as const,
               subscriptionKey,
               subscriptionConfiguredEvent,
-              crossPostListRecordedEvent,
-              crossPostListConfirmedEvent,
+              copyListRecordedEvent,
+              copyListConfirmedEvent,
             };
           },
-          async removeCrossPostSubscription(input: {
+          async removeCopySubscription(input: {
             expectedReceiverPath: string;
             subscriptionKey: string;
           }) {
@@ -408,27 +407,27 @@ export function createFakeItxEnv(options?: {
             if (active === null) {
               const prior = latestSubscriptionRemoval(name, input.subscriptionKey);
               if (prior === null) return { status: "already-absent" as const };
-              const crossPostListRecordedEvent = appendCrossPostList(
+              const copyListRecordedEvent = appendCopyList(
                 name,
                 prior.receivingStreamPath,
                 prior.event.offset,
               );
-              const crossPostListConfirmedEvent = appendCrossPostListConfirmed(
+              const copyListConfirmedEvent = appendCopyListConfirmed(
                 name,
                 prior.receivingStreamPath,
                 prior.event.offset,
-                crossPostListRecordedEvent,
+                copyListRecordedEvent,
               );
               return {
                 status: "removed" as const,
                 subscriptionRemovedEvent: prior.event,
-                crossPostListRecordedEvent,
-                crossPostListConfirmedEvent,
+                copyListRecordedEvent,
+                copyListConfirmedEvent,
               };
             }
-            const receiver = active.payload.receiver as FakeCrossPostReceiver;
+            const receiver = active.payload.receiver as FakeCopyReceiver;
             if (
-              receiver.action !== "cross-post" ||
+              receiver.action !== "copy-to-stream" ||
               receiver.receivingStreamPath !== input.expectedReceiverPath
             ) {
               throw new Error(
@@ -441,22 +440,22 @@ export function createFakeItxEnv(options?: {
                 payload: { subscriptionKey: input.subscriptionKey, reason: "requested" },
               },
             ])[0]!;
-            const crossPostListRecordedEvent = appendCrossPostList(
+            const copyListRecordedEvent = appendCopyList(
               name,
               input.expectedReceiverPath,
               subscriptionRemovedEvent.offset,
             );
-            const crossPostListConfirmedEvent = appendCrossPostListConfirmed(
+            const copyListConfirmedEvent = appendCopyListConfirmed(
               name,
               input.expectedReceiverPath,
               subscriptionRemovedEvent.offset,
-              crossPostListRecordedEvent,
+              copyListRecordedEvent,
             );
             return {
               status: "removed" as const,
               subscriptionRemovedEvent,
-              crossPostListRecordedEvent,
-              crossPostListConfirmedEvent,
+              copyListRecordedEvent,
+              copyListConfirmedEvent,
             };
           },
           async getEvents(

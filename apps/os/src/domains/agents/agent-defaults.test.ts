@@ -165,7 +165,7 @@ describe("agentCreationForPath", () => {
     });
   });
 
-  test("appends processor wake subscriptions and the narrow collection cross-post in the same batch", () => {
+  test("appends processor wake subscriptions and the narrow collection copy in the same batch", () => {
     const subscriptions = defaultsFor("/agents/demo").events.filter(
       (event) => event.type === "events.iterate.com/stream/subscription-configured",
     );
@@ -177,7 +177,7 @@ describe("agentCreationForPath", () => {
       ),
     ).toEqual(["agent", "capability-host"]);
     expect(
-      subscriptions.find((event) => event.payload.receiver.action === "cross-post")?.payload,
+      subscriptions.find((event) => event.payload.receiver.action === "copy-to-stream")?.payload,
     ).toMatchObject({
       subscriptionKey: "agent-collection",
       filter: {
@@ -187,7 +187,7 @@ describe("agentCreationForPath", () => {
         ],
       },
       receiver: {
-        action: "cross-post",
+        action: "copy-to-stream",
         receivingStreamPath: "/agents",
         delivery: {
           start: "beginning",

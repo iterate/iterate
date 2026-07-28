@@ -118,16 +118,16 @@ export function boundedErrorMessage(error: unknown): string | undefined {
 }
 
 /**
- * Whether two cross-post appends materialize the same source coordinate.
+ * Whether two copy appends materialize the same source coordinate.
  * A receiver transform may legitimately change between redeliveries; the
  * source hop, not the derived body, is the exactly-once identity.
  */
-export function sameCrossPostedEventIdentity(
+export function sameCopiedEventIdentity(
   existing: StreamEvent,
   incoming: StreamEventInput,
 ): boolean {
-  const existingHop = existing.source?.crossPostedFrom?.at(-1);
-  const incomingHop = incoming.source?.crossPostedFrom?.at(-1);
+  const existingHop = existing.source?.copiedFrom?.at(-1);
+  const incomingHop = incoming.source?.copiedFrom?.at(-1);
   return (
     existingHop !== undefined &&
     incomingHop !== undefined &&

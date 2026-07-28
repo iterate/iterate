@@ -1,14 +1,14 @@
 import { MAX_DELIVERY_ATTEMPTS } from "./delivery-math.ts";
 
 /**
- * Copying a cross-post list and sending matching events are both receiver calls.
+ * Copying a copy list and sending matching events are both receiver calls.
  * Keep one bounded retry budget so a temporary receiver outage has the same
  * recovery window whichever call happened to encounter it first.
  */
-export const MAX_CROSS_POST_LIST_ATTEMPTS = MAX_DELIVERY_ATTEMPTS;
+export const MAX_COPY_LIST_ATTEMPTS = MAX_DELIVERY_ATTEMPTS;
 
-/** Durable retry progress for sending one source's current cross-post list to a receiving stream. */
-export type CrossPostListRetryRow = {
+/** Durable retry progress for sending one source's current copy list to a receiving stream. */
+export type CopyListRetryRow = {
   receivingStreamPath: string;
   sourceOffset: number;
   attempt: number;
@@ -25,14 +25,14 @@ export type CrossPostListRetryRow = {
  * pending offset and clears its old failure count, so bursts collapse to one
  * latest-wins list instead of accumulating a chain of changes.
  */
-export class CrossPostListRetryStore {
+export class CopyListRetryStore {
   readonly #sql: SqlStorage;
   readonly #onMutation: () => void;
 
   constructor(sqlStorage: SqlStorage, options: { onMutation?: () => void } = {}) {
     this.#sql = sqlStorage;
     this.#onMutation = options.onMutation ?? (() => undefined);
-    this.#sql.exec(`create table if not exists cross_post_list_retries (
+    this.#sql.exec(`create table if not exists copy_list_retries (
       receiving_stream_path text primary key,
       source_offset integer not null,
       attempt integer not null default 0,
@@ -42,12 +42,12 @@ export class CrossPostListRetryStore {
     )`);
   }
 
-  get(receivingStreamPath: string): CrossPostListRetryRow | undefined {
+  get(receivingStreamPath: string): CopyListRetryRow | undefined {
     const record = this.#sql
-      .exec<CrossPostListRetryRecord>(
+      .exec<CopyListRetryRecord>(
         `select receiving_stream_path, source_offset, attempt,
                 next_attempt_at, last_error
-         from cross_post_list_retries
+         from copy_list_retries
          where receiving_stream_path = ? limit 1`,
         receivingStreamPath,
       )
@@ -55,22 +55,22 @@ export class CrossPostListRetryStore {
     return record === undefined ? undefined : rowFromRecord(record);
   }
 
-  list(): CrossPostListRetryRow[] {
+  list(): CopyListRetryRow[] {
     return this.#sql
-      .exec<CrossPostListRetryRecord>(
+      .exec<CopyListRetryRecord>(
         `select receiving_stream_path, source_offset, attempt,
                 next_attempt_at, last_error
-         from cross_post_list_retries`,
+         from copy_list_retries`,
       )
       .toArray()
       .map(rowFromRecord);
   }
 
-  ensure(receivingStreamPath: string, sourceOffset: number): CrossPostListRetryRow {
+  ensure(receivingStreamPath: string, sourceOffset: number): CopyListRetryRow {
     const current = this.get(receivingStreamPath);
     if (current !== undefined && current.sourceOffset >= sourceOffset) return current;
     this.#sql.exec(
-      `insert into cross_post_list_retries (
+      `insert into copy_list_retries (
          receiving_stream_path, source_offset, updated_at
        ) values (?, ?, ?)
        on conflict (receiving_stream_path) do update set
@@ -79,7 +79,7 @@ export class CrossPostListRetryStore {
          next_attempt_at = null,
          last_error = null,
          updated_at = excluded.updated_at
-       where cross_post_list_retries.source_offset < excluded.source_offset`,
+       where copy_list_retries.source_offset < excluded.source_offset`,
       receivingStreamPath,
       sourceOffset,
       new Date().toISOString(),
@@ -93,7 +93,7 @@ export class CrossPostListRetryStore {
     args: { sourceOffset: number; attempt: number; nextAttemptAt: number; error: string },
   ): void {
     this.#sql.exec(
-      `update cross_post_list_retries
+      `update copy_list_retries
        set attempt = ?, next_attempt_at = ?, last_error = ?, updated_at = ?
        where receiving_stream_path = ? and source_offset = ?`,
       args.attempt,
@@ -109,12 +109,12 @@ export class CrossPostListRetryStore {
   delete(receivingStreamPath: string, sourceOffset?: number): void {
     if (sourceOffset === undefined) {
       this.#sql.exec(
-        "delete from cross_post_list_retries where receiving_stream_path = ?",
+        "delete from copy_list_retries where receiving_stream_path = ?",
         receivingStreamPath,
       );
     } else {
       this.#sql.exec(
-        "delete from cross_post_list_retries where receiving_stream_path = ? and source_offset = ?",
+        "delete from copy_list_retries where receiving_stream_path = ? and source_offset = ?",
         receivingStreamPath,
         sourceOffset,
       );
@@ -129,7 +129,7 @@ export class CrossPostListRetryStore {
   }
 }
 
-type CrossPostListRetryRecord = {
+type CopyListRetryRecord = {
   receiving_stream_path: string;
   source_offset: number;
   attempt: number;
@@ -137,7 +137,7 @@ type CrossPostListRetryRecord = {
   last_error: string | null;
 };
 
-function rowFromRecord(record: CrossPostListRetryRecord): CrossPostListRetryRow {
+function rowFromRecord(record: CopyListRetryRecord): CopyListRetryRow {
   return {
     receivingStreamPath: record.receiving_stream_path,
     sourceOffset: record.source_offset,

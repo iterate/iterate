@@ -48,7 +48,7 @@ const CONFIG_REPO_READY = {
     remote: "https://example.artifacts.cloudflare.net/git/ns/x.git",
   },
   source: {
-    crossPostedFrom: [
+    copiedFrom: [
       {
         subscriptionKey: "project-config-to-root",
         streamId: "11111111-1111-4111-8111-111111111111",
@@ -218,7 +218,7 @@ describe("ProjectProcessor bootstrap", () => {
       payload: {
         subscriptionKey: "project-config-to-root",
         receiver: {
-          action: "cross-post",
+          action: "copy-to-stream",
           receivingStreamPath: "/",
           delivery: { start: "now" },
         },
@@ -318,7 +318,7 @@ describe("ProjectProcessor catalogs", () => {
           type: "events.iterate.com/agent/created",
           payload: {},
           source: {
-            crossPostedFrom: [
+            copiedFrom: [
               {
                 subscriptionKey: "agent-catalog",
                 streamId: "11111111-1111-4111-8111-111111111111",
@@ -342,7 +342,7 @@ describe("ProjectProcessor catalogs", () => {
             remote: "https://example.artifacts.cloudflare.net/git/ns/side.git",
           },
           source: {
-            crossPostedFrom: [
+            copiedFrom: [
               {
                 subscriptionKey: "repo-catalog",
                 streamId: "11111111-1111-4111-8111-111111111111",

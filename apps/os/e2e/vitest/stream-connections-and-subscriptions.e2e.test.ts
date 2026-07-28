@@ -10,12 +10,12 @@
 
 import { expect, test } from "vitest";
 import {
-  MAX_CROSS_POSTED_FROM_HOPS,
+  MAX_COPIED_FROM_HOPS,
   type StreamDeliveryBatch,
   type StreamEvent,
   type StreamEventBatch,
   type StreamEventInput,
-  type CrossPostReceipt,
+  type CopyReceipt,
 } from "iterate/processors";
 import type {
   CoreProcessorState,
@@ -687,7 +687,7 @@ test("a receiver configures one subscription visible on both streams before deli
   using source = project.streams.get(sourcePath);
   using receiver = project.streams.get(receivingStreamPath);
 
-  const configured = await receiver.receiveCrossPostsFrom({
+  const configured = await receiver.subscribeToEventsFrom({
     sourceStreamPath: sourcePath,
     subscriptionKey,
     filter: { eventTypes: [MATCHING_EVENT_TYPE] },
@@ -698,11 +698,11 @@ test("a receiver configures one subscription visible on both streams before deli
     type: "events.iterate.com/stream/subscription-configured",
     payload: {
       subscriptionKey,
-      receiver: { action: "cross-post", receivingStreamPath: receivingStreamPath },
+      receiver: { action: "copy-to-stream", receivingStreamPath: receivingStreamPath },
     },
   });
-  expect(configured.crossPostListRecordedEvent).toMatchObject({
-    type: "events.iterate.com/stream/cross-post-list-recorded",
+  expect(configured.copyListRecordedEvent).toMatchObject({
+    type: "events.iterate.com/stream/copy-list-recorded",
     payload: {
       source: { path: sourcePath },
       sourceOffset: configured.subscriptionConfiguredEvent.offset,
@@ -720,7 +720,7 @@ test("a receiver configures one subscription visible on both streams before deli
     receiverState.subscriptions.inbound.bySourcePath[sourcePath]?.byKey[subscriptionKey],
   ).toMatchObject({
     configuration: incomingSubscriptionConfiguration(
-      configured.crossPostListRecordedEvent,
+      configured.copyListRecordedEvent,
       subscriptionKey,
     ),
     numEventsReceived: 0,
@@ -732,12 +732,12 @@ test("a receiver configures one subscription visible on both streams before deli
     payload: { marker },
   });
   const copied = await receiver.waitForEvent({
-    afterOffset: configured.crossPostListRecordedEvent.offset,
+    afterOffset: configured.copyListRecordedEvent.offset,
     eventTypes: [MATCHING_EVENT_TYPE],
     timeoutMs: 15_000,
   });
-  expect(copied.offset).toBeGreaterThan(configured.crossPostListRecordedEvent.offset);
-  expect(copied.source?.crossPostedFrom?.at(-1)?.offset).toBe(sourceProductEvent!.offset);
+  expect(copied.offset).toBeGreaterThan(configured.copyListRecordedEvent.offset);
+  expect(copied.source?.copiedFrom?.at(-1)?.offset).toBe(sourceProductEvent!.offset);
 });
 
 test("an agent-scoped script can make any project stream receive from another", async () => {
@@ -756,7 +756,7 @@ test("an agent-scoped script can make any project stream receive from another", 
   // deliberately project-wide: the agent chooses the receiving stream and
   // source itself, without an admin configuring the rule on its behalf.
   const execution = await agent.capabilityHost.runScript(`async (itx) => {
-    return await itx.streams.get(${JSON.stringify(receivingStreamPath)}).receiveCrossPostsFrom({
+    return await itx.streams.get(${JSON.stringify(receivingStreamPath)}).subscribeToEventsFrom({
       sourceStreamPath: ${JSON.stringify(sourcePath)},
       subscriptionKey: ${JSON.stringify(subscriptionKey)},
       filter: { eventTypes: [${JSON.stringify(MATCHING_EVENT_TYPE)}] },
@@ -767,16 +767,16 @@ test("an agent-scoped script can make any project stream receive from another", 
       type: "events.iterate.com/stream/subscription-configured",
       payload: { subscriptionKey },
     },
-    crossPostListRecordedEvent: {
-      type: "events.iterate.com/stream/cross-post-list-recorded",
+    copyListRecordedEvent: {
+      type: "events.iterate.com/stream/copy-list-recorded",
       payload: { source: { path: sourcePath } },
     },
   });
 
   using source = project.streams.get(sourcePath);
   using receiver = project.streams.get(receivingStreamPath);
-  const receivingStreamEvent = (execution.result as { crossPostListRecordedEvent: StreamEvent })
-    .crossPostListRecordedEvent;
+  const receivingStreamEvent = (execution.result as { copyListRecordedEvent: StreamEvent })
+    .copyListRecordedEvent;
   const [sent] = await source.append({
     type: MATCHING_EVENT_TYPE,
     payload: { marker, configuredBy: agentPath },
@@ -789,14 +789,14 @@ test("an agent-scoped script can make any project stream receive from another", 
   expect(copied).toMatchObject({
     payload: { marker, configuredBy: agentPath },
     source: {
-      crossPostedFrom: [
+      copiedFrom: [
         expect.objectContaining({ path: sourcePath, offset: sent!.offset, subscriptionKey }),
       ],
     },
   });
 });
 
-test("bare receiveCrossPostsFrom generates an offset key, starts now, and copies wildcard control events", async () => {
+test("bare subscribeToEventsFrom generates an offset key, starts now, and copies wildcard control events", async () => {
   const marker = crypto.randomUUID();
   const sourcePath = `/e2e/subscriptions/defaults/source/${marker}`;
   const receivingStreamPath = `/e2e/subscriptions/defaults/receiver/${marker}`;
@@ -810,7 +810,7 @@ test("bare receiveCrossPostsFrom generates an offset key, starts now, and copies
     type: MATCHING_EVENT_TYPE,
     payload: { marker, phase: "before-bare-receive" },
   });
-  const configured = await receiver.receiveCrossPostsFrom({
+  const configured = await receiver.subscribeToEventsFrom({
     sourceStreamPath: sourcePath,
     idempotencyKey: `defaults-${marker}`,
   });
@@ -821,7 +821,7 @@ test("bare receiveCrossPostsFrom generates an offset key, starts now, and copies
   expect(configured.subscriptionConfiguredEvent).toMatchObject({
     payload: {
       receiver: {
-        action: "cross-post",
+        action: "copy-to-stream",
         receivingStreamPath: receivingStreamPath,
         delivery: { start: "now", includeEphemeral: false, onFailingEvent: "halt" },
       },
@@ -832,7 +832,7 @@ test("bare receiveCrossPostsFrom generates an offset key, starts now, and copies
   const confirmation = (
     await source.getEvents({
       afterOffset: configured.subscriptionConfiguredEvent.offset,
-      eventTypes: ["events.iterate.com/stream/cross-post-list-confirmed"],
+      eventTypes: ["events.iterate.com/stream/copy-list-confirmed"],
     })
   ).find((event) => event.payload?.receivingStreamPath === receivingStreamPath);
   expect(confirmation).toBeDefined();
@@ -842,18 +842,18 @@ test("bare receiveCrossPostsFrom generates an offset key, starts now, and copies
     payload: { config: {} },
   });
   const copiedControl = await receiver.waitForEvent({
-    afterOffset: configured.crossPostListRecordedEvent.offset,
+    afterOffset: configured.copyListRecordedEvent.offset,
     eventTypes: ["events.iterate.com/stream/configured"],
     timeoutMs: 15_000,
   });
-  expect(copiedControl.source?.crossPostedFrom?.at(-1)).toMatchObject({
+  expect(copiedControl.source?.copiedFrom?.at(-1)).toMatchObject({
     subscriptionKey: defaultSubscriptionKey,
     offset: liveControl!.offset,
     path: sourcePath,
   });
 
   const copiedSourceOffsets = (await receiver.getEvents({ afterOffset: 0 })).flatMap(
-    (event) => event.source?.crossPostedFrom?.map((hop) => hop.offset) ?? [],
+    (event) => event.source?.copiedFrom?.map((hop) => hop.offset) ?? [],
   );
   expect(copiedSourceOffsets).not.toContain(historical!.offset);
   expect(copiedSourceOffsets).not.toContain(confirmation!.offset);
@@ -882,7 +882,7 @@ test.skipIf(deployedBaseUrl() === null)(
       filter: { eventTypes: [MATCHING_EVENT_TYPE] },
       start: "beginning" as const,
     };
-    await receiver.receiveCrossPostsFrom(desired);
+    await receiver.subscribeToEventsFrom(desired);
     const [firstSourceEvent] = await source.append({
       type: MATCHING_EVENT_TYPE,
       payload: { marker, sourceLifetime: 1 },
@@ -898,7 +898,7 @@ test.skipIf(deployedBaseUrl() === null)(
     const firstSourceCreation = firstSourceState.createdAt;
     expect(firstSourceId).toBeDefined();
     expect(firstSourceCreation).toBeDefined();
-    expect(firstCopy.source?.crossPostedFrom?.at(-1)).toMatchObject({
+    expect(firstCopy.source?.copiedFrom?.at(-1)).toMatchObject({
       path: sourcePath,
       streamId: firstSourceId,
       streamCreatedAt: firstSourceCreation,
@@ -911,7 +911,7 @@ test.skipIf(deployedBaseUrl() === null)(
     expect(secondSourceState).not.toMatchObject({ streamId: firstSourceId });
     expect(secondSourceState.createdAt).toBeDefined();
 
-    await receiver.receiveCrossPostsFrom(desired);
+    await receiver.subscribeToEventsFrom(desired);
     const [secondSourceEvent] = await source.append({
       type: MATCHING_EVENT_TYPE,
       payload: { marker, sourceLifetime: 2 },
@@ -924,7 +924,7 @@ test.skipIf(deployedBaseUrl() === null)(
       predicate: (event) => event.payload?.sourceLifetime === 2,
       timeoutMs: 15_000,
     });
-    expect(secondCopy.source?.crossPostedFrom?.at(-1)).toMatchObject({
+    expect(secondCopy.source?.copiedFrom?.at(-1)).toMatchObject({
       path: sourcePath,
       streamId: secondSourceState.streamId,
       streamCreatedAt: secondSourceState.createdAt,
@@ -955,7 +955,7 @@ test("a receiver rejects a delayed batch after the same source key is reconfigur
   using source = project.streams.get(sourcePath);
   using receiver = project.streams.get(receivingStreamPath);
 
-  const first = await receiver.receiveCrossPostsFrom({
+  const first = await receiver.subscribeToEventsFrom({
     sourceStreamPath: sourcePath,
     subscriptionKey,
     filter: { eventTypes: [MATCHING_EVENT_TYPE] },
@@ -971,7 +971,7 @@ test("a receiver rejects a delayed batch after the same source key is reconfigur
     timeoutMs: 15_000,
   });
 
-  const replacement = await receiver.receiveCrossPostsFrom({
+  const replacement = await receiver.subscribeToEventsFrom({
     sourceStreamPath: sourcePath,
     subscriptionKey,
     filter: { eventTypes: [MATCHING_EVENT_TYPE] },
@@ -1020,26 +1020,26 @@ test("a blocked subscription list resumes only after an explicit resend request"
   using source = project.streams.get(sourcePath);
   using receiver = project.streams.get(receivingStreamPath);
 
-  await receiver.receiveCrossPostsFrom({ sourceStreamPath: sourcePath, subscriptionKey });
+  await receiver.subscribeToEventsFrom({ sourceStreamPath: sourcePath, subscriptionKey });
 
   // The direct Durable Object recovery test exhausts all 15 real failures.
   // Here one atomic test-only append commits the same platform-authored
   // terminal state before reconciliation can win the race. The recovery path
   // itself remains the public resend command and real two-stream acknowledgement.
-  const blockedDescription = "synthetic blocked cross-post-list generation";
+  const blockedDescription = "synthetic blocked copy-list generation";
   const blockedOffset = coreState(await source.runtimeState()).maxOffset + 1;
   const [replacement] = await appendTrustedCoreEvents(source, [
     subscriptionConfigured({
       subscriptionKey,
       description: blockedDescription,
       receiver: {
-        action: "cross-post",
+        action: "copy-to-stream",
         receivingStreamPath: receivingStreamPath,
         delivery: deliveryPolicy("now"),
       },
     }),
     {
-      type: "events.iterate.com/stream/cross-post-list-delivery-blocked",
+      type: "events.iterate.com/stream/copy-list-delivery-blocked",
       payload: {
         receivingStreamPath,
         sourceOffset: blockedOffset,
@@ -1050,30 +1050,26 @@ test("a blocked subscription list resumes only after an explicit resend request"
   ]);
   expect(replacement).toMatchObject({ offset: blockedOffset });
   expect(
-    coreState(await source.runtimeState()).crossPostListDeliveriesByReceivingStream[
-      receivingStreamPath
-    ],
+    coreState(await source.runtimeState()).copyListDeliveriesByReceivingStream[receivingStreamPath],
   ).toMatchObject({ sourceOffset: blockedOffset, status: "blocked", attempts: 15 });
   await expect(
-    receiver.receiveCrossPostsFrom({
+    receiver.subscribeToEventsFrom({
       sourceStreamPath: sourcePath,
       subscriptionKey,
       description: blockedDescription,
     }),
-  ).rejects.toThrow(/blocked after 15 attempts.*resendCrossPostList/s);
+  ).rejects.toThrow(/blocked after 15 attempts.*resendCopyList/s);
 
-  const resend = await source.resendCrossPostList({ receivingStreamPath });
+  const resend = await source.resendCopyList({ receivingStreamPath });
   await waitForCondition(
     async () =>
-      coreState(await source.runtimeState()).crossPostListDeliveriesByReceivingStream[
+      coreState(await source.runtimeState()).copyListDeliveriesByReceivingStream[
         receivingStreamPath
       ]?.status === "confirmed",
     { description: "the explicit resend request to be acknowledged by the receiving stream" },
   );
   expect(
-    coreState(await source.runtimeState()).crossPostListDeliveriesByReceivingStream[
-      receivingStreamPath
-    ],
+    coreState(await source.runtimeState()).copyListDeliveriesByReceivingStream[receivingStreamPath],
   ).toMatchObject({ sourceOffset: resend.offset, status: "confirmed" });
   expect(
     coreState(await receiver.runtimeState()).subscriptions.inbound.bySourcePath[sourcePath]?.byKey[
@@ -1094,22 +1090,22 @@ test("each source change replaces that source's complete subscription list on th
   using source = project.streams.get(sourcePath);
   using receiver = project.streams.get(receivingStreamPath);
 
-  const configuredAlpha = await receiver.receiveCrossPostsFrom({
+  const configuredAlpha = await receiver.subscribeToEventsFrom({
     sourceStreamPath: sourcePath,
     subscriptionKey: alpha,
     filter: { eventTypes: [MATCHING_EVENT_TYPE] },
   });
-  const configuredBeta = await receiver.receiveCrossPostsFrom({
+  const configuredBeta = await receiver.subscribeToEventsFrom({
     sourceStreamPath: sourcePath,
     subscriptionKey: beta,
     filter: { eventTypes: [OTHER_EVENT_TYPE] },
   });
-  expect(Object.keys(subscriptionsFromSource(configuredAlpha.crossPostListRecordedEvent))).toEqual([
+  expect(Object.keys(subscriptionsFromSource(configuredAlpha.copyListRecordedEvent))).toEqual([
     alpha,
   ]);
-  expect(
-    Object.keys(subscriptionsFromSource(configuredBeta.crossPostListRecordedEvent)).sort(),
-  ).toEqual([alpha, beta].sort());
+  expect(Object.keys(subscriptionsFromSource(configuredBeta.copyListRecordedEvent)).sort()).toEqual(
+    [alpha, beta].sort(),
+  );
 
   let receiverSource = coreState(await receiver.runtimeState()).subscriptions.inbound.bySourcePath[
     sourcePath
@@ -1123,15 +1119,13 @@ test("each source change replaces that source's complete subscription list on th
     [beta]: { configuredAtSourceOffset: configuredBeta.subscriptionConfiguredEvent.offset },
   });
 
-  const removedAlpha = await receiver.stopReceivingCrossPostsFrom({
+  const removedAlpha = await receiver.unsubscribeFromEvents({
     sourceStreamPath: sourcePath,
     subscriptionKey: alpha,
   });
   expect(removedAlpha).toMatchObject({ status: "removed" });
   if (removedAlpha.status !== "removed") throw new Error("alpha removal did not commit");
-  expect(Object.keys(subscriptionsFromSource(removedAlpha.crossPostListRecordedEvent))).toEqual([
-    beta,
-  ]);
+  expect(Object.keys(subscriptionsFromSource(removedAlpha.copyListRecordedEvent))).toEqual([beta]);
   receiverSource = coreState(await receiver.runtimeState()).subscriptions.inbound.bySourcePath[
     sourcePath
   ]!;
@@ -1140,20 +1134,18 @@ test("each source change replaces that source's complete subscription list on th
   });
   expect(Object.keys(receiverSource.byKey)).toEqual([beta]);
 
-  const removedBeta = await receiver.stopReceivingCrossPostsFrom({
+  const removedBeta = await receiver.unsubscribeFromEvents({
     sourceStreamPath: sourcePath,
     subscriptionKey: beta,
   });
   expect(removedBeta).toMatchObject({ status: "removed" });
   if (removedBeta.status !== "removed") throw new Error("beta removal did not commit");
-  expect(subscriptionsFromSource(removedBeta.crossPostListRecordedEvent)).toEqual({});
+  expect(subscriptionsFromSource(removedBeta.copyListRecordedEvent)).toEqual({});
   expect(
     coreState(await receiver.runtimeState()).subscriptions.inbound.bySourcePath[sourcePath],
   ).toBeUndefined();
   expect(
-    coreState(await source.runtimeState()).crossPostListDeliveriesByReceivingStream[
-      receivingStreamPath
-    ],
+    coreState(await source.runtimeState()).copyListDeliveriesByReceivingStream[receivingStreamPath],
   ).toBeUndefined();
 });
 
@@ -1169,24 +1161,24 @@ test("concurrent receive commands share one send and follow the newest complete 
   using receiver = project.streams.get(receivingStreamPath);
 
   const [configuredAlpha, configuredBeta] = await Promise.all([
-    receiver.receiveCrossPostsFrom({
+    receiver.subscribeToEventsFrom({
       sourceStreamPath: sourcePath,
       subscriptionKey: alpha,
       filter: { eventTypes: [MATCHING_EVENT_TYPE] },
     }),
-    receiver.receiveCrossPostsFrom({
+    receiver.subscribeToEventsFrom({
       sourceStreamPath: sourcePath,
       subscriptionKey: beta,
       filter: { eventTypes: [OTHER_EVENT_TYPE] },
     }),
   ]);
 
-  expect(subscriptionsFromSource(configuredAlpha.crossPostListRecordedEvent)[alpha]).toBeDefined();
-  expect(subscriptionsFromSource(configuredBeta.crossPostListRecordedEvent)[beta]).toBeDefined();
+  expect(subscriptionsFromSource(configuredAlpha.copyListRecordedEvent)[alpha]).toBeDefined();
+  expect(subscriptionsFromSource(configuredBeta.copyListRecordedEvent)[beta]).toBeDefined();
   expect(
     Math.max(
-      Object.keys(subscriptionsFromSource(configuredAlpha.crossPostListRecordedEvent)).length,
-      Object.keys(subscriptionsFromSource(configuredBeta.crossPostListRecordedEvent)).length,
+      Object.keys(subscriptionsFromSource(configuredAlpha.copyListRecordedEvent)).length,
+      Object.keys(subscriptionsFromSource(configuredBeta.copyListRecordedEvent)).length,
     ),
   ).toBe(2);
   const receiverState = coreState(await receiver.runtimeState());
@@ -1195,12 +1187,12 @@ test("concurrent receive commands share one send and follow the newest complete 
   ).toEqual([alpha, beta].sort());
 
   const [repeatOne, repeatTwo] = await Promise.all([
-    receiver.receiveCrossPostsFrom({
+    receiver.subscribeToEventsFrom({
       sourceStreamPath: sourcePath,
       subscriptionKey: alpha,
       filter: { eventTypes: [MATCHING_EVENT_TYPE] },
     }),
-    receiver.receiveCrossPostsFrom({
+    receiver.subscribeToEventsFrom({
       sourceStreamPath: sourcePath,
       subscriptionKey: alpha,
       filter: { eventTypes: [MATCHING_EVENT_TYPE] },
@@ -1212,8 +1204,8 @@ test("concurrent receive commands share one send and follow the newest complete 
   expect(repeatTwo.subscriptionConfiguredEvent).toMatchObject({
     offset: configuredAlpha.subscriptionConfiguredEvent.offset,
   });
-  expect(repeatOne.crossPostListRecordedEvent).toMatchObject({
-    offset: repeatTwo.crossPostListRecordedEvent.offset,
+  expect(repeatOne.copyListRecordedEvent).toMatchObject({
+    offset: repeatTwo.copyListRecordedEvent.offset,
   });
 });
 
@@ -1238,7 +1230,7 @@ test("repeating a receive command reuses its original now cursor", async () => {
     filter: { eventTypes: [MATCHING_EVENT_TYPE] },
     start: "now" as const,
   };
-  const first = await receiver.receiveCrossPostsFrom(desired);
+  const first = await receiver.subscribeToEventsFrom(desired);
   const firstConfiguration = (
     await source.getEvents({
       afterOffset: 0,
@@ -1251,11 +1243,11 @@ test("repeating a receive command reuses its original now cursor", async () => {
     type: MATCHING_EVENT_TYPE,
     payload: { marker, phase: "between-ambiguous-attempts" },
   });
-  const retried = await receiver.receiveCrossPostsFrom(desired);
+  const retried = await receiver.subscribeToEventsFrom(desired);
 
   expect(retried.subscriptionConfiguredEvent).toMatchObject({ offset: firstConfiguration!.offset });
-  expect(retried.crossPostListRecordedEvent).toMatchObject({
-    offset: first.crossPostListRecordedEvent.offset,
+  expect(retried.copyListRecordedEvent).toMatchObject({
+    offset: first.copyListRecordedEvent.offset,
   });
   const configurations = (
     await source.getEvents({
@@ -1271,7 +1263,7 @@ test("repeating a receive command reuses its original now cursor", async () => {
     predicate: (event) => event.payload?.marker === marker,
     timeoutMs: 15_000,
   });
-  expect(delivered.source?.crossPostedFrom?.at(-1)?.offset).toBe(betweenAttempts!.offset);
+  expect(delivered.source?.copiedFrom?.at(-1)?.offset).toBe(betweenAttempts!.offset);
 });
 
 test("reusing a source key moves the subscription without leaving it on the old receiver", async () => {
@@ -1287,7 +1279,7 @@ test("reusing a source key moves the subscription without leaving it on the old 
   using oldReceiver = project.streams.get(oldReceiverPath);
   using newReceiver = project.streams.get(newReceiverPath);
 
-  await oldReceiver.receiveCrossPostsFrom({
+  await oldReceiver.subscribeToEventsFrom({
     sourceStreamPath: sourcePath,
     subscriptionKey,
     filter: { eventTypes: [MATCHING_EVENT_TYPE] },
@@ -1302,9 +1294,9 @@ test("reusing a source key moves the subscription without leaving it on the old 
     timeoutMs: 15_000,
   });
   await expect(
-    newReceiver.stopReceivingCrossPostsFrom({ sourceStreamPath: sourcePath, subscriptionKey }),
+    newReceiver.unsubscribeFromEvents({ sourceStreamPath: sourcePath, subscriptionKey }),
   ).resolves.toEqual({ status: "already-absent" });
-  const replacement = await newReceiver.receiveCrossPostsFrom({
+  const replacement = await newReceiver.subscribeToEventsFrom({
     sourceStreamPath: sourcePath,
     subscriptionKey,
     filter: { eventTypes: [MATCHING_EVENT_TYPE] },
@@ -1320,7 +1312,7 @@ test("reusing a source key moves the subscription without leaving it on the old 
       ?.byKey[subscriptionKey],
   ).toMatchObject({
     configuration: incomingSubscriptionConfiguration(
-      replacement.crossPostListRecordedEvent,
+      replacement.copyListRecordedEvent,
       subscriptionKey,
     ),
   });
@@ -1330,7 +1322,7 @@ test("reusing a source key moves the subscription without leaving it on the old 
     configuration: replacement.subscriptionConfiguredEvent.payload,
   });
   await expect(
-    oldReceiver.stopReceivingCrossPostsFrom({ sourceStreamPath: sourcePath, subscriptionKey }),
+    oldReceiver.unsubscribeFromEvents({ sourceStreamPath: sourcePath, subscriptionKey }),
   ).resolves.toEqual({ status: "already-absent" });
 
   const replayed = await newReceiver.waitForEvent({
@@ -1338,7 +1330,7 @@ test("reusing a source key moves the subscription without leaving it on the old 
     eventTypes: [MATCHING_EVENT_TYPE],
     timeoutMs: 15_000,
   });
-  expect(replayed.source?.crossPostedFrom?.at(-1)?.offset).toBe(historical!.offset);
+  expect(replayed.source?.copiedFrom?.at(-1)?.offset).toBe(historical!.offset);
 
   await source.append({
     type: MATCHING_EVENT_TYPE,
@@ -1384,13 +1376,13 @@ test("a stream-to-webhook replacement waits for the old stream to record removal
       },
     }),
   );
-  await oldReceiver.receiveCrossPostsFrom({
+  await oldReceiver.subscribeToEventsFrom({
     sourceStreamPath: sourcePath,
     subscriptionKey,
     filter: { eventTypes: [MATCHING_EVENT_TYPE] },
   });
 
-  // Atomically replace the cross-post destination and inject the final outcome of
+  // Atomically replace the copy destination and inject the final outcome of
   // its removal-list retry ladder. The real resend and cutover below still run
   // through public commands and the live receiver/webhook seams.
   const replacementOffset = coreState(await source.runtimeState()).maxOffset + 1;
@@ -1405,7 +1397,7 @@ test("a stream-to-webhook replacement waits for the old stream to record removal
       },
     }),
     {
-      type: "events.iterate.com/stream/cross-post-list-delivery-blocked",
+      type: "events.iterate.com/stream/copy-list-delivery-blocked",
       payload: {
         receivingStreamPath: oldReceiverPath,
         sourceOffset: replacementOffset,
@@ -1416,9 +1408,7 @@ test("a stream-to-webhook replacement waits for the old stream to record removal
   ]);
   expect(replacement).toMatchObject({ offset: replacementOffset });
   expect(
-    coreState(await source.runtimeState()).crossPostListDeliveriesByReceivingStream[
-      oldReceiverPath
-    ],
+    coreState(await source.runtimeState()).copyListDeliveriesByReceivingStream[oldReceiverPath],
   ).toMatchObject({
     sourceOffset: replacementOffset,
     status: "blocked",
@@ -1439,7 +1429,7 @@ test("a stream-to-webhook replacement waits for the old stream to record removal
   );
   expect(deliveries.filter((delivery) => delivery.subscriptionKey === subscriptionKey)).toEqual([]);
 
-  await source.resendCrossPostList({ receivingStreamPath: oldReceiverPath });
+  await source.resendCopyList({ receivingStreamPath: oldReceiverPath });
   await waitForCondition(
     () =>
       deliveries.some(
@@ -1452,9 +1442,7 @@ test("a stream-to-webhook replacement waits for the old stream to record removal
     coreState(await oldReceiver.runtimeState()).subscriptions.inbound.bySourcePath[sourcePath],
   ).toBeUndefined();
   expect(
-    coreState(await source.runtimeState()).crossPostListDeliveriesByReceivingStream[
-      oldReceiverPath
-    ],
+    coreState(await source.runtimeState()).copyListDeliveriesByReceivingStream[oldReceiverPath],
   ).toBeUndefined();
 });
 
@@ -1749,13 +1737,13 @@ test("chains longer than five copies retain provenance, cycles terminate, and re
   const streams = [streamA, streamB, streamC, streamD, streamE, streamF, streamG];
 
   for (let index = 1; index < streams.length; index += 1) {
-    await streams[index]!.receiveCrossPostsFrom({
+    await streams[index]!.subscribeToEventsFrom({
       sourceStreamPath: paths[index - 1]!,
       subscriptionKey: forwardRuleKeys[index - 1]!,
       filter: { eventTypes: [MATCHING_EVENT_TYPE] },
     });
   }
-  await streamA.receiveCrossPostsFrom({
+  await streamA.subscribeToEventsFrom({
     sourceStreamPath: pathG,
     subscriptionKey: gToA,
     filter: { eventTypes: [MATCHING_EVENT_TYPE] },
@@ -1771,16 +1759,14 @@ test("chains longer than five copies retain provenance, cycles terminate, and re
     predicate: (event) => event.payload?.marker === marker,
     timeoutMs: 15_000,
   });
-  expect(chained.source?.crossPostedFrom?.map((hop) => hop.path)).toEqual(paths.slice(0, -1));
-  expect(chained.source?.crossPostedFrom?.map((hop) => hop.subscriptionKey)).toEqual(
-    forwardRuleKeys,
-  );
+  expect(chained.source?.copiedFrom?.map((hop) => hop.path)).toEqual(paths.slice(0, -1));
+  expect(chained.source?.copiedFrom?.map((hop) => hop.subscriptionKey)).toEqual(forwardRuleKeys);
 
   // G→A would complete a cycle. A acknowledges the source coordinate without
   // appending a duplicate product event, and records that decision as an event.
   const dropped = await streamA.waitForEvent({
     afterOffset: original!.offset,
-    eventTypes: ["events.iterate.com/stream/cross-posted-events-dropped"],
+    eventTypes: ["events.iterate.com/stream/copied-events-dropped"],
     predicate: (event) => event.payload?.subscriptionKey === gToA,
     timeoutMs: 15_000,
   });
@@ -1809,15 +1795,15 @@ test("chains longer than five copies retain provenance, cycles terminate, and re
     ).map((event) => event.offset),
   ).toEqual([original!.offset]);
 
-  const removed = await streamB.stopReceivingCrossPostsFrom({
+  const removed = await streamB.unsubscribeFromEvents({
     sourceStreamPath: pathA,
     subscriptionKey: forwardRuleKeys[0]!,
   });
   expect(removed).toMatchObject({
     status: "removed",
     subscriptionRemovedEvent: { type: "events.iterate.com/stream/subscription-removed" },
-    crossPostListRecordedEvent: {
-      type: "events.iterate.com/stream/cross-post-list-recorded",
+    copyListRecordedEvent: {
+      type: "events.iterate.com/stream/copy-list-recorded",
       payload: { subscriptionsByKey: {} },
     },
   });
@@ -1833,7 +1819,7 @@ test("chains longer than five copies retain provenance, cycles terminate, and re
   const removalObserverPath = `/e2e/subscriptions/cycle/removal-observer/${marker}`;
   const removalObserverKey = `removal-observer-${marker}`;
   using removalObserver = project.streams.get(removalObserverPath);
-  await removalObserver.receiveCrossPostsFrom({
+  await removalObserver.subscribeToEventsFrom({
     sourceStreamPath: pathA,
     subscriptionKey: removalObserverKey,
     filter: { eventTypes: [MATCHING_EVENT_TYPE] },
@@ -1848,7 +1834,7 @@ test("chains longer than five copies retain provenance, cycles terminate, and re
     predicate: (event) => event.payload?.phase === "after-removal",
     timeoutMs: 15_000,
   });
-  expect(observedAfterRemoval.source?.crossPostedFrom?.at(-1)).toMatchObject({
+  expect(observedAfterRemoval.source?.copiedFrom?.at(-1)).toMatchObject({
     offset: afterRemoval!.offset,
     path: pathA,
     subscriptionKey: removalObserverKey,
@@ -1878,16 +1864,16 @@ test("the stream-copy limit is an acknowledged durable drop whose audit event is
     type: MATCHING_EVENT_TYPE,
     payload: { marker, purpose: "synthetic event at the provenance boundary" },
   });
-  const configured = await receiver.receiveCrossPostsFrom({
+  const configured = await receiver.subscribeToEventsFrom({
     sourceStreamPath: sourcePath,
     subscriptionKey,
     filter: { eventTypes: [MATCHING_EVENT_TYPE] },
   });
-  await observer.receiveCrossPostsFrom({
+  await observer.subscribeToEventsFrom({
     sourceStreamPath: receiverPath,
     subscriptionKey: `observe-hop-limit-${marker}`,
     filter: {
-      eventTypes: [MATCHING_EVENT_TYPE, "events.iterate.com/stream/cross-posted-events-dropped"],
+      eventTypes: [MATCHING_EVENT_TYPE, "events.iterate.com/stream/copied-events-dropped"],
     },
   });
 
@@ -1895,7 +1881,7 @@ test("the stream-copy limit is an acknowledged durable drop whose audit event is
   const eventAtLimit: StreamEvent = {
     ...historical!,
     source: {
-      crossPostedFrom: Array.from({ length: MAX_CROSS_POSTED_FROM_HOPS }, (_, index) => ({
+      copiedFrom: Array.from({ length: MAX_COPIED_FROM_HOPS }, (_, index) => ({
         subscriptionKey: `prior-copy-${index}`,
         streamId: crypto.randomUUID(),
         streamCreatedAt: new Date(Date.parse(historical!.createdAt) - index).toISOString(),
@@ -1933,8 +1919,8 @@ test("the stream-copy limit is an acknowledged durable drop whose audit event is
   });
 
   const dropped = await receiver.waitForEvent({
-    afterOffset: configured.crossPostListRecordedEvent.offset,
-    eventTypes: ["events.iterate.com/stream/cross-posted-events-dropped"],
+    afterOffset: configured.copyListRecordedEvent.offset,
+    eventTypes: ["events.iterate.com/stream/copied-events-dropped"],
     timeoutMs: 15_000,
   });
   expect(dropped).toMatchObject({
@@ -1967,7 +1953,7 @@ test("the stream-copy limit is an acknowledged durable drop whose audit event is
   expect(
     await observer.getEvents({
       afterOffset: 0,
-      eventTypes: ["events.iterate.com/stream/cross-posted-events-dropped"],
+      eventTypes: ["events.iterate.com/stream/copied-events-dropped"],
     }),
   ).toEqual([]);
 });
@@ -1983,7 +1969,7 @@ test("a global subscription stays in the global namespace", async () => {
   using globalReceiver = itx.streams.get(receivingStreamPath);
   using projectReceiver = project.streams.get(receivingStreamPath);
 
-  await globalReceiver.receiveCrossPostsFrom({
+  await globalReceiver.subscribeToEventsFrom({
     sourceStreamPath: sourcePath,
     subscriptionKey: `global-${marker}`,
     filter: { eventTypes: [MATCHING_EVENT_TYPE] },
@@ -1994,7 +1980,7 @@ test("a global subscription stays in the global namespace", async () => {
     eventTypes: [MATCHING_EVENT_TYPE],
     timeoutMs: 15_000,
   });
-  expect(copy.source?.crossPostedFrom?.at(-1)).toMatchObject({
+  expect(copy.source?.copiedFrom?.at(-1)).toMatchObject({
     projectId: null,
     path: sourcePath,
   });
@@ -2014,7 +2000,7 @@ test("a time condition is an independent OR boundary and removes the subscriptio
   using source = project.streams.get(sourcePath);
   using receiver = project.streams.get(receivingStreamPath);
 
-  await receiver.receiveCrossPostsFrom({
+  await receiver.subscribeToEventsFrom({
     sourceStreamPath: sourcePath,
     subscriptionKey,
     filter: { eventTypes: [MATCHING_EVENT_TYPE] },
@@ -2034,7 +2020,7 @@ test("a time condition is an independent OR boundary and removes the subscriptio
         ],
       },
       receiver: {
-        action: "cross-post",
+        action: "copy-to-stream",
         receivingStreamPath: receivingStreamPath,
         delivery: deliveryPolicy("now"),
       },
@@ -2072,7 +2058,7 @@ test("a paused receiver records subscription changes immediately and receives pr
     type: "events.iterate.com/stream/paused",
     payload: { reason: "separate subscription configuration from product delivery" },
   });
-  const configured = await receiver.receiveCrossPostsFrom({
+  const configured = await receiver.subscribeToEventsFrom({
     sourceStreamPath: sourcePath,
     subscriptionKey,
   });
@@ -2082,7 +2068,7 @@ test("a paused receiver records subscription changes immediately and receives pr
       subscriptionKey
     ],
   ).toMatchObject({ configuredAtSourceOffset: configured.subscriptionConfiguredEvent.offset });
-  expect(crossPostListRetry(await source.runtimeState(), receivingStreamPath)).toBeUndefined();
+  expect(copyListRetry(await source.runtimeState(), receivingStreamPath)).toBeUndefined();
 
   const [held] = await source.append({
     type: MATCHING_EVENT_TYPE,
@@ -2102,7 +2088,7 @@ test("a paused receiver records subscription changes immediately and receives pr
   expect(failed.coreProcessorState.subscriptions.outbound.byKey[subscriptionKey]).toMatchObject({
     configuration: {
       subscriptionKey,
-      receiver: { action: "cross-post", receivingStreamPath: receivingStreamPath },
+      receiver: { action: "copy-to-stream", receivingStreamPath: receivingStreamPath },
     },
   });
   expect(failed.runtime.subscriptions[subscriptionKey]).toMatchObject({
@@ -2117,7 +2103,7 @@ test("a paused receiver records subscription changes immediately and receives pr
     predicate: (event) => event.payload?.marker === marker,
     timeoutMs: 15_000,
   });
-  expect(delivered.source?.crossPostedFrom?.at(-1)?.offset).toBe(held!.offset);
+  expect(delivered.source?.copiedFrom?.at(-1)?.offset).toBe(held!.offset);
   await waitForCondition(
     async () =>
       runtimeState(await source.runtimeState()).runtime.subscriptions[subscriptionKey]?.attempt ===
@@ -2125,9 +2111,9 @@ test("a paused receiver records subscription changes immediately and receives pr
     { description: "the resumed receiver to acknowledge the held product event" },
   );
   const recovered = runtimeState(await source.runtimeState());
-  expect(crossPostListRetry(recovered, receivingStreamPath)).toBeUndefined();
+  expect(copyListRetry(recovered, receivingStreamPath)).toBeUndefined();
   expect(
-    recovered.coreProcessorState.crossPostListDeliveriesByReceivingStream[receivingStreamPath],
+    recovered.coreProcessorState.copyListDeliveriesByReceivingStream[receivingStreamPath],
   ).toMatchObject({
     sourceOffset: configured.subscriptionConfiguredEvent.offset,
     status: "confirmed",
@@ -2149,7 +2135,7 @@ test("a time boundary removes the subscription from both streams while product d
     type: "events.iterate.com/stream/paused",
     payload: { reason: "subscription updates remain available while product events stop" },
   });
-  await receiver.receiveCrossPostsFrom({
+  await receiver.subscribeToEventsFrom({
     sourceStreamPath: sourcePath,
     subscriptionKey,
     endWhen: {
@@ -2197,7 +2183,7 @@ test("a paused source still removes requested and expired subscriptions across e
   using source = project.streams.get(sourcePath);
   using receiver = project.streams.get(receivingStreamPath);
 
-  await receiver.receiveCrossPostsFrom({
+  await receiver.subscribeToEventsFrom({
     sourceStreamPath: sourcePath,
     subscriptionKey: requestedKey,
   });
@@ -2205,27 +2191,27 @@ test("a paused source still removes requested and expired subscriptions across e
     type: "events.iterate.com/stream/paused",
     payload: { reason: "revocation must remain available while ordinary appends are closed" },
   });
-  const removed = await receiver.stopReceivingCrossPostsFrom({
+  const removed = await receiver.unsubscribeFromEvents({
     sourceStreamPath: sourcePath,
     subscriptionKey: requestedKey,
   });
   expect(removed).toMatchObject({
     status: "removed",
     subscriptionRemovedEvent: { type: "events.iterate.com/stream/subscription-removed" },
-    crossPostListRecordedEvent: {
-      type: "events.iterate.com/stream/cross-post-list-recorded",
+    copyListRecordedEvent: {
+      type: "events.iterate.com/stream/copy-list-recorded",
       payload: { subscriptionsByKey: {} },
     },
   });
   await expect(
-    receiver.stopReceivingCrossPostsFrom({
+    receiver.unsubscribeFromEvents({
       sourceStreamPath: sourcePath,
       subscriptionKey: requestedKey,
     }),
   ).resolves.toEqual({ status: "already-absent" });
 
   await source.append({ type: "events.iterate.com/stream/resumed", payload: {} });
-  await receiver.receiveCrossPostsFrom({
+  await receiver.subscribeToEventsFrom({
     sourceStreamPath: sourcePath,
     subscriptionKey: expiringKey,
     endWhen: { any: [{ kind: "time", at: new Date(Date.now() + 1_000).toISOString() }] },
@@ -2256,7 +2242,7 @@ test("a paused source still removes requested and expired subscriptions across e
   ).toMatchObject({ payload: { reason: "expired" } });
 });
 
-test("a cross-post filters, transforms, records its source, and deduplicates a retried delivery", async () => {
+test("a copy filters, transforms, records its source, and deduplicates a retried delivery", async () => {
   const marker = crypto.randomUUID();
   const sourcePath = `/e2e/subscriptions/copy/source/${marker}`;
   const receivingStreamPath = `/e2e/subscriptions/copy/receiver/${marker}`;
@@ -2268,7 +2254,7 @@ test("a cross-post filters, transforms, records its source, and deduplicates a r
   using source = project.streams.get(sourcePath);
   using receiver = project.streams.get(receivingStreamPath);
 
-  const configured = await receiver.receiveCrossPostsFrom({
+  const configured = await receiver.subscribeToEventsFrom({
     sourceStreamPath: sourcePath,
     subscriptionKey,
     filter: {
@@ -2291,7 +2277,7 @@ test("a cross-post filters, transforms, records its source, and deduplicates a r
   expect(copied).toMatchObject({
     payload: { value: marker },
     source: {
-      crossPostedFrom: [
+      copiedFrom: [
         {
           subscriptionKey,
           cursorChangedAtSourceOffset: configured.subscriptionConfiguredEvent.offset,
@@ -2353,7 +2339,7 @@ test("changing a subscription cursor deliberately copies the same source coordin
   using source = project.streams.get(sourcePath);
   using receiver = project.streams.get(receivingStreamPath);
 
-  const configured = await receiver.receiveCrossPostsFrom({
+  const configured = await receiver.subscribeToEventsFrom({
     sourceStreamPath: sourcePath,
     subscriptionKey,
     filter: { eventTypes: [MATCHING_EVENT_TYPE] },
@@ -2390,7 +2376,7 @@ test("changing a subscription cursor deliberately copies the same source coordin
   const copiedAfterSeek = copiesAfterSeek[1]!;
   expect(copiedAfterSeek).toMatchObject({
     source: {
-      crossPostedFrom: [
+      copiedFrom: [
         expect.objectContaining({
           subscriptionKey,
           cursorChangedAtSourceOffset: cursorSet.offset,
@@ -2405,7 +2391,7 @@ test("changing a subscription cursor deliberately copies the same source coordin
     receiverState.subscriptions.inbound.bySourcePath[sourcePath]?.byKey[subscriptionKey],
   ).toMatchObject({
     configuration: incomingSubscriptionConfiguration(
-      configured.crossPostListRecordedEvent,
+      configured.copyListRecordedEvent,
       subscriptionKey,
     ),
     numEventsReceived: 2,
@@ -2425,7 +2411,7 @@ test("replacing a subscription starts a new copy run and keeps configuration out
   using source = project.streams.get(sourcePath);
   using receiver = project.streams.get(receivingStreamPath);
 
-  await receiver.receiveCrossPostsFrom({
+  await receiver.subscribeToEventsFrom({
     sourceStreamPath: sourcePath,
     subscriptionKey,
     filter: {
@@ -2447,7 +2433,7 @@ test("replacing a subscription starts a new copy run and keeps configuration out
 
   // A same-key replacement is another deliberate delivery run. Its own
   // configure-event offset distinguishes the replay from both old copies.
-  const replacement = await receiver.receiveCrossPostsFrom({
+  const replacement = await receiver.subscribeToEventsFrom({
     sourceStreamPath: sourcePath,
     subscriptionKey,
     filter: {
@@ -2470,9 +2456,7 @@ test("replacing a subscription starts a new copy run and keeps configuration out
     configuration: replacement.subscriptionConfiguredEvent.payload,
   });
   expect(
-    coreState(await source.runtimeState()).crossPostListDeliveriesByReceivingStream[
-      receivingStreamPath
-    ],
+    coreState(await source.runtimeState()).copyListDeliveriesByReceivingStream[receivingStreamPath],
   ).toMatchObject({
     sourceOffset: replacement.subscriptionConfiguredEvent.offset,
     status: "confirmed",
@@ -2489,7 +2473,7 @@ test("replacing a subscription starts a new copy run and keeps configuration out
   expect(copiedByReplacementReplay).toMatchObject({
     payload: { changed: marker },
     source: {
-      crossPostedFrom: [
+      copiedFrom: [
         expect.objectContaining({
           subscriptionKey,
           cursorChangedAtSourceOffset: replacement.subscriptionConfiguredEvent.offset,
@@ -2511,7 +2495,7 @@ test("replacing a subscription starts a new copy run and keeps configuration out
   expect(copiedUnderReplacement).toMatchObject({
     payload: { changed: `${marker}-v2` },
     source: {
-      crossPostedFrom: [
+      copiedFrom: [
         expect.objectContaining({
           subscriptionKey,
           offset: newUnderReplacement!.offset,
@@ -2545,7 +2529,7 @@ test("a stream transform failure preserves the healthy batch prefix without crea
   using source = project.streams.get(sourcePath);
   using receiver = project.streams.get(receivingStreamPath);
 
-  await receiver.receiveCrossPostsFrom({
+  await receiver.subscribeToEventsFrom({
     sourceStreamPath: sourcePath,
     subscriptionKey,
     filter: { eventTypes: [MATCHING_EVENT_TYPE] },
@@ -2567,7 +2551,7 @@ test("a stream transform failure preserves the healthy batch prefix without crea
     predicate: (event) => event.payload?.marker === marker,
     timeoutMs: 15_000,
   });
-  expect(copiedHealthy.source?.crossPostedFrom?.at(-1)?.offset).toBe(healthy!.offset);
+  expect(copiedHealthy.source?.copiedFrom?.at(-1)?.offset).toBe(healthy!.offset);
 
   await waitForCondition(
     async () =>
@@ -2578,7 +2562,7 @@ test("a stream transform failure preserves the healthy batch prefix without crea
   const runtime = runtimeState(await source.runtimeState()).runtime.subscriptions[subscriptionKey]!;
   expect(runtime).toMatchObject({ acknowledgedOffset: healthy!.offset });
   expect(runtime.acknowledgedOffset).toBeLessThan(failed!.offset);
-  expect(runtime.lastError).toContain("cross-post transform");
+  expect(runtime.lastError).toContain("copy transform");
   expect(
     (await receiver.getEvents({ afterOffset: 0, eventTypes: [MATCHING_EVENT_TYPE] })).map(
       (event) => event.offset,
@@ -2597,7 +2581,7 @@ test("a filter failure retries in order and never advances past later events", a
   using source = project.streams.get(sourcePath);
   using receiver = project.streams.get(receivingStreamPath);
 
-  await receiver.receiveCrossPostsFrom({
+  await receiver.subscribeToEventsFrom({
     sourceStreamPath: sourcePath,
     subscriptionKey,
     filter: {
@@ -2629,7 +2613,7 @@ test("a filter failure retries in order and never advances past later events", a
 // Hosted processors are separate: they report their own checkpoint, have no
 // configurable start/ephemeral policy, and cannot use count or source-offset
 // ending conditions. Their wake/checkpoint behavior has dedicated stories below.
-test("cross-post, ITX-call, and webhook-post subscriptions share start positions and ephemeral-event inclusion", async () => {
+test("copy, ITX-call, and webhook-post subscriptions share start positions and ephemeral-event inclusion", async () => {
   const marker = crypto.randomUUID();
   const sourcePath = `/e2e/subscriptions/start/source/${marker}`;
   const itxOutputPath = `/e2e/subscriptions/start/itx-output/${marker}`;
@@ -2742,7 +2726,7 @@ test("cross-post, ITX-call, and webhook-post subscriptions share start positions
   );
   try {
     for (const [index, entry] of cases.entries()) {
-      await receivingStreams[index]!.receiveCrossPostsFrom({
+      await receivingStreams[index]!.subscribeToEventsFrom({
         sourceStreamPath: sourcePath,
         subscriptionKey: `${subscriptionPrefix}stream-${index}`,
         filter: { eventTypes: [MATCHING_EVENT_TYPE] },
@@ -2805,7 +2789,7 @@ test("cross-post, ITX-call, and webhook-post subscriptions share start positions
           );
         },
         {
-          description: `${entry.name} deliveries through cross-post, ITX-call, and webhook-post subscriptions`,
+          description: `${entry.name} deliveries through copy, ITX-call, and webhook-post subscriptions`,
           timeoutMs: 30_000,
         },
       );
@@ -2839,13 +2823,13 @@ test("cross-post, ITX-call, and webhook-post subscriptions share start positions
   expect(transientBefore).toMatchObject({ ephemeral: true });
 });
 
-test("cross-post, ITX-call, and webhook-post subscriptions stop at exact count and source-offset boundaries", async () => {
+test("copy, ITX-call, and webhook-post subscriptions stop at exact count and source-offset boundaries", async () => {
   const marker = crypto.randomUUID();
   const subscriptionPrefix = `finite-${marker}-`;
   const itxOutputPath = `/e2e/subscriptions/finite/itx-output/${marker}`;
   const itxOutputType = "events.iterate.test/subscriptions/finite-itx-received";
   const webhookDeliveries: Array<{ subscriptionKey: string; index: number }> = [];
-  const cases = (["cross-post", "itx-call", "webhook-post"] as const).flatMap(
+  const cases = (["copy-to-stream", "itx-call", "webhook-post"] as const).flatMap(
     (subscriptionAction) =>
       (["acknowledged-events", "source-offset-acknowledged"] as const).map((endKind) => ({
         subscriptionAction,
@@ -2908,7 +2892,7 @@ test("cross-post, ITX-call, and webhook-post subscriptions stop at exact count a
     project.streams.get(`/e2e/subscriptions/finite/source/${entry.slug}/${marker}`),
   );
   const receivingStreams = cases.map((entry) =>
-    entry.subscriptionAction === "cross-post"
+    entry.subscriptionAction === "copy-to-stream"
       ? project.streams.get(`/e2e/subscriptions/finite/receiver/${entry.slug}/${marker}`)
       : undefined,
   );
@@ -2936,8 +2920,8 @@ test("cross-post, ITX-call, and webhook-post subscriptions stop at exact count a
               ],
             };
 
-      if (entry.subscriptionAction === "cross-post") {
-        await receivingStreams[index]!.receiveCrossPostsFrom({
+      if (entry.subscriptionAction === "copy-to-stream") {
+        await receivingStreams[index]!.subscribeToEventsFrom({
           sourceStreamPath: sourcePath,
           subscriptionKey,
           filter: { eventTypes: [MATCHING_EVENT_TYPE] },
@@ -2977,7 +2961,7 @@ test("cross-post, ITX-call, and webhook-post subscriptions stop at exact count a
             coreState(await source.runtimeState()).subscriptions.outbound.byKey[subscriptionKey] ===
             undefined;
           if (!sourceRemoved) return false;
-          if (entry.subscriptionAction !== "cross-post") return true;
+          if (entry.subscriptionAction !== "copy-to-stream") return true;
           return (
             coreState(await receivingStreams[index]!.runtimeState()).subscriptions.inbound
               .bySourcePath[sourcePath]?.byKey[subscriptionKey] === undefined
@@ -2990,7 +2974,7 @@ test("cross-post, ITX-call, and webhook-post subscriptions stop at exact count a
       );
 
       const indexes =
-        entry.subscriptionAction === "cross-post"
+        entry.subscriptionAction === "copy-to-stream"
           ? (
               await receivingStreams[index]!.getEvents({
                 afterOffset: 0,
@@ -3112,17 +3096,17 @@ test("every project stream is born with ordinary project-worker and PostHog ITX 
   using impersonatedProject = impersonatedItx.projects.get(projectId);
   using impersonatedStream = impersonatedProject.streams.get(streamPath);
   const hiddenReceiver = impersonatedStream as unknown as {
-    receiveCrossPostedEvents(batch: unknown): Promise<unknown>;
+    receiveCopiedEvents(batch: unknown): Promise<unknown>;
   };
   await expect(
-    hiddenReceiver.receiveCrossPostedEvents({
+    hiddenReceiver.receiveCopiedEvents({
       projectId,
       path: "/forged-source",
       events: [],
       streamMaxOffset: 1,
       subscriptionKey: "forged",
       cursorChangedAtSourceOffset: 1,
-      deliveryId: `forged-cross-post:${marker}`,
+      deliveryId: `forged-copy:${marker}`,
       attempt: 1,
       configuredEvent: {
         type: "events.iterate.com/stream/subscription-configured",
@@ -4123,7 +4107,7 @@ test("invalid receiver-specific combinations and expressions never commit", asyn
         payload: {
           subscriptionKey: `stream-skip-${marker}`,
           receiver: {
-            action: "cross-post",
+            action: "copy-to-stream",
             receivingStreamPath: `/e2e/subscriptions/validation/receiver/${marker}`,
             delivery: deliveryPolicy("now", { onFailingEvent: "skip" }),
           },
@@ -4137,7 +4121,7 @@ test("invalid receiver-specific combinations and expressions never commit", asyn
         subscriptionKey: `condition-${marker}`,
         filter: { condition: "payload.(((" },
         receiver: {
-          action: "cross-post",
+          action: "copy-to-stream",
           receivingStreamPath: `/e2e/subscriptions/validation/receiver/${marker}`,
           delivery: { ...deliveryPolicy("now"), onFailingEvent: "halt" as const },
         },
@@ -4152,7 +4136,7 @@ test("invalid receiver-specific combinations and expressions never commit", asyn
           subscriptionKey: `filter-typo-${marker}`,
           filter: { eventType: [MATCHING_EVENT_TYPE] },
           receiver: {
-            action: "cross-post",
+            action: "copy-to-stream",
             receivingStreamPath: `/e2e/subscriptions/validation/receiver/${marker}`,
             delivery: deliveryPolicy("now"),
           },
@@ -4165,7 +4149,7 @@ test("invalid receiver-specific combinations and expressions never commit", asyn
       event: subscriptionConfigured({
         subscriptionKey: `transform-${marker}`,
         receiver: {
-          action: "cross-post",
+          action: "copy-to-stream",
           receivingStreamPath: `/e2e/subscriptions/validation/receiver/${marker}`,
           transform: "{ ((( ",
           delivery: { ...deliveryPolicy("now"), onFailingEvent: "halt" as const },
@@ -4204,7 +4188,7 @@ test("invalid receiver-specific combinations and expressions never commit", asyn
     );
   }
   await expect(
-    source.receiveCrossPostsFrom({
+    source.subscribeToEventsFrom({
       sourceStreamPath: sourcePath,
       subscriptionKey: `self-${marker}`,
     }),
@@ -4215,7 +4199,7 @@ test("invalid receiver-specific combinations and expressions never commit", asyn
       subscriptionConfigured({
         subscriptionKey: `self-alias-${marker}`,
         receiver: {
-          action: "cross-post",
+          action: "copy-to-stream",
           receivingStreamPath: `${sourcePath}/../${ownSegment}`,
           delivery: { ...deliveryPolicy("now"), onFailingEvent: "halt" as const },
         },
@@ -4228,7 +4212,7 @@ test("invalid receiver-specific combinations and expressions never commit", asyn
   );
   const sourceHeadBeforeFutureStart = coreState(await source.runtimeState()).maxOffset;
   await expect(
-    futureStartReceiver.receiveCrossPostsFrom({
+    futureStartReceiver.subscribeToEventsFrom({
       sourceStreamPath: sourcePath,
       subscriptionKey: `future-start-${marker}`,
       start: { afterOffset: sourceHeadBeforeFutureStart + 1_000_000 },
@@ -4241,7 +4225,7 @@ test("invalid receiver-specific combinations and expressions never commit", asyn
     subscriptionConfigured({
       subscriptionKey: ` ${canonicalSubscriptionKey} `,
       receiver: {
-        action: "cross-post",
+        action: "copy-to-stream",
         receivingStreamPath: ` e2e/subscriptions/validation/./canonical/${marker} `,
         delivery: { ...deliveryPolicy("now"), onFailingEvent: "halt" as const },
       },
@@ -4250,7 +4234,7 @@ test("invalid receiver-specific combinations and expressions never commit", asyn
   expect(canonical).toMatchObject({
     payload: {
       subscriptionKey: canonicalSubscriptionKey,
-      receiver: { action: "cross-post", receivingStreamPath: canonicalReceiverPath },
+      receiver: { action: "copy-to-stream", receivingStreamPath: canonicalReceiverPath },
     },
   });
   const sourceHeadBeforeFutureRead = coreState(await source.runtimeState()).maxOffset;
@@ -4279,7 +4263,7 @@ test("public callers cannot forge copied events or platform-authored stream fact
 
   await expect(
     source.append({
-      type: "events.iterate.com/stream/cross-post-list-recorded",
+      type: "events.iterate.com/stream/copy-list-recorded",
       payload: {
         source: {
           projectId,
@@ -4296,7 +4280,7 @@ test("public callers cannot forge copied events or platform-authored stream fact
     source.append({
       type: MATCHING_EVENT_TYPE,
       source: {
-        crossPostedFrom: [
+        copiedFrom: [
           {
             subscriptionKey: `forged-received-from-${marker}`,
             streamId: crypto.randomUUID(),
@@ -4311,16 +4295,16 @@ test("public callers cannot forge copied events or platform-authored stream fact
         ],
       },
     }),
-  ).rejects.toThrow(/cross-post source information is platform-authored/);
+  ).rejects.toThrow(/copy source information is platform-authored/);
 
   const forgedCoreFacts: StreamEventInput[] = [
     {
-      type: "events.iterate.com/stream/cross-post-list-confirmed",
+      type: "events.iterate.com/stream/copy-list-confirmed",
       payload: {
         receivingStreamPath: canonicalReceiverPath,
         sourceOffset: 1,
         receivingStreamEvent: {
-          type: "events.iterate.com/stream/cross-post-list-recorded",
+          type: "events.iterate.com/stream/copy-list-recorded",
           payload: {
             source: {
               projectId: "forged-project",
@@ -4348,7 +4332,7 @@ test("public callers cannot forge copied events or platform-authored stream fact
       },
     },
     {
-      type: "events.iterate.com/stream/cross-post-list-delivery-blocked",
+      type: "events.iterate.com/stream/copy-list-delivery-blocked",
       payload: {
         receivingStreamPath: canonicalReceiverPath,
         sourceOffset: 1,
@@ -4401,7 +4385,7 @@ test("commands on a missing subscription key fail without appending state", asyn
   await expect(
     project.streams
       .get(`/e2e/subscriptions/validation/missing-receiver/${marker}`)
-      .stopReceivingCrossPostsFrom({ sourceStreamPath: sourcePath, subscriptionKey: missingKey }),
+      .unsubscribeFromEvents({ sourceStreamPath: sourcePath, subscriptionKey: missingKey }),
   ).resolves.toEqual({ status: "already-absent" });
 
   const committedEvents = await source.getEvents({ afterOffset: 0 });
@@ -4470,8 +4454,8 @@ function runtimeState(value: unknown): StreamRuntimeDebugState {
   return value as StreamRuntimeDebugState;
 }
 
-function crossPostListRetry(value: unknown, receivingStreamPath: string) {
-  return runtimeState(value).runtime.crossPostListRetries[receivingStreamPath];
+function copyListRetry(value: unknown, receivingStreamPath: string) {
+  return runtimeState(value).runtime.copyListRetries[receivingStreamPath];
 }
 
 function incomingSubscriptionConfiguration(event: StreamEvent, subscriptionKey: string): unknown {
@@ -4567,12 +4551,12 @@ async function appendTrustedCoreEvents(
 async function deliverTrustedStreamBatch(
   stream: Stream,
   batch: StreamDeliveryBatch,
-): Promise<CrossPostReceipt> {
+): Promise<CopyReceipt> {
   return await (
     stream as unknown as {
-      testReceiveCrossPostedEvents(batch: StreamDeliveryBatch): Promise<CrossPostReceipt>;
+      testReceiveCopiedEvents(batch: StreamDeliveryBatch): Promise<CopyReceipt>;
     }
-  ).testReceiveCrossPostedEvents(batch);
+  ).testReceiveCopiedEvents(batch);
 }
 
 function disposeRpc(value: unknown): void {

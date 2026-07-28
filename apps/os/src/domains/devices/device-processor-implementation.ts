@@ -14,7 +14,7 @@ import {
  * Enrollment happens in the device Durable Object: it stores the Expo push
  * token in a write-only Secret and appends `device/created` carrying only the
  * Secret's path and update offset — the token never rides this stream. The
- * created event's per-event lane cross-posts the birth fact to the project
+ * created event's per-event lane copies the birth fact to the project
  * root stream (the catalog the project processor lists devices from) and
  * configures a notification-intent subscription there, so every project-level
  * `notification/requested` intent is copied onto this device stream.
@@ -22,7 +22,7 @@ import {
  * standing revocation); `device/revoked` removes it.
  *
  * A push obligation opens when a `device/notification-requested` (direct) or
- * `notification/requested` (cross-posted intent) event reduces into
+ * `notification/requested` (copied intent) event reduces into
  * `state.notifications`, keyed by the requesting event's OFFSET — the
  * obligation's identity; there are no synthetic ids anywhere, and every later
  * fact points back with that requestOffset.
@@ -74,7 +74,7 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
   // The side-effect lanes are chosen HERE, at the dispatch site, never inside
   // helpers:
   //
-  // - PER-EVENT consequences (the created/updated/revoked cross-posts to the
+  // - PER-EVENT consequences (the created/updated/revoked copies to the
   //   project root stream) use `blockProcessorWhile`: each rides an event
   //   delivered once — a dropped append would lose the catalog entry or leave
   //   the intent subscription wrong forever.
@@ -592,7 +592,7 @@ function notificationIntentSubscriptionEvent(input: { idempotencyKey: string; pa
       description: `Delivers project notification intents to ${input.path} for device-owned delivery.`,
       filter: { eventTypes: ["events.iterate.com/notification/requested"] },
       receiver: {
-        action: "cross-post" as const,
+        action: "copy-to-stream" as const,
         receivingStreamPath: input.path,
         delivery: {
           start: "now" as const,

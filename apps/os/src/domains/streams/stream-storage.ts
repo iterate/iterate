@@ -8,7 +8,7 @@
 // JSON is chunked in JS.
 //
 // A third table, `subscription_cursors`, holds delivery cursors. A fourth records
-// retries when a source cannot send its current cross-post list to a
+// retries when a source cannot send its current copy list to a
 // receiving stream. They live in the same SQLite as the log on purpose:
 // a cursor advance and the events it acknowledges commit under the same
 // output gate, so the cursor can never disagree with the log it points into.
@@ -26,12 +26,12 @@ import { StreamEvent as StreamEventSchema } from "iterate/processors";
 const EVENT_CHUNK_SIZE = 512 * 1024;
 const textEncoder = new TextEncoder();
 const REQUIRED_EVENT_COLUMNS = [
-  "cross_post_list_source_path",
-  "cross_post_list_source_created_at_ms",
-  "cross_post_list_source_stream_id",
-  "cross_post_list_source_offset",
-  "cross_post_list_confirmed_receiving_stream_path",
-  "cross_post_list_confirmed_source_offset",
+  "copy_list_source_path",
+  "copy_list_source_created_at_ms",
+  "copy_list_source_stream_id",
+  "copy_list_source_offset",
+  "copy_list_confirmed_receiving_stream_path",
+  "copy_list_confirmed_source_offset",
 ] as const;
 
 /**
@@ -59,12 +59,12 @@ export class StreamEventLog {
         created_at text not null,
         idempotency_key text unique,
         ephemeral integer not null default 0,
-        cross_post_list_source_path text,
-        cross_post_list_source_created_at_ms integer,
-        cross_post_list_source_stream_id text,
-        cross_post_list_source_offset integer,
-        cross_post_list_confirmed_receiving_stream_path text,
-        cross_post_list_confirmed_source_offset integer
+        copy_list_source_path text,
+        copy_list_source_created_at_ms integer,
+        copy_list_source_stream_id text,
+        copy_list_source_offset integer,
+        copy_list_confirmed_receiving_stream_path text,
+        copy_list_confirmed_source_offset integer
       )
     `);
     const eventColumns = new Set(
@@ -78,31 +78,31 @@ export class StreamEventLog {
     );
     if (missingEventColumns.length > 0) {
       throw new Error(
-        `stream storage at "${this.path}" predates the cross-post subscription schema (missing events columns: ${missingEventColumns.join(", ")}); erase and recreate this stream before deploying this version`,
+        `stream storage at "${this.path}" predates the copy subscription schema (missing events columns: ${missingEventColumns.join(", ")}); erase and recreate this stream before deploying this version`,
       );
     }
     this.sql.exec(`
       -- Empty source lists disappear from reduced state. These metadata fields
       -- retain the source lifetime and offset on the immutable event row,
       -- allowing a delayed RPC from either an older offset or a destroyed
-      -- source lifetime to be rejected without retaining an empty cross-post list.
-      create index if not exists events_cross_post_list_source_position
+      -- source lifetime to be rejected without retaining an empty copy list.
+      create index if not exists events_copy_list_source_position
       on events (
-        cross_post_list_source_path,
-        cross_post_list_source_created_at_ms desc,
-        cross_post_list_source_stream_id desc,
-        cross_post_list_source_offset desc,
+        copy_list_source_path,
+        copy_list_source_created_at_ms desc,
+        copy_list_source_stream_id desc,
+        copy_list_source_offset desc,
         offset desc
       )
-      where cross_post_list_source_path is not null
+      where copy_list_source_path is not null
     `);
     this.sql.exec(`
       -- Source-side records retain the receiver event that stored each
       -- complete list. This index makes an already-completed command a
       -- local read even after an empty list removed its reduced-state tracker.
-      create index if not exists events_cross_post_list_confirmed_source_offset
-      on events (cross_post_list_confirmed_receiving_stream_path, cross_post_list_confirmed_source_offset desc)
-      where cross_post_list_confirmed_receiving_stream_path is not null
+      create index if not exists events_copy_list_confirmed_source_offset
+      on events (copy_list_confirmed_receiving_stream_path, copy_list_confirmed_source_offset desc)
+      where copy_list_confirmed_receiving_stream_path is not null
     `);
     this.sql.exec(`
       -- Full committed event JSON split into ordered byte chunks. The WITHOUT ROWID
@@ -162,17 +162,17 @@ export class StreamEventLog {
   insert(events: readonly StreamEvent[]): number[] {
     const byteLengths: number[] = [];
     for (const event of events) {
-      const crossPostListRecordedEvent =
-        event.type === "events.iterate.com/stream/cross-post-list-recorded" &&
-        event.source?.crossPostedFrom === undefined
+      const copyListRecordedEvent =
+        event.type === "events.iterate.com/stream/copy-list-recorded" &&
+        event.source?.copiedFrom === undefined
           ? (event.payload as {
               source: { path: string; streamId: string; streamCreatedAt: string };
               sourceOffset: number;
             })
           : undefined;
-      const crossPostListConfirmedEvent =
-        event.type === "events.iterate.com/stream/cross-post-list-confirmed" &&
-        event.source?.crossPostedFrom === undefined
+      const copyListConfirmedEvent =
+        event.type === "events.iterate.com/stream/copy-list-confirmed" &&
+        event.source?.copiedFrom === undefined
           ? (event.payload as {
               receivingStreamPath: string;
               sourceOffset: number;
@@ -181,23 +181,23 @@ export class StreamEventLog {
       this.sql.exec(
         `insert into events (
            offset, type, created_at, idempotency_key, ephemeral,
-           cross_post_list_source_path, cross_post_list_source_created_at_ms,
-           cross_post_list_source_stream_id, cross_post_list_source_offset,
-           cross_post_list_confirmed_receiving_stream_path, cross_post_list_confirmed_source_offset
+           copy_list_source_path, copy_list_source_created_at_ms,
+           copy_list_source_stream_id, copy_list_source_offset,
+           copy_list_confirmed_receiving_stream_path, copy_list_confirmed_source_offset
          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         event.offset,
         event.type,
         event.createdAt,
         event.idempotencyKey ?? null,
         event.ephemeral === true ? 1 : 0,
-        crossPostListRecordedEvent?.source.path ?? null,
-        crossPostListRecordedEvent === undefined
+        copyListRecordedEvent?.source.path ?? null,
+        copyListRecordedEvent === undefined
           ? null
-          : Date.parse(crossPostListRecordedEvent.source.streamCreatedAt),
-        crossPostListRecordedEvent?.source.streamId ?? null,
-        crossPostListRecordedEvent?.sourceOffset ?? null,
-        crossPostListConfirmedEvent?.receivingStreamPath ?? null,
-        crossPostListConfirmedEvent?.sourceOffset ?? null,
+          : Date.parse(copyListRecordedEvent.source.streamCreatedAt),
+        copyListRecordedEvent?.source.streamId ?? null,
+        copyListRecordedEvent?.sourceOffset ?? null,
+        copyListConfirmedEvent?.receivingStreamPath ?? null,
+        copyListConfirmedEvent?.sourceOffset ?? null,
       );
       const rawJsonBytes = textEncoder.encode(JSON.stringify(event));
       byteLengths.push(rawJsonBytes.byteLength);
@@ -214,16 +214,16 @@ export class StreamEventLog {
   }
 
   /** Latest complete list of subscriptions recorded from one source stream. */
-  getLatestCrossPostListFromSource(sourcePath: string): StreamEvent | undefined {
+  getLatestCopyListFromSource(sourcePath: string): StreamEvent | undefined {
     const row = this.sql
       .exec<{ offset: number }>(
         `select offset
          from events
-         where cross_post_list_source_path = ?
+         where copy_list_source_path = ?
          order by
-           cross_post_list_source_created_at_ms desc,
-           cross_post_list_source_stream_id desc,
-           cross_post_list_source_offset desc,
+           copy_list_source_created_at_ms desc,
+           copy_list_source_stream_id desc,
+           copy_list_source_offset desc,
            offset desc
          limit 1`,
         sourcePath,
@@ -232,16 +232,16 @@ export class StreamEventLog {
     return row === undefined ? undefined : this.#readEventFromChunks(row.offset);
   }
 
-  /** Latest source-side event recording that one receiving stream stored its cross-post list. */
-  getLatestCrossPostListConfirmationForReceivingStream(
+  /** Latest source-side event recording that one receiving stream stored its copy list. */
+  getLatestCopyListConfirmationForReceivingStream(
     receivingStreamPath: string,
   ): StreamEvent | undefined {
     const row = this.sql
       .exec<{ offset: number }>(
         `select offset
          from events
-         where cross_post_list_confirmed_receiving_stream_path = ?
-         order by cross_post_list_confirmed_source_offset desc
+         where copy_list_confirmed_receiving_stream_path = ?
+         order by copy_list_confirmed_source_offset desc
          limit 1`,
         receivingStreamPath,
       )
@@ -372,7 +372,7 @@ export class StreamEventLog {
 
 /**
  * One stored subscription's delivery cursor row. `acknowledgedOffset` is exclusive
- * (delivery resumes at +1). For cross-post, ITX-call, and webhook subscriptions
+ * (delivery resumes at +1). For copy, ITX-call, and webhook subscriptions
  * it is the authoritative cursor: it advances only when the awaited call resolves. For
  * hosted processors it is the checkpoint reported by the processor on its
  * hosted processor reported on the last successful wake, used only to decide

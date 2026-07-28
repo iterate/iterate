@@ -31,7 +31,7 @@ function streamEvent(overrides: Partial<StreamEvent> = {}): StreamEvent {
         },
         whileProcessing: { offset: 6, type: "events.example.com/question-asked" },
       },
-      crossPostedFrom: [
+      copiedFrom: [
         {
           subscriptionKey: "mirror",
           streamId: "11111111-1111-4111-8111-111111111111",

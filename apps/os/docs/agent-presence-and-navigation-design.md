@@ -44,7 +44,7 @@ AgentCollectionRpcTarget.processEvent(batch)
 singleton AgentCollectionDurableObject
   projectId + "/agents"
           |
-          | receiveCrossPostedEvents(batch)
+          | receiveCopiedEvents(batch)
           v
 /agents collection stream
           |
@@ -82,7 +82,7 @@ infrastructure to its own stream:
 - agent-collection/created;
 - the normal wake subscription for the agent-collection processor.
 
-It then passes the delivered batch to receiveCrossPostedEvents. From that point onward the
+It then passes the delivered batch to receiveCopiedEvents. From that point onward the
 normal stream processor registry owns wakeup, reduction, durable progress,
 snapshot, and live-state publication.
 
@@ -155,7 +155,7 @@ the same update semantics.
 - A second creation for one path, summary before creation, or received agent
   facts without source-stream provenance are data-model violations and fail
   loudly.
-- Exact redelivery is handled by normal cross-post and processor
+- Exact redelivery is handled by normal copy and processor
   idempotency.
 
 waitingFor clears use the summary event family too. A processor-authored

@@ -595,10 +595,10 @@ describe("StreamRpcTarget", () => {
   });
 
   it("requires branded sender authority and the receiving stream's project", async () => {
-    const receiveCrossPostedEvents = vi.fn(async () => ({ accepted: 0, dropped: [] }));
+    const receiveCopiedEvents = vi.fn(async () => ({ accepted: 0, dropped: [] }));
     class TestStreamRpcTarget extends StreamRpcTarget {
       override get [STREAM_DURABLE_OBJECT_STUB]() {
-        return { receiveCrossPostedEvents } as never;
+        return { receiveCopiedEvents } as never;
       }
     }
     const batch = {
@@ -627,7 +627,7 @@ describe("StreamRpcTarget", () => {
       path: "/receiver",
       projectId: "prj_receiver",
     });
-    expect(() => forged.receiveCrossPostedEvents(batch as never)).toThrow(
+    expect(() => forged.receiveCopiedEvents(batch as never)).toThrow(
       "accepted only from trusted internal senders",
     );
 
@@ -637,13 +637,13 @@ describe("StreamRpcTarget", () => {
       projectId: "prj_receiver",
     });
     expect(() =>
-      branded.receiveCrossPostedEvents({ ...batch, projectId: "prj_other" } as never),
+      branded.receiveCopiedEvents({ ...batch, projectId: "prj_other" } as never),
     ).toThrow("must come from the receiving stream's project");
-    await expect(branded.receiveCrossPostedEvents(batch as never)).resolves.toEqual({
+    await expect(branded.receiveCopiedEvents(batch as never)).resolves.toEqual({
       accepted: 0,
       dropped: [],
     });
-    expect(receiveCrossPostedEvents).toHaveBeenCalledOnce();
+    expect(receiveCopiedEvents).toHaveBeenCalledOnce();
   });
 });
 

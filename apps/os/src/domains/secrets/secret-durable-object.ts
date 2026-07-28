@@ -88,7 +88,7 @@ export class SecretDurableObject extends DurableObject<Env> {
   // The DO constructs the processor — no host-injected readState/writeState/
   // keepAliveWhile deps; the runner owns durable progress and keepalive. NO
   // recovery on purpose: the processor's only side effect (the secret/created
-  // catalog cross-post) is a blocked per-event append — the cursor holds until
+  // catalog copy) is a blocked per-event append — the cursor holds until
   // it commits, so an eviction just redelivers the event; there is no
   // runInBackground work an eviction could lose (see the registry module
   // doc's rule).

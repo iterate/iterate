@@ -1,6 +1,6 @@
 // GitHub-backed repos, the CI-provable half: webhook events arriving on a
 // GitHub connection stream reach the linked repo's own stream
-// through the exact cross-post subscription `repo.linkGithub` installs (same
+// through the exact copy subscription `repo.linkGithub` installs (same
 // subscriptionKey, same JSONata condition on push type + GitHub's stable repository ID, same
 // first-class destination). The GitHub-touching half (mirror
 // push, create-on-link, syncFromGithub) authenticates against real GitHub and
@@ -43,7 +43,7 @@ test("github pushes about a linked repository reach the repo stream", async () =
         condition: 'payload.delivery.name = "push" and payload.body.repository.id = 101',
       },
       receiver: {
-        action: "cross-post",
+        action: "copy-to-stream",
         receivingStreamPath: repoPath,
         delivery: {
           start: "now",
@@ -104,8 +104,8 @@ test("github pushes about a linked repository reach the repo stream", async () =
   expect(copied.payload).toMatchObject({
     body: { after: "widgets-head", ref: "refs/heads/main" },
   });
-  expect(copied.source?.crossPostedFrom).toHaveLength(1);
-  expect(copied.source?.crossPostedFrom?.[0]).toMatchObject({
+  expect(copied.source?.copiedFrom).toHaveLength(1);
+  expect(copied.source?.copiedFrom?.[0]).toMatchObject({
     path: connectionPath,
     subscriptionKey: `github-repo:${repoPath}`,
     type: GITHUB_WEBHOOK_RECEIVED_EVENT_TYPE,

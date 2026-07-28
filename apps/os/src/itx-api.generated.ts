@@ -1290,18 +1290,18 @@ export interface Stream {
     afterOffset: number;
   }): Promise<{ cursorSet: StreamEvent; resumed: StreamEvent }>;
   /** Retry sending this source's current list to one receiving stream. */
-  resendCrossPostList(args: { receivingStreamPath: string }): Promise<StreamEvent>;
+  resendCopyList(args: { receivingStreamPath: string }): Promise<StreamEvent>;
   /**
    * Configure this stream to durably receive matching events from `source`.
    * The source owns the matching-event read position. It appends an
    * `subscription-configured` event, sends its complete list for this
-   * receiver, waits for the receiver to append `cross-post-list-recorded`,
-   * waits for the source to append `cross-post-list-confirmed`, then returns
+   * receiver, waits for the receiver to append `copy-list-recorded`,
+   * waits for the source to append `copy-list-confirmed`, then returns
    * the effective key and that receiver's three committed events. Moving an
    * existing key also waits for the old receiver's replacement list and
    * source confirmation.
    */
-  receiveCrossPostsFrom(
+  subscribeToEventsFrom(
     args: {
       /** Source stream path in this project. */
       sourceStreamPath: string;
@@ -1334,16 +1334,16 @@ export interface Stream {
   ): Promise<{
     subscriptionKey: string;
     subscriptionConfiguredEvent: CommittedSubscriptionConfiguredEvent;
-    crossPostListRecordedEvent: CommittedCrossPostListRecordedEvent;
-    crossPostListConfirmedEvent: CommittedCrossPostListConfirmedEvent;
+    copyListRecordedEvent: CommittedCopyListRecordedEvent;
+    copyListConfirmedEvent: CommittedCopyListConfirmedEvent;
   }>;
   /** Stop receiving from `source`, waiting for both streams to record the change. */
-  stopReceivingCrossPostsFrom(args: { sourceStreamPath: string; subscriptionKey: string }): Promise<
+  unsubscribeFromEvents(args: { sourceStreamPath: string; subscriptionKey: string }): Promise<
     | {
         status: "removed";
         subscriptionRemovedEvent: CommittedSubscriptionRemovedEvent;
-        crossPostListRecordedEvent: CommittedCrossPostListRecordedEvent;
-        crossPostListConfirmedEvent: CommittedCrossPostListConfirmedEvent;
+        copyListRecordedEvent: CommittedCopyListRecordedEvent;
+        copyListConfirmedEvent: CommittedCopyListConfirmedEvent;
       }
     | { status: "already-absent" }
   >;
@@ -1989,7 +1989,7 @@ export type OpenApiRpc = object;
  * source stream stores: delivery coordinates and events plus the fields an
  * at-least-once receiver needs to deduplicate and self-configure. Deliberately
  * not the state-carrying callback batch
- * {@link StreamEventBatch}: ITX calls and cross-post destinations do not get
+ * {@link StreamEventBatch}: ITX calls and copy destinations do not get
  * folded core state, because other subscriptions' configuration, halt errors,
  * and the presence roster are deployment-internal. Webhooks use a narrower
  * per-event envelope for the same reason. Session callbacks and hosted
@@ -2528,7 +2528,7 @@ export type StreamEvent = {
               whileProcessing?: { offset: number; type: string } | undefined;
             }
           | undefined;
-        crossPostedFrom?:
+        copiedFrom?:
           | {
               subscriptionKey: string;
               streamId: string;
@@ -3193,7 +3193,7 @@ export type SubscriptionConfigurationForDelivery = {
           processorSlug?: string;
         }
       | {
-          action: "cross-post";
+          action: "copy-to-stream";
           receivingStreamPath: string;
           transform?: string;
           delivery: {
@@ -3227,7 +3227,7 @@ export type SubscriptionConfigurationForDelivery = {
  * metadata, provenance source, and idempotency key — everything before the
  * stream assigns offset and timestamp at commit. `ephemeral: true` commits a
  * second-class row: excluded from range reads unless `includeEphemeral`,
- * excluded from durable delivery unless a cross-post, ITX-call, or webhook subscription opts in, and evictable —
+ * excluded from durable delivery unless a copy, ITX-call, or webhook subscription opts in, and evictable —
  * for transient signals (LLM streaming chunks) whose durable truth lands as
  * its own event. */
 export type StreamEventInput = {
@@ -3244,7 +3244,7 @@ export type StreamEventInput = {
               whileProcessing?: { offset: number; type: string } | undefined;
             }
           | undefined;
-        crossPostedFrom?:
+        copiedFrom?:
           | {
               subscriptionKey: string;
               streamId: string;
@@ -3304,7 +3304,7 @@ export type StreamRuntimeDebugState = {
     /** Stored subscription progress, keyed by subscription key. */
     subscriptions: Record<string, SubscriptionRuntimeState>;
     /** Retry progress keyed by receiving stream path. */
-    crossPostListRetries: Record<string, CrossPostListRetryRow>;
+    copyListRetries: Record<string, CopyListRetryRow>;
     metrics: StreamThroughputMetrics;
     /** SQLite database size in bytes (event log + delivery rows + chunks). */
     storageSizeBytes: number;
@@ -3382,7 +3382,7 @@ export type CommittedSubscriptionConfiguredEvent = Omit<
                 whileProcessing?: { offset: number; type: string } | undefined;
               }
             | undefined;
-          crossPostedFrom?:
+          copiedFrom?:
             | {
                 subscriptionKey: string;
                 streamId: string;
@@ -3420,7 +3420,7 @@ export type CommittedSubscriptionConfiguredEvent = Omit<
                   whileProcessing?: { offset: number; type: string } | undefined;
                 }
               | undefined;
-            crossPostedFrom?:
+            copiedFrom?:
               | {
                   subscriptionKey: string;
                   streamId: string;
@@ -3461,7 +3461,7 @@ export type CommittedSubscriptionConfiguredEvent = Omit<
             processorSlug?: string | undefined;
           }
         | {
-            action: "cross-post";
+            action: "copy-to-stream";
             receivingStreamPath: string;
             transform?: string | undefined;
             delivery: {
@@ -3510,7 +3510,7 @@ export type CommittedSubscriptionConfiguredEvent = Omit<
             processorSlug?: string | undefined;
           }
         | {
-            action: "cross-post";
+            action: "copy-to-stream";
             receivingStreamPath: string;
             transform?: string | undefined;
             delivery: {
@@ -3540,8 +3540,8 @@ export type CommittedSubscriptionConfiguredEvent = Omit<
     };
   };
 
-/** One committed receiver event recording a source stream's complete cross-post list. */
-export type CommittedCrossPostListRecordedEvent = Omit<
+/** One committed receiver event recording a source stream's complete copy list. */
+export type CommittedCopyListRecordedEvent = Omit<
   {
     type: string;
     payload?: Record<string, unknown> | undefined;
@@ -3556,7 +3556,7 @@ export type CommittedCrossPostListRecordedEvent = Omit<
                 whileProcessing?: { offset: number; type: string } | undefined;
               }
             | undefined;
-          crossPostedFrom?:
+          copiedFrom?:
             | {
                 subscriptionKey: string;
                 streamId: string;
@@ -3594,7 +3594,7 @@ export type CommittedCrossPostListRecordedEvent = Omit<
                   whileProcessing?: { offset: number; type: string } | undefined;
                 }
               | undefined;
-            crossPostedFrom?:
+            copiedFrom?:
               | {
                   subscriptionKey: string;
                   streamId: string;
@@ -3614,7 +3614,7 @@ export type CommittedCrossPostListRecordedEvent = Omit<
     },
     "payload" | "type"
   > & {
-    type: "events.iterate.com/stream/cross-post-list-recorded";
+    type: "events.iterate.com/stream/copy-list-recorded";
     payload: {
       source: { projectId: string | null; path: string; streamId: string; streamCreatedAt: string };
       sourceOffset: number;
@@ -3680,8 +3680,8 @@ export type CommittedCrossPostListRecordedEvent = Omit<
     };
   };
 
-/** One committed source event confirming the receiver recorded its cross-post list. */
-export type CommittedCrossPostListConfirmedEvent = Omit<
+/** One committed source event confirming the receiver recorded its copy list. */
+export type CommittedCopyListConfirmedEvent = Omit<
   {
     type: string;
     payload?: Record<string, unknown> | undefined;
@@ -3696,7 +3696,7 @@ export type CommittedCrossPostListConfirmedEvent = Omit<
                 whileProcessing?: { offset: number; type: string } | undefined;
               }
             | undefined;
-          crossPostedFrom?:
+          copiedFrom?:
             | {
                 subscriptionKey: string;
                 streamId: string;
@@ -3734,7 +3734,7 @@ export type CommittedCrossPostListConfirmedEvent = Omit<
                   whileProcessing?: { offset: number; type: string } | undefined;
                 }
               | undefined;
-            crossPostedFrom?:
+            copiedFrom?:
               | {
                   subscriptionKey: string;
                   streamId: string;
@@ -3754,7 +3754,7 @@ export type CommittedCrossPostListConfirmedEvent = Omit<
     },
     "payload" | "type"
   > & {
-    type: "events.iterate.com/stream/cross-post-list-confirmed";
+    type: "events.iterate.com/stream/copy-list-confirmed";
     payload: {
       receivingStreamPath: string;
       sourceOffset: number;
@@ -3770,7 +3770,7 @@ export type CommittedCrossPostListConfirmedEvent = Omit<
                     whileProcessing?: { offset: number; type: string } | undefined;
                   }
                 | undefined;
-              crossPostedFrom?:
+              copiedFrom?:
                 | {
                     subscriptionKey: string;
                     streamId: string;
@@ -3790,7 +3790,7 @@ export type CommittedCrossPostListConfirmedEvent = Omit<
         offset: number;
         createdAt: string;
         path: string;
-        type: "events.iterate.com/stream/cross-post-list-recorded";
+        type: "events.iterate.com/stream/copy-list-recorded";
         payload: {
           source: {
             projectId: string | null;
@@ -3845,7 +3845,7 @@ export type CommittedCrossPostListConfirmedEvent = Omit<
                     whileProcessing?: { offset: number; type: string } | undefined;
                   }
                 | undefined;
-              crossPostedFrom?:
+              copiedFrom?:
                 | {
                     subscriptionKey: string;
                     streamId: string;
@@ -3865,7 +3865,7 @@ export type CommittedCrossPostListConfirmedEvent = Omit<
         offset: number;
         createdAt: string;
         path: string;
-        type: "events.iterate.com/stream/cross-post-list-recorded";
+        type: "events.iterate.com/stream/copy-list-recorded";
         payload: {
           source: {
             projectId: string | null;
@@ -3922,7 +3922,7 @@ export type CommittedSubscriptionRemovedEvent = Omit<
                 whileProcessing?: { offset: number; type: string } | undefined;
               }
             | undefined;
-          crossPostedFrom?:
+          copiedFrom?:
             | {
                 subscriptionKey: string;
                 streamId: string;
@@ -3960,7 +3960,7 @@ export type CommittedSubscriptionRemovedEvent = Omit<
                   whileProcessing?: { offset: number; type: string } | undefined;
                 }
               | undefined;
-            crossPostedFrom?:
+            copiedFrom?:
               | {
                   subscriptionKey: string;
                   streamId: string;
@@ -4464,7 +4464,7 @@ export type CoreProcessorState = {
                   processorSlug?: string | undefined;
                 }
               | {
-                  action: "cross-post";
+                  action: "copy-to-stream";
                   receivingStreamPath: string;
                   transform?: string | undefined;
                   delivery: {
@@ -4509,7 +4509,7 @@ export type CoreProcessorState = {
       >;
     };
   };
-  crossPostListDeliveriesByReceivingStream: Record<
+  copyListDeliveriesByReceivingStream: Record<
     string,
     | { sourceOffset: number; status: "pending"; subscriptionKeysRecordedByReceiver: string[] }
     | { sourceOffset: number; status: "confirmed"; subscriptionKeysRecordedByReceiver: string[] }
@@ -4547,16 +4547,16 @@ export type SubscriptionRuntimeState = {
   nextAttemptAt: number | null;
   inFlightDeadlineAt: number | null;
   lastError: string | null;
-  /** Serialized payload bytes delivered by cross-post, ITX-call, and webhook subscriptions. */
+  /** Serialized payload bytes delivered by copy, ITX-call, and webhook subscriptions. */
   bytesSent?: number;
   /** Commit-to-acked latency (stream clock): newest event `createdAt` → awaited delivery resolved. */
   completionLatencyMs?: LatencyStats;
-  /** Duration of the awaited cross-post, ITX, or webhook call itself. */
+  /** Duration of the awaited copy, ITX, or webhook call itself. */
   deliveryDurationMs?: LatencyStats;
 };
 
-/** Durable retry progress for sending one source's current cross-post list to a receiving stream. */
-export type CrossPostListRetryRow = {
+/** Durable retry progress for sending one source's current copy list to a receiving stream. */
+export type CopyListRetryRow = {
   receivingStreamPath: string;
   sourceOffset: number;
   attempt: number;

@@ -47,7 +47,7 @@ import {
  *   session zero, the v1 shape.
  * - `sentMessages`: `chatId:messageId → sessionPath` provenance for bot-sent
  *   messages, reduced from the `message-sent` claims the telegram-agent
- *   processor cross-posts here after each journaled send. Replies to bot
+ *   processor copies here after each journaled send. Replies to bot
  *   messages get EXACT thread hints from this map; replies to user messages
  *   fall back to "latest session started at or before the replied-to date".
  *

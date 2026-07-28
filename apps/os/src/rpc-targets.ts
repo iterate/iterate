@@ -34,7 +34,7 @@ import type {
   GetProcessorRuntimeState,
   ProcessEventBatch,
   StreamDeliveryBatch,
-  CrossPostReceipt,
+  CopyReceipt,
   ProcessorRuntimeState,
   ProcessorSnapshot,
   StreamEventPage,
@@ -88,8 +88,8 @@ import {
   normalizePath,
 } from "./domains/durable-object-names.ts";
 import type {
-  CommittedCrossPostListConfirmedEvent,
-  CommittedCrossPostListRecordedEvent,
+  CommittedCopyListConfirmedEvent,
+  CommittedCopyListRecordedEvent,
   CommittedSubscriptionConfiguredEvent,
   CommittedSubscriptionRemovedEvent,
   SubscriptionEndCondition,
@@ -438,7 +438,7 @@ const PARALLEL_API_BASE_URL = "https://api.parallel.ai";
 // forever; the durable birth events remain committed for ordinary redelivery.
 const PROCESSOR_BIRTH_WAIT_TIMEOUT_MS = 75_000;
 // Project birth is heavier than the other creation barriers: it includes the
-// config repository's Artifacts write and terminal cross-post. Keep explicit
+// config repository's Artifacts write and terminal copy. Keep explicit
 // headroom between the nested sibling barrier (75s), the Project processor
 // acknowledgement, and the caller's end-to-ready deadline. Healthy creates
 // still resolve immediately; these values only bound an unhealthy tail.
@@ -537,7 +537,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
 
   async __describe(): Promise<Description> {
     return describeNode({
-      instructions: `A durable event stream at path "${this.props.path}": append(events), readEvents(), getEvents(), waitForEvent(), openConnection(), receiveCrossPostsFrom(), stopReceivingCrossPostsFrom(), kill(). Processors and agents communicate by appending and reducing events. A processor on stream A can react only to events appended to A; call receiveCrossPostsFrom({ sourceStreamPath, subscriptionKey }) on the receiving stream to make the named source append matching copies here. Omit subscriptionKey only when supplying idempotencyKey for retry-safe generated-key setup. Each copy records the source stream and offset in source.crossPostedFrom. The source stores each durable subscription and its cursor under a source-local subscriptionKey. append({ ..., ephemeral: true }) commits a transient event: connections opened before the append receive it, while default reads and durable subscriptions exclude it unless explicitly configured with includeEphemeral. The row may be deleted later, so append durable product truth separately.`,
+      instructions: `A durable event stream at path "${this.props.path}": append(events), readEvents(), getEvents(), waitForEvent(), openConnection(), subscribeToEventsFrom(), unsubscribeFromEvents(), kill(). Processors and agents communicate by appending and reducing events. A processor on stream A can react only to events appended to A; call subscribeToEventsFrom({ sourceStreamPath, subscriptionKey }) on the receiving stream to make the named source append matching copies here. Omit subscriptionKey only when supplying idempotencyKey for retry-safe generated-key setup. Each copy records the source stream and offset in source.copiedFrom. The source stores each durable subscription and its cursor under a source-local subscriptionKey. append({ ..., ephemeral: true }) commits a transient event: connections opened before the append receive it, while default reads and durable subscriptions exclude it unless explicitly configured with includeEphemeral. The row may be deleted later, so append durable product truth separately.`,
       children: {
         append: "Commit events; returns them with offsets.",
         at: "The stream at a sub-path.",
@@ -549,15 +549,15 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
           "Open a callback for newly appended events, with optional replay, until this RPC session closes it.",
         setSubscriptionCursorAndResume:
           "On this source stream, change where a subscription reads next and resume it in one append; an already-started receiver call may finish.",
-        resendCrossPostList:
-          "On this source stream, retry sending its current cross-post list to one receiving stream without changing any event cursor.",
-        receiveCrossPostsFrom:
+        resendCopyList:
+          "On this source stream, retry sending its current copy list to one receiving stream without changing any event cursor.",
+        subscribeToEventsFrom:
           "On this receiving stream, tell the explicitly named source stream to append matching event copies here.",
         resumeSubscription:
           "On this source stream, resume a halted subscription without changing its cursor.",
         setSubscriptionCursor:
           "On this source stream, change where a subscription reads next; an already-started receiver call may finish.",
-        stopReceivingCrossPostsFrom:
+        unsubscribeFromEvents:
           "On this receiving stream, remove one named subscription from the explicitly named source stream.",
         liveState: "Watch the stream's reduced state and current send/callback measurements.",
         waitForEvent: "Block until a matching event lands.",
@@ -901,9 +901,9 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   }
 
   /** @internal Deliver one trusted source batch in a live non-production test. */
-  async testReceiveCrossPostedEvents(batch: StreamDeliveryBatch): Promise<CrossPostReceipt> {
-    this.#assertCanUseStreamTestMethod("testReceiveCrossPostedEvents");
-    const result = await this[STREAM_DURABLE_OBJECT_STUB].receiveCrossPostedEvents(batch);
+  async testReceiveCopiedEvents(batch: StreamDeliveryBatch): Promise<CopyReceipt> {
+    this.#assertCanUseStreamTestMethod("testReceiveCopiedEvents");
+    const result = await this[STREAM_DURABLE_OBJECT_STUB].receiveCopiedEvents(batch);
     return detachPlainRpcResult(result);
   }
 
@@ -969,16 +969,16 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   }
 
   /** @internal Append a trusted batch copied from another stream. */
-  receiveCrossPostedEvents(batch: StreamDeliveryBatch): Promise<CrossPostReceipt> {
+  receiveCopiedEvents(batch: StreamDeliveryBatch): Promise<CopyReceipt> {
     // A session principal invoking the receiving method directly would bypass the source
-    // subscription's authority to send events and source.crossPostedFrom stamping.
+    // subscription's authority to send events and source.copiedFrom stamping.
     if (!isStreamDeliveryAuth(this.props.auth)) {
       throw new Error("copied stream events are accepted only from trusted internal senders");
     }
     if (batch.projectId !== this.props.projectId) {
       throw new Error("copied stream events must come from the receiving stream's project");
     }
-    return Promise.resolve(this[STREAM_DURABLE_OBJECT_STUB].receiveCrossPostedEvents(batch));
+    return Promise.resolve(this[STREAM_DURABLE_OBJECT_STUB].receiveCopiedEvents(batch));
   }
 
   /** Change where one subscription whose cursor this stream stores reads next. An already-started receiver call may finish. */
@@ -1026,13 +1026,13 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   }
 
   /** Retry sending this source's current list to one receiving stream. */
-  async resendCrossPostList(args: { receivingStreamPath: string }): Promise<StreamEvent> {
+  async resendCopyList(args: { receivingStreamPath: string }): Promise<StreamEvent> {
     const [event] = await this.append({
-      type: "events.iterate.com/stream/cross-post-list-resend-requested",
+      type: "events.iterate.com/stream/copy-list-resend-requested",
       payload: args,
     });
     if (event === undefined) {
-      throw new Error("stream did not commit the cross-post-list retry request");
+      throw new Error("stream did not commit the copy-list retry request");
     }
     return event;
   }
@@ -1041,13 +1041,13 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    * Configure this stream to durably receive matching events from `source`.
    * The source owns the matching-event read position. It appends an
    * `subscription-configured` event, sends its complete list for this
-   * receiver, waits for the receiver to append `cross-post-list-recorded`,
-   * waits for the source to append `cross-post-list-confirmed`, then returns
+   * receiver, waits for the receiver to append `copy-list-recorded`,
+   * waits for the source to append `copy-list-confirmed`, then returns
    * the effective key and that receiver's three committed events. Moving an
    * existing key also waits for the old receiver's replacement list and
    * source confirmation.
    */
-  async receiveCrossPostsFrom(
+  async subscribeToEventsFrom(
     args: {
       /** Source stream path in this project. */
       sourceStreamPath: string;
@@ -1080,8 +1080,8 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   ): Promise<{
     subscriptionKey: string;
     subscriptionConfiguredEvent: CommittedSubscriptionConfiguredEvent;
-    crossPostListRecordedEvent: CommittedCrossPostListRecordedEvent;
-    crossPostListConfirmedEvent: CommittedCrossPostListConfirmedEvent;
+    copyListRecordedEvent: CommittedCopyListRecordedEvent;
+    copyListConfirmedEvent: CommittedCopyListConfirmedEvent;
   }> {
     const sourcePath = canonicalizeStreamPath(args.sourceStreamPath);
     const receivingStreamPath = canonicalizeStreamPath(this.props.path);
@@ -1095,7 +1095,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       path: sourcePath,
     });
     const result = await source[STREAM_DURABLE_OBJECT_STUB]
-      .setCrossPostSubscription({
+      .setCopySubscription({
         ...(args.idempotencyKey === undefined ? {} : { idempotencyKey: args.idempotencyKey }),
         configuration: {
           ...(args.subscriptionKey === undefined ? {} : { subscriptionKey: args.subscriptionKey }),
@@ -1103,7 +1103,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
           ...(args.description?.trim() ? { description: args.description.trim() } : {}),
           ...(args.filter === undefined ? {} : { filter: args.filter }),
           receiver: {
-            action: "cross-post",
+            action: "copy-to-stream",
             receivingStreamPath,
             ...(args.transform === undefined ? {} : { transform: args.transform }),
             delivery: {
@@ -1121,15 +1121,12 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   }
 
   /** Stop receiving from `source`, waiting for both streams to record the change. */
-  async stopReceivingCrossPostsFrom(args: {
-    sourceStreamPath: string;
-    subscriptionKey: string;
-  }): Promise<
+  async unsubscribeFromEvents(args: { sourceStreamPath: string; subscriptionKey: string }): Promise<
     | {
         status: "removed";
         subscriptionRemovedEvent: CommittedSubscriptionRemovedEvent;
-        crossPostListRecordedEvent: CommittedCrossPostListRecordedEvent;
-        crossPostListConfirmedEvent: CommittedCrossPostListConfirmedEvent;
+        copyListRecordedEvent: CommittedCopyListRecordedEvent;
+        copyListConfirmedEvent: CommittedCopyListConfirmedEvent;
       }
     | { status: "already-absent" }
   > {
@@ -1142,7 +1139,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     });
     const result = detachPlainRpcResult(
       await source[STREAM_DURABLE_OBJECT_STUB]
-        .removeCrossPostSubscription({
+        .removeCopySubscription({
           subscriptionKey: args.subscriptionKey,
           expectedReceiverPath: receivingStreamPath,
         })
@@ -1429,7 +1426,7 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
             description: "Copy the repo's terminal creation fact to the project catalog.",
             filter: { eventTypes: ["events.iterate.com/repos/created"] },
             receiver: {
-              action: "cross-post",
+              action: "copy-to-stream",
               receivingStreamPath: "/",
               delivery: {
                 start: "now",

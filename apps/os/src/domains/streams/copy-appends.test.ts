@@ -1,17 +1,17 @@
 import {
-  MAX_CROSS_POSTED_FROM_HOPS,
+  MAX_COPIED_FROM_HOPS,
   StreamReceiverUnavailableError,
   type StreamDeliveryBatch,
   type StreamEvent,
 } from "iterate/processors";
 import { describe, expect, test } from "vitest";
 import {
-  recordedSubscriptionForCrossPost,
+  recordedSubscriptionForCopy,
   type CoreProcessorState,
   type SubscriptionConfiguredPayload,
 } from "./core-processor-contract.ts";
 import { deliveryId } from "./delivery-math.ts";
-import { buildCrossPostAppends } from "./cross-post-appends.ts";
+import { buildCopyAppends } from "./copy-appends.ts";
 
 const PROJECT_ID = "prj_stream_receiver";
 const SOURCE_PATH = "/sources/issues";
@@ -26,7 +26,7 @@ const configuration = {
   description: "Receive issue events",
   filter: { eventTypes: ["example.com/issue-created"] },
   receiver: {
-    action: "cross-post",
+    action: "copy-to-stream",
     receivingStreamPath: RECEIVER_PATH,
     delivery: {
       start: "beginning",
@@ -44,7 +44,7 @@ const sourceEvent = {
   createdAt: "2026-07-21T12:05:00.000Z",
 } satisfies StreamEvent;
 
-type BuildArgs = Parameters<typeof buildCrossPostAppends>[0];
+type BuildArgs = Parameters<typeof buildCopyAppends>[0];
 
 function batch(
   streamId = FIRST_STREAM_ID,
@@ -96,7 +96,7 @@ function recordedSource(
     sourceOffset: 2,
     byKey: {
       [configured.subscriptionKey!]: {
-        configuration: recordedSubscriptionForCrossPost(configured),
+        configuration: recordedSubscriptionForCopy(configured),
         configuredAtSourceOffset: 2,
         numEventsReceived: 0,
         numEventsDropped: 0,
@@ -124,9 +124,9 @@ function caught(action: () => unknown): unknown {
   throw new Error("expected action to throw");
 }
 
-describe("cross-post input boundary", () => {
+describe("copy input boundary", () => {
   test("builds accepted appends and a receipt from the receiver's recorded subscription", () => {
-    const result = buildCrossPostAppends(validArgs());
+    const result = buildCopyAppends(validArgs());
 
     expect(result.receipt).toEqual({ accepted: 1, dropped: [] });
     expect(result.inputs).toHaveLength(1);
@@ -134,7 +134,7 @@ describe("cross-post input boundary", () => {
       type: sourceEvent.type,
       payload: sourceEvent.payload,
       source: {
-        crossPostedFrom: [
+        copiedFrom: [
           {
             projectId: PROJECT_ID,
             path: SOURCE_PATH,
@@ -206,7 +206,7 @@ describe("cross-post input boundary", () => {
   ];
 
   test.each(malformedCases)("rejects malformed batches: %s", (_name, mutate, message) => {
-    const error = caught(() => buildCrossPostAppends(validArgs(mutate(batch()))));
+    const error = caught(() => buildCopyAppends(validArgs(mutate(batch()))));
     expect(error).toBeInstanceOf(Error);
     expect(error).not.toBeInstanceOf(StreamReceiverUnavailableError);
     expect(error).toMatchObject({ message: expect.stringMatching(message) });
@@ -242,7 +242,7 @@ describe("cross-post input boundary", () => {
       },
     ],
     [
-      "the committed subscription does not cross-post to a stream",
+      "the committed subscription does not copy to a stream",
       () => {
         const args = validArgs();
         args.batch.configuredEvent = {
@@ -335,23 +335,23 @@ describe("cross-post input boundary", () => {
   ];
 
   test.each(unavailableCases)("reports receiver unavailability when %s", (_name, build) => {
-    const error = caught(() => buildCrossPostAppends(build()));
+    const error = caught(() => buildCopyAppends(build()));
     expect(error).toBeInstanceOf(StreamReceiverUnavailableError);
   });
 });
 
-describe("cross-post event construction", () => {
+describe("copy event construction", () => {
   test("transport retries dedupe within one source lifetime, while a recreated source is new", () => {
     const firstBatch = batch(FIRST_STREAM_ID);
     const recreatedBatch = batch(SECOND_STREAM_ID);
-    const first = buildCrossPostAppends(validArgs(firstBatch));
-    const retry = buildCrossPostAppends(validArgs(firstBatch));
-    const recreated = buildCrossPostAppends(validArgs(recreatedBatch));
+    const first = buildCopyAppends(validArgs(firstBatch));
+    const retry = buildCopyAppends(validArgs(firstBatch));
+    const recreated = buildCopyAppends(validArgs(recreatedBatch));
 
     expect(first.inputs[0]?.idempotencyKey).toBe(retry.inputs[0]?.idempotencyKey);
     expect(recreated.inputs[0]?.idempotencyKey).not.toBe(first.inputs[0]?.idempotencyKey);
     expect(recreatedBatch.deliveryId).not.toBe(firstBatch.deliveryId);
-    expect(recreated.inputs[0]?.source?.crossPostedFrom?.at(-1)).toMatchObject({
+    expect(recreated.inputs[0]?.source?.copiedFrom?.at(-1)).toMatchObject({
       projectId: PROJECT_ID,
       path: SOURCE_PATH,
       streamId: SECOND_STREAM_ID,
@@ -362,7 +362,7 @@ describe("cross-post event construction", () => {
   });
 
   test("commits accepted events before deterministic cycle-suppression events", () => {
-    const crossPostedFrom = {
+    const copiedFrom = {
       subscriptionKey: "prior-subscription",
       streamId: SECOND_STREAM_ID,
       streamCreatedAt: SOURCE_CREATED_AT,
@@ -377,18 +377,18 @@ describe("cross-post event construction", () => {
       ...batch(),
       events: [
         { ...sourceEvent, offset: 6 },
-        { ...sourceEvent, source: { crossPostedFrom: [crossPostedFrom] } },
+        { ...sourceEvent, source: { copiedFrom: [copiedFrom] } },
       ],
     } satisfies StreamDeliveryBatch;
 
-    const first = buildCrossPostAppends(validArgs(delivery));
-    const retry = buildCrossPostAppends(validArgs(delivery));
+    const first = buildCopyAppends(validArgs(delivery));
+    const retry = buildCopyAppends(validArgs(delivery));
 
     expect(first.receipt).toEqual({ accepted: 1, dropped: [{ offset: 7, reason: "cycle" }] });
     expect(first.inputs).toHaveLength(2);
     expect(first.inputs[0]?.type).toBe(sourceEvent.type);
     expect(first.inputs[1]).toMatchObject({
-      type: "events.iterate.com/stream/cross-posted-events-dropped",
+      type: "events.iterate.com/stream/copied-events-dropped",
       payload: {
         source: {
           projectId: PROJECT_ID,
@@ -407,7 +407,7 @@ describe("cross-post event construction", () => {
   });
 
   test("durably drops a received-from chain at the hop cap instead of retrying it", () => {
-    const crossPostedFrom = Array.from({ length: MAX_CROSS_POSTED_FROM_HOPS }, (_, index) => ({
+    const copiedFrom = Array.from({ length: MAX_COPIED_FROM_HOPS }, (_, index) => ({
       subscriptionKey: `subscription-${index}`,
       streamId: SECOND_STREAM_ID,
       streamCreatedAt: SOURCE_CREATED_AT,
@@ -420,10 +420,10 @@ describe("cross-post event construction", () => {
     }));
     const delivery = {
       ...batch(),
-      events: [{ ...sourceEvent, source: { crossPostedFrom } }],
+      events: [{ ...sourceEvent, source: { copiedFrom } }],
     } satisfies StreamDeliveryBatch;
 
-    const result = buildCrossPostAppends(validArgs(delivery));
+    const result = buildCopyAppends(validArgs(delivery));
 
     expect(result.receipt).toEqual({
       accepted: 0,
@@ -431,7 +431,7 @@ describe("cross-post event construction", () => {
     });
     expect(result.inputs).toHaveLength(1);
     expect(result.inputs[0]).toMatchObject({
-      type: "events.iterate.com/stream/cross-posted-events-dropped",
+      type: "events.iterate.com/stream/copied-events-dropped",
       payload: {
         subscriptionKey: configuration.subscriptionKey,
         reason: "hop-limit",
@@ -455,7 +455,7 @@ describe("cross-post event construction", () => {
     delivery.events = [{ ...sourceEvent, ephemeral: true }];
     const source = recordedSource({ configured: transformed });
 
-    const result = buildCrossPostAppends(validArgs(delivery, source));
+    const result = buildCopyAppends(validArgs(delivery, source));
 
     expect(result.inputs[0]).toMatchObject({
       type: "example.com/transformed",
@@ -473,7 +473,7 @@ describe("cross-post event construction", () => {
         transform: '{"payload":{"issue":payload.issue + 1}}',
       },
     } satisfies SubscriptionConfiguredPayload;
-    const result = buildCrossPostAppends(
+    const result = buildCopyAppends(
       validArgs(
         batch(FIRST_STREAM_ID, SOURCE_CREATED_AT, transformed),
         recordedSource({ configured: transformed }),
@@ -500,7 +500,7 @@ describe("cross-post event construction", () => {
     } satisfies SubscriptionConfiguredPayload;
 
     expect(() =>
-      buildCrossPostAppends(
+      buildCopyAppends(
         validArgs(
           batch(FIRST_STREAM_ID, SOURCE_CREATED_AT, transformed),
           recordedSource({ configured: transformed }),

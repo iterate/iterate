@@ -79,7 +79,7 @@ export class ReviewBotProcessor extends StreamProcessor<
     if (event === null || event.type !== "events.iterate.com/github/webhook-received") return;
     // First-hand facts only: a copy received from another stream is history,
     // never fresh input for this router.
-    if (event.source?.crossPostedFrom !== undefined) return;
+    if (event.source?.copiedFrom !== undefined) return;
     const now = this.deps.now || Date.now;
     if (now() - Date.parse(event.createdAt) > reviewBotFreshnessHorizonMs) return;
     blockProcessorWhile(async () => {
@@ -196,7 +196,7 @@ export async function handleGithubPullRequestWebhook(
     type: "event",
   };
   // The durable receive rule below records every matching webhook on the
-  // agent stream with platform-authored source.crossPostedFrom history. These are
+  // agent stream with platform-authored source.copiedFrom history. These are
   // only the companion agent events that should trigger work.
   const agentEvents: StreamEventInput[] = [];
 
@@ -273,7 +273,7 @@ export async function handleGithubPullRequestWebhook(
   }
 
   if (!exists) await agent.create();
-  await agent.stream.receiveCrossPostsFrom({
+  await agent.stream.subscribeToEventsFrom({
     sourceStreamPath: event.path,
     subscriptionKey: `userspace:github-pr:${repoPath}`,
     description: `Verified GitHub webhooks for ${repository.owner}/${repository.repo}#${number}`,

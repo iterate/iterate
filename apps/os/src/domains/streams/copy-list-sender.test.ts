@@ -2,16 +2,13 @@ import type { StreamEvent, StreamEventInput } from "iterate/processors";
 import { describe, expect, it, vi } from "vitest";
 import { CoreProcessorContract, type CoreProcessorState } from "./core-processor-contract.ts";
 import {
-  isCrossPostListBlockedError,
-  CrossPostListSender,
-  type CrossPostListRetryStateStore,
-} from "./cross-post-list-sender.ts";
-import {
-  MAX_CROSS_POST_LIST_ATTEMPTS,
-  type CrossPostListRetryRow,
-} from "./cross-post-list-retry-store.ts";
+  isCopyListBlockedError,
+  CopyListSender,
+  type CopyListRetryStateStore,
+} from "./copy-list-sender.ts";
+import { MAX_COPY_LIST_ATTEMPTS, type CopyListRetryRow } from "./copy-list-retry-store.ts";
 
-const PROJECT_ID = "prj_cross_post_list_sender";
+const PROJECT_ID = "prj_copy_list_sender";
 const SOURCE_PATH = "/sources/issues";
 const RECEIVER_PATH = "/agents/reviewer";
 const SOURCE_STREAM_ID = "11111111-1111-4111-8111-111111111111";
@@ -44,7 +41,7 @@ function stateWithReceiver(
             configuration: {
               subscriptionKey: SUBSCRIPTION_KEY,
               receiver: {
-                action: "cross-post",
+                action: "copy-to-stream",
                 receivingStreamPath: RECEIVER_PATH,
                 delivery: {
                   start: "beginning",
@@ -59,7 +56,7 @@ function stateWithReceiver(
         },
       },
     },
-    crossPostListDeliveriesByReceivingStream: {
+    copyListDeliveriesByReceivingStream: {
       [RECEIVER_PATH]: receiver,
     },
   });
@@ -76,7 +73,7 @@ function receivingStreamEvent(
   },
 ): StreamEvent {
   return {
-    type: "events.iterate.com/stream/cross-post-list-recorded",
+    type: "events.iterate.com/stream/copy-list-recorded",
     path: RECEIVER_PATH,
     offset: 1,
     createdAt: "2026-07-22T10:00:03.000Z",
@@ -103,8 +100,8 @@ function receivingStreamEvent(
   };
 }
 
-function memoryRetryStore(): CrossPostListRetryStateStore {
-  const rows = new Map<string, CrossPostListRetryRow>();
+function memoryRetryStore(): CopyListRetryStateStore {
+  const rows = new Map<string, CopyListRetryRow>();
   return {
     get: (path) => rows.get(path),
     list: () => [...rows.values()],
@@ -147,7 +144,7 @@ function unused<T>(): T {
   throw new Error("unexpected test hook call");
 }
 
-describe("CrossPostListSender", () => {
+describe("CopyListSender", () => {
   it("blocks immediately when the receiver already records a newer source lifetime", async () => {
     let state = stateWithReceiver({
       sourceOffset: 2,
@@ -159,16 +156,16 @@ describe("CrossPostListSender", () => {
       streamId: "22222222-2222-4222-8222-222222222222",
       streamCreatedAt: "2026-07-22T10:00:01.000Z",
     });
-    const recordCrossPostListOnReceivingStream = vi.fn(async () => newerReceiverEvent);
+    const recordCopyListOnReceivingStream = vi.fn(async () => newerReceiverEvent);
     const appended: StreamEventInput[] = [];
-    const sender = new CrossPostListSender({
+    const sender = new CopyListSender({
       projectId: PROJECT_ID,
       path: SOURCE_PATH,
       coreState: () => state,
       retryStore,
       appendCore: (event) => {
         const parsed = CoreProcessorContract.parseEventInput(event);
-        if (parsed.type !== "events.iterate.com/stream/cross-post-list-delivery-blocked") {
+        if (parsed.type !== "events.iterate.com/stream/copy-list-delivery-blocked") {
           throw new Error(`unexpected event ${parsed.type}`);
         }
         appended.push(parsed);
@@ -188,8 +185,8 @@ describe("CrossPostListSender", () => {
         } as StreamEvent;
       },
       getEvent: () => unused(),
-      latestCrossPostListRecordedByReceiver: () => unused(),
-      recordCrossPostListOnReceivingStream,
+      latestCopyListRecordedByReceiver: () => unused(),
+      recordCopyListOnReceivingStream,
       scheduleDurable: (work) => void work(),
       armAlarm: vi.fn(),
       now: () => Date.parse("2026-07-22T10:00:00.000Z"),
@@ -200,10 +197,10 @@ describe("CrossPostListSender", () => {
       /newer lifetime.*reset the receiving stream.*resend cannot succeed/i,
     );
 
-    expect(recordCrossPostListOnReceivingStream).toHaveBeenCalledOnce();
+    expect(recordCopyListOnReceivingStream).toHaveBeenCalledOnce();
     expect(appended).toHaveLength(1);
     expect(appended[0]).toMatchObject({
-      type: "events.iterate.com/stream/cross-post-list-delivery-blocked",
+      type: "events.iterate.com/stream/copy-list-delivery-blocked",
       payload: {
         receivingStreamPath: RECEIVER_PATH,
         sourceOffset: 2,
@@ -216,7 +213,7 @@ describe("CrossPostListSender", () => {
     await expect(sender.waitUntilConfirmed(RECEIVER_PATH)).rejects.toThrow(
       /blocked after 1 attempt.*newer lifetime.*resend cannot succeed/i,
     );
-    expect(recordCrossPostListOnReceivingStream).toHaveBeenCalledOnce();
+    expect(recordCopyListOnReceivingStream).toHaveBeenCalledOnce();
   });
 
   it("bounds a terminal receiver error before appending the blocked event", async () => {
@@ -236,14 +233,14 @@ describe("CrossPostListSender", () => {
     });
     const appended: StreamEventInput[] = [];
     vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const sender = new CrossPostListSender({
+    const sender = new CopyListSender({
       projectId: PROJECT_ID,
       path: SOURCE_PATH,
       coreState: () => state,
       retryStore,
       appendCore: (input) => {
         const parsed = CoreProcessorContract.parseEventInput(input);
-        if (parsed.type !== "events.iterate.com/stream/cross-post-list-delivery-blocked") {
+        if (parsed.type !== "events.iterate.com/stream/copy-list-delivery-blocked") {
           throw new Error(`unexpected event ${parsed.type}`);
         }
         appended.push(parsed);
@@ -263,8 +260,8 @@ describe("CrossPostListSender", () => {
         } as StreamEvent;
       },
       getEvent: () => unused(),
-      latestCrossPostListRecordedByReceiver: () => unused(),
-      recordCrossPostListOnReceivingStream: async () => {
+      latestCopyListRecordedByReceiver: () => unused(),
+      recordCopyListOnReceivingStream: async () => {
         throw new Error(message);
       },
       scheduleDurable: (work) => void work(),
@@ -291,15 +288,15 @@ describe("CrossPostListSender", () => {
     retryStore.ensure(RECEIVER_PATH, 2);
     retryStore.fail(RECEIVER_PATH, {
       sourceOffset: 2,
-      attempt: MAX_CROSS_POST_LIST_ATTEMPTS - 1,
+      attempt: MAX_COPY_LIST_ATTEMPTS - 1,
       nextAttemptAt: now,
       error: "previous failure",
     });
     const armAlarm = vi.fn();
     let interruptBlockedEvent = true;
-    const recordedFailure = `sending cross-post list to "${RECEIVER_PATH}" failed: receiver unavailable`;
+    const recordedFailure = `sending copy list to "${RECEIVER_PATH}" failed: receiver unavailable`;
     vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const sender = new CrossPostListSender({
+    const sender = new CopyListSender({
       projectId: PROJECT_ID,
       path: SOURCE_PATH,
       coreState: () => state,
@@ -309,7 +306,7 @@ describe("CrossPostListSender", () => {
           throw Object.assign(new Error("synthetic eviction"), { durableObjectReset: true });
         }
         const parsed = CoreProcessorContract.parseEventInput(input);
-        if (parsed.type !== "events.iterate.com/stream/cross-post-list-delivery-blocked") {
+        if (parsed.type !== "events.iterate.com/stream/copy-list-delivery-blocked") {
           throw new Error(`unexpected event ${parsed.type}`);
         }
         state = stateWithReceiver({
@@ -328,8 +325,8 @@ describe("CrossPostListSender", () => {
         } as StreamEvent;
       },
       getEvent: () => unused(),
-      latestCrossPostListRecordedByReceiver: () => unused(),
-      recordCrossPostListOnReceivingStream: async () => {
+      latestCopyListRecordedByReceiver: () => unused(),
+      recordCopyListOnReceivingStream: async () => {
         throw new Error("receiver unavailable");
       },
       scheduleDurable: (work) => void work(),
@@ -340,11 +337,11 @@ describe("CrossPostListSender", () => {
 
     await expect(sender.waitUntilConfirmed(RECEIVER_PATH)).rejects.toThrow("receiver unavailable");
     expect(retryStore.get(RECEIVER_PATH)).toMatchObject({
-      attempt: MAX_CROSS_POST_LIST_ATTEMPTS - 1,
+      attempt: MAX_COPY_LIST_ATTEMPTS - 1,
       nextAttemptAt: now + 1_000,
       lastError: recordedFailure,
     });
-    expect(state.crossPostListDeliveriesByReceivingStream[RECEIVER_PATH]).toMatchObject({
+    expect(state.copyListDeliveriesByReceivingStream[RECEIVER_PATH]).toMatchObject({
       status: "pending",
     });
     expect(armAlarm).toHaveBeenCalledWith(now + 1_000);
@@ -352,9 +349,9 @@ describe("CrossPostListSender", () => {
     interruptBlockedEvent = false;
     now += 1_000;
     await expect(sender.waitUntilConfirmed(RECEIVER_PATH)).rejects.toThrow("receiver unavailable");
-    expect(state.crossPostListDeliveriesByReceivingStream[RECEIVER_PATH]).toMatchObject({
+    expect(state.copyListDeliveriesByReceivingStream[RECEIVER_PATH]).toMatchObject({
       status: "blocked",
-      attempts: MAX_CROSS_POST_LIST_ATTEMPTS,
+      attempts: MAX_COPY_LIST_ATTEMPTS,
       error: recordedFailure,
     });
     expect(retryStore.get(RECEIVER_PATH)).toBeUndefined();
@@ -375,16 +372,16 @@ describe("CrossPostListSender", () => {
       subscriptionKeysRecordedByReceiver: [],
     });
     let stateReads = 0;
-    const recordCrossPostListOnReceivingStream = vi.fn<() => Promise<unknown>>();
-    const sender = new CrossPostListSender({
+    const recordCopyListOnReceivingStream = vi.fn<() => Promise<unknown>>();
+    const sender = new CopyListSender({
       projectId: PROJECT_ID,
       path: SOURCE_PATH,
       coreState: () => (stateReads++ === 0 ? pending : blocked),
       retryStore: memoryRetryStore(),
       appendCore: () => unused(),
       getEvent: () => unused(),
-      latestCrossPostListRecordedByReceiver: () => unused(),
-      recordCrossPostListOnReceivingStream,
+      latestCopyListRecordedByReceiver: () => unused(),
+      recordCopyListOnReceivingStream,
       scheduleDurable: () => unused(),
       armAlarm: () => unused(),
       now: () => Date.parse("2026-07-22T10:00:00.000Z"),
@@ -398,16 +395,16 @@ describe("CrossPostListSender", () => {
       failure = error;
     }
 
-    expect(isCrossPostListBlockedError(failure)).toBe(true);
+    expect(isCopyListBlockedError(failure)).toBe(true);
     expect(failure).toMatchObject({
-      crossPostListBlocked: true,
+      copyListBlocked: true,
       receivingStreamPath: RECEIVER_PATH,
       attempts: 15,
     });
     expect(failure).toBeInstanceOf(Error);
     expect((failure as Error).message).toContain("receiver unavailable");
-    expect((failure as Error).message).toMatch(/fix .* then call resendCrossPostList/i);
-    expect(recordCrossPostListOnReceivingStream).not.toHaveBeenCalled();
+    expect((failure as Error).message).toMatch(/fix .* then call resendCopyList/i);
+    expect(recordCopyListOnReceivingStream).not.toHaveBeenCalled();
   });
 
   it("tolerates append reconciliation re-entering the sender without duplicating the call", async () => {
@@ -418,10 +415,10 @@ describe("CrossPostListSender", () => {
     });
     const retryStore = memoryRetryStore();
     const receiving = receivingStreamEvent();
-    const recordCrossPostListOnReceivingStream = vi.fn(async () => receiving);
+    const recordCopyListOnReceivingStream = vi.fn(async () => receiving);
     const appended: StreamEventInput[] = [];
-    let sender!: CrossPostListSender;
-    sender = new CrossPostListSender({
+    let sender!: CopyListSender;
+    sender = new CopyListSender({
       projectId: PROJECT_ID,
       path: SOURCE_PATH,
       coreState: () => state,
@@ -442,8 +439,8 @@ describe("CrossPostListSender", () => {
         } as StreamEvent;
       },
       getEvent: () => unused(),
-      latestCrossPostListRecordedByReceiver: () => unused(),
-      recordCrossPostListOnReceivingStream,
+      latestCopyListRecordedByReceiver: () => unused(),
+      recordCopyListOnReceivingStream,
       scheduleDurable: () => unused(),
       armAlarm: vi.fn(),
       now: () => Date.parse("2026-07-22T10:00:00.000Z"),
@@ -452,9 +449,9 @@ describe("CrossPostListSender", () => {
 
     await expect(sender.waitUntilConfirmed(RECEIVER_PATH)).resolves.toEqual(receiving);
 
-    expect(recordCrossPostListOnReceivingStream).toHaveBeenCalledOnce();
+    expect(recordCopyListOnReceivingStream).toHaveBeenCalledOnce();
     expect(appended).toHaveLength(1);
-    expect(appended[0]?.type).toBe("events.iterate.com/stream/cross-post-list-confirmed");
+    expect(appended[0]?.type).toBe("events.iterate.com/stream/copy-list-confirmed");
     expect(sender.runtimeState()).toEqual({});
   });
 });

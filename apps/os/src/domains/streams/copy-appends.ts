@@ -1,14 +1,14 @@
-// Appending matching source events to another stream with `source.crossPostedFrom`.
+// Appending matching source events to another stream with `source.copiedFrom`.
 //
 // A processor on stream A can only react
 // to events ON stream A; reacting to stream B means receiving B's events on A.
 // This module performs the receiving half of that operation: the logic behind
-// `StreamDurableObject.receiveCrossPostedEvents`, configured by a direct
-// `{ receiver: { action: "cross-post", receivingStreamPath } }` subscription. The shared source-side
+// `StreamDurableObject.receiveCopiedEvents`, configured by a direct
+// `{ receiver: { action: "copy-to-stream", receivingStreamPath } }` subscription. The shared source-side
 // delivery code knows none of these receiving details (filters select;
 // receivers transform):
 //
-// - source history: every send appends itself to `source.crossPostedFrom`, so a
+// - source history: every send appends itself to `source.copiedFrom`, so a
 //   multi-stream chain stays legible end to end;
 // - cycle prevention: never accept an event whose chain already contains this
 //   stream, with a hop cap as the backstop;
@@ -18,15 +18,15 @@
 //   or same-key replacement may append the same source offset again;
 // - transforms: `receiver.transform` on the subscription is a JSONata
 //   expression CONSTRUCTING the received event's body from the original. It is
-//   applied here, BEFORE adding `source.crossPostedFrom` — a transform can reshape
+//   applied here, BEFORE adding `source.copiedFrom` — a transform can reshape
 //   the body but can never forge or drop the chain. A transform that throws or
-//   returns a non-object rejects the batch; cross-posts always use the
+//   returns a non-object rejects the batch; copies always use the
 //   halt-on-failure policy because advancing would create a gap in the receiving stream.
 
 import { z } from "zod";
 import {
   jsonValuesEqual,
-  MAX_CROSS_POSTED_FROM_HOPS,
+  MAX_COPIED_FROM_HOPS,
   StreamEvent as StreamEventSchema,
   StreamReceiverUnavailableError,
 } from "iterate/processors";
@@ -34,7 +34,7 @@ import type {
   StreamDeliveryBatch,
   StreamEvent,
   StreamEventInput,
-  CrossPostReceipt,
+  CopyReceipt,
 } from "iterate/processors";
 import type {
   CoreProcessorState,
@@ -42,19 +42,19 @@ import type {
 } from "./core-processor-contract.ts";
 import {
   parseCommittedCoreEvent,
-  recordedSubscriptionForCrossPost,
+  recordedSubscriptionForCopy,
   subscriptionKeyForConfiguredEvent,
 } from "./core-processor-contract.ts";
 import { compileJsonataExpression } from "./event-filter.ts";
 import { errorMessage, internalStreamId } from "./stream-delivery-utils.ts";
 
-type CrossPostedFromChain = NonNullable<NonNullable<StreamEvent["source"]>["crossPostedFrom"]>;
+type CopiedFromChain = NonNullable<NonNullable<StreamEvent["source"]>["copiedFrom"]>;
 
 /**
- * What a cross-post transform may construct. Strict, so a typo'd key
+ * What a copy transform may construct. Strict, so a typo'd key
  * rejects delivery instead of silently vanishing.
  */
-const CrossPostTransformResult = z.strictObject({
+const CopyTransformResult = z.strictObject({
   type: z.string().trim().min(1).optional(),
   payload: z.record(z.string(), z.unknown()).optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
@@ -69,7 +69,7 @@ const CrossPostTransformResult = z.strictObject({
  * the batch is evidence only: transforms and delivery settings always come
  * from the receiver's recorded state.
  */
-export function buildCrossPostAppends({
+export function buildCopyAppends({
   batch,
   self,
   source,
@@ -77,7 +77,7 @@ export function buildCrossPostAppends({
   batch: StreamDeliveryBatch;
   self: { projectId: string | null; path: string };
   source: CoreProcessorState["subscriptions"]["inbound"]["bySourcePath"][string] | undefined;
-}): { inputs: StreamEventInput[]; receipt: CrossPostReceipt } {
+}): { inputs: StreamEventInput[]; receipt: CopyReceipt } {
   validateStreamDeliveryBatch(batch);
 
   const configuredEvent = parseCommittedCoreEvent(
@@ -88,14 +88,14 @@ export function buildCrossPostAppends({
   const recordedSubscription = source?.byKey[batch.subscriptionKey];
   const configuredSubscriptionKey = subscriptionKeyForConfiguredEvent(configuredEvent);
   const expectedRecordedSubscription =
-    receiver.action === "cross-post"
-      ? recordedSubscriptionForCrossPost(configuredEvent.payload)
+    receiver.action === "copy-to-stream"
+      ? recordedSubscriptionForCopy(configuredEvent.payload)
       : undefined;
   if (
     configuredEvent.path !== batch.path ||
     configuredEvent.offset !== recordedSubscription?.configuredAtSourceOffset ||
     configuredSubscriptionKey !== batch.subscriptionKey ||
-    receiver.action !== "cross-post" ||
+    receiver.action !== "copy-to-stream" ||
     receiver.receivingStreamPath !== self.path ||
     source?.source.projectId !== batch.projectId ||
     source?.source.streamId !== batch.streamId ||
@@ -105,12 +105,12 @@ export function buildCrossPostAppends({
     !jsonValuesEqual(expectedRecordedSubscription, recordedSubscription.configuration)
   ) {
     throw new StreamReceiverUnavailableError(
-      `cross-post receiver ${self.path} has no current subscription from ${batch.path}#${batch.subscriptionKey}@${configuredEvent.offset}`,
+      `copy receiver ${self.path} has no current subscription from ${batch.path}#${batch.subscriptionKey}@${configuredEvent.offset}`,
     );
   }
 
-  const { inputs: receivedEventInputs, dropped } = buildCrossPostAppendInputs(batch, self, {
-    action: "cross-post",
+  const { inputs: receivedEventInputs, dropped } = buildCopyAppendInputs(batch, self, {
+    action: "copy-to-stream",
     receivingStreamPath: self.path,
     delivery: recordedSubscription.configuration.delivery,
     ...(recordedSubscription.configuration.transform === undefined
@@ -118,9 +118,9 @@ export function buildCrossPostAppends({
       : { transform: recordedSubscription.configuration.transform }),
   });
   const suppressionEvents: StreamEventInput[] = dropped.map(({ offset, reason }) => ({
-    type: "events.iterate.com/stream/cross-posted-events-dropped",
+    type: "events.iterate.com/stream/copied-events-dropped",
     idempotencyKey: internalStreamId(
-      "cross-post-event-dropped",
+      "copy-event-dropped",
       batch.projectId,
       batch.path,
       batch.streamId,
@@ -151,23 +151,23 @@ export function buildCrossPostAppends({
 
 function validateStreamDeliveryBatch(batch: StreamDeliveryBatch): void {
   if (batch.events.length === 0) {
-    throw new Error("cross-post batches must contain at least one event");
+    throw new Error("copy batches must contain at least one event");
   }
   if (!z.uuid().safeParse(batch.streamId).success) {
-    throw new Error("cross-post batch has an invalid source stream ID");
+    throw new Error("copy batch has an invalid source stream ID");
   }
   if (!Number.isFinite(Date.parse(batch.streamCreatedAt))) {
-    throw new Error("cross-post batch has an invalid source stream creation time");
+    throw new Error("copy batch has an invalid source stream creation time");
   }
   if (!Number.isSafeInteger(batch.streamMaxOffset) || batch.streamMaxOffset < 1) {
-    throw new Error("cross-post batch has an invalid source stream maximum offset");
+    throw new Error("copy batch has an invalid source stream maximum offset");
   }
   if (
     !Number.isSafeInteger(batch.cursorChangedAtSourceOffset) ||
     batch.cursorChangedAtSourceOffset < 1 ||
     batch.cursorChangedAtSourceOffset > batch.streamMaxOffset
   ) {
-    throw new Error("cross-post batch has an invalid cursor-control event offset");
+    throw new Error("copy batch has an invalid cursor-control event offset");
   }
 
   let previousEventOffset = 0;
@@ -178,7 +178,7 @@ function validateStreamDeliveryBatch(batch: StreamDeliveryBatch): void {
       event.offset <= previousEventOffset ||
       event.offset > batch.streamMaxOffset
     ) {
-      throw new Error("cross-post batch events must be ordered source-stream events");
+      throw new Error("copy batch events must be ordered source-stream events");
     }
     previousEventOffset = event.offset;
   }
@@ -189,38 +189,38 @@ function validateStreamDeliveryBatch(batch: StreamDeliveryBatch): void {
 // eligible; the receiver commits a durable result either way. Source
 // offsets are descriptive, never dereferenced, so source-row eviction leaves
 // no dangling reads.
-function buildCrossPostAppendInput(args: {
+function buildCopyAppendInput(args: {
   event: StreamEvent;
-  crossPostedFrom: CrossPostedFromChain;
+  copiedFrom: CopiedFromChain;
   idempotencyKey: string;
 }): StreamEventInput {
   return {
     type: args.event.type,
     ...(args.event.payload === undefined ? {} : { payload: args.event.payload }),
     ...(args.event.metadata === undefined ? {} : { metadata: args.event.metadata }),
-    source: { ...args.event.source, crossPostedFrom: args.crossPostedFrom },
+    source: { ...args.event.source, copiedFrom: args.copiedFrom },
     idempotencyKey: args.idempotencyKey,
   };
 }
 
 /**
- * Everything `StreamDurableObject.receiveCrossPostedEvents` appends for one delivered batch.
+ * Everything `StreamDurableObject.receiveCopiedEvents` appends for one delivered batch.
  * Pure — the Stream Durable Object appends the transformed copies with
- * `source.crossPostedFrom` in its own synchronous turn.
+ * `source.copiedFrom` in its own synchronous turn.
  */
-function buildCrossPostAppendInputs(
+function buildCopyAppendInputs(
   batch: StreamDeliveryBatch,
   self: { projectId: string | null; path: string },
-  receiver: Extract<SubscriptionConfiguredPayload["receiver"], { action: "cross-post" }>,
-): { inputs: StreamEventInput[]; dropped: CrossPostReceipt["dropped"] } {
+  receiver: Extract<SubscriptionConfiguredPayload["receiver"], { action: "copy-to-stream" }>,
+): { inputs: StreamEventInput[]; dropped: CopyReceipt["dropped"] } {
   const transformSource = receiver.transform;
   const transform =
     transformSource === undefined ? undefined : compileJsonataExpression(transformSource);
 
   const inputs: StreamEventInput[] = [];
-  const dropped: CrossPostReceipt["dropped"] = [];
+  const dropped: CopyReceipt["dropped"] = [];
   for (const event of batch.events) {
-    const chain = event.source?.crossPostedFrom ?? [];
+    const chain = event.source?.copiedFrom ?? [];
     const hop = {
       subscriptionKey: batch.subscriptionKey,
       streamId: batch.streamId,
@@ -232,18 +232,18 @@ function buildCrossPostAppendInputs(
       projectId: batch.projectId,
       type: event.type,
     };
-    const crossPostedFrom: CrossPostedFromChain = [...chain, hop];
-    // Never accept an event whose `source.crossPostedFrom` chain already
+    const copiedFrom: CopiedFromChain = [...chain, hop];
+    // Never accept an event whose `source.copiedFrom` chain already
     // contains this stream (including the source hop itself
     // when a chain of streams sends it back into itself).
-    const selfOnChain = crossPostedFrom.some(
+    const selfOnChain = copiedFrom.some(
       (entry) => entry.projectId === self.projectId && entry.path === self.path,
     );
     if (selfOnChain) {
       dropped.push({ offset: event.offset, reason: "cycle" });
       continue;
     }
-    if (chain.length >= MAX_CROSS_POSTED_FROM_HOPS) {
+    if (chain.length >= MAX_COPIED_FROM_HOPS) {
       // This event can never be copied, which is different from a receiver failure:
       // retrying the same immutable provenance can never make it deliverable.
       dropped.push({ offset: event.offset, reason: "hop-limit" });
@@ -253,7 +253,7 @@ function buildCrossPostAppendInputs(
     let body: Pick<StreamEvent, "type" | "payload" | "metadata"> = event;
     if (transform !== undefined) {
       try {
-        const produced = CrossPostTransformResult.parse(transform.evaluate(event));
+        const produced = CopyTransformResult.parse(transform.evaluate(event));
         body = {
           type: produced.type ?? event.type,
           ...(produced.payload === undefined
@@ -269,21 +269,21 @@ function buildCrossPostAppendInputs(
         };
       } catch (error) {
         throw new Error(
-          `cross-post transform for subscription "${batch.subscriptionKey}" failed on ${event.path}@${event.offset}: ${errorMessage(error)}`,
+          `copy transform for subscription "${batch.subscriptionKey}" failed on ${event.path}@${event.offset}: ${errorMessage(error)}`,
           { cause: error },
         );
       }
     }
 
     inputs.push(
-      buildCrossPostAppendInput({
+      buildCopyAppendInput({
         event: { ...event, ...body },
-        crossPostedFrom,
+        copiedFrom,
         // At-least-once transport retries collapse within one cursor epoch.
         // A deliberate seek or same-key replacement changes the epoch and may
         // replay this same source coordinate as a new copied event.
         idempotencyKey: internalStreamId(
-          "cross-post",
+          "copy",
           batch.subscriptionKey,
           batch.cursorChangedAtSourceOffset,
           batch.projectId,

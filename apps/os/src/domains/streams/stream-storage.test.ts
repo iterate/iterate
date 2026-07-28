@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import type { StreamEvent } from "iterate/processors";
 import { SqliteSubscriptionCursorStore, StreamEventLog } from "./stream-storage.ts";
-import { CrossPostListRetryStore } from "./cross-post-list-retry-store.ts";
+import { CopyListRetryStore } from "./copy-list-retry-store.ts";
 
 function wrapSqlStorage(db: DatabaseSync): SqlStorage {
   return {
@@ -68,11 +68,11 @@ describe("StreamEventLog schema", () => {
 
     try {
       expect(() => new StreamEventLog(wrapSqlStorage(db), "/legacy-stream")).toThrow(
-        'stream storage at "/legacy-stream" predates the cross-post subscription schema' +
-          " (missing events columns: cross_post_list_source_path, " +
-          "cross_post_list_source_created_at_ms, cross_post_list_source_stream_id, " +
-          "cross_post_list_source_offset, cross_post_list_confirmed_receiving_stream_path, " +
-          "cross_post_list_confirmed_source_offset); erase and recreate this stream before " +
+        'stream storage at "/legacy-stream" predates the copy subscription schema' +
+          " (missing events columns: copy_list_source_path, " +
+          "copy_list_source_created_at_ms, copy_list_source_stream_id, " +
+          "copy_list_source_offset, copy_list_confirmed_receiving_stream_path, " +
+          "copy_list_confirmed_source_offset); erase and recreate this stream before " +
           "deploying this version",
       );
     } finally {
@@ -199,7 +199,7 @@ describe("StreamEventLog.getRange", () => {
     expect(log.highestAssignedOffset()).toBe(2);
   });
 
-  it("indexes the latest cross-post list by creation time, stream ID, and then source offset", () => {
+  it("indexes the latest copy list by creation time, stream ID, and then source offset", () => {
     const log = new StreamEventLog(wrapSqlStorage(new DatabaseSync(":memory:")), "/receiver");
     const received = (
       offset: number,
@@ -207,7 +207,7 @@ describe("StreamEventLog.getRange", () => {
       streamCreatedAt = "2026-07-21T10:00:00.000Z",
       streamId = "11111111-1111-4111-8111-111111111111",
     ): StreamEvent => ({
-      type: "events.iterate.com/stream/cross-post-list-recorded",
+      type: "events.iterate.com/stream/copy-list-recorded",
       payload: {
         source: { projectId: "project", path: "/source", streamId, streamCreatedAt },
         sourceOffset,
@@ -226,7 +226,7 @@ describe("StreamEventLog.getRange", () => {
       received(6, 1, "2026-07-22T10:00:00.000Z", "22222222-2222-4222-8222-222222222222"),
     ]);
 
-    expect(log.getLatestCrossPostListFromSource("/source")).toMatchObject({
+    expect(log.getLatestCopyListFromSource("/source")).toMatchObject({
       offset: 6,
       payload: {
         source: {
@@ -236,18 +236,18 @@ describe("StreamEventLog.getRange", () => {
         sourceOffset: 1,
       },
     });
-    expect(log.getLatestCrossPostListFromSource("/other")).toBeUndefined();
+    expect(log.getLatestCopyListFromSource("/other")).toBeUndefined();
   });
 
   it("indexes the latest receiver-recorded list by source offset, not source-event order", () => {
     const log = new StreamEventLog(wrapSqlStorage(new DatabaseSync(":memory:")), "/source");
     const recorded = (offset: number, sourceOffset: number): StreamEvent => ({
-      type: "events.iterate.com/stream/cross-post-list-confirmed",
+      type: "events.iterate.com/stream/copy-list-confirmed",
       payload: {
         receivingStreamPath: "/receiver",
         sourceOffset,
         receivingStreamEvent: {
-          type: "events.iterate.com/stream/cross-post-list-recorded",
+          type: "events.iterate.com/stream/copy-list-recorded",
           payload: {
             source: {
               projectId: "project",
@@ -269,11 +269,11 @@ describe("StreamEventLog.getRange", () => {
     });
     log.insert([recorded(1, 10), recorded(2, 12), recorded(3, 11)]);
 
-    expect(log.getLatestCrossPostListConfirmationForReceivingStream("/receiver")).toMatchObject({
+    expect(log.getLatestCopyListConfirmationForReceivingStream("/receiver")).toMatchObject({
       offset: 2,
       payload: { sourceOffset: 12 },
     });
-    expect(log.getLatestCrossPostListConfirmationForReceivingStream("/other")).toBeUndefined();
+    expect(log.getLatestCopyListConfirmationForReceivingStream("/other")).toBeUndefined();
   });
 });
 
@@ -413,10 +413,10 @@ describe("SqliteSubscriptionCursorStore hosted delivery watchdog", () => {
   });
 });
 
-describe("CrossPostListRetryStore latest-list retry", () => {
+describe("CopyListRetryStore latest-list retry", () => {
   function createStore() {
     const sql = wrapSqlStorage(new DatabaseSync(":memory:"));
-    return new CrossPostListRetryStore(sql);
+    return new CopyListRetryStore(sql);
   }
 
   it("keeps the newest source offset per receiving stream and resets its retry ladder", () => {
@@ -479,7 +479,7 @@ describe("CrossPostListRetryStore latest-list retry", () => {
   it("does not report or rewrite an unchanged pending row", () => {
     const sql = wrapSqlStorage(new DatabaseSync(":memory:"));
     let mutations = 0;
-    const store = new CrossPostListRetryStore(sql, {
+    const store = new CopyListRetryStore(sql, {
       onMutation: () => {
         mutations += 1;
       },

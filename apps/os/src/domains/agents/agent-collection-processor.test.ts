@@ -40,9 +40,9 @@ const COLLECTION_CREATED = {
 // catalog preserves source chronology, not ingest delay.
 // -----------------------------------------------------------------------------
 
-function crossPostedFromSource(type: string, path: string, sourceOffset: number) {
+function copiedFromSource(type: string, path: string, sourceOffset: number) {
   return {
-    crossPostedFrom: [
+    copiedFrom: [
       {
         subscriptionKey: "agent-collection",
         streamId: "11111111-1111-4111-8111-111111111111",
@@ -65,7 +65,7 @@ function agentCreatedCopy(args: { sourceOffset: number; path?: string }): Collec
   return {
     type: "events.iterate.com/agent/created",
     payload: {},
-    source: crossPostedFromSource("events.iterate.com/agent/created", path, args.sourceOffset),
+    source: copiedFromSource("events.iterate.com/agent/created", path, args.sourceOffset),
   };
 }
 
@@ -80,11 +80,7 @@ function summaryUpdatedCopy(
   return {
     type: "events.iterate.com/agent/summary-updated",
     payload: update,
-    source: crossPostedFromSource(
-      "events.iterate.com/agent/summary-updated",
-      path,
-      args.sourceOffset,
-    ),
+    source: copiedFromSource("events.iterate.com/agent/summary-updated", path, args.sourceOffset),
   };
 }
 

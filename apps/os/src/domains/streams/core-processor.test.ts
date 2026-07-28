@@ -6,7 +6,7 @@ import {
   MAX_SOURCE_STREAMS_PER_RECEIVING_STREAM,
   MAX_SUBSCRIPTIONS_PER_RECEIVING_STREAM,
   type CoreProcessorState,
-  type CrossPostListRecordedPayload,
+  type CopyListRecordedPayload,
   type SubscriptionConfiguredPayload,
 } from "./core-processor-contract.ts";
 import {
@@ -32,7 +32,7 @@ function streamSubscription(
     description: "Receive issue events",
     filter: { eventTypes: ["example.com/issue-created"] },
     receiver: {
-      action: "cross-post",
+      action: "copy-to-stream",
       receivingStreamPath: RECEIVER_PATH,
       delivery: {
         start: "now",
@@ -46,7 +46,7 @@ function streamSubscription(
 
 function subscriptionsFromSource(
   sourceOffset: number,
-  subscriptionsByKey: CrossPostListRecordedPayload["subscriptionsByKey"] = {
+  subscriptionsByKey: CopyListRecordedPayload["subscriptionsByKey"] = {
     issues: {
       configuredAtSourceOffset: sourceOffset,
       configuration: {
@@ -62,7 +62,7 @@ function subscriptionsFromSource(
   },
   streamCreatedAt = SOURCE_CREATED_AT,
   streamId = SOURCE_STREAM_ID,
-): CrossPostListRecordedPayload {
+): CopyListRecordedPayload {
   return {
     source: {
       projectId: PROJECT_ID,
@@ -193,7 +193,7 @@ describe("StreamCoreProcessor circuit-breaker accounting", () => {
     const receivedWoken = reduce(processor, reconfigured, {
       ...committed(6, "events.iterate.com/stream/woken", { incarnationId: "untrusted-source" }),
       source: {
-        crossPostedFrom: [
+        copiedFrom: [
           {
             subscriptionKey: "issues",
             streamId: SOURCE_STREAM_ID,
@@ -212,7 +212,7 @@ describe("StreamCoreProcessor circuit-breaker accounting", () => {
       ...committed(7, "events.iterate.com/stream/paused", { reason: "untrusted source" }),
       createdAt: "2026-07-21T12:00:06.000Z",
       source: {
-        crossPostedFrom: [
+        copiedFrom: [
           {
             subscriptionKey: "issues",
             streamId: SOURCE_STREAM_ID,
@@ -394,36 +394,32 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
     const configured = reduce(
       processor,
       coreState(),
-      committed(
-        2,
-        "events.iterate.com/stream/cross-post-list-recorded",
-        subscriptionsFromSource(5),
-      ),
+      committed(2, "events.iterate.com/stream/copy-list-recorded", subscriptionsFromSource(5)),
     );
     const paused = { ...configured, paused: true, pauseReason: "operator boundary" };
 
     expect(() =>
       processor.validate({
         event: {
-          type: "events.iterate.com/stream/cross-post-list-recorded",
+          type: "events.iterate.com/stream/copy-list-recorded",
           payload: subscriptionsFromSource(6, {}),
         },
         state: paused,
-        authority: "cross-post-list",
+        authority: "copy-list",
       }),
     ).not.toThrow();
 
     expect(() =>
       processor.validate({
         event: {
-          type: "events.iterate.com/stream/cross-post-list-recorded",
+          type: "events.iterate.com/stream/copy-list-recorded",
           payload: subscriptionsFromSource(6, {
             ...subscriptionsFromSource(5).subscriptionsByKey,
             newKey: subscriptionsFromSource(6).subscriptionsByKey.issues!,
           }),
         },
         state: paused,
-        authority: "cross-post-list",
+        authority: "copy-list",
       }),
     ).not.toThrow();
 
@@ -432,7 +428,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
       processor.validate({
         event: { type: "example.com/product-event", payload: {} },
         state: paused,
-        authority: "cross-post",
+        authority: "copy",
       });
     } catch (error) {
       productAppendError = error;
@@ -452,17 +448,17 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
     expect(() =>
       processor.validate({
         event: {
-          type: "events.iterate.com/stream/cross-post-list-resend-requested",
+          type: "events.iterate.com/stream/copy-list-resend-requested",
           payload: { receivingStreamPath: RECEIVER_PATH },
         },
         state,
         authority: "public",
       }),
-    ).toThrow(/no blocked cross-post list/);
+    ).toThrow(/no blocked copy list/);
     state = reduce(
       processor,
       state,
-      committed(3, "events.iterate.com/stream/cross-post-list-delivery-blocked", {
+      committed(3, "events.iterate.com/stream/copy-list-delivery-blocked", {
         receivingStreamPath: RECEIVER_PATH,
         sourceOffset: 2,
         attempts: 8,
@@ -471,7 +467,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
     );
 
     expect(state.subscriptions.outbound.byKey.issues?.deliveryHalted).toBeUndefined();
-    expect(state.crossPostListDeliveriesByReceivingStream[RECEIVER_PATH]).toEqual({
+    expect(state.copyListDeliveriesByReceivingStream[RECEIVER_PATH]).toEqual({
       sourceOffset: 2,
       status: "blocked",
       attempts: 8,
@@ -493,7 +489,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
 
     const retryRequest = committed(
       4,
-      "events.iterate.com/stream/cross-post-list-resend-requested",
+      "events.iterate.com/stream/copy-list-resend-requested",
       { receivingStreamPath: RECEIVER_PATH },
       { path: SOURCE_PATH },
     );
@@ -504,7 +500,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
     });
     state = reduce(processor, state, retryRequest);
     expect(state.subscriptions.outbound.byKey.issues?.deliveryHalted).toBeUndefined();
-    expect(state.crossPostListDeliveriesByReceivingStream[RECEIVER_PATH]).toEqual({
+    expect(state.copyListDeliveriesByReceivingStream[RECEIVER_PATH]).toEqual({
       sourceOffset: retryRequest.offset,
       status: "pending",
       subscriptionKeysRecordedByReceiver: [],
@@ -512,13 +508,13 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
     expect(() =>
       processor.validate({
         event: {
-          type: "events.iterate.com/stream/cross-post-list-resend-requested",
+          type: "events.iterate.com/stream/copy-list-resend-requested",
           payload: { receivingStreamPath: RECEIVER_PATH },
         },
         state,
         authority: "public",
       }),
-    ).toThrow(/no blocked cross-post list/);
+    ).toThrow(/no blocked copy list/);
   });
 
   test("keeps the latest explicit read position in reduced state and clears it on replacement", () => {
@@ -640,7 +636,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
       configuredAtOffset: 2,
       configuration: streamSubscription(),
     });
-    expect(sourceState.crossPostListDeliveriesByReceivingStream).toEqual({
+    expect(sourceState.copyListDeliveriesByReceivingStream).toEqual({
       [RECEIVER_PATH]: {
         sourceOffset: 2,
         status: "pending",
@@ -651,17 +647,17 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
     sourceState = reduce(
       processor,
       sourceState,
-      committed(3, "events.iterate.com/stream/cross-post-list-confirmed", {
+      committed(3, "events.iterate.com/stream/copy-list-confirmed", {
         receivingStreamPath: RECEIVER_PATH,
         sourceOffset: 2,
         receivingStreamEvent: committed(
           2,
-          "events.iterate.com/stream/cross-post-list-recorded",
+          "events.iterate.com/stream/copy-list-recorded",
           subscriptionsFromSource(2),
         ),
       }),
     );
-    expect(sourceState.crossPostListDeliveriesByReceivingStream[RECEIVER_PATH]).toEqual({
+    expect(sourceState.copyListDeliveriesByReceivingStream[RECEIVER_PATH]).toEqual({
       sourceOffset: 2,
       status: "confirmed",
       subscriptionKeysRecordedByReceiver: ["issues"],
@@ -669,22 +665,18 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
     expect(() =>
       processor.validate({
         event: {
-          type: "events.iterate.com/stream/cross-post-list-resend-requested",
+          type: "events.iterate.com/stream/copy-list-resend-requested",
           payload: { receivingStreamPath: RECEIVER_PATH },
         },
         state: sourceState,
         authority: "public",
       }),
-    ).toThrow(/no blocked cross-post list/);
+    ).toThrow(/no blocked copy list/);
 
     const receiverState = reduce(
       processor,
       coreState(),
-      committed(
-        2,
-        "events.iterate.com/stream/cross-post-list-recorded",
-        subscriptionsFromSource(2),
-      ),
+      committed(2, "events.iterate.com/stream/copy-list-recorded", subscriptionsFromSource(2)),
     );
     expect(receiverState.subscriptions.inbound.bySourcePath[SOURCE_PATH]).toEqual({
       source: {
@@ -709,14 +701,10 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
     let state = reduce(
       processor,
       coreState(),
-      committed(
-        2,
-        "events.iterate.com/stream/cross-post-list-recorded",
-        subscriptionsFromSource(10),
-      ),
+      committed(2, "events.iterate.com/stream/copy-list-recorded", subscriptionsFromSource(10)),
     );
     const copiedSource = {
-      crossPostedFrom: [
+      copiedFrom: [
         {
           subscriptionKey: "issues",
           streamId: SOURCE_STREAM_ID,
@@ -743,7 +731,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
     state = reduce(
       processor,
       state,
-      committed(4, "events.iterate.com/stream/cross-posted-events-dropped", {
+      committed(4, "events.iterate.com/stream/copied-events-dropped", {
         source: {
           projectId: PROJECT_ID,
           path: SOURCE_PATH,
@@ -763,7 +751,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
       state,
       committed(
         5,
-        "events.iterate.com/stream/cross-post-list-recorded",
+        "events.iterate.com/stream/copy-list-recorded",
         subscriptionsFromSource(12, {
           issues: {
             ...subscriptionsFromSource(10).subscriptionsByKey.issues!,
@@ -781,22 +769,14 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
     state = reduce(
       processor,
       state,
-      committed(
-        6,
-        "events.iterate.com/stream/cross-post-list-recorded",
-        subscriptionsFromSource(11, {}),
-      ),
+      committed(6, "events.iterate.com/stream/copy-list-recorded", subscriptionsFromSource(11, {})),
     );
     expect(state.subscriptions.inbound.bySourcePath[SOURCE_PATH]?.sourceOffset).toBe(12);
 
     state = reduce(
       processor,
       state,
-      committed(
-        7,
-        "events.iterate.com/stream/cross-post-list-recorded",
-        subscriptionsFromSource(13),
-      ),
+      committed(7, "events.iterate.com/stream/copy-list-recorded", subscriptionsFromSource(13)),
     );
     expect(state.subscriptions.inbound.bySourcePath[SOURCE_PATH]?.byKey.issues).toMatchObject({
       configuredAtSourceOffset: 13,
@@ -807,11 +787,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
     state = reduce(
       processor,
       state,
-      committed(
-        8,
-        "events.iterate.com/stream/cross-post-list-recorded",
-        subscriptionsFromSource(14, {}),
-      ),
+      committed(8, "events.iterate.com/stream/copy-list-recorded", subscriptionsFromSource(14, {})),
     );
     expect(state.subscriptions.inbound.bySourcePath[SOURCE_PATH]).toBeUndefined();
   });
@@ -825,7 +801,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
       coreState(),
       committed(
         2,
-        "events.iterate.com/stream/cross-post-list-recorded",
+        "events.iterate.com/stream/copy-list-recorded",
         subscriptionsFromSource(40, undefined, firstCreation),
       ),
     );
@@ -839,7 +815,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
         {
           path: RECEIVER_PATH,
           source: {
-            crossPostedFrom: [
+            copiedFrom: [
               {
                 subscriptionKey: "issues",
                 streamId: SOURCE_STREAM_ID,
@@ -865,7 +841,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
       state,
       committed(
         4,
-        "events.iterate.com/stream/cross-post-list-recorded",
+        "events.iterate.com/stream/copy-list-recorded",
         subscriptionsFromSource(2, undefined, secondCreation, SECOND_SOURCE_STREAM_ID),
       ),
     );
@@ -883,7 +859,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
       state,
       committed(
         5,
-        "events.iterate.com/stream/cross-post-list-recorded",
+        "events.iterate.com/stream/copy-list-recorded",
         subscriptionsFromSource(50, undefined, firstCreation),
       ),
     );
@@ -897,7 +873,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
         {
           path: RECEIVER_PATH,
           source: {
-            crossPostedFrom: [
+            copiedFrom: [
               {
                 subscriptionKey: "issues",
                 streamId: SOURCE_STREAM_ID,
@@ -933,7 +909,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
         {
           path: RECEIVER_PATH,
           source: {
-            crossPostedFrom: [
+            copiedFrom: [
               {
                 subscriptionKey: "issues",
                 streamId: SECOND_SOURCE_STREAM_ID,
@@ -960,7 +936,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
     const at = (path: string) =>
       streamSubscription({
         receiver: {
-          action: "cross-post",
+          action: "copy-to-stream",
           receivingStreamPath: path,
           delivery: {
             start: "now",
@@ -983,7 +959,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
         }),
       );
     }
-    expect(state.crossPostListDeliveriesByReceivingStream).toEqual({
+    expect(state.copyListDeliveriesByReceivingStream).toEqual({
       "/agents/a": { sourceOffset: 3, status: "pending", subscriptionKeysRecordedByReceiver: [] },
       "/agents/b": { sourceOffset: 4, status: "pending", subscriptionKeysRecordedByReceiver: [] },
       "/agents/c": { sourceOffset: 4, status: "pending", subscriptionKeysRecordedByReceiver: [] },
@@ -997,12 +973,12 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
       state = reduce(
         processor,
         state,
-        committed(offset, "events.iterate.com/stream/cross-post-list-confirmed", {
+        committed(offset, "events.iterate.com/stream/copy-list-confirmed", {
           receivingStreamPath,
           sourceOffset,
           receivingStreamEvent: committed(
             offset,
-            "events.iterate.com/stream/cross-post-list-recorded",
+            "events.iterate.com/stream/copy-list-recorded",
             subscriptionsFromSource(
               sourceOffset,
               receivingStreamPath === "/agents/c"
@@ -1014,7 +990,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
         }),
       );
     }
-    expect(state.crossPostListDeliveriesByReceivingStream).toEqual({
+    expect(state.copyListDeliveriesByReceivingStream).toEqual({
       "/agents/c": {
         sourceOffset: 4,
         status: "confirmed",
@@ -1028,7 +1004,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
     const at = (path: string) =>
       streamSubscription({
         receiver: {
-          action: "cross-post",
+          action: "copy-to-stream",
           receivingStreamPath: path,
           delivery: {
             start: "now",
@@ -1041,17 +1017,17 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
       offset: number,
       receivingStreamPath: string,
       sourceOffset: number,
-      subscriptionsByKey: CrossPostListRecordedPayload["subscriptionsByKey"],
+      subscriptionsByKey: CopyListRecordedPayload["subscriptionsByKey"],
     ) =>
       committed(
         offset,
-        "events.iterate.com/stream/cross-post-list-confirmed",
+        "events.iterate.com/stream/copy-list-confirmed",
         {
           receivingStreamPath,
           sourceOffset,
           receivingStreamEvent: committed(
             offset,
-            "events.iterate.com/stream/cross-post-list-recorded",
+            "events.iterate.com/stream/copy-list-recorded",
             subscriptionsFromSource(sourceOffset, subscriptionsByKey),
             { path: receivingStreamPath },
           ),
@@ -1071,7 +1047,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
       state,
       recorded(3, "/agents/a", 2, subscriptionsFromSource(2).subscriptionsByKey),
     );
-    expect(state.crossPostListDeliveriesByReceivingStream["/agents/a"]).toEqual({
+    expect(state.copyListDeliveriesByReceivingStream["/agents/a"]).toEqual({
       sourceOffset: 2,
       status: "confirmed",
       subscriptionKeysRecordedByReceiver: ["issues"],
@@ -1084,7 +1060,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
         path: SOURCE_PATH,
       }),
     );
-    expect(state.crossPostListDeliveriesByReceivingStream).toEqual({
+    expect(state.copyListDeliveriesByReceivingStream).toEqual({
       "/agents/a": {
         sourceOffset: 4,
         status: "pending",
@@ -1098,7 +1074,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
       state,
       committed(
         5,
-        "events.iterate.com/stream/cross-post-list-delivery-blocked",
+        "events.iterate.com/stream/copy-list-delivery-blocked",
         {
           receivingStreamPath: "/agents/a",
           sourceOffset: 4,
@@ -1108,7 +1084,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
         { path: SOURCE_PATH },
       ),
     );
-    expect(state.crossPostListDeliveriesByReceivingStream["/agents/a"]).toEqual({
+    expect(state.copyListDeliveriesByReceivingStream["/agents/a"]).toEqual({
       sourceOffset: 4,
       status: "blocked",
       attempts: 8,
@@ -1123,7 +1099,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
       state,
       committed(
         6,
-        "events.iterate.com/stream/cross-post-list-delivery-blocked",
+        "events.iterate.com/stream/copy-list-delivery-blocked",
         {
           receivingStreamPath: "/agents/a",
           sourceOffset: 3,
@@ -1133,13 +1109,13 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
         { path: SOURCE_PATH },
       ),
     );
-    expect(state.crossPostListDeliveriesByReceivingStream).toEqual(
-      beforeStaleBlock.crossPostListDeliveriesByReceivingStream,
+    expect(state.copyListDeliveriesByReceivingStream).toEqual(
+      beforeStaleBlock.copyListDeliveriesByReceivingStream,
     );
 
     const resend = committed(
       7,
-      "events.iterate.com/stream/cross-post-list-resend-requested",
+      "events.iterate.com/stream/copy-list-resend-requested",
       { receivingStreamPath: "/agents/a" },
       { path: SOURCE_PATH },
     );
@@ -1149,7 +1125,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
       authority: "public",
     });
     state = reduce(processor, state, resend);
-    expect(state.crossPostListDeliveriesByReceivingStream["/agents/a"]).toEqual({
+    expect(state.copyListDeliveriesByReceivingStream["/agents/a"]).toEqual({
       sourceOffset: 7,
       status: "pending",
       subscriptionKeysRecordedByReceiver: ["issues"],
@@ -1160,7 +1136,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
       state,
       committed(
         8,
-        "events.iterate.com/stream/cross-post-list-delivery-blocked",
+        "events.iterate.com/stream/copy-list-delivery-blocked",
         {
           receivingStreamPath: "/agents/a",
           sourceOffset: 4,
@@ -1170,15 +1146,15 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
         { path: SOURCE_PATH },
       ),
     );
-    expect(state.crossPostListDeliveriesByReceivingStream["/agents/a"]).toEqual({
+    expect(state.copyListDeliveriesByReceivingStream["/agents/a"]).toEqual({
       sourceOffset: 7,
       status: "pending",
       subscriptionKeysRecordedByReceiver: ["issues"],
     });
 
     state = reduce(processor, state, recorded(9, "/agents/a", 7, {}));
-    expect(state.crossPostListDeliveriesByReceivingStream["/agents/a"]).toBeUndefined();
-    expect(state.crossPostListDeliveriesByReceivingStream["/agents/b"]).toEqual({
+    expect(state.copyListDeliveriesByReceivingStream["/agents/a"]).toBeUndefined();
+    expect(state.copyListDeliveriesByReceivingStream["/agents/b"]).toEqual({
       sourceOffset: 4,
       status: "pending",
       subscriptionKeysRecordedByReceiver: [],
@@ -1189,7 +1165,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
       state,
       recorded(10, "/agents/b", 4, subscriptionsFromSource(4).subscriptionsByKey),
     );
-    expect(state.crossPostListDeliveriesByReceivingStream).toEqual({
+    expect(state.copyListDeliveriesByReceivingStream).toEqual({
       "/agents/b": {
         sourceOffset: 4,
         status: "confirmed",
@@ -1203,7 +1179,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
     const at = (path: string) =>
       streamSubscription({
         receiver: {
-          action: "cross-post",
+          action: "copy-to-stream",
           receivingStreamPath: path,
           delivery: {
             start: "now",
@@ -1216,17 +1192,17 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
       offset: number,
       receivingStreamPath: string,
       sourceOffset: number,
-      subscriptionsByKey: CrossPostListRecordedPayload["subscriptionsByKey"],
+      subscriptionsByKey: CopyListRecordedPayload["subscriptionsByKey"],
     ) =>
       committed(
         offset,
-        "events.iterate.com/stream/cross-post-list-confirmed",
+        "events.iterate.com/stream/copy-list-confirmed",
         {
           receivingStreamPath,
           sourceOffset,
           receivingStreamEvent: committed(
             offset,
-            "events.iterate.com/stream/cross-post-list-recorded",
+            "events.iterate.com/stream/copy-list-recorded",
             subscriptionsFromSource(sourceOffset, subscriptionsByKey),
             { path: receivingStreamPath },
           ),
@@ -1263,7 +1239,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
       state,
       committed(
         6,
-        "events.iterate.com/stream/cross-post-list-delivery-blocked",
+        "events.iterate.com/stream/copy-list-delivery-blocked",
         {
           receivingStreamPath: "/agents/a",
           sourceOffset: 4,
@@ -1284,7 +1260,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
         { path: SOURCE_PATH },
       ),
     );
-    expect(state.crossPostListDeliveriesByReceivingStream).toEqual({
+    expect(state.copyListDeliveriesByReceivingStream).toEqual({
       "/agents/a": {
         sourceOffset: 7,
         status: "pending",
@@ -1302,7 +1278,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
       state,
       committed(
         8,
-        "events.iterate.com/stream/cross-post-list-delivery-blocked",
+        "events.iterate.com/stream/copy-list-delivery-blocked",
         {
           receivingStreamPath: "/agents/a",
           sourceOffset: 7,
@@ -1314,7 +1290,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
     );
     state = reduce(processor, state, recorded(9, "/agents/b", 7, {}));
     expect(state.subscriptions.outbound.byKey.issues).toBeUndefined();
-    expect(state.crossPostListDeliveriesByReceivingStream["/agents/a"]).toMatchObject({
+    expect(state.copyListDeliveriesByReceivingStream["/agents/a"]).toMatchObject({
       sourceOffset: 7,
       status: "blocked",
       subscriptionKeysRecordedByReceiver: ["issues"],
@@ -1327,7 +1303,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
         path: SOURCE_PATH,
       }),
     );
-    expect(state.crossPostListDeliveriesByReceivingStream).toEqual({
+    expect(state.copyListDeliveriesByReceivingStream).toEqual({
       "/agents/a": {
         sourceOffset: 10,
         status: "pending",
@@ -1345,13 +1321,13 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
       state,
       recorded(11, "/agents/c", 10, subscriptionsFromSource(10).subscriptionsByKey),
     );
-    expect(state.crossPostListDeliveriesByReceivingStream["/agents/c"]).toEqual({
+    expect(state.copyListDeliveriesByReceivingStream["/agents/c"]).toEqual({
       sourceOffset: 10,
       status: "confirmed",
       subscriptionKeysRecordedByReceiver: ["issues"],
     });
     state = reduce(processor, state, recorded(12, "/agents/a", 10, {}));
-    expect(state.crossPostListDeliveriesByReceivingStream).toEqual({
+    expect(state.copyListDeliveriesByReceivingStream).toEqual({
       "/agents/c": {
         sourceOffset: 10,
         status: "confirmed",
@@ -1371,11 +1347,11 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
     expect(() =>
       processor.validate({
         event: {
-          type: "events.iterate.com/stream/cross-post-list-recorded",
+          type: "events.iterate.com/stream/copy-list-recorded",
           payload: subscriptionsFromSource(5, tooManyRecords),
         },
         state: coreState(),
-        authority: "cross-post-list",
+        authority: "copy-list",
       }),
     ).toThrow(`at most ${MAX_SUBSCRIPTIONS_PER_RECEIVING_STREAM}`);
 
@@ -1405,7 +1381,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
     expect(() =>
       processor.validate({
         event: {
-          type: "events.iterate.com/stream/cross-post-list-recorded",
+          type: "events.iterate.com/stream/copy-list-recorded",
           payload: {
             source: {
               projectId: PROJECT_ID,
@@ -1418,14 +1394,14 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
           },
         },
         state: full,
-        authority: "cross-post-list",
+        authority: "copy-list",
       }),
     ).not.toThrow();
 
     expect(() =>
       processor.validate({
         event: {
-          type: "events.iterate.com/stream/cross-post-list-recorded",
+          type: "events.iterate.com/stream/copy-list-recorded",
           payload: {
             source: {
               projectId: PROJECT_ID,
@@ -1438,7 +1414,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
           },
         },
         state: full,
-        authority: "cross-post-list",
+        authority: "copy-list",
       }),
     ).toThrow(`at most ${MAX_SOURCE_STREAMS_PER_RECEIVING_STREAM}`);
   });
@@ -1448,7 +1424,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
     const initialState = coreState(SOURCE_PATH);
     const futureStart = streamSubscription({
       receiver: {
-        action: "cross-post",
+        action: "copy-to-stream",
         receivingStreamPath: RECEIVER_PATH,
         delivery: {
           start: { afterOffset: initialState.maxOffset + 1 },
@@ -1476,7 +1452,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
         "events.iterate.com/stream/subscription-configured",
         streamSubscription({
           receiver: {
-            action: "cross-post",
+            action: "copy-to-stream",
             receivingStreamPath: RECEIVER_PATH,
             delivery: {
               start: "beginning",
@@ -1503,7 +1479,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
   test("rejects a 65th subscription before it can invalidate the receiver's stored set", () => {
     const { processor } = harness(SOURCE_PATH);
     const receiver = streamSubscription().receiver;
-    if (receiver.action !== "cross-post") throw new Error("test fixture must target a stream");
+    if (receiver.action !== "copy-to-stream") throw new Error("test fixture must target a stream");
     const sending = Object.fromEntries(
       Array.from({ length: MAX_SUBSCRIPTIONS_PER_RECEIVING_STREAM }, (_, index) => [
         `key-${index}`,
@@ -1552,12 +1528,12 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
 
 describe("StreamCoreProcessor validation and dispatch", () => {
   test.each([
-    "cross-post",
+    "copy",
     "stream-paused",
     "child-stream-created",
-    "cross-post-list-recorded",
-    "cross-post-list-confirmed",
-    "cross-post-event-dropped",
+    "copy-list-recorded",
+    "copy-list-confirmed",
+    "copy-event-dropped",
     "filter-condition-failed",
     "subscription-failing-event-skipped",
     "subscription-ended",
@@ -1575,30 +1551,26 @@ describe("StreamCoreProcessor validation and dispatch", () => {
     ).toThrow("iterate-internal idempotency keys are platform-authored");
   });
 
-  test("only the platform can append cross-post lists, dropped-event records, or source.crossPostedFrom", () => {
+  test("only the platform can append copy lists, dropped-event records, or source.copiedFrom", () => {
     const { processor, state } = harness();
     const replacement: StreamEventInput = {
-      type: "events.iterate.com/stream/cross-post-list-recorded",
+      type: "events.iterate.com/stream/copy-list-recorded",
       payload: subscriptionsFromSource(4),
     };
     expect(() => processor.validate({ event: replacement, state, authority: "public" })).toThrow(
-      "cross-post lists from source streams are platform-authored",
+      "copy lists from source streams are platform-authored",
     );
     expect(() =>
-      processor.validate({ event: replacement, state, authority: "cross-post-list" }),
+      processor.validate({ event: replacement, state, authority: "copy-list" }),
     ).not.toThrow();
 
     const stateWithRecordedSubscription = reduce(
       processor,
       state,
-      committed(
-        2,
-        "events.iterate.com/stream/cross-post-list-recorded",
-        subscriptionsFromSource(4),
-      ),
+      committed(2, "events.iterate.com/stream/copy-list-recorded", subscriptionsFromSource(4)),
     );
     const dropping: StreamEventInput = {
-      type: "events.iterate.com/stream/cross-posted-events-dropped",
+      type: "events.iterate.com/stream/copied-events-dropped",
       payload: {
         source: {
           projectId: PROJECT_ID,
@@ -1614,19 +1586,19 @@ describe("StreamCoreProcessor validation and dispatch", () => {
       },
     };
     expect(() => processor.validate({ event: dropping, state, authority: "public" })).toThrow(
-      "cross-post drop records are platform-authored",
+      "copy drop records are platform-authored",
     );
     expect(() =>
       processor.validate({
         event: dropping,
         state: stateWithRecordedSubscription,
-        authority: "cross-post",
+        authority: "copy",
       }),
     ).not.toThrow();
     expect(() =>
       processor.validate({
         event: {
-          type: "events.iterate.com/stream/cross-posted-events-dropped",
+          type: "events.iterate.com/stream/copied-events-dropped",
           payload: {
             source: {
               projectId: PROJECT_ID,
@@ -1642,7 +1614,7 @@ describe("StreamCoreProcessor validation and dispatch", () => {
           },
         },
         state: stateWithRecordedSubscription,
-        authority: "cross-post",
+        authority: "copy",
       }),
     ).toThrow(
       'dropped events do not match the current subscription "issues" from "/sources/issues"',
@@ -1651,7 +1623,7 @@ describe("StreamCoreProcessor validation and dispatch", () => {
     const copied: StreamEventInput = {
       type: "example.com/issue-created",
       source: {
-        crossPostedFrom: [
+        copiedFrom: [
           {
             subscriptionKey: "issues",
             streamId: SOURCE_STREAM_ID,
@@ -1667,7 +1639,7 @@ describe("StreamCoreProcessor validation and dispatch", () => {
       },
     };
     expect(() => processor.validate({ event: copied, state, authority: "public" })).toThrow(
-      "cross-post source information is platform-authored",
+      "copy source information is platform-authored",
     );
   });
 
@@ -1676,16 +1648,12 @@ describe("StreamCoreProcessor validation and dispatch", () => {
     const state = reduce(
       processor,
       initialState,
-      committed(
-        2,
-        "events.iterate.com/stream/cross-post-list-recorded",
-        subscriptionsFromSource(4),
-      ),
+      committed(2, "events.iterate.com/stream/copy-list-recorded", subscriptionsFromSource(4)),
     );
     const copied: StreamEventInput = {
       type: "example.com/issue-created",
       source: {
-        crossPostedFrom: [
+        copiedFrom: [
           {
             subscriptionKey: "issues",
             streamId: SOURCE_STREAM_ID,
@@ -1701,33 +1669,31 @@ describe("StreamCoreProcessor validation and dispatch", () => {
       },
     };
 
-    expect(() =>
-      processor.validate({ event: copied, state, authority: "cross-post" }),
-    ).not.toThrow();
+    expect(() => processor.validate({ event: copied, state, authority: "copy" })).not.toThrow();
     expect(() =>
       processor.validate({
         event: {
           ...copied,
           source: {
-            crossPostedFrom: [
+            copiedFrom: [
               {
-                ...copied.source!.crossPostedFrom![0]!,
+                ...copied.source!.copiedFrom![0]!,
                 streamId: SECOND_SOURCE_STREAM_ID,
               },
             ],
           },
         },
         state,
-        authority: "cross-post",
+        authority: "copy",
       }),
     ).toThrow(
       'received event does not match the current subscription "issues" from "/sources/issues"',
     );
     expect(() =>
       processor.validate({
-        event: { ...copied, source: { crossPostedFrom: [] } },
+        event: { ...copied, source: { copiedFrom: [] } },
         state,
-        authority: "cross-post",
+        authority: "copy",
       }),
     ).toThrow("received event has no source hop");
   });
@@ -1786,7 +1752,7 @@ describe("StreamCoreProcessor validation and dispatch", () => {
     const at = (path: string) =>
       streamSubscription({
         receiver: {
-          action: "cross-post",
+          action: "copy-to-stream",
           receivingStreamPath: path,
           delivery: {
             start: "now",
@@ -1800,7 +1766,7 @@ describe("StreamCoreProcessor validation and dispatch", () => {
       path: SOURCE_PATH,
     });
     state = reduce(processor, state, first);
-    expect(state.crossPostListDeliveriesByReceivingStream).toMatchObject({
+    expect(state.copyListDeliveriesByReceivingStream).toMatchObject({
       "/a": { sourceOffset: 2, status: "pending", subscriptionKeysRecordedByReceiver: [] },
     });
 
@@ -1813,7 +1779,7 @@ describe("StreamCoreProcessor validation and dispatch", () => {
       },
     );
     state = reduce(processor, state, replacement);
-    expect(state.crossPostListDeliveriesByReceivingStream).toMatchObject({
+    expect(state.copyListDeliveriesByReceivingStream).toMatchObject({
       "/a": { sourceOffset: 3, status: "pending", subscriptionKeysRecordedByReceiver: [] },
       "/b": { sourceOffset: 3, status: "pending", subscriptionKeysRecordedByReceiver: [] },
     });
@@ -1823,7 +1789,7 @@ describe("StreamCoreProcessor validation and dispatch", () => {
       state,
       committed(
         4,
-        "events.iterate.com/stream/cross-post-list-delivery-blocked",
+        "events.iterate.com/stream/copy-list-delivery-blocked",
         {
           receivingStreamPath: "/b",
           sourceOffset: 3,
@@ -1835,7 +1801,7 @@ describe("StreamCoreProcessor validation and dispatch", () => {
     );
     const retryRequest = committed(
       5,
-      "events.iterate.com/stream/cross-post-list-resend-requested",
+      "events.iterate.com/stream/copy-list-resend-requested",
       { receivingStreamPath: "/b" },
       { path: SOURCE_PATH },
     );
@@ -1845,7 +1811,7 @@ describe("StreamCoreProcessor validation and dispatch", () => {
       authority: "public",
     });
     state = reduce(processor, state, retryRequest);
-    expect(state.crossPostListDeliveriesByReceivingStream).toMatchObject({
+    expect(state.copyListDeliveriesByReceivingStream).toMatchObject({
       "/a": { sourceOffset: 3, status: "pending", subscriptionKeysRecordedByReceiver: [] },
       "/b": { sourceOffset: 5, status: "pending", subscriptionKeysRecordedByReceiver: [] },
     });

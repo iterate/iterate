@@ -401,12 +401,9 @@ describe("StreamConnections hosted delivery watchdog", () => {
     expect(disposed).not.toHaveBeenCalled();
   });
 
-  it("withholds source-private cross-post-list confirmations from hosted processors", async () => {
+  it("withholds source-private copy-list confirmations from hosted processors", async () => {
     const h = harness({
-      events: [
-        streamEvent(1, "events.iterate.com/stream/cross-post-list-confirmed"),
-        streamEvent(2),
-      ],
+      events: [streamEvent(1, "events.iterate.com/stream/copy-list-confirmed"), streamEvent(2)],
     });
     const calls: DeliveryCall[] = [];
     const connection = h.connections.openHosted({

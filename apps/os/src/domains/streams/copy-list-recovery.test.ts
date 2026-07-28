@@ -3,12 +3,9 @@ import type { StreamEvent } from "iterate/processors";
 import { describe, expect, it } from "vitest";
 import { CoreProcessorContract, type CoreProcessorState } from "./core-processor-contract.ts";
 import { StreamCoreProcessor } from "./core-processor.ts";
-import {
-  MAX_CROSS_POST_LIST_ATTEMPTS,
-  CrossPostListRetryStore,
-} from "./cross-post-list-retry-store.ts";
+import { MAX_COPY_LIST_ATTEMPTS, CopyListRetryStore } from "./copy-list-retry-store.ts";
 
-const PROJECT_ID = "prj_cross_post_list_recovery";
+const PROJECT_ID = "prj_copy_list_recovery";
 const SOURCE_PATH = "/sources/issues";
 const RECEIVER_PATH = "/agents/reviewer";
 const SUBSCRIPTION_KEY = "issues";
@@ -61,10 +58,10 @@ function reduce(
   return processor.reduce({ state, event });
 }
 
-describe("cross-post list recovery", () => {
+describe("copy list recovery", () => {
   it("exhausts the shared receiver-call budget, blocks, starts an explicit resend generation, and records its ack", () => {
     const sql = wrapSqlStorage(new DatabaseSync(":memory:"));
-    const retries = new CrossPostListRetryStore(sql);
+    const retries = new CopyListRetryStore(sql);
     const processor = new StreamCoreProcessor({ projectId: PROJECT_ID });
     let state = CoreProcessorContract.stateSchema.parse({
       projectId: PROJECT_ID,
@@ -77,7 +74,7 @@ describe("cross-post list recovery", () => {
       committed(2, "events.iterate.com/stream/subscription-configured", {
         subscriptionKey: SUBSCRIPTION_KEY,
         receiver: {
-          action: "cross-post",
+          action: "copy-to-stream",
           receivingStreamPath: RECEIVER_PATH,
           delivery: {
             start: "beginning",
@@ -89,7 +86,7 @@ describe("cross-post list recovery", () => {
     );
     retries.ensure(RECEIVER_PATH, 2);
 
-    for (let attempt = 1; attempt < MAX_CROSS_POST_LIST_ATTEMPTS; attempt += 1) {
+    for (let attempt = 1; attempt < MAX_COPY_LIST_ATTEMPTS; attempt += 1) {
       retries.fail(RECEIVER_PATH, {
         sourceOffset: 2,
         attempt,
@@ -99,9 +96,9 @@ describe("cross-post list recovery", () => {
     }
     expect(retries.get(RECEIVER_PATH)).toMatchObject({
       sourceOffset: 2,
-      attempt: MAX_CROSS_POST_LIST_ATTEMPTS - 1,
+      attempt: MAX_COPY_LIST_ATTEMPTS - 1,
     });
-    expect(state.crossPostListDeliveriesByReceivingStream[RECEIVER_PATH]).toEqual({
+    expect(state.copyListDeliveriesByReceivingStream[RECEIVER_PATH]).toEqual({
       sourceOffset: 2,
       status: "pending",
       subscriptionKeysRecordedByReceiver: [],
@@ -110,24 +107,24 @@ describe("cross-post list recovery", () => {
     state = reduce(
       processor,
       state,
-      committed(3, "events.iterate.com/stream/cross-post-list-delivery-blocked", {
+      committed(3, "events.iterate.com/stream/copy-list-delivery-blocked", {
         receivingStreamPath: RECEIVER_PATH,
         sourceOffset: 2,
-        attempts: MAX_CROSS_POST_LIST_ATTEMPTS,
-        error: `receiver failure ${MAX_CROSS_POST_LIST_ATTEMPTS}`,
+        attempts: MAX_COPY_LIST_ATTEMPTS,
+        error: `receiver failure ${MAX_COPY_LIST_ATTEMPTS}`,
       }),
     );
-    const blocked = state.crossPostListDeliveriesByReceivingStream[RECEIVER_PATH];
+    const blocked = state.copyListDeliveriesByReceivingStream[RECEIVER_PATH];
     expect(blocked).toMatchObject({
       sourceOffset: 2,
       status: "blocked",
-      attempts: MAX_CROSS_POST_LIST_ATTEMPTS,
+      attempts: MAX_COPY_LIST_ATTEMPTS,
     });
     if (blocked?.status !== "blocked") throw new Error("expected the list to be blocked");
     retries.delete(RECEIVER_PATH, 2);
     expect(retries.get(RECEIVER_PATH)).toBeUndefined();
 
-    const resend = committed(4, "events.iterate.com/stream/cross-post-list-resend-requested", {
+    const resend = committed(4, "events.iterate.com/stream/copy-list-resend-requested", {
       receivingStreamPath: RECEIVER_PATH,
     });
     processor.validate({
@@ -137,7 +134,7 @@ describe("cross-post list recovery", () => {
     });
     state = reduce(processor, state, resend);
     retries.ensure(RECEIVER_PATH, resend.offset);
-    expect(state.crossPostListDeliveriesByReceivingStream[RECEIVER_PATH]).toEqual({
+    expect(state.copyListDeliveriesByReceivingStream[RECEIVER_PATH]).toEqual({
       sourceOffset: 4,
       status: "pending",
       subscriptionKeysRecordedByReceiver: [],
@@ -151,7 +148,7 @@ describe("cross-post list recovery", () => {
 
     const receivingStreamEvent = committed(
       1,
-      "events.iterate.com/stream/cross-post-list-recorded",
+      "events.iterate.com/stream/copy-list-recorded",
       {
         source: {
           projectId: PROJECT_ID,
@@ -178,7 +175,7 @@ describe("cross-post list recovery", () => {
     state = reduce(
       processor,
       state,
-      committed(5, "events.iterate.com/stream/cross-post-list-confirmed", {
+      committed(5, "events.iterate.com/stream/copy-list-confirmed", {
         receivingStreamPath: RECEIVER_PATH,
         sourceOffset: 4,
         receivingStreamEvent,
@@ -186,7 +183,7 @@ describe("cross-post list recovery", () => {
     );
     retries.delete(RECEIVER_PATH, 4);
 
-    expect(state.crossPostListDeliveriesByReceivingStream[RECEIVER_PATH]).toEqual({
+    expect(state.copyListDeliveriesByReceivingStream[RECEIVER_PATH]).toEqual({
       sourceOffset: 4,
       status: "confirmed",
       subscriptionKeysRecordedByReceiver: [SUBSCRIPTION_KEY],

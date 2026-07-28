@@ -164,7 +164,7 @@ function harness(input?: {
     const birth = births.get(path);
     return birth === undefined ? [] : [birth];
   });
-  const receiveCrossPostsFrom = vi.fn(async (_path: string, _args: unknown) => ({
+  const subscribeToEventsFrom = vi.fn(async (_path: string, _args: unknown) => ({
     inbound: {},
     outbound: {},
   }));
@@ -174,7 +174,7 @@ function harness(input?: {
     stream: {
       append: (...events: StreamEventInput[]) => append(path, ...events),
       getEvents: () => getEvents(path),
-      receiveCrossPostsFrom: (args: unknown) => receiveCrossPostsFrom(path, args),
+      subscribeToEventsFrom: (args: unknown) => subscribeToEventsFrom(path, args),
     },
   }));
   const routes = input?.routes ?? {
@@ -213,7 +213,7 @@ function harness(input?: {
     itx,
     repoGet,
     repoList,
-    receiveCrossPostsFrom,
+    subscribeToEventsFrom,
   };
 }
 
@@ -270,7 +270,7 @@ describe("userspace GitHub pull-request routing", () => {
         number: 7,
       },
     });
-    expect(test.receiveCrossPostsFrom).toHaveBeenCalledWith(agentPath, {
+    expect(test.subscribeToEventsFrom).toHaveBeenCalledWith(agentPath, {
       sourceStreamPath: "/integrations/github/install-789",
       subscriptionKey: "userspace:github-pr:/repos/config",
       description: "Verified GitHub webhooks for acme/widgets#7",
@@ -319,7 +319,7 @@ describe("userspace GitHub pull-request routing", () => {
     expect(test.agentGet).toHaveBeenCalledWith(iterateAgentPath);
     expect(test.create).toHaveBeenCalledWith(iterateAgentPath);
     expect(test.appendBatches[0]?.path).toBe(iterateAgentPath);
-    expect(test.receiveCrossPostsFrom).toHaveBeenCalledWith(
+    expect(test.subscribeToEventsFrom).toHaveBeenCalledWith(
       iterateAgentPath,
       expect.objectContaining({ subscriptionKey: "userspace:github-pr:/repos/iterate" }),
     );
@@ -649,13 +649,13 @@ describe("userspace review-bot stream processor", () => {
     expect(fake.appendBatches[0]?.events).toHaveLength(3);
   });
 
-  it("skips cross-posted copies", async () => {
+  it("skips events copied from another stream", async () => {
     const { bot, fake } = reviewBotHarness();
     await bot.append({
       type: "events.iterate.com/github/webhook-received",
       payload: webhook().payload ?? {},
       source: {
-        crossPostedFrom: [
+        copiedFrom: [
           {
             subscriptionKey: "userspace:github-pr:/repos/config",
             streamId: "11111111-1111-4111-8111-111111111111",

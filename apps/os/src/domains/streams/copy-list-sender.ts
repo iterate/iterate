@@ -1,4 +1,4 @@
-// Sends a source stream's complete current cross-post list to each receiving
+// Sends a source stream's complete current copy list to each receiving
 // stream. Commands and receiver-side recording stay in StreamDurableObject;
 // this class owns only the durable source-side call/retry/wait state machine.
 
@@ -8,18 +8,18 @@ import { StreamEvent as StreamEventSchema } from "iterate/processors";
 import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
 import {
   parseCommittedCoreEvent,
-  recordedSubscriptionForCrossPost,
-  type CommittedCrossPostListRecordedEvent,
+  recordedSubscriptionForCopy,
+  type CommittedCopyListRecordedEvent,
   type CoreProcessorState,
-  type CrossPostListRecordedPayload,
+  type CopyListRecordedPayload,
 } from "./core-processor-contract.ts";
 import { compareSourceListPosition } from "./core-processor.ts";
 import { computeBackoffMs } from "./delivery-math.ts";
 import {
-  MAX_CROSS_POST_LIST_ATTEMPTS,
-  type CrossPostListRetryRow,
-  type CrossPostListRetryStore,
-} from "./cross-post-list-retry-store.ts";
+  MAX_COPY_LIST_ATTEMPTS,
+  type CopyListRetryRow,
+  type CopyListRetryStore,
+} from "./copy-list-retry-store.ts";
 import {
   boundedErrorMessage,
   DEFAULT_DELIVERY_TIMEOUT_MS,
@@ -34,49 +34,47 @@ const RECEIVER_CALL_WATCHDOG_GRACE_MS = 1_000;
 
 class SourceLifetimeConflictError extends Error {}
 
-export type CrossPostListRetryStateStore = Pick<
-  CrossPostListRetryStore,
+export type CopyListRetryStateStore = Pick<
+  CopyListRetryStore,
   "delete" | "ensure" | "fail" | "get" | "list" | "prune"
 >;
 
-export type BlockedCrossPostListResult = {
+export type BlockedCopyListResult = {
   status: "blocked";
   receivingStreamPath: string;
   attempts: number;
   message: string;
 };
 
-type CrossPostListBlockedError = Error & {
-  crossPostListBlocked: true;
+type CopyListBlockedError = Error & {
+  copyListBlocked: true;
   receivingStreamPath: string;
   attempts: number;
   lastError: string;
 };
 
-export function crossPostListBlockedError(args: {
+export function copyListBlockedError(args: {
   receivingStreamPath: string;
   attempts: number;
   lastError: string;
-}): CrossPostListBlockedError {
-  const message = `sending this source's cross-post list to "${args.receivingStreamPath}" is blocked after ${args.attempts} attempts: ${args.lastError}. Fix the reported failure, then call resendCrossPostList({ receivingStreamPath: "${args.receivingStreamPath}" }) to try again`;
+}): CopyListBlockedError {
+  const message = `sending this source's copy list to "${args.receivingStreamPath}" is blocked after ${args.attempts} attempts: ${args.lastError}. Fix the reported failure, then call resendCopyList({ receivingStreamPath: "${args.receivingStreamPath}" }) to try again`;
   return Object.assign(new Error(message), {
-    crossPostListBlocked: true as const,
+    copyListBlocked: true as const,
     receivingStreamPath: args.receivingStreamPath,
     attempts: args.attempts,
     lastError: args.lastError,
   });
 }
 
-export function isCrossPostListBlockedError(error: unknown): error is CrossPostListBlockedError {
+export function isCopyListBlockedError(error: unknown): error is CopyListBlockedError {
   return (
     error instanceof Error &&
-    (error as Error & { crossPostListBlocked?: unknown }).crossPostListBlocked === true
+    (error as Error & { copyListBlocked?: unknown }).copyListBlocked === true
   );
 }
 
-export function blockedCrossPostListResult(
-  error: CrossPostListBlockedError,
-): BlockedCrossPostListResult {
+export function blockedCopyListResult(error: CopyListBlockedError): BlockedCopyListResult {
   return {
     status: "blocked",
     receivingStreamPath: error.receivingStreamPath,
@@ -85,24 +83,22 @@ export function blockedCrossPostListResult(
   };
 }
 
-export function isCrossPostListBackoffError(
-  error: unknown,
-): error is Error & { crossPostListBackoff: true } {
+export function isCopyListBackoffError(error: unknown): error is Error & { copyListBackoff: true } {
   return (
     error instanceof Error &&
-    (error as Error & { crossPostListBackoff?: unknown }).crossPostListBackoff === true
+    (error as Error & { copyListBackoff?: unknown }).copyListBackoff === true
   );
 }
 
-type CrossPostListSenderHooks = {
+type CopyListSenderHooks = {
   readonly projectId: string | null;
   readonly path: string;
   coreState(): CoreProcessorState;
-  readonly retryStore: CrossPostListRetryStateStore;
+  readonly retryStore: CopyListRetryStateStore;
   appendCore(event: StreamEventInput): StreamEvent;
   getEvent(args: { offset: number } | { idempotencyKey: string }): StreamEvent | undefined;
-  latestCrossPostListRecordedByReceiver(receivingStreamPath: string): StreamEvent | undefined;
-  recordCrossPostListOnReceivingStream(path: string, event: StreamEventInput): Promise<unknown>;
+  latestCopyListRecordedByReceiver(receivingStreamPath: string): StreamEvent | undefined;
+  recordCopyListOnReceivingStream(path: string, event: StreamEventInput): Promise<unknown>;
   scheduleDurable(work: () => Promise<unknown>): void;
   armAlarm(atMs: number): void;
   now(): number;
@@ -110,32 +106,32 @@ type CrossPostListSenderHooks = {
 };
 
 /**
- * Synchronizes one source stream's current cross-post subscriptions with the
+ * Synchronizes one source stream's current copy subscriptions with the
  * streams that receive from it. Selected-event delivery is deliberately not
  * here; StreamEventSender starts only after this protocol confirms the receipt.
  */
-export class CrossPostListSender {
-  readonly #hooks: CrossPostListSenderHooks;
+export class CopyListSender {
+  readonly #hooks: CopyListSenderHooks;
   readonly #callsInFlight = new Map<
     string,
     { sourceOffset: number; promise: Promise<StreamEvent | null> }
   >();
 
-  constructor(hooks: CrossPostListSenderHooks) {
+  constructor(hooks: CopyListSenderHooks) {
     this.#hooks = hooks;
   }
 
-  runtimeState(): Record<string, CrossPostListRetryRow> {
+  runtimeState(): Record<string, CopyListRetryRow> {
     return Object.fromEntries(
       this.#hooks.retryStore.list().map((retry) => [retry.receivingStreamPath, retry]),
     );
   }
 
-  /** Re-derive every owed cross-post-list call from reduced state after a commit or alarm. */
+  /** Re-derive every owed copy-list call from reduced state after a commit or alarm. */
   reconcile(): void {
     const receivingStreamPaths = new Set<string>();
     for (const [receivingStreamPath, list] of Object.entries(
-      this.#hooks.coreState().crossPostListDeliveriesByReceivingStream,
+      this.#hooks.coreState().copyListDeliveriesByReceivingStream,
     )) {
       if (list.status === "confirmed") continue;
       receivingStreamPaths.add(receivingStreamPath);
@@ -160,7 +156,7 @@ export class CrossPostListSender {
    */
   #schedule(receivingStreamPath: string, sourceOffset: number): void {
     const tracker =
-      this.#hooks.coreState().crossPostListDeliveriesByReceivingStream[receivingStreamPath];
+      this.#hooks.coreState().copyListDeliveriesByReceivingStream[receivingStreamPath];
     if (tracker?.sourceOffset !== sourceOffset || tracker.status !== "pending") return;
     const row = this.#hooks.retryStore.ensure(receivingStreamPath, sourceOffset);
     if (row.nextAttemptAt !== null && row.nextAttemptAt > this.#hooks.now()) {
@@ -179,11 +175,11 @@ export class CrossPostListSender {
   }): Promise<StreamEvent | null> {
     for (;;) {
       const tracker =
-        this.#hooks.coreState().crossPostListDeliveriesByReceivingStream[args.receivingStreamPath];
+        this.#hooks.coreState().copyListDeliveriesByReceivingStream[args.receivingStreamPath];
       if (tracker === undefined || tracker.sourceOffset !== args.sourceOffset) return null;
       if (tracker.status === "confirmed") return null;
       if (tracker.status === "blocked") {
-        throw crossPostListBlockedError({
+        throw copyListBlockedError({
           receivingStreamPath: args.receivingStreamPath,
           attempts: tracker.attempts,
           lastError: tracker.error,
@@ -198,9 +194,9 @@ export class CrossPostListSender {
       ) {
         throw Object.assign(
           new Error(
-            `sending this source's cross-post list to "${args.receivingStreamPath}" is backing off after attempt ${retry.attempt} until ${new Date(retry.nextAttemptAt).toISOString()}`,
+            `sending this source's copy list to "${args.receivingStreamPath}" is backing off after attempt ${retry.attempt} until ${new Date(retry.nextAttemptAt).toISOString()}`,
           ),
-          { crossPostListBackoff: true as const },
+          { copyListBackoff: true as const },
         );
       }
 
@@ -267,7 +263,7 @@ export class CrossPostListSender {
             attempt,
             error: boundedErrorMessage(message) ?? "source lifetime conflict",
           });
-        } else if (attempt >= MAX_CROSS_POST_LIST_ATTEMPTS) {
+        } else if (attempt >= MAX_COPY_LIST_ATTEMPTS) {
           this.#block(args.receivingStreamPath, {
             sourceOffset: args.sourceOffset,
             attempt,
@@ -282,7 +278,7 @@ export class CrossPostListSender {
             error: message,
           });
           this.#hooks.armAlarm(nextAttemptAt);
-          console.warn("sending cross-post list to receiving stream failed; retry scheduled", {
+          console.warn("sending copy list to receiving stream failed; retry scheduled", {
             receivingStreamPath: args.receivingStreamPath,
             sourceOffset: args.sourceOffset,
             attempt,
@@ -301,12 +297,12 @@ export class CrossPostListSender {
   ): void {
     try {
       const tracker =
-        this.#hooks.coreState().crossPostListDeliveriesByReceivingStream[receivingStreamPath];
+        this.#hooks.coreState().copyListDeliveriesByReceivingStream[receivingStreamPath];
       if (tracker?.sourceOffset !== args.sourceOffset || tracker.status !== "pending") return;
       this.#hooks.appendCore({
-        type: "events.iterate.com/stream/cross-post-list-delivery-blocked",
+        type: "events.iterate.com/stream/copy-list-delivery-blocked",
         idempotencyKey: internalStreamId(
-          "cross-post-list-delivery-blocked",
+          "copy-list-delivery-blocked",
           receivingStreamPath,
           args.sourceOffset,
         ),
@@ -318,11 +314,11 @@ export class CrossPostListSender {
         },
       });
       const blocked =
-        this.#hooks.coreState().crossPostListDeliveriesByReceivingStream[receivingStreamPath];
+        this.#hooks.coreState().copyListDeliveriesByReceivingStream[receivingStreamPath];
       if (blocked?.sourceOffset === args.sourceOffset && blocked.status === "blocked") {
         this.#hooks.retryStore.delete(receivingStreamPath, args.sourceOffset);
       }
-      console.error("sending cross-post list to receiving stream is blocked", {
+      console.error("sending copy list to receiving stream is blocked", {
         receivingStreamPath,
         ...args,
       });
@@ -345,7 +341,7 @@ export class CrossPostListSender {
     sourceOffset: number;
   }): Promise<StreamEvent | null> {
     const state = this.#hooks.coreState();
-    const tracker = state.crossPostListDeliveriesByReceivingStream[args.receivingStreamPath];
+    const tracker = state.copyListDeliveriesByReceivingStream[args.receivingStreamPath];
     if (tracker?.sourceOffset !== args.sourceOffset) {
       this.#hooks.retryStore.delete(args.receivingStreamPath, args.sourceOffset);
       return null;
@@ -354,27 +350,27 @@ export class CrossPostListSender {
     const sourceStreamId = state.streamId;
     const sourceStreamCreatedAt = state.createdAt;
     if (sourceStreamId === undefined || sourceStreamCreatedAt === undefined) {
-      throw new Error("cannot send a cross-post list from an uninitialized stream");
+      throw new Error("cannot send a copy list from an uninitialized stream");
     }
 
-    const subscriptionsByKey: CrossPostListRecordedPayload["subscriptionsByKey"] = {};
+    const subscriptionsByKey: CopyListRecordedPayload["subscriptionsByKey"] = {};
     for (const [subscriptionKey, entry] of Object.entries(state.subscriptions.outbound.byKey)) {
       if (
-        entry.configuration.receiver.action !== "cross-post" ||
+        entry.configuration.receiver.action !== "copy-to-stream" ||
         entry.configuration.receiver.receivingStreamPath !== args.receivingStreamPath
       ) {
         continue;
       }
       subscriptionsByKey[subscriptionKey] = {
         configuredAtSourceOffset: entry.configuredAtOffset,
-        configuration: recordedSubscriptionForCrossPost(entry.configuration),
+        configuration: recordedSubscriptionForCopy(entry.configuration),
       };
     }
 
     const eventInput: StreamEventInput = {
-      type: "events.iterate.com/stream/cross-post-list-recorded",
+      type: "events.iterate.com/stream/copy-list-recorded",
       idempotencyKey: internalStreamId(
-        "cross-post-list-recorded",
+        "copy-list-recorded",
         this.#hooks.projectId,
         this.#hooks.path,
         sourceStreamId,
@@ -396,8 +392,8 @@ export class CrossPostListSender {
     let receivingStreamEvent: StreamEvent;
     try {
       const remoteEvent = await withDeliveryTimeout(
-        this.#hooks.recordCrossPostListOnReceivingStream(args.receivingStreamPath, eventInput),
-        `sending cross-post list from ${this.#hooks.path}@${args.sourceOffset} to ${args.receivingStreamPath}`,
+        this.#hooks.recordCopyListOnReceivingStream(args.receivingStreamPath, eventInput),
+        `sending copy list from ${this.#hooks.path}@${args.sourceOffset} to ${args.receivingStreamPath}`,
         { onLateResolve: disposeIgnoredRpcResult },
       );
       try {
@@ -407,16 +403,16 @@ export class CrossPostListSender {
       }
     } catch (error) {
       throw new Error(
-        `sending cross-post list to "${args.receivingStreamPath}" failed: ${errorMessage(error)}`,
+        `sending copy list to "${args.receivingStreamPath}" failed: ${errorMessage(error)}`,
       );
     }
 
     const recorded = parseCommittedCoreEvent(
       receivingStreamEvent,
-      "events.iterate.com/stream/cross-post-list-recorded",
+      "events.iterate.com/stream/copy-list-recorded",
     );
     const trackerAfterCall =
-      this.#hooks.coreState().crossPostListDeliveriesByReceivingStream[args.receivingStreamPath];
+      this.#hooks.coreState().copyListDeliveriesByReceivingStream[args.receivingStreamPath];
     if (trackerAfterCall?.sourceOffset !== args.sourceOffset) {
       this.#hooks.retryStore.delete(args.receivingStreamPath, args.sourceOffset);
       return null;
@@ -461,9 +457,9 @@ export class CrossPostListSender {
     }
 
     this.#hooks.appendCore({
-      type: "events.iterate.com/stream/cross-post-list-confirmed",
+      type: "events.iterate.com/stream/copy-list-confirmed",
       idempotencyKey: internalStreamId(
-        "cross-post-list-confirmed",
+        "copy-list-confirmed",
         args.receivingStreamPath,
         sourceStreamId,
         args.sourceOffset,
@@ -473,32 +469,28 @@ export class CrossPostListSender {
     this.#hooks.retryStore.delete(args.receivingStreamPath, args.sourceOffset);
 
     const current =
-      this.#hooks.coreState().crossPostListDeliveriesByReceivingStream[args.receivingStreamPath];
+      this.#hooks.coreState().copyListDeliveriesByReceivingStream[args.receivingStreamPath];
     const stillCurrent =
       current?.sourceOffset === args.sourceOffset && current.status === "confirmed";
     const removedAndCurrent =
       current === undefined &&
       !Object.values(this.#hooks.coreState().subscriptions.outbound.byKey).some(
         (entry) =>
-          entry.configuration.receiver.action === "cross-post" &&
+          entry.configuration.receiver.action === "copy-to-stream" &&
           entry.configuration.receiver.receivingStreamPath === args.receivingStreamPath,
       );
     return stillCurrent || removedAndCurrent ? receivingStreamEvent : null;
   }
 
   /** Follow newer source changes until the source confirms the receiver's latest complete list. */
-  async waitUntilConfirmed(
-    receivingStreamPath: string,
-  ): Promise<CommittedCrossPostListRecordedEvent> {
+  async waitUntilConfirmed(receivingStreamPath: string): Promise<CommittedCopyListRecordedEvent> {
     for (;;) {
       const state = this.#hooks.coreState();
-      const tracker = state.crossPostListDeliveriesByReceivingStream[receivingStreamPath];
+      const tracker = state.copyListDeliveriesByReceivingStream[receivingStreamPath];
       if (tracker === undefined) {
-        const latest = this.#hooks.latestCrossPostListRecordedByReceiver(receivingStreamPath);
+        const latest = this.#hooks.latestCopyListRecordedByReceiver(receivingStreamPath);
         if (latest === undefined) {
-          throw new Error(
-            `receiving stream "${receivingStreamPath}" has no recorded cross-post list`,
-          );
+          throw new Error(`receiving stream "${receivingStreamPath}" has no recorded copy list`);
         }
         return this.#receiverEventFromReceipt(latest, receivingStreamPath);
       }
@@ -508,7 +500,7 @@ export class CrossPostListSender {
         if (sourceStreamId === undefined) throw new Error("a configured stream has no stream ID");
         const sourceReceipt = this.#hooks.getEvent({
           idempotencyKey: internalStreamId(
-            "cross-post-list-confirmed",
+            "copy-list-confirmed",
             receivingStreamPath,
             sourceStreamId,
             tracker.sourceOffset,
@@ -527,7 +519,7 @@ export class CrossPostListSender {
       }
 
       if (tracker.status === "blocked") {
-        throw crossPostListBlockedError({
+        throw copyListBlockedError({
           receivingStreamPath,
           attempts: tracker.attempts,
           lastError: tracker.error,
@@ -542,21 +534,21 @@ export class CrossPostListSender {
 
       const recorded = parseCommittedCoreEvent(
         receivingStreamEvent,
-        "events.iterate.com/stream/cross-post-list-recorded",
+        "events.iterate.com/stream/copy-list-recorded",
       );
       const current =
-        this.#hooks.coreState().crossPostListDeliveriesByReceivingStream[receivingStreamPath];
+        this.#hooks.coreState().copyListDeliveriesByReceivingStream[receivingStreamPath];
       if (current === undefined) {
         const stillHasSubscriptions = Object.values(
           this.#hooks.coreState().subscriptions.outbound.byKey,
         ).some(
           (entry) =>
-            entry.configuration.receiver.action === "cross-post" &&
+            entry.configuration.receiver.action === "copy-to-stream" &&
             entry.configuration.receiver.receivingStreamPath === receivingStreamPath,
         );
         if (!stillHasSubscriptions) return recorded;
         throw new Error(
-          `receiving stream "${receivingStreamPath}" lost its cross-post-list record while subscriptions still target it`,
+          `receiving stream "${receivingStreamPath}" lost its copy-list record while subscriptions still target it`,
         );
       }
       if (
@@ -572,18 +564,16 @@ export class CrossPostListSender {
     event: StreamEvent,
     receivingStreamPath: string,
     sourceOffset?: number,
-  ): CommittedCrossPostListRecordedEvent {
+  ): CommittedCopyListRecordedEvent {
     const sourceReceipt = parseCommittedCoreEvent(
       event,
-      "events.iterate.com/stream/cross-post-list-confirmed",
+      "events.iterate.com/stream/copy-list-confirmed",
     );
     if (
       sourceReceipt.payload.receivingStreamPath !== receivingStreamPath ||
       (sourceOffset !== undefined && sourceReceipt.payload.sourceOffset !== sourceOffset)
     ) {
-      throw new Error(
-        `cross-post-list record does not match receiving stream "${receivingStreamPath}"`,
-      );
+      throw new Error(`copy-list record does not match receiving stream "${receivingStreamPath}"`);
     }
     return sourceReceipt.payload.receivingStreamEvent;
   }

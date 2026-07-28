@@ -704,7 +704,7 @@ test("agents.get(path).create explicitly appends and processes the complete birt
   expect(processorSlugs).toEqual(expect.arrayContaining(["agent", "capability-host"]));
   expect(subscriptionCount).toBeGreaterThanOrEqual(3);
 });
-test("Project worker processEventBatch receives events from every project stream and can cross-post", async () => {
+test("Project worker processEventBatch receives events from every project stream and can copy", async () => {
   using session = withItxSession();
   using itx = session.authenticate({
     type: "admin-secret",
@@ -714,7 +714,7 @@ test("Project worker processEventBatch receives events from every project stream
   using project = await itx.projects
     .get(uniqueFixtureSlug("project-worker-process-event"))
     .create({});
-  const marker = `cross-post-${crypto.randomUUID()}`;
+  const marker = `copy-${crypto.randomUUID()}`;
   // NOT the root stream: every project stream self-configures the
   // project-worker push feed at birth, so a freshly minted child stream must
   // reach the worker with no wiring at all.
@@ -737,15 +737,15 @@ test("Project worker processEventBatch receives events from every project stream
               }
 
               async processEvent(event) {
-                if (event.metadata?.crossPostMarker !== ${JSON.stringify(marker)}) return;
+                if (event.metadata?.copyMarker !== ${JSON.stringify(marker)}) return;
 
                 const project = await this.env.ITX.get();
-                await project.streams.get("/cross-posted").append({
-                  type: "events.iterate.com/test/cross-posted",
-                  idempotencyKey: \`project-worker-cross-post:\${event.path}@\${event.offset}\`,
+                await project.streams.get("/copied").append({
+                  type: "events.iterate.com/test/copied",
+                  idempotencyKey: \`project-worker-copy:\${event.path}@\${event.offset}\`,
                   metadata: {
-                    crossPostedBy: "project-worker",
-                    marker: event.metadata.crossPostMarker,
+                    copiedBy: "project-worker",
+                    marker: event.metadata.copyMarker,
                     sourceOffset: event.offset,
                     sourcePath: event.path,
                   },
@@ -759,15 +759,15 @@ test("Project worker processEventBatch receives events from every project stream
           `,
       },
     ],
-    message: "Cross-post selected project events from processEventBatch",
+    message: "Copy selected project events from processEventBatch",
   });
 
-  const crossPosted = project.streams.get("/cross-posted");
-  const copied = crossPosted.waitForEvent({
-    eventTypes: ["events.iterate.com/test/cross-posted"],
+  const copiedStream = project.streams.get("/copied");
+  const copied = copiedStream.waitForEvent({
+    eventTypes: ["events.iterate.com/test/copied"],
     // A fresh commit deliberately exercises the cold project-worker build.
     // Durable feed handoff preserves delivery, but two consecutive preview
-    // runs exceeded the old 30s client deadline before the worker cross-posted.
+    // runs exceeded the old 30s client deadline before the worker copied.
     // Keep enough headroom to observe that delivery while the follow-up task
     // reduces the cold-path tail and restores the tighter budget.
     timeoutMs: 100_000,
@@ -775,13 +775,13 @@ test("Project worker processEventBatch receives events from every project stream
 
   const [sourceEvent] = await project.streams.get(sourcePath).append({
     type: "events.iterate.com/test/source",
-    metadata: { crossPostMarker: marker },
+    metadata: { copyMarker: marker },
     payload: { text: "hello from a child stream" },
   });
 
   const copiedEvent = await copied;
   expect(copiedEvent.metadata).toMatchObject({
-    crossPostedBy: "project-worker",
+    copiedBy: "project-worker",
     marker,
     sourceOffset: sourceEvent.offset,
     sourcePath,
@@ -794,7 +794,7 @@ test("Project worker processEventBatch receives events from every project stream
 
   // The source stream's worker-feed cursor reflects the delivery. The push
   // ack lands after the worker's processEventBatch resolves — which can be a
-  // beat after the cross-posted copy became observable — so poll briefly.
+  // beat after the copy became observable — so poll briefly.
   await waitForCondition(
     async () => {
       const runtimeState = await project.streams.get(sourcePath).runtimeState();

@@ -105,7 +105,7 @@ export class ProjectProcessor extends StreamProcessor<
         // subscription copies it here — this saga only ever reacts
         // to events ON `/`. The certificate payload carries no path, so the
         // config repo is recognized by its recorded source coordinates.
-        const origin = event.source?.crossPostedFrom?.at(-1);
+        const origin = event.source?.copiedFrom?.at(-1);
         if (
           origin?.projectId !== this.deps.itx.projectId ||
           origin.path !== CONFIG_REPO_PATH ||
@@ -269,7 +269,7 @@ export class ProjectProcessor extends StreamProcessor<
               description:
                 "Sends every config-repo event after the birth batch to the project root so the project processor can react when configuration changes.",
               receiver: {
-                action: "cross-post",
+                action: "copy-to-stream",
                 receivingStreamPath: "/",
                 delivery: {
                   start: "now",
@@ -624,7 +624,7 @@ function recordDomainObject<
   State extends { devices: StreamListItem[]; repos: StreamListItem[]; secrets: StreamListItem[] },
   Key extends "devices" | "repos" | "secrets",
 >(state: State, key: Key, event: StreamEvent): State {
-  const path = event.source?.processor?.stream.path ?? event.source?.crossPostedFrom?.[0]?.path;
+  const path = event.source?.processor?.stream.path ?? event.source?.copiedFrom?.[0]?.path;
   if (path === undefined) return state;
   return {
     ...state,

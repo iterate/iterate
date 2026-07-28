@@ -205,7 +205,7 @@ export type SubscriptionConfigurationForDelivery = {
           processorSlug?: string;
         }
       | {
-          action: "cross-post";
+          action: "copy-to-stream";
           receivingStreamPath: string;
           transform?: string;
           delivery: {
@@ -240,7 +240,7 @@ export type SubscriptionConfigurationForDelivery = {
  * source stream stores: delivery coordinates and events plus the fields an
  * at-least-once receiver needs to deduplicate and self-configure. Deliberately
  * not the state-carrying callback batch
- * {@link StreamEventBatch}: ITX calls and cross-post destinations do not get
+ * {@link StreamEventBatch}: ITX calls and copy destinations do not get
  * folded core state, because other subscriptions' configuration, halt errors,
  * and the presence roster are deployment-internal. Webhooks use a narrower
  * per-event envelope for the same reason. Session callbacks and hosted
@@ -283,7 +283,7 @@ export type StreamDeliveryBatch = {
 };
 
 /** What a receiving stream durably did with one delivered source batch. */
-export type CrossPostReceipt = {
+export type CopyReceipt = {
   /** Events appended now or already present under the same source-coordinate idempotency key. */
   accepted: number;
   /** Events deliberately not appended because their stream-copy path cannot safely continue. */

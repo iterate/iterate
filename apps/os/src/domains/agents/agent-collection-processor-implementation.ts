@@ -6,12 +6,12 @@ import {
 } from "./agent-collection-processor-contract.ts";
 
 /**
- * The project's agent catalog, reduced from cross-posted agent facts.
+ * The project's agent catalog, reduced from copied agent facts.
  *
  * HOW IT WORKS, end to end:
  *
  * Every project has ONE agent collection stream at `/agents`. Each agent
- * stream (`/agents/<name>`) cross-posts its `agent/created` and
+ * stream (`/agents/<name>`) copies its `agent/created` and
  * `agent/summary-updated` events into it — the AgentCollectionDurableObject
  * configures that deliberately narrow push subscription when it births the
  * collection with `agent-collection/created`. `reduce` projects the copies
@@ -23,7 +23,7 @@ import {
  * not summary chatter.
  *
  * Every timestamp comes from the SOURCE hop
- * (`event.source.crossPostedFrom.at(-1)`), never from the received copy's commit
+ * (`event.source.copiedFrom.at(-1)`), never from the received copy's commit
  * time: a copy can arrive long after the source fact, and the catalog must
  * preserve source chronology, not ingest delay. A malformed committed copy is
  * skipped and logged rather than wedging the cursor. If that log fires, an
@@ -114,7 +114,7 @@ export class AgentCollectionStreamProcessor extends StreamProcessor<AgentCollect
 }
 
 /**
- * The last cross-post hop of a copied agent fact: which agent stream it came
+ * The last copy hop of a copied agent fact: which agent stream it came
  * from (parsed to a canonical path) and the fact's ORIGINAL coordinates —
  * its offset and commit time on the SOURCE stream. Reduced catalog
  * timestamps and the waitingFor race guard read these, never the copy's own
@@ -126,7 +126,7 @@ function receivedAgentSource(event: Pick<StreamEvent, "type" | "source">): {
   createdAt: string;
   offset: number;
 } | null {
-  const source = event.source?.crossPostedFrom?.at(-1);
+  const source = event.source?.copiedFrom?.at(-1);
   if (source === undefined) {
     console.error(`agent collection skipped ${event.type}: missing source-stream coordinates`);
     return null;

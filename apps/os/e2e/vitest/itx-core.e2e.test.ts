@@ -121,7 +121,7 @@ test("Authenticated internal auth itx can create project and append to stream", 
     // Provenance: the copy names its source coordinate on the config repo's
     // own stream.
     source: {
-      crossPostedFrom: [
+      copiedFrom: [
         expect.objectContaining({
           path: "/repos/config",
           projectId: description.projectId,
@@ -145,7 +145,7 @@ test("Authenticated internal auth itx can create project and append to stream", 
   expect(firstHandRepoCreated).toMatchObject({
     payload: { request: { type: "empty" } },
   });
-  expect(firstHandRepoCreated!.source?.crossPostedFrom).toBeUndefined();
+  expect(firstHandRepoCreated!.source?.copiedFrom).toBeUndefined();
   expect(
     configRepoEvents.some(
       (event) =>
@@ -167,8 +167,8 @@ test("Authenticated internal auth itx can create project and append to stream", 
     eventTypes: ["events.iterate.test/config-repo-fact"],
     predicate: (event) =>
       (event.payload as { marker?: string }).marker === description.projectId &&
-      event.source?.crossPostedFrom?.[0]?.path === "/repos/config" &&
-      event.source.crossPostedFrom[0].offset === configRepoFact!.offset,
+      event.source?.copiedFrom?.[0]?.path === "/repos/config" &&
+      event.source.copiedFrom[0].offset === configRepoFact!.offset,
     timeoutMs: 30_000,
   });
 

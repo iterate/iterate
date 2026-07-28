@@ -63,7 +63,7 @@ function githubRepoSubscription(input: {
       condition: `payload.delivery.name = "push" and payload.body.repository.id = ${input.repositoryId}`,
     },
     receiver: {
-      action: "cross-post",
+      action: "copy-to-stream",
       receivingStreamPath: input.repoPath,
       delivery: {
         start: "now",
@@ -80,7 +80,7 @@ async function configureGithubWebhookSubscription(
   stream: GithubConnectionStream,
   subscription: SubscriptionConfiguredPayload,
 ): Promise<void> {
-  const result = await stream.setCrossPostSubscription({ configuration: subscription });
+  const result = await stream.setCopySubscription({ configuration: subscription });
   try {
     if (result.status === "blocked") throw new Error(result.message);
   } finally {
@@ -92,7 +92,7 @@ async function removeGithubWebhookSubscription(
   stream: GithubConnectionStream,
   input: { repoPath: string; subscriptionKey: string },
 ): Promise<void> {
-  const result = await stream.removeCrossPostSubscription({
+  const result = await stream.removeCopySubscription({
     subscriptionKey: input.subscriptionKey,
     expectedReceiverPath: input.repoPath,
   });

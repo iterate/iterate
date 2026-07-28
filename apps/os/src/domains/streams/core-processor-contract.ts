@@ -32,7 +32,7 @@ import { EventFilter } from "./event-filter.ts";
 // Version 22 establishes the current vocabulary: subscriptions are stored
 // instructions, connections are live callbacks, deliveries are attempted
 // batches or HTTP calls, and checkpoints/cursors record completed work.
-// Version 24 makes each receiving stream's cross-post-list status a durable,
+// Version 24 makes each receiving stream's copy-list status a durable,
 // replayable state machine instead of inferring a blocked list from a
 // per-subscription halt or the SQLite retry scheduler.
 // Version 25 records a random stream-lifetime identity. Creation time still
@@ -42,7 +42,7 @@ import { EventFilter } from "./event-filter.ts";
 // subscription instead of beneath a redundant always-durable lifetime wrapper.
 // Version 27 gives subscriptions one hierarchy: inbound subscriptions are
 // grouped by source path and outbound subscriptions are keyed by their
-// source-local key. Complete cross-post-list delivery work is separate because
+// source-local key. Complete copy-list delivery work is separate because
 // an empty list is still work the source must deliver.
 export const CORE_STATE_VERSION = 27;
 
@@ -73,7 +73,7 @@ export const StreamConnectionKind = z.enum(["session", "hosted"]);
 /** Who owns a live event-batch callback: the current session or a hosted processor. */
 export type StreamConnectionKind = z.infer<typeof StreamConnectionKind>;
 
-/** Where a cross-post, ITX-call, or webhook subscription starts reading the source stream. */
+/** Where a copy, ITX-call, or webhook subscription starts reading the source stream. */
 export const SubscriptionStart = z.union([
   z.literal("beginning"),
   z.literal("now"),
@@ -83,7 +83,7 @@ export const SubscriptionStart = z.union([
 export type SubscriptionStart = z.infer<typeof SubscriptionStart>;
 
 /**
- * What a cross-post, ITX-call, or webhook subscription does when one specific batch keeps failing
+ * What a copy, ITX-call, or webhook subscription does when one specific batch keeps failing
  * while the receiver is otherwise alive: `halt` (default) stops delivery and
  * appends a `subscription-delivery-halted` event — ordered receivers like stream
  * must never skip (a skip is a silent gap in the target stream); `skip`
@@ -138,7 +138,7 @@ export type SubscriptionEndCondition = z.infer<typeof SubscriptionEndCondition>;
  * What one subscription does with matching source events. The action makes
  * invalid combinations unrepresentable: processor wake-ups own their
  * checkpoint; the other actions store their cursor and delivery policy on the source. A
- * cross-post names the receiving stream directly instead of hiding it inside
+ * copy names the receiving stream directly instead of hiding it inside
  * an ITX expression.
  */
 export const SubscriptionReceiver = z.discriminatedUnion("action", [
@@ -148,7 +148,7 @@ export const SubscriptionReceiver = z.discriminatedUnion("action", [
     processorSlug: z.string().trim().min(1).optional(),
   }),
   z.strictObject({
-    action: z.literal("cross-post"),
+    action: z.literal("copy-to-stream"),
     receivingStreamPath: StreamPath,
     transform: z.string().trim().min(1).optional(),
     delivery: StreamReceiverDeliveryPolicy,
@@ -251,7 +251,7 @@ const RecordedSubscriptionConfiguration = z.strictObject({
  * one source stream. A missing key removes that subscription; `sourceOffset` prevents
  * a delayed older call from replacing a newer list.
  */
-export const CrossPostListRecordedPayload = z
+export const CopyListRecordedPayload = z
   .strictObject({
     source: StreamCoordinate,
     sourceOffset: z.number().int().positive(),
@@ -270,25 +270,25 @@ export const CrossPostListRecordedPayload = z
       context.addIssue({
         code: "custom",
         path: ["subscriptionsByKey"],
-        message: `a source may cross-post through at most ${MAX_SUBSCRIPTIONS_PER_RECEIVING_STREAM} subscriptions to one receiving stream (received ${count})`,
+        message: `a source may copy through at most ${MAX_SUBSCRIPTIONS_PER_RECEIVING_STREAM} subscriptions to one receiving stream (received ${count})`,
       });
     }
   });
 
-export type CrossPostListRecordedPayload = z.infer<typeof CrossPostListRecordedPayload>;
+export type CopyListRecordedPayload = z.infer<typeof CopyListRecordedPayload>;
 
 /** The exact committed receiver event embedded in the source's confirmation. */
-const CrossPostListRecordedEvent = StreamEventSchema.extend({
-  type: z.literal("events.iterate.com/stream/cross-post-list-recorded"),
-  payload: CrossPostListRecordedPayload,
+const CopyListRecordedEvent = StreamEventSchema.extend({
+  type: z.literal("events.iterate.com/stream/copy-list-recorded"),
+  payload: CopyListRecordedPayload,
 });
 
 /** The exact subset of a source subscription that a receiving stream records. */
-export function recordedSubscriptionForCrossPost(
+export function recordedSubscriptionForCopy(
   configuration: SubscriptionConfiguredPayload,
-): CrossPostListRecordedPayload["subscriptionsByKey"][string]["configuration"] {
-  if (configuration.receiver.action !== "cross-post") {
-    throw new Error("only a cross-post action has a receiving-stream subscription record");
+): CopyListRecordedPayload["subscriptionsByKey"][string]["configuration"] {
+  if (configuration.receiver.action !== "copy-to-stream") {
+    throw new Error("only a copy action has a receiving-stream subscription record");
   }
   return {
     delivery: configuration.receiver.delivery,
@@ -447,7 +447,7 @@ export const CoreProcessorContract = defineProcessorContract({
       }),
     subscriptions: z
       .object({
-        /** Subscriptions on source streams that cross-post into this stream. */
+        /** Subscriptions on source streams that copy into this stream. */
         inbound: z
           .object({
             bySourcePath: z
@@ -519,11 +519,11 @@ export const CoreProcessorContract = defineProcessorContract({
         outbound: { byKey: {} },
       }),
     /**
-     * Delivery status for this source's complete cross-post list per receiving
+     * Delivery status for this source's complete copy list per receiving
      * stream. This is work tracking, not a second subscription collection:
-     * sending an empty list is how the source removes its final cross-post.
+     * sending an empty list is how the source removes its final copy.
      */
-    crossPostListDeliveriesByReceivingStream: z
+    copyListDeliveriesByReceivingStream: z
       .record(
         z.string(),
         z.discriminatedUnion("status", [
@@ -599,7 +599,7 @@ export const CoreProcessorContract = defineProcessorContract({
         },
         {
           description:
-            "A cross-post copies one repository's GitHub webhooks from a connection stream, starting with new events from now on.",
+            "A copy copies one repository's GitHub webhooks from a connection stream, starting with new events from now on.",
           payload: {
             subscriptionKey: "github-repo:/repos/root",
             description:
@@ -609,7 +609,7 @@ export const CoreProcessorContract = defineProcessorContract({
               condition: 'payload.body.repository.full_name = "acme/widgets"',
             },
             receiver: {
-              action: "cross-post",
+              action: "copy-to-stream",
               receivingStreamPath: "/repos/root",
               delivery: {
                 start: "now",
@@ -654,10 +654,10 @@ export const CoreProcessorContract = defineProcessorContract({
         },
       ],
     },
-    "events.iterate.com/stream/cross-post-list-recorded": {
+    "events.iterate.com/stream/copy-list-recorded": {
       description:
         "Records the complete current list of subscriptions from one source stream, replacing the previous list from that source. Platform-authored; the source still sends matching source events.",
-      payloadSchema: CrossPostListRecordedPayload,
+      payloadSchema: CopyListRecordedPayload,
       examples: [
         {
           description:
@@ -702,13 +702,13 @@ export const CoreProcessorContract = defineProcessorContract({
         },
       ],
     },
-    "events.iterate.com/stream/cross-post-list-confirmed": {
+    "events.iterate.com/stream/copy-list-confirmed": {
       description:
-        "Records on the source that one receiving stream durably stored its latest cross-post list.",
+        "Records on the source that one receiving stream durably stored its latest copy list.",
       payloadSchema: z.strictObject({
         receivingStreamPath: StreamPath,
         sourceOffset: z.number().int().positive(),
-        receivingStreamEvent: CrossPostListRecordedEvent,
+        receivingStreamEvent: CopyListRecordedEvent,
       }),
       examples: [
         {
@@ -718,7 +718,7 @@ export const CoreProcessorContract = defineProcessorContract({
             receivingStreamPath: "/repos/root",
             sourceOffset: 42,
             receivingStreamEvent: {
-              type: "events.iterate.com/stream/cross-post-list-recorded",
+              type: "events.iterate.com/stream/copy-list-recorded",
               payload: {
                 source: {
                   projectId: "prj_01jzp3v9qkfxeb2m4n8r7wd5ha",
@@ -737,9 +737,9 @@ export const CoreProcessorContract = defineProcessorContract({
         },
       ],
     },
-    "events.iterate.com/stream/cross-post-list-delivery-blocked": {
+    "events.iterate.com/stream/copy-list-delivery-blocked": {
       description:
-        "Records that one receiving stream did not durably store this source's current cross-post list within the bounded retry budget.",
+        "Records that one receiving stream did not durably store this source's current copy list within the bounded retry budget.",
       payloadSchema: z.strictObject({
         receivingStreamPath: StreamPath,
         sourceOffset: z.number().int().positive(),
@@ -749,7 +749,7 @@ export const CoreProcessorContract = defineProcessorContract({
       examples: [
         {
           description:
-            "The receiving stream stayed unavailable through the bounded cross-post-list retry ladder.",
+            "The receiving stream stayed unavailable through the bounded copy-list retry ladder.",
           payload: {
             receivingStreamPath: "/repos/root",
             sourceOffset: 42,
@@ -759,9 +759,9 @@ export const CoreProcessorContract = defineProcessorContract({
         },
       ],
     },
-    "events.iterate.com/stream/cross-post-list-resend-requested": {
+    "events.iterate.com/stream/copy-list-resend-requested": {
       description:
-        "Audits an operator-requested retry after a receiving stream failed to record its latest cross-post list. The matching-event read position is unchanged.",
+        "Audits an operator-requested retry after a receiving stream failed to record its latest copy list. The matching-event read position is unchanged.",
       payloadSchema: z.strictObject({
         receivingStreamPath: StreamPath,
       }),
@@ -772,7 +772,7 @@ export const CoreProcessorContract = defineProcessorContract({
         },
       ],
     },
-    "events.iterate.com/stream/cross-posted-events-dropped": {
+    "events.iterate.com/stream/copied-events-dropped": {
       description:
         "Records source events that a receiving stream deliberately did not append because their stream-copy path contains this stream or reached the supported length.",
       payloadSchema: z.strictObject({
@@ -860,7 +860,7 @@ export const CoreProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/stream/subscription-cursor-set": {
       description:
-        "Changes the next source offset read by one cross-post, ITX-call, or webhook subscription (exclusive afterOffset semantics). It rejects offsets beyond the current stream head. A receiver call already in progress may still finish, but cannot advance this new position. Hosted processors reject this event because the processor stores its own checkpoint.",
+        "Changes the next source offset read by one copy, ITX-call, or webhook subscription (exclusive afterOffset semantics). It rejects offsets beyond the current stream head. A receiver call already in progress may still finish, but cannot advance this new position. Hosted processors reject this event because the processor stores its own checkpoint.",
       payloadSchema: z.strictObject({
         subscriptionKey: z.string().trim().min(1),
         afterOffset: z.number().int().min(0),
@@ -873,7 +873,7 @@ export const CoreProcessorContract = defineProcessorContract({
         },
         {
           description:
-            "Makes future cross-post sends read after offset 512; a receiver call already in progress may still finish.",
+            "Makes future copy sends read after offset 512; a receiver call already in progress may still finish.",
           payload: { subscriptionKey: "github-repo:/repos/root", afterOffset: 512 },
         },
       ],
@@ -1026,17 +1026,17 @@ export const CoreProcessorContract = defineProcessorContract({
     "events.iterate.com/stream/configured",
     "events.iterate.com/stream/child-stream-created",
     "events.iterate.com/stream/subscription-configured",
-    "events.iterate.com/stream/cross-post-list-recorded",
+    "events.iterate.com/stream/copy-list-recorded",
     "events.iterate.com/stream/subscription-removed",
-    "events.iterate.com/stream/cross-post-list-confirmed",
-    "events.iterate.com/stream/cross-post-list-delivery-blocked",
-    "events.iterate.com/stream/cross-post-list-resend-requested",
+    "events.iterate.com/stream/copy-list-confirmed",
+    "events.iterate.com/stream/copy-list-delivery-blocked",
+    "events.iterate.com/stream/copy-list-resend-requested",
     "events.iterate.com/stream/subscription-delivery-halted",
     "events.iterate.com/stream/subscription-delivery-resumed",
     "events.iterate.com/stream/subscription-cursor-set",
     "events.iterate.com/stream/connection-opened",
     "events.iterate.com/stream/connection-closed",
-    "events.iterate.com/stream/cross-posted-events-dropped",
+    "events.iterate.com/stream/copied-events-dropped",
     "events.iterate.com/stream/error-occurred",
     "events.iterate.com/stream/paused",
     "events.iterate.com/stream/resumed",
@@ -1044,10 +1044,10 @@ export const CoreProcessorContract = defineProcessorContract({
   emits: [
     "events.iterate.com/stream/connection-opened",
     "events.iterate.com/stream/connection-closed",
-    "events.iterate.com/stream/cross-post-list-recorded",
-    "events.iterate.com/stream/cross-post-list-confirmed",
-    "events.iterate.com/stream/cross-post-list-delivery-blocked",
-    "events.iterate.com/stream/cross-posted-events-dropped",
+    "events.iterate.com/stream/copy-list-recorded",
+    "events.iterate.com/stream/copy-list-confirmed",
+    "events.iterate.com/stream/copy-list-delivery-blocked",
+    "events.iterate.com/stream/copied-events-dropped",
     "events.iterate.com/stream/subscription-delivery-halted",
     "events.iterate.com/stream/child-stream-created",
   ],
@@ -1077,12 +1077,12 @@ export type CommittedSubscriptionConfiguredEvent =
 /** One committed event that removed a subscription from its source stream. */
 export type CommittedSubscriptionRemovedEvent =
   CommittedCoreEvent<"events.iterate.com/stream/subscription-removed">;
-/** One committed receiver event recording a source stream's complete cross-post list. */
-export type CommittedCrossPostListRecordedEvent =
-  CommittedCoreEvent<"events.iterate.com/stream/cross-post-list-recorded">;
-/** One committed source event confirming the receiver recorded its cross-post list. */
-export type CommittedCrossPostListConfirmedEvent =
-  CommittedCoreEvent<"events.iterate.com/stream/cross-post-list-confirmed">;
+/** One committed receiver event recording a source stream's complete copy list. */
+export type CommittedCopyListRecordedEvent =
+  CommittedCoreEvent<"events.iterate.com/stream/copy-list-recorded">;
+/** One committed source event confirming the receiver recorded its copy list. */
+export type CommittedCopyListConfirmedEvent =
+  CommittedCoreEvent<"events.iterate.com/stream/copy-list-confirmed">;
 
 /** Parse a committed event returned by an index or another Stream Durable Object. */
 export function parseCommittedCoreEvent<const Type extends ParsedCoreEvent["type"]>(

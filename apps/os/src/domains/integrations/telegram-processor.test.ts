@@ -549,7 +549,7 @@ describe("TelegramProcessor (webhook router)", () => {
     await h.play([
       "append",
       ...NEW_ROUTER_EVENTS,
-      // The telegram-agent send obligation cross-posts this claim after each
+      // The telegram-agent send obligation copies this claim after each
       // journaled send: bot message 500 came from the session-1000 thread.
       {
         type: "events.iterate.com/telegram/message-sent",
@@ -690,7 +690,7 @@ describe("telegramAgentSystemPrompt", () => {
     );
     expect(prompt).toContain(`this chat's id is ${CHAT_ID}`);
     expect(prompt).toContain("Never use itx.chat.sendMessage");
-    // Threading guidance: /new sessions + reply hints (read / cross-post /
+    // Threading guidance: /new sessions + reply hints (read / copy /
     // answer in place) — imperative, with the FILTERED transcript read (an
     // unfiltered getEvents pages through plumbing noise, not conversation).
     expect(prompt).toContain("/new");

@@ -19,7 +19,7 @@ events from B appear on A, configure A as the receiving stream:
 ```ts
 const agentStream = project.streams.get("/agents/reviewer");
 
-await agentStream.receiveCrossPostsFrom({
+await agentStream.subscribeToEventsFrom({
   sourceStreamPath: "/integrations/github/main",
   subscriptionKey: "github-for-reviewer",
   filter: {
@@ -30,10 +30,10 @@ await agentStream.receiveCrossPostsFrom({
 ```
 
 The source stores the subscription and product-event cursor. The receiver stores
-the complete cross-post list copied from that source.
+the complete copy list copied from that source.
 Every copied event is a normal append with its immediate source
 path, stream lifetime ID, creation time, offset, type, timestamp, and subscription
-key in `source.crossPostedFrom`.
+key in `source.copiedFrom`.
 That record proves the event travelled through that configured stream
 delivery; it is not proof of who originally appended the source event.
 
@@ -41,7 +41,7 @@ An optional JSONata transform constructs the copied event before the
 platform adds that source information:
 
 ```ts
-await agentStream.receiveCrossPostsFrom({
+await agentStream.subscribeToEventsFrom({
   sourceStreamPath: "/integrations/github/main",
   idempotencyKey: "reviewer/github-transform/v1",
   filter: { eventTypes: ["events.iterate.com/github/webhook-received"] },
@@ -128,7 +128,7 @@ subscriptions: {
     },
   },
 },
-crossPostListDeliveriesByReceivingStream: {
+copyListDeliveriesByReceivingStream: {
   [receivingStreamPath]:
     | { sourceOffset, status: "pending", subscriptionKeysRecordedByReceiver }
     | { sourceOffset, status: "confirmed", subscriptionKeysRecordedByReceiver }
@@ -144,7 +144,7 @@ crossPostListDeliveriesByReceivingStream: {
 ```
 
 Acknowledged offsets, retry times, live callbacks, and measurements live in runtime
-state. They do not repeat durable configuration. Complete cross-post-list work
+state. They do not repeat durable configuration. Complete copy-list work
 is separate because sending an empty list is how the source removes its final
 subscription from a receiving stream.
 
@@ -201,7 +201,7 @@ checkpoint with its reduced state.
 
 ```ts
 receiver: {
-  action: "cross-post",
+  action: "copy-to-stream",
   receivingStreamPath: "/agents/reviewer",
   transform?,
   delivery: {
@@ -212,7 +212,7 @@ receiver: {
 }
 ```
 
-The source stores the cursor and awaits each receiving-stream append. A cross-post
+The source stores the cursor and awaits each receiving-stream append. A copy
 cannot skip a repeatedly failing event.
 
 ### ITX method
@@ -258,7 +258,7 @@ be deleted. Never derive durable product truth from it.
 - A session callback sees it only when it is appended after that callback
   opens; it is never replayed during session catch-up.
 - Hosted processors always exclude it.
-- A cross-post, ITX-call, or webhook subscription includes it only when its
+- A copy, ITX-call, or webhook subscription includes it only when its
   delivery policy opts in.
 - Stream control events cannot be ephemeral.
 
@@ -307,18 +307,18 @@ await source.resumeSubscription({ subscriptionKey });
 await source.setSubscriptionCursorAndResume({ subscriptionKey, afterOffset });
 ```
 
-## Recording the current cross-post list on a receiving stream
+## Recording the current copy list on a receiving stream
 
-`receiveCrossPostsFrom()` causes this append sequence:
+`subscribeToEventsFrom()` causes this append sequence:
 
 ```text
 source stream                               receiving stream
 
 subscription-configured
        |
-       +---- complete current list ------> cross-post-list-recorded
+       +---- complete current list ------> copy-list-recorded
        |
-cross-post-list-confirmed
+copy-list-confirmed
 ```
 
 The receiver event contains every current subscription from that source to that
@@ -331,7 +331,7 @@ ones. If a key moves from receiver A to B, the command waits until A records a
 list without it and B records a list with it.
 
 Product events do not start until
-`crossPostListDeliveriesByReceivingStream[receivingStreamPath].status` is
+`copyListDeliveriesByReceivingStream[receivingStreamPath].status` is
 `"confirmed"`. The source's reduced state records whether each complete list is pending, confirmed, or
 blocked. The SQLite retry row only schedules attempts and does not move the
 product-event cursor. After a key moves from A to B, delivery to B also waits
@@ -347,17 +347,17 @@ during an earlier move. A blocked old path deliberately stops the cutover until
 an explicit resend succeeds.
 
 ```ts
-await source.resendCrossPostList({ receivingStreamPath });
+await source.resendCopyList({ receivingStreamPath });
 ```
 
-After bounded failures, the source appends `cross-post-list-delivery-blocked` for that
+After bounded failures, the source appends `copy-list-delivery-blocked` for that
 receiving-stream path. The subscription itself is not halted: product delivery simply
 cannot start until the receiver records the list. This command appends
-`cross-post-list-resend-requested`, creates a new pending generation, and retries
+`copy-list-resend-requested`, creates a new pending generation, and retries
 the newest complete list.
 
-Public `append()` cannot author either cross-post-list record, dropped-event
-records, or `source.crossPostedFrom`. Only trusted Stream Durable Object calls can.
+Public `append()` cannot author either copy-list record, dropped-event
+records, or `source.copiedFrom`. Only trusted Stream Durable Object calls can.
 
 ## Received control events are data, not commands
 
@@ -418,12 +418,12 @@ alarm/watchdog behavior, or receiver batch construction.
 | `core-processor.ts`                                          | Validates and reduces core events without making calls                             |
 | `stream-storage.ts`                                          | Stores the event log, delivery cursors, and list-send retries                      |
 | `stream-connections.ts`                                      | Opens live callbacks, replays history, and sends newly appended events             |
-| `cross-post-list-sender.ts`                                  | Sends complete cross-post lists to streams and owns bounded list-send retries      |
-| `cross-post-list-retry-store.ts`                             | Reads and updates one list-send retry row per receiver path                        |
+| `copy-list-sender.ts`                                        | Sends complete copy lists to streams and owns bounded list-send retries            |
+| `copy-list-retry-store.ts`                                   | Reads and updates one list-send retry row per receiver path                        |
 | `stream-event-sender.ts`                                     | Sends events for durable subscriptions and owns their cursors, retries, and expiry |
 | `subscription-receiver-calls.ts`                             | Calls hosted processors, ITX methods, receiving streams, and webhooks              |
 | `retained-event-callbacks.ts`                                | Retains and releases session and hosted-processor callback capabilities            |
-| `cross-post-appends.ts`                                      | Builds copied events, source information, idempotency keys, and cycle suppressions |
+| `copy-appends.ts`                                            | Builds copied events, source information, idempotency keys, and cycle suppressions |
 | `event-filter.ts`                                            | Compiles and evaluates event-type and JSONata filters                              |
 | `packages/iterate/src/processors/stream-processor.ts`        | Defines the processor class and its event-handling helpers                         |
 | `packages/iterate/src/processors/stream-processor-runner.ts` | Folds hosted processor events and stores checkpoints                               |

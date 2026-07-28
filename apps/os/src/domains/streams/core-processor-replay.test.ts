@@ -75,7 +75,7 @@ const VERSION_27_COMMITTED_EVENTS: StreamEvent[] = [
     },
     endWhen: { any: [{ kind: "acknowledged-events", count: 10 }] },
     receiver: {
-      action: "cross-post",
+      action: "copy-to-stream",
       receivingStreamPath: RECEIVING_STREAM_PATH,
       transform: "$",
       delivery: {
@@ -85,7 +85,7 @@ const VERSION_27_COMMITTED_EVENTS: StreamEvent[] = [
       },
     },
   }),
-  committed(6, "events.iterate.com/stream/cross-post-list-recorded", {
+  committed(6, "events.iterate.com/stream/copy-list-recorded", {
     source: {
       projectId: PROJECT_ID,
       path: SOURCE_PATH,
@@ -95,7 +95,7 @@ const VERSION_27_COMMITTED_EVENTS: StreamEvent[] = [
     sourceOffset: 6,
     subscriptionsByKey: recordedSubscriptions,
   }),
-  committed(7, "events.iterate.com/stream/cross-posted-events-dropped", {
+  committed(7, "events.iterate.com/stream/copied-events-dropped", {
     source: {
       projectId: PROJECT_ID,
       path: SOURCE_PATH,
@@ -108,20 +108,20 @@ const VERSION_27_COMMITTED_EVENTS: StreamEvent[] = [
     firstOffset: 6,
     lastOffset: 6,
   }),
-  committed(8, "events.iterate.com/stream/cross-post-list-delivery-blocked", {
+  committed(8, "events.iterate.com/stream/copy-list-delivery-blocked", {
     receivingStreamPath: RECEIVING_STREAM_PATH,
     sourceOffset: 5,
     attempts: 8,
     error: "receiver unavailable",
   }),
-  committed(9, "events.iterate.com/stream/cross-post-list-resend-requested", {
+  committed(9, "events.iterate.com/stream/copy-list-resend-requested", {
     receivingStreamPath: RECEIVING_STREAM_PATH,
   }),
-  committed(10, "events.iterate.com/stream/cross-post-list-confirmed", {
+  committed(10, "events.iterate.com/stream/copy-list-confirmed", {
     receivingStreamPath: RECEIVING_STREAM_PATH,
     sourceOffset: 9,
     receivingStreamEvent: {
-      type: "events.iterate.com/stream/cross-post-list-recorded",
+      type: "events.iterate.com/stream/copy-list-recorded",
       payload: {
         source: {
           projectId: PROJECT_ID,
@@ -225,7 +225,7 @@ const VERSION_27_COMMITTED_EVENTS: StreamEvent[] = [
       retiredShape: true,
     }),
     source: {
-      crossPostedFrom: [
+      copiedFrom: [
         {
           subscriptionKey: SUBSCRIPTION_KEY,
           streamId: SOURCE_STREAM_ID,
@@ -240,7 +240,7 @@ const VERSION_27_COMMITTED_EVENTS: StreamEvent[] = [
       ],
     },
   },
-  committed(25, "events.iterate.com/stream/cross-post-list-recorded", {
+  committed(25, "events.iterate.com/stream/copy-list-recorded", {
     source: {
       projectId: PROJECT_ID,
       path: SOURCE_PATH,
@@ -288,7 +288,7 @@ describe("core processor version 27 committed-event replay", () => {
       // Received copies deliberately bypass that parse, exactly as the replay
       // reducer does, because their payload belongs to the source lifetime.
       const event =
-        fixture.source?.crossPostedFrom === undefined
+        fixture.source?.copiedFrom === undefined
           ? (CoreProcessorContract.parseEvent(fixture as never) as StreamEvent)
           : fixture;
       state = processor.reduce({ event, state });
@@ -303,7 +303,7 @@ describe("core processor version 27 committed-event replay", () => {
       numEventsReceived: 0,
       numEventsDropped: 1,
     });
-    expect(states.get(8)?.crossPostListDeliveriesByReceivingStream[RECEIVING_STREAM_PATH]).toEqual({
+    expect(states.get(8)?.copyListDeliveriesByReceivingStream[RECEIVING_STREAM_PATH]).toEqual({
       sourceOffset: 5,
       status: "blocked",
       attempts: 8,
@@ -311,18 +311,16 @@ describe("core processor version 27 committed-event replay", () => {
       blockedAt: "2026-07-21T12:00:08.000Z",
       subscriptionKeysRecordedByReceiver: [],
     });
-    expect(states.get(9)?.crossPostListDeliveriesByReceivingStream[RECEIVING_STREAM_PATH]).toEqual({
+    expect(states.get(9)?.copyListDeliveriesByReceivingStream[RECEIVING_STREAM_PATH]).toEqual({
       sourceOffset: 9,
       status: "pending",
       subscriptionKeysRecordedByReceiver: [],
     });
-    expect(states.get(10)?.crossPostListDeliveriesByReceivingStream[RECEIVING_STREAM_PATH]).toEqual(
-      {
-        sourceOffset: 9,
-        status: "confirmed",
-        subscriptionKeysRecordedByReceiver: [SUBSCRIPTION_KEY],
-      },
-    );
+    expect(states.get(10)?.copyListDeliveriesByReceivingStream[RECEIVING_STREAM_PATH]).toEqual({
+      sourceOffset: 9,
+      status: "confirmed",
+      subscriptionKeysRecordedByReceiver: [SUBSCRIPTION_KEY],
+    });
     expect(states.get(11)?.subscriptions.outbound.byKey[SUBSCRIPTION_KEY]?.deliveryHalted).toEqual({
       reason: "delivery-failed",
       afterOffset: 4,
@@ -337,13 +335,11 @@ describe("core processor version 27 committed-event replay", () => {
       setAtSourceOffset: 13,
     });
     expect(states.get(20)?.subscriptions.outbound.byKey[SUBSCRIPTION_KEY]).toBeUndefined();
-    expect(states.get(20)?.crossPostListDeliveriesByReceivingStream[RECEIVING_STREAM_PATH]).toEqual(
-      {
-        sourceOffset: 20,
-        status: "pending",
-        subscriptionKeysRecordedByReceiver: [SUBSCRIPTION_KEY],
-      },
-    );
+    expect(states.get(20)?.copyListDeliveriesByReceivingStream[RECEIVING_STREAM_PATH]).toEqual({
+      sourceOffset: 20,
+      status: "pending",
+      subscriptionKeysRecordedByReceiver: [SUBSCRIPTION_KEY],
+    });
     expect(
       states.get(24)?.subscriptions.inbound.bySourcePath[SOURCE_PATH]?.byKey[SUBSCRIPTION_KEY],
     ).toMatchObject({
@@ -435,7 +431,7 @@ describe("core processor version 27 committed-event replay", () => {
         },
       },
     });
-    expect(state.crossPostListDeliveriesByReceivingStream).toEqual({
+    expect(state.copyListDeliveriesByReceivingStream).toEqual({
       [RECEIVING_STREAM_PATH]: {
         sourceOffset: 20,
         status: "pending",

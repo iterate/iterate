@@ -5,7 +5,7 @@
 //    shared MemoryStream with production idempotency semantics (a same-key
 //    append with a different body is REJECTED). The home stream lives inside a
 //    MemoryStreamNetwork so the ONE side effect — the secret/created catalog
-//    cross-post onto the project root stream "/" — is observable.
+//    copy onto the project root stream "/" — is observable.
 // 2. The registry-level wiring suite (fake DurableObjectState, REAL registry +
 //    runner, the facade built exactly as secret-durable-object.ts builds it),
 //    kept on its inline registry harness.
@@ -50,7 +50,7 @@ const GITHUB_REFRESH = {
   privateKey: { platform: "integrations.github" },
 } as const;
 
-/** The generic harness over a MemoryStreamNetwork, so cross-posts to the
+/** The generic harness over a MemoryStreamNetwork, so copies to the
  * project root stream "/" land somewhere observable. Pass another harness's
  * substrate for a replay incarnation over the SAME stream. */
 function makeSecretHarness(substrate?: HarnessSubstrate) {
@@ -72,7 +72,7 @@ function makeSecretHarness(substrate?: HarnessSubstrate) {
 }
 
 describe("SecretProcessor birth", () => {
-  it("secret/created reduces the whole birth policy and cross-posts the catalog fact to the project root", async () => {
+  it("secret/created reduces the whole birth policy and copies the catalog fact to the project root", async () => {
     const h = makeSecretHarness();
     await h.play([
       "append",
@@ -267,9 +267,9 @@ describe("SecretProcessor audit", () => {
 });
 
 describe("SecretProcessor recovery", () => {
-  it("a catalog outage holds the cursor; the successor incarnation re-runs the cross-post", async () => {
+  it("a catalog outage holds the cursor; the successor incarnation re-runs the copy", async () => {
     const h = makeSecretHarness();
-    // The project root stream is down: the blocked cross-post fails, so the
+    // The project root stream is down: the blocked copy fails, so the
     // frame fails with the cursor HELD — the created event stays deliverable.
     h.network.get("/").failAppendsOfType = "events.iterate.com/secret/created";
     await expect(h.append(CREATED)).rejects.toThrow("injected append failure");
@@ -288,7 +288,7 @@ describe("SecretProcessor recovery", () => {
     expect(h.state().birthCertificate).not.toBeNull();
   });
 
-  it("a full replay (fresh cursor over the same stream) reaches the same state and dedupes the cross-post", async () => {
+  it("a full replay (fresh cursor over the same stream) reaches the same state and dedupes the copy", async () => {
     const h = makeSecretHarness();
     await h.play(
       ["append", CREATED],
@@ -307,7 +307,7 @@ describe("SecretProcessor recovery", () => {
         },
       ],
       // The clock is now well past the original appends: the replayed
-      // cross-post must still produce a byte-identical body (it is built from
+      // copy must still produce a byte-identical body (it is built from
       // the consumed payload, never from now()), or the same-key append would
       // be REJECTED and wedge the replay.
       ["advanceTime", 60_000],
@@ -325,7 +325,7 @@ describe("SecretProcessor recovery", () => {
 
     expect(replay.events().map((row) => row.offset)).toEqual(committedOffsets);
     expect(replay.state()).toEqual(headState);
-    // The re-run cross-post deduped on its key instead of double-cataloging.
+    // The re-run copy deduped on its key instead of double-cataloging.
     expect(h.catalog()).toHaveLength(1);
   });
 });

@@ -56,7 +56,7 @@ const GITHUB_LINK_CONFIGURED = {
   },
 } satisfies RepoEventInput;
 
-/** A GitHub push delivery as the connection stream cross-posts it. Event
+/** A GitHub push delivery as the connection stream copies it. Event
  * BUILDER (data), not an append wrapper — the overrides produce the
  * wrong-provenance variants. */
 function githubPush(input?: {
@@ -83,7 +83,7 @@ function githubPush(input?: {
       ? {}
       : {
           source: {
-            crossPostedFrom: [
+            copiedFrom: [
               {
                 subscriptionKey: input?.subscriptionKey ?? `github-repo:${REPO_PATH}`,
                 streamId: "11111111-1111-4111-8111-111111111111",

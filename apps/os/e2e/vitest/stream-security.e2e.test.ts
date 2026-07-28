@@ -45,9 +45,9 @@ test("project users cannot reach stream test controls or the raw Durable Object"
     ["testReset", []],
     [
       "testAppendCoreEvents",
-      [[{ type: "events.iterate.com/stream/cross-post-list-resend-requested", payload: {} }]],
+      [[{ type: "events.iterate.com/stream/copy-list-resend-requested", payload: {} }]],
     ],
-    ["testReceiveCrossPostedEvents", [{}]],
+    ["testReceiveCopiedEvents", [{}]],
   ];
   for (const [method, args] of attempts) {
     await expect(async () => {
@@ -139,7 +139,7 @@ test("append accepts an offset assertion on a subscription configuration event",
     payload: {
       subscriptionKey: `stream-${marker}`,
       receiver: {
-        action: "cross-post",
+        action: "copy-to-stream",
         receivingStreamPath: `/e2e/security/offset-assert-target/${marker}`,
         delivery: {
           start: "now",

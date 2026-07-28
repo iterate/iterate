@@ -30,10 +30,10 @@ const network = await vi.hoisted(async () => {
   };
   const itx = createFakeItxEnv({
     onAppend: ({ event }) => {
-      if (event.type === "events.iterate.com/stream/cross-post-list-recorded") {
+      if (event.type === "events.iterate.com/stream/copy-list-recorded") {
         state.receivedRuleSetObserved = true;
       }
-      if (event.type === "events.iterate.com/stream/cross-post-list-confirmed") {
+      if (event.type === "events.iterate.com/stream/copy-list-confirmed") {
         state.sourceAcceptanceObserved = true;
       }
       if (
@@ -258,7 +258,7 @@ describe("linkRepoToGithub", () => {
         eventTypes: ["events.iterate.com/github/webhook-received"],
       },
       receiver: {
-        action: "cross-post",
+        action: "copy-to-stream",
         receivingStreamPath: "/repos/project",
         delivery: {
           start: "now",
@@ -269,7 +269,7 @@ describe("linkRepoToGithub", () => {
     });
     const inbound = network.streams
       .get(REPO_STREAM)
-      ?.find((event) => event.type === "events.iterate.com/stream/cross-post-list-recorded");
+      ?.find((event) => event.type === "events.iterate.com/stream/copy-list-recorded");
     expect(inbound?.payload).toMatchObject({
       source: { projectId: PROJECT_ID, path: `/integrations/github/${CONNECTION}` },
       sourceOffset: subscription?.offset,
@@ -282,7 +282,7 @@ describe("linkRepoToGithub", () => {
     expect(
       network.streams
         .get(CONNECTION_STREAM)
-        ?.some((event) => event.type === "events.iterate.com/stream/cross-post-list-confirmed"),
+        ?.some((event) => event.type === "events.iterate.com/stream/copy-list-confirmed"),
     ).toBe(true);
   });
 
@@ -393,11 +393,11 @@ describe("linkRepoToGithub", () => {
     seedConnectedFact();
     network.state.subscriptionEventFailure = {
       remaining: 1,
-      type: "events.iterate.com/stream/cross-post-list-recorded",
+      type: "events.iterate.com/stream/copy-list-recorded",
     };
 
     await expect(linkRepoToGithub(linkInput())).rejects.toThrow(
-      /cross-post-list-recorded.*append exploded/,
+      /copy-list-recorded.*append exploded/,
     );
 
     expect(network.state.githubLink).toBeNull();
@@ -417,17 +417,17 @@ describe("linkRepoToGithub", () => {
     seedConnectedFact();
     network.state.subscriptionEventFailure = {
       remaining: 1,
-      type: "events.iterate.com/stream/cross-post-list-confirmed",
+      type: "events.iterate.com/stream/copy-list-confirmed",
     };
 
     await expect(linkRepoToGithub(linkInput())).rejects.toThrow(
-      /cross-post-list-confirmed.*append exploded/,
+      /copy-list-confirmed.*append exploded/,
     );
 
     expect(network.state.githubLink).toBeNull();
     expect((network.streams.get(REPO_STREAM) ?? []).map((event) => event.type)).toEqual([
-      "events.iterate.com/stream/cross-post-list-recorded",
-      "events.iterate.com/stream/cross-post-list-recorded",
+      "events.iterate.com/stream/copy-list-recorded",
+      "events.iterate.com/stream/copy-list-recorded",
     ]);
     expect(
       (network.streams.get(REPO_STREAM) ?? []).map((event) =>
@@ -620,12 +620,12 @@ describe("unlinkRepoFromGithub", () => {
     await linkRepoToGithub(linkInput());
     network.state.subscriptionEventFailure = {
       remaining: 1,
-      type: "events.iterate.com/stream/cross-post-list-recorded",
+      type: "events.iterate.com/stream/copy-list-recorded",
     };
 
     await expect(
       unlinkRepoFromGithub({ projectId: PROJECT_ID, repoPath: "/repos/project" }),
-    ).rejects.toThrow(/cross-post-list-recorded.*append exploded/);
+    ).rejects.toThrow(/copy-list-recorded.*append exploded/);
     expect(network.state.githubLink).not.toBeNull();
 
     const retried = await unlinkRepoFromGithub({
@@ -641,7 +641,7 @@ describe("unlinkRepoFromGithub", () => {
     expect(
       (network.streams.get(REPO_STREAM) ?? []).filter(
         (event) =>
-          event.type === "events.iterate.com/stream/cross-post-list-recorded" &&
+          event.type === "events.iterate.com/stream/copy-list-recorded" &&
           Object.keys(
             (event.payload as { subscriptionsByKey: Record<string, unknown> }).subscriptionsByKey,
           ).length === 0,

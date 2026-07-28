@@ -3,7 +3,7 @@ import { z } from "zod";
 import type {
   ProcessorRuntimeState,
   StreamDeliveryBatch,
-  CrossPostReceipt,
+  CopyReceipt,
   StreamConnectionHandle,
 } from "iterate/processors";
 import {
@@ -28,8 +28,8 @@ import {
 } from "../../rpc-targets.ts";
 import { canonicalizeStreamPath, DurableObjectNameCodec } from "../durable-object-names.ts";
 import { posthogSubscriptionEvent } from "../integrations/posthog.ts";
-import { buildCrossPostAppends } from "./cross-post-appends.ts";
-import { CrossPostListRetryStore } from "./cross-post-list-retry-store.ts";
+import { buildCopyAppends } from "./copy-appends.ts";
+import { CopyListRetryStore } from "./copy-list-retry-store.ts";
 import {
   assertCoreProcessorCheckpointGrowthFits,
   compareSourceListPosition,
@@ -40,7 +40,7 @@ import { compileEventFilter } from "./event-filter.ts";
 import {
   internalStreamId,
   isInternalStreamIdempotencyKey,
-  sameCrossPostedEventIdentity,
+  sameCopiedEventIdentity,
 } from "./stream-delivery-utils.ts";
 import { computeBackoffMs } from "./delivery-math.ts";
 import {
@@ -51,13 +51,13 @@ import {
 } from "./stream-storage.ts";
 import { StreamEventSender } from "./stream-event-sender.ts";
 import {
-  blockedCrossPostListResult,
-  isCrossPostListBackoffError,
-  isCrossPostListBlockedError,
-  crossPostListBlockedError,
-  CrossPostListSender,
-  type BlockedCrossPostListResult,
-} from "./cross-post-list-sender.ts";
+  blockedCopyListResult,
+  isCopyListBackoffError,
+  isCopyListBlockedError,
+  copyListBlockedError,
+  CopyListSender,
+  type BlockedCopyListResult,
+} from "./copy-list-sender.ts";
 import type { StreamRuntimeDebugState } from "./stream-runtime-state.ts";
 import { createSubscriptionReceiverCalls } from "./subscription-receiver-calls.ts";
 import {
@@ -70,8 +70,8 @@ import {
   ConnectionOpenerDescriptor as ConnectionOpenerDescriptorSchema,
   parseCommittedCoreEvent,
   subscriptionKeyForConfiguredEvent,
-  type CommittedCrossPostListConfirmedEvent,
-  type CommittedCrossPostListRecordedEvent,
+  type CommittedCopyListConfirmedEvent,
+  type CommittedCopyListRecordedEvent,
   type CommittedSubscriptionConfiguredEvent,
   type CommittedSubscriptionRemovedEvent,
   type CoreProcessorState,
@@ -106,17 +106,14 @@ export async function settleStreamCoreBackgroundWork(work: () => Promise<unknown
   try {
     await work();
   } catch (error) {
-    if (isCrossPostListBlockedError(error)) {
-      console.info(
-        "stream core background work is waiting for an explicitly blocked cross-post list",
-        {
-          message: error.message,
-        },
-      );
+    if (isCopyListBlockedError(error)) {
+      console.info("stream core background work is waiting for an explicitly blocked copy list", {
+        message: error.message,
+      });
       return;
     }
-    if (isCrossPostListBackoffError(error)) {
-      console.info("stream core background work reached a scheduled cross-post-list backoff", {
+    if (isCopyListBackoffError(error)) {
+      console.info("stream core background work reached a scheduled copy-list backoff", {
         message: error.message,
       });
       return;
@@ -255,7 +252,7 @@ const PROJECT_WORKER_SUBSCRIPTION_KEY = "project-worker";
  *    from one-shot event hooks.
  * 3. Its checkpoint — reduced state in DO KV, rebuilt from the SQL event log
  *    (`stream-storage.ts`) when missing or version-skewed.
- * 4. Delivery — session callbacks, hosted processors, cross-posts, ITX calls,
+ * 4. Delivery — session callbacks, hosted processors, copies, ITX calls,
  *    and webhooks live in `stream-event-sender.ts`, calling receivers through
  *    `subscription-receiver-calls.ts`; this class only decides policy (who may
  *    connect, what a subscription event means, which events to append).
@@ -284,7 +281,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   readonly #subscriptionCursorStore = new SqliteSubscriptionCursorStore(this.ctx.storage.sql, {
     onMutation: () => this.#refreshLiveState(),
   });
-  readonly #crossPostListRetryStore = new CrossPostListRetryStore(this.ctx.storage.sql, {
+  readonly #copyListRetryStore = new CopyListRetryStore(this.ctx.storage.sql, {
     onMutation: () => this.#refreshLiveState(),
   });
   /** In-memory throughput accounting (events/s, bytes in/out); resets with the incarnation. */
@@ -295,19 +292,19 @@ export class StreamDurableObject extends DurableObject<Env> {
     now: () => Date.now(),
     waitUntil: (work) => this.ctx.waitUntil(work),
   });
-  readonly #crossPostListSender = new CrossPostListSender({
+  readonly #copyListSender = new CopyListSender({
     projectId: this.name.projectId,
     path: this.name.path,
     coreState: () => this.#coreProcessorState,
-    retryStore: this.#crossPostListRetryStore,
+    retryStore: this.#copyListRetryStore,
     appendCore: (event) => this.#append({ authority: "core-event" }, [event])[0]!,
     getEvent: (args) => this.getEvent(args),
-    latestCrossPostListRecordedByReceiver: (receivingStreamPath) =>
-      this.#log.getLatestCrossPostListConfirmationForReceivingStream(receivingStreamPath),
-    recordCrossPostListOnReceivingStream: (path, event) =>
+    latestCopyListRecordedByReceiver: (receivingStreamPath) =>
+      this.#log.getLatestCopyListConfirmationForReceivingStream(receivingStreamPath),
+    recordCopyListOnReceivingStream: (path, event) =>
       path === this.name.path
-        ? Promise.resolve(this.recordCrossPostListFromSource(event))
-        : this.#streamStub(path).recordCrossPostListFromSource(event),
+        ? Promise.resolve(this.recordCopyListFromSource(event))
+        : this.#streamStub(path).recordCopyListFromSource(event),
     scheduleDurable: (work) => this.#deliveryAlarmBoundary.scheduleOrRun(work),
     armAlarm: (atMs) => this.#alarmArmer.armNoLaterThan(atMs),
     now: () => Date.now(),
@@ -336,7 +333,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         projectId: this.name.projectId,
         exports: this.ctx.exports,
         createAuthorityRoot: () => this.#createEventDeliveryAuthorityRoot(),
-        crossPostToStream: (path, batch) => this.#streamStub(path).receiveCrossPostedEvents(batch),
+        copyToStream: (path, batch) => this.#streamStub(path).receiveCopiedEvents(batch),
         onHostedDeliveryError: (subscriptionKey, error, expectedDelivery) =>
           this.#eventSender.onHostedDeliveryError(subscriptionKey, error, expectedDelivery),
       }),
@@ -547,7 +544,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * Commit one cross-post subscription on this source stream.
+   * Commit one copy subscription on this source stream.
    *
    * A caller-supplied key means "ensure/replace this source-local
    * subscription". An omitted key always means "create another subscription";
@@ -555,7 +552,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    * command must supply an event idempotency key so a retry cannot create a
    * duplicate after the source commits but the receiver handshake fails.
    */
-  #ensureCrossPostSubscription(args: {
+  #ensureCopySubscription(args: {
     configuration: SubscriptionConfiguredPayload;
     idempotencyKey?: string;
   }): {
@@ -567,12 +564,12 @@ export class StreamDurableObject extends DurableObject<Env> {
       type: "events.iterate.com/stream/subscription-configured",
       payload: args.configuration,
     }).payload;
-    if (canonical.receiver.action !== "cross-post") {
-      throw new Error("setCrossPostSubscription requires a cross-post action");
+    if (canonical.receiver.action !== "copy-to-stream") {
+      throw new Error("setCopySubscription requires a copy action");
     }
     if (canonical.subscriptionKey === undefined && args.idempotencyKey === undefined) {
       throw new Error(
-        "a keyless cross-post subscription requires idempotencyKey so setup is safe to retry",
+        "a keyless copy subscription requires idempotencyKey so setup is safe to retry",
       );
     }
 
@@ -582,7 +579,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         ? undefined
         : this.#coreProcessorState.subscriptions.outbound.byKey[explicitSubscriptionKey];
     const previousReceivingStreamPath =
-      existing?.configuration.receiver.action === "cross-post"
+      existing?.configuration.receiver.action === "copy-to-stream"
         ? existing.configuration.receiver.receivingStreamPath
         : undefined;
 
@@ -618,17 +615,17 @@ export class StreamDurableObject extends DurableObject<Env> {
     const current = this.#coreProcessorState.subscriptions.outbound.byKey[subscriptionKey];
     if (
       current?.configuredAtOffset !== configuredEvent.offset ||
-      current.configuration.receiver.action !== "cross-post"
+      current.configuration.receiver.action !== "copy-to-stream"
     ) {
       throw new Error(
-        `subscription "${subscriptionKey}" does not point to its committed cross-post configuration`,
+        `subscription "${subscriptionKey}" does not point to its committed copy configuration`,
       );
     }
     const receivingStreamPath = current.configuration.receiver.receivingStreamPath;
     const receiverList =
-      this.#coreProcessorState.crossPostListDeliveriesByReceivingStream[receivingStreamPath];
+      this.#coreProcessorState.copyListDeliveriesByReceivingStream[receivingStreamPath];
     if (receiverList?.status === "blocked") {
-      throw crossPostListBlockedError({
+      throw copyListBlockedError({
         receivingStreamPath,
         attempts: receiverList.attempts,
         lastError: receiverList.error,
@@ -646,7 +643,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    * after every affected receiving stream and this source have recorded the
    * change. The returned list events are the named receiver's durable pair.
    */
-  async setCrossPostSubscription(args: {
+  async setCopySubscription(args: {
     configuration: SubscriptionConfiguredPayload;
     idempotencyKey?: string;
   }): Promise<
@@ -654,42 +651,42 @@ export class StreamDurableObject extends DurableObject<Env> {
         status: "configured";
         subscriptionKey: string;
         subscriptionConfiguredEvent: CommittedSubscriptionConfiguredEvent;
-        crossPostListRecordedEvent: CommittedCrossPostListRecordedEvent;
-        crossPostListConfirmedEvent: CommittedCrossPostListConfirmedEvent;
+        copyListRecordedEvent: CommittedCopyListRecordedEvent;
+        copyListConfirmedEvent: CommittedCopyListConfirmedEvent;
       }
-    | BlockedCrossPostListResult
+    | BlockedCopyListResult
   > {
     try {
-      const result = await this.#setCrossPostSubscription(args);
+      const result = await this.#setCopySubscription(args);
       return { status: "configured", ...result };
     } catch (error) {
-      if (isCrossPostListBlockedError(error)) return blockedCrossPostListResult(error);
+      if (isCopyListBlockedError(error)) return blockedCopyListResult(error);
       throw error;
     }
   }
 
-  async #setCrossPostSubscription(args: {
+  async #setCopySubscription(args: {
     configuration: SubscriptionConfiguredPayload;
     idempotencyKey?: string;
   }): Promise<{
     subscriptionKey: string;
     subscriptionConfiguredEvent: CommittedSubscriptionConfiguredEvent;
-    crossPostListRecordedEvent: CommittedCrossPostListRecordedEvent;
-    crossPostListConfirmedEvent: CommittedCrossPostListConfirmedEvent;
+    copyListRecordedEvent: CommittedCopyListRecordedEvent;
+    copyListConfirmedEvent: CommittedCopyListConfirmedEvent;
   }> {
     const {
       event: subscriptionConfiguredEvent,
       configuration,
       previousReceivingStreamPath,
-    } = this.#ensureCrossPostSubscription(args);
+    } = this.#ensureCopySubscription(args);
     const subscriptionKey = configuration.subscriptionKey;
-    if (configuration.receiver.action !== "cross-post") {
-      throw new Error("setCrossPostSubscription requires a cross-post action");
+    if (configuration.receiver.action !== "copy-to-stream") {
+      throw new Error("setCopySubscription requires a copy action");
     }
     const receivingStreamPath = configuration.receiver.receivingStreamPath;
     const receivingStreamPathsToWaitFor = new Set<string>();
     for (const [path, list] of Object.entries(
-      this.#coreProcessorState.crossPostListDeliveriesByReceivingStream,
+      this.#coreProcessorState.copyListDeliveriesByReceivingStream,
     )) {
       if (
         list.sourceOffset === subscriptionConfiguredEvent.offset ||
@@ -708,43 +705,43 @@ export class StreamDurableObject extends DurableObject<Env> {
     // both streams still record the same subscription key.
     for (const changedReceiverPath of receivingStreamPathsToWaitFor) {
       if (changedReceiverPath === receivingStreamPath) continue;
-      await this.#crossPostListSender.waitUntilConfirmed(changedReceiverPath);
+      await this.#copyListSender.waitUntilConfirmed(changedReceiverPath);
       this.#assertSubscriptionUnchanged({
         subscriptionKey,
         configuredAtOffset: subscriptionConfiguredEvent.offset,
         receivingStreamPath,
       });
     }
-    const crossPostListRecordedEvent =
-      await this.#crossPostListSender.waitUntilConfirmed(receivingStreamPath);
+    const copyListRecordedEvent =
+      await this.#copyListSender.waitUntilConfirmed(receivingStreamPath);
     this.#assertSubscriptionUnchanged({
       subscriptionKey,
       configuredAtOffset: subscriptionConfiguredEvent.offset,
       receivingStreamPath,
     });
-    const crossPostListConfirmedEvent = this.#crossPostListConfirmedEvent(
+    const copyListConfirmedEvent = this.#copyListConfirmedEvent(
       receivingStreamPath,
-      crossPostListRecordedEvent,
+      copyListRecordedEvent,
     );
     return {
       subscriptionKey,
       subscriptionConfiguredEvent,
-      crossPostListRecordedEvent,
-      crossPostListConfirmedEvent,
+      copyListRecordedEvent,
+      copyListConfirmedEvent,
     };
   }
 
-  #crossPostListConfirmedEvent(
+  #copyListConfirmedEvent(
     receivingStreamPath: string,
-    crossPostListRecordedEvent: StreamEvent,
-  ): CommittedCrossPostListConfirmedEvent {
+    copyListRecordedEvent: StreamEvent,
+  ): CommittedCopyListConfirmedEvent {
     const recorded = parseCommittedCoreEvent(
-      crossPostListRecordedEvent,
-      "events.iterate.com/stream/cross-post-list-recorded",
+      copyListRecordedEvent,
+      "events.iterate.com/stream/copy-list-recorded",
     );
     const confirmed = this.getEvent({
       idempotencyKey: internalStreamId(
-        "cross-post-list-confirmed",
+        "copy-list-confirmed",
         receivingStreamPath,
         recorded.payload.source.streamId,
         recorded.payload.sourceOffset,
@@ -755,10 +752,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         `receiving stream "${receivingStreamPath}" recorded source offset ${recorded.payload.sourceOffset}, but the source has no matching confirmation event`,
       );
     }
-    return parseCommittedCoreEvent(
-      confirmed,
-      "events.iterate.com/stream/cross-post-list-confirmed",
-    );
+    return parseCommittedCoreEvent(confirmed, "events.iterate.com/stream/copy-list-confirmed");
   }
 
   #assertSubscriptionUnchanged(args: {
@@ -769,7 +763,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     const current = this.#coreProcessorState.subscriptions.outbound.byKey[args.subscriptionKey];
     if (
       current?.configuredAtOffset !== args.configuredAtOffset ||
-      current.configuration.receiver.action !== "cross-post" ||
+      current.configuration.receiver.action !== "copy-to-stream" ||
       current.configuration.receiver.receivingStreamPath !== args.receivingStreamPath
     ) {
       throw new Error(
@@ -801,7 +795,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     const configured = this.#coreProcessorState.subscriptions.outbound.byKey[args.subscriptionKey];
     if (configured === undefined) {
       const pending =
-        this.#coreProcessorState.crossPostListDeliveriesByReceivingStream[expectedReceiverPath];
+        this.#coreProcessorState.copyListDeliveriesByReceivingStream[expectedReceiverPath];
       if (pending !== undefined && pending.status !== "confirmed") {
         const existing = this.getEvent({ offset: pending.sourceOffset });
         if (
@@ -822,7 +816,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       return null;
     }
     if (
-      configured.configuration.receiver.action !== "cross-post" ||
+      configured.configuration.receiver.action !== "copy-to-stream" ||
       configured.configuration.receiver.receivingStreamPath !== expectedReceiverPath
     ) {
       return null;
@@ -839,42 +833,42 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * Source-side removal command for a cross-post. Repeated calls are
+   * Source-side removal command for a copy. Repeated calls are
    * level-triggered: each call enforces that this key is absent from the
    * expected receiving stream. That includes a same-key/same-receiver
    * recreation made after an earlier ambiguous call. A replacement owned by
    * a different receiver is protected by `expectedReceiverPath`.
    */
-  async removeCrossPostSubscription(args: {
+  async removeCopySubscription(args: {
     subscriptionKey: string;
     expectedReceiverPath: string;
   }): Promise<
     | {
         status: "removed";
         subscriptionRemovedEvent: CommittedSubscriptionRemovedEvent;
-        crossPostListRecordedEvent: CommittedCrossPostListRecordedEvent;
-        crossPostListConfirmedEvent: CommittedCrossPostListConfirmedEvent;
+        copyListRecordedEvent: CommittedCopyListRecordedEvent;
+        copyListConfirmedEvent: CommittedCopyListConfirmedEvent;
       }
     | { status: "already-absent" }
-    | BlockedCrossPostListResult
+    | BlockedCopyListResult
   > {
     try {
-      return await this.#removeCrossPostSubscription(args);
+      return await this.#removeCopySubscription(args);
     } catch (error) {
-      if (isCrossPostListBlockedError(error)) return blockedCrossPostListResult(error);
+      if (isCopyListBlockedError(error)) return blockedCopyListResult(error);
       throw error;
     }
   }
 
-  async #removeCrossPostSubscription(args: {
+  async #removeCopySubscription(args: {
     subscriptionKey: string;
     expectedReceiverPath: string;
   }): Promise<
     | {
         status: "removed";
         subscriptionRemovedEvent: CommittedSubscriptionRemovedEvent;
-        crossPostListRecordedEvent: CommittedCrossPostListRecordedEvent;
-        crossPostListConfirmedEvent: CommittedCrossPostListConfirmedEvent;
+        copyListRecordedEvent: CommittedCopyListRecordedEvent;
+        copyListConfirmedEvent: CommittedCopyListConfirmedEvent;
       }
     | { status: "already-absent" }
   > {
@@ -889,8 +883,8 @@ export class StreamDurableObject extends DurableObject<Env> {
       expectedReceiverPath,
     });
     if (subscriptionRemovedEvent !== null) {
-      const crossPostListRecordedEvent =
-        await this.#crossPostListSender.waitUntilConfirmed(expectedReceiverPath);
+      const copyListRecordedEvent =
+        await this.#copyListSender.waitUntilConfirmed(expectedReceiverPath);
       if (this.#coreProcessorState.subscriptions.outbound.byKey[subscriptionKey] !== undefined) {
         throw new Error(
           `subscription "${subscriptionKey}" was configured again while the receiving stream was recording its removal`,
@@ -899,10 +893,10 @@ export class StreamDurableObject extends DurableObject<Env> {
       return {
         status: "removed",
         subscriptionRemovedEvent,
-        crossPostListRecordedEvent,
-        crossPostListConfirmedEvent: this.#crossPostListConfirmedEvent(
+        copyListRecordedEvent,
+        copyListConfirmedEvent: this.#copyListConfirmedEvent(
           expectedReceiverPath,
-          crossPostListRecordedEvent,
+          copyListRecordedEvent,
         ),
       };
     }
@@ -911,9 +905,9 @@ export class StreamDurableObject extends DurableObject<Env> {
     // receiver's list even though this call appended no removal event. Ensure
     // the receiver has recorded that newest list before reporting absence.
     const pending =
-      this.#coreProcessorState.crossPostListDeliveriesByReceivingStream[expectedReceiverPath];
+      this.#coreProcessorState.copyListDeliveriesByReceivingStream[expectedReceiverPath];
     if (pending !== undefined && pending.status !== "confirmed") {
-      await this.#crossPostListSender.waitUntilConfirmed(expectedReceiverPath);
+      await this.#copyListSender.waitUntilConfirmed(expectedReceiverPath);
     }
     return { status: "already-absent" };
   }
@@ -923,31 +917,31 @@ export class StreamDurableObject extends DurableObject<Env> {
    * absent from the public Stream capability: only another Stream Durable
    * Object can replace the subscriptions a receiver records for a source.
    */
-  recordCrossPostListFromSource(eventInput: StreamEventInput): StreamEvent {
-    if (eventInput.type !== "events.iterate.com/stream/cross-post-list-recorded") {
-      throw new Error("recordCrossPostListFromSource requires a cross-post-list-recorded event");
+  recordCopyListFromSource(eventInput: StreamEventInput): StreamEvent {
+    if (eventInput.type !== "events.iterate.com/stream/copy-list-recorded") {
+      throw new Error("recordCopyListFromSource requires a copy-list-recorded event");
     }
-    const crossPostList = CoreProcessorContract.parseEventInput(
+    const copyList = CoreProcessorContract.parseEventInput(
       eventInput as StreamEventInput & {
-        type: "events.iterate.com/stream/cross-post-list-recorded";
+        type: "events.iterate.com/stream/copy-list-recorded";
       },
     );
     // The reducer can compare against reduced state while a source has at
     // least one recorded subscription. An empty list deliberately removes that state,
     // so this journal lookup is the authoritative lifetime/order check for
     // both non-empty and empty lists.
-    const latest = this.#log.getLatestCrossPostListFromSource(crossPostList.payload.source.path);
+    const latest = this.#log.getLatestCopyListFromSource(copyList.payload.source.path);
     if (latest !== undefined) {
       const recorded = parseCommittedCoreEvent(
         latest,
-        "events.iterate.com/stream/cross-post-list-recorded",
+        "events.iterate.com/stream/copy-list-recorded",
       );
       if (
         compareSourceListPosition(
           {
-            streamId: crossPostList.payload.source.streamId,
-            streamCreatedAt: crossPostList.payload.source.streamCreatedAt,
-            sourceOffset: crossPostList.payload.sourceOffset,
+            streamId: copyList.payload.source.streamId,
+            streamCreatedAt: copyList.payload.source.streamCreatedAt,
+            sourceOffset: copyList.payload.sourceOffset,
           },
           {
             source: {
@@ -961,12 +955,12 @@ export class StreamDurableObject extends DurableObject<Env> {
         return recorded;
       }
     }
-    return this.#append({ authority: "cross-post-list" }, [eventInput])[0]!;
+    return this.#append({ authority: "copy-list" }, [eventInput])[0]!;
   }
 
   #append(
     options: {
-      authority: "public" | "core-event" | "cross-post-list" | "cross-post";
+      authority: "public" | "core-event" | "copy-list" | "copy";
     },
     eventInputs: readonly StreamEventInput[],
   ): StreamEvent[] {
@@ -1002,20 +996,20 @@ export class StreamDurableObject extends DurableObject<Env> {
           if (expectedOffset !== undefined && expectedOffset !== existing.offset) {
             throw new Error(`idempotency hit at offset ${existing.offset}, got ${expectedOffset}`);
           }
-          if (options.authority === "cross-post") {
-            // Cross-posted product-event copies are identified by their final
+          if (options.authority === "copy") {
+            // Copied product-event copies are identified by their final
             // source hop because a transform may change their body between
-            // retries. Cross-post drop records have no hop; their
+            // retries. Copy drop records have no hop; their
             // deterministic body and internal key are the complete identity.
-            const isSameCrossPostAppend =
-              body.source?.crossPostedFrom?.at(-1) === undefined
+            const isSameCopyAppend =
+              body.source?.copiedFrom?.at(-1) === undefined
                 ? sameIdempotentEvent(existing, body)
-                : sameCrossPostedEventIdentity(existing, body);
-            if (isSameCrossPostAppend) {
+                : sameCopiedEventIdentity(existing, body);
+            if (isSameCopyAppend) {
               events.push(existing);
               continue;
             }
-            // Cross-post keys name source coordinates, not merely an event
+            // Copy keys name source coordinates, not merely an event
             // body. Never let a pre-existing ordinary append masquerade as a
             // successful delivery just because type/payload happen to match.
             throw new Error(idempotencyConflictMessage(body.idempotencyKey, existing.offset));
@@ -1047,7 +1041,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
       if (
         options.authority === "public" &&
-        committed.source?.crossPostedFrom === undefined &&
+        committed.source?.copiedFrom === undefined &&
         committed.type === "events.iterate.com/stream/subscription-configured"
       ) {
         const configured = parseCommittedCoreEvent(
@@ -1227,7 +1221,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     attempt("append circuit-breaker pause", () => this.#appendOwedCircuitBreakerPause());
     attempt("announce stream to ancestors", () => this.#announceToAncestors());
-    attempt("send pending cross-post lists", () => this.#crossPostListSender.reconcile());
+    attempt("send pending copy lists", () => this.#copyListSender.reconcile());
     attempt("send pending events", () =>
       args.alarmTurn === true
         ? this.#eventSender.onAlarm()
@@ -1308,19 +1302,19 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * Receive events from another stream. Adding `source.crossPostedFrom`, preventing
+   * Receive events from another stream. Adding `source.copiedFrom`, preventing
    * repeated-stream cycles, applying idempotency keys,
-   * and the optional JSONata transform live in `cross-post-appends.ts`; this method
+   * and the optional JSONata transform live in `copy-appends.ts`; this method
    * only appends the built inputs in its own synchronous turn.
    */
-  receiveCrossPostedEvents(batch: StreamDeliveryBatch): CrossPostReceipt {
-    const { inputs, receipt } = buildCrossPostAppends({
+  receiveCopiedEvents(batch: StreamDeliveryBatch): CopyReceipt {
+    const { inputs, receipt } = buildCopyAppends({
       batch,
       self: { projectId: this.name.projectId, path: this.name.path },
       source: this.#coreProcessorState.subscriptions.inbound.bySourcePath[batch.path],
     });
     if (inputs.length > 0) {
-      this.#append({ authority: "cross-post" }, inputs);
+      this.#append({ authority: "copy" }, inputs);
     }
     return receipt;
   }
@@ -1811,13 +1805,13 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   #readRuntimeState(): StreamRuntimeDebugState {
     const subscriptions = this.#eventSender.subscriptionRuntimeState();
-    const crossPostListRetries = this.#crossPostListSender.runtimeState();
+    const copyListRetries = this.#copyListSender.runtimeState();
     return {
       coreProcessorState: this.#coreProcessorState,
       runtime: {
         connections: this.#eventSender.connectionRuntimeState(),
         subscriptions,
-        crossPostListRetries,
+        copyListRetries,
         metrics: this.#metrics.report(Date.now()),
         storageSizeBytes: this.ctx.storage.sql.databaseSize,
       },
@@ -1853,7 +1847,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 }
 
 /** Idempotency deduplicates one logical event, not arbitrary writes sharing a
- * key. `source.crossPostedFrom` is deliberately excluded: a processor may retry
+ * key. `source.copiedFrom` is deliberately excluded: a processor may retry
  * the same logical output after a deploy changes its source-version stamp. */
 
 /**

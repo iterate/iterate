@@ -16,7 +16,7 @@ subscriptions. For examples organized by use case, see
 - **cursor**: the exclusive completed source offset stored by the source;
 - **checkpoint**: the completed source offset stored with a hosted processor's
   reduced state;
-- **cross-post list**: the complete current set of one source's subscriptions
+- **copy list**: the complete current set of one source's subscriptions
   that target one receiving stream;
 - **connection**: one currently retained event-batch callback;
 - **delivery**: one awaited receiver call for matching events;
@@ -24,7 +24,7 @@ subscriptions. For examples organized by use case, see
 
 There is no separate “outbound subscription event” and “inbound subscription
 event” for one key. `subscription-configured` is the source-side fact that
-enables sending. A receiving stream gets the source's complete cross-post list,
+enables sending. A receiving stream gets the source's complete copy list,
 not a second independently managed subscription.
 
 ## The configuration event
@@ -56,7 +56,7 @@ type SubscriptionConfigured = {
           processorSlug?: string;
         }
       | {
-          action: "cross-post";
+          action: "copy-to-stream";
           receivingStreamPath: string;
           transform?: string;
           delivery: {
@@ -89,7 +89,7 @@ type SubscriptionConfigured = {
 
 This is the sole event that enables delivery. The `action` union prevents
 invalid combinations: a hosted processor cannot carry a start position stored
-by the source stream, and an ordered cross-post cannot skip a permanently
+by the source stream, and an ordered copy cannot skip a permanently
 failing event.
 
 ## How subscription keys behave
@@ -114,7 +114,7 @@ Consequences:
 - two raw keyless configuration appends create two subscriptions;
 - a keyless append with an `idempotencyKey` can be retried and returns the same
   committed event and generated key;
-- `receiveCrossPostsFrom()` requires that idempotency key when it generates the
+- `subscribeToEventsFrom()` requires that idempotency key when it generates the
   subscription key, because its source commit can precede a failed receiver
   handshake;
 - a fresh caller may not claim the reserved `subscription:` prefix;
@@ -126,9 +126,9 @@ Consequences:
 The original keyless event remains keyless. Reduced outbound state stores the
 effective key inside its normalized configuration.
 
-## Cross-post append order
+## Copy append order
 
-`receiveCrossPostsFrom()` is called on the receiving stream, but the first event
+`subscribeToEventsFrom()` is called on the receiving stream, but the first event
 is appended to the source:
 
 ```text
@@ -136,9 +136,9 @@ source stream                              receiving stream
 
 subscription-configured
       |
-      +---- complete cross-post list ----> cross-post-list-recorded
+      +---- complete copy list ----> copy-list-recorded
       |
-cross-post-list-confirmed
+copy-list-confirmed
       |
       +---- matching event copies -------> ordinary appended events
 ```
@@ -150,26 +150,26 @@ after these three control events have committed. It returns:
 {
   subscriptionKey,
   subscriptionConfiguredEvent,
-  crossPostListRecordedEvent,
-  crossPostListConfirmedEvent,
+  copyListRecordedEvent,
+  copyListConfirmedEvent,
 }
 ```
 
 Matching event delivery starts only after the source has reduced the matching
-`cross-post-list-confirmed`.
+`copy-list-confirmed`.
 
 Moving an existing key from receiver A to receiver B also appends and confirms
 A's replacement list without the key. The method waits for that pair before
-B's pair, while the returned `crossPostListRecordedEvent` and
-`crossPostListConfirmedEvent` are B's events.
+B's pair, while the returned `copyListRecordedEvent` and
+`copyListConfirmedEvent` are B's events.
 
-### `cross-post-list-recorded`
+### `copy-list-recorded`
 
 This platform-authored event is appended to the receiving stream:
 
 ```ts
-type CrossPostListRecorded = {
-  type: "events.iterate.com/stream/cross-post-list-recorded";
+type CopyListRecorded = {
+  type: "events.iterate.com/stream/copy-list-recorded";
   payload: {
     source: {
       projectId: string | null;
@@ -200,7 +200,7 @@ type CrossPostListRecorded = {
   };
 };
 
-type CommittedCrossPostListRecorded = CrossPostListRecorded & {
+type CommittedCopyListRecorded = CopyListRecorded & {
   idempotencyKey: string;
   offset: number;
   createdAt: string;
@@ -213,29 +213,29 @@ key removes it. Sending `{ subscriptionsByKey: {} }` removes the final
 subscription from that source.
 
 The receiving copy contains only fields needed to explain and validate
-cross-posts. It does not repeat the source-only receiver address or mutable
+copies. It does not repeat the source-only receiver address or mutable
 cursor state.
 
 `sourceOffset` orders list replacements. A delayed older call cannot restore a
 removed key. `streamCreatedAt` and `streamId` order and distinguish deleted and
 recreated source streams whose offsets restart.
 
-### `cross-post-list-confirmed`
+### `copy-list-confirmed`
 
 After the receiver returns its committed event, the source appends:
 
 ```ts
-type CrossPostListConfirmed = {
-  type: "events.iterate.com/stream/cross-post-list-confirmed";
+type CopyListConfirmed = {
+  type: "events.iterate.com/stream/copy-list-confirmed";
   payload: {
     receivingStreamPath: string;
     sourceOffset: number;
-    receivingStreamEvent: CommittedCrossPostListRecorded;
+    receivingStreamEvent: CommittedCopyListRecorded;
   };
 };
 ```
 
-Embedding the exact committed `cross-post-list-recorded` event gives the source
+Embedding the exact committed `copy-list-recorded` event gives the source
 an immutable audit record of the other stream's append.
 
 ## Removal and moves
@@ -252,7 +252,7 @@ type SubscriptionRemoved = {
 };
 ```
 
-For `cross-post`, the source then sends a complete list without that key. There
+For `copy-to-stream`, the source then sends a complete list without that key. There
 is no separate per-key receiver removal event.
 
 A public command may append only `reason: "requested"`. The source stream's
@@ -324,7 +324,7 @@ subscriptions: {
 ```
 
 On a receiving stream, `inbound.bySourcePath` answers “which source streams
-cross-post here?” and `byKey` gives every subscription from each source.
+copy here?” and `byKey` gives every subscription from each source.
 
 On a source stream, `outbound.byKey` contains every durable subscription,
 regardless of action. The subscription key is the common identifier on both
@@ -338,13 +338,13 @@ Received counters are properties of the inbound subscription:
   because of a cycle or hop limit;
 - `lastEventReceivedAt` records the most recent copied event's commit time.
 
-## Cross-post-list work is separate
+## Copy-list work is separate
 
 Sending a complete list is work even when that list is empty, so it is not
 hidden inside `subscriptions.outbound.byKey`:
 
 ```ts
-crossPostListDeliveriesByReceivingStream: {
+copyListDeliveriesByReceivingStream: {
   [receivingStreamPath: string]:
     | {
         sourceOffset: number;
@@ -374,7 +374,7 @@ what lets the source prevent delivery during a move.
 This map is not a redundant outbound-subscription index:
 
 - `subscriptions.outbound.byKey` answers what should receive matching events;
-- `crossPostListDeliveriesByReceivingStream` answers which complete receiver
+- `copyListDeliveriesByReceivingStream` answers which complete receiver
   updates are still owed.
 
 ## Runtime state
@@ -400,7 +400,7 @@ runtime: {
   connections: {
     [connectionKey: string]: ConnectionRuntimeState;
   };
-  crossPostListRetries: {
+  copyListRetries: {
     [receivingStreamPath: string]: {
       receivingStreamPath: string;
       sourceOffset: number;
@@ -457,14 +457,14 @@ cannot advance the newer cursor.
 Retries are bounded. Exhaustion appends `subscription-delivery-halted`; it is
 not represented only by a log line or volatile retry row.
 
-## Cross-post-list failure and repair events
+## Copy-list failure and repair events
 
 List delivery has its own retry budget and events because it changes what the
 receiving stream believes is configured:
 
 ```ts
-type CrossPostListDeliveryBlocked = {
-  type: "events.iterate.com/stream/cross-post-list-delivery-blocked";
+type CopyListDeliveryBlocked = {
+  type: "events.iterate.com/stream/copy-list-delivery-blocked";
   payload: {
     receivingStreamPath: string;
     sourceOffset: number;
@@ -473,8 +473,8 @@ type CrossPostListDeliveryBlocked = {
   };
 };
 
-type CrossPostListResendRequested = {
-  type: "events.iterate.com/stream/cross-post-list-resend-requested";
+type CopyListResendRequested = {
+  type: "events.iterate.com/stream/copy-list-resend-requested";
   payload: {
     receivingStreamPath: string;
   };
@@ -486,7 +486,7 @@ When retries exhaust, the source reduces the first event into a durable
 failure. After fixing the receiver, an operator calls:
 
 ```ts
-await source.resendCrossPostList({ receivingStreamPath });
+await source.resendCopyList({ receivingStreamPath });
 ```
 
 The resend event creates a new pending generation without changing any
@@ -496,14 +496,14 @@ Only a bounded number of list sends run concurrently. Each call has a timeout,
 retry delay, and watchdog alarm. Final failure remains visible until an
 explicit resend succeeds.
 
-## Cross-posted event validation
+## Copied event validation
 
 Every delivered copy is an ordinary append on the receiving stream with an
 additional immediate-source hop:
 
 ```ts
 source: {
-  crossPostedFrom: [{
+  copiedFrom: [{
     projectId,
     path,
     streamId,
@@ -529,8 +529,8 @@ If the hop array already contains the receiving stream, the receiving stream
 appends:
 
 ```ts
-type CrossPostedEventsDropped = {
-  type: "events.iterate.com/stream/cross-posted-events-dropped";
+type CopiedEventsDropped = {
+  type: "events.iterate.com/stream/copied-events-dropped";
   idempotencyKey: string;
   payload: {
     source: {
@@ -562,13 +562,13 @@ validation.
 
 Only trusted stream internals may append:
 
-- `cross-post-list-recorded`;
-- `cross-post-list-confirmed`;
-- `cross-post-list-delivery-blocked`;
+- `copy-list-recorded`;
+- `copy-list-confirmed`;
+- `copy-list-delivery-blocked`;
 - `subscription-delivery-halted`;
 - completed or expired `subscription-removed`;
-- `cross-posted-events-dropped`;
-- an event carrying `source.crossPostedFrom`.
+- `copied-events-dropped`;
+- an event carrying `source.copiedFrom`.
 
 A copied `events.iterate.com/stream/*` event is data on the receiving stream. It
 does not execute source-stream control behavior there.
@@ -580,7 +580,7 @@ The reducer rejects configuration that would exceed:
 - 1,000 distinct source streams recorded by one receiving stream;
 - 64 subscriptions from one source to one receiving stream;
 - the retained core-state byte limit;
-- the maximum `source.crossPostedFrom` hop count.
+- the maximum `source.copiedFrom` hop count.
 
 These checks run before committing the event or receiver list that would exceed
 the bound.

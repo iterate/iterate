@@ -6,7 +6,7 @@ import { StreamReceiverUnavailableError } from "iterate/processors";
 import type {
   StreamDeliveryBatch,
   StreamProcessorWakeRequest,
-  CrossPostReceipt,
+  CopyReceipt,
   StreamWebhookDelivery,
 } from "iterate/processors";
 import { evaluateItxExpression, type ItxExpression } from "../../itx/expression.ts";
@@ -42,7 +42,7 @@ export function createSubscriptionReceiverCalls(deps: {
   projectId: string | null;
   exports: unknown;
   createAuthorityRoot(): unknown;
-  crossPostToStream(path: string, batch: StreamDeliveryBatch): Promise<CrossPostReceipt>;
+  copyToStream(path: string, batch: StreamDeliveryBatch): Promise<CopyReceipt>;
   onHostedDeliveryError(
     subscriptionKey: string,
     error: unknown,
@@ -91,8 +91,8 @@ export function createSubscriptionReceiverCalls(deps: {
       await evaluateItxDelivery(expression, batch);
     },
 
-    async crossPostToStream(path: string, batch: StreamDeliveryBatch) {
-      return deps.crossPostToStream(path, batch);
+    async copyToStream(path: string, batch: StreamDeliveryBatch) {
+      return deps.copyToStream(path, batch);
     },
 
     async deliverToWebhook(url: string, delivery: StreamWebhookDelivery) {

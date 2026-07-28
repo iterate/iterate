@@ -1,7 +1,7 @@
 // EventFilter: THE one way to say "which subset of a stream's events".
 //
 // Every event receiver uses it — session callback connections, hosted processors
-// (derived from the processor contract's `consumes`), plus cross-post, ITX-call,
+// (derived from the processor contract's `consumes`), plus copy, ITX-call,
 // and webhook subscriptions (persisted in the configuration event). One zod schema,
 // one compiled matcher and one JSONata cache.
 //
@@ -55,7 +55,7 @@ export class EventFilterEvaluationError extends Error {
   }
 }
 
-// Compiled-expression cache: filter conditions (and cross-post transforms,
+// Compiled-expression cache: filter conditions (and copy transforms,
 // which share this compiler) re-evaluate on every matching append, and a
 // stream's expression set is small and stable, so compile-once is the
 // sensible steady state. Bounded so pathological churn of expressions cannot
@@ -67,7 +67,7 @@ const MAX_COMPILED_EXPRESSIONS = 200;
 /**
  * Parse a JSONata expression, throwing on invalid input. Used for filter
  * `condition`s (must evaluate to exactly `true` to match) and for
- * cross-post transforms (construct the copied event body) — one
+ * copy transforms (construct the copied event body) — one
  * compiler, one cache, one language for everything expression-shaped that
  * evaluates against a committed event.
  */

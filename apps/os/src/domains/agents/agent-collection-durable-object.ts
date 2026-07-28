@@ -119,8 +119,8 @@ export class AgentCollectionDurableObject extends DurableObject<Env> {
     const delivered = this.#reads.waitUntilEvent({
       predicate: (event) =>
         event.type === "events.iterate.com/agent/created" &&
-        event.source?.crossPostedFrom?.at(-1)?.path === path &&
-        event.source.crossPostedFrom.at(-1)?.subscriptionKey === AGENT_COLLECTION_SUBSCRIPTION_KEY,
+        event.source?.copiedFrom?.at(-1)?.path === path &&
+        event.source.copiedFrom.at(-1)?.subscriptionKey === AGENT_COLLECTION_SUBSCRIPTION_KEY,
       timeoutMs,
       signal: observationAbort.signal,
     });

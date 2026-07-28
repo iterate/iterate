@@ -207,7 +207,7 @@ test("a blocked subscription removal remains visible after its configured row is
   const state = streamRuntimeState(8);
   state.coreProcessorState = CoreProcessorContract.stateSchema.parse({
     maxOffset: 8,
-    crossPostListDeliveriesByReceivingStream: {
+    copyListDeliveriesByReceivingStream: {
       "/receiver": {
         sourceOffset: 7,
         status: "blocked",
@@ -246,7 +246,7 @@ test("a blocked subscription removal remains visible after its configured row is
     expect(host.textContent).toContain("Pending subscription removal from /receiver");
   });
   expect(host.textContent).toContain("subscription list blocked (attempt 6)");
-  expect(host.textContent).toContain("cross-post-list source offset#7");
+  expect(host.textContent).toContain("copy-list source offset#7");
   expect(host.textContent).toContain("receiver journal unavailable");
 });
 
@@ -264,7 +264,7 @@ test("a moved subscription shows that its new receiver is waiting for the blocke
             configuration: {
               subscriptionKey,
               receiver: {
-                action: "cross-post",
+                action: "copy-to-stream",
                 receivingStreamPath: "/agents/b",
                 delivery: {
                   start: "now",
@@ -277,7 +277,7 @@ test("a moved subscription shows that its new receiver is waiting for the blocke
         },
       },
     },
-    crossPostListDeliveriesByReceivingStream: {
+    copyListDeliveriesByReceivingStream: {
       "/agents/a": {
         sourceOffset: 8,
         status: "blocked",
@@ -338,7 +338,7 @@ test.each([
             configuration: {
               subscriptionKey,
               receiver: {
-                action: "cross-post",
+                action: "copy-to-stream",
                 receivingStreamPath: "/receiver",
                 delivery: {
                   start,
@@ -506,7 +506,7 @@ function streamRuntimeState(maxOffset: number): StreamRuntimeDebugState {
         },
       },
       subscriptions: {},
-      crossPostListRetries: {},
+      copyListRetries: {},
       metrics: {
         measuredSince: "2026-07-18T00:00:00.000Z",
         reportedAt: "2026-07-18T00:00:00.000Z",
