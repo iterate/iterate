@@ -50,6 +50,10 @@ import { NotificationProcessor } from "../notifications/notification-processor-i
 import { isRetryableDurableObjectAvailabilityError } from "../streams/stream-unavailable.ts";
 import type { ProjectEgressIntercept, ProjectEgressInterceptor } from "./egress.ts";
 import {
+  captureProjectBatchFactsIndex,
+  type ProjectBatchFactsIndexResult,
+} from "./project-batch-facts-recovery.ts";
+import {
   buildApprovalMessage,
   approvalRequestBody,
   evaluateGrant,
@@ -335,15 +339,19 @@ export class ProjectDurableObject extends DurableObject<Env> {
    * are harmless; a storage/RPC failure rejects the batch instead of silently
    * leaving live state stale.
    */
-  async indexCommittedBatchFacts(input: { stream: TouchInput }): Promise<void> {
-    // See incrementLiveDemo: once this resolves every peer slice is real, so
-    // the synchronous refresh below cannot drop this external index update.
-    await this.#registry.loadAndRefreshLive();
-    const streamsBefore = this.#streamDatabase.all();
-    this.#streamDatabase.touch(input.stream);
-    if (streamsBefore !== this.#streamDatabase.all()) {
-      this.#registry.refreshLive();
-    }
+  async indexCommittedBatchFacts(input: {
+    stream: TouchInput;
+  }): Promise<ProjectBatchFactsIndexResult> {
+    return await captureProjectBatchFactsIndex(async () => {
+      // See incrementLiveDemo: once this resolves every peer slice is real, so
+      // the synchronous refresh below cannot drop this external index update.
+      await this.#registry.loadAndRefreshLive();
+      const streamsBefore = this.#streamDatabase.all();
+      this.#streamDatabase.touch(input.stream);
+      if (streamsBefore !== this.#streamDatabase.all()) {
+        this.#registry.refreshLive();
+      }
+    });
   }
 
   async fetch(request: Request): Promise<Response> {

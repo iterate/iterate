@@ -996,15 +996,17 @@ test("two tabs: follower blast survives a DO kill and both mirrors converge", as
   page,
 }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
+  // Establish one writer and the durable creation event before evaluating
+  // follower behavior. Opening both cold tabs together mixed this contract
+  // with a simultaneous writer-election/bootstrap race: when the elected
+  // writer's first stream call timed out, the healthy follower could only
+  // remain an empty mirror and both created-event assertions timed out.
+  await page.goto(streamRoute({ path: streamPath }));
+  await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
+
   const otherPage = await context.newPage();
-  await Promise.all([
-    page.goto(streamRoute({ path: streamPath })),
-    otherPage.goto(streamRoute({ path: streamPath })),
-  ]);
-  await Promise.all([
-    expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible(),
-    expect(eventMeta(otherPage, "events.iterate.com/stream/created").first()).toBeVisible(),
-  ]);
+  await otherPage.goto(streamRoute({ path: streamPath }));
+  await expect(eventMeta(otherPage, "events.iterate.com/stream/created").first()).toBeVisible();
 
   const leader = (await isLeader(page)) ? page : otherPage;
   const follower = leader === page ? otherPage : page;

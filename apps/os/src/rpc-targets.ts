@@ -97,6 +97,10 @@ import {
 } from "./domains/itx/utils.ts";
 import { projectStub } from "./domains/projects/egress.ts";
 import { fetchFromDeploymentReadyProject } from "./domains/projects/project-egress-deployment-readiness.ts";
+import {
+  indexProjectBatchFactsWithRecovery,
+  type ProjectBatchFactsIndexResult,
+} from "./domains/projects/project-batch-facts-recovery.ts";
 import { projectCreationEvents } from "./domains/projects/project-defaults.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
 import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
@@ -5257,7 +5261,9 @@ type ProjectDurableObjectRpc = {
   liveState: PromiseLike<LiveStateRpc<ProjectLiveState>>;
   notificationProcessor: PromiseLike<StreamProcessorRpc>;
   incrementLiveDemo(): Promise<void>;
-  indexCommittedBatchFacts(input: { stream: TouchInput }): Promise<void>;
+  indexCommittedBatchFacts(input: {
+    stream: TouchInput;
+  }): Promise<ProjectBatchFactsIndexResult | void>;
 };
 
 /**
@@ -5966,13 +5972,17 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     const last = batch.events.at(-1);
     if (last === undefined) return;
 
-    await this.#projectDo.indexCommittedBatchFacts({
-      stream: {
-        path: batch.path,
-        at: last.createdAt,
-        type: last.type,
-        maxOffset: batch.streamMaxOffset,
+    await indexProjectBatchFactsWithRecovery({
+      facts: {
+        stream: {
+          path: batch.path,
+          at: last.createdAt,
+          type: last.type,
+          maxOffset: batch.streamMaxOffset,
+        },
       },
+      getProject: () => this.#projectDo,
+      projectId: this.#projectId,
     });
   }
 

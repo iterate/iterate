@@ -291,6 +291,60 @@ strict streak remains 0/25; the next immutable head must establish whether
 fresh-stub recovery removes the app-owned defect while preserving those
 platform failures as explicit rejected evidence.
 
+The automatic exact-head preflight for the fresh-stub fix (`9e5867530`, Depot
+run `b6cqg50wlk`, canonical workflow `zrb2cnffkq`, job `9pbhn3wxpb`, attempt
+`r2ntsxv483`) was rejected after 3 minutes 29 seconds. The OS lane still failed
+and the retained raw artifacts contained exactly five framework retries:
+onboarding smoke and the two-tab stream Playwright case passed on retry; the
+Guestbook catalogue and warm-delivery Vitest cases passed on retry; and the
+Ocado integration test failed again. This also validates the corrected ledger
+path: it recovered all five retries from a failed command's artifact even
+though no successful-run annotation existed.
+
+PostHog independently recorded 10,942 exact-head events under workflow run id
+`201023552274857`, all tagged `runner_provider=depot`. The canonical preview
+job contributed 6,994 events and all five retries; a second ordinary Depot CI
+job on the same head contributed 3,948 events and no retries. Both finalizers
+completed. Counted flakethon iterations remain exclusively separate canonical
+`cloudflare-previews.yml` runs on the standard 16-core Depot runner; unrelated
+same-head CI is useful corroboration but never enters the streak.
+
+The terminal Ocado retry was fixture-induced. Attempt one lost its connection
+after durably creating the Secret; Vitest re-entered the test with the same
+module-level project and Secret names but a newly allocated echo origin, so
+attempt two deterministically rejected the changed egress policy. Each test
+attempt now creates all of those durable identities inside its callback.
+
+The two-tab Playwright retry mixed its intended follower-after-kill contract
+with a simultaneous cold writer-election and stream-bootstrap race. The first
+writer's stream call timed out, leaving the healthy follower with an empty
+SQLite mirror and neither page able to observe the creation event. The fixture
+now establishes one writer plus the durable creation event before opening the
+follower; the tested kill, follower blast, and mirror-convergence sequence is
+unchanged.
+
+Cloudflare traces for the same 3m29s window prove the remaining retry cluster
+was rollout/storage-wide rather than a reason to relax assertions: 40
+`Network connection lost` errors, 27 named Durable Object storage-operation
+timeouts, 11 code-update resets, eight generic internal errors, two objects
+moved between machines, two keyed-append timeouts, and additional internal
+storage-reset references. Fourteen intentional `kill requested` actions were
+counted separately. Trace `81a0789810c441796b70a4bd3b1ed45d` tied the warm
+delivery retry's internal reference to `ProjectDurableObject`'s
+`indexCommittedBatchFacts` method while the processor relay was indexing a
+committed batch.
+
+That indexing RPC was idempotent but previously lost the local lifecycle
+classification at the RPC boundary. The Project now converts a locally
+flagged reset into an explicit plain-data availability result, while
+application failures still reject unchanged. Its caller reacquires a fresh
+named Project stub and replays once; a second availability interruption
+becomes `StreamReceiverUnavailableError`, causing the durable delivery spine
+to back off and redeliver instead of treating the batch as poison. A fulfilled
+`void` from an old rollout target remains a successful result for
+backward compatibility. The strict proof is still 0/25 pending a clean
+immutable-head preflight of these three fixes.
+
 ## Round 15 (2026-07-23, post-#2284)
 
 This round starts from merged `origin/main` at
