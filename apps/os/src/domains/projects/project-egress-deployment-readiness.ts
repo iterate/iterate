@@ -4,9 +4,15 @@ import {
   type DeploymentVersionReadinessOptions,
   type WorkerDeploymentVersionLike,
 } from "../durable-object-deployment-readiness.ts";
+import {
+  WORKER_DEPLOYMENT_VERSION_METADATA_FORMAT,
+  type WorkerDeploymentVersionFormat,
+} from "../../env.ts";
 
 type ProjectDeploymentTarget = {
-  deploymentVersion: () => PromiseLike<WorkerDeploymentVersionLike> | WorkerDeploymentVersionLike;
+  deploymentVersion: (
+    format: WorkerDeploymentVersionFormat,
+  ) => PromiseLike<WorkerDeploymentVersionLike> | WorkerDeploymentVersionLike;
   fetch: (request: Request) => Promise<Response>;
 };
 
@@ -45,7 +51,8 @@ export async function fetchFromDeploymentReadyProject(
     ...readinessOptions,
     expectedVersion: input.expectedVersion,
     notReadyError: (detail, cause) => requestNotForwardedError(input, detail, cause),
-    readVersion: () => Promise.resolve(input.project.deploymentVersion()),
+    readVersion: () =>
+      Promise.resolve(input.project.deploymentVersion(WORKER_DEPLOYMENT_VERSION_METADATA_FORMAT)),
   });
   if (readiness.probes > 1 || readiness.targetNewer) {
     console.info("project deployment version converged before outbound egress", {

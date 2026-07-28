@@ -230,6 +230,28 @@ events intentionally cancel each other for the same slot. As in every current
 round, each counted iteration is a separate canonical Depot run on the normal
 16-core runner, with ordinary artifacts and the PostHog finalizer.
 
+The isolated automatic preflight for the directional correction
+(`737107870`, Depot run `7nr3xqfnz7`, workflow `4xz2mgz3td`, attempt
+`jpbhzgz72s`) finished green in 3 minutes 56 seconds, but was correctly
+rejected with 11 absorbed retries. Its ten artifacts still normalized into
+6,976 PostHog events. Several failures came from older callers expecting the
+previous `deploymentVersion(): string` RPC contract while a newer target
+returned the metadata object; the old comparison rendered that value as
+`"[object Object]"` and waited out its 30-second safe-boundary deadline.
+Other retry records were the corresponding code-update resets and operations
+still running on the old rollout implementation.
+
+Cloudflare explicitly requires Worker↔Durable Object APIs to remain forward
+and backward compatible because code updates propagate eventually
+consistently. The metadata upgrade now preserves the no-argument string
+response forever and makes the directional descriptor opt-in through a
+versioned optional argument. A new caller can pass that argument to a new
+target for id plus timestamp; the old JavaScript implementation safely ignores
+the extra argument and returns its string, while an old caller still invokes a
+new target with no argument and receives the string it expects. This repairs
+the protocol rather than classifying rollout retries as harmless. The strict
+proof remains 0/25 pending a clean immutable-head preflight.
+
 ## Round 15 (2026-07-23, post-#2284)
 
 This round starts from merged `origin/main` at

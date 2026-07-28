@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { WORKER_DEPLOYMENT_VERSION_METADATA_FORMAT } from "../../env.ts";
 import { fetchFromDeploymentReadyProject } from "./project-egress-deployment-readiness.ts";
 
 describe("fetchFromDeploymentReadyProject", () => {
@@ -38,6 +39,7 @@ describe("fetchFromDeploymentReadyProject", () => {
     ).resolves.toBe(response);
 
     expect(callOrder).toEqual(["version-old", "version-new", "fetch"]);
+    expect(deploymentVersion).toHaveBeenCalledWith(WORKER_DEPLOYMENT_VERSION_METADATA_FORMAT);
     expect(fetch).toHaveBeenCalledOnce();
     expect(info).toHaveBeenCalledWith(
       "project deployment version converged before outbound egress",

@@ -6,10 +6,11 @@ import { isStreamOffsetConflictError } from "iterate/processors";
 import type { StreamEventInput } from "iterate/processors";
 import type { ProcessorState } from "iterate/processors";
 import {
-  workerDeploymentVersion,
+  workerDeploymentVersionRpcResponse,
   workerVersion,
   type Env,
   type WorkerDeploymentVersion,
+  type WorkerDeploymentVersionFormat,
 } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
@@ -66,9 +67,15 @@ const INGEST_WAIT_TIMEOUT_MS = 15_000;
  * Application frames are opaque and are never scanned for placeholders.
  */
 export class SecretDurableObject extends DurableObject<Env> {
-  /** Report this incarnation's code version for the deployment rollout gate. */
-  deploymentVersion(): WorkerDeploymentVersion {
-    return workerDeploymentVersion(this.env);
+  /** Report this incarnation's code version for the deployment rollout gate.
+   * No argument preserves the legacy string RPC contract; new callers opt in
+   * to ordering metadata so both sides of a rollout remain compatible. */
+  deploymentVersion(): string;
+  deploymentVersion(format: WorkerDeploymentVersionFormat): WorkerDeploymentVersion;
+  deploymentVersion(format?: WorkerDeploymentVersionFormat): WorkerDeploymentVersion | string {
+    return format === undefined
+      ? workerDeploymentVersionRpcResponse(this.env)
+      : workerDeploymentVersionRpcResponse(this.env, format);
   }
 
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);

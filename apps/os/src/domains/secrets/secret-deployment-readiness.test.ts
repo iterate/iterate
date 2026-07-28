@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { WORKER_DEPLOYMENT_VERSION_METADATA_FORMAT } from "../../env.ts";
 import { fetchFromDeploymentReadySecret } from "./secret-deployment-readiness.ts";
 
 describe("fetchFromDeploymentReadySecret", () => {
@@ -39,6 +40,7 @@ describe("fetchFromDeploymentReadySecret", () => {
     ).resolves.toBe(response);
 
     expect(callOrder).toEqual(["version-old", "version-new", "fetch"]);
+    expect(deploymentVersion).toHaveBeenCalledWith(WORKER_DEPLOYMENT_VERSION_METADATA_FORMAT);
     expect(fetch).toHaveBeenCalledOnce();
     expect(info).toHaveBeenCalledWith(
       "secret deployment version converged before credential-bearing egress",

@@ -66,7 +66,11 @@ import {
   userPrincipalOf,
   widenProjectAccess,
 } from "./auth.ts";
-import { itxEnv as env, workerDeploymentVersion } from "./env.ts";
+import {
+  itxEnv as env,
+  workerDeploymentVersion,
+  WORKER_DEPLOYMENT_VERSION_METADATA_FORMAT,
+} from "./env.ts";
 import {
   listProjectDirectory,
   primeProjectDirectory,
@@ -5024,7 +5028,10 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
       executionId: command.executionId,
       expectedVersion: expectedDeploymentVersion,
       path: this.#props.path,
-      readVersion: () => Promise.resolve(this.#durableObject.deploymentVersion()),
+      readVersion: () =>
+        Promise.resolve(
+          this.#durableObject.deploymentVersion(WORKER_DEPLOYMENT_VERSION_METADATA_FORMAT),
+        ),
     });
     if (readiness.probes > 1 || readiness.targetNewer) {
       console.info("capability host deployment version converged before script request", {

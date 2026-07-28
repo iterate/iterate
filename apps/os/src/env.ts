@@ -194,6 +194,9 @@ export type WorkerDeploymentVersion = {
   timestamp?: string;
 };
 
+export const WORKER_DEPLOYMENT_VERSION_METADATA_FORMAT = "metadata-v1" as const;
+export type WorkerDeploymentVersionFormat = typeof WORKER_DEPLOYMENT_VERSION_METADATA_FORMAT;
+
 /** The deploy's version id, for the processor hosts' crash-loop breaker.
  * "unversioned" in environments without the version_metadata binding. */
 export function workerVersion(env: Env): string {
@@ -212,4 +215,25 @@ export function workerDeploymentVersion(env: Env): WorkerDeploymentVersion {
     id: metadata.id,
     ...(metadata.timestamp === undefined ? {} : { timestamp: metadata.timestamp }),
   };
+}
+
+/**
+ * Backwards-compatible response for the Durable Object deployment-version RPC.
+ *
+ * Old callers invoke the method with no arguments and must keep receiving the
+ * string contract they were deployed against. New callers pass the optional
+ * format argument to obtain ordering metadata. An old JavaScript method
+ * ignores that extra argument and returns its string, which the new gate also
+ * accepts while the target upgrades.
+ */
+export function workerDeploymentVersionRpcResponse(env: Env): string;
+export function workerDeploymentVersionRpcResponse(
+  env: Env,
+  format: WorkerDeploymentVersionFormat,
+): WorkerDeploymentVersion;
+export function workerDeploymentVersionRpcResponse(
+  env: Env,
+  format?: WorkerDeploymentVersionFormat,
+): WorkerDeploymentVersion | string {
+  return format === undefined ? workerVersion(env) : workerDeploymentVersion(env);
 }

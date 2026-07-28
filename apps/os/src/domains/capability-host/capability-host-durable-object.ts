@@ -2,10 +2,11 @@ import { DurableObject } from "cloudflare:workers";
 import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
 import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
 import {
-  workerDeploymentVersion,
+  workerDeploymentVersionRpcResponse,
   workerVersion,
   type Env,
   type WorkerDeploymentVersion,
+  type WorkerDeploymentVersionFormat,
 } from "../../env.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
@@ -45,9 +46,15 @@ type ScriptExecutionLoopbackExports = {
  * host) on a local miss.
  */
 export class CapabilityHostDurableObject extends DurableObject<Env> {
-  /** Report the incarnation version at the safe pre-script-request boundary. */
-  deploymentVersion(): WorkerDeploymentVersion {
-    return workerDeploymentVersion(this.env);
+  /** Report the incarnation version at the safe pre-script-request boundary.
+   * No argument preserves the legacy string RPC contract; new callers opt in
+   * to ordering metadata so both sides of a rollout remain compatible. */
+  deploymentVersion(): string;
+  deploymentVersion(format: WorkerDeploymentVersionFormat): WorkerDeploymentVersion;
+  deploymentVersion(format?: WorkerDeploymentVersionFormat): WorkerDeploymentVersion | string {
+    return format === undefined
+      ? workerDeploymentVersionRpcResponse(this.env)
+      : workerDeploymentVersionRpcResponse(this.env, format);
   }
 
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);

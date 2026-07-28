@@ -4,9 +4,15 @@ import {
   type DeploymentVersionReadinessOptions,
   type WorkerDeploymentVersionLike,
 } from "../durable-object-deployment-readiness.ts";
+import {
+  WORKER_DEPLOYMENT_VERSION_METADATA_FORMAT,
+  type WorkerDeploymentVersionFormat,
+} from "../../env.ts";
 
 type SecretDeploymentTarget = {
-  deploymentVersion: () => PromiseLike<WorkerDeploymentVersionLike> | WorkerDeploymentVersionLike;
+  deploymentVersion: (
+    format: WorkerDeploymentVersionFormat,
+  ) => PromiseLike<WorkerDeploymentVersionLike> | WorkerDeploymentVersionLike;
   fetch: (request: Request) => Promise<Response>;
 };
 
@@ -47,7 +53,8 @@ export async function fetchFromDeploymentReadySecret(
     ...readinessOptions,
     expectedVersion: input.expectedVersion,
     notReadyError: (detail, cause) => requestNotForwardedError(input, detail, cause),
-    readVersion: () => Promise.resolve(input.secret.deploymentVersion()),
+    readVersion: () =>
+      Promise.resolve(input.secret.deploymentVersion(WORKER_DEPLOYMENT_VERSION_METADATA_FORMAT)),
   });
   if (readiness.probes > 1 || readiness.targetNewer) {
     console.info("secret deployment version converged before credential-bearing egress", {
