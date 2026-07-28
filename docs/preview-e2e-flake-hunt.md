@@ -345,6 +345,55 @@ to back off and redeliver instead of treating the batch as poison. A fulfilled
 backward compatibility. The strict proof is still 0/25 pending a clean
 immutable-head preflight of these three fixes.
 
+The automatic exact-head preflight for those fixes (`ad7fce6f8`, Depot run
+`4rgc5pftbj`, canonical workflow `sjfrqsg1nq`, job `kdpcs71096`, attempt
+`2fkdnbs6wv`) was functionally green in 5 minutes 8 seconds, but correctly
+rejected at 0/25 because five Vitest tests passed only after retry. Its
+canonical finalizer retained 6,932 events; a workflow-run-id query in PostHog
+independently recovered all five retries, all ten expected test runs, and
+`runner_provider=depot` on every event.
+
+The retries were not one class. Two catalogue/egress operations and the
+streams example hit explicit code-update resets; the in-flight refresh test
+timed out at 120 seconds; and the sandbox egress test timed out at 180 seconds.
+A deduplicated 90-day PostHog review found retry rates of 3.36% for the sandbox
+egress test, 3.06% for workspace edit-and-push, 1.53% for the refresh race,
+1.22% for the redirect proof, and 0.42% for the streams append proof. None is
+being normalized by increasing a framework timeout.
+
+Cloudflare trace `22af0431330958c323b78d41fb944ef5` showed the refresh request
+had already failed remotely after 1.4 seconds, before reaching the fixture's
+OAuth barrier. The test then waited only for that barrier and hid the real
+rejection until its 120-second watchdog. Both barrier-based refresh tests now
+race the barrier against request settlement and a 30-second synchronization
+deadline, release their blocked fixture in `finally`, and annotate fixture,
+operation, synchronization, and verification phases. An early request failure
+therefore stays the original failure instead of becoming a misleading hang.
+
+Trace `feededbb0763d4e028978dd8b4dd2dd4` showed a sandbox command invoked with
+`timeout: 45000` remain inside `Sandbox.exec` for roughly 193 seconds. In
+`@cloudflare/sandbox@0.12.3`, that timeout is enforced only after the SDK has
+acquired the stream and received its `start` event. OS now owns the whole
+post-readiness deadline. A unique container-local guard records the exact
+process group; if stream admission misses the deadline, a separate command
+installs a cancellation tombstone and performs the same targeted TERM/KILL
+proof. It returns 124 only after containment is confirmed, throws explicitly
+if containment remains unknown, never destroys the whole sandbox, and never
+replays user code. The egress proof now emits fine-grained PostHog phases for
+every fixture, file write, command, wait, verification, and cleanup so any
+remaining tail names the stalled operation directly.
+
+The streams example had used a new stream path after a failed WebSocket call,
+implicitly assuming that a lost response meant append did not commit. It now
+keeps one stream path and one idempotency key across its single transport
+redial. The keyed append safely deduplicates a committed-but-unacknowledged
+call and lets the server replay one classified lifecycle reset; a second reset
+or application failure remains terminal. The redirect proof remains
+non-replayed because its credential-bearing request crosses an external
+side-effect boundary, but now records phases that distinguish setup from the
+terminal probe. The strict streak remains 0/25 pending the next immutable-head
+preflight.
+
 ## Round 15 (2026-07-23, post-#2284)
 
 This round starts from merged `origin/main` at

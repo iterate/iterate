@@ -1,4 +1,5 @@
 import { expect, test } from "vitest";
+import { measureE2ePhase } from "@iterate-com/shared/test-support/measure-e2e-phase";
 import { withTunnel } from "../test-support/tunnel.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { startEgressEcho } from "./itx-capability-fixtures.ts";
@@ -117,7 +118,11 @@ test("every egress-only update clears retained secret material", async () => {
   expect(await secret.__describe()).toMatchObject({ hasMaterial: false });
 });
 
-test("an in-flight refresh cannot resurrect material after an egress event", async () => {
+test("an in-flight refresh cannot resurrect material after an egress event", async ({
+  annotate,
+}) => {
+  const measurePhase = <Value>(name: string, category: string, operation: () => Promise<Value>) =>
+    measureE2ePhase(annotate, name, category, operation);
   let announceRefresh!: () => void;
   const refreshStarted = new Promise<void>((resolve) => (announceRefresh = resolve));
   let releaseRefresh!: () => void;
@@ -142,39 +147,61 @@ test("an in-flight refresh cannot resurrect material after an egress event", asy
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await itx.projects.get(`secret-refresh-race-${crypto.randomUUID()}`).create({});
+  using project = await measurePhase("create refresh-race project", "fixture", () =>
+    itx.projects.get(`secret-refresh-race-${crypto.randomUUID()}`).create({}),
+  );
   const secretPath = `/secrets/refresh-race/${crypto.randomUUID()}`;
   using secret = project.secrets.get(secretPath);
-  await secret.create({
-    egress: { urls: [provider.url] },
-    material: {
-      accessToken: "stale-access-token",
-      clientId: "public-client",
-      refreshToken: "refresh-token",
-    },
-    refresh: {
-      clientCreds: "material",
-      kind: "oauth-refresh-token",
-      tokenEndpoint: `${provider.url}/oauth/token`,
-    },
-  });
+  await measurePhase("create refreshable secret", "fixture", () =>
+    secret.create({
+      egress: { urls: [provider.url] },
+      material: {
+        accessToken: "stale-access-token",
+        clientId: "public-client",
+        refreshToken: "refresh-token",
+      },
+      refresh: {
+        clientCreds: "material",
+        kind: "oauth-refresh-token",
+        tokenEndpoint: `${provider.url}/oauth/token`,
+      },
+    }),
+  );
 
   using probe = egressProbeWorker(project);
-  const request = probe.probeFetch({
-    headerValue: `Bearer getSecret("${secretPath}", { field: "accessToken" })`,
-    url: `${provider.url}/resource`,
-  });
-  await refreshStarted;
-  await project.streams.get(secretPath).append({
-    type: "events.iterate.com/secret/updated",
-    payload: { egress: { urls: [attacker.url] } },
-  });
-  releaseRefresh();
+  const request = Promise.resolve(
+    probe.probeFetch({
+      headerValue: `Bearer getSecret("${secretPath}", { field: "accessToken" })`,
+      url: `${provider.url}/resource`,
+    }),
+  );
+  await measurePhase("wait for OAuth refresh to begin", "synchronization", () =>
+    waitForBarrierOrRequest({
+      barrier: refreshStarted,
+      description: "the OAuth refresh request to reach its provider",
+      request,
+      timeoutMs: 30_000,
+    }),
+  );
+  try {
+    await measurePhase("commit egress-only update", "operation", () =>
+      project.streams.get(secretPath).append({
+        type: "events.iterate.com/secret/updated",
+        payload: { egress: { urls: [attacker.url] } },
+      }),
+    );
+  } finally {
+    releaseRefresh();
+  }
 
-  await expect(request).resolves.toEqual({ stale: true });
-  expect(await secret.__describe()).toMatchObject({
-    egress: { urls: [attacker.url] },
-    hasMaterial: false,
+  await measurePhase("settle in-flight egress request", "operation", async () => {
+    await expect(request).resolves.toEqual({ stale: true });
+  });
+  await measurePhase("verify material remains cleared", "verification", async () => {
+    expect(await secret.__describe()).toMatchObject({
+      egress: { urls: [attacker.url] },
+      hasMaterial: false,
+    });
   });
 });
 
@@ -225,16 +252,26 @@ test("a repeated refresh event before its snapshot cannot resurrect material", a
   });
 
   using probe = egressProbeWorker(project);
-  const request = probe.probeFetch({
-    headerValue: `Bearer getSecret("${secretPath}", { field: "accessToken" })`,
-    url: `${provider.url}/resource`,
+  const request = Promise.resolve(
+    probe.probeFetch({
+      headerValue: `Bearer getSecret("${secretPath}", { field: "accessToken" })`,
+      url: `${provider.url}/resource`,
+    }),
+  );
+  await waitForBarrierOrRequest({
+    barrier: resourceStarted,
+    description: "the resource request to reach its provider",
+    request,
+    timeoutMs: 30_000,
   });
-  await resourceStarted;
-  await project.streams.get(secretPath).append({
-    type: "events.iterate.com/secret/updated",
-    payload: { refresh },
-  });
-  releaseResource();
+  try {
+    await project.streams.get(secretPath).append({
+      type: "events.iterate.com/secret/updated",
+      payload: { refresh },
+    });
+  } finally {
+    releaseResource();
+  }
 
   await expect(request).resolves.toEqual({ stale: true });
   expect(tokenRequests).toBe(0);
@@ -244,7 +281,11 @@ test("a repeated refresh event before its snapshot cannot resurrect material", a
   });
 });
 
-test("secret egress rejects a cross-origin redirect without forwarding material", async () => {
+test("secret egress rejects a cross-origin redirect without forwarding material", async ({
+  annotate,
+}) => {
+  const measurePhase = <Value>(name: string, category: string, operation: () => Promise<Value>) =>
+    measureE2ePhase(annotate, name, category, operation);
   const received: string[] = [];
   await using attacker = await withTunnel({
     path: "/capture",
@@ -264,22 +305,30 @@ test("secret egress rejects a cross-origin redirect without forwarding material"
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await itx.projects.get(`secret-redirect-${crypto.randomUUID()}`).create({});
+  using project = await measurePhase("create redirect project", "fixture", () =>
+    itx.projects.get(`secret-redirect-${crypto.randomUUID()}`).create({}),
+  );
   const secretPath = `/secrets/redirect/${crypto.randomUUID()}`;
   using secret = project.secrets.get(secretPath);
 
-  await secret.create({
-    egress: { urls: [allowed.url] },
-    material: "redirect-exfiltration-proof",
-  });
+  await measurePhase("create redirect secret", "fixture", () =>
+    secret.create({
+      egress: { urls: [allowed.url] },
+      material: "redirect-exfiltration-proof",
+    }),
+  );
   using probe = egressProbeWorker(project);
-  const responseBody = await probe.probeFetch({
-    headerValue: `Bearer getSecret("${secretPath}")`,
-    url: allowed.url,
-  });
+  const responseBody = await measurePhase("probe cross-origin redirect", "operation", () =>
+    probe.probeFetch({
+      headerValue: `Bearer getSecret("${secretPath}")`,
+      url: allowed.url,
+    }),
+  );
 
-  expect(responseBody).toEqual({ error: "secret_not_allowed_for_origin" });
-  expect(received).toEqual([]);
+  await measurePhase("verify redirect secret was not forwarded", "verification", async () => {
+    expect(responseBody).toEqual({ error: "secret_not_allowed_for_origin" });
+    expect(received).toEqual([]);
+  });
 });
 
 test("URL-path secret material is not returned in Response metadata", async () => {
@@ -575,3 +624,38 @@ test("Project egress intercept catches explicit and worker fetches before secret
     await echo.close();
   }
 });
+
+async function waitForBarrierOrRequest({
+  barrier,
+  description,
+  request,
+  timeoutMs,
+}: {
+  barrier: Promise<void>;
+  description: string;
+  request: Promise<unknown>;
+  timeoutMs: number;
+}): Promise<void> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      barrier,
+      request.then(
+        () => {
+          throw new Error(`Egress request settled before ${description}`);
+        },
+        (error: unknown) => {
+          throw error;
+        },
+      ),
+      new Promise<never>((_resolve, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new Error(`Timed out after ${timeoutMs}ms waiting for ${description}`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  }
+}

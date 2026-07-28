@@ -53,36 +53,37 @@ describe("stream capnweb protocol", () => {
   });
 
   it("appends events after the stream-created event over capnweb", async () => {
-    // Re-dial ONCE on a fresh path after a pause. This test dials a FRESH
-    // stream DO per attempt, so it is the fleet's canary for Durable Object
-    // weather: during the 2026-07-06/07 Cloudflare "DO increased error rate
-    // in ENAM" incident it failed in minutes-long windows (socket dead <1s
-    // after a clean upgrade, on workers.dev AND custom domains alike) while
-    // warm-DO tests sailed on. The re-dial is safe (nothing was appended when
-    // the socket dies mid-first-call; a fresh path per attempt means a late
-    // duplicate could only land on an abandoned stream) and absorbs blips; a
-    // window longer than the pause still fails — correct, that's an outage.
+    // Re-dial ONCE after a transport failure, preserving one stream identity
+    // and one operation identity. A lost response does not prove that append
+    // failed, so abandoning the first path was not a sound replay boundary.
+    // Keyed append deduplicates a committed-but-unacknowledged call and lets
+    // the server replay one classified deploy/eviction reset. A second reset,
+    // an application failure, or an outage longer than the pause stays
+    // terminal.
+    const path = e2eStreamPathLabel("stream-capnweb-append");
+    const idempotencyKey = crypto.randomUUID();
     const dialAndAppend = async () => {
-      const path = e2eStreamPathLabel("stream-capnweb-append");
       using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
       const [appended] = await stream.stream.append({
+        idempotencyKey,
         type: "test.stream.capnweb-append",
         payload: { path },
       });
-      return { appended, path };
+      return appended;
     };
-    let result: Awaited<ReturnType<typeof dialAndAppend>>;
+    let appended: Awaited<ReturnType<typeof dialAndAppend>>;
     try {
-      result = await dialAndAppend();
+      appended = await dialAndAppend();
     } catch (error) {
       if (!/Network connection lost|WebSocket connection failed/i.test(String(error))) throw error;
       await new Promise((resolve) => setTimeout(resolve, 15_000));
-      result = await dialAndAppend();
+      appended = await dialAndAppend();
     }
 
-    expect(result.appended).toMatchObject({
+    expect(appended).toMatchObject({
+      idempotencyKey,
       type: "test.stream.capnweb-append",
-      payload: { path: result.path },
+      payload: { path },
       offset: 3, // after the standalone birth certificate (created, woken)
       createdAt: expect.any(String),
     });

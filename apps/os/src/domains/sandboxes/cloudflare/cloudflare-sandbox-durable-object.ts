@@ -18,6 +18,7 @@ import { trustedInternalAuthContext } from "../../../auth.ts";
 import { workerVersion, type Env } from "../../../env.ts";
 import { StreamProcessorRpcTarget, StreamRpcTarget } from "../../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../../durable-object-names.ts";
+import { settleByDeadline } from "../../execution-deadline.ts";
 import { listIntegrationConnections } from "../../integrations/connect-flows.ts";
 import { describeNode } from "../../itx/utils.ts";
 import { projectStub } from "../../projects/egress.ts";
@@ -37,6 +38,12 @@ import {
   githubTokenEnvForConnections,
   SANDBOX_GIT_CONFIG_SHELL,
 } from "../utils.ts";
+import {
+  cancelSandboxExecAdmissionCommand,
+  guardSandboxExecAdmission,
+  sandboxProcessGroupCleanupCommand,
+  waitForSandboxExecAdmission,
+} from "./sandbox-exec-admission.ts";
 
 /**
  * The workspace root inside every sandbox container: what the backup/restore
@@ -104,11 +111,10 @@ const SANDBOX_SESSION_SETUP_REDIAL_DELAYS_MS = [1_500, 3_000, 7_500, 15_000] as 
 // not pass through getSandbox, so select that execution policy explicitly.
 const SANDBOX_SESSIONLESS_EXECUTION_TOKEN = "__DISABLE_SESSION__";
 const SANDBOX_TIMEOUT_EXIT_CODE = 124;
-const SANDBOX_PROCESS_GROUP_TERM_GRACE_SECONDS = "0.5";
-const SANDBOX_PROCESS_GROUP_KILL_ATTEMPTS = 20;
-const SANDBOX_PROCESS_GROUP_POLL_SECONDS = "0.05";
 const SANDBOX_PROCESS_GROUP_CLEANUP_TIMEOUT_MS = 5_000;
 const SANDBOX_TERMINATED_STREAM_DRAIN_TIMEOUT_MS = 5_000;
+const SANDBOX_EXEC_ADMISSION_CANCELLATION_TIMEOUT_MS = 10_000;
+const SANDBOX_EXEC_ADMISSION_CANCELLATION_SETTLEMENT_MS = 12_000;
 
 /**
  * The durable sandbox env-var map, as stored. The SDK's `setEnvVars` input
@@ -129,46 +135,17 @@ function definedEnvEntries(
   );
 }
 
-/**
- * Shell executed in a fresh sessionless process group to terminate a DIFFERENT
- * group. `ps`, rather than the group leader alone, is the source of truth: a
- * cooperative leader may exit on TERM while one of its descendants ignores
- * the signal. Zombies are already terminated and cannot execute code, so they
- * do not keep cleanup open while PID 1 gets a chance to reap them.
- */
-function sandboxProcessGroupCleanupCommand(processGroupId: number): string {
-  if (!Number.isSafeInteger(processGroupId) || processGroupId <= 1) {
-    throw new Error(`Invalid sandbox process-group id: ${String(processGroupId)}`);
-  }
-
-  return [
-    "set -u",
-    `pgid=${processGroupId}`,
-    "group_has_active_processes() {",
-    "  ps -eo pgid=,stat= | awk -v wanted=\"$pgid\" '$1 == wanted && $2 !~ /^Z/ { found=1 } END { exit(found ? 0 : 1) }'",
-    "}",
-    "wait_for_group_exit() {",
-    "  attempts=$1",
-    "  while group_has_active_processes; do",
-    '    if test "$attempts" -le 0; then return 1; fi',
-    `    sleep ${SANDBOX_PROCESS_GROUP_POLL_SECONDS}`,
-    "    attempts=$((attempts - 1))",
-    "  done",
-    "}",
-    'kill -TERM -- -"$pgid" 2>/dev/null || true',
-    `sleep ${SANDBOX_PROCESS_GROUP_TERM_GRACE_SECONDS}`,
-    "if ! group_has_active_processes; then exit 0; fi",
-    'kill -KILL -- -"$pgid" 2>/dev/null || true',
-    `if wait_for_group_exit ${SANDBOX_PROCESS_GROUP_KILL_ATTEMPTS}; then exit 0; fi`,
-    "printf 'sandbox process group %s survived TERM and KILL\\n' \"$pgid\" >&2",
-    "ps -eo pid=,ppid=,pgid=,stat=,args= | awk -v wanted=\"$pgid\" '$3 == wanted { print }' >&2",
-    "exit 70",
-  ].join("\n");
-}
-
 function appendSandboxTimeoutMessage(stderr: string, timeoutMs: number): string {
   const separator = stderr.length === 0 || stderr.endsWith("\n") ? "" : "\n";
   return `${stderr}${separator}Command timed out after ${timeoutMs}ms`;
+}
+
+function appendSandboxAdmissionTimeoutMessage(stderr: string, timeoutMs: number): string {
+  const separator = stderr.length === 0 || stderr.endsWith("\n") ? "" : "\n";
+  return (
+    `${stderr}${separator}Command timed out after ${timeoutMs}ms before the sandbox ` +
+    "acknowledged its process group; targeted cancellation was installed"
+  );
 }
 
 // The two `readFile` result types (`ReadFileResult`, and the `encoding: "none"`
@@ -1183,15 +1160,11 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     const startedAt = Date.now();
     const deadlineAt = startedAt + timeoutMs;
     const timestamp = new Date(startedAt).toISOString();
-    const stream = await this.#redialOnInterruptedSessionSetup(() =>
-      super.execStreamWithSessionToken(command, SANDBOX_SESSIONLESS_EXECUTION_TOKEN, {
-        cwd: options.cwd,
-        env: options.env,
-      }),
-    );
+    const admissionGuardDirectory = `/tmp/.iterate-exec-guards/${crypto.randomUUID()}`;
 
     let stdout = "";
     let stderr = "";
+    let acceptingOutput = true;
     let sawStart = false;
     let resolveStarted!: (pid: number) => void;
     let rejectStarted!: (error: unknown) => void;
@@ -1200,62 +1173,117 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
       rejectStarted = reject;
     });
 
-    const completion = (async (): Promise<number> => {
-      try {
-        for await (const event of parseSSEStream<ExecEvent>(stream)) {
-          switch (event.type) {
-            case "start": {
-              if (sawStart)
-                throw new Error("Sandbox exec stream emitted more than one start event");
-              if (!Number.isSafeInteger(event.pid) || (event.pid ?? 0) <= 1) {
+    let completion: Promise<number> | undefined;
+    const admission = (async (): Promise<number> => {
+      const stream = await this.#redialOnInterruptedSessionSetup(() =>
+        super.execStreamWithSessionToken(
+          guardSandboxExecAdmission(command, admissionGuardDirectory),
+          SANDBOX_SESSIONLESS_EXECUTION_TOKEN,
+          {
+            cwd: options.cwd,
+            env: options.env,
+          },
+        ),
+      );
+
+      completion = (async (): Promise<number> => {
+        try {
+          for await (const event of parseSSEStream<ExecEvent>(stream)) {
+            switch (event.type) {
+              case "start": {
+                if (sawStart)
+                  throw new Error("Sandbox exec stream emitted more than one start event");
+                if (!Number.isSafeInteger(event.pid) || (event.pid ?? 0) <= 1) {
+                  throw new Error(
+                    `Sandbox exec stream emitted an invalid process-group id: ${String(event.pid)}`,
+                  );
+                }
+                sawStart = true;
+                resolveStarted(event.pid!);
+                break;
+              }
+              case "stdout":
+              case "stderr": {
+                const data = event.data ?? "";
+                if (event.type === "stdout") stdout += data;
+                else stderr += data;
+                if (acceptingOutput && options.stream === true) {
+                  options.onOutput?.(event.type, data);
+                }
+                break;
+              }
+              case "complete": {
+                const exitCode = event.exitCode ?? event.result?.exitCode;
+                if (!Number.isInteger(exitCode)) {
+                  throw new Error("Sandbox exec stream completed without an exit code");
+                }
+                return exitCode!;
+              }
+              case "error":
                 throw new Error(
-                  `Sandbox exec stream emitted an invalid process-group id: ${String(event.pid)}`,
+                  event.error ?? "Sandbox exec stream failed without an error message",
                 );
-              }
-              sawStart = true;
-              resolveStarted(event.pid!);
-              break;
             }
-            case "stdout":
-            case "stderr": {
-              const data = event.data ?? "";
-              if (event.type === "stdout") stdout += data;
-              else stderr += data;
-              if (options.stream === true) options.onOutput?.(event.type, data);
-              break;
-            }
-            case "complete": {
-              const exitCode = event.exitCode ?? event.result?.exitCode;
-              if (!Number.isInteger(exitCode)) {
-                throw new Error("Sandbox exec stream completed without an exit code");
-              }
-              return exitCode!;
-            }
-            case "error":
-              throw new Error(event.error ?? "Sandbox exec stream failed without an error message");
           }
+          throw new Error("Sandbox exec stream ended without a completion event");
+        } catch (error) {
+          if (!sawStart) rejectStarted(error);
+          throw error;
         }
-        throw new Error("Sandbox exec stream ended without a completion event");
-      } catch (error) {
-        if (!sawStart) rejectStarted(error);
-        throw error;
-      }
+      })();
+
+      return await Promise.race([
+        started,
+        completion.then(() => {
+          throw new Error("Sandbox exec stream completed before its start event");
+        }),
+      ]);
     })();
 
-    const processGroupId = await Promise.race([
-      started,
-      completion.then(() => {
-        throw new Error("Sandbox exec stream completed before its start event");
-      }),
-    ]);
+    const admissionOutcome = await waitForSandboxExecAdmission({
+      admission,
+      deadlineAt,
+    });
+    if (admissionOutcome.kind === "deadline") {
+      // The observed admission promise may settle after this method returns.
+      // Keep consuming it to avoid an unhandled rejection, but never emit a
+      // late output callback after the synthesized completion below.
+      acceptingOutput = false;
+      const admissionTimeout = new Error(
+        `Sandbox exec did not acknowledge a process group within ${timeoutMs}ms`,
+      );
+      try {
+        await this.#cancelAmbiguousSandboxExecAdmission(admissionGuardDirectory);
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [admissionTimeout, cleanupError],
+          "Sandbox exec admission timed out and targeted cancellation could not be confirmed",
+        );
+      }
+
+      const result: ExecResult = {
+        command,
+        duration: Date.now() - startedAt,
+        exitCode: SANDBOX_TIMEOUT_EXIT_CODE,
+        stderr: appendSandboxAdmissionTimeoutMessage(stderr, timeoutMs),
+        stdout,
+        success: false,
+        timestamp,
+      };
+      options.onComplete?.(result);
+      return result;
+    }
+    const processGroupId = admissionOutcome.processGroupId;
+    if (completion === undefined) {
+      throw new Error("Sandbox exec announced its process group without a completion stream");
+    }
 
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
     let abortListener: (() => void) | undefined;
     const timeout = new Promise<{ kind: "timeout" }>((resolve) => {
-      // Session setup and delivery of the start event consume the caller's
-      // budget too. We still wait for the start event before enforcing an
-      // expired deadline because it is the only safe way to learn which
-      // process group must be terminated.
+      // Stream acquisition and delivery of the start event already consumed
+      // part of the caller's budget. The admission guard above makes an
+      // expired pre-start deadline targetable without running user code.
       timeoutId = setTimeout(
         () => resolve({ kind: "timeout" }),
         Math.max(0, deadlineAt - Date.now()),
@@ -1323,6 +1351,44 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     };
     options.onComplete?.(result);
     return result;
+  }
+
+  async #cancelAmbiguousSandboxExecAdmission(guardDirectory: string): Promise<void> {
+    const cancellation = this.#redialOnInterruptedSessionSetup(() =>
+      super.execWithSessionToken(
+        cancelSandboxExecAdmissionCommand(guardDirectory),
+        SANDBOX_SESSIONLESS_EXECUTION_TOKEN,
+        {
+          origin: "internal",
+          timeout: SANDBOX_EXEC_ADMISSION_CANCELLATION_TIMEOUT_MS,
+        },
+      ),
+    );
+    // A platform stall can outlive the bounded caller wait below. Keep the
+    // already-issued, idempotent cancellation observed and alive: when the
+    // container transport recovers it still installs the tombstone before a
+    // delayed wrapper may enter user code.
+    this.ctx.waitUntil(
+      cancellation.catch((error) => {
+        console.error("sandbox exec admission cancellation eventually failed", error);
+      }),
+    );
+
+    const outcome = await settleByDeadline(
+      cancellation,
+      Date.now() + SANDBOX_EXEC_ADMISSION_CANCELLATION_SETTLEMENT_MS,
+      Date.now,
+    );
+    if (outcome.status === "rejected") throw outcome.error;
+    if (outcome.status === "deadline") {
+      throw new Error(
+        `Sandbox exec admission cancellation did not settle within ${SANDBOX_EXEC_ADMISSION_CANCELLATION_SETTLEMENT_MS}ms; the cancellation remains scheduled but command state is not yet confirmed`,
+      );
+    }
+    if (outcome.value.exitCode === 0) return;
+    throw new Error(
+      `Sandbox exec admission cancellation failed with exit ${outcome.value.exitCode}: ${outcome.value.stderr || outcome.value.stdout}`,
+    );
   }
 
   async #terminateSandboxProcessGroup(processGroupId: number): Promise<void> {

@@ -2,6 +2,7 @@
 
 import type { RpcStub } from "capnweb";
 import { expect, test } from "vitest";
+import { measureE2ePhase } from "@iterate-com/shared/test-support/measure-e2e-phase";
 import type { SandboxLiteDurableObject } from "../../src/domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import {
@@ -25,34 +26,55 @@ const EGRESS_PROOF_HEADER = "x-itx-egress-proof";
 test.skipIf(deployedBaseUrl() === null)(
   "is MITM-intercepted and routed through project egress with secret substitution",
   { timeout: 180_000 },
-  async () => {
-    await using echo = await startEgressEcho();
+  async ({ annotate }) => {
+    const measurePhase: MeasurePhase = (name, category, operation) =>
+      measureE2ePhase(annotate, name, category, operation);
+    await using echo = await measurePhase("start HTTP egress fixture", "fixture", () =>
+      startEgressEcho(),
+    );
     const echoUrl = new URL(echo.url);
     const echoOrigin = echoUrl.origin;
 
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = await itx.projects.get(`sandbox-egress-${crypto.randomUUID()}`).create({});
+    using project = await measurePhase("create sandbox egress project", "fixture", () =>
+      itx.projects.get(`sandbox-egress-${crypto.randomUUID()}`).create({}),
+    );
 
     const material = `sandbox-egress-material-${crypto.randomUUID()}`;
     const secretPath = `/secrets/sandbox-egress/${crypto.randomUUID()}`;
-    await using bareWebSocketEcho = await startWebSocketEcho();
-    await using authenticatedWebSocketEcho = await startWebSocketEcho({
-      expectedAuthorization: `Bearer ${material}`,
-    });
+    await using bareWebSocketEcho = await measurePhase(
+      "start bare WebSocket fixture",
+      "fixture",
+      () => startWebSocketEcho(),
+    );
+    await using authenticatedWebSocketEcho = await measurePhase(
+      "start authenticated WebSocket fixture",
+      "fixture",
+      () =>
+        startWebSocketEcho({
+          expectedAuthorization: `Bearer ${material}`,
+        }),
+    );
     const bareWebSocketUrl = new URL(bareWebSocketEcho.url);
     bareWebSocketUrl.protocol = "wss:";
-    await proveFixtureCloseRoundTrip(bareWebSocketUrl.href);
+    await measurePhase("prove WebSocket fixture close round trip", "fixture", () =>
+      proveFixtureCloseRoundTrip(bareWebSocketUrl.href),
+    );
     const authenticatedWebSocketUrl = new URL(authenticatedWebSocketEcho.url);
     authenticatedWebSocketUrl.protocol = "wss:";
     using secret = project.secrets.get(secretPath);
-    await secret.create({
-      egress: { urls: [echoOrigin, new URL(authenticatedWebSocketEcho.url).origin] },
-      material,
-    });
-    await waitForCondition(async () => (await secret.__describe()).hasMaterial, {
-      description: "secret processor to fold the material",
-    });
+    await measurePhase("create sandbox egress secret", "fixture", () =>
+      secret.create({
+        egress: { urls: [echoOrigin, new URL(authenticatedWebSocketEcho.url).origin] },
+        material,
+      }),
+    );
+    await measurePhase("wait for sandbox egress secret", "synchronization", () =>
+      waitForCondition(async () => (await secret.__describe()).hasMaterial, {
+        description: "secret processor to fold the material",
+      }),
+    );
 
     const sandboxName = `egress-proof-${crypto.randomUUID()}`;
     const secretPlaceholder = `getSecret("${secretPath}")`;
@@ -61,17 +83,23 @@ test.skipIf(deployedBaseUrl() === null)(
     const issuerCommand = `echo | openssl s_client -connect ${echoUrl.hostname}:443 -servername ${echoUrl.hostname} 2>/dev/null | openssl x509 -noout -issuer 2>/dev/null || echo no-openssl`;
 
     const sandboxPath = `/sandboxes/${sandboxName}`;
-    await project.sandboxes.get(sandboxPath).create({
-      env: { CODEX_API_KEY: secretPlaceholder },
-      instanceType: "lite",
-    });
+    await measurePhase("create sandbox egress container", "fixture", () =>
+      project.sandboxes.get(sandboxPath).create({
+        env: { CODEX_API_KEY: secretPlaceholder },
+        instanceType: "lite",
+      }),
+    );
     const sandbox = (await project.sandboxes.get(
       sandboxPath,
     )) as unknown as RpcStub<SandboxLiteDurableObject>;
 
     try {
-      const echoResult = await sandbox.exec(curlCommand, { timeout: 90_000 });
-      const issuer = await sandbox.exec(issuerCommand, { timeout: 30_000 });
+      const echoResult = await measurePhase("run HTTP egress probe", "operation", () =>
+        sandbox.exec(curlCommand, { timeout: 90_000 }),
+      );
+      const issuer = await measurePhase("inspect sandbox MITM issuer", "operation", () =>
+        sandbox.exec(issuerCommand, { timeout: 30_000 }),
+      );
 
       expect(echoResult).toMatchObject({ exitCode: 0 });
 
@@ -85,6 +113,7 @@ test.skipIf(deployedBaseUrl() === null)(
         sandbox,
         "global-websocket-proof",
         globalWebSocketProbeScript(bareWebSocketUrl.href),
+        measurePhase,
       );
       expect(
         globalResult,
@@ -98,17 +127,21 @@ test.skipIf(deployedBaseUrl() === null)(
         messages: [WEBSOCKET_ECHO_GREETING, GLOBAL_WEBSOCKET_MESSAGE],
       });
       expect(bareWebSocketEcho).toMatchObject({ authHeaders: ["", ""] });
-      await waitForCondition(
-        async () =>
-          bareWebSocketEcho.closeEvents.some(
-            (event) => event.code === 1000 && event.reason === "global-proof-complete",
-          ),
-        { description: "built-in WebSocket close frame to reach the fixture" },
+      await measurePhase("wait for built-in WebSocket close", "synchronization", () =>
+        waitForCondition(
+          async () =>
+            bareWebSocketEcho.closeEvents.some(
+              (event) => event.code === 1000 && event.reason === "global-proof-complete",
+            ),
+          { description: "built-in WebSocket close frame to reach the fixture" },
+        ),
       );
 
-      const installWs = await sandbox.exec(
-        `npm install --prefix /tmp/websocket-proof --no-audit --no-fund --ignore-scripts --package-lock=false ws@${WS_VERSION}`,
-        { timeout: 120_000 },
+      const installWs = await measurePhase("install ws probe dependency", "operation", () =>
+        sandbox.exec(
+          `npm install --prefix /tmp/websocket-proof --no-audit --no-fund --ignore-scripts --package-lock=false ws@${WS_VERSION}`,
+          { timeout: 120_000 },
+        ),
       );
       expect(installWs, installWs.stderr).toMatchObject({ exitCode: 0 });
 
@@ -116,6 +149,7 @@ test.skipIf(deployedBaseUrl() === null)(
         sandbox,
         "ws-bare-websocket-proof",
         wsProbeScript(bareWebSocketUrl.href, false),
+        measurePhase,
       );
       expectReleasedWsResult(bareWsResult);
       expect(bareWsResult).toMatchObject({ nodeVersion: globalResult.nodeVersion });
@@ -125,6 +159,7 @@ test.skipIf(deployedBaseUrl() === null)(
         sandbox,
         "ws-websocket-proof",
         wsProbeScript(authenticatedWebSocketUrl.href),
+        measurePhase,
       );
       expectReleasedWsResult(wsResult);
 
@@ -134,26 +169,38 @@ test.skipIf(deployedBaseUrl() === null)(
           (authorization) => authorization === substitutedAuthorization,
         ).length,
       ).toBeGreaterThanOrEqual(1);
-      await waitForCondition(
-        async () =>
-          authenticatedWebSocketEcho.closeEvents.some(
-            (event) => event.code === 4001 && event.reason === "ws-proof-complete",
-          ),
-        { description: "ws close frame to reach the fixture" },
+      await measurePhase("wait for authenticated WebSocket close", "synchronization", () =>
+        waitForCondition(
+          async () =>
+            authenticatedWebSocketEcho.closeEvents.some(
+              (event) => event.code === 4001 && event.reason === "ws-proof-complete",
+            ),
+          { description: "ws close frame to reach the fixture" },
+        ),
       );
       expect(echoResult.stdout).not.toContain(`path: "${secretPath}"`);
       expect(globalProbeOutput).not.toContain(material);
       expect(bareWsProbeOutput).not.toContain(material);
       expect(wsProbeOutput).not.toContain(material);
-      const sandboxKey = await sandbox.exec('printf %s "$CODEX_API_KEY"', { timeout: 10_000 });
+      const sandboxKey = await measurePhase(
+        "inspect sandbox secret placeholder",
+        "verification",
+        () => sandbox.exec('printf %s "$CODEX_API_KEY"', { timeout: 10_000 }),
+      );
       expect(sandboxKey).toMatchObject({ stdout: secretPlaceholder });
-      const described = await secret.__describe();
+      const described = await measurePhase("inspect durable secret state", "verification", () =>
+        secret.__describe(),
+      );
       expect(JSON.stringify(described)).not.toContain(material);
-      await waitForCondition(async () => (await secret.__describe()).audit.usedCount >= 2, {
-        description: "secret usage audit to record the substitution",
-      });
+      await measurePhase("wait for secret usage audit", "synchronization", () =>
+        waitForCondition(async () => (await secret.__describe()).audit.usedCount >= 2, {
+          description: "secret usage audit to record the substitution",
+        }),
+      );
     } finally {
-      await sandbox.destroy().catch(() => {});
+      await measurePhase("destroy sandbox egress container", "cleanup", () =>
+        sandbox.destroy(),
+      ).catch(() => {});
     }
   },
 );
@@ -180,14 +227,23 @@ type WebSocketProbeResult = {
   protocol?: string;
 };
 
+type MeasurePhase = <Value>(
+  name: string,
+  category: string,
+  operation: () => Promise<Value>,
+) => Promise<Value>;
+
 async function runWebSocketProbe(
   sandbox: RpcStub<SandboxLiteDurableObject>,
   name: string,
   script: string,
+  measurePhase: MeasurePhase,
 ): Promise<{ result: WebSocketProbeResult; stdout: string }> {
   const path = `/tmp/${name}.mjs`;
-  await sandbox.writeFile(path, script);
-  const command = await sandbox.exec(`node ${path}`, { timeout: 45_000 });
+  await measurePhase(`write ${name}`, "operation", () => sandbox.writeFile(path, script));
+  const command = await measurePhase(`execute ${name}`, "operation", () =>
+    sandbox.exec(`node ${path}`, { timeout: 45_000 }),
+  );
   expect(command, command.stderr).toMatchObject({ exitCode: 0 });
   return {
     result: jsonFromCommand(command.stdout) as WebSocketProbeResult,

@@ -182,6 +182,30 @@ avatar. Nothing else is planted: there is no baked coding agent
 and no automatic repo checkout — a sandbox starts as the stock image plus
 whatever its snapshots carry.
 
+## Timed commands: deadline plus containment
+
+`sandbox.exec(command, { timeout })` starts its deadline after the sandbox is
+ready (container boot and `/workspace` restore are readiness, not command
+execution). From there the budget covers the entire command path: acquiring
+the SDK stream, receiving its process-group `start` event, and running the
+command. It is not merely forwarded to the upstream SDK.
+
+The wrapper owns containment because the upstream SDK's timeout can kill only
+the process-group leader while a child survives or keeps an output pipe open.
+After the start event, expiry sends TERM and then KILL to the exact process
+group, verifies that no non-zombie member remains, and waits for the stream to
+settle before returning exit 124.
+
+Expiry before the start event is also bounded. Each timed command first writes
+its process-group id under a unique container-local guard directory. A
+concurrent cancellation command installs a tombstone and either terminates
+that exact group or leaves the tombstone for a delayed wrapper to observe
+before user code. The sandbox itself and unrelated commands are never killed,
+and the user command is never replayed. Exit 124 is synthesized only after
+that targeted cancellation settles successfully; if the control path is
+itself unavailable, `exec` throws an explicit aggregate containment error
+instead of claiming an unknown command state is safe.
+
 ## Egress: all sandbox traffic goes through project policy
 
 A sandbox container has **no direct internet path**. Every outbound request it
