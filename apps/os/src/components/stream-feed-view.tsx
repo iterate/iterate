@@ -1,5 +1,6 @@
 import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { ZERO_AGENT_RUNTIME, type AgentRuntime } from "@iterate-com/shared/agent-events";
 import type { AgentUiItem, AgentUiState } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
 import { Spinner } from "@iterate-com/ui/components/spinner";
@@ -25,6 +26,7 @@ import {
 const TAIL_PREFETCH_ROWS = 32;
 /** Cap on rows retained across window shifts (memory bound for long feeds). */
 const MAX_RETAINED_ROWS = 2000;
+const EMPTY_AGENT_ITEMS: readonly AgentUiItem[] = [];
 
 /** One parsed feed_items row, ready to render. */
 type FeedRow = {
@@ -63,22 +65,33 @@ export function StreamFeedView({
   emptyLabel = "No events in this stream yet.",
   filter,
   isPending = false,
+  pendingLabel = "Connecting to the stream",
   liveState,
+  transientAgentItems = EMPTY_AGENT_ITEMS,
+  runtime = ZERO_AGENT_RUNTIME,
   onInspectEvent,
   onInspectLlmRequest,
+  onInspectScriptExecution,
   projectSlug,
 }: {
   database: StreamBrowserDatabase;
-  emptyLabel?: string;
+  emptyLabel?: string | null;
   /** Which kind families (and constraints within them) this mode shows. */
   filter: StreamFeedQueryInput;
   isPending?: boolean;
+  pendingLabel?: string;
   /** Reduced agent state for the live tail; null hides the trailing items. */
   liveState: AgentUiState | null;
+  /** Runtime-projected settled items which are not journal database rows. */
+  transientAgentItems?: readonly AgentUiItem[];
+  /** Current processor runtime from the agent live-state subscription. */
+  runtime?: AgentRuntime;
   /** Opens the raw-event inspector panel at this offset (raw rows only). */
   onInspectEvent?: (offset: number) => void;
   /** Opens the LLM request inspector at this llmRequestOffset (llm steps only). */
   onInspectLlmRequest?: (llmRequestOffset: number) => void;
+  /** Opens the script execution inspector at this execution id (code steps only). */
+  onInspectScriptExecution?: (executionId: string) => void;
   projectSlug?: string;
 }) {
   // No memo: building the filter is trivial and db.query dedupes by
@@ -91,11 +104,11 @@ export function StreamFeedView({
   );
   const itemCount = Number(countResult.data[0]?.count ?? 0);
   const live = filter.agent == null ? null : (liveState?.live ?? null);
+  const transientItems = filter.agent == null ? EMPTY_AGENT_ITEMS : transientAgentItems;
   const scrollRef = useRef<HTMLDivElement>(null);
-  // Ids whose disclosure the user flipped away from its default state.
-  // Activities and live-rail steps default collapsed (has(id) = expanded);
-  // steps inside an expanded settled activity default expanded when their
-  // detail has content (has(id) = collapsed).
+  // Ids of activity summaries the user expanded. Operation rows inside an
+  // expanded activity open their URL-backed inspector instead of nesting a
+  // second disclosure state.
   const [toggledIds, setToggledIds] = useState<ReadonlySet<string>>(new Set());
 
   // The live in-flight activity is the list's trailing item so it's inside
@@ -103,8 +116,9 @@ export function StreamFeedView({
   // sizer's height, which is what the stick's ResizeObserver follows and what
   // anchorTo's mid-history compensation measures. Rendering it outside the
   // list would hide its height from both.
+  const transientCount = transientItems.length;
   const liveCount = live == null ? 0 : 1;
-  const totalCount = itemCount + liveCount;
+  const totalCount = itemCount + transientCount + liveCount;
 
   // Settled rows are append-only at dense positions, so the position is a
   // stable key for them. The live activity keeps its own key: its index
@@ -112,8 +126,12 @@ export function StreamFeedView({
   // hand the (often tall) live block's cached measurement to the new settled
   // row — a visible jump right when a turn settles.
   const getItemKey = useCallback(
-    (index: number) => (index < itemCount ? index : "live"),
-    [itemCount],
+    (index: number) => {
+      if (index < itemCount) return index;
+      const transient = transientItems[index - itemCount];
+      return transient == null ? "live" : `transient:${transient.id}`;
+    },
+    [itemCount, transientItems],
   );
 
   const virtualizer = useVirtualizer({
@@ -162,7 +180,9 @@ export function StreamFeedView({
   // window again.
   const [initialPinDone, setInitialPinDone] = useState(false);
   const virtualWindowSize = Math.max(0, last + 1 + TAIL_PREFETCH_ROWS - first);
-  const windowFirst = initialPinDone ? first : Math.max(0, itemCount - virtualWindowSize);
+  const windowFirst = initialPinDone
+    ? Math.min(first, itemCount)
+    : Math.max(0, itemCount - virtualWindowSize);
   // Fetch one row before the window (when there is one) so the topmost visible
   // raw row has its predecessor available for the colour-coded time delta —
   // the window's first row would otherwise never see the index before it.
@@ -203,13 +223,13 @@ export function StreamFeedView({
   }, []);
 
   const filtersNarrow =
-    filter.raw != null &&
-    (filter.raw.eventTypes != null ||
-      filter.raw.components != null ||
-      filter.raw.eventTypePrefix != null ||
-      filter.raw.searchQuery != null ||
-      filter.raw.offsetFrom != null ||
-      filter.raw.offsetTo != null);
+    (filter.agent?.searchQuery != null && filter.agent.searchQuery !== "") ||
+    (filter.raw != null &&
+      ((filter.raw.eventTypes?.length ?? 0) > 0 ||
+        (filter.raw.components?.length ?? 0) > 0 ||
+        (filter.raw.searchQuery != null && filter.raw.searchQuery !== "") ||
+        filter.raw.offsetFrom != null ||
+        filter.raw.offsetTo != null));
 
   return (
     <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
@@ -219,12 +239,16 @@ export function StreamFeedView({
         {totalCount === 0 ? (
           <Empty className="min-h-48">
             <EmptyHeader>
-              {isPending ? <Spinner className="size-4" /> : null}
-              <EmptyTitle>{isPending ? "Connecting to the stream" : "Nothing here yet"}</EmptyTitle>
-              {isPending ? null : (
-                <EmptyDescription>
-                  {filtersNarrow ? "No feed items match the current filters." : emptyLabel}
-                </EmptyDescription>
+              {isPending || !filtersNarrow ? <Spinner className="size-4" /> : null}
+              <EmptyTitle>
+                {isPending
+                  ? pendingLabel
+                  : filtersNarrow
+                    ? "Nothing matches the current filters"
+                    : "Waiting for events…"}
+              </EmptyTitle>
+              {isPending || filtersNarrow || emptyLabel === null ? null : (
+                <EmptyDescription>{emptyLabel}</EmptyDescription>
               )}
             </EmptyHeader>
           </Empty>
@@ -237,7 +261,8 @@ export function StreamFeedView({
         >
           {virtualItems.map((virtualItem) => {
             const index = virtualItem.index;
-            const isLiveItem = live != null && index === itemCount;
+            const transientItem = transientItems[index - itemCount];
+            const isLiveItem = live != null && index === itemCount + transientCount;
             const row = index < itemCount ? rowsByIndex.get(index)?.row : undefined;
             return (
               <div
@@ -250,9 +275,20 @@ export function StreamFeedView({
                 {isLiveItem ? (
                   <AgentLiveActivity
                     live={live}
+                    runtime={runtime}
                     toggledIds={toggledIds}
                     onToggle={toggleExpanded}
                     onInspectLlmRequest={onInspectLlmRequest}
+                    onInspectScriptExecution={onInspectScriptExecution}
+                  />
+                ) : transientItem != null ? (
+                  <AgentFeedItemRow
+                    item={transientItem}
+                    toggledIds={toggledIds}
+                    onToggle={toggleExpanded}
+                    onInspectLlmRequest={onInspectLlmRequest}
+                    onInspectScriptExecution={onInspectScriptExecution}
+                    projectSlug={projectSlug}
                   />
                 ) : row == null ? (
                   // Not-yet-loaded rows must measure exactly estimateSize
@@ -270,6 +306,7 @@ export function StreamFeedView({
                     toggledIds={toggledIds}
                     onToggle={toggleExpanded}
                     onInspectLlmRequest={onInspectLlmRequest}
+                    onInspectScriptExecution={onInspectScriptExecution}
                     projectSlug={projectSlug}
                   />
                 ) : (

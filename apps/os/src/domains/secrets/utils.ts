@@ -2,20 +2,31 @@ import { normalizePath } from "../durable-object-names.ts";
 
 /**
  * The egress placeholder grammar. A request may carry
- * `getSecret({ path: "/secrets/…" })` (substitute the whole material — which
- * must then be a string) or `getSecret({ path: "/secrets/…", field: "a.b" })`
+ * `getSecret("/secrets/…")` (substitute the whole material — which
+ * must then be a string) or `getSecret("/secrets/…", { field: "a.b" })`
  * (substitute one dotted field of structured material). Substitution reaches
  * headers and the request URL PATH (for providers that carry the credential
- * there, e.g. Telegram's `/bot<token>/…`) — never the query string, and never
- * the body: a header or path segment is a substitutable reference, everything
- * else is bytes the composer already holds (see
+ * there, e.g. Telegram's `/bot<token>/…`). An explicitly opted-in JSON body
+ * may also carry exact-reference string values; embedded references, object
+ * keys, unmarked bodies, and URL query strings are never substituted (see
  * apps/os/docs/integrations-and-secrets-design.md §1 and ADR 0005). A
  * placeholder outside the path fails loudly at substitution instead of
  * leaking the literal reference string to the provider. The `field` key is
  * optional; omit it for whole-material (plain-string) secrets.
+ *
+ * Headers may also carry the placeholder inside a **Basic** Authorization
+ * credential (`Authorization: Basic base64(user:getSecret(...))`). GitHub's
+ * git-over-HTTPS smart HTTP endpoint only accepts Basic (not Bearer), so
+ * sandbox git plants that shape; discovery and substitution peel the base64
+ * payload so the placeholder stays findable without putting token bytes in
+ * the container.
  */
-const SECRET_REFERENCE =
-  /getSecret\(\s*\{\s*path\s*:\s*"([^"]+)"\s*(?:,\s*field\s*:\s*"([^"]+)"\s*)?\}\s*\)/g;
+const SECRET_REFERENCE = /getSecret\(\s*"([^"]+)"\s*(?:,\s*\{\s*field\s*:\s*"([^"]+)"\s*\})?\s*\)/g;
+const EXACT_SECRET_REFERENCE =
+  /^getSecret\(\s*"([^"]+)"\s*(?:,\s*\{\s*field\s*:\s*"([^"]+)"\s*\})?\s*\)$/;
+
+export const SECRET_JSON_TEMPLATE_HEADER = "x-iterate-secret-template";
+const MAX_SECRET_JSON_TEMPLATE_BYTES = 1024 * 1024;
 
 /** One parsed placeholder: the secret it addresses and, optionally, the dotted
  * field of that secret's material to substitute. */
@@ -31,12 +42,15 @@ type SecretReference = { field?: string; path: string };
 const PLATFORM_REFERENCE = /getSecret\(\s*\{\s*platform\s*:\s*"([^"]+)"\s*\}\s*\)/g;
 
 /** One parsed platform placeholder: the AppConfig path it references. */
-type PlatformReference = { platform: string };
+export type PlatformReference = { platform: string };
 
 export function normalizeSecretPath(path: string): string {
   const normalized = normalizePath(path);
   if (!normalized.startsWith("/secrets/")) {
-    throw new Error(`secret path must start with "/secrets/", got "${normalized}"`);
+    throw new SecretSubstitutionError(
+      "secret_reference_invalid_path",
+      `secret path must start with "/secrets/", got "${normalized}"`,
+    );
   }
   // A secret path becomes a Durable Object name (`durable-object-names.ts`),
   // and that name is reparsed with WHATWG `URL` — which collapses `.`/`..`
@@ -46,11 +60,17 @@ export function normalizeSecretPath(path: string): string {
   // through it) so the addressed path and the displayed path cannot diverge.
   // eslint-disable-next-line no-control-regex -- control chars are exactly what we reject
   if (/[\u0000-\u0020\u007f?#%\\]/.test(normalized)) {
-    throw new Error(`secret path has an illegal character: "${normalized}"`);
+    throw new SecretSubstitutionError(
+      "secret_reference_invalid_path",
+      `secret path has an illegal character: "${normalized}"`,
+    );
   }
   for (const segment of normalized.slice(1).split("/")) {
     if (segment === "" || segment === "." || segment === "..") {
-      throw new Error(`secret path has an empty or dot segment: "${normalized}"`);
+      throw new SecretSubstitutionError(
+        "secret_reference_invalid_path",
+        `secret path has an empty or dot segment: "${normalized}"`,
+      );
     }
   }
   return normalized;
@@ -71,41 +91,146 @@ export function secretReferencesFromHeaders(headers: Headers): SecretReference[]
  * query must still route to the Secret DO, where substitution rejects it
  * loudly (see {@link substituteSecretRequest}) instead of the request sailing
  * through egress with the literal placeholder in it. */
-export function secretReferencesFromRequest(request: {
-  headers: Headers;
-  url: string;
-}): SecretReference[] {
+export async function secretReferencesFromRequest(
+  request: Request,
+): Promise<{ problems: SecretSubstitutionError[]; references: SecretReference[] }> {
   const byKey = new Map<string, SecretReference>();
-  request.headers.forEach((value) => collectSecretReferences(byKey, value));
-  collectSecretReferences(byKey, decodedUrl(request.url));
-  return [...byKey.values()];
+  try {
+    request.headers.forEach((value) => collectSecretReferences(byKey, value));
+    collectSecretReferences(byKey, decodedUrl(request.url));
+    const jsonTemplate = await inspectSecretJsonTemplate(request);
+    if (jsonTemplate.problem !== undefined) {
+      return { problems: [jsonTemplate.problem], references: [...byKey.values()] };
+    }
+    if (jsonTemplate.value !== undefined) collectJsonSecretReferences(byKey, jsonTemplate.value);
+    return { problems: [], references: [...byKey.values()] };
+  } catch (error) {
+    if (
+      error instanceof SecretSubstitutionError &&
+      error.code === "secret_reference_invalid_path"
+    ) {
+      return { problems: [error], references: [...byKey.values()] };
+    }
+    throw error;
+  }
 }
 
-/** The distinct secret PATHS referenced across a request's headers and URL —
+/** The distinct secret PATHS referenced across a request's headers, URL, and
+ * explicitly opted-in JSON body —
  * used by the project egress door to pick which Secret DO to hand the request
  * to (exactly one; multi-secret requests are not supported) and as a cheap
  * presence check. */
-export function secretReferencePathsFromRequest(request: {
-  headers: Headers;
-  url: string;
-}): string[] {
-  return [...new Set(secretReferencesFromRequest(request).map((reference) => reference.path))];
+export async function secretReferencePathsFromRequest(
+  request: Request,
+): Promise<{ paths: string[]; problems: SecretSubstitutionError[] }> {
+  const { problems, references } = await secretReferencesFromRequest(request);
+  return { paths: [...new Set(references.map((reference) => reference.path))], problems };
 }
 
 function collectSecretReferences(byKey: Map<string, SecretReference>, value: string): void {
-  for (const match of value.matchAll(SECRET_REFERENCE)) {
+  for (const candidate of headerValuesForSecretScan(value)) {
+    for (const match of candidate.matchAll(SECRET_REFERENCE)) {
+      const path = normalizeSecretPath(match[1]!);
+      const field = match[2];
+      byKey.set(`${path} ${field ?? ""}`, field === undefined ? { path } : { field, path });
+    }
+  }
+}
+
+function collectJsonSecretReferences(byKey: Map<string, SecretReference>, value: unknown): void {
+  if (typeof value === "string") {
+    const match = EXACT_SECRET_REFERENCE.exec(value);
+    if (match === null) return;
     const path = normalizeSecretPath(match[1]!);
     const field = match[2];
-    byKey.set(`${path} ${field ?? ""}`, field === undefined ? { path } : { field, path });
+    byKey.set(`${path} ${field || ""}`, field === undefined ? { path } : { field, path });
+    return;
   }
+  if (Array.isArray(value)) {
+    for (const item of value) collectJsonSecretReferences(byKey, item);
+    return;
+  }
+  if (typeof value !== "object" || value === null) return;
+  for (const item of Object.values(value)) collectJsonSecretReferences(byKey, item);
+}
+
+/**
+ * Values to scan for `getSecret(...)` placeholders: the raw header string,
+ * plus — when the header is HTTP Basic auth — the base64-decoded credential
+ * payload. Git (and anything else that only speaks Basic) base64-encodes
+ * `username:password` into `Authorization: Basic …`; without peeling that
+ * layer the placeholder inside the password is invisible to discovery and
+ * substitution.
+ */
+function headerValuesForSecretScan(value: string): string[] {
+  const decoded = decodeBasicAuthorizationCredential(value);
+  return decoded === null ? [value] : [value, decoded.credential];
+}
+
+/**
+ * Peel `Authorization: Basic <base64>` into its decoded `user:pass` payload.
+ * Returns null when the value is not Basic or the base64 is invalid. Callers
+ * re-encode with `btoa` after substitution (placeholders and tokens are
+ * ASCII, so the latin1 btoa/atob pair is the right codec).
+ */
+function decodeBasicAuthorizationCredential(
+  value: string,
+): { prefix: string; encoded: string; suffix: string; credential: string } | null {
+  const match = /^(\s*[Bb]asic\s+)([A-Za-z0-9+/]+=*)(\s*)$/.exec(value);
+  if (match === null) return null;
+  try {
+    return {
+      prefix: match[1]!,
+      encoded: match[2]!,
+      suffix: match[3]!,
+      credential: atob(match[2]!),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Substitute every path-based `getSecret(...)` match in a plain header value. */
+function substituteSecretPlaceholdersInText(
+  value: string,
+  resolve: (reference: SecretReference) => string,
+): string {
+  return value.replaceAll(SECRET_REFERENCE, (_match, path: string, field: string | undefined) =>
+    resolve(
+      field === undefined
+        ? { path: normalizeSecretPath(path) }
+        : { field, path: normalizeSecretPath(path) },
+    ),
+  );
+}
+
+/**
+ * Substitute placeholders in one header value, including inside Basic auth
+ * base64 payloads. Non-Basic headers (Bearer, custom) substitute in place;
+ * Basic peels → substitutes the credential → re-encodes so the provider sees
+ * a real `user:token` pair.
+ */
+function substituteSecretPlaceholdersInHeaderValue(
+  value: string,
+  resolve: (reference: SecretReference) => string,
+): string {
+  const basic = decodeBasicAuthorizationCredential(value);
+  if (basic !== null) {
+    const substituted = substituteSecretPlaceholdersInText(basic.credential, resolve);
+    if (substituted !== basic.credential) {
+      return `${basic.prefix}${btoa(substituted)}${basic.suffix}`;
+    }
+    // No placeholder in the credential — still run plain substitution in case
+    // the scheme/prefix somehow carried one (it shouldn't), then return.
+  }
+  return substituteSecretPlaceholdersInText(value, resolve);
 }
 
 /**
  * A request URL as placeholder-matchable text. URL parsing percent-encodes the
- * placeholder's braces/spaces/quotes (`new Request("…/botgetSecret({ path:
- * "…" })/sendMessage")` stores `bot getSecret(%7B%20path…`), so matching and
- * substitution run on the decoded form. Returns the input unchanged when it
- * does not decode (a stray `%` outside any escape).
+ * placeholder's quotes (and its options object's braces/spaces when present),
+ * so matching and substitution run on the decoded form. Returns the input
+ * unchanged when it does not decode (a stray `%` outside any escape).
  */
 function decodedUrl(url: string): string {
   try {
@@ -119,27 +244,48 @@ function decodedUrl(url: string): string {
 export function platformReferencesFromHeaders(headers: Headers): PlatformReference[] {
   const byPath = new Map<string, PlatformReference>();
   headers.forEach((value) => {
-    for (const match of value.matchAll(PLATFORM_REFERENCE)) {
-      byPath.set(match[1]!, { platform: match[1]! });
+    for (const candidate of headerValuesForSecretScan(value)) {
+      for (const match of candidate.matchAll(PLATFORM_REFERENCE)) {
+        byPath.set(match[1]!, { platform: match[1]! });
+      }
     }
   });
   return [...byPath.values()];
 }
 
 /** Rewrites every `getSecret({ platform: ... })` placeholder in every header
- * using `resolve`. Runs in trusted platform code (the project egress door). */
+ * using `resolve`. Runs in trusted platform code (the project egress door).
+ * Peels Basic Authorization base64 the same way path-secret substitution does. */
 export function substitutePlatformHeaders(
   request: Request,
   resolve: (reference: PlatformReference) => string,
 ): Request {
   const headers = new Headers(request.headers);
   headers.forEach((value, name) => {
-    headers.set(
-      name,
-      value.replaceAll(PLATFORM_REFERENCE, (_match, platform: string) => resolve({ platform })),
-    );
+    headers.set(name, substitutePlatformPlaceholdersInHeaderValue(value, resolve));
   });
   return new Request(request, { headers });
+}
+
+function substitutePlatformPlaceholdersInText(
+  value: string,
+  resolve: (reference: PlatformReference) => string,
+): string {
+  return value.replaceAll(PLATFORM_REFERENCE, (_match, platform: string) => resolve({ platform }));
+}
+
+function substitutePlatformPlaceholdersInHeaderValue(
+  value: string,
+  resolve: (reference: PlatformReference) => string,
+): string {
+  const basic = decodeBasicAuthorizationCredential(value);
+  if (basic !== null) {
+    const substituted = substitutePlatformPlaceholdersInText(basic.credential, resolve);
+    if (substituted !== basic.credential) {
+      return `${basic.prefix}${btoa(substituted)}${basic.suffix}`;
+    }
+  }
+  return substitutePlatformPlaceholdersInText(value, resolve);
 }
 
 /**
@@ -174,6 +320,12 @@ export function selectSecretField(material: unknown, field?: string): string {
  * The resolver is handed the parsed reference and returns the substituted
  * string; it runs in the Secret DO (trusted platform code), so material bytes
  * are only ever handled here on the way out to a pinned host.
+ *
+ * Basic Authorization headers are special: the placeholder may live inside
+ * the base64 credential (`user:getSecret(...)`). That shape is required for
+ * GitHub git-over-HTTPS (Bearer is rejected with 401). Decode → substitute →
+ * re-encode so providers see a real token while the container still only held
+ * the placeholder.
  */
 export function substituteSecretHeaders(
   request: Request,
@@ -181,24 +333,15 @@ export function substituteSecretHeaders(
 ): Request {
   const headers = new Headers(request.headers);
   headers.forEach((value, name) => {
-    headers.set(
-      name,
-      value.replaceAll(SECRET_REFERENCE, (_match, path: string, field: string | undefined) =>
-        resolve(
-          field === undefined
-            ? { path: normalizeSecretPath(path) }
-            : { field, path: normalizeSecretPath(path) },
-        ),
-      ),
-    );
+    headers.set(name, substituteSecretPlaceholdersInHeaderValue(value, resolve));
   });
   return new Request(request, { headers });
 }
 
 /**
- * Rewrites every `getSecret(...)` placeholder in every header AND in the
- * request URL's PATH — never the query (or fragment/userinfo/host), and never
- * the body. URL substitution exists for providers that authenticate in the
+ * Rewrites every `getSecret(...)` placeholder in every header, the request
+ * URL's PATH, and exact string values in an explicitly opted-in JSON body —
+ * never the query (or fragment/userinfo/host). URL substitution exists for providers that authenticate in the
  * URL path (Telegram's `/bot<token>/<method>`; there is no header auth), and
  * the path is deliberately ALL it covers: a placeholder anywhere else in the
  * URL throws here — silently passing the literal placeholder through to the
@@ -207,11 +350,23 @@ export function substituteSecretHeaders(
  * {@link decodedUrl}); a URL whose path carries no placeholder stays
  * byte-identical.
  */
-export function substituteSecretRequest(
+export async function substituteSecretRequest(
   request: Request,
   resolve: (reference: SecretReference) => string,
-): Request {
-  const substituted = substituteSecretHeaders(request, resolve);
+): Promise<Request> {
+  const inspectedJsonTemplate = await inspectSecretJsonTemplate(request);
+  if (inspectedJsonTemplate.problem !== undefined) throw inspectedJsonTemplate.problem;
+  const jsonTemplate = inspectedJsonTemplate.value;
+  let substituted = substituteSecretHeaders(request, resolve);
+  if (jsonTemplate !== undefined) {
+    const headers = new Headers(substituted.headers);
+    headers.delete(SECRET_JSON_TEMPLATE_HEADER);
+    headers.delete("content-length");
+    substituted = new Request(substituted, {
+      body: JSON.stringify(substituteSecretJsonValues(jsonTemplate, resolve)),
+      headers,
+    });
+  }
   const url = new URL(request.url);
   for (const [part, value] of [
     ["query", url.search],
@@ -242,6 +397,68 @@ export function substituteSecretRequest(
   if (!pathHasPlaceholder) return substituted;
   url.pathname = rewrittenPath;
   return new Request(url.toString(), substituted);
+}
+
+async function inspectSecretJsonTemplate(
+  request: Request,
+): Promise<{ problem?: SecretSubstitutionError; value?: unknown }> {
+  const mode = request.headers.get(SECRET_JSON_TEMPLATE_HEADER);
+  if (mode === null) return {};
+  if (mode !== "json") {
+    return { problem: new SecretSubstitutionError("secret_json_template_invalid_mode") };
+  }
+  const contentType = request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+  if (contentType !== "application/json" && !contentType?.endsWith("+json")) {
+    return { problem: new SecretSubstitutionError("secret_json_template_invalid_content_type") };
+  }
+  const inspectedBody = await readSecretJsonTemplateBody(request);
+  if (inspectedBody.problem !== undefined) return inspectedBody;
+  try {
+    return { value: JSON.parse(inspectedBody.body) as unknown };
+  } catch {
+    return { problem: new SecretSubstitutionError("secret_json_template_invalid_body") };
+  }
+}
+
+async function readSecretJsonTemplateBody(
+  request: Request,
+): Promise<
+  { body: string; problem?: undefined } | { body?: undefined; problem: SecretSubstitutionError }
+> {
+  const stream = request.clone().body;
+  if (stream === null) return { body: "" };
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let body = "";
+  let byteLength = 0;
+  while (true) {
+    const chunk = await reader.read();
+    if (chunk.done) return { body: body + decoder.decode() };
+    byteLength += chunk.value.byteLength;
+    if (byteLength > MAX_SECRET_JSON_TEMPLATE_BYTES) {
+      void reader.cancel();
+      return { problem: new SecretSubstitutionError("secret_json_template_body_too_large") };
+    }
+    body += decoder.decode(chunk.value, { stream: true });
+  }
+}
+
+function substituteSecretJsonValues(
+  value: unknown,
+  resolve: (reference: SecretReference) => string,
+): unknown {
+  if (typeof value === "string") {
+    const match = EXACT_SECRET_REFERENCE.exec(value);
+    if (match === null) return value;
+    const path = normalizeSecretPath(match[1]!);
+    const field = match[2];
+    return resolve(field === undefined ? { path } : { field, path });
+  }
+  if (Array.isArray(value)) return value.map((item) => substituteSecretJsonValues(item, resolve));
+  if (typeof value !== "object" || value === null) return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [key, substituteSecretJsonValues(item, resolve)]),
+  );
 }
 
 /** Hex-encoded keyed HMAC-SHA256 over caller bytes — the webhook-signature
@@ -321,11 +538,17 @@ export function timingSafeStringEqual(a: string, b: string): boolean {
 }
 
 type SecretErrorCode =
+  | "secret_fetch_failed"
+  | "secret_json_template_body_too_large"
+  | "secret_json_template_invalid_body"
+  | "secret_json_template_invalid_content_type"
+  | "secret_json_template_invalid_mode"
   | "secret_material_not_a_string"
   | "secret_not_allowed_for_origin"
   | "secret_not_found"
   | "secret_reference_field_not_found"
   | "secret_reference_foreign"
+  | "secret_reference_invalid_path"
   | "secret_reference_outside_url_path"
   | "secret_reference_required";
 
@@ -333,11 +556,11 @@ type SecretErrorCode =
  * a 4xx instead of leaking an exception. `detail` (message-only) names the
  * specifics — e.g. which URL part held a disallowed placeholder. */
 export class SecretSubstitutionError extends Error {
-  constructor(
-    readonly code: SecretErrorCode,
-    detail?: string,
-  ) {
+  readonly code: SecretErrorCode;
+
+  constructor(code: SecretErrorCode, detail?: string) {
     super(detail === undefined ? code : `${code}: ${detail}`);
+    this.code = code;
     this.name = "SecretSubstitutionError";
   }
 }
@@ -347,6 +570,29 @@ export class SecretSubstitutionError extends Error {
 export function secretErrorResponse(code: SecretErrorCode): Response {
   return Response.json(
     { error: code },
-    { status: code === "secret_not_allowed_for_origin" ? 403 : 400 },
+    {
+      status:
+        code === "secret_fetch_failed" ? 502 : code === "secret_not_allowed_for_origin" ? 403 : 400,
+    },
   );
+}
+
+/**
+ * Every project is born with a write-only ingress credential at this path:
+ * the value the `project-secret` /api credential is verified against (inside
+ * the Secret Durable Object — material never leaves the secret system; the
+ * verifier's answer is one bit). Born with an EMPTY egress pin, so unlike
+ * every other secret it can never be substituted into any outbound request:
+ * the ingress key and any egress credentials an external app is dialed with
+ * are deliberately different secrets.
+ */
+export const PROJECT_API_KEY_SECRET_PATH = "/secrets/project-api-key";
+
+/** Random birth material for {@link PROJECT_API_KEY_SECRET_PATH}. Unusable
+ * until the owner overwrites it with a value they hold (secrets.update) —
+ * writing a known value IS the pairing ceremony with an external app. */
+export function generateProjectApiKeyMaterial(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return `itxk_${[...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }

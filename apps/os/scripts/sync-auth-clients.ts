@@ -1,5 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createAuthContractClient } from "@iterate-com/auth-contract";
+import { envs } from "../../../envs.ts";
 
 type Target = {
   dopplerConfig: string;
@@ -16,23 +17,20 @@ type SeedOAuthClientSpec = {
   referenceId?: string;
 };
 
-const targets: Target[] = [
-  ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map(
-    (previewNumber) =>
-      ({
-        dopplerConfig: `preview_${previewNumber}`,
-        baseUrl: `https://os.iterate-preview-${previewNumber}.com`,
-        mcpBaseUrl: `https://mcp.iterate-preview-${previewNumber}.com`,
-        projectHostnameBase: `iterate-preview-${previewNumber}.app`,
-      }) satisfies Target,
-  ),
-  {
-    dopplerConfig: "prd",
-    baseUrl: "https://os.iterate.com",
-    mcpBaseUrl: "https://mcp.iterate.com",
-    projectHostnameBase: "iterate.app",
-  },
-];
+const targets: Target[] = Object.values(envs).map((env) => {
+  const [projectHostnameBase, ...additionalProjectHostnameBases] = env.projectHostnameBases;
+  if (!projectHostnameBase || additionalProjectHostnameBases.length > 0) {
+    throw new Error(
+      `${env.dopplerConfig} must have exactly one project hostname base to sync its Auth client.`,
+    );
+  }
+  return {
+    dopplerConfig: env.dopplerConfig,
+    baseUrl: env.baseUrl,
+    mcpBaseUrl: env.mcpBaseUrl,
+    projectHostnameBase,
+  };
+});
 
 const configuredAuthOrigin = process.env.APP_CONFIG_AUTH_APP_ORIGIN?.trim();
 const authIssuer = configuredAuthOrigin
@@ -111,7 +109,6 @@ for (const target of targets) {
     APP_CONFIG_ITERATE_AUTH__ISSUER: authIssuer,
     APP_CONFIG_ITERATE_AUTH__CLIENT_ID: webClient.clientId,
     APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET: webClient.clientSecret,
-    APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN: serviceToken,
   });
 
   upsertSeedOAuthClient(seedOAuthClients, {

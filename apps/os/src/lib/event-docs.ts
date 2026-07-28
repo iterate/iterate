@@ -12,6 +12,7 @@ import { SecretProcessorContract } from "~/domains/secrets/secret-processor-cont
 import { BrowserFeedContract } from "~/domains/streams/client-libraries/processors/browser-feed/contract.ts";
 import { BrowserRawEventsContract } from "~/domains/streams/client-libraries/processors/browser-raw-events/contract.ts";
 import { CoreProcessorContract } from "~/domains/streams/core-processor-contract.ts";
+import { WorkspaceProcessorContract } from "~/domains/workspaces/workspace-processor-contract.ts";
 
 const EVENT_TYPE_PREFIX = "events.iterate.com/";
 const EVENT_TYPE_URL_PREFIX = "https://events.iterate.com/";
@@ -19,7 +20,6 @@ const PROCESSOR_DOCS_BASE_PATH = "/docs/streams/processors";
 
 type EventDefinitionForDocs = {
   description?: string;
-  examples?: readonly { description: string; payload: unknown }[];
   payloadSchema: z.ZodType;
 };
 
@@ -41,6 +41,7 @@ const processorContracts = [
   CapabilityHostProcessorContract,
   SecretProcessorContract,
   SandboxProcessorContract,
+  WorkspaceProcessorContract,
   SlackProcessorContract,
   SlackAgentProcessorContract,
   TelegramProcessorContract,
@@ -49,14 +50,6 @@ const processorContracts = [
   BrowserFeedContract,
 ] as const satisfies readonly ProcessorContractForDocs[];
 
-/**
- * The contracts the public event docs are generated from, in docs order —
- * exported so tests can validate documentation invariants (e.g. that every
- * example payload parses against its event's payload schema) against the same
- * list the site renders.
- */
-export const documentedProcessorContracts: readonly ProcessorContractForDocs[] = processorContracts;
-
 export type EventDoc = {
   /** Processors that list this event type in `consumes` (owner included; wildcard consumers excluded). */
   consumedBy: ProcessorReferenceDoc[];
@@ -64,17 +57,11 @@ export type EventDoc = {
   /** Processors that list this event type in `emits`. */
   emittedBy: ProcessorReferenceDoc[];
   eventPath: string;
-  examples: EventExampleDoc[];
   href: string;
   payloadJsonSchema: unknown;
   processor: ProcessorReferenceDoc;
   routeParams: EventRouteParams;
   type: string;
-};
-
-export type EventExampleDoc = {
-  description: string;
-  payload: unknown;
 };
 
 export type EventReferenceDoc = {
@@ -283,10 +270,6 @@ function buildEventDoc(args: {
     consumedBy: args.consumedBy,
     emittedBy: args.emittedBy,
     eventPath,
-    examples: (args.definition.examples ?? []).map((example) => ({
-      description: example.description,
-      payload: example.payload,
-    })),
     href: `${processorDocsPathForSlug(args.processor.slug)}/events/${processorEventPath}`,
     payloadJsonSchema: z.toJSONSchema(args.definition.payloadSchema, {
       io: "input",

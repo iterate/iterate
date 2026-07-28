@@ -1,4 +1,5 @@
 import { useMemo, useState, type ReactElement } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Link, useMatches, useMatchRoute } from "@tanstack/react-router";
 import {
   ArrowLeft,
@@ -28,9 +29,7 @@ import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-
 import type { PublicAppConfig } from "@iterate-com/shared/config";
 import { useAuthClient } from "@iterate-com/auth/client";
 import { useConfig } from "@iterate-com/ui/apps/config";
-import { useQuery } from "@tanstack/react-query";
 import { Avatar, AvatarFallback } from "@iterate-com/ui/components/avatar";
-import { Button } from "@iterate-com/ui/components/button";
 import { IterateLogo } from "@iterate-com/ui/components/iterate-logo";
 import {
   DropdownMenu,
@@ -58,60 +57,69 @@ import {
   SidebarGroupContent,
   SidebarHeader,
   SidebarMenu,
+  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarRail,
   SidebarSeparator,
   useSidebar,
 } from "@iterate-com/ui/components/sidebar";
+import { useIterateSessionQuery, useLiveState } from "iterate/sdk/itx/react";
 import type { ProjectListEntry } from "../project-deployment-status.ts";
-import { StreamPath, type StreamPath as StreamPathType } from "~/lib/stream-links.ts";
+import { sidebarAgentRowsVisible } from "./agents/sidebar-agent-visibility.ts";
+import { SidebarAgents } from "./agents/sidebar-agents.tsx";
+import { CloseMobileSidebarOnNavigate } from "~/components/close-mobile-sidebar-on-navigate.tsx";
+import { DeferredSurface } from "~/components/deferred-surface.tsx";
+import { ProjectWorkerHealthWarning } from "~/components/project-worker-health.tsx";
 import type { AppConfig } from "~/config.ts";
+import { deriveAgentDisplayState } from "~/domains/agents/agent-presence.ts";
 import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
-import {
-  fetchProjectsList,
-  projectsListQueryKey,
-  projectsListStaleTime,
-} from "~/lib/projects-query.ts";
+import { getProjectCustomHostnames } from "~/lib/project-custom-hostnames.ts";
+import { projectsListStaleTime } from "~/lib/projects-query.ts";
 import type { PublicRouteConfig } from "~/lib/public-route-config.ts";
+import { StreamPath, type StreamPath as StreamPathType } from "~/lib/stream-links.ts";
 
 type PublicConfig = PublicAppConfig<AppConfig>;
 
 export function AppSidebar({ routeConfig }: { routeConfig: PublicRouteConfig }) {
   // Client-only read through the itx session (itx never SSRs): the sidebar
-  // renders empty during SSR and populates after hydration. Plain useQuery —
-  // not the suspending useItxQuery — so the always-mounted shell never
+  // renders empty during SSR and populates after hydration. useIterateSessionQuery is
+  // non-suspending (unlike useItxQuery) so the always-mounted shell never
   // suspends on the socket.
-  const { data } = useQuery({
-    queryKey: projectsListQueryKey,
-    queryFn: fetchProjectsList,
+  const { data } = useIterateSessionQuery({
+    key: ["projects"],
+    query: (session) => session.projects.list(),
     staleTime: projectsListStaleTime,
   });
   // Missing projects (auth knows them, this deployment's engine does not) are
   // not navigable — the /projects page owns setting them up.
   const projects = data?.filter((project) => project.deploymentStatus !== "missing") ?? [];
-
   // Sidebar composition follows shadcn sidebar blocks 07/08:
   // https://ui.shadcn.com/blocks/sidebar
+  // CloseMobileSidebarOnNavigate must sit outside <Sidebar>: on mobile, Sidebar
+  // children live inside a Sheet that remounts when opened.
   return (
-    <Sidebar collapsible="icon">
-      {/* Collapsed: nudge the logo down 4px (pt-2 → pt-3) so its center lines up
+    <>
+      <CloseMobileSidebarOnNavigate />
+      <Sidebar collapsible="icon">
+        {/* Collapsed: nudge the logo down 4px (pt-2 → pt-3) so its center lines up
           with the stream path pill in the page header (h-9 pill, pt-2.5 → center 28px).
           Transition padding with Tailwind's default timing — the same curve the
           SidebarMenuButton uses for its width/height/padding — so the padding offset
           and the button's height change move the logo together instead of drifting. */}
-      <SidebarHeader className="transition-[padding] group-data-[collapsible=icon]:pt-3">
-        <AppSidebarHeader projects={projects} />
-      </SidebarHeader>
-      <SidebarContent>
-        <AppSidebarNav routeConfig={routeConfig} />
-      </SidebarContent>
-      <SidebarFooter>
-        <AppSidebarCollapseButton />
-        <AppSidebarUser />
-      </SidebarFooter>
-      <SidebarRail />
-    </Sidebar>
+        <SidebarHeader className="transition-[padding] group-data-[collapsible=icon]:pt-3">
+          <AppSidebarHeader projects={projects} />
+        </SidebarHeader>
+        <SidebarContent>
+          <AppSidebarNav routeConfig={routeConfig} />
+        </SidebarContent>
+        <SidebarFooter>
+          <AppSidebarCollapseButton />
+          <AppSidebarUser />
+        </SidebarFooter>
+        <SidebarRail />
+      </Sidebar>
+    </>
   );
 }
 
@@ -132,7 +140,7 @@ function AppSidebarHeader({ projects }: { projects: ProjectListEntry[] }) {
                 className="data-popup-open:bg-sidebar-accent data-popup-open:text-sidebar-accent-foreground"
               >
                 <span className="flex aspect-square size-8 items-center justify-center rounded-md bg-black">
-                  <IterateLogo className="size-6 rounded-sm" />
+                  <IterateLogo className="size-6" />
                 </span>
                 <span className="grid flex-1 text-left text-sm leading-tight">
                   <span className="truncate font-medium">iterate</span>
@@ -151,16 +159,8 @@ function AppSidebarHeader({ projects }: { projects: ProjectListEntry[] }) {
             className="min-w-56 rounded-lg"
           >
             <DropdownMenuGroup>
-              <DropdownMenuLabel className="flex items-center justify-between pr-1 text-xs text-muted-foreground">
+              <DropdownMenuLabel className="text-xs text-muted-foreground">
                 Projects
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  aria-label="New project"
-                  render={<Link to="/new-project" />}
-                >
-                  <Plus />
-                </Button>
               </DropdownMenuLabel>
               {projects.length > 0 ? (
                 projects.map((project) => (
@@ -169,8 +169,9 @@ function AppSidebarHeader({ projects }: { projects: ProjectListEntry[] }) {
                     className="gap-2 p-2"
                     render={
                       <Link
-                        to="/projects/$projectSlug/agents/new"
+                        to="/projects/$projectSlug"
                         params={{ projectSlug: project.slug }}
+                        search={{}}
                       />
                     }
                   >
@@ -189,6 +190,10 @@ function AppSidebarHeader({ projects }: { projects: ProjectListEntry[] }) {
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
+              <DropdownMenuItem render={<Link to="/new-project" />}>
+                <Plus />
+                <span>Create project</span>
+              </DropdownMenuItem>
               <DropdownMenuItem render={<Link to="/projects" />}>
                 <ArrowLeft />
                 <span>View all projects</span>
@@ -231,9 +236,30 @@ function AppSidebarUser() {
   const [debugOpen, setDebugOpen] = useState(false);
   const user = session?.authenticated ? session.user : null;
   const isAdmin = user?.isAdmin ?? false;
+  const operatorScope = session?.authenticated
+    ? ["operator admin", "operator project"].includes(session.session.scope)
+      ? session.session.scope
+      : null
+    : null;
+  const isOperatorSession = operatorScope !== null;
   const label = [user?.name, user?.email, "Account"].find((value) => value?.trim())?.trim() ?? "";
-  const email = user?.email?.trim() ?? "";
+  const detail =
+    operatorScope === "operator admin"
+      ? "Platform-wide operator access"
+      : operatorScope === "operator project"
+        ? "Project-scoped operator access"
+        : (user?.email?.trim() ?? "");
   const initials = userInitials(label);
+
+  async function endCurrentSession() {
+    if (!isOperatorSession) return await signOut();
+    const response = await fetch("/api/operator-sessions/current", {
+      credentials: "same-origin",
+      method: "DELETE",
+    });
+    if (!response.ok) throw new Error(`Could not end operator session (${response.status}).`);
+    window.location.assign("/");
+  }
   const debugInfo = useMemo(
     () => ({
       auth: {
@@ -271,7 +297,7 @@ function AppSidebarUser() {
                   </Avatar>
                   <span className="grid flex-1 text-left text-sm leading-tight">
                     <span className="truncate font-medium">{label}</span>
-                    {email ? <span className="truncate text-xs">{email}</span> : null}
+                    {detail ? <span className="truncate text-xs">{detail}</span> : null}
                   </span>
                   <ChevronsUpDown className="ml-auto" />
                 </SidebarMenuButton>
@@ -290,21 +316,23 @@ function AppSidebarUser() {
                   </Avatar>
                   <div className="grid flex-1 text-left text-sm leading-tight">
                     <span className="truncate font-medium">{label}</span>
-                    {email ? <span className="truncate text-xs">{email}</span> : null}
+                    {detail ? <span className="truncate text-xs">{detail}</span> : null}
                   </div>
                 </div>
               </div>
               <DropdownMenuSeparator />
               <DropdownMenuGroup>
-                <DropdownMenuItem
-                  render={
-                    <a href={accountManagementUrl}>
-                      <UserCircle />
-                      <span>Manage account</span>
-                      <ExternalLink className="ml-auto" />
-                    </a>
-                  }
-                />
+                {!isOperatorSession && (
+                  <DropdownMenuItem
+                    render={
+                      <a href={accountManagementUrl}>
+                        <UserCircle />
+                        <span>Manage account</span>
+                        <ExternalLink className="ml-auto" />
+                      </a>
+                    }
+                  />
+                )}
                 {isAdmin && (
                   <DropdownMenuItem render={<Link to="/admin" />}>
                     <Shield />
@@ -318,9 +346,9 @@ function AppSidebarUser() {
               </DropdownMenuGroup>
               <DropdownMenuSeparator />
               <DropdownMenuGroup>
-                <DropdownMenuItem onClick={() => void signOut()}>
+                <DropdownMenuItem onClick={() => void endCurrentSession()}>
                   <LogOut />
-                  <span>Sign out</span>
+                  <span>{isOperatorSession ? "End operator session" : "Sign out"}</span>
                 </DropdownMenuItem>
               </DropdownMenuGroup>
             </DropdownMenuContent>
@@ -393,6 +421,7 @@ function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
   if (activeProjectSlug) {
     return (
       <ProjectSidebarGroup
+        projectId={activeRouteProject?.id ?? null}
         projectSlug={activeProjectSlug}
         projectHostnameBases={routeConfig.projectHostnameBases}
         appBaseUrl={routeConfig.baseUrl}
@@ -475,47 +504,78 @@ function getActiveRouteProject(matches: ReturnType<typeof useMatches>): ActiveRo
 
 function ProjectSidebarGroup({
   projectHostnameBases,
+  projectId,
   projectSlug,
   appBaseUrl,
 }: {
   projectHostnameBases: readonly string[];
+  /** Null while the route context has not resolved the project (cached-slug
+   * fallback) — the agents roster needs the id to address its subscription. */
+  projectId: string | null;
   projectSlug: string;
   appBaseUrl?: string;
 }) {
   const matchRoute = useMatchRoute();
-  const isNewChatActive = Boolean(
-    matchRoute({
-      to: "/projects/$projectSlug/agents/new",
-      params: { projectSlug },
-      fuzzy: false,
-    }),
+  const { isMobile, openMobile, state: sidebarState } = useSidebar();
+  const agents =
+    useLiveState(
+      (itx) => itx.agents.liveState,
+      (state) => state.agents,
+      [projectId],
+      { slug: projectId ?? "", enabled: projectId !== null },
+    ).value ?? {};
+  const agentAttentionCount = Object.values(agents).filter(
+    (agent) => deriveAgentDisplayState(undefined, agent.summary.waitingFor) !== "idle",
+  ).length;
+  // A registered custom domain (garple.com) is the project's real address —
+  // the Homepage link prefers it over the platform host (<slug>.<base>).
+  const customHostnames = useQuery({
+    enabled: projectId !== null,
+    queryKey: ["project-custom-hostnames", projectId],
+    queryFn: () => getProjectCustomHostnames({ data: { projectId: projectId ?? "" } }),
+    staleTime: 5 * 60_000,
+  });
+  // A malformed directory entry must not cost the link entirely: take the
+  // first registered hostname that passes validation, then the platform host.
+  const projectWorkerUrl = [...(customHostnames.data ?? []), null].reduce<string | null>(
+    (url, customHostname) =>
+      url ??
+      buildProjectWorkerUrl({ projectSlug, customHostname, projectHostnameBases, appBaseUrl }),
+    null,
   );
-  const projectWorkerUrl = buildProjectWorkerUrl({
-    projectSlug,
-    projectHostnameBases,
-    appBaseUrl,
+  const showAgentRows = sidebarAgentRowsVisible({
+    isMobile,
+    openMobile,
+    state: sidebarState,
   });
 
   return (
     <>
+      <ProjectWorkerHealthWarning projectId={projectId} />
       <SidebarGroup>
         <SidebarGroupContent>
           <SidebarMenu>
             <ProjectSidebarMenuItem
               icon={SquarePen}
-              label="New Chat"
-              render={
-                <Link to="/projects/$projectSlug/agents/new" params={{ projectSlug }} search={{}} />
-              }
-              isActive={isNewChatActive}
-            />
-            <ProjectSidebarMenuItem
-              icon={Settings2}
-              label="Settings"
+              label="New agent"
               render={<Link to="/projects/$projectSlug" params={{ projectSlug }} search={{}} />}
               isActive={Boolean(
                 matchRoute({
                   to: "/projects/$projectSlug",
+                  params: { projectSlug },
+                  fuzzy: false,
+                }),
+              )}
+            />
+            <ProjectSidebarMenuItem
+              icon={Settings2}
+              label="Settings"
+              render={
+                <Link to="/projects/$projectSlug/settings" params={{ projectSlug }} search={{}} />
+              }
+              isActive={Boolean(
+                matchRoute({
+                  to: "/projects/$projectSlug/settings",
                   params: { projectSlug },
                   fuzzy: false,
                 }),
@@ -572,12 +632,9 @@ function ProjectSidebarGroup({
                 <ProjectStreamNavItem
                   key={item.label}
                   icon={item.icon}
-                  isActive={
-                    item.to === "/projects/$projectSlug/agents" && isNewChatActive
-                      ? false
-                      : itemActive
-                  }
+                  isActive={itemActive}
                   label={item.label}
+                  badge={item.to === "/projects/$projectSlug/agents" ? agentAttentionCount : 0}
                   projectSlug={projectSlug}
                   streamPath={item.streamPath}
                   to={item.to}
@@ -587,6 +644,12 @@ function ProjectSidebarGroup({
           </SidebarMenu>
         </SidebarGroupContent>
       </SidebarGroup>
+      {/* The capped live agent hierarchy shares one project projection. */}
+      {projectId === null ? null : (
+        <DeferredSurface active={showAgentRows}>
+          <SidebarAgents agents={agents} projectSlug={projectSlug} />
+        </DeferredSurface>
+      )}
     </>
   );
 }
@@ -661,6 +724,7 @@ const PROJECT_STREAM_NAV_ITEMS: readonly ProjectStreamNavItemConfig[] = [
 ];
 
 function ProjectStreamNavItem({
+  badge,
   icon: Icon,
   isActive,
   label,
@@ -668,6 +732,7 @@ function ProjectStreamNavItem({
   streamPath,
   to,
 }: {
+  badge: number;
   icon: LucideIcon;
   isActive: boolean;
   label: string;
@@ -685,6 +750,20 @@ function ProjectStreamNavItem({
         <Icon />
         <EventsStreamPathLabel className="text-xs" label={label} path={streamPath} />
       </SidebarMenuButton>
+      {badge > 0 ? (
+        <>
+          <SidebarMenuBadge aria-label={`${badge} agents active or waiting`} role="status">
+            {badge > 99 ? "99+" : badge}
+          </SidebarMenuBadge>
+          <span
+            className="absolute right-0.5 top-0.5 hidden size-3 items-center justify-center rounded-full bg-primary text-[8px] font-semibold leading-none text-primary-foreground tabular-nums group-data-[collapsible=icon]:flex"
+            aria-label={`${badge} agents active or waiting`}
+            role="status"
+          >
+            {badge > 9 ? "9+" : badge}
+          </span>
+        </>
+      ) : null}
     </SidebarMenuItem>
   );
 }

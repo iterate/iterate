@@ -1,47 +1,63 @@
 import { DurableObject } from "cloudflare:workers";
+import { LiveStateRpcTarget } from "iterate/sdk/capnweb";
+import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
+import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
+import type { StreamEvent } from "iterate/processors";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { parseConfig } from "../../config.ts";
 import { workerVersion, type Env } from "../../env.ts";
 import {
   itxForScope,
-  LiveStateRpcTarget,
   ProjectEgressInterceptRpcTarget,
   StreamProcessorRpcTarget,
   StreamRpcTarget,
 } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { createStreamProcessorHost } from "../streams/stream-processor-host.ts";
-import type {
-  StreamSubscriberWakeRequest,
-  StreamSubscriberWakeResponse,
-} from "../streams/rpc-types.ts";
-import type { StreamEvent } from "../streams/schemas.ts";
 import { deepRetainRpcStubs } from "../capability-host/live-capability.ts";
-import { substitutePlatformApiKeyReferences } from "../secrets/platform-secrets.ts";
+import { fetchWithCredentialRedirects } from "../secrets/credential-fetch.ts";
+import { withWebSocketHandshakeHeaders } from "../secrets/websocket-handshake.ts";
+import {
+  assertPlatformApiKeyReferencesAllowed,
+  substitutePlatformApiKeyReferences,
+} from "../secrets/platform-secrets.ts";
 import {
   platformReferencesFromHeaders,
   secretErrorResponse,
   secretReferencePathsFromRequest,
+  SECRET_JSON_TEMPLATE_HEADER,
   SecretSubstitutionError,
 } from "../secrets/utils.ts";
 import { SlackProcessor } from "../integrations/slack-processor-implementation.ts";
+import { SlackProcessorContract } from "../integrations/slack-processor-contract.ts";
 import { eyesReactionTargetFromWebhookPayload } from "../integrations/slack-agent-processor-implementation.ts";
 import { callProjectSlackWebApi } from "../integrations/slack-api.ts";
 import { TelegramProcessor } from "../integrations/telegram-processor-implementation.ts";
-import { connectionFromIntegrationStreamPath } from "../integrations/utils.ts";
+import { TelegramProcessorContract } from "../integrations/telegram-processor-contract.ts";
+import { callProjectTelegramBotApi } from "../integrations/telegram-api.ts";
+import { buildTelegramAccessSettingsUrl } from "../integrations/utils.ts";
+import { readProjectById } from "../../project-directory.ts";
 import { EmailProcessor } from "../email/email-processor-implementation.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
+import { NotificationProcessor } from "../notifications/notification-processor-implementation.ts";
+import { isRetryableDurableObjectAvailabilityError } from "../streams/stream-unavailable.ts";
 import type { ProjectEgressIntercept, ProjectEgressInterceptor } from "./egress.ts";
 import {
   buildApprovalMessage,
+  approvalRequestBody,
   evaluateGrant,
-  HumanApprovalGrantedPayload,
-  HumanApprovalRejectedPayload,
   matchEgressRule,
   sha256Hex,
   type EgressRule,
   type HumanApprovalRequestedPayload,
 } from "./egress-approvals.ts";
+import {
+  applyOpenAiAiGatewayCacheHeaders,
+  isOpenAiPublicApiRequest,
+  openAiAiGatewayBindingHeaders,
+  openAiAiGatewayRoutingFromConfig,
+  openAiGatewayBindingEndpoint,
+} from "./openai-ai-gateway-egress.ts";
+import { takeStreamContext, type StreamContext } from "./stream-context.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
 import { StreamDatabase, type TouchInput } from "./stream-database.ts";
@@ -49,6 +65,11 @@ import type { ProjectLiveState } from "./project-live-state.ts";
 import { createCloudflareProjectCustomDomainDeps } from "./custom-domains.ts";
 
 export class ProjectDurableObject extends DurableObject<Env> {
+  /** Report this incarnation's code version for the deployment rollout gate. */
+  deploymentVersion(): string {
+    return workerVersion(this.env);
+  }
+
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
   #egressInterceptor?: ReturnType<typeof deepRetainRpcStubs<ProjectEgressInterceptor>>;
   // Last time #egressRules paid a catch-up — bounds rules staleness to ~5s.
@@ -59,63 +80,88 @@ export class ProjectDurableObject extends DurableObject<Env> {
   // will use.
   #liveDemo: { count: number } = { count: 0 };
   // The project's streams index — a materialized view in the DO's own SQLite,
-  // touched from the processEventBatch fan-in (see touchStreamActivity).
+  // updated from the processEventBatch fan-in.
   readonly #streamDatabase = new StreamDatabase(this.ctx.storage.sql);
-  readonly #processorHost = createStreamProcessorHost(this.ctx, {
-    stream: new StreamRpcTarget({
-      auth: trustedInternalAuthContext(),
-      path: this.#name.path,
-      projectId: this.#name.projectId,
-    }),
+  readonly #stream = new StreamRpcTarget({
+    auth: trustedInternalAuthContext(),
+    path: this.#name.path,
+    projectId: this.#name.projectId,
+  });
+  readonly #registry = createStreamProcessorRegistry(this.ctx, {
+    stream: this.#stream,
     path: this.#name.path,
     projectId: this.#name.projectId,
     version: workerVersion(this.env),
     // `itx.liveState` = the project's composite live state (see ProjectLiveState):
     // the processor's fold is ONE peer slice, alongside the streams index the DO
-    // keeps in SQLite and the demo counter.
+    // keeps in SQLite and the demo counter. The explicit return type breaks the
+    // field-initializer inference cycle (this closure reads #projectReads,
+    // which is built from this registry).
     getLiveState: (): ProjectLiveState => {
-      const reduced = this.#projectProcessor.currentState;
+      const reduced = this.#projectReads.currentState;
       // Reconcile any catalog stream missing an index row (cheap when none are),
       // so newly-created quiet streams show up in ⌘K without waiting for events.
       this.#streamDatabase.seedMissing(reduced.streams);
-      return { reduced, streamsIndex: this.#streamDatabase.all(), liveDemo: this.#liveDemo };
+      return {
+        reduced,
+        streamsIndex: this.#streamDatabase.all(),
+        liveDemo: this.#liveDemo,
+      };
     },
   });
-  readonly #projectProcessor = this.#processorHost.add(
-    (deps) =>
-      new ProjectProcessor({
-        ...deps,
-        customDomains: createCloudflareProjectCustomDomainDeps({
-          env: this.env,
-          projectId: this.#name.projectId,
-        }),
-        itx: itxForScope({
-          auth: trustedInternalAuthContext(),
-          ctx: this.ctx,
-          path: "/",
-          projectId: this.#name.projectId,
-        }),
+  // The DO constructs its processors — no host-injected readState/writeState/
+  // keepAliveWhile deps; the runner owns durable progress and keepalive. NO
+  // recovery on any of them, on purpose (parity with the host wiring): none
+  // overrides `reconcile`, so no post-eviction pass would have work to settle.
+  // Their consequential side effects all run under `blockProcessorWhile`,
+  // which holds the frame — a death mid-work leaves the cursor behind and the
+  // subscription spine redelivers. Their `runInBackground` work (the Slack 👀
+  // ack) is best-effort telemetry-grade
+  // today and stays that way (see the registry module doc's recovery rule).
+  readonly #projectProcessor = this.#registry.register(
+    new ProjectProcessor({
+      stream: this.#stream,
+      path: this.#name.path,
+      projectId: this.#name.projectId,
+      customDomains: createCloudflareProjectCustomDomainDeps({
+        env: this.env,
+        projectId: this.#name.projectId,
       }),
+      itx: itxForScope({
+        auth: trustedInternalAuthContext(),
+        ctx: this.ctx,
+        streamContext: { kind: "scope", scopePath: "/" },
+        path: "/",
+        projectId: this.#name.projectId,
+      }),
+    }),
   );
+  readonly #notificationProcessor = this.#registry.register(
+    new NotificationProcessor({
+      stream: this.#stream,
+      path: this.#name.path,
+      projectId: this.#name.projectId,
+    }),
+  );
+  readonly #notificationReads = this.#registry.reads(this.#notificationProcessor);
+  // Runner-backed reads: under runner drive the runner owns the cursors and
+  // the processor instance's internal checkpoint never advances, so every
+  // read this DO serves (snapshots, egress rules, approval keys, live state)
+  // must go through the runner's committed progress.
+  readonly #projectReads = this.#registry.reads(this.#projectProcessor);
 
   // The Slack webhook router. It only ever WAKES on the Durable Object
   // instances addressed at `/integrations/slack/{connection}` (the host stream
   // is this DO's own path stream), where the OAuth connect flow configured
   // its subscription; registering it on every instance is harmless.
-  // Registration is the point: the host wakes the router by slug; nothing
-  // dials the facet handle directly anymore (status is a journal fold).
-  protected readonly slackRouterRegistration = this.#processorHost.add((deps) => {
-    // This DO instance hosts one connection's router stream
-    // (/integrations/slack/{connection}): the name IS the connection, for both
-    // routing and the bot-token secret path. Null (a non-connection path) is
-    // passed through — the processor errors loudly if a mis-armed subscription
-    // ever wakes it there.
-    const connection = connectionFromIntegrationStreamPath(this.#name.path);
-    return new SlackProcessor({
-      ...deps,
-      connection,
-      acknowledgeRoutedWebhook: async ({ payload }) => {
-        if (connection === null) return;
+  // Registration routes wake delivery by slug; #slackReads below exposes the
+  // same runner's committed fold to the public processor inspection handle.
+  protected readonly slackRouterRegistration = this.#registry.register(
+    new SlackProcessor({
+      stream: this.#stream,
+      path: this.#name.path,
+      projectId: this.#name.projectId,
+      acknowledgeRoutedWebhook: async ({ connection, payload }) => {
         const ack = eyesReactionTargetFromWebhookPayload(payload);
         if (ack == null) return;
         try {
@@ -124,6 +170,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
             connection,
             method: "reactions.add",
             projectId: this.#name.projectId,
+            streamContext: { kind: "scope", scopePath: this.#name.path },
           });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
@@ -136,42 +183,89 @@ export class ProjectDurableObject extends DurableObject<Env> {
           });
         }
       },
-    });
-  });
+    }),
+  );
+  readonly #slackReads = this.#registry.reads(this.slackRouterRegistration);
 
   // The Telegram webhook router — same hosting shape as the Slack router: it
   // only ever WAKES on `/integrations/telegram/{connection}` instances, where
   // connectTelegram configured its subscription. No routed-webhook ack dep:
   // Telegram has no reaction primitive; the telegram-agent processor's
   // "typing…" chat action covers acknowledgement.
-  protected readonly telegramRouterRegistration = this.#processorHost.add((deps) => {
-    return new TelegramProcessor({
-      ...deps,
-      connection: connectionFromIntegrationStreamPath(this.#name.path),
-    });
-  });
+  protected readonly telegramRouterRegistration = this.#registry.register(
+    new TelegramProcessor({
+      stream: this.#stream,
+      path: this.#name.path,
+      projectId: this.#name.projectId,
+      now: Date.now,
+      sendTelegramMessage: ({ body, connection }) =>
+        callProjectTelegramBotApi({
+          body,
+          connection,
+          method: "sendMessage",
+          projectId: this.#name.projectId,
+          streamContext: { kind: "scope", scopePath: this.#name.path },
+        }),
+      telegramAccessSettingsUrl: async ({ connection, projectId }) => {
+        const project = await readProjectById(this.env.PROJECT_DIRECTORY, projectId);
+        if (project === null) {
+          throw new Error(
+            `Telegram access denial cannot link project ${projectId}: directory record missing`,
+          );
+        }
+        return buildTelegramAccessSettingsUrl({
+          baseUrl: parseConfig(this.env).baseUrl || "https://os.iterate.com",
+          connection,
+          projectSlug: project.slug,
+        });
+      },
+    }),
+  );
+  readonly #telegramReads = this.#registry.reads(this.telegramRouterRegistration);
 
   // The email thread router — same hosting shape as the Slack router: it only
   // ever WAKES on the Durable Object instance addressed at
-  // `/integrations/email`, where project bootstrap (or the email ingress
-  // door's belt-and-braces append) configured its subscription.
-  readonly #emailProcessor = this.#processorHost.add((deps) => new EmailProcessor(deps));
+  // `/integrations/email`, where project bootstrap explicitly created it and
+  // configured its subscription. Email ingress only appends received mail.
+  readonly #emailProcessor = this.#registry.register(
+    new EmailProcessor({
+      stream: this.#stream,
+      path: this.#name.path,
+      projectId: this.#name.projectId,
+    }),
+  );
+  readonly #emailReads = this.#registry.reads(this.#emailProcessor);
 
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
-    return this.#processorHost.wakeStreamSubscriber(args);
+    return this.#registry.wakeStreamSubscriber(args);
   }
 
-  /** The keepalive's revival alarm — see stream-processor-host.ts. */
-  alarm(): Promise<void> {
-    return this.#processorHost.handleAlarm();
+  /** The registry's shared DO alarm (runner keepalives) — see stream-processor-registry.ts. */
+  alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
+    return this.#registry.handleAlarm(alarmInfo);
+  }
+
+  get slackProcessor() {
+    return new StreamProcessorRpcTarget(this.#slackReads, {
+      catchUpBeforeSnapshot: () => this.#registry.catchUp(SlackProcessorContract.slug),
+    });
+  }
+
+  get telegramProcessor() {
+    return new StreamProcessorRpcTarget(this.#telegramReads, {
+      catchUpBeforeSnapshot: () => this.#registry.catchUp(TelegramProcessorContract.slug),
+    });
   }
 
   get emailProcessor() {
-    return new StreamProcessorRpcTarget(this.#emailProcessor, {
+    // Runner-backed reads (#emailReads), never the processor instance — see
+    // the #projectReads comment: instance reads are stale forever under
+    // runner drive.
+    return new StreamProcessorRpcTarget(this.#emailReads, {
       // The ingress door reads the sender allowlist from this snapshot; it
       // must reflect a policy event appended moments ago (e.g. the birth
       // seed) even when push delivery is lagging or a wake was dropped.
-      catchUpBeforeSnapshot: () => this.#processorHost.catchUp(EmailProcessorContract.slug),
+      catchUpBeforeSnapshot: () => this.#registry.catchUp(EmailProcessorContract.slug),
     });
   }
 
@@ -188,43 +282,64 @@ export class ProjectDurableObject extends DurableObject<Env> {
   }
 
   get processor() {
-    return new StreamProcessorRpcTarget(this.#projectProcessor, {
+    // Runner-backed reads (#projectReads), never the processor instance —
+    // see the field comment: instance reads are stale forever under runner
+    // drive.
+    return new StreamProcessorRpcTarget(this.#projectReads, {
       // Lists served from this snapshot (child streams, secrets) must reflect
       // a child stream created moments ago even when the root stream's push
       // delivery is lagging or a wake was dropped.
-      catchUpBeforeSnapshot: () => this.#processorHost.catchUp(ProjectProcessorContract.slug),
+      catchUpBeforeSnapshot: () => this.#registry.catchUp(ProjectProcessorContract.slug),
+    });
+  }
+
+  get notificationProcessor() {
+    return new StreamProcessorRpcTarget(this.#notificationReads, {
+      catchUpBeforeSnapshot: () => this.#registry.catchUp("notification"),
     });
   }
 
   /** The project's live state — the get/set/assign/subscribe surface behind `itx.liveState`. */
   get liveState() {
-    return new LiveStateRpcTarget(this.#processorHost);
+    return new LiveStateRpcTarget(this.#registry);
   }
 
   /** Demo mutation: bump the shared counter and push it to every `itx.liveState` watcher. */
-  incrementLiveDemo(): void {
+  async incrementLiveDemo(): Promise<void> {
+    // External live-state inputs cannot use the synchronous refresh door on a
+    // cold incarnation: it deliberately refuses to assemble from a runner's
+    // schema default. Load every peer before mutating so this update is
+    // published immediately and a load failure rejects the caller.
+    await this.#registry.loadAndRefreshLive();
     this.#liveDemo = { count: this.#liveDemo.count + 1 };
-    this.#processorHost.refreshLive();
+    this.#registry.refreshLive();
   }
 
   /**
-   * Record stream activity in the index and push it to `itx.liveState`. Called
-   * from the project's `processEventBatch` fan-in (every project-scoped
-   * stream's events flow through it). Idempotent — `StreamDatabase.touch` only
-   * advances recency — so a redelivered batch is harmless.
+   * Update the live projections from one committed delivery before that
+   * delivery is acknowledged. Both reducers are idempotent, so spine retries
+   * are harmless; a storage/RPC failure rejects the batch instead of silently
+   * leaving live state stale.
    */
-  touchStreamActivity(input: TouchInput): void {
-    this.#streamDatabase.touch(input);
-    this.#processorHost.refreshLive();
+  async indexCommittedBatchFacts(input: { stream: TouchInput }): Promise<void> {
+    // See incrementLiveDemo: once this resolves every peer slice is real, so
+    // the synchronous refresh below cannot drop this external index update.
+    await this.#registry.loadAndRefreshLive();
+    const streamsBefore = this.#streamDatabase.all();
+    this.#streamDatabase.touch(input.stream);
+    if (streamsBefore !== this.#streamDatabase.all()) {
+      this.#registry.refreshLive();
+    }
   }
 
   async fetch(request: Request): Promise<Response> {
+    const taken = takeStreamContext(request);
     if (this.#egressInterceptor !== undefined) {
       // Egress interceptors run before secret substitution. They must never
       // receive raw secret material, only getSecret(...) placeholders.
-      return await this.#egressInterceptor.value(request);
+      return await this.#egressInterceptor.value(taken.request);
     }
-    return this.#egressWithApprovalGate(request);
+    return this.#egressWithApprovalGate(taken.request, taken.streamContext);
   }
 
   /**
@@ -236,7 +351,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
    * UI reading them) can honestly say "this request spends /secrets/x"
    * without material ever leaving the platform.
    */
-  async #egressWithApprovalGate(request: Request): Promise<Response> {
+  async #egressWithApprovalGate(request: Request, streamContext: StreamContext): Promise<Response> {
     const rules = await this.#egressRules();
     if (rules.length === 0) return this.#egress(request);
 
@@ -245,12 +360,8 @@ export class ProjectDurableObject extends DurableObject<Env> {
     // getSecret placeholder must not be a way to slip a `deny`/`hold` rule —
     // just without the secret-path matchers. A request that then matches no
     // rule falls to the egress lanes, which report the canonical error.
-    let secretPaths: string[] = [];
-    try {
-      secretPaths = secretReferencePathsFromRequest(request);
-    } catch {
-      secretPaths = [];
-    }
+    const scanned = await secretReferencePathsFromRequest(request);
+    const secretPaths = scanned.problems.length === 0 ? scanned.paths : [];
 
     const rule = matchEgressRule(rules, { method: request.method, url: request.url, secretPaths });
     if (rule === undefined) return this.#egress(request);
@@ -261,7 +372,8 @@ export class ProjectDurableObject extends DurableObject<Env> {
         ruleKey: rule.ruleKey,
       });
     }
-    return this.#holdForHumanApproval({ request, rule, secretPaths });
+    if (scanned.problems[0] !== undefined) return this.#egress(request);
+    return this.#holdForHumanApproval({ request, rule, secretPaths, streamContext });
   }
 
   /**
@@ -272,11 +384,11 @@ export class ProjectDurableObject extends DurableObject<Env> {
    * catch up; rules are policy, where seconds of lag are acceptable.)
    */
   async #egressRules(): Promise<readonly EgressRule[]> {
-    if (!this.#projectProcessor.isLoaded || Date.now() - this.#egressRulesFreshAt > 5_000) {
-      await this.#processorHost.catchUp(ProjectProcessorContract.slug);
+    if (!this.#projectReads.isLoaded || Date.now() - this.#egressRulesFreshAt > 5_000) {
+      await this.#registry.catchUp(ProjectProcessorContract.slug);
       this.#egressRulesFreshAt = Date.now();
     }
-    return this.#projectProcessor.currentState.egressRules;
+    return this.#projectReads.currentState.egressRules;
   }
 
   /**
@@ -292,6 +404,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     request: Request;
     rule: EgressRule;
     secretPaths: string[];
+    streamContext: StreamContext;
   }): Promise<Response> {
     const { request, rule } = input;
     // ONE deadline drives both the `expiresAt` the approver UI reads and the
@@ -305,14 +418,15 @@ export class ProjectDurableObject extends DurableObject<Env> {
       method: request.method,
       url: request.url,
       headers: Object.fromEntries(request.headers),
-      bodySha256: bodyBytes === null ? null : await sha256Hex(bodyBytes),
-      bodyPreview: bodyBytes === null ? null : utf8Preview(bodyBytes),
+      body: bodyBytes === null ? null : approvalRequestBody(bodyBytes, await sha256Hex(bodyBytes)),
       secretPaths: input.secretPaths,
       ruleKey: rule.ruleKey,
+      ruleDescription: rule.description,
+      streamContext: input.streamContext,
       expiresAt: new Date(deadline).toISOString(),
     };
 
-    const stream = this.#ownStream();
+    const stream = this.#stream;
     const [requested] = await stream.append({
       type: "events.iterate.com/project/human-approval-requested",
       payload: requestedPayload,
@@ -395,7 +509,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     deadline: number;
     requestedPayload: HumanApprovalRequestedPayload;
   }): Promise<"granted" | "rejected" | "expired"> {
-    const stream = this.#ownStream();
+    const stream = this.#stream;
     const resolutionEventTypes = [
       "events.iterate.com/project/human-approval-granted",
       "events.iterate.com/project/human-approval-rejected",
@@ -403,6 +517,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     let cursor = input.approvalRequestEventOffset;
 
     // Live phase: chunked one-shot waits until the wall-clock deadline.
+    let availabilityBackoffMs = 200;
     while (Date.now() < input.deadline) {
       let event;
       try {
@@ -413,15 +528,30 @@ export class ProjectDurableObject extends DurableObject<Env> {
         });
       } catch (error) {
         // waitForEvent is a one-shot, not a durable waiter: chunk timeouts
-        // (and transient stream restarts) just re-arm from the same cursor.
+        // just re-arm from the same cursor.
         if (
           error instanceof Error &&
           error.message.includes("Timed out waiting for stream event")
         ) {
           continue;
         }
+        // A hold spans minutes of human latency, so the stream DO behind the
+        // wait WILL sometimes restart mid-chunk (connection recycle, eviction,
+        // deploy reset, explicit kill). By the stream-unavailable contract
+        // those rejections are retryable — the incarnation reboots on the next
+        // call and durable resolutions replay from the cursor — so re-arm
+        // instead of failing the parked fetch (which killed whole script runs:
+        // tasks/script-runs-survive-parked-egress-holds.md). Backoff keeps a
+        // hard-down stream from hot-looping; the deadline still bounds the
+        // hold, and expiry remains the safe direction.
+        if (isRetryableDurableObjectAvailabilityError(error)) {
+          await this.#sleep(Math.min(availabilityBackoffMs, input.deadline - Date.now()));
+          availabilityBackoffMs = Math.min(availabilityBackoffMs * 2, 5_000);
+          continue;
+        }
         throw error;
       }
+      availabilityBackoffMs = 200;
       cursor = event.offset;
       const verdict = await this.#judgeResolution(event, input);
       if (verdict !== null) return verdict;
@@ -461,14 +591,18 @@ export class ProjectDurableObject extends DurableObject<Env> {
     },
   ): Promise<"granted" | "rejected" | null> {
     if (event.type === "events.iterate.com/project/human-approval-rejected") {
-      const rejection = HumanApprovalRejectedPayload.safeParse(event.payload);
+      const rejection = ProjectProcessorContract.events[
+        "events.iterate.com/project/human-approval-rejected"
+      ].payloadSchema.safeParse(event.payload);
       return rejection.success &&
         rejection.data.approvalRequestEventOffset === input.approvalRequestEventOffset
         ? "rejected"
         : null;
     }
 
-    const grant = HumanApprovalGrantedPayload.safeParse(event.payload);
+    const grant = ProjectProcessorContract.events[
+      "events.iterate.com/project/human-approval-granted"
+    ].payloadSchema.safeParse(event.payload);
     if (
       !grant.success ||
       grant.data.approvalRequestEventOffset !== input.approvalRequestEventOffset
@@ -492,7 +626,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     let backoffMs = 200;
     while (true) {
       try {
-        await this.#processorHost.catchUp(ProjectProcessorContract.slug);
+        await this.#registry.catchUp(ProjectProcessorContract.slug);
       } catch (error) {
         if (Date.now() >= input.deadline) {
           console.warn("egress approval: grant unverifiable — key-state catch-up kept failing", {
@@ -509,7 +643,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
       }
       const verdict = await evaluateGrant({
         grant: grant.data,
-        keys: this.#projectProcessor.currentState.humanApprovalKeys,
+        keys: this.#projectReads.currentState.humanApprovalKeys,
         message,
       });
       if (verdict.accepted) return "granted";
@@ -528,26 +662,16 @@ export class ProjectDurableObject extends DurableObject<Env> {
     return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
   }
 
-  /** This Durable Object's own stream (the project stream for the "/" egress instance). */
-  #ownStream() {
-    return new StreamRpcTarget({
-      auth: trustedInternalAuthContext(),
-      path: this.#name.path,
-      projectId: this.#name.projectId,
-    });
-  }
-
   /** The egress lanes proper: platform references, secret substitution, bare fetch. */
   async #egress(request: Request): Promise<Response> {
-    let secretPaths: string[];
-    try {
-      // Placeholders live in the request envelope: headers, or the URL for
-      // providers that authenticate in the URL path (Telegram).
-      secretPaths = secretReferencePathsFromRequest(request);
-    } catch {
+    // Placeholders live in the request envelope: headers, the URL path, or an
+    // explicitly marked JSON body.
+    const { paths: secretPaths, problems } = await secretReferencePathsFromRequest(request);
+    if (problems[0] !== undefined) return secretErrorResponse(problems[0].code);
+    const platformReferences = platformReferencesFromHeaders(request.headers);
+    if (request.headers.has(SECRET_JSON_TEMPLATE_HEADER) && secretPaths.length === 0) {
       return secretErrorResponse("secret_reference_required");
     }
-    const platformReferences = platformReferencesFromHeaders(request.headers);
 
     // Platform API-key references (`getSecret({ platform: ... })`) resolve
     // HERE, from typed deployment config against a known origin-pinned
@@ -556,8 +680,16 @@ export class ProjectDurableObject extends DurableObject<Env> {
     if (platformReferences.length > 0) {
       if (secretPaths.length > 0) return secretErrorResponse("secret_reference_foreign");
       try {
-        return await fetch(
-          substitutePlatformApiKeyReferences({ config: parseConfig(this.env), request }),
+        const substituted = substitutePlatformApiKeyReferences({
+          config: parseConfig(this.env),
+          request,
+        });
+        return await withWebSocketHandshakeHeaders(
+          request,
+          await fetchWithCredentialRedirects(substituted, {
+            assertUrlAllowed: (url) =>
+              assertPlatformApiKeyReferencesAllowed(platformReferences, url),
+          }),
         );
       } catch (error) {
         if (error instanceof SecretSubstitutionError) return secretErrorResponse(error.code);
@@ -565,17 +697,75 @@ export class ProjectDurableObject extends DurableObject<Env> {
       }
     }
 
-    if (secretPaths.length === 0) return fetch(request);
     // One request, one secret: the referenced Secret DO substitutes its own
     // placeholders under its own host pin (cross-secret chaining is gone).
     if (secretPaths.length > 1) return secretErrorResponse("secret_reference_foreign");
+    if (secretPaths.length === 1) {
+      const response = await this.env.SECRET.getByName(
+        DurableObjectNameCodec.stringify({
+          projectId: this.#name.projectId,
+          path: secretPaths[0]!,
+        }),
+      ).fetch(request);
+      return withWebSocketHandshakeHeaders(request, response);
+    }
 
-    return this.env.SECRET.getByName(
-      DurableObjectNameCodec.stringify({
-        projectId: this.#name.projectId,
-        path: secretPaths[0]!,
-      }),
-    ).fetch(request);
+    // Sandbox coding agents with no explicit project/platform secret use the
+    // platform OpenAI key through AI Gateway. An explicit project secret wins,
+    // including if a WebSocket client falls back to an HTTP POST, so credential
+    // provenance and the secret audit cannot silently change between transports.
+    if (isOpenAiPublicApiRequest(request)) {
+      const routed = await this.#egressOpenAiViaAiGateway(request);
+      if (routed !== null) return routed;
+      // Fall through when accountId/gateway config is missing (local/dev edge).
+    }
+
+    return withWebSocketHandshakeHeaders(request, await fetch(request));
+  }
+
+  /**
+   * Route JSON POST/PUT to `api.openai.com` through Cloudflare AI Gateway via
+   * the Workers AI binding only (same door as agent BYOK). Returns null when
+   * the request is not binding-shaped (GET, non-JSON, missing gateway) so
+   * normal egress applies — no REST rewrite and no direct-OpenAI platform-key
+   * ladder.
+   */
+  async #egressOpenAiViaAiGateway(request: Request): Promise<Response | null> {
+    if (request.method !== "POST" && request.method !== "PUT") return null;
+
+    const config = parseConfig(this.env);
+    const routing = openAiAiGatewayRoutingFromConfig(config);
+    if (routing === null) return null;
+
+    const gateway = this.env.AI?.gateway?.(routing.gatewayId);
+    if (gateway === undefined) return null;
+
+    const endpoint = openAiGatewayBindingEndpoint(request.url);
+    if (endpoint.replace(/\?.*$/, "").length === 0) return null;
+
+    let body: unknown;
+    try {
+      body = await request.clone().json();
+    } catch {
+      return null;
+    }
+
+    const headers = openAiAiGatewayBindingHeaders({
+      openaiApiKey: routing.openaiApiKey,
+      projectId: this.#name.projectId,
+      requestHeaders: request.headers,
+    });
+    await applyOpenAiAiGatewayCacheHeaders({
+      headers,
+      body,
+      responseCacheTtlSeconds: routing.responseCacheTtlSeconds,
+    });
+    return gateway.run({
+      provider: "openai",
+      endpoint,
+      headers,
+      query: body,
+    });
   }
 
   interceptEgress(handler: ProjectEgressInterceptor): ProjectEgressIntercept {
@@ -607,13 +797,4 @@ function approvalGateResponse(body: {
   ruleKey: string;
 }): Response {
   return Response.json({ error: body.code, ...body }, { status: 403 });
-}
-
-/** First 2KB of a body as UTF-8 for the approval UI; null when it does not decode. */
-function utf8Preview(bytes: Uint8Array): string | null {
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes.slice(0, 2048));
-  } catch {
-    return null;
-  }
 }

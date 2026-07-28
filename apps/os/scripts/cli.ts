@@ -5,8 +5,10 @@ import { fileURLToPath } from "node:url";
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 
+export * as configRepo from "./reset-config-repo.ts";
 export * as dev from "./dev.ts";
 export * as itx from "./itx.ts";
+export * as session from "./session.ts";
 
 const DEFAULT_MCP_BASE_URL = "https://mcp.iterate.com";
 const LOCAL_DEVELOPMENT_MCP_PATH = "/api/mcp";
@@ -20,7 +22,7 @@ type ClaudeMcpOptions = {
   baseHost?: string;
   /** Initial prompt passed to Claude before entering interactive mode. */
   prompt?: string;
-  /** Include the ask_assistant tool in addition to exec_js. */
+  /** Include the ask_assistant tool in addition to exec_typescript. */
   withAgent?: boolean;
 };
 

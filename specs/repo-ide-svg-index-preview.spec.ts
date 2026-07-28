@@ -1,6 +1,7 @@
 import { expect } from "@playwright/test";
 import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
+import { openRepoTreeFile } from "./test-support/repo-tree.ts";
 
 /**
  * SVG previews through the same sandboxed html iframe as html files (raw svg
@@ -17,7 +18,7 @@ test("toggle an svg file between Code and its sandboxed Preview", async ({
 
   using itx = await connectAdminItx(baseURL!);
   using project = itx.projects.get(fixture.project.id);
-  await project.repos.create({ path: "/repos/ide" });
+  await project.repos.get("/repos/ide").create({ type: "empty" });
   await project.repos.get("/repos/ide").commitFiles({
     message: "Add icon.svg",
     changes: [
@@ -32,13 +33,19 @@ test("toggle an svg file between Code and its sandboxed Preview", async ({
   await page.goto(`/projects/${fixture.project.slug}/repos/ide`);
 
   // Code view shows the svg source.
-  await page.locator('[data-item-path="icon.svg"]').click();
-  await expect(page.locator(".cm-content")).toContainText("<circle");
+  await openRepoTreeFile(page, "icon.svg");
+  await page.locator(".cm-content").filter({ hasText: "<circle" }).waitFor();
 
   // Preview renders the svg in the sandboxed iframe (same srcdoc lane as html).
   await page.getByRole("tab", { name: "Preview" }).click({ timeout: 10_000 });
   const preview = page.locator('iframe[title="HTML preview"]');
+  // The tab changes URL-owned view state through a React transition while the
+  // usable Code pane remains on screen. There is intentionally no loading
+  // spinner, so assert the bounded eventual render rather than treating the
+  // transition as a missing product loading state.
+  // oxlint-disable-next-line iterate/spec-restricted-syntax -- React retains the usable Code pane during this search-state transition, so there is intentionally no spinner for locator.waitFor to follow.
   await expect(preview).toBeVisible();
+  // oxlint-disable-next-line iterate/spec-restricted-syntax -- same bounded search-state transition; this assertion also proves the rendered iframe contains the SVG source.
   await expect(preview).toHaveAttribute("srcdoc", /<circle/);
 });
 
@@ -51,7 +58,7 @@ test("preview a staged snapshot from the readonly Index view", async ({
 
   using itx = await connectAdminItx(baseURL!);
   using project = itx.projects.get(fixture.project.id);
-  await project.repos.create({ path: "/repos/ide" });
+  await project.repos.get("/repos/ide").create({ type: "empty" });
   await project.repos.get("/repos/ide").commitFiles({
     message: "Add page.html",
     changes: [{ path: "page.html", content: "<h1>Committed</h1>" }],
@@ -60,21 +67,18 @@ test("preview a staged snapshot from the readonly Index view", async ({
   await page.goto(`/projects/${fixture.project.slug}/repos/ide`);
 
   // Edit the html and stage it, then open the readonly "(Index)" pseudo-file.
-  await page.locator('[data-item-path="page.html"]').click();
+  await openRepoTreeFile(page, "page.html");
   await page.locator(".cm-content").click();
   await page.keyboard.press("ControlOrMeta+a");
   await page.keyboard.type("<h1>Staged edit</h1>");
   await page.getByRole("button", { name: "Stage" }).click();
   await page.getByRole("button", { name: "Source control" }).click();
   await page.getByRole("button", { name: "page.html" }).first().click();
-  await expect(page.getByText("page.html (Index)")).toBeVisible();
+  await page.getByText("page.html (Index)").waitFor();
 
   // The Code | Preview toggle rides into the Index view: previewing renders the
   // STAGED snapshot and the header reads "(Index Preview)".
   await page.getByRole("tab", { name: "Preview" }).click({ timeout: 10_000 });
-  await expect(page.getByText("page.html (Index Preview)")).toBeVisible();
-  await expect(page.locator('iframe[title="HTML preview"]')).toHaveAttribute(
-    "srcdoc",
-    /Staged edit/,
-  );
+  await page.getByText("page.html (Index Preview)").waitFor();
+  await page.locator('iframe[title="HTML preview"][srcdoc*="Staged edit"]').waitFor();
 });

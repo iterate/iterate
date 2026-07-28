@@ -43,13 +43,14 @@ Key consequences:
 - **The path is the identity; the journal routes.** The instance type is
   configuration, not a path segment (a type segment would materialize
   meaningless intermediate folder streams like `/sandboxes/lite`).
-  `itx.sandboxes.create` claims the name by appending `create-requested` to
+  `itx.sandboxes.get(path).create` claims the name by appending `create-requested` to
   the `/sandboxes` catalogue stream (idempotency-keyed by path — atomic), and
   `itx.sandboxes.get(path)` reads the claim back to pick the namespace, then
   mints the DO stub from `{projectId}:{path}`. Same path → same sandbox (and
   its snapshot lineage). The catalogue stream _is_ the directory — no separate
   registry, and lookups never materialize per-path streams.
-- **Existence is explicit.** A stub only answers once `itx.sandboxes.create`
+- **Existence is explicit.** A handle's SDK surface only answers once
+  `itx.sandboxes.get(path).create`
   recorded the sandbox; addressing never creates (unlike stock `getSandbox`).
 - Per-class settings (`instance_type`, `max_instances`, `ssh`,
   `authorized_keys`) are set per instance type in
@@ -120,7 +121,7 @@ container's memory) merges into it; `undefined` unsets a key, and every call
 lands as a `sandbox/configured` event on the sandbox's stream.
 
 **The secret never enters the container.** A value like
-`getSecret({ path: "…" })` or `getSecret({ platform: "…" })` is set verbatim as
+`getSecret("…")` or `getSecret({ platform: "…" })` is set verbatim as
 the env var; when code in the sandbox puts it in a request header, the project
 egress path substitutes the real material on the way out (the same allowlist +
 substitution used for all sandbox egress — see
@@ -134,13 +135,17 @@ value** — it would sit in the container's environment, its snapshots, and the
 connection, the sandbox plants `GH_TOKEN` automatically — a `getSecret`
 placeholder for the connection secret's `accessToken` (minted/substituted only
 at egress). `gh` reads it from the environment natively, and provisioning also
-sets a `git http."https://github.com/".extraheader` with a raw
-`AUTHORIZATION: Bearer $GH_TOKEN` header (a credential helper would send Basic
-auth — base64 — hiding the placeholder from egress substitution), so plain
-`git` and `gitCheckout` against github.com work too. Discovery runs per
-container start (a new connection is picked up on the next start); with
-several connections the lexicographically first connection name wins;
-`setEnvVars({ GH_TOKEN })` overrides the pick.
+sets a `git http."https://github.com/".extraheader` with
+`AUTHORIZATION: Basic base64(x-access-token:$GH_TOKEN)` — GitHub's git
+smart-HTTP endpoint rejects Bearer tokens (API-style) and wants Basic with
+username `x-access-token`. The placeholder rides inside the base64 payload;
+project egress peels Basic Authorization headers before substituting, so plain
+`git` and `gitCheckout` against github.com work without token bytes entering
+the container. Provisioning also sets `user.name` / `user.email` to brand-lowercase
+**`iterate`** plus the first-party GitHub App bot noreply address so commits
+show the app avatar. Discovery runs per container start (a new connection is picked up on
+the next start); with several connections the lexicographically first
+connection name wins; `setEnvVars({ GH_TOKEN })` overrides the pick.
 
 **Nothing else is planted, and nothing is baked into the image.** There is no
 bundled coding agent and no automatic repo checkout — a sandbox starts as the

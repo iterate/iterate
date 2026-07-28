@@ -14,12 +14,6 @@ import type { BuiltinIntegrationSlug } from "./types.ts";
  */
 export const INTEGRATION_DIRECTORY_STREAM_PATH = "/integrations/_directory";
 
-/** Directory claim/unclaim facts, payload `{ slug, externalId, projectId,
- * connection }` — see `foldConnectionDirectory`. */
-export const CONNECTION_CLAIMED_EVENT_TYPE = "events.iterate.com/integration/connection-claimed";
-export const CONNECTION_UNCLAIMED_EVENT_TYPE =
-  "events.iterate.com/integration/connection-unclaimed";
-
 /**
  * The integration slugs whose call surfaces ship with the OS deployment. ONE
  * constant on purpose — the collection's dispatch, list()'s source labeling,
@@ -40,32 +34,14 @@ export function isBuiltinIntegrationSlug(slug: string): slug is BuiltinIntegrati
   return BUILTIN_INTEGRATION_SLUGS.has(slug);
 }
 
-export const SLACK_CONNECTED_EVENT_TYPE = "events.iterate.com/slack/connected";
-export const SLACK_DISCONNECTED_EVENT_TYPE = "events.iterate.com/slack/disconnected";
-export const SLACK_WEBHOOK_RECEIVED_EVENT_TYPE = "events.iterate.com/slack/webhook-received";
-
-export const GOOGLE_CONNECTED_EVENT_TYPE = "events.iterate.com/google/connected";
-export const GOOGLE_DISCONNECTED_EVENT_TYPE = "events.iterate.com/google/disconnected";
-
-export const GITHUB_CONNECTED_EVENT_TYPE = "events.iterate.com/github/connected";
-export const GITHUB_DISCONNECTED_EVENT_TYPE = "events.iterate.com/github/disconnected";
-export const GITHUB_WEBHOOK_RECEIVED_EVENT_TYPE = "events.iterate.com/github/webhook-received";
-
-export const TELEGRAM_CONNECTED_EVENT_TYPE = "events.iterate.com/telegram/connected";
-export const TELEGRAM_DISCONNECTED_EVENT_TYPE = "events.iterate.com/telegram/disconnected";
-export const TELEGRAM_WEBHOOK_RECEIVED_EVENT_TYPE = "events.iterate.com/telegram/webhook-received";
-// The journaled-send pair (`telegram/send-requested` → `telegram/message-sent`)
-// is declared on the telegram processor contracts, not here: contract event
-// catalogs need literal keys, and no door-side code composes those strings.
-
 /**
  * How old a webhook may be and still deserve its user-visible acknowledgement
  * (the 👀 reaction, the assistant status). Acks mean "your message was just
- * picked up" — they are only meaningful near arrival. A full journal refold
+ * picked up" — they are only meaningful near arrival. A full stream replay
  * (the normal aftermath of deploying a state-schema change) or a late wake
  * replays historical webhooks; re-acking those would resurrect reactions on
  * old messages, and a burst of them is a Slack rate-limit crash-loop
- * (docs/writing-stream-processors.md, "Refold safety").
+ * (docs/writing-stream-processors.md, "Reprocessing safety").
  */
 const WEBHOOK_ACK_FRESHNESS_MS = 15 * 60_000;
 
@@ -92,11 +68,6 @@ export function parseJsonRecord(body: string): Record<string, unknown> | null {
 
 export function readString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
-}
-
-/** `value` as a finite number when it is one; undefined otherwise (webhook bodies are untrusted). */
-export function readNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 /**
@@ -160,7 +131,7 @@ export function githubConnectionSecretPath(connection: string): string {
  * the sandbox `GH_TOKEN` env var can't drift from the material's field name.
  */
 export function githubAccessTokenPlaceholder(connection: string): string {
-  return `getSecret({ path: "${githubConnectionSecretPath(connection)}", field: "accessToken" })`;
+  return `getSecret("${githubConnectionSecretPath(connection)}", { field: "accessToken" })`;
 }
 
 /** Hosts a GitHub connection secret's egress is pinned to: the API (REST +
@@ -172,6 +143,25 @@ export const GITHUB_CONNECTION_EGRESS_URLS = [
   "https://uploads.github.com",
   "https://objects.githubusercontent.com",
 ];
+
+/**
+ * Default git author/committer for commits the platform makes (sandbox `git`,
+ * `itx.repo.commitFiles`, workspace publish, seed).
+ *
+ * - **name** is brand-lowercase `iterate` (never "Iterate") — see
+ *   docs/brand-and-tone-of-voice.md.
+ * - **email** is the first-party GitHub App bot noreply address so GitHub
+ *   links the commit to `iterate[bot]` and shows the app avatar (not a human,
+ *   not `support@…` which would render as an unlinked gray identity).
+ *
+ * Bot user id is public (`GET /users/iterate%5Bbot%5D` → 233973017); the
+ * format is `{id}+{app-slug}[bot]@users.noreply.github.com`. Do not put a
+ * project slug in name/email — that breaks avatar attribution.
+ */
+export const ITERATE_GITHUB_BOT_COMMIT_AUTHOR = {
+  email: "233973017+iterate[bot]@users.noreply.github.com",
+  name: "iterate",
+} as const;
 
 /** Itx secret Durable Object path holding one Telegram connection's bot token. */
 export function telegramBotTokenSecretPath(connection: string): string {
@@ -226,42 +216,28 @@ export function telegramChatStreamPath(input: {
   return input.session === undefined ? topical : `${topical}/session-${input.session}`;
 }
 
-/**
- * Connection segment of a routed Telegram agent path
- * (`/agents/telegram/{connection}/chat-{chatId}[/topic-{threadId}]`), or null
- * when the path is not a connection-qualified Telegram agent path.
- */
-export function telegramConnectionFromAgentPath(agentPath: string): string | null {
-  const segments = agentPath.split("/");
-  if (segments.length >= 5 && segments[1] === "agents" && segments[2] === "telegram") {
-    return segments[3] || null;
-  }
-  return null;
+/** Authenticated OS page for editing one Telegram connection's user access.
+ * The search param opens the exact editor after the project route authorizes
+ * the signed-in dashboard user. */
+export function buildTelegramAccessSettingsUrl(input: {
+  baseUrl: string;
+  connection: string;
+  projectSlug: string;
+}): string {
+  const url = new URL(
+    `/projects/${encodeURIComponent(input.projectSlug)}/integrations`,
+    input.baseUrl,
+  );
+  url.searchParams.set("telegramAccess", input.connection);
+  return url.toString();
 }
 
-/** Chat id of a routed Telegram agent path (the `chat-{chatId}` segment), or
- * null. The id is what `sendMessage({ chat_id })` wants — the agent's system
- * prompt embeds it so replies need no payload spelunking. */
-export function telegramChatIdFromAgentPath(agentPath: string): string | null {
-  const segments = agentPath.split("/");
-  if (segments.length >= 5 && segments[1] === "agents" && segments[2] === "telegram") {
-    const chatSegment = segments[4]!;
-    if (chatSegment.startsWith("chat-")) return chatSegment.slice("chat-".length) || null;
-  }
-  return null;
-}
-
-/** Forum topic id of a routed Telegram agent path (the optional
- * `topic-{threadId}` segment after the chat segment), or null. The journaled
- * send effect passes it back as `message_thread_id` so replies land in the
- * right topic. */
-export function telegramTopicIdFromAgentPath(agentPath: string): string | null {
-  const segments = agentPath.split("/");
-  if (segments.length >= 6 && segments[1] === "agents" && segments[2] === "telegram") {
-    const topicSegment = segments[5]!;
-    if (topicSegment.startsWith("topic-")) return topicSegment.slice("topic-".length) || null;
-  }
-  return null;
+/** Ids ride stream paths and processor state as strings; the Bot API wants
+ * Telegram's original integers back wherever JavaScript can represent them
+ * safely. */
+export function coerceTelegramId(id: string): number | string {
+  const numeric = Number(id);
+  return Number.isSafeInteger(numeric) ? numeric : id;
 }
 
 /**
@@ -280,19 +256,6 @@ export function slackThreadStreamPath(input: {
 }
 
 /**
- * Connection segment of a routed Slack agent path
- * (`/agents/slack/{connection}/{channel}/ts-{ts}`), or null when the path is
- * not a connection-qualified Slack agent path.
- */
-export function slackConnectionFromAgentPath(agentPath: string): string | null {
-  const segments = agentPath.split("/");
-  if (segments.length >= 6 && segments[1] === "agents" && segments[2] === "slack") {
-    return segments[3] || null;
-  }
-  return null;
-}
-
-/**
  * The `{ slug, connection }` coordinates of an integration connection stream
  * path (`/integrations/{slug}/{connection}`), or null for any other path —
  * notably the connection directory stream and the project root.
@@ -304,9 +267,4 @@ export function integrationCoordinatesFromStreamPath(
   if (segments.length !== 4 || segments[0] !== "" || segments[1] !== "integrations") return null;
   if (!segments[2] || !segments[3]) return null;
   return { connection: segments[3], slug: segments[2] };
-}
-
-/** Connection segment of an integration connection stream path, or null. */
-export function connectionFromIntegrationStreamPath(path: string): string | null {
-  return integrationCoordinatesFromStreamPath(path)?.connection ?? null;
 }

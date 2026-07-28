@@ -11,16 +11,20 @@ import {
   TableHeader,
   TableRow,
 } from "@iterate-com/ui/components/table";
+import { useItx, useItxQuery } from "iterate/sdk/itx/react";
 import type { ScheduleView, SchedulerRecurrence } from "../../../../domains/scheduler/types.ts";
-import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { SCHEDULER_PRIMARY_PATH } from "~/domains/scheduler/utils.ts";
 import { formatRelativeTime, formatTimeAgo } from "~/lib/format-relative-time.ts";
-import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
+import {
+  breadcrumbLoaderData,
+  streamBreadcrumb,
+  streamPageStaticData,
+} from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
-import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/scheduler")({
+  staticData: streamPageStaticData(),
   validateSearch: StreamViewSearch,
   ssr: false,
   loader: ({ context }) =>
@@ -28,16 +32,8 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/scheduler")({
       project: context.project,
       streamBreadcrumb: streamBreadcrumb(context.project, SCHEDULER_PRIMARY_PATH),
     }),
-  component: ProjectSchedulerPage,
+  component: ProjectSchedulerContent,
 });
-
-function ProjectSchedulerPage() {
-  return (
-    <ItxBoundary>
-      <ProjectSchedulerContent />
-    </ItxBoundary>
-  );
-}
 
 function ProjectSchedulerContent() {
   const { project } = Route.useLoaderData();

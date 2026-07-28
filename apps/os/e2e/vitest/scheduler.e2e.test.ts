@@ -4,8 +4,8 @@
 // and the script's cross-stream side effect land as events.
 
 import { expect, test } from "vitest";
+import type { StreamEvent } from "iterate/processors";
 import type { ScheduleView } from "../../src/domains/scheduler/types.ts";
-import type { StreamEvent } from "../../src/domains/streams/schemas.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
@@ -21,9 +21,9 @@ test("a near-future schedule triggers, runs its itx script, and records the outc
 
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = itx.projects.create({
-    slug: `scheduler-e2e-${RUN_SUFFIX}-${marker.slice(0, 8)}`,
-  });
+  using project = await itx.projects
+    .get(`scheduler-e2e-${RUN_SUFFIX}-${marker.slice(0, 8)}`)
+    .create({});
 
   const view = await project.scheduler.set({
     key,
@@ -49,7 +49,7 @@ test("a near-future schedule triggers, runs its itx script, and records the outc
     metadata: { suite: "scheduler-e2e" },
   });
   // set() is read-your-writes: the returned view proves ingestion + arming.
-  expect(view.key).toBe(key);
+  expect(view).toMatchObject({ key });
   expect(view.nextTriggerAt).not.toBeNull();
   expect("at" in view.recurrence).toBe(true);
 
@@ -108,9 +108,9 @@ test("manual trigger runs a far-future schedule now; cancel removes it", async (
 
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = itx.projects.create({
-    slug: `scheduler-manual-e2e-${RUN_SUFFIX}-${marker.slice(0, 8)}`,
-  });
+  using project = await itx.projects
+    .get(`scheduler-manual-e2e-${RUN_SUFFIX}-${marker.slice(0, 8)}`)
+    .create({});
 
   await project.scheduler.set({
     key,

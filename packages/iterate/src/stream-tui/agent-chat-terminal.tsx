@@ -4,98 +4,164 @@
 /**
  * React/OpenTUI terminal chat with one project agent.
  *
- * The data layer is the shared client stack, not a bespoke stream client:
- * `connectItx` (apps/os/src/itx-client.ts) hands us the same `Agent`
- * capability the web app uses, a live `stream.subscribe` pumps events into
- * the shared agent-ui reducer (@iterate-com/ui), and sends go through
- * `agent.sendMessage`. This file owns only terminal runtime state and
- * rendering.
+ * The data layer is the SAME client stack the web app renders from: the
+ * one-socket session keeper (`iterate/client`, pointed at the deployment via
+ * `configureIterateSession`) and the shared React hooks (`iterate/sdk/itx/react` —
+ * `useItxQuery` seeds durable history and `useItxSubscription` owns reconnect,
+ * watchdog, and re-subscribe recovery), folding stream events through the
+ * shared agent-ui reducer (@iterate-com/ui). Sends use TanStack Query's
+ * mutation lifecycle and `agent.message` on the same socket. This file owns
+ * the app shell and terminal runtime state; the presentational components live
+ * in ./chat-view.tsx. OpenTUI is just another React renderer, so the browser's
+ * query policy and hooks run here unchanged.
  */
-import { StyledText, bg, fg } from "@opentui/core";
+import { userInfo } from "node:os";
 import { createCliRenderer } from "@opentui/core";
 import { createRoot, useKeyboard } from "@opentui/react";
-import { useCallback, useState, useSyncExternalStore } from "react";
-import type {
-  AgentUiActivity,
-  AgentUiItem,
-  AgentUiMessageItem,
-} from "@iterate-com/ui/components/events/agent-ui-reducer";
-import { createAgentFeedModel, type AgentFeedSnapshot } from "./agent-feed-model.ts";
+import { Suspense, useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { QueryClientProvider, QueryErrorResetBoundary, useMutation } from "@tanstack/react-query";
 import {
-  connectAgentFeed,
-  resolveItxAuth,
-  type AgentConnectionStatus,
-} from "./agent-connection.ts";
-import { formatActivitySummary, formatStepLine, streamingTail } from "./feed-format.ts";
-
+  configureIterateSession,
+  connectItx,
+  createIterateQueryClient,
+  ProjectScope,
+  useItxQuery,
+  useItxSubscription,
+  type Itx,
+} from "../sdk/itx/react.ts";
+import {
+  ensureOnboardingAgentReady,
+  ONBOARDING_AGENT_PATH,
+} from "../../../../apps/os/src/lib/onboarding-agent.ts";
+import { sendAgentMessage } from "./agent-message-command.ts";
+import { createAgentFeedModel, type AgentFeedSnapshot } from "./agent-feed-model.ts";
+import { ensureAgentFeedReady, readAgentFeedHistory } from "./agent-feed-query.ts";
+import { resolveItxAuth } from "./itx-auth.ts";
+import { ChatHeader, FeedItem, LiveActivity } from "./chat-view.tsx";
+import { COLORS } from "./chat-colors.ts";
+import { createChatComputerSharing, launchUseMyComputerProvider } from "./chat-computer-sharing.ts";
+import { computerCapabilityName, parseChatSlashCommand } from "./chat-slash-command.ts";
+import { LoadingTerminal, TerminalErrorBoundary } from "./terminal-shell.tsx";
 if (!process.stdin.isTTY || !process.stdout.isTTY) {
   throw new Error("iterate chat requires an interactive terminal.");
 }
 
-const COLORS = {
-  bg: "#0b0f14",
-  surface: "#27272a",
-  border: "#3f3f46",
-  accent: "#22c55e",
-  warning: "#facc15",
-  danger: "#ef4444",
-  text: "#e5e7eb",
-  textSecondary: "#9ca3af",
-  textBody: "#d1d5db",
-  textMuted: "#6b7280",
-  agent: "#a78bfa",
-} as const;
-
 const args = parseArgs(process.argv.slice(2));
+const computerName = computerCapabilityName(userInfo().username);
+const computerSharing = createChatComputerSharing({
+  name: computerName,
+  launch: () =>
+    launchUseMyComputerProvider({
+      bearerTokenCameFromStoredSession: process.env.ITERATE_CHAT_BEARER_FROM_STORED_SESSION === "1",
+      cliPath: args.cliPath,
+      configName: args.configName,
+      environment: process.env,
+      name: computerName,
+      projectId: args.projectId,
+    }),
+});
+process.on("exit", () => computerSharing[Symbol.dispose]());
+const historyQueryKey = ["agent-feed-history", args.projectId, args.agentPath] as const;
 
-// ---------------------------------------------------------------------------
-// App state: one feed model + one connection, exposed to React through a tiny
-// external store (the connection callbacks fire outside React).
-// ---------------------------------------------------------------------------
-
-type AppState = {
-  feed: AgentFeedSnapshot;
-  status: AgentConnectionStatus;
-  notice: string;
-};
-
-const model = createAgentFeedModel();
-let appState: AppState = {
-  feed: model.snapshot(),
-  status: { kind: "connecting" },
-  notice: "",
-};
-const listeners = new Set<() => void>();
-
-function patchAppState(patch: Partial<AppState>) {
-  appState = { ...appState, ...patch };
-  for (const listener of listeners) listener();
-}
-
-const connection = connectAgentFeed({
-  auth: resolveItxAuth({ configName: process.env.ITERATE_CONFIG_NAME }),
+// One keeper socket for the whole process — the TUI's equivalent of the
+// browser tab. Everything below (subscription, sends) rides it.
+configureIterateSession({
   baseUrl: args.baseUrl,
-  projectId: args.projectId,
-  agentPath: args.agentPath,
-  replayAfterOffset: () => model.snapshot().lastOffset,
-  onEvents: (events) => {
-    if (model.applyEvents(events)) patchAppState({ feed: model.snapshot() });
-  },
-  onStatus: (status) => patchAppState({ status }),
+  credentials: resolveItxAuth({ configName: process.env.ITERATE_CONFIG_NAME }),
 });
 
 // ---------------------------------------------------------------------------
-// Rendering
+// The app shell
 // ---------------------------------------------------------------------------
 
+async function openAgentFeedSubscription(input: {
+  itx: Itx;
+  model: ReturnType<typeof createAgentFeedModel>;
+  publishFeed: () => void;
+}) {
+  // One agent path stub per (re)subscribe cycle, released once the returned
+  // subscription handle exists. useItxSubscription owns and releases that
+  // handle on dependency changes, reconnect, and unmount.
+  const agent = input.itx.agents.get(args.agentPath);
+  try {
+    return await agent.stream.subscribe({
+      processEventBatch: (batch) => {
+        if (input.model.applyEvents(batch.events)) input.publishFeed();
+      },
+      replayAfterOffset: input.model.snapshot().lastOffset,
+      subscriber: { description: "iterate chat TUI" },
+    });
+  } finally {
+    (agent as Partial<Disposable>)[Symbol.dispose]?.();
+  }
+}
+
 function AgentChatApp() {
-  const state = useSyncExternalStore(
-    useCallback((listener: () => void) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    }, []),
-    () => appState,
+  const computerShare = useSyncExternalStore(computerSharing.subscribe, computerSharing.snapshot);
+  // The immutable/durable half is a finite TanStack query, exactly like a
+  // browser route read. The live subscription starts at that query's cursor,
+  // closes the read→subscribe race with replay, then owns the tail.
+  const history = useItxQuery({
+    key: historyQueryKey,
+    query: (itx) =>
+      readAgentFeedHistory(itx, args.agentPath, {
+        initialize: (agent) =>
+          args.agentPath === ONBOARDING_AGENT_PATH
+            ? ensureOnboardingAgentReady({ agent })
+            : ensureAgentFeedReady(agent),
+      }),
+  });
+  const [model] = useState(() => {
+    const next = createAgentFeedModel();
+    next.applyEvents(history);
+    return next;
+  });
+  const [feed, setFeed] = useState<AgentFeedSnapshot>(() => model.snapshot());
+  useEffect(() => {
+    if (model.applyEvents(history)) setFeed(model.snapshot());
+  }, [history, model]);
+  const publishFeed = useCallback(() => setFeed(model.snapshot()), [model]);
+
+  /**
+   * Establish the live agent feed on the shared socket from the query-seeded
+   * model's resume cursor. The finite query above owns one-time agent birth and
+   * durable history. That keeps potentially slow creation outside the live
+   * subscription's transport watchdog, whose timer now covers only subscribe.
+   * Recovery rereads the current cursor and the model folds replay overlap out
+   * by offset.
+   */
+  const subscribeAgentFeed = useCallback(
+    (itx: Itx) => openAgentFeedSubscription({ itx, model, publishFeed }),
+    [model, publishFeed],
   );
+  const subscription = useItxSubscription(subscribeAgentFeed, [model], {
+    slug: args.projectId,
+  });
+  // oxlint-disable react-doctor/query-mutation-missing-invalidation -- History is only the startup seed; the replay-capable subscription is the live authority. Writing or refetching the mutation result here can advance the model past delayed events.
+  const {
+    mutate: sendMessage,
+    isPending: messageIsPending,
+    error: messageError,
+  } = useMutation({
+    mutationFn: async (message: string) => {
+      const itx = await connectItx(args.projectId);
+      const agent = itx.agents.get(args.agentPath);
+      try {
+        await sendAgentMessage(agent, message);
+      } finally {
+        (agent as Partial<Disposable>)[Symbol.dispose]?.();
+      }
+    },
+  });
+  // oxlint-enable react-doctor/query-mutation-missing-invalidation
+  const messageNotice = messageIsPending
+    ? "sending…"
+    : messageError != null
+      ? `send failed: ${messageError instanceof Error ? messageError.message : String(messageError)}`
+      : "";
+  const notice = [messageNotice, subscription.status === "error" ? "Ctrl+R to retry" : ""]
+    .filter(Boolean)
+    .join(" · ");
   const [composerValue, setComposerValue] = useState("");
   const [composerRevision, setComposerRevision] = useState(0);
 
@@ -106,6 +172,9 @@ function AgentChatApp() {
 
   useKeyboard((key) => {
     if (key.name === "escape") clearComposer();
+    if (key.ctrl && key.name === "r" && subscription.status === "error") {
+      subscription.refresh();
+    }
   });
 
   const submit = useCallback(
@@ -113,22 +182,24 @@ function AgentChatApp() {
       const message = value.trim();
       if (message === "") return;
       clearComposer();
-      patchAppState({ notice: "sending…" });
-      connection
-        .sendMessage(message)
-        .then(() => patchAppState({ notice: "" }))
-        .catch((error: unknown) => {
-          patchAppState({
-            notice: `send failed: ${error instanceof Error ? error.message : String(error)}`,
-          });
-        });
+      if (parseChatSlashCommand(message)?.kind === "use-my-computer") {
+        computerSharing.start();
+        return;
+      }
+      sendMessage(message);
     },
-    [clearComposer],
+    [clearComposer, sendMessage],
   );
 
   return (
     <box width="100%" height="100%" flexDirection="column" backgroundColor={COLORS.bg}>
-      <ChatHeader status={state.status} notice={state.notice} eventCount={state.feed.eventCount} />
+      <ChatHeader
+        title={`${args.projectId} ${args.agentPath}`}
+        status={subscription.status}
+        detail={subscription.error}
+        notice={[notice, computerShare.notice].filter(Boolean).join(" · ")}
+        eventCount={feed.eventCount}
+      />
       <scrollbox
         width="100%"
         flexGrow={1}
@@ -140,15 +211,15 @@ function AgentChatApp() {
         stickyStart="bottom"
         contentOptions={{ flexDirection: "column", paddingLeft: 1, paddingRight: 1, gap: 1 }}
       >
-        {state.feed.items.length === 0 && state.feed.live == null ? (
+        {feed.items.length === 0 && feed.live == null ? (
           <text fg={COLORS.textMuted}>
             No messages yet — say something to {args.agentPath.slice("/agents/".length)}.
           </text>
         ) : null}
-        {state.feed.items.map((item) => (
+        {feed.items.map((item) => (
           <FeedItem key={item.id} item={item} />
         ))}
-        {state.feed.live == null ? null : <LiveActivity activity={state.feed.live} />}
+        {feed.live == null ? null : <LiveActivity activity={feed.live} />}
       </scrollbox>
       <box
         width="100%"
@@ -182,143 +253,29 @@ function AgentChatApp() {
   );
 }
 
-function ChatHeader(props: { status: AgentConnectionStatus; notice: string; eventCount: number }) {
-  const statusLabel =
-    props.status.kind === "live"
-      ? "live"
-      : props.status.kind === "connecting"
-        ? "connecting"
-        : `reconnecting (${props.status.detail})`;
-  const statusColor =
-    props.status.kind === "live"
-      ? COLORS.accent
-      : props.status.kind === "connecting"
-        ? COLORS.warning
-        : COLORS.danger;
-  const meta = [
-    `${props.eventCount} event${props.eventCount === 1 ? "" : "s"}`,
-    statusLabel,
-    props.notice,
-  ]
-    .filter(Boolean)
-    .join(" · ");
-
-  return (
-    <box
-      width="100%"
-      height={3}
-      border
-      borderStyle="single"
-      borderColor={COLORS.border}
-      backgroundColor={COLORS.surface}
-      flexDirection="row"
-      paddingLeft={1}
-      paddingRight={1}
-      gap={1}
-    >
-      <text width={6} content={getBrandMarkText()} />
-      <text flexGrow={1} fg={COLORS.text} content={`${args.projectId} ${args.agentPath}`} />
-      <text fg={COLORS.textSecondary} content={meta} />
-      <text width={2} fg={statusColor}>
-        ●
-      </text>
-    </box>
-  );
-}
-
-function FeedItem(props: { item: AgentUiItem }) {
-  const item = props.item;
-  if (item.kind === "activity") return <SettledActivity activity={item} />;
-  if (item.kind === "user" || item.kind === "assistant") return <Message item={item} />;
-  if (item.kind === "child-stream-created") {
-    return <text fg={COLORS.textMuted}>✦ child stream created: {item.childPath}</text>;
-  }
-  return <text fg={COLORS.textMuted}>✦ {item.text}</text>;
-}
-
-function Message(props: { item: AgentUiMessageItem }) {
-  const isUser = props.item.kind === "user";
-  return (
-    <box flexDirection="column">
-      <text fg={isUser ? COLORS.accent : COLORS.agent}>
-        {isUser ? "you ›" : "agent ›"}
-        <span fg={COLORS.textMuted}> {formatClock(props.item.timestampMs)}</span>
-      </text>
-      <text fg={COLORS.textBody}>{props.item.text}</text>
-    </box>
-  );
-}
-
-function SettledActivity(props: { activity: AgentUiActivity }) {
-  return (
-    <box flexDirection="column">
-      <text fg={COLORS.textMuted}>✦ {formatActivitySummary(props.activity)}</text>
-      {props.activity.steps.map((step) => (
-        <text key={step.id} fg={COLORS.textMuted}>
-          {"  "}· {formatStepLine(step)}
-        </text>
-      ))}
-    </box>
-  );
-}
-
-function LiveActivity(props: { activity: AgentUiActivity }) {
-  const lastStep = props.activity.steps[props.activity.steps.length - 1];
-  const thinking = lastStep?.kind === "llm" ? streamingTail(lastStep.thinkingText) : "";
-  const streamed =
-    lastStep?.kind === "llm"
-      ? streamingTail(lastStep.responseText)
-      : lastStep?.kind === "code"
-        ? streamingTail(lastStep.code)
-        : "";
-  return (
-    <box flexDirection="column">
-      <text fg={COLORS.warning}>✦ working…</text>
-      {props.activity.steps.map((step) => (
-        <text key={step.id} fg={COLORS.textMuted}>
-          {"  "}· {formatStepLine(step)}
-        </text>
-      ))}
-      {thinking === "" ? null : <text fg={COLORS.textMuted}>{thinking}</text>}
-      {streamed === "" ? null : <text fg={COLORS.textSecondary}>{streamed}</text>}
-    </box>
-  );
-}
-
-function getBrandMarkText() {
-  return new StyledText([
-    fg("#000000")(bg(COLORS.surface)("▐")),
-    bg("#000000")(fg("#ffffff")(" 𝑖 ")),
-    fg("#000000")(bg(COLORS.surface)("▌")),
-  ]);
-}
-
-function formatClock(timestampMs: number) {
-  return new Date(timestampMs).toLocaleTimeString(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
 function parseArgs(argv: string[]) {
   const baseUrl = readFlag(argv, "--base-url");
   const projectId = readFlag(argv, "--project-id");
   const agentPath = readFlag(argv, "--agent-path");
+  const cliPath = readFlag(argv, "--cli-path");
+  const configName = readFlag(argv, "--config-name");
 
-  if (baseUrl == null || projectId == null || agentPath == null) {
+  if (
+    baseUrl == null ||
+    projectId == null ||
+    agentPath == null ||
+    cliPath == null ||
+    configName == null
+  ) {
     throw new Error(
-      "Usage: bun agent-chat-terminal.tsx --base-url <url> --project-id <prj_id> --agent-path </agents/name>",
+      "Usage: bun agent-chat-terminal.tsx --base-url <url> --project-id <prj_id> --agent-path </agents/name> --cli-path <path> --config-name <name>",
     );
   }
   if (!agentPath.startsWith("/agents/")) {
     throw new Error(`--agent-path must start with "/agents/", got "${agentPath}".`);
   }
 
-  return {
-    baseUrl: baseUrl.replace(/\/+$/, ""),
-    projectId,
-    agentPath,
-  };
+  return { baseUrl, projectId, agentPath, cliPath, configName };
 }
 
 function readFlag(argv: string[], flagName: string) {
@@ -337,5 +294,19 @@ const renderer = await createCliRenderer({
   screenMode: "alternate-screen",
   consoleMode: "disabled",
 });
-process.on("exit", () => connection.dispose());
-createRoot(renderer).render(<AgentChatApp />);
+const queryClient = createIterateQueryClient();
+createRoot(renderer).render(
+  <QueryClientProvider client={queryClient}>
+    <QueryErrorResetBoundary>
+      {({ reset }) => (
+        <TerminalErrorBoundary onReset={reset}>
+          <ProjectScope slug={args.projectId}>
+            <Suspense fallback={<LoadingTerminal />}>
+              <AgentChatApp />
+            </Suspense>
+          </ProjectScope>
+        </TerminalErrorBoundary>
+      )}
+    </QueryErrorResetBoundary>
+  </QueryClientProvider>,
+);

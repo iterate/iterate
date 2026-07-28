@@ -199,6 +199,29 @@ describe("parseAppConfigFromEnv", () => {
     );
   });
 
+  it("accepts a JSON object env override for a z.record config field", () => {
+    const Config = z.object({
+      specOverrides: z.record(z.string(), z.string()).optional(),
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const config = parseAppConfigFromEnv({
+        configSchema: Config,
+        prefix: "APP_CONFIG_",
+        env: {
+          APP_CONFIG_SPEC_OVERRIDES: '{"iterate": "http://127.0.0.1:1234/iterate-abc.tgz"}',
+        },
+      });
+      expect(config).toMatchObject({
+        specOverrides: { iterate: "http://127.0.0.1:1234/iterate-abc.tgz" },
+      });
+      // Record keys are arbitrary by definition — no unknown-key warning.
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("applies a leaf override after an object override when the leaf env var comes later", () => {
     const Config = z.object({
       posthog: z.object({
@@ -413,6 +436,16 @@ describe("public config helpers", () => {
       maybePublic: "shown",
       tags: ["alpha", "beta"],
     });
+  });
+
+  it("extracts public fields from objects with defaults", () => {
+    const schema = z.object({
+      deployment: z
+        .object({ stage: publicValue(z.string()), privateToken: z.string() })
+        .default({ stage: "local", privateToken: "hidden" }),
+    });
+
+    expect(getPublicConfig(schema.parse({}), schema)).toEqual({ deployment: { stage: "local" } });
   });
 
   it("exposes the correct public config types", () => {

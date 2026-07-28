@@ -1,24 +1,29 @@
-import type { Stream } from "../../itx-api.generated.ts";
+import type { StreamEvent } from "iterate/processors";
+import {
+  agentSystemPromptContextEvent,
+  MCP_AGENT_SYSTEM_PROMPT,
+  MCP_AGENT_SYSTEM_PROMPT_REVISION,
+} from "../agents/agent-defaults.ts";
+import type { AgentEventInput } from "../agents/agent-processor-contract.ts";
 
-export const ASK_ASSISTANT_SESSION_READY_TIMEOUT_MS = 90_000;
-
+/** Explicitly birth the session agent before ask() starts its reply timeout. */
 export async function ensureMcpSessionAgentReady(input: {
   agentPath: string;
   projectItx: {
-    streams: {
-      get(path: string): Pick<Stream, "append" | "waitForEvent">;
+    agents: {
+      get(path: string): {
+        create(): Promise<unknown>;
+        append(...events: AgentEventInput[]): Promise<StreamEvent[]>;
+      };
     };
   };
 }): Promise<void> {
-  const stream = input.projectItx.streams.get(input.agentPath);
-  await stream.append({
-    type: "events.iterate.com/mcp/session-agent-warmup",
-    idempotencyKey: `mcp/session-agent-warmup:${input.agentPath}`,
-    payload: { agentPath: input.agentPath },
-  });
-  await stream.waitForEvent({
-    afterOffset: 0,
-    eventTypes: ["events.iterate.com/agent/system-prompt-updated"],
-    timeoutMs: ASK_ASSISTANT_SESSION_READY_TIMEOUT_MS,
-  });
+  const agent = input.projectItx.agents.get(input.agentPath);
+  await agent.create();
+  await agent.append(
+    agentSystemPromptContextEvent({
+      content: MCP_AGENT_SYSTEM_PROMPT,
+      idempotencyKey: `agent/mcp-system-prompt:v${MCP_AGENT_SYSTEM_PROMPT_REVISION}`,
+    }),
+  );
 }

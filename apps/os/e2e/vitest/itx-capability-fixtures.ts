@@ -1,44 +1,77 @@
-import { mockSlackResponseBody } from "../test-support/mock-slack-api.ts";
+import { createWebSocketResponse, isWebSocketUpgradeRequest, WebSocketPair } from "captun";
 import { withTunnel, type TunnelHandle } from "../test-support/tunnel.ts";
 
 type CapabilityFixtureInput = {
   expectedAuthorization?: string;
 };
 
-/**
- * Slack Web API stand-in for the WORKER-side WebClient (the seeded project
- * worker's `slack` surface): local runs use loopback; deployed runs expose the
- * same local fixture through the apps/tunnels captun gateway.
- */
-export async function startMockSlackApi(): Promise<TunnelHandle & { calls: string[] }> {
-  const calls: string[] = [];
-  const server = await withTunnel({
-    path: "/",
-    async fetch(request) {
-      const method = new URL(request.url).pathname.replace(/^\//, "");
-      calls.push(method);
-      const body = await request.text();
-      const contentType = request.headers.get("content-type") ?? "";
-      const payload: Record<string, unknown> = contentType.includes("application/json")
-        ? (JSON.parse(body || "{}") as Record<string, unknown>)
-        : Object.fromEntries(new URLSearchParams(body));
-      return Response.json(mockSlackResponseBody(method, payload));
-    },
-  });
-  return { ...server, calls };
-}
-
 export async function startEgressEcho(): Promise<TunnelHandle> {
   return await withTunnel({
     path: "/egress-echo",
-    fetch(request) {
+    async fetch(request) {
       const headers: Record<string, string> = {};
       request.headers.forEach((value, key) => {
         headers[key] = value;
       });
-      return Response.json({ headers });
+      const body = await request.text();
+      const contentType = request.headers.get("content-type") || "";
+      return Response.json({
+        body: body && contentType.includes("json") ? JSON.parse(body) : body || null,
+        headers,
+      });
     },
   });
+}
+
+/** Public WSS fixture for ordinary clients and the stock Codex CLI. */
+export const WEBSOCKET_ECHO_GREETING = "iterate-websocket-ready";
+export const WEBSOCKET_ECHO_PROTOCOL = "iterate.websocket.proof";
+
+export async function startWebSocketEcho(input: CapabilityFixtureInput = {}): Promise<
+  TunnelHandle & {
+    authHeaders: string[];
+    closeEvents: Array<{ code: number; reason: string }>;
+  }
+> {
+  const authHeaders: string[] = [];
+  const closeEvents: Array<{ code: number; reason: string }> = [];
+  const server = await withTunnel({
+    path: "/websocket-echo",
+    fetch(request) {
+      const authorization = request.headers.get("authorization") ?? "";
+      authHeaders.push(authorization);
+      if (!isWebSocketUpgradeRequest(request)) {
+        return new Response("websocket upgrade required", { status: 426 });
+      }
+      if (
+        input.expectedAuthorization !== undefined &&
+        authorization !== input.expectedAuthorization
+      ) {
+        return new Response("unauthorized", { status: 401 });
+      }
+
+      const pair = new WebSocketPair();
+      pair[1].accept({ allowHalfOpen: false });
+      pair[1].addEventListener("message", (event) => {
+        pair[1].send(event.data as string | ArrayBuffer);
+      });
+      pair[1].addEventListener("close", (event) => {
+        closeEvents.push({ code: event.code, reason: event.reason });
+      });
+      pair[1].send(WEBSOCKET_ECHO_GREETING);
+
+      const offeredProtocols = (request.headers.get("sec-websocket-protocol") ?? "")
+        .split(",")
+        .map((protocol) => protocol.trim());
+      return createWebSocketResponse(
+        pair[0],
+        offeredProtocols.includes(WEBSOCKET_ECHO_PROTOCOL)
+          ? { protocol: WEBSOCKET_ECHO_PROTOCOL }
+          : undefined,
+      );
+    },
+  });
+  return { ...server, authHeaders, closeEvents };
 }
 
 export async function startMockOpenApi(

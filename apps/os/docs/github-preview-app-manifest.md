@@ -1,89 +1,88 @@
 # GitHub Apps for preview environments
 
-Use this runbook when you need to create or repair the GitHub App for an OS
-preview slot, or when setting up a new developer environment app.
+Each preview slot needs its own GitHub App. GitHub sends every installation's
+events to the single webhook URL configured on its App, so sharing an App would
+route all preview traffic to one slot.
 
-Each preview slot and developer environment gets its own GitHub App so that
-webhook delivery is isolated: GitHub routes every event for a given installation
-to exactly one webhook URL, and that URL is set at the app level, not the
-installation level.
-
-For the Doppler secrets shape and the integration runtime, see
-[`apps/os/docs/integrations-and-secrets-design.md`](integrations-and-secrets-design.md).
-
-| OS config   | GitHub App name       | Webhook URL base                   |
+| OS config   | GitHub App            | URL base                           |
 | ----------- | --------------------- | ---------------------------------- |
-| `dev_<you>` | `iterate (dev-<you>)` | `https://os.iterate-dev-<you>.app` |
-| `preview_N` | `iterate (preview-N)` | `https://os.iterate-preview-N.app` |
+| `preview_N` | `iterate (preview-N)` | `https://os.iterate-preview-N.com` |
 | `prd`       | `iterate`             | `https://os.iterate.com`           |
 
-Do not reuse the production GitHub App for previews, and do not point one GitHub
-App at multiple preview slots. Each GitHub App has exactly one webhook URL.
+Do not reuse the production App. For the full expansion sequence, see
+[Adding preview slots](../../../docs/adding-preview-slots.md).
 
-## Why GitHub Apps and not OAuth Apps
+## Safety boundary
 
-GitHub Apps authenticate at the installation level (per repo/org) rather than
-the user level, which gives:
+The App Manifest flow is the only supported way to automate GitHub App
+creation. It intentionally includes a GitHub review page; there is no direct
+`POST /apps` API.
 
-- **Check Runs API** — exclusive to GitHub Apps. Creates inline PR annotations
-  with action buttons that fire webhook events back to OS. OAuth Apps cannot
-  create check runs at all.
-- **Higher rate limits** — 5 000 req/hr baseline, up to 12 500 for large
-  installations, versus 5 000/hr total for a PAT.
-- **Scoped permissions** — repositories only grant the minimum required access;
-  user tokens via `request_oauth_on_install: true` give user-scoped actions
-  (creating personal repos, acting as the user).
-- **Webhook signatures** — every payload is signed with the app's webhook
-  secret, verified in OS before any processing.
+An agent may render manifests, start a local callback receiver, and open review
+pages without changing GitHub. Before clicking Create, a human must approve:
+
+- the `iterate` organization;
+- the exact App names;
+- the callback and webhook hostnames;
+- the permission set;
+- the matching `os/preview_N` Doppler writes.
+
+That approval may cover a concrete batch such as slots 10–19. Stop on a name
+collision, different organization, changed permissions, 2FA, or CAPTCHA. Never
+create a near-duplicate to work around an existing App.
+
+Use a dedicated, headed automation browser profile. Playwriter controls a
+person's existing Chrome, so use it only with explicit permission for the
+current task.
 
 ## Manifest
 
-This is the maximal manifest for a full AI coding-agent integration. Replace
-every `N` placeholder with the slot number (hyphen form in names and hostnames,
-underscore form only for Doppler config names). Replace `<you>` for dev apps.
-
-The manifest targets the **GitHub App Manifest flow** (see below) — paste this
-JSON into the creation form in one step.
+Replace every `N` with the slot number. Preview OS URLs use `.com`; `.app` is
+the hosted-project domain. `default_permissions` uses GitHub's manifest/API
+permission keys, which differ from several labels shown in the settings UI.
+The manifest below was accepted by GitHub's review flow on 2026-07-20.
 
 ```json
 {
   "name": "iterate (preview-N)",
-  "url": "https://os.iterate-preview-N.app",
+  "url": "https://os.iterate-preview-N.com",
   "description": "Iterate AI coding agent — preview-N",
   "public": false,
   "request_oauth_on_install": true,
   "setup_on_update": true,
   "hook_attributes": {
-    "url": "https://os.iterate-preview-N.app/api/integrations/github/webhook",
+    "url": "https://os.iterate-preview-N.com/api/integrations/github/webhook",
     "active": true
   },
-  "callback_urls": ["https://os.iterate-preview-N.app/api/integrations/github/callback"],
+  "callback_urls": ["https://os.iterate-preview-N.com/api/integrations/github/callback"],
   "redirect_url": "http://localhost:3333/github-app-created",
   "default_permissions": {
     "actions": "write",
     "administration": "write",
     "attestations": "write",
     "checks": "write",
-    "code_scanning_alerts": "write",
-    "commit_statuses": "write",
+    "security_events": "write",
+    "statuses": "write",
     "contents": "write",
-    "dependabot_alerts": "write",
+    "vulnerability_alerts": "write",
     "deployments": "write",
+    "discussions": "write",
     "environments": "write",
     "issues": "write",
     "metadata": "read",
     "pages": "write",
     "pull_requests": "write",
-    "repository_security_advisories": "write",
+    "repository_advisories": "write",
     "secret_scanning_alerts": "write",
     "secrets": "read",
-    "variables": "read",
-    "webhooks": "write",
+    "actions_variables": "read",
+    "repository_hooks": "write",
     "workflows": "write",
+    "merge_queues": "read",
     "members": "read",
     "organization_administration": "write",
-    "projects": "write",
-    "email_addresses": "read"
+    "organization_projects": "write",
+    "emails": "read"
   },
   "default_events": [
     "branch_protection_rule",
@@ -101,7 +100,6 @@ JSON into the creation form in one step.
     "discussion",
     "discussion_comment",
     "fork",
-    "installation_repositories",
     "installation_target",
     "issue_comment",
     "issues",
@@ -130,230 +128,48 @@ JSON into the creation form in one step.
 }
 ```
 
-### Notable permissions
+`request_oauth_on_install` gives OS a user-to-server token after installation;
+that is needed for user-scoped actions such as creating a personal repository.
+The Check Runs API requires a GitHub App and `checks: write`.
+`installation_repositories` is sent automatically to GitHub Apps and is not a
+valid explicit subscription. The `merge_group` subscription requires
+`merge_queues: read` even though the GitHub settings UI describes it as the
+Merge queues permission.
 
-| Permission                           | What it unlocks                                                                                               |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
-| `checks: write`                      | **Check Runs API** — exclusive to GitHub Apps; inline PR annotations with action buttons that POST back to OS |
-| `contents: write`                    | Read/write files, create commits, manage releases                                                             |
-| `workflows: write`                   | Create or update `.github/workflows/` YAML — lets the agent wire up its own CI                                |
-| `actions: write`                     | Trigger `workflow_dispatch` and `repository_dispatch`, download run logs                                      |
-| `organization_administration: write` | Create repos in orgs via installation token                                                                   |
-| `email_addresses: read`              | User account permission; requires `request_oauth_on_install: true` to be useful                               |
+## Agent-led creation
 
-`request_oauth_on_install: true` triggers GitHub's user OAuth flow immediately
-after app installation, giving OS a user-to-server token in addition to the
-installation token. This is required for creating repos in a user's personal
-namespace (personal namespace repos can only be created by the user, not by an
-installation token).
+For a batch, use a small local helper rather than ad-hoc shell pipelines. It
+must:
 
-`setup_on_update: true` re-runs the setup redirect when the app's permissions
-are updated, keeping existing installs in sync.
+1. render one manifest and a cryptographically random `state` per slot;
+2. start a callback server on loopback before opening GitHub;
+3. map each callback to its slot by `state`, reject missing or repeated state,
+   and capture the one-time `code` without logging it;
+4. POST the code to `/app-manifests/{code}/conversions` within one hour;
+5. validate the returned slug and IDs;
+6. pipe the credential object directly into the matching Doppler config;
+7. record only non-secret App ID, slug, slot, and verification state.
 
-## How GitHub App creation works
+Do not use a background server whose stdout is disconnected from the process
+that performs conversion. The old bulk example did that and could never
+reliably recover the callback code.
 
-GitHub does not expose a REST API endpoint for creating apps. There is no
-`POST /apps`. The only supported path is the **App Manifest flow**:
+Open each manifest with a POST to:
 
-1. You construct an HTML form that POSTs the manifest JSON to
-   `https://github.com/organizations/iterate/settings/apps/new` (for org apps)
-   or `https://github.com/settings/apps/new` (for personal apps).
-2. The GitHub UI shows a review screen — the user clicks **Create GitHub App**.
-   This is the one mandatory human interaction.
-3. GitHub redirects to the `redirect_url` in your manifest with a `?code=`
-   parameter (one-time use, expires in 1 hour).
-4. Your server exchanges the code: `POST /app-manifests/{code}/conversions`.
-   Response contains `id`, `pem` (RSA private key), `client_id`,
-   `client_secret`, `webhook_secret`.
-
-Everything except step 2 is scriptable. The typical bulk-creation pattern runs
-a local HTTP server to capture the redirect automatically, reducing each app to
-one browser click.
-
-## Single app: browser flow
-
-1. Open `https://github.com/organizations/iterate/settings/apps/new`.
-2. In the **Register a new GitHub App** form, paste the filled manifest JSON
-   into the **From a manifest** tab.
-3. Click **Create GitHub App**.
-4. Capture the credentials from the post-creation screen (**App ID**, download
-   **private key**, note **Client ID**, **Client Secret**, **Webhook secret**).
-
-If you included `"redirect_url": "http://localhost:3333/github-app-created"`,
-GitHub will redirect there after creation with `?code=...`. You can exchange
-the code immediately:
-
-```bash
-curl -s -X POST https://api.github.com/app-manifests/CODE_HERE/conversions \
-  -H "Accept: application/vnd.github+json" \
-  | jq '{id:.id, appSlug:.slug, clientId:.client_id, clientSecret:.client_secret, webhookSecret:.webhook_secret, pem:.pem}'
+```text
+https://github.com/organizations/iterate/settings/apps/new
 ```
 
-The `pem` field is the RSA private key. Store it as-is (with literal `\n`).
+The form field is named `manifest`. GitHub shows a review page. After the human
+approves the exact batch, the agent can drive the Create buttons in its
+dedicated browser session and let the callback helper complete each conversion.
 
-## Bulk creation: one-click-per-app script
+The conversion endpoint returns `id`, `slug`, `client_id`, `client_secret`,
+`webhook_secret`, and `pem`. Treat the complete response as secret material.
 
-For creating many apps at once (10 preview slots, multiple developer envs),
-this pattern reduces each app to one browser click with automatic credential
-capture.
+## Doppler shape
 
-```bash
-#!/usr/bin/env bash
-# Usage: ./create-github-app.sh 3
-# Creates iterate (preview-3), writes credentials to Doppler os/preview_3.
-# Requires: jq, doppler, nc or python3 -m http.server
-
-N=$1
-APP_NAME="iterate (preview-$N)"
-BASE="https://os.iterate-preview-$N.app"
-REDIRECT="http://localhost:3333/github-app-created"
-PORT=3333
-
-MANIFEST=$(jq -nc \
-  --arg name "$APP_NAME" \
-  --arg url "$BASE" \
-  --arg desc "Iterate AI coding agent — preview-$N" \
-  --arg webhook "$BASE/api/integrations/github/webhook" \
-  --arg callback "$BASE/api/integrations/github/callback" \
-  --arg redirect "$REDIRECT" \
-  '{
-    name: $name,
-    url: $url,
-    description: $desc,
-    public: false,
-    request_oauth_on_install: true,
-    setup_on_update: true,
-    hook_attributes: { url: $webhook, active: true },
-    callback_urls: [$callback],
-    redirect_url: $redirect,
-    default_permissions: {
-      actions:"write", administration:"write", attestations:"write",
-      checks:"write", code_scanning_alerts:"write", commit_statuses:"write",
-      contents:"write", dependabot_alerts:"write", deployments:"write",
-      environments:"write", issues:"write", metadata:"read", pages:"write",
-      pull_requests:"write", repository_security_advisories:"write",
-      secret_scanning_alerts:"write", secrets:"read", variables:"read",
-      webhooks:"write", workflows:"write", members:"read",
-      organization_administration:"write", projects:"write",
-      email_addresses:"read"
-    },
-    default_events: [
-      "branch_protection_rule","check_run","check_suite","code_scanning_alert",
-      "commit_comment","create","delete","dependabot_alert","deployment",
-      "deployment_protection_rule","deployment_review","deployment_status",
-      "discussion","discussion_comment","fork","installation_repositories",
-      "installation_target","issue_comment","issues","label","merge_group",
-      "milestone","projects_v2","projects_v2_item","pull_request",
-      "pull_request_review","pull_request_review_comment",
-      "pull_request_review_thread","push","release","repository",
-      "repository_advisory","repository_dispatch","repository_ruleset",
-      "secret_scanning_alert","security_and_analysis","status",
-      "workflow_dispatch","workflow_job","workflow_run"
-    ]
-  }')
-
-# Start a one-shot local server to capture the redirect code
-echo "Starting local redirect capture server on :$PORT..."
-python3 -c "
-import http.server, urllib.parse, sys, os, signal
-
-class Handler(http.server.BaseHTTPRequestHandler):
-    def do_GET(self):
-        q = urllib.parse.urlparse(self.path).query
-        code = urllib.parse.parse_qs(q).get('code', [None])[0]
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b'<h1>App created — you can close this tab.</h1>')
-        print('CODE=' + (code or ''), flush=True)
-        signal.raise_signal(signal.SIGTERM)
-    def log_message(self, *a): pass
-
-http.server.HTTPServer(('localhost', $PORT), Handler).serve_forever()
-" &
-SERVER_PID=$!
-
-# Open GitHub's app creation page with the manifest pre-filled
-FORM_HTML=$(mktemp /tmp/gh-app-XXXXXX.html)
-cat > "$FORM_HTML" <<HTML
-<!doctype html><html><body>
-<form method="post" action="https://github.com/organizations/iterate/settings/apps/new">
-  <input type="hidden" name="manifest" value='$MANIFEST'>
-  <button type="submit">Open GitHub App creation form</button>
-</form>
-<script>document.forms[0].submit();</script>
-</body></html>
-HTML
-open "$FORM_HTML"
-
-echo "Waiting for GitHub redirect..."
-CODE=$(while read line; do
-  [[ "$line" == CODE=* ]] && echo "${line#CODE=}" && break
-done < <(python3 - <<EOF
-# already started above — this just reads stdout
-EOF
-))
-
-kill $SERVER_PID 2>/dev/null
-rm -f "$FORM_HTML"
-
-if [[ -z "$CODE" ]]; then
-  echo "No code captured. Did you click 'Create GitHub App' in the browser?" >&2
-  exit 1
-fi
-
-echo "Exchanging code for credentials..."
-CREDS=$(curl -sf -X POST "https://api.github.com/app-manifests/$CODE/conversions" \
-  -H "Accept: application/vnd.github+json")
-
-APP_ID=$(echo "$CREDS" | jq -r '.id')
-APP_SLUG=$(echo "$CREDS" | jq -r '.slug')
-CLIENT_ID=$(echo "$CREDS" | jq -r '.client_id')
-CLIENT_SECRET=$(echo "$CREDS" | jq -r '.client_secret')
-WEBHOOK_SECRET=$(echo "$CREDS" | jq -r '.webhook_secret')
-PEM=$(echo "$CREDS" | jq -r '.pem')
-
-echo "Created app: $APP_NAME (id=$APP_ID slug=$APP_SLUG)"
-
-# Write to Doppler
-jq -nc \
-  --arg appId "$APP_ID" \
-  --arg appSlug "$APP_SLUG" \
-  --arg clientId "$CLIENT_ID" \
-  --arg clientSecret "$CLIENT_SECRET" \
-  --arg webhookSecret "$WEBHOOK_SECRET" \
-  --arg privateKey "$PEM" \
-  '{appId:$appId, appSlug:$appSlug, oauthClientId:$clientId,
-    oauthClientSecret:$clientSecret, webhookSigningSecret:$webhookSecret,
-    privateKey:$privateKey}' |
-  doppler secrets set APP_CONFIG_INTEGRATIONS__GITHUB \
-    --project os \
-    --config "preview_$N" \
-    --silent
-
-echo "Written to Doppler os/preview_$N. Verify:"
-doppler secrets get APP_CONFIG_INTEGRATIONS__GITHUB \
-  --project os \
-  --config "preview_$N" \
-  --plain | jq -e '.appId and .oauthClientId and .privateKey and .webhookSigningSecret' >/dev/null && \
-  echo "Shape OK." || echo "Shape check failed — inspect the value." >&2
-```
-
-Run it ten times in parallel:
-
-```bash
-for N in 1 2 3 4 5 6 7 8 9 10; do
-  ./create-github-app.sh $N &
-done
-wait
-```
-
-Each invocation opens a browser tab at GitHub's app creation form. Click
-**Create GitHub App** in each tab (you can batch the clicks). Credentials are
-written to Doppler automatically after each redirect.
-
-## Credential shape in Doppler
-
-The key is `APP_CONFIG_INTEGRATIONS__GITHUB` in each `os/preview_N` config.
+Write `APP_CONFIG_INTEGRATIONS__GITHUB` to `os/preview_N`:
 
 ```json
 {
@@ -361,98 +177,49 @@ The key is `APP_CONFIG_INTEGRATIONS__GITHUB` in each `os/preview_N` config.
   "appSlug": "iterate-preview-N",
   "oauthClientId": "Iv23li...",
   "oauthClientSecret": "...",
-  "webhookSigningSecret": "...",
+  "webhookSecret": "...",
   "privateKey": "-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----"
 }
 ```
 
-The `privateKey` must include the PEM header/footer with literal `\n` newlines
-(as returned by the manifest conversion API). GitHub's JWTs use RS256; `appId`
-is the `iss` claim, max 10-minute lifetime.
+The runtime field is `webhookSecret`, not `webhookSigningSecret`. Preserve the
+PEM newlines returned by GitHub. Never print the value to verify it; parse it
+inside `doppler run` and assert that the required keys are non-empty.
 
-Write it manually if you collected credentials from the GitHub UI instead of
-via the manifest flow:
+## Verify
 
-```bash
-jq -nc \
-  --arg appId "$APP_ID" \
-  --arg appSlug "$APP_SLUG" \
-  --arg clientId "$CLIENT_ID" \
-  --arg clientSecret "$CLIENT_SECRET" \
-  --arg webhookSecret "$WEBHOOK_SECRET" \
-  --arg privateKey "$PEM" \
-  '{appId:$appId, appSlug:$appSlug, oauthClientId:$clientId,
-    oauthClientSecret:$clientSecret, webhookSigningSecret:$webhookSecret,
-    privateKey:$privateKey}' |
-  doppler secrets set APP_CONFIG_INTEGRATIONS__GITHUB \
-    --project os \
-    --config preview_N \
-    --silent
-```
+After writing Doppler and deploying OS:
 
-## Installation token format
+1. Create an App JWT from the Doppler config.
+2. Call `GET /app` and require the exact slug `iterate-preview-N`.
+3. Call `GET /app/hook/config` and require the exact `.com` webhook URL.
+4. Install the App through OS's Connect GitHub flow for a test project.
+5. Deliver a real webhook and verify its signature and resulting project
+   state, not merely an HTTP 200.
 
-As of April 2026, GitHub is transitioning installation tokens from the
-legacy 40-character `ghs_…` format to a stateless `ghs_APPID_JWT` format
-(~520 characters). Both formats are valid during the transition. Do not
-hardcode token length limits anywhere in OS.
-
-## Smoke test
-
-After writing Doppler and redeploying:
-
-```bash
-(cd apps/os && doppler run --project os --config preview_N -- pnpm run deploy)
-```
-
-Verify the app credentials are valid (does not require an installation):
-
-```bash
-# from apps/os, using the preview_N Doppler config
-doppler run --project os --config preview_N -- node -e "
-const cfg = JSON.parse(process.env.APP_CONFIG_INTEGRATIONS__GITHUB);
-const { createAppAuth } = require('@octokit/auth-app');
-const auth = createAppAuth({ appId: cfg.appId, privateKey: cfg.privateKey });
-auth({ type: 'app' }).then(a => {
-  require('node:https').get({
-    hostname: 'api.github.com',
-    path: '/app',
-    headers: { Authorization: 'Bearer ' + a.token, 'User-Agent': 'iterate-smoke' }
-  }, r => { let d=''; r.on('data',c=>d+=c); r.on('end',()=>console.log(JSON.parse(d).slug)); });
-});
-"
-```
-
-Expected output: `iterate-preview-N` (the app slug).
+Do not hardcode installation-token lengths. GitHub supports both legacy and
+new stateless token formats during its transition.
 
 ## Troubleshooting
 
-- **JWT error / bad credentials**: the `privateKey` in Doppler may have escaped
-  newlines (`\\n` rather than `\n`). The PEM must decode to a valid RSA key.
-  Check with `echo "$KEY" | openssl rsa -check -noout`.
-- **Webhook signature mismatch**: `webhookSigningSecret` in Doppler does not
-  match the app's Webhook Secret in GitHub settings. Rotate the secret in
-  GitHub, write the new value to Doppler, redeploy.
-- **OAuth callback fails**: confirm the `callback_urls` list in the GitHub App
-  settings contains exactly
-  `https://os.iterate-preview-N.app/api/integrations/github/callback`. GitHub
+- **Name already exists:** stop and inspect its owner, URLs, permissions, and
+  credentials. Reconcile it or obtain explicit approval for a replacement.
+- **Callback has no code:** check that the receiver was listening before the
+  form opened and that GitHub used the exact loopback redirect URL.
+- **State mismatch:** discard the callback. Do not convert it.
+- **JWT error:** the private key may contain escaped `\\n` instead of PEM
+  newlines, or belong to a different App.
+- **Webhook mismatch:** compare `GET /app/hook/config` with the slot's exact
+  `.com` URL. Rotate only with explicit approval.
+- **OAuth callback fails:** require
+  `https://os.iterate-preview-N.com/api/integrations/github/callback`; GitHub
   does not allow wildcard callback URLs.
-- **Events arrive but no project reacts**: the app is not yet installed on any
-  repo/org. Install it through the OS **Connect GitHub** flow for the intended
-  project.
-- **Rate limit 403s on check run creation**: the app token is rate-limited
-  per installation (5 000/hr baseline). Requests to `/repos/{owner}/{repo}/check-runs`
-  require the `checks: write` permission on the installation, not just the app.
+- **No project reacts:** the App may not be installed through OS for that
+  project, even if App authentication succeeds.
 
-## GitHub references
+## References
 
-- App Manifest flow:
-  <https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/creating-a-github-app-from-a-manifest>
-- App permissions reference:
-  <https://docs.github.com/en/rest/overview/permissions-required-for-github-apps>
-- Check Runs API:
-  <https://docs.github.com/en/rest/checks/runs>
-- Installation token exchange:
-  <https://docs.github.com/en/rest/apps/apps#create-an-installation-access-token-for-an-app>
-- App Manifest conversion endpoint:
-  <https://docs.github.com/en/rest/apps/apps#create-a-github-app-from-a-manifest>
+- [GitHub App Manifest flow](https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-from-a-manifest)
+- [App Manifest conversion API](https://docs.github.com/en/rest/apps/apps#create-a-github-app-from-a-manifest)
+- [GitHub App permissions](https://docs.github.com/en/rest/authentication/permissions-required-for-github-apps)
+- [Check Runs API](https://docs.github.com/en/rest/checks/runs)

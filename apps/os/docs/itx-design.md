@@ -434,7 +434,7 @@ The plan:
   want call-level audit later it's one hook in `ContextRegistry.invoke` —
   the single supervisor dispatch — covering every cap uniformly.
 - The inbound MCP route is stateless: authenticate each request, select a
-  project, run `exec_js` against the project context, and format the result.
+  project, run `exec_typescript` against the project context, and format the result.
 - Needed along the way: explicit execution handles if MCP tools need durable
   state beyond the project context. Do not hide application state in MCP
   transport sessions.
@@ -997,10 +997,10 @@ into this statement. What shipped, in the locked terms:
   context's identity, journaled on that context. Semantic change, on
   purpose: plain extensions now SHARE the project workspace through the
   chain — isolation is a host's decision, not kernel magic.
-- **Processor-mode execution arrived.** `script-execution-requested` with
+- **Processor-mode execution arrived.** `script-run-requested` with
   `enqueued: true` runs in the processor via the existing runner (detached:
   a script's own provides re-enter the serialized ingest) and appends
-  `script-execution-completed`; `pendingExecutions` in state makes
+  `script-run-settled`; `pendingExecutions` in state makes
   at-least-once reruns detectable and completed pairs inert. The synchronous
   /api/itx/run door writes the same two events as a record — both modes
   converge on one journal vocabulary.
@@ -1078,7 +1078,7 @@ deep: { thought: (q) => … } } })` works directly, callable at any depth
   `events.iterate.com/capability-host/capability-provided` (payload `kind` records
   live vs durable), `cap-revoked`/`cap-disconnected` →
   `capability-revoked`/`capability-disconnected`, and the script pair is
-  `script-execution-requested`/`script-execution-completed`. Every `Cap*`
+  `script-run-requested`/`script-run-settled`. Every `Cap*`
   identifier is spelled out (`CapabilityTarget`, `CapabilitySource`,
   `CapabilityInvoke`, `RESERVED_CAPABILITY_NAMES`, …), the dial-time
   attribution prop `cap` is now `capability`, the registry table is

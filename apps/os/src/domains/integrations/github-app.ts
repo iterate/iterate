@@ -6,6 +6,29 @@
 // App private key comes from deployment config and never reaches a caller.
 
 import { computeSignatureBase64Url } from "../secrets/utils.ts";
+import { fetchWithCredentialRedirects } from "../secrets/credential-fetch.ts";
+import type { PlatformCredsRef } from "../secrets/types.ts";
+import { lookupConnectionClaim } from "./integration-streams.ts";
+
+/**
+ * Platform App authority follows the deployment-wide integration claim. A
+ * project-owned App key is independent of that directory because possessing
+ * the key is the authority for its own installations.
+ */
+export async function assertGithubInstallationTokenMintAuthorized(input: {
+  installationId: string;
+  privateKey: PlatformCredsRef | "material";
+  projectId: string;
+}): Promise<void> {
+  if (input.privateKey === "material") return;
+
+  const claim = await lookupConnectionClaim("github", input.installationId);
+  if (claim?.projectId !== input.projectId) {
+    throw new Error(
+      `GitHub installation ${input.installationId} is not claimed by project ${input.projectId}.`,
+    );
+  }
+}
 
 function base64UrlOfJson(value: unknown): string {
   return btoa(JSON.stringify(value)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -33,16 +56,18 @@ export async function mintGithubInstallationToken(input: {
     payload: signingInput,
     privateKeyPem: input.privateKeyPem,
   });
-  const response = await fetch(
-    `${input.apiBase.replace(/\/$/, "")}/app/installations/${input.installationId}/access_tokens`,
-    {
-      method: "POST",
-      headers: {
-        accept: "application/vnd.github+json",
-        authorization: `Bearer ${signingInput}.${signature}`,
-        "user-agent": "iterate-os",
+  const response = await fetchWithCredentialRedirects(
+    new Request(
+      `${input.apiBase.replace(/\/$/, "")}/app/installations/${input.installationId}/access_tokens`,
+      {
+        method: "POST",
+        headers: {
+          accept: "application/vnd.github+json",
+          authorization: `Bearer ${signingInput}.${signature}`,
+          "user-agent": "iterate-os",
+        },
       },
-    },
+    ),
   );
   if (!response.ok) {
     throw new Error(`github installation token mint failed: HTTP ${response.status}`);

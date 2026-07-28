@@ -1,40 +1,12 @@
-// Implements the "telegram-agent" processor on itx — the Telegram sibling of
-// slack-agent-processor-implementation.ts. Emitted event types, payloads, and
-// idempotency keys are stable wire formats.
-//
-// Side-effect policy mirrors the Slack agent processor (refold-safety
-// included, #1807):
-// - The agent-input append runs inside `blockProcessorWhile` (a failed append
-//   holds the checkpoint and replays). It ALWAYS runs — late webhooks still
-//   reach the agent — and dedupes on its idempotency key across a refold.
-// - The "typing…" chat action is a user-visible ACK ("we just heard you"),
-//   so it fires only for FRESH webhooks (webhookAckIsFresh): a state-schema
-//   deploy discards the checkpoint and refolds the whole journal, and typing
-//   on months-old messages would be a rate-limit burst. The arrival typing
-//   stays per-event (gated); the "still working" typing repaint moved to
-//   `processEventBatch` — latest lifecycle fact only, at-head, once — because
-//   per-event `blockProcessorWhile` closures run concurrently within a batch
-//   (a real pre-existing race) and a refold would replay every historical
-//   status flip.
-// - The journaled send (`telegram/send-requested` → Bot API → `message-sent`
-//   marker + connection-stream claim) is a DURABLE OBLIGATION, NOT an ack, so
-//   it is NOT freshness-gated: it must retry until marked. It is inherently
-//   refold-safe — a replayed request finds its journal marker and skips the
-//   re-send (the marker + claim appends dedupe on their idempotency keys). The
-//   accepted caveat: a crash BETWEEN the Bot API call and the marker append
-//   re-sends on retry (Telegram's sendMessage has no idempotency key; the
-//   journal is exactly-once, the send is at-least-once).
-
 import { stringify as stringifyYaml } from "yaml";
-import { StreamProcessor } from "../streams/stream-processor.ts";
-import type { StreamEvent } from "../streams/schemas.ts";
+import { isIdempotencyConflict, StreamProcessor } from "iterate/processors";
+import type { ConsumedEvent, ProcessEventArgs, ReduceArgs, StreamEvent } from "iterate/processors";
+import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "../capability-host/capability-host-processor-contract.ts";
 import {
+  coerceTelegramId,
   integrationConnectionStreamPath,
   readRecord,
   readString,
-  telegramChatIdFromAgentPath,
-  telegramConnectionFromAgentPath,
-  telegramTopicIdFromAgentPath,
   webhookAckIsFresh,
 } from "./utils.ts";
 import { telegramNewCommand } from "./telegram-processor-implementation.ts";
@@ -43,26 +15,57 @@ import {
   type TelegramAgentProcessorState,
 } from "./telegram-agent-processor-contract.ts";
 
-/** The fixed `/new` acknowledgement — a processor-level message, deliberately
- * not an agent greeting (no LLM turn for a bare `/new`). */
-export const TELEGRAM_NEW_SESSION_ACK_TEXT = "Started a fresh thread.";
-
-type TelegramAgentProcessorDeps = {
-  /** The host stream's own path
-   * (`/agents/telegram/<connection>/chat-<chatId>[...]`) — the chat id, forum
-   * topic, and connection the send effect needs all derive from it. */
-  agentPath: string;
-  /** Best-effort UX side effects only (the typing chat action) — failures are
-   * swallowed by the host dep and must never wedge the checkpoint. */
-  callTelegramApi?(method: string, body: Record<string, unknown>): Promise<void>;
-  /** The journaled send effect: deliver one sendMessage body and return
-   * Telegram's message_id. MUST throw on failure — the send obligation relies
-   * on the thrown error holding the checkpoint for retry. */
-  sendTelegramMessage?(body: Record<string, unknown>): Promise<{ messageId: number }>;
-  /** Injectable clock for the ack freshness gate (defaults to Date.now). */
-  now?: () => number;
-};
-
+/**
+ * The "telegram-agent" processor for one routed Telegram agent stream (one
+ * chat session) — the Telegram sibling of SlackAgentProcessor. Emitted event
+ * types, payloads, and idempotency keys are stable wire formats.
+ *
+ * HOW IT WORKS, end to end:
+ *
+ * The upstream `telegram` router has already forwarded this session's raw
+ * webhook updates here. This processor owns the Telegram-specific in-chat
+ * behavior, three lanes with three deliberately different guarantees:
+ *
+ * TRANSCRIPTION (per-event, `blockProcessorWhile`): each forwarded
+ * `telegram/webhook-received` becomes an `agents/context-added` item — the
+ * message's only copy on its way to the agent, so a failed append holds the
+ * checkpoint and the frame replays (the idempotency key dedupes the re-run).
+ * Bot-authored updates are ignored entirely (answering our own bot's echoes
+ * is a feedback loop). Human messages and button presses trigger an LLM turn;
+ * edits, membership changes and the like are recorded without one. `/new` is
+ * acknowledged with a FIXED processor-level message riding the journaled send
+ * pair (not an agent greeting — a bare `/new` wakes no LLM), and `/debug`
+ * compiles straight to a capability-host script execution that posts the dump
+ * back through the journaled send on this stream (no LLM turn, no context
+ * item; mirrors Slack's !debug — the general !<expression> compiler is
+ * deliberately NOT ported). Reply hints the router attached are rendered
+ * ABOVE the YAML dump with an imperative read-that-thread-first instruction.
+ *
+ * THE JOURNALED SEND (per-event, `blockProcessorWhile`): consuming
+ * `telegram/send-requested` OBLIGES delivery — Bot API sendMessage, then the
+ * `telegram/message-sent` marker here plus the provenance claim on the
+ * connection stream (the router reduces it so replies to bot messages resolve
+ * to their exact thread). A request without a marker is an unmet obligation:
+ * a crash holds the checkpoint and the frame replays; a replayed request
+ * whose marker already exists skips the re-send (a crash BETWEEN the Bot API
+ * call and the marker re-sends — the accepted at-least-once caveat, since
+ * sendMessage has no idempotency key; the stream is exactly-once, the send is
+ * not). Sends are thread-bound: the stream's chat coordinates always win over
+ * payload-supplied ones, and reply_to_message_id defaults to the message this
+ * turn is answering exactly when newer messages have arrived since.
+ *
+ * TYPING (best-effort, freshness-gated): the arrival "typing…" fires inside
+ * the transcription blocker AFTER the context item committed (the indicator
+ * must not signal receipt of a message that could still be lost), only for
+ * FRESH webhooks — a reducer-version replay of months-old messages must not
+ * re-type (a rate-limit burst, #1807). The "still working" repaint runs once
+ * per at-head pass as a droppable background attempt: per event we only
+ * remember the LATEST typing-worthy fact (`agent/llm-request-requested`,
+ * `capability-host/script-run-requested`), carried across behind-head frames,
+ * and the at-head pass paints it if still fresh. Nothing recovers a dropped
+ * repaint — the indicator auto-expires in ~5s and the next lifecycle fact
+ * repaints anyway.
+ */
 export class TelegramAgentProcessor extends StreamProcessor<
   TelegramAgentProcessorContract,
   TelegramAgentProcessorDeps
@@ -70,16 +73,377 @@ export class TelegramAgentProcessor extends StreamProcessor<
   readonly contract = TelegramAgentProcessorContract;
 
   /** A typing-worthy lifecycle fact seen in a batch that was NOT at head, so
-   * the next at-head batch repaints it (mirrors slack-agent's status carry). */
+   * the next at-head pass repaints it (mirrors slack-agent's status carry).
+   * In-memory: dies with the incarnation, and that is fine — typing is
+   * cosmetic. */
   #unpaintedTypingFact: StreamEvent | undefined;
 
-  protected override reduce({
-    event,
-    state,
-  }: Parameters<
-    StreamProcessor<TelegramAgentProcessorContract>["reduce"]
-  >[0]): TelegramAgentProcessorState {
+  // ------------------------------------------------------------ processEvent
+  // Lanes, chosen here at the dispatch site: the transcription and the
+  // journaled send are per-event consequences (the event is delivered once —
+  // a lost append loses the message or the reply forever), so they block; the
+  // at-head typing repaint is a freshness-gated cosmetic ack whose dropped
+  // attempt nothing needs to recover, so it rides `runInBackground`.
+  protected override processEvent(
+    args: ProcessEventArgs<TelegramAgentProcessorContract>,
+  ): undefined {
+    const { append, appendTo, blockProcessorWhile, delivery, event, runInBackground, state } = args;
+    if (state.birthCertificate === null) return;
+    const { chatId, connection, messageThreadId } = state.birthCertificate.config;
+    switch (event?.type) {
+      case "events.iterate.com/telegram/webhook-received": {
+        const target = telegramUpdateTarget(event.payload.body);
+        // Never react to bot-authored updates — our own bot's messages come
+        // back through the webhook, and answering them is a feedback loop.
+        if (target?.fromIsBot === true) break;
+        const messageText = readRecord(readRecord(event.payload.body)?.message)?.text;
+        if (target?.kind === "message" && isTelegramDebugCommand(messageText)) {
+          blockProcessorWhile(() => this.#requestDebugScript({ append, event }));
+          break;
+        }
+        const newCommand = target?.kind === "message" ? telegramNewCommand(messageText) : null;
+        // Human messages and button presses wake the agent; everything else
+        // (edits, membership changes, channel posts by anonymous admins, …)
+        // is recorded as context without triggering an LLM turn. A bare /new
+        // does not wake the agent either — its acknowledgement is the fixed
+        // processor-level message, not an agent greeting.
+        const triggers =
+          newCommand !== null
+            ? newCommand.trailingText !== null
+            : target?.kind === "message" || target?.kind === "callback_query";
+        blockProcessorWhile(() =>
+          this.#transcribeWebhook({ append, connection, event, newCommand, target, triggers }),
+        );
+        break;
+      }
+      case "events.iterate.com/telegram/send-requested": {
+        blockProcessorWhile(() =>
+          this.#satisfySendObligation({
+            answeringMessageId: state.answeringMessageId,
+            append,
+            appendTo,
+            chatId,
+            connection,
+            event,
+            latestInboundMessageId: state.latestInboundMessageId,
+            messageThreadId,
+          }),
+        );
+        break;
+      }
+      case "events.iterate.com/agent/llm-request-requested":
+      case "events.iterate.com/capability-host/script-run-requested":
+        // "The agent is working now" — remembered, not painted: the repaint
+        // runs once per at-head pass (below), never per event, so a replay
+        // of history cannot re-run every historical flip and behind-head
+        // frames carry the fact instead of painting stale. Latest wins — an
+        // earlier unpainted fact is already stale.
+        this.#unpaintedTypingFact = event;
+        break;
+      // telegram-agent/created matters through reduce only.
+    }
+    // The at-head typing repaint: after the per-event switch (so a
+    // typing-worthy head event has already landed in the memo), once per
+    // at-head pass. A droppable attempt — a lost repaint costs ~5s of
+    // indicator, and the next lifecycle fact repaints anyway.
+    if (delivery.caughtUp) {
+      runInBackground(() => this.#repaintTypingAtHead(state));
+    }
+  }
+
+  /**
+   * Compile `/debug` straight to a capability-host script execution — no LLM
+   * turn, no agent context item. The script posts the debug dump back through
+   * the journaled send pair on THIS session stream, so it lands in the right
+   * thread with provenance like the /new ack.
+   */
+  async #requestDebugScript(input: {
+    append: ProcessEventArgs<TelegramAgentProcessorContract>["append"];
+    event: ConsumedEvent<TelegramAgentProcessorContract>;
+  }): Promise<void> {
+    const { append, event } = input;
+    // Deterministic body: expiresAt anchors to the webhook's createdAt,
+    // never to `now` — an at-least-once redelivery re-appends the identical
+    // request and dedupes on the key (a now-stamped expiry would make the
+    // re-append a same-key CONFLICT and wedge the frame forever). The
+    // race-tolerant append additionally covers replays over streams whose
+    // committed request predates this anchoring.
+    await this.#appendUnlessLostIdempotencyRace(append, {
+      type: "events.iterate.com/capability-host/script-run-requested",
+      idempotencyKey: `telegram-agent:debug-command:${event.offset}`,
+      payload: {
+        code: compileTelegramDebugScript(this.path),
+        executionId: `telegram-debug-command-${event.offset}`,
+        expiresAt: Date.parse(event.createdAt) + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
+      },
+    });
+  }
+
+  /**
+   * Transcribe one forwarded webhook into agent context (plus the fixed `/new`
+   * acknowledgement), then — only after the input committed — the freshness-
+   * gated arrival "typing…".
+   */
+  async #transcribeWebhook(input: {
+    append: ProcessEventArgs<TelegramAgentProcessorContract>["append"];
+    connection: string;
+    event: Extract<
+      ConsumedEvent<TelegramAgentProcessorContract>,
+      { type: "events.iterate.com/telegram/webhook-received" }
+    >;
+    newCommand: { trailingText: string | null } | null;
+    target: TelegramUpdateTarget | null;
+    triggers: boolean;
+  }): Promise<void> {
+    const { append, connection, event, newCommand, target, triggers } = input;
+    if (newCommand !== null) {
+      // The fixed acknowledgement rides the journaled send pair, so it is
+      // delivered with the same obligation semantics as any reply — and
+      // lands in the chat before the agent's answer to any trailing text
+      // (its request precedes the triggering input).
+      await append({
+        type: "events.iterate.com/telegram/send-requested",
+        idempotencyKey: `telegram-agent:new-session-ack:${event.offset}`,
+        payload: { text: TELEGRAM_NEW_SESSION_ACK_TEXT },
+      });
+    }
+    // Telegram's normalized content is application-supplied developer
+    // context; actor and refs preserve the untrusted sender and source. The
+    // sender's location depends on the update kind: messages carry
+    // message.from, button presses callback_query.from, edits
+    // edited_message.from.
+    const update = readRecord(event.payload.body);
+    const sender =
+      readRecord(readRecord(update?.message)?.from) ??
+      readRecord(readRecord(update?.callback_query)?.from) ??
+      readRecord(readRecord(update?.edited_message)?.from);
+    const senderId = sender?.id;
+    const senderUsername = readString(sender?.username);
+    await append({
+      type: "events.iterate.com/agents/context-added",
+      idempotencyKey: `telegram-agent:webhook-to-agent-context:${event.offset}`,
+      payload: {
+        role: "developer",
+        content: telegramWebhookAgentInput(event.payload, { newCommand }),
+        actor: {
+          type: "telegram",
+          ...(typeof senderId === "number" || typeof senderId === "string"
+            ? { userId: String(senderId) }
+            : {}),
+          ...(senderUsername == null ? {} : { username: senderUsername }),
+        },
+        refs: [
+          {
+            type: "event",
+            streamPath: event.path,
+            offset: event.offset,
+            eventType: event.type,
+          },
+        ],
+        ...(triggers ? {} : { llmRequestPolicy: { behaviour: "dont-trigger-request" } }),
+      },
+    });
+    // After the input committed (never before — the typing indicator must
+    // not signal receipt of a message that could still be lost), show
+    // "typing…" so the human knows the bot heard them. Freshness-gated: a
+    // replay must not re-type on historical messages.
+    if (triggers && target != null && webhookAckIsFresh(event, (this.deps.now ?? Date.now)())) {
+      await this.#sendTyping(connection, target);
+    }
+  }
+
+  /** The send obligation: deliver one send-requested to the Bot API, then
+   * mark it here and claim it on the connection stream. */
+  async #satisfySendObligation(input: {
+    answeringMessageId: number | undefined;
+    append: ProcessEventArgs<TelegramAgentProcessorContract>["append"];
+    appendTo: ProcessEventArgs<TelegramAgentProcessorContract>["appendTo"];
+    chatId: string;
+    connection: string;
+    event: Extract<
+      ConsumedEvent<TelegramAgentProcessorContract>,
+      { type: "events.iterate.com/telegram/send-requested" }
+    >;
+    latestInboundMessageId: number | undefined;
+    messageThreadId: string | undefined;
+  }): Promise<void> {
+    const { append, appendTo, chatId, connection, event } = input;
+    const sessionPath = this.path;
+
+    // Replay safety: a marker for this request means the send already
+    // happened — never re-send a satisfied obligation. (A crash BEFORE the
+    // marker re-sends; that is the accepted at-least-once caveat.)
+    const existingMarker = await this.#findSentMarker(event.offset);
+    const messageId = existingMarker?.messageId ?? (await this.#deliver(input));
+
+    await append({
+      type: "events.iterate.com/telegram/message-sent",
+      idempotencyKey: `telegram-agent:message-sent:${event.offset}`,
+      payload: { messageId, requestOffset: event.offset },
+    });
+    // The provenance claim on the CONNECTION stream: the router reduces
+    // message_id → sessionPath from it, making reply hints exact for bot
+    // messages. Idempotency-keyed, so a crash between marker and claim
+    // replays into a single claim.
+    await appendTo(integrationConnectionStreamPath("telegram", connection), {
+      type: "events.iterate.com/telegram/message-sent",
+      idempotencyKey: `telegram:sent-claim:${sessionPath}:${event.offset}`,
+      payload: {
+        chatId,
+        messageId,
+        request: { offset: event.offset, stream: sessionPath },
+        sessionPath,
+      },
+    });
+  }
+
+  /**
+   * The at-head typing repaint. The "still working" typing indicator
+   * auto-expires after ~5s; one repaint per at-head pass keeps it roughly
+   * alive while the agent works, painted from the latest typing-worthy fact
+   * seen since the last pass ("once at head, latest wins" — behind-head
+   * frames only accumulate the memo). The memo is read and cleared FIRST,
+   * unconditionally: a stale fact must not survive into the next pass just
+   * because this one skipped painting.
+   */
+  async #repaintTypingAtHead(state: TelegramAgentProcessorState): Promise<void> {
+    const latest = this.#unpaintedTypingFact;
+    this.#unpaintedTypingFact = undefined;
+    if (latest == null || !webhookAckIsFresh(latest, (this.deps.now ?? Date.now)())) return;
+    if (state.birthCertificate === null) return;
+    const { chatId, messageThreadId } = state;
+    if (chatId == null) return;
+    await this.#sendTyping(state.birthCertificate.config.connection, {
+      chatId,
+      messageThreadId,
+    });
+  }
+
+  /** Deliver one send-requested to the Bot API; returns Telegram's message_id. */
+  async #deliver(input: {
+    answeringMessageId: number | undefined;
+    chatId: string;
+    connection: string;
+    event: { offset: number; payload: Record<string, unknown> };
+    latestInboundMessageId: number | undefined;
+    messageThreadId: string | undefined;
+  }): Promise<number> {
+    if (this.deps.sendTelegramMessage == null) {
+      // Loud, not skipped: a send obligation with no delivery dep is a
+      // misconfiguration; dropping it would silently eat the reply.
+      throw new Error(
+        "telegram-agent has no sendTelegramMessage dep; cannot satisfy send-requested",
+      );
+    }
+    // The deterministic reply_to_message_id rule (unless the request already
+    // chose one): quote the message this turn is answering ONLY when newer
+    // messages have arrived since — quoting the latest message is noise,
+    // quoting a stale one disambiguates.
+    const { answeringMessageId, latestInboundMessageId } = input;
+    const replyTo =
+      input.event.payload.reply_to_message_id !== undefined
+        ? undefined
+        : answeringMessageId !== undefined && answeringMessageId !== latestInboundMessageId
+          ? answeringMessageId
+          : undefined;
+    // Journaled sends are THREAD-BOUND: the stream's identity always wins over
+    // payload-supplied chat_id/message_thread_id. Not a capability boundary
+    // (the raw itx.integrations.telegram sendMessage can post anywhere) — a
+    // provenance one: the message-sent claim records THIS stream as the
+    // message's thread, and a send that actually went elsewhere would poison
+    // reply hints and the reply_to comparison. Forced rather than rejected: a
+    // permanently-invalid request must not wedge the obligation retry loop.
+    // reply_to_message_id stays caller-overridable (it is within-chat).
+    const {
+      chat_id: _ignoredChatId,
+      message_thread_id: _ignoredThreadId,
+      ...payloadRest
+    } = input.event.payload;
+    const { messageId } = await this.deps.sendTelegramMessage({
+      body: {
+        ...(replyTo === undefined ? {} : { reply_to_message_id: replyTo }),
+        ...payloadRest,
+        chat_id: coerceTelegramId(input.chatId),
+        ...(input.messageThreadId === undefined
+          ? {}
+          : { message_thread_id: coerceTelegramId(input.messageThreadId) }),
+      },
+      connection: input.connection,
+    });
+    return messageId;
+  }
+
+  /** The message-sent marker satisfying the send-requested at `requestOffset`,
+   * read from the stream (markers land AFTER their request, so reduced state
+   * can never see them while replaying the request itself). */
+  async #findSentMarker(requestOffset: number): Promise<{ messageId: number } | null> {
+    let afterOffset = requestOffset;
+    for (;;) {
+      const page = await this.stream.getEvents({
+        afterOffset,
+        eventTypes: ["events.iterate.com/telegram/message-sent"],
+        limit: 500,
+      });
+      for (const event of page) {
+        const payload = readRecord(event.payload);
+        if (payload?.requestOffset === requestOffset && typeof payload.messageId === "number") {
+          return { messageId: payload.messageId };
+        }
+      }
+      if (page.length < 500) return null;
+      afterOffset = page.at(-1)!.offset;
+    }
+  }
+
+  async #sendTyping(connection: string, target: { chatId: string; messageThreadId?: string }) {
+    if (this.deps.callTelegramApi == null) return;
+    await this.deps.callTelegramApi({
+      body: {
+        action: "typing",
+        chat_id: coerceTelegramId(target.chatId),
+        ...(target.messageThreadId === undefined
+          ? {}
+          : { message_thread_id: coerceTelegramId(target.messageThreadId) }),
+      },
+      connection,
+      method: "sendChatAction",
+    });
+  }
+
+  /**
+   * Append tolerating a lost idempotency race: the stream rejects a same-key
+   * append with a different body, and losing that race is success — the
+   * consequence is already committed under the key (here: a legacy /debug
+   * request whose committed expiry was stamped with delivery-time `now`
+   * before it was anchored to the webhook's createdAt).
+   */
+  async #appendUnlessLostIdempotencyRace(
+    append: ProcessEventArgs<TelegramAgentProcessorContract>["append"],
+    ...events: Parameters<ProcessEventArgs<TelegramAgentProcessorContract>["append"]>
+  ): Promise<void> {
+    try {
+      await append(...events);
+    } catch (error) {
+      if (!isIdempotencyConflict(error)) throw error;
+    }
+  }
+
+  // ------------------------------------------------------------------ reduce
+  protected override reduce(
+    args: ReduceArgs<TelegramAgentProcessorContract>,
+  ): TelegramAgentProcessorState {
+    const { event, state } = args;
     switch (event.type) {
+      case "events.iterate.com/telegram-agent/created":
+        if (state.birthCertificate !== null) return state;
+        return {
+          ...state,
+          birthCertificate: event.payload,
+          chatId: event.payload.config.chatId,
+          ...(event.payload.config.messageThreadId === undefined
+            ? {}
+            : { messageThreadId: event.payload.config.messageThreadId }),
+        };
       case "events.iterate.com/telegram/webhook-received": {
         const target = telegramUpdateTarget(event.payload.body);
         if (target == null) return state;
@@ -106,280 +470,38 @@ export class TelegramAgentProcessor extends StreamProcessor<
         return state;
     }
   }
-
-  protected override processEvent({
-    append,
-    appendTo,
-    blockProcessorWhile,
-    event,
-    state,
-  }: Parameters<StreamProcessor<TelegramAgentProcessorContract>["processEvent"]>[0]): undefined {
-    switch (event.type) {
-      case "events.iterate.com/telegram/webhook-received": {
-        const target = telegramUpdateTarget(event.payload.body);
-        // Never react to bot-authored updates — our own bot's messages come
-        // back through the webhook, and answering them is a feedback loop.
-        if (target?.fromIsBot === true) return;
-
-        const messageText = readRecord(readRecord(event.payload.body)?.message)?.text;
-        if (target?.kind === "message" && isTelegramDebugCommand(messageText)) {
-          // /debug mirrors Slack's !debug: compiled straight to a script
-          // execution — no LLM turn, no agent input. The script posts the
-          // debug dump back through the journaled send pair on THIS session
-          // stream, so it lands in the right thread with provenance like the
-          // /new ack. (Slack's general !<expression> compiler is deliberately
-          // NOT ported — /debug only for now.)
-          blockProcessorWhile(async () => {
-            await append({
-              type: "events.iterate.com/capability-host/script-execution-requested",
-              idempotencyKey: `telegram-agent:debug-command:${event.offset}`,
-              payload: {
-                code: compileTelegramDebugScript(this.deps.agentPath),
-                executionId: `telegram-debug-command-${event.offset}`,
-              },
-            });
-          });
-          return;
-        }
-
-        const newCommand = target?.kind === "message" ? telegramNewCommand(messageText) : null;
-
-        // Human messages and button presses wake the agent; everything else
-        // (edits, membership changes, channel posts by anonymous admins, …)
-        // is recorded as context without triggering an LLM turn. A bare /new
-        // does not wake the agent either — its acknowledgement is the fixed
-        // processor-level message below, not an agent greeting.
-        const triggers =
-          newCommand !== null
-            ? newCommand.trailingText !== null
-            : target?.kind === "message" || target?.kind === "callback_query";
-        blockProcessorWhile(async () => {
-          if (newCommand !== null) {
-            // The fixed acknowledgement rides the journaled send pair, so it
-            // is delivered with the same obligation semantics as any reply —
-            // and lands in the chat before the agent's answer to any trailing
-            // text (its request precedes the triggering input).
-            await append({
-              type: "events.iterate.com/telegram/send-requested",
-              idempotencyKey: `telegram-agent:new-session-ack:${event.offset}`,
-              payload: { text: TELEGRAM_NEW_SESSION_ACK_TEXT },
-            });
-          }
-          // The unified inbound message event: a Telegram update is a message
-          // FROM its sender, `from` carries the facts (see agents/message-received).
-          // The sender's location depends on the update kind: messages carry
-          // message.from, button presses callback_query.from, edits
-          // edited_message.from.
-          const update = readRecord(event.payload.body);
-          const sender =
-            readRecord(readRecord(update?.message)?.from) ??
-            readRecord(readRecord(update?.callback_query)?.from) ??
-            readRecord(readRecord(update?.edited_message)?.from);
-          const senderId = sender?.id;
-          const senderUsername = readString(sender?.username);
-          await append({
-            type: "events.iterate.com/agents/message-received",
-            idempotencyKey: `telegram-agent:webhook-to-agent-input:${event.offset}`,
-            payload: {
-              content: telegramWebhookAgentInput(event.payload, { newCommand }),
-              from: {
-                kind: "telegram",
-                ...(typeof senderId === "number" || typeof senderId === "string"
-                  ? { userId: String(senderId) }
-                  : {}),
-                ...(senderUsername == null ? {} : { username: senderUsername }),
-              },
-              ...(triggers ? {} : { llmRequestPolicy: { behaviour: "dont-trigger-request" } }),
-            },
-          });
-          // After the input committed (never before — the typing indicator
-          // must not signal receipt of a message that could still be lost),
-          // show "typing…" so the human knows the bot heard them. Freshness-
-          // gated: a refold must not re-type on historical messages.
-          if (
-            triggers &&
-            target != null &&
-            webhookAckIsFresh(event, (this.deps.now ?? Date.now)())
-          ) {
-            await this.#sendTyping(target);
-          }
-        });
-        return;
-      }
-      case "events.iterate.com/telegram/send-requested": {
-        // The send obligation: deliver, then mark. Everything under
-        // blockProcessorWhile so any failure holds the checkpoint and the
-        // host replays this request until a marker exists.
-        blockProcessorWhile(async () => {
-          const sessionPath = this.deps.agentPath;
-          const chatId = state.chatId ?? telegramChatIdFromAgentPath(sessionPath);
-          if (chatId === null) {
-            throw new Error(
-              `telegram-agent send-requested on a stream whose path carries no chat id: ${sessionPath}`,
-            );
-          }
-
-          // Replay safety: a marker for this request means the send already
-          // happened — never re-send a satisfied obligation. (A crash BEFORE
-          // the marker re-sends; that is the accepted at-least-once caveat.)
-          const existingMarker = await this.#findSentMarker(event.offset);
-          const messageId =
-            existingMarker?.messageId ?? (await this.#deliver({ chatId, event, state }));
-
-          await append({
-            type: "events.iterate.com/telegram/message-sent",
-            idempotencyKey: `telegram-agent:message-sent:${event.offset}`,
-            payload: { messageId, requestOffset: event.offset },
-          });
-          // The provenance claim on the CONNECTION stream: the router folds
-          // message_id → sessionPath from it, making reply hints exact for
-          // bot messages. Idempotency-keyed, so a crash between marker and
-          // claim replays into a single claim.
-          const connection = telegramConnectionFromAgentPath(sessionPath);
-          if (connection !== null) {
-            await appendTo(integrationConnectionStreamPath("telegram", connection), {
-              type: "events.iterate.com/telegram/message-sent",
-              idempotencyKey: `telegram:sent-claim:${sessionPath}:${event.offset}`,
-              payload: {
-                chatId,
-                messageId,
-                request: { offset: event.offset, stream: sessionPath },
-                sessionPath,
-              },
-            });
-          }
-        });
-        return;
-      }
-      // llm-request-requested / script-execution-requested drive the "still
-      // working" typing repaint — handled once per batch in processEventBatch
-      // (below), not per-event, so a refold cannot replay every historical
-      // flip and concurrent per-event closures cannot race.
-      default:
-        return;
-    }
-  }
-
-  protected override async processEventBatch(
-    args: Parameters<StreamProcessor<TelegramAgentProcessorContract>["processEventBatch"]>[0],
-  ): Promise<void> {
-    await super.processEventBatch(args);
-    // The "still working" typing indicator auto-expires after ~5s; one repaint
-    // per batch keeps it roughly alive while the agent works. Repaint the
-    // LATEST typing-worthy fact in the batch (an earlier one is already stale),
-    // carried across non-at-head batches so a lagging fold still paints once it
-    // catches up.
-    const latest =
-      args.reducedEvents.findLast(({ event }) => isTelegramTypingLifecycleFact(event))?.event ??
-      this.#unpaintedTypingFact;
-    if (args.checkpointOffset < args.streamMaxOffset) {
-      this.#unpaintedTypingFact = latest;
-      return;
-    }
-    this.#unpaintedTypingFact = undefined;
-    if (latest == null || !webhookAckIsFresh(latest, (this.deps.now ?? Date.now)())) return;
-    const { chatId, messageThreadId } = args.state;
-    if (chatId == null) return;
-    args.blockProcessorWhile(async () => {
-      await this.#sendTyping({ chatId, messageThreadId });
-    });
-  }
-
-  /** Deliver one send-requested to the Bot API; returns Telegram's message_id. */
-  async #deliver(input: {
-    chatId: string;
-    event: { offset: number; payload: Record<string, unknown> };
-    state: TelegramAgentProcessorState;
-  }): Promise<number> {
-    if (this.deps.sendTelegramMessage == null) {
-      // Loud, not skipped: a send obligation with no delivery dep is a
-      // misconfiguration; dropping it would silently eat the reply.
-      throw new Error(
-        "telegram-agent has no sendTelegramMessage dep; cannot satisfy send-requested",
-      );
-    }
-    const topicId = telegramTopicIdFromAgentPath(this.deps.agentPath);
-    // The deterministic reply_to_message_id rule (unless the request already
-    // chose one): quote the message this turn is answering ONLY when newer
-    // messages have arrived since — quoting the latest message is noise,
-    // quoting a stale one disambiguates.
-    const { answeringMessageId, latestInboundMessageId } = input.state;
-    const replyTo =
-      input.event.payload.reply_to_message_id !== undefined
-        ? undefined
-        : answeringMessageId !== undefined && answeringMessageId !== latestInboundMessageId
-          ? answeringMessageId
-          : undefined;
-    // Journaled sends are THREAD-BOUND: the stream's identity always wins over
-    // payload-supplied chat_id/message_thread_id. Not a capability boundary
-    // (the raw itx.integrations.telegram sendMessage can post anywhere) — a
-    // provenance one: the message-sent claim below records THIS stream as the
-    // message's thread, and a send that actually went elsewhere would poison
-    // reply hints and the reply_to comparison. Forced rather than rejected: a
-    // permanently-invalid request must not wedge the obligation retry loop.
-    // reply_to_message_id stays caller-overridable (it is within-chat).
-    const {
-      chat_id: _ignoredChatId,
-      message_thread_id: _ignoredThreadId,
-      ...payloadRest
-    } = input.event.payload;
-    const { messageId } = await this.deps.sendTelegramMessage({
-      ...(replyTo === undefined ? {} : { reply_to_message_id: replyTo }),
-      ...payloadRest,
-      chat_id: coerceTelegramId(input.chatId),
-      ...(topicId === null ? {} : { message_thread_id: coerceTelegramId(topicId) }),
-    });
-    return messageId;
-  }
-
-  /** The message-sent marker satisfying the send-requested at `requestOffset`,
-   * read from the journal (markers land AFTER their request, so folded state
-   * can never see them while replaying the request itself). */
-  async #findSentMarker(requestOffset: number): Promise<{ messageId: number } | null> {
-    let afterOffset = requestOffset;
-    for (;;) {
-      const page = await this.stream.getEvents({
-        afterOffset,
-        eventTypes: ["events.iterate.com/telegram/message-sent"],
-        limit: 500,
-      });
-      for (const event of page) {
-        const payload = readRecord(event.payload);
-        if (payload?.requestOffset === requestOffset && typeof payload.messageId === "number") {
-          return { messageId: payload.messageId };
-        }
-      }
-      if (page.length < 500) return null;
-      afterOffset = page.at(-1)!.offset;
-    }
-  }
-
-  async #sendTyping(target: { chatId: string; messageThreadId?: string }) {
-    if (this.deps.callTelegramApi == null) return;
-    await this.deps.callTelegramApi("sendChatAction", {
-      action: "typing",
-      chat_id: coerceTelegramId(target.chatId),
-      ...(target.messageThreadId === undefined
-        ? {}
-        : { message_thread_id: coerceTelegramId(target.messageThreadId) }),
-    });
-  }
 }
 
-/** Ids ride stream paths and state as strings; the Bot API wants the original
- * integers back where they were integers. */
-function coerceTelegramId(id: string): number | string {
-  const numeric = Number(id);
-  return Number.isSafeInteger(numeric) ? numeric : id;
-}
+// -----------------------------------------------------------------------------
+// Injected dependencies.
+// -----------------------------------------------------------------------------
 
-/** Events that mean "the agent is working now", driving the typing repaint. */
-function isTelegramTypingLifecycleFact(event: { type: string }): boolean {
-  return (
-    event.type === "events.iterate.com/agent/llm-request-requested" ||
-    event.type === "events.iterate.com/capability-host/script-execution-requested"
-  );
-}
+type TelegramAgentProcessorDeps = {
+  /** Best-effort UX side effects only (the typing chat action) — failures are
+   * swallowed by the host dep and must never wedge the checkpoint. */
+  callTelegramApi?(input: {
+    body: Record<string, unknown>;
+    connection: string;
+    method: string;
+  }): Promise<void>;
+  /** The journaled send effect: deliver one sendMessage body and return
+   * Telegram's message_id. MUST throw on failure — the send obligation relies
+   * on the thrown error holding the checkpoint for retry. */
+  sendTelegramMessage?(input: {
+    body: Record<string, unknown>;
+    connection: string;
+  }): Promise<{ messageId: number }>;
+  /** Injectable clock for the ack freshness gates (defaults to Date.now). */
+  now?: () => number;
+};
+
+// -----------------------------------------------------------------------------
+// Pure helpers.
+// -----------------------------------------------------------------------------
+
+/** The fixed `/new` acknowledgement — a processor-level message, deliberately
+ * not an agent greeting (no LLM turn for a bare `/new`). */
+export const TELEGRAM_NEW_SESSION_ACK_TEXT = "Started a fresh thread.";
 
 /** A message of exactly `/debug` (Telegram appends `@BotUsername` in groups). */
 function isTelegramDebugCommand(text: unknown): boolean {
@@ -439,14 +561,14 @@ function telegramWebhookAgentInput(
   if (placeholders.length > 0) {
     lines.push(
       "",
-      `Media in this message (not directly viewable in v1 — reply accordingly if asked about it): ${placeholders.join(" ")}`,
+      `Media in this message (file_id is in the raw payload): ${placeholders.join(" ")}`,
     );
   }
   return lines.join("\n");
 }
 
-/** Bracketed placeholders for the media a message carries — the v1 stand-in
- * for actually downloading Telegram files. */
+/** Bracketed hints for the media a message carries; the raw payload retains
+ * the file ids the agent can download through token-safe project egress. */
 function telegramMediaPlaceholders(payload: unknown): string[] {
   const update = readRecord(readRecord(payload)?.body);
   const message =

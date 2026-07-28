@@ -21,7 +21,7 @@ test("project.processor does not expose the host-only ingest method over RPC", a
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `sec-ingest-${RUN_SUFFIX}-${marker}` });
+  using project = await itx.projects.get(`sec-ingest-${RUN_SUFFIX}-${marker}`).create({});
 
   // Reach past the typed surface exactly as a hostile caller would.
   const processor = project.processor as unknown as {
@@ -59,21 +59,21 @@ test("append accepts an offset assertion on a subscription-configured core event
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `sec-offset-${RUN_SUFFIX}-${marker}` });
+  using project = await itx.projects.get(`sec-offset-${RUN_SUFFIX}-${marker}`).create({});
   using stream = project.streams.get(streamPath);
 
   // A brand-new project stream has committed created(1) + the birth-certificate
-  // project-worker feed's subscription-configured(2) + woken(3); the next append
-  // is 4. `offset` is the DO's optimistic-concurrency assertion. It rides on the
-  // append input at runtime but is intentionally absent from the narrow public
-  // `Stream` type, so it is cast in here exactly as a concurrency-sensitive
-  // caller would.
+  // project-worker feed's subscription-configured(2) + the PostHog feed(3) +
+  // woken(4); the next append is 5. `offset` is the DO's optimistic-concurrency
+  // assertion. It rides on the append input at runtime but is intentionally
+  // absent from the narrow public `Stream` type, so it is cast in here exactly
+  // as a concurrency-sensitive caller would.
   const appendWithOffset = stream.append as unknown as (
     event: Record<string, unknown>,
   ) => Promise<{ offset: number }[]>;
   const [configured] = await appendWithOffset({
     type: "events.iterate.com/stream/subscription-configured",
-    offset: 4,
+    offset: 5,
     payload: {
       subscriptionKey: `cross-post-${marker}`,
       delivery: {
@@ -88,7 +88,7 @@ test("append accepts an offset assertion on a subscription-configured core event
     },
   });
 
-  expect(configured!.offset).toBe(4);
+  expect(configured!).toMatchObject({ offset: 5 });
 });
 
 // B6: the subscriber descriptor supplied to subscribe() must be validated at the
@@ -108,7 +108,7 @@ test("subscribe rejects a malformed subscriber descriptor instead of corrupting 
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `sec-subscriber-${RUN_SUFFIX}-${marker}` });
+  using project = await itx.projects.get(`sec-subscriber-${RUN_SUFFIX}-${marker}`).create({});
   using stream = project.streams.get(streamPath);
 
   // An explicit key makes the rejected attempt identifiable in the state
@@ -140,6 +140,6 @@ test("subscribe rejects a malformed subscriber descriptor instead of corrupting 
   expect(state.coreProcessorState.connectionsByKey?.[rejectedKey]).toBeUndefined();
   // The reduced roster tracks configured subscriptions only (core state v14).
   for (const [key, connection] of Object.entries(state.coreProcessorState.connectionsByKey ?? {})) {
-    expect(connection.subscriptionType, `roster entry ${key}`).toBe("configured");
+    expect(connection, `roster entry ${key}`).toMatchObject({ subscriptionType: "configured" });
   }
 });

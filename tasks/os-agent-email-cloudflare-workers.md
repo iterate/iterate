@@ -157,8 +157,9 @@ Suggested streams/processors:
 - An email router processor tracks email thread state using `Message-ID`,
   `In-Reply-To`, and `References`, so future replies can route even when the
   recipient is a project-level address.
-- An email agent processor converts routed mail into
-  `events.iterate.com/agent/input-added`.
+- An email agent processor converts routed mail into an
+  `events.iterate.com/agents/context-added` developer item with an email actor,
+  an event ref back to the routed mail, and an explicit LLM request policy.
 
 In v1, attachments can be represented as metadata plus a stored blob reference or
 explicitly rejected with a clear event. Do not silently drop attachments.
@@ -250,7 +251,7 @@ Do not block the `@iterate.app` v1 on full custom-domain email.
 - [ ] Inbound mail to `<slug>@iterate.app` appends one deterministic project email
       event.
 - [ ] Inbound mail to `<slug>+p_<encodedPath>@iterate.app` wakes/routes to the
-      decoded agent path and creates an agent input event.
+      decoded agent path and creates an agent context event.
 - [ ] OS can send mail through Cloudflare from authorized project and agent
       addresses.
 - [ ] OS rejects attempts to send from another project slug or an unsupported

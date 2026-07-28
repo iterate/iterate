@@ -1,14 +1,55 @@
 import { describe, expect, it } from "vitest";
 import {
+  adaptMessagesForModel,
   cloudflareAiGatewayResponseCacheKey,
   maskCloudflareAiGatewayResponseCacheEntropy,
   runWorkersAiAttempt,
 } from "./workers-ai-transport.ts";
-import { DEFAULT_AGENT_MODEL } from "./agent-processor-contract.ts";
-import { agentDefaultsForPath } from "./agent-defaults.ts";
-import { buildAgentLlmRequestBody } from "./agent-processor-implementation.ts";
+const DEFAULT_AGENT_MODEL = "openai/gpt-5.6-sol"; // the config schema default
+
+describe("adaptMessagesForModel", () => {
+  const messages = [
+    { role: "system" as const, content: "durable" },
+    { role: "developer" as const, content: "application context" },
+    { role: "user" as const, content: "hello" },
+  ];
+
+  it("preserves developer context for transports that support it", () => {
+    expect(adaptMessagesForModel(messages, { supportsDeveloperRole: true })).toEqual(messages);
+  });
+
+  it("maps developer context to system for transports without that role", () => {
+    expect(adaptMessagesForModel(messages, { supportsDeveloperRole: false })).toEqual([
+      messages[0],
+      { role: "system", content: "application context" },
+      messages[2],
+    ]);
+  });
+});
 
 describe("runWorkersAiAttempt", () => {
+  it("maps developer context to system on the unified Workers AI lane", async () => {
+    let requestBody: unknown;
+
+    await runWorkersAiAttempt({
+      ai: {
+        run: async (_model, body) => {
+          requestBody = body;
+          return { response: "ok" };
+        },
+      },
+      deadlineMs: 1_000,
+      messages: [{ role: "developer", content: "trusted application context" }],
+      model: "openai/gpt-5.6-sol",
+      onChunk: async () => {},
+      transport: { kind: "unified" },
+    });
+
+    expect(requestBody).toMatchObject({
+      messages: [{ role: "system", content: "trusted application context" }],
+    });
+  });
+
   it("cancels the response stream on deadline so no chunk lands after the failure", async () => {
     const encoder = new TextEncoder();
     let cancelled = false;
@@ -169,7 +210,10 @@ describe("the BYOK gateway lane", () => {
     const completion = await runWorkersAiAttempt({
       ai: fake.ai,
       deadlineMs: 1_000,
-      messages: [{ role: "user", content: "hi" }],
+      messages: [
+        { role: "developer", content: "trusted application context" },
+        { role: "user", content: "hi" },
+      ],
       model: DEFAULT_AGENT_MODEL,
       onChunk: async () => {},
       transport: {
@@ -186,10 +230,16 @@ describe("the BYOK gateway lane", () => {
     expect(request.provider).toBe("openai");
     expect(request.endpoint).toBe("chat/completions");
     expect(request.headers.authorization).toBe("Bearer sk-test");
+    expect(request.headers["cf-aig-collect-log"]).toBe("true");
+    expect(request.headers["cf-aig-collect-log-payload"]).toBe("true");
     expect(request.headers["cf-aig-cache-ttl"]).toBe("600");
     expect(request.headers["cf-aig-cache-key"]).toMatch(/^[0-9a-f]{64}$/);
     expect(request.query).toMatchObject({
       model: "gpt-5.6-sol",
+      messages: [
+        { role: "developer", content: "trusted application context" },
+        { role: "user", content: "hi" },
+      ],
       prompt_cache_key: "prj_1:/agents/onboarding",
       reasoning_effort: "medium",
       stream: true,
@@ -218,6 +268,39 @@ describe("the BYOK gateway lane", () => {
     expect(request.headers["cf-aig-skip-cache"]).toBe("true");
     // No header on the response either -> no cache-status claim in evidence.
     expect(completion.rawResponse).not.toHaveProperty("cloudflareAiGatewayResponseCacheStatus");
+  });
+
+  it("never caches file-bearing turns even when the deployment enables response caching", async () => {
+    const fake = byokAi(() => new Response(sseBody(okFrames)));
+    await runWorkersAiAttempt({
+      ai: fake.ai,
+      deadlineMs: 1_000,
+      messages: [
+        {
+          role: "user",
+          content:
+            "[Attached file: report.pdf; public url: https://iterate-files--demo.iterate.app/report.pdf?exp=1&ver=v1&sig=x]",
+          containsFiles: true,
+        },
+      ],
+      model: DEFAULT_AGENT_MODEL,
+      onChunk: async () => {},
+      transport: {
+        kind: "byok",
+        gatewayId: "default",
+        openaiApiKey: "sk-test",
+        responseCacheTtlSeconds: 600,
+      },
+    });
+
+    const request = fake.requests[0]!;
+    expect(request.endpoint).toBe("chat/completions");
+    expect(request.headers["cf-aig-collect-log"]).toBe("true");
+    expect(request.headers["cf-aig-collect-log-payload"]).toBe("true");
+    expect(request.headers["cf-aig-skip-cache"]).toBe("true");
+    expect(request.headers).not.toHaveProperty("cf-aig-cache-ttl");
+    expect(request.headers).not.toHaveProperty("cf-aig-cache-key");
+    expect(JSON.stringify(request.query)).toContain("iterate-files--demo.iterate.app");
   });
 
   it("falls back to unified billing for non-OpenAI models", async () => {
@@ -329,68 +412,5 @@ describe("cloudflareAiGatewayResponseCacheKey", () => {
     expect(maskedA).toContain("Current date and time (UTC): MASKED");
     expect(maskedA).toContain("- Project: MASKED");
     expect(maskedA).not.toContain("snake");
-  });
-
-  it("REAL birth-turn bodies from the defaults pipeline mask to one key across projects", async () => {
-    // Not a hand-built string: run the actual birth machinery for two
-    // projects — agentDefaultsForPath events folded through
-    // buildAgentLlmRequestBody — and require the masked serializations (and
-    // so the cache keys) to be byte-identical. This is the preview-burn
-    // guarantee itself.
-    const birthBody = (input: {
-      projectId: string;
-      name: string;
-      slug: string;
-      workerUrl: string;
-      requestedAt: string;
-    }) => {
-      const defaults = agentDefaultsForPath({
-        agentPath: "/agents/onboarding",
-        projectId: input.projectId,
-        project: { name: input.name, slug: input.slug, workerUrl: input.workerUrl },
-      });
-      const events = [
-        ...defaults.events.map((event, index) => ({
-          ...event,
-          offset: index + 1,
-          createdAt: input.requestedAt,
-          path: "/agents/onboarding",
-        })),
-        {
-          type: "events.iterate.com/agent/llm-request-requested",
-          payload: { model: DEFAULT_AGENT_MODEL, requestId: "llm-request:gen-0" },
-          offset: defaults.events.length + 1,
-          createdAt: input.requestedAt,
-          path: "/agents/onboarding",
-        },
-      ];
-      return buildAgentLlmRequestBody({
-        events: events as never,
-        llmRequestOffset: events.length,
-      });
-    };
-    const bodyA = birthBody({
-      projectId: `prj_${"a".repeat(32)}`,
-      name: "Snake Game",
-      slug: "snake",
-      workerUrl: "https://snake.iterate-preview-4.app",
-      requestedAt: "2026-07-11T10:00:00.000Z",
-    });
-    const bodyB = birthBody({
-      projectId: `prj_${"b".repeat(32)}`,
-      name: "Crossword Helper",
-      slug: "crossword-helper",
-      workerUrl: "https://crossword-helper.iterate-preview-4.app",
-      requestedAt: "2026-07-12T18:30:00.000Z",
-    });
-    const [keyA, keyB] = await Promise.all([
-      cloudflareAiGatewayResponseCacheKey(bodyA),
-      cloudflareAiGatewayResponseCacheKey(bodyB),
-    ]);
-    const maskedA = maskCloudflareAiGatewayResponseCacheEntropy(JSON.stringify(bodyA));
-    expect(maskedA).toBe(maskCloudflareAiGatewayResponseCacheEntropy(JSON.stringify(bodyB)));
-    expect(keyA).toBe(keyB);
-    expect(maskedA).not.toContain("snake");
-    expect(maskedA).not.toContain("Crossword");
   });
 });

@@ -1,83 +1,100 @@
-# Cloudflare Trace Query Examples
+# Cloudflare Observability Query Examples
 
-## Exact Trace Lookup
+Pass each function as the `code` argument to the general Cloudflare MCP
+`execute` tool. Replace the placeholders and pass the account as `account_id`.
 
-This query returned trace `250178b64271952ffb1ed1711133cf78` from
-`os-preview-2` with 686 spans. It first asks for the trace summary, then asks for
-the underlying span events and counts them by span name.
+## Correlate a call ID across logs and spans
 
 ```ts
-mcp__cloudflare_api__.execute({
-  account_id: "376ef7ed81b0573f93524de763666c15",
-  code: `async () => {
-    const traceId = "250178b64271952ffb1ed1711133cf78";
-    const timeframe = {
-      from: Date.parse("2026-05-06T15:37:00.000Z"),
-      to: Date.parse("2026-05-06T15:40:00.000Z"),
-    };
-
-    const traceSummary = await cloudflare.request({
-      method: "POST",
-      path: \`/accounts/\${accountId}/workers/observability/telemetry/query\`,
-      body: {
-        queryId: "trace-summary",
-        timeframe,
-        view: "traces",
-        limit: 20,
-        parameters: {
-          datasets: ["otel"],
-          filters: [{ key: "traceId", operation: "eq", type: "string", value: traceId }],
-        },
+async () => {
+  const value = "log_<call-id>";
+  return cloudflare.request({
+    method: "POST",
+    path: `/accounts/${accountId}/workers/observability/telemetry/query`,
+    body: {
+      queryId: "correlate-call-id",
+      timeframe: {
+        from: Date.parse("<from-utc>"),
+        to: Date.parse("<to-utc>"),
       },
-    });
-
-    const spanEvents = await cloudflare.request({
-      method: "POST",
-      path: \`/accounts/\${accountId}/workers/observability/telemetry/query\`,
-      body: {
-        queryId: "trace-events",
-        timeframe,
-        view: "events",
-        limit: 2000,
-        parameters: {
-          datasets: ["otel"],
-          filters: [{ key: "traceId", operation: "eq", type: "string", value: traceId }],
-        },
+      view: "events",
+      limit: 100,
+      parameters: {
+        datasets: [],
+        needle: { value, matchCase: true },
+        filters: [
+          {
+            key: "$metadata.service",
+            operation: "eq",
+            type: "string",
+            value: "<service>",
+          },
+        ],
       },
-    });
-
-    const events = spanEvents.result?.events?.events ?? [];
-    const byName = Object.fromEntries(
-      Object.entries(events.reduce((acc, event) => {
-        const name = event.source?.name ?? event.$metadata?.spanName ?? "unknown";
-        acc[name] = (acc[name] ?? 0) + 1;
-        return acc;
-      }, {})).sort((a, b) => b[1] - a[1]),
-    );
-
-    return {
-      traceSummary: traceSummary.result?.traces,
-      eventCount: events.length,
-      byName,
-    };
-  }`,
-});
+    },
+  });
+};
 ```
 
-Expected high-signal output for this trace:
+Normally the `cloudflare-workers` row supplies the bounded structured log and
+the `otel` row supplies `traceId`, span IDs, and span attributes. Construct the
+dashboard link from the account and trace IDs. Treat those dataset names as the
+current API mapping, not a stable schema.
 
-```json
-{
-  "eventCount": 686,
-  "byName": {
-    "durable_object_storage_exec": 247,
-    "jsrpc": 205,
-    "durable_object_subrequest": 199,
-    "durable_object_storage_kv_get": 22,
-    "durable_object_storage_kv_put": 8,
-    "d1_batch": 3,
-    "fetch": 1,
-    "GET": 1
-  }
-}
+## Fetch and summarize an exact trace
+
+```ts
+async () => {
+  const traceId = "<trace-id>";
+  const response = await cloudflare.request({
+    method: "POST",
+    path: `/accounts/${accountId}/workers/observability/telemetry/query`,
+    body: {
+      queryId: "exact-trace",
+      timeframe: {
+        from: Date.parse("<from-utc>"),
+        to: Date.parse("<to-utc>"),
+      },
+      view: "events",
+      limit: 2000,
+      parameters: {
+        datasets: ["otel"],
+        filters: [{ key: "traceId", operation: "eq", type: "string", value: traceId }],
+      },
+    },
+  });
+  const events = response.result?.events?.events ?? [];
+  return events.map((event) => ({
+    name: event.source?.name ?? event.$metadata?.spanName,
+    spanId: event.source?.spanId ?? event.$metadata?.spanId,
+    parentSpanId: event.source?.parentSpanId ?? event.$metadata?.parentSpanId,
+    start: event.source?.startTime ?? event.$metadata?.startTime,
+    end: event.source?.endTime ?? event.$metadata?.endTime,
+    durationMS: event.source?.durationMS,
+    outcome: event.source?.itx?.outcome ?? event.source?.outcome,
+  }));
+};
 ```
+
+## Fetch one structured operation log
+
+```ts
+async () =>
+  cloudflare.request({
+    method: "POST",
+    path: `/accounts/${accountId}/workers/observability/telemetry/query`,
+    body: {
+      queryId: "operation-log",
+      timeframe: { from: Date.parse("<from-utc>"), to: Date.parse("<to-utc>") },
+      view: "events",
+      limit: 20,
+      parameters: {
+        datasets: ["cloudflare-workers"],
+        filters: [{ key: "log.id", operation: "eq", type: "string", value: "log_<id>" }],
+      },
+    },
+  });
+```
+
+Use `log.parentId` to walk to the parent operation and `itx.sessionId` to find
+other calls from the same long-running ITX WebSocket.

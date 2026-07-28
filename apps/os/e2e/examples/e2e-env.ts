@@ -1,11 +1,10 @@
-// Shared environment plumbing for the itx e2e suites (Node side): which
-// deployed worker to talk to and how to authenticate against it. The browser
-// suite cannot read process.env, so vitest.config.ts injects the same values
-// there via `define` (__ITX_BROWSER_E2E__) instead of importing this file.
+// Shared environment plumbing for the itx e2e suites: which deployed worker
+// to talk to and how to authenticate against it.
 
 import { fileURLToPath } from "node:url";
 import type { RpcStub } from "capnweb";
-import { connectItx } from "../../src/itx-client.ts";
+import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
+import { connectItx } from "iterate/node";
 import type { Project as ProjectRpcTarget, Session } from "../../src/itx-api.generated.ts";
 import { resolveBaseUrl } from "../test-support/dev-server.ts";
 
@@ -32,6 +31,7 @@ export function connectGlobal(): RpcStub<Session> {
   return connectItx({
     auth: { secret: adminApiSecret(), type: "admin-secret" },
     baseUrl: baseUrl(),
+    headers: cloudflareWorkerVersionOverrideHeaders(process.env),
   });
 }
 
@@ -40,6 +40,7 @@ export function connectProject(projectId: string): RpcStub<ProjectRpcTarget> {
   return connectItx({
     auth: { secret: adminApiSecret(), type: "admin-secret" },
     baseUrl: baseUrl(),
+    headers: cloudflareWorkerVersionOverrideHeaders(process.env),
     projectId,
   });
 }

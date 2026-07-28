@@ -22,6 +22,7 @@ function config() {
       baseUrl: "https://os.example.test",
       integrations: {
         github: {
+          appSlug: "iterate-test",
           oauthClientId: "gh-client",
           oauthClientSecret: "gh-client-secret",
           webhookSecret: GITHUB_WEBHOOK_SECRET,
@@ -37,16 +38,46 @@ function config() {
   });
 }
 
-function githubRequest(body: string, signature?: string) {
+/** The github config without a webhook secret (the 503 lane). */
+function bareConfig() {
+  return parseConfig({
+    APP_CONFIG: JSON.stringify({
+      integrations: { github: { oauthClientId: "x", oauthClientSecret: "y" } },
+      openAiApiKey: "k",
+    }),
+  });
+}
+
+function githubRequest(
+  body: string,
+  signature?: string,
+  eventName: string | null = "push",
+  delivery: string | null = "delivery-1",
+) {
   const sig =
     signature ?? `sha256=${createHmac("sha256", GITHUB_WEBHOOK_SECRET).update(body).digest("hex")}`;
+  const headers = new Headers({
+    "content-type": "application/json",
+    "x-hub-signature-256": sig,
+  });
+  if (delivery !== null) headers.set("x-github-delivery", delivery);
+  if (eventName !== null) headers.set("x-github-event", eventName);
   return new Request("https://os.example.test/api/integrations/github/webhook", {
+    body,
+    headers,
+    method: "POST",
+  });
+}
+
+function slackRequest(body: string) {
+  const ts = String(Math.floor(Date.now() / 1000));
+  const sig = `v0=${createHmac("sha256", SLACK_SIGNING_SECRET).update(`v0:${ts}:${body}`).digest("hex")}`;
+  return new Request("https://os.example.test/api/integrations/slack/webhook", {
     body,
     headers: {
       "content-type": "application/json",
-      "x-github-delivery": "delivery-1",
-      "x-github-event": "push",
-      "x-hub-signature-256": sig,
+      "x-slack-request-timestamp": ts,
+      "x-slack-signature": sig,
     },
     method: "POST",
   });
@@ -55,118 +86,164 @@ function githubRequest(body: string, signature?: string) {
 describe("handleIntegrationWebhookApiRequest (github)", () => {
   afterEach(() => routeIntegrationWebhook.mockReset());
 
-  test("valid signature + claimed installation → routes on (github, installation_id) and 200", async () => {
-    routeIntegrationWebhook.mockResolvedValue({
-      connection: "install-42",
-      ok: true,
-      projectId: "prj_1",
-    });
-    const body = JSON.stringify({ action: "opened", installation: { id: 42 } });
-    const response = await handleIntegrationWebhookApiRequest({
-      config: config(),
-      request: githubRequest(body),
-    });
-
-    expect(response?.status).toBe(200);
-    expect(routeIntegrationWebhook).toHaveBeenCalledTimes(1);
-    const call = routeIntegrationWebhook.mock.calls[0]![0];
-    expect(call.slug).toBe("github");
-    expect(call.externalId).toBe("42");
-    expect(call.event.type).toBe("events.iterate.com/github/webhook-received");
-    expect(call.event.idempotencyKey).toBe("github-webhook:delivery-1");
-    expect(call.event.payload).toMatchObject({ installationId: "42" });
-  });
-
-  test("bad signature → 401, never routes (the trust boundary)", async () => {
-    const body = JSON.stringify({ installation: { id: 42 } });
-    const response = await handleIntegrationWebhookApiRequest({
-      config: config(),
-      request: githubRequest(body, "sha256=deadbeef"),
-    });
-    expect(response?.status).toBe(401);
-    expect(routeIntegrationWebhook).not.toHaveBeenCalled();
-  });
-
-  test("no webhook secret configured → 503", async () => {
-    const bare = parseConfig({
-      APP_CONFIG: JSON.stringify({
-        integrations: { github: { oauthClientId: "x", oauthClientSecret: "y" } },
-        openAiApiKey: "k",
+  test.for([
+    {
+      name: "valid signature + claimed installation → routes on (github, installation_id) and 200",
+      body: JSON.stringify({
+        action: "opened",
+        installation: { id: 42 },
+        pull_request: { number: 7 },
+        repository: {
+          full_name: "acme/widgets",
+          id: 101,
+          name: "widgets",
+          node_id: "R_101",
+          owner: { login: "acme" },
+        },
+        sender: { id: 44, login: "jonas", node_id: "U_44", type: "User" },
       }),
-    });
-    const body = JSON.stringify({ installation: { id: 42 } });
-    const response = await handleIntegrationWebhookApiRequest({
-      config: bare,
-      request: githubRequest(body),
-    });
-    expect(response?.status).toBe(503);
-  });
+      eventName: "pull_request",
+      mockRoute: { connection: "install-42", ok: true, projectId: "prj_1" },
+      expectedStatus: 200,
+      expectedJson: { ok: true },
+      expectedCall: {
+        slug: "github",
+        externalId: "42",
+        event: {
+          type: "events.iterate.com/github/webhook-received",
+          idempotencyKey: "github-webhook:delivery-1",
+          payload: {
+            appSlug: "iterate-test",
+            associations: {
+              mentionedUsers: [],
+              pullRequest: { number: 7 },
+              repository: { id: 101, owner: "acme", repo: "widgets" },
+            },
+            delivery: { id: "delivery-1", name: "pull_request" },
+            installationId: "42",
+          },
+        },
+      },
+    },
+    {
+      name: "bad signature → 401, never routes (the trust boundary)",
+      body: JSON.stringify({ installation: { id: 42 } }),
+      signature: "sha256=deadbeef",
+      expectedStatus: 401,
+      expectedJson: { error: "Invalid GitHub signature." },
+    },
+    {
+      name: "valid signature without a delivery ID → explicit 400",
+      body: JSON.stringify({ installation: { id: 42 } }),
+      delivery: null,
+      expectedStatus: 400,
+      expectedJson: { error: "Missing required GitHub webhook delivery headers." },
+    },
+    {
+      name: "valid signature without an event name → explicit 400",
+      body: JSON.stringify({ installation: { id: 42 } }),
+      eventName: null,
+      expectedStatus: 400,
+      expectedJson: { error: "Missing required GitHub webhook delivery headers." },
+    },
+    {
+      name: "no webhook secret configured → 503",
+      bare: true,
+      body: JSON.stringify({ installation: { id: 42 } }),
+      expectedStatus: 503,
+      expectedJson: { error: "GitHub integration is not configured." },
+    },
+    {
+      name: "valid signature but no installation → 200 ACK-drop, never routes",
+      body: JSON.stringify({ zen: "ping without an installation" }),
+      expectedStatus: 200,
+      expectedJson: { ignored: "no-installation", ok: true },
+    },
+    {
+      name: "valid signature, unclaimed installation → 200 ACK-drop (distributed-app rule)",
+      body: JSON.stringify({ installation: { id: 999 } }),
+      mockRoute: { ignored: "external-id-not-claimed", ok: true },
+      expectedStatus: 200,
+      expectedJson: { ignored: "external-id-not-claimed", ok: true },
+      expectedCall: { slug: "github", externalId: "999" },
+    },
+  ])(
+    "$name",
+    async ({
+      bare,
+      body,
+      delivery,
+      eventName,
+      expectedCall,
+      expectedJson,
+      expectedStatus,
+      mockRoute,
+      signature,
+    }) => {
+      if (mockRoute !== undefined) routeIntegrationWebhook.mockResolvedValue(mockRoute);
 
-  test("valid signature but no installation → 200 ACK-drop, never routes", async () => {
-    const body = JSON.stringify({ zen: "ping without an installation" });
-    const response = await handleIntegrationWebhookApiRequest({
-      config: config(),
-      request: githubRequest(body),
-    });
-    expect(response?.status).toBe(200);
-    expect(await response?.json()).toMatchObject({ ignored: "no-installation" });
-    expect(routeIntegrationWebhook).not.toHaveBeenCalled();
-  });
+      const response = await handleIntegrationWebhookApiRequest({
+        config: bare === true ? bareConfig() : config(),
+        request: githubRequest(body, signature, eventName, delivery),
+      });
 
-  test("valid signature, unclaimed installation → 200 ACK-drop (distributed-app rule)", async () => {
-    routeIntegrationWebhook.mockResolvedValue({ ignored: "external-id-not-claimed", ok: true });
-    const body = JSON.stringify({ installation: { id: 999 } });
-    const response = await handleIntegrationWebhookApiRequest({
-      config: config(),
-      request: githubRequest(body),
-    });
-    expect(response?.status).toBe(200);
-    expect(await response?.json()).toMatchObject({ ignored: "external-id-not-claimed" });
-  });
+      expect(response?.status).toBe(expectedStatus);
+      expect(await response?.json()).toEqual(expectedJson);
+      if (expectedCall === undefined) {
+        expect(routeIntegrationWebhook).not.toHaveBeenCalled();
+      } else {
+        expect(routeIntegrationWebhook).toHaveBeenCalledTimes(1);
+        expect(routeIntegrationWebhook.mock.calls[0]![0]).toMatchObject(expectedCall);
+        if ("event" in expectedCall) {
+          expect(routeIntegrationWebhook.mock.calls[0]![0].event.payload.body).toEqual(
+            JSON.parse(body),
+          );
+        }
+      }
+    },
+  );
 });
 
 describe("handleIntegrationWebhookApiRequest (slack + routing)", () => {
   afterEach(() => routeIntegrationWebhook.mockReset());
 
-  function slackRequest(body: string) {
-    const ts = String(Math.floor(Date.now() / 1000));
-    const sig = `v0=${createHmac("sha256", SLACK_SIGNING_SECRET).update(`v0:${ts}:${body}`).digest("hex")}`;
-    return new Request("https://os.example.test/api/integrations/slack/webhook", {
-      body,
-      headers: {
-        "content-type": "application/json",
-        "x-slack-request-timestamp": ts,
-        "x-slack-signature": sig,
+  test.for([
+    {
+      name: "url_verification handshake echoes the challenge, never routes",
+      body: JSON.stringify({ challenge: "abc123", type: "url_verification" }),
+      expectedJson: { challenge: "abc123" },
+    },
+    {
+      name: "claimed team routes on (slack, team_id) with the exact agent-facing shape",
+      body: JSON.stringify({ event_id: "Ev1", team_id: "T42", event: { type: "message" } }),
+      mockRoute: { connection: "acme", ok: true, projectId: "prj_1" },
+      expectedStatus: 200,
+      expectedJson: { ok: true },
+      expectedCall: {
+        slug: "slack",
+        externalId: "T42",
+        event: {
+          type: "events.iterate.com/slack/webhook-received",
+          idempotencyKey: "slack-webhook:Ev1",
+          payload: { slackTeamId: "T42" },
+        },
       },
-      method: "POST",
-    });
-  }
+    },
+  ])("$name", async ({ body, expectedCall, expectedJson, expectedStatus, mockRoute }) => {
+    if (mockRoute !== undefined) routeIntegrationWebhook.mockResolvedValue(mockRoute);
 
-  test("url_verification handshake echoes the challenge, never routes", async () => {
-    const body = JSON.stringify({ challenge: "abc123", type: "url_verification" });
-    const response = await handleIntegrationWebhookApiRequest({
-      config: config(),
-      request: slackRequest(body),
-    });
-    expect(await response?.json()).toEqual({ challenge: "abc123" });
-    expect(routeIntegrationWebhook).not.toHaveBeenCalled();
-  });
-
-  test("claimed team routes on (slack, team_id) with the exact agent-facing shape", async () => {
-    routeIntegrationWebhook.mockResolvedValue({ connection: "acme", ok: true, projectId: "prj_1" });
-    const body = JSON.stringify({ event_id: "Ev1", team_id: "T42", event: { type: "message" } });
     const response = await handleIntegrationWebhookApiRequest({
       config: config(),
       request: slackRequest(body),
     });
 
-    expect(response?.status).toBe(200);
-    const call = routeIntegrationWebhook.mock.calls[0]![0];
-    expect(call.slug).toBe("slack");
-    expect(call.externalId).toBe("T42");
-    expect(call.event.type).toBe("events.iterate.com/slack/webhook-received");
-    expect(call.event.idempotencyKey).toBe("slack-webhook:Ev1");
-    expect(call.event.payload).toMatchObject({ slackTeamId: "T42" });
+    if (expectedStatus !== undefined) expect(response?.status).toBe(expectedStatus);
+    expect(await response?.json()).toEqual(expectedJson);
+    if (expectedCall === undefined) {
+      expect(routeIntegrationWebhook).not.toHaveBeenCalled();
+    } else {
+      expect(routeIntegrationWebhook.mock.calls[0]![0]).toMatchObject(expectedCall);
+    }
   });
 
   test("non-webhook path → null (not mine)", async () => {

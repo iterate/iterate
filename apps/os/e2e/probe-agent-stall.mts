@@ -7,7 +7,7 @@
  *   doppler run --project os --config preview_1 -- pnpm exec tsx e2e/probe-agent-stall.mts [rounds] [concurrency]
  */
 import { setTimeout as sleep } from "node:timers/promises";
-import { connectItx } from "../src/itx-client.ts";
+import { connectItx } from "iterate/node";
 
 const baseUrl = (process.env.APP_CONFIG_BASE_URL ?? "").replace(/\/+$/, "");
 const secret = process.env.APP_CONFIG_ADMIN_API_SECRET?.trim();
@@ -30,7 +30,7 @@ async function probeOne(tag: string): Promise<{ ok: boolean; ms: number; tag: st
   const slug = `stall-probe-${tag}-${Math.random().toString(36).slice(2, 7)}`;
   const { session, root } = connectAdmin();
   try {
-    using created = root.projects.create({ slug });
+    using created = await root.projects.get(slug).create({});
     const { projectId } = await created.__describe();
     const agentPath = "/agents/probe";
     using agent = connectItx({ agentPath, auth, baseUrl, projectId });

@@ -3,6 +3,11 @@
 // durations, file sizes, timestamps). Pure string functions — no locale
 // state, no React.
 
+import {
+  formatAgentUiDuration,
+  type AgentUiStep,
+} from "@iterate-com/ui/components/events/agent-ui-reducer";
+
 /** `950`, `2.5k` — compact token count; `?` when the model reported none. */
 export function formatTokens(count: number | undefined): string {
   if (count == null) return "?";
@@ -12,11 +17,31 @@ export function formatTokens(count: number | undefined): string {
 
 /** `950 ms`, `2.4 s`, `1m 40s` — duration from milliseconds. */
 export function formatSeconds(durationMs: number): string {
-  if (durationMs < 1000) return `${Math.round(durationMs)} ms`;
-  const seconds = durationMs / 1000;
-  if (seconds < 60) return `${seconds.toFixed(1).replace(/\.0$/, "")} s`;
-  const minutes = Math.floor(seconds / 60);
-  return `${minutes}m ${Math.round(seconds % 60)}s`;
+  return formatAgentUiDuration(durationMs);
+}
+
+/**
+ * CLI-style elapsed clock for the live current-phase indicator: always one
+ * decimal place, no space (`0.0s`, `0.9s`, `12.3s`). Counts up from 0.
+ */
+export function formatElapsedSeconds(durationMs: number): string {
+  return `${(Math.max(0, durationMs) / 1000).toFixed(1)}s`;
+}
+
+/**
+ * What the live activity spinner says right now. One in-flight LLM at a time:
+ * reasoning tokens → "Thinking"; otherwise (waiting for first token or
+ * streaming the response) → "Waiting for a response". Code/ITX → "Running code"
+ * The caller appends the current phase's live elapsed counter.
+ */
+export function liveActivityLabel(runningSteps: readonly AgentUiStep[]): string {
+  const runningCode = runningSteps.some((step) => step.kind === "code");
+  if (runningCode) return "Running code";
+
+  const llm = runningSteps.findLast((step) => step.kind === "llm");
+  if (llm == null || llm.kind !== "llm") return "Working…";
+  if (llm.thinkingText !== "" && llm.responseText === "") return "Thinking";
+  return "Waiting for a response";
 }
 
 /** `950 B`, `1.5 KB`, `2.3 MB` — file size from bytes. */

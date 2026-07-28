@@ -95,7 +95,13 @@ const AVATAR_PALETTE = [
 ];
 
 export function presenceLabel(entry: AgentUiPresenceEntry): string {
-  return entry.processor?.slug ?? entry.description ?? entry.subscriptionKey;
+  return (
+    entry.user?.name ??
+    entry.user?.email ??
+    entry.processor?.slug ??
+    entry.description ??
+    entry.subscriptionKey
+  );
 }
 
 export function presenceInitials(label: string): string {

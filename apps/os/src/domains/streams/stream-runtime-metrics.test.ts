@@ -4,11 +4,12 @@
 
 import { describe, expect, it, test } from "vitest";
 import {
+  ageStreamThroughputMetrics,
   LatencyRing,
   MinuteBuckets,
   pingRoundTrip,
   StreamRuntimeMetrics,
-} from "./stream-runtime-metrics.ts";
+} from "iterate/processors";
 
 describe("LatencyRing", () => {
   it("reports null until the first sample — surfaces render a dash, never a number", () => {
@@ -113,12 +114,33 @@ describe("StreamRuntimeMetrics", () => {
     metrics.egress.bump(1_700_000_010_000, 8, 8000);
     const report = metrics.report(1_700_000_010_500);
     expect(report.measuredSince).toBe("2023-11-14T22:13:20.000Z");
+    expect(report.reportedAt).toBe("2023-11-14T22:13:30.500Z");
     expect(report.ingress.perSecond5s).toBe(4 / 5);
     expect(report.ingress.bytesPerSecond5s).toBe(4000 / 5);
     expect(report.ingress.lastMinute).toEqual({ count: 4, bytes: 4000, perSecond: 4 / 60 });
     expect(report.ingress.series.counts.reduce((sum, n) => sum + n, 0)).toBe(4);
     expect(report.egress.perSecond5s).toBe(8 / 5);
     expect(report.egress.lastMinute.bytes).toBe(8000);
+  });
+
+  it("ages a pushed snapshot locally while the stream is silent", () => {
+    const reportedAt = 1_700_000_010_500;
+    const metrics = new StreamRuntimeMetrics(1_700_000_000_000);
+    metrics.ingress.bump(reportedAt, 15, 1_500);
+    const report = metrics.report(reportedAt);
+
+    const afterFiveSeconds = ageStreamThroughputMetrics(report, reportedAt + 5_000);
+    expect(afterFiveSeconds.ingress.perSecond5s).toBe(0);
+    expect(afterFiveSeconds.ingress.lastMinute).toEqual({
+      count: 15,
+      bytes: 1_500,
+      perSecond: 15 / 60,
+    });
+
+    const afterOneMinute = ageStreamThroughputMetrics(report, reportedAt + 60_000);
+    expect(afterOneMinute.ingress.lastMinute).toEqual({ count: 0, bytes: 0, perSecond: 0 });
+    expect(afterOneMinute.ingress.series.counts).toEqual(new Array(60).fill(0));
+    expect(afterOneMinute.ingress.series.bytes).toEqual(new Array(60).fill(0));
   });
 });
 

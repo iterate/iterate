@@ -9,6 +9,12 @@ The old TypeScript workflow generator is gone. Edit the YAML directly, and put
 runtime logic in normal scripts under `scripts/ci` instead of embedding large
 `actions/github-script` blocks.
 
+Historical workflow/job/attempt timing, queueing, CPU/memory utilization, and
+failure-rate analysis lives in PostHog; see
+[CI and test telemetry](ci-test-telemetry.md) for the dashboards, event model,
+scheduled backfill, Doppler-managed Depot organization token and its scope
+caveat, and CLI/MCP queries.
+
 ## Quick Links
 
 - [Depot CI dashboard](https://depot.dev/orgs/0p91s0lz49/workflows)
@@ -27,8 +33,9 @@ runtime logic in normal scripts under `scripts/ci` instead of embedding large
 - CI scripts: `scripts/ci/*.ts`
 - Custom image:
   `0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree`
-- Secrets and variables are managed with `depot ci secrets` and `depot ci vars`,
-  not GitHub Actions secrets.
+- `DOPPLER_TOKEN` is the only Depot CI secret. Application and service
+  credentials live in Doppler; GitHub supplies a short-lived job token.
+- Non-secret variables are managed with `depot ci vars`.
 
 The only GitHub Actions workflow left is `.github/workflows/claude-assistant.yml`.
 It is not CI; it exists because Depot CI does not support issue/comment events
@@ -68,10 +75,26 @@ Fetch logs and diagnostics:
 ```bash
 depot ci logs <attempt-id> --org 0p91s0lz49
 depot ci logs <job-id> --org 0p91s0lz49 --follow
-depot ci metrics <run-id> --org 0p91s0lz49
+depot ci metrics --run <run-id> --org 0p91s0lz49
 depot ci diagnose <run-id> --org 0p91s0lz49
 depot ci summary <attempt-id> --org 0p91s0lz49
 ```
+
+List and download retained artifacts:
+
+```bash
+depot_run_id="<run-id>"
+depot ci artifacts list "$depot_run_id" --org 0p91s0lz49 --output json
+artifact_id="<artifact-id>"
+depot ci artifacts download "$artifact_id" \
+  --org 0p91s0lz49 \
+  --output-file /tmp/unit-test-telemetry.zip
+```
+
+For a Depot-hosted workflow, use `depot ci artifacts` as the source of truth.
+The `actions/upload-artifact` log may print a GitHub-looking actions URL, but
+Depot owns the run and artifact; `gh run download` and the GitHub Actions
+artifact API can return 404 for that URL.
 
 Control runs:
 
@@ -85,9 +108,24 @@ Manage secrets:
 
 ```bash
 depot ci secrets list --org 0p91s0lz49
-printf '%s' "$VALUE" | depot ci secrets add NAME --org 0p91s0lz49
-depot ci secrets remove NAME --org 0p91s0lz49
 ```
+
+The list must contain only `DOPPLER_TOKEN`. Do not copy GitHub, Depot API,
+Cloudflare, Slack, PostHog, or other service credentials into Depot. Put them
+in the appropriate Doppler config; CI reaches them through the bootstrap
+token. GitHub operations use `${{ github.token }}` and workflow-level
+`permissions` instead of a stored bot token. The CI telemetry collector is the
+non-obvious case: its Depot organization token lives in `_shared/preview`, but
+the collector sends under `_shared/prd` so it reaches the canonical PostHog
+project. See [CI and test telemetry](ci-test-telemetry.md) for the exact setup.
+
+The daily PR dashboard also avoids a hidden token exception: it finds today's
+message and detail reply through Slack history instead of persisting their
+timestamps in a GitHub Actions repository variable. GitHub's variable API
+requires the separate
+[repository `Variables` permission](https://docs.github.com/en/rest/actions/variables#get-a-repository-variable),
+which workflow `GITHUB_TOKEN` permissions cannot request. Do not reintroduce
+`SLACK_PR_DASHBOARD_STATE` or a personal/bot token for that state.
 
 ## Wait For CI
 
@@ -228,17 +266,59 @@ Use Depot-specific features where they make the workflow clearer:
 - independent checks can use Depot `parallel:` blocks with `fail-fast: false`;
 - workflow runtime logic belongs in `scripts/ci`, not in long YAML strings.
 
+### Reliability defaults
+
+Mainline workflows deliberately separate deployment safety from validation
+freshness:
+
+- A credentialed deploy uses one fixed concurrency group named for its actual
+  destination, such as `deploy-auth-os-production`. It always sets
+  `cancel-in-progress: false`. The checked-out branch is not the destination,
+  so it must not appear in that group name. An active rollout finishes; if
+  several newer commits queue behind it, Depot keeps the newest pending run.
+- Tests, lint/typecheck, and autofix use the source branch (falling back to
+  `ref_name`) and `cancel-in-progress: true`. A newer commit makes an older
+  validation result obsolete, including on `main`.
+- Every mainline job has `timeout-minutes`. This is a watchdog, not a retry:
+  jobs fail at the outer edge and an operator decides whether a rerun is safe.
+  Auth + OS gets 45 minutes because its bounded worst case includes both
+  deployments and four sequential smoke probes.
+- Runner size follows observed peak CPU and memory, with headroom. Lint stays
+  on `8x32` (parallel oxlint/typecheck/knip). Unit tests use `4x16` — measured
+  peaks on `8x32` were ~3 cores / ~2.5GB, and a second large sandbox next to
+  lint is the common trigger for no-log `Sandbox terminated before worker
+reported completion` on main. Auth + OS deploy uses `4x16`; short deploy,
+  notification, and autofix jobs use `2x8`. Re-check with
+  `depot ci metrics --run <run-id>` before increasing a size.
+
+These defaults keep a normal all-app main push to 28 requested vCPUs before
+notification jobs, down from 72, without reducing the parallel lint lane that
+uses the larger machine.
+
+If an attempt receives a sandbox but produces no logs or metrics before
+failing, inspect `depot ci status`, `logs`, `metrics`, and `diagnose`. When the
+same commit and image pass on rerun, treat that as runner provisioning evidence,
+not an application failure. Do not add automatic workflow retries: deployment
+reruns can repeat external side effects and need an operator decision.
+
 ## Custom Image
 
 The baked image is built by `.depot/workflows/build-preview-ci-image.yml` using
 `scripts/depot-ci/bake-preview-ci-image.sh`.
 
 It contains Node, pnpm, workspace dependencies, Doppler CLI, and the preview
-browser. Jobs that consume it must keep:
+browser. A snapshot is independent of sandbox size: choose `2x8`, `4x16`,
+`8x32`, or `16x64` from measured workload demand. Preview deploy/e2e retains
+`16x64` for its overlapping browser and Vitest pools. The image rebuilds when
+dependency manifests or its bake inputs land on `main`, with a weekly scheduled
+rebuild as drift repair. Consumers still run
+`pnpm install --frozen-lockfile --prefer-offline`; that reconcile is the
+correctness check and safely handles a stale image. Jobs that consume it must
+keep the image and checkout behavior:
 
 ```yaml
 runs-on:
-  size: 8x32
+  size: 2x8 # workload-specific
   image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
 steps:
   - uses: actions/checkout@v4
@@ -270,7 +350,4 @@ When the autofix job fails with `pull request parse error: cannot find workflow
 run named "autofix.ci"`, the real signal is that autofix found a diff to apply
 (the apply step only contacts GitHub when there is one) and could not correlate
 the Depot run with a GitHub Actions run. Look at the `git diff` output in the
-job logs, apply the same fix locally (usually `pnpm format`), and push. A common
-cause is committing a locally regenerated file (for example
-`apps/iterate-com/backend/generated/skills-registry.ts`) whose generator output
-is not format-stable.
+job logs, apply the same fix locally (usually `pnpm format`), and push.

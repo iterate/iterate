@@ -1,4 +1,5 @@
 import { env as workerEnv } from "cloudflare:workers";
+import type { AuthWorker } from "@iterate-com/auth-contract/worker";
 import type { SendEmailBinding } from "./domains/email/utils.ts";
 
 /**
@@ -20,17 +21,35 @@ export interface Env {
    * internal error).
    */
   WORKER_SELF: string;
+  /** Preview-only pkg.pr.new ref pinned onto iterate/iterate package specs in
+   * dynamic builds. Deploy writes this from PREVIEW_PULL_REQUEST_HEAD_SHA. */
+  APP_CONFIG_ITERATE_REPO_PKG_REF?: string;
+  /** Local-dev-only JSON map of dependency name → replacement spec (the
+   * worktree SDK tarball lockstep — scripts/lib/dev-sdk-tarball.ts). */
+  APP_CONFIG_ITERATE_REPO_PKG_SPEC_OVERRIDES?: string;
+  /** Present only in generated deployed env blocks; absent in local dev. */
+  DEPLOYMENT_ENV?: string;
+  /** Required in deployed config; optional in the local runtime binding shape. */
+  APP_CONFIG_CLOUDFLARE__API_TOKEN?: string;
   ARTIFACTS: Artifacts;
   ARTIFACTS_ACCOUNT_ID: string;
   ARTIFACTS_NAMESPACE: string;
   /** Worker Loader: hosts every dynamic worker isolate. Reach it through
    * DynamicWorkerRunner (domains/workers/worker-runner.ts) — its constructor
-   * is where a dynamic isolate gets its scoped ITX binding and egress
+   * is where a dynamic isolate gets its scoped itx binding and egress
    * fetcher. */
   LOADER: WorkerLoader;
   /** Slug -> project id (+ metadata) cache in front of the auth worker's
    * project directory (project-directory.ts). */
   PROJECT_DIRECTORY: KVNamespace;
+  /**
+   * Auth's default Worker binding. Its project-directory and token-
+   * introspection methods are private RPC capabilities; auth's public HTTP
+   * `fetch` remains a separate surface. Possession of this required same-
+   * account binding is the RPC credential; no auth service token is present
+   * in OS runtime configuration.
+   */
+  AUTH: Service<AuthWorker>;
   /**
    * Cloudflare Email Service send binding backing `itx.email`. Bound in every
    * wrangler env block including local dev, where miniflare simulates sends
@@ -42,21 +61,23 @@ export interface Env {
    * (domains/workers/artifact-store.ts). Every entry is reproducible from its
    * deterministic build key, so the namespace is safe to wipe. */
   WORKER_BUILD_CACHE: KVNamespace;
+  /** One coordinator actor per content-addressed build key. KV remains the
+   * result cache; this namespace elects one live builder across OS isolates. */
+  WORKER_BUILD_COORDINATOR: DurableObjectNamespace<
+    import("./domains/workers/worker-build-coordinator-durable-object.ts").WorkerBuildCoordinatorDurableObject
+  >;
   /**
-   * The builder sidecar (src/builder.ts): bundles dynamic worker source into
-   * loader-ready artifacts, called on artifact-cache misses. The only script
-   * carrying the bundler toolchain (esbuild-wasm, ~14MB) — the "+1" in the
-   * one-worker topology, kept out of this script so the product stays small.
-   * The builder does NOT carry this Env; its whole binding set is the
-   * artifact cache (see its BuilderEnv).
+   * The worker-bundler sidecar (src/worker-bundler.ts): the only OS script
+   * carrying esbuild-wasm. Source files cross this binding as inert data so a
+   * build cannot load the compiler into the product Worker's DO isolate.
    */
-  BUILDER: Service<import("./domains/workers/builder-entrypoint.ts").BuilderEntrypoint>;
+  WORKER_BUNDLER: Service<import("./worker-bundler.ts").default>;
   /**
    * The typechecker sidecar (src/typechecker.ts): compiles virtual TypeScript
    * projects and returns diagnostics, behind provide-time capability-types
    * validation and `itx.docs.typecheck`. The only script carrying the
-   * TypeScript compiler (tswasm, ~30MB wasm) — same quarantine story as
-   * BUILDER.
+   * TypeScript compiler (tswasm, ~30MB wasm) quarantined out of the product
+   * script.
    */
   TYPECHECKER: Service<
     import("./domains/typecheck/typechecker-entrypoint.ts").TypecheckerEntrypoint
@@ -65,8 +86,14 @@ export interface Env {
   AGENT: DurableObjectNamespace<
     import("./domains/agents/agent-durable-object.ts").AgentDurableObject
   >;
+  AGENT_COLLECTION: DurableObjectNamespace<
+    import("./domains/agents/agent-collection-durable-object.ts").AgentCollectionDurableObject
+  >;
   CAPABILITY_HOST: DurableObjectNamespace<
     import("./domains/capability-host/capability-host-durable-object.ts").CapabilityHostDurableObject
+  >;
+  DEVICE: DurableObjectNamespace<
+    import("./domains/devices/device-durable-object.ts").DeviceDurableObject
   >;
   PROJECT: DurableObjectNamespace<
     import("./domains/projects/project-durable-object.ts").ProjectDurableObject
@@ -153,8 +180,8 @@ export interface Env {
   WORKER: DurableObjectNamespace<
     import("./domains/workers/stateful-worker-durable-object.ts").StatefulWorkerDurableObject
   >;
-  WORKSPACE: DurableObjectNamespace<
-    import("./domains/workspaces/workspace-durable-object.ts").WorkspaceDurableObject
+  WORKSPACE_V2: DurableObjectNamespace<
+    import("./domains/workspaces/workspace-durable-object.ts").WorkspaceV2DurableObject
   >;
 }
 

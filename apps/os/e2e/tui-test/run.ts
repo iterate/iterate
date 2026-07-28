@@ -1,67 +1,53 @@
-import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { createTestProject } from "../test-support/create-test-project.ts";
+import {
+  ciTelemetrySourceFromEnvironment,
+  testTelemetryArtifactId,
+  testTelemetryContextFromEnvironment,
+  writeTestTelemetryArtifact,
+} from "@iterate-com/shared/test-support/ci-telemetry";
 
-const thisDir = dirname(fileURLToPath(import.meta.url));
-const appRoot = join(thisDir, "../..");
-const tuiTestBin = join(appRoot, "node_modules/.bin/tui-test");
-
-const project = await createTestProject({
-  slugPrefix: "tui-test",
-});
-
-// `iterate chat` reads the OS base URL from the iterate config file, so point
-// XDG_CONFIG_HOME at a throwaway config naming the disposable project's URL.
-const xdgConfigHome = mkdtempSync(join(tmpdir(), "iterate-tui-test-xdg-"));
-mkdirSync(join(xdgConfigHome, "iterate"), { recursive: true });
-writeFileSync(
-  join(xdgConfigHome, "iterate", "config.json"),
-  `${JSON.stringify(
-    {
-      configs: { "tui-test": { osBaseUrl: project.baseUrl } },
-      default: "tui-test",
-    },
-    null,
-    2,
-  )}\n`,
+// The TUI e2e lane is deliberately SKIPPED.
+//
+// The terminal UI has known bugs and no users right now, and its test
+// framework (@microsoft/tui-test 0.0.4) has defects of its own: it reuses a
+// worker it already terminated on timeout for its retry, and it hardwires
+// shared global state (the spec transform cache under cwd, the zsh dotfiles
+// folder under tmpdir) that concurrent invocations race on. Keeping the lane
+// green required a patched framework plus a bespoke isolation harness — not
+// worth carrying for a surface nobody uses yet.
+//
+// The specs and tui-test.config.ts next to this file are kept as the starting
+// point for reviving the lane once the TUI matters again. The evidence and
+// removal criteria live in tasks/quarantined-tui-e2e.md.
+console.info(
+  "[tui-test] SKIPPED: quarantined by tasks/quarantined-tui-e2e.md — the terminal UI has known bugs and tui-test 0.0.4 is not concurrency-safe.",
 );
 
-try {
-  console.info(`[tui-test] Created disposable project ${project.project.id}`);
-  await runTuiTest({
-    env: {
-      ...process.env,
-      APP_CONFIG_BASE_URL: project.baseUrl,
-      OS_E2E_TUI_PROJECT_ID: project.project.id,
-      XDG_CONFIG_HOME: xdgConfigHome,
+const now = new Date().toISOString();
+const context = testTelemetryContextFromEnvironment("script", {
+  testKind: "e2e",
+  lane: "tui",
+  workspace: process.env.npm_package_name ?? "@iterate-com/os",
+  app: "os",
+});
+writeTestTelemetryArtifact({
+  artifactSchemaVersion: 1,
+  artifactId: testTelemetryArtifactId("tui-quarantine", process.pid, Date.now()),
+  producer: "tui-quarantine",
+  createdAt: now,
+  ci: ciTelemetrySourceFromEnvironment(process.env),
+  context,
+  run: { status: "skipped", startedAt: now, finishedAt: now, durationMs: 0 },
+  lanes: [
+    {
+      context,
+      status: "skipped",
+      durationMs: 0,
+      exitCode: 0,
+      testCount: 0,
+      retryCount: 0,
+      collectionErrors: [],
     },
-  });
-} finally {
-  rmSync(xdgConfigHome, { recursive: true, force: true });
-  // Disposal is currently a no-op: the itx surface has no projects.remove yet
-  // (tasks/os-project-archival.md), so disposable TUI projects are leaked until stages reset.
-  await project[Symbol.asyncDispose]();
-  console.info(
-    `[tui-test] Released disposable project ${project.project.id} (removal pending tasks/os-project-archival.md)`,
-  );
-}
-
-async function runTuiTest(input: { env: NodeJS.ProcessEnv }) {
-  const child = spawn(tuiTestBin, process.argv.slice(2), {
-    cwd: thisDir,
-    env: input.env,
-    stdio: "inherit",
-  });
-
-  const exitCode = await new Promise<number | null>((resolve, reject) => {
-    child.on("error", reject);
-    child.on("exit", (code) => resolve(code));
-  });
-
-  if (exitCode !== 0) {
-    throw new Error(`tui-test exited with code ${exitCode ?? "unknown"}.`);
-  }
-}
+  ],
+  tests: [],
+  modules: [],
+});

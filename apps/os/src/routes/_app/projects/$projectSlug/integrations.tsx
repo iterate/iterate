@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Suspense, useEffect, useState, type ReactNode } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -32,6 +32,7 @@ import {
   FieldLabel,
 } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
+import { Textarea } from "@iterate-com/ui/components/textarea";
 import {
   Sheet,
   SheetContent,
@@ -41,8 +42,8 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@iterate-com/ui/components/sheet";
-import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { Spinner } from "@iterate-com/ui/components/spinner";
+import { Skeleton } from "@iterate-com/ui/components/skeleton";
 import { toast } from "@iterate-com/ui/components/sonner";
 import {
   Activity,
@@ -58,22 +59,21 @@ import {
   Plus,
   Search as SearchIcon,
   Send,
-  Sparkles,
+  UserRoundCheck,
   type LucideIcon,
   Unplug,
 } from "lucide-react";
 import { z } from "zod";
+import { useItx, useItxQuery, useLiveState } from "iterate/sdk/itx/react";
 import type { Project } from "../../../../itx-api.generated.ts";
-import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
-import { StreamPathPill } from "~/components/stream-path-pill.tsx";
 import {
   breadcrumbLoaderData,
   streamBreadcrumb,
   streamPageStaticData,
 } from "~/lib/route-breadcrumbs.ts";
+import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
-import { useItx, useItxQuery, useLiveState } from "~/itx/itx-react.tsx";
 
 type Connection = Awaited<ReturnType<Project["integrations"]["getConnection"]>>;
 
@@ -83,31 +83,18 @@ type ConnectionEntry = Awaited<ReturnType<Project["integrations"]["list"]>>[numb
   status: Connection | null;
 };
 
-type FeedPanel = {
-  emptyLabel: string;
-  streamPath: string;
-};
-
 const Search = StreamViewSearch.extend({
   error: z.string().optional(),
+  /** Signed proof that GitHub user OAuth authorized moving an installation
+   * currently claimed by another project. */
+  githubSteal: z.string().optional(),
   /** Deep-link target: `?connect=<slug>` auto-starts that integration's connect
    * flow on mount, then clears itself so a refresh never re-triggers. */
   connect: z.string().optional(),
+  /** Opens one connected Telegram bot's user-access editor. Denial messages
+   * deep-link here so an owner can paste the supplied numeric id. */
+  telegramAccess: z.string().optional(),
 });
-
-const STREAM_VIEW_SEARCH_RESET = {
-  components: undefined,
-  event: undefined,
-  filter: undefined,
-  from: undefined,
-  mode: undefined,
-  panel: undefined,
-  preset: undefined,
-  processor: undefined,
-  q: undefined,
-  to: undefined,
-  types: undefined,
-} satisfies Partial<z.infer<typeof StreamViewSearch>>;
 
 const BUILTIN_API_INTEGRATIONS = [
   {
@@ -137,15 +124,6 @@ const BUILTIN_API_INTEGRATIONS = [
     name: "Cloudflare Edge AI",
     namespace: "itx.ai",
   },
-  {
-    description:
-      "OpenAI API calls through project egress or workers without storing a project-owned OpenAI key.",
-    docsUrl: "https://platform.openai.com/docs/api-reference",
-    icon: Sparkles,
-    keyReference: 'Authorization: Bearer getSecret({ platform: "openAiApiKey" })',
-    name: "OpenAI",
-    namespace: "itx.egress.fetch",
-  },
 ] as const;
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/integrations")({
@@ -157,20 +135,13 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/integrations")
       project: context.project,
       streamBreadcrumb: streamBreadcrumb(context.project, "/integrations"),
     }),
-  component: ProjectIntegrationsPage,
+  component: ProjectIntegrationsContent,
 });
-
-function ProjectIntegrationsPage() {
-  return (
-    <ItxBoundary>
-      <ProjectIntegrationsContent />
-    </ItxBoundary>
-  );
-}
 
 function ProjectIntegrationsContent() {
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
+  const params = Route.useParams();
   const { project } = Route.useLoaderData();
   const { session } = useAuthClient();
   const userId = session?.authenticated ? session.user.id : null;
@@ -187,7 +158,7 @@ function ProjectIntegrationsContent() {
             entry.source === "builtin"
               ? await itx.integrations.getConnection({
                   connection: entry.connection,
-                  provider: entry.integration,
+                  provider: entry.integration === "gmail" ? "google" : entry.integration,
                 })
               : null,
         })),
@@ -201,15 +172,27 @@ function ProjectIntegrationsContent() {
       entry.source === "builtin",
   );
   const slackConnections = builtinConnections.filter((entry) => entry.integration === "slack");
-  const googleConnections = builtinConnections.filter((entry) => entry.integration === "google");
+  const googleConnections = builtinConnections.filter((entry) => entry.integration === "gmail");
   const githubConnections = builtinConnections.filter((entry) => entry.integration === "github");
   const telegramConnections = builtinConnections.filter(
     (entry) => entry.integration === "telegram",
   );
+  const telegramAccessConnection =
+    telegramConnections.find(
+      (entry) => entry.connection === search.telegramAccess && entry.status?.connected,
+    )?.connection || null;
+  const setTelegramAccessSheetOpen = (open: boolean) => {
+    if (open) return;
+    void navigate({
+      replace: true,
+      search: (previous) => ({ ...previous, telegramAccess: undefined }),
+    });
+  };
   const providedConnections = (connections ?? []).filter((entry) => entry.source === "provided");
-  const oauthErrorLabel = search.error ? search.error.replaceAll("_", " ") : null;
-  const [feedPanel, setFeedPanel] = useState<FeedPanel | null>(null);
-  const feedOpenRequestId = useRef(0);
+  const githubStealState =
+    search.error === "github_installation_already_claimed" ? search.githubSteal || null : null;
+  const oauthErrorLabel =
+    search.error && githubStealState === null ? search.error.replaceAll("_", " ") : null;
 
   const startSlack = useMutation({
     mutationFn: async () => {
@@ -271,6 +254,18 @@ function ProjectIntegrationsContent() {
     },
     onError: (error) => toast.error(`Failed to disconnect GitHub: ${error.message}`),
   });
+  const stealGithub = useMutation({
+    mutationFn: async (state: string) => await itx.integrations.confirmGithubSteal({ state }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["itx", "integrations", project.slug] });
+      await navigate({
+        replace: true,
+        search: (previous) => ({ ...previous, error: undefined, githubSteal: undefined }),
+      });
+      toast.success("GitHub installation moved");
+    },
+    onError: (error) => toast.error(`Failed to move GitHub installation: ${error.message}`),
+  });
   const disconnectGoogle = useMutation({
     mutationFn: async (connection: string) =>
       await itx.integrations.disconnect({ connection, provider: "google" }),
@@ -325,193 +320,221 @@ function ProjectIntegrationsContent() {
     // Unknown slug: ignored.
   }, [search.connect, navigate, connectSlack, connectGoogle, connectGithub]);
 
-  const resetFeedViewSearch = () => {
-    return navigate({
-      search: (previous) => ({ ...previous, ...STREAM_VIEW_SEARCH_RESET }),
+  // Connection journals are their own streams — open the canonical stream
+  // page rather than stacking a second ProjectStreamView (which would share
+  // this route's StreamViewSearch URL params with the /integrations feed).
+  const openStream = (streamPath: string) => {
+    void navigate(linkOptionsForStreamPath(params.projectSlug, streamPath));
+  };
+  const dismissGithubSteal = () => {
+    void navigate({
       replace: true,
+      search: (previous) => ({
+        ...previous,
+        error: undefined,
+        githubSteal: undefined,
+      }),
     });
   };
-  const openFeed = async (panel: FeedPanel) => {
-    const requestId = ++feedOpenRequestId.current;
-    if (feedPanel == null || feedPanel.streamPath !== panel.streamPath) {
-      await resetFeedViewSearch();
-    }
-    if (feedOpenRequestId.current !== requestId) return;
-    setFeedPanel(panel);
-  };
-  const openProjectFeed = () =>
-    openFeed({
-      emptyLabel: "No events on the integrations stream yet.",
-      streamPath: "/integrations",
-    });
 
-  return (
-    <main className="min-h-0 flex-1 overflow-y-auto bg-background">
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-5 md:px-6">
-        <header className="flex items-center gap-2 pb-2">
-          <SidebarTrigger className="-ml-1 md:hidden" />
-          <StreamPathPill streamPath="/integrations" />
-          <Button
-            className="ml-auto shrink-0"
-            size="sm"
-            variant="outline"
-            onClick={openProjectFeed}
+  // Same shell as secrets/agents/repos: ProjectStreamView owns the header
+  // (path pill flush left, presence + RTT + stream state on the right) and the
+  // live /integrations feed; the domain UI is the panel beside it.
+  const panel = (
+    <>
+      <AlertDialog
+        open={githubStealState !== null}
+        onOpenChange={(open) => {
+          if (!open && !stealGithub.isPending) dismissGithubSteal();
+        }}
+      >
+        <AlertDialogContent size="sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Steal this GitHub installation?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This installation is already connected to another project. Stealing it disconnects
+              that project and routes future GitHub activity here.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={stealGithub.isPending} onClick={dismissGithubSteal}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={stealGithub.isPending}
+              onClick={() => {
+                if (githubStealState !== null) stealGithub.mutate(githubStealState);
+              }}
+            >
+              {stealGithub.isPending ? <Spinner data-icon="inline-start" /> : null}
+              {stealGithub.isPending ? "Stealing..." : "Steal it"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {oauthErrorLabel ? (
+        <Alert variant="destructive">
+          <AlertCircle className="size-4" />
+          <AlertTitle>Integration failed</AlertTitle>
+          <AlertDescription>{oauthErrorLabel}</AlertDescription>
+        </Alert>
+      ) : null}
+
+      <section className="space-y-3">
+        <div className="space-y-1">
+          <h2 className="text-base font-medium">Connectable integrations</h2>
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            OAuth and app-installation connections create their own stream at
+            <code className="mx-1 rounded bg-muted px-1 py-0.5 font-mono text-xs">
+              /integrations/&lt;provider&gt;/&lt;connection&gt;
+            </code>
+            for lifecycle facts, routed webhooks, and provider-specific activity.
+          </p>
+        </div>
+        <ItemGroup className="grid gap-4">
+          <ConnectableIntegrationCard
+            connectionNoun="workspace"
+            connections={slackConnections}
+            description="Receive Slack events and call Slack Web API methods with project-scoped credentials."
+            disconnecting={disconnectSlack.isPending}
+            icon={MessageSquare}
+            name="Slack"
+            onDisconnect={(connection) => disconnectSlack.mutate(connection)}
+            onConfigureAccess={null}
+            onOpenFeed={openStream}
+            provider="slack"
+            connectControl={
+              <Button size="sm" disabled={startSlack.isPending} onClick={() => startSlack.mutate()}>
+                {startSlack.isPending ? <Spinner /> : <Plus className="size-4" />}
+                Connect
+              </Button>
+            }
+          />
+          <ConnectableIntegrationCard
+            connectionNoun="account"
+            connections={googleConnections}
+            description="Use Gmail API tools through a connected Google account."
+            disconnecting={disconnectGoogle.isPending}
+            icon={Mail}
+            name="Google"
+            onDisconnect={(connection) => disconnectGoogle.mutate(connection)}
+            onConfigureAccess={null}
+            onOpenFeed={openStream}
+            provider="google"
+            connectControl={
+              <Button
+                size="sm"
+                disabled={startGoogle.isPending}
+                onClick={() => startGoogle.mutate()}
+              >
+                {startGoogle.isPending ? <Spinner /> : <Plus className="size-4" />}
+                Connect
+              </Button>
+            }
+          />
+          <ConnectableIntegrationCard
+            connectionNoun="installation"
+            connections={githubConnections}
+            description="Use the GitHub REST API, route repo webhooks, and enable gh/git inside sandboxes."
+            disconnecting={disconnectGithub.isPending}
+            icon={Github}
+            name="GitHub"
+            onDisconnect={(connection) => disconnectGithub.mutate(connection)}
+            onConfigureAccess={null}
+            onOpenFeed={openStream}
+            provider="github"
+            connectControl={
+              <Button
+                size="sm"
+                disabled={startGithub.isPending}
+                onClick={() => startGithub.mutate()}
+              >
+                {startGithub.isPending ? <Spinner /> : <Plus className="size-4" />}
+                Connect
+              </Button>
+            }
+          />
+          <ConnectableIntegrationCard
+            connectionNoun="bot"
+            connections={telegramConnections}
+            description="Connect a Telegram bot (via @BotFather) so agents can chat in Telegram."
+            disconnecting={disconnectTelegram.isPending}
+            icon={Send}
+            name="Telegram"
+            onDisconnect={(connection) => disconnectTelegram.mutate(connection)}
+            onConfigureAccess={(connection) => {
+              void navigate({
+                search: (previous) => ({ ...previous, telegramAccess: connection }),
+              });
+            }}
+            onOpenFeed={openStream}
+            provider="telegram"
+            connectControl={
+              <TelegramConnectSheet
+                connect={connectTelegram}
+                open={telegramSheetOpen}
+                onOpenChange={setTelegramSheetOpen}
+              />
+            }
+          />
+          <AccountConnectionsItem />
+        </ItemGroup>
+        {telegramAccessConnection === null ? null : (
+          <Suspense
+            fallback={<TelegramAccessSheetLoading onOpenChange={setTelegramAccessSheetOpen} />}
           >
-            <Activity data-icon="inline-start" />
-            Show stream
-          </Button>
-        </header>
+            <TelegramAccessSheet
+              connection={telegramAccessConnection}
+              onOpenChange={setTelegramAccessSheetOpen}
+              projectSlug={project.slug}
+            />
+          </Suspense>
+        )}
+      </section>
 
-        {oauthErrorLabel ? (
-          <Alert variant="destructive">
-            <AlertCircle className="size-4" />
-            <AlertTitle>Integration failed</AlertTitle>
-            <AlertDescription>{oauthErrorLabel}</AlertDescription>
-          </Alert>
-        ) : null}
-
+      {providedConnections.length > 0 ? (
         <section className="space-y-3">
           <div className="space-y-1">
-            <h2 className="text-base font-medium">Connectable integrations</h2>
-            <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
-              OAuth and app-installation connections create their own stream at
-              <code className="mx-1 rounded bg-muted px-1 py-0.5 font-mono text-xs">
-                /integrations/&lt;provider&gt;/&lt;connection&gt;
-              </code>
-              for lifecycle facts, routed webhooks, and provider-specific activity.
+            <h2 className="text-base font-medium">Project integrations</h2>
+            <p className="text-sm leading-relaxed text-muted-foreground">
+              Mounted by this project through <code>provideCapability</code>; manage these in
+              project code.
             </p>
           </div>
-          <ItemGroup className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            <ConnectableIntegrationCard
-              connectionNoun="workspace"
-              connections={slackConnections}
-              description="Receive Slack events and call Slack Web API methods with project-scoped credentials."
-              disconnecting={disconnectSlack.isPending}
-              icon={MessageSquare}
-              name="Slack"
-              onDisconnect={(connection) => disconnectSlack.mutate(connection)}
-              onOpenFeed={openFeed}
-              provider="slack"
-              connectControl={
-                <Button
-                  size="sm"
-                  disabled={startSlack.isPending}
-                  onClick={() => startSlack.mutate()}
-                >
-                  {startSlack.isPending ? <Spinner /> : <Plus className="size-4" />}
-                  Connect
-                </Button>
-              }
-            />
-            <ConnectableIntegrationCard
-              connectionNoun="account"
-              connections={googleConnections}
-              description="Use Gmail API tools through a connected Google account."
-              disconnecting={disconnectGoogle.isPending}
-              icon={Mail}
-              name="Google"
-              onDisconnect={(connection) => disconnectGoogle.mutate(connection)}
-              onOpenFeed={openFeed}
-              provider="google"
-              connectControl={
-                <Button
-                  size="sm"
-                  disabled={startGoogle.isPending}
-                  onClick={() => startGoogle.mutate()}
-                >
-                  {startGoogle.isPending ? <Spinner /> : <Plus className="size-4" />}
-                  Connect
-                </Button>
-              }
-            />
-            <ConnectableIntegrationCard
-              connectionNoun="installation"
-              connections={githubConnections}
-              description="Use the GitHub REST API, route repo webhooks, and enable gh/git inside sandboxes."
-              disconnecting={disconnectGithub.isPending}
-              icon={Github}
-              name="GitHub"
-              onDisconnect={(connection) => disconnectGithub.mutate(connection)}
-              onOpenFeed={openFeed}
-              provider="github"
-              connectControl={
-                <Button
-                  size="sm"
-                  disabled={startGithub.isPending}
-                  onClick={() => startGithub.mutate()}
-                >
-                  {startGithub.isPending ? <Spinner /> : <Plus className="size-4" />}
-                  Connect
-                </Button>
-              }
-            />
-            <ConnectableIntegrationCard
-              connectionNoun="bot"
-              connections={telegramConnections}
-              description="Connect a Telegram bot (via @BotFather) so agents can chat in Telegram."
-              disconnecting={disconnectTelegram.isPending}
-              icon={Send}
-              name="Telegram"
-              onDisconnect={(connection) => disconnectTelegram.mutate(connection)}
-              onOpenFeed={openFeed}
-              provider="telegram"
-              connectControl={
-                <TelegramConnectSheet
-                  connect={connectTelegram}
-                  open={telegramSheetOpen}
-                  onOpenChange={setTelegramSheetOpen}
-                />
-              }
-            />
-            <AccountConnectionsItem />
-          </ItemGroup>
-        </section>
-
-        {providedConnections.length > 0 ? (
-          <section className="space-y-3">
-            <div className="space-y-1">
-              <h2 className="text-base font-medium">Project integrations</h2>
-              <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
-                Mounted by this project through <code>provideCapability</code>; manage these in
-                project code.
-              </p>
-            </div>
-            <ItemGroup className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {providedConnections.map((entry) => (
-                <ProvidedIntegrationCard key={entry.path} entry={entry} onOpenFeed={openFeed} />
-              ))}
-            </ItemGroup>
-          </section>
-        ) : null}
-
-        <section className="space-y-3">
-          <div className="space-y-1">
-            <h2 className="text-base font-medium">Built-in Integrations</h2>
-            <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
-              Iterate-managed capabilities are available without creating a connection. Keys stay
-              server-side and usage is charged to this project.
-            </p>
-          </div>
-          <ItemGroup className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {BUILTIN_API_INTEGRATIONS.map((integration) => (
-              <BuiltInApiIntegrationRow key={integration.name} integration={integration} />
+          <ItemGroup className="grid gap-4">
+            {providedConnections.map((entry) => (
+              <ProvidedIntegrationCard key={entry.path} entry={entry} onOpenFeed={openStream} />
             ))}
           </ItemGroup>
         </section>
-      </div>
+      ) : null}
 
-      <IntegrationFeedSheet
-        feedPanel={feedPanel}
-        onOpenChange={(open) => {
-          if (!open) {
-            feedOpenRequestId.current += 1;
-            void resetFeedViewSearch();
-            setFeedPanel(null);
-          }
-        }}
-        projectId={project.id}
-      />
-    </main>
+      <section className="space-y-3">
+        <div className="space-y-1">
+          <h2 className="text-base font-medium">Built-in Integrations</h2>
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            iterate-managed capabilities are available without creating a connection. Keys stay
+            server-side and usage is charged to this project.
+          </p>
+        </div>
+        <ItemGroup className="grid gap-4">
+          {BUILTIN_API_INTEGRATIONS.map((integration) => (
+            <BuiltInApiIntegrationRow key={integration.name} integration={integration} />
+          ))}
+        </ItemGroup>
+      </section>
+    </>
+  );
+
+  return (
+    <ProjectStreamView
+      panel={panel}
+      projectId={project.id}
+      streamPath="/integrations"
+      emptyLabel="No events on the integrations stream yet."
+    />
   );
 }
 
@@ -568,6 +591,7 @@ function ConnectableIntegrationCard({
   disconnecting,
   icon: Icon,
   name,
+  onConfigureAccess,
   onDisconnect,
   onOpenFeed,
   provider,
@@ -581,8 +605,9 @@ function ConnectableIntegrationCard({
   disconnecting: boolean;
   icon: LucideIcon;
   name: string;
+  onConfigureAccess: ((connection: string) => void) | null;
   onDisconnect: (connection: string) => void;
-  onOpenFeed: (panel: FeedPanel) => void;
+  onOpenFeed: (streamPath: string) => void;
   provider: "github" | "google" | "slack" | "telegram";
 }) {
   const connected = connectedCount(connections);
@@ -610,13 +635,11 @@ function ConnectableIntegrationCard({
                 key={entry.path}
                 disconnecting={disconnecting}
                 entry={entry}
-                onDisconnect={() => onDisconnect(entry.connection)}
-                onOpenFeed={() =>
-                  onOpenFeed({
-                    emptyLabel: `No events on ${entry.path} yet.`,
-                    streamPath: entry.path,
-                  })
+                onConfigureAccess={
+                  onConfigureAccess === null ? null : () => onConfigureAccess(entry.connection)
                 }
+                onDisconnect={() => onDisconnect(entry.connection)}
+                onOpenFeed={() => onOpenFeed(entry.path)}
                 provider={provider}
               />
             ))}
@@ -632,7 +655,7 @@ function ProvidedIntegrationCard({
   onOpenFeed,
 }: {
   entry: ConnectionEntry;
-  onOpenFeed: (panel: FeedPanel) => void;
+  onOpenFeed: (streamPath: string) => void;
 }) {
   return (
     <Item variant="outline" className="min-w-0 items-start gap-4 p-4">
@@ -656,12 +679,7 @@ function ProvidedIntegrationCard({
           className="w-fit"
           size="sm"
           variant="outline"
-          onClick={() =>
-            onOpenFeed({
-              emptyLabel: `No events on ${entry.path} yet.`,
-              streamPath: entry.path,
-            })
-          }
+          onClick={() => onOpenFeed(entry.path)}
         >
           <Activity className="size-4" />
           Feed
@@ -674,12 +692,14 @@ function ProvidedIntegrationCard({
 function ConnectionRow({
   disconnecting,
   entry,
+  onConfigureAccess,
   onDisconnect,
   onOpenFeed,
   provider,
 }: {
   disconnecting: boolean;
   entry: ConnectionEntry;
+  onConfigureAccess: (() => void) | null;
   onDisconnect: () => void;
   onOpenFeed: () => void;
   provider: "github" | "google" | "slack" | "telegram";
@@ -692,6 +712,16 @@ function ConnectionRow({
         <IntegrationMetadata connection={entry.status ?? undefined} provider={provider} />
       </div>
       <div className="flex shrink-0 items-center gap-1.5">
+        {entry.status?.connected && onConfigureAccess !== null ? (
+          <Button
+            size="icon-sm"
+            variant="outline"
+            aria-label={`Configure ${entry.connection} user access`}
+            onClick={onConfigureAccess}
+          >
+            <UserRoundCheck data-icon="inline-start" />
+          </Button>
+        ) : null}
         <Button
           size="icon-sm"
           variant="outline"
@@ -713,36 +743,6 @@ function ConnectionRow({
         ) : null}
       </div>
     </div>
-  );
-}
-
-function IntegrationFeedSheet({
-  feedPanel,
-  onOpenChange,
-  projectId,
-}: {
-  feedPanel: FeedPanel | null;
-  onOpenChange: (open: boolean) => void;
-  projectId: string;
-}) {
-  return (
-    <Sheet open={feedPanel != null} onOpenChange={onOpenChange}>
-      {feedPanel == null ? null : (
-        <SheetContent className="w-full gap-0 data-[side=right]:sm:w-[56vw] data-[side=right]:sm:max-w-[92vw]">
-          <SheetHeader className="sr-only">
-            <SheetTitle>{feedPanel.streamPath} feed</SheetTitle>
-          </SheetHeader>
-          <div className="flex min-h-0 flex-1">
-            <ProjectStreamView
-              showHeader={false}
-              projectId={projectId}
-              streamPath={feedPanel.streamPath}
-              emptyLabel={feedPanel.emptyLabel}
-            />
-          </div>
-        </SheetContent>
-      )}
-    </Sheet>
   );
 }
 
@@ -793,6 +793,105 @@ function IntegrationMetadataRow({
       <span className="shrink-0 text-muted-foreground/80">{label}</span>
       <span className="truncate text-foreground">{value}</span>
     </div>
+  );
+}
+
+function TelegramAccessSheet({
+  connection,
+  onOpenChange,
+  projectSlug,
+}: {
+  connection: string;
+  onOpenChange: (open: boolean) => void;
+  projectSlug: string;
+}) {
+  const itx = useItx();
+  const queryClient = useQueryClient();
+  const access = useItxQuery({
+    key: ["telegram-access", projectSlug, connection],
+    query: (itx) => itx.integrations.getTelegramAccess({ connection }),
+  });
+  const saveAccess = useMutation({
+    mutationFn: async (allowedUserIds: string[]) =>
+      await itx.integrations.setTelegramAccess({ allowedUserIds, connection }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: ["itx", "telegram-access", projectSlug, connection],
+      });
+      toast.success("Telegram user access updated");
+      onOpenChange(false);
+    },
+    onError: (error) => toast.error(`Failed to update Telegram access: ${error.message}`),
+  });
+
+  return (
+    <Sheet open onOpenChange={onOpenChange}>
+      <SheetContent side="right" className="overflow-y-auto">
+        <form
+          className="flex h-full flex-col"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const value = String(new FormData(event.currentTarget).get("allowedUserIds") || "");
+            saveAccess.mutate(value.split(/[\s,]+/).filter(Boolean));
+          }}
+        >
+          <SheetHeader>
+            <SheetTitle>Telegram user access</SheetTitle>
+            <SheetDescription>
+              Only listed Telegram accounts can ask this bot to use project capabilities.
+            </SheetDescription>
+          </SheetHeader>
+          <FieldGroup className="flex flex-1 flex-col gap-4 p-4">
+            {access === undefined ? (
+              <Skeleton className="h-40 w-full" />
+            ) : (
+              <Field data-invalid={saveAccess.isError}>
+                <FieldLabel htmlFor="telegram-allowed-user-ids">
+                  Allowed Telegram user IDs
+                </FieldLabel>
+                <Textarea
+                  id="telegram-allowed-user-ids"
+                  name="allowedUserIds"
+                  aria-invalid={saveAccess.isError}
+                  autoComplete="off"
+                  defaultValue={access.allowedUserIds.join("\n")}
+                  placeholder="123456789"
+                  rows={8}
+                />
+                <FieldDescription>
+                  Enter one numeric user ID per line. Usernames are not accepted because they can
+                  change owners. To find an ID, message the bot while unauthorized—the reply
+                  includes the exact ID and a link back here.
+                </FieldDescription>
+                {saveAccess.error ? <FieldError>{saveAccess.error.message}</FieldError> : null}
+              </Field>
+            )}
+          </FieldGroup>
+          <SheetFooter>
+            <Button type="submit" disabled={access === undefined || saveAccess.isPending}>
+              {saveAccess.isPending ? <Spinner /> : null}
+              {saveAccess.isPending ? "Saving..." : "Save access"}
+            </Button>
+          </SheetFooter>
+        </form>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+function TelegramAccessSheetLoading({ onOpenChange }: { onOpenChange: (open: boolean) => void }) {
+  return (
+    <Sheet open onOpenChange={onOpenChange}>
+      <SheetContent side="right">
+        <SheetHeader>
+          <SheetTitle>Telegram user access</SheetTitle>
+          <SheetDescription>Loading this bot's access policy…</SheetDescription>
+        </SheetHeader>
+        <div className="p-4">
+          <Skeleton className="h-40 w-full" />
+        </div>
+      </SheetContent>
+    </Sheet>
   );
 }
 
@@ -860,7 +959,7 @@ function AccountConnectionsItem() {
   // The connections list is derived from the project processor's live secrets
   // state — the same push-based slice the secrets page reads. Two payoffs over
   // a second useItxQuery: it does not suspend a second time (which would bubble
-  // to the route ItxBoundary and flash the whole panel back to the global
+  // to the route's `<Suspense>` boundary and flash the whole panel back to the
   // "Connecting…" placeholder), and a freshly-created session secret appears
   // here the instant its stream folds, with no manual invalidation to race.
   const secretsList = useLiveState(
@@ -876,10 +975,10 @@ function AccountConnectionsItem() {
   const createConnection = useMutation({
     mutationFn: async (input: z.infer<typeof AccountConnectionForm>) => {
       const path = `/secrets/integrations/${input.slug}/${input.connection}/session`;
-      // One update births the whole connection: credential material, the
+      // One create births the whole connection: credential material, the
       // egress pin (the login URL's origin), and the session-login refresh
       // strategy. The password is write-only from here on.
-      await itx.secrets.get(path).update({
+      await itx.secrets.get(path).create({
         egress: { urls: [new URL(input.loginUrl).origin] },
         material: { password: input.password, username: input.username },
         refresh: { graphqlUrl: input.loginUrl, kind: "waitrose-session" },

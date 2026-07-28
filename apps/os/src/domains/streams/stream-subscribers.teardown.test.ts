@@ -9,18 +9,18 @@
 // the log, every fact-append triggers wake(), parked facts fold.
 
 import { describe, expect, it } from "vitest";
+import type { StreamEvent, StreamEventInput, StreamWakeEventBatch } from "iterate/processors";
 import {
   CoreProcessorContract,
   type SubscriptionConfiguredPayload,
 } from "./core-processor-contract.ts";
-import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import { StreamSubscribers } from "./stream-subscribers.ts";
 import type { RetainedProcessEventBatch } from "./subscriber-sinks.ts";
 import type { SubscriptionCursorRow, SubscriptionCursorStore } from "./stream-storage.ts";
 
 type PokeImpl = (request: { subscriptionKey: string }) => Promise<{
   checkpointOffset: number;
-  sink: RetainedProcessEventBatch;
+  sink: RetainedProcessEventBatch<StreamWakeEventBatch>;
 }>;
 
 function makeFaithfulHarness(pokeImpl?: PokeImpl) {
@@ -71,6 +71,11 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
         nextAttemptAt: args.nextAttemptAt,
         lastError: args.error,
       });
+    },
+    park: (k, args) => {
+      const row = rows.get(k);
+      if (!row) return;
+      Object.assign(row, { attempt: args.attempt, nextAttemptAt: null, lastError: args.error });
     },
     setCursor: (k, acked) => {
       const row = rows.get(k);
@@ -133,11 +138,16 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
         poke: async (_expression, request) => {
           pokes.push(request.subscriptionKey);
           if (pokeImpl !== undefined) return pokeImpl(request);
-          const sink = Object.assign(() => undefined, {
-            [Symbol.dispose]() {
-              sinkAlive = false;
+          const sink = Object.assign(
+            (batch: StreamWakeEventBatch) => {
+              batch.settleDelivery({ outcome: "ok" });
             },
-          }) as RetainedProcessEventBatch;
+            {
+              [Symbol.dispose]() {
+                sinkAlive = false;
+              },
+            },
+          ) as RetainedProcessEventBatch<StreamWakeEventBatch>;
           sinkAlive = true;
           return { checkpointOffset: log.length, sink };
         },
@@ -146,9 +156,11 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
       },
       appendFact: append,
       recordEgress: () => undefined,
+      runtimeChanged: () => undefined,
       now: () => Date.now(),
       random: () => 0.5,
       armAlarm: () => undefined,
+      runDurable: (work) => void kept.push(work()),
       keepAlive: (promise) => void kept.push(promise),
     },
   });
@@ -231,10 +243,10 @@ describe("StreamSubscribers with a DO-faithful (log-appending) harness", () => {
     let pokes = 0;
     const h = makeFaithfulHarness(async () => {
       pokes += 1;
-      const sink = Object.assign(() => undefined, {
-        pendingDeliveries: () => 1, // permanently unsettled delivery
+      const sink = Object.assign((_batch: StreamWakeEventBatch) => undefined, {
+        // Deliberately never invokes `settleDelivery`.
         [Symbol.dispose]() {},
-      }) as RetainedProcessEventBatch;
+      }) as RetainedProcessEventBatch<StreamWakeEventBatch>;
       return { checkpointOffset: 0, sink };
     });
     h.configured["k"] = {

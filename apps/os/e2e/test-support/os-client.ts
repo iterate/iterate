@@ -1,9 +1,10 @@
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import type { RpcStub } from "capnweb";
+import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
+import { connectItx } from "iterate/node";
 import type { Project as ProjectRpcTarget, Session } from "../../src/itx-api.generated.ts";
 import { resolveBaseUrl } from "./dev-server.ts";
-import { connectItx } from "~/itx-client.ts";
 
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -44,11 +45,8 @@ export function createAdminOsItx(input: {
 export function createAdminOsItx(input?: { baseUrl?: string; context?: string }) {
   const baseUrl = input?.baseUrl ?? requireBaseUrl();
   const auth = { type: "admin-secret" as const, secret: requireAdminBearerToken() };
+  const headers = cloudflareWorkerVersionOverrideHeaders(process.env);
   return input?.context
-    ? connectItx({ auth, baseUrl, projectId: input.context })
-    : connectItx({ auth, baseUrl });
-}
-
-export function uniqueSuffix() {
-  return `${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
+    ? connectItx({ auth, baseUrl, headers, projectId: input.context })
+    : connectItx({ auth, baseUrl, headers });
 }

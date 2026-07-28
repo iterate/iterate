@@ -25,12 +25,15 @@ import {
 } from "@iterate-com/ui/components/sheet";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
-import { ItxBoundary } from "~/components/itx-boundary.tsx";
+import { useItx, useLiveState } from "iterate/sdk/itx/react";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { formatTimeAgo } from "~/lib/format-relative-time.ts";
-import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
+import {
+  breadcrumbLoaderData,
+  streamBreadcrumb,
+  streamPageStaticData,
+} from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
-import { useItx, useLiveState } from "~/itx/itx-react.tsx";
 
 /** Secrets live at `/secrets/<name>`; the route param is the bare name. */
 const secretPathFromName = (name: string) => `/secrets/${name}`;
@@ -62,6 +65,7 @@ const parseEgressUrls = (raw: string): string[] =>
     .filter((url) => url !== "");
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/secrets/")({
+  staticData: streamPageStaticData(),
   validateSearch: StreamViewSearch,
   ssr: false,
   loader: ({ context }) =>
@@ -69,16 +73,8 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/secrets/")({
       project: context.project,
       streamBreadcrumb: streamBreadcrumb(context.project, "/secrets"),
     }),
-  component: ProjectSecretsIndexPage,
+  component: ProjectSecretsIndexContent,
 });
-
-function ProjectSecretsIndexPage() {
-  return (
-    <ItxBoundary>
-      <ProjectSecretsIndexContent />
-    </ItxBoundary>
-  );
-}
 
 function ProjectSecretsIndexContent() {
   const params = Route.useParams();
@@ -99,11 +95,11 @@ function ProjectSecretsIndexContent() {
 
   const createSecret = useMutation({
     mutationFn: async (input: { name: string; material: string; egressUrls: string[] }) => {
-      // Material and egress land in ONE update, so the secret is born already
+      // Material and egress land in ONE birth, so the secret is born already
       // pinned to its hosts — no window where it exists but cannot be used.
-      await itx.secrets.get(secretPathFromName(input.name)).update({
+      await itx.secrets.get(secretPathFromName(input.name)).create({
+        egress: { urls: input.egressUrls },
         material: input.material,
-        ...(input.egressUrls.length === 0 ? {} : { egress: { urls: input.egressUrls } }),
       });
       return input.name;
     },

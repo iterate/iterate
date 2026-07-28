@@ -63,8 +63,12 @@ export interface GithubApp {
  * signing secret, and backdoor toggles.
  */
 export interface PetshopState {
-  /** Bumping this invalidates every outstanding access token (they seal the epoch they were minted under). */
+  /** Legacy baseline for tokens minted before revocation became client-scoped. */
   accessTokenEpoch: number;
+  /** Per-client revocation epochs. A token seals the epoch for its `clientId`,
+   * so concurrent integration tests can expire their own credentials without
+   * invalidating an unrelated client's freshly refreshed token. */
+  accessTokenEpochs?: Record<string, number>;
   clients: Record<string, OauthClient>;
   /** `jti` values of refresh tokens the backdoor has revoked. */
   revokedRefreshTokenIds: string[];
@@ -73,12 +77,20 @@ export interface PetshopState {
   usedAuthorizationCodeIds: string[];
   /** Current webhook HMAC secret; rotatable via the backdoor. */
   webhookSigningSecret: string;
-  /** While > 0, POST /oauth/token returns 500 and decrements — for retry specs. */
-  tokenEndpointFailuresRemaining: number;
+  /** Scheduled POST /oauth/token failures, scoped by OAuth client so one test's
+   * fault injection cannot break another concurrently running integration. */
+  tokenEndpointFailuresRemainingByClient: Record<string, number>;
   /** Registered GitHub App installations, keyed by `installationId` (the path
    * segment of `POST /app/installations/<id>/access_tokens`). Seeded with the
    * well-known default; extended/replaced via `POST /__backdoor/apps`. */
   apps: Record<string, GithubApp>;
+}
+
+/** Resolve the revocation epoch for one token client. The legacy scalar is
+ * the fallback so a deployment can continue validating already-minted tokens
+ * and state blobs written before client-scoped revocation existed. */
+export function accessTokenEpochFor(state: PetshopState, clientId: string): number {
+  return state.accessTokenEpochs?.[clientId] ?? state.accessTokenEpoch;
 }
 
 /** The seeded default GitHub App installation — well-known ids, no verifying
@@ -104,17 +116,32 @@ export class PetshopStateDurableObject extends DurableObject {
   async #load(): Promise<PetshopState> {
     const existing = await this.ctx.storage.get<PetshopState>("state");
     if (existing) {
+      let changed = false;
       // Backfill the App registry for a blob written before it existed (the
       // shop's state is one long-lived blob; a preview DO can predate this).
       // Persisted once so the seeded webhook secret is stable across reads.
       if (!existing.apps) {
         existing.apps = { [DEFAULT_INSTALLATION_ID]: defaultGithubApp() };
-        await this.ctx.storage.put("state", existing);
+        changed = true;
       }
+      // A single deployment-global failure counter could leak from an aborted
+      // run or be consumed by a concurrent client. Deliberately discard it
+      // while moving existing preview state to client-scoped fault injection.
+      if (!existing.tokenEndpointFailuresRemainingByClient) {
+        existing.tokenEndpointFailuresRemainingByClient = {};
+        changed = true;
+      }
+      if ("tokenEndpointFailuresRemaining" in existing) {
+        delete (existing as PetshopState & { tokenEndpointFailuresRemaining?: number })
+          .tokenEndpointFailuresRemaining;
+        changed = true;
+      }
+      if (changed) await this.ctx.storage.put("state", existing);
       return existing;
     }
     const initial: PetshopState = {
       accessTokenEpoch: 0,
+      accessTokenEpochs: {},
       clients: {
         [DEFAULT_CLIENT_ID]: {
           clientSecret: DEFAULT_CLIENT_SECRET,
@@ -127,7 +154,7 @@ export class PetshopStateDurableObject extends DurableObject {
       // not a hardcoded constant. Persisted immediately so it is stable
       // across reads; readable (and rotatable) through the backdoor.
       webhookSigningSecret: crypto.randomUUID(),
-      tokenEndpointFailuresRemaining: 0,
+      tokenEndpointFailuresRemainingByClient: {},
       apps: { [DEFAULT_INSTALLATION_ID]: defaultGithubApp() },
     };
     await this.ctx.storage.put("state", initial);
@@ -161,11 +188,13 @@ export class PetshopStateDurableObject extends DurableObject {
     return { clientId, clientSecret };
   }
 
-  async expireAccessTokens(): Promise<number> {
+  async expireAccessTokens(clientId: string): Promise<number> {
     const state = await this.#load();
-    state.accessTokenEpoch += 1;
+    const next = accessTokenEpochFor(state, clientId) + 1;
+    state.accessTokenEpochs ??= {};
+    state.accessTokenEpochs[clientId] = next;
     await this.#save(state);
-    return state.accessTokenEpoch;
+    return next;
   }
 
   async revokeRefreshToken(refreshTokenId: string): Promise<void> {
@@ -224,17 +253,20 @@ export class PetshopStateDurableObject extends DurableObject {
     return app;
   }
 
-  async setTokenEndpointFailures(times: number): Promise<void> {
+  async setTokenEndpointFailures(clientId: string, times: number): Promise<void> {
     const state = await this.#load();
-    state.tokenEndpointFailuresRemaining = times;
+    if (times === 0) delete state.tokenEndpointFailuresRemainingByClient[clientId];
+    else state.tokenEndpointFailuresRemainingByClient[clientId] = times;
     await this.#save(state);
   }
 
-  /** Atomically consume one scheduled failure; true means "fail this request". */
-  async consumeTokenEndpointFailure(): Promise<boolean> {
+  /** Atomically consume one scheduled failure for this client. */
+  async consumeTokenEndpointFailure(clientId: string): Promise<boolean> {
     const state = await this.#load();
-    if (state.tokenEndpointFailuresRemaining <= 0) return false;
-    state.tokenEndpointFailuresRemaining -= 1;
+    const remaining = state.tokenEndpointFailuresRemainingByClient[clientId] ?? 0;
+    if (remaining <= 0) return false;
+    if (remaining === 1) delete state.tokenEndpointFailuresRemainingByClient[clientId];
+    else state.tokenEndpointFailuresRemainingByClient[clientId] = remaining - 1;
     await this.#save(state);
     return true;
   }

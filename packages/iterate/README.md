@@ -125,6 +125,11 @@ iterate use-my-computer --project <id-or-slug>              # prompts for a name
 iterate use-my-computer --project <id-or-slug> --name jonasComputer
 ```
 
+From an active `iterate chat` session, type `/use-my-computer` instead. Chat
+uses the local OS username for the capability name: a user named `joebloggs`
+shares `itx.joebloggsComputer`. The provider stays project-wide and stops when
+chat exits.
+
 It's also built into the **menu-bar app** (`iterate approve --menubar`): flip
 **Use my computer** on to share, and the dropdown shows each call as it happens —
 a green dot appears in the menu bar while an agent is actively using your Mac.
@@ -178,6 +183,69 @@ Config resolution priority: `--config` flag > workspace match (walk up from cwd)
 
 If you run inside an `iterate/iterate` clone, the CLI auto-detects it and
 delegates to the local source instead of the published build.
+
+## GitHub AI linter
+
+Project workers can configure the packaged pull-request linter and call it
+explicitly from their event hook:
+
+```ts
+import { GithubAiLinter } from "iterate/starter-apps/github-ai-linter";
+import { IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
+
+export default class ProjectWorker extends IterateWorkerEntrypoint {
+  #aiLintApp = GithubAiLinter.create(this.env, {
+    policyVersion: "2",
+    rules: { glob: "rules/**/*.md", repoPath: "/repos/iterate" },
+  });
+
+  protected override async processEvent(event: StreamEvent): Promise<void> {
+    await this.#aiLintApp.processEvent(event);
+  }
+}
+```
+
+Each matched Markdown file supplies one rule. Its frontmatter contains a stable
+ID and JSON file globs; its body is the review invariant:
+
+```md
+---
+id: typescript/no-inferable-type-annotation
+files: ["**/*.{ts,tsx,mts,cts}", "!**/*.test.ts"]
+---
+
+Do not declare a type annotation that TypeScript can infer from the value.
+```
+
+The package owns GitHub event routing and the durable processor. Rules are read
+from one pinned repository commit for each webhook.
+
+## Stateful Todo app
+
+Project workers can route authenticated HTTP to the packaged Todo app:
+
+```ts
+import { TodoApp } from "iterate/starter-apps/todo";
+import { IterateWorkerEntrypoint } from "iterate/sdk";
+
+export default class ProjectWorker extends IterateWorkerEntrypoint {
+  #todoApp = TodoApp.create(this.env);
+
+  async fetch(request: Request): Promise<Response> {
+    using itx = await this.env.ITX.get();
+    const denied = await itx.auth.get({ policy: "project-member" }).fetch(request);
+    if (denied) return denied;
+    return this.#todoApp.fetch(request);
+  }
+}
+```
+
+`TodoApp.create(env)` keeps the stateful worker ref private and forwards over
+the fetch lane, so WebSocket upgrades reach the Durable Object. The physical
+package artifact contains the sqlfu-backed SQLite runtime and browser client;
+the project config does not carry Todo source or install Todo dependencies.
+Its durable identity remains `app-todo-live`, so moving an existing project to
+the factory preserves its rows.
 
 ## Publishing (maintainers)
 

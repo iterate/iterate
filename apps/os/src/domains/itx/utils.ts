@@ -1,10 +1,14 @@
 import { normalizePath } from "../durable-object-names.ts";
 import { BUILTIN_INTEGRATION_SLUGS } from "../integrations/utils.ts";
+import {
+  StreamContext as StreamContextSchema,
+  type StreamContext,
+} from "../projects/stream-context.ts";
 
 /**
  * Minimal ExecutionContext shape the RPC adapter layer needs.
  *
- * Server-side plumbing, not part of the client-facing ITX contract. It is
+ * Server-side plumbing, not part of the client-facing itx contract. It is
  * exported only so domain hosts can inject project/agent capability targets
  * without importing the full worker module.
  */
@@ -15,11 +19,6 @@ export type CfExecutionContext = {
    * strand every cold build the caller gave up on. Hosts without a real
    * runtime hook must still supply an explicit function. */
   waitUntil: ExecutionContext["waitUntil"];
-};
-
-type DisposableLike = {
-  [Symbol.dispose]?(): void;
-  dup?(): DisposableLike;
 };
 
 type InvokeCapabilityTarget = {
@@ -52,7 +51,10 @@ const RESERVED_DYNAMIC_PATH_SEGMENTS: ReadonlySet<string> = new Set([
 ]);
 
 export type ItxEntrypointScope = {
+  streamContext: StreamContext;
   path: string;
+  /** The host-minted lane determines whether this binding can reach delivery-only sinks. */
+  purpose: "stream-delivery" | "userspace";
   /**
    * `null` is the deployment-global scope: the trusted root a GLOBAL
    * (`projectId: null`) stream's delivery dial evaluates expressions against.
@@ -70,18 +72,20 @@ export type ItxEntrypointProps = ItxEntrypointScope;
  * Worker Loader cache keys, stateful worker Durable Object names, and
  * `env.ITX.get()` must all agree on the same project/path scope. Keeping this
  * normalization in one small helper prevents one call site from caching under
- * `"agents/demo"` while another resolves the runtime ITX target as
+ * `"agents/demo"` while another resolves the runtime itx target as
  * `"/agents/demo"`.
  */
 export function itxEntrypointProps(input: ItxEntrypointScope): ItxEntrypointProps {
   return {
+    streamContext: input.streamContext,
     path: normalizePath(input.path),
     projectId: input.projectId,
+    purpose: input.purpose,
   };
 }
 
 /**
- * Validates the host-minted binding props before giving worker code an ITX
+ * Validates the host-minted binding props before giving worker code an itx
  * capability. This is the trust boundary for dynamic workers: callers do not
  * choose their own scope, the hosting object mints it.
  */
@@ -89,14 +93,19 @@ export function scopeFromItxEntrypointProps(
   props: ItxEntrypointProps | undefined,
 ): ItxEntrypointScope {
   if (props === undefined) {
-    throw new Error("env.ITX.get() requires ITX binding props with projectId and path");
+    throw new Error("env.ITX.get() requires itx binding props with projectId, path, and purpose");
   }
   if (props.projectId !== null && props.projectId.trim() === "") {
     throw new Error("env.ITX.get() requires a non-empty projectId (or null for the global scope)");
   }
+  if (props.purpose !== "stream-delivery" && props.purpose !== "userspace") {
+    throw new Error("env.ITX.get() requires purpose to be userspace or stream-delivery");
+  }
   return {
+    streamContext: StreamContextSchema.parse(props.streamContext),
     path: normalizePath(props.path),
     projectId: props.projectId,
+    purpose: props.purpose,
   };
 }
 
@@ -116,20 +125,6 @@ export function itxEntrypointBinding(exports: unknown, props: ItxEntrypointProps
 }
 
 /**
- * The loopback ItxEntrypoint stub viewed by callers that use its RPC `get()`
- * (the scoped itx root) rather than binding it as a dynamic worker's env
- * fetcher. Same stub, honest type: `Fetcher` is what worker bindings need,
- * `get()` is what in-process callers (the stream delivery dial, scheduler
- * scripts) actually call. Both the stub and the root it returns are
- * per-acquisition and must be disposed by the caller.
- */
-type ItxLoopbackStub = { get(): Promise<unknown> } & Partial<Disposable>;
-
-export function itxLoopbackStub(exports: unknown, props: ItxEntrypointProps): ItxLoopbackStub {
-  return itxEntrypointBinding(exports, itxEntrypointProps(props)) as unknown as ItxLoopbackStub;
-}
-
-/**
  * Shape helper for the `__describe()` convention (see `Description` in
  * ./describe.ts): fills the always-present fields so every node returns
  * `{ instructions, types, children, ... }` even before it has real content.
@@ -145,33 +140,6 @@ export function describeNode<Extras extends object>(
   } & Extras,
 ): { instructions: string; types: string; children: Record<string, string> } & Extras {
   return { children: {}, types: "", ...input };
-}
-
-/**
- * Groups an authenticated child stub with the parent stubs that keep it alive.
- *
- * Cap'n Web callers often want `using project = connectItx({ projectId })`, but
- * that project stub is reached through a root session and authentication stub.
- * This proxy makes disposal and `dup()` preserve the whole ownership chain, so
- * disposing the child also tells the server it can release the parent stubs.
- */
-export function withOwnedRpcSession<T extends object>(stub: T, ...owned: DisposableLike[]): T {
-  let disposed = false;
-  return new Proxy(stub, {
-    get(target, key, receiver) {
-      if (key === Symbol.dispose) {
-        return () => {
-          if (disposed) return;
-          disposed = true;
-          disposeAll(target as DisposableLike, ...owned);
-        };
-      }
-      if (key === "dup") {
-        return () => withOwnedRpcSession(dup(target as DisposableLike), ...owned.map(dup));
-      }
-      return Reflect.get(target, key, receiver);
-    },
-  });
 }
 
 /**
@@ -194,6 +162,9 @@ const NAMESPACE_BUILTIN_ROOTS: ReadonlyMap<string, ReadonlySet<string>> = new Ma
     "integrations",
     new Set([
       ...BUILTIN_INTEGRATION_SLUGS,
+      // Fixed first-party receiver; unlike connection families it is absent
+      // from the public integration catalog.
+      "posthog",
       "list",
       "getConnection",
       "startOAuthFlow",
@@ -209,7 +180,7 @@ export function rejectBuiltinCollision(surfaceMembers: ReadonlySet<string>, path
   const root = path[0];
   if (!root) return;
   if (isReservedDynamicPathSegment(root)) {
-    throw new Error(`cannot provide capability "${root}": it is a reserved ITX path segment`);
+    throw new Error(`cannot provide capability "${root}": it is a reserved itx path segment`);
   }
   if (surfaceMembers.has(root)) {
     const reservedChildren = NAMESPACE_BUILTIN_ROOTS.get(root);
@@ -222,12 +193,12 @@ export function rejectBuiltinCollision(surfaceMembers: ReadonlySet<string>, path
       }
       return;
     }
-    throw new Error(`cannot provide capability "${root}": it is already on the ITX surface`);
+    throw new Error(`cannot provide capability "${root}": it is already on the itx surface`);
   }
 }
 
 /**
- * Builds the dotted-path fallback used by dynamic ITX capabilities.
+ * Builds the dotted-path fallback used by dynamic itx capabilities.
  *
  * Dynamic dotted fallback uses a function-backed proxy instead of a RpcTarget
  * instance: each missing property extends the path, and applying the function
@@ -308,8 +279,8 @@ export function createInvokeCapabilityPathProxy(
  * as `project.slack.chat.postMessage(...)`.
  *
  * KEY DESIGN IDEA: the RpcTarget with its known members sits *in front of*
- * the ITX Durable Object. Built-ins resolve here in the isolate; only
- * unknown roots fall through to `invokeCapability` (the ITX DO's dynamic
+ * the itx Durable Object. Built-ins resolve here in the isolate; only
+ * unknown roots fall through to `invokeCapability` (the itx DO's dynamic
  * table). So `itx.streams.get(...)` never makes a round trip to the DO just
  * to check whether `streams` was shadowed. The deliberate trade-off: a
  * dynamic capability can never shadow a built-in name — the built-in always
@@ -433,23 +404,4 @@ export function installPrototypeInvokeCapabilityFallback<
 
 function isReservedDynamicPathSegment(segment: string): boolean {
   return RESERVED_DYNAMIC_PATH_SEGMENTS.has(segment);
-}
-
-function dup(disposable: DisposableLike): DisposableLike {
-  if (disposable.dup === undefined) {
-    throw new Error("Cannot dup scoped RPC stub because an owned stub does not expose dup()");
-  }
-  return disposable.dup();
-}
-
-function disposeAll(...disposables: DisposableLike[]): void {
-  let firstError: unknown;
-  for (const disposable of disposables) {
-    try {
-      disposable[Symbol.dispose]?.();
-    } catch (error) {
-      firstError ??= error;
-    }
-  }
-  if (firstError !== undefined) throw firstError;
 }

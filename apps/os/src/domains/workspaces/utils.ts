@@ -1,28 +1,17 @@
 import { DurableObjectNameCodec, normalizePath } from "../durable-object-names.ts";
+import { CONFIG_REPO_PATH } from "../repos/paths.ts";
+import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
+import { resolveAbsolutePath } from "./paths.ts";
+import { WorkspaceProcessorContract, type WorkspaceMount } from "./workspace-processor-contract.ts";
 
 // A placeholder projectId used only to round-trip the PATH through the codec.
 // Its value never leaves this module — real workspace names carry the caller's
 // projectId — it just has to be a legal projectId so stringify/parse run.
 const ROUND_TRIP_PROJECT_ID = "prj_roundtrip";
 
-// Every workspace lives under this prefix — the domain-prefix convention every
-// other domain already follows (`/secrets/...`, `/repos/...`, `/sandboxes/...`),
-// so a project path names exactly one kind of object.
+// Every workspace lives under this collection prefix, matching the addressing
+// convention used by `/secrets/...`, `/repos/...`, and `/sandboxes/...`.
 const WORKSPACE_PATH_PREFIX = "/workspaces";
-
-/**
- * The project's ROOT workspace: the always-fresh, read-only materialization of
- * the config repo's main branch that every other workspace falls through to
- * on missing reads. Callers spell it `"/"` (`itx.workspaces.get("/")`); the
- * bare prefix is its Durable Object identity — previously unmintable (the
- * normalizer required a path UNDER the prefix), so no existing workspace can
- * collide with it.
- */
-export const ROOT_WORKSPACE_PATH = WORKSPACE_PATH_PREFIX;
-
-export function isRootWorkspacePath(path: string): boolean {
-  return path === ROOT_WORKSPACE_PATH;
-}
 
 /**
  * Where an agent's own workspace (`itx.workspace`) lives: the agent path under
@@ -35,24 +24,22 @@ export function agentWorkspacePath(agentPath: string): string {
 }
 
 /**
- * The workspace path is durable identity (it becomes the Durable Object name),
- * so this guard sits at the edge where callers choose a path — same role as
- * `assertSandboxPath` / `normalizeAgentPath`. Beyond the prefix, the only
- * real constraint is codec safety: the path must survive the
- * `{projectId}.iterate{path}` name round trip unchanged, so two spellings can
- * never mint two Durable Objects that parse back to one canonical path.
+ * The workspace path is durable identity (it becomes the Durable Object name
+ * AND the workspace's stream path), so this guard sits at the edge where
+ * callers choose a path — same role as `assertSandboxPath` / `parseAgentPath`.
+ * Beyond the prefix, the only real constraint is codec safety: the path must
+ * survive the `{projectId}.iterate{path}` name round trip unchanged, so two
+ * spellings can never mint two Durable Objects that parse back to one
+ * canonical path.
  */
 export function normalizeWorkspacePath(path: string): string {
   const normalized = normalizePath(path);
-  // "/" is the caller spelling of the root workspace; the bare prefix is its
-  // durable identity. Both normalize to the same Durable Object.
-  if (normalized === "/" || normalized === ROOT_WORKSPACE_PATH) return ROOT_WORKSPACE_PATH;
   if (!normalized.startsWith(`${WORKSPACE_PATH_PREFIX}/`)) {
     throw new Error(
       `workspace paths live under ${WORKSPACE_PATH_PREFIX}/ (an agent's workspace at ` +
         `${WORKSPACE_PATH_PREFIX}<agent path>, standalone ones under ` +
-        `${WORKSPACE_PATH_PREFIX}/<anything>, and "/" is the project's read-only root ` +
-        `workspace tracking the repo's main branch), got "${normalized}"`,
+        `${WORKSPACE_PATH_PREFIX}/<anything>; there is no root workspace — repos are ` +
+        `mounted into each workspace instead), got "${normalized}"`,
     );
   }
   const roundTripped = DurableObjectNameCodec.parse(
@@ -65,4 +52,118 @@ export function normalizeWorkspacePath(path: string): string {
     );
   }
   return normalized;
+}
+
+/**
+ * The mount table every workspace is born with unless the caller passes its
+ * own: the project's config repo at the workspace root, committable — which
+ * makes a fresh workspace behave exactly like the old single-parent overlay
+ * (reads fall through to the config repo's main, `git.commit` lands there).
+ */
+function defaultWorkspaceMounts(): Record<string, WorkspaceMount> {
+  return { "/": { policy: "commit-to-main", repoPath: CONFIG_REPO_PATH } };
+}
+
+/**
+ * The mount-table door guard, shared by `create` and `configure`: raw stream
+ * appends bypass it (and merely reduce into config), but every platform door
+ * validates here so a bad table fails loudly at the caller instead of quietly
+ * mis-routing reads. Returns the table with normalized mount-point keys.
+ * Values may be partial (configure patches) or null (unmount) — `repoPath` is
+ * checked when present.
+ */
+export function normalizeWorkspaceMountKeys<
+  Value extends { policy?: string; repoPath?: string | undefined } | null,
+>(mounts: Record<string, Value>): Record<string, Value> {
+  const normalized: Record<string, Value> = {};
+  for (const [key, value] of Object.entries(mounts)) {
+    const path = resolveAbsolutePath(key);
+    if (path.split("/").includes(".git")) {
+      throw new Error(`mount path "${key}" contains a reserved .git segment`);
+    }
+    if (path in normalized) {
+      throw new Error(`duplicate mount path "${path}" — mount paths must be unique`);
+    }
+    if (value !== null && value.repoPath !== undefined) {
+      const repoPath = normalizePath(value.repoPath);
+      if (!repoPath.startsWith("/repos/")) {
+        throw new Error(`mount repoPath must name a /repos/** stream, got "${value.repoPath}"`);
+      }
+      normalized[path] = { ...value, repoPath };
+      continue;
+    }
+    normalized[path] = value;
+  }
+  return normalized;
+}
+
+/**
+ * The complete atomic workspace birth batch: the `workspace/created` birth
+ * certificate, an optional initial `workspace/configured` patch merged over
+ * the default mount table, and the processor subscription. The created and
+ * configured keys contain identity only: identical retries dedupe, while a
+ * retry with a different initial table fails through the stream's
+ * same-key-different-body check.
+ */
+export function workspaceCreationEvents(input: {
+  mounts?: Record<string, WorkspaceMount>;
+  path: string;
+  projectId: string;
+}) {
+  const desiredMounts =
+    input.mounts === undefined
+      ? undefined
+      : WorkspaceProcessorContract.stateSchema.shape.config.parse({
+          mounts: normalizeWorkspaceMountKeys(input.mounts),
+        }).mounts;
+  const defaultMounts = defaultWorkspaceMounts();
+  return [
+    WorkspaceProcessorContract.buildEvent({
+      type: "events.iterate.com/workspace/created",
+      idempotencyKey: `workspace-created:${input.projectId}:${input.path}`,
+      payload: { config: { mounts: defaultMounts } },
+    }),
+    ...(desiredMounts === undefined
+      ? []
+      : [
+          WorkspaceProcessorContract.buildEvent({
+            type: "events.iterate.com/workspace/configured",
+            idempotencyKey: `workspace-configured-at-creation:${input.projectId}:${input.path}`,
+            payload: { config: { mounts: desiredMounts } },
+          }),
+        ]),
+    buildDurableObjectProcessorSubscriptionConfiguredEvent({
+      durableObjectName: DurableObjectNameCodec.stringify({
+        path: input.path,
+        projectId: input.projectId,
+      }),
+      idempotencyKey: `stream/subscription-configured:${DurableObjectNameCodec.stringify({
+        path: input.path,
+        projectId: input.projectId,
+      })}#${WorkspaceProcessorContract.slug}`,
+      processor: ["workspaces", ["get", input.path], "processor"],
+      processorSlug: WorkspaceProcessorContract.slug,
+    }),
+  ];
+}
+
+/**
+ * The repo write lane wants text as text (reviewable diffs on GitHub mirrors)
+ * and bytes as base64; a workspace file is just bytes. Valid UTF-8 rides as
+ * a string, anything else (images, PDFs) as base64 — the same convention as
+ * `files.put`.
+ */
+export function encodeRepoContent(
+  bytes: Uint8Array,
+): { content: string } | { contentBase64: string } {
+  try {
+    return { content: new TextDecoder("utf-8", { fatal: true }).decode(bytes) };
+  } catch {
+    let binary = "";
+    // Chunked: String.fromCharCode(...bytes) overflows the arg limit on big files.
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    }
+    return { contentBase64: btoa(binary) };
+  }
 }

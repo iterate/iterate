@@ -1,84 +1,214 @@
 import { DurableObject } from "cloudflare:workers";
-import { WorkspaceFileSystem } from "@cloudflare/shell";
-import { createGit } from "@cloudflare/shell/git";
-import type { Env } from "../../env.ts";
+import { Workspace } from "@cloudflare/shell";
+import type {
+  StreamEventInput,
+  StreamSubscriberWakeRequest,
+  StreamSubscriberWakeResponse,
+} from "iterate/processors";
+import { isStreamOffsetConflictError } from "iterate/processors";
+import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
+import { minimatch } from "minimatch";
+import { workerVersion, type Env } from "../../env.ts";
+import { trustedInternalAuthContext } from "../../auth.ts";
+import { StreamProcessorRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { CONFIG_REPO_PATH } from "../repos/utils.ts";
 import type {
   EditWorkspaceFileInput,
   EditWorkspaceFileResult,
-  WorkspaceChange,
-  WorkspaceFileInfo,
+  WorkspaceCommitInput,
+  WorkspaceCommitResult,
   WorkspaceGitLogEntry,
-  WorkspacePublishResult,
+  WorkspaceGitLogInput,
+  WorkspaceStatus,
 } from "./types.ts";
-import { UnboundedWorkspace, WorkspaceCore } from "./workspace-core.ts";
-import { ROOT_WORKSPACE_PATH, isRootWorkspacePath } from "./utils.ts";
+import {
+  WorkspaceProcessorContract,
+  type WorkspaceConfig,
+  type WorkspaceConfigPatch,
+} from "./workspace-processor-contract.ts";
+import {
+  mergeWorkspaceConfigPatch,
+  WorkspaceProcessor,
+} from "./workspace-processor-implementation.ts";
+import {
+  isVirtualDirectoryPath,
+  reRoutedPaths,
+  routeMount,
+  WorkspaceCore,
+  type MountRepoAccess,
+} from "./workspace-core.ts";
+import { normalizeWorkspaceMountKeys } from "./utils.ts";
+import type { CollabPull, CollabPush, CollabPushResult } from "./collab-engine.ts";
+import { CollabHost, type CollabPresenceFlat } from "./collab-host.ts";
+import { sqliteCollabStore } from "./collab-store.ts";
+
+const PROCESSOR_SLUG = WorkspaceProcessorContract.slug;
+// Configuration appends assert their exact stream offset (no interleaved
+// append can invalidate the validated plan); a conflict re-plans against the
+// fresh state. Bounded: past this, something is genuinely storming the stream.
+const MAX_CONFIGURE_ATTEMPTS = 5;
+// The workspace reduce is pure and normally completes during catchUp; if
+// ingestion is broken, fail the command instead of retaining its RPC forever.
+const INGEST_WAIT_TIMEOUT_MS = 15_000;
 
 /**
- * A durable workspace: a private virtual filesystem living in this Durable
- * Object's SQLite storage (via `@cloudflare/shell`'s `Workspace`), in one of
- * two modes decided by its path:
+ * One workspace: an EVENT-SOURCED, MOUNT-ROUTED durable workspace.
  *
- * ROOT (`/workspaces`, spelled `"/"` by callers): the project's always-fresh,
- * READ-ONLY materialization of the config repo's main branch. Every read
- * checks the Repo Durable Object's durable head cache (one cheap RPC — the
- * repo's read-your-write boundary, so a commit is visible here the moment
- * `commitFiles` returns) and re-clones only when main actually moved.
+ * Identity and configuration are stream facts — `workspace/created` is the
+ * birth certificate (carrying the initial config), `workspace/configured`
+ * patches it — reduced by {@link WorkspaceProcessor} under the ordinary
+ * registry/runner machinery. The mount table in that reduced config routes
+ * everything else: reads fall through per subtree to the longest-prefix
+ * mount's repo at HEAD, writes land in this DO's private local layer
+ * (DO-SQLite via `@cloudflare/shell`, R2 spill past ~1.5MB), and
+ * `gitCommit({ scope })` turns one mount's changes into one commit on THAT
+ * repo's main via its own `commitFiles` lane.
  *
- * OVERLAY (everything else): a copy-on-write layer over the root. Writes land
- * in this DO's own filesystem; reads try the local layer first and fall
- * through to the root workspace on a miss; deletes of parent files leave
- * whiteouts so the parent copy stays hidden. There is NO clone — a fresh
- * overlay workspace is usable instantly and always sees latest main through
- * the fall-through, until a local write pins a path.
+ * A workspace must be explicitly created before any filesystem or
+ * configuration method can use it. Addressing the Durable Object never births
+ * it; a missing birth certificate is a loud command error.
  *
- * Truth lives in the filesystem; git is the COMMIT mechanism, not the
- * storage: `gitCommit` turns the overlay's changes (local layer minus
- * whiteouts and .gitignored paths) into ONE ordinary commit on the config
- * repo's main branch, through the Repo Durable Object's own `commitFiles`
- * lane — so the durable head cache, worker rebuilds, and any GitHub mirror
- * fire exactly as for a direct `itx.repo` commit. There are no workspace
- * branches; commit = live on main.
+ * The filesystem/overlay semantics live in {@link WorkspaceCore}; this DO is
+ * the thin host wiring storage, the processor's reduced state, and repo stubs
+ * together.
  *
- * Clone coordinates come from the project Repo Durable Object's `gitAccess()`
- * (the documented internal DO-to-DO surface, same as the sandbox domain), so
- * repo tokens never appear on this object's public surface.
- *
- * All of the above semantics live in {@link WorkspaceCore} — a host-agnostic
- * library object constructed with explicit deps (cloudflare/workspace's
- * shape). This DO is the thin host: it parses its name, wires its storage,
- * git, and sibling-DO stubs into the core, and delegates.
+ * The class is deliberately NOT named `WorkspaceDurableObject`: declarative
+ * Durable Object exports key namespaces by class name, and the retired
+ * single-parent-overlay workspace occupied that name — reusing it would
+ * inherit the old namespace's storage. Its uncommitted overlays were
+ * disposable by contract (committed state lives on main), so that namespace
+ * is simply dropped.
  */
-export class WorkspaceDurableObject extends DurableObject<Env> {
+export class WorkspaceV2DurableObject extends DurableObject<Env> {
+  /** Report this incarnation's code version for the deployment rollout gate. */
+  deploymentVersion(): string {
+    return workerVersion(this.env);
+  }
+
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
-  readonly #isRoot = isRootWorkspacePath(this.#name.path);
-  readonly #workspace = new UnboundedWorkspace({
+  readonly #stream = new StreamRpcTarget({
+    auth: trustedInternalAuthContext(),
+    path: this.#name.path,
+    projectId: this.#name.projectId,
+  });
+  readonly #registry = createStreamProcessorRegistry(this.ctx, {
+    stream: this.#stream,
+    path: this.#name.path,
+    projectId: this.#name.projectId,
+    version: workerVersion(this.env),
+  });
+  // NO recovery on purpose: WorkspaceProcessor is a pure reducer (no
+  // processEvent, no runInBackground), so an eviction can never lose
+  // consequential background work (see the registry module doc's rule).
+  readonly #workspaceProcessor = this.#registry.register(
+    new WorkspaceProcessor({
+      stream: this.#stream,
+      path: this.#name.path,
+      projectId: this.#name.projectId,
+    }),
+  );
+  // Runner-backed reads: the runner owns the cursors; every read this DO
+  // serves goes through the runner's committed progress.
+  readonly #reads = this.#registry.reads(this.#workspaceProcessor);
+
+  readonly #workspace = new Workspace({
     sql: this.ctx.storage.sql,
     name: () => this.ctx.id.name,
     // Files past @cloudflare/shell's inline threshold (1.5MB — the DO SQLite
-    // row cap zone) spill transparently to R2, so workspace files have no
-    // practical size limit. The bucket is shared with the files domain, whose
-    // keys always start "{projectId}.iterate" (project ids are prj_-prefixed)
-    // — the "workspace/" prefix can never collide with them. The shell owns
-    // the object lifecycle: rm/mv/overwrite/recursive-delete all clean up the
-    // bucket objects, so reset()'s wipe leaves nothing orphaned.
+    // row cap zone) spill transparently to R2. Own prefix: the retired
+    // overlay-workspace namespace used "workspace/" and could mint the SAME
+    // name string for the same path; their bucket objects must never collide.
     r2: this.env.FILES_BUCKET,
-    r2Prefix: `workspace/${this.ctx.id.name!}`,
+    r2Prefix: `workspace-v2/${this.ctx.id.name!}`,
   });
   readonly #core = new WorkspaceCore({
-    git: createGit(new WorkspaceFileSystem(this.#workspace), "/"),
     kv: this.ctx.storage.kv,
-    mode: this.#isRoot ? "root" : "overlay",
-    parent: () => this.#rootWorkspaceStub(),
-    repo: () => this.#projectRepoStub(),
+    // Fresh per operation: every public op below runs #assertCreated() first,
+    // so this thunk reads already-fresh reduced state.
+    mounts: async () => this.#currentConfig().mounts,
+    repo: (repoPath) => this.#repoStub(repoPath),
     workspace: this.#workspace,
   });
 
+  #repoStub(repoPath: string): MountRepoAccess {
+    return this.env.REPO.getByName(
+      DurableObjectNameCodec.stringify({ path: repoPath, projectId: this.#name.projectId }),
+    );
+  }
+
+  #currentConfig(): WorkspaceConfig {
+    return this.#reads.currentState.config;
+  }
+
+  /** Pull the reduced state current and require an explicit birth certificate.
+   * STRICT catch-up (throws): every public operation routes and
+   * classifies against `currentState.config`, and a swallowed catch-up failure
+   * would let it proceed on a stale mount table — misrouting reads and commits
+   * — when a committed `configured` event exists but has not reduced. Failing
+   * the operation loudly is the only safe disposition. */
+  async #assertCreated(): Promise<void> {
+    await this.#reads.catchUp();
+    if (this.#reads.currentState.birthCertificate !== null) return;
+    throw new Error(
+      `workspace "${this.#name.path}" does not exist — create it with itx.workspaces.get(${JSON.stringify(this.#name.path)}).create({})`,
+    );
+  }
+
+  /**
+   * The ONE validated configuration transition: plan against the freshest
+   * reduced state, append with an exact-offset assertion (an interleaved raw
+   * append conflicts instead of silently invalidating the plan), re-plan on
+   * conflict, and return only after the reduced state provably includes the
+   * change. Runs inside the core's serialized chain via its callers.
+   */
+  async #applyConfigTransition(
+    plan: (current: WorkspaceConfig) => WorkspaceConfigPatch | null,
+  ): Promise<WorkspaceConfig> {
+    for (let attempt = 1; attempt <= MAX_CONFIGURE_ATTEMPTS; attempt++) {
+      // Pin BOTH heads in one read: the reduction barrier waits for the
+      // DURABLE head — a processor catch-up never sees ephemeral rows, so
+      // waiting for the raw head would wedge on a trailing ephemeral suffix —
+      // while the CAS below asserts against the RAW head, where offsets are
+      // actually assigned. waitUntilEvent THROWS on a wedged catch-up, so a
+      // stale runner can never validate a plan or report convergence
+      // silently; the exact-offset append turns any raw/durable skew into a
+      // plain conflict retry.
+      const { maxDurableOffset, maxOffset: rawHead } =
+        await this.#stream.durableObjectStub.getHeadOffsets();
+      await this.#reads.waitUntilEvent({
+        offset: maxDurableOffset,
+        timeoutMs: INGEST_WAIT_TIMEOUT_MS,
+      });
+      const current = this.#currentConfig();
+      const patch = plan(current);
+      if (patch === null) return current;
+      const next = mergeWorkspaceConfigPatch(current, patch);
+      // Ownership/collision safety, judged inside the lock against the exact
+      // tables this append will transition between.
+      await this.#core.assertMountTransitionSafe(current.mounts, next.mounts);
+      try {
+        const [event] = await this.#stream.append({
+          ...WorkspaceProcessorContract.buildEvent({
+            type: "events.iterate.com/workspace/configured",
+            payload: { config: patch },
+          }),
+          offset: rawHead + 1,
+        } as StreamEventInput);
+        await this.#reads.catchUp();
+        await this.#reads.waitUntilEvent({
+          offset: event!.offset,
+          timeoutMs: INGEST_WAIT_TIMEOUT_MS,
+        });
+        return this.#currentConfig();
+      } catch (error) {
+        if (!isStreamOffsetConflictError(error) || attempt === MAX_CONFIGURE_ATTEMPTS) throw error;
+      }
+    }
+    throw new Error("unreachable configuration transition retry state");
+  }
+
   whoami(): string {
-    return this.#isRoot
-      ? `workspace ${this.#name.projectId}:/ (root — read-only mirror of the config repo's main branch)`
-      : `workspace ${this.#name.projectId}:${this.#name.path} (overlay over "/")`;
+    return `workspace ${this.#name.projectId}:${this.#name.path} (event-sourced, mount-routed)`;
   }
 
   /** Abort the current Durable Object incarnation; the next request boots it again. */
@@ -86,149 +216,382 @@ export class WorkspaceDurableObject extends DurableObject<Env> {
     this.ctx.abort("kill requested");
   }
 
-  #projectRepoStub() {
-    return this.env.REPO.getByName(
-      DurableObjectNameCodec.stringify({
-        path: CONFIG_REPO_PATH,
-        projectId: this.#name.projectId,
+  // -- lifecycle / configuration ----------------------------------------------
+
+  /** The reduced configuration (birth certificate + configured patches). */
+  async getConfig(): Promise<WorkspaceConfig> {
+    await this.#assertCreated();
+    return this.#currentConfig();
+  }
+
+  /**
+   * Append a `workspace/configured` patch and return the resulting reduced
+   * config (read-your-writes: the command only returns once the reduced state
+   * provably includes the event it appended). The patch deep-merges per mount point:
+   * unknown keys add mounts, partial values edit existing mounts, `null`
+   * removes one. The MERGED result is validated here before the append, so a
+   * patch that would leave a broken table fails loudly at the door.
+   */
+  async configure(input: { config: WorkspaceConfigPatch }): Promise<WorkspaceConfig> {
+    await this.#assertCreated();
+    const config: WorkspaceConfigPatch =
+      input.config.mounts === undefined
+        ? input.config
+        : { ...input.config, mounts: normalizeWorkspaceMountKeys(input.config.mounts) };
+    // Under the collab BARRIER (settle + run as ONE coordinated job): live
+    // sessions settle so their dirtiness is visible to the transition-safety
+    // check, and no debounce flush can interleave between that settle and the
+    // transition itself — the same fence commits use.
+    return this.#collab.barrier(async () => {
+      const before = this.#currentConfig().mounts;
+      // Serialized with the core's mutations and commits: an unmount or repo
+      // swap must never interleave a commit that already classified against
+      // the old table.
+      const applied = await this.#core.runExclusive(() =>
+        this.#applyConfigTransition((current) => {
+          // The reduce is deliberately TOLERANT (a committed event must never
+          // wedge the reducer), so the door supplies the loudness — validated
+          // against the exact state this append will land on (the offset
+          // assertion makes an interleaved append a retry, not a silent drop):
+          // every non-null patch entry must survive into a complete mount.
+          const merged = mergeWorkspaceConfigPatch(current, config);
+          for (const [key, value] of Object.entries(config.mounts ?? {})) {
+            if (value !== null && !(key in merged.mounts)) {
+              throw new Error(
+                `mount "${key}" patch does not produce a complete mount — new mounts need { repoPath, policy }`,
+              );
+            }
+          }
+          return config;
+        }),
+      );
+      // A session whose OWNING mount changed — removed, re-pointed, or the
+      // path stolen by a newly added nested mount — would keep serving the
+      // old repo's text as the live truth (and flush it into the NEW mount's
+      // repo). Ownership is routeMount's longest-prefix rule, diffed across
+      // the transition; the barrier settled dirty work, so nothing is lost.
+      const live = this.#collab.livePaths();
+      const doomed = new Set(reRoutedPaths(before, applied.mounts, live));
+      // A path that BECAME a virtual directory (a nested mount landed at or
+      // below it) keeps its owner but can't stay a live file — reads would
+      // serve a file at a directory path and its flush would die in the
+      // mount-point write guard, wedging every settle barrier.
+      const becameDirectories: string[] = [];
+      for (const path of live) {
+        if (isVirtualDirectoryPath(applied.mounts, path)) {
+          doomed.add(path);
+          becameDirectories.push(path);
+        }
+      }
+      if (doomed.size > 0) this.#collab.endSessions([...doomed]);
+      // The barrier's settle may have flushed an overlay FILE at a path the
+      // new table makes a DIRECTORY — a ghost that would shadow the mounted
+      // subtree (overlay copies win over the virtual-dir mask). Drop it; the
+      // mount transition is the destructive act here, same posture as
+      // endSessions discarding unflushed keystrokes.
+      for (const path of becameDirectories) {
+        await this.#core.revert(path).catch(() => {});
+      }
+      return applied;
+    });
+  }
+
+  // A live collaborative session is the current truth for its path, and the
+  // durable session table (not this incarnation's memory) decides liveness —
+  // so every fs method routes through the host's gateway first, and every
+  // settled-truth classifier runs the host's reconcile barrier first. See
+  // collab-host.ts for the invariants.
+  readonly #collab = new CollabHost({
+    fs: this.#core,
+    // The live pulse: every accepted batch appends an EPHEMERAL stream event
+    // (delivered to live subscribers, never replayed — the llm-chunk lane's
+    // idiom), so the workspace's event sheet breathes while people type.
+    onBroadcast: (event) => {
+      void this.#stream
+        .append({
+          ephemeral: true,
+          payload: {
+            clients: [...new Set(event.ops.map((op) => op.clientId))],
+            path: event.path,
+            toVersion: event.toVersion,
+          },
+          type: "events.iterate.com/workspace/live-edit",
+        } as StreamEventInput)
+        .catch(() => {});
+    },
+    store: sqliteCollabStore(this.ctx.storage),
+  });
+
+  // -- filesystem ----------------------------------------------------------------
+
+  async readFile(path: string): Promise<string | null> {
+    await this.#assertCreated();
+    return (await this.#collab.readFile(path)) ?? this.#core.readFile(path);
+  }
+
+  async readFileBytes(path: string): Promise<Uint8Array | null> {
+    await this.#assertCreated();
+    return (await this.#collab.readFileBytes(path)) ?? this.#core.readFileBytes(path);
+  }
+
+  /**
+   * Batched reads for board-style consumers: ONE RPC for the whole file set
+   * instead of a call per file through a client chain. Live sessions route
+   * exactly like readFile; missing paths map to null. Bounded loudly.
+   */
+  async readFiles(paths: string[]): Promise<Record<string, string | null>> {
+    await this.#assertCreated();
+    if (paths.length > 10_000) throw new Error("readFiles caps at 10000 paths per call");
+    const result: Record<string, string | null> = {};
+    // Live sessions and overlay copies first (local, concurrent); the mount
+    // fall-through is grouped so each mount pays ONE snapshot RPC — fanning
+    // per-file reads at a repo object is the documented overload.
+    const leftover: string[] = [];
+    await Promise.all(
+      paths.map(async (path) => {
+        const live = await this.#collab.readFile(path);
+        if (live !== null) {
+          result[path] = live;
+          return;
+        }
+        const local = await this.#core.readOverlayFile(path);
+        if (local !== null) {
+          result[path] = local;
+          return;
+        }
+        leftover.push(path);
       }),
     );
+    // The core groups the fall-through per mount and asks each repo for
+    // exactly the routed paths — the mount table is read THERE, after the
+    // local awaits, so a configure landing during them routes exactly as a
+    // fresh per-file readFile would.
+    Object.assign(result, await this.#core.readMountFiles(leftover));
+    return result;
   }
 
-  #rootWorkspaceStub() {
-    return this.env.WORKSPACE.getByName(
-      DurableObjectNameCodec.stringify({
-        path: ROOT_WORKSPACE_PATH,
-        projectId: this.#name.projectId,
-      }),
-    );
+  /** A path's mount content at HEAD — what uncommitted work diffs against. */
+  async readBase(path: string): Promise<string | null> {
+    await this.#assertCreated();
+    return this.#core.readBase(path);
   }
 
-  // -- lifecycle --------------------------------------------------------------
-
-  /**
-   * Wipe this workspace back to pristine. Root: the next read re-materializes
-   * main (the escape hatch for a wedged checkout). Overlay: the local layer
-   * and every whiteout vanish, so the workspace shows exactly the parent
-   * again — uncommitted work is lost (committed state lives on main).
-   */
-  reset(): Promise<void> {
-    return this.#core.reset();
+  async exists(path: string): Promise<boolean> {
+    await this.#assertCreated();
+    // A live session IS existence: a collab-created file can be readable
+    // before its first flush lands in the overlay.
+    return this.#collab.isLive(path) || this.#core.exists(path);
   }
 
-  /**
-   * Un-pin one path: drop the local copy (file or subtree) and clear the
-   * whiteouts at or below it, so the path resumes following latest main
-   * through the fall-through. The surgical sibling of `reset()` — reverting
-   * "/worker.ts" after an edit brings back main's version, reverting a
-   * deleted path un-deletes it. Scoped strictly at-or-below: an ancestor
-   * whiteout (a deleted parent directory) still masks the path until that
-   * ancestor is reverted too.
-   */
-  revert(path: string): Promise<void> {
-    return this.#core.revert(path);
-  }
-
-  // -- filesystem (mirrors @cloudflare/shell's Workspace surface, merged) ----
-
-  readFile(path: string): Promise<string | null> {
-    return this.#core.readFile(path);
-  }
-
-  readFileBytes(path: string): Promise<Uint8Array | null> {
-    return this.#core.readFileBytes(path);
-  }
-
-  stat(path: string): Promise<WorkspaceFileInfo | null> {
-    return this.#core.stat(path);
-  }
-
-  exists(path: string): Promise<boolean> {
-    return this.#core.exists(path);
-  }
-
-  readDir(dir?: string): Promise<WorkspaceFileInfo[]> {
-    return this.#core.readDir(dir);
-  }
-
-  glob(pattern: string): Promise<WorkspaceFileInfo[]> {
-    return this.#core.glob(pattern);
-  }
-
-  /**
-   * Every file path in the merged view (absolute, sorted, no directories).
-   * The one-RPC bulk listing overlays use to classify their local layer
-   * against the parent — and the cheap way for anything else to see a
-   * workspace's full extent without a readDir walk.
-   */
-  listAllFiles(): Promise<string[]> {
-    return this.#core.listAllFiles();
-  }
-
-  writeFile(path: string, content: string): Promise<void> {
+  async writeFile(path: string, content: string): Promise<void> {
+    await this.#assertCreated();
+    if (await this.#collab.writeFile(path, content)) return;
     return this.#core.writeFile(path, content);
   }
 
-  writeFileBytes(path: string, data: Uint8Array): Promise<void> {
+  async writeFileBytes(path: string, data: Uint8Array): Promise<void> {
+    await this.#assertCreated();
+    // A binary replace ends any text session (unflushed edits discarded by
+    // design — same posture as delete/reset).
+    this.#collab.endSessions([path]);
     return this.#core.writeFileBytes(path, data);
   }
 
-  appendFile(path: string, content: string): Promise<void> {
-    return this.#core.appendFile(path, content);
+  async edit(input: EditWorkspaceFileInput): Promise<EditWorkspaceFileResult> {
+    await this.#assertCreated();
+    return (await this.#collab.edit(input)) ?? this.#core.edit(input);
   }
 
-  deleteFile(path: string): Promise<boolean> {
+  async deleteFile(path: string): Promise<boolean> {
+    await this.#assertCreated();
+    // End the session BEFORE the whiteout lands, so no flush can resurrect.
+    this.#collab.endSessions([path]);
     return this.#core.deleteFile(path);
   }
 
-  edit(input: EditWorkspaceFileInput): Promise<EditWorkspaceFileResult> {
-    return this.#core.edit(input);
+  async listAllFiles(): Promise<string[]> {
+    await this.#assertCreated();
+    // Live-only sessions (opened on a missing path, unflushed) are readable
+    // and exist — listings must agree with readFile/exists.
+    const merged = new Set(await this.#core.listAllFiles());
+    for (const path of this.#collab.livePaths()) merged.add(path);
+    return [...merged].sort();
   }
 
-  mkdir(path: string, opts?: { recursive?: boolean }): Promise<void> {
-    return this.#core.mkdir(path, opts);
+  async glob(pattern: string): Promise<string[]> {
+    // listAllFiles runs the birth assertion (same error, no duplicate round).
+    const all = await this.listAllFiles();
+    return all.filter((path) => minimatch(path, pattern, { dot: true }));
   }
 
-  rm(path: string, opts?: { force?: boolean; recursive?: boolean }): Promise<void> {
-    return this.#core.rm(path, opts);
+  async reset(): Promise<void> {
+    await this.#assertCreated();
+    this.#collab.endSessions();
+    return this.#core.reset();
   }
 
-  cp(src: string, dest: string, opts?: { recursive?: boolean }): Promise<void> {
-    return this.#core.cp(src, dest, opts);
+  async revert(path: string): Promise<void> {
+    await this.#assertCreated();
+    this.#collab.endSessions([path]);
+    return this.#core.revert(path);
   }
 
-  mv(src: string, dest: string, opts?: { recursive?: boolean }): Promise<void> {
-    return this.#core.mv(src, dest, opts);
+  // -- collaborative sessions (see collab-host.ts / collab-engine.ts) --------------
+
+  async collabOpen(path: string): Promise<{ content: string; epoch: string; version: number }> {
+    await this.#assertCreated();
+    // Mount points and their virtual ancestors are DIRECTORIES in the merged
+    // view — a live session there would seed an empty "file" that shadows the
+    // subtree and whose flush dies inside writeFile's mount-point guard,
+    // wedging every workspace-wide barrier until the session ends.
+    if (isVirtualDirectoryPath(this.#currentConfig().mounts, path)) {
+      throw new Error(`cannot open a collaborative session on directory "${path}"`);
+    }
+    // A whiteouted path is DELETED: an empty-seed birth would make it exist
+    // again (and its first flush would clear the whiteout, undoing the
+    // delete). Recreation is an explicit write, never an open.
+    if (this.#core.isMaskedFromMount(path) && (await this.#core.readOverlayFile(path)) === null) {
+      throw new Error(`"${path}" was deleted — write it to recreate before opening a session`);
+    }
+    const opened = await this.#collab.open(path);
+    void this.#stream
+      .append({
+        ephemeral: true,
+        payload: { epoch: opened.epoch, path, version: opened.version },
+        type: "events.iterate.com/workspace/session-opened",
+      } as StreamEventInput)
+      .catch(() => {});
+    return opened;
   }
 
-  // -- publish (git) ----------------------------------------------------------
-
-  /**
-   * The overlay's changes relative to the parent: local files that shadow a
-   * parent file ("modified" — shadowed, not content-diffed), local files the
-   * parent lacks ("added"), and whiteouted parent files ("deleted").
-   * `.gitignore`d local files (e.g. spilled script results) are omitted, same
-   * as `gitCommit` will omit them.
-   */
-  gitStatus(): Promise<WorkspaceChange[]> {
-    return this.#core.gitStatus();
+  async collabPush(input: CollabPush): Promise<CollabPushResult> {
+    await this.#assertCreated();
+    return this.#collab.push(input);
   }
 
-  /**
-   * Commit the workspace's changes (local layer minus .gitignored paths, plus
-   * whiteout deletions) as ONE ordinary commit on the config repo's main
-   * branch, via the Repo DO's `commitFiles` lane. On success the overlay is
-   * cleared — the workspace mirrors the new main.
-   */
-  gitCommit(input: {
-    author?: { email: string; name: string };
-    message: string;
-  }): Promise<WorkspacePublishResult> {
-    return this.#core.gitCommit(input);
+  /** Long-poll lane: resolves when ops land past afterVersion (or ~20s);
+   * with afterPresence given, also when cursors moved past that generation. */
+  async collabWait(
+    path: string,
+    epoch: string,
+    afterVersion: number,
+    clientId?: string,
+    afterPresence?: number,
+  ): Promise<CollabPull> {
+    await this.#assertCreated();
+    return this.#collab.wait(path, epoch, afterVersion, clientId, afterPresence);
   }
 
-  /** The config repo's main-branch history, newest first. */
-  gitLog(input: { limit?: number } = {}): Promise<WorkspaceGitLogEntry[]> {
+  /** Announce (or clear, with null) one client's cursor — quiet decoration,
+   * fanned out to session waiters coalesced. */
+  async collabPresent(
+    path: string,
+    clientId: string,
+    selection: { anchor: number; head: number } | null,
+  ): Promise<void> {
+    await this.#assertCreated();
+    this.#collab.present(path, clientId, selection);
+  }
+
+  /** Head versions of every live session (the board's change cursor). */
+  async collabVersions(): Promise<Record<string, number>> {
+    await this.#assertCreated();
+    return this.#collab.versions();
+  }
+
+  /** Attributed tracked changes since the last commit (redline segments). */
+  async collabChanges(path: string) {
+    await this.#assertCreated();
+    return this.#collab.changes(path);
+  }
+
+  // Board-level viewer presence: who has the BOARD open (sheet or not),
+  // heartbeat-refreshed, in-memory (rebuilds from heartbeats after eviction).
+  readonly #boardClients = new Map<string, { at: number; name: string }>();
+
+  /** Announce (or clear, with null name) one client viewing the board. */
+  async boardPresent(clientId: string, name: string | null): Promise<void> {
+    await this.#assertCreated();
+    if (name === null) this.#boardClients.delete(clientId);
+    else this.#boardClients.set(clientId, { at: Date.now(), name: name.slice(0, 80) });
+  }
+
+  /** Fresh caret presence per live session — "who has this file open".
+   * Index-matched flat arrays on the wire (one entry per path+client pair):
+   * Record-of-array values break the generated capnweb promise-mapped
+   * types, the same family of rule CollabChanges documents. */
+  async collabPresenceSummary(): Promise<CollabPresenceFlat> {
+    await this.#assertCreated();
+    const paths: string[] = [];
+    const clientIds: string[] = [];
+    for (const [path, ids] of Object.entries(this.#collab.presenceSummary())) {
+      for (const clientId of ids) {
+        paths.push(path);
+        clientIds.push(clientId);
+      }
+    }
+    return { clientIds, paths };
+  }
+
+  /** Everyone with the BOARD open (heartbeats): clientId -> display name.
+   * A flat Record on the wire — nesting breaks the generated capnweb
+   * promise-mapped types (same family of rule as CollabChanges). */
+  async collabBoardViewers(): Promise<Record<string, string>> {
+    await this.#assertCreated();
+    const now = Date.now();
+    for (const [clientId, client] of this.#boardClients) {
+      if (now - client.at > 45_000) this.#boardClients.delete(clientId);
+    }
+    return Object.fromEntries(
+      [...this.#boardClients]
+        .map(([clientId, client]) => [clientId, client.name] as const)
+        .sort(([left], [right]) => left.localeCompare(right)),
+    );
+  }
+
+  // -- git -------------------------------------------------------------------------
+
+  async gitStatus(): Promise<WorkspaceStatus> {
+    await this.#assertCreated();
+    return this.#collab.barrier(() => this.#core.gitStatus());
+  }
+
+  async gitCommit(input: WorkspaceCommitInput): Promise<WorkspaceCommitResult> {
+    await this.#assertCreated();
+    // Settle → commit → stamp as ONE fence: no flush timer, open, or
+    // configure can interleave, and baselines advance mount-scoped to
+    // exactly what the commit contained (a commit never spans mounts;
+    // stamping another mount's session would erase its redline). The mount
+    // table is read AT CALL TIME — inside the fence — so a configure that
+    // queued ahead of this commit can't leave ownsPath stamping with a
+    // stale table while the commit classified against the new one.
+    return this.#collab.commitBarrier(
+      () => this.#core.gitCommit(input),
+      (path, mount) => routeMount(this.#currentConfig().mounts, path)?.mountPath === mount,
+    );
+  }
+
+  async gitLog(input: WorkspaceGitLogInput = {}): Promise<WorkspaceGitLogEntry[]> {
+    await this.#assertCreated();
     return this.#core.gitLog(input);
+  }
+
+  // -- processor host plumbing -----------------------------------------------------
+
+  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
+    return this.#registry.wakeStreamSubscriber(args);
+  }
+
+  /** The registry's shared DO alarm (runner keepalives) — see stream-processor-registry.ts. */
+  alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
+    return this.#registry.handleAlarm(alarmInfo);
+  }
+
+  get processor() {
+    // Runner-backed reads (#reads), never the processor instance — instance
+    // reads are stale forever under runner drive.
+    return new StreamProcessorRpcTarget(this.#reads, {
+      catchUpBeforeSnapshot: () => this.#registry.catchUp(PROCESSOR_SLUG),
+    });
   }
 }

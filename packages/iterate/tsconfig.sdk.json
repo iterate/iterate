@@ -3,16 +3,42 @@
   // (rolldown-plugin-dts → @babel/generator) crashes on the generated itx
   // contract's getter signatures, so sdk declarations are emitted with plain
   // tsc instead (see the sdk entry in tsdown.config.ts + the build script).
-  "files": ["src/sdk.ts", "src/cloudflare-workers.d.ts"],
+  "files": [
+    "src/sdk.ts",
+    "src/client.ts",
+    "src/node.ts",
+    "src/starter-apps/github-ai-linter/index.ts",
+    "src/starter-apps/github-ai-linter/worker.ts",
+    "src/starter-apps/guestbook/client.tsx",
+    "src/starter-apps/guestbook/index.ts",
+    "src/starter-apps/guestbook/virtual-client.d.ts",
+    "src/starter-apps/guestbook/worker.ts",
+    "src/starter-apps/todo/index.ts",
+    "src/processors/cloudflare.ts",
+    "src/processors/index.ts",
+    "src/processors/testing.ts",
+    "src/sdk/capnweb/index.ts",
+    "src/sdk/capnweb/react.tsx",
+    "src/sdk/itx/react.ts",
+    "src/cloudflare-workers.d.ts"
+  ],
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "lib": ["ES2022", "ESNext.Disposable", "DOM"],
+    "jsx": "react-jsx",
+    // The itx client sources use `.ts`-suffixed relative imports (the package
+    // convention); legal under emitDeclarationOnly, and the emitted d.ts keeps
+    // the .ts specifiers, which consumers resolve to the sibling .d.ts.
+    "rewriteRelativeImportExtensions": true,
+    "lib": ["ESNext", "DOM"],
     "strict": true,
     "declaration": true,
     "emitDeclarationOnly": true,
     "outDir": "dist",
-    "types": []
+    "types": ["node"],
+    // The client/react graphs pull capnweb + TanStack d.ts, which do not pass
+    // a full lib check (same posture as the package tsconfig).
+    "skipLibCheck": true
   }
 }

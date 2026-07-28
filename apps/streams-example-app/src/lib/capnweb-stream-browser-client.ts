@@ -1,3 +1,4 @@
+import type { Stream } from "iterate/sdk";
 import {
   DEFAULT_STREAM_PROJECT_ID,
   streamRpcPath,
@@ -7,8 +8,7 @@ import {
   asBrowserStreamClient,
   type BrowserStreamClient,
   type BrowserStreamClientFactory,
-} from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
-import type { Stream } from "~/itx-api.generated.ts";
+} from "~/domains/streams/client-libraries/browser/stream-transport.ts";
 
 export const createCapnwebStreamClient: BrowserStreamClientFactory = async (
   args,

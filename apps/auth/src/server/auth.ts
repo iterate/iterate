@@ -5,6 +5,7 @@ import { matchesSignupAllowlist, parseSignupAllowlist } from "@iterate-com/share
 import { generateDefaultAvatar } from "@iterate-com/shared/default-avatar";
 import { config, env } from "./env.ts";
 import { getAuthPlugins } from "./auth-plugins.ts";
+import { authJwt } from "./auth-jwt.ts";
 
 const LOCAL_OAUTH_CLIENT_ORIGINS = [
   "http://localhost:6274",
@@ -54,6 +55,7 @@ export const auth = betterAuth({
   baseURL: config.authAppOrigin,
   plugins: getAuthPlugins({
     authAppOrigin: config.authAppOrigin,
+    jwtPlugin: authJwt(config.authSigningPrivateJwk.exposeSecret()),
     emailOtpEnabled: config.emailOtpEnabled,
     fixedTestOtpEnabled: config.fixedTestOtpEnabled,
     emailBinding: env.EMAIL,
@@ -64,6 +66,16 @@ export const auth = betterAuth({
   secret: config.betterAuthSecret.exposeSecret(),
   session: {
     storeSessionInDatabase: true,
+    // A LONG rolling session: any authenticated touch within `updateAge`
+    // granularity extends it, so interactive login is needed only after 60
+    // days of complete inactivity. The 60-day floor is deliberate: relying
+    // parties' refresh-token chains hit their hard ~30-day ceiling and
+    // bounce back through /authorize — with this session still alive, that
+    // bounce is a silent redirect instead of a Google login. (Before this,
+    // the 7-day default was almost always dead by the time a bounce
+    // happened, forcing a full re-login roughly every token ceiling.)
+    expiresIn: 60 * 24 * 60 * 60,
+    updateAge: 24 * 60 * 60,
     cookieCache: {
       enabled: true,
       maxAge: 5 * 60,

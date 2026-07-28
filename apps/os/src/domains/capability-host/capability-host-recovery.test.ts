@@ -1,197 +1,175 @@
-// Script-execution recovery: the capability-host processor's end-of-batch
-// reconciliation of journaled script obligations against this incarnation's
-// live executions — the same doctrine as the LLM providers, with the
-// script-specific policy that a `started` obligation is settled as failure
-// and NEVER re-run (scripts may have half-executed non-idempotent effects).
+// Focused script-execution recovery through the shared processor harness.
+// `crash()` is eviction; the durable keepalive alarm wakes the successor.
 
 import { describe, expect, it, vi } from "vitest";
+import { KEEPALIVE_ALARM_LEAD_MS, STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "iterate/processors";
+import { makeProcessorHarness } from "iterate/processors/testing";
 import type { Project } from "../../itx-api.generated.ts";
-import { MemoryStream } from "../streams/test-helpers.ts";
+import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
 import { CapabilityHostProcessor } from "./capability-host-processor-implementation.ts";
 
+const HOME = "/agents/test";
 const T = {
-  requested: "events.iterate.com/capability-host/script-execution-requested",
-  started: "events.iterate.com/capability-host/script-execution-started",
-  completed: "events.iterate.com/capability-host/script-execution-completed",
+  created: "events.iterate.com/capability-host/created",
+  requested: "events.iterate.com/capability-host/script-run-requested",
+  started: "events.iterate.com/capability-host/script-run-started",
+  completed: "events.iterate.com/capability-host/script-run-settled",
+  revived: STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
 } as const;
 
-function makeProcessor(options: {
-  stream: MemoryStream;
-  run?: (code: string) => Promise<unknown>;
-}) {
-  return new CapabilityHostProcessor({
-    stream: options.stream,
-    itx: {} as Project,
-    path: "/",
-    projectId: null,
-    scriptExecutionEntrypoint: {
-      run:
-        options.run ??
-        (() => {
-          throw new Error("must not run in this scenario");
-        }),
+function makeHarness() {
+  const run: { impl: (code: string) => Promise<unknown> } = {
+    impl: () => {
+      throw new Error("must not run in this scenario");
     },
+  };
+  const harness = makeProcessorHarness<CapabilityHostProcessorContract, CapabilityHostProcessor>({
+    path: HOME,
+    createProcessor: (deps) =>
+      new CapabilityHostProcessor({
+        ...deps,
+        itx: {} as Project,
+        scriptExecutionEntrypoint: { run: (code) => run.impl(code) },
+        reads: deps.reads,
+      }),
   });
+  harness.clock.now = Date.parse("2026-07-14T12:00:00Z");
+  harness.stream.events.push({
+    type: T.created,
+    idempotencyKey: `capability-host/created:test:${HOME}`,
+    payload: { config: {} },
+    createdAt: new Date(harness.clock.now).toISOString(),
+    offset: 1,
+    path: HOME,
+  });
+  return { ...harness, run };
 }
 
-describe("script execution reconciliation", () => {
-  it("runs a fresh request: started evidence lands before the body, completion after", async () => {
-    const stream = new MemoryStream();
-    const ran: string[] = [];
-    const processor = makeProcessor({
-      stream,
-      run: async (code) => {
-        // The started fact must already be durable when the body runs.
-        expect(stream.events.some((event) => event.type === T.started)).toBe(true);
-        ran.push(code);
-        return { ok: true };
+describe("script execution recovery at head", () => {
+  it("does not reduce retired lifecycle events into current script obligations", async () => {
+    const h = makeHarness();
+    await h.stream.append(
+      {
+        type: "events.iterate.com/capability-host/script-execution-requested",
+        payload: {
+          code: "async () => 'retired'",
+          executionId: "retired-exec",
+          expiresAt: h.clock.now + 60_000,
+        },
       },
-    });
-    const [requested] = await stream.append({
-      type: T.requested,
-      payload: { code: "async () => 1", executionId: "exec-1" },
-    });
-    await processor.ingest({ events: stream.events, streamMaxOffset: requested!.offset });
-
-    await vi.waitFor(() => {
-      const completed = stream.events.find((event) => event.type === T.completed);
-      expect(completed?.idempotencyKey).toBe("capability-host/script-execution-completed@exec-1");
-      expect(completed?.payload).toMatchObject({ executionId: "exec-1", result: { ok: true } });
-    });
-    expect(ran).toEqual(["async () => 1"]);
-  });
-
-  it("settles an orphaned execution (started, incarnation died) without re-running it", async () => {
-    const stream = new MemoryStream();
-    // The dead incarnation's evidence, written before it was evicted.
-    await stream.append(
-      { type: T.requested, payload: { code: "async () => 1", executionId: "exec-1" } },
-      { type: T.started, payload: { executionId: "exec-1" } },
+      {
+        type: "events.iterate.com/capability-host/script-execution-started",
+        payload: { executionId: "retired-exec" },
+      },
+      {
+        type: "events.iterate.com/capability-host/script-execution-completed",
+        idempotencyKey: "capability-host/script-execution-completed@retired-exec",
+        payload: { executionId: "retired-exec", result: "retired" },
+      },
     );
-    const processor = makeProcessor({ stream }); // run() throws if invoked
-    await processor.ingest({ events: stream.events, streamMaxOffset: 2 });
+    await h.settle();
 
-    await vi.waitFor(() => {
-      const completed = stream.events.find((event) => event.type === T.completed);
-      expect(completed?.payload).toMatchObject({
-        executionId: "exec-1",
-        error: expect.stringContaining("orphaned"),
-      });
-    });
+    expect(h.state().scriptExecutions).toEqual({});
+    expect(
+      h.events().filter((event) => event.type === T.started || event.type === T.completed),
+    ).toEqual([]);
   });
 
-  it("recovers a request whose incarnation died BEFORE any attempt started (provably never ran → runs it)", async () => {
-    const stream = new MemoryStream();
-    await stream.append({
-      type: T.requested,
-      payload: { code: "async () => 2", executionId: "exec-2" },
-    });
+  it("a failed started append leaves the request safe to retry", async () => {
+    const h = makeHarness();
+    h.stream.failAppendsOfType = T.started;
     const ran: string[] = [];
-    const processor = makeProcessor({
-      stream,
-      run: async (code) => {
-        ran.push(code);
-        return 42;
-      },
-    });
-    // A later batch (e.g. the revival fact) — the requested event itself is
-    // NOT in it; recovery reads the fold, not the batch.
-    await processor.ingest({ events: stream.events, streamMaxOffset: 1 });
-    await vi.waitFor(() => {
-      expect(stream.events.some((event) => event.type === T.completed)).toBe(true);
-    });
-    expect(ran).toEqual(["async () => 2"]);
-  });
-
-  it("a failed started-append leaves the obligation requested (no body run, no completion) and retries", async () => {
-    const stream = new MemoryStream();
-    let failStartedAppends = true;
-    const realAppend = stream.append.bind(stream);
-    stream.append = async (...inputs) => {
-      if (failStartedAppends && inputs.some((input) => input.type === T.started)) {
-        throw new Error("stream hiccup");
-      }
-      return realAppend(...inputs);
+    h.run.impl = async (code) => {
+      ran.push(code);
+      return { status: "succeeded" as const, result: "ok" };
     };
-    const ran: string[] = [];
-    const processor = makeProcessor({
-      stream,
-      run: async (code) => {
-        ran.push(code);
-        return "ok";
-      },
-    });
-    await realAppend({
+    await h.append({
       type: T.requested,
-      payload: { code: "async () => 5", executionId: "exec-5" },
+      payload: { code: "async () => 5", executionId: "exec-5", expiresAt: h.clock.now + 60_000 },
     });
-    await processor.ingest({ events: stream.events, streamMaxOffset: 1 });
-    // Give the failed attempt a beat: nothing may have run or settled — the
-    // evidence rule ("no started fact ⇒ never ran") must stay true.
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(ran).toEqual([]);
-    expect(stream.events.some((event) => event.type === T.completed)).toBe(false);
-    expect(processor.state.scriptExecutions["exec-5"]).toMatchObject({ status: "requested" });
+    expect(h.events(T.completed)).toHaveLength(0);
+    expect(h.state().scriptExecutions["exec-5"]).toMatchObject({ status: "requested" });
 
-    // The stream recovers; the next reconciliation (any batch — even one of
-    // events this processor does not consume) retries the whole attempt from
-    // the fold.
-    failStartedAppends = false;
-    const [nudge] = await realAppend({ type: "events.iterate.com/test/nudge", payload: {} });
-    await processor.ingest({ events: [nudge!], streamMaxOffset: nudge!.offset });
-    await vi.waitFor(() => {
-      const completed = stream.events.find(
-        (event) =>
-          event.type === T.completed &&
-          (event.payload as { executionId: string }).executionId === "exec-5",
-      );
-      expect(completed?.payload).toMatchObject({ executionId: "exec-5", result: "ok" });
+    h.stream.failAppendsOfType = undefined;
+    await h.stream.append({
+      type: "events.iterate.com/stream/woken",
+      payload: { incarnationId: "retry" },
     });
+    await h.settle();
+
+    expect(h.events(T.completed)).toMatchObject([
+      {
+        payload: {
+          executionId: "exec-5",
+          settlement: { status: "succeeded", result: "ok" },
+        },
+      },
+    ]);
     expect(ran).toEqual(["async () => 5"]);
   });
 
-  it("settles an expired request without running it (only-settle-past-expiry)", async () => {
-    const stream = new MemoryStream();
-    await stream.append({
+  it("settles and cancels a started script when its absolute deadline passes", async () => {
+    const h = makeHarness();
+    const run = new Promise<unknown>(() => {}) as Promise<unknown> & {
+      [Symbol.dispose]: ReturnType<typeof vi.fn>;
+    };
+    run[Symbol.dispose] = vi.fn();
+    h.run.impl = () => run;
+    await h.append({
       type: T.requested,
       payload: {
-        code: "async () => 3",
-        executionId: "exec-3",
-        expiresAt: Date.now() - 1, // the host slept past the intent's horizon
+        code: 'async (itx) => itx.sandboxes.get("/sandboxes/test")',
+        executionId: "agent-output:13980",
+        expiresAt: h.clock.now + 15_020,
       },
     });
-    const processor = makeProcessor({ stream }); // run() throws if invoked
-    await processor.ingest({ events: stream.events, streamMaxOffset: 1 });
 
     await vi.waitFor(() => {
-      const completed = stream.events.find((event) => event.type === T.completed);
-      expect(completed?.payload).toMatchObject({
-        executionId: "exec-3",
-        error: expect.stringContaining("expired"),
+      expect(h.events(T.completed)[0]?.payload).toMatchObject({
+        executionId: "agent-output:13980",
+        settlement: { status: "failed", failureKind: "deadline", phase: "execution" },
       });
     });
+    expect(run[Symbol.dispose]).toHaveBeenCalledOnce();
   });
+});
 
-  it("a completion settles the obligation for good: replayed batches change nothing", async () => {
-    const stream = new MemoryStream();
-    const processor = makeProcessor({ stream, run: async () => "done" });
-    await stream.append({
+describe("eviction recovery end to end", () => {
+  it("revives at zero lag and settles the orphan without re-running it", async () => {
+    const h = makeHarness();
+    h.run.impl = () => new Promise<never>(() => {});
+    await h.append({
       type: T.requested,
-      payload: { code: "async () => 4", executionId: "exec-4" },
+      payload: { code: "async () => 1", executionId: "exec-1", expiresAt: h.clock.now + 60_000 },
     });
-    await processor.ingest({ events: stream.events, streamMaxOffset: 1 });
-    await vi.waitFor(() => {
-      expect(stream.events.filter((event) => event.type === T.completed)).toHaveLength(1);
-    });
+    await vi.waitFor(() => expect(h.events(T.started)).toHaveLength(1));
+    expect((await h.runner().snapshot()).offset).toBe(h.events().at(-1)!.offset);
 
-    // A fresh incarnation replaying the WHOLE journal (checkpoint reset):
-    // the fold re-creates and re-settles the obligation in order; the
-    // idempotent completion append collapses at the dedup layer.
-    const replayer = makeProcessor({ stream }); // run() throws if invoked
-    await replayer.ingest({
-      events: stream.events,
-      streamMaxOffset: stream.events.at(-1)!.offset,
-    });
-    expect(stream.events.filter((event) => event.type === T.completed)).toHaveLength(1);
+    h.crash();
+    await h.settle();
+    h.run.impl = () => {
+      throw new Error("must not re-run an orphaned script");
+    };
+    await h.advanceTime(KEEPALIVE_ALARM_LEAD_MS + 1);
+
+    expect(h.events(T.revived)).toMatchObject([
+      {
+        payload: {
+          processorSlug: CapabilityHostProcessorContract.slug,
+          revivals: 1,
+          version: "test-harness",
+        },
+      },
+    ]);
+    expect(h.events(T.completed)).toMatchObject([
+      {
+        payload: {
+          executionId: "exec-1",
+          settlement: { status: "failed", failureKind: "orphaned" },
+        },
+      },
+    ]);
   });
 });

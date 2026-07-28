@@ -4,7 +4,7 @@ import type { SchedulerProcessorState } from "./scheduler-processor-contract.ts"
 
 // =============================================================================
 // Pure scheduler time math. Everything here is a total function of its inputs
-// (no Date.now(), no I/O) so the fold stays deterministic under replay and the
+// (no Date.now(), no I/O) so reduce stays deterministic under replay and the
 // interesting behavior is unit-testable without a Durable Object.
 // =============================================================================
 
@@ -74,7 +74,10 @@ export function dueSchedules(
  * anything else (parked schedules, pending executions) keeps the heartbeat so
  * the sweep can heal it.
  */
-export function nextWakeAtMs(state: SchedulerProcessorState, nowMs: number): number | null {
+export function nextWakeAtMs(
+  state: Pick<SchedulerProcessorState, "pendingTriggers" | "schedules">,
+  nowMs: number,
+): number | null {
   const schedules = Object.values(state.schedules);
   if (schedules.length === 0 && Object.keys(state.pendingTriggers).length === 0) return null;
   let wakeAtMs = nowMs + SCHEDULER_HEARTBEAT_MS;
@@ -87,9 +90,9 @@ export function nextWakeAtMs(state: SchedulerProcessorState, nowMs: number): num
 
 /**
  * A wake that made no progress (its trigger requests all deduped against
- * events the fold has not been able to advance past — a wedged ingest or a
- * stuck-due schedule) backs off exponentially toward the heartbeat instead of
- * re-arming at the minimum delay forever.
+ * events the reduced state has not been able to advance past — a wedged
+ * delivery or a stuck-due schedule) backs off exponentially toward the
+ * heartbeat instead of re-arming at the minimum delay forever.
  */
 export function barrenWakeAtMs(nowMs: number, consecutiveBarrenWakes: number): number {
   return nowMs + Math.min(SCHEDULER_HEARTBEAT_MS, MIN_WAKE_DELAY_MS * 2 ** consecutiveBarrenWakes);

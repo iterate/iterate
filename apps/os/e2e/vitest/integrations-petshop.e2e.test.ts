@@ -13,9 +13,9 @@
 //   3. describe() never leaks material; uses land on the audit trail.
 //
 // Requires a deployed OS (APP_CONFIG_BASE_URL) and a reachable dummy-petshop
-// (PETSHOP_BASE_URL, or derived). See petshop-support.ts.
+// (the exact PETSHOP_BASE_URL supplied by preview orchestration).
 
-import { describe, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 import {
@@ -25,49 +25,32 @@ import {
   petshopExchangeCode,
   petshopExpireTokens,
   petshopMintClient,
+  shouldSkipPetshopE2e,
 } from "./petshop-support.ts";
 
 const RUN = crypto.randomUUID().slice(0, 8);
 const REDIRECT_URI = "https://example.com/callback";
 
-/** Read a petshop JSON API through the OS egress door with an access-token
- * placeholder — the request routes to the connection secret, which substitutes
- * the token (and refreshes on 401) before it reaches petshop. */
-async function callThroughConnection(
-  project: any,
-  connectionPath: string,
-  path: string,
-): Promise<{ status: number; body: any }> {
-  const response = await project.egress.fetch(
-    new Request(`${petshopBaseUrl()}${path}`, {
-      headers: {
-        authorization: `Bearer getSecret({ path: "${connectionPath}", field: "accessToken" })`,
-      },
-    }),
-  );
-  return { status: response.status, body: await response.json().catch(() => null) };
-}
-
-// Opt-in: this suite talks to a deployed dummy-petshop, which only exists at
-// slots where it was deployed. Point PETSHOP_BASE_URL at one to run it;
-// otherwise it skips, so the shared CI e2e lane (whose preview slot has no
-// petshop) stays green.
-describe.skipIf(!process.env.PETSHOP_BASE_URL)("dummy-petshop integration", () => {
-  test("two OAuth clients, two connections: connect, call, forced-expiry refresh", async () => {
+// Local runs can opt in by pointing PETSHOP_BASE_URL at a fixture. Preview CI
+// always supplies the Petshop deployment from its own leased slot and fails
+// closed rather than silently skipping this coverage.
+test.skipIf(shouldSkipPetshopE2e())(
+  "two OAuth clients, two connections: connect, call, forced-expiry refresh",
+  async () => {
     const petshop = petshopBaseUrl();
-    // Instance A uses the seeded client; instance B a freshly minted one — the
-    // two-client proof. Both are project-owned (userspace) clients: the client
-    // credential lives IN the connection secret's material, next to the tokens
-    // (bring-your-own-app connections are self-contained cells).
-    const clientB = await petshopMintClient();
+    // Both instances get a unique project-owned (userspace) client. Their
+    // credentials live IN each connection secret's material, next to the
+    // tokens (bring-your-own-app connections are self-contained cells). The
+    // seeded client is reserved for the concurrently running first-party test.
+    const [clientA, clientB] = await Promise.all([petshopMintClient(), petshopMintClient()]);
     const instances = [
-      { ...PETSHOP_DEFAULT_CLIENT, slug: `petshop-home-${RUN}`, connection: "jonas" },
+      { ...clientA, slug: `petshop-home-${RUN}`, connection: "jonas" },
       { ...clientB, slug: `petshop-work-${RUN}`, connection: "ops" },
     ];
 
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = itx.projects.create({ slug: `petshop-${RUN}` });
+    using project = await itx.projects.get(`petshop-${RUN}`).create({});
     await project.__describe();
 
     for (const instance of instances) {
@@ -89,7 +72,7 @@ describe.skipIf(!process.env.PETSHOP_BASE_URL)("dummy-petshop integration", () =
       // Connection secret: tokens + client credential in material, refreshed by
       // the shared strategy. Configuring `refresh` is the trust event.
       using connectionSecret = project.secrets.get(connectionPath);
-      await connectionSecret.update({
+      await connectionSecret.create({
         egress: { urls: [petshop] },
         material: {
           accessToken: tokens.access_token,
@@ -110,21 +93,19 @@ describe.skipIf(!process.env.PETSHOP_BASE_URL)("dummy-petshop integration", () =
 
       // Authed call through the secret: token substituted, petshop sees it.
       const me = await callThroughConnection(project, connectionPath, "/api/me");
-      expect(me.status).toBe(200);
-      expect(me.body).toMatchObject({ clientId: instance.clientId });
+      expect(me).toMatchObject({ status: 200, body: { clientId: instance.clientId } });
 
       // Force a real 401 (epoch bump) and call again: the Secret DO must run
       // the refresh grant against the pinned token endpoint and retry to a 200.
-      await petshopExpireTokens();
+      await petshopExpireTokens(instance.clientId);
       const afterExpiry = await callThroughConnection(project, connectionPath, "/api/me");
-      expect(afterExpiry.status).toBe(200);
-      expect(afterExpiry.body).toMatchObject({ clientId: instance.clientId });
+      expect(afterExpiry).toMatchObject({ status: 200, body: { clientId: instance.clientId } });
 
       // Confinement: describe() leaks no token; the use is audited.
       const described = await connectionSecret.__describe();
       expect(JSON.stringify(described)).not.toContain(tokens.access_token);
       expect(JSON.stringify(described)).not.toContain(instance.clientSecret);
-      expect(described.hasMaterial).toBe(true);
+      expect(described).toMatchObject({ hasMaterial: true });
       await waitForCondition(
         async () => (await connectionSecret.__describe()).audit.usedCount >= 1,
         {
@@ -132,14 +113,17 @@ describe.skipIf(!process.env.PETSHOP_BASE_URL)("dummy-petshop integration", () =
         },
       );
     }
-  });
+  },
+);
 
-  // The first-party lane: the EXACT SAME shared refresh strategy, but its
-  // client credential is a platform config reference (integrations.petshop —
-  // APP_CONFIG_INTEGRATIONS__PETSHOP) resolved from typed AppConfig by the
-  // Secret DO's trusted code. No project app secret, no platform bytes in
-  // project material. Only `clientCreds` differs from the userspace lane.
-  test("first-party lane: client credential resolves from platform config, same strategy", async () => {
+// The first-party lane: the EXACT SAME shared refresh strategy, but its
+// client credential is a platform config reference (integrations.petshop —
+// APP_CONFIG_INTEGRATIONS__PETSHOP) resolved from typed AppConfig by the
+// Secret DO's trusted code. No project app secret, no platform bytes in
+// project material. Only `clientCreds` differs from the userspace lane.
+test.skipIf(shouldSkipPetshopE2e())(
+  "first-party lane: client credential resolves from platform config, same strategy",
+  async () => {
     const petshop = petshopBaseUrl();
     const slug = `petshop-firstparty-${RUN}`;
     const connectionPath = `/secrets/integrations/${slug}/acme`;
@@ -147,7 +131,7 @@ describe.skipIf(!process.env.PETSHOP_BASE_URL)("dummy-petshop integration", () =
 
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = itx.projects.create({ slug: `petshop-fp-${RUN}` });
+    using project = await itx.projects.get(`petshop-fp-${RUN}`).create({});
     await project.__describe();
 
     const code = await petshopAuthorize({ clientId, redirectUri: REDIRECT_URI });
@@ -159,7 +143,7 @@ describe.skipIf(!process.env.PETSHOP_BASE_URL)("dummy-petshop integration", () =
     });
 
     using connectionSecret = project.secrets.get(connectionPath);
-    await connectionSecret.update({
+    await connectionSecret.create({
       egress: { urls: [petshop] },
       material: { accessToken: tokens.access_token, refreshToken: tokens.refresh_token },
       refresh: {
@@ -174,14 +158,30 @@ describe.skipIf(!process.env.PETSHOP_BASE_URL)("dummy-petshop integration", () =
     );
 
     const me = await callThroughConnection(project, connectionPath, "/api/me");
-    expect(me.status).toBe(200);
-    expect(me.body).toMatchObject({ clientId });
+    expect(me).toMatchObject({ status: 200, body: { clientId } });
 
     // Force a 401 and prove the strategy refreshes using the PLATFORM client
     // credential resolved from deployment config — never present in material.
-    await petshopExpireTokens();
+    await petshopExpireTokens(clientId);
     const afterExpiry = await callThroughConnection(project, connectionPath, "/api/me");
-    expect(afterExpiry.status).toBe(200);
-    expect(afterExpiry.body).toMatchObject({ clientId });
-  });
-});
+    expect(afterExpiry).toMatchObject({ status: 200, body: { clientId } });
+  },
+);
+
+/** Read a petshop JSON API through the OS egress door with an access-token
+ * placeholder — the request routes to the connection secret, which substitutes
+ * the token (and refreshes on 401) before it reaches petshop. */
+async function callThroughConnection(
+  project: any,
+  connectionPath: string,
+  path: string,
+): Promise<{ status: number; body: any }> {
+  const response = await project.egress.fetch(
+    new Request(`${petshopBaseUrl()}${path}`, {
+      headers: {
+        authorization: `Bearer getSecret("${connectionPath}", { field: "accessToken" })`,
+      },
+    }),
+  );
+  return { status: response.status, body: await response.json().catch(() => null) };
+}

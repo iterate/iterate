@@ -1,7 +1,9 @@
 import type { RpcStub } from "capnweb";
+import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
+import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
+import { connectItx } from "iterate/node";
 import type { Agent, Project as ProjectRpcTarget } from "../../src/itx-api.generated.ts";
-import { createAdminOsItx, requireBaseUrl, uniqueSuffix } from "./os-client.ts";
-import { connectItx } from "~/itx-client.ts";
+import { createAdminOsItx, requireBaseUrl } from "./os-client.ts";
 
 /**
  * Create a disposable project against the deployment under test via itx (the
@@ -15,12 +17,11 @@ import { connectItx } from "~/itx-client.ts";
  */
 export async function createTestProject(opts: { slugPrefix: string }) {
   const baseUrl = requireBaseUrl();
-  const slugPrefix = opts.slugPrefix;
-  // you get invalid DNS name errors if the slug is too long
-  const slug = `${slugPrefix.slice(0, 20)}-${uniqueSuffix()}`.replace("--", "-");
+  // Trimmed: you get invalid DNS name errors if the slug is too long.
+  const slug = uniqueFixtureSlug(opts.slugPrefix, { maxPrefixLength: 20 });
 
   using session = createAdminOsItx({ baseUrl });
-  using created = session.projects.create({ slug });
+  using created = await session.projects.get(slug).create({});
   const description = await created.__describe();
   const project = { id: description.projectId, slug };
 
@@ -35,6 +36,7 @@ export async function createTestProject(opts: { slugPrefix: string }) {
         agentPath,
         auth: adminAuth(),
         baseUrl,
+        headers: cloudflareWorkerVersionOverrideHeaders(process.env),
         projectId: project.id,
       });
     },

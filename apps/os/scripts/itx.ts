@@ -14,10 +14,16 @@ import repl from "node:repl";
 
 import { RpcTarget } from "capnweb";
 
-import { connectItx } from "../src/itx-client.ts";
+import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
+import {
+  connectItxReady,
+  type ConnectItxReadyOptions,
+  type ItxInitialConnectionRetry,
+} from "iterate/node";
 import { readDevServerInfo } from "./lib/dev-server-info.ts";
 
 const ASSISTANT_RESPONSE_TYPE = "events.iterate.com/agents/web-message-sent";
+export const ITX_INITIAL_CONNECTION_RETRY_PREFIX = "[itx-initial-connection-retry] ";
 
 const AsyncFunction = async function () {}.constructor as new (
   ...args: string[]
@@ -31,7 +37,7 @@ type RunOptions = {
   eval?: string;
   /** Path to a script file with the same body shape as `eval`. */
   file?: string;
-  /** Project id to connect into. Omit for the global admin session. */
+  /** Project id to connect into. Omit to retain platform-wide admin-secret authority. */
   context?: string;
   /** JSON object passed to the script as `vars`, e.g. '{"note":"hi"}'. */
   vars?: string;
@@ -54,8 +60,11 @@ export async function run(options: RunOptions) {
   const script = new AsyncFunction("itx", "vars", "RpcTarget", code);
 
   using itx = options.context
-    ? connectItx({ ...connection, projectId: options.context })
-    : connectItx(connection);
+    ? await connectItxReady(
+        { ...connection, projectId: options.context },
+        initialConnectionRetryOptions(),
+      )
+    : await connectItxReady(connection, initialConnectionRetryOptions());
   const result = await script(itx, vars, RpcTarget).catch((error: unknown) => {
     process.stderr.write(formatScriptError(error));
     process.exit(1);
@@ -92,7 +101,7 @@ export function formatScriptError(error: unknown): string {
 }
 
 type ReplOptions = {
-  /** Project id to connect into. Omit for the global admin session. */
+  /** Project id to connect into. Omit to retain platform-wide admin-secret authority. */
   context?: string;
   /** OS base URL. Defaults to APP_CONFIG_BASE_URL. */
   baseUrl?: string;
@@ -102,8 +111,11 @@ type ReplOptions = {
 export async function startRepl(options: ReplOptions) {
   const connection = adminConnection(options);
   const itx = options.context
-    ? connectItx({ ...connection, projectId: options.context })
-    : connectItx(connection);
+    ? await connectItxReady(
+        { ...connection, projectId: options.context },
+        initialConnectionRetryOptions(),
+      )
+    : await connectItxReady(connection, initialConnectionRetryOptions());
 
   process.stdout.write(
     [
@@ -128,13 +140,13 @@ type AgentSmokeOptions = {
   baseUrl?: string;
   /** Single user message to send to the agent. */
   message: string;
-  /** Project id to connect into over ITX. */
+  /** Project id to connect into over itx. */
   project: string;
   /** Maximum time to wait for an assistant response. */
   timeoutMs?: number;
 };
 
-/** Send one user message to an agent over ITX and wait for the assistant response. */
+/** Send one user message to an agent over itx and wait for the assistant response. */
 export async function agentSmoke(options: AgentSmokeOptions) {
   const agentPath = options.agentPath.trim();
   const project = options.project.trim();
@@ -150,11 +162,14 @@ export async function agentSmoke(options: AgentSmokeOptions) {
   }
 
   const startedAt = Date.now();
-  using agent = connectItx({
-    ...adminConnection(options),
-    agentPath,
-    projectId: project,
-  });
+  using agent = await connectItxReady(
+    {
+      ...adminConnection(options),
+      agentPath,
+      projectId: project,
+    },
+    initialConnectionRetryOptions(),
+  );
 
   // `ask` is the server-side send-and-wait: append the user message, resolve
   // on the agent's web reply. Waiting is bounded client-side as well.
@@ -201,7 +216,38 @@ function adminConnection(options: { baseUrl?: string }) {
   }
   const secret = process.env.APP_CONFIG_ADMIN_API_SECRET?.trim() ?? "";
   if (!secret) throw new Error("APP_CONFIG_ADMIN_API_SECRET is required.");
-  return { auth: { type: "admin-secret" as const, secret }, baseUrl };
+  return {
+    auth: { type: "admin-secret" as const, secret },
+    baseUrl,
+    headers: cloudflareWorkerVersionOverrideHeaders(process.env),
+  };
+}
+
+function initialConnectionRetryOptions(): ConnectItxReadyOptions {
+  return {
+    retryInitialConnection: {
+      delayMs: 250,
+      onRetry(retry) {
+        process.stderr.write(
+          `${ITX_INITIAL_CONNECTION_RETRY_PREFIX}${JSON.stringify(initialConnectionRetryLog(retry))}\n`,
+        );
+      },
+    },
+  };
+}
+
+function initialConnectionRetryLog(retry: ItxInitialConnectionRetry) {
+  const code =
+    "code" in retry.error && typeof retry.error.code === "string" ? retry.error.code : undefined;
+  return {
+    attemptDurationMs: Math.round(retry.attemptDurationMs),
+    delayMs: retry.delayMs,
+    error: retry.error.message,
+    ...(code === undefined ? {} : { errorCode: code }),
+    failedAttempt: retry.failedAttempt,
+    nextAttempt: retry.nextAttempt,
+    startedAt: retry.startedAt,
+  };
 }
 
 function parseVars(raw: string | undefined): Record<string, unknown> {

@@ -1,13 +1,11 @@
-import {
-  StreamProcessor,
-  type StreamProcessorConstructorArgs,
-} from "../streams/stream-processor.ts";
+import { StreamProcessor } from "iterate/processors";
+import type { ProcessEventArgs, ProcessorState, ReduceArgs, StreamEvent } from "iterate/processors";
+import type { ItxExpression } from "../../itx/expression.ts";
 import { normalizePath } from "../durable-object-names.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";
-import type { StreamEvent } from "../streams/schemas.ts";
-import type { JsonValue } from "../workers/schemas.ts";
-import type { CapabilityHost, Project } from "../../itx-api.generated.ts";
+import type { Project } from "../../itx-api.generated.ts";
 import type { ScriptExecutionCheck } from "../typecheck/virtual-project.ts";
+import type { StreamContext } from "../projects/stream-context.ts";
 import type {
   CapabilityProvidedPayload,
   CapabilityRecord,
@@ -15,183 +13,241 @@ import type {
   RevokeCapabilityInput,
 } from "./types.ts";
 import { retainLiveCapabilityProvider, type LiveCapability } from "./live-capability.ts";
+import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
+import { settleByDeadline } from "./execution-deadline.ts";
 import {
-  CapabilityHostProcessorContract,
-  DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
-} from "./capability-host-processor-contract.ts";
+  SCRIPT_EXECUTION_SETTLEMENT_GRACE_MS,
+  ScriptExecutionSettlement,
+  scriptCompletionInput,
+  settlementAppendDeadline,
+  settlementForUndrivenScript,
+  settlementFromWorkerOutcome,
+  type ScriptExecutionSettlement as ScriptExecutionSettlementValue,
+} from "./script-execution-settlement.ts";
 import {
   evaluateItxExpression,
   invokeNormalizedCapability,
   normalizeCapabilityProvider,
 } from "./itx-expression.ts";
 
-export type RunScriptResult = Awaited<ReturnType<CapabilityHost["runScript"]>>;
-
-type CompletedPayload = {
-  error?: string;
-  executionId: string;
-  result?: JsonValue;
-};
-
-type ScriptExecutionEntrypoint = {
-  run(code: string): Promise<unknown>;
-};
-
-const INVALID_PATH_SEGMENTS = new Set([
-  // Mount names only — INVOCATION paths may end in __describe (intercepted in
-  // invokeCapability below); a MOUNT named __describe would be unreachable.
-  "__describe",
-  "__proto__",
-  "constructor",
-  "prototype",
-  "then",
-  "apply",
-  "call",
-  "bind",
-  "dup",
-  "onRpcBroken",
-]);
-
-/** ~4k tokens: how much of a mount's types `__describe` shows before
- * deferring to docs.get's budgeted reader. */
-const MAX_DESCRIBED_TYPES_CHARS = 16_000;
-
-function truncatedTypes(types: string, mountPoint: string): string {
-  if (types.length <= MAX_DESCRIBED_TYPES_CHARS) return types;
-  const cut = types.slice(0, MAX_DESCRIBED_TYPES_CHARS);
-  // Close a block comment the cut may have opened, so the notice stays
-  // visible to a consumer rendering this as code (same rule as typeSlice).
-  const openComment = cut.lastIndexOf("/*") > cut.lastIndexOf("*/");
-  return (
-    cut +
-    (openComment ? " */" : "") +
-    `\n// … truncated — read slices with itx.docs.get({ name: ${JSON.stringify(mountPoint)}, maxTokens: 4000 })`
-  );
-}
-
-const samePath = (a: string[], b: string[]) =>
-  a.length === b.length && a.every((segment, index) => segment === b[index]);
-
-const liveKey = (path: string[]) => JSON.stringify(path);
-
-function assertCapabilityPath(path: string[]) {
-  if (!Array.isArray(path)) {
-    throw new Error('capability path must be an ARRAY of segments (e.g. ["tools", "weather"])');
-  }
-  if (path.length === 0) {
-    throw new Error("capability path must contain at least one segment");
-  }
-  for (const segment of path) {
-    if (
-      typeof segment !== "string" ||
-      !/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(segment) ||
-      INVALID_PATH_SEGMENTS.has(segment)
-    ) {
-      throw new Error(`invalid capability path segment "${String(segment)}"`);
-    }
-  }
-}
-
-function json(value: unknown): JsonValue {
-  if (value === undefined) return null;
-  return JSON.parse(JSON.stringify(value)) as JsonValue;
-}
-
-function resolveLongestPrefix(records: CapabilityRecord[], path: string[]) {
-  let best: { record: CapabilityRecord; rest: string[] } | null = null;
-  for (const record of records) {
-    const matches =
-      record.path.length <= path.length &&
-      record.path.every((segment, index) => segment === path[index]);
-    if (matches && (!best || record.path.length > best.record.path.length)) {
-      best = { record, rest: path.slice(record.path.length) };
-    }
-  }
-  return best;
-}
-
 /**
- * The enclosing itx scope, as seen from a child scope's processor.
+ * The capability-host processor: one scope's dynamic capability table plus its
+ * script-run obligations, both reduced from the scope's stream.
  *
- * Only the two read operations chain upward (see the class below); mounting is
- * always local, so `provide`/`revoke` are deliberately absent here. In practice
- * this is a `DurableObjectStub<CapabilityHostDurableObject>` for the parent scope, but the
- * processor only depends on these two methods.
+ * HOW IT WORKS, end to end:
+ *
+ * The stream carries two families of facts. CAPABILITY facts
+ * (`capability-provided` / `capability-revoked`) reduce into the durable mount
+ * table: one row per mount path, a re-provide at the same path replaces the
+ * row, and a mount's identity is `providedAtOffset` — the stream offset of the
+ * event that created it, no synthetic mount ids anywhere. The itx-facing verbs
+ * on this class (`provideCapability`, `revokeCapability`, `invokeCapability`,
+ * `describeCapabilities`) are the scope's public capability surface:
+ * mounting appends the fact and then waits for its own delivery
+ * (read-your-writes), reads resolve the longest matching prefix over the
+ * reduced table, and a local miss follows the birth certificate's `fallback`
+ * expression — ONE direct hop, usually to the project root host, re-evaluated
+ * against this scope's own itx on every read so the stream stores the NAME of
+ * the fallback and never captured authority.
+ *
+ * SCRIPT facts are a promise vocabulary. `script-run-requested` opens an
+ * obligation, keyed by the caller-supplied `executionId` (the requester lives
+ * on ANOTHER stream — an agent stream, a public runScript call — so this
+ * stream's offsets cannot name the obligation for it; the id is the
+ * cross-stream correlation key and every settle idempotency key derives from
+ * it). `script-run-started` is durable evidence that an attempt began,
+ * appended BEFORE the script body runs — so requested-without-started provably
+ * never ran, while started-without-settled may have half-executed.
+ * `script-run-settled` is the ONE terminal fact; reducing it deletes the
+ * obligation. Entries carry the code, so an attempt can start from reduced
+ * state alone — recovery never re-reads the request event.
+ *
+ * The at-head pass in `processEvent` (under `delivery.caughtUp`) compares the
+ * open obligations in state against `#liveExecutions` — the script runs alive
+ * in THIS incarnation — and for every obligation nobody here is driving it
+ * either STARTS it (status `requested` and unexpired: typecheck gate → started
+ * evidence → worker RPC → settled, all in one background attempt) or SETTLES
+ * it: expired before any attempt began, or `started` with no live run — the
+ * incarnation running it died, so it settles as an orphan FAILURE and is NEVER
+ * re-run (a script may have half-executed non-idempotent side effects; the
+ * agent renders the failure and the model decides whether to retry).
+ *
+ * RECOVERY rides that same at-head pass. When an incarnation dies owing script
+ * work, the keepalive alarm revives the processor and appends
+ * `events.iterate.com/stream/processor-revived`; its wake produces the
+ * eventless at-head pass that re-drives the open obligations — fresh requested
+ * scripts start, orphaned started scripts settle. Starting fresh and
+ * recovering after an eviction are the same code path. The pass is
+ * BLOCKED (one outer `blockProcessorWhile` per at-head pass): a settle append
+ * that fails keeps the frame retryable, so the transport's redelivery — not a
+ * timer — is what retries a transiently failed settlement. Settle appends are
+ * idempotency-keyed on the executionId alone, so a zombie incarnation racing
+ * its replacement collapses to one settled fact; a loser reads back the
+ * durable outcome and stands down (`#appendSettlementsWithin`).
  */
-export type ParentCapabilityHost = {
-  invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
-  describeCapabilities(): Promise<CapabilityDescription[]>;
-};
-
-export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProcessorContract> {
+export class CapabilityHostProcessor extends StreamProcessor<
+  CapabilityHostProcessorContract,
+  CapabilityHostProcessorDeps
+> {
   readonly contract = CapabilityHostProcessorContract;
-  #itx: Project;
-  #path: string;
-  #scriptExecutionEntrypoint: ScriptExecutionEntrypoint;
-  /** Injected clock (expiry decisions); production defaults to Date.now. */
-  #now: (() => number) | undefined;
-  #parent: ParentCapabilityHost | undefined;
-  #validateCapabilityTypes: ((types: string) => Promise<string[]>) | undefined;
-  #typecheckScript:
-    | ((input: {
-        capabilities: CapabilityDescription[];
-        code: string;
-      }) => Promise<ScriptExecutionCheck>)
-    | undefined;
-  #liveCapabilities = new Map<string, LiveCapability>();
 
-  constructor(
-    args: StreamProcessorConstructorArgs<CapabilityHostProcessorContract, object> & {
-      itx: Project;
-      path: string;
-      /** Runs run-script workers in this scope. */
-      scriptExecutionEntrypoint: ScriptExecutionEntrypoint;
-      /** Injected clock (expiry decisions); production defaults to Date.now. */
-      now?: () => number;
-      // The enclosing scope, or undefined at the project root ("/"). Present for
-      // every nested scope (agents, sub-agents, agent namespaces) so capability
-      // lookups that miss locally can fall through to the surrounding scope.
-      parent?: ParentCapabilityHost;
-      /**
-       * Compiles a mount's `types` string, returning problems (empty = it
-       * compiles). Wired to the typechecker sidecar in production; the node
-       * test harness runs without one, which skips validation.
-       */
-      validateCapabilityTypes?: (types: string) => Promise<string[]>;
-      /**
-       * Pre-execution typecheck of a requested script against this scope's
-       * capability types (checkItxScriptForExecution in production; absent in
-       * the node test harness, which skips the gate). Only a `problems`
-       * verdict blocks the run — see ScriptExecutionCheck.
-       */
-      typecheckScript?: (input: {
-        capabilities: CapabilityDescription[];
-        code: string;
-      }) => Promise<ScriptExecutionCheck>;
-    },
-  ) {
-    super(args);
-    this.#itx = args.itx;
-    this.#path = normalizePath(args.path);
-    this.#scriptExecutionEntrypoint = args.scriptExecutionEntrypoint;
-    this.#now = args.now;
-    this.#parent = args.parent;
-    this.#validateCapabilityTypes = args.validateCapabilityTypes;
-    this.#typecheckScript = args.typecheckScript;
+  /** Live (session-bound) capability providers by mount-path key — ephemeral
+   * by design: only the mount RECORD is durable; the provider's value lives on
+   * the providing connection and dies with it. */
+  readonly #liveCapabilities = new Map<string, LiveCapability>();
+
+  /** Script executions alive in THIS incarnation — the "actually running" half
+   * the at-head pass compares the reduced obligations against. */
+  readonly #liveExecutions = new Set<string>();
+
+  /**
+   * Exact outcomes already known by this incarnation but not yet observed back
+   * from the stream. A timed-out settle append is an ambiguous transport
+   * outcome, not permission to replace the script's real result with an
+   * invented orphan classification: the at-head pass retries this same
+   * settlement under the settle idempotency key until the durable event
+   * reduces (or the incarnation itself disappears).
+   */
+  readonly #pendingSettlements = new Map<string, ScriptExecutionSettlementValue>();
+
+  // ------------------------------------------------------------ processEvent
+  // Synchronous; one switch over the delivered event, then the state-derived
+  // work at head. This processor has exactly ONE per-event effect (observing
+  // its own settled facts back); everything else it does is derived from the
+  // reduced state once the delivery is caught up.
+  protected override processEvent(
+    args: ProcessEventArgs<CapabilityHostProcessorContract>,
+  ): undefined {
+    const { event, state, delivery, blockProcessorWhile } = args;
+
+    switch (event?.type) {
+      case "events.iterate.com/capability-host/script-run-settled":
+        // The durable settlement came back through our own subscription: this
+        // incarnation no longer owes its retry.
+        this.#pendingSettlements.delete(event.payload.executionId);
+        break;
+      // created / capability-provided / capability-revoked /
+      // script-run-requested / script-run-started: no per-event side effect —
+      // they matter through the reduced state below.
+    }
+
+    // ---------------------------------------- state-derived side effects
+    // Only at head: behind it the state is a partial reduction and a script's
+    // settled fact may sit in stream pages not yet replayed — acting early
+    // would re-run a settled script.
+    if (!delivery.caughtUp) return;
+    if (state.birthCertificate === null) return;
+    // ONE outer blocking closure per at-head pass — a nested
+    // blockProcessorWhile would register after the runner's per-event blocker
+    // snapshot and never be awaited. Blocking (not background) is deliberate:
+    // holding the frame keeps a failed settle append retryable via the
+    // transport's redelivery; a dropped background attempt would strand the
+    // obligation until something else happened to wake the stream.
+    blockProcessorWhile(() => this.#startOrSettleOpenScriptRuns(args));
   }
 
-  protected override reduce({
-    event,
-    state,
-  }: Parameters<StreamProcessor<CapabilityHostProcessorContract>["reduce"]>[0]) {
+  /**
+   * The at-head pass over the open script obligations: for every entry in
+   * `state.scriptExecutions` that no run in THIS incarnation is driving,
+   * either start it or settle it.
+   *
+   * - a settlement this incarnation already knows (`#pendingSettlements`) is
+   *   re-appended verbatim — never reclassified;
+   * - `requested` and unexpired → start the attempt in the background (the
+   *   whole typecheck → started → worker → settled pipeline);
+   * - anything else — expired before an attempt, or `started` with its
+   *   incarnation gone — settles via {@link settlementForUndrivenScript}: an
+   *   orphaned `started` script is a FAILURE and is never re-run, because the
+   *   body may have half-executed and scripts are not assumed idempotent.
+   *
+   * Recovery is this same code: the platform's revived fact (appended after an
+   * eviction took in-flight work) is consumed by the contract purely so its
+   * ordinary delivery lands at head and runs this pass.
+   */
+  async #startOrSettleOpenScriptRuns(
+    args: ProcessEventArgs<CapabilityHostProcessorContract>,
+  ): Promise<void> {
+    const now = this.#now();
+    const settle: {
+      executionId: string;
+      expiresAt: number;
+      reason: "pending-settlement" | "recovery";
+      settlement: ScriptExecutionSettlementValue;
+    }[] = [];
+    for (const [executionId, execution] of Object.entries(args.state.scriptExecutions)) {
+      if (this.#liveExecutions.has(executionId)) continue;
+      const pendingSettlement = this.#pendingSettlements.get(executionId);
+      if (pendingSettlement !== undefined) {
+        settle.push({
+          executionId,
+          expiresAt: execution.expiresAt,
+          reason: "pending-settlement",
+          settlement: pendingSettlement,
+        });
+        continue;
+      }
+      if (execution.status === "requested" && now < execution.expiresAt) {
+        this.#liveExecutions.add(executionId);
+        // The head state handed to this pass, NOT an instance read: the
+        // typecheck gate must see capabilities provided in the same delivery
+        // as the request or it would judge the script against a stale scope.
+        const capabilities = args.state.capabilities;
+        const fallback = args.state.birthCertificate?.fallback ?? null;
+        args.runInBackground(() =>
+          this.#executeScript({
+            capabilities,
+            code: execution.code,
+            executionId,
+            expiresAt: execution.expiresAt,
+            fallback,
+            requestedAtOffset: execution.requestedAtOffset,
+          }),
+        );
+        continue;
+      }
+      settle.push({
+        executionId,
+        expiresAt: execution.expiresAt,
+        reason: "recovery",
+        settlement: settlementForUndrivenScript(execution.status),
+      });
+    }
+    // Settle inline — this runs inside the head event's outer blocking closure
+    // (see processEvent), so awaiting the single atomic append holds the frame.
+    if (settle.length === 0) return;
+    for (const { executionId, reason, settlement } of settle) {
+      if (reason !== "recovery") continue;
+      console.info("[capability-host] recovering undriven script execution", {
+        cancellation: settlement.status === "failed" ? settlement.cancellation : undefined,
+        executionId,
+        failureKind: settlement.status === "failed" ? settlement.failureKind : undefined,
+        phase: settlement.status === "failed" ? settlement.phase : undefined,
+        status: settlement.status,
+      });
+    }
+    // One stream append is both faster and stronger than serial appends: a
+    // recovery backlog consumes one bounded settlement window and commits
+    // every orphan classification atomically in canonical execution order.
+    await this.#appendSettlementsWithin(settle);
+  }
+
+  // ------------------------------------------------------------------ reduce
+  // Pure reduction, one switch, cases inline.
+  protected override reduce({ event, state }: ReduceArgs<CapabilityHostProcessorContract>) {
     switch (event.type) {
+      case "events.iterate.com/capability-host/created":
+        // The first created event wins; a duplicate is a no-op (explicit
+        // creation rejects conflicting births at the append door — a throwing
+        // reducer would only wedge the frame).
+        if (state.birthCertificate !== null) return state;
+        return { ...state, birthCertificate: event.payload };
       case "events.iterate.com/capability-host/capability-provided": {
         const row: CapabilityRecord = {
           ...event.payload,
-          // The stream offset is the provision identity. It is stable,
-          // observable, and already exists because the append event is the
-          // commit point for a mount. Handles use it to revoke exactly the
-          // mount they received, without introducing a second generated id.
+          // The stream offset is the mount's identity. It is stable,
+          // observable, and already exists because the append IS the commit
+          // point for a mount. Handles use it to revoke exactly the mount
+          // they received, without a second generated id.
           providedAtOffset: event.offset,
         };
         const exists = state.capabilities.some((capability) => samePath(capability.path, row.path));
@@ -210,6 +266,8 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
           ...state,
           capabilities: state.capabilities.filter((capability) => {
             if (!samePath(capability.path, revoke.path)) return true;
+            // With providedAtOffset the revoke names ONE exact mount: a path
+            // re-mounted since then keeps its newer row.
             return (
               revoke.providedAtOffset !== undefined &&
               capability.providedAtOffset !== revoke.providedAtOffset
@@ -217,7 +275,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
           }),
         };
       }
-      case "events.iterate.com/capability-host/script-execution-requested":
+      case "events.iterate.com/capability-host/script-run-requested":
         return {
           ...state,
           scriptExecutions: {
@@ -225,14 +283,15 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
             [event.payload.executionId]: {
               status: "requested" as const,
               code: event.payload.code,
-              expiresAt:
-                event.payload.expiresAt ??
-                Date.parse(event.createdAt) + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
+              requestedAtOffset: event.offset,
+              expiresAt: event.payload.expiresAt,
             },
           },
         };
-      case "events.iterate.com/capability-host/script-execution-started": {
+      case "events.iterate.com/capability-host/script-run-started": {
         const existing = state.scriptExecutions[event.payload.executionId];
+        // A started fact for an already-settled (deleted) obligation reduces
+        // to nothing — the settle won.
         if (existing === undefined) return state;
         return {
           ...state,
@@ -242,7 +301,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
           },
         };
       }
-      case "events.iterate.com/capability-host/script-execution-completed": {
+      case "events.iterate.com/capability-host/script-run-settled": {
         const scriptExecutions = { ...state.scriptExecutions };
         delete scriptExecutions[event.payload.executionId];
         return { ...state, scriptExecutions };
@@ -252,64 +311,12 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     }
   }
 
-  /** Script executions alive in THIS incarnation — the "actual" half of the
-   * reconciliation below. */
-  readonly #liveExecutions = new Set<string>();
-
-  /**
-   * End-of-batch reconciliation of desired (open script obligations in the
-   * fold) against actual (this incarnation's live executions) — the same
-   * shape as the LLM providers' (see OpenAiWsProcessor.processEventBatch for
-   * the doctrine), with one policy difference: a `started` script that lost
-   * its incarnation is settled as a FAILURE and never re-run, because a
-   * script may have half-executed its side effects and scripts are not
-   * assumed idempotent. The agent renders the failure and the model decides
-   * whether to retry.
-   */
-  protected override async processEventBatch(
-    args: Parameters<StreamProcessor<CapabilityHostProcessorContract>["processEventBatch"]>[0],
-  ): Promise<void> {
-    await super.processEventBatch(args);
-    // At-head gate — see OpenAiWsProcessor.processEventBatch.
-    if (args.checkpointOffset < args.streamMaxOffset) return;
-    const now = (this.#now ?? Date.now)();
-    const settle: { executionId: string; error: string }[] = [];
-    for (const [executionId, execution] of Object.entries(args.state.scriptExecutions)) {
-      if (this.#liveExecutions.has(executionId)) continue;
-      if (execution.status === "requested" && now < execution.expiresAt) {
-        this.#liveExecutions.add(executionId);
-        // The batch's own fold, NOT this.state: the durable checkpoint (and
-        // the state getter behind it) advances only after this hook returns,
-        // and the typecheck gate must see capabilities provided in the same
-        // batch as the request or it would judge the script against a stale
-        // scope.
-        const capabilities = args.state.capabilities;
-        args.runInBackground(() =>
-          this.#executeScript({ capabilities, code: execution.code, executionId }),
-        );
-        continue;
-      }
-      settle.push({
-        executionId,
-        error:
-          execution.status === "started"
-            ? "Script execution orphaned: the incarnation running it went away before completing (eviction mid-run). It may have partially executed; it was NOT re-run."
-            : "Script execution expired before any attempt started (the host was down past the request's expiry). It never ran.",
-      });
-    }
-    if (settle.length === 0) return;
-    args.blockProcessorWhile(async () => {
-      for (const { executionId, error } of settle) {
-        console.error("[capability-host] settling undriven script execution", {
-          executionId,
-          error,
-        });
-        await this.#appendCompletion({ executionId, error });
-      }
-    });
-  }
+  // -------------------------------------------------------- itx-facing verbs
+  // The scope's public capability surface, called via the hosting durable
+  // object (never by the delivery loop).
 
   async provideCapability(input: ProvideCapabilityInput) {
+    await this.#assertCreated();
     const { path } = input;
     assertCapabilityPath(path);
     const key = liveKey(path);
@@ -353,13 +360,13 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
       input satisfies never;
       throw new Error(`unsupported capability input ${(input as { type?: unknown }).type}`);
     }
-    // Authored types must compile before they enter the journal — a typo'd
-    // declaration rejected here is a fixable error; one journaled durably is
+    // Authored types must compile before they enter the stream — a typo'd
+    // declaration rejected here is a fixable error; one recorded durably is
     // silent rot every docs read and typecheck inherits. This runs AFTER the
     // cheap structural checks above so a malformed payload never costs a
     // network-bound compile before its real error surfaces.
     if (input.types !== undefined) {
-      const problems = (await this.#validateCapabilityTypes?.(input.types)) ?? [];
+      const problems = (await this.deps.validateCapabilityTypes?.(input.types)) ?? [];
       if (problems.length > 0) {
         throw new Error(
           `capability "types" for "${path.join(".")}" does not compile:\n${problems.join("\n")}`,
@@ -386,7 +393,8 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     }
 
     // The append is the durable commit point. From here on, keep the ephemeral
-    // live-provider map aligned with the record that will fold from the stream.
+    // live-provider map aligned with the record that will reduce from the
+    // stream.
     if (nextLive === undefined) {
       this.#liveCapabilities.delete(key);
     } else {
@@ -394,8 +402,105 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     }
     previousLive?.dispose();
 
-    await this.waitUntilEvent({ offset: committedOffset });
+    await this.deps.reads.waitUntilEvent({
+      offset: committedOffset,
+      timeoutMs: INGEST_WAIT_TIMEOUT_MS,
+    });
     return { path, providedAtOffset: committedOffset };
+  }
+
+  async revokeCapability({ path, providedAtOffset }: RevokeCapabilityInput) {
+    await this.#assertCreated();
+    assertCapabilityPath(path);
+    const { state } = await this.deps.reads.snapshot();
+    const current = state.capabilities.find((record) => samePath(record.path, path));
+    if (providedAtOffset !== undefined && current?.providedAtOffset !== providedAtOffset) {
+      return;
+    }
+    const key = liveKey(path);
+    const previousLive = this.#liveCapabilities.get(key);
+    const [committed] = await this.append({
+      type: "events.iterate.com/capability-host/capability-revoked",
+      payload: {
+        path,
+        ...(providedAtOffset === undefined ? {} : { providedAtOffset }),
+      },
+    });
+    this.#liveCapabilities.delete(key);
+    previousLive?.dispose();
+    await this.deps.reads.waitUntilEvent({
+      offset: committed.offset,
+      timeoutMs: INGEST_WAIT_TIMEOUT_MS,
+    });
+  }
+
+  async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
+    // A trailing __describe is a valid INVOCATION (answered from the mount's
+    // durable metadata below) — the reserved-name rule is for MOUNT names, so
+    // validate the path without it or discovery on provided capabilities dies
+    // here with "invalid capability path segment".
+    assertCapabilityPath(path[path.length - 1] === "__describe" ? path.slice(0, -1) : path);
+    const { state } = await this.deps.reads.snapshot();
+    if (state.birthCertificate === null) {
+      throw new Error(`capability host at ${this.#scopePath} has not been created`);
+    }
+    const hit = resolveLongestPrefix(state.capabilities, path);
+    if (!hit) {
+      // Not declared at THIS scope: follow the birth certificate's recorded
+      // fallback — ONE direct hop, usually to the project root host. This is
+      // how an agent sees capabilities mounted on the project. Resolution
+      // reads live state every call, so a revoked local mount transparently
+      // re-exposes whatever the fallback host has at that path.
+      const fallback = await this.#fallbackHost(state.birthCertificate.fallback);
+      if (fallback) return await fallback.invokeCapability({ args, path });
+      throw new Error(`no capability "${path.join(".")}"`);
+    }
+    // `__describe` on a mounted capability is answered HERE, from the mount's
+    // durable metadata (instructions/types recorded at provide time) — the
+    // live target is never dialed, for ANY mount kind. Flattened mounts
+    // especially: forwarding ["...","__describe"] to a flattenNestedPaths
+    // target would hand a discovery probe to a dispatcher that treats every
+    // path as a method route. This is what makes discovery work on
+    // session-bound live mounts whose provider is offline, and it is the first
+    // rung of the transitive-description ladder.
+    if (path[path.length - 1] === "__describe") {
+      return this.#describeMount(hit.record, path.slice(0, -1));
+    }
+    if (hit.record.type === "itx-expression") {
+      const evaluated = await evaluateItxExpression(this.deps.itx, hit.record.expression);
+      const provider = await normalizeCapabilityProvider(evaluated, hit.record);
+      return await invokeNormalizedCapability(provider, hit.rest, args);
+    }
+    const live = this.#liveCapabilities.get(liveKey(hit.record.path));
+    if (!live) {
+      throw new Error(`capability "${hit.record.path.join(".")}" is offline`);
+    }
+    return await live.invoke(hit.rest, args);
+  }
+
+  // Reports everything reachable at this scope: this scope's own mounts plus
+  // everything the fallback host reports, each tagged with the scope it was
+  // declared at. A local mount shadows a fallback one at the same path (same
+  // rule as `resolveLongestPrefix` below), so the caller — usually an LLM
+  // deciding what it can invoke — sees exactly one entry per reachable path
+  // and where it lives.
+  async describeCapabilities(): Promise<CapabilityDescription[]> {
+    const { state } = await this.deps.reads.snapshot();
+    // Deliberately no #assertCreated: describing an unborn scope reports []
+    // (discovery stays safe everywhere), while invoking one throws above.
+    return await this.#describeCapabilitiesFrom(
+      state.capabilities,
+      state.birthCertificate?.fallback ?? null,
+    );
+  }
+
+  // ------------------------------------------------------- private machinery
+
+  async #assertCreated(): Promise<void> {
+    const { state } = await this.deps.reads.snapshot();
+    if (state.birthCertificate === null) {
+      throw new Error(`capability host at ${this.#scopePath} has not been created`);
+    }
   }
 
   /**
@@ -407,7 +512,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
    * Best-effort by design: an unreachable or slow server, a target without
    * `__describe`, or self-reported types that fail to compile all leave the
    * mount untyped rather than blocking the provide. The compile gate keeps
-   * the invariant that types journaled THROUGH provideCapability always
+   * the invariant that types recorded THROUGH provideCapability always
    * compile (direct `capability-provided` appends — agent birth mounts,
    * userspace processors — bypass this method entirely).
    */
@@ -437,73 +542,14 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   async #describeExpressionTypes(
     expression: Extract<ProvideCapabilityInput, { type: "itx-expression" }>["expression"],
   ): Promise<string | undefined> {
-    const evaluated = await evaluateItxExpression(this.#itx, expression);
+    const evaluated = await evaluateItxExpression(this.deps.itx, expression);
     const value = (await evaluated.value) as {
       __describe?: () => Promise<{ types?: string }>;
     };
     const types = (await value.__describe?.())?.types;
     if (typeof types !== "string" || types.length === 0) return undefined;
-    const problems = (await this.#validateCapabilityTypes?.(types)) ?? [];
+    const problems = (await this.deps.validateCapabilityTypes?.(types)) ?? [];
     return problems.length === 0 ? types : undefined;
-  }
-
-  async revokeCapability({ path, providedAtOffset }: RevokeCapabilityInput) {
-    assertCapabilityPath(path);
-    const current = this.state.capabilities.find((record) => samePath(record.path, path));
-    if (providedAtOffset !== undefined && current?.providedAtOffset !== providedAtOffset) {
-      return;
-    }
-    const key = liveKey(path);
-    const previousLive = this.#liveCapabilities.get(key);
-    const [committed] = await this.append({
-      type: "events.iterate.com/capability-host/capability-revoked",
-      payload: {
-        path,
-        ...(providedAtOffset === undefined ? {} : { providedAtOffset }),
-      },
-    });
-    this.#liveCapabilities.delete(key);
-    previousLive?.dispose();
-    await this.waitUntilEvent({ offset: committed.offset });
-  }
-
-  async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
-    // A trailing __describe is a valid INVOCATION (answered from the mount's
-    // durable metadata below) — the reserved-name rule is for MOUNT names, so
-    // validate the path without it or discovery on provided capabilities dies
-    // here with "invalid capability path segment".
-    assertCapabilityPath(path[path.length - 1] === "__describe" ? path.slice(0, -1) : path);
-    const hit = resolveLongestPrefix(this.state.capabilities, path);
-    if (!hit) {
-      // Not declared at THIS scope. Capability reads chain up the scope hierarchy,
-      // so ask the enclosing scope before giving up — this is how an agent sees
-      // capabilities mounted on its namespace or on the project. Resolution reads
-      // live `state.capabilities` every call, so a revoked child mount transparently
-      // re-exposes whatever the parent still has at that path.
-      if (this.#parent) return await this.#parent.invokeCapability({ args, path });
-      throw new Error(`no capability "${path.join(".")}"`);
-    }
-    // `__describe` on a mounted capability is answered HERE, from the mount's
-    // durable metadata (instructions/types recorded at provide time) — the
-    // live target is never dialed, for ANY mount kind. Flattened mounts
-    // especially: forwarding ["...","__describe"] to a flattenNestedPaths
-    // target would hand a discovery probe to a dispatcher that treats every
-    // path as a method route. This is what makes discovery work on
-    // session-bound live mounts whose provider is offline, and it is the first
-    // rung of the transitive-description ladder.
-    if (path[path.length - 1] === "__describe") {
-      return this.#describeMount(hit.record, path.slice(0, -1));
-    }
-    if (hit.record.type === "itx-expression") {
-      const evaluated = await evaluateItxExpression(this.#itx, hit.record.expression);
-      const provider = await normalizeCapabilityProvider(evaluated, hit.record);
-      return await invokeNormalizedCapability(provider, hit.rest, args);
-    }
-    const live = this.#liveCapabilities.get(liveKey(hit.record.path));
-    if (!live) {
-      throw new Error(`capability "${hit.record.path.join(".")}" is offline`);
-    }
-    return await live.invoke(hit.rest, args);
   }
 
   /**
@@ -533,157 +579,534 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
         dispatch + nestedNote,
       ].join("\n\n"),
       // __describe is the identity card, never big: a giant declaration
-      // (authors can journal hundreds of KB) is truncated here; the budgeted
+      // (authors can record hundreds of KB) is truncated here; the budgeted
       // reader is `itx.docs.get({ name: "<mount path>", maxTokens })`.
       types: truncatedTypes(record.types ?? "", mountPoint),
       children: {},
-      parent: `the capability host at scope "${this.#path}" (mounted at "${mountPoint}", providedAtOffset ${record.providedAtOffset})`,
+      parent: `the capability host at scope "${this.#scopePath}" (mounted at "${mountPoint}", providedAtOffset ${record.providedAtOffset})`,
     };
   }
 
-  // Reports everything reachable at this scope: this scope's own mounts plus every
-  // capability inherited from enclosing scopes, each tagged with the scope it was
-  // declared at. A nearer scope shadows a farther one at the same path (same rule
-  // as `resolveLongestPrefix` above), so the caller — usually an LLM deciding what
-  // it can invoke — sees exactly one entry per reachable path and where it lives.
-  describeCapabilities(): Promise<CapabilityDescription[]> {
-    return this.#describeCapabilitiesFrom(this.state.capabilities);
+  /**
+   * The birth certificate's fallback expression, evaluated against this
+   * scope's own itx into the host reads fall back to — or null when the
+   * certificate ends resolution here (the project root, and every unborn or
+   * pre-fallback host). Evaluated per read: the stream stores the NAME of
+   * the fallback, never a captured handle. Platform-written expressions
+   * evaluate to an in-process RpcTarget (never a disposable client stub), so
+   * the hop holds nothing that needs disposal.
+   */
+  async #fallbackHost(
+    fallback: ItxExpression | null | undefined,
+  ): Promise<FallbackCapabilityHost | null> {
+    if (!fallback) return null;
+    const { value } = await evaluateItxExpression(this.deps.itx, fallback);
+    if (!isFallbackCapabilityHost(value)) {
+      throw new Error(
+        `capability fallback expression for scope ${this.#scopePath} did not evaluate to a capability host`,
+      );
+    }
+    // Platform-written fallbacks always point at "/", but the field is stream
+    // data: reject the one trivially-expressible cycle instead of letting a
+    // self-pointing scope recurse through DO dials to the subrequest limit.
+    if (typeof value.path === "string" && normalizePath(value.path) === this.#scopePath) {
+      throw new Error(`capability fallback for scope ${this.#scopePath} points at itself`);
+    }
+    return value;
   }
 
-  async #describeCapabilitiesFrom(records: CapabilityRecord[]): Promise<CapabilityDescription[]> {
+  async #describeCapabilitiesFrom(
+    records: CapabilityRecord[],
+    fallbackExpression: ItxExpression | null | undefined,
+  ): Promise<CapabilityDescription[]> {
     const local: CapabilityDescription[] = records.map((record) => ({
       instructions: record.instructions,
       path: record.path,
       providedAtOffset: record.providedAtOffset,
-      scope: this.#path,
+      scope: this.#scopePath,
       type: record.type,
       types: record.types,
     }));
-    if (!this.#parent) return local;
+    const fallback = await this.#fallbackHost(fallbackExpression);
+    if (!fallback) return local;
     const shadowed = new Set(local.map((c) => JSON.stringify(c.path)));
-    const inherited = await this.#parent.describeCapabilities();
+    const { capabilities: inherited } = await fallback.__describe();
     return [...local, ...inherited.filter((c) => !shadowed.has(JSON.stringify(c.path)))];
-  }
-
-  async runScript(code: string): Promise<RunScriptResult> {
-    const executionId = crypto.randomUUID();
-    const completed = this.#waitForScriptCompletion(executionId);
-    await this.append({
-      type: "events.iterate.com/capability-host/script-execution-requested",
-      payload: { code, executionId },
-    });
-    const event = await completed;
-    const payload = event.payload as CompletedPayload;
-    if (payload.error !== undefined) throw new Error(String(payload.error));
-    return { completedEvent: event, executionId, result: payload.result ?? null };
-  }
-
-  async #waitForScriptCompletion(executionId: string) {
-    let completed: StreamEvent | undefined;
-    await this.waitUntilEvent({
-      predicate: (event) => {
-        if (event.type !== "events.iterate.com/capability-host/script-execution-completed")
-          return false;
-        const payload = event.payload as CompletedPayload;
-        if (payload.executionId !== executionId) return false;
-        completed = event as StreamEvent;
-        return true;
-      },
-    });
-    if (!completed) throw new Error(`script execution "${executionId}" completed without an event`);
-    return completed;
   }
 
   /**
    * The pre-execution typecheck gate: a script whose OWN code carries a
    * provable error (a syntax error, a near-miss typo the compiler can name
-   * the fix for) settles as an error completion without running — the model
+   * the fix for) settles as an error settlement without running — the model
    * reads compiler errors instead of paying a failed run. Permissive
    * everywhere the checker lacks knowledge (unknown types, unchecked
    * verdicts, checker failures): the gate may only ever block on proof.
-   * Returns the completion error, or null to proceed.
+   * Returns the settlement error, or null to proceed.
    */
-  async #typecheckRejection(code: string, records: CapabilityRecord[]): Promise<string | null> {
-    const typecheckScript = this.#typecheckScript;
-    if (typecheckScript === undefined) return null;
+  async #typecheckScriptForRun(
+    code: string,
+    records: CapabilityRecord[],
+    fallback: ItxExpression | null,
+  ): Promise<{ rejection: string | null; emittedJs?: string }> {
+    const typecheckScript = this.deps.typecheckScript;
+    if (typecheckScript === undefined) return { rejection: null };
     try {
-      const capabilities = await this.#describeCapabilitiesFrom(records);
+      const capabilities = await this.#describeCapabilitiesFrom(records, fallback);
       const checked = await typecheckScript({ capabilities, code });
-      if (checked.verdict !== "problems") return null;
-      return [
-        "Script was NOT executed: it does not typecheck against this scope's capability types.",
-        ...checked.problems,
-        "Fix the type errors and resend the whole corrected script.",
-      ].join("\n");
+      if (checked.verdict === "clean") {
+        // Check and emit are one compile: what runs IS the compiler's
+        // type-stripped output, so scripts are genuinely TypeScript.
+        return { rejection: null, emittedJs: checked.emittedJs };
+      }
+      if (checked.verdict !== "problems") return { rejection: null };
+      return {
+        rejection: [
+          "Script was NOT executed: it does not typecheck against this scope's capability types.",
+          ...checked.problems,
+          "Fix the type errors and resend the whole corrected script.",
+        ].join("\n"),
+      };
     } catch (error) {
       // The gate must never fail a script for the checker's own failure — an
-      // unreachable sidecar or a parent-scope dial error means unchecked.
+      // unreachable sidecar or a fallback-host dial error means unchecked.
       console.warn("[capability-host] script typecheck skipped", { error });
-      return null;
+      return { rejection: null };
     }
   }
 
+  /**
+   * One attempt at one script obligation, start to settled — background work:
+   * it can run for minutes, and the stream (not this closure) is what survives
+   * an eviction. Typecheck gate → started evidence → worker RPC → settled,
+   * with the deadline enforced at every stage.
+   */
   async #executeScript(input: {
     capabilities: CapabilityRecord[];
     code: string;
     executionId: string;
+    expiresAt: number;
+    fallback: ItxExpression | null;
+    requestedAtOffset: number;
   }) {
+    const now = () => this.#now();
+    const executionExpiresAt = input.expiresAt - SCRIPT_EXECUTION_SETTLEMENT_GRACE_MS;
     try {
       // The typecheck gate runs BEFORE the started evidence: it has no side
       // effects, so a rejected script provably never ran (requested →
-      // completed, no started event) and the reconciler doctrine is untouched.
-      const rejection = await this.#typecheckRejection(input.code, input.capabilities);
-      if (rejection !== null) {
-        await this.#appendCompletion({ executionId: input.executionId, error: rejection });
+      // settled, no started event) and the orphan policy is untouched.
+      const checkedOutcome = await settleByDeadline(
+        this.#typecheckScriptForRun(input.code, input.capabilities, input.fallback),
+        executionExpiresAt,
+        now,
+      );
+      if (checkedOutcome.status === "deadline") {
+        await this.#appendSettlementWithin(
+          {
+            executionId: input.executionId,
+            settlement: {
+              status: "failed",
+              error:
+                "Script execution reached its absolute deadline while being typechecked. It never ran.",
+              failureKind: "deadline",
+              phase: "typecheck",
+              executionMayHaveOccurred: false,
+              cancellation: "not-applicable",
+            },
+          },
+          input.expiresAt,
+        );
+        return;
+      }
+      if (checkedOutcome.status === "rejected") throw checkedOutcome.error;
+      const checked = checkedOutcome.value;
+      if (checked.rejection !== null) {
+        await this.#appendSettlementWithin(
+          {
+            executionId: input.executionId,
+            settlement: {
+              status: "failed",
+              error: checked.rejection,
+              failureKind: "typecheck",
+              phase: "typecheck",
+              executionMayHaveOccurred: false,
+              cancellation: "not-applicable",
+            },
+          },
+          input.expiresAt,
+        );
         return;
       }
       // Started-evidence lands durably BEFORE the script body runs, so the
-      // fold can always tell "provably never ran" (requested, startable late)
-      // from "may have half-run" (started, settle-only). Deliberately OUTSIDE
-      // the try below: if this append fails the script never ran, so no
-      // completion may be appended — the obligation stays `requested`, the
-      // rethrow marks the keepalive window failed, and a later reconciliation
-      // retries the whole attempt. (Same shape as the LLM providers.)
-      await this.append({
-        type: "events.iterate.com/capability-host/script-execution-started",
-        idempotencyKey: this.idempotencyKey(`script-execution-started@${input.executionId}`),
-        payload: { executionId: input.executionId },
-      });
-      try {
-        const result = await this.#scriptExecutionEntrypoint.run(input.code);
-        await this.#appendCompletion({ executionId: input.executionId, result });
-      } catch (error) {
-        await this.#appendCompletion({
-          executionId: input.executionId,
-          error: error instanceof Error ? error.message : String(error),
-        });
+      // reduced state can always tell "provably never ran" (requested,
+      // startable late) from "may have half-run" (started, settle-only).
+      // Deliberately OUTSIDE the try below: if this append fails the script
+      // never ran, so no settlement may be appended — the obligation stays
+      // `requested`, the rethrow marks the keepalive window failed, and a
+      // later at-head pass retries the whole attempt.
+      await this.#awaitAppendWithin(
+        this.append({
+          type: "events.iterate.com/capability-host/script-run-started",
+          idempotencyKey: this.idempotencyKey(`script-run-started@${input.executionId}`),
+          payload: { executionId: input.executionId },
+        }),
+        executionExpiresAt,
+        `record the start of script execution "${input.executionId}"`,
+      );
+      if (now() >= executionExpiresAt) {
+        await this.#appendSettlementWithin(
+          {
+            executionId: input.executionId,
+            settlement: {
+              status: "failed",
+              error:
+                "Script execution reached its absolute deadline after its start was recorded but before the worker was invoked. It never ran.",
+              failureKind: "deadline",
+              phase: "before-execution",
+              executionMayHaveOccurred: false,
+              cancellation: "not-applicable",
+            },
+          },
+          input.expiresAt,
+        );
+        return;
       }
+
+      // The entrypoint owns a timer around the dynamic-worker invocation, but
+      // the RPC carrying that result back to this host is a second failure
+      // boundary. Bound it independently: a half-open worker stub must not
+      // keep the obligation (and its stream-native public waiter) alive forever
+      // even if the remote timer fired correctly.
+      const runPromise = this.deps.scriptExecutionEntrypoint.run(input.code, {
+        emittedJs: checked.emittedJs,
+        expiresAt: executionExpiresAt,
+        streamContext: {
+          kind: "script-execution",
+          streamPath: this.#scopePath,
+          scriptRunRequestedEventOffset: input.requestedAtOffset,
+          executionId: input.executionId,
+        },
+      });
+      const runOutcome = await settleByDeadline(runPromise, executionExpiresAt, now);
+      if (runOutcome.status === "deadline") {
+        // Workers RPC promises are disposable capabilities at runtime. End
+        // this host's retained call as soon as its absolute wait expires;
+        // the durable settlement still conservatively says arbitrary
+        // external work may continue because disposal is not a cancellation
+        // acknowledgement from code the script already invoked.
+        (runPromise as Promise<unknown> & Partial<Disposable>)[Symbol.dispose]?.();
+      }
+      const settlement = settlementFromWorkerOutcome(runOutcome);
+      // Deliberately outside the worker-invocation catch: a failed stream
+      // append must never be reclassified as a script runtime failure. It
+      // rejects this tracked attempt, and the next at-head pass retries the
+      // same idempotent settlement.
+      await this.#appendSettlementWithin(
+        { executionId: input.executionId, settlement },
+        input.expiresAt,
+      );
     } finally {
       this.#liveExecutions.delete(input.executionId);
     }
   }
 
-  /** The one durable outcome of a script execution. The reconciler's settle
-   * path and the normal run share the idempotency key, so races collapse to
-   * one completion at the append dedup layer. */
-  #appendCompletion(input: { executionId: string; error?: string; result?: unknown }) {
-    const payload =
-      input.error !== undefined
-        ? { error: input.error, executionId: input.executionId }
-        : {
-            executionId: input.executionId,
-            // A script that returns undefined omits `result` entirely. The
-            // distinction is load-bearing for agents: "returned a value"
-            // feeds the result back for another turn, "returned nothing"
-            // ends the loop.
-            ...(input.result === undefined ? {} : { result: json(input.result) }),
-          };
-    return this.append({
-      type: "events.iterate.com/capability-host/script-execution-completed",
-      idempotencyKey: this.idempotencyKey(`script-execution-completed@${input.executionId}`),
-      payload,
+  async #awaitAppendWithin<T>(
+    append: Promise<T>,
+    deadline: number,
+    description: string,
+  ): Promise<T> {
+    const outcome = await settleByDeadline(append, deadline, () => this.#now());
+    if (outcome.status === "fulfilled") return outcome.value;
+    if (outcome.status === "rejected") throw outcome.error;
+    throw new Error(`Timed out while attempting to ${description}`);
+  }
+
+  #appendSettlementWithin(
+    input: { executionId: string; settlement: ScriptExecutionSettlementValue },
+    obligationExpiresAt: number,
+  ) {
+    return this.#appendSettlementsWithin([{ ...input, expiresAt: obligationExpiresAt }]);
+  }
+
+  /**
+   * Append a batch of settlements, each the ONE durable outcome of a script
+   * execution. The at-head pass and the normal run share the settle
+   * idempotency key (`script-run-settled@<executionId>`), so races collapse to
+   * one settled fact at the append dedup layer. A failed append is retried by
+   * the next at-head pass with the SAME settlement (`#pendingSettlements`);
+   * a same-key CONFLICT means another incarnation's settlement already stands
+   * — read it back and stand down instead of surfacing an error.
+   */
+  async #appendSettlementsWithin(
+    inputs: {
+      executionId: string;
+      expiresAt: number;
+      settlement: ScriptExecutionSettlementValue;
+    }[],
+  ) {
+    if (inputs.length === 0) return Promise.resolve();
+    for (const { executionId, settlement } of inputs) {
+      this.#pendingSettlements.set(executionId, settlement);
+    }
+    const now = this.#now();
+    // Normal execution reserved this interval before obligation expiry. A
+    // recovery pass necessarily runs after expiry, so give each idempotent
+    // retry one fresh bounded interval instead of either failing instantly or
+    // blocking the processor forever. A batch uses its earliest member's
+    // deadline so batching cannot extend any individual obligation.
+    const appendDeadline = settlementAppendDeadline(inputs, now);
+    const settlements = inputs.map((input) => this.#settlementInput(input));
+    try {
+      await this.#awaitAppendWithin(
+        this.append(...settlements),
+        appendDeadline,
+        inputs.length === 1
+          ? `record the settlement of script execution "${inputs[0]!.executionId}"`
+          : `record ${inputs.length} script execution settlements`,
+      );
+    } catch (appendError) {
+      let durableSettlements: ScriptExecutionSettlementValue[];
+      try {
+        durableSettlements = await this.#awaitAppendWithin(
+          Promise.all(
+            settlements.map(async (settlement, index) => {
+              const event = await this.stream.getEvent({
+                idempotencyKey: settlement.idempotencyKey,
+              });
+              const durable = settlementFromSettledEvent(event, inputs[index]!.executionId);
+              if (durable === undefined) throw appendError;
+              return durable;
+            }),
+          ),
+          settlementAppendDeadline(inputs, this.#now()),
+          "verify the durable script settlement after its append failed",
+        );
+      } catch (verificationError) {
+        if (verificationError === appendError) throw appendError;
+        throw new AggregateError(
+          [appendError, verificationError],
+          "script settlement append failed and its durable outcome could not be verified",
+        );
+      }
+
+      // A replacement incarnation may conservatively classify an execution
+      // as orphaned while the old external worker is still returning. The
+      // first settlement is authoritative. A failed append is a settled
+      // obligation only after reading back a valid settlement for every
+      // exact execution/idempotency key; the late result is then an expected,
+      // explicitly observed loser rather than error telemetry.
+      inputs.forEach((input, index) => {
+        const durableSettlement = durableSettlements[index]!;
+        console.info("[capability-host] late script settlement superseded by durable outcome", {
+          attemptedFailureKind:
+            input.settlement.status === "failed" ? input.settlement.failureKind : undefined,
+          attemptedStatus: input.settlement.status,
+          durableFailureKind:
+            durableSettlement.status === "failed" ? durableSettlement.failureKind : undefined,
+          durableStatus: durableSettlement.status,
+          executionId: input.executionId,
+        });
+      });
+    }
+  }
+
+  /** The one durable outcome of a script execution, as an append input. */
+  #settlementInput(input: { executionId: string; settlement: ScriptExecutionSettlementValue }) {
+    return scriptCompletionInput({
+      executionId: input.executionId,
+      idempotencyKey: this.idempotencyKey(`script-run-settled@${input.executionId}`),
+      settlement: input.settlement,
     });
   }
+
+  #now(): number {
+    return this.deps.now?.() ?? Date.now();
+  }
+
+  /** The normalized scope path (error messages, __describe, the self-fallback
+   * guard) — normalized once per read, from the base class's raw `path`. */
+  get #scopePath(): string {
+    return normalizePath(this.path);
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Injected dependencies.
+// -----------------------------------------------------------------------------
+
+type ScriptExecutionEntrypoint = {
+  run(
+    code: string,
+    options: {
+      emittedJs?: string;
+      expiresAt: number;
+      streamContext: Extract<StreamContext, { kind: "script-execution" }>;
+    },
+  ): Promise<unknown>;
+};
+
+/**
+ * RUNNER-backed reads of the committed reduction. Under registry drive the
+ * runner owns both cursors and the processor instance's internal checkpoint
+ * never advances, so every state read this processor makes OUTSIDE a hook's
+ * own args — capability resolution, the revoke guard, and the provide/revoke
+ * read-your-writes barriers — must go through the runner's committed progress.
+ * The hosting DO wires this to
+ * `registry.reads(processor)` (lazily — `reads()` needs the registered
+ * processor); test harnesses wire it to the driving StreamProcessorRunner.
+ * `waitUntilEvent` takes BOTH forms as one union parameter (the registry's
+ * read surface accepts it; the predicate form is in-process-only — a function
+ * cannot cross the RPC facade).
+ */
+export type CapabilityHostProcessorReads = {
+  snapshot(): Promise<{
+    offset: number;
+    state: ProcessorState<CapabilityHostProcessorContract>;
+  }>;
+  waitUntilEvent(
+    input:
+      | { offset: number; timeoutMs?: number; signal?: AbortSignal }
+      | {
+          predicate: (event: StreamEvent) => boolean;
+          timeoutMs?: number;
+          signal?: AbortSignal;
+        },
+  ): Promise<void>;
+};
+
+export type CapabilityHostProcessorDeps = {
+  /** This scope's own itx — what fallback and itx-expression mounts evaluate against. */
+  itx: Project;
+  /** Runner-backed committed-state reads — see {@link CapabilityHostProcessorReads}. */
+  reads: CapabilityHostProcessorReads;
+  /** Runs run-script workers in this scope. */
+  scriptExecutionEntrypoint: ScriptExecutionEntrypoint;
+  /** Injected clock (expiry decisions); production defaults to Date.now. */
+  now?: () => number;
+  /**
+   * Compiles a mount's `types` string, returning problems (empty = it
+   * compiles). Wired to the typechecker sidecar in production; the node
+   * test harness runs without one, which skips validation.
+   */
+  validateCapabilityTypes?: (types: string) => Promise<string[]>;
+  /**
+   * Pre-execution typecheck of a requested script against this scope's
+   * capability types (checkItxScriptForExecution in production; absent in
+   * the node test harness, which skips the gate). Only a `problems`
+   * verdict blocks the run — see ScriptExecutionCheck.
+   */
+  typecheckScript?: (input: {
+    capabilities: CapabilityDescription[];
+    code: string;
+  }) => Promise<ScriptExecutionCheck>;
+};
+
+// -----------------------------------------------------------------------------
+// Auxiliary types and pure helpers.
+// -----------------------------------------------------------------------------
+
+/**
+ * The host a capability miss falls back to, as this processor sees it after
+ * evaluating the birth certificate's `fallback` expression against its own
+ * itx. In practice that expression is `["capabilityHosts", ["get", "/"]]` and
+ * the value is a CapabilityHostRpcTarget, but only these two read operations
+ * are depended on — mounting is always local, so `provide`/`revoke` are
+ * deliberately absent.
+ */
+type FallbackCapabilityHost = {
+  invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
+  __describe(): Promise<{ capabilities: CapabilityDescription[] }>;
+  /** The scope path the handle fronts, when it exposes one (the self-fallback guard reads it). */
+  path?: string;
+};
+
+function isFallbackCapabilityHost(value: unknown): value is FallbackCapabilityHost {
+  const host = value as Partial<FallbackCapabilityHost> | null | undefined;
+  return typeof host?.invokeCapability === "function" && typeof host.__describe === "function";
+}
+
+const INVALID_PATH_SEGMENTS = new Set([
+  // Mount names only — INVOCATION paths may end in __describe (intercepted in
+  // invokeCapability above); a MOUNT named __describe would be unreachable.
+  "__describe",
+  "__proto__",
+  "constructor",
+  "prototype",
+  "then",
+  "apply",
+  "call",
+  "bind",
+  "dup",
+  "onRpcBroken",
+]);
+
+/** ~4k tokens: how much of a mount's types `__describe` shows before
+ * deferring to docs.get's budgeted reader. */
+const MAX_DESCRIBED_TYPES_CHARS = 16_000;
+// provide/revoke are read-your-write boundaries. A broken delivery path must
+// reject the command rather than retain an RPC forever.
+const INGEST_WAIT_TIMEOUT_MS = 15_000;
+
+function truncatedTypes(types: string, mountPoint: string): string {
+  if (types.length <= MAX_DESCRIBED_TYPES_CHARS) return types;
+  const cut = types.slice(0, MAX_DESCRIBED_TYPES_CHARS);
+  // Close a block comment the cut may have opened, so the notice stays
+  // visible to a consumer rendering this as code (same rule as typeSlice).
+  const openComment = cut.lastIndexOf("/*") > cut.lastIndexOf("*/");
+  return (
+    cut +
+    (openComment ? " */" : "") +
+    `\n// … truncated — read slices with itx.docs.get({ name: ${JSON.stringify(mountPoint)}, maxTokens: 4000 })`
+  );
+}
+
+const samePath = (a: string[], b: string[]) =>
+  a.length === b.length && a.every((segment, index) => segment === b[index]);
+
+const liveKey = (path: string[]) => JSON.stringify(path);
+
+function assertCapabilityPath(path: string[]) {
+  if (!Array.isArray(path)) {
+    throw new Error('capability path must be an ARRAY of segments (e.g. ["tools", "weather"])');
+  }
+  if (path.length === 0) {
+    throw new Error("capability path must contain at least one segment");
+  }
+  for (const segment of path) {
+    if (
+      typeof segment !== "string" ||
+      !/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(segment) ||
+      INVALID_PATH_SEGMENTS.has(segment)
+    ) {
+      throw new Error(`invalid capability path segment "${String(segment)}"`);
+    }
+  }
+}
+
+function resolveLongestPrefix(records: CapabilityRecord[], path: string[]) {
+  let best: { record: CapabilityRecord; rest: string[] } | null = null;
+  for (const record of records) {
+    const matches =
+      record.path.length <= path.length &&
+      record.path.every((segment, index) => segment === path[index]);
+    if (matches && (!best || record.path.length > best.record.path.length)) {
+      best = { record, rest: path.slice(record.path.length) };
+    }
+  }
+  return best;
+}
+
+function settlementFromSettledEvent(
+  event: StreamEvent | undefined,
+  executionId: string,
+): ScriptExecutionSettlementValue | undefined {
+  if (
+    event?.type !== "events.iterate.com/capability-host/script-run-settled" ||
+    event.payload?.executionId !== executionId
+  ) {
+    return undefined;
+  }
+  const parsed = ScriptExecutionSettlement.safeParse(event.payload.settlement);
+  return parsed.success ? parsed.data : undefined;
 }
 
 function assertExpressionDoesNotReferenceOwnMount(

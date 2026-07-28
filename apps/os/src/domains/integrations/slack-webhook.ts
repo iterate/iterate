@@ -7,22 +7,22 @@
 // shared primitives, not a webhook framework). The one shared primitive it uses
 // is routeIntegrationWebhook (append to the (slug, externalId) claim's stream).
 //
-// ## The cardinal rule: ACK every *validly-signed* event with an HTTP 2xx
+// ## The cardinal rule: ACK every *validly-signed event we intentionally ignore*
 //
 // Our Slack app is DISTRIBUTED — one app (one signing secret, one Request URL)
 // installed across many workspaces, most of which no OS project has claimed.
 // Slack auto-disables an app's event deliveries (for ALL workspaces) when
 // failures cross 95% over 60 min, and treats any non-2xx as a failure. So any
-// request that is validly signed but unroutable (unparseable, no team id,
-// unclaimed team) returns a 200 with an `ignored` reason — dropping at 200 keeps
-// our success rate ~100%. See incident_slack_webhook_404_autodisable. The ONE
-// non-2xx we keep is signature-verification failure (401): the signature is our
-// entire trust boundary, and ACKing an unauthenticated request would let anyone
-// flood us with writes.
+// request that is validly signed but unusable by design (unparseable, no team
+// id, unclaimed team) returns a 200 with an `ignored` reason — dropping at 200
+// keeps our success rate ~100%. See incident_slack_webhook_404_autodisable.
+// Signature failure is an authored 401. Durable routing/readiness failures
+// throw instead of ACKing data loss, allowing Slack to retry while we repair
+// the invariant.
 
 import { routeIntegrationWebhook } from "./integration-streams.ts";
 import { verifySlackSignature } from "./slack-signature.ts";
-import { parseJsonRecord, readString, SLACK_WEBHOOK_RECEIVED_EVENT_TYPE } from "./utils.ts";
+import { parseJsonRecord, readString } from "./utils.ts";
 import type { AppConfig } from "~/config.ts";
 
 const WEBHOOK_PATH = "/api/integrations/slack/webhook";
@@ -49,7 +49,7 @@ export async function fetchSlackWebhook(input: {
     signingSecret: slack.webhookSigningSecret.exposeSecret(),
     timestamp: input.request.headers.get("x-slack-request-timestamp"),
   });
-  // Trust boundary — the only non-2xx (see the cardinal rule).
+  // Trust boundary — the only authored non-2xx (see the cardinal rule).
   if (!valid) return Response.json({ error: "Invalid Slack signature." }, { status: 401 });
 
   // Signed → every "can't use this" branch ACKs 200 and drops.
@@ -74,9 +74,10 @@ export async function fetchSlackWebhook(input: {
         },
         slackTeamId: teamId,
       },
-      type: SLACK_WEBHOOK_RECEIVED_EVENT_TYPE,
+      type: "events.iterate.com/slack/webhook-received",
     },
     externalId: teamId,
+    routerCreatedEventType: "events.iterate.com/slack/created",
     slug: "slack",
   });
   if ("ignored" in result) return Response.json({ ignored: result.ignored, ok: true });

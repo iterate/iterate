@@ -27,6 +27,35 @@ export const SeedOAuthClientSpec = z.object({
 });
 export type SeedOAuthClientSpec = z.infer<typeof SeedOAuthClientSpec>;
 
+const oauthSeedPropagationRetryDelaysMs = [3_000, 3_000, 6_000, 12_000, 24_000, 30_000];
+const transientCloudflarePropagationStatuses = new Set([522, 523, 524, 525, 526]);
+
+export async function retryTransientCloudflarePropagation<T>(
+  operation: () => Promise<T>,
+  options: {
+    delaysMs: number[];
+    label: string;
+    sleep: (delayMs: number) => Promise<void>;
+  },
+) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      const status = cloudflareStatus(error);
+      const delayMs = options.delaysMs[attempt];
+      if (!status || !transientCloudflarePropagationStatuses.has(status) || delayMs === undefined) {
+        throw error;
+      }
+      console.warn(
+        `[seed-oauth-clients] ${options.label} received Cloudflare ${status}; ` +
+          `retrying in ${delayMs / 1_000}s (attempt ${attempt + 1}/${options.delaysMs.length + 1})`,
+      );
+      await options.sleep(delayMs);
+    }
+  }
+}
+
 const OptionalNonEmptyString = z.preprocess(
   (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
   z.string().trim().min(1).optional(),
@@ -121,14 +150,22 @@ export async function seedOAuthClients(
   });
 
   for (const spec of clients) {
-    const result = await authClient.internal.oauth.setClient({
-      clientId: spec.clientId,
-      clientSecret: spec.clientSecret,
-      clientName: spec.clientName,
-      redirectURIs: spec.redirectURIs,
-      referenceId: spec.referenceId,
-      skipConsent: spec.skipConsent,
-    });
+    const result = await retryTransientCloudflarePropagation(
+      () =>
+        authClient.internal.oauth.setClient({
+          clientId: spec.clientId,
+          clientSecret: spec.clientSecret,
+          clientName: spec.clientName,
+          redirectURIs: spec.redirectURIs,
+          referenceId: spec.referenceId,
+          skipConsent: spec.skipConsent,
+        }),
+      {
+        delaysMs: oauthSeedPropagationRetryDelaysMs,
+        label: `setClient for "${spec.clientId}"`,
+        sleep: (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
+      },
+    );
     console.log(
       `[seed-oauth-clients] ensured client "${result.clientId}" (${result.clientName}) ` +
         `redirectURIs=${JSON.stringify(result.redirectURIs)}`,
@@ -138,6 +175,21 @@ export async function seedOAuthClients(
   console.log(
     `[seed-oauth-clients] done: ${clients.length} client(s) seeded via ${seedThroughUrl}`,
   );
+}
+
+function cloudflareStatus(error: unknown) {
+  if (!error || typeof error !== "object") return undefined;
+  if ("status" in error && typeof error.status === "number") return error.status;
+  if (
+    "data" in error &&
+    error.data &&
+    typeof error.data === "object" &&
+    "status" in error.data &&
+    typeof error.data.status === "number"
+  ) {
+    return error.data.status;
+  }
+  return undefined;
 }
 
 if (isMainModule(import.meta.url)) {

@@ -19,7 +19,7 @@ Append one event at a time so you can control offsets and timing:
 ```bash
 doppler run --project os --config preview_2 -- pnpm --dir apps/os cli itx run \
   --context <prj_id> \
-  -e 'return await itx.streams.get("/agents/local-debug").append({ type: "events.iterate.com/agents/message-received", payload: { content: "Say hello via itx.chat.sendMessage.", from: { kind: "user", origin: "web" } } })'
+  -e 'return await itx.streams.get("/agents/local-debug").append({ type: "events.iterate.com/agents/context-added", payload: { role: "user", content: "Say hello via itx.chat.sendMessage.", actor: { type: "user", origin: "web" }, llmRequestPolicy: { behaviour: "after-current-request" } } })'
 ```
 
 Then wait for the agent response:
@@ -53,8 +53,8 @@ around:
 - `events.iterate.com/agent/llm-request-started`
 - `events.iterate.com/agent/llm-response-chunk`
 - `events.iterate.com/agent/llm-request-completed`
-- `events.iterate.com/capability-host/script-execution-requested`
-- `events.iterate.com/capability-host/script-execution-completed`
+- `events.iterate.com/capability-host/script-run-requested`
+- `events.iterate.com/capability-host/script-run-settled`
 - `events.iterate.com/agents/web-message-sent`
 
 If streamed LLM chunks dominate the stream before script execution starts,

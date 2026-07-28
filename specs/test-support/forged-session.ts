@@ -1,37 +1,25 @@
-import type { Page } from "@playwright/test";
+import { test, type Page, type TestInfo } from "@playwright/test";
 import { z } from "zod/v4";
-import {
-  ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM,
-  ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM,
-  ITERATE_IS_ADMIN_CLAIM,
-  ITERATE_ROLE_CLAIM,
-  type IterateAuthAccessTokenOrganizationClaim,
-  type IterateAuthProjectClaim,
+import type {
+  IterateAuthAccessTokenOrganizationClaim,
+  IterateAuthProjectClaim,
 } from "@iterate-com/shared/auth-claims";
+import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
+import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
+import { waitForPreviewRolloutBeforeProjectCreation } from "@iterate-com/shared/test-support/preview-rollout-gate";
+import { connectItxReady, type ItxInitialConnectionRetry } from "iterate/node";
 import { doppler } from "../../apps/os/scripts/dev.ts";
-import { connectItx } from "../../apps/os/src/itx-client.ts";
-
-type ForgePrivateJwk = JsonWebKey & {
-  alg?: string;
-  kid?: string;
-};
+import { mintForgedAccessToken, mintForgedIdToken } from "../../scripts/auth/forge-token.ts";
 
 type OsPlaywrightAuthConfig = {
   adminApiSecret: string;
   clientId: string;
-  forgePrivateJwk: ForgePrivateJwk;
+  /** The forge private JWK as its raw JSON string — what forge-token.ts consumes. */
+  forgePrivateJwk: string;
   issuer: string;
 };
 
 type OsPlaywrightAuthEnv = z.infer<typeof OsPlaywrightAuthEnv>;
-
-const ForgePrivateJwkSchema = z
-  .looseObject({
-    crv: z.literal("Ed25519"),
-    kid: z.string().min(1),
-    kty: z.literal("OKP"),
-  })
-  .transform((value) => value as ForgePrivateJwk);
 
 const OsPlaywrightAuthEnv = z.object({
   /** OS admin handle used to create and clean up fixture projects through /api/itx. */
@@ -40,19 +28,18 @@ const OsPlaywrightAuthEnv = z.object({
   APP_CONFIG_ITERATE_AUTH__CLIENT_ID: z.string().min(1),
   /** Auth issuer used for both forged access and id tokens. */
   APP_CONFIG_ITERATE_AUTH__ISSUER: z.url(),
-  /** Private half of the forge key baked into dev/preview OS JWKS. */
+  /** Private half of the Auth signing key whose public half OS trusts. */
   AUTH_FORGE_PRIVATE_JWK: z
     .string()
     .min(1)
-    .transform((value, context) => {
+    .refine((value) => {
       try {
-        return JSON.parse(value);
-      } catch (error) {
-        context.addIssue({ code: "custom", message: `Invalid JSON ${value}: ${error}` });
-        return z.NEVER;
+        JSON.parse(value);
+        return true;
+      } catch {
+        return false;
       }
-    })
-    .pipe(ForgePrivateJwkSchema),
+    }, "must be the forge private JWK as a JSON string"),
 });
 
 export type MintedIterateSession = {
@@ -62,16 +49,36 @@ export type MintedIterateSession = {
 };
 
 let configPromise: Promise<OsPlaywrightAuthConfig> | undefined;
-let signingKeyPromise: Promise<CryptoKey> | undefined;
+const ITX_INITIAL_CONNECTION_RETRY_PREFIX = "[itx-initial-connection-retry] ";
 
 export async function createProjectFixture(
   slugPrefix: string,
-  input: { baseURL: string | undefined; page: Page },
+  input: {
+    baseURL: string | undefined;
+    page: Page;
+    projectCount?: number;
+    testInfo: TestInfo;
+  },
 ) {
-  if (!input.baseURL) throw new Error("Playwright baseURL fixture is required.");
+  const baseUrl = input.baseURL;
+  if (!baseUrl) throw new Error("Playwright baseURL fixture is required.");
 
+  const [config] = await Promise.all([
+    resolveOsPlaywrightAuthConfig(),
+    waitForPreviewRolloutBeforeProjectCreation({
+      beforeWait: (waitMs) => input.testInfo.setTimeout(input.testInfo.timeout + waitMs),
+    }),
+  ]);
   const projectSlug = uniqueFixtureSlug(slugPrefix);
-  const projectFixture = await createAdminProject({ baseUrl: input.baseURL, slug: projectSlug });
+  const projectFixtures = await Promise.all(
+    Array.from({ length: input.projectCount ?? 1 }, (_, index) =>
+      createAdminProjectAfterPreviewRollout({
+        baseUrl,
+        config,
+        slug: index === 0 ? projectSlug : uniqueFixtureSlug(`${slugPrefix}-${index + 1}`),
+      }),
+    ),
+  );
   try {
     const organization = {
       id: `org_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`,
@@ -80,16 +87,13 @@ export async function createProjectFixture(
       slug: uniqueFixtureSlug(`${slugPrefix}-org`),
     };
     const session = await mintIterateSession({
-      baseUrl: input.baseURL,
+      baseUrl,
       email: `forged-${projectSlug}+test@nustom.com`,
       organizations: [organization],
-      projects: [
-        {
-          id: projectFixture.project.id,
-          organizationId: organization.id,
-          slug: projectFixture.project.slug,
-        },
-      ],
+      projects: projectFixtures.map(({ project }) => ({
+        ...project,
+        organizationId: organization.id,
+      })),
     });
 
     await input.page.context().addCookies([
@@ -98,8 +102,8 @@ export async function createProjectFixture(
         httpOnly: true,
         name: "iterate_session",
         sameSite: "Lax",
-        secure: new URL(input.baseURL).protocol === "https:",
-        url: input.baseURL,
+        secure: new URL(baseUrl).protocol === "https:",
+        url: baseUrl,
         value: encodeURIComponent(
           JSON.stringify({
             accessToken: session.accessToken,
@@ -113,14 +117,15 @@ export async function createProjectFixture(
 
     return {
       organization,
-      project: projectFixture.project,
+      project: projectFixtures[0]!.project,
+      projects: projectFixtures.map(({ project }) => project),
       session,
       async [Symbol.asyncDispose]() {
-        await projectFixture[Symbol.asyncDispose]();
+        await Promise.all(projectFixtures.map((fixture) => fixture[Symbol.asyncDispose]()));
       },
     };
   } catch (error) {
-    await projectFixture[Symbol.asyncDispose]();
+    await Promise.all(projectFixtures.map((fixture) => fixture[Symbol.asyncDispose]()));
     throw error;
   }
 }
@@ -132,25 +137,22 @@ export async function createProjectFixture(
  */
 export async function connectAdminItx(baseUrl: string) {
   const config = await resolveOsPlaywrightAuthConfig();
-  return connectItx({
-    auth: { type: "admin-secret", secret: config.adminApiSecret },
-    baseUrl,
-  });
+  return connectPlaywrightAdminItx({ baseUrl, config });
 }
 
-export async function createAdminProject(input: { baseUrl: string; slug: string }) {
-  const config = await resolveOsPlaywrightAuthConfig();
+async function createAdminProjectAfterPreviewRollout(input: {
+  baseUrl: string;
+  config: OsPlaywrightAuthConfig;
+  slug: string;
+}) {
   // itx-v4 cutover: this used to dial the legacy client (`withItx({baseUrl,
   // token})`) and then poll `project.processor.onStateChange` until the
-  // project reached phase "ready". The itx create resolves only
-  // after the bootstrap saga committed project/created (repo seeded, project
-  // worker probed, onboarding agent born), so the readiness wait is gone and
-  // auth is an explicit admin-secret credential on connect.
-  using session = connectItx({
-    auth: { type: "admin-secret", secret: config.adminApiSecret },
-    baseUrl: input.baseUrl,
-  });
-  using created = session.projects.create({ slug: input.slug });
+  // project reached phase "ready". The itx create resolves only after the
+  // bootstrap saga commits project/ready (sibling processors born, config repo
+  // seeded, project worker probed), so the readiness wait is gone and auth is
+  // an explicit admin-secret credential on connect.
+  using session = await connectPlaywrightAdminItx(input);
+  using created = await session.projects.get(input.slug).create({});
   const description = await created.__describe();
   const project = { id: description.projectId, slug: input.slug };
 
@@ -165,56 +167,82 @@ export async function createAdminProject(input: { baseUrl: string; slug: string 
   };
 }
 
+async function connectPlaywrightAdminItx(input: {
+  baseUrl: string;
+  config: OsPlaywrightAuthConfig;
+}) {
+  return test.step("connect admin itx", () =>
+    connectItxReady(
+      {
+        auth: { type: "admin-secret", secret: input.config.adminApiSecret },
+        baseUrl: input.baseUrl,
+        headers: cloudflareWorkerVersionOverrideHeaders(process.env),
+      },
+      {
+        retryInitialConnection: {
+          delayMs: 250,
+          onRetry: recordInitialConnectionRetry,
+        },
+      },
+    ));
+}
+
+async function recordInitialConnectionRetry(retry: ItxInitialConnectionRetry) {
+  const code =
+    "code" in retry.error && typeof retry.error.code === "string" ? retry.error.code : undefined;
+  const diagnostic = JSON.stringify({
+    attemptDurationMs: Math.round(retry.attemptDurationMs),
+    delayMs: retry.delayMs,
+    error: retry.error.message,
+    ...(code === undefined ? {} : { errorCode: code }),
+    failedAttempt: retry.failedAttempt,
+    nextAttempt: retry.nextAttempt,
+    startedAt: retry.startedAt,
+  });
+
+  await test.step("itx: initial connection retry", () => {
+    test.info().annotations.push({
+      type: "itx-initial-connection-retry",
+      description: diagnostic,
+    });
+    process.stderr.write(`${ITX_INITIAL_CONNECTION_RETRY_PREFIX}${diagnostic}\n`);
+  });
+}
+
 export async function mintIterateSession(input: {
   baseUrl: string;
   email: string;
   organizations: IterateAuthAccessTokenOrganizationClaim[];
   projects: IterateAuthProjectClaim[];
-}) {
+}): Promise<MintedIterateSession> {
   const config = await resolveOsPlaywrightAuthConfig();
-  const subject = `usr_forged_${input.email.replace(/[^a-z0-9]+/gi, "_").toLowerCase()}`;
-  const now = Math.floor(Date.now() / 1000);
-  const ttlSeconds = 60 * 60;
-  const expiresAtSeconds = now + ttlSeconds;
-  const sessionId = `ses_forged_${crypto.randomUUID().slice(0, 8)}`;
-
-  const accessToken = await signJwt({
+  // Signing lives in scripts/auth/forge-token.ts (the core behind
+  // `pnpm auth:mint`); this layer only picks the audience for the deployment
+  // under test and wraps the token pair in a browser cookie.
+  const accessToken = await mintForgedAccessToken({
+    forgePrivateJwk: config.forgePrivateJwk,
+    issuer: config.issuer,
     audience: authResourceForBaseUrl(input.baseUrl),
-    issuer: config.issuer,
-    payload: {
-      email: input.email,
-      scope: "openid profile email",
-      scopes: ["openid", "profile", "email"],
-      sid: sessionId,
-      [ITERATE_IS_ADMIN_CLAIM]: false,
-      [ITERATE_ROLE_CLAIM]: null,
-      [ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM]: input.organizations,
-      [ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM]: input.projects,
-    },
-    subject,
-    now,
-    expiresAtSeconds,
-    privateJwk: config.forgePrivateJwk,
+    email: input.email,
+    organizations: input.organizations,
+    projects: input.projects,
   });
-  const idToken = await signJwt({
-    audience: config.clientId,
+  const idToken = await mintForgedIdToken({
+    forgePrivateJwk: config.forgePrivateJwk,
     issuer: config.issuer,
-    payload: {
-      email: input.email,
-      email_verified: true,
-      name: input.email.split("@")[0] || input.email,
-      [ITERATE_IS_ADMIN_CLAIM]: false,
-      [ITERATE_ROLE_CLAIM]: null,
-    },
-    subject,
-    now,
-    expiresAtSeconds,
-    privateJwk: config.forgePrivateJwk,
+    clientId: config.clientId,
+    email: input.email,
   });
+
+  // The cookie's expiry mirrors the access token's `exp` claim exactly —
+  // the same derivation the session-from-token endpoint does server-side.
+  const { exp } = JSON.parse(
+    Buffer.from(accessToken.split(".")[1]!, "base64url").toString("utf8"),
+  ) as { exp: number };
 
   return {
     accessToken,
-    expiresAtMs: expiresAtSeconds * 1000,
+    expiresAtMs: exp * 1000,
     idToken,
   };
 }
@@ -268,48 +296,6 @@ async function loadOsPlaywrightAuthEnv(): Promise<OsPlaywrightAuthEnv> {
   );
 }
 
-async function signJwt(input: {
-  audience: string;
-  expiresAtSeconds: number;
-  issuer: string;
-  now: number;
-  payload: Record<string, unknown>;
-  privateJwk: ForgePrivateJwk;
-  subject: string;
-}) {
-  const header = base64UrlEncode(
-    JSON.stringify({
-      alg: "EdDSA",
-      kid: input.privateJwk.kid,
-      typ: "JWT",
-    }),
-  );
-  const payload = base64UrlEncode(
-    JSON.stringify({
-      ...input.payload,
-      aud: input.audience,
-      exp: input.expiresAtSeconds,
-      iat: input.now,
-      iss: input.issuer,
-      sub: input.subject,
-    }),
-  );
-  const signingInput = `${header}.${payload}`;
-  const signature = await crypto.subtle.sign(
-    { name: "Ed25519" },
-    await signingKey(input.privateJwk),
-    new TextEncoder().encode(signingInput),
-  );
-  return `${signingInput}.${base64UrlEncode(signature)}`;
-}
-
-async function signingKey(privateJwk: ForgePrivateJwk) {
-  signingKeyPromise =
-    signingKeyPromise ||
-    crypto.subtle.importKey("jwk", privateJwk, { name: "Ed25519" }, false, ["sign"]);
-  return await signingKeyPromise;
-}
-
 function authResourceForBaseUrl(baseUrl: string) {
   const url = new URL(baseUrl);
   if (
@@ -321,13 +307,4 @@ function authResourceForBaseUrl(baseUrl: string) {
     return `http://${url.hostname}`;
   }
   return baseUrl.replace(/\/+$/, "");
-}
-
-function base64UrlEncode(value: string | ArrayBuffer) {
-  const bytes = typeof value === "string" ? new TextEncoder().encode(value) : new Uint8Array(value);
-  return Buffer.from(bytes).toString("base64url");
-}
-
-function uniqueFixtureSlug(prefix: string) {
-  return `${prefix}-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`.toLowerCase();
 }

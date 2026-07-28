@@ -52,6 +52,13 @@ export const SPEC_ACTION_TIMEOUT_MS = 750;
 /** Playwright `expect` polling budget — one UI assertion, not a whole flow. */
 export const SPEC_EXPECT_TIMEOUT_MS = 15_000;
 
+/**
+ * Microsoft TUI Test hard watchdog for one real-PTY product flow. Assertions
+ * fail at 15–30s, leaving at least 10s for terminal diagnostics and trace
+ * persistence before this process-killing backstop fires.
+ */
+export const TUI_TEST_TIMEOUT_MS = 55_000;
+
 /** Playwright per-spec budget: a full product flow against a deployed slot. */
 export const SPEC_TEST_TIMEOUT_MS = 90_000;
 
@@ -69,6 +76,23 @@ export const E2E_TEST_TIMEOUT_MS = 120_000;
 export const E2E_HEAVY_TEST_TIMEOUT_MS = 240_000;
 
 /**
+ * Watchdog on the sequential onboarding smoke that runs before the OS preview
+ * suites. The smoke owns one retry and each greeting wait is bounded at 90s,
+ * so 240s covers both attempts plus project setup. This outer bound catches
+ * RPC calls before the greeting wait that would otherwise park the whole
+ * preview job without producing suite output.
+ */
+export const OS_ONBOARDING_SMOKE_TIMEOUT_SECS = 240;
+
+/**
+ * Watchdog on the built Iterate CLI's PTY lane. The independent 55s workflows
+ * run concurrently; one case may retry in a fresh process/project after a 5s
+ * pause. Package build and project setup still fit comfortably. Expiry is a
+ * visible lane failure and is never retried here.
+ */
+export const OS_TUI_LANE_TIMEOUT_SECS = 180;
+
+/**
  * Watchdog on each preview sub-lane (`timeout N pnpm e2e` and
  * `timeout N pnpm spec` in scripts/preview/preview.ts). Kills, never
  * retries: a lane that blows this is wedged, not slow — before the specs
@@ -79,16 +103,27 @@ export const E2E_HEAVY_TEST_TIMEOUT_MS = 240_000;
  * processor spaces LLM retries 10/20/40s apart, so an agent test whose first
  * attempt eats a Workers-AI rate-limit blip legitimately takes ~190s before
  * its re-roll passes (observed on the slack-agent e2e). A 360s ceiling
- * killed an all-green lane bloated by exactly that. Both sub-lanes run
- * concurrently, so even a fully watchdogged attempt stays inside the
- * preview job's 10-minute timeout-minutes ceiling.
+ * killed an all-green lane bloated by exactly that. The Vitest, Playwright,
+ * and separately bounded TUI sub-lanes run concurrently. The onboarding smoke above is bounded so a
+ * pre-suite RPC wedge cannot consume the preview job's 10-minute ceiling.
  */
 export const OS_PREVIEW_LANE_TIMEOUT_SECS = 480;
 
 /**
- * Watchdog on one whole preview e2e run (flake-hunt-loop.sh, marathon). A
- * healthy full-fleet run is a few minutes; per rule 3 this deliberately does
- * NOT budget for a test double-burning its heavy-cap retry — both historical
- * watchdog kills were genuine infra wedges where retrying was hopeless.
+ * Watchdog on one canonical Depot preview run as observed by
+ * flake-hunt-loop.sh. A healthy full-fleet run is a few minutes; per rule 3
+ * this deliberately does NOT budget for a test double-burning its heavy-cap
+ * retry — both historical watchdog kills were genuine infra wedges where
+ * retrying was hopeless. Expiry cancels that Depot run; it never re-runs it.
  */
 export const PREVIEW_RUN_WATCHDOG_SECS = 600;
+
+/**
+ * The marathon's per-run PROOF ceiling (flake-hunt-loop.sh
+ * MAX_RUN_DURATION_SECS): a green run at or above this still fails the
+ * marathon, because the stability goal is distributional — every full
+ * deploy-plus-e2e run under seven minutes. Not part of the watchdog ladder:
+ * watchdogs bound wedged runs (one lane may legitimately hold a 480s wedge
+ * watchdog), while this bounds what counts as a healthy whole run.
+ */
+export const PREVIEW_RUN_PROOF_BUDGET_SECS = 420;

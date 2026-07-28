@@ -21,7 +21,6 @@ import { StreamStateView } from "./-stream-state-view.tsx";
 import { ViewSwitcher } from "./-view-switcher.tsx";
 import {
   acquireStreamRuntime,
-  type BrowserProcessorConfig,
   type StreamBrowserSnapshot,
   type StreamBrowserStore,
   type StreamRuntimeState,
@@ -30,14 +29,7 @@ import {
   type StreamBrowserDatabase,
   type StreamEventRow,
 } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
-import { browserProcessorStateStorage } from "~/domains/streams/client-libraries/browser/processor-state-storage.ts";
-import {
-  BROWSER_RAW_EVENTS_SCHEMA_VERSION,
-  BROWSER_RAW_EVENTS_TABLES,
-  BrowserRawEventsContract,
-  BrowserRawEventsProcessor,
-  type BrowserRawEventsState,
-} from "~/domains/streams/client-libraries/processors/browser-raw-events/implementation.ts";
+import { CANONICAL_MIRROR_PROCESSORS } from "~/domains/streams/client-libraries/browser/canonical-mirror-processors.ts";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 
 export function StreamPage({ streamView }: { streamView: StreamViewSearch }) {
@@ -173,25 +165,23 @@ function HydratedStreamCompactView({ streamPath }: { streamPath: string }) {
   );
 }
 
-// The browser's thin layer over a processor: acquire the shared (path, processor) runtime
-// — which, once it wins leadership, runs the processor over a subscription exactly like the
-// StreamProcessorRunner DO — and subscribe to its snapshot for React. Nothing view-specific.
-function useStreamProcessor(
-  args: { streamPath: string; streamProjectId?: string } & BrowserProcessorConfig,
-) {
-  const { streamPath, streamProjectId, slug, schemaVersion, tables, createProcessor } = args;
+// The browser's thin layer over the stream mirror: acquire the shared
+// (projectId, path) runtime — which, once it wins leadership, downloads the
+// stream once and fans it out to the canonical processors exactly like the
+// StreamProcessorRunner DO — and subscribe to its snapshot for React. Every
+// view of a stream joins this one runtime, so the raw and feed views here share
+// a single download.
+function useStreamProcessor(args: { streamPath: string; streamProjectId?: string }) {
+  const { streamPath, streamProjectId } = args;
   const store = useMemo(
     () =>
       acquireStreamRuntime({
         streamPath,
         ...(streamProjectId === undefined ? {} : { projectId: streamProjectId }),
         createStreamClient: createCapnwebStreamClient,
-        slug,
-        schemaVersion,
-        tables,
-        createProcessor,
+        processors: CANONICAL_MIRROR_PROCESSORS,
       }),
-    [streamPath, streamProjectId, slug, schemaVersion, tables, createProcessor],
+    [streamPath, streamProjectId],
   );
   const snapshot = useSyncExternalStore(
     store.subscribe,
@@ -200,28 +190,6 @@ function useStreamProcessor(
   );
   return { store, snapshot, db: store.streamDatabase };
 }
-
-// Stable raw-events config (a constant so useStreamProcessor's useMemo identity is stable).
-const RAW_EVENTS_RUNTIME: BrowserProcessorConfig = {
-  slug: BrowserRawEventsContract.slug,
-  schemaVersion: BROWSER_RAW_EVENTS_SCHEMA_VERSION,
-  tables: BROWSER_RAW_EVENTS_TABLES,
-  createProcessor({ stream, path, projectId, sql, subscriptionKey }) {
-    const storage = browserProcessorStateStorage<BrowserRawEventsState>({
-      sql,
-      processorSlug: BrowserRawEventsContract.slug,
-      subscriptionKey,
-    });
-    return new BrowserRawEventsProcessor({
-      stream,
-      path,
-      projectId,
-      sql,
-      readState: storage.readState,
-      writeState: storage.writeState,
-    });
-  },
-};
 
 // The raw-events view's data: the thin runtime + this view's own reactive SQL queries.
 function useRawEventsView(args: {
@@ -232,7 +200,6 @@ function useRawEventsView(args: {
   const { store, snapshot, db } = useStreamProcessor({
     streamPath: args.streamPath,
     streamProjectId: args.streamProjectId,
-    ...RAW_EVENTS_RUNTIME,
   });
   // Counts come from the trigger-maintained event_type_counts table, not
   // COUNT(*) over the mirror: these queries re-run reactively after every
@@ -664,7 +631,7 @@ function EventRows({
   onEventTypeFilterChange(eventType: string): void;
 }) {
   const topScrollAffordanceHeight = 48;
-  const estimatedEventRowHeight = 38;
+  const estimatedEventRowHeight = 40; // Pending + pb-2 must measure exactly this.
   const parentRef = useRef<HTMLDivElement>(null);
   const previousEventCount = useRef(eventCount);
   const initialScrollOffset = useRef(
@@ -1084,7 +1051,7 @@ function EventRowWindow({
       >
         {event === undefined ? (
           <article
-            className="box-border h-[30px] rounded-md border border-[#e1e5eb]"
+            className="box-border h-8 rounded-md border border-[#e1e5eb]"
             data-testid="event-row-pending"
           />
         ) : (
@@ -1105,8 +1072,10 @@ function EventRowWindow({
               onClick={() => onToggleOffset(event.offset)}
             >
               <span>{event.offset}</span>
-              <span>{event.type}</span>
-              <time dateTime={event.created_at}>{event.created_at}</time>
+              <span className="truncate">{event.type}</span>
+              <time className="whitespace-nowrap" dateTime={event.created_at}>
+                {event.created_at}
+              </time>
             </button>
             {isExpanded ? (
               <pre
@@ -1612,6 +1581,7 @@ function InsertEventsTool({
   streamPath: string;
   streamStore: StreamBrowserStore;
 }) {
+  const [insertError, setInsertError] = useState<string | null>(null);
   const [insertState, dispatchInsertState] = useReducer(
     (
       state: {
@@ -1664,6 +1634,7 @@ function InsertEventsTool({
     }
 
     dispatchInsertState({ type: "set-insert-state", value: "inserting" });
+    setInsertError(null);
 
     try {
       const pendingResponses: Promise<unknown>[] = [];
@@ -1711,7 +1682,10 @@ function InsertEventsTool({
       );
       if (insertState.appendResponseMode === "await") await Promise.all(pendingResponses);
       dispatchInsertState({ type: "set-insert-state", value: "done" });
-    } catch {
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("stream random-event insertion failed", error);
+      setInsertError(message);
       dispatchInsertState({ type: "set-insert-state", value: "error" });
     }
   }
@@ -1805,6 +1779,11 @@ function InsertEventsTool({
       >
         {insertState.insertState}
       </output>
+      {insertError == null ? null : (
+        <p className="m-0 break-words font-mono text-xs text-[#b42318]" data-testid="insert-error">
+          {insertError}
+        </p>
+      )}
     </section>
   );
 }

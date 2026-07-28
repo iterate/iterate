@@ -9,7 +9,7 @@
 // | lane       | sink arrives as                       | call result            |
 // |------------|---------------------------------------|------------------------|
 // | ephemeral  | `subscribe()` parameter               | disposed unpulled — zero return frames |
-// | wake       | returned from the expression-named poke| pulled, never awaited — prompt corpse detection |
+// | wake       | returned from the expression-named poke| disposed unpulled; independent per-batch settlement |
 // | push       | named by a persisted itx expression   | awaited — the ack that advances the cursor |
 // | webhook    | the configured URL (per-event POST)   | awaited 2xx — the ack that advances the cursor |
 //
@@ -24,10 +24,10 @@
 //
 // Runtime metrics: every connection carries real counters (events/bytes
 // delivered, lag from cursor), the durable lanes record commit→settled
-// latency on the stream's own clock (wake: the pulled result settling; push/
+// latency on the stream's own clock (wake: the settlement callback; push/
 // webhook: the awaited ack), and subscribers that hand over a ping capability
-// get NTP-style RTT sampled — observer-driven via runtimeState(), throttled,
-// and purely observational (a failed ping drops the sample, nothing else).
+// get NTP-style RTT sampled when runtime observation begins, throttled, and
+// purely observational (a failed ping drops the sample, nothing else).
 // Ephemeral consumption is deliberately NOT measured here: those results stay
 // unpulled (zero return frames), and the consuming host self-reports through
 // its getRuntimeState capability instead (see subscriber-metrics.ts).
@@ -39,8 +39,7 @@
 // (stream-subscribers.test.ts). The only streams file that knows RPC exists is
 // subscriber-sinks.ts.
 
-import type { ItxExpression } from "../../itx/expression.ts";
-import type { StreamEvent, StreamEventInput } from "./schemas.ts";
+import type { StreamEvent, StreamEventInput } from "iterate/processors";
 import type {
   GetProcessorRuntimeState,
   ProcessEventBatch,
@@ -49,9 +48,18 @@ import type {
   StreamPushEventBatch,
   StreamSubscriberPing,
   StreamSubscriberWakeRequest,
+  StreamWakeDeliveryError,
+  StreamWakeDeliverySettlement,
+  StreamWakeEventBatch,
   StreamWebhookDelivery,
-} from "./rpc-types.ts";
-import { isStreamReceiverUnavailableError } from "./rpc-types.ts";
+} from "iterate/processors";
+import {
+  isStreamReceiverUnavailableError,
+  StreamReceiverUnavailableError,
+} from "iterate/processors";
+import { LatencyRing, pingRoundTrip, type LatencyStats } from "iterate/processors";
+import type { ItxExpression } from "../../itx/expression.ts";
+import { isDurableObjectLifecycleError } from "./stream-unavailable.ts";
 import type {
   CoreProcessorState,
   StreamSubscriberDescriptor,
@@ -70,7 +78,6 @@ import {
   type RetainedProcessEventBatch,
   type RetainedSubscriberPing,
 } from "./subscriber-sinks.ts";
-import { LatencyRing, pingRoundTrip, type LatencyStats } from "./stream-runtime-metrics.ts";
 import {
   computeBackoffMs,
   deliveryId,
@@ -97,10 +104,10 @@ export type ConnectionRuntimeState = {
   lastDeliveredAt?: string;
   /**
    * Commit-to-settled latency, stream clock only: `createdAt` of the newest
-   * event in a batch → the pulled batch result settling (the subscriber's
-   * ingest resolved). Durable (wake) lane only — ephemeral results are
-   * disposed unpulled, so ephemeral consumption is self-reported by the host
-   * through `getRuntimeState` instead. Absent until a sample exists.
+   * event in a batch → the subscriber's explicit settlement callback.
+   * Durable (wake) lane only — ephemeral results are disposed unpulled, so
+   * ephemeral consumption is self-reported by the host through
+   * `getRuntimeState` instead. Absent until a sample exists.
    */
   settleLatencyMs?: LatencyStats;
   /** Mutual-ping transport RTT to this subscriber (observer-driven sampling). Absent until pinged. */
@@ -113,7 +120,7 @@ export type ConnectionRuntimeState = {
    */
   subscriber?: StreamSubscriberDescriptor;
   /**
-   * True while the last batch handed to this connection's sink is unsettled —
+   * True while any batch handed to this connection's sink is unsettled —
    * exactly the signal idle teardown consults to classify a sink as wedged.
    */
   hasPendingDelivery: boolean;
@@ -169,17 +176,20 @@ type Connection = {
   isLive(): boolean;
   /** `true` while a durable sink delivery is dispatched but unsettled. */
   hasPendingDelivery(): boolean;
+  /** Earliest deadline for an unsettled wake delivery, or null when caught up. */
+  nextSettlementDeadlineAt(): number | null;
   /** Stop the pump, dispose the sink, append the disconnect fact, drop from the table. */
   close(reason: StreamSubscriberDisconnectReason): void;
 };
 
 /** Everything `open()` needs to start one delivery connection. */
-type OpenConnectionArgs = {
+type OpenConnectionBase = {
   subscriptionKey: string;
-  subscriptionType: StreamSubscriptionType;
-  /** Already-retained sink (subscriber-sinks.ts owns retention semantics). */
-  sink: RetainedProcessEventBatch;
   replayAfterOffset?: number;
+  /** Stable stream creation identity observed by the caller; null binds to an unborn stream. */
+  expectedIncarnation?: string | null;
+  /** Reject the open if replay would exceed this many raw offsets. */
+  maxReplayOffsetGap?: number;
   selector?: CompiledEventSelector;
   /** `false` = state-only batches. Default `true`. */
   events?: boolean;
@@ -190,6 +200,18 @@ type OpenConnectionArgs = {
   /** Subscriber's ping capability, retained for the connection lifetime. */
   ping?: StreamSubscriberPing;
 };
+
+type OpenConnectionArgs =
+  | (OpenConnectionBase & {
+      subscriptionType: "ephemeral";
+      /** Already-retained sink (subscriber-sinks.ts owns retention semantics). */
+      sink: RetainedProcessEventBatch<StreamEventBatch>;
+    })
+  | (OpenConnectionBase & {
+      subscriptionType: "configured";
+      /** One-way durable sink; completion arrives through each batch's settlement door. */
+      sink: RetainedProcessEventBatch<StreamWakeEventBatch>;
+    });
 
 /**
  * The transport quarantine's face: how the spine reaches subscribers. Wake and
@@ -205,7 +227,7 @@ export type SubscriberDial = {
     request: StreamSubscriberWakeRequest,
   ): Promise<{
     checkpointOffset: number;
-    sink: RetainedProcessEventBatch;
+    sink: RetainedProcessEventBatch<StreamWakeEventBatch>;
     subscriber?: unknown;
     getRuntimeState?: GetProcessorRuntimeState;
     ping?: StreamSubscriberPing;
@@ -241,32 +263,41 @@ type StreamSubscribersHooks = {
    * the event count and serialized payload bytes it carried (all lanes).
    */
   recordEgress(count: number, bytes: number): void;
+  /** An in-memory runtime-debug field changed; refresh any observed projection. */
+  runtimeChanged(): void;
   /** Injected clock (epoch ms). */
   now(): number;
   /** Injected randomness (backoff jitter); [0, 1) like Math.random. */
   random(): number;
   /** Arm the Durable Object alarm for the earliest pending retry. */
   armAlarm(atMs: number): void;
+  /**
+   * Run durable delivery in its alarm-owned invocation. The production Stream
+   * DO schedules an immediate alarm when called from an append and runs the
+   * closure only when reconciliation is already inside that alarm turn.
+   */
+  runDurable(work: () => Promise<unknown>): void;
   /** Keep the Durable Object alive through background delivery work. */
   keepAlive(promise: Promise<unknown>): void;
 };
 
 export class StreamSubscribers {
   readonly #hooks: StreamSubscribersHooks;
-  /**
-   * How long the stream may hold idle durable delivery connections before
-   * severing them so it (and its subscribers) can hibernate instead of
-   * accruing billable duration on cross-isolate RPC sessions that pin both
-   * DOs. Tracked with an in-memory timer (NOT a DO alarm): the retained sinks
-   * we tear down are in-memory and die on eviction anyway, the DO is always
-   * resident while it holds them (so the timer is guaranteed to fire), and a
-   * durable alarm's only extra power — waking a hibernated DO — is exactly
-   * what we must never do FOR THIS. (The spine's retry alarm is the opposite
-   * case: its state is durable rows, so waking the DO is exactly the point.)
-   */
+  /** How long a quiet configured connection may stay open. */
   readonly #idleTeardownMs: number;
   readonly #connections = new Map<string, Connection>();
-  #idleTimer: ReturnType<typeof setTimeout> | undefined;
+  /**
+   * In-memory deadline multiplexed onto the Stream DO's existing alarm.
+   *
+   * This MUST NOT be a setTimeout. Workerd adds every actor timer to the
+   * actor's drain set. An append reached from another Durable Object can
+   * return its value promptly while its JS-RPC session remains open waiting
+   * for that timer; the caller then waits on the nested session and can exceed
+   * wall time. An alarm schedules the future turn without retaining this one.
+   * If the Stream is evicted first, its RPC connections are already gone and
+   * the eventual alarm is a harmless no-op.
+   */
+  #idleTeardownAtMs: number | null = null;
 
   // Durable-lane in-memory state. All of it is reconstructible: a DO eviction
   // resets these and the durable rows + folded config re-derive every decision
@@ -340,6 +371,10 @@ export class StreamSubscribers {
 
   /** The DO alarm handler body: retry whatever is due, then re-arm. */
   onAlarm(): void {
+    this.#expireWakeDeliveryDeadlines();
+    if (this.#idleTeardownAtMs !== null && this.#idleTeardownAtMs <= this.#hooks.now()) {
+      this.runIdleTeardownNow();
+    }
     this.wake();
     this.#armAlarmFromStore();
   }
@@ -352,6 +387,8 @@ export class StreamSubscribers {
     subscriptionKey: string;
     sink: ProcessEventBatch;
     replayAfterOffset?: number;
+    expectedIncarnation?: string | null;
+    maxReplayOffsetGap?: number;
     selector?: CompiledEventSelector;
     events?: boolean;
     presence?: StreamSubscriberDescriptor;
@@ -367,6 +404,8 @@ export class StreamSubscribers {
       // subscriber's problem: explicit unsubscribe or best-effort onRpcBroken.
       sink: retainProcessEventBatch(args.sink),
       replayAfterOffset: args.replayAfterOffset,
+      expectedIncarnation: args.expectedIncarnation,
+      maxReplayOffsetGap: args.maxReplayOffsetGap,
       selector: args.selector,
       events: args.events,
       presence: args.presence,
@@ -445,8 +484,9 @@ export class StreamSubscribers {
       ...(delivery.processorSlug === undefined ? {} : { processorSlug: delivery.processorSlug }),
     };
 
-    this.#pokesInFlight.add(subscriptionKey);
-    const work = (async () => {
+    this.#hooks.runDurable(async () => {
+      if (this.#pokesInFlight.has(subscriptionKey)) return;
+      this.#pokesInFlight.add(subscriptionKey);
       try {
         // A poke that outlives its timeout still eventually settles with a
         // RETAINED sink; dropping that undisposed would leak a session-pinning
@@ -519,8 +559,7 @@ export class StreamSubscribers {
       } finally {
         this.#pokesInFlight.delete(subscriptionKey);
       }
-    })();
-    this.#hooks.keepAlive(work);
+    });
   }
 
   /**
@@ -532,8 +571,9 @@ export class StreamSubscribers {
    * can own their cursors. Push delivers per batch; webhook per event.
    */
   #drainPush(subscriptionKey: string): void {
-    this.#pushDrains.add(subscriptionKey);
-    const work = (async () => {
+    this.#hooks.runDurable(async () => {
+      if (this.#pushDrains.has(subscriptionKey)) return;
+      this.#pushDrains.add(subscriptionKey);
       try {
         for (;;) {
           const state = this.#hooks.coreState();
@@ -562,21 +602,30 @@ export class StreamSubscribers {
                 );
           const sized = this.#readBatch(row.ackedOffset, limit);
           const lastOffset = sized.at(-1)?.event.offset;
-          if (lastOffset === undefined) return; // caught up
+          if (lastOffset === undefined) {
+            // The allocator head can be ahead of the last surviving row after
+            // ephemeral eviction. An empty range read proves that whole suffix
+            // contains no durable work, so advance the durable cursor through
+            // it instead of reporting permanent phantom lag.
+            if (row.ackedOffset < state.maxOffset) {
+              this.#hooks.store.ack(subscriptionKey, state.maxOffset, row.epoch);
+            }
+            return;
+          }
           const byteLengthByOffset = new Map(
             sized.map((entry) => [entry.event.offset, entry.byteLength]),
           );
 
-          // Ephemeral events never reach durable receivers — platform law,
-          // enforced as the same skip-not-defer shape selectors use: the raw
-          // read advances the cursor over their offsets, delivery drops them.
-          const durable = sized
-            .filter((entry) => entry.event.ephemeral !== true)
-            .map((entry) => entry.event);
+          // Durable delivery skips ephemeral rows unless the subscription
+          // explicitly opts in. The cursor still advances over skipped rows.
+          const visible =
+            config.includeEphemeral === true
+              ? sized.map((entry) => entry.event)
+              : sized.filter((entry) => entry.event.ephemeral !== true).map((entry) => entry.event);
           const { matched, conditionErrors } = this.#applySelector(
             subscriptionKey,
             config,
-            durable,
+            visible,
           );
           for (const fact of conditionErrors) this.#hooks.appendFact(fact);
 
@@ -658,6 +707,7 @@ export class StreamSubscribers {
             subscriptionMetrics.settleLatency.record(settledAtMs - newestCreatedAtMs, settledAtMs);
           }
           subscriptionMetrics.bytesSent += deliveredBytes;
+          this.#hooks.runtimeChanged();
           // Fenced on the epoch read above: a seek (cursor-set, replacement
           // deliver, remove+recreate) that landed while this delivery was in
           // flight bumped the epoch, and this ack no-ops instead of
@@ -667,15 +717,12 @@ export class StreamSubscribers {
           this.#batchLimits.delete(subscriptionKey);
           this.#consecutiveSkips.delete(subscriptionKey);
         }
+      } catch (error) {
+        console.error("stream push drain failed", { subscriptionKey, error });
       } finally {
         this.#pushDrains.delete(subscriptionKey);
       }
-    })();
-    this.#hooks.keepAlive(
-      work.catch((error: unknown) => {
-        console.error("stream push drain failed", { subscriptionKey, error });
-      }),
-    );
+    });
   }
 
   /**
@@ -815,6 +862,10 @@ export class StreamSubscribers {
   #onDeliveryFailure(subscriptionKey: string, error: unknown, previousAttempts?: number): void {
     const attempts = previousAttempts ?? this.#hooks.store.get(subscriptionKey)?.attempt ?? 0;
     const attempt = attempts + 1;
+    if ((error as { retryable?: unknown } | null)?.retryable === false) {
+      this.#park(subscriptionKey, attempt, error);
+      return;
+    }
     if (attempt >= MAX_DELIVERY_ATTEMPTS) {
       this.#park(subscriptionKey, attempt, error);
       return;
@@ -863,9 +914,13 @@ export class StreamSubscribers {
     // A parked row must not keep driving the alarm: the park was preceded by
     // a nack whose (now past) next_attempt_at would otherwise be re-armed by
     // every onAlarm forever — a permanent alarm hot loop per parked
-    // subscription. Clear the backoff, keep the cursor (the park fact carries
-    // the attempts + error for the audit trail).
-    if (row !== undefined) this.#hooks.store.ack(subscriptionKey, row.ackedOffset);
+    // subscription. Clear the retry schedule but keep the cursor AND the
+    // failure evidence: the row mirrors the park fact's attempts + error so
+    // runtime state (and the sidebar warning sheet) can say WHY it parked
+    // without digging the fact back out of the event log.
+    if (row !== undefined) {
+      this.#hooks.store.park(subscriptionKey, { attempt: attempts, error: errorMessage(error) });
+    }
     this.#consecutiveSkips.delete(subscriptionKey);
     this.#batchLimits.delete(subscriptionKey);
   }
@@ -884,7 +939,12 @@ export class StreamSubscribers {
       if (this.#pushDrains.has(key) || this.#pokesInFlight.has(key)) continue;
       if (next === null || row.nextAttemptAt < next) next = row.nextAttemptAt;
     }
+    for (const connection of this.#connections.values()) {
+      const deadlineAt = connection.nextSettlementDeadlineAt();
+      if (deadlineAt !== null && (next === null || deadlineAt < next)) next = deadlineAt;
+    }
     if (next !== null) this.#hooks.armAlarm(next);
+    if (this.#idleTeardownAtMs !== null) this.#hooks.armAlarm(this.#idleTeardownAtMs);
   }
 
   // ===========================================================================
@@ -917,6 +977,7 @@ export class StreamSubscribers {
     this.#batchLimits.delete(subscriptionKey);
     this.#consecutiveSkips.delete(subscriptionKey);
     this.#subscriptionMetrics.delete(subscriptionKey);
+    this.#hooks.runtimeChanged();
   }
 
   #subscriptionMetricsFor(subscriptionKey: string) {
@@ -962,18 +1023,69 @@ export class StreamSubscribers {
   #open(args: OpenConnectionArgs): Connection {
     const { subscriptionKey, subscriptionType, sink } = args;
 
-    // Replacing any existing connection for this key.
-    this.#connections.get(subscriptionKey)?.close("replaced");
-
     const deliverEvents = args.events !== false;
+    // This synchronous committed head is the subscription's atomic live
+    // boundary. Ephemeral rows at/below it existed before the subscription
+    // opened and are never replayed; rows above it are genuinely live.
+    const coreState = this.#hooks.coreState();
+    const openedAtOffset = coreState.maxOffset;
+    if (
+      args.replayAfterOffset !== undefined &&
+      (!Number.isSafeInteger(args.replayAfterOffset) || args.replayAfterOffset < 0)
+    ) {
+      sink[Symbol.dispose]();
+      throw new Error("replayAfterOffset must be a non-negative safe integer");
+    }
+    if (
+      args.expectedIncarnation !== undefined &&
+      args.expectedIncarnation !== null &&
+      args.expectedIncarnation.trim().length === 0
+    ) {
+      sink[Symbol.dispose]();
+      throw new Error("expectedIncarnation must be null or a non-empty string");
+    }
+    if (
+      args.expectedIncarnation !== undefined &&
+      (coreState.createdAt ?? null) !== args.expectedIncarnation
+    ) {
+      sink[Symbol.dispose]();
+      throw new Error(
+        `stream incarnation changed (${String(args.expectedIncarnation)} -> ${String(coreState.createdAt ?? null)})`,
+      );
+    }
+    if (
+      args.maxReplayOffsetGap !== undefined &&
+      (!Number.isSafeInteger(args.maxReplayOffsetGap) || args.maxReplayOffsetGap < 0)
+    ) {
+      sink[Symbol.dispose]();
+      throw new Error("maxReplayOffsetGap must be a non-negative safe integer");
+    }
     // State-only subscriptions are implicitly live-from-now: replay without
     // events is meaningless, so replayAfterOffset is ignored in that mode.
-    let cursor = deliverEvents
-      ? (args.replayAfterOffset ?? this.#hooks.coreState().maxOffset)
-      : this.#hooks.coreState().maxOffset;
+    let cursor = deliverEvents ? (args.replayAfterOffset ?? openedAtOffset) : openedAtOffset;
+    if (cursor > openedAtOffset) {
+      sink[Symbol.dispose]();
+      throw new Error(`replayAfterOffset ${cursor} is ahead of the stream head ${openedAtOffset}`);
+    }
+    if (
+      deliverEvents &&
+      args.maxReplayOffsetGap !== undefined &&
+      openedAtOffset - cursor > args.maxReplayOffsetGap
+    ) {
+      sink[Symbol.dispose]();
+      throw new Error(
+        `replay gap ${openedAtOffset - cursor} exceeds maxReplayOffsetGap ${args.maxReplayOffsetGap}`,
+      );
+    }
+
+    // Replacing any existing connection for this key only after the proposed
+    // open is valid; a rejected bounded replay must leave the live one intact.
+    this.#connections.get(subscriptionKey)?.close("replaced");
     let initialBatchPending = true;
     let draining = false;
     let open = true;
+    const pendingDeliveries = new Map<symbol, number>();
+    let connection!: Connection;
 
     const pump = async () => {
       if (draining) return;
@@ -982,6 +1094,7 @@ export class StreamSubscribers {
         while (open) {
           let events: StreamEvent[] = [];
           let deliveredBytes = 0;
+          const scannedAfterOffset = cursor;
           if (deliverEvents) {
             // Same byte-capped read as the push drain: a batch of near-2MB
             // events in one live frame would blow the RPC frame limit and turn
@@ -989,27 +1102,33 @@ export class StreamSubscribers {
             const readEvents = this.#readBatch(cursor, DELIVERY_BATCH_LIMIT);
             const lastOffset = readEvents.at(-1)?.event.offset;
             if (lastOffset === undefined) {
-              // Caught up; the next append wakes us again. The first drain
-              // still owes the initial state batch.
-              if (!initialBatchPending) return;
+              // An evicted ephemeral suffix has no surviving row to carry its
+              // scan coordinate. The synchronous allocator head proves the
+              // absent interval, so emit one empty envelope across it. This is
+              // what lets filtered processors durably checkpoint through old
+              // chunks without ever replaying them.
+              const currentHead = this.#hooks.coreState().maxOffset;
+              if (currentHead <= cursor && !initialBatchPending) return;
+              cursor = Math.max(cursor, currentHead);
             } else {
               cursor = lastOffset;
-              // Configured (wake) connections are a durable lane: ephemeral
-              // events are dropped from delivery (the cursor above already
-              // advanced over them), so hosted processors structurally never
-              // see one. Ephemeral subscriptions receive them, live and on
-              // replay.
+              // Configured (wake) connections are a durable lane: ephemerals
+              // never reach them. Session subscriptions receive ephemerals
+              // only when they were committed AFTER this connection's atomic
+              // open boundary; historical ephemerals are never replayed.
               const visible =
                 subscriptionType === "configured"
                   ? readEvents.filter((entry) => entry.event.ephemeral !== true)
-                  : readEvents;
+                  : readEvents.filter(
+                      (entry) =>
+                        entry.event.ephemeral !== true || entry.event.offset > openedAtOffset,
+                    );
               const delivered =
                 args.selector === undefined
                   ? visible
                   : visible.filter((entry) => selectorMatchesSafely(args.selector!, entry.event));
               events = delivered.map((entry) => entry.event);
               deliveredBytes = delivered.reduce((sum, entry) => sum + entry.byteLength, 0);
-              if (events.length === 0 && !initialBatchPending) continue;
             }
           } else {
             const stateMaxOffset = this.#hooks.coreState().maxOffset;
@@ -1028,32 +1147,61 @@ export class StreamSubscribers {
               "Cannot deliver stream batch before stream coordinates are initialized.",
             );
           }
-          // Wake-lane batches have their results pulled anyway (corpse
-          // detection), so the settle doubles as a free commit→consumed
-          // sample on the stream's own clock. Ephemeral results stay
-          // unpulled: no onSettled ever fires there (see subscriber-sinks.ts).
+          // A wake batch reports completion through an independent one-shot
+          // capability. Its sink result is disposed unpulled, exactly like an
+          // ephemeral batch, so a processor that appends back to this stream
+          // cannot close a cyclic actor-drain dependency through its return
+          // value.
           const newestCreatedAtMs =
             events.length === 0 ? undefined : Date.parse(events.at(-1)!.createdAt);
-          sink(
-            {
-              projectId: currentState.projectId,
-              path: currentState.path,
-              events,
-              streamMaxOffset: currentState.maxOffset,
-              // Read in the same synchronous block as streamMaxOffset, so the
-              // two always correspond (state-at-streamMaxOffset; see rpc-types.ts).
-              state: currentState,
-            } satisfies StreamEventBatch,
-            newestCreatedAtMs === undefined || !Number.isFinite(newestCreatedAtMs)
-              ? undefined
-              : {
-                  onSettled: (outcome) => {
-                    if (outcome !== "ok") return;
-                    const settledAtMs = this.#hooks.now();
-                    connection.settleLatency.record(settledAtMs - newestCreatedAtMs, settledAtMs);
-                  },
-                },
-          );
+          const batch = {
+            projectId: currentState.projectId,
+            path: currentState.path,
+            events,
+            scannedAfterOffset,
+            scannedThroughOffset: cursor,
+            streamMaxOffset: currentState.maxOffset,
+            // Read in the same synchronous block as streamMaxOffset, so the
+            // two always correspond (state-at-streamMaxOffset; see rpc-types.ts).
+            state: currentState,
+          } satisfies StreamEventBatch;
+          if (args.subscriptionType === "configured") {
+            const delivery = Symbol("stream wake delivery");
+            const settlementDeadlineAt = this.#hooks.now() + DELIVERY_TIMEOUT_MS;
+            pendingDeliveries.set(delivery, settlementDeadlineAt);
+            this.#hooks.armAlarm(settlementDeadlineAt);
+            // Publish the pending state BEFORE dispatch. A local sink can
+            // settle synchronously, and debug state must still observe the
+            // real pending → settled transition.
+            this.#hooks.runtimeChanged();
+            args.sink({
+              ...batch,
+              settleDelivery: (settlement) => {
+                // One callback capability belongs to one batch. Duplicates
+                // and late reports after close/replacement are harmless.
+                if (!pendingDeliveries.delete(delivery)) return;
+                if (open && this.#connections.get(subscriptionKey) === connection) {
+                  const parsed = parseWakeDeliverySettlement(settlement);
+                  if (parsed.outcome === "ok") {
+                    if (newestCreatedAtMs !== undefined && Number.isFinite(newestCreatedAtMs)) {
+                      const settledAtMs = this.#hooks.now();
+                      connection.settleLatency.record(settledAtMs - newestCreatedAtMs, settledAtMs);
+                    }
+                  } else {
+                    // Fence on the exact connection above: a late failure
+                    // from a replaced sink must never close its successor.
+                    this.onDurableDeliveryError(subscriptionKey, parsed.error);
+                  }
+                }
+                // Includes empty/state-only, rejected, stale, and duplicate-
+                // fenced deliveries: pending state changed for the first
+                // terminal report even when no latency sample was recorded.
+                this.#hooks.runtimeChanged();
+              },
+            } satisfies StreamWakeEventBatch);
+          } else {
+            args.sink(batch);
+          }
           await Promise.resolve();
         }
       } finally {
@@ -1061,7 +1209,7 @@ export class StreamSubscribers {
       }
     };
 
-    const connection: Connection = {
+    connection = {
       subscriptionType,
       startedAt: new Date(this.#hooks.now()).toISOString(),
       ...(args.presence === undefined ? {} : { subscriber: args.presence }),
@@ -1077,12 +1225,21 @@ export class StreamSubscribers {
       pingRtt: new LatencyRing(),
       wake: () => void pump(),
       isLive: () => open,
-      hasPendingDelivery: () => (sink.pendingDeliveries?.() ?? 0) > 0,
+      hasPendingDelivery: () => pendingDeliveries.size > 0,
+      nextSettlementDeadlineAt: () => {
+        let next: number | null = null;
+        for (const deadlineAt of pendingDeliveries.values()) {
+          if (next === null || deadlineAt < next) next = deadlineAt;
+        }
+        return next;
+      },
       close: (reason) => {
         if (!open) return;
         open = false;
+        pendingDeliveries.clear();
         if (this.#connections.get(subscriptionKey) === connection) {
           this.#connections.delete(subscriptionKey);
+          this.#hooks.runtimeChanged();
         }
         // The ping stub proxies through the same chain the sink retains
         // (wake lane), so it releases before the sink tears that chain down.
@@ -1105,6 +1262,7 @@ export class StreamSubscribers {
     };
 
     this.#connections.set(subscriptionKey, connection);
+    this.#hooks.runtimeChanged();
     this.#hooks.appendFact({
       type: "events.iterate.com/stream/subscriber-connected",
       payload: {
@@ -1113,7 +1271,20 @@ export class StreamSubscribers {
         ...(args.presence === undefined ? {} : { subscriber: args.presence }),
       },
     });
-    sink.onRpcBroken?.(() => connection.close("rpc-broken"));
+    sink.onRpcBroken?.((error) => {
+      if (subscriptionType === "configured") {
+        // A disposed predecessor can report its transport break late. Fence
+        // the hint to this exact connection so it cannot nack and close the
+        // replacement currently stored under the same subscription key.
+        if (this.#connections.get(subscriptionKey) === connection) {
+          this.#onDurableSinkFailure(subscriptionKey, error, "rpc-broken");
+        }
+      } else {
+        // Session-scoped ephemerals have no durable cursor to nack or retry;
+        // disconnecting forgets them exactly as their ownership contract says.
+        connection.close("rpc-broken");
+      }
+    });
     connection.wake();
     return connection;
   }
@@ -1128,14 +1299,58 @@ export class StreamSubscribers {
    * see #poke) and parks at the same threshold as every other lane.
    */
   onDurableDeliveryError(subscriptionKey: string, error: unknown): void {
+    this.#onDurableSinkFailure(subscriptionKey, error, "delivery-failed");
+  }
+
+  /**
+   * A wake sink call is deliberately one-way, so its independent settlement
+   * callback is the only acknowledgement. If workerd silently orphans that
+   * callback without reporting onRpcBroken, the connection must not remain
+   * authoritative until the much longer idle teardown. The native DO alarm
+   * owns this deadline: actor timers would retain the append invocation that
+   * dispatched the batch.
+   */
+  #expireWakeDeliveryDeadlines(): void {
+    const now = this.#hooks.now();
+    for (const [subscriptionKey, connection] of [...this.#connections]) {
+      const deadlineAt = connection.nextSettlementDeadlineAt();
+      if (deadlineAt === null || deadlineAt > now) continue;
+      this.#onDurableSinkFailure(
+        subscriptionKey,
+        new StreamReceiverUnavailableError(
+          `wake ${subscriptionKey} settlement timed out after ${DELIVERY_TIMEOUT_MS}ms`,
+        ),
+        "delivery-failed",
+      );
+    }
+  }
+
+  #onDurableSinkFailure(
+    subscriptionKey: string,
+    error: unknown,
+    reason: Extract<StreamSubscriberDisconnectReason, "rpc-broken" | "delivery-failed">,
+  ): void {
     const connection = this.#connections.get(subscriptionKey);
     if (connection === undefined) return;
-    console.error("stream durable sink delivery failed; backing off before re-poke", {
-      subscriptionKey,
-      error,
-    });
+    const details = { subscriptionKey, reason, error };
+    if (
+      reason === "rpc-broken" ||
+      isDurableObjectLifecycleError(error) ||
+      isStreamReceiverUnavailableError(error)
+    ) {
+      // A killed, evicted, deployed, or overloaded subscriber is a modelled
+      // availability transition. `onRpcBroken` is itself the transport's
+      // authoritative availability signal even when its Error lost workerd's
+      // lifecycle flags crossing an RPC boundary. The durable cursor stays
+      // put and the bounded backoff below reconnects it; keep that expected
+      // transition out of the error signal while retaining an observable
+      // warning.
+      console.warn("stream durable sink unavailable; backing off before re-poke", details);
+    } else {
+      console.error("stream durable sink delivery failed; backing off before re-poke", details);
+    }
     this.#onDeliveryFailure(subscriptionKey, error);
-    connection.close("delivery-failed");
+    connection.close(reason);
   }
 
   // ===========================================================================
@@ -1157,13 +1372,12 @@ export class StreamSubscribers {
 
   /**
    * One throttled mutual-ping round over every live connection that supplied
-   * a ping capability. Observer-driven: `runtimeState()` triggers it, so RTT
-   * sampling runs only while something is reading runtime state — the debug
-   * panel's poll, or a live browser tab's ~10s liveness probe. A stream with
-   * no browser attached and no debug observer is never pinged. Purely
+   * a ping capability. Observer-driven: a one-shot `runtimeState()` read or a
+   * runtime LiveState observer attaching triggers it. A stream with no debug
+   * observer is never pinged. Purely
    * observational: a failed/garbage/slow ping drops the sample and NOTHING
-   * else (liveness stays owned by result-pulling and onRpcBroken); it never
-   * wakes pumps and never re-arms the idle timer.
+   * else (liveness stays owned by explicit delivery settlement and
+   * onRpcBroken); it never wakes pumps and never re-arms the idle timer.
    */
   samplePingsSoon(): void {
     const now = this.#hooks.now();
@@ -1193,7 +1407,10 @@ export class StreamSubscribers {
             return; // a subscriber that answers garbage just has no RTT data
           }
           const { rttMs } = pingRoundTrip({ t0, t1: reply.t1, t2: reply.t2 }, t3);
-          if (connection.isLive()) connection.pingRtt.record(rttMs, t3);
+          if (connection.isLive()) {
+            connection.pingRtt.record(rttMs, t3);
+            this.#hooks.runtimeChanged();
+          }
         } catch {
           // Drop the sample; the delivery machinery owns liveness verdicts.
         }
@@ -1260,28 +1477,27 @@ export class StreamSubscribers {
   }
 
   /**
-   * Keep the in-memory idle timer armed only while durable delivery
-   * connections exist (the thing that pins the DO resident). Reset on every
-   * append; cleared once no durable connection remains. No storage writes,
-   * and nothing scheduled against a hibernated DO.
+   * Keep an idle deadline only while configured delivery connections exist.
+   * Every append restarts the quiet window. The owning DO multiplexes this
+   * deadline with delivery-retry deadlines on its single native alarm.
    */
-  armOrClearIdleTimer(): void {
-    if (this.#idleTimer !== undefined) {
-      clearTimeout(this.#idleTimer);
-      this.#idleTimer = undefined;
+  armOrClearIdleAlarm(): void {
+    if (this.#configuredConnectionKeys().length === 0) {
+      this.#idleTeardownAtMs = null;
+      return;
     }
-    if (this.#configuredConnectionKeys().length === 0) return;
-    this.#idleTimer = setTimeout(() => this.runIdleTeardownNow(), this.#idleTeardownMs);
+    this.#idleTeardownAtMs = this.#hooks.now() + this.#idleTeardownMs;
+    this.#hooks.armAlarm(this.#idleTeardownAtMs);
   }
 
   /**
    * Deliberately drops every live durable delivery connection so a quiet
    * stream stops pinning subscriber DOs with idle cross-isolate RPC sessions.
    * The durable subscription config is kept, so the next append re-pokes.
-   * The idle timer's action, also exposed for tests / operator use.
+   * The idle alarm's action, also exposed for tests / operator use.
    */
   runIdleTeardownNow(): void {
-    this.#idleTimer = undefined;
+    this.#idleTeardownAtMs = null;
     // Snapshot first: close() mutates the connection table. The whole loop is
     // one synchronous DO turn, so nothing foreign can interleave — the only
     // events appended during it are our own subscriber-disconnected facts.
@@ -1311,6 +1527,10 @@ export class StreamSubscribers {
       if (wedgedKeys.has(subscriptionKey)) continue;
       this.#hooks.store.ack(subscriptionKey, maxOffset);
     }
+    // Disconnect facts append re-entrantly while other connections in the
+    // snapshot may still exist, so their append turns can transiently arm a
+    // fresh idle deadline. The completed teardown owns the final state.
+    this.#idleTeardownAtMs = null;
     if (wedgedKeys.size > 0) queueMicrotask(() => this.wake());
   }
 
@@ -1322,19 +1542,22 @@ export class StreamSubscribers {
 }
 
 /**
- * Bounds one delivery/poke attempt. Without it a wedged receiver (the worst
- * real case: a cold worker build that never completes) holds the drain slot
- * and pins the DO unboundedly, with no nack, no backoff, and no park. On
- * timeout the attempt counts as a failure — the spine backs off and retries;
- * a build that was merely slow continues server-side via waitUntil, so the
- * retry hits the warm cache (the same shape #1761's build budget had).
+ * Bounds one delivery/poke attempt or independent wake settlement. Without it
+ * a wedged receiver (the worst real case: a cold worker build that never
+ * completes) holds the drain slot or leaves a wake connection authoritative
+ * unboundedly, with no nack, no backoff, and no park. On timeout the receiver
+ * is classified as unavailable — the spine backs off and retries the WHOLE
+ * batch without allowing `onPoison: "skip"` to turn a transport stall into a
+ * verdict about healthy events. The bound deliberately wins before the
+ * platform's roughly 30-second nested-RPC cancellation window; a build that
+ * was merely slow continues server-side via waitUntil, so the retry hits the
+ * warm cache (the same shape #1761's build budget had).
  */
-const DELIVERY_TIMEOUT_MS = 60_000;
+const DELIVERY_TIMEOUT_MS = 20_000;
 
 /**
- * Minimum interval between mutual-ping rounds. Sampling is observer-driven
- * (each `runtimeState()` call requests a round), so this throttle turns the
- * panel's ~2s poll into a ≤1-ping-per-5s-per-connection ceiling.
+ * Minimum interval between mutual-ping rounds. Sampling is observer-driven;
+ * this bounds repeated explicit refreshes/one-shot reads without a ticker.
  */
 const PING_ROUND_MIN_INTERVAL_MS = 5_000;
 /** Bound on one ping attempt — a reply slower than this isn't a useful RTT sample. */
@@ -1372,7 +1595,7 @@ async function withDeliveryTimeout<T>(
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
           timedOut = true;
-          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+          reject(new StreamReceiverUnavailableError(`${label} timed out after ${timeoutMs}ms`));
         }, timeoutMs);
       }),
     ]);
@@ -1392,4 +1615,34 @@ function selectorMatchesSafely(selector: CompiledEventSelector, event: StreamEve
 
 function errorMessage(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)) || "unknown error";
+}
+
+function parseWakeDeliverySettlement(
+  value: StreamWakeDeliverySettlement,
+): { outcome: "ok" } | { outcome: "error"; error: Error } {
+  const candidate = value as Partial<StreamWakeDeliverySettlement> | null;
+  if (candidate?.outcome === "ok") return { outcome: "ok" };
+  if (candidate?.outcome !== "error" || !("error" in candidate)) {
+    return {
+      outcome: "error",
+      error: new Error("wake delivery reported an invalid settlement"),
+    };
+  }
+  const serialized = candidate.error as Partial<StreamWakeDeliveryError> | null;
+  if (typeof serialized?.name !== "string" || typeof serialized.message !== "string") {
+    return {
+      outcome: "error",
+      error: new Error("wake delivery reported an invalid failure"),
+    };
+  }
+  const error = new Error(serialized.message);
+  error.name = serialized.name;
+  return {
+    outcome: "error",
+    error: Object.assign(error, {
+      ...(serialized.durableObjectReset === true ? { durableObjectReset: true } : {}),
+      ...(serialized.overloaded === true ? { overloaded: true } : {}),
+      ...(serialized.retryable === true ? { retryable: true } : {}),
+    }),
+  };
 }

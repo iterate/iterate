@@ -7,15 +7,22 @@ import { MessageResponse } from "@iterate-com/ui/components/ai-elements/message"
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
+import { Table, TableBody, TableCell, TableRow } from "@iterate-com/ui/components/table";
 import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
+import { useItxQuery } from "iterate/sdk/itx/react";
 import { changedLinesGutter } from "./change-gutter.ts";
 import { HtmlPreview } from "./html-preview.tsx";
+import { projectMarkdownPreview } from "./markdown-frontmatter.ts";
 import { isPreviewablePath, repoFileKind } from "./repo-file-kinds.ts";
 import { useRepoFileJsonSchema } from "./repo-json-schema.ts";
 import { useRepoTypeScriptExtensions } from "./repo-typescript.ts";
 import { localFileToBase64, pickLocalFile } from "./local-file.ts";
-import { effectiveEntry, type FileChange, type FileEntry } from "./staged-changes.ts";
-import { useItxQuery } from "~/itx/itx-react.tsx";
+import {
+  effectiveEntry,
+  textContentForEntry,
+  type FileChange,
+  type FileEntry,
+} from "./staged-changes.ts";
 
 /**
  * The right-hand side of the repo IDE: one file, rendered by kind — an
@@ -37,6 +44,7 @@ export function RepoEditorPane({
   onTogglePreview,
   onSetWorking,
   onSetStaged,
+  onDiscardFile,
   onStageFile,
   onUnstageFile,
   onOpenWorking,
@@ -58,6 +66,7 @@ export function RepoEditorPane({
   onTogglePreview: (open: boolean) => void;
   onSetWorking: (entry: FileEntry | undefined) => void;
   onSetStaged: (entry: FileEntry | undefined) => void;
+  onDiscardFile: () => void;
   onStageFile: () => void;
   onUnstageFile: () => void;
   /** Leave the Index view for the editable working-tree file. */
@@ -79,10 +88,16 @@ export function RepoEditorPane({
   const headContent = headRead?.content;
   const working = change?.working;
   const staged = change?.staged;
+  const workingText = kind.kind === "text" ? textContentForEntry(working) : undefined;
+  const stagedText = kind.kind === "text" ? textContentForEntry(staged) : undefined;
+  const hasUndecodableTextEntry =
+    kind.kind === "text" &&
+    ((working?.type === "write-base64" && workingText === undefined) ||
+      (staged?.type === "write-base64" && stagedText === undefined));
 
   // Diffs and dirty checks run against the git-shaped baseline: the staged
   // snapshot when one exists, else HEAD.
-  const textBaseline = staged?.type === "write" ? staged.content : (headContent ?? undefined);
+  const textBaseline = stagedText ?? headContent ?? undefined;
 
   // TypeScript language service (diagnostics, hover, autocomplete) for
   // ts/tsx/js/jsx working-tree buffers — empty for everything else, and for
@@ -110,7 +125,7 @@ export function RepoEditorPane({
   const jsonSchema = useRepoFileJsonSchema({
     path,
     language: schemaLanguage,
-    content: working?.type === "write" ? working.content : (textBaseline ?? ""),
+    content: workingText ?? textBaseline ?? "",
   });
   // The readonly Index view renders the STAGED snapshot, so it must validate
   // against the schema that snapshot declares — not the working buffer's, whose
@@ -118,7 +133,7 @@ export function RepoEditorPane({
   const stagedJsonSchema = useRepoFileJsonSchema({
     path,
     language: schemaLanguage,
-    content: staged?.type === "write" ? staged.content : "",
+    content: stagedText ?? "",
   });
 
   // The plain editor carries vscode-style gutter bars for lines differing
@@ -172,7 +187,7 @@ export function RepoEditorPane({
   // chunk controls — inspection only.
   const stagedDiffExtensions = useMemo(
     () =>
-      stagedView && staged?.type === "write"
+      stagedView && stagedText !== undefined
         ? [
             unifiedMergeView({
               original: headContent ?? "",
@@ -181,7 +196,7 @@ export function RepoEditorPane({
             }),
           ]
         : [],
-    [stagedView, staged, headContent],
+    [stagedView, stagedText, headContent],
   );
 
   const editorExtensionsWithSchema = useMemo(
@@ -227,7 +242,7 @@ export function RepoEditorPane({
           size="sm"
           className="text-xs"
           title="Discard changes"
-          onClick={() => onSetWorking(undefined)}
+          onClick={onDiscardFile}
         >
           <Undo2Icon className="size-3.5" />
           Discard
@@ -268,7 +283,7 @@ export function RepoEditorPane({
   const status =
     entry === undefined ? undefined : headHasPath ? ("modified" as const) : ("added" as const);
 
-  if (stagedView && staged?.type === "write" && kind.kind === "text") {
+  if (stagedView && stagedText !== undefined && kind.kind === "text") {
     // Same Code/Preview toggle as the working view, over the staged snapshot
     // — the Index pseudo-file stays readonly either way.
     const showStagedPreview = previewOpen && isPreviewablePath(path);
@@ -314,9 +329,9 @@ export function RepoEditorPane({
       >
         {showStagedPreview ? (
           kind.language === "markdown" ? (
-            <MarkdownPreview markdown={staged.content} />
+            <MarkdownPreview markdown={stagedText} />
           ) : (
-            <HtmlPreview html={staged.content} />
+            <HtmlPreview html={stagedText} />
           )
         ) : (
           <SourceCodeBlock
@@ -326,7 +341,7 @@ export function RepoEditorPane({
             showLineNumbers
             editable={false}
             wrapLongLines={false}
-            code={staged.content}
+            code={stagedText}
             language={kind.language}
             codeMirrorExtensions={stagedDiffExtensionsWithSchema}
             onChange={() => {}}
@@ -336,8 +351,8 @@ export function RepoEditorPane({
     );
   }
 
-  if (kind.kind === "text" && working?.type !== "write-base64" && staged?.type !== "write-base64") {
-    const value = working?.type === "write" ? working.content : (textBaseline ?? "");
+  if (kind.kind === "text" && !hasUndecodableTextEntry) {
+    const value = workingText ?? textBaseline ?? "";
     const stageText = (content: string) => {
       // Typing back to the baseline un-dirties the file, like vscode.
       if (content === textBaseline) onSetWorking(undefined);
@@ -540,12 +555,40 @@ function CodePreviewToggle({
  * that prop without re-checking sanitization.
  */
 function MarkdownPreview({ markdown }: { markdown: string }) {
+  const preview = projectMarkdownPreview(markdown);
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto w-full max-w-3xl px-8 py-6 text-sm">
+        {preview.metadata.length === 0 ? null : (
+          <div className="mb-6 overflow-hidden rounded-lg border bg-muted/20">
+            <Table className="text-xs">
+              <TableBody>
+                {preview.metadata.map((property) => (
+                  <TableRow key={property.key} className="hover:bg-transparent">
+                    <TableCell className="w-36 py-1.5 font-medium text-muted-foreground">
+                      {property.key}
+                    </TableCell>
+                    <TableCell className="py-1.5 font-mono whitespace-normal">
+                      {property.value}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
         {/* A settled document, not a stream — skip streamdown's unpaired-
             marker balancing (it appends a phantom `*` to text like "17 * 23"). */}
-        <MessageResponse parseIncompleteMarkdown={false}>{markdown}</MessageResponse>
+        <MessageResponse
+          loadingFallback={
+            <div className="text-sm text-muted-foreground" data-spinner="true" role="status">
+              Rendering preview...
+            </div>
+          }
+          parseIncompleteMarkdown={false}
+        >
+          {preview.body}
+        </MessageResponse>
       </div>
     </div>
   );

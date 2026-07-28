@@ -1,5 +1,3 @@
-import { z } from "zod";
-
 // =============================================================================
 // Human-in-the-loop egress approvals.
 //
@@ -25,90 +23,21 @@ import { z } from "zod";
 // 64-byte r‖s signature.
 // =============================================================================
 
-/** Matchers of one egress rule. Absent fields match everything. */
-const EgressRuleMatch = z.object({
-  /** Hostnames, with `*.` wildcard support: "api.stripe.com", "*.stripe.com". */
-  hosts: z.array(z.string()).optional(),
-  /** HTTP methods (case-insensitive): ["POST", "DELETE"]. */
-  methods: z.array(z.string()).optional(),
-  /** URL path prefix: "/v1/transfers". */
-  pathPrefix: z.string().optional(),
-  /**
-   * Secret paths the request references (getSecret placeholders). This is the
-   * secret-aware trigger: "any request spending /secrets/stripe/prod needs a
-   * human", regardless of destination.
-   */
-  secretPaths: z.array(z.string()).optional(),
-});
+// The event payload and state schemas live INLINE in the project processor
+// contract (the contract owns every nested data structure); this module only
+// re-exports their inferred types for its own function signatures and for
+// the out-of-app importers (the `iterate approve` CLI, the mobile approver).
+import type {
+  EgressRule,
+  HumanApprovalKey,
+  HumanApprovalRequestedPayload,
+} from "./project-processor-contract.ts";
 
-export const EgressRule = z.object({
-  /** Caller-provided identifier; the requested event names the rule that caught it. */
-  ruleKey: z.string().min(1),
-  /** Human-readable "why was this caught" line, shown on the approval prompt. */
-  description: z.string().default(""),
-  match: EgressRuleMatch.default({}),
-  verdict: z.enum(["hold", "deny"]),
-  /** How long a held request waits for a human before auto-rejecting. */
-  approvalTimeoutMs: z.number().int().positive().max(3_600_000).default(600_000),
-});
-
-export type EgressRule = z.output<typeof EgressRule>;
-
-/** One enrolled approval public key as reduced onto project processor state. */
-export const HumanApprovalKey = z.object({
-  keyId: z.string(),
-  /** Base64 of the uncompressed P-256 public point (65 bytes, 0x04‖X‖Y). */
-  publicKey: z.string(),
-  label: z.string().default(""),
-  addedAt: z.string(),
-  revokedAt: z.string().nullable().default(null),
-});
-
-export type HumanApprovalKey = z.output<typeof HumanApprovalKey>;
-
-/**
- * The `human-approval-requested` payload fields the approval signature
- * covers. Everything here is placeholder-form (getSecret(...) references,
- * never material) — what the human approves is "a request that will spend
- * this secret", and the material never reaches the approval device.
- */
-export const HumanApprovalRequestedPayload = z.object({
-  method: z.string(),
-  url: z.string(),
-  /** All headers as they would be forwarded, placeholder form. */
-  headers: z.record(z.string(), z.string()),
-  /** Hex SHA-256 of the body bytes; null for bodyless requests. */
-  bodySha256: z.string().nullable().default(null),
-  /** First ~2KB of a UTF-8 body, for the approval UI only (NOT signed). */
-  bodyPreview: z.string().nullable().default(null),
-  /** Secret paths the request references — the "spends this secret" headline. */
-  secretPaths: z.array(z.string()).default([]),
-  /** The rule that caught the request. */
-  ruleKey: z.string(),
-  expiresAt: z.string(),
-});
-
-export type HumanApprovalRequestedPayload = z.output<typeof HumanApprovalRequestedPayload>;
-
-/** A held request's identity is the offset of its requested event — no minted ids. */
-const HumanApprovalResolutionPayload = z.object({
-  approvalRequestEventOffset: z.number().int().nonnegative(),
-});
-
-export const HumanApprovalGrantedPayload = HumanApprovalResolutionPayload.extend({
-  keyId: z.string().optional(),
-  /** Base64 raw 64-byte r‖s ECDSA P-256 signature over the canonical approval message. */
-  signature: z.string().optional(),
-});
-
-export const HumanApprovalRejectedPayload = HumanApprovalResolutionPayload.extend({
-  reason: z.enum(["human", "expired"]),
-});
-
-export const HumanApprovalSettledPayload = HumanApprovalResolutionPayload.extend({
-  status: z.number().int().optional(),
-  error: z.string().optional(),
-});
+export type {
+  EgressRule,
+  HumanApprovalKey,
+  HumanApprovalRequestedPayload,
+} from "./project-processor-contract.ts";
 
 // -----------------------------------------------------------------------------
 // Rule matching.
@@ -196,16 +125,16 @@ function sortKeysDeep(value: unknown): unknown {
 /**
  * The exact bytes an approval signature covers. Reconstructable by both
  * sides from the requested event alone: the CLI builds it from the event it
- * received, the Project DO from the payload it appended. `bodyPreview` and
- * `expiresAt` are deliberately excluded — the preview is a UI hint (the
- * signature covers the body via its hash) and expiry is enforced server-side.
+ * received, the Project DO from the payload it appended. Display/provenance
+ * fields and `expiresAt` are deliberately excluded — the signature covers the
+ * body via its hash, and expiry is enforced server-side.
  */
 export function buildApprovalMessage(input: {
   projectId: string;
   approvalRequestEventOffset: number;
   requested: Pick<
     HumanApprovalRequestedPayload,
-    "method" | "url" | "headers" | "bodySha256" | "secretPaths"
+    "method" | "url" | "headers" | "body" | "secretPaths"
   >;
   decision: "granted" | "rejected";
 }): Uint8Array {
@@ -217,11 +146,54 @@ export function buildApprovalMessage(input: {
       method: input.requested.method,
       url: input.requested.url,
       headers: input.requested.headers,
-      bodySha256: input.requested.bodySha256,
+      bodySha256: input.requested.body?.sha256 || null,
       secretPaths: input.requested.secretPaths,
       decision: input.decision,
     }),
   );
+}
+
+export const APPROVAL_BODY_INSPECTION_LIMIT_BYTES = 64 * 1024;
+
+/** Keep a bounded body prefix for human inspection; UTF-8 stays readable and other bytes are base64. */
+export function approvalRequestBody(
+  bytes: Uint8Array,
+  sha256: string,
+): {
+  encoding: "utf8" | "base64";
+  content: string;
+  originalByteLength: number;
+  sha256: string;
+  truncated: boolean;
+} {
+  const truncated = bytes.byteLength > APPROVAL_BODY_INSPECTION_LIMIT_BYTES;
+  const inspectionBytes = bytes.slice(0, APPROVAL_BODY_INSPECTION_LIMIT_BYTES);
+  const metadata = { originalByteLength: bytes.byteLength, sha256, truncated };
+  try {
+    return {
+      encoding: "utf8",
+      content: decodeUtf8InspectionBytes(inspectionBytes, truncated),
+      ...metadata,
+    };
+  } catch {
+    return { encoding: "base64", content: bytesToBase64(inspectionBytes), ...metadata };
+  }
+}
+
+function decodeUtf8InspectionBytes(bytes: Uint8Array, truncated: boolean): string {
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  if (!truncated) return decoder.decode(bytes);
+
+  // A byte cap may split the final UTF-8 code point. Trim only that incomplete
+  // suffix; invalid bytes elsewhere still fall back to the binary/base64 view.
+  for (let trim = 0; trim <= 3; trim++) {
+    try {
+      return decoder.decode(bytes.subarray(0, bytes.byteLength - trim));
+    } catch {
+      // Try the next possible UTF-8 suffix length.
+    }
+  }
+  throw new Error("The approval body inspection prefix is not UTF-8.");
 }
 
 // -----------------------------------------------------------------------------

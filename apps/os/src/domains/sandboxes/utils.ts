@@ -1,63 +1,25 @@
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { githubAccessTokenPlaceholder } from "../integrations/utils.ts";
+import {
+  githubAccessTokenPlaceholder,
+  ITERATE_GITHUB_BOT_COMMIT_AUTHOR,
+} from "../integrations/utils.ts";
 import type { SandboxInstanceType } from "./instance-types.ts";
 
-/**
- * One sandbox: the bare `@cloudflare/sandbox` Durable Object stub, nothing
- * wrapped on top. Whatever the installed SDK exposes is callable —
- * `exec(command)`, `readFile`/`writeFile`/`listFiles`, `startProcess`,
- * sessions, `gitCheckout`, the code interpreter, `tunnels`, … — so this
- * contract deliberately does not re-declare that surface (same stance as
- * `McpClientRpc`); https://developers.cloudflare.com/sandbox/api/ is
- * the authoritative reference. The image is the stock Cloudflare sandbox
- * image (Ubuntu 22.04, Node 20, Bun, git, curl, jq); install anything else
- * you need at runtime.
- *
- * Platform deltas over stock Cloudflare (everything else passes through):
- * - Sandboxes are created explicitly (`itx.sandboxes.create`), never minted
- *   by addressing.
- * - `/workspace` SURVIVES sleep: snapshotted to storage on `sleep()` or the
- *   idle timer, restored on the next start — where stock Cloudflare loses all
- *   state. Everything outside `/workspace` is ephemeral, and a crash loses
- *   anything since the last snapshot.
- * - `start()` boots the container now instead of lazily; `sleep()` snapshots
- *   and tears down now instead of waiting for `sleepAfter` (the SDK's
- *   `stop()` forwards to it); `kill()` aborts the Durable Object incarnation;
- *   `destroy()` is permanent — the name is retired.
- * - `__describe()` (the capability-tree convention) carries the durable
- *   record as structured extras ({ path, instanceType, createdAt, sleepAfter }).
- * - `setEnvVars(vars)` is DURABLE here (persisted, re-applied every start,
- *   journaled as a `configured` event); values are conventionally
- *   `getSecret({ path })` placeholders substituted only at egress — real
- *   secret material never enters the container. All sandbox egress flows
- *   through project egress policy; there is no direct internet path.
- * - `mountBucket` and `exposePort` are unavailable (they throw): /workspace
- *   snapshots cover persistence, and `tunnels` covers public URLs.
- */
-export type CloudflareSandbox = object & {
-  /** Abort the current sandbox Durable Object incarnation; the next request boots it again. */
-  kill(): Promise<void>;
-};
-
-/** What `itx.sandboxes.create` takes — Cloudflare's own vocabulary
- * (instance types, `SandboxOptions.sleepAfter`/`keepAlive`) plus a name. */
+/** What `itx.sandboxes.get(path).create` takes — Cloudflare's own vocabulary
+ * (instance types and `SandboxOptions.sleepAfter`/`keepAlive`). */
 export type SandboxCreateInput = {
-  /** The sandbox's name — a single path segment (no `/`); its path becomes
-   * `/sandboxes/<name>`. Names are unique per project (across instance
-   * types), and destroyed names are retired, not recycled — pick a new one. */
-  name: string;
   /** Cloudflare instance type; defaults to `basic`. Cannot be changed later. */
   instanceType?: SandboxInstanceType;
   /** Idle time before the container is snapshotted and torn down: a positive
    * number of SECONDS, or `"<n>s"`/`"<n>m"`/`"<n>h"` (e.g. `"30s"`, `"5m"`,
    * `"1h"` — no other units). Defaults to the SDK's 10 minutes. The workspace
-   * survives — see {@link CloudflareSandbox}. */
+   * survives across idle sleep. */
   sleepAfter?: string | number;
   /** Keep the container alive indefinitely (the SDK's `keepAlive`); you must
    * `sleep()` or `destroy()` explicitly. */
   keepAlive?: boolean;
   /** Initial env-var map, merged as if by `setEnvVars` — values are
-   * `getSecret({ path })` placeholders or non-secret literals, NEVER raw
+   * `getSecret(path)` placeholders or non-secret literals, NEVER raw
    * secret material. */
   env?: Record<string, string>;
 };
@@ -67,12 +29,12 @@ export type SandboxCreateInput = {
 // projectId — it just has to be a legal projectId so stringify/parse run.
 const ROUND_TRIP_PROJECT_ID = "prj_roundtrip";
 
-// Every sandbox lives under this prefix — the domain-prefix convention every
-// other domain already follows (`/secrets/...`, `/repos/...`, `/agents/...`),
-// so a project path names exactly one kind of object.
+// Every sandbox lives under this collection prefix, matching the addressing
+// convention used by `/secrets/...`, `/repos/...`, and `/agents/...`. The
+// prefix does not itself declare or create a stream processor.
 const SANDBOX_PATH_PREFIX = "/sandboxes";
 
-/** The path a `create({ name })` mints: the prefix then the caller's name —
+/** Convert a short name into the path accepted by `sandboxes.get(path)` —
  * `/sandboxes/my-pet`. Names are ONE path segment: every extra segment would
  * materialize an intermediate "folder" stream (the streams system announces a
  * new stream to all its ancestors, minting each one), and a folder that is
@@ -81,6 +43,13 @@ const SANDBOX_PATH_PREFIX = "/sandboxes";
  * in the durable record, never in the path. */
 export function sandboxPathFor(name: string): string {
   return assertSandboxPath(`${SANDBOX_PATH_PREFIX}/${name}`);
+}
+
+/** The catalogue idempotency key that claims a sandbox name — one
+ * `create-requested` per path, ever (`itx.sandboxes.get(path).create`,
+ * rpc-targets.ts). */
+export function sandboxCreateClaimKey(path: string): string {
+  return `sandbox-create-requested:${path}`;
 }
 
 /**
@@ -98,13 +67,11 @@ export function sandboxPathFor(name: string): string {
  *   identity — so reject exactly those, and nothing more.
  */
 export function assertSandboxPath(path: string): string {
-  const name = path.startsWith(`${SANDBOX_PATH_PREFIX}/`)
-    ? path.slice(SANDBOX_PATH_PREFIX.length + 1)
-    : undefined;
-  if (name === undefined || name === "" || name.includes("/")) {
+  const name = path.slice(SANDBOX_PATH_PREFIX.length + 1);
+  if (!path.startsWith(`${SANDBOX_PATH_PREFIX}/`) || !name || name.includes("/")) {
     throw new Error(
       `sandbox paths are exactly ${SANDBOX_PATH_PREFIX}/<name> with a single-segment name ` +
-        `(use the exact path itx.sandboxes.create returned), got "${path}"`,
+        `(address it with itx.sandboxes.get("/sandboxes/<name>")), got "${path}"`,
     );
   }
   const roundTripped = DurableObjectNameCodec.parse(
@@ -129,12 +96,13 @@ export function assertSandboxPath(path: string): string {
  * instantiation (even `destroy()` becomes unreachable; only manual storage
  * surgery recovers). Accepted forms mirror the SDK's parser exactly:
  * a positive number of seconds, or `<digits><s|m|h>`. Lives here (not on the
- * Durable Object) because the collection validates it before journaling a
+ * Durable Object) because the collection validates it before appending a
  * `create-requested`, and the Durable Object validates it again at its door.
  */
 export function assertValidSleepAfter(value: string | number): void {
   const valid =
-    typeof value === "number" ? Number.isFinite(value) && value > 0 : /^\d+[smh]$/.test(value);
+    (typeof value === "number" && Number.isFinite(value) && value > 0) ||
+    (typeof value === "string" && /^\d+[smh]$/.test(value));
   if (!valid) {
     throw new Error(
       `invalid sleepAfter "${value}": pass a positive number of seconds or "<n>s"/"<n>m"/"<n>h" (e.g. "30s", "5m", "1h")`,
@@ -160,5 +128,30 @@ export function githubTokenEnvForConnections(
     .filter((entry) => entry.integration === "github")
     .map((entry) => entry.connection)
     .sort();
-  return first === undefined ? null : githubAccessTokenPlaceholder(first);
+  return first ? githubAccessTokenPlaceholder(first) : null;
+}
+
+/**
+ * Shell run on every container start: stock git identity + optional GitHub HTTPS
+ * auth. Identity is always planted (local commits need an author even without a
+ * GitHub connection). Auth only runs when `GH_TOKEN` is set.
+ *
+ * - **Identity** — {@link ITERATE_GITHUB_BOT_COMMIT_AUTHOR} so commits pushed to
+ *   GitHub attribute to the iterate app bot (logo in history). Project slug is
+ *   deliberately not in name/email (that would break avatar linking).
+ * - **Auth** — Basic `x-access-token:$GH_TOKEN` extraheader. GitHub git smart-HTTP
+ *   rejects Bearer; the placeholder is base64-encoded and peeled at egress
+ *   (`substituteSecretHeaders`) so token bytes never enter the container.
+ */
+export const SANDBOX_GIT_CONFIG_SHELL = [
+  `git config --global user.name ${shellSingleQuote(ITERATE_GITHUB_BOT_COMMIT_AUTHOR.name)}`,
+  `git config --global user.email ${shellSingleQuote(ITERATE_GITHUB_BOT_COMMIT_AUTHOR.email)}`,
+  // base64 -w0: single-line output (GNU coreutils on the stock sandbox image).
+  // Do not pipe through tr -d "\\n" — that deletes backslash and n, not newlines.
+  `if [ -n "$GH_TOKEN" ]; then git config --global http."https://github.com/".extraheader "AUTHORIZATION: Basic $(printf %s "x-access-token:\${GH_TOKEN}" | base64 -w0)"; fi`,
+].join(" && ");
+
+/** Quote a literal for POSIX single-quoted shell (safe for `[bot]` emails). */
+function shellSingleQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
 }

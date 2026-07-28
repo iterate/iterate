@@ -22,8 +22,6 @@ export const StreamViewSearch = z.object({
    * otherwise).
    */
   mode: StreamViewModeRaw.optional().catch(undefined),
-  /** Feed-items domain preset id; omitted on default. */
-  preset: z.string().optional().catch(undefined),
   /** Text query (agent feed and/or feed_items, depending on mode). */
   q: z.string().optional().catch(undefined),
   /**
@@ -43,7 +41,13 @@ export const StreamViewSearch = z.object({
   /** Offset of the raw event open in the inspector side panel. */
   event: z.number().optional().catch(undefined),
   /** llm-request-requested offset open in the LLM request inspector panel. */
-  llmRequest: z.number().optional().catch(undefined),
+  llmRequest: z.number().int().positive().optional().catch(undefined),
+  /** Script execution id open in the code/result inspector panel. */
+  scriptExecution: z
+    .union([z.string().min(1), z.number().finite()])
+    .transform(String)
+    .optional()
+    .catch(undefined),
   /** Whether the mode's search/filter row is open. */
   filter: z.boolean().optional().catch(undefined),
   /** Whether the processors sheet is open (overview when processor is absent). */
@@ -52,6 +56,8 @@ export const StreamViewSearch = z.object({
   events: z.boolean().optional().catch(undefined),
   /** Subscription key of the processor focused in the sheet. */
   processor: z.string().optional().catch(undefined),
+  /** Whether the agent details sheet is open (agent streams only). */
+  agent: z.boolean().optional().catch(undefined),
 });
 
 export type StreamViewSearch = z.infer<typeof StreamViewSearch>;
@@ -70,8 +76,6 @@ type StreamModeCapabilities = {
   filters: boolean;
   /** Search box in the filter row. */
   search: boolean;
-  /** Domain feed-items preset pills. */
-  rawPresets: boolean;
   /** Event-type multi-select (types inside feed items). */
   rawEventTypes: boolean;
   /** Raw kind multi-select (feed_items.kind, raw.* family). */
@@ -87,7 +91,6 @@ const PRETTY_CAPS: StreamModeCapabilities = {
   eventInspector: false,
   filters: true,
   search: true,
-  rawPresets: false,
   rawEventTypes: false,
   rawComponents: false,
   rawOffsets: false,
@@ -100,7 +103,6 @@ const PRETTY_RAW_CAPS: StreamModeCapabilities = {
   eventInspector: true,
   filters: true,
   search: true,
-  rawPresets: false,
   rawEventTypes: true,
   rawComponents: true,
   rawOffsets: false,
@@ -113,7 +115,6 @@ const RAW_CAPS: StreamModeCapabilities = {
   eventInspector: true,
   filters: true,
   search: true,
-  rawPresets: true,
   rawEventTypes: true,
   rawComponents: true,
   rawOffsets: true,
@@ -204,61 +205,86 @@ export function useStreamViewSearch(): {
 const RELEASE_PANEL_EDGE = {
   event: undefined,
   llmRequest: undefined,
+  scriptExecution: undefined,
   panel: undefined,
   processor: undefined,
+  agent: undefined,
 } satisfies Partial<StreamViewSearch>;
 
 /**
- * URL state for the stream view's right-edge overlays — the raw-event
- * inspector, the LLM request inspector, the processors sheet, and (on
- * full-panel layouts) the Events sheet. They share the same screen edge, so
- * every setter keeps them mutually exclusive; if a hand-edited URL asks for
- * more than one, either inspector beats the processors sheet, which beats
- * the Events sheet (between the two inspectors, StreamInspectorOverlay picks
- * whichever the active mode can render, raw-event inspector first).
+ * URL state for the stream view's right-edge sheets — the raw-event
+ * inspector, the LLM request inspector, the script execution inspector, the
+ * processors sheet, and (on full-panel layouts) the Events sheet. They share
+ * the same screen edge, so every setter keeps them mutually exclusive; if a
+ * hand-edited URL asks for more than one, an inspector beats the processors
+ * sheet, which beats the Events sheet (StreamInspectorSheet owns inspector
+ * precedence because it knows which modes can render the raw inspector).
  */
 export function useStreamViewPanels(): {
   inspectedOffset: number | null;
   inspectedLlmRequestOffset: number | null;
+  inspectedScriptExecutionId: string | null;
   focusedProcessorKey: string | null;
   processorsPanelOpen: boolean;
+  agentDetailsOpen: boolean;
   eventsSheetOpen: boolean;
   inspectEvent: (offset: number) => void;
   closeInspector: () => void;
   inspectLlmRequest: (llmRequestOffset: number) => void;
-  closeLlmRequestInspector: () => void;
+  inspectScriptExecution: (executionId: string) => void;
   focusProcessor: (subscriptionKey: string) => void;
   openProcessorsOverview: () => void;
   closeProcessorsPanel: () => void;
+  openAgentDetails: () => void;
+  closeAgentDetails: () => void;
   openEventsSheet: () => void;
   closeEventsSheet: () => void;
 } {
   const { search, setSearch } = useStreamViewSearch();
   const inspectedOffset = search.event ?? null;
-  // Both inspector offsets are surfaced as-is. Openers keep them mutually
-  // exclusive, so both set = a stale or hand-edited URL; precedence between
-  // them is the RENDERER's call (StreamInspectorOverlay): only it knows
-  // whether the mode can actually show the raw inspector, and suppressing
-  // the LLM offset here would leave the edge empty in modes that can't.
+  // Inspector identifiers are surfaced as-is. Openers keep them mutually
+  // exclusive, so multiple values mean a stale or hand-edited URL; precedence
+  // is the RENDERER's call (StreamInspectorSheet), because only it knows
+  // whether the active mode can actually show the raw inspector.
   const inspectedLlmRequestOffset = search.llmRequest ?? null;
+  const inspectedScriptExecutionId = search.scriptExecution ?? null;
   const focusedProcessorKey = search.processor ?? null;
+  const inspectorOpen =
+    inspectedOffset != null ||
+    inspectedLlmRequestOffset != null ||
+    inspectedScriptExecutionId != null;
   const processorsPanelOpen =
-    inspectedOffset == null &&
-    inspectedLlmRequestOffset == null &&
-    (search.panel === true || focusedProcessorKey != null);
-  const eventsSheetOpen = search.events === true && !processorsPanelOpen;
+    !inspectorOpen && (search.panel === true || focusedProcessorKey != null);
+  // The agent details sheet exists only on agent chat pages and the Events
+  // sheet only on full-panel layouts, so the two can never render together;
+  // `agent` therefore must not suppress `events` (a stray ?agent=true on a
+  // catalog URL would otherwise dead-lock the Events sheet). The openers keep
+  // the params mutually exclusive for shareable URLs.
+  const agentDetailsOpen = !inspectorOpen && !processorsPanelOpen && search.agent === true;
+  // Full-panel layouts render inspectors inside the Events sheet. A direct
+  // `?llmRequest=` / `?scriptExecution=` link therefore opens that containing
+  // sheet even when `events=true` was not part of the shared URL.
+  const eventsSheetOpen = !processorsPanelOpen && (search.events === true || inspectorOpen);
   const inspectEvent = useCallback(
     (offset: number) => setSearch({ ...RELEASE_PANEL_EDGE, event: offset }),
     [setSearch],
   );
-  const closeInspector = useCallback(() => setSearch({ event: undefined }), [setSearch]);
+  const closeInspector = useCallback(
+    () =>
+      setSearch({
+        event: undefined,
+        llmRequest: undefined,
+        scriptExecution: undefined,
+      }),
+    [setSearch],
+  );
   const inspectLlmRequest = useCallback(
     (llmRequestOffset: number) =>
       setSearch({ ...RELEASE_PANEL_EDGE, llmRequest: llmRequestOffset }),
     [setSearch],
   );
-  const closeLlmRequestInspector = useCallback(
-    () => setSearch({ llmRequest: undefined }),
+  const inspectScriptExecution = useCallback(
+    (executionId: string) => setSearch({ ...RELEASE_PANEL_EDGE, scriptExecution: executionId }),
     [setSearch],
   );
   const focusProcessor = useCallback(
@@ -279,24 +305,42 @@ export function useStreamViewPanels(): {
     () => setSearch({ panel: undefined, processor: undefined }),
     [setSearch],
   );
-  const openEventsSheet = useCallback(
-    () => setSearch({ events: true, panel: undefined, processor: undefined }),
+  const openAgentDetails = useCallback(
+    () => setSearch({ ...RELEASE_PANEL_EDGE, events: undefined, agent: true }),
     [setSearch],
   );
-  const closeEventsSheet = useCallback(() => setSearch({ events: undefined }), [setSearch]);
+  const closeAgentDetails = useCallback(() => setSearch({ agent: undefined }), [setSearch]);
+  const openEventsSheet = useCallback(
+    () => setSearch({ events: true, panel: undefined, processor: undefined, agent: undefined }),
+    [setSearch],
+  );
+  const closeEventsSheet = useCallback(
+    () =>
+      setSearch({
+        event: undefined,
+        events: undefined,
+        llmRequest: undefined,
+        scriptExecution: undefined,
+      }),
+    [setSearch],
+  );
   return {
     inspectedOffset,
     inspectedLlmRequestOffset,
+    inspectedScriptExecutionId,
     focusedProcessorKey,
     processorsPanelOpen,
+    agentDetailsOpen,
     eventsSheetOpen,
     inspectEvent,
     closeInspector,
     inspectLlmRequest,
-    closeLlmRequestInspector,
+    inspectScriptExecution,
     focusProcessor,
     openProcessorsOverview,
     closeProcessorsPanel,
+    openAgentDetails,
+    closeAgentDetails,
     openEventsSheet,
     closeEventsSheet,
   };

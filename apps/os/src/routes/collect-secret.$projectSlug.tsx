@@ -16,11 +16,11 @@ import { Field, FieldDescription, FieldLabel } from "@iterate-com/ui/components/
 import { Input } from "@iterate-com/ui/components/input";
 import { Separator } from "@iterate-com/ui/components/separator";
 import { toast } from "@iterate-com/ui/components/sonner";
+import { ProjectScope, useItx, useItxQuery } from "iterate/sdk/itx/react";
 import { requireOrganizationMemberForSession } from "../lib/auth.ts";
 import { CollectSecretSearch } from "~/lib/collect-secret-link.ts";
 import { getProjectBySlugServerFn } from "~/lib/project-server-fns.ts";
 import { ItxResourceLoading } from "~/components/itx-boundary.tsx";
-import { ItxProvider, useItx, useItxQuery } from "~/itx/itx-react.tsx";
 
 // The secret-collection deep link target: a chrome-free, one-job page an
 // agent sends a user to when it needs a credential it must never see in
@@ -30,7 +30,7 @@ import { ItxProvider, useItx, useItxQuery } from "~/itx/itx-react.tsx";
 // first and returns here.
 export const Route = createFileRoute("/collect-secret/$projectSlug")({
   validateSearch: CollectSecretSearch,
-  // ItxProvider dials a WebSocket and throws during SSR — same shape as the
+  // ProjectScope dials a WebSocket and throws during SSR — same shape as the
   // project layout (_app/projects/$projectSlug/route.tsx).
   ssr: false,
   beforeLoad: async ({ context, location, params }) => {
@@ -77,9 +77,9 @@ function CollectSecretPage() {
         <MalformedLinkCard />
       ) : (
         <Suspense fallback={<ItxResourceLoading label="secret" />}>
-          <ItxProvider projectId={project.id}>
+          <ProjectScope slug={project.slug}>
             <CollectSecretCard />
-          </ItxProvider>
+          </ProjectScope>
         </Suspense>
       )}
     </main>
@@ -109,9 +109,11 @@ function CollectSecretCard() {
   const submit = useMutation({
     mutationFn: async (value: string): Promise<SavedOutcome> => {
       const secret = itx.secrets.get(search.path);
-      // Material and egress land in ONE update, so the secret is born already
+      // Material and egress land in one birth or update, so the secret is
       // pinned to its hosts — no window where it exists but cannot be used.
-      await secret.update({ material: value, egress: { urls: search.egress } });
+      const secretInput = { material: value, egress: { urls: search.egress } };
+      if (existing.created === true) await secret.update(secretInput);
+      else await secret.create(secretInput);
       // describe() is read-your-writes (the secret DO catches up its own fold
       // before snapshotting), so one assertion — no wait — is the honest
       // "stored and usable" check before anything is announced.

@@ -4,12 +4,13 @@ How to reproduce UI/auth bugs against a **local** OS + Auth stack with a
 scripted headless browser: sign in via test OTP, create orgs/projects, drive
 OAuth, and read server state directly. Complements
 [preview-agent-browser-smoke.md](./preview-agent-browser-smoke.md), which drives
-a _deployed_ preview against _production_ auth.
+a deployed preview against that slot's auth worker.
 
 ## When to use which environment
 
-- **Deployed preview** (`os.iterate-preview-N.com`): uses production auth. No
-  test OTP — you sign in as a real allowlisted user. Best for final proof.
+- **Deployed preview** (`os.iterate-preview-N.com`): uses the matching
+  `auth.iterate-preview-N.com` worker and isolated auth database. Fixed test
+  OTP is enabled for preview test users. Best for final proof.
 - **Normal OS local dev**: `pnpm dev` or `pnpm dev start --detach` runs OS
   on a random localhost port and uses shared dev auth at
   `auth.iterate-dev.com`.
@@ -34,9 +35,9 @@ Gotchas:
 - The Doppler scope for `apps/auth` must resolve to a config that exists. If
   `pnpm dev-all` dies with `Could not find requested config 'dev_<you>'`, point it
   at the shared dev config: `doppler configure set config dev --scope apps/auth`.
-- A loopback issuer signs tokens with the **local** auth keys, so a static
-  production JWKS can't verify them. `apps/os/scripts/deploy.ts` detects a loopback
-  issuer and skips the static JWKS (falls back to runtime JWKS fetch).
+- Local Auth and OS read the same `AUTH_FORGE_PRIVATE_JWK`. Auth signs with its
+  private half and generated OS config derives the public JWKS, exactly like a
+  deployment; no live JWKS fallback is involved.
 
 ## Headless browser without touching the user's Chrome
 

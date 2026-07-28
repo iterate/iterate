@@ -27,17 +27,35 @@ One Durable Object per path under `/secrets/**` (`secret-durable-object.ts`).
 Folded state: encrypted material (one JSON blob, write-only), an egress URL
 allowlist, an optional refresh strategy, an audit record.
 
-- `update({ material?, egress?, refresh? })` — the only write verb.
+- `update({ material, egress, refresh? } | { egress?, refresh? })` — the only
+  write verb. Replacement material always carries its complete egress policy.
+- Ciphertext is authenticated to its project, secret path, exact egress
+  origins, and storing event offset. Every update without replacement material
+  clears it (including refresh-only updates); copied ciphertext cannot be
+  re-pinned or replayed.
 - `__describe()` — the node's self-report, metadata only (hasMaterial,
   egress, refresh kind, audit); material never leaves, in snapshots or pushes.
 - `fetch(request)` — the only lane material travels. Every request must carry
-  at least one `getSecret({ path[, field] })` placeholder for THIS secret in
-  its headers or its URL path (one request, one secret); the DO substitutes
+  at least one `getSecret("/secrets/…")` or
+  `getSecret("/secrets/…", { field: "…" })` placeholder for THIS secret in
+  its headers, URL path, or explicitly marked JSON body (one request, one secret); the DO substitutes
   from decrypted material and dispatches, after checking the destination
   origin against the pin. Substitution reaches headers plus the URL PATH
   (added for Telegram, whose Bot API authenticates in the path
-  `/bot<token>/…`) — never the query string, never the body; a placeholder
-  elsewhere in the URL is rejected loudly rather than passed through.
+  `/bot<token>/…`). JSON body substitution requires
+  `x-iterate-secret-template: json` plus an `application/json` or `+json`
+  content type, and replaces only complete string values that are exact
+  references. Ordinary bodies, embedded references, object keys, and query
+  strings are never substituted; malformed opted-in JSON and placeholders
+  elsewhere in the URL are rejected loudly rather than passed through. The
+  internal template marker is removed before dispatch.
+- Credential-bearing fetches follow at most five same-origin redirects, with
+  every hop requested manually and revalidated before rebuilding the request.
+  Cross-origin redirects are rejected rather than forwarding headers or bodies.
+- Secret streams accept user-appended events, including
+  `events.iterate.com/secret/*`. Forged facts may change public metadata or
+  clear material, but cannot install usable ciphertext outside its authenticated
+  project/path/policy/event context.
 
 ### Refresh strategies
 
@@ -65,6 +83,11 @@ missing (the first-use mint):
 
 Exchange endpoints falling within the secret's own pin is what keeps refresh
 inside the cell: refresh moves bytes only toward pinned hosts, like any use.
+The selected strategy and reducer-owned update offset must still match current
+state before provider I/O, and the result is compare-appended at the snapshotted
+next event offset. Any intervening update at either side of that snapshot—even
+one repeating the same strategy—prevents stale material from being minted or
+restored.
 One shared implementation per protocol replaces the per-secret worker that
 used to be copied into every secret; configuring the strategy is the trust
 event.
@@ -73,11 +96,14 @@ event.
 
 `platform-secrets.ts` — a known, closed registry over typed AppConfig:
 
-- **API keys** (`integrations.exa.apiKey`, `integrations.parallel.apiKey`,
-  `openAiApiKey`): substitutable into project egress as
+- **API keys** (`integrations.exa.apiKey`, `integrations.parallel.apiKey`):
+  substitutable into project egress as
   `getSecret({ platform: "<configPath>" })` header references, resolved at
   the project egress door, each pinned to its provider origins. Adding one is
   adding a config key + a row.
+- **The internal OpenAI key is not in this registry.** The Agent Durable
+  Object may use it only through its hardcoded Cloudflare AI Gateway model
+  transport; project egress cannot reference or receive it.
 - **OAuth client credentials** (`integrations.google`,
   `integrations.petshop`): resolved by the `oauth-refresh-token` strategy.
   The registry's origin pin means even a hostile `secret.update` configuring
@@ -103,10 +129,11 @@ Google accounts / GitHub installations, each at
   `recordConnection` storage half (write the connection secret, append the
   connected fact, arm the router subscription, claim the directory entry).
 - **Outbound calls**: the itx caller surface replays dotted paths onto real
-  vendor SDK instances — a real `@slack/web-api` WebClient, a real
-  `@octokit/rest` Octokit — whose transport carries a `getSecret(...)`
-  placeholder through the connection secret's `fetch()`. Full SDK surface for
-  free; tokens never leave the DO.
+  vendor SDK instances — a real `@slack/web-api` WebClient, the all-in-one
+  `octokit` SDK — whose transport carries a `getSecret(...)` placeholder
+  through project egress. Project policy runs first; the connection Secret DO
+  then substitutes, refreshes, pins, and audits. Full SDK surface for free;
+  tokens never leave the DO.
 - **Inbound webhooks** (`integration-webhook-api.ts` + per-provider
   handlers): a tiny chain of imperative `fetch` handlers. Each verifies
   however its provider requires (plain WebCrypto in platform code), extracts
@@ -125,10 +152,15 @@ Google accounts / GitHub installations, each at
 - **Google/Gmail** — `{ accessToken, refreshToken }` + the
   `oauth-refresh-token` strategy against `oauth2.googleapis.com` with the
   platform client credential.
-- **GitHub** — a GitHub App installation (deep-link → `installation_id`
-  callback, no code exchange). Empty material + the `github-app-installation`
-  strategy; the token mints on first use and re-mints on 401. Inbound App
-  webhooks verify `x-hub-signature-256` and route on `installation_id`.
+- **GitHub** — a GitHub App installation. The setup callback's
+  `installation_id` is untrusted until GitHub user OAuth proves that the
+  signed-in user can access it. Empty material + the
+  `github-app-installation` strategy; the token mints on first use and
+  re-mints on 401. Inbound App webhooks verify `x-hub-signature-256` and route
+  on `installation_id`. If another project already holds the installation,
+  the OAuth proof becomes a short-lived project-and-user-bound confirmation
+  state. Explicit confirmation prepares the new connection, atomically swaps
+  the directory claim, then bricks and disconnects the old connection.
 
 ## 4. The userspace lane
 
@@ -164,9 +196,12 @@ Deferred to the userspace-integrations PR (see ADR 0005):
   fixture for the jailed variant). Extends the cell to DO + jail; the
   boundary stays "bytes only leave toward pinned hosts"; worker install gated
   like a material write.
-- **WebSocket egress + relay** (the three gateway credential shapes petshop
-  already serves). An Upgrade is a fetch through the same surface; the relay
-  returns as a pure addition.
+- **Frame-authenticated WebSocket protocols** (for example Discord IDENTIFY):
+  frame placeholders are sent literally because application frames are opaque.
+  Header-authenticated HTTP/1.1 upgrades use the existing `fetch()` surface
+  and native socket response; frame payloads remain opaque. A trusted
+  first-frame API is still deferred. See
+  [sandbox-websocket-egress.md](./sandbox-websocket-egress.md).
 - **A userspace webhook-verification story** (the compute-methods question
   returns here, answered inside the jail rather than on the public secret).
 
@@ -176,11 +211,12 @@ ALL container egress — including HTTPS, MITM'd with the Cloudflare container
 CA (`interceptHttps`) — routes through the project egress door. So sandboxes
 need no token bytes: the sandbox DO plants a placeholder `GH_TOKEN` per
 container start when the project has a GitHub connection, and the warm-up
-script sets a `git http.extraheader` with a raw Bearer placeholder (git's
-credential helpers send Basic auth — base64 — which would hide the placeholder
-from header substitution). Substitution + refresh-on-401 happen en route under
-the pin, exactly as for any other caller. There is no reveal lane, and none is
-needed.
+script sets a `git http.extraheader` with Basic auth
+(`x-access-token` + base64 of the placeholder — GitHub git rejects Bearer).
+Egress peels Basic Authorization headers so the placeholder is still
+discoverable and substitutable. Substitution + refresh-on-401 happen en route
+under the pin, exactly as for any other caller. There is no reveal lane, and
+none is needed.
 
 ## 6. The proof (apps/dummy-petshop)
 

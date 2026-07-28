@@ -15,6 +15,38 @@ type ImportKindNode = {
 };
 
 const LIFECYCLE_HOOKS = new Set(["beforeAll", "beforeEach", "afterAll", "afterEach"]);
+/** What the server-side script isolate genuinely provides: the ES builtins
+ * plus the workerd/web globals of the script runtime — kept in the same
+ * spirit as the typechecker's RUNTIME_SHIMS list
+ * (apps/os/src/domains/typecheck/virtual-project.ts). oxlint's scope manager
+ * leaves ALL globals unresolved (`scope.through` contains `Promise` and
+ * `console` alike), so the itx-script-fn-self-contained rule allowlists by
+ * name instead of relying on env resolution. */
+const SCRIPT_ISOLATE_GLOBALS = new Set([
+  // ES language builtins.
+  ...["globalThis", "undefined", "NaN", "Infinity"],
+  ...["Object", "Function", "Array", "String", "Number", "Boolean", "Symbol", "BigInt"],
+  ...["Math", "JSON", "Date", "RegExp", "Intl"],
+  ...["Promise", "Proxy", "Reflect", "eval", "globalThis"],
+  ...["Error", "AggregateError", "EvalError", "RangeError", "ReferenceError"],
+  ...["SyntaxError", "TypeError", "URIError"],
+  ...["Map", "Set", "WeakMap", "WeakSet", "WeakRef", "FinalizationRegistry"],
+  ...["ArrayBuffer", "SharedArrayBuffer", "Atomics", "DataView"],
+  ...["Int8Array", "Uint8Array", "Uint8ClampedArray", "Int16Array", "Uint16Array"],
+  ...["Int32Array", "Uint32Array", "Float16Array", "Float32Array", "Float64Array"],
+  ...["BigInt64Array", "BigUint64Array", "Iterator", "AsyncIterator"],
+  ...["parseInt", "parseFloat", "isNaN", "isFinite"],
+  ...["decodeURI", "decodeURIComponent", "encodeURI", "encodeURIComponent"],
+  // workerd/web runtime globals (see RUNTIME_SHIMS in virtual-project.ts).
+  ...["console", "fetch", "crypto", "performance", "navigator", "caches", "scheduler"],
+  ...["setTimeout", "clearTimeout", "setInterval", "clearInterval", "setImmediate"],
+  ...["queueMicrotask", "structuredClone", "reportError", "atob", "btoa"],
+  ...["TextEncoder", "TextDecoder", "URL", "URLSearchParams", "URLPattern"],
+  ...["AbortController", "AbortSignal", "Blob", "File", "FormData", "Headers"],
+  ...["Request", "Response", "ReadableStream", "WritableStream", "TransformStream"],
+  ...["WebSocket", "WebSocketPair", "Event", "EventTarget", "CustomEvent"],
+  ...["DOMException", "MessageChannel", "MessagePort", "Buffer", "process"],
+]);
 const VI_MOCK_CALLS = new Set(["vi.mock", "vi.doMock"]);
 const PROPERTY_MATCHERS = new Set(["toBe", "toEqual", "toStrictEqual"]);
 const getExpectedName = (name: string) => {
@@ -73,6 +105,10 @@ function isAllowedRawDurableObjectBindingAccessFile(filename: string) {
     // projections) and WORKER (stateful facets) namespaces.
     path.endsWith("/domains/workers/worker-loader.ts") ||
     path.endsWith("/domains/workers/worker-runner.ts") ||
+    // The platform's builder-sandbox get-or-create (dynamic worker builds)
+    // mints sandbox + catalogue-stream stubs with the same claim discipline
+    // as itx.sandboxes.get(path).create in rpc-targets.ts.
+    path.endsWith("/domains/sandboxes/builder-sandbox.ts") ||
     // Engine loopback/egress seams that mint project/stream stubs.
     path.endsWith("/domains/itx/itx-entrypoint.ts") ||
     path.endsWith("/domains/itx/utils.ts") ||
@@ -508,6 +544,48 @@ const plugin: StrictPlugin = {
                   `Use a visible wrapper for UI locators, or hidden/script JSON for machine-readable test data.`,
               });
             }
+          },
+        };
+      },
+    },
+    "icon-button-has-hover-text": {
+      meta: {
+        docs: {
+          description:
+            "Require icon-size <Button>s to carry an aria-label (or title); Button turns it into hover text. " +
+            "The off-the-shelf jsx-a11y/control-has-associated-label rule can't do this: it assumes any " +
+            "uppercase-component child (e.g. a lucide icon) might render a text label.",
+        },
+        type: "problem",
+      },
+      create: (context) => {
+        return {
+          JSXOpeningElement: (node: any) => {
+            if (node.name.type !== "JSXIdentifier" || node.name.name !== "Button") return;
+            // A spread might supply size and/or aria-label; can't tell statically.
+            if (node.attributes.some((attribute: any) => attribute.type !== "JSXAttribute")) return;
+
+            const findAttribute = (name: string) =>
+              node.attributes.find(
+                (attribute: any) => getJSXAttributeName(attribute.name) === name,
+              );
+            const sizeAttribute = findAttribute("size");
+            const size = sizeAttribute?.value;
+            if (size?.type !== "Literal" || typeof size.value !== "string") return;
+            if (!size.value.startsWith("icon")) return;
+
+            const hasLabel = ["aria-label", "aria-labelledby", "title"].some((name) => {
+              const value = findAttribute(name)?.value;
+              // Static string must be non-empty; assume any expression provides a label.
+              return value?.type === "Literal" ? !!String(value.value).trim() : value != null;
+            });
+            if (hasLabel) return;
+            context.report({
+              node,
+              message:
+                `An icon-only <Button size="${size.value}"> has no visible text, so screen readers and ` +
+                `hovering users get nothing. Add aria-label="..." - Button renders it as title (hover text) too.`,
+            });
           },
         };
       },
@@ -995,6 +1073,76 @@ const plugin: StrictPlugin = {
         };
       },
     },
+    "itx-script-fn-self-contained": {
+      meta: {
+        type: "problem",
+        docs: {
+          description:
+            "Function arguments of ItxScriptBuilder .execute()/.define() must be self-contained: " +
+            "they ship as compiled source into a server-side isolate where outer-scope " +
+            "identifiers and downleveled-syntax helpers do not exist.",
+        },
+      },
+      create(context) {
+        const checkScriptFunction = (node: any) => {
+          const call = node.parent;
+          if (!call || call.type !== "CallExpression" || !call.arguments.includes(node)) return;
+          if (call.callee.type !== "MemberExpression") return;
+          const method = getPropertyName(call.callee.property);
+          if (method !== "execute" && method !== "define") return;
+
+          // Outer-scope references: everything the function reads but does not
+          // define itself. Its parameters (itx, vars) resolve inside the
+          // function scope; runtime globals are allowlisted by name (oxlint's
+          // scope manager resolves no globals, so `Promise` and a test-file
+          // const look identical in `through`). What remains is test-file
+          // state the compiled source cannot reach from the script isolate.
+          const scope = context.sourceCode.getScope(node);
+          for (const reference of scope.through) {
+            const identifier = reference.identifier as Node & { parent?: Node };
+            const parentType = identifier.parent?.type as string | undefined;
+            // Type positions are erased by the transform — they never reach
+            // the isolate, so referencing test-file TYPES is fine.
+            if (parentType === "TSTypeReference" || parentType === "TSTypeQuery") continue;
+            if (SCRIPT_ISOLATE_GLOBALS.has((identifier as any).name)) continue;
+            context.report({
+              node: identifier,
+              message:
+                `\`${(identifier as any).name}\` is captured from outside the script function. ` +
+                `The function ships as compiled JavaScript into a server-side isolate where ` +
+                `only its own parameters (itx, vars) and runtime globals exist — test-file ` +
+                `bindings are dead references there. Pass values through .vars({...}).`,
+            });
+          }
+
+          // `using` declarations: the TEST-FILE transform downlevels them into
+          // module-scope helper references (__vite_ssr_import_…) that do not
+          // exist in the script isolate. The isolate itself supports `using`
+          // natively — scripts whose point is the `using` idiom go through
+          // executeSource() as strings.
+          const usingDeclarations = esquery.match(
+            node,
+            esquery.parse(
+              'VariableDeclaration[kind="using"], VariableDeclaration[kind="await using"]',
+            ),
+          );
+          for (const declaration of usingDeclarations) {
+            context.report({
+              node: declaration as never,
+              message:
+                "`using` inside a typed script function downlevels into test-isolate helper " +
+                "references that do not exist server-side. Use try/finally (or an explicit " +
+                "[Symbol.dispose]() call), or send the script as a string via " +
+                "executeSource() — the script isolate supports `using` natively.",
+            });
+          }
+        };
+        return {
+          FunctionExpression: checkScriptFunction,
+          ArrowFunctionExpression: checkScriptFunction,
+        };
+      },
+    },
     "import-rules": {
       meta: {
         fixable: "code",
@@ -1224,6 +1372,11 @@ const plugin: StrictPlugin = {
 
         const filename = context.filename ?? "";
         const isTestFile = /\.(test|spec)\.[cm]?[jt]sx?$/.test(filename);
+        // A contract package may expose an explicit worker-only subpath whose
+        // shared entrypoint class must extend Cloudflare's WorkerEntrypoint.
+        // Keep this exact so browser-visible contract modules cannot acquire
+        // a Worker runtime dependency accidentally.
+        const isWorkerOnlyContractModule = /\/src\/worker\.ts$/.test(filename);
 
         const allowedListForMessage =
           ALLOWED_RUNTIME_IMPORT_PREFIXES.map((p) => `  • ${p} (and ${p}/…)`).join("\n") +
@@ -1245,6 +1398,8 @@ const plugin: StrictPlugin = {
             if (typeof source !== "string") return;
 
             if (source.startsWith(".") || source.startsWith("/")) return;
+
+            if (source === "cloudflare:workers" && isWorkerOnlyContractModule) return;
 
             if (isAllowedRuntimeImport(source)) return;
 

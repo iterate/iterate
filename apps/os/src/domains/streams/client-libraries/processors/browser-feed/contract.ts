@@ -5,22 +5,35 @@
 // the live in-flight agent tail.
 
 import { z } from "zod";
-import { defineProcessorContract } from "../../../processor-contracts.ts";
-import { initialBrowserFeedState, type BrowserFeedState } from "./projector.ts";
+import { defineProcessorContract } from "iterate/processors";
+import {
+  initialBrowserFeedState,
+  isCurrentBrowserFeedState,
+  type BrowserFeedState,
+} from "./projector.ts";
+
+const Empty = z.strictObject({});
 
 export const BrowserFeedContract = defineProcessorContract({
   slug: "browser-feed",
-  version: "0.1.0",
+  version: "0.4.0",
   description:
-    "Browser-side projector folding every stream event into the single feed_items table (pretty agent rows and grouped raw rows in one total order) plus live in-flight agent state.",
-  // itx derives a processor's empty fold from `stateSchema.parse({})`
-  // (there is no separate `initialState`), so the schema spreads
-  // initialBrowserFeedState() under whatever was persisted — parse({}) IS the
-  // initial state, and a persisted snapshot passes through unchanged.
-  stateSchema: z.preprocess(
-    (value) => ({ ...initialBrowserFeedState(), ...(value as object) }),
-    z.custom<BrowserFeedState>((value) => value !== null && typeof value === "object"),
-  ),
+    "Browser-side projector reducing every stream event into the single feed_items table (pretty agent rows and grouped raw rows in one total order) plus live in-flight agent state.",
+  // itx derives the initial reduce state from stateSchema.parse({}). Only that
+  // exact empty input receives the initial state. Persisted snapshots must
+  // identify themselves as the current schema; old browser caches are rejected
+  // and rebuilt rather than adapted.
+  stateSchema: z
+    .preprocess(
+      (value) => (Empty.safeParse(value).success ? initialBrowserFeedState() : value),
+      z.custom<BrowserFeedState>(isCurrentBrowserFeedState, {
+        message: "browser-feed state is not from the current schema",
+      }),
+    )
+    .meta({
+      description:
+        "Reduced feed state: the agent-lens UI state (live in-flight tail), the currently open extendable raw group row, the next feed_items local_index (the total feed order), and row addresses for activities still awaiting a durable script correction. Snapshots from older schema versions are rejected and rebuilt from offset 0.",
+    }),
   events: {},
   consumes: ["*"],
   emits: [],
@@ -29,6 +42,6 @@ export const BrowserFeedContract = defineProcessorContract({
 /**
  * The contract's type under the same identifier, so type-level helpers read
  * without `typeof`: `ProcessorState<BrowserFeedContract>`,
- * `ConsumedEvent<BrowserFeedContract>`, `ProcessorEvent<BrowserFeedContract, T>`.
+ * `ConsumedEvent<BrowserFeedContract>`.
  */
 export type BrowserFeedContract = typeof BrowserFeedContract;

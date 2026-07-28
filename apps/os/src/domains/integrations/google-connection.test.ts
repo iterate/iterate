@@ -1,31 +1,16 @@
 // Unit tests for getConnectionStatus's google behavior — the newest-first
 // lifecycle fold over the connection journal. Tokens never live on the journal
 // (they're in the connection secret, refreshed by the Secret DO's shared
-// oauth-refresh-token strategy), so status is display metadata only. Same
-// in-memory itxEnv seam as github-connect.test.ts.
+// oauth-refresh-token strategy), so status is display metadata only. Storage
+// is the shared in-memory itxEnv seam (src/test/fake-itx-env.ts).
 
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import {
-  GITHUB_CONNECTED_EVENT_TYPE,
-  GITHUB_DISCONNECTED_EVENT_TYPE,
-  GOOGLE_CONNECTED_EVENT_TYPE,
-  GOOGLE_DISCONNECTED_EVENT_TYPE,
-  integrationConnectionStreamPath,
-} from "./utils.ts";
+import { integrationConnectionStreamPath } from "./utils.ts";
 
-// In-memory STREAM namespace behind the mocked itxEnv: each stream is an
-// append-only event list, read newest-first by streamEventsNewestFirst via
-// runtimeState + getEvents.
-const streamNetwork = vi.hoisted(() => {
-  const streams = new Map<string, { offset: number; payload: unknown; type: string }[]>();
-  const getEventsCalls: Array<{
-    afterOffset?: number;
-    beforeOffset?: number;
-    eventTypes?: readonly string[];
-    limit?: number;
-  }> = [];
-  return { getEventsCalls, streams };
+const network = await vi.hoisted(async () => {
+  const { createFakeItxEnv } = await import("../../test/fake-itx-env.ts");
+  return createFakeItxEnv();
 });
 
 // connect-flows imports slack-api (disconnect's auth.revoke) and telegram-api
@@ -39,36 +24,7 @@ vi.mock("./telegram-api.ts", () => ({
 }));
 
 vi.mock("../../env.ts", () => ({
-  itxEnv: {
-    STREAM: {
-      getByName(name: string) {
-        const events = streamNetwork.streams.get(name) ?? [];
-        streamNetwork.streams.set(name, events);
-        return {
-          async runtimeState() {
-            return { coreProcessorState: { maxOffset: events.length } };
-          },
-          async getEvents(input: {
-            afterOffset?: number;
-            beforeOffset?: number;
-            eventTypes?: readonly string[];
-            limit?: number;
-          }) {
-            streamNetwork.getEventsCalls.push(input);
-            const { afterOffset = 0, beforeOffset = Infinity, eventTypes, limit = 500 } = input;
-            return events
-              .filter(
-                (event) =>
-                  event.offset > afterOffset &&
-                  event.offset < beforeOffset &&
-                  (eventTypes === undefined || eventTypes.includes(event.type)),
-              )
-              .slice(0, limit);
-          },
-        };
-      },
-    },
-  },
+  itxEnv: { STREAM: network.STREAM },
 }));
 
 const { getConnectionStatus } = await import("./connect-flows.ts");
@@ -83,15 +39,11 @@ function seed(
     path: integrationConnectionStreamPath(slug, connection),
     projectId,
   });
-  streamNetwork.streams.set(
-    name,
-    events.map((e, i) => ({ ...e, offset: i + 1 })),
-  );
+  network.seedStream(name, ...events);
 }
 
 afterEach(() => {
-  streamNetwork.getEventsCalls.length = 0;
-  streamNetwork.streams.clear();
+  network.reset();
 });
 
 test("connection status filters lifecycle facts before reading a webhook-heavy journal", async () => {
@@ -100,7 +52,7 @@ test("connection status filters lifecycle facts before reading a webhook-heavy j
     "install-1",
     [
       {
-        type: GITHUB_CONNECTED_EVENT_TYPE,
+        type: "events.iterate.com/github/connected",
         payload: {
           connection: "install-1",
           externalId: "115079265",
@@ -118,10 +70,10 @@ test("connection status filters lifecycle facts before reading a webhook-heavy j
   expect(
     await getConnectionStatus({ connection: "install-1", projectId: "prj_1", provider: "github" }),
   ).toMatchObject({ connected: true, externalId: "115079265" });
-  expect(streamNetwork.getEventsCalls).toEqual([
+  expect(network.getEventsCalls).toEqual([
     {
       afterOffset: 0,
-      eventTypes: [GITHUB_CONNECTED_EVENT_TYPE, GITHUB_DISCONNECTED_EVENT_TYPE],
+      eventTypes: ["events.iterate.com/github/connected", "events.iterate.com/github/disconnected"],
       limit: 500,
     },
   ]);
@@ -131,7 +83,7 @@ describe("getConnectionStatus (google)", () => {
   test("connected fact yields display metadata (no tokens)", async () => {
     seed("prj_1", "jonas", [
       {
-        type: GOOGLE_CONNECTED_EVENT_TYPE,
+        type: "events.iterate.com/google/connected",
         payload: { email: "jonas@nustom.com", googleUserId: "g-1", name: "Jonas", scopes: ["a"] },
       },
     ]);
@@ -152,8 +104,8 @@ describe("getConnectionStatus (google)", () => {
 
   test("a later disconnected fact wins (no metadata on the disconnected fact)", async () => {
     seed("prj_1", "jonas", [
-      { type: GOOGLE_CONNECTED_EVENT_TYPE, payload: { email: "jonas@nustom.com" } },
-      { type: GOOGLE_DISCONNECTED_EVENT_TYPE, payload: {} },
+      { type: "events.iterate.com/google/connected", payload: { email: "jonas@nustom.com" } },
+      { type: "events.iterate.com/google/disconnected", payload: {} },
     ]);
     expect(
       await getConnectionStatus({ connection: "jonas", projectId: "prj_1", provider: "google" }),
@@ -162,7 +114,7 @@ describe("getConnectionStatus (google)", () => {
 
   test("non-lifecycle events on top of the connected fact are skipped", async () => {
     seed("prj_1", "jonas", [
-      { type: GOOGLE_CONNECTED_EVENT_TYPE, payload: { email: "jonas@nustom.com" } },
+      { type: "events.iterate.com/google/connected", payload: { email: "jonas@nustom.com" } },
       { type: "events.iterate.com/google/token-refreshed", payload: {} },
     ]);
     expect(

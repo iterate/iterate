@@ -5,20 +5,49 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test, vi } from "vitest";
 import {
+  buildChatCommand,
   defaultBareInvocationToChat,
   ensureBearerAuthHeadersForChat,
   oauthResourceForOsBaseUrl,
   refreshOAuthSession,
+  replaceWithInheritedProcess,
   resolveChatProject,
   verifyOsSession,
 } from "./cli.ts";
 
+test("chat passes its CLI/config identity to local slash-command providers", () => {
+  expect(
+    buildChatCommand({
+      agentPath: "/agents/test",
+      cliPath: "/opt/iterate/bin/iterate.js",
+      configName: "preview_3",
+      entrypointPath: "/opt/iterate/dist/agent-chat-terminal.mjs",
+      osBaseUrl: "https://os.iterate-preview-3.com",
+      projectId: "prj_test",
+    }),
+  ).toEqual({
+    command: "bun",
+    args: [
+      "/opt/iterate/dist/agent-chat-terminal.mjs",
+      "--base-url",
+      "https://os.iterate-preview-3.com",
+      "--project-id",
+      "prj_test",
+      "--agent-path",
+      "/agents/test",
+      "--cli-path",
+      "/opt/iterate/bin/iterate.js",
+      "--config-name",
+      "preview_3",
+    ],
+  });
+});
+
 const createFakeSession = (input: {
   listError?: unknown;
   onConnect?: (connectInput: { auth: unknown; baseUrl: string }) => void;
-  onAgentReadyWait?: (args: unknown) => void;
   description?: { principal: string };
-  onProjectCreate?: (args: unknown) => void;
+  onProjectCreate?: (args: unknown, options: unknown) => void;
   projects?: Array<{
     deploymentStatus: "missing" | "ready" | "unknown";
     id: string;
@@ -30,7 +59,6 @@ const createFakeSession = (input: {
 }) => {
   const disposeAuthenticated = vi.fn();
   const disposeProject = vi.fn();
-  const disposeStream = vi.fn();
   const createSession = ((connectInput: { auth: unknown; baseUrl: string }) => {
     input.onConnect?.(connectInput);
     return {
@@ -42,21 +70,14 @@ const createFakeSession = (input: {
         ...input.description,
       }),
       projects: {
-        create: async (args: unknown) => {
-          input.onProjectCreate?.(args);
-          return {
-            streams: {
-              get: () => ({
-                waitForEvent: async (waitArgs: unknown) => {
-                  input.onAgentReadyWait?.(waitArgs);
-                  return {};
-                },
-                [Symbol.dispose]: disposeStream,
-              }),
-            },
-            [Symbol.dispose]: disposeProject,
-          };
-        },
+        get: (_slug: string) => ({
+          create: async (args: unknown, options: unknown) => {
+            input.onProjectCreate?.(args, options);
+            return {
+              [Symbol.dispose]: disposeProject,
+            };
+          },
+        }),
         list: async () => {
           if (input.listError) throw input.listError;
           return input.projects ?? [];
@@ -66,7 +87,7 @@ const createFakeSession = (input: {
     };
   }) as unknown as NonNullable<Parameters<typeof verifyOsSession>[0]["createSession"]>;
 
-  return { createSession, disposeAuthenticated, disposeProject, disposeStream };
+  return { createSession, disposeAuthenticated, disposeProject };
 };
 
 describe("oauthResourceForOsBaseUrl", () => {
@@ -161,6 +182,38 @@ describe("defaultBareInvocationToChat", () => {
   });
 });
 
+describe("replaceWithInheritedProcess", () => {
+  test("replaces the launcher process with inherited arguments and environment", () => {
+    const replacementReached = new Error("replacement reached");
+    const execve = vi.fn(
+      (_file: string, _args: string[], _environment: Record<string, string>): never => {
+        throw replacementReached;
+      },
+    );
+
+    expect(() =>
+      replaceWithInheritedProcess({
+        command: process.execPath,
+        args: ["entrypoint.mjs", "--flag"],
+        env: {
+          ITERATE_EXECVE_TEST: "inherited",
+          ITERATE_EXECVE_UNSET: undefined,
+        },
+        execve,
+      }),
+    ).toThrow(replacementReached);
+
+    expect(execve).toHaveBeenCalledOnce();
+    expect(execve).toHaveBeenCalledWith(
+      process.execPath,
+      [process.execPath, "entrypoint.mjs", "--flag"],
+      expect.objectContaining({ ITERATE_EXECVE_TEST: "inherited" }),
+    );
+    const environment = execve.mock.calls[0]?.[2];
+    expect(environment).not.toHaveProperty("ITERATE_EXECVE_UNSET");
+  });
+});
+
 describe("bin wrapper", () => {
   test("can load repo source through Node's strip-only TypeScript loader", () => {
     const binPath = fileURLToPath(new URL("../bin/iterate.js", import.meta.url));
@@ -207,6 +260,43 @@ describe("bin wrapper", () => {
 
       expect(result.status, result.stderr || result.stdout).toBe(0);
       expect(result.stdout.trim()).toBe("fake published dist");
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("the PTY harness can force the built artifact while running inside the repo", () => {
+    const sourceBinPath = fileURLToPath(new URL("../bin/iterate.js", import.meta.url));
+    const packageRoot = fileURLToPath(new URL("..", import.meta.url));
+    const tempRoot = mkdtempSync(join(tmpdir(), "iterate-bin-test-"));
+    const fakePackageRoot = join(tempRoot, "node_modules", "iterate");
+    const fakeBinDir = join(fakePackageRoot, "bin");
+    const fakeDistDir = join(fakePackageRoot, "dist");
+    const fakeBinPath = join(fakeBinDir, "iterate.js");
+
+    try {
+      mkdirSync(fakeBinDir, { recursive: true });
+      mkdirSync(fakeDistDir, { recursive: true });
+      writeFileSync(join(fakePackageRoot, "package.json"), '{"type":"module"}\n');
+      writeFileSync(fakeBinPath, readFileSync(sourceBinPath));
+      writeFileSync(
+        join(fakeDistDir, "index.mjs"),
+        "export async function runCli() { console.log('forced built dist'); }\n",
+      );
+
+      const result = spawnSync(process.execPath, [fakeBinPath], {
+        cwd: packageRoot,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          ITERATE_FORCE_BUILT_PACKAGE: "1",
+          npm_command: "",
+          npm_lifecycle_event: "",
+        },
+      });
+
+      expect(result.status, result.stderr || result.stdout).toBe(0);
+      expect(result.stdout.trim()).toBe("forced built dist");
     } finally {
       rmSync(tempRoot, { force: true, recursive: true });
     }
@@ -317,13 +407,11 @@ describe("resolveChatProject", () => {
 
   test("sets up the only missing accessible project before selecting it for chat", async () => {
     let createArgs: unknown;
-    let waitArgs: unknown;
+    let createOptions: unknown;
     const fake = createFakeSession({
-      onAgentReadyWait: (args) => {
-        waitArgs = args;
-      },
-      onProjectCreate: (args) => {
+      onProjectCreate: (args, options) => {
         createArgs = args;
+        createOptions = options;
       },
       projects: [
         {
@@ -349,23 +437,18 @@ describe("resolveChatProject", () => {
 
     expect(createArgs).toEqual({
       projectId: "prj_missing",
-      slug: "missing",
-      waitUntilCreated: false,
     });
-    expect(waitArgs).toEqual({
-      afterOffset: 0,
-      eventTypes: ["events.iterate.com/agent/llm-provider-selected"],
-      timeoutMs: 15_000,
-    });
+    expect(createOptions).toEqual({ waitUntilReady: false });
     expect(fake.disposeProject).toHaveBeenCalledOnce();
-    expect(fake.disposeStream).toHaveBeenCalledOnce();
   });
 
   test("resolves and sets up a configured project slug when it is missing", async () => {
     let createArgs: unknown;
+    let createOptions: unknown;
     const fake = createFakeSession({
-      onProjectCreate: (args) => {
+      onProjectCreate: (args, options) => {
         createArgs = args;
+        createOptions = options;
       },
       projects: [
         {
@@ -392,16 +475,17 @@ describe("resolveChatProject", () => {
 
     expect(createArgs).toEqual({
       projectId: "prj_default",
-      slug: "default",
-      waitUntilCreated: false,
     });
+    expect(createOptions).toEqual({ waitUntilReady: false });
   });
 
   test("passes the organization slug when setting up a missing project", async () => {
     let createArgs: unknown;
+    let createOptions: unknown;
     const fake = createFakeSession({
-      onProjectCreate: (args) => {
+      onProjectCreate: (args, options) => {
         createArgs = args;
+        createOptions = options;
       },
       projects: [
         {
@@ -428,9 +512,8 @@ describe("resolveChatProject", () => {
     expect(createArgs).toEqual({
       organizationSlug: "acme",
       projectId: "prj_org_project",
-      slug: "org-project",
-      waitUntilCreated: false,
     });
+    expect(createOptions).toEqual({ waitUntilReady: false });
   });
 
   test("rejects a configured project slug that is not accessible", async () => {
@@ -474,6 +557,27 @@ describe("resolveChatProject", () => {
         createSession: fake.createSession,
       }),
     ).resolves.toBe("prj_manual");
+  });
+
+  test("uses an explicit project id without enumerating accessible projects", async () => {
+    const onConnect = vi.fn();
+    const fake = createFakeSession({
+      listError: new Error("project catalog must not be queried"),
+      onConnect,
+    });
+
+    await expect(
+      resolveChatProject({
+        auth: { credentials: { type: "bearer", token: "token_123" } },
+        baseUrl: "https://os.iterate.com",
+        configName: "prd",
+        configPath: "/tmp/config.json",
+        explicitProject: "prj_explicit",
+        createSession: fake.createSession,
+      }),
+    ).resolves.toBe("prj_explicit");
+
+    expect(onConnect).not.toHaveBeenCalled();
   });
 
   test("does not bypass project resolution when listing accessible projects fails", async () => {

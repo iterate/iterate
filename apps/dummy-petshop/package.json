@@ -8,7 +8,7 @@
     "destroy": "node -e \"console.log('dummy-petshop destroy is a no-op: it holds only fake data, and workers stay')\" --",
     "ensure-resources": "tsx ./scripts/ensure-resources.ts",
     "gen:wrangler": "tsx ./scripts/generate-wrangler-config.ts",
-    "test": "vitest run",
+    "test": "vitest run --reporter=default --reporter=../../packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
     "test:e2e": "node -e \"if (!process.env.PETSHOP_BASE_URL) { console.error('PETSHOP_BASE_URL is required for dummy-petshop e2e tests'); process.exit(1); }\" && vitest run --config ./e2e/vitest.config.ts",
     "typecheck": "pnpm gen:wrangler && tsc --noEmit"
   },
@@ -18,10 +18,11 @@
     "@orpc/server": "1.13.14",
     "@orpc/zod": "1.13.14",
     "dedent": "^1.7.0",
-    "zod": "^4.3.6"
+    "zod": "4.3.6"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "catalog:cloudflare",
+    "@iterate-com/shared": "workspace:*",
     "@orpc/client": "1.13.14",
     "trpc-cli": "0.15.1",
     "tsx": "^4.20.6",

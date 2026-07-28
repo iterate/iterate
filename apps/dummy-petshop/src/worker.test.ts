@@ -6,8 +6,8 @@
  */
 import { createHmac } from "node:crypto";
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { listenOnFetchSafePort } from "@iterate-com/shared/test-support/fetch-safe-port";
 import { seedPets } from "./pets.ts";
 import { pkceS256, randomSealKey } from "./seal.ts";
 import {
@@ -241,46 +241,66 @@ describe("token exchange", () => {
     expect(wrong.status).toBe(401);
   });
 
-  test("a code minted for one client cannot be exchanged by another", async () => {
-    const shop = makeShop();
-    const other = await (await shop("/__backdoor/clients", postJson({}))).json<MintedClient>();
-    const location = await approve(shop, {
-      client_id: DEFAULT_CLIENT_ID,
-      redirect_uri: REDIRECT_URI,
-    });
-    const response = await exchange(shop, {
-      clientId: other.clientId,
-      clientSecret: other.clientSecret,
-      body: {
+  // The rejection grammar: every row approves a fresh code, then exchanges
+  // with one thing wrong. `expectedStatus` is asserted only where the
+  // original test pinned it.
+  test.for([
+    {
+      name: "a code minted for one client cannot be exchanged by another",
+      useMintedClient: true,
+      body: (code: string) => ({
         grant_type: "authorization_code",
-        code: location.searchParams.get("code") ?? "",
+        code,
         redirect_uri: REDIRECT_URI,
-      },
-    });
-    expect(response.status).toBe(400);
-    expect(await response.json()).toMatchObject({ error: "invalid_grant" });
-  });
-
-  test("re-checks redirect_uri at exchange time", async () => {
+      }),
+      expectedStatus: 400,
+      expectedError: "invalid_grant",
+    },
+    {
+      name: "re-checks redirect_uri at exchange time",
+      body: (code: string) => ({
+        grant_type: "authorization_code",
+        code,
+        redirect_uri: "https://attacker.example/callback",
+      }),
+      expectedStatus: 400,
+      expectedError: "invalid_grant",
+    },
+    {
+      name: "rejects garbage codes",
+      body: () => ({
+        grant_type: "authorization_code",
+        code: "garbage",
+        redirect_uri: REDIRECT_URI,
+      }),
+      expectedError: "invalid_grant",
+    },
+    {
+      name: "rejects unknown grant types",
+      body: () => ({ grant_type: "password" }),
+      expectedError: "unsupported_grant_type",
+    },
+  ])("$name", async ({ body, expectedError, expectedStatus, useMintedClient }) => {
     const shop = makeShop();
     const location = await approve(shop, {
       client_id: DEFAULT_CLIENT_ID,
       redirect_uri: REDIRECT_URI,
     });
+    const client = useMintedClient
+      ? await (await shop("/__backdoor/clients", postJson({}))).json<MintedClient>()
+      : { clientId: DEFAULT_CLIENT_ID, clientSecret: DEFAULT_CLIENT_SECRET };
     const response = await exchange(shop, {
-      clientId: DEFAULT_CLIENT_ID,
-      clientSecret: DEFAULT_CLIENT_SECRET,
-      body: {
-        grant_type: "authorization_code",
-        code: location.searchParams.get("code") ?? "",
-        redirect_uri: "https://attacker.example/callback",
-      },
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+      body: body(location.searchParams.get("code") ?? ""),
     });
-    expect(response.status).toBe(400);
-    expect(await response.json()).toMatchObject({ error: "invalid_grant" });
+    if (expectedStatus !== undefined) {
+      expect(response.status).toBe(expectedStatus);
+    }
+    expect(await response.json()).toMatchObject({ error: expectedError });
   });
 
-  test("rejects expired codes, garbage codes, and unknown grant types", async () => {
+  test("rejects expired codes", async () => {
     const shop = makeShop();
     const location = await approve(shop, {
       client_id: DEFAULT_CLIENT_ID,
@@ -298,21 +318,6 @@ describe("token exchange", () => {
       },
     });
     expect(await expired.json()).toMatchObject({ error: "invalid_grant" });
-    vi.useRealTimers();
-
-    const garbage = await exchange(shop, {
-      clientId: DEFAULT_CLIENT_ID,
-      clientSecret: DEFAULT_CLIENT_SECRET,
-      body: { grant_type: "authorization_code", code: "garbage", redirect_uri: REDIRECT_URI },
-    });
-    expect(await garbage.json()).toMatchObject({ error: "invalid_grant" });
-
-    const unknown = await exchange(shop, {
-      clientId: DEFAULT_CLIENT_ID,
-      clientSecret: DEFAULT_CLIENT_SECRET,
-      body: { grant_type: "password" },
-    });
-    expect(await unknown.json()).toMatchObject({ error: "unsupported_grant_type" });
   });
 
   test("backdoor-minted clients control their own access-token TTL", async () => {
@@ -346,7 +351,9 @@ describe("expiry, refresh, revocation", () => {
   test("backdoor expire-tokens kills outstanding access tokens but not refresh tokens", async () => {
     const shop = makeShop();
     const tokens = await connect(shop);
-    expect((await shop("/__backdoor/expire-tokens", { method: "POST" })).status).toBe(200);
+    expect(
+      (await shop("/__backdoor/expire-tokens", postJson({ clientId: DEFAULT_CLIENT_ID }))).status,
+    ).toBe(200);
     expect((await shop("/api/me", bearer(tokens.access_token))).status).toBe(401);
 
     const refreshed = await exchange(shop, {
@@ -355,6 +362,29 @@ describe("expiry, refresh, revocation", () => {
       body: { grant_type: "refresh_token", refresh_token: tokens.refresh_token },
     });
     expect(refreshed.status).toBe(200);
+  });
+
+  test("expiring one client's tokens leaves concurrently active clients alone", async () => {
+    const shop = makeShop();
+    const first = await connect(shop);
+    const otherClient = await (
+      await shop("/__backdoor/clients", postJson({}))
+    ).json<MintedClient>();
+    const other = await connect(shop, otherClient);
+
+    expect(
+      (await shop("/__backdoor/expire-tokens", postJson({ clientId: DEFAULT_CLIENT_ID }))).status,
+    ).toBe(200);
+
+    expect((await shop("/api/me", bearer(first.access_token))).status).toBe(401);
+    expect((await shop("/api/me", bearer(other.access_token))).status).toBe(200);
+  });
+
+  test("expire-tokens requires an explicit client so it cannot globally invalidate tests", async () => {
+    const shop = makeShop();
+    const response = await shop("/__backdoor/expire-tokens", { method: "POST" });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: "invalid_request" });
   });
 
   test("backdoor revoke-refresh-token kills exactly that refresh token", async () => {
@@ -421,7 +451,7 @@ describe("legacy login (email + password, no refresh grant)", () => {
     const { accessToken } = await (
       await shop("/api/legacy-login", postJson({ email: "a@b.c", password: "correct-horse" }))
     ).json<{ accessToken: string }>();
-    await shop("/__backdoor/expire-tokens", { method: "POST" });
+    await shop("/__backdoor/expire-tokens", postJson({ clientId: "legacy-login" }));
     expect((await shop("/api/me", bearer(accessToken))).status).toBe(401);
   });
 });
@@ -429,9 +459,27 @@ describe("legacy login (email + password, no refresh grant)", () => {
 describe("token endpoint outage (backdoor-scheduled)", () => {
   test("fails the next N token calls, then recovers", async () => {
     const shop = makeShop();
-    expect((await shop("/__backdoor/fail-token-endpoint", postJson({ times: 2 }))).status).toBe(
-      200,
-    );
+    const otherClient = await (
+      await shop("/__backdoor/clients", postJson({}))
+    ).json<{ clientId: string; clientSecret: string }>();
+    expect(
+      (
+        await shop(
+          "/__backdoor/fail-token-endpoint",
+          postJson({ clientId: DEFAULT_CLIENT_ID, times: 2 }),
+        )
+      ).status,
+    ).toBe(200);
+    // A concurrent client's call reaches the real endpoint and cannot consume
+    // the default client's scheduled failures.
+    expect(
+      (
+        await exchange(shop, {
+          ...otherClient,
+          body: { grant_type: "refresh_token", refresh_token: "irrelevant" },
+        })
+      ).status,
+    ).toBe(400);
     const attempt = () =>
       exchange(shop, {
         clientId: DEFAULT_CLIENT_ID,
@@ -442,13 +490,23 @@ describe("token endpoint outage (backdoor-scheduled)", () => {
     expect((await attempt()).status).toBe(500);
     // Third call reaches the real endpoint (and fails normally on the junk token).
     expect((await attempt()).status).toBe(400);
-    expect((await backdoorState(shop)).tokenEndpointFailuresRemaining).toBe(0);
+    expect(
+      (await backdoorState(shop)).tokenEndpointFailuresRemainingByClient[DEFAULT_CLIENT_ID],
+    ).toBeUndefined();
   });
 
-  test("rejects a non-integer times", async () => {
+  test("requires a client and rejects a non-integer times", async () => {
     const shop = makeShop();
+    expect((await shop("/__backdoor/fail-token-endpoint", postJson({ times: 1 }))).status).toBe(
+      400,
+    );
     expect(
-      (await shop("/__backdoor/fail-token-endpoint", postJson({ times: "many" }))).status,
+      (
+        await shop(
+          "/__backdoor/fail-token-endpoint",
+          postJson({ clientId: DEFAULT_CLIENT_ID, times: "many" }),
+        )
+      ).status,
     ).toBe(400);
   });
 });
@@ -468,8 +526,7 @@ describe("webhooks", () => {
         response.writeHead(200).end("ok");
       });
     });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-    const { port } = server.address() as AddressInfo;
+    const port = await listenOnFetchSafePort(server);
     return {
       url: `http://127.0.0.1:${port}/hook`,
       received,

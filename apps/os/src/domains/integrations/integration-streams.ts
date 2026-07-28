@@ -5,15 +5,10 @@
 // RpcTarget layer. All callers are itx workers acting with internal
 // authority; caller-facing confinement stays in rpc-targets.ts.
 
+import type { StreamEvent } from "iterate/processors";
 import { itxEnv } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import type { StreamEvent } from "../streams/schemas.ts";
-import {
-  CONNECTION_CLAIMED_EVENT_TYPE,
-  CONNECTION_UNCLAIMED_EVENT_TYPE,
-  INTEGRATION_DIRECTORY_STREAM_PATH,
-  integrationConnectionStreamPath,
-} from "./utils.ts";
+import { INTEGRATION_DIRECTORY_STREAM_PATH, integrationConnectionStreamPath } from "./utils.ts";
 
 export function integrationStreamStub(projectId: string | null, path: string) {
   return itxEnv.STREAM.getByName(
@@ -74,12 +69,13 @@ function directoryKey(slug: string, externalId: string): string {
 
 /**
  * Folds the deployment-wide integration directory: for each `(slug,
- * externalId)`, latest claim wins; an unclaim clears it only when BOTH the
- * project and the connection match the live claim — one project can hold
- * several external accounts, and a stale connection's disconnect must not tear
- * down the claim a newer connection now owns. This is the provider-agnostic
- * generalization of the old Slack team directory (D4): the same fold serves
- * Slack team ids, GitHub installation ids, and any future provider.
+ * externalId)`, the first live project owner wins. That project may update the
+ * connection name; another project can claim the id only after a matching
+ * unclaim clears it. Requiring BOTH the project and connection on an unclaim
+ * also prevents a stale connection's disconnect from tearing down the claim a
+ * newer connection now owns. This is the provider-agnostic generalization of
+ * the old Slack team directory (D4): the same fold serves Slack team ids,
+ * GitHub installation ids, and any future provider.
  */
 export function foldConnectionDirectory(
   events: readonly StreamEvent[],
@@ -100,11 +96,14 @@ export function foldConnectionDirectory(
       continue;
     }
     const key = directoryKey(payload.slug, payload.externalId);
-    if (event.type === CONNECTION_CLAIMED_EVENT_TYPE) {
+    if (event.type === "events.iterate.com/integration/connection-claimed") {
       if (typeof payload.connection !== "string") continue;
-      claims.set(key, { connection: payload.connection, projectId: payload.projectId });
+      const existingClaim = claims.get(key);
+      if (existingClaim === undefined || existingClaim.projectId === payload.projectId) {
+        claims.set(key, { connection: payload.connection, projectId: payload.projectId });
+      }
     } else if (
-      event.type === CONNECTION_UNCLAIMED_EVENT_TYPE &&
+      event.type === "events.iterate.com/integration/connection-unclaimed" &&
       claims.get(key)?.projectId === payload.projectId &&
       claims.get(key)?.connection === payload.connection
     ) {
@@ -134,22 +133,45 @@ type RouteIntegrationWebhookResult =
 /**
  * Route one validly-signed webhook to the project + connection that claimed its
  * `(slug, externalId)`, by appending a provider-shaped event to that
- * connection's stream. `ignored` (no live claim) lets the door ACK-and-drop.
- * This is the generic core of the webhook door (D4): per-provider code does
- * only the signature verify, external-id extract, and event shaping; routing is
- * one function for every integration.
+ * connection's stream. This function deliberately appends ONLY the ingress
+ * fact: connection setup owns any router birth and subscription. `ignored` (no
+ * live claim) lets the door ACK-and-drop. This is the generic core of the
+ * webhook door (D4): per-provider code does only the signature verify,
+ * external-id extract, and event shaping; routing is one function for every
+ * integration.
  */
 export async function routeIntegrationWebhook(input: {
   event: { idempotencyKey: string; payload: Record<string, unknown>; type: string };
   externalId: string;
+  /**
+   * Birth certificate that must already exist on the claimed connection
+   * stream. Webhook routers pass this so ingress can never commit work before
+   * the processor has been explicitly created. Providers without an inbound
+   * stream processor (currently GitHub) omit it.
+   */
+  routerCreatedEventType?: string;
   slug: string;
 }): Promise<RouteIntegrationWebhookResult> {
   const claim = await lookupConnectionClaim(input.slug, input.externalId);
   if (claim === null) return { ignored: "external-id-not-claimed", ok: true };
-  await integrationStreamStub(
-    claim.projectId,
-    integrationConnectionStreamPath(input.slug, claim.connection),
-  ).append(input.event);
+  const streamPath = integrationConnectionStreamPath(input.slug, claim.connection);
+  if (
+    input.routerCreatedEventType !== undefined &&
+    (await latestStreamEventOfTypes(claim.projectId, streamPath, [
+      input.routerCreatedEventType,
+    ])) === null
+  ) {
+    throw new Error(
+      `${input.slug} router ${claim.connection} for project ${claim.projectId} has not been created`,
+    );
+  }
+  await integrationStreamStub(claim.projectId, streamPath).append({
+    ...input.event,
+    // Preserve the trusted routing decision on the durable fact. Downstream
+    // userspace can select the exact account that received the webhook
+    // instead of accidentally acting through the project's first connection.
+    payload: { ...input.event.payload, connection: claim.connection },
+  });
   return { connection: claim.connection, ok: true, projectId: claim.projectId };
 }
 
@@ -188,7 +210,9 @@ export async function appendConnectionDirectoryEvents(
 ): Promise<void> {
   await integrationStreamStub(null, INTEGRATION_DIRECTORY_STREAM_PATH).append(
     ...inputs.map((input) => ({
-      type: input.claimed ? CONNECTION_CLAIMED_EVENT_TYPE : CONNECTION_UNCLAIMED_EVENT_TYPE,
+      type: input.claimed
+        ? "events.iterate.com/integration/connection-claimed"
+        : "events.iterate.com/integration/connection-unclaimed",
       payload: {
         connection: input.connection,
         externalId: input.externalId,

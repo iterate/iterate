@@ -13,6 +13,7 @@
 
 import { itxEnv } from "../../env.ts";
 import { projectStub } from "../projects/egress.ts";
+import { withStreamContext, type StreamContext } from "../projects/stream-context.ts";
 import { telegramBotTokenSecretPath } from "./utils.ts";
 import { parseConfig } from "~/config.ts";
 
@@ -25,7 +26,7 @@ type TelegramBotApiResult = { description?: string; ok?: boolean; result?: unkno
  * method name (the API is flat — sendMessage, sendPhoto, getMe, …) with one
  * params object. Shared by the dispatch guard (rpc-targets) and __describe. */
 export const TELEGRAM_CALL_GRAMMAR =
-  'itx.integrations.telegram expected `<connection>.<Bot API method>` (e.g. itx.integrations.telegram["my-bot"].sendMessage({ chat_id, text })); use itx.integrations.list() to see connections.';
+  "Use itx.integrations.telegram.get(connection?).<Bot API method>, for example itx.integrations.telegram.get().sendMessage({ chat_id, text }). Pass a connection slug only when a specific bot matters.";
 
 /** The Bot API base for this deployment — https://api.telegram.org unless a
  * test repointed it (config.integrations.telegram.apiBaseUrl). */
@@ -44,8 +45,9 @@ export async function callProjectTelegramBotApi(input: {
   connection: string;
   method: string;
   projectId: string;
+  streamContext: StreamContext;
 }): Promise<TelegramBotApiResult> {
-  const placeholder = `getSecret({ path: "${telegramBotTokenSecretPath(input.connection)}" })`;
+  const placeholder = `getSecret("${telegramBotTokenSecretPath(input.connection)}")`;
   const request = new Request(
     `${telegramApiBaseUrl(parseConfig(itxEnv))}/bot${placeholder}/${input.method}`,
     {
@@ -54,7 +56,9 @@ export async function callProjectTelegramBotApi(input: {
       method: "POST",
     },
   );
-  const response = await projectStub(itxEnv.PROJECT, input.projectId).fetch(request);
+  const response = await projectStub(itxEnv.PROJECT, input.projectId).fetch(
+    withStreamContext(request, input.streamContext),
+  );
   if (response.status === 400 || response.status === 403 || response.status === 404) {
     // secret_not_found / secret_not_allowed_for_origin errors from the secret
     // pipeline — not a Telegram response. Name the connection so the failure

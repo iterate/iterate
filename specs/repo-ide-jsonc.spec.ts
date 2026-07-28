@@ -1,6 +1,7 @@
 import { expect } from "@playwright/test";
 import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
+import { openRepoTreeFile } from "./test-support/repo-tree.ts";
 
 /**
  * The jsonc lane: tsconfig-family files (and *.jsonc, .vscode/*.json) parse
@@ -21,7 +22,7 @@ test("a commented tsconfig still schema-validates (comments are tolerated)", asy
 
   using itx = await connectAdminItx(baseURL!);
   using project = itx.projects.get(fixture.project.id);
-  await project.repos.create({ path: "/repos/ide" });
+  await project.repos.get("/repos/ide").create({ type: "empty" });
   // A comment, a trailing comma, and a schema violation (`strict` must be a
   // boolean). json5 tolerates the first two; the schema flags the third.
   await project.repos.get("/repos/ide").commitFiles({
@@ -44,10 +45,15 @@ test("a commented tsconfig still schema-validates (comments are tolerated)", asy
 
   await page.goto(`/projects/${fixture.project.slug}/repos/ide`);
 
-  await page.locator('[data-item-path="tsconfig.json"]').click();
-  await expect(page.locator(".cm-content")).toContainText("// jsonc: comments are allowed");
+  await openRepoTreeFile(page, "tsconfig.json");
+  await page.locator(".cm-content").filter({ hasText: "// jsonc: comments are allowed" }).waitFor();
 
   // Once the tsconfig schema loads, the invalid `strict` value squiggles — which
-  // can only happen if the commented, trailing-comma doc parsed as json5.
+  // can only happen if the commented, trailing-comma doc parsed as json5. The
+  // schemastore fetch + lint pass run in the background with no spinner, so
+  // spinner-waiter clamps a locator.waitFor here to its 1ms no-spinner
+  // fail-fast; the web-first assertion is not middleware-instrumented and
+  // keeps the generous 20s budget the one-off fetch needs.
+  // oxlint-disable-next-line iterate/spec-restricted-syntax -- no spinner exists during the background schemastore fetch, so locator.waitFor gets fail-fasted to 1ms; expect().toBeVisible() polls the full 20s.
   await expect(page.locator(".cm-lintRange-error").first()).toBeVisible({ timeout: 20_000 });
 });

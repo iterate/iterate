@@ -1,14 +1,14 @@
 # Slack apps for preview environments
 
-Use this runbook when a browser-using agent needs to create or repair the Slack
-app for an OS preview slot.
+Use this runbook to create or repair the Slack app for an OS preview slot. For
+a batch, prefer Slack's App Manifest API; use the browser for authorization,
+installation, and recovery from an existing app.
 
 For the end-to-end testing flow and the `Niterate (CI bot)` duplicate-reply
 caveat in the Iterate Slack workspace, see
 [`docs/slack-testing.md`](../../../docs/slack-testing.md).
-For bulk creation of the remaining preview Slack apps and the secrets handoff
-form, see
-[`docs/slack-preview-oauth-clients.md`](../../../docs/slack-preview-oauth-clients.md).
+For the full fleet-expansion sequence, see
+[`docs/adding-preview-slots.md`](../../../docs/adding-preview-slots.md).
 
 Each preview slot gets its own Slack app:
 
@@ -21,16 +21,20 @@ Do not reuse the production Slack app for previews, and do not point one Slack
 app at multiple preview slots. Slack has one active Events API Request URL per
 app, while OS stores one signing secret per deployed config.
 
-## Safety checklist
+## Safety boundary
 
-- Confirm the exact slot number and Slack workspace with a human before making
-  changes. Use the Iterate test/development Slack workspace unless the human
-  explicitly says otherwise.
-- Confirm before changing Doppler. `APP_CONFIG_INTEGRATIONS__SLACK` changes
-  deployed behavior for that preview slot without a git diff.
+- Inventory and validate manifests without approval. Before creating apps,
+  confirm the exact slot numbers and workspace ID with a human. Use the Iterate
+  test workspace unless the human explicitly names another one.
+- Confirm the exact Doppler configs and secret name before writing them.
+  `APP_CONFIG_INTEGRATIONS__SLACK` changes deployed behavior without a git diff.
 - Keep Slack client secrets and signing secrets out of chat, screenshots, logs,
-  and git. Use the Slack **Signing Secret**, not the deprecated verification
-  token.
+  shell history, and git. Pipe API responses into Doppler; never ask a human to
+  paste credentials into chat. Use the Signing Secret, not the deprecated
+  verification token.
+- Stop on an existing app name, a different workspace, 2FA, CAPTCHA, or a
+  manifest diff outside the approved slots. Inspect existing state instead of
+  creating a near-duplicate.
 - Install and claim the workspace through OS after the Slack app exists. The
   Slack dashboard's "Install App to Workspace" button is not a substitute for
   OS's connect flow because OS must store the bot token and claim the Slack
@@ -113,7 +117,73 @@ Agent messaging experience. OS currently routes real conversation work from
 Slack `message.*` events; `app_home_opened` is included for Slack's agent
 surface and future diagnostics, but it is not the smoke-test signal by itself.
 
-## Browser creation flow
+## Preferred creation flow: App Manifest API
+
+An app configuration token can create and configure any app belonging to its
+user in one workspace. Generate it under **Your App Configuration Tokens** on
+the Slack app settings page. It normally expires after 12 hours; do not store
+it in git or a shared preview config.
+
+The safe batch flow is:
+
+1. Render the bootstrap manifest in the browser-fallback section below for
+   every slot.
+2. Call `apps.manifest.validate` for all of them. Validation is read-only.
+3. Present the workspace ID, app names, validation result, and intended Doppler
+   writes for approval.
+4. Call `apps.manifest.create` sequentially. It is a Tier 1 method, so respect
+   `Retry-After` instead of launching ten calls in parallel.
+5. Check `ok`, the returned app ID, and the OAuth URL. Pipe the returned
+   credentials directly into the matching Doppler config.
+
+For one slot, save the rendered bootstrap manifest in a temporary directory
+outside the repository, then run:
+
+```bash
+read -rs 'SLACK_APP_CONFIG_TOKEN?Slack app configuration token: '
+export SLACK_APP_CONFIG_TOKEN
+printf '\n'
+
+response_dir=$(mktemp -d)
+chmod 700 "$response_dir"
+cleanup() {
+  unset SLACK_APP_CONFIG_TOKEN
+  rm -f "$response_dir/manifest.yaml" "$response_dir/response.json"
+  rmdir "$response_dir"
+}
+trap cleanup EXIT
+
+jq -n --rawfile manifest "$response_dir/manifest.yaml" \
+  '{manifest:$manifest}' |
+  curl --fail-with-body --silent --show-error \
+    https://slack.com/api/apps.manifest.create \
+    -H "Authorization: Bearer $SLACK_APP_CONFIG_TOKEN" \
+    -H 'Content-Type: application/json' \
+    --data-binary @- >"$response_dir/response.json"
+
+jq -e '.ok == true and .app_id and .credentials.client_id and
+  .credentials.client_secret and .credentials.signing_secret' \
+  "$response_dir/response.json" >/dev/null
+
+jq -c '{oauthClientId:.credentials.client_id,
+  oauthClientSecret:.credentials.client_secret,
+  webhookSigningSecret:.credentials.signing_secret}' \
+  "$response_dir/response.json" |
+  doppler secrets set APP_CONFIG_INTEGRATIONS__SLACK \
+    --project os --config preview_N --silent
+```
+
+Do not enable shell tracing. Do not print `response.json`: it contains secrets.
+Record the non-secret app ID and slot in the expansion ledger before the trap
+removes the temporary directory.
+
+After OS is deployed with the signing secret, call `apps.manifest.update` with
+the full manifest. Slack can then verify the Events API and interactivity URLs.
+
+Reference: [Slack App Manifest API](https://docs.slack.dev/app-manifests/configuring-apps-with-app-manifests/)
+and [`apps.manifest.create`](https://docs.slack.dev/reference/methods/apps.manifest.create/).
+
+## Browser fallback
 
 1. Open `https://api.slack.com/apps?new_app=1`.
 2. Choose **From a manifest**.
@@ -176,7 +246,7 @@ View against `message.im`, `app_home_opened`, and a verifiable request URL, so
 those fields belong in the full manifest only after the preview worker can
 answer Slack's URL verification challenge.
 
-## Copy Slack credentials
+## Browser credential handoff
 
 After Slack creates the app, open **Basic Information** and collect:
 
@@ -187,18 +257,20 @@ After Slack creates the app, open **Basic Information** and collect:
   **OAuth & Permissions**
 - Optional for inventory only: **App ID** and **Team ID**
 
-Do not use the Verification Token.
+Do not use the Verification Token. Enter these values into a local secure
+prompt or write them directly from the page into Doppler. Do not copy them into
+chat or a task file.
 
 ## Write Doppler config
 
-From repo root, set the OS preview config. Keep the values in shell variables
-or an interactive prompt; do not paste them into this file.
+From repo root, set the OS preview config. Read values silently so they do not
+enter shell history:
 
 ```bash
-export SLACK_CLIENT_ID='...'
-export SLACK_CLIENT_SECRET='...'
-export SLACK_SIGNING_SECRET='...'
-export SLACK_BOT_TOKEN='' # optional xoxb- token from OAuth & Permissions
+read -r 'SLACK_CLIENT_ID?Client ID: '
+read -rs 'SLACK_CLIENT_SECRET?Client secret: '; printf '\n'
+read -rs 'SLACK_SIGNING_SECRET?Signing secret: '; printf '\n'
+read -rs 'SLACK_BOT_TOKEN?Bot token (optional): '; printf '\n'
 
 jq -nc \
   --arg id "$SLACK_CLIENT_ID" \
@@ -262,10 +334,10 @@ match, or OS was not redeployed after the Doppler update.
    workspace.
 
 This writes the workspace bot token into the project secret
-`/secrets/integrations/slack/bot-token`, appends
-`events.iterate.com/slack/connected` on `/integrations/slack`, and claims the
-Slack team in the preview deployment's `/integrations/slack-team-directory`
-stream.
+`/secrets/integrations/slack/<connection>/bot-token`, appends
+`events.iterate.com/slack/connected` on
+`/integrations/slack/<connection>`, and claims the Slack team in the preview
+deployment's `/integrations/_directory` stream.
 
 If OS returns `slack_team_already_claimed`, that workspace is already claimed
 by a different project in the same preview deployment. Disconnect Slack from
@@ -295,7 +367,7 @@ production `iterate` app or legacy `Niterate (CI bot)` actor are acceptable.
    ```
 
    The Slack processor compiles this into a call to
-   `itx.integrations.slack["<connection>"].chat.postMessage` in the same thread.
+   `itx.integrations.slack.get("<connection>").chat.postMessage` in the same thread.
 
 4. In OS, inspect the project stream
    `/projects/<projectSlug>/streams/integrations/slack`. A successful real

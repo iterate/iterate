@@ -1,8 +1,9 @@
 import { z } from "zod";
 
-// Canonical stream path (leading slash, lowercase kebab segments), formerly
+// Canonical stream path (leading slash, lowercase path segments), formerly
 // the shared streams package's StreamPath. This module owns stream-path URL
 // plumbing, so the schema lives here; other UI modules import it from here.
+//
 const CanonicalStreamPath = z
   .string()
   .max(1023)

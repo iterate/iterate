@@ -1,25 +1,26 @@
 import { DurableObject } from "cloudflare:workers";
+import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
+import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
 import { workerVersion, type Env } from "../../env.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
-import { DurableObjectNameCodec, parentScopePath } from "../durable-object-names.ts";
-import { createStreamProcessorHost } from "../streams/stream-processor-host.ts";
-import type {
-  StreamSubscriberWakeRequest,
-  StreamSubscriberWakeResponse,
-} from "../streams/rpc-types.ts";
+import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { itxForScope, StreamRpcTarget } from "../../rpc-targets.ts";
 import { checkCapabilityTypes, checkItxScriptForExecution } from "../typecheck/virtual-project.ts";
 import {
   CapabilityHostProcessor,
-  type ParentCapabilityHost,
-  type RunScriptResult,
+  type CapabilityHostProcessorReads,
 } from "./capability-host-processor-implementation.ts";
+import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
+import type { ScriptExecutionSettlement } from "./script-execution-settlement.ts";
 import type { ProvideCapabilityInput } from "./types.ts";
 
 type ScriptExecutionEntrypoint = {
-  run(code: string): Promise<unknown>;
+  run(
+    code: string,
+    options: { emittedJs?: string; expiresAt: number },
+  ): Promise<ScriptExecutionSettlement>;
 };
 
 type ScriptExecutionLoopbackExports = {
@@ -33,46 +34,73 @@ type ScriptExecutionLoopbackExports = {
 
 /**
  * One capability scope: the durable dynamic-capability table and script
- * journal at one `{projectId, path}`. `provideCapability` always mounts here;
- * `invokeCapability`/`describeCapabilities` chain up to the enclosing scope's
- * host on a local miss.
+ * stream at one `{projectId, path}`. `provideCapability` always mounts here;
+ * `invokeCapability`/`describeCapabilities` follow the birth certificate's
+ * committed `fallback` expression (usually straight to the project root's
+ * host) on a local miss.
  */
 export class CapabilityHostDurableObject extends DurableObject<Env> {
+  /** Report this incarnation's code version for the deployment rollout gate. */
+  deploymentVersion(): string {
+    return workerVersion(this.env);
+  }
+
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
-  readonly #processorHost = createStreamProcessorHost(this.ctx, {
-    stream: new StreamRpcTarget({
-      auth: trustedInternalAuthContext(),
-      path: this.#name.path,
-      projectId: this.#name.projectId,
-    }),
+  readonly #stream = new StreamRpcTarget({
+    auth: trustedInternalAuthContext(),
+    path: this.#name.path,
+    projectId: this.#name.projectId,
+  });
+  readonly #registry = createStreamProcessorRegistry(this.ctx, {
+    stream: this.#stream,
     path: this.#name.path,
     projectId: this.#name.projectId,
     version: workerVersion(this.env),
   });
-  readonly #capabilityHostProcessor = this.#processorHost.add(
-    (deps) =>
-      new CapabilityHostProcessor({
-        ...deps,
-        itx: itxForScope({
-          auth: trustedInternalAuthContext(),
-          ctx: this.ctx,
-          path: this.#name.path,
-          projectId: this.#name.projectId,
-        }),
-        // The enclosing scope, so a capability miss at this path falls through to
-        // the surrounding scope (agent → its namespace → the project). Only the
-        // immediate parent is wired; deeper ancestors are reached because that
-        // parent applies the same fallback. Undefined at the root, which ends the
-        // chain.
-        parent: this.#parentCapabilityHost(),
+  // The DO constructs the processor — no host-injected readState/writeState/
+  // keepAliveWhile deps; the runner owns durable progress and keepalive.
+  // Registered WITH recovery: script executions are consequential
+  // `runInBackground` work (stream-committed requested/started obligations
+  // whose OUTCOME matters), so an incarnation that dies owing one must be
+  // revived — the keepalive alarm appends the `stream/processor-revived` fact,
+  // whose wake produces the eventless at-head pass (`delivery.caughtUp`) that
+  // re-drives the obligations (see the registry module doc's recovery rule).
+  readonly #capabilityHostProcessor = this.#registry.register(
+    new CapabilityHostProcessor({
+      stream: this.#stream,
+      path: this.#name.path,
+      projectId: this.#name.projectId,
+      itx: itxForScope({
+        auth: trustedInternalAuthContext(),
+        ctx: this.ctx,
+        streamContext: { kind: "scope", scopePath: this.#name.path },
         path: this.#name.path,
-        scriptExecutionEntrypoint: this.#scriptExecutionEntrypoint(),
-        validateCapabilityTypes: (types) =>
-          checkCapabilityTypes({ types, typechecker: this.env.TYPECHECKER }),
-        typecheckScript: (input) =>
-          checkItxScriptForExecution({ ...input, typechecker: this.env.TYPECHECKER }),
+        projectId: this.#name.projectId,
       }),
+      reads: this.#processorReads(),
+      scriptExecutionEntrypoint: this.#scriptExecutionEntrypoint(),
+      validateCapabilityTypes: (types) =>
+        checkCapabilityTypes({ types, typechecker: this.env.TYPECHECKER }),
+      typecheckScript: (input) =>
+        checkItxScriptForExecution({ ...input, typechecker: this.env.TYPECHECKER }),
+    }),
+    { recovery: true },
   );
+  // Runner-backed reads: under runner drive the runner owns the cursors and
+  // the processor instance's internal checkpoint never advances, so every
+  // read this DO serves (the processor facade, the processor's own state
+  // reads via #processorReads) goes through the runner's committed progress.
+  readonly #reads = this.#registry.reads(this.#capabilityHostProcessor);
+
+  /** The processor's runner-backed state reads — lazy closures because #reads
+   * is built from the registered processor above; the explicit return type
+   * breaks the field-initializer inference cycle. */
+  #processorReads(): CapabilityHostProcessorReads {
+    return {
+      snapshot: () => this.#reads.snapshot(),
+      waitUntilEvent: (input) => this.#reads.waitUntilEvent(input),
+    };
+  }
 
   #scriptExecutionEntrypoint(): ScriptExecutionEntrypoint {
     // Scripts execute in THIS scope, but the Dynamic Worker load happens in a
@@ -88,28 +116,13 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
     });
   }
 
-  #parentCapabilityHost(): ParentCapabilityHost | undefined {
-    const parentPath = parentScopePath(this.#name.path);
-    if (parentPath === null) return undefined;
-    const parent = this.env.CAPABILITY_HOST.getByName(
-      DurableObjectNameCodec.stringify({ path: parentPath, projectId: this.#name.projectId }),
-    );
-    // Forward only the two read methods the child scope chains through. Handing the
-    // full DurableObjectStub over as a typed dependency makes TypeScript instantiate
-    // the DO's self-referential stub type (TS2589); a thin forwarder keeps it shallow.
-    return {
-      invokeCapability: (input) => parent.invokeCapability(input),
-      describeCapabilities: () => parent.describeCapabilities(),
-    };
-  }
-
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
-    return this.#processorHost.wakeStreamSubscriber(args);
+    return this.#registry.wakeStreamSubscriber(args);
   }
 
-  /** The keepalive's revival alarm — see stream-processor-host.ts. */
-  alarm(): Promise<void> {
-    return this.#processorHost.handleAlarm();
+  /** The registry's shared DO alarm (runner keepalives) — see stream-processor-registry.ts. */
+  alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
+    return this.#registry.handleAlarm(alarmInfo);
   }
 
   /** Abort the current Durable Object incarnation; the next request boots it again. */
@@ -118,7 +131,11 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
   }
 
   get processor() {
-    return new StreamProcessorRpcTarget(this.#capabilityHostProcessor);
+    // Runner-backed reads (#reads), never the processor instance — see the
+    // field comment: instance reads are stale forever under runner drive.
+    return new StreamProcessorRpcTarget(this.#reads, {
+      catchUpBeforeSnapshot: () => this.#registry.catchUp(CapabilityHostProcessorContract.slug),
+    });
   }
 
   // Return types are pinned shallow so `DurableObjectStub<CapabilityHostDurableObject>`
@@ -135,10 +152,6 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
 
   revokeCapability(input: { path: string[]; providedAtOffset?: number }): Promise<void> {
     return this.#capabilityHostProcessor.revokeCapability(input);
-  }
-
-  runScript(code: string): Promise<RunScriptResult> {
-    return this.#capabilityHostProcessor.runScript(code);
   }
 
   describeCapabilities(): Promise<CapabilityDescription[]> {

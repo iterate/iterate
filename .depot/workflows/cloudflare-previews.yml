@@ -11,9 +11,8 @@
 # still coordinate through the same concurrency groups (copied verbatim in the
 # cleanup file): closing a PR mid-deploy cancels the in-flight deploy run
 # (cancel-in-progress on the shared workflow-level group) and the job-level
-# lifecycle group serializes whatever remains — the two never race the same
-# preview slot. (When deploy ran on Depot and cleanup on GitHub, a close
-# during a run tore down the slot under the deploy.)
+# lifecycle group serializes whatever remains. The two never race the same
+# preview slot.
 #
 # Depot registers automatic triggers when this file is on the default branch —
 # branch-only changes to the `on:` block do not take effect until merged. Test
@@ -22,14 +21,19 @@
 #     --workflow cloudflare-previews.yml --ref <branch> \
 #     --input pull-request-number=<pr>
 #
-# Secrets (depot ci secrets --org 0p91s0lz49): DOPPLER_TOKEN,
-# ITERATE_BOT_GITHUB_TOKEN.
+# The only Depot secret is DOPPLER_TOKEN. GitHub supplies the job-scoped token;
+# Doppler supplies every other credential.
 #
 # Keep the `paths` list below in sync with `cloudflarePreviewSharedPaths` +
 # `cloudflarePreviewAdditionalTriggerPaths` + each app's `paths` in
 # scripts/preview/preview.ts (asserted in scripts/preview/preview.test.ts).
 
 name: Cloudflare Previews (Depot CI)
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: read
 
 # Draft PRs don't claim a preview slot unless they ask — the `preview` label,
 # marking ready for review, or a manual dispatch (dispatch passes
@@ -57,14 +61,18 @@ on:
       - scripts/preview/**
       - envs.ts
       - scripts/lib/**
-      - apps/iterate-com/**
       - apps/auth-example/**
       - apps/os/**
+      - specs/**
+      - playwright.config.ts
+      - apps/mobile/**
+      - packages/iterate/**
       - apps/auth/**
       - apps/auth-contract/**
       - apps/os/src/domains/streams/**
       - apps/semaphore/**
       - apps/streams-example-app/**
+      - apps/dummy-petshop/**
   workflow_dispatch:
     inputs:
       pull-request-number:
@@ -83,18 +91,16 @@ jobs:
       (github.event.action != 'labeled' || github.event.label.name == 'preview') &&
         (github.event.action != 'unlabeled' || github.event.label.name == 'preview')
     name: Preview / deploy + e2e
-    # 8-core: the job is network-bound (waiting on deployed slots), not
-    # CPU-bound. Depot metrics on a full run showed peak CPU ~30% and peak
-    # memory ~10% of a 16-core box, so 8 cores keeps peak ~60% with headroom
-    # while halving the per-second cost. Re-check with
-    # `depot ci metrics --run <id>` before changing.
-    runs-on: depot-ubuntu-24.04-8
-    # Hard backstop on ONE attempt: a preview run past 10 minutes IS a flake
-    # (healthy ~4m; slot wait 6m, both e2e sub-lanes 360s watchdogs and
-    # per-test caps all fail loudly before this fires). 2026-07-09 saw 31m
-    # and ~90m attempts (unerasable-slot loops, an unbounded playwright
-    # tail); nothing can stack past this anymore.
-    timeout-minutes: 10
+    # The overlapping test pools peaked below ten cores. Keep the 16-core
+    # shape, but start from the same baked workspace used by mainline checks
+    # and production deploys so setup does not redownload the toolchain.
+    runs-on:
+      size: 16x64
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    # Hard backstop on one attempt. Each parallel sub-lane retains its own
+    # tighter watchdog; this outer bound catches setup, deploy, and reporting
+    # runaways while leaving enough time to preserve failure artifacts.
+    timeout-minutes: 20
     concurrency:
       group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number || inputs.pull-request-number }}
       cancel-in-progress: false
@@ -102,52 +108,55 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          clean: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - name: Install dependencies
-        run: pnpm install
-      - name: Install Doppler CLI
-        run: |-
-          for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
-          doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
-      - name: Preview / deploy
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
-          WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      # Permanent breaking-change floor: an old branch would deploy Auth first,
+      # then fail or deploy an OS revision that cannot call the default RPC
+      # entrypoint. Refuse before any app or credential is touched. This is an
+      # epoch assertion, not a compatibility path; rebase is the only remedy.
+      - name: Enforce preview deployment epoch
         run: |-
           set -euo pipefail
-          # A manual dispatch is an explicit ask for a preview, so it
-          # overrides the draft policy.
-          doppler run --project _shared --config prd -- pnpm preview deploy \
+          expected="os-auth-rpc-v1"
+          actual="$(cat scripts/preview/deployment-epoch 2>/dev/null || true)"
+          if [ "$actual" != "$expected" ]; then
+            echo "This branch predates preview deployment epoch $expected. Rebase onto main before deploying." >&2
+            exit 1
+          fi
+      - name: Reconcile dependencies (baked)
+        run: pnpm install --frozen-lockfile --prefer-offline
+      # ONE step for deploy + e2e: `preview run` shares a single resolved PR
+      # head between the two phases, so a push can no longer race into a gap
+      # between separate deploy and test steps (that gap used to need a whole
+      # class of stale-head skip machinery in preview.ts). Deploy failures
+      # fail the step before any test runs.
+      - name: Preview / deploy + e2e
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
+        run: |-
+          set -euo pipefail
+          # A manual dispatch is an explicit ask for a fresh preview, so it
+          # overrides the draft policy and redeploys even when this exact head
+          # was previously cleaned up and recorded as released.
+          doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview run \
             --github-token "$GITHUB_TOKEN" \
             --pull-request-number "${{ github.event.pull_request.number || inputs.pull-request-number }}" \
-            ${{ github.event_name == 'workflow_dispatch' && '--allow-draft' || '' }}
-      - name: Preview / e2e
+            ${{ github.event_name == 'workflow_dispatch' && '--allow-draft --all-apps' || '' }}
+      - name: Normalize and send preview test telemetry
+        if: always()
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
-          WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |-
-          set -euo pipefail
-          doppler run --project _shared --config prd -- pnpm preview test \
-            --github-token "$GITHUB_TOKEN" \
-            --pull-request-number "${{ github.event.pull_request.number || inputs.pull-request-number }}"
+        run: doppler run --project _shared --config prd -- pnpm tsx scripts/ci/upload-test-telemetry.ts ${{ cancelled() && '--cancelled' || '' }}
       - name: Collect OS preview test artifacts
         if: always()
         run: scripts/preview/collect-test-artifacts.sh test-results
       - name: Upload OS preview test artifacts
         if: always()
-        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: preview-os-test-artifacts
           path: test-results
           include-hidden-files: true
-          if-no-files-found: ignore
+          if-no-files-found: error

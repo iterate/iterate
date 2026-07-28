@@ -7,18 +7,19 @@ short README.
 
 OS deploys as one Worker (see [worker-topology.md](./worker-topology.md)):
 the dashboard, the itx api, and every Durable Object class live in a single
-script (`src/worker.ts`), plus the builder sidecar for dynamic worker builds.
+script (`src/worker.ts`), plus isolated typechecker and worker-bundler compiler
+sidecars. Neither sidecar hosts state.
 Traffic is dispatched on hostname and path:
 
-1. Rpc lanes: `/api` (+ `/api/admin-cookie`), `/prj_<id>/...`, and project
+1. Rpc lanes: `/api` (+ `/api/operator-sessions`), `/prj_<id>/...`, and project
    platform hosts (`<slug>.iterate.app`, `<slug>.localhost:<port>`) take the
    api pipeline. Project-host requests route to the project's seeded worker,
    never the dashboard.
 2. The MCP hostname (`mcp.iterate.com`) rewrites to the app's `/api/mcp`
    route.
 3. Everything else on the OS host lands on the TanStack Start dashboard
-   (SSR, server functions, assets) wrapped in one evlog "wide event" per
-   request.
+   (SSR, server functions, assets) wrapped in one typed operation-wide event
+   per request.
 
 The routing decision is one shared function (`src/ingress.ts`). Runtime
 config is parsed from `env` per request, never at module scope — isolates
@@ -46,12 +47,16 @@ claims fallback are described in [src/README.md](../src/README.md).
 ## The Project Directory
 
 OS has no database. The auth worker is the source of truth for which projects
-exist, their slugs, and who can access them; OS fronts it with the
-`PROJECT_DIRECTORY` KV namespace (`src/project-directory.ts`) so hot
-paths — project-host ingress, dashboard slug resolution — never pay an
-auth-worker roundtrip on a cache hit. Project creation registers with the auth
-worker and primes the cache. Everything else durable lives in Durable Object
-SQLite, as event streams.
+exist, their slugs, and who can access them. OS reaches that authority through
+the required `AUTH` Workers RPC service binding and fronts directory reads with
+the `PROJECT_DIRECTORY` KV namespace (`src/project-directory.ts`), so hot paths
+— project-host ingress and dashboard slug resolution — never pay an auth-worker
+roundtrip on a cache hit. Project creation registers through the same binding
+and primes the cache. The binding to auth's default `AuthWorker` is the
+credential; none of these runtime operations has a public HTTP or shared-token
+fallback. Omitting an `entrypoint` selector in Wrangler intentionally targets
+that default export.
+Everything else durable lives in Durable Object SQLite, as event streams.
 
 ## API And Routing
 
@@ -75,13 +80,17 @@ There are no organization routes; organization membership and selection live
 in the auth worker.
 
 The browser talks to itx over `/api`: one Cap'n Web WebSocket per
-context, managed by `src/itx/itx-react.tsx` (`useItx`/`useItxQuery`/
-`useItxEffect`). `POST /api` serves one-shot HTTP batch sessions (used by
-the project-create server function and MCP `exec_js`).
-`/api/admin-cookie` is the browser admin-auth bridge (WebSockets cannot
-set headers). The dashboard's Start routes keep only `/api/mcp` and `/api/health`; the
-catch-all `src/routes/api.$.ts` returns 404 (integration callbacks return
-with the integrations domain).
+context, managed by the `iterate` package's client (`iterate/sdk/itx/react` —
+`useItx`/`useItxQuery`/`useItxSubscription`; see `docs/frontend-development.md`). `POST /api` serves one-shot HTTP batch sessions (used by
+the project-create server function and MCP `exec_typescript`).
+`/api/operator-sessions` mints short-lived, origin-bound grants for either one
+resolved project or explicit platform-wide operation. Project grants create a
+synthetic operator principal; they do not impersonate a customer, inherit the
+customer's other memberships, or widen through the project directory. Browser
+redemption installs an HttpOnly `SameSite=Strict` cookie; see
+[Operator Sessions](./operator-sessions.md). The dashboard's Start routes keep
+only `/api/mcp` and `/api/health`; the catch-all `src/routes/api.$.ts` returns
+404 (integration callbacks return with the integrations domain).
 
 ## Streams
 
@@ -106,13 +115,13 @@ OS has two MCP flows:
   hostname (for example `https://mcp.iterate.com`), which ingress rewrites to
   the same route. The OS app-host `/api/mcp` route is also valid. The handler
   authenticates each request, creates a fresh in-memory MCP server, and
-  exposes `exec_js`, which runs the code through itx over a one-shot
+  exposes `exec_typescript`, which runs the code through itx over a one-shot
   capnweb batch.
 - Outbound MCP: `itx.mcp.connect(...)` connects to an external MCP server and
   exposes that remote server's tools as capability methods.
 
 Keep these separate in naming and code. Inbound MCP may execute itx scripts
-through `exec_js`, but it is not itself an outbound MCP capability.
+through `exec_typescript`, but it is not itself an outbound MCP capability.
 
 Inbound MCP requests authenticate two ways, tried in order:
 
@@ -128,9 +137,9 @@ the authorization server.
 
 ## itx Scripts
 
-itx executes JavaScript in isolated dynamic Worker sandboxes through
+itx executes TypeScript in isolated dynamic Worker sandboxes through
 `itx.capabilityHost.runScript(...)` — reached from the browser REPL, agents, the CLI
-(`pnpm cli itx run`), and MCP `exec_js`. Every runtime accepts the same
+(`pnpm cli itx run`), and MCP `exec_typescript`. Every runtime accepts the same
 script shape: a body that runs with `itx` (and `vars`) in scope and ends with
 an explicit `return` (see `src/itx/examples.ts`, the catalogue that doubles
 as the REPL Examples panel and the cross-runtime e2e matrix).
@@ -158,7 +167,6 @@ APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET=...
 APP_CONFIG_ADMIN_API_SECRET=...
 APP_CONFIG_OPEN_AI_API_KEY=...
 APP_CONFIG_PROJECT_HOSTNAME_BASES=["iterate.app"]
-APP_CONFIG_LOGS__STDOUT_FORMAT=pretty
 ```
 
 Fields marked `redacted(...)` in the schema parse into `Redacted` wrappers
@@ -173,15 +181,15 @@ Slack/Google integration config returns with the integrations domain
 
 OAuth clients in the Iterate Auth Worker and the matching Doppler values are
 managed by `scripts/sync-auth-clients.ts` (`pnpm auth:sync-clients`). For each
-target Doppler config (`dev_<name>`, `preview_1`–`preview_9`, `prd`) it
+target Doppler config (`dev_<name>`, `preview_<n>`, `prd`) it
 ensures two OAuth clients (web + MCP/CLI) via the auth contract's
 `internal.oauth.ensureClient`, then writes `APP_CONFIG_BASE_URL`,
 `APP_CONFIG_MCP__BASE_URL`, `APP_CONFIG_PROJECT_HOSTNAME_BASES`, and
 `APP_CONFIG_ITERATE_AUTH__*` OAuth/client values back to Doppler. It does not
-write `APP_CONFIG_ITERATE_AUTH__JWKS`: OS deploys fetch the live auth JWKS
-directly, merge the forge public key, and fail closed if auth's JWKS endpoint
-remains unavailable after the deploy retry window. Local dev derives its forge
-JWKS binding from `AUTH_FORGE_PRIVATE_JWK` at generated-Wrangler-config time.
+write `APP_CONFIG_ITERATE_AUTH__JWKS`: generated local config and deployed OS
+derive the public JWKS directly from the environment's Doppler-owned
+`AUTH_FORGE_PRIVATE_JWK`. Auth signs with the private half; OS receives only
+the public half and never fetches Auth during deploy or verification.
 
 It requires `APP_CONFIG_SERVICE_AUTH_TOKEN` (run through Doppler for the auth project).
 `AUTH_CLIENT_SYNC_TARGETS` filters targets;
@@ -194,10 +202,11 @@ deployment: a single worker ([worker-topology.md](./worker-topology.md))
 carrying every Durable Object class same-script, the `PROJECT_DIRECTORY` and
 `WORKER_BUILD_CACHE` KV namespaces, the Worker Loader, the Workers AI
 binding, Cloudflare Artifacts for repos, and routes for the app base URL,
-the MCP base URL, and each project hostname base. One sidecar rides along:
-the builder worker (`wrangler.builder.jsonc`, deployed first by deploy.ts),
-the only script carrying the dynamic-worker bundler toolchain. Deploys take
-the env explicitly: `pnpm run deploy --env preview_2` / `--env prd`.
+the MCP base URL, and each project hostname base. Two compiler sidecars ride
+along: the typechecker (`wrangler.typechecker.jsonc`) carries the TypeScript
+compiler wasm, while worker-bundler (`wrangler.worker-bundler.jsonc`) carries
+esbuild wasm. `deploy.ts` deploys both before OS. Deploys take the env
+explicitly: `pnpm run deploy --env preview_2` / `--env prd`.
 
 ## Smoke Tests
 

@@ -113,6 +113,7 @@
     "iterate/no-capnweb-http-batch": "error",
     "iterate/import-rules": "warn",
     "iterate/no-sr-only-data-attributes": "error",
+    "iterate/icon-button-has-hover-text": "error",
     "iterate/relative-import-extensions": "error",
     "iterate/zod-schema-naming": "error",
     "iterate/no-raw-durable-object-binding-access": "error",
@@ -151,7 +152,7 @@
   },
   "overrides": [
     {
-      "files": ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs"],
+      "files": ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.mjs"],
       "rules": {
         "no-unused-vars": [
           "warn",
@@ -200,7 +201,7 @@
       "plugins": ["typescript", "import", "react", "jsx-a11y"]
     },
     {
-      "files": ["**/*.tsx", "**/*.jsx"],
+      "files": ["**/*.tsx"],
       "rules": {
         "react-hooks/rules-of-hooks": "error",
         "react-hooks/exhaustive-deps": "warn"
@@ -208,21 +209,13 @@
       "plugins": ["react"]
     },
     {
-      "files": [
-        "startups/**",
-        "**/test/**",
-        "**/*.test.ts",
-        "**/*.e2e.ts",
-        "**/*.test.tsx",
-        "**/test-setup.ts",
-        "**/test-utils.ts"
-      ],
+      "files": ["**/test/**", "**/*.test.ts"],
       "rules": {
         "no-console": "off"
       }
     },
     {
-      "files": ["**/routes/**", "**/app/root.tsx"],
+      "files": ["**/routes/**"],
       "rules": {
         "react/only-export-components": "off"
       },
@@ -236,29 +229,13 @@
       "plugins": ["react"]
     },
     {
-      "files": ["apps/*/backend/**/*.ts"],
-      "rules": {
-        "no-console": "error"
-      }
-    },
-    {
-      "files": [
-        "apps/*/backend/**/*test*/**",
-        "apps/*/backend/**/*.test.ts",
-        "apps/*/backend/**/*.test.tsx"
-      ],
-      "rules": {
-        "no-console": "off"
-      }
-    },
-    {
-      "files": ["apps/*-contract/src/**/*.ts", "apps/*-contract/src/**/*.tsx"],
+      "files": ["apps/*-contract/src/**/*.ts"],
       "rules": {
         "iterate/contract-package-imports": "error"
       }
     },
     {
-      "files": ["apps/os/e2e/vitest/agents.e2e.test.ts"],
+      "files": ["apps/os/e2e/**/*.test.ts"],
       "rules": {
         "iterate/helpers-after-tests": "error",
         "iterate/no-describe": "error",
@@ -266,6 +243,37 @@
         "iterate/no-vi-mock": "error",
         "iterate/prefer-object-property-match": "error",
         "iterate/prefer-test-over-it": "error"
+      }
+    },
+    {
+      "files": ["apps/os/e2e/**"],
+      "rules": {
+        "iterate/itx-script-fn-self-contained": "error"
+      }
+    },
+    {
+      "files": ["specs/**/*.ts"],
+      "rules": {
+        "iterate/spec-restricted-syntax": "error",
+        "iterate/helpers-after-tests": "error",
+        "iterate/no-lifecycle-hooks": "error",
+        "iterate/no-vi-mock": "error",
+        "iterate/prefer-object-property-match": "error",
+        "iterate/prefer-test-over-it": "error",
+        "no-restricted-imports": [
+          "error",
+          {
+            "name": "@playwright/test",
+            "importNames": ["test"],
+            "message": "Use import { test } from './test-support/test.ts' instead. It wraps Playwright's test with middlewright plugins (spinner waiter, hydration waiter, UI error reporter)."
+          }
+        ]
+      }
+    },
+    {
+      "files": ["specs/test-support/**"],
+      "rules": {
+        "no-restricted-imports": "off"
       }
     },
     {

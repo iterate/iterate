@@ -2,7 +2,7 @@
 // Regenerate with: pnpm generate:itx-api
 // Freshness is enforced by itx-api.generated.test.ts.
 //
-// The Itx Type Graph: every exported declaration of itx-api.generated.ts as
+// The Itx Type Graph: every declaration of itx-api.generated.ts as
 // one record, in file order — same generator run, same content, kept
 // per-declaration so runtime consumers (itx.docs, __describe) can assemble
 // bounded slices instead of shipping the whole flat file.
@@ -38,24 +38,29 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "Project",
     kind: "interface",
     sourceText:
-      "/**\n * An itx: the project capability surface, scoped to one path (the project\n * root \"/\", an agent path, ...). Built-ins (streams, repo, agents, files,\n * integrations, sandboxes, scheduler, docs, ...) are project-global and\n * identical at every scope; what differs by scope is the capability host\n * chain (which mounts resolve) and the agent-scope extras (`agent`, `chat`).\n * Unknown dotted members dispatch dynamically against the scope's capability\n * host, chaining up to the project root.\n */\nexport interface Project {\n  /** The project this itx is scoped into. */\n  projectId: string;\n  /**\n   * Identity + full capability inventory: `projectId`/`name`, every reachable\n   * capability (built-ins + dynamic mounts), the children map, and the\n   * `Project` declaration in `types` (the full surface is one\n   * `itx.docs.get({ name })` per declaration away).\n   */\n  __describe(): Promise<ProjectDescription>;\n  /** Formatted dashboard/debug info for this itx scope, suitable for Slack messages. */\n  debug(): Promise<string>;\n  /** Restart the project's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  /** The project stream processor (snapshot/state; `state.created` flips when bootstrap lands). */\n  processor: WakeableStreamProcessorRpc<ProjectProcessorState>;\n  /** The project's live state — reduced processor state plus non-folded slices. See {@link LiveStateRpc}. */\n  liveState: LiveStateRpc<ProjectLiveState>;\n  /** Demo capability for the live-state playground — `ticker` (stateless) + `increment()` (a durable server-side counter). */\n  liveDemo: LiveDemo;\n  /** Workers AI: run(model, body), models(). */\n  ai: Ai;\n  /** Cloudflare Browser Run: quickAction() and raw fetch(). */\n  browser: CfBrowserCapability;\n  /** THIS agent's control surface — present only on an agent-scoped itx (path under `/agents/`). */\n  agent?: Agent;\n  /** THIS agent's web-chat door — present only on an agent-scoped itx. */\n  chat?: AgentChat;\n  /**\n   * This scope's own capability host: the durable capability table behind\n   * this itx (`provideCapability`, `revokeCapability`, `runScript`,\n   * `__describe`). Dynamic dotted calls (`itx.foo.bar(...)`) fall back to it.\n   */\n  capabilityHost: CapabilityHost;\n  /**\n   * Capability hosts of OTHER scopes, by path. `capabilityHosts.get(\"/\")` is\n   * the project root — providing there makes a capability visible to every\n   * scope in the project (child scopes inherit ancestors' mounts).\n   */\n  capabilityHosts: CapabilityHostCollection;\n  /** Shortcut for `capabilityHost.provideCapability` (mounts on THIS scope). */\n  provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;\n  /** Shortcut for `capabilityHost.revokeCapability`. */\n  revokeCapability(input: RevokeCapabilityInput): Promise<void>;\n  /** Project stream catalog: get(path), list(). */\n  streams: ProjectStreamCollection;\n  /** Agent catalog: get(path), list(). */\n  agents: AgentCollection;\n  /** Project-attributed outbound fetch (+ intercept). */\n  egress: ProjectEgress;\n  /** Project email: send(...) and the connection-scoped inbound address. */\n  email: EmailCapability;\n  /** The docs door: `search({ q })` finds e2e-tested example scripts, type\n   * declarations, and this scope's mounted capabilities; `get({ name })`\n   * fetches one. Pass search MANY related words — matching is dumb word\n   * overlap. */\n  docs: Docs;\n  /** Project file storage (R2-backed): `files.get(path)` → put/bytes/url/delete. */\n  files: Files;\n  /** The integrations collection: built-in integrations as dispatch branches\n   * on the dotted-call surface (`itx.integrations.slack[\"main-slack\"].chat\n   * .postMessage(...)`), provided integrations through the capability table,\n   * management verbs, `list()`. */\n  integrations: ProjectIntegrations;\n  /** Ad-hoc MCP clients: connect(url); `itx.mcp.exa` is the built-in Exa web search. */\n  mcp: McpClientCollection;\n  /** Ad-hoc OpenAPI clients: connect(spec). */\n  openapi: OpenApiCollection;\n  /** Parallel API, preconfigured with Iterate's platform API key. */\n  parallel: OpenApiRpc;\n  /** Repo catalog by path. */\n  repos: ProjectRepoCollection;\n  /** The project's sandboxes — explicitly created, sized Linux containers\n   * (`itx.sandboxes.create` / `get` / `list`) — see {@link SandboxCollection}. */\n  sandboxes: SandboxCollection;\n  /** The default project Scheduler — shorthand for `schedulers.get(\"/scheduler/primary\")`. */\n  scheduler: Scheduler;\n  /** Path-addressed Schedulers; the default at `/scheduler/primary` covers almost every use. */\n  schedulers: SchedulerCollection;\n  /** Secret catalog by path. */\n  secrets: SecretCollection;\n  /** The project's config repo at /repos/config — shorthand for `repos.get(\"/repos/config\")`. */\n  repo: Repo;\n  /** Dynamic worker refs: get(ref). */\n  workers: DynamicWorkerCollection;\n  /** Path-addressed durable workspaces (`itx.workspaces.get(path)`). */\n  workspaces: WorkspaceCollection;\n  /**\n   * Platform dispatch point: streams deliver committed event batches here\n   * for the project worker. Scripts should not call this — subscribe to a\n   * stream (or configure a subscription) instead.\n   */\n  processEventBatch(batch: StreamPushEventBatch): Promise<void>;\n  /**\n   * The default repo-backed project worker — a convenience alias; the general\n   * API is `workers.get(ref)`. Flattened: the seeded worker implements\n   * invokeCapability in userspace, so a dotted call onto any getter the\n   * worker adds (`itx.worker.<getter>.<method>(...)`) is one RPC end to end.\n   */\n  worker: DynamicWorkerCapability<ProjectWorker>;\n}",
+      "/**\n * An itx: the project capability surface, scoped to one path (the project\n * root \"/\", an agent path, ...). Built-ins (streams, repo, agents, files,\n * integrations, sandboxes, scheduler, docs, ...) are project-global and\n * identical at every scope; what differs by scope is the capability host\n * chain (which mounts resolve) and the agent-scope extras (`agent`, `chat`).\n * Unknown dotted members dispatch dynamically against the scope's capability\n * host, chaining up to the project root.\n */\nexport interface Project {\n  /** The project this itx is scoped into. */\n  projectId: string;\n  /**\n   * Register (for a prospective slug) and append the complete root birth\n   * batch. By default this resolves once the bootstrap saga has committed\n   * `project/ready` — the right shape for scripts that use the project\n   * immediately. `waitUntilReady: false` resolves as soon as the project\n   * EXISTS (identity registered, directory primed, birth events appended):\n   * the caller renders bootstrap progress itself, so nobody is left waiting.\n   * The durable-delivery subscriptions committed in the birth batch are what\n   * guarantee the saga runs; create also nudges both root processors AFTER\n   * this response, and a failed nudge is telemetry, not a create failure —\n   * the checklist's stall detector covers the rest. Either lane returns this\n   * same handle, and addressing an unknown slug is side-effect free.\n   */\n  create(\n    args: { organizationSlug?: string; projectId?: string },\n    options?: { waitUntilReady?: boolean },\n  ): Promise<Project>;\n  /**\n   * Canonical identity from the project directory: id, slug (the auth\n   * worker's normalized form — what URLs and ingress hostnames use),\n   * organization, and display name. A directory read only — no project DO\n   * dial — so it is safe pre-birth and cheap to pipeline through\n   * `projects.get(slug).create()`.\n   */\n  identity(): Promise<ProjectIdentity>;\n  /**\n   * Resolve once the bootstrap saga has committed `project/ready`. Replays\n   * stream history first, so an already-ready project resolves immediately,\n   * and dialing the processor here heals a lost birth wake rather than just\n   * observing. `create()` waits here by default; this remains useful after a\n   * non-blocking create or when a caller receives an existing handle while a\n   * bootstrap is in flight.\n   */\n  waitUntilReady(args?: { timeoutMs?: number }): Promise<void>;\n  /**\n   * Identity + full capability inventory: `projectId`/`name`, every reachable\n   * capability (built-ins + dynamic mounts), the children map, and the\n   * `Project` declaration in `types` (the full surface is one\n   * `itx.docs.get({ name })` per declaration away).\n   */\n  __describe(): Promise<ProjectDescription>;\n  /** Formatted dashboard/debug info for this itx scope, suitable for Slack messages. */\n  debug(): Promise<string>;\n  /** Restart the project's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  /** The project stream processor (snapshot/state; `state.ready` flips when bootstrap lands). */\n  processor: WakeableStreamProcessorRpc<ProjectProcessorState>;\n  /** The project's live state — reduced processor state plus non-folded slices. See {@link LiveStateRpc}. */\n  liveState: LiveStateRpc<ProjectLiveState>;\n  /** Demo capability for the live-state playground — `ticker` (stateless) + `increment()` (a durable server-side counter). */\n  liveDemo: LiveDemo;\n  /** Small durable project key-value store: get/set/delete/list. */\n  kv: Kv;\n  /** Workers AI: run(model, body), models(). */\n  ai: Ai;\n  /** Browser auth for project-host web apps. */\n  auth: ProjectAuth;\n  /** Cloudflare Browser Run: quickAction() and raw fetch(). */\n  browser: CfBrowserCapability;\n  /** This scope's agent control handle, when its address is under `/agents/`. */\n  agent?: Agent;\n  /** THIS agent's web-chat door — present only on an agent-scoped itx. */\n  chat?: AgentChat;\n  /**\n   * This scope's own capability host: the durable capability table behind\n   * this itx (`provideCapability`, `revokeCapability`, `runScript`,\n   * `__describe`). Dynamic dotted calls (`itx.foo.bar(...)`) fall back to it.\n   */\n  capabilityHost: CapabilityHost;\n  /**\n   * Capability hosts of OTHER scopes, by path. `capabilityHosts.get(\"/\")` is\n   * the project root — providing there makes a capability visible to every\n   * scope in the project (child scopes inherit ancestors' mounts).\n   */\n  capabilityHosts: CapabilityHostCollection;\n  /** Shortcut for `capabilityHost.provideCapability` (mounts on THIS scope). */\n  provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;\n  /** Shortcut for `capabilityHost.revokeCapability`. */\n  revokeCapability(input: RevokeCapabilityInput): Promise<void>;\n  /** Project stream catalog: get(path), list(). */\n  streams: ProjectStreamCollection;\n  /** Agent catalog: get(path), list(). */\n  agents: AgentCollection;\n  /** Project-attributed outbound fetch (+ intercept). */\n  egress: ProjectEgress;\n  /** Project email: send(...) and the connection-scoped inbound address. */\n  email: EmailCapability;\n  /** The docs door: `search({ q })` finds e2e-tested example scripts, type\n   * declarations, and this scope's mounted capabilities; `get({ name })`\n   * fetches one. Pass search MANY related words — matching is dumb word\n   * overlap. */\n  docs: Docs;\n  /** Project file storage (R2-backed): `files.get(path)` → put/bytes/url/delete. */\n  files: Files;\n  /** The integrations collection: built-in connection families selected with\n   * `.get()` (first connected) or `.get(\"slug\")` (exact), provided\n   * integrations through the capability table, management verbs, `list()`. */\n  integrations: ProjectIntegrations;\n  /** Ad-hoc MCP clients: connect(url); `itx.mcp.exa` is the built-in Exa web search. */\n  mcp: McpClientCollection;\n  /** Ad-hoc OpenAPI clients: connect(spec). */\n  openapi: OpenApiCollection;\n  /** Parallel API, preconfigured with iterate's platform API key. */\n  parallel: OpenApiRpc;\n  /** Repo catalog by path. */\n  repos: ProjectRepoCollection;\n  /** Enrolled phone installations and their durable notification journals. */\n  devices: DeviceCollection;\n  /** The project's sandboxes — explicitly created, sized Linux containers\n   * (`itx.sandboxes.get(path).create(input)` / `list`) — see {@link SandboxCollection}. */\n  sandboxes: SandboxCollection;\n  /** The default project Scheduler — shorthand for `schedulers.get(\"/scheduler/primary\")`. */\n  scheduler: Scheduler;\n  /** Path-addressed Schedulers; the default at `/scheduler/primary` covers almost every use. */\n  schedulers: SchedulerCollection;\n  /** Secret catalog by path. */\n  secrets: SecretCollection;\n  /** The project's config repo at /repos/config — shorthand for `repos.get(\"/repos/config\")`. */\n  repo: Repo;\n  /** Dynamic worker refs: get(ref). */\n  workers: DynamicWorkerCollection;\n  /** Path-addressed, event-sourced, mount-routed workspaces (`itx.workspaces.get(path)`). */\n  workspaces: WorkspaceCollection;\n  /**\n   * Platform dispatch point: streams deliver committed event batches here\n   * for the project worker. Scripts should not call this — subscribe to a\n   * stream (or configure a subscription) instead.\n   */\n  processEventBatch(batch: StreamPushEventBatch): Promise<void>;\n  /**\n   * The default repo-backed project worker — a convenience alias; the general\n   * API is `workers.get(ref)`. Flattened: the seeded worker implements\n   * invokeCapability in userspace, so a dotted call onto any getter the\n   * worker adds (`itx.worker.<getter>.<method>(...)`) is one RPC end to end.\n   */\n  worker: DynamicWorkerCapability<ProjectWorker>;\n}",
     summary:
       'An itx: the project capability surface, scoped to one path (the project root "/", an agent path, ...).',
     memberSummaries: {
       projectId: "The project this itx is scoped into.",
+      create: "Register (for a prospective slug) and append the complete root birth batch.",
+      identity:
+        "Canonical identity from the project directory: id, slug (the auth worker's normalized form — what URLs and ingress hostnames use), organization, and display name.",
+      waitUntilReady: "Resolve once the bootstrap saga has committed `project/ready`.",
       __describe:
         "Identity + full capability inventory: `projectId`/`name`, every reachable capability (built-ins + dynamic mounts), the children map, and the `Project` declaration in `types` (the full surface is one `itx.docs.get({ name })` per declaration away).",
       debug: "Formatted dashboard/debug info for this itx scope, suitable for Slack messages.",
       kill: "Restart the project's server-side object; the next request boots it fresh.",
       processor:
-        "The project stream processor (snapshot/state; `state.created` flips when bootstrap lands).",
+        "The project stream processor (snapshot/state; `state.ready` flips when bootstrap lands).",
       liveState: "The project's live state — reduced processor state plus non-folded slices.",
       liveDemo:
         "Demo capability for the live-state playground — `ticker` (stateless) + `increment()` (a durable server-side counter).",
+      kv: "Small durable project key-value store: get/set/delete/list.",
       ai: "Workers AI: run(model, body), models().",
+      auth: "Browser auth for project-host web apps.",
       browser: "Cloudflare Browser Run: quickAction() and raw fetch().",
-      agent:
-        "THIS agent's control surface — present only on an agent-scoped itx (path under `/agents/`).",
+      agent: "This scope's agent control handle, when its address is under `/agents/`.",
       chat: "THIS agent's web-chat door — present only on an agent-scoped itx.",
       capabilityHost:
         "This scope's own capability host: the durable capability table behind this itx (`provideCapability`, `revokeCapability`, `runScript`, `__describe`).",
@@ -69,13 +74,14 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       docs: "The docs door: `search({ q })` finds e2e-tested example scripts, type declarations, and this scope's mounted capabilities; `get({ name })` fetches one.",
       files: "Project file storage (R2-backed): `files.get(path)` → put/bytes/url/delete.",
       integrations:
-        'The integrations collection: built-in integrations as dispatch branches on the dotted-call surface (`itx.integrations.slack["main-slack"].chat .postMessage(...)`), provided integrations through the capability table, management verbs, `list()`.',
+        'The integrations collection: built-in connection families selected with `.get()` (first connected) or `.get("slug")` (exact), provided integrations through the capability table, management verbs, `list()`.',
       mcp: "Ad-hoc MCP clients: connect(url); `itx.mcp.exa` is the built-in Exa web search.",
       openapi: "Ad-hoc OpenAPI clients: connect(spec).",
-      parallel: "Parallel API, preconfigured with Iterate's platform API key.",
+      parallel: "Parallel API, preconfigured with iterate's platform API key.",
       repos: "Repo catalog by path.",
+      devices: "Enrolled phone installations and their durable notification journals.",
       sandboxes:
-        "The project's sandboxes — explicitly created, sized Linux containers (`itx.sandboxes.create` / `get` / `list`) — see {@link SandboxCollection}.",
+        "The project's sandboxes — explicitly created, sized Linux containers (`itx.sandboxes.get(path).create(input)` / `list`) — see {@link SandboxCollection}.",
       scheduler:
         'The default project Scheduler — shorthand for `schedulers.get("/scheduler/primary")`.',
       schedulers:
@@ -83,20 +89,24 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       secrets: "Secret catalog by path.",
       repo: 'The project\'s config repo at /repos/config — shorthand for `repos.get("/repos/config")`.',
       workers: "Dynamic worker refs: get(ref).",
-      workspaces: "Path-addressed durable workspaces (`itx.workspaces.get(path)`).",
+      workspaces:
+        "Path-addressed, event-sourced, mount-routed workspaces (`itx.workspaces.get(path)`).",
       processEventBatch:
         "Platform dispatch point: streams deliver committed event batches here for the project worker.",
       worker:
         "The default repo-backed project worker — a convenience alias; the general API is `workers.get(ref)`.",
     },
     referencedTypeNames: [
+      "ProjectIdentity",
       "ProjectDescription",
       "WakeableStreamProcessorRpc",
       "ProjectProcessorState",
       "LiveStateRpc",
       "ProjectLiveState",
       "LiveDemo",
+      "Kv",
       "Ai",
+      "ProjectAuth",
       "CfBrowserCapability",
       "Agent",
       "AgentChat",
@@ -116,6 +126,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "OpenApiCollection",
       "OpenApiRpc",
       "ProjectRepoCollection",
+      "DeviceCollection",
       "SandboxCollection",
       "Scheduler",
       "SchedulerCollection",
@@ -143,10 +154,9 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "RepoCollection",
     kind: "interface",
     sourceText:
-      "/** Repo catalog for either a project or the deployment-wide global scope. */\nexport interface RepoCollection {\n  __describe(): Promise<Description>;\n  /** Create the repo at a path; resolves once `repo/created` lands. */\n  create(input: { path: string }): Promise<Repo>;\n  /** The repo at a path. */\n  get(path: string): Repo;\n}",
+      "/** Repo catalog for either a project or the deployment-wide global scope. */\nexport interface RepoCollection {\n  __describe(): Promise<Description>;\n  /** The repo at a path. */\n  get(path: string): Repo;\n}",
     summary: "Repo catalog for either a project or the deployment-wide global scope.",
     memberSummaries: {
-      create: "Create the repo at a path; resolves once `repo/created` lands.",
       get: "The repo at a path.",
     },
     referencedTypeNames: ["Description", "Repo"],
@@ -155,12 +165,11 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "ProjectCollection",
     kind: "interface",
     sourceText:
-      '/** Catalog of projects reachable from a {@link Session}. */\nexport interface ProjectCollection {\n  __describe(): Promise<Description>;\n  /** The itx at the project root for a `prj_…` id. */\n  get(projectId: string): Promise<Project>;\n  /**\n   * Register and bootstrap a project. By default this resolves once the\n   * bootstrap saga has committed `project/created` — convenient for scripts\n   * and tests that use the project immediately. Pass\n   * `waitUntilCreated: false` to resolve as soon as the project EXISTS\n   * (identity registered, directory primed, bootstrap events appended): the\n   * saga then runs behind the returned handle, and its progress is ordinary\n   * live state (`itx.liveState` — `state.reduced.created` flips when bootstrap\n   * lands). The dashboard uses the fast path to redirect into the project\n   * instantly and play creation progress from pushes.\n   */\n  create(args: {\n    organizationSlug?: string;\n    projectId?: string;\n    slug: string;\n    waitUntilCreated?: boolean;\n  }): Promise<Project>;\n  /**\n   * The session\'s projects, enriched: identity (id/slug/org) from the auth\n   * claims or the project directory, deployment status from a concurrent\n   * engine probe (`state.created` on each project\'s processor snapshot). A\n   * probe failure degrades THAT entry to "unknown" — the list always renders.\n   * Scope is explicit: "mine" (default for user principals) is the caller\'s\n   * own claims even when admin credentials ride the same socket;\n   * "deployment" (every directory-known project) requires an admin principal\n   * and is the default for non-user admin principals, which have no claims.\n   */\n  list(input?: { scope?: "mine" | "deployment" }): Promise<ProjectListEntry[]>;\n}',
+      '/** Catalog of projects reachable from a {@link Session}. */\nexport interface ProjectCollection {\n  __describe(): Promise<Description>;\n  /**\n   * The itx at the project root, addressable by `prj_…` id OR by URL slug — the\n   * browser passes `params.projectSlug` straight through, no client-side\n   * slug→id hop (`get("acme")` and `get("prj_123")` both work). Resolution\n   * rides the KV-cached project directory ({@link resolveProjectIdBySlug},\n   * which passes `prj_` ids through untouched and resolves slugs); slugs are\n   * immutable, so a slug handle can\'t silently repoint. Confinement stays keyed\n   * on the resolved id — the access check runs on the id, never the raw input.\n   */\n  get(idOrSlug: string): Promise<Project>;\n  /**\n   * The session\'s projects, enriched: identity (id/slug/org) from the auth\n   * claims or the project directory, deployment status from a concurrent\n   * engine probe (`state.ready` on each project\'s processor snapshot). A\n   * probe failure degrades THAT entry to "unknown" — the list always renders.\n   * Scope is explicit: "mine" (default for user principals) is the caller\'s\n   * own claims even when admin credentials ride the same socket;\n   * "deployment" (every directory-known project) requires an admin principal\n   * and is the default for non-user admin principals, which have no claims.\n   */\n  list(input?: { scope?: "mine" | "deployment" }): Promise<ProjectListEntry[]>;\n}',
     summary: "Catalog of projects reachable from a {@link Session}.",
     memberSummaries: {
-      get: "The itx at the project root for a `prj_…` id.",
-      create: "Register and bootstrap a project.",
-      list: "The session's projects, enriched: identity (id/slug/org) from the auth claims or the project directory, deployment status from a concurrent engine probe (`state.created` on each project's processor snapshot).",
+      get: 'The itx at the project root, addressable by `prj_…` id OR by URL slug — the browser passes `params.projectSlug` straight through, no client-side slug→id hop (`get("acme")` and `get("prj_123")` both work).',
+      list: "The session's projects, enriched: identity (id/slug/org) from the auth claims or the project directory, deployment status from a concurrent engine probe (`state.ready` on each project's processor snapshot).",
     },
     referencedTypeNames: ["Description", "Project", "ProjectListEntry"],
   },
@@ -168,8 +177,8 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "LiveStateRpc",
     kind: "interface",
     sourceText:
-      "/**\n * A node's live state — a source-agnostic reactive value. `get()` reads it once;\n * `subscribe()` opens a channel that pushes a full snapshot then minimal diffs\n * (see `lib/live-state`), which the React `useLiveState` hook reassembles so\n * components pick only the slice they render. ANY RpcTarget can expose one: a\n * Durable Object over its folded state, or a stateless worker over state it\n * computes or fetches.\n *\n * Deliberately READ-ONLY over the wire: the server DERIVES this state (a DO\n * reassembles it from its fold), so writes go through the node's own verbs —\n * events appended, mutations called — never a generic `set`. A wire-level\n * `set`/`assign` would let any principal that can reach the node broadcast\n * fabricated state to every subscriber.\n */\nexport interface LiveStateRpc<State = unknown> {\n  get(): Promise<State>;\n  subscribe(onUpdate: (update: LiveUpdate<State>) => unknown): Promise<LiveStateSubscriptionHandle>;\n}",
-    summary: "A node's live state — a source-agnostic reactive value.",
+      "/** Read-only live value exposed across a Cap'n Web capability boundary. */\nexport interface LiveStateRpc<State = unknown> {\n  get(): Promise<State>;\n  subscribe(onUpdate: (update: LiveUpdate<State>) => unknown): Promise<LiveStateSubscriptionHandle>;\n}",
+    summary: "Read-only live value exposed across a Cap'n Web capability boundary.",
     memberSummaries: {},
     referencedTypeNames: ["LiveUpdate", "LiveStateSubscriptionHandle"],
   },
@@ -187,31 +196,59 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: ["LiveStateRpc"],
   },
   {
+    name: "Kv",
+    kind: "interface",
+    sourceText:
+      "/**\n * `itx.kv` — a small durable project key-value store on Workers KV (the\n * deployment's PROJECT_DIRECTORY namespace, keys prefixed with the project\n * id). Stateless by design: no Durable Object in the path, so a config\n * worker can read a policy knob on every request for microseconds (the\n * canonical example: its reverse-proxy target, flipped between the deployed\n * app and a dev tunnel). KV is eventually consistent across the edge —\n * writes are visible immediately in the writing location and within ~60s\n * everywhere else — which is the right trade for knobs and exactly the\n * wrong one for data (streams), files (files), or credentials (secrets).\n * Values are JSON-serializable, ≤64KiB; keys ≤256 characters.\n */\nexport interface Kv {\n  /** The stored value, or null when the key is absent. */\n  get(key: string): Promise<unknown>;\n  /** Store a JSON-serializable value (≤64KiB) under a key (≤512 chars). */\n  set(key: string, value: unknown): Promise<void>;\n  /** Remove a key; absent keys are a no-op. */\n  delete(key: string): Promise<void>;\n  /** Keys only (values are one get away), optionally under a prefix. */\n  list(input?: { prefix?: string }): Promise<string[]>;\n}",
+    summary:
+      "`itx.kv` — a small durable project key-value store on Workers KV (the deployment's PROJECT_DIRECTORY namespace, keys prefixed with the project id).",
+    memberSummaries: {
+      get: "The stored value, or null when the key is absent.",
+      set: "Store a JSON-serializable value (≤64KiB) under a key (≤512 chars).",
+      delete: "Remove a key; absent keys are a no-op.",
+      list: "Keys only (values are one get away), optionally under a prefix.",
+    },
+    referencedTypeNames: [],
+  },
+  {
     name: "Ai",
     kind: "interface",
     sourceText:
-      '/** Workers AI binding exposed through ITX as a project/agent capability. */\nexport interface Ai {\n  __describe(): Promise<Description>;\n  /** List the Workers AI model catalog. */\n  models(): Promise<unknown>;\n  /** Run one model invocation (`run("@cf/meta/llama-3.1-8b-instruct", { prompt })`).\n   * The optional third argument is the binding\'s own options object — e.g.\n   * `{ gateway: { id: "default", skipCache: true } }` — passed through to\n   * `env.AI.run`; its `gateway` wins over any constructor-provided one. */\n  run(model: string, body: unknown, options?: CfAiRunOptions): Promise<unknown>;\n  /** Convert documents (`{ name, blob }`) to Markdown; call with no args for the supported-format list. */\n  toMarkdown(\n    ...args: CfMarkdownConversionArgs\n  ): Promise<\n    CfMarkdownSupportedFormat[] | CfMarkdownConversionResult | CfMarkdownConversionResult[]\n  >;\n}',
-    summary: "Workers AI binding exposed through ITX as a project/agent capability.",
+      '/** Workers AI binding exposed through itx as a project/agent capability. */\nexport interface Ai {\n  __describe(): Promise<Description>;\n  /** List the Workers AI model catalog. */\n  models(): Promise<unknown>;\n  /** Run one model invocation (`run("@cf/meta/llama-3.1-8b-instruct", { prompt })`).\n   * Outputs are model-shaped: instantiate `run<T>` with the response shape you\n   * read (`run<{ response?: string }>(…)`); uninstantiated it stays the honest\n   * `unknown`. The optional third argument is the binding\'s own options object\n   * — e.g. `{ gateway: { id: "default", skipCache: true } }` — passed through\n   * to `env.AI.run`; its `gateway` wins over any constructor-provided one. */\n  run<T = unknown>(model: string, body: unknown, options?: CfAiRunOptions): Promise<T>;\n  /** Calling with no arguments lists the file formats the converter accepts. */\n  toMarkdown(): Promise<CfMarkdownSupportedFormat[]>;\n  /** Convert one document (`{ name, blob }`) to Markdown. */\n  toMarkdown(\n    document: CfMarkdownDocument,\n    options?: CfMarkdownConversionOptions,\n  ): Promise<CfMarkdownConversionResult>;\n  /** Convert a batch of documents to Markdown; results come back in input order. */\n  toMarkdown(\n    documents: CfMarkdownDocument[],\n    options?: CfMarkdownConversionOptions,\n  ): Promise<CfMarkdownConversionResult[]>;\n}',
+    summary: "Workers AI binding exposed through itx as a project/agent capability.",
     memberSummaries: {
       models: "List the Workers AI model catalog.",
       run: 'Run one model invocation (`run("@cf/meta/llama-3.1-8b-instruct", { prompt })`).',
-      toMarkdown:
-        "Convert documents (`{ name, blob }`) to Markdown; call with no args for the supported-format list.",
+      toMarkdown: "Convert a batch of documents to Markdown; results come back in input order.",
     },
     referencedTypeNames: [
       "Description",
       "CfAiRunOptions",
-      "CfMarkdownConversionArgs",
       "CfMarkdownSupportedFormat",
+      "CfMarkdownDocument",
+      "CfMarkdownConversionOptions",
       "CfMarkdownConversionResult",
     ],
+  },
+  {
+    name: "ProjectAuth",
+    kind: "interface",
+    sourceText:
+      "/** A partial fetch: return its response, or continue the app when it returns null. */\nexport interface ProjectAuth {\n  /** Select the project-member policy for this project's auth gate. */\n  get(policy: ProjectAuthPolicy): ProjectAuth;\n  /**\n   * Exchange an exact-origin app cookie for its authenticated actor. An app's\n   * unauthenticated Cap'n Web root uses this to construct its own session\n   * RpcTarget; the browser never receives the project's itx.\n   */\n  authenticate(request: Request, credentials: ProjectAuthCredentials): Promise<ProjectAuthActor>;\n  /**\n   * Own login, callback, logout, and the host-only cookie. Returns null only\n   * when this request belongs to a current project member. Like any partial\n   * fetch, a null result leaves the request body untouched for the app.\n   */\n  fetch(request: Request): Promise<Response | null>;\n}",
+    summary: "A partial fetch: return its response, or continue the app when it returns null.",
+    memberSummaries: {
+      get: "Select the project-member policy for this project's auth gate.",
+      authenticate: "Exchange an exact-origin app cookie for its authenticated actor.",
+      fetch: "Own login, callback, logout, and the host-only cookie.",
+    },
+    referencedTypeNames: ["ProjectAuthPolicy", "ProjectAuthCredentials", "ProjectAuthActor"],
   },
   {
     name: "CfBrowserCapability",
     kind: "interface",
     sourceText:
-      "/** Cloudflare Browser Run binding exposed through ITX. */\nexport interface CfBrowserCapability {\n  __describe(): Promise<Description>;\n  /** Raw Browser Run fetch, primarily for libraries that connect over CDP. */\n  fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;\n  /**\n   * Browser Run Quick Actions: content, screenshot, pdf, markdown, snapshot,\n   * scrape, json, links, crawl. Returns the action's RESULT directly —\n   * `quickAction(\"markdown\", { url })` is the markdown string, structured\n   * actions (links, json, scrape, …) are their parsed value, and binary\n   * actions (screenshot, pdf) are bytes — instead of the binding's raw\n   * Response, whose `{ success, result }` JSON envelope every caller was\n   * unwrapping by hand (and the agent prompt's one-call recipe promised not\n   * to need). A failed action throws with the envelope's error.\n   */\n  quickAction(\n    action: CfBrowserQuickAction,\n    options: CfBrowserQuickActionOptions,\n  ): Promise<string | Uint8Array | unknown>;\n}",
-    summary: "Cloudflare Browser Run binding exposed through ITX.",
+      "/** Cloudflare Browser Run binding exposed through itx. */\nexport interface CfBrowserCapability {\n  __describe(): Promise<Description>;\n  /** Raw Browser Run fetch, primarily for libraries that connect over CDP. */\n  fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;\n  /**\n   * Browser Run Quick Actions: content, screenshot, pdf, markdown, snapshot,\n   * scrape, json, links, crawl. Returns the action's RESULT directly —\n   * `quickAction(\"markdown\", { url })` is the markdown string, structured\n   * actions (links, json, scrape, …) are their parsed value, and binary\n   * actions (screenshot, pdf) are bytes — instead of the binding's raw\n   * Response, whose `{ success, result }` JSON envelope every caller was\n   * unwrapping by hand (and the agent prompt's one-call recipe promised not\n   * to need). A failed action throws with the envelope's error.\n   */\n  quickAction(\n    action: CfBrowserQuickAction,\n    options: CfBrowserQuickActionOptions,\n  ): Promise<string | Uint8Array | unknown>;\n}",
+    summary: "Cloudflare Browser Run binding exposed through itx.",
     memberSummaries: {
       fetch: "Raw Browser Run fetch, primarily for libraries that connect over CDP.",
       quickAction:
@@ -223,7 +260,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "Agent",
     kind: "interface",
     sourceText:
-      '/**\n * One agent: message loops and agent-local dynamic tools. Chain calls\n * directly off `get` — `await itx.agents.get("researcher").message(task)`.\n * Unknown members dispatch through the agent scope\'s capability host, so\n * `agents.get(path).someTool(args)` and\n * `agents.get(path).capabilityHost.someTool(args)` are equivalent; inside\n * the agent\'s own scripts the same tools are simply `itx.someTool(args)`.\n */\nexport interface Agent {\n  /**\n   * The agent scope\'s own capability host (provide/revoke/runScript/\n   * __describe) — and the explicit dotted door to the scope\'s DYNAMIC\n   * capabilities: `agents.get(path).capabilityHost.someTool(args)`. The\n   * shorthand `agents.get(path).someTool(args)` resolves through the same\n   * host via the handle\'s prototype-chain fallback; both pipeline over\n   * workerd RPC. Inside the agent\'s own scripts the same capabilities are\n   * simply `itx.someTool(args)`.\n   */\n  capabilityHost: CapabilityHost;\n  /** Shortcut for `capabilityHost.provideCapability` (mounts on THIS agent\'s scope). */\n  provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;\n  /** Shortcut for `capabilityHost.revokeCapability`. */\n  revokeCapability(input: RevokeCapabilityInput): Promise<void>;\n  /** The agent stream processor (snapshot/state). */\n  processor: WakeableStreamProcessorRpc<AgentProcessorState>;\n  /** The agent\'s own event stream. */\n  stream: Stream;\n  /** The agent\'s web-chat door (what the user sees). */\n  chat: AgentChat;\n  /**\n   * Send a message to this agent — THE inbound door for every caller. The\n   * event\'s `from` derives from the calling scope: inside an agent script\n   * (itx scoped to an agent path), the message is stamped\n   * `{ kind: "agent", path }` and does NOT refill the receiver\'s autonomous\n   * turn budget, so agent↔agent reply loops stay bounded; from anywhere else\n   * (web UI, CLI, MCP session) it is a user message. Messaging a path that\n   * never existed births the agent: the first append creates the stream and\n   * the platform applies birth mechanics + default policy. Optional files\n   * are stored in project file storage and ride the message as attachments\n   * (images stay visible to vision-capable models).\n   */\n  message(\n    input:\n      | string\n      | {\n          message: string;\n          files?: Array<{ contentType: string; data: FileData; filename: string }>;\n        },\n  ): Promise<StreamEvent>;\n  /**\n   * Set THIS agent\'s policy: system prompt and/or model. Works on an agent\n   * that already ran (a plain last-write-wins update) AND on a path that has\n   * never existed — the append births the agent with the full default policy\n   * plus these overrides, and the batch claims the same idempotency keys the\n   * project worker\'s defaults lane uses, so whichever lane runs second\n   * dedupes instead of clobbering. A custom systemPrompt REPLACES the path\'s\n   * platform prompt wholesale — including the codemode contract that tells\n   * the agent how to act. For delegation, prefer putting instructions in the\n   * message itself and leaving the prompt alone.\n   */\n  configure(input: AgentDefaultsOverrides): Promise<void>;\n  /**\n   * Send-and-wait convenience: appends a message and resolves with the\n   * agent\'s next chat reply on this stream. Replies are matched by order, not\n   * correlated per request — concurrent asks on one agent stream interleave\n   * exactly like two people typing into the same chat. Like `message`, the\n   * sender derives from the calling scope, so an agent asking another agent\n   * does not refill the receiver\'s autonomous turn budget. For delegated child\n   * agents, prefer `message()` and read their report from your own inputs:\n   * every agent-sourced message is labeled with how to reply (message the\n   * sender, whose web chat nobody watches), so `ask()` can time out waiting\n   * for a chat reply that never comes.\n   */\n  ask(input: {\n    message: string;\n    /** Where a USER message came from (ignored for agent-scoped callers). Defaults to "web". */\n    origin?: "web" | "mcp";\n    /** How long to wait for the reply. Defaults to 45s. */\n    timeoutMs?: number;\n  }): Promise<StreamEvent>;\n  /**\n   * Store files AND make them part of this agent\'s conversation in one call.\n   * The bytes land in project file storage under the agent\'s own path\n   * (`<agent path>/<short id>-<filename>`), and ONE input event carrying all\n   * attachments (each with a signed public `url`) is appended to the agent\n   * stream — so the files show up as a single conversation message, and\n   * images become visible to vision-capable models on following turns. Pass\n   * `llmRequestPolicy: { behaviour: "dont-trigger-request" }` to record files\n   * WITHOUT starting an LLM turn (the right choice for files the agent\n   * itself generated, e.g. `itx.ai.run` images).\n   */\n  addFiles(input: {\n    files: Array<{ contentType: string; data: FileData; filename: string }>;\n    /** Conversation text accompanying the files. Defaults to a short attachment note. */\n    message?: string;\n    llmRequestPolicy?: {\n      behaviour: "dont-trigger-request" | "after-current-request" | "interrupt-current-request";\n    };\n  }): Promise<{ event: StreamEvent; files: AgentFileAttachment[] }>;\n  /** Includes `whoami` (`"agent <projectId>:<agentPath>"`), `projectId`, `agentPath`. */\n  __describe(): Promise<Description & { agentPath: string; projectId: string; whoami: string }>;\n  /** Restart the agent\'s server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n}',
+      '/**\n * One agent: message loops and agent-local dynamic tools. For an\n * already-created agent, chain calls directly off `get` —\n * `await itx.agents.get("researcher").message(task)`.\n * Unknown members dispatch through the agent scope\'s capability host, so\n * `agents.get(path).someTool(args)` and\n * `agents.get(path).capabilityHost.someTool(args)` are equivalent; inside\n * the agent\'s own scripts the same tools are simply `itx.someTool(args)`.\n */\nexport interface Agent {\n  /**\n   * The agent scope\'s own capability host (provide/revoke/runScript/\n   * __describe) — and the explicit dotted door to the scope\'s DYNAMIC\n   * capabilities: `agents.get(path).capabilityHost.someTool(args)`. The\n   * shorthand `agents.get(path).someTool(args)` resolves through the same\n   * host via the handle\'s prototype-chain fallback; both pipeline over\n   * workerd RPC. Inside the agent\'s own scripts the same capabilities are\n   * simply `itx.someTool(args)`.\n   */\n  capabilityHost: CapabilityHost;\n  /** Shortcut for `capabilityHost.provideCapability` (mounts on THIS agent\'s scope). */\n  provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;\n  /** Shortcut for `capabilityHost.revokeCapability`. */\n  revokeCapability(input: RevokeCapabilityInput): Promise<void>;\n  /** The agent stream processor (snapshot/state). */\n  processor: WakeableStreamProcessorRpc<AgentProcessorState>;\n  /** The agent\'s transient runtime as a push-driven live-state surface. */\n  liveState: LiveStateRpc<AgentLiveState>;\n  /** The agent\'s own event stream. */\n  stream: Stream;\n  /**\n   * Append durable events the Agent processor consumes. The input union and\n   * runtime parser both derive from `AgentProcessorContract.consumes`, so the\n   * typed helper cannot drift from the processor. This validates shape and\n   * vocabulary, not state-machine order or provenance, and grants no special\n   * append rights: any project member can append any event through\n   * `stream.append`, with the same reducer meaning for a valid matching event.\n   * `create()` remains the normal birth path. Use `stream.append` for an event\n   * outside the Agent vocabulary or for an intentionally ephemeral event.\n   */\n  append(...events: AgentEventInput[]): Promise<StreamEvent[]>;\n  /** The agent\'s web-chat door (what the user sees). */\n  chat: AgentChat;\n  /**\n   * Create the generic agent machinery on this stream and wait until the\n   * agent, capability-host, singleton collection, and explicitly-created\n   * workspace processors have reduced their births. The optional payload is\n   * the `agent/created` birth certificate\n   * (arbitrary birth facts; defaults to `{}`). Configuration, context, and\n   * tasks remain separate events: append processor-consumed events through\n   * `agent.append()` or use a typed helper such as `message()` after creation.\n   * Resolves with this same agent handle, so create chains.\n   * Identical-payload retries dedupe on the birth idempotency keys; a create\n   * over an existing agent with a different payload fails loudly.\n   */\n  create(payload?: AgentCreateInput): Promise<Agent>;\n  /**\n   * Send a message to this agent — THE inbound door for every caller. The\n   * context item\'s actor derives from the calling scope: inside an agent script\n   * (itx scoped to an agent path), the message is stamped\n   * `{ type: "agent", path }` and does NOT refill the receiver\'s autonomous\n   * turn budget, so agent↔agent reply loops stay bounded; from anywhere else\n   * (web UI, CLI, MCP session) it is a user message. The agent must already\n   * have been created explicitly. Optional files\n   * are stored in project file storage and ride the message as attachments\n   * (images stay visible to vision-capable models).\n   */\n  message(\n    input:\n      | string\n      | {\n          message: string;\n          files?: Array<{ contentType: string; data: FileData; filename: string }>;\n        },\n  ): Promise<StreamEvent>;\n  /**\n   * Send-and-wait convenience: appends a message and resolves with the\n   * agent\'s next chat reply on this stream. Replies are matched by order, not\n   * correlated per request — concurrent asks on one agent stream interleave\n   * exactly like two people typing into the same chat. Like `message`, the\n   * sender derives from the calling scope, so an agent asking another agent\n   * does not refill the receiver\'s autonomous turn budget. For delegated child\n   * agents, prefer `message()` and read their report from your own inputs:\n   * every agent-sourced message is labeled with how to reply (message the\n   * sender, whose web chat nobody watches), so `ask()` can time out waiting\n   * for a chat reply that never comes.\n   */\n  ask(input: {\n    message: string;\n    /** Where a USER message came from (ignored for agent-scoped callers). Defaults to "web". */\n    origin?: "web" | "mcp";\n    /** How long to wait for the reply. Defaults to 45s. */\n    timeoutMs?: number;\n  }): Promise<StreamEvent>;\n  /**\n   * Store files AND make them part of this agent\'s conversation in one call.\n   * The bytes land in project file storage under the agent\'s own path\n   * (`<agent path>/<short id>-<filename>`), and ONE input event carrying all\n   * attachments (each with a signed public `url`) is appended as one context\n   * item — so the files show up as a single conversation message, and\n   * images become visible to vision-capable models on following turns. Pass\n   * `llmRequestPolicy: { behaviour: "dont-trigger-request" }` to record files\n   * WITHOUT starting an LLM turn (the right choice for files the agent\n   * itself generated, e.g. `itx.ai.run` images).\n   */\n  addFiles(input: {\n    files: Array<{ contentType: string; data: FileData; filename: string }>;\n    /** Conversation text accompanying the files. Defaults to a short attachment note. */\n    message?: string;\n    llmRequestPolicy?: {\n      behaviour: "dont-trigger-request" | "after-current-request" | "interrupt-current-request";\n    };\n  }): Promise<{ event: StreamEvent; files: AgentFileAttachment[] }>;\n  /** Includes `whoami` (`"agent <projectId>:<agentPath>"`), `projectId`, `agentPath`. */\n  __describe(): Promise<Description & { agentPath: string; projectId: string; whoami: string }>;\n  /** Restart the agent\'s server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n}',
     summary: "One agent: message loops and agent-local dynamic tools.",
     memberSummaries: {
       capabilityHost:
@@ -232,10 +269,13 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
         "Shortcut for `capabilityHost.provideCapability` (mounts on THIS agent's scope).",
       revokeCapability: "Shortcut for `capabilityHost.revokeCapability`.",
       processor: "The agent stream processor (snapshot/state).",
+      liveState: "The agent's transient runtime as a push-driven live-state surface.",
       stream: "The agent's own event stream.",
+      append: "Append durable events the Agent processor consumes.",
       chat: "The agent's web-chat door (what the user sees).",
+      create:
+        "Create the generic agent machinery on this stream and wait until the agent, capability-host, singleton collection, and explicitly-created workspace processors have reduced their births.",
       message: "Send a message to this agent — THE inbound door for every caller.",
-      configure: "Set THIS agent's policy: system prompt and/or model.",
       ask: "Send-and-wait convenience: appends a message and resolves with the agent's next chat reply on this stream.",
       addFiles: "Store files AND make them part of this agent's conversation in one call.",
       __describe:
@@ -249,11 +289,14 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "RevokeCapabilityInput",
       "WakeableStreamProcessorRpc",
       "AgentProcessorState",
+      "LiveStateRpc",
+      "AgentLiveState",
       "Stream",
-      "AgentChat",
-      "FileData",
+      "AgentEventInput",
       "StreamEvent",
-      "AgentDefaultsOverrides",
+      "AgentChat",
+      "AgentCreateInput",
+      "FileData",
       "AgentFileAttachment",
       "Description",
     ],
@@ -275,12 +318,14 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "CapabilityHost",
     kind: "interface",
     sourceText:
-      '/**\n * The host surface for ONE capability scope: mount, revoke, invoke, describe,\n * and run scripts against the durable capability table at `path` (backed by\n * the CapabilityHostDurableObject with that name). Mounting is always local to\n * this scope; reads chain up through enclosing scopes inside the Durable\n * Object. `itx.capabilityHost` is the current scope\'s host;\n * `itx.capabilityHosts.get("/")` addresses the project root from anywhere —\n * that is how an agent provides a capability to the whole project.\n */\nexport interface CapabilityHost {\n  /** The scope path this host fronts: `"/"` is the project root, `/agents/bla` an agent. */\n  path: string;\n  /** This scope\'s capability-host stream processor (snapshot/state). A real\n   * member, so it also claims the name: mounts cannot shadow `processor`. */\n  processor: WakeableStreamProcessorRpc;\n  /** Mount a capability on THIS scope; returns an ownership handle that can revoke exactly this mount. */\n  provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;\n  /** Remove the current mount at a path, or one exact mount by its offset. */\n  revokeCapability(input: RevokeCapabilityInput): Promise<void>;\n  /** Explicit dynamic dispatch; the dotted-path fallback (`itx.foo.bar(...)`) compiles to exactly this call. */\n  invokeCapability(call: { args?: unknown[]; path: string[] }): Promise<unknown>;\n  /** Includes `capabilities`: everything reachable at this scope — own mounts plus inherited ones, tagged with their declaring scope. */\n  __describe(): Promise<Description & { capabilities: CapabilityDescription[]; path: string }>;\n  /** Run an `async (itx) => { … }` script in this scope; the execution is journaled on the scope stream. */\n  runScript(code: string): Promise<{\n    completedEvent: StreamEvent;\n    executionId: string;\n    result: unknown;\n  }>;\n  /** Restart this scope\'s server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n}',
+      "/**\n * The host surface for ONE capability scope: mount, revoke, invoke, describe,\n * and run scripts against the durable capability table at `path` (backed by\n * the CapabilityHostDurableObject with that name). Mounting is always local to\n * this scope; on a local miss, reads follow the scope's journaled `fallback`\n * expression — usually one hop straight to the project root host.\n * `itx.capabilityHost` is the current scope's host;\n * `itx.capabilityHosts.get(\"/\")` addresses the project root from anywhere —\n * that is how an agent provides a capability to the whole project.\n */\nexport interface CapabilityHost {\n  /** The scope path this host fronts: `\"/\"` is the project root, `/agents/bla` an agent. */\n  path: string;\n  /** This scope's capability-host stream processor (snapshot/state). A real\n   * member, so it also claims the name: mounts cannot shadow `processor`. */\n  processor: WakeableStreamProcessorRpc;\n  /**\n   * Create this capability host: append the atomic birth batch (created +\n   * processor subscription; the payload defaults to `{}` config with the\n   * standard one-hop fallback to the project root host — the path is\n   * normalized in the constructor), wait until the processor has consumed it,\n   * and return this same host handle, so create chains. Identical-payload\n   * retries dedupe on the birth idempotency keys; a create over an existing\n   * host with a different payload fails loudly.\n   */\n  create(payload?: CapabilityHostCreateInput): Promise<CapabilityHost>;\n  /** Mount a capability on THIS scope; returns an ownership handle that can revoke exactly this mount. */\n  provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;\n  /** Remove the current mount at a path, or one exact mount by its offset. */\n  revokeCapability(input: RevokeCapabilityInput): Promise<void>;\n  /** Explicit dynamic dispatch; the dotted-path fallback (`itx.foo.bar(...)`) compiles to exactly this call. */\n  invokeCapability(call: { args?: unknown[]; path: string[] }): Promise<unknown>;\n  /** Includes `capabilities`: everything reachable at this scope — own mounts plus inherited ones, tagged with their declaring scope. */\n  __describe(): Promise<Description & { capabilities: CapabilityDescription[]; path: string }>;\n  /** Run an `async (itx) => { … }` script in this scope; the execution is journaled on the scope stream. */\n  runScript(code: string): Promise<{\n    completedEvent: StreamEvent;\n    executionId: string;\n    result: unknown;\n  }>;\n  /** Restart this scope's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n}",
     summary:
       "The host surface for ONE capability scope: mount, revoke, invoke, describe, and run scripts against the durable capability table at `path` (backed by the CapabilityHostDurableObject with that name).",
     memberSummaries: {
       path: 'The scope path this host fronts: `"/"` is the project root, `/agents/bla` an agent.',
       processor: "This scope's capability-host stream processor (snapshot/state).",
+      create:
+        "Create this capability host: append the atomic birth batch (created + processor subscription; the payload defaults to `{}` config with the standard one-hop fallback to the project root host — the path is normalized in the constructor), wait until the processor has consumed it, and return this same host handle, so create chains.",
       provideCapability:
         "Mount a capability on THIS scope; returns an ownership handle that can revoke exactly this mount.",
       revokeCapability: "Remove the current mount at a path, or one exact mount by its offset.",
@@ -294,6 +339,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     },
     referencedTypeNames: [
       "WakeableStreamProcessorRpc",
+      "CapabilityHostCreateInput",
       "ProvideCapabilityInput",
       "CapabilityProvision",
       "RevokeCapabilityInput",
@@ -341,26 +387,39 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "AgentCollection",
     kind: "interface",
     sourceText:
-      '/** Agent catalog within one project. */\nexport interface AgentCollection {\n  __describe(): Promise<Description>;\n  /**\n   * The agent control surface at a path (`"/agents/<name>"`, or relative to\n   * the calling scope — `".."` climbs). The returned handle is a plain,\n   * unproxied RpcTarget ON PURPOSE, so callers can PIPELINE onto this call —\n   * `itx.agents.get(path).message(text)` or `.someTool(args)` in one\n   * expression — over workerd RPC (the script lane); dynamic members resolve\n   * through the prototype-chain fallback. See Agent\'s class comment\n   * for the mechanism and `agent-handle-pipelining.itx.e2e.test.ts` for the\n   * guard.\n   */\n  get(path: string): Agent;\n  /** Known agents, read from the project processor\'s reduced state. */\n  list(): Promise<StreamListItem[]>;\n  /** The platform\'s default agent policy, as data. */\n  defaults: AgentDefaults;\n}',
+      '/** Agent catalog within one project. */\nexport interface AgentCollection {\n  __describe(): Promise<Description>;\n  processor: WakeableStreamProcessorRpc<AgentCollectionProcessorState>;\n  liveState: LiveStateRpc<AgentCollectionProcessorState>;\n  /** Stateless push sink: forwarding and authorization are its entire job. */\n  processEvent(batch: StreamPushEventBatch): Promise<void>;\n  /**\n   * The agent control surface at a path (`"/agents/<name>"`, or relative to\n   * the calling scope — `".."` climbs). The returned handle is a plain,\n   * unproxied RpcTarget ON PURPOSE, so callers can PIPELINE onto this call —\n   * `itx.agents.get(path).message(text)` or `.someTool(args)` in one\n   * expression for an already-created agent — over workerd RPC (the script\n   * lane); dynamic members resolve through the prototype-chain fallback. See\n   * Agent\'s class comment for the mechanism and\n   * `agent-handle-pipelining.itx.e2e.test.ts` for the guard.\n   */\n  get(path: string): Agent;\n  /** Known agents, read from the collection processor\'s reduced database. */\n  list(): Promise<StreamListItem[]>;\n}',
     summary: "Agent catalog within one project.",
     memberSummaries: {
+      processEvent: "Stateless push sink: forwarding and authorization are its entire job.",
       get: 'The agent control surface at a path (`"/agents/<name>"`, or relative to the calling scope — `".."` climbs).',
-      list: "Known agents, read from the project processor's reduced state.",
-      defaults: "The platform's default agent policy, as data.",
+      list: "Known agents, read from the collection processor's reduced database.",
     },
-    referencedTypeNames: ["Description", "Agent", "StreamListItem", "AgentDefaults"],
+    referencedTypeNames: [
+      "Description",
+      "WakeableStreamProcessorRpc",
+      "AgentCollectionProcessorState",
+      "LiveStateRpc",
+      "StreamPushEventBatch",
+      "Agent",
+      "StreamListItem",
+    ],
   },
   {
     name: "ProjectEgress",
     kind: "interface",
     sourceText:
-      "/**\n * Public project egress facet.\n *\n * The Project Durable Object is the single egress decision point: it owns the\n * live runtime interceptor slot and, when there is no interceptor, performs the\n * terminal secret-substitution fetch path.\n */\nexport interface ProjectEgress {\n  __describe(): Promise<Description>;\n  /** Outbound fetch with the project's identity and secret substitution. */\n  fetch(request: Request): Promise<Response>;\n  /** Install a live egress interceptor (last writer wins); returns a release handle. */\n  intercept(handler: ProjectEgressInterceptor): Promise<ProjectEgressIntercept>;\n}",
+      "/**\n * Public project egress facet.\n *\n * The Project Durable Object is the single egress decision point: it owns the\n * live runtime interceptor slot and, when there is no interceptor, performs the\n * terminal secret-substitution fetch path.\n */\nexport interface ProjectEgress {\n  __describe(): Promise<Description>;\n  /** Outbound fetch with project identity and secret substitution. Set\n   * `x-iterate-secret-template: json` to replace exact `getSecret(...)` string\n   * values in an `application/json` (or `+json`) body. */\n  fetch(request: Request): Promise<EgressResponse>;\n  /** Install a live egress interceptor (last writer wins); returns a release handle. */\n  intercept(handler: ProjectEgressInterceptor): Promise<ProjectEgressIntercept>;\n}",
     summary: "Public project egress facet.",
     memberSummaries: {
-      fetch: "Outbound fetch with the project's identity and secret substitution.",
+      fetch: "Outbound fetch with project identity and secret substitution.",
       intercept: "Install a live egress interceptor (last writer wins); returns a release handle.",
     },
-    referencedTypeNames: ["Description", "ProjectEgressInterceptor", "ProjectEgressIntercept"],
+    referencedTypeNames: [
+      "Description",
+      "EgressResponse",
+      "ProjectEgressInterceptor",
+      "ProjectEgressIntercept",
+    ],
   },
   {
     name: "EmailCapability",
@@ -382,9 +441,9 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "Docs",
     kind: "interface",
     sourceText:
-      '/**\n * The docs door: search + fetch over everything callable from this scope —\n * the platform\'s example scripts (most are proven: the test suite runs them\n * unattended against a live project on every change; the rest are marked\n * interactive), the public type surface (the Itx Type Graph), and the\n * capabilities mounted in the caller\'s scope chain. One door for "how do I\n * X?": search first, fetch what the hits name, adapt working code.\n *\n * The search mechanism is deliberately dumb (word matching, no embeddings),\n * which is why every docstring here tells callers to pass MANY related words\n * — recall comes from the query, not the engine.\n */\nexport interface Docs {\n  __describe(): Promise<Description>;\n  /**\n   * Find examples, types, and mounted capabilities. Pass MANY related words —\n   * matching is dumb word overlap, so more synonyms means better recall:\n   * `search({ q: "file upload attachment bytes store image" })`, not\n   * `search({ q: "files" })`. API-name queries work too: "itx" is dropped as\n   * noise and a word matching a row\'s NAME counts double, so `"itx.docs"`,\n   * `"worker"`, or `"agents"` rank their subject first instead of every row\n   * that mentions the word. Example hits are working scripts — prefer copying\n   * them over writing calls from scratch. Each hit\'s `fetchCall` field holds\n   * the ready-made docs.get call that fetches its full doc.\n   */\n  search(input: { q: string }): Promise<DocsSearchHit[]>;\n  /**\n   * Fetch one entry by the name a search hit gave you. An example name\n   * returns its full script, annotated with its provenance (most examples\n   * run unattended against a live project in the platform\'s test suite; the\n   * rest are marked interactive); a type declaration name returns its\n   * TypeScript source plus as much of its reference closure as fits\n   * `maxTokens` (default 1500), ending with a comment naming anything left\n   * out and how to fetch it; a mounted capability\'s dotted path (say\n   * "tools.weather") returns its instructions and types plus the platform\n   * declarations those types reference, same budget rules.\n   */\n  get(input: { name: string; maxTokens?: number }): Promise<string>;\n  /**\n   * Typecheck an `async (itx) => { … }` script against this scope\'s surface —\n   * the platform types plus every mounted capability\'s types (npm-backed\n   * `import("pkg")` types resolve too) — WITHOUT running it. Advisory: a\n   * clean result does not promise the script works, but a typo like\n   * `itx.streams.gett(...)` comes back as a compiler error with a\n   * did-you-mean instead of costing a failed run.\n   */\n  typecheck(input: { code: string }): Promise<{ ok: boolean; problems: string[] }>;\n}',
+      '/**\n * The docs door: search + fetch over everything callable from this scope —\n * the platform\'s example scripts (most are proven: the test suite runs them\n * unattended against a live project on every change; the rest are marked\n * interactive), the public type surface (the Itx Type Graph), and the\n * capabilities reachable from the caller\'s scope. One door for "how do I\n * X?": search first, fetch what the hits name, adapt working code.\n *\n * The search mechanism is deliberately dumb (word matching, no embeddings),\n * which is why every docstring here tells callers to pass MANY related words\n * — recall comes from the query, not the engine.\n */\nexport interface Docs {\n  __describe(): Promise<Description>;\n  /**\n   * Find examples, types, and mounted capabilities. Pass MANY related words —\n   * matching is dumb word overlap, so more synonyms means better recall:\n   * `search({ q: "file upload attachment bytes store image" })`, not\n   * `search({ q: "files" })`. API-name queries work too: "itx" is dropped as\n   * noise and a word matching a row\'s NAME counts double, so `"itx.docs"`,\n   * `"worker"`, or `"agents"` rank their subject first instead of every row\n   * that mentions the word. Example hits are working scripts — prefer copying\n   * them over writing calls from scratch. Each hit\'s `fetchCall` field holds\n   * the ready-made docs.get call that fetches its full doc.\n   */\n  search(input: { q: string }): Promise<DocsSearchHit[]>;\n  /**\n   * Fetch one entry by the name a search hit gave you. An example name\n   * returns its full script, annotated with its provenance (most examples\n   * run unattended against a live project in the platform\'s test suite; the\n   * rest are marked interactive); a type declaration name returns its\n   * TypeScript source plus as much of its reference closure as fits\n   * `maxTokens` (default 1500), ending with a comment naming anything left\n   * out and how to fetch it; a mounted capability\'s dotted path (say\n   * "tools.weather") returns its instructions and types plus the platform\n   * declarations those types reference, same budget rules.\n   */\n  get(input: { name: string; maxTokens?: number }): Promise<string>;\n  /**\n   * Typecheck an `async (itx) => { … }` script against this scope\'s surface —\n   * the platform types plus every mounted capability\'s types (npm-backed\n   * `import("pkg")` types resolve too) — WITHOUT running it. Advisory: a\n   * clean result does not promise the script works, but a typo like\n   * `itx.streams.gett(...)` comes back as a compiler error with a\n   * did-you-mean instead of costing a failed run.\n   */\n  typecheck(input: { code: string }): Promise<{ ok: boolean; problems: string[] }>;\n}',
     summary:
-      "The docs door: search + fetch over everything callable from this scope — the platform's example scripts (most are proven: the test suite runs them unattended against a live project on every change; the rest are marked interactive), the public type surface (the Itx Type Graph), and the capabilities mounted in the caller's scope chain.",
+      "The docs door: search + fetch over everything callable from this scope — the platform's example scripts (most are proven: the test suite runs them unattended against a live project on every change; the rest are marked interactive), the public type surface (the Itx Type Graph), and the capabilities reachable from the caller's scope.",
     memberSummaries: {
       search: "Find examples, types, and mounted capabilities.",
       get: "Fetch one entry by the name a search hit gave you.",
@@ -408,23 +467,38 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "ProjectIntegrations",
     kind: "interface",
     sourceText:
-      '/**\n * The `itx.integrations` collection.\n *\n * Connection-yielding dotted calls are `{slug}.{connection}.{...method}`.\n * Built-in slugs (`slack`, `google`, `github`, `telegram`, `waitrose`)\n * dispatch to deployment code —\n * `itx.integrations.slack["main-slack"].chat.postMessage({...})` reaches any\n * Slack Web API method (a real WebClient), `itx.integrations.google["jonas"].gmail.request({...})`\n * the Gmail REST proxy, and `itx.integrations.github["jonas"]` is a real\n * Octokit — `.rest.apps.listReposAccessibleToInstallation()`, the\n * `.request("GET /repos/{owner}/{repo}")` escape hatch, `.graphql(...)`;\n * there is NO generic `.api.request({ method, path })` shape, and the\n * connection acts as a GitHub App INSTALLATION, so user-scoped\n * `...ForAuthenticatedUser` endpoints answer 403 — and every other slug\n * resolves through the ITX capability table under the `integrations` prefix.\n * The exception is `itx.integrations.parallel`: a first-party API-key RPC\n * target, not a connection and not returned by `list()`. There is no implicit\n * connection: a built-in call without a connection name is an error.\n *\n * Built-in integrations are plain imperative dispatch branches, not classes,\n * because their only callers are untyped dotted scripts; a project extends\n * the collection with ordinary `provideCapability({ path: ["integrations", ...] })`\n * — data, not deployment. `completeConnect` is called by the app worker\'s\n * OAuth callback routes (/api/integrations/<provider>/callback); its\n * authority is the HMAC-signed OAuth state minted by startOAuthFlow,\n * verified itx-side.\n */\nexport interface ProjectIntegrations {\n  /** Parallel API, preconfigured with Iterate\'s platform API key. Not a connection. */\n  parallel: OpenApiRpc;\n  /** Cloudflare first-party platform bindings: AI, Browser Run, Images, Media\n   * Transformations. Like `parallel`, these ride the deployment\'s own\n   * Cloudflare account — not a per-project connection. */\n  cf: CloudflareIntegrations;\n  /** The dotted-call surface: built-in slugs dispatch here; unknown slugs\n   * resolve through the project capability table (the provided lane). Slack\n   * methods are unary — one body object:\n   * `itx.integrations.slack["<connection>"].chat.postMessage({ ... })`. */\n  invokeCapability(call: { args?: unknown[]; path: string[] }): Promise<unknown>;\n  /** Every connection the project holds: `/integrations/<slug>/<connection>`\n   * journals plus provided mounts from the capability table (deduped by path;\n   * a mount over its own webhook journal is one entry). */\n  list(): Promise<IntegrationConnectionListEntry[]>;\n  __describe(): Promise<\n    { instructions: string; types: string; children: Record<string, string> } & {\n      instructions: string;\n      types: string;\n      children: {\n        cf: string;\n        completeConnect: string;\n        connectTelegram: string;\n        disconnect: string;\n        getConnection: string;\n        github: string;\n        google: string;\n        list: string;\n        parallel: string;\n        slack: string;\n        startOAuthFlow: string;\n        telegram: string;\n      };\n      parent: string;\n    }\n  >;\n  /** Connection status for { provider, connection }. */\n  getConnection(input: {\n    connection: string;\n    provider: BuiltinIntegrationSlug;\n  }): Promise<IntegrationConnectionStatus>;\n  /**\n   * Connect a Telegram bot by BotFather token — no OAuth, no redirect: getMe\n   * validates the token, setWebhook points the bot at this deployment (with a\n   * derived secret token), and the token lands in a write-only connection\n   * secret. Throws with a human-readable message on failure — except a bot\n   * already claimed by ANOTHER project, which answers the structured\n   * `ok: false, error: "telegram_bot_already_claimed"` arm so the caller can\n   * confirm and retry with `steal: true` (moving the bot: the old project is\n   * disconnected first; possession of the token is the authorization).\n   */\n  connectTelegram(input: { botToken: string; steal?: boolean }): Promise<ConnectTelegramResult>;\n  /** Begin the OAuth connect flow; returns the authorization URL. */\n  startOAuthFlow(input: {\n    callbackUrl?: string;\n    provider: OAuthProviderSlug;\n    /** The user to bind the OAuth state to. Browser-supplied, not authority;\n     * the callback\'s check against the signed state is the backstop. */\n    userId: string;\n  }): Promise<{ authorizationUrl: string }>;\n  /** Called by the app worker\'s OAuth callback route; authority is the\n   * HMAC-signed OAuth state minted by startOAuthFlow. */\n  completeConnect(input: {\n    /** OAuth authorization code (slack/google). */\n    code?: string;\n    /** GitHub App installation id — github\'s callback carries this, not a code. */\n    installationId?: string;\n    provider: OAuthProviderSlug;\n    state: string;\n    userId: string | null;\n  }): Promise<CompleteConnectResult>;\n  /** Disconnect one connection: { provider, connection }. */\n  disconnect(input: {\n    connection: string;\n    provider: BuiltinIntegrationSlug;\n  }): Promise<{ success: true }>;\n}',
+      "/**\n * The `itx.integrations` collection.\n *\n * Connection-yielding calls are `{slug}.get(connection?).{...method}`.\n * Public built-in families (`slack`, `gmail`, `github`, `telegram`, `waitrose`)\n * dispatch to deployment code —\n * `itx.integrations.slack.get().chat.postMessage({...})` reaches any Slack Web\n * API method (a real WebClient), `itx.integrations.gmail.get().request({...})`\n * the Gmail REST proxy, and `itx.integrations.github.get().octokit` is a\n * real Octokit — `.rest.apps.listReposAccessibleToInstallation()`, the\n * `.request(\"GET /repos/{owner}/{repo}\")` escape hatch, `.graphql(...)`;\n * there is NO generic `.api.request({ method, path })` shape, and the\n * connection acts as a GitHub App INSTALLATION, so user-scoped\n * `...ForAuthenticatedUser` endpoints answer 403 — and every other slug\n * resolves through the itx capability table under the `integrations` prefix.\n * The exception is `itx.integrations.parallel`: a first-party API-key RPC\n * target, not a connection and not returned by `list()`. With no argument,\n * `get()` selects the first currently connected account in `list()` order.\n *\n * The SDK connection targets are thin dispatchers over the normal vendor\n * clients. A project extends the collection with ordinary\n * `provideCapability({ path: [\"integrations\", ...] })` — data, not deployment.\n * `completeConnect` is called by the app worker's\n * OAuth callback routes (/api/integrations/<provider>/callback); its\n * authority is the HMAC-signed OAuth state minted by startOAuthFlow,\n * verified itx-side.\n */\nexport interface ProjectIntegrations {\n  /** Slack WebClient connections. `get()` selects the first connected workspace. */\n  slack: IntegrationFamily<SlackConnection>;\n  /** Connected Google accounts, exposed as Gmail. `get()` selects the first. */\n  gmail: IntegrationFamily<GmailConnection>;\n  /** GitHub App installations with the normal all-in-one Octokit package. */\n  github: IntegrationFamily<GithubConnection>;\n  /** Telegram Bot API connections. `get()` selects the first connected bot. */\n  telegram: IntegrationFamily<TelegramConnection>;\n  /** Waitrose account connections. */\n  waitrose: IntegrationFamily<WaitroseConnection>;\n  /** Parallel API, preconfigured with iterate's platform API key. Not a connection. */\n  parallel: OpenApiRpc;\n  /** Cloudflare first-party platform bindings: AI, Browser Run, Images, Media\n   * Transformations. Like `parallel`, these ride the deployment's own\n   * Cloudflare account — not a per-project connection. */\n  cf: CloudflareIntegrations;\n  /** Dynamic provided-integration dispatch. The only selector is\n   * `<slug>.get(connection?)`; built-in families are concrete typed getters. */\n  invokeCapability(call: { args?: unknown[]; path: string[] }): Promise<unknown>;\n  /** Every connection the project holds: integration journals,\n   * credential-defined Waitrose accounts, plus provided mounts from the\n   * capability table (deduped by path). */\n  list(): Promise<IntegrationConnectionListEntry[]>;\n  __describe(): Promise<\n    { instructions: string; types: string; children: Record<string, string> } & {\n      instructions: string;\n      types: string;\n      children: {\n        cf: string;\n        completeConnect: string;\n        confirmGithubSteal: string;\n        connectTelegram: string;\n        disconnect: string;\n        getConnection: string;\n        github: string;\n        gmail: string;\n        list: string;\n        parallel: string;\n        slack: string;\n        startOAuthFlow: string;\n        telegram: string;\n        waitrose: string;\n      };\n      parent: string;\n    }\n  >;\n  /** Connection status for { provider, connection }. */\n  getConnection(input: {\n    connection: string;\n    provider: BuiltinIntegrationSlug;\n  }): Promise<IntegrationConnectionStatus>;\n  /** The immutable Telegram user ids currently authorized for one bot. Empty\n   * means deny-all, including on connections created before this policy was\n   * introduced. */\n  getTelegramAccess(input: { connection: string }): Promise<{ allowedUserIds: string[] }>;\n  /** Replace one Telegram bot's complete user allowlist and wait until the\n   * ingress router has folded it, so the successful response is the access\n   * boundary taking effect—not merely an event being queued. */\n  setTelegramAccess(input: {\n    allowedUserIds: string[];\n    connection: string;\n  }): Promise<{ allowedUserIds: string[] }>;\n  /**\n   * Connect a Telegram bot by BotFather token — no OAuth, no redirect: getMe\n   * validates the token, setWebhook points the bot at this deployment (with a\n   * derived secret token), and the token lands in a write-only connection\n   * secret. Throws with a human-readable message on failure — except a bot\n   * already claimed by ANOTHER project, which answers the structured\n   * `ok: false, error: \"telegram_bot_already_claimed\"` arm so the caller can\n   * confirm and retry with `steal: true` (moving the bot: the old project is\n   * disconnected first; possession of the token is the authorization).\n   */\n  connectTelegram(input: { botToken: string; steal?: boolean }): Promise<ConnectTelegramResult>;\n  /** Begin the OAuth connect flow; returns the authorization URL. */\n  startOAuthFlow(input: {\n    callbackUrl?: string;\n    provider: OAuthProviderSlug;\n    /** The user to bind the OAuth state to. Browser-supplied, not authority;\n     * the callback's check against the signed state is the backstop. */\n    userId: string;\n  }): Promise<{ authorizationUrl: string }>;\n  /** Called by the app worker's OAuth callback route; authority is the\n   * HMAC-signed OAuth state minted by startOAuthFlow. */\n  completeConnect(input: {\n    /** OAuth authorization code (Slack/Google, or GitHub's proof callback). */\n    code?: string;\n    /** Untrusted GitHub setup-URL installation id, verified through user OAuth. */\n    installationId?: string;\n    provider: OAuthProviderSlug;\n    state: string;\n    userId: string | null;\n  }): Promise<CompleteConnectResult>;\n  /** Move a GitHub installation after a signed, user-bound OAuth proof has\n   * been returned to the dashboard for explicit confirmation. */\n  confirmGithubSteal(input: { state: string }): Promise<{ connection: string; ok: true }>;\n  /** Disconnect one connection: { provider, connection }. */\n  disconnect(input: {\n    connection: string;\n    provider: BuiltinIntegrationSlug;\n  }): Promise<{ success: true }>;\n}",
     summary: "The `itx.integrations` collection.",
     memberSummaries: {
-      parallel: "Parallel API, preconfigured with Iterate's platform API key.",
+      slack: "Slack WebClient connections.",
+      gmail: "Connected Google accounts, exposed as Gmail.",
+      github: "GitHub App installations with the normal all-in-one Octokit package.",
+      telegram: "Telegram Bot API connections.",
+      waitrose: "Waitrose account connections.",
+      parallel: "Parallel API, preconfigured with iterate's platform API key.",
       cf: "Cloudflare first-party platform bindings: AI, Browser Run, Images, Media Transformations.",
-      invokeCapability:
-        "The dotted-call surface: built-in slugs dispatch here; unknown slugs resolve through the project capability table (the provided lane).",
-      list: "Every connection the project holds: `/integrations/<slug>/<connection>` journals plus provided mounts from the capability table (deduped by path; a mount over its own webhook journal is one entry).",
+      invokeCapability: "Dynamic provided-integration dispatch.",
+      list: "Every connection the project holds: integration journals, credential-defined Waitrose accounts, plus provided mounts from the capability table (deduped by path).",
       getConnection: "Connection status for { provider, connection }.",
+      getTelegramAccess: "The immutable Telegram user ids currently authorized for one bot.",
+      setTelegramAccess:
+        "Replace one Telegram bot's complete user allowlist and wait until the ingress router has folded it, so the successful response is the access boundary taking effect—not merely an event being queued.",
       connectTelegram:
         "Connect a Telegram bot by BotFather token — no OAuth, no redirect: getMe validates the token, setWebhook points the bot at this deployment (with a derived secret token), and the token lands in a write-only connection secret.",
       startOAuthFlow: "Begin the OAuth connect flow; returns the authorization URL.",
       completeConnect:
         "Called by the app worker's OAuth callback route; authority is the HMAC-signed OAuth state minted by startOAuthFlow.",
+      confirmGithubSteal:
+        "Move a GitHub installation after a signed, user-bound OAuth proof has been returned to the dashboard for explicit confirmation.",
       disconnect: "Disconnect one connection: { provider, connection }.",
     },
     referencedTypeNames: [
+      "IntegrationFamily",
+      "SlackConnection",
+      "GmailConnection",
+      "GithubConnection",
+      "TelegramConnection",
+      "WaitroseConnection",
       "OpenApiRpc",
       "CloudflareIntegrations",
       "IntegrationConnectionListEntry",
@@ -439,7 +513,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "McpClientCollection",
     kind: "interface",
     sourceText:
-      '/**\n * Ad-hoc MCP (Model Context Protocol) clients — `itx.mcp`. `connect({ url })`\n * returns a client whose dotted calls invoke the server\'s tools; `exa` is the\n * pre-connected Exa web-search server every project gets.\n */\nexport interface McpClientCollection {\n  __describe(): Promise<Description>;\n  /** Connect to an MCP server by URL; dotted calls on the client are tool invocations. */\n  connect(input: McpClientConnectInput): Promise<McpClientRpc>;\n  /**\n   * Begin the OAuth sign-in for an OAuth-protected MCP server (one whose\n   * unauthenticated request answers 401 with a `WWW-Authenticate` challenge —\n   * e.g. Cloudflare\'s mcp.cloudflare.com). Discovers the server\'s OAuth\n   * endpoints, registers a client, and returns a `{ authorizationUrl, path }`:\n   * send `authorizationUrl` to the user ("click here to connect"). When they\n   * sign in, the token is stored write-only at `path` and — if you are an agent\n   * — you are messaged so you can continue. Then connect like any bearer MCP:\n   * `itx.mcp.connect({ url, headers: { authorization: \'Bearer getSecret({ path:\n   * "<path>", field: "accessToken" })\' } })`. For a server that just wants a\n   * bearer token you already hold, use `itx.secrets.collectFromUser` instead.\n   */\n  beginOAuth(input: McpBeginOAuthInput): Promise<McpBeginOAuthResult>;\n  /**\n   * The public Exa MCP server (https://mcp.exa.ai/mcp), pre-connected for every\n   * project: web search and page reading as flat tool calls.\n   * `itx.mcp.exa.web_search_exa({ query, numResults })` searches the web;\n   * `itx.mcp.exa.web_fetch_exa({ urls, maxCharacters })` reads pages as markdown.\n   */\n  exa: McpClientRpc;\n}',
+      '/**\n * Ad-hoc MCP (Model Context Protocol) clients — `itx.mcp`. `connect({ url })`\n * returns a client whose dotted calls invoke the server\'s tools; `exa` is the\n * pre-connected Exa web-search server every project gets.\n */\nexport interface McpClientCollection {\n  __describe(): Promise<Description>;\n  /** Connect to an MCP server by URL; dotted calls on the client are tool invocations. */\n  connect(input: McpClientConnectInput): Promise<McpClientRpc>;\n  /**\n   * Begin the OAuth sign-in for an OAuth-protected MCP server (one whose\n   * unauthenticated request answers 401 with a `WWW-Authenticate` challenge —\n   * e.g. Cloudflare\'s mcp.cloudflare.com). Discovers the server\'s OAuth\n   * endpoints, registers a client, and returns a `{ authorizationUrl, path }`:\n   * send `authorizationUrl` to the user ("click here to connect"). When they\n   * sign in, the token is stored write-only at `path` and — if you are an agent\n   * — you are messaged so you can continue. Then connect like any bearer MCP:\n   * `itx.mcp.connect({ url, headers: { authorization: \'Bearer getSecret(\n   * "<path>", { field: "accessToken" })\' } })`. For a server that just wants a\n   * bearer token you already hold, use `itx.secrets.collectFromUser` instead.\n   */\n  beginOAuth(input: McpBeginOAuthInput): Promise<McpBeginOAuthResult>;\n  /**\n   * The public Exa MCP server (https://mcp.exa.ai/mcp), pre-connected for every\n   * project: web search and page reading as flat tool calls.\n   * `itx.mcp.exa.web_search_exa({ query, numResults })` searches the web;\n   * `itx.mcp.exa.web_fetch_exa({ urls, maxCharacters })` reads pages as markdown.\n   */\n  exa: McpClientRpc;\n}',
     summary: "Ad-hoc MCP (Model Context Protocol) clients — `itx.mcp`.",
     memberSummaries: {
       connect: "Connect to an MCP server by URL; dotted calls on the client are tool invocations.",
@@ -470,41 +544,42 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "ProjectRepoCollection",
     kind: "interface",
     sourceText:
-      "/** Project-scoped repo catalog with reduced-state listing. */\nexport interface ProjectRepoCollection extends RepoCollection {\n  /** Known repos, read from the project processor's reduced state. */\n  list(): Promise<StreamListItem[]>;\n}",
+      "/** Project-scoped repo catalog with reduced-state listing. */\nexport interface ProjectRepoCollection extends RepoCollection {\n  __describe(): Promise<Description>;\n  /** Known repos, read from the project processor's reduced state. */\n  list(): Promise<StreamListItem[]>;\n}",
     summary: "Project-scoped repo catalog with reduced-state listing.",
     memberSummaries: {
       list: "Known repos, read from the project processor's reduced state.",
     },
-    referencedTypeNames: ["RepoCollection", "StreamListItem"],
+    referencedTypeNames: ["RepoCollection", "Description", "StreamListItem"],
+  },
+  {
+    name: "DeviceCollection",
+    kind: "interface",
+    sourceText:
+      "/** Enrolled mobile installations within one project. */\nexport interface DeviceCollection {\n  __describe(): Promise<Description>;\n  get(deviceId: string): Device;\n  list(): Promise<DeviceDescription[]>;\n}",
+    summary: "Enrolled mobile installations within one project.",
+    memberSummaries: {},
+    referencedTypeNames: ["Description", "Device", "DeviceDescription"],
   },
   {
     name: "SandboxCollection",
     kind: "interface",
     sourceText:
-      "/**\n * The `itx.sandboxes` built-in. Sandboxes are PETS:\n * `create({ name, instanceType })` is the only way one comes to exist\n * (nothing mints a sandbox implicitly — `get` refuses paths that were never\n * created), names are one path segment (`/sandboxes/<name>` — no intermediate\n * folders in the stream tree), and the sandbox itself carries the imperative\n * lifecycle (`start`/`sleep`/`destroy`).\n *\n * `get(path)` returns the sandbox Durable Object's own RPC stub —\n * deliberately NO RpcTarget wrapper, so the caller sees exactly what the\n * `@cloudflare/sandbox` SDK exposes and new SDK methods need no forwarding\n * code here. Confinement is by name: the stub is minted from this project's\n * id plus the validated path, after the same project-access assert every\n * collection performs.\n *\n * The instance type is CONFIGURATION, not identity — but Cloudflare fixes\n * instance type per container class (instance-types.ts), so each type is its\n * own Durable Object namespace and routing needs the type. The `/sandboxes`\n * catalogue stream is the directory: `create` journals `create-requested`\n * there (idempotency-keyed by path, so the stream's native dedup makes the\n * FIRST claim on a name authoritative — races settle atomically in one\n * append) BEFORE touching any container namespace, and `get` routes by the\n * claim's instance type. The catalogue and not the sandbox's own stream\n * because reads materialize streams (any wake appends `created`/`woken`):\n * routing a `get` through the sandbox's own stream would mint a junk stream\n * for every typo'd path, and addressing must never create.\n */\nexport interface SandboxCollection {\n  __describe(): Promise<Description>;\n  /** Create a sandbox. Strict: an existing or destroyed path is an error.\n   * Returns the path to `get`. */\n  create(\n    input: SandboxCreateInput,\n  ): Promise<{ createdAt: string; instanceType: SandboxInstanceType; path: string }>;\n  /** The sandbox at a path. Throws unless the path was created (and not destroyed). */\n  get(path: string): Promise<CloudflareSandbox>;\n  /** Every sandbox stream path in the project (`/sandboxes/...`), including\n   * destroyed sandboxes' streams — the stream is the history. */\n  list(): Promise<StreamListItem[]>;\n}",
-    summary: "The `itx.sandboxes` built-in.",
-    memberSummaries: {
-      create: "Create a sandbox.",
-      get: "The sandbox at a path.",
-      list: "Every sandbox stream path in the project (`/sandboxes/...`), including destroyed sandboxes' streams — the stream is the history.",
-    },
-    referencedTypeNames: [
-      "Description",
-      "SandboxCreateInput",
-      "SandboxInstanceType",
-      "CloudflareSandbox",
-      "StreamListItem",
-    ],
+      "/** Path-addressed sandbox catalogue. `get` is pure addressing; creation lives on the handle. */\nexport interface SandboxCollection {\n  __describe(): Promise<Description>;\n  get(path: string): Sandbox;\n  list(): Promise<StreamListItem[]>;\n}",
+    summary: "Path-addressed sandbox catalogue.",
+    memberSummaries: {},
+    referencedTypeNames: ["Description", "Sandbox", "StreamListItem"],
   },
   {
     name: "Scheduler",
     kind: "interface",
     sourceText:
-      "/**\n * One Scheduler: keyed Schedules on one `/scheduler/**` stream, triggered by\n * a durable alarm. Everything it does is events on that stream — `set`/`cancel`\n * append, `list` reads reduced state, and every Trigger's request and outcome\n * are appended back, so the stream is the complete audit log. Scripts run\n * with project-root itx authority, at least once per Trigger (derive append\n * idempotency keys from `trigger.executionId`).\n *\n * A thin forwarder to the SchedulerDurableObject: the command surface runs on\n * the DO so every write returns read-your-writes visible and alarm-armed;\n * this target only normalizes input sugar before dialing.\n */\nexport interface Scheduler {\n  __describe(): Promise<Description>;\n  /** The scheduler stream processor (snapshot/state). */\n  processor: WakeableStreamProcessorRpc<SchedulerProcessorState>;\n  /** Upsert by key; returns after the Scheduler has ingested the set (read-your-writes, alarm armed). */\n  set(input: SetScheduleInput): Promise<ScheduleView>;\n  /** Remove a key. Idempotent; an in-flight Trigger completes as `skipped`. */\n  cancel(key: string): Promise<void>;\n  /** Restart the scheduler's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  list(): Promise<ScheduleView[]>;\n  /** Run a Schedule now. Advances a recurring Schedule's clock and consumes a one-shot. */\n  trigger(key: string): Promise<{ executionId: string }>;\n}",
+      "/**\n * One Scheduler: keyed Schedules on one `/scheduler/**` stream, triggered by\n * a durable alarm. Everything it does is events on that stream — `set`/`cancel`\n * append, `list` reads reduced state, and every Trigger's request and outcome\n * are appended back, so the stream is the complete audit log. Scripts run\n * with project-root itx authority, at least once per Trigger (derive append\n * idempotency keys from `trigger.executionId`).\n *\n * A thin forwarder to the SchedulerDurableObject: the command surface runs on\n * the DO so every write returns read-your-writes visible and alarm-armed;\n * this target only normalizes input sugar before dialing.\n */\nexport interface Scheduler {\n  __describe(): Promise<Description>;\n  /** The scheduler stream processor (snapshot/state). */\n  processor: WakeableStreamProcessorRpc<SchedulerProcessorState>;\n  /** Create this Scheduler and return only after it has processed the complete birth batch. */\n  create(_input: Record<string, never>): Promise<Scheduler>;\n  /** Upsert by key; returns after the Scheduler has ingested the set (read-your-writes, alarm armed). */\n  set(input: SetScheduleInput): Promise<ScheduleView>;\n  /** Remove a key. Idempotent; an in-flight Trigger completes as `skipped`. */\n  cancel(key: string): Promise<void>;\n  /** Restart the scheduler's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  list(): Promise<ScheduleView[]>;\n  /** Run a Schedule now. Advances a recurring Schedule's clock and consumes a one-shot. */\n  trigger(key: string): Promise<{ executionId: string }>;\n}",
     summary:
       "One Scheduler: keyed Schedules on one `/scheduler/**` stream, triggered by a durable alarm.",
     memberSummaries: {
       processor: "The scheduler stream processor (snapshot/state).",
+      create:
+        "Create this Scheduler and return only after it has processed the complete birth batch.",
       set: "Upsert by key; returns after the Scheduler has ingested the set (read-your-writes, alarm armed).",
       cancel: "Remove a key.",
       kill: "Restart the scheduler's server-side object; the next request boots it fresh.",
@@ -553,10 +628,10 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "Repo",
     kind: "interface",
     sourceText:
-      '/** Git-backed repo capability used by project workers and dynamic worker refs. */\nexport interface Repo {\n  __describe(): Promise<Description>;\n  /** Create the repo if it does not exist yet; resolves once `repo/created` lands. */\n  create(): Promise<Repo>;\n  /** Repo identity string (debug). */\n  whoami(): Promise<string>;\n  /** Restart the repo\'s server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  /** Commit a batch of file changes; use `edit` for a targeted single-string replacement. */\n  commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult>;\n  /**\n   * Safely replace text in one committed file and commit the result. The\n   * `oldString` must match exactly once unless `replaceAll` is true.\n   */\n  edit(input: EditRepoFileInput): Promise<EditRepoFileResult>;\n  /** All committed file paths at HEAD. */\n  listFiles(): Promise<{ commitOid: string; paths: string[] }>;\n  /**\n   * Commit history of a branch, newest first — oid, message, author,\n   * timestamp (epoch ms), parent oids. Deliberately without per-commit file\n   * stats (those cost tree checkouts per commit); fetch them lazily per\n   * commit through `commitDetails`.\n   */\n  log(input: { branch?: string; limit?: number }): Promise<RepoLogResult>;\n  /**\n   * One commit\'s metadata plus the files it changed versus its first parent\n   * (the whole tree for the root commit), with `git diff --numstat`-shaped\n   * +/- line counts; binary files are flagged instead of counted.\n   */\n  commitDetails(input: { branch?: string; commitOid: string }): Promise<RepoCommitDetails>;\n  /**\n   * Committed file contents at HEAD — or, with `commitOid`, pinned to that\n   * commit — null when the path does not exist there. `encoding: "base64"`\n   * reads raw bytes (images, PDFs) base64-encoded.\n   */\n  readFile(input: { path: string; encoding?: "utf8" | "base64"; commitOid?: string }): Promise<{\n    commitOid: string;\n    content: string;\n    path: string;\n  } | null>;\n  /**\n   * Back this repo with a real GitHub repository through a named GitHub\n   * connection. From then on every default-branch commit is mirrored to\n   * GitHub best-effort (failures journal on the repo stream and self-heal on\n   * the next commit), and every GitHub webhook about that repository is\n   * cross-posted onto this repo\'s stream. If the GitHub repository does not\n   * exist and the installation can create org repositories, it is created\n   * private. Re-linking replaces the previous link.\n   */\n  linkGithub(input: { connection: string; owner: string; repo: string }): Promise<LinkGithubResult>;\n  /** Remove the GitHub link and its webhook cross-post rule. */\n  unlinkGithub(): Promise<{ unlinked: boolean }>;\n  /**\n   * Push the default branch head to the linked GitHub repository now — the\n   * repair verb for a failed mirror push. Never forced by default; `force:\n   * true` makes this repo win over commits made directly on GitHub.\n   */\n  pushToGithub(input: { force?: boolean }): Promise<{ branch: string; commitOid: string }>;\n  /**\n   * Adopt the linked GitHub repository\'s default-branch head into this repo.\n   * Fast-forward only: fails when this repo has commits GitHub does not,\n   * unless `force: true` discards them. The synced head is immediately live\n   * for worker builds.\n   *\n   * The history transfers in-process, so big histories need `depth` — it\n   * prunes to the newest N commits. GitHub retains the full history, and a\n   * later deeper sync can always widen the window.\n   */\n  syncFromGithub(input: { depth?: number; force?: boolean }): Promise<GithubSyncResult>;\n  /** The repo stream processor (snapshot/state). */\n  processor: WakeableStreamProcessorRpc<RepoProcessorState>;\n  /** The repo\'s live state — its reduced processor state. See {@link LiveStateRpc}. */\n  liveState: LiveStateRpc<RepoProcessorState>;\n}',
+      "/** Git-backed repo capability used by project workers and dynamic worker refs. */\nexport interface Repo {\n  __describe(): Promise<Description>;\n  /**\n   * Request creation and wait for the repo creation saga's terminal fact.\n   * The request chooses an empty starter seed (the default), a private\n   * GitHub pull at depth one, or a public import performed by Cloudflare\n   * Artifacts outside the Worker isolate (full history unless `depth` is\n   * provided). Appends the atomic request batch (`repos/create-requested` +\n   * the repo processor subscription, plus the catalog cross-post rule that\n   * copies the terminal certificate onto `/`), then waits for\n   * `repos/created` and resolves with this same handle, so create chains —\n   * or throws the saga's recorded error when creation fails. An\n   * identical-payload retry dedupes on the request idempotency keys and\n   * resumes the same saga; a create over an existing repo with a different\n   * payload fails loudly.\n   */\n  create(payload?: RepoCreateInput): Promise<Repo>;\n  /** Repo identity string (debug). */\n  whoami(): Promise<string>;\n  /** Restart the repo's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  /** Commit a batch of file changes; use `edit` for a targeted single-string replacement. */\n  commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult>;\n  /**\n   * Safely replace text in one committed file and commit the result. The\n   * `oldString` must match exactly once unless `replaceAll` is true.\n   */\n  edit(input: EditRepoFileInput): Promise<EditRepoFileResult>;\n  /** All committed file paths at HEAD. */\n  listFiles(): Promise<{ commitOid: string; paths: string[] }>;\n  /**\n   * Commit history of a branch, newest first — oid, message, author,\n   * timestamp (epoch ms), parent oids. Deliberately without per-commit file\n   * stats (those cost tree checkouts per commit); fetch them lazily per\n   * commit through `commitDetails`.\n   */\n  log(input: { branch?: string; limit?: number }): Promise<RepoLogResult>;\n  /**\n   * One commit's metadata plus the files it changed versus its first parent\n   * (the whole tree for the root commit), with `git diff --numstat`-shaped\n   * +/- line counts; binary files are flagged instead of counted.\n   */\n  commitDetails(input: { branch?: string; commitOid: string }): Promise<RepoCommitDetails>;\n  /**\n   * Committed file contents at HEAD — or, with `commitOid`, pinned to that\n   * commit — null when the path does not exist there. `encoding: \"base64\"`\n   * reads raw bytes (images, PDFs) base64-encoded.\n   */\n  readFile(input: { path: string; encoding?: \"utf8\" | \"base64\"; commitOid?: string }): Promise<{\n    commitOid: string;\n    content: string;\n    path: string;\n  } | null>;\n  /**\n   * Back this repo with a real GitHub repository through a named GitHub\n   * connection. From then on every default-branch commit is mirrored to\n   * GitHub best-effort (failures journal on the repo stream and self-heal on\n   * the next commit), fast-forward default-branch pushes made on GitHub are\n   * imported through the Cloudflare Artifacts queue, and every GitHub webhook\n   * about that repository is cross-posted onto this repo's stream. If the\n   * GitHub repository does not exist and the installation can create org\n   * repositories, it is created private. Re-linking replaces the previous\n   * link.\n   */\n  linkGithub(input: { connection: string; owner: string; repo: string }): Promise<LinkGithubResult>;\n  /** Remove the GitHub link and its webhook cross-post rule. */\n  unlinkGithub(): Promise<{ unlinked: boolean }>;\n  /**\n   * Push the default branch head to the linked GitHub repository now — the\n   * repair verb for a failed mirror push. Never forced by default; `force:\n   * true` makes this repo win over commits made directly on GitHub.\n   */\n  pushToGithub(input: { force?: boolean }): Promise<{ branch: string; commitOid: string }>;\n  /**\n   * Adopt the linked GitHub repository's default-branch head into this repo.\n   * Fast-forward only: fails when this repo has commits GitHub does not,\n   * unless `force: true` discards them. The synced head is immediately live\n   * for worker builds.\n   *\n   * The history transfers in-process. `depth` requests a bounded history\n   * window, but fast-forward syncs always retain the previous Artifacts head\n   * as well so queue-derived commit diffs can read both sides. GitHub retains\n   * the full history, and a later deeper sync can always widen the window.\n   */\n  syncFromGithub(input: { depth?: number; force?: boolean }): Promise<GithubSyncResult>;\n  /**\n   * Hard recovery: destroy and recreate the Artifacts repository from the\n   * linked GitHub repository's default branch. GitHub always wins and the\n   * operation runs even when the recorded commit oids already match. The\n   * source clone is completed before destruction; `depth` bounds memory for\n   * large histories without changing anything on GitHub.\n   */\n  resetFromGithub(input: { depth?: number }): Promise<GithubResetResult>;\n  /** The repo stream processor (snapshot/state). */\n  processor: WakeableStreamProcessorRpc<RepoProcessorState>;\n  /** The repo's live state — its reduced processor state. See {@link LiveStateRpc}. */\n  liveState: LiveStateRpc<RepoProcessorState>;\n}",
     summary: "Git-backed repo capability used by project workers and dynamic worker refs.",
     memberSummaries: {
-      create: "Create the repo if it does not exist yet; resolves once `repo/created` lands.",
+      create: "Request creation and wait for the repo creation saga's terminal fact.",
       whoami: "Repo identity string (debug).",
       kill: "Restart the repo's server-side object; the next request boots it fresh.",
       commitFiles:
@@ -573,11 +648,14 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       pushToGithub:
         "Push the default branch head to the linked GitHub repository now — the repair verb for a failed mirror push.",
       syncFromGithub: "Adopt the linked GitHub repository's default-branch head into this repo.",
+      resetFromGithub:
+        "Hard recovery: destroy and recreate the Artifacts repository from the linked GitHub repository's default branch.",
       processor: "The repo stream processor (snapshot/state).",
       liveState: "The repo's live state — its reduced processor state.",
     },
     referencedTypeNames: [
       "Description",
+      "RepoCreateInput",
       "CommitRepoFilesInput",
       "CommitRepoFilesResult",
       "EditRepoFileInput",
@@ -586,6 +664,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "RepoCommitDetails",
       "LinkGithubResult",
       "GithubSyncResult",
+      "GithubResetResult",
       "WakeableStreamProcessorRpc",
       "RepoProcessorState",
       "LiveStateRpc",
@@ -611,10 +690,11 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "WorkspaceCollection",
     kind: "interface",
     sourceText:
-      "/**\n * Catalog of durable workspaces within one project.\n *\n * `get(\"/\")` is the project's ROOT workspace: a read-only, always-fresh\n * materialization of the config repo's main branch. Every other workspace is\n * addressed by its FULL path under `/workspaces/` — the same domain-prefix\n * convention as `/sandboxes/...` and `/repos/...`: an agent's workspace is\n * the agent path under the prefix (`/workspaces/agents/...`, exposed as\n * `itx.workspace` in that agent's scope), and standalone workspaces live\n * under `/workspaces/<anything>`. Non-root workspaces are OVERLAYS over the\n * root: writes stay local, missing reads fall through to latest main — no\n * clone, usable instantly.\n */\nexport interface WorkspaceCollection {\n  __describe(): Promise<Description>;\n  /** The workspace at a path — \"/\" is the read-only root (latest main); others are private overlays. */\n  get(path: string): Workspace;\n}",
-    summary: "Catalog of durable workspaces within one project.",
+      "/**\n * Catalog of durable workspaces within one project: EVENT-SOURCED,\n * MOUNT-ROUTED workspace filesystems (Durable-Object-hosted, no container,\n * always warm). Every workspace is addressed by its FULL path under\n * `/workspaces/` — the same domain-prefix convention as `/sandboxes/...` and\n * `/repos/...`: an agent's workspace is the agent path under the prefix\n * (`/workspaces/agents/...`, exposed as `itx.workspace` in that agent's\n * scope), and standalone workspaces live under `/workspaces/<anything>`.\n *\n * A workspace's identity + configuration are stream facts. `get(path)` only\n * addresses a handle; `get(path).create({ mounts? })` appends the atomic birth\n * batch. Every birth-requiring method fails loudly until that explicit create.\n */\nexport interface WorkspaceCollection {\n  __describe(): Promise<Description>;\n  /** A workspace handle at a path. Addressing never creates it. */\n  get(path: string): Workspace;\n}",
+    summary:
+      "Catalog of durable workspaces within one project: EVENT-SOURCED, MOUNT-ROUTED workspace filesystems (Durable-Object-hosted, no container, always warm).",
     memberSummaries: {
-      get: 'The workspace at a path — "/" is the read-only root (latest main); others are private overlays.',
+      get: "A workspace handle at a path.",
     },
     referencedTypeNames: ["Description", "Workspace"],
   },
@@ -634,7 +714,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "Stream",
     kind: "interface",
     sourceText:
-      '/**\n * Durable event stream capability.\n *\n * Streams are the public coordination primitive, not an internal queue hidden\n * behind domain methods. Domain helpers can construct common event shapes, but\n * callers and processors still work with explicit events.\n */\nexport interface Stream {\n  __describe(): Promise<Description>;\n  /** Commit events; resolves with the same events carrying offsets and timestamps. */\n  append(...events: StreamEventInput[]): Promise<StreamEvent[]>;\n  /** The stream at a sub-path, resolved relative to this stream\'s path. */\n  at(path: string): Stream;\n  /** One event by offset or idempotencyKey; undefined when it does not exist.\n   * Point reads return ephemeral rows too — but those rows are evictable, so\n   * an offset that once resolved may later read as undefined. */\n  getEvent(\n    args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },\n  ): Promise<StreamEvent | undefined>;\n  /**\n   * Read one bounded page of committed events (default from the stream\'s\n   * start; filter with `eventTypes`, page forward with `afterOffset`). A full\n   * page (500 events) means MORE remain — page with\n   * `afterOffset: events.at(-1).offset`; reading a long stream without paging\n   * shows you the beginning, not the head.\n   */\n  getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]>;\n  /**\n   * A stateful pager over a read window: repeated `next()` calls walk forward\n   * through pages, `[]` means "caught up for now". Dispose it when finished\n   * (`using pager = stream.readEvents(...)`).\n   */\n  readEvents(args?: StreamEventReadInput): StreamEventPager;\n  /**\n   * Block until an event lands that is after `afterOffset`, matches\n   * `eventTypes`, and passes `predicate`; rejects after `timeoutMs`.\n   * Rides the ephemeral (session) lane, so it can match `ephemeral: true`\n   * events too — remember their rows may be evicted if you record the offset.\n   */\n  waitForEvent(args: {\n    afterOffset?: number;\n    eventTypes?: readonly string[];\n    predicate?: (event: StreamEvent) => boolean | Promise<boolean>;\n    timeoutMs: number;\n  }): Promise<StreamEvent>;\n  /** The reduced-state snapshot (plus runtime debug info) of one configured processor. */\n  getProcessorRuntimeState(args: {\n    subscriptionKey: string;\n  }): Promise<ProcessorRuntimeState | null>;\n  /**\n   * Live debug view of the stream Durable Object: core processor state, open\n   * connections with real delivery metrics (lag, bytes, commit→settled\n   * latency, mutual-ping RTT), per-subscription delivery cursors/lag, and the\n   * stream\'s own throughput windows. All runtime metrics are in-memory and\n   * reset on eviction (`metrics.measuredSince` says how long the window has\n   * been collecting); latency stats fields are absent until a real sample\n   * exists — no value is ever synthesized. Calling this also requests a\n   * throttled mutual-ping round over the live connections (observer-driven\n   * sampling), so a polling debug UI sees RTTs populate.\n   */\n  runtimeState(): Promise<{\n    coreProcessorState: unknown;\n    runtime: {\n      connections: Record<string, ConnectionRuntimeState>;\n      subscriptions: Record<string, SubscriptionRuntimeState>;\n      metrics: StreamThroughputMetrics;\n      /** SQLite database size in bytes (event log + spine rows + chunks). */\n      storageSizeBytes: number;\n    };\n  }>;\n  /** Abort the current Durable Object incarnation; the next request boots it again. */\n  kill(): Promise<void>;\n  /**\n   * Session-scoped live event delivery (the "ephemeral" subscription lane —\n   * also the only lane that receives `ephemeral: true` events):\n   * `processEventBatch` is called for every committed batch (optionally\n   * replayed from `replayAfterOffset`); returns an unsubscribe handle.\n   * Forgotten on disconnect — durable delivery is configured as data instead,\n   * by appending a `subscription-configured` event (wake or push mode) to the\n   * stream.\n   */\n  subscribe(args: {\n    subscriptionKey?: string;\n    processEventBatch: ProcessEventBatch;\n    replayAfterOffset?: number;\n    /** Sugar for `selector.eventTypes` — one filter shape across every lane. */\n    eventTypes?: readonly string[];\n    selector?: { eventTypes?: string[]; condition?: string };\n    events?: boolean;\n    subscriber?: unknown;\n    /** Optional live debug hook, retained for the subscription\'s lifetime. */\n    getRuntimeState?: GetProcessorRuntimeState;\n    /**\n     * Optional mutual-ping responder (see `StreamPingInput`/`StreamPingReply`\n     * in rpc-types.ts), retained for the subscription\'s lifetime. The stream\n     * pings it — throttled, and only while someone is watching runtimeState —\n     * to measure real transport RTT to this subscriber.\n     */\n    ping?: StreamSubscriberPing;\n  }): Promise<StreamSubscriptionHandle>;\n  /**\n   * Cross-post receiving end: an ordinary push SINK (`(batch) => void`) that\n   * appends the batch\'s events into THIS stream with provenance stamping,\n   * structural loop protection, and source-derived idempotency keys. A source\n   * stream cross-posts here by configuring\n   * `{ delivery: { mode: "push", expression: ["streams", ["get", path], "acceptCrossPost"] } }`.\n   */\n  acceptCrossPost(batch: StreamPushEventBatch): Promise<void>;\n  /**\n   * "When events matching this land HERE, post them onto stream `path`" — the\n   * cross-post verb. Pure sugar over appending a `subscription-configured`\n   * push subscription targeting the destination\'s `acceptCrossPost` sink; the appended\n   * event (returned) is the real interface and shows in the log like any\n   * other config. Same-`key` calls replace the previous cross-post; remove\n   * with `removeCrossPost`. Copies carry the full provenance chain\n   * (`source.crossPostedFrom`), multi-hop legal, loop-protected. `transform`\n   * is an optional JSONata expression CONSTRUCTING the copied event\'s body\n   * from the original (e.g. `{ "type": "myapp/pr", "payload": { "repo":\n   * payload.body.repository.full_name } }`); omitted fields copy verbatim.\n   */\n  crossPostTo(args: {\n    /** Destination stream path (this project). */\n    path: string;\n    /** Subscription identity; defaults to `cross-post:<destination path>`. */\n    key?: string;\n    eventTypes?: string[];\n    /** JSONata filter; the event is copied only when it evaluates to exactly `true`. */\n    condition?: string;\n    /** JSONata constructor for the copied event\'s `{type?, payload?, metadata?}`. */\n    transform?: string;\n    /** Where to start: "new" (default, from now), "all" (full history), or an offset. */\n    deliver?: "all" | "new" | { afterOffset: number };\n  }): Promise<StreamEvent>;\n  /** Remove a cross-post configured by `crossPostTo` (by destination path or explicit key). */\n  removeCrossPost(args: { path?: string; key?: string }): Promise<StreamEvent>;\n}',
+      '/**\n * Durable event stream capability.\n *\n * Streams are the public coordination primitive, not an internal queue hidden\n * behind domain methods. Domain helpers can construct common event shapes, but\n * callers and processors still work with explicit events.\n */\nexport interface Stream {\n  __describe(): Promise<Description>;\n  /** Commit events; resolves with the same events carrying offsets and timestamps. */\n  append(...events: StreamEventInput[]): Promise<StreamEvent[]>;\n  /** The stream at a sub-path, resolved relative to this stream\'s path. */\n  at(path: string): Stream;\n  /** One event by offset or idempotencyKey; undefined when it does not exist.\n   * Point reads return ephemeral rows too — but those rows are evictable, so\n   * an offset that once resolved may later read as undefined. */\n  getEvent(\n    args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },\n  ): Promise<StreamEvent | undefined>;\n  /**\n   * Read one bounded page of committed events (default from the stream\'s\n   * start; filter with `eventTypes`, page forward with `afterOffset`). A full\n   * page (500 events) means MORE remain — page with\n   * `afterOffset: events.at(-1).offset`; reading a long stream without paging\n   * shows you the beginning, not the head.\n   */\n  getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]>;\n  /**\n   * A stateful pager over a read window: repeated `next()` calls walk forward\n   * through pages, `[]` means "caught up for now". Dispose it when finished\n   * (`using pager = stream.readEvents(...)`).\n   */\n  readEvents(args?: StreamEventReadInput): StreamEventPager;\n  /**\n   * Block until an event lands that is after `afterOffset`, matches\n   * `eventTypes`, and passes `predicate`; rejects after `timeoutMs`.\n   * Durable rows after `afterOffset` are replayed. It can also match an\n   * `ephemeral: true` event appended after this wait opens, but historical\n   * ephemeral rows are never replayed.\n   */\n  waitForEvent(args: {\n    afterOffset?: number;\n    eventTypes?: readonly string[];\n    predicate?: (event: StreamEvent) => boolean | Promise<boolean>;\n    timeoutMs: number;\n  }): Promise<StreamEvent>;\n  /** The reduced-state snapshot (plus runtime debug info) of one configured processor. */\n  getProcessorRuntimeState(args: {\n    subscriptionKey: string;\n  }): Promise<ProcessorRuntimeState | null>;\n  /**\n   * Live debug view of the stream Durable Object: core processor state, open\n   * connections with real delivery metrics (lag, bytes, commit→settled\n   * latency, mutual-ping RTT), per-subscription delivery cursors/lag, and the\n   * stream\'s own throughput windows. All runtime metrics are in-memory and\n   * reset on eviction (`metrics.measuredSince` says how long the window has\n   * been collecting); latency stats fields are absent until a real sample\n   * exists — no value is ever synthesized. Calling this also requests a\n   * throttled mutual-ping round over the live connections (observer-driven\n   * sampling); live debug surfaces should subscribe through `liveState`.\n   */\n  runtimeState(): Promise<StreamRuntimeDebugState>;\n  /** Push-driven stream runtime state for polling-free debug surfaces. */\n  liveState: LiveStateRpc<StreamRuntimeDebugState>;\n  /** Abort the current Durable Object incarnation; the next request boots it again. */\n  kill(): Promise<void>;\n  /**\n   * Session-scoped live event delivery (the "ephemeral" subscription lane):\n   * `processEventBatch` first receives durable history after\n   * `replayAfterOffset`, then new commits. Ephemeral events are delivered only\n   * when appended after this exact subscription opens and are never replayed.\n   * Returns an unsubscribe handle.\n   * Forgotten on disconnect — durable delivery is configured as data instead,\n   * by appending a `subscription-configured` event (wake or push mode) to the\n   * stream.\n   */\n  subscribe(args: {\n    subscriptionKey?: string;\n    processEventBatch: ProcessEventBatch;\n    replayAfterOffset?: number;\n    /**\n     * Atomically bind this open to the stream identity observed during\n     * catch-up. `null` means the caller observed a stream with no committed\n     * creation fact yet. A mismatch rejects before replacing any connection.\n     */\n    expectedIncarnation?: string | null;\n    /**\n     * Atomically reject instead of opening when the current raw-log head is\n     * more than this many offsets beyond `replayAfterOffset`.\n     */\n    maxReplayOffsetGap?: number;\n    /** Sugar for `selector.eventTypes` — one filter shape across every lane. */\n    eventTypes?: readonly string[];\n    selector?: { eventTypes?: string[]; condition?: string };\n    events?: boolean;\n    subscriber?: unknown;\n    /** Optional live debug hook, retained for the subscription\'s lifetime. */\n    getRuntimeState?: GetProcessorRuntimeState;\n    /**\n     * Optional mutual-ping responder (see `StreamPingInput`/`StreamPingReply`\n     * in rpc-types.ts), retained for the subscription\'s lifetime. The stream\n     * pings it — throttled, and only while someone is watching runtimeState —\n     * to measure real transport RTT to this subscriber.\n     */\n    ping?: StreamSubscriberPing;\n  }): Promise<StreamSubscriptionHandle>;\n  /**\n   * Cross-post receiving end: an ordinary push SINK (`(batch) => void`) that\n   * appends the batch\'s events into THIS stream with provenance stamping,\n   * structural loop protection, and source-derived idempotency keys. A source\n   * stream cross-posts here by configuring\n   * `{ delivery: { mode: "push", expression: ["streams", ["get", path], "acceptCrossPost"] } }`.\n   */\n  acceptCrossPost(batch: StreamPushEventBatch): Promise<void>;\n  /**\n   * "When events matching this land HERE, post them onto stream `path`" — the\n   * cross-post verb. Pure sugar over appending a `subscription-configured`\n   * push subscription targeting the destination\'s `acceptCrossPost` sink; the appended\n   * event (returned) is the real interface and shows in the log like any\n   * other config. Same-`key` calls replace the previous cross-post; remove\n   * with `removeCrossPost`. Copies carry the full provenance chain\n   * (`source.crossPostedFrom`), multi-hop legal, loop-protected. `transform`\n   * is an optional JSONata expression CONSTRUCTING the copied event\'s body\n   * from the original (e.g. `{ "type": "myapp/pr", "payload": { "repo":\n   * payload.body.repository.full_name } }`); omitted fields copy verbatim.\n   */\n  crossPostTo(args: {\n    /** Destination stream path (this project). */\n    path: string;\n    /** Subscription identity; defaults to `cross-post:<destination path>`. */\n    key?: string;\n    /**\n     * Human-readable note for operators and the stream state panel (why this\n     * cross-post exists). Optional on the API; platform call sites always set it.\n     */\n    description?: string;\n    eventTypes?: string[];\n    /** JSONata filter; the event is copied only when it evaluates to exactly `true`. */\n    condition?: string;\n    /** JSONata constructor for the copied event\'s `{type?, payload?, metadata?}`. */\n    transform?: string;\n    /** Where to start: "new" (default, from now), "all" (full history), or an offset. */\n    deliver?: "all" | "new" | { afterOffset: number };\n  }): Promise<StreamEvent>;\n  /** Remove a cross-post configured by `crossPostTo` (by destination path or explicit key). */\n  removeCrossPost(args: { path?: string; key?: string }): Promise<StreamEvent>;\n}',
     summary: "Durable event stream capability.",
     memberSummaries: {
       append: "Commit events; resolves with the same events carrying offsets and timestamps.",
@@ -650,9 +730,10 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
         "The reduced-state snapshot (plus runtime debug info) of one configured processor.",
       runtimeState:
         "Live debug view of the stream Durable Object: core processor state, open connections with real delivery metrics (lag, bytes, commit→settled latency, mutual-ping RTT), per-subscription delivery cursors/lag, and the stream's own throughput windows.",
+      liveState: "Push-driven stream runtime state for polling-free debug surfaces.",
       kill: "Abort the current Durable Object incarnation; the next request boots it again.",
       subscribe:
-        'Session-scoped live event delivery (the "ephemeral" subscription lane — also the only lane that receives `ephemeral: true` events): `processEventBatch` is called for every committed batch (optionally replayed from `replayAfterOffset`); returns an unsubscribe handle.',
+        'Session-scoped live event delivery (the "ephemeral" subscription lane): `processEventBatch` first receives durable history after `replayAfterOffset`, then new commits.',
       acceptCrossPost:
         "Cross-post receiving end: an ordinary push SINK (`(batch) => void`) that appends the batch's events into THIS stream with provenance stamping, structural loop protection, and source-derived idempotency keys.",
       crossPostTo:
@@ -667,9 +748,8 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "StreamEventReadInput",
       "StreamEventPager",
       "ProcessorRuntimeState",
-      "ConnectionRuntimeState",
-      "SubscriptionRuntimeState",
-      "StreamThroughputMetrics",
+      "StreamRuntimeDebugState",
+      "LiveStateRpc",
       "ProcessEventBatch",
       "GetProcessorRuntimeState",
       "StreamSubscriberPing",
@@ -681,23 +761,11 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "StreamProcessorRpc",
     kind: "interface",
     sourceText:
-      "/**\n * The read-side RPC surface every stream processor node exposes: inspect\n * runtime state (snapshot plus a processor-specific runtime bag), take an\n * offset-pinned `snapshot()` of the folded state, and `waitUntilEvent` to\n * block until the processor has folded a given offset.\n */\nexport interface StreamProcessorRpc<State = unknown> {\n  getRuntimeState(): Promise<ProcessorRuntimeState<State>>;\n  snapshot(): Promise<ProcessorSnapshot<State>>;\n  waitUntilEvent(input: { offset: number; timeoutMs?: number }): Promise<void>;\n}",
+      "/**\n * The read-side RPC surface every stream processor node exposes: inspect\n * runtime state (snapshot plus a processor-specific runtime bag), take an\n * offset-pinned `snapshot()` of the folded state, and `waitUntilProcessed` to\n * block until the processor has durably folded through a given offset.\n */\nexport interface StreamProcessorRpc<State = unknown> {\n  getRuntimeState(): Promise<ProcessorRuntimeState<State>>;\n  snapshot(): Promise<ProcessorSnapshot<State>>;\n  waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<void>;\n}",
     summary:
-      "The read-side RPC surface every stream processor node exposes: inspect runtime state (snapshot plus a processor-specific runtime bag), take an offset-pinned `snapshot()` of the folded state, and `waitUntilEvent` to block until the processor has folded a given offset.",
+      "The read-side RPC surface every stream processor node exposes: inspect runtime state (snapshot plus a processor-specific runtime bag), take an offset-pinned `snapshot()` of the folded state, and `waitUntilProcessed` to block until the processor has durably folded through a given offset.",
     memberSummaries: {},
     referencedTypeNames: ["ProcessorRuntimeState", "ProcessorSnapshot"],
-  },
-  {
-    name: "AgentDefaults",
-    kind: "interface",
-    sourceText:
-      "/**\n * The `itx.agents.defaults` built-in: default agent POLICY as data. The\n * project worker owns applying it — the seeded template reacts to\n * `stream/child-stream-created` for `/agents/**` by appending\n * `forPath(path).events` to the new agent stream (and edits the result to\n * customize agents). The platform appends only mechanics (processor\n * subscriptions); an agent nobody configures runs on stock defaults.\n */\nexport interface AgentDefaults {\n  __describe(): Promise<Description>;\n  /**\n   * The default policy for one agent path: the named pieces plus the exact\n   * event batch that applies them. Events are idempotency-keyed on\n   * (projectId, path), so appending them twice — or racing a redelivery — is\n   * a no-op.\n   */\n  forPath(path: string, overrides?: AgentDefaultsOverrides): Promise<AgentDefaultPolicy>;\n}",
-    summary: "The `itx.agents.defaults` built-in: default agent POLICY as data.",
-    memberSummaries: {
-      forPath:
-        "The default policy for one agent path: the named pieces plus the exact event batch that applies them.",
-    },
-    referencedTypeNames: ["Description", "AgentDefaultsOverrides", "AgentDefaultPolicy"],
   },
   {
     name: "ProjectEgressIntercept",
@@ -756,23 +824,69 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     ],
   },
   {
+    name: "Device",
+    kind: "interface",
+    sourceText:
+      '/** One enrolled installation. Push credentials enter only through enroll(). */\nexport interface Device {\n  __describe(): Promise<Description & DeviceDescription>;\n  /**\n   * Enroll remains a named device-vocabulary door instead of generic create:\n   * it first routes the private Expo push token into the device\'s Secret,\n   * then appends the device certificate and processor subscription atomically\n   * after that Secret offset. Re-enrollment rotates the credential without\n   * rebirthing the Device.\n   */\n  enroll(input: DeviceEnrollInput): Promise<DeviceDescription>;\n  append(...events: DeviceAppendInput[]): Promise<StreamEvent[]>;\n  /** Idempotently disable push; null means this installation was never enrolled. */\n  revoke(reason: "disabled" | "permission-denied" | "sign-out"): Promise<StreamEvent | null>;\n  kill(): Promise<void>;\n  processor: WakeableStreamProcessorRpc<DeviceDescription>;\n  liveState: LiveStateRpc<DeviceDescription>;\n}',
+    summary: "One enrolled installation.",
+    memberSummaries: {
+      enroll:
+        "Enroll remains a named device-vocabulary door instead of generic create: it first routes the private Expo push token into the device's Secret, then appends the device certificate and processor subscription atomically after that Secret offset.",
+      revoke: "Idempotently disable push; null means this installation was never enrolled.",
+    },
+    referencedTypeNames: [
+      "Description",
+      "DeviceDescription",
+      "DeviceEnrollInput",
+      "DeviceAppendInput",
+      "StreamEvent",
+      "WakeableStreamProcessorRpc",
+      "LiveStateRpc",
+    ],
+  },
+  {
+    name: "Sandbox",
+    kind: "interface",
+    sourceText:
+      "/**\n * One address-first sandbox handle. Addressing never creates or even chooses\n * a container namespace. `create(input)` claims the path in the catalogue,\n * lets the selected Durable Object append and reduce its own birth batch, and\n * returns this handle. Every later SDK call resolves the durable claim and is\n * receiver-preservingly replayed onto the real Cloudflare Sandbox stub.\n */\nexport interface Sandbox {\n  __describe(): Promise<Description>;\n  /** Claim, birth, and configure this sandbox; identical re-entry returns this handle. */\n  create(input: SandboxCreateInput): Promise<Sandbox>;\n  /** The sandbox's hosted lifecycle reducer. */\n  processor: WakeableStreamProcessorRpc<SandboxProcessorState>;\n  /** Push-driven reduced lifecycle state, including after permanent destroy. */\n  liveState: LiveStateRpc<SandboxProcessorState>;\n  start(): Promise<void>;\n  sleep(): Promise<void>;\n  restart(): Promise<void>;\n  destroy(): Promise<void>;\n  kill(): Promise<void>;\n  exec(\n    command: string,\n    options?: {\n      cwd?: string;\n      encoding?: string;\n      env?: Record<string, string | undefined>;\n      timeout?: number;\n    },\n  ): Promise<{\n    success: boolean;\n    exitCode: number;\n    stdout: string;\n    stderr: string;\n    command: string;\n    duration: number;\n    timestamp: string;\n    sessionId?: string;\n  }>;\n  /** Replay any undeclared Cloudflare Sandbox SDK path onto the claimed stub. */\n  invokeCapability(call: { args: unknown[]; path: string[] }): Promise<unknown>;\n}",
+    summary: "One address-first sandbox handle.",
+    memberSummaries: {
+      create: "Claim, birth, and configure this sandbox; identical re-entry returns this handle.",
+      processor: "The sandbox's hosted lifecycle reducer.",
+      liveState: "Push-driven reduced lifecycle state, including after permanent destroy.",
+      invokeCapability: "Replay any undeclared Cloudflare Sandbox SDK path onto the claimed stub.",
+    },
+    referencedTypeNames: [
+      "Description",
+      "SandboxCreateInput",
+      "WakeableStreamProcessorRpc",
+      "SandboxProcessorState",
+      "LiveStateRpc",
+    ],
+  },
+  {
     name: "Secret",
     kind: "interface",
     sourceText:
-      "/** Path-addressed secret capability. Secret material has no public read API:\n * material never leaves the Secret Durable Object except substituted into a\n * request bound for one of the secret's pinned egress hosts. */\nexport interface Secret {\n  /** Like every other node, the secret's self-report IS `__describe()`: the\n   * discovery Description merged with the secret's public SecretDescription\n   * (audit, egress, whether material is present, the refresh strategy). The\n   * raw value is never part of it. */\n  __describe(): Promise<Description & SecretDescription>;\n  /** Egress fetch with this secret's placeholders substituted server-side. */\n  fetch(request: Request): Promise<Response>;\n  /** Restart the secret's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  /** Set the secret material and/or its egress allowlist. */\n  update(input: SecretUpdateInput): Promise<StreamEvent>;\n  /** The secret stream processor; its public state IS the SecretDescription. */\n  processor: WakeableStreamProcessorRpc<SecretDescription>;\n  /** The secret's live state — its public SecretDescription (never the ciphertext). See {@link LiveStateRpc}. */\n  liveState: LiveStateRpc<SecretDescription>;\n}",
+      "/** Path-addressed secret capability. Secret material has no public read API:\n * material never leaves the Secret Durable Object except substituted into a\n * request bound for one of the secret's pinned egress hosts. */\nexport interface Secret {\n  /** Like every other node, the secret's self-report IS `__describe()`: the\n   * discovery Description merged with the secret's public SecretDescription\n   * (audit, egress, whether material is present, the refresh strategy). The\n   * raw value is never part of it. */\n  __describe(): Promise<Description & SecretDescription>;\n  /** Egress fetch with this secret's placeholders substituted server-side. */\n  fetch(request: Request): Promise<Response>;\n  /** Restart the secret's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  /**\n   * Create this secret and wait until its processor has reduced the birth\n   * certificate, then return this same secret handle, so create chains. The\n   * Secret Durable Object owns the birth semantics: it encrypts the material\n   * bound to the exact commit offset and appends `secret/created` plus the\n   * secret's processor subscription in one atomic batch. An identical-policy\n   * retry over an existing secret resolves fine (material is write-only and\n   * not comparable — it is kept, never replaced; rotate through `update()`);\n   * a create with a DIFFERENT egress/refresh/visibility policy fails loudly.\n   */\n  create(input: SecretCreateInput): Promise<Secret>;\n  /**\n   * Read the material back — only for a secret born `readable: true` (an\n   * immutable birth-certificate fact; every other secret stays write-only\n   * and this throws). The born project ingress key at\n   * /secrets/project-api-key is the canonical readable secret: show it to an\n   * external app as often as needed.\n   */\n  reveal(): Promise<unknown>;\n  /** Set secret material, its egress allowlist, and/or refresh strategy.\n   * Replacement material requires its complete egress policy in the same\n   * update. Every update without replacement material clears stored material. */\n  update(input: SecretUpdateInput): Promise<StreamEvent>;\n  /** The secret stream processor; its public state IS the SecretDescription. */\n  processor: WakeableStreamProcessorRpc<SecretDescription>;\n  /** The secret's live state — its public SecretDescription (never the ciphertext). See {@link LiveStateRpc}. */\n  liveState: LiveStateRpc<SecretDescription>;\n}",
     summary: "Path-addressed secret capability.",
     memberSummaries: {
       __describe:
         "Like every other node, the secret's self-report IS `__describe()`: the discovery Description merged with the secret's public SecretDescription (audit, egress, whether material is present, the refresh strategy).",
       fetch: "Egress fetch with this secret's placeholders substituted server-side.",
       kill: "Restart the secret's server-side object; the next request boots it fresh.",
-      update: "Set the secret material and/or its egress allowlist.",
+      create:
+        "Create this secret and wait until its processor has reduced the birth certificate, then return this same secret handle, so create chains.",
+      reveal:
+        "Read the material back — only for a secret born `readable: true` (an immutable birth-certificate fact; every other secret stays write-only and this throws).",
+      update: "Set secret material, its egress allowlist, and/or refresh strategy.",
       processor: "The secret stream processor; its public state IS the SecretDescription.",
       liveState: "The secret's live state — its public SecretDescription (never the ciphertext).",
     },
     referencedTypeNames: [
       "Description",
       "SecretDescription",
+      "SecretCreateInput",
       "SecretUpdateInput",
       "StreamEvent",
       "WakeableStreamProcessorRpc",
@@ -783,30 +897,43 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "Workspace",
     kind: "interface",
     sourceText:
-      "/**\n * One durable workspace: a private virtual filesystem living in a Durable\n * Object (no container, always warm). The root workspace (`\"/\"`) is the\n * read-only, always-fresh materialization of the config repo's main branch.\n * Every other workspace is an OVERLAY over the root: reads see latest main\n * until a local write shadows a path, writes and deletes stay private, and\n * there is no clone — a new workspace is usable instantly. `git.commit`\n * commits the overlay's changes straight to the config repo's MAIN branch\n * (the same lane as `itx.repo.commitFiles`, so the project worker/website\n * redeploys automatically), then the overlay resets to mirror the new main.\n *\n * Constraints: the `.git` name is reserved (platform-managed). Large files\n * are fine (past ~1.5MB they are stored in R2 transparently).\n */\nexport interface Workspace {\n  __describe(): Promise<Description>;\n  /** Workspace identity string (debug). */\n  whoami(): Promise<string>;\n  /** Restart the workspace's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  /** File contents, or null when the path does not exist. */\n  readFile(path: string): Promise<string | null>;\n  /** Raw file bytes (use for binaries — readFile text-decodes), or null when missing. */\n  readFileBytes(path: string): Promise<Uint8Array | null>;\n  /**\n   * Wipe the workspace back to pristine: the local layer and every deletion\n   * vanish, leaving a clean view of latest main (on the root, the next read\n   * re-materializes). Uncommitted work is LOST (committed changes live on\n   * main).\n   */\n  reset(): Promise<void>;\n  /**\n   * Un-pin one path: drop the local copy (file or subtree) and any deletion\n   * of it, so the path follows latest main again — the surgical sibling of\n   * reset(). Scoped at-or-below the path; a deleted ancestor directory still\n   * masks it until that ancestor is reverted too.\n   */\n  revert(path: string): Promise<void>;\n  /** Every file path in the merged view (local layer over latest main), sorted. */\n  listAllFiles(): Promise<string[]>;\n  writeFile(path: string, content: string): Promise<void>;\n  writeFileBytes(path: string, data: Uint8Array): Promise<void>;\n  appendFile(path: string, content: string): Promise<void>;\n  /** Delete one file. Returns false when the path did not exist. */\n  deleteFile(path: string): Promise<boolean>;\n  /**\n   * Safely replace text in one file (uncommitted — use `git` to publish).\n   * The `oldString` must match exactly once unless `replaceAll` is true.\n   */\n  edit(input: EditWorkspaceFileInput): Promise<EditWorkspaceFileResult>;\n  mkdir(path: string, opts?: { recursive?: boolean }): Promise<void>;\n  readDir(dir?: string): Promise<WorkspaceFileInfo[]>;\n  glob(pattern: string): Promise<WorkspaceFileInfo[]>;\n  rm(path: string, opts?: { force?: boolean; recursive?: boolean }): Promise<void>;\n  cp(src: string, dest: string, opts?: { recursive?: boolean }): Promise<void>;\n  mv(src: string, dest: string, opts?: { recursive?: boolean }): Promise<void>;\n  /** File metadata, or null when the path does not exist. */\n  stat(path: string): Promise<WorkspaceFileInfo | null>;\n  exists(path: string): Promise<boolean>;\n  /** Git over this workspace's checkout. */\n  git: WorkspaceGit;\n}",
-    summary:
-      "One durable workspace: a private virtual filesystem living in a Durable Object (no container, always warm).",
+      "/**\n * One durable workspace: an event-sourced, mount-routed private filesystem.\n * Its mount table (getConfig/configure) maps repos into the tree: reads under\n * a mount fall through to that repo's main at HEAD, writes land in a private\n * copy-on-write local layer (large files spill to R2 transparently), and\n * `git.commit({ scope })` turns ONE mount's changes into one commit on that\n * repo's main (honoring the mount's policy). Paths outside every mount are\n * private scratch. The `.git` name is reserved (platform-managed).\n */\nexport interface Workspace {\n  __describe(): Promise<Description>;\n  /** Explicitly create this workspace and wait through its complete birth batch. */\n  create(input: { mounts?: Record<string, WorkspaceMount> }): Promise<Workspace>;\n  whoami(): Promise<string>;\n  /** Restart the workspace's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  /** The workspace stream processor (snapshot/state). */\n  processor: WakeableStreamProcessorRpc<WorkspaceProcessorState>;\n  /** The folded configuration (birth certificate + configured patches). */\n  getConfig(): Promise<WorkspaceConfig>;\n  /** Patch configuration — deep-merged per mount point; null removes a mount (appends workspace/configured). */\n  configure(input: { config: WorkspaceConfigPatch }): Promise<WorkspaceConfig>;\n  /** One file's contents from the merged view (overlay, then owning mount at HEAD); null when missing. */\n  readFile(path: string): Promise<string | null>;\n  /** The collaborative session lane (rebase model, no Yjs) — workspace.collab. */\n  collab: WorkspaceCollab;\n  /** A path's mount content at HEAD — the base uncommitted work diffs against. */\n  readBase(path: string): Promise<string | null>;\n  /** Batched file reads (board seeds): one RPC, missing paths map to null. */\n  readFiles(paths: string[]): Promise<Record<string, string | null>>;\n  /** One file's raw bytes from the merged view; null when missing. */\n  readFileBytes(path: string): Promise<Uint8Array | null>;\n  /** Whether a path exists in the merged view. */\n  exists(path: string): Promise<boolean>;\n  /** Write one file into the private overlay. */\n  writeFile(path: string, content: string): Promise<void>;\n  /** Write raw bytes to one file in the private overlay. */\n  writeFileBytes(path: string, data: Uint8Array): Promise<void>;\n  /** Replace an exact string in one file (copies a mount file up first). */\n  edit(input: EditWorkspaceFileInput): Promise<EditWorkspaceFileResult>;\n  /** Delete one file (whiteouts a mount copy; false when it did not exist). */\n  deleteFile(path: string): Promise<boolean>;\n  /** Every file path in the merged view (local layer + every mount at HEAD, sorted). */\n  listAllFiles(): Promise<string[]>;\n  /** Merged file paths matching a glob pattern. */\n  glob(pattern: string): Promise<string[]>;\n  /** Wipe the local layer and deletions — back to a pristine view of the mounts. Uncommitted work is LOST. */\n  reset(): Promise<void>;\n  /** Un-pin ONE path: drop the local copy/deletion so it follows its mount again. */\n  revert(path: string): Promise<void>;\n  /** Per-mount git surface. */\n  git: WorkspaceGit;\n}",
+    summary: "One durable workspace: an event-sourced, mount-routed private filesystem.",
     memberSummaries: {
-      whoami: "Workspace identity string (debug).",
+      create: "Explicitly create this workspace and wait through its complete birth batch.",
       kill: "Restart the workspace's server-side object; the next request boots it fresh.",
-      readFile: "File contents, or null when the path does not exist.",
-      readFileBytes:
-        "Raw file bytes (use for binaries — readFile text-decodes), or null when missing.",
-      reset:
-        "Wipe the workspace back to pristine: the local layer and every deletion vanish, leaving a clean view of latest main (on the root, the next read re-materializes).",
-      revert:
-        "Un-pin one path: drop the local copy (file or subtree) and any deletion of it, so the path follows latest main again — the surgical sibling of reset().",
-      listAllFiles: "Every file path in the merged view (local layer over latest main), sorted.",
-      deleteFile: "Delete one file.",
-      edit: "Safely replace text in one file (uncommitted — use `git` to publish).",
-      stat: "File metadata, or null when the path does not exist.",
-      git: "Git over this workspace's checkout.",
+      processor: "The workspace stream processor (snapshot/state).",
+      getConfig: "The folded configuration (birth certificate + configured patches).",
+      configure:
+        "Patch configuration — deep-merged per mount point; null removes a mount (appends workspace/configured).",
+      readFile:
+        "One file's contents from the merged view (overlay, then owning mount at HEAD); null when missing.",
+      collab: "The collaborative session lane (rebase model, no Yjs) — workspace.collab.",
+      readBase: "A path's mount content at HEAD — the base uncommitted work diffs against.",
+      readFiles: "Batched file reads (board seeds): one RPC, missing paths map to null.",
+      readFileBytes: "One file's raw bytes from the merged view; null when missing.",
+      exists: "Whether a path exists in the merged view.",
+      writeFile: "Write one file into the private overlay.",
+      writeFileBytes: "Write raw bytes to one file in the private overlay.",
+      edit: "Replace an exact string in one file (copies a mount file up first).",
+      deleteFile: "Delete one file (whiteouts a mount copy; false when it did not exist).",
+      listAllFiles:
+        "Every file path in the merged view (local layer + every mount at HEAD, sorted).",
+      glob: "Merged file paths matching a glob pattern.",
+      reset: "Wipe the local layer and deletions — back to a pristine view of the mounts.",
+      revert: "Un-pin ONE path: drop the local copy/deletion so it follows its mount again.",
+      git: "Per-mount git surface.",
     },
     referencedTypeNames: [
       "Description",
+      "WorkspaceMount",
+      "WakeableStreamProcessorRpc",
+      "WorkspaceProcessorState",
+      "WorkspaceConfig",
+      "WorkspaceConfigPatch",
+      "WorkspaceCollab",
       "EditWorkspaceFileInput",
       "EditWorkspaceFileResult",
-      "WorkspaceFileInfo",
       "WorkspaceGit",
     ],
   },
@@ -825,8 +952,8 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "CfImagesCapability",
     kind: "interface",
     sourceText:
-      "/** Cloudflare Images binding exposed through ITX as one-call helpers. */\nexport interface CfImagesCapability {\n  __describe(): Promise<Description>;\n  /** Inspect an image stream for format/dimensions/file size. */\n  info(image: ReadableStream<Uint8Array>): Promise<unknown>;\n  /** Apply ordered image transforms/draws and output a Response. */\n  transform(input: CfImageTransformInput): Promise<Response>;\n}",
-    summary: "Cloudflare Images binding exposed through ITX as one-call helpers.",
+      "/** Cloudflare Images binding exposed through itx as one-call helpers. */\nexport interface CfImagesCapability {\n  __describe(): Promise<Description>;\n  /** Inspect an image stream for format/dimensions/file size. */\n  info(image: ReadableStream<Uint8Array>): Promise<unknown>;\n  /** Apply ordered image transforms/draws and output a Response. */\n  transform(input: CfImageTransformInput): Promise<Response>;\n}",
+    summary: "Cloudflare Images binding exposed through itx as one-call helpers.",
     memberSummaries: {
       info: "Inspect an image stream for format/dimensions/file size.",
       transform: "Apply ordered image transforms/draws and output a Response.",
@@ -837,8 +964,8 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "CfVideosCapability",
     kind: "interface",
     sourceText:
-      "/** Cloudflare Media Transformations binding exposed through ITX as one-call helpers. */\nexport interface CfVideosCapability {\n  __describe(): Promise<Description>;\n  /** Transform a video stream and return a Response (video, frame, spritesheet, or audio). */\n  transform(input: CfVideoTransformInput): Promise<Response>;\n}",
-    summary: "Cloudflare Media Transformations binding exposed through ITX as one-call helpers.",
+      "/** Cloudflare Media Transformations binding exposed through itx as one-call helpers. */\nexport interface CfVideosCapability {\n  __describe(): Promise<Description>;\n  /** Transform a video stream and return a Response (video, frame, spritesheet, or audio). */\n  transform(input: CfVideoTransformInput): Promise<Response>;\n}",
+    summary: "Cloudflare Media Transformations binding exposed through itx as one-call helpers.",
     memberSummaries: {
       transform:
         "Transform a video stream and return a Response (video, frame, spritesheet, or audio).",
@@ -846,23 +973,69 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: ["Description", "CfVideoTransformInput"],
   },
   {
-    name: "WorkspaceGit",
+    name: "WorkspaceCollab",
     kind: "interface",
     sourceText:
-      "/**\n * The commit surface of an overlay workspace. There is no staging area, no\n * branch, and no separate push: `commit({ message })` turns the workspace's\n * changes (local files minus `.gitignore`d paths, plus deletions) into ONE\n * ordinary commit on the config repo's MAIN branch — the same lane as\n * `itx.repo.commitFiles`, so the project worker/website redeploys\n * automatically. Credentials are internal; no token rides this surface.\n */\nexport interface WorkspaceGit {\n  __describe(): Promise<Description>;\n  /** Changes vs latest main: added / modified (shadowed, not content-diffed) / deleted. */\n  status(): Promise<WorkspaceChange[]>;\n  /** Commit the workspace's changes to the config repo's main branch (goes live immediately). */\n  commit(input: {\n    author?: { email: string; name: string };\n    message: string;\n  }): Promise<WorkspacePublishResult>;\n  /** The config repo's main-branch history, newest first. */\n  log(input?: { limit?: number }): Promise<WorkspaceGitLogEntry[]>;\n}",
-    summary: "The commit surface of an overlay workspace.",
+      '/**\n * The collaborative session lane of a workspace: server-authoritative\n * rebase-model editing (@codemirror/collab wire — per-file op logs, integer\n * versions, optimistic clients rebasing unconfirmed edits). Sessions are\n * durable; the workspace\'s ordinary filesystem RPC reads/writes route through\n * live sessions automatically, so this surface is only for LIVE participants\n * (editors) and redline consumers.\n */\nexport interface WorkspaceCollab {\n  __describe(): Promise<Description>;\n  /** Join (or start) the collaborative editing session for one file. */\n  open(path: string): Promise<{ content: string; epoch: string; version: number }>;\n  /** Submit a client update batch (rebase model; idempotent via clientSeq). */\n  push(input: {\n    baseVersion: number;\n    clientId: string;\n    epoch: string;\n    ops: { changes: unknown; clientSeq: number }[];\n    path: string;\n  }):\n    | (Promise<{ status: "accepted"; version: number } & Disposable> &\n        Pick<{ status: Promise<"accepted">; version: Promise<number> }, "status" | "version">)\n    | (Promise<{ status: "epoch-mismatch"; epoch: string } & Disposable> &\n        Pick<{ status: Promise<"epoch-mismatch">; epoch: Promise<string> }, "epoch" | "status">)\n    | (Promise<{ status: "history-miss" } & Disposable> &\n        Pick<{ status: Promise<"history-miss"> }, "status">)\n    | (Promise<{ status: "too-large"; maxBytes: number } & Disposable> &\n        Pick<{ status: Promise<"too-large">; maxBytes: Promise<number> }, "maxBytes" | "status">);\n  /** Long-poll catch-up: ops after a version (parking ~20s for new ones), a\n   * snapshot when past the retained floor, or ended after a destructive op.\n   * With afterPresence given, also resolves when cursors moved past that\n   * generation (delivered on the result\'s `presence`). */\n  wait(\n    path: string,\n    epoch: string,\n    afterVersion: number,\n    clientId?: string,\n    afterPresence?: number,\n  ):\n    | Promise<\n        {\n          ops: { changes: unknown; clientId: string }[];\n          presence?: CollabPresence;\n          status: "ops";\n        } & Disposable\n      >\n    | (Promise<\n        {\n          snapshot: { ackedSeq: number; content: string; epoch: string; version: number };\n          status: "snapshot";\n        } & Disposable\n      > &\n        Pick<\n          {\n            snapshot: Promise<\n              { ackedSeq: number; content: string; epoch: string; version: number } & Disposable\n            > &\n              Pick<\n                {\n                  ackedSeq: Promise<number>;\n                  content: Promise<string>;\n                  epoch: Promise<string>;\n                  version: Promise<number>;\n                },\n                "ackedSeq" | "content" | "epoch" | "version"\n              >;\n            status: Promise<"snapshot">;\n          },\n          "snapshot" | "status"\n        >)\n    | (Promise<{ status: "ended" } & Disposable> & Pick<{ status: Promise<"ended"> }, "status">);\n  /** Announce (or clear, with null) this client\'s cursor for one session. */\n  present(\n    path: string,\n    clientId: string,\n    selection: { anchor: number; head: number } | null,\n  ): Promise<void>;\n  /** Head versions of every live session (a cheap board change cursor). */\n  versions(): Promise<Record<string, number>>;\n  /** Attributed tracked changes since the last commit (redline segments). */\n  changes(path: string): Promise<CollabChangesResult>;\n  /** Fresh caret presence per live session — "who has this file open". */\n  presenceSummary(): Promise<CollabPresenceFlat>;\n  /** Everyone with the BOARD open (heartbeats): clientId -> display name. */\n  boardViewers(): Promise<{ [x: string]: string } & Disposable> &\n    Pick<{ [x: string]: Promise<string> }, string>;\n  /** Announce (or clear, with null name) one client viewing the board. */\n  boardPresent(clientId: string, name: string | null): Promise<void>;\n}',
+    summary:
+      "The collaborative session lane of a workspace: server-authoritative rebase-model editing (@codemirror/collab wire — per-file op logs, integer versions, optimistic clients rebasing unconfirmed edits).",
     memberSummaries: {
-      status: "Changes vs latest main: added / modified (shadowed, not content-diffed) / deleted.",
-      commit:
-        "Commit the workspace's changes to the config repo's main branch (goes live immediately).",
-      log: "The config repo's main-branch history, newest first.",
+      open: "Join (or start) the collaborative editing session for one file.",
+      push: "Submit a client update batch (rebase model; idempotent via clientSeq).",
+      wait: "Long-poll catch-up: ops after a version (parking ~20s for new ones), a snapshot when past the retained floor, or ended after a destructive op.",
+      present: "Announce (or clear, with null) this client's cursor for one session.",
+      versions: "Head versions of every live session (a cheap board change cursor).",
+      changes: "Attributed tracked changes since the last commit (redline segments).",
+      presenceSummary: 'Fresh caret presence per live session — "who has this file open".',
+      boardViewers: "Everyone with the BOARD open (heartbeats): clientId -> display name.",
+      boardPresent: "Announce (or clear, with null name) one client viewing the board.",
     },
     referencedTypeNames: [
       "Description",
-      "WorkspaceChange",
-      "WorkspacePublishResult",
+      "CollabPresence",
+      "CollabChangesResult",
+      "CollabPresenceFlat",
+    ],
+  },
+  {
+    name: "WorkspaceGit",
+    kind: "interface",
+    sourceText:
+      "/**\n * The per-mount git surface of a workspace. `status()` groups the overlay's\n * changes by owning mount (plus the never-committable unmounted scratch);\n * `commit({ message, scope? })` turns ONE mount's changes into one ordinary\n * commit on that repo's main via its own `commitFiles` lane — scope may be\n * omitted when exactly one mount is dirty, and commits never span mounts.\n * Read-only mounts reject commits. No branches, no push: commit = live on\n * that repo's main.\n */\nexport interface WorkspaceGit {\n  __describe(): Promise<Description>;\n  /** Changes grouped by owning mount, plus the unmounted local scratch. */\n  status(): Promise<WorkspaceStatus>;\n  /** Commit one mount's changes to its repo's main branch. */\n  commit(input: WorkspaceCommitInput): Promise<WorkspaceCommitResult>;\n  /** One mount's repo history, newest first. */\n  log(input?: WorkspaceGitLogInput): Promise<WorkspaceGitLogEntry[]>;\n}",
+    summary: "The per-mount git surface of a workspace.",
+    memberSummaries: {
+      status: "Changes grouped by owning mount, plus the unmounted local scratch.",
+      commit: "Commit one mount's changes to its repo's main branch.",
+      log: "One mount's repo history, newest first.",
+    },
+    referencedTypeNames: [
+      "Description",
+      "WorkspaceStatus",
+      "WorkspaceCommitInput",
+      "WorkspaceCommitResult",
+      "WorkspaceGitLogInput",
       "WorkspaceGitLogEntry",
     ],
+  },
+  {
+    name: "CollabChangesResult",
+    kind: "interface",
+    sourceText:
+      "/** Attributed tracked changes since the last commit: author-tagged inserted\n * spans and deleted-text markers in current-head coordinates, plus the ONE\n * baseline both redline layers render against. */\nexport interface CollabChangesResult {\n  baseContent: string;\n  baseVersion: number;\n  deleted: { at: number; clientId: string; createdAt?: number; text: string }[];\n  headVersion: number;\n  inserted: { clientId: string; createdAt?: number; from: number; to: number }[];\n}",
+    summary:
+      "Attributed tracked changes since the last commit: author-tagged inserted spans and deleted-text markers in current-head coordinates, plus the ONE baseline both redline layers render against.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "CollabPresenceFlat",
+    kind: "interface",
+    sourceText:
+      "/** Fresh caret presence as index-matched flat arrays (one entry per\n * path+client pair) — named so the generated capnweb surface references it\n * instead of structurally promise-mapping raw string arrays (illegal). */\nexport interface CollabPresenceFlat {\n  clientIds: string[];\n  paths: string[];\n}",
+    summary:
+      "Fresh caret presence as index-matched flat arrays (one entry per path+client pair) — named so the generated capnweb surface references it instead of structurally promise-mapping raw string arrays (illegal).",
+    memberSummaries: {},
+    referencedTypeNames: [],
   },
   {
     name: "ItxBinding",
@@ -888,7 +1061,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "ItxAuthCredentials",
     kind: "typeAlias",
     sourceText:
-      '/**\n * Credentials accepted by `UnauthenticatedOs.authenticate`.\n *\n * - `from-server-cookie` — the browser lane: the deployment\'s admin cookie or\n *   the signed-in user\'s session cookie riding the WebSocket handshake.\n * - `bearer` — an auth access token presented as RPC data.\n * - `admin-secret` — the deployment admin API secret (CLI / tooling / e2e).\n * - `impersonate` — admin-secret-gated fake principal, for test suites that\n *   exercise per-project confinement without minting real users.\n */\nexport type ItxAuthCredentials =\n  | { type: "from-server-cookie" }\n  | { type: "bearer"; token: string }\n  | { type: "admin-secret"; secret: string }\n  | { type: "impersonate"; secret: string; token: ItxAuthToken };',
+      '/**\n * Credentials accepted by `UnauthenticatedOs.authenticate`.\n *\n * - `from-server-cookie` — the browser lane: an operator/session cookie on an\n *   exact same-origin HTTP request or WebSocket handshake.\n * - `bearer` — an auth access token presented as RPC data.\n * - `admin-secret` — the deployment admin API secret (CLI / tooling / e2e).\n * - `operator-session` — a short-lived grant minted with the admin secret.\n *   Project grants create a synthetic operator principal authorized for one\n *   resolved project only; they do not impersonate a customer. Platform-wide\n *   grants are a separate, explicit kind.\n * - `impersonate` — admin-secret-gated fake principal, for test suites that\n *   exercise per-project confinement without minting real users.\n */\nexport type ItxAuthCredentials =\n  | { type: "from-server-cookie" }\n  | { type: "bearer"; token: string }\n  | { type: "admin-secret"; secret: string }\n  | { type: "operator-session"; token: string }\n  | { type: "impersonate"; secret: string; token: ItxAuthToken }\n  /**\n   * A project\'s own long-lived machine credential — for externally deployed\n   * apps that connect back to /api as their project (docs/remote-apps.md).\n   * Verified against the secret every project is born with at\n   * `/secrets/project-api-key` (the comparison happens inside the Secret\n   * Durable Object — this door never receives material, only a one-bit\n   * answer). None of the existing lanes fit this caller: `bearer` is a\n   * user identity, `operator-session` is a short-lived human grant, and\n   * `admin-secret` is deployment-global. Grants exactly one project, no\n   * admin, no user identity.\n   */\n  | { type: "project-secret"; projectId: string; secret: string }\n  /**\n   * The short-lived user-on-project token auth mints for project app hosts\n   * (the `iterate-project-auth` cookie). A config worker reverse-proxying an\n   * externally deployed app forwards the browser\'s request as-is, and the app\n   * presents the token here to act AS THAT USER on exactly that project\n   * (docs/remote-apps.md). Verified locally — an HS256 check against the\n   * shared project-app-session secret, no auth-worker hop; membership was\n   * checked at mint time and the 15-minute expiry bounds revocation lag.\n   */\n  | { type: "project-app-session"; token: string };',
     summary: "Credentials accepted by `UnauthenticatedOs.authenticate`.",
     memberSummaries: {},
     referencedTypeNames: ["ItxAuthToken"],
@@ -899,6 +1072,16 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     sourceText:
       '/** Principal shape for `impersonate` credentials. */\nexport type ItxAuthToken =\n  | { type: "admin"; principal?: string }\n  | { type: "user"; principal: string; projectScopes: string[] };',
     summary: "Principal shape for `impersonate` credentials.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "ProjectIdentity",
+    kind: "typeAlias",
+    sourceText:
+      "/**\n * What `itx.identity()` returns: the directory's canonical project record,\n * with the itx surface's `projectId` field name (the surface always says\n * `projectId`; `id` is the directory/list convention).\n */\nexport type ProjectIdentity = {\n  projectId: string;\n  slug: string;\n  organizationId: string | null;\n  name: string;\n};",
+    summary:
+      "What `itx.identity()` returns: the directory's canonical project record, with the itx surface's `projectId` field name (the surface always says `projectId`; `id` is the directory/list convention).",
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -916,7 +1099,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "WakeableStreamProcessorRpc",
     kind: "typeAlias",
     sourceText:
-      '/**\n * A processor node that is also its HOST\'s wake-mode delivery door. This is\n * what the domain surfaces expose (`itx.agents.get(path).processor`,\n * `itx.repos.get(path).processor`, `itx.processor`, …) and what wake-mode\n * stream subscriptions persist as their delivery expression:\n * `["agents", ["get", path], "processor", "wakeStreamSubscriber"]`.\n *\n * `wakeStreamSubscriber` is dialed by stream delivery spines only\n * (trusted-internal): the handshake\'s sink drives the host\'s durable\n * checkpoint, so an ordinary session poking it could feed fabricated batches\n * and fast-forward the checkpoint past real events. Multi-processor hosts (an\n * agent Durable Object hosts agent + slack-agent + more) resolve WHICH\n * processor wakes from the request\'s `processorSlug` — the inspection half of\n * this node reads the host\'s main processor.\n */\nexport type WakeableStreamProcessorRpc<State = unknown> = StreamProcessorRpc<State> & {\n  wakeStreamSubscriber(request: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse>;\n};',
+      '/**\n * A processor node that is also its HOST\'s wake-mode delivery door. This is\n * what the domain surfaces expose (`itx.agents.get(path).processor`,\n * `itx.repos.get(path).processor`, `itx.processor`, …) and what wake-mode\n * stream subscriptions persist as their delivery expression:\n * `["agents", ["get", path], "processor", "wakeStreamSubscriber"]`.\n *\n * `wakeStreamSubscriber` is dialed by stream delivery spines only\n * (trusted-internal): the handshake\'s sink drives the host\'s durable\n * checkpoint, so an ordinary session poking it could feed fabricated batches\n * and fast-forward the checkpoint past real events. Multi-processor hosts (an\n * agent Durable Object hosts agent + slack-agent + more) resolve WHICH\n * processor wakes from the request\'s `processorSlug`. Each public domain\n * surface selects that same named processor for inspection, so\n * `agent.processor`, `agent.slack.processor`, and other siblings expose their\n * own snapshots and checkpoints.\n */\nexport type WakeableStreamProcessorRpc<State = unknown> = StreamProcessorRpc<State> & {\n  wakeStreamSubscriber(request: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse>;\n};',
     summary: "A processor node that is also its HOST's wake-mode delivery door.",
     memberSummaries: {},
     referencedTypeNames: [
@@ -929,7 +1112,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "ProjectProcessorState",
     kind: "typeAlias",
     sourceText:
-      '/**\n * The project processor\'s reduced state, inferred from the contract\'s\n * `stateSchema` — the one definition of the shape. `created` flips when the\n * bootstrap saga lands; the list fields are what the collection `list()`\n * methods read.\n */\nexport type ProjectProcessorState = {\n  createRequest: { projectId: string; slug: string } | null;\n  created: boolean;\n  onboardingActive: boolean;\n  onboardingCompletedAt: string | null;\n  agents: { createdAt: string; path: string }[];\n  repos: { createdAt: string; path: string }[];\n  secrets: { createdAt: string; path: string }[];\n  streams: { createdAt: string; path: string }[];\n  customDomains: {\n    cloudflareHostnameId: string | null;\n    error: string | null;\n    hostname: string;\n    hostnameStatus: string | null;\n    ownershipVerification: { name: string; value: string } | null;\n    sslStatus: string | null;\n    status: "active" | "failed" | "pending_validation" | "provisioning" | "removing" | "requested";\n    validationRecords: { name: string; status: string | null; value: string }[];\n    wildcard: boolean;\n    createdAt: string;\n    updatedAt: string;\n  }[];\n  egressRules: {\n    ruleKey: string;\n    description: string;\n    match: {\n      hosts?: string[] | undefined;\n      methods?: string[] | undefined;\n      pathPrefix?: string | undefined;\n      secretPaths?: string[] | undefined;\n    };\n    verdict: "deny" | "hold";\n    approvalTimeoutMs: number;\n  }[];\n  humanApprovalKeys: {\n    keyId: string;\n    publicKey: string;\n    label: string;\n    addedAt: string;\n    revokedAt: string | null;\n  }[];\n};',
+      '/**\n * The project processor\'s reduced state, inferred from the contract\'s\n * `stateSchema` — the one definition of the shape. `ready` flips when the\n * bootstrap saga lands; the list fields are what the collection `list()`\n * methods read.\n */\nexport type ProjectProcessorState = {\n  birthCertificate: {\n    config: {\n      slug: string;\n      onboardingActive?: boolean | undefined;\n      creatorEmail?: string | undefined;\n    };\n  } | null;\n  ready: boolean;\n  onboardingActive: boolean;\n  onboardingCompletedAt: string | null;\n  devices: { createdAt: string; path: string }[];\n  repos: { createdAt: string; path: string }[];\n  secrets: { createdAt: string; path: string }[];\n  streams: { createdAt: string; path: string }[];\n  customDomains: {\n    kind: "cloudflare" | "direct";\n    createdAt: string;\n    updatedAt: string;\n    cloudflareHostnameId: string | null;\n    error: string | null;\n    hostname: string;\n    hostnameStatus: string | null;\n    ownershipVerification: { name: string; value: string } | null;\n    sslStatus: string | null;\n    status: "active" | "failed" | "pending_validation" | "provisioning" | "removing" | "requested";\n    validationRecords: { name: string; status: string | null; value: string }[];\n    wildcard: boolean;\n  }[];\n  egressRules: {\n    ruleKey: string;\n    description: string;\n    match: {\n      hosts?: string[] | undefined;\n      methods?: string[] | undefined;\n      pathPrefix?: string | undefined;\n      secretPaths?: string[] | undefined;\n    };\n    verdict: "deny" | "hold";\n    approvalTimeoutMs: number;\n  }[];\n  humanApprovalKeys: {\n    keyId: string;\n    publicKey: string;\n    label: string;\n    addedAt: string;\n    revokedAt: string | null;\n  }[];\n  notificationReady: boolean;\n};',
     summary:
       "The project processor's reduced state, inferred from the contract's `stateSchema` — the one definition of the shape.",
     memberSummaries: {},
@@ -985,7 +1168,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "DynamicWorkerCapability",
     kind: "typeAlias",
     sourceText:
-      "/** Dynamic worker RPC stub plus platform-owned lifecycle operations. */\nexport type DynamicWorkerCapability<T extends object = Record<string, unknown>> = T &\n  Disposable & {\n    /** Abort the stateful worker Durable Object incarnation. Stateless worker refs reject. */\n    kill(): Promise<void>;\n  };",
+      "/**\n * Dynamic worker RPC stub plus platform-owned lifecycle operations. The\n * lifecycle names are platform verbs: a worker method with the same name is\n * shadowed on this stub (still reachable via\n * `invokeCapability({ path: [...] })`).\n */\nexport type DynamicWorkerCapability<T extends object = Record<string, unknown>> = T &\n  Disposable & {\n    /** Abort the stateful worker Durable Object incarnation. Stateless worker refs reject. */\n    kill(): Promise<void>;\n    /**\n     * Arm (ms timestamp) — or with null, disarm — the stateful worker's\n     * durable alarm; the fire calls the worker class's own `alarm(alarmInfo)`\n     * method, retried by the platform if it throws. Facets have no native\n     * alarms in workerd, so the hosting Durable Object keeps the real one on\n     * the worker's behalf. Stateless worker refs reject. Inside the worker,\n     * `IterateDurableObject` presents this as the ordinary `ctx.storage`\n     * alarm API automatically.\n     */\n    setAlarm(atMs: number | null): Promise<void>;\n    /** The stateful worker's armed alarm time (ms) or null. Stateless worker refs reject. */\n    getAlarm(): Promise<number | null>;\n  };",
     summary: "Dynamic worker RPC stub plus platform-owned lifecycle operations.",
     memberSummaries: {},
     referencedTypeNames: [],
@@ -1003,7 +1186,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "CapabilityDescription",
     kind: "typeAlias",
     sourceText:
-      '/**\n * One capability in a project\'s inventory (`__describe().capabilities`): the\n * itx path it is mounted at, how it is implemented (built-in, live-provided,\n * or a persisted itx expression), and optional instructions/types for\n * discovery.\n */\nexport type CapabilityDescription = {\n  instructions?: string;\n  path: string[];\n  providedAtOffset?: number;\n  /**\n   * The itx scope path this capability is declared at (`"/"`, `"/agents/bla"`, …).\n   * Set when a scope reports capabilities it inherited from an enclosing scope,\n   * so the reader can tell a local mount from an inherited one. Absent on\n   * built-ins (they exist at every scope).\n   */\n  scope?: string;\n  type: "builtin" | "live" | "itx-expression";\n  types?: string;\n};',
+      '/**\n * One capability in a project\'s inventory (`__describe().capabilities`): the\n * itx path it is mounted at, how it is implemented (built-in, live-provided,\n * or a persisted itx expression), and optional instructions/types for\n * discovery.\n */\nexport type CapabilityDescription = {\n  instructions?: string;\n  path: string[];\n  providedAtOffset?: number;\n  /**\n   * The itx scope path this capability is declared at (`"/"`, `"/agents/bla"`, …).\n   * Set when a scope reports capabilities its fallback host contributed, so\n   * the reader can tell a local mount from an inherited one. Absent on\n   * built-ins (they exist at every scope).\n   */\n  scope?: string;\n  type: "builtin" | "live" | "itx-expression";\n  types?: string;\n};',
     summary:
       "One capability in a project's inventory (`__describe().capabilities`): the itx path it is mounted at, how it is implemented (built-in, live-provided, or a persisted itx expression), and optional instructions/types for discovery.",
     memberSummaries: {},
@@ -1023,10 +1206,14 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "StreamSubscriberWakeResponse",
     kind: "typeAlias",
     sourceText:
-      "/**\n * What the poked subscriber hands back — the entire handshake in one return\n * value. The stream retains `sink` (ownership of a returned stub transfers to\n * the caller) and streams one-way batches into it from `checkpointOffset + 1`;\n * there is no subscribe-back call and therefore no handshake race to fence.\n */\nexport type StreamSubscriberWakeResponse = {\n  /** The processor's durable checkpoint offset — replay resumes after it. */\n  checkpointOffset: number;\n  /** The live delivery callback the stream retains and invokes per batch. */\n  sink: ProcessEventBatch;\n  /**\n   * Serializable subscriber identity (validated against\n   * `StreamSubscriberDescriptor` by the stream) appended as the\n   * subscriber-connected presence fact; carries the processor's contract\n   * announcement for the stream's `processorsBySlug` registry.\n   */\n  subscriber?: unknown;\n  /** Live runtime-state capability, retained for the connection lifetime. */\n  getRuntimeState?: GetProcessorRuntimeState;\n  /** Optional ping capability, retained for the connection lifetime (see {@link StreamSubscriberPing}). */\n  ping?: StreamSubscriberPing;\n};",
+      "/**\n * What the poked subscriber hands back — the entire handshake in one return\n * value. The stream retains `sink` (ownership of a returned stub transfers to\n * the caller) and streams one-way batches into it from `checkpointOffset + 1`;\n * there is no subscribe-back call and therefore no handshake race to fence.\n */\nexport type StreamSubscriberWakeResponse = {\n  /** The processor's durable checkpoint offset — replay resumes after it. */\n  checkpointOffset: number;\n  /**\n   * The live delivery callback the stream retains and invokes per batch.\n   * Calls are one-way; each batch reports completion through its independent\n   * `settleDelivery` capability.\n   */\n  sink: ProcessStreamWakeEventBatch;\n  /**\n   * Serializable subscriber identity (validated against\n   * `StreamSubscriberDescriptor` by the stream) appended as the\n   * subscriber-connected presence fact; carries the processor's contract\n   * announcement for the stream's `processorsBySlug` registry.\n   */\n  subscriber?: unknown;\n  /** Live runtime-state capability, retained for the connection lifetime. */\n  getRuntimeState?: GetProcessorRuntimeState;\n  /** Optional ping capability, retained for the connection lifetime (see {@link StreamSubscriberPing}). */\n  ping?: StreamSubscriberPing;\n};",
     summary: "What the poked subscriber hands back — the entire handshake in one return value.",
     memberSummaries: {},
-    referencedTypeNames: ["ProcessEventBatch", "GetProcessorRuntimeState", "StreamSubscriberPing"],
+    referencedTypeNames: [
+      "ProcessStreamWakeEventBatch",
+      "GetProcessorRuntimeState",
+      "StreamSubscriberPing",
+    ],
   },
   {
     name: "LiveUpdate",
@@ -1041,8 +1228,8 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "LiveStateSubscriptionHandle",
     kind: "typeAlias",
     sourceText:
-      "/**\n * Live handle for one live-state subscription. `ping()` reports liveness (and\n * the call rejects when the hosting incarnation is gone); `unsubscribe()` closes it.\n */\nexport type LiveStateSubscriptionHandle = Disposable & {\n  ping(): boolean | Promise<boolean>;\n  unsubscribe(): void;\n};",
-    summary: "Live handle for one live-state subscription.",
+      "/** Owned handle for one live-state subscription. */\nexport type LiveStateSubscriptionHandle = Disposable & {\n  ping(): boolean | Promise<boolean>;\n  unsubscribe(): void;\n};",
+    summary: "Owned handle for one live-state subscription.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -1067,16 +1254,6 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
-    name: "CfMarkdownConversionArgs",
-    kind: "typeAlias",
-    sourceText:
-      "/** The `ai.toMarkdown` argument tuple: empty lists the supported formats;\n * otherwise one document (or an array) plus optional conversion options\n * converts to markdown. */\nexport type CfMarkdownConversionArgs =\n  | []\n  | [documents: CfMarkdownDocument | CfMarkdownDocument[], options?: CfMarkdownConversionOptions];",
-    summary:
-      "The `ai.toMarkdown` argument tuple: empty lists the supported formats; otherwise one document (or an array) plus optional conversion options converts to markdown.",
-    memberSummaries: {},
-    referencedTypeNames: ["CfMarkdownDocument", "CfMarkdownConversionOptions"],
-  },
-  {
     name: "CfMarkdownSupportedFormat",
     kind: "typeAlias",
     sourceText:
@@ -1087,12 +1264,59 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
+    name: "CfMarkdownDocument",
+    kind: "typeAlias",
+    sourceText:
+      "/** One input document for Workers AI markdown conversion (`ai.toMarkdown`):\n * a filename plus the raw bytes as a Blob. */\nexport type CfMarkdownDocument = {\n  /** Filename including the extension; Cloudflare uses it to choose the converter. */\n  name: string;\n  blob: Blob;\n};",
+    summary:
+      "One input document for Workers AI markdown conversion (`ai.toMarkdown`): a filename plus the raw bytes as a Blob.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "CfMarkdownConversionOptions",
+    kind: "typeAlias",
+    sourceText:
+      "/** Per-format tuning for `ai.toMarkdown`: HTML scoping (CSS selector,\n * hostname for relative links), image description language, PDF metadata\n * exclusion. */\nexport type CfMarkdownConversionOptions = {\n  conversionOptions?: {\n    html?: {\n      cssSelector?: string;\n      hostname?: string;\n    };\n    image?: {\n      descriptionLanguage?: string;\n    };\n    pdf?: {\n      excludeMetadata?: boolean;\n    };\n  };\n};",
+    summary:
+      "Per-format tuning for `ai.toMarkdown`: HTML scoping (CSS selector, hostname for relative links), image description language, PDF metadata exclusion.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
     name: "CfMarkdownConversionResult",
     kind: "typeAlias",
     sourceText:
       '/** One converted document from `ai.toMarkdown`: `format` is "markdown" with\n * the markdown text in `data` (plus a token estimate), or "error" with the\n * failure message in `error`. */\nexport type CfMarkdownConversionResult = {\n  name: string;\n  format: "markdown" | "error";\n  mimeType?: string;\n  tokens?: number;\n  data?: string;\n  error?: string;\n};',
     summary:
       'One converted document from `ai.toMarkdown`: `format` is "markdown" with the markdown text in `data` (plus a token estimate), or "error" with the failure message in `error`.',
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "ProjectAuthPolicy",
+    kind: "typeAlias",
+    sourceText:
+      '/** A declarative access rule for a project-host web app. */\nexport type ProjectAuthPolicy = { policy: "project-member" };',
+    summary: "A declarative access rule for a project-host web app.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "ProjectAuthCredentials",
+    kind: "typeAlias",
+    sourceText:
+      '/** Browser credentials accepted by a project app\'s unauthenticated RPC root. */\nexport type ProjectAuthCredentials = { type: "from-server-cookie" };',
+    summary: "Browser credentials accepted by a project app's unauthenticated RPC root.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "ProjectAuthActor",
+    kind: "typeAlias",
+    sourceText:
+      "/** Identity proven by the app-origin session, safe for app-defined authorization. */\nexport type ProjectAuthActor = { userId: string };",
+    summary: "Identity proven by the app-origin session, safe for app-defined authorization.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -1120,8 +1344,46 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "AgentProcessorState",
     kind: "typeAlias",
     sourceText:
-      '/**\n * The agent processor\'s reduced state, inferred from the contract\'s\n * `stateSchema`.\n */\nexport type AgentProcessorState = {\n  systemPrompt: string;\n  history: {\n    role: "assistant" | "user";\n    content: string;\n    files?:\n      | { contentType: string; filename: string; path: string; size: number; url: string }[]\n      | undefined;\n  }[];\n  llmConfig: { model: string };\n  llmConfigConfigured: boolean;\n  currentRequest:\n    | { phase: "scheduled"; requestId: string; scheduledOffset: number }\n    | { phase: "requested"; llmRequestOffset: number; requestedAt?: number | undefined }\n    | null;\n  pendingTriggerOffset: number | null;\n  pendingTriggerSource: "agent-loop" | "user" | null;\n  autonomousTurnCount: number;\n  requestGeneration: number;\n  consecutiveLlmFailures: number;\n  lastLlmFailureRateLimited: boolean;\n  llmRequests: Record<\n    string,\n    { status: "requested" | "started"; model: string; expiresAt: number }\n  >;\n  tokenUsage: {\n    totalInputTokens: number;\n    totalOutputTokens: number;\n    totalCachedInputTokens: number;\n    totalReasoningOutputTokens: number;\n  };\n};',
+      '/** The agent processor\'s reduced state, inferred from the contract\'s `stateSchema`. */\nexport type AgentProcessorState = {\n  birthCertificate: { createdAtOffset: number } | null;\n  config: {\n    llm: { model: string };\n    llmRequestDebounceMs: number;\n    llmRequestExpiryMs: number;\n    llmRequestRetryPolicy: { maxAttempts: number; backoffBaseMs: number; backoffMaxMs: number };\n    maxAutonomousTurns: number;\n    scriptResultHistoryLimit: number;\n    compactionTriggerFraction: number;\n  };\n  contextItems: {\n    offset: number;\n    payload: {\n      role: "assistant" | "developer" | "system" | "user";\n      content: string;\n      key?: string | undefined;\n      files?:\n        | { contentType: string; filename: string; path: string; size: number; url: string }[]\n        | undefined;\n      refs?:\n        | (\n            | { type: "event"; streamPath: string; offset: number; eventType?: string | undefined }\n            | { type: "user"; userId: string }\n            | { type: "file"; path: string }\n            | { type: "git-commit"; repoPath: string; commitOid: string }\n          )[]\n        | undefined;\n      actor?:\n        | { type: "user"; origin: "mcp" | "web" }\n        | { type: "agent"; path: string }\n        | { type: "script"; executionId: string }\n        | { type: "integration"; name: string }\n        | { type: "slack"; userId?: string | undefined; botName?: string | undefined }\n        | { type: "telegram"; userId?: string | undefined; username?: string | undefined }\n        | { type: "email"; address?: string | undefined; name?: string | undefined }\n        | { type: "github"; login?: string | undefined; senderType?: string | undefined }\n        | undefined;\n      llmRequestPolicy:\n        | { behaviour: "dont-trigger-request" }\n        | { behaviour: "interrupt-current-request" }\n        | { behaviour: "after-current-request" };\n      llmRequestOffset?: number | undefined;\n      compaction?:\n        | {\n            replacesHistoryThrough: number;\n            usage?:\n              | {\n                  inputTokens: number;\n                  outputTokens: number;\n                  cachedInputTokens?: number | undefined;\n                  reasoningOutputTokens?: number | undefined;\n                }\n              | undefined;\n          }\n        | undefined;\n    };\n  }[];\n  lastLlmRequestOffset: number;\n  pendingLlmRequestTrigger: {\n    offset: number;\n    atMs: number;\n    source: "agent-loop" | "external";\n  } | null;\n  openRequest: { requestedAtOffset: number; expiresAt: number; model: string } | null;\n  consecutiveLlmFailures: number;\n  paused: { reason?: string | undefined; atOffset: number } | null;\n  autonomousTurnCount: number;\n  activeScriptExecutionIds: string[];\n  summary: {\n    title?: string | undefined;\n    description?: string | undefined;\n    activity?: string | undefined;\n    waitingFor?: "external_event" | "timer" | "user_input" | undefined;\n    pinned: boolean;\n  };\n  waitingForSinceOffset?: number | undefined;\n  tokenUsage: {\n    totalInputTokens: number;\n    totalOutputTokens: number;\n    totalCachedInputTokens: number;\n    totalReasoningOutputTokens: number;\n  };\n  runtimeChange?:\n    | {\n        runtime: {\n          triggers: { pending: number; runnable: number };\n          llmRequests: { scheduled: number; requested: number; started: number };\n          runningScripts: number;\n        };\n        sinceOffset: number;\n        since: string;\n      }\n    | undefined;\n};',
     summary: "The agent processor's reduced state, inferred from the contract's `stateSchema`.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "AgentLiveState",
+    kind: "typeAlias",
+    sourceText:
+      "/** The transient runtime state pushed by one Agent durable object. */\nexport type AgentLiveState = {\n  runtimeChange?:\n    | {\n        runtime: {\n          triggers: { pending: number; runnable: number };\n          llmRequests: { scheduled: number; requested: number; started: number };\n          runningScripts: number;\n        };\n        sinceOffset: number;\n        since: string;\n      }\n    | undefined;\n};",
+    summary: "The transient runtime state pushed by one Agent durable object.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "AgentEventInput",
+    kind: "typeAlias",
+    sourceText:
+      '/** Append input accepted by the Agent processor, derived from its `consumes` contract. */\nexport type AgentEventInput =\n  | TypedConsumedEventInput<\n      "events.iterate.com/agent/configured",\n      {\n        config: {\n          llm?: { model?: string | undefined } | undefined;\n          llmRequestDebounceMs?: number | undefined;\n          llmRequestExpiryMs?: number | undefined;\n          llmRequestRetryPolicy?:\n            | {\n                maxAttempts?: number | undefined;\n                backoffBaseMs?: number | undefined;\n                backoffMaxMs?: number | undefined;\n              }\n            | undefined;\n          maxAutonomousTurns?: number | undefined;\n          scriptResultHistoryLimit?: number | undefined;\n          compactionTriggerFraction?: number | undefined;\n        };\n      }\n    >\n  | TypedConsumedEventInput<"events.iterate.com/agent/created", { [x: string]: unknown }>\n  | TypedConsumedEventInput<\n      "events.iterate.com/agent/llm-request-requested",\n      { model: string; expiresAt: number }\n    >\n  | TypedConsumedEventInput<\n      "events.iterate.com/agent/llm-request-settled",\n      {\n        requestOffset: number;\n        durationMs?: number | undefined;\n        result:\n          | {\n              status: "succeeded";\n              text: string;\n              usage?:\n                | {\n                    inputTokens: number;\n                    outputTokens: number;\n                    cachedInputTokens?: number | undefined;\n                    reasoningOutputTokens?: number | undefined;\n                  }\n                | undefined;\n              rawResponse?: unknown;\n            }\n          | { status: "failed"; errorMessage: string; rawResponse?: unknown }\n          | {\n              status: "cancelled";\n              reason: "expired" | "interrupted-by-user-input";\n              partialText?: string | undefined;\n            };\n      }\n    >\n  | TypedConsumedEventInput<"events.iterate.com/agent/paused", { reason?: string | undefined }>\n  | TypedConsumedEventInput<"events.iterate.com/agent/resumed", { reason?: string | undefined }>\n  | TypedConsumedEventInput<\n      "events.iterate.com/agent/summary-updated",\n      | {\n          title?: string | null | undefined;\n          description?: string | null | undefined;\n          activity?: string | null | undefined;\n          waitingFor?: "external_event" | "timer" | "user_input" | null | undefined;\n          pinned?: boolean | undefined;\n        }\n      | { waitingFor: null; clearWaitingForThroughOffset: number }\n    >\n  | TypedConsumedEventInput<\n      "events.iterate.com/agent/token-usage-reported",\n      {\n        llmRequestOffset: number;\n        model: string;\n        maxContextTokens: number;\n        inputTokens: number;\n        outputTokens: number;\n        cachedInputTokens?: number | undefined;\n        reasoningOutputTokens?: number | undefined;\n      }\n    >\n  | TypedConsumedEventInput<\n      "events.iterate.com/agents/context-added",\n      {\n        role: "assistant" | "developer" | "system" | "user";\n        content: string;\n        key?: string | undefined;\n        files?:\n          | { contentType: string; filename: string; path: string; size: number; url: string }[]\n          | undefined;\n        refs?:\n          | (\n              | {\n                  type: "event";\n                  streamPath: string;\n                  offset: number;\n                  eventType?: string | undefined;\n                }\n              | { type: "user"; userId: string }\n              | { type: "file"; path: string }\n              | { type: "git-commit"; repoPath: string; commitOid: string }\n            )[]\n          | undefined;\n        actor?:\n          | { type: "user"; origin: "mcp" | "web" }\n          | { type: "agent"; path: string }\n          | { type: "script"; executionId: string }\n          | { type: "integration"; name: string }\n          | { type: "slack"; userId?: string | undefined; botName?: string | undefined }\n          | { type: "telegram"; userId?: string | undefined; username?: string | undefined }\n          | { type: "email"; address?: string | undefined; name?: string | undefined }\n          | { type: "github"; login?: string | undefined; senderType?: string | undefined }\n          | undefined;\n        llmRequestPolicy?:\n          | { behaviour: "dont-trigger-request" }\n          | { behaviour: "interrupt-current-request" }\n          | { behaviour: "after-current-request" }\n          | undefined;\n        llmRequestOffset?: number | undefined;\n        compaction?:\n          | {\n              replacesHistoryThrough: number;\n              usage?:\n                | {\n                    inputTokens: number;\n                    outputTokens: number;\n                    cachedInputTokens?: number | undefined;\n                    reasoningOutputTokens?: number | undefined;\n                  }\n                | undefined;\n            }\n          | undefined;\n      }\n    >\n  | TypedConsumedEventInput<\n      "events.iterate.com/agents/web-message-sent",\n      {\n        message: string;\n        files?:\n          | { contentType: string; filename: string; path: string; size: number; url: string }[]\n          | undefined;\n      }\n    >\n  | TypedConsumedEventInput<\n      "events.iterate.com/capability-host/script-run-requested",\n      { code: string; executionId: string; expiresAt: number }\n    >\n  | TypedConsumedEventInput<\n      "events.iterate.com/capability-host/script-run-settled",\n      {\n        executionId: string;\n        settlement:\n          | { status: "succeeded"; result?: JsonValue | undefined }\n          | {\n              status: "failed";\n              error: string;\n              failureKind: "deadline" | "expired" | "orphaned" | "runtime" | "typecheck";\n              phase: "before-execution" | "execution" | "recovery" | "typecheck";\n              executionMayHaveOccurred: boolean;\n              cancellation: "external-work-may-continue" | "not-applicable";\n            };\n      }\n    >\n  | TypedConsumedEventInput<\n      "events.iterate.com/stream/error-occurred",\n      {\n        message: string;\n        error?:\n          | {\n              name?: string | undefined;\n              message: string;\n              code?: string | undefined;\n              stack?: string | undefined;\n            }\n          | undefined;\n      }\n    >;',
+    summary: "Append input accepted by the Agent processor, derived from its `consumes` contract.",
+    memberSummaries: {},
+    referencedTypeNames: ["TypedConsumedEventInput", "JsonValue"],
+  },
+  {
+    name: "StreamEvent",
+    kind: "typeAlias",
+    sourceText:
+      "/** One committed event on a durable stream: type, JSON payload, offset,\n * idempotency key, and provenance (processor stamp / cross-post chain), plus\n * the commit-time `createdAt` and stream `path`. `ephemeral: true` marks a\n * second-class row (see `StreamEventInput`). */\nexport type StreamEvent = {\n  type: string;\n  payload?: Record<string, unknown> | undefined;\n  metadata?: Record<string, unknown> | undefined;\n  source?:\n    | {\n        processor?:\n          | {\n              slug: string;\n              version: string;\n              stream: { path: string; projectId: string | null };\n              whileProcessing?: { offset: number; type: string } | undefined;\n            }\n          | undefined;\n        crossPostedFrom?:\n          | {\n              subscriptionKey: string;\n              createdAt: string;\n              offset: number;\n              path: string;\n              projectId: string | null;\n              type: string;\n            }[]\n          | undefined;\n      }\n    | undefined;\n  idempotencyKey?: string | undefined;\n  ephemeral?: true | undefined;\n  offset: number;\n  createdAt: string;\n  path: string;\n};",
+    summary:
+      "One committed event on a durable stream: type, JSON payload, offset, idempotency key, and provenance (processor stamp / cross-post chain), plus the commit-time `createdAt` and stream `path`.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "AgentCreateInput",
+    kind: "typeAlias",
+    sourceText:
+      "/** The `agent/created` payload — the agent's birth certificate (a loose\n * object of caller-authored birth facts; `{}` is the norm). */\nexport type AgentCreateInput = { [x: string]: unknown };",
+    summary:
+      "The `agent/created` payload — the agent's birth certificate (a loose object of caller-authored birth facts; `{}` is the norm).",
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -1135,31 +1397,21 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
-    name: "StreamEvent",
-    kind: "typeAlias",
-    sourceText:
-      "/** One committed event on a durable stream: type, JSON payload, offset,\n * idempotency key, and provenance (processor stamp / cross-post chain), plus\n * the commit-time `createdAt` and stream `path`. `ephemeral: true` marks a\n * second-class row (see `StreamEventInput`). */\nexport type StreamEvent = {\n  type: string;\n  payload?: Record<string, unknown> | undefined;\n  metadata?: Record<string, unknown> | undefined;\n  source?:\n    | {\n        processor?:\n          | {\n              slug: string;\n              version: string;\n              stream: { path: string; projectId: string | null };\n              whileProcessing?: { offset: number; type: string } | undefined;\n            }\n          | undefined;\n        crossPostedFrom?:\n          | {\n              subscriptionKey: string;\n              createdAt: string;\n              offset: number;\n              path: string;\n              projectId: string | null;\n              type: string;\n            }[]\n          | undefined;\n      }\n    | undefined;\n  idempotencyKey?: string | undefined;\n  ephemeral?: true | undefined;\n  offset: number;\n  createdAt: string;\n  path: string;\n};",
-    summary:
-      "One committed event on a durable stream: type, JSON payload, offset, idempotency key, and provenance (processor stamp / cross-post chain), plus the commit-time `createdAt` and stream `path`.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "AgentDefaultsOverrides",
-    kind: "typeAlias",
-    sourceText:
-      "/** Caller-supplied policy overrides, baked into the returned events. A\n * systemPrompt override REPLACES the path's platform prompt wholesale — the\n * caller owns the whole contract, including how the agent acts (codemode). */\nexport type AgentDefaultsOverrides = {\n  systemPrompt?: string;\n  model?: string;\n};",
-    summary: "Caller-supplied policy overrides, baked into the returned events.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
     name: "AgentFileAttachment",
     kind: "typeAlias",
     sourceText:
-      "/** A file attached to an agent input: content type, filename, project\n * file-storage path, size, and the signed public URL minted at attach time\n * (stored, not re-minted — it expires with its signature). */\nexport type AgentFileAttachment = {\n  contentType: string;\n  filename: string;\n  path: string;\n  size: number;\n  url: string;\n};",
+      '/** A file attached to an agent context item: content type, filename, project\n * file-storage path, size, and the signed public URL minted at attach time\n * (stored, not re-minted — it expires with its signature). */\nexport type AgentFileAttachment = NonNullable<AgentContextAddedPayload["files"]>[number];',
     summary:
-      "A file attached to an agent input: content type, filename, project file-storage path, size, and the signed public URL minted at attach time (stored, not re-minted — it expires with its signature).",
+      "A file attached to an agent context item: content type, filename, project file-storage path, size, and the signed public URL minted at attach time (stored, not re-minted — it expires with its signature).",
+    memberSummaries: {},
+    referencedTypeNames: ["AgentContextAddedPayload"],
+  },
+  {
+    name: "CapabilityHostCreateInput",
+    kind: "typeAlias",
+    sourceText:
+      "/** The `capability-host/created` payload — the scope's birth certificate. */\nexport type CapabilityHostCreateInput = { config: Record<string, never>; fallback?: unknown };",
+    summary: "The `capability-host/created` payload — the scope's birth certificate.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -1192,6 +1444,25 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
+    name: "AgentCollectionProcessorState",
+    kind: "typeAlias",
+    sourceText:
+      '/** The singleton agent collection processor\'s reduced database state. */\nexport type AgentCollectionProcessorState = {\n  birthCertificate: Record<string, never> | null;\n  agents: Record<\n    string,\n    {\n      path: string;\n      summary: {\n        title?: string | undefined;\n        description?: string | undefined;\n        activity?: string | undefined;\n        waitingFor?: "external_event" | "timer" | "user_input" | undefined;\n        pinned: boolean;\n      };\n      timestamps: {\n        createdAt: string;\n        lastWorkAt: string;\n        summaryUpdatedAt?: string | undefined;\n        activityUpdatedAt?: string | undefined;\n      };\n    }\n  >;\n  waitingForSinceOffsets: Record<string, number>;\n};',
+    summary: "The singleton agent collection processor's reduced database state.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "EgressResponse",
+    kind: "typeAlias",
+    sourceText:
+      "/**\n * What `egress.fetch` resolves: a real fetch `Response`, with `json()` pinned\n * to `Promise<unknown>` ahead of the ambient signature. Pinned because the\n * ambient resolution is a compiler-settings artifact — which `lib`/`types` a\n * consumer compiles with decides whether `await response.json()` is `any`\n * (DOM lib alone), `unknown` (the current DOM + workers-types merge), or the\n * useless `Promise<{}>` (older merges, where workers-types'\n * `json<T>(): Promise<T>` inferred `{}`). The first-position member makes\n * every consumer see the same honest `unknown`: narrow or cast it to the\n * shape you expect, or `JSON.parse(await response.text())` in plain-JS\n * scripts that read the body dynamically.\n */\nexport type EgressResponse = {\n  /** The parsed JSON body — honestly `unknown`; the caller supplies the shape. */\n  json(): Promise<unknown>;\n} & Response;",
+    summary:
+      "What `egress.fetch` resolves: a real fetch `Response`, with `json()` pinned to `Promise<unknown>` ahead of the ambient signature.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
     name: "ProjectEgressInterceptor",
     kind: "typeAlias",
     sourceText:
@@ -1211,13 +1482,68 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
+    name: "IntegrationFamily",
+    kind: "typeAlias",
+    sourceText:
+      "/** A connection family on `itx.integrations`. `get()` selects the first\n * connected account; pass a slug only when the exact account matters. The\n * return value is an RPC capability (not a Promise), so calls pipeline in one\n * expression: `itx.integrations.github.get().octokit.rest.repos.get(...)`. */\nexport type IntegrationFamily<Connection> = {\n  get(connection?: string): Connection;\n};",
+    summary: "A connection family on `itx.integrations`.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "SlackConnection",
+    kind: "typeAlias",
+    sourceText:
+      "/** A Slack WebClient connection. Web API namespaces and methods are dynamic;\n * `processor` is the connection's durable webhook router. */\nexport type SlackConnection = Record<string, any> & {\n  processor: WakeableStreamProcessorRpc;\n};",
+    summary: "A Slack WebClient connection.",
+    memberSummaries: {},
+    referencedTypeNames: ["WakeableStreamProcessorRpc"],
+  },
+  {
+    name: "GmailConnection",
+    kind: "typeAlias",
+    sourceText:
+      "/** The Gmail REST API connection exposed by a connected Google account.\n * `data` is whatever the addressed REST resource returns — the caller\n * supplies the expected shape via `request<T>` (no invented Gmail schemas\n * here); it defaults to the honest `unknown` when uninstantiated. */\nexport type GmailConnection = {\n  request<T = unknown>(\n    input: GmailRequestInput,\n  ): Promise<{\n    data: T;\n    headers: Record<string, string>;\n    status: number;\n    statusText: string;\n  }>;\n};",
+    summary: "The Gmail REST API connection exposed by a connected Google account.",
+    memberSummaries: {},
+    referencedTypeNames: ["GmailRequestInput"],
+  },
+  {
+    name: "GithubConnection",
+    kind: "typeAlias",
+    sourceText:
+      '/** The normal all-in-one Octokit package with iterate supplying GitHub App\n * installation auth and transport. Both REST and GraphQL are available. */\nexport type GithubConnection = { octokit: import("octokit").Octokit };',
+    summary:
+      "The normal all-in-one Octokit package with iterate supplying GitHub App installation auth and transport.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "TelegramConnection",
+    kind: "typeAlias",
+    sourceText:
+      "/** The commonly used Telegram Bot API surface. The runtime accepts every\n * flat Bot API method with one params object; these members keep the generated\n * script types useful without maintaining a second copy of Telegram's API. */\nexport type TelegramConnection = {\n  getMe(params?: Record<string, unknown>): Promise<Record<string, unknown>>;\n  processor: WakeableStreamProcessorRpc;\n  sendChatAction(params: Record<string, unknown>): Promise<Record<string, unknown>>;\n  sendMessage(\n    params: { chat_id: number | string; text: string } & Record<string, unknown>,\n  ): Promise<Record<string, unknown>>;\n  sendPhoto(params: Record<string, unknown>): Promise<Record<string, unknown>>;\n};",
+    summary: "The commonly used Telegram Bot API surface.",
+    memberSummaries: {},
+    referencedTypeNames: ["WakeableStreamProcessorRpc"],
+  },
+  {
+    name: "WaitroseConnection",
+    kind: "typeAlias",
+    sourceText:
+      "/** iterate's small, connection-scoped Waitrose client. */\nexport type WaitroseConnection = {\n  addToTrolley(lineNumber: string, quantity?: number): Promise<Record<string, unknown>>;\n  removeFromTrolley(lineNumber: string): Promise<Record<string, unknown>>;\n  searchProducts(\n    searchTerm: string,\n    options?: { size?: number; sortBy?: string; start?: number },\n  ): Promise<{\n    products: Array<{ displayPrice?: string; lineNumber: string; name: string; size?: string }>;\n    totalMatches: number;\n  }>;\n  shoppingContext(): Promise<{\n    customerId: string;\n    customerOrderId: string;\n    customerOrderState: string;\n    defaultBranchId: string;\n  }>;\n  trolley(orderId?: string): Promise<Record<string, unknown>>;\n  updateTrolleyItems(\n    items: Array<{\n      canSubstitute?: boolean;\n      lineNumber: string;\n      noteToShopper?: string;\n      quantity: { amount: number; uom: string };\n    }>,\n    orderId?: string,\n  ): Promise<Record<string, unknown>>;\n};",
+    summary: "iterate's small, connection-scoped Waitrose client.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
     name: "IntegrationConnectionListEntry",
     kind: "typeAlias",
     sourceText:
-      '/**\n * One entry of `integrations.list()`. Discriminated on `source`: built-in\n * entries always name a concrete connection (they come from\n * `/integrations/<slug>/<connection>` journals); provided entries may be\n * integration-level mounts (`connection: null` — one recipe serving every\n * connection name beneath it, path `/integrations/<slug>`).\n */\nexport type IntegrationConnectionListEntry =\n  | {\n      connection: string;\n      integration: BuiltinIntegrationSlug;\n      /** The fully qualified connection path, e.g. `/integrations/slack/main-slack`. */\n      path: string;\n      source: "builtin";\n    }\n  | {\n      connection: string | null;\n      integration: string;\n      path: string;\n      source: "provided";\n    };',
+      '/**\n * One entry of `integrations.list()`. Discriminated on `source`: built-in\n * entries always name a concrete connection (normally from\n * `/integrations/<slug>/<connection>` journals; credential-defined Waitrose\n * connections come from their session-secret paths); provided entries may be\n * integration-level mounts (`connection: null` — one recipe serving every\n * connection name beneath it, path `/integrations/<slug>`).\n */\nexport type IntegrationConnectionListEntry =\n  | {\n      connection: string;\n      integration: PublicBuiltinIntegrationSlug;\n      /** The internal connection path, e.g. `/integrations/slack/main-slack`;\n       * Gmail entries retain their `/integrations/google/...` journal path. */\n      path: string;\n      source: "builtin";\n    }\n  | {\n      connection: string | null;\n      integration: string;\n      path: string;\n      source: "provided";\n    };',
     summary: "One entry of `integrations.list()`.",
     memberSummaries: {},
-    referencedTypeNames: ["BuiltinIntegrationSlug"],
+    referencedTypeNames: ["PublicBuiltinIntegrationSlug"],
   },
   {
     name: "BuiltinIntegrationSlug",
@@ -1263,9 +1589,9 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "CompleteConnectResult",
     kind: "typeAlias",
     sourceText:
-      "/** Outcome of `completeConnect` (the OAuth/installation redirect callback):\n * `ok` plus the `callbackUrl` to send the browser back to; on failure, a\n * human-readable `error`. */\nexport type CompleteConnectResult =\n  | { callbackUrl: string | null; ok: true }\n  | { callbackUrl: string | null; error: string; ok: false };",
+      '/** Outcome of `completeConnect` (the OAuth/installation redirect callback):\n * `ok` plus the browser\'s next URL (a provider authorization URL for an\n * intermediate step, otherwise the product callback); on failure, a\n * human-readable `error`. */\nexport type CompleteConnectResult =\n  | { callbackUrl: string | null; ok: true }\n  | {\n      callbackUrl: string | null;\n      error: "github_installation_already_claimed";\n      githubStealState: string;\n      ok: false;\n    }\n  | { callbackUrl: string | null; error: string; ok: false };',
     summary:
-      "Outcome of `completeConnect` (the OAuth/installation redirect callback): `ok` plus the `callbackUrl` to send the browser back to; on failure, a human-readable `error`.",
+      "Outcome of `completeConnect` (the OAuth/installation redirect callback): `ok` plus the browser's next URL (a provider authorization URL for an intermediate step, otherwise the product callback); on failure, a human-readable `error`.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -1302,7 +1628,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "McpBeginOAuthResult",
     kind: "typeAlias",
     sourceText:
-      '/** Result of `itx.mcp.beginOAuth`: a link to send the user through, and the\n * secret path the token lands at once they finish. */\nexport type McpBeginOAuthResult = {\n  /** Send this to the user. Signing in there stores the token and (for an agent)\n   * messages you back so you can continue. */\n  authorizationUrl: string;\n  /** The `/secrets/…` path the token is stored at. Connect afterwards with\n   * `headers: { authorization: \'Bearer getSecret({ path: "<path>", field: "accessToken" })\' }`. */\n  path: string;\n};',
+      '/** Result of `itx.mcp.beginOAuth`: a link to send the user through, and the\n * secret path the token lands at once they finish. */\nexport type McpBeginOAuthResult = {\n  /** Send this to the user. Signing in there stores the token and (for an agent)\n   * messages you back so you can continue. */\n  authorizationUrl: string;\n  /** The `/secrets/…` path the token is stored at. Connect afterwards with\n   * `headers: { authorization: \'Bearer getSecret("<path>", { field: "accessToken" })\' }`. */\n  path: string;\n};',
     summary:
       "Result of `itx.mcp.beginOAuth`: a link to send the user through, and the secret path the token lands at once they finish.",
     memberSummaries: {},
@@ -1319,32 +1645,11 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
-    name: "SandboxCreateInput",
+    name: "DeviceDescription",
     kind: "typeAlias",
     sourceText:
-      '/** What `itx.sandboxes.create` takes — Cloudflare\'s own vocabulary\n * (instance types, `SandboxOptions.sleepAfter`/`keepAlive`) plus a name. */\nexport type SandboxCreateInput = {\n  /** The sandbox\'s name — a single path segment (no `/`); its path becomes\n   * `/sandboxes/<name>`. Names are unique per project (across instance\n   * types), and destroyed names are retired, not recycled — pick a new one. */\n  name: string;\n  /** Cloudflare instance type; defaults to `basic`. Cannot be changed later. */\n  instanceType?: SandboxInstanceType;\n  /** Idle time before the container is snapshotted and torn down: a positive\n   * number of SECONDS, or `"<n>s"`/`"<n>m"`/`"<n>h"` (e.g. `"30s"`, `"5m"`,\n   * `"1h"` — no other units). Defaults to the SDK\'s 10 minutes. The workspace\n   * survives — see {@link CloudflareSandbox}. */\n  sleepAfter?: string | number;\n  /** Keep the container alive indefinitely (the SDK\'s `keepAlive`); you must\n   * `sleep()` or `destroy()` explicitly. */\n  keepAlive?: boolean;\n  /** Initial env-var map, merged as if by `setEnvVars` — values are\n   * `getSecret({ path })` placeholders or non-secret literals, NEVER raw\n   * secret material. */\n  env?: Record<string, string>;\n};',
-    summary:
-      "What `itx.sandboxes.create` takes — Cloudflare's own vocabulary (instance types, `SandboxOptions.sleepAfter`/`keepAlive`) plus a name.",
-    memberSummaries: {},
-    referencedTypeNames: ["SandboxInstanceType"],
-  },
-  {
-    name: "SandboxInstanceType",
-    kind: "typeAlias",
-    sourceText:
-      '/** A sandbox\'s size tier ("lite" | "basic" | "standard-1"…"standard-4") —\n * Cloudflare container instance-type names, fixed at `create` and immutable\n * for the sandbox\'s lifetime. See {@link SANDBOX_INSTANCE_TYPES} for the\n * vCPU/memory/disk table. */\nexport type SandboxInstanceType =\n  | "basic"\n  | "lite"\n  | "standard-1"\n  | "standard-2"\n  | "standard-3"\n  | "standard-4";',
-    summary:
-      'A sandbox\'s size tier ("lite" | "basic" | "standard-1"…"standard-4") — Cloudflare container instance-type names, fixed at `create` and immutable for the sandbox\'s lifetime.',
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "CloudflareSandbox",
-    kind: "typeAlias",
-    sourceText:
-      "/**\n * One sandbox: the bare `@cloudflare/sandbox` Durable Object stub, nothing\n * wrapped on top. Whatever the installed SDK exposes is callable —\n * `exec(command)`, `readFile`/`writeFile`/`listFiles`, `startProcess`,\n * sessions, `gitCheckout`, the code interpreter, `tunnels`, … — so this\n * contract deliberately does not re-declare that surface (same stance as\n * `McpClientRpc`); https://developers.cloudflare.com/sandbox/api/ is\n * the authoritative reference. The image is the stock Cloudflare sandbox\n * image (Ubuntu 22.04, Node 20, Bun, git, curl, jq); install anything else\n * you need at runtime.\n *\n * Platform deltas over stock Cloudflare (everything else passes through):\n * - Sandboxes are created explicitly (`itx.sandboxes.create`), never minted\n *   by addressing.\n * - `/workspace` SURVIVES sleep: snapshotted to storage on `sleep()` or the\n *   idle timer, restored on the next start — where stock Cloudflare loses all\n *   state. Everything outside `/workspace` is ephemeral, and a crash loses\n *   anything since the last snapshot.\n * - `start()` boots the container now instead of lazily; `sleep()` snapshots\n *   and tears down now instead of waiting for `sleepAfter` (the SDK's\n *   `stop()` forwards to it); `kill()` aborts the Durable Object incarnation;\n *   `destroy()` is permanent — the name is retired.\n * - `__describe()` (the capability-tree convention) carries the durable\n *   record as structured extras ({ path, instanceType, createdAt, sleepAfter }).\n * - `setEnvVars(vars)` is DURABLE here (persisted, re-applied every start,\n *   journaled as a `configured` event); values are conventionally\n *   `getSecret({ path })` placeholders substituted only at egress — real\n *   secret material never enters the container. All sandbox egress flows\n *   through project egress policy; there is no direct internet path.\n * - `mountBucket` and `exposePort` are unavailable (they throw): /workspace\n *   snapshots cover persistence, and `tunnels` covers public URLs.\n */\nexport type CloudflareSandbox = object & {\n  /** Abort the current sandbox Durable Object incarnation; the next request boots it again. */\n  kill(): Promise<void>;\n};",
-    summary:
-      "One sandbox: the bare `@cloudflare/sandbox` Durable Object stub, nothing wrapped on top.",
+      '/** Safe, discoverable metadata for one project-enrolled mobile installation. */\nexport type DeviceDescription = {\n  appVersion: string | null;\n  created: boolean;\n  deviceId: string;\n  label: string | null;\n  lastNotificationOpenedAt: string | null;\n  notificationsStatus: "granted" | "revoked" | null;\n  ownerId: string | null;\n  platform: "ios" | "android" | null;\n  revokedAt: string | null;\n};',
+    summary: "Safe, discoverable metadata for one project-enrolled mobile installation.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -1352,7 +1657,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "SchedulerProcessorState",
     kind: "typeAlias",
     sourceText:
-      '/** The scheduler\'s reduced state: the one object the UI, alarm, and executor read. */\nexport type SchedulerProcessorState = {\n  pendingTriggers: Record<\n    string,\n    {\n      [x: string]: unknown;\n      key: string;\n      requestedAt: string;\n      runCount: number;\n      scheduledFor: string;\n    }\n  >;\n  schedules: Record<\n    string,\n    {\n      [x: string]: unknown;\n      action: { [x: string]: unknown; kind: "itx-script"; script: string };\n      definedAtOffset: number;\n      metadata?: Record<string, unknown> | undefined;\n      path?: string | undefined;\n      nextTriggerAt: number | null;\n      recurrence:\n        | { [x: string]: unknown; at: string }\n        | { [x: string]: unknown; every: number }\n        | { [x: string]: unknown; cron: string; timezone?: string | undefined };\n      runCount: number;\n      setAt: string;\n    }\n  >;\n};',
+      '/** The scheduler\'s reduced state: the one object the UI, alarm, and executor read. */\nexport type SchedulerProcessorState = {\n  birthCertificate: { config: Record<string, never> } | null;\n  pendingTriggers: Record<\n    string,\n    {\n      [x: string]: unknown;\n      key: string;\n      requestedAt: string;\n      runCount: number;\n      scheduledFor: string;\n    }\n  >;\n  schedules: Record<\n    string,\n    {\n      [x: string]: unknown;\n      action: { [x: string]: unknown; kind: "itx-script"; script: string };\n      definedAtOffset: number;\n      metadata?: Record<string, unknown> | undefined;\n      path: string;\n      nextTriggerAt: number | null;\n      recurrence:\n        | { [x: string]: unknown; at: string }\n        | { [x: string]: unknown; every: number }\n        | { [x: string]: unknown; cron: string; timezone?: string | undefined };\n      runCount: number;\n      setAt: string;\n    }\n  >;\n};',
     summary: "The scheduler's reduced state: the one object the UI, alarm, and executor read.",
     memberSummaries: {},
     referencedTypeNames: [],
@@ -1392,6 +1697,15 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "/**\n * What `itx.secrets.collectFromUser` returns: the normalized secret path and\n * the deep link to the chrome-free collection page. Send the URL to the user;\n * when they submit, the secret is stored (material + egress pin in one update)\n * and — when the caller was an agent scope — that agent receives a message\n * that the secret at this path is ready.\n */\nexport type CollectSecretLink = {\n  path: string;\n  url: string;\n};",
     summary:
       "What `itx.secrets.collectFromUser` returns: the normalized secret path and the deep link to the chrome-free collection page.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "RepoCreateInput",
+    kind: "typeAlias",
+    sourceText:
+      '/** The `repos/create-requested` payload — the creation saga\'s durable intent. */\nexport type RepoCreateInput =\n  | { type: "empty" }\n  | { type: "github-private"; connection: string; owner: string; repo: string }\n  | {\n      type: "github-public";\n      connection: string;\n      depth?: number | undefined;\n      owner: string;\n      repo: string;\n    };',
+    summary: "The `repos/create-requested` payload — the creation saga's durable intent.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -1454,9 +1768,9 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "LinkGithubResult",
     kind: "typeAlias",
     sourceText:
-      "/** What `repo.linkGithub` returns: the recorded link, whether the GitHub\n * repository was created by this call, and the initial mirror push's outcome\n * (a failed initial push does not fail the link — it is journaled on the repo\n * stream and repaired by `pushToGithub()` or the next commit). */\nexport type LinkGithubResult = GithubRepoLink & {\n  created: boolean;\n  initialPush: { ok: boolean; commitOid?: string; error?: string };\n};",
+      "/** What `repo.linkGithub` returns: the recorded link, whether the GitHub\n * repository was created by this call, and the initial mirror push's outcome.\n * The compound public-import path reports that push as skipped because the\n * Artifact already came from GitHub. A failed initial push does not fail the\n * link — it is journaled and repaired by `pushToGithub()` or the next commit. */\nexport type LinkGithubResult = GithubRepoLink & {\n  created: boolean;\n  initialPush:\n    | { ok: true; commitOid: string }\n    | { ok: true; skipped: true }\n    | { ok: false; error: string };\n};",
     summary:
-      "What `repo.linkGithub` returns: the recorded link, whether the GitHub repository was created by this call, and the initial mirror push's outcome (a failed initial push does not fail the link — it is journaled on the repo stream and repaired by `pushToGithub()` or the next commit).",
+      "What `repo.linkGithub` returns: the recorded link, whether the GitHub repository was created by this call, and the initial mirror push's outcome.",
     memberSummaries: {},
     referencedTypeNames: ["GithubRepoLink"],
   },
@@ -1471,10 +1785,20 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
+    name: "GithubResetResult",
+    kind: "typeAlias",
+    sourceText:
+      "/** What `repo.resetFromGithub` returns after destructively replacing the\n * Artifacts repository with the linked GitHub repository's branch head. */\nexport type GithubResetResult = {\n  artifactReplaced: true;\n  branch: string;\n  commitOid: string;\n  previousCommitOid: string | null;\n};",
+    summary:
+      "What `repo.resetFromGithub` returns after destructively replacing the Artifacts repository with the linked GitHub repository's branch head.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
     name: "RepoProcessorState",
     kind: "typeAlias",
     sourceText:
-      "/**\n * The repo processor's reduced state, inferred from the contract's\n * `stateSchema` — the one definition of the shape.\n */\nexport type RepoProcessorState = {\n  artifactName: string | null;\n  createRequested: boolean;\n  created: boolean;\n  defaultBranch: string | null;\n  github: { connection: string; installationId: string; owner: string; repo: string } | null;\n  initialized: boolean;\n  lastGithubPush: {\n    at: string;\n    branch: string;\n    commitOid: string | null;\n    error: string | null;\n    ok: boolean;\n  } | null;\n  remote: string | null;\n};",
+      '/**\n * The repo processor\'s reduced state, inferred from the contract\'s\n * `stateSchema` — the one definition of the shape.\n */\nexport type RepoProcessorState = {\n  createRequest:\n    | { type: "empty" }\n    | { type: "github-private"; connection: string; owner: string; repo: string }\n    | {\n        type: "github-public";\n        connection: string;\n        depth?: number | undefined;\n        owner: string;\n        repo: string;\n      }\n    | null;\n  createFailure: {\n    error: string;\n    request:\n      | { type: "empty" }\n      | { type: "github-private"; connection: string; owner: string; repo: string }\n      | {\n          type: "github-public";\n          connection: string;\n          depth?: number | undefined;\n          owner: string;\n          repo: string;\n        };\n  } | null;\n  birthCertificate: {\n    request:\n      | { type: "empty" }\n      | { type: "github-private"; connection: string; owner: string; repo: string }\n      | {\n          type: "github-public";\n          connection: string;\n          depth?: number | undefined;\n          owner: string;\n          repo: string;\n        };\n    artifactName: string;\n    defaultBranch: string;\n    remote: string;\n  } | null;\n  artifactName: string | null;\n  defaultBranch: string | null;\n  github: {\n    connection: string;\n    installationId: string;\n    owner: string;\n    repo: string;\n    repositoryId: number;\n  } | null;\n  githubImport: {\n    branch: string;\n    requestId: string;\n    requestedCommitOid: string;\n    status: "requested" | "started";\n  } | null;\n  initialized: boolean;\n  lastGithubPush: {\n    at: string;\n    branch: string;\n    commitOid: string | null;\n    error: string | null;\n    ok: boolean;\n  } | null;\n  remote: string | null;\n};',
     summary:
       "The repo processor's reduced state, inferred from the contract's `stateSchema` — the one definition of the shape.",
     memberSummaries: {},
@@ -1484,8 +1808,8 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "DynamicWorkerRef",
     kind: "typeAlias",
     sourceText:
-      "/** Worker recipe accepted by `workers.get` and worker-backed capabilities. */\nexport type DynamicWorkerRef = StatelessDynamicWorkerRef | StatefulDynamicWorkerRef;",
-    summary: "Worker recipe accepted by `workers.get` and worker-backed capabilities.",
+      "/** Worker reference accepted by `workers.get` and worker-backed capabilities. */\nexport type DynamicWorkerRef = StatelessDynamicWorkerRef | StatefulDynamicWorkerRef;",
+    summary: "Worker reference accepted by `workers.get` and worker-backed capabilities.",
     memberSummaries: {},
     referencedTypeNames: ["StatelessDynamicWorkerRef", "StatefulDynamicWorkerRef"],
   },
@@ -1511,7 +1835,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "StreamEventInput",
     kind: "typeAlias",
     sourceText:
-      "/** Append input for `Stream.append`: event type, JSON payload, optional\n * metadata, provenance source, and idempotency key — everything before the\n * stream assigns offset and timestamp at commit. `ephemeral: true` commits a\n * second-class row: excluded from range reads unless `includeEphemeral`,\n * never delivered to durable subscribers (wake/push/webhook), and evictable —\n * for transient signals (LLM streaming chunks) whose durable truth lands as\n * its own event. */\nexport type StreamEventInput = {\n  type: string;\n  payload?: Record<string, unknown> | undefined;\n  metadata?: Record<string, unknown> | undefined;\n  source?:\n    | {\n        processor?:\n          | {\n              slug: string;\n              version: string;\n              stream: { path: string; projectId: string | null };\n              whileProcessing?: { offset: number; type: string } | undefined;\n            }\n          | undefined;\n        crossPostedFrom?:\n          | {\n              subscriptionKey: string;\n              createdAt: string;\n              offset: number;\n              path: string;\n              projectId: string | null;\n              type: string;\n            }[]\n          | undefined;\n      }\n    | undefined;\n  idempotencyKey?: string | undefined;\n  ephemeral?: true | undefined;\n};",
+      "/** Append input for `Stream.append`: event type, JSON payload, optional\n * metadata, provenance source, and idempotency key — everything before the\n * stream assigns offset and timestamp at commit. `ephemeral: true` commits a\n * second-class row: excluded from range reads unless `includeEphemeral`,\n * excluded from durable delivery unless a push/webhook explicitly opts in, and evictable —\n * for transient signals (LLM streaming chunks) whose durable truth lands as\n * its own event. */\nexport type StreamEventInput = {\n  type: string;\n  payload?: Record<string, unknown> | undefined;\n  metadata?: Record<string, unknown> | undefined;\n  source?:\n    | {\n        processor?:\n          | {\n              slug: string;\n              version: string;\n              stream: { path: string; projectId: string | null };\n              whileProcessing?: { offset: number; type: string } | undefined;\n            }\n          | undefined;\n        crossPostedFrom?:\n          | {\n              subscriptionKey: string;\n              createdAt: string;\n              offset: number;\n              path: string;\n              projectId: string | null;\n              type: string;\n            }[]\n          | undefined;\n      }\n    | undefined;\n  idempotencyKey?: string | undefined;\n  ephemeral?: true | undefined;\n};",
     summary:
       "Append input for `Stream.append`: event type, JSON payload, optional metadata, provenance source, and idempotency key — everything before the stream assigns offset and timestamp at commit.",
     memberSummaries: {},
@@ -1536,32 +1860,18 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
-    name: "ConnectionRuntimeState",
+    name: "StreamRuntimeDebugState",
     kind: "typeAlias",
     sourceText:
-      "/** Serializable debug view of one live connection, for `runtimeState()`. */\nexport type ConnectionRuntimeState = {\n  subscriptionType: StreamSubscriptionType;\n  startedAt: string;\n  cursor: number;\n  /** `maxOffset - cursor` — real offset lag for EVERY connection kind, ephemeral included. */\n  lag: number;\n  batchesSent: number;\n  eventsSent: number;\n  /** Serialized payload bytes delivered into this connection's sink (cumulative). */\n  bytesSent: number;\n  lastDeliveredAt?: string;\n  /**\n   * Commit-to-settled latency, stream clock only: `createdAt` of the newest\n   * event in a batch → the pulled batch result settling (the subscriber's\n   * ingest resolved). Durable (wake) lane only — ephemeral results are\n   * disposed unpulled, so ephemeral consumption is self-reported by the host\n   * through `getRuntimeState` instead. Absent until a sample exists.\n   */\n  settleLatencyMs?: LatencyStats;\n  /** Mutual-ping transport RTT to this subscriber (observer-driven sampling). Absent until pinged. */\n  pingRttMs?: LatencyStats;\n  /**\n   * The connect-time identity descriptor. The runtime table is the ONLY home\n   * for ephemeral identity — ephemeral connections don't fold into the\n   * reduced `connectionsByKey` roster (core state v14) — so debug surfaces\n   * read who's connected from here.\n   */\n  subscriber?: StreamSubscriberDescriptor;\n  /**\n   * True while the last batch handed to this connection's sink is unsettled —\n   * exactly the signal idle teardown consults to classify a sink as wedged.\n   */\n  hasPendingDelivery: boolean;\n};",
-    summary: "Serializable debug view of one live connection, for `runtimeState()`.",
-    memberSummaries: {},
-    referencedTypeNames: ["StreamSubscriptionType", "LatencyStats", "StreamSubscriberDescriptor"],
-  },
-  {
-    name: "SubscriptionRuntimeState",
-    kind: "typeAlias",
-    sourceText:
-      "/** Serializable debug view of one durable subscription's spine row, for `runtimeState()`. */\nexport type SubscriptionRuntimeState = {\n  mode: SubscriptionDelivery[\"mode\"];\n  /** Exclusive. Authoritative cursor (push) or observational watermark (wake). */\n  ackedOffset: number;\n  /** `maxOffset - ackedOffset` — the Kafka lag number, per subscriber. */\n  lag: number;\n  attempt: number;\n  nextAttemptAt: number | null;\n  lastError: string | null;\n  parkedAtOffset: number | null;\n  /** Whether a live delivery connection currently exists (wake mode). */\n  connected: boolean;\n  /** Serialized payload bytes delivered (push/webhook lanes; cumulative). */\n  bytesSent?: number;\n  /** Commit-to-acked latency (stream clock): newest event `createdAt` → awaited delivery resolved. */\n  settleLatencyMs?: LatencyStats;\n  /** Duration of the awaited delivery call itself — the push/webhook lane's transport latency. */\n  deliveryDurationMs?: LatencyStats;\n};",
+      "/** Serializable stream-core and delivery-runtime state exposed through `Stream.liveState`. */\nexport type StreamRuntimeDebugState = {\n  /** Kept opaque at the public stream boundary; consumers may inspect known fields defensively. */\n  coreProcessorState: unknown;\n  runtime: {\n    connections: Record<string, ConnectionRuntimeState>;\n    subscriptions: Record<string, SubscriptionRuntimeState>;\n    metrics: StreamThroughputMetrics;\n    /** SQLite database size in bytes (event log + spine rows + chunks). */\n    storageSizeBytes: number;\n  };\n};",
     summary:
-      "Serializable debug view of one durable subscription's spine row, for `runtimeState()`.",
+      "Serializable stream-core and delivery-runtime state exposed through `Stream.liveState`.",
     memberSummaries: {},
-    referencedTypeNames: ["SubscriptionDelivery", "LatencyStats"],
-  },
-  {
-    name: "StreamThroughputMetrics",
-    kind: "typeAlias",
-    sourceText:
-      "/** What `runtimeState()` reports for the stream's own throughput. */\nexport type StreamThroughputMetrics = {\n  /** ISO timestamp when this incarnation started measuring (metrics reset on eviction). */\n  measuredSince: string;\n  /** Appends committed (all producers). */\n  ingress: ThroughputReport;\n  /** Deliveries dispatched (all lanes, all subscribers). */\n  egress: ThroughputReport;\n};",
-    summary: "What `runtimeState()` reports for the stream's own throughput.",
-    memberSummaries: {},
-    referencedTypeNames: ["ThroughputReport"],
+    referencedTypeNames: [
+      "ConnectionRuntimeState",
+      "SubscriptionRuntimeState",
+      "StreamThroughputMetrics",
+    ],
   },
   {
     name: "ProcessEventBatch",
@@ -1595,7 +1905,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "StreamSubscriptionHandle",
     kind: "typeAlias",
     sourceText:
-      "/**\n * Live subscription handle returned by `Stream.subscribe`.\n *\n * `ping()` reports liveness: `true` while\n * the connection is still open on the live stream, `false` after it closed\n * (replaced, delivery failure, unsubscribe); it rejects when the stream's\n * Durable Object incarnation is gone. Either non-`true` outcome means the\n * subscriber should re-subscribe.\n */\nexport type StreamSubscriptionHandle = Disposable & {\n  /** Stable identity of this subscription connection. */\n  subscriptionKey: SubscriptionKey;\n  /** The stream's max offset at subscribe time (replay starts behind it). */\n  streamMaxOffset: number;\n  ping(): boolean | Promise<boolean>;\n  /** Close this connection; safe to call more than once. */\n  unsubscribe(): void;\n};",
+      "/**\n * Live subscription handle returned by `Stream.subscribe`.\n *\n * `ping()` reports liveness: `true` while\n * the connection is still open on the live stream, `false` after it closed\n * (replaced, delivery failure, unsubscribe); it rejects when the stream's\n * Durable Object incarnation is gone. Either non-`true` outcome means the\n * subscriber should re-subscribe.\n */\nexport type StreamSubscriptionHandle = Disposable & {\n  /** Stable identity of this subscription connection. */\n  subscriptionKey: SubscriptionKey;\n  /** The stream's max offset at subscribe time (durable replay starts behind it). */\n  streamMaxOffset: number;\n  ping(): boolean | Promise<boolean>;\n  /** Close this connection; safe to call more than once. */\n  unsubscribe(): void;\n};",
     summary: "Live subscription handle returned by `Stream.subscribe`.",
     memberSummaries: {},
     referencedTypeNames: ["SubscriptionKey"],
@@ -1604,9 +1914,9 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "ProjectDeploymentStatus",
     kind: "typeAlias",
     sourceText:
-      '/**\n * Whether a project the directory knows about actually exists in THIS\n * deployment\'s engine:\n * - `ready` — the project stream\'s bootstrap saga ran (`state.created`).\n * - `missing` — the engine has no state for it (e.g. the deployment was reset\n *   while the auth worker kept its rows); it can be set up again.\n * - `unknown` — the probe failed (engine hiccup); don\'t block the list on it.\n */\nexport type ProjectDeploymentStatus = "ready" | "missing" | "unknown";',
+      '/**\n * Whether a project the directory knows about actually exists in THIS\n * deployment\'s engine:\n * - `ready` — the project stream\'s bootstrap saga ran (`state.ready`).\n * - `missing` — the engine has no state for it (e.g. the deployment was reset\n *   while the auth worker kept its rows); it can be set up again.\n * - `unknown` — the probe failed (engine hiccup); don\'t block the list on it.\n */\nexport type ProjectDeploymentStatus = "ready" | "missing" | "unknown";',
     summary:
-      "Whether a project the directory knows about actually exists in THIS deployment's engine: - `ready` — the project stream's bootstrap saga ran (`state.created`).",
+      "Whether a project the directory knows about actually exists in THIS deployment's engine: - `ready` — the project stream's bootstrap saga ran (`state.ready`).",
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -1621,6 +1931,15 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
+    name: "ProcessStreamWakeEventBatch",
+    kind: "typeAlias",
+    sourceText:
+      "/** Durable wake-mode sink. Its call result is always disposed unpulled. */\nexport type ProcessStreamWakeEventBatch = (batch: StreamWakeEventBatch) => unknown;",
+    summary: "Durable wake-mode sink.",
+    memberSummaries: {},
+    referencedTypeNames: ["StreamWakeEventBatch"],
+  },
+  {
     name: "LiveStatePatch",
     kind: "typeAlias",
     sourceText:
@@ -1630,24 +1949,32 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
-    name: "CfMarkdownDocument",
+    name: "TypedConsumedEventInput",
     kind: "typeAlias",
     sourceText:
-      "/** One input document for Workers AI markdown conversion (`ai.toMarkdown`):\n * a filename plus the raw bytes as a Blob. */\nexport type CfMarkdownDocument = {\n  /** Filename including the extension; Cloudflare uses it to choose the converter. */\n  name: string;\n  blob: Blob;\n};",
-    summary:
-      "One input document for Workers AI markdown conversion (`ai.toMarkdown`): a filename plus the raw bytes as a Blob.",
+      '/**\n * A durable processor input. Wake processors never receive ephemeral rows, so\n * a domain object\'s processor-typed append door must not claim that they do.\n */\ntype TypedConsumedEventInput<\n  Type extends string = string,\n  Payload = Record<string, unknown>,\n> = Omit<TypedStreamEventInput<Type, Payload>, "ephemeral"> & { ephemeral?: never };',
+    summary: "A durable processor input.",
+    memberSummaries: {},
+    referencedTypeNames: ["TypedStreamEventInput"],
+  },
+  {
+    name: "JsonValue",
+    kind: "typeAlias",
+    sourceText:
+      "/** JSON subset accepted by WorkerEntrypoint props and script results. */\nexport type JsonValue =\n  | string\n  | number\n  | boolean\n  | null\n  | JsonValue[]\n  | { [key: string]: JsonValue };",
+    summary: "JSON subset accepted by WorkerEntrypoint props and script results.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
   {
-    name: "CfMarkdownConversionOptions",
+    name: "AgentContextAddedPayload",
     kind: "typeAlias",
     sourceText:
-      "/** Per-format tuning for `ai.toMarkdown`: HTML scoping (CSS selector,\n * hostname for relative links), image description language, PDF metadata\n * exclusion. */\nexport type CfMarkdownConversionOptions = {\n  conversionOptions?: {\n    html?: {\n      cssSelector?: string;\n      hostname?: string;\n    };\n    image?: {\n      descriptionLanguage?: string;\n    };\n    pdf?: {\n      excludeMetadata?: boolean;\n    };\n  };\n};",
+      '/** One model-visible context item\'s payload — the wire contract for every\n * committed `agents/context-added` event. */\nexport type AgentContextAddedPayload = AgentProcessorState["contextItems"][number]["payload"];',
     summary:
-      "Per-format tuning for `ai.toMarkdown`: HTML scoping (CSS selector, hostname for relative links), image description language, PDF metadata exclusion.",
+      "One model-visible context item's payload — the wire contract for every committed `agents/context-added` event.",
     memberSummaries: {},
-    referencedTypeNames: [],
+    referencedTypeNames: ["AgentProcessorState"],
   },
   {
     name: "FlattenedCapabilityInvocation",
@@ -1669,22 +1996,69 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
-    name: "AgentDefaultPolicy",
-    kind: "typeAlias",
-    sourceText:
-      "/** The default policy for one agent path: the named pieces plus the exact\n * event batch that applies them (idempotency-keyed, safe to re-append). */\nexport type AgentDefaultPolicy = {\n  systemPrompt: string;\n  model: string;\n  events: AgentPolicyEventInput[];\n};",
-    summary:
-      "The default policy for one agent path: the named pieces plus the exact event batch that applies them (idempotency-keyed, safe to re-append).",
-    memberSummaries: {},
-    referencedTypeNames: ["AgentPolicyEventInput"],
-  },
-  {
     name: "ProjectFileMetadata",
     kind: "typeAlias",
     sourceText:
       "/** A stored project file: what it looks like from the outside — its itx path plus wire facts. */\nexport type ProjectFileMetadata = {\n  contentType: string;\n  path: string;\n  size: number;\n};",
     summary:
       "A stored project file: what it looks like from the outside — its itx path plus wire facts.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "GmailRequestInput",
+    kind: "typeAlias",
+    sourceText:
+      '/** Input to `itx.integrations.gmail.get("<connection>").request(...)` — a\n * Gmail REST call relative to https://gmail.googleapis.com/gmail/v1; the\n * response is `{ data, headers, status, statusText }`. */\nexport type GmailRequestInput = {\n  body?: unknown;\n  headers?: Record<string, string>;\n  method?: string;\n  path: string;\n  query?: Record<string, boolean | number | string | null | undefined>;\n};',
+    summary:
+      'Input to `itx.integrations.gmail.get("<connection>").request(...)` — a Gmail REST call relative to https://gmail.googleapis.com/gmail/v1; the response is `{ data, headers, status, statusText }`.',
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "PublicBuiltinIntegrationSlug",
+    kind: "typeAlias",
+    sourceText:
+      '/** Public connection-family names. Google OAuth is presented as the Gmail\n * capability it actually supplies, while management APIs retain the provider\n * slug `google`. */\nexport type PublicBuiltinIntegrationSlug = "github" | "gmail" | "slack" | "telegram" | "waitrose";',
+    summary: "Public connection-family names.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "DeviceEnrollInput",
+    kind: "typeAlias",
+    sourceText:
+      '/** Authenticated mobile enrollment metadata plus the write-only Expo push credential. */\nexport type DeviceEnrollInput = {\n  appVersion: string;\n  expoPushToken: string;\n  label: string;\n  notificationsStatus: "granted";\n  platform: "ios" | "android";\n};',
+    summary: "Authenticated mobile enrollment metadata plus the write-only Expo push credential.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "DeviceAppendInput",
+    kind: "typeAlias",
+    sourceText:
+      '/** Public stream vocabulary, mechanically retaining payloads from the processor contract. */\nexport type DeviceAppendInput =\n  | TypedConsumedEventInput<\n      "events.iterate.com/device/notification-opened",\n      { openedAt: string; requestOffset: number }\n    >\n  | TypedConsumedEventInput<\n      "events.iterate.com/device/notification-requested",\n      {\n        body: string;\n        destination:\n          | { kind: "project" }\n          | { kind: "approvals"; approvalRequestEventOffset: number }\n          | { kind: "agent-chat"; path: string };\n        expiresAt: number;\n        title: string;\n      }\n    >;',
+    summary:
+      "Public stream vocabulary, mechanically retaining payloads from the processor contract.",
+    memberSummaries: {},
+    referencedTypeNames: ["TypedConsumedEventInput"],
+  },
+  {
+    name: "SandboxCreateInput",
+    kind: "typeAlias",
+    sourceText:
+      '/** What `itx.sandboxes.get(path).create` takes — Cloudflare\'s own vocabulary\n * (instance types and `SandboxOptions.sleepAfter`/`keepAlive`). */\nexport type SandboxCreateInput = {\n  /** Cloudflare instance type; defaults to `basic`. Cannot be changed later. */\n  instanceType?: SandboxInstanceType;\n  /** Idle time before the container is snapshotted and torn down: a positive\n   * number of SECONDS, or `"<n>s"`/`"<n>m"`/`"<n>h"` (e.g. `"30s"`, `"5m"`,\n   * `"1h"` — no other units). Defaults to the SDK\'s 10 minutes. The workspace\n   * survives across idle sleep. */\n  sleepAfter?: string | number;\n  /** Keep the container alive indefinitely (the SDK\'s `keepAlive`); you must\n   * `sleep()` or `destroy()` explicitly. */\n  keepAlive?: boolean;\n  /** Initial env-var map, merged as if by `setEnvVars` — values are\n   * `getSecret(path)` placeholders or non-secret literals, NEVER raw\n   * secret material. */\n  env?: Record<string, string>;\n};',
+    summary:
+      "What `itx.sandboxes.get(path).create` takes — Cloudflare's own vocabulary (instance types and `SandboxOptions.sleepAfter`/`keepAlive`).",
+    memberSummaries: {},
+    referencedTypeNames: ["SandboxInstanceType"],
+  },
+  {
+    name: "SandboxProcessorState",
+    kind: "typeAlias",
+    sourceText:
+      '/** The sandbox processor\'s reduced lifecycle projection. */\nexport type SandboxProcessorState = {\n  birthCertificate: {\n    config: {\n      instanceType: "basic" | "lite" | "standard-1" | "standard-2" | "standard-3" | "standard-4";\n    };\n  } | null;\n  status: "created" | "destroyed" | "running" | "stopped" | null;\n  running: boolean;\n  lastBackupId: string | null;\n  env: Record<string, string>;\n};',
+    summary: "The sandbox processor's reduced lifecycle projection.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -1710,18 +2084,28 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "SecretDescription",
     kind: "typeAlias",
     sourceText:
-      "/**\n * A stored secret's public face — its live state and what `__describe()`\n * merges in: usage audit counters, pinned egress URLs, whether material is\n * present, and the configured refresh strategy's kind. Never the material\n * itself: material is write-only and projected away before crossing the RPC\n * boundary.\n */\nexport type SecretDescription = {\n  audit: {\n    lastUsedAt?: string;\n    lastUsedBy?: string;\n    lastUsedUrl?: string;\n    usedCount: number;\n  };\n  egress: { urls: string[] };\n  hasMaterial: boolean;\n  /** The configured refresh strategy's kind, or null when none is configured. */\n  refresh: SecretRefresh[\"kind\"] | null;\n};",
+      "/**\n * A stored secret's public face — its live state and what `__describe()`\n * merges in: usage audit counters, pinned egress URLs, whether material is\n * present, and the configured refresh strategy's kind. Never the material\n * itself: material is write-only and projected away before crossing the RPC\n * boundary.\n */\nexport type SecretDescription = {\n  audit: {\n    lastUsedAt?: string;\n    lastUsedBy?: string;\n    lastUsedUrl?: string;\n    usedCount: number;\n  };\n  egress: { urls: string[] };\n  /** Whether the secret processor has reduced its birth certificate. */\n  created: boolean;\n  hasMaterial: boolean;\n  /** How the material may leave (a birth-certificate fact): write-only secrets refuse reveal(). */\n  visibility: SecretVisibility;\n  /** The configured refresh strategy's kind, or null when none is configured. */\n  refresh: SecretRefresh[\"kind\"] | null;\n};",
     summary:
       "A stored secret's public face — its live state and what `__describe()` merges in: usage audit counters, pinned egress URLs, whether material is present, and the configured refresh strategy's kind.",
     memberSummaries: {},
-    referencedTypeNames: ["SecretRefresh"],
+    referencedTypeNames: ["SecretVisibility", "SecretRefresh"],
+  },
+  {
+    name: "SecretCreateInput",
+    kind: "typeAlias",
+    sourceText:
+      '/** Input to `itx.secrets.get(path).create` — the birth policy (egress pin,\n * visibility, refresh strategy) plus optional initial material. */\nexport type SecretCreateInput = {\n  /** Complete egress policy established by the birth certificate. */\n  egress: { urls: string[] };\n  /** Optional initial write-only material. */\n  material?: unknown;\n  /** Optional initial refresh strategy; omitted means no refresh. */\n  refresh?: SecretRefresh | null;\n  /**\n   * How the material may leave: "write-only" (never — the default and the\n   * classic secret invariant) or "readable" (reveal() answers it, as often\n   * as asked). IMMUTABLE: declared at birth, never updatable, so a\n   * write-only secret can never be retro-flipped readable. Readable and\n   * substitutable are mutually exclusive: a readable secret must have (and\n   * keep) an empty egress pin — create and update both reject egress\n   * origins on one. Reserve "readable" for credentials whose whole purpose\n   * is to be shown to the outside — the born project ingress key at\n   * /secrets/project-api-key is the canonical case.\n   */\n  visibility?: SecretVisibility;\n};',
+    summary:
+      "Input to `itx.secrets.get(path).create` — the birth policy (egress pin, visibility, refresh strategy) plus optional initial material.",
+    memberSummaries: {},
+    referencedTypeNames: ["SecretRefresh", "SecretVisibility"],
   },
   {
     name: "SecretUpdateInput",
     kind: "typeAlias",
     sourceText:
-      "/**\n * Public secret capability data shapes. A secret's public live state IS its\n * {@link SecretDescription}: there is deliberately no separate secret processor\n * state type — the internal fold carries the encrypted material, and the DO's\n * processor facade projects it away (write-only material) before anything\n * crosses the RPC boundary.\n */\nexport type SecretUpdateInput = {\n  egress?: { urls: string[] };\n  /** Any serializable value (write-only, one JSON blob). A plain string keeps\n   * the whole-material placeholder working; structured material is addressed\n   * by `field` in placeholders (design §2.1). */\n  material?: unknown;\n  /** A named refresh strategy the secret runs in trusted DO code when a\n   * substituted request 401s (or a referenced field is missing), or `null` to\n   * clear it. Omitted leaves any configured strategy unchanged. */\n  refresh?: SecretRefresh | null;\n};",
-    summary: "Public secret capability data shapes.",
+      "/** Input for replacing secret material or changing its egress and refresh policy. */\nexport type SecretUpdateInput =\n  | {\n      /** Replacement material must name its complete egress policy in the same\n       * authorized update. It never inherits a policy chosen by a public event. */\n      egress: { urls: string[] };\n      /** Any serializable value (write-only, one JSON blob). A plain string keeps\n       * the whole-material placeholder working; structured material is addressed\n       * by `field` in placeholders (design §2.1). */\n      material: unknown;\n      /** A named refresh strategy the secret runs in trusted DO code when a\n       * substituted request 401s (or a referenced field is missing), or `null` to\n       * clear it. Omitted leaves the strategy unchanged. */\n      refresh?: SecretRefresh | null;\n    }\n  | {\n      /** Replaces the effective egress origins. Every update without `material`\n       * clears stored material, including egress-only and refresh-only updates. */\n      egress?: { urls: string[] };\n      material?: never;\n      /** Omitted leaves the strategy unchanged. A refresh-only update still\n       * clears material because it does not contain replacement material. */\n      refresh?: SecretRefresh | null;\n    };",
+    summary: "Input for replacing secret material or changing its egress and refresh policy.",
     memberSummaries: {},
     referencedTypeNames: ["SecretRefresh"],
   },
@@ -1756,7 +2140,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "GithubRepoLink",
     kind: "typeAlias",
     sourceText:
-      "/**\n * The GitHub repository a repo is linked to: the named GitHub connection (an\n * App installation) whose token authenticates mirror pushes, its installation\n * id, and the owner/repo coordinates on GitHub.\n */\nexport type GithubRepoLink = {\n  connection: string;\n  installationId: string;\n  owner: string;\n  repo: string;\n};",
+      "/**\n * The GitHub repository a repo is linked to: the named GitHub connection (an\n * App installation) whose token authenticates mirror pushes, its installation\n * id, and the owner/repo coordinates on GitHub.\n */\nexport type GithubRepoLink = {\n  connection: string;\n  installationId: string;\n  owner: string;\n  repo: string;\n  /** GitHub's stable database identity for this repository. */\n  repositoryId: number;\n};",
     summary:
       "The GitHub repository a repo is linked to: the named GitHub connection (an App installation) whose token authenticates mirror pushes, its installation id, and the owner/repo coordinates on GitHub.",
     memberSummaries: {},
@@ -1775,11 +2159,47 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "StatefulDynamicWorkerRef",
     kind: "typeAlias",
     sourceText:
-      '/**\n * Stateful workers are Durable Object class exports hosted by\n * `StatefulWorkerDurableObject`.\n *\n * `durableWorkerKey` is the durable identity under `{ projectId, path }`. It is\n * not a source cache key: source changes deliberately affect the next use of the\n * same durable worker identity.\n */\nexport type StatefulDynamicWorkerRef = DynamicWorkerRefBase & {\n  type: "stateful";\n  className: string;\n  durableWorkerKey: string;\n  /**\n   * What a call does when the worker\'s source changed since the running\n   * version. `"block"` (default) waits for the rebuild — commit-then-call\n   * sees the new code. `"stale-while-rebuild"` keeps answering with the\n   * running version and swaps to the new build in the background: better\n   * availability, but the next few calls after a commit may see old code.\n   * The policy rides the REF, not the durable identity — callers sharing one\n   * `durableWorkerKey` should agree on it (and on `source`), or each call\n   * flips the facet to its own version.\n   */\n  updatePolicy?: "block" | "stale-while-rebuild";\n};',
+      '/**\n * Stateful workers are Durable Object class exports hosted by\n * `StatefulWorkerDurableObject`.\n *\n * `durableWorkerKey` is the durable identity under `{ projectId, path }`. It is\n * not a source cache key: source changes deliberately affect the next use of the\n * same durable worker identity.\n */\nexport type StatefulDynamicWorkerRef = DynamicWorkerRefBase & {\n  type: "stateful";\n  className: string;\n  durableWorkerKey: string;\n};',
     summary:
       "Stateful workers are Durable Object class exports hosted by `StatefulWorkerDurableObject`.",
     memberSummaries: {},
     referencedTypeNames: ["DynamicWorkerRefBase"],
+  },
+  {
+    name: "WorkspaceMount",
+    kind: "typeAlias",
+    sourceText:
+      '/** One repo mount: the repo a workspace subtree reads from and its commit policy. */\nexport type WorkspaceMount = WorkspaceConfig["mounts"][string];',
+    summary: "One repo mount: the repo a workspace subtree reads from and its commit policy.",
+    memberSummaries: {},
+    referencedTypeNames: ["WorkspaceConfig"],
+  },
+  {
+    name: "WorkspaceProcessorState",
+    kind: "typeAlias",
+    sourceText:
+      '/** The workspace processor\'s reduced state: birth certificate plus the merged config. */\nexport type WorkspaceProcessorState = {\n  birthCertificate: {\n    config: {\n      mounts: Record<string, { policy: "commit-to-main" | "read-only"; repoPath: string }>;\n    };\n  } | null;\n  config: { mounts: Record<string, { policy: "commit-to-main" | "read-only"; repoPath: string }> };\n};',
+    summary: "The workspace processor's reduced state: birth certificate plus the merged config.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "WorkspaceConfig",
+    kind: "typeAlias",
+    sourceText:
+      '/** A workspace\'s complete configuration: the mount table, keyed by mount path. */\nexport type WorkspaceConfig = WorkspaceProcessorState["config"];',
+    summary: "A workspace's complete configuration: the mount table, keyed by mount path.",
+    memberSummaries: {},
+    referencedTypeNames: ["WorkspaceProcessorState"],
+  },
+  {
+    name: "WorkspaceConfigPatch",
+    kind: "typeAlias",
+    sourceText:
+      '/** A configuration patch: deep-merged per mount point; null unmounts.\n * (Spelled as one z.output<> reference — not an indexed access over it — so\n * the itx-api generator expands it structurally instead of copying the\n * expression verbatim into the generated public API.) */\nexport type WorkspaceConfigPatch = {\n  mounts?:\n    | Record<\n        string,\n        {\n          policy?: "commit-to-main" | "read-only" | undefined;\n          repoPath?: string | undefined;\n        } | null\n      >\n    | undefined;\n};',
+    summary: "A configuration patch: deep-merged per mount point; null unmounts.",
+    memberSummaries: {},
+    referencedTypeNames: [],
   },
   {
     name: "EditWorkspaceFileInput",
@@ -1800,12 +2220,192 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
-    name: "WorkspaceFileInfo",
+    name: "ConnectionRuntimeState",
     kind: "typeAlias",
     sourceText:
-      '/**\n * Metadata for one workspace filesystem entry — mirrors `@cloudflare/shell`\'s\n * `FileInfo`, the shape `readDir`/`glob`/`stat` return.\n */\nexport type WorkspaceFileInfo = {\n  createdAt: number;\n  mimeType: string;\n  name: string;\n  path: string;\n  size: number;\n  /** Symlink target, present only on symlinks. */\n  target?: string;\n  type: "directory" | "file" | "symlink";\n  updatedAt: number;\n};',
+      "/** Serializable debug view of one live connection, for `runtimeState()`. */\nexport type ConnectionRuntimeState = {\n  subscriptionType: StreamSubscriptionType;\n  startedAt: string;\n  cursor: number;\n  /** `maxOffset - cursor` — real offset lag for EVERY connection kind, ephemeral included. */\n  lag: number;\n  batchesSent: number;\n  eventsSent: number;\n  /** Serialized payload bytes delivered into this connection's sink (cumulative). */\n  bytesSent: number;\n  lastDeliveredAt?: string;\n  /**\n   * Commit-to-settled latency, stream clock only: `createdAt` of the newest\n   * event in a batch → the subscriber's explicit settlement callback.\n   * Durable (wake) lane only — ephemeral results are disposed unpulled, so\n   * ephemeral consumption is self-reported by the host through\n   * `getRuntimeState` instead. Absent until a sample exists.\n   */\n  settleLatencyMs?: LatencyStats;\n  /** Mutual-ping transport RTT to this subscriber (observer-driven sampling). Absent until pinged. */\n  pingRttMs?: LatencyStats;\n  /**\n   * The connect-time identity descriptor. The runtime table is the ONLY home\n   * for ephemeral identity — ephemeral connections don't fold into the\n   * reduced `connectionsByKey` roster (core state v14) — so debug surfaces\n   * read who's connected from here.\n   */\n  subscriber?: StreamSubscriberDescriptor;\n  /**\n   * True while any batch handed to this connection's sink is unsettled —\n   * exactly the signal idle teardown consults to classify a sink as wedged.\n   */\n  hasPendingDelivery: boolean;\n};",
+    summary: "Serializable debug view of one live connection, for `runtimeState()`.",
+    memberSummaries: {},
+    referencedTypeNames: ["StreamSubscriptionType", "LatencyStats", "StreamSubscriberDescriptor"],
+  },
+  {
+    name: "SubscriptionRuntimeState",
+    kind: "typeAlias",
+    sourceText:
+      "/** Serializable debug view of one durable subscription's spine row, for `runtimeState()`. */\nexport type SubscriptionRuntimeState = {\n  mode: SubscriptionDelivery[\"mode\"];\n  /** Exclusive. Authoritative cursor (push) or observational watermark (wake). */\n  ackedOffset: number;\n  /** `maxOffset - ackedOffset` — the Kafka lag number, per subscriber. */\n  lag: number;\n  attempt: number;\n  nextAttemptAt: number | null;\n  lastError: string | null;\n  parkedAtOffset: number | null;\n  /** Whether a live delivery connection currently exists (wake mode). */\n  connected: boolean;\n  /** Serialized payload bytes delivered (push/webhook lanes; cumulative). */\n  bytesSent?: number;\n  /** Commit-to-acked latency (stream clock): newest event `createdAt` → awaited delivery resolved. */\n  settleLatencyMs?: LatencyStats;\n  /** Duration of the awaited delivery call itself — the push/webhook lane's transport latency. */\n  deliveryDurationMs?: LatencyStats;\n};",
     summary:
-      "Metadata for one workspace filesystem entry — mirrors `@cloudflare/shell`'s `FileInfo`, the shape `readDir`/`glob`/`stat` return.",
+      "Serializable debug view of one durable subscription's spine row, for `runtimeState()`.",
+    memberSummaries: {},
+    referencedTypeNames: ["SubscriptionDelivery", "LatencyStats"],
+  },
+  {
+    name: "StreamThroughputMetrics",
+    kind: "typeAlias",
+    sourceText:
+      "/** What a stream runtime snapshot reports for the stream's own throughput. */\nexport type StreamThroughputMetrics = {\n  /** ISO timestamp when this incarnation started measuring (metrics reset on eviction). */\n  measuredSince: string;\n  /** ISO timestamp anchoring the trailing windows and final series bucket. */\n  reportedAt: string;\n  /** Appends committed (all producers). */\n  ingress: ThroughputReport;\n  /** Deliveries dispatched (all lanes, all subscribers). */\n  egress: ThroughputReport;\n};",
+    summary: "What a stream runtime snapshot reports for the stream's own throughput.",
+    memberSummaries: {},
+    referencedTypeNames: ["ThroughputReport"],
+  },
+  {
+    name: "StreamEventBatch",
+    kind: "typeAlias",
+    sourceText:
+      "/**\n * Batch delivered to stream processors and live subscribers.\n *\n * Kept named because callback retention, processor hosts, and tests all depend\n * on the same cross-RPC batch envelope.\n */\nexport type StreamEventBatch = {\n  projectId: string | null;\n  path: string;\n  events: StreamEvent[];\n  /** Exclusive raw-log cursor from which this delivery scan began. */\n  scannedAfterOffset: number;\n  /** Inclusive raw-log cursor through which this delivery scan completed. */\n  scannedThroughOffset: number;\n  streamMaxOffset: number;\n  state: unknown;\n};",
+    summary: "Batch delivered to stream processors and live subscribers.",
+    memberSummaries: {},
+    referencedTypeNames: ["StreamEvent"],
+  },
+  {
+    name: "StreamPingInput",
+    kind: "typeAlias",
+    sourceText:
+      "/**\n * The mutual ping's request half (NTP-style, for real latency measurement\n * between a stream and its subscribers): the requester stamps `t0` on its own\n * clock and observes `t3` when the reply lands.\n */\nexport type StreamPingInput = { t0: number };",
+    summary:
+      "The mutual ping's request half (NTP-style, for real latency measurement between a stream and its subscribers): the requester stamps `t0` on its own clock and observes `t3` when the reply lands.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "StreamPingReply",
+    kind: "typeAlias",
+    sourceText:
+      "/**\n * The mutual ping's reply half: the responder echoes `t0` and reports when it\n * received the request (`t1`) and sent the reply (`t2`) on ITS clock.\n * `rtt = (t3 - t0) - (t2 - t1)` excludes responder processing time, and\n * `((t1 - t0) + (t2 - t3)) / 2` estimates the responder−requester clock\n * offset (see stream-runtime-metrics.pingRoundTrip). Purely observational:\n * ping failures drop the sample and never affect delivery or liveness.\n */\nexport type StreamPingReply = { t0: number; t1: number; t2: number };",
+    summary:
+      "The mutual ping's reply half: the responder echoes `t0` and reports when it received the request (`t1`) and sent the reply (`t2`) on ITS clock.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "StreamWakeEventBatch",
+    kind: "typeAlias",
+    sourceText:
+      "/** Internal wake-mode frame: an ordinary batch plus its one-shot settlement door. */\nexport type StreamWakeEventBatch = StreamEventBatch & {\n  settleDelivery: SettleStreamWakeDelivery;\n};",
+    summary: "Internal wake-mode frame: an ordinary batch plus its one-shot settlement door.",
+    memberSummaries: {},
+    referencedTypeNames: ["StreamEventBatch", "SettleStreamWakeDelivery"],
+  },
+  {
+    name: "TypedStreamEventInput",
+    kind: "typeAlias",
+    sourceText:
+      '/** `StreamEventInput` with `type`/`payload` narrowed to one event definition. */\ntype TypedStreamEventInput<Type extends string = string, Payload = Record<string, unknown>> = Omit<\n  StreamEventInput,\n  "payload" | "type"\n> & {\n  type: Type;\n  payload: Payload;\n};',
+    summary: "`StreamEventInput` with `type`/`payload` narrowed to one event definition.",
+    memberSummaries: {},
+    referencedTypeNames: ["StreamEventInput"],
+  },
+  {
+    name: "CfImageTransformInput",
+    kind: "typeAlias",
+    sourceText:
+      "/** Input to the Images capability's `transform`: the source image stream,\n * ordered transform steps, optional overlay draws (watermarks — each with its\n * own transforms), and the output encoding. */\nexport type CfImageTransformInput = {\n  image: ReadableStream<Uint8Array>;\n  transforms?: CfImageTransformOptions[];\n  draws?: Array<{\n    image: ReadableStream<Uint8Array>;\n    options?: CfImageDrawOptions;\n    transforms?: CfImageTransformOptions[];\n  }>;\n  output: CfImageOutputOptions;\n};",
+    summary:
+      "Input to the Images capability's `transform`: the source image stream, ordered transform steps, optional overlay draws (watermarks — each with its own transforms), and the output encoding.",
+    memberSummaries: {},
+    referencedTypeNames: ["CfImageTransformOptions", "CfImageDrawOptions", "CfImageOutputOptions"],
+  },
+  {
+    name: "CfVideoTransformInput",
+    kind: "typeAlias",
+    sourceText:
+      "/** Input to the videos capability's `transform`: the source video stream,\n * optional transform options, and the output selection. */\nexport type CfVideoTransformInput = {\n  video: ReadableStream<Uint8Array>;\n  transform?: CfVideoTransformOptions;\n  output: CfVideoOutputOptions;\n};",
+    summary:
+      "Input to the videos capability's `transform`: the source video stream, optional transform options, and the output selection.",
+    memberSummaries: {},
+    referencedTypeNames: ["CfVideoTransformOptions", "CfVideoOutputOptions"],
+  },
+  {
+    name: "SandboxInstanceType",
+    kind: "typeAlias",
+    sourceText:
+      '/** A sandbox\'s size tier ("lite" | "basic" | "standard-1"…"standard-4") —\n * Cloudflare container instance-type names, fixed at `create` and immutable\n * for the sandbox\'s lifetime. See {@link SANDBOX_INSTANCE_TYPES} for the\n * vCPU/memory/disk table. */\nexport type SandboxInstanceType =\n  | "basic"\n  | "lite"\n  | "standard-1"\n  | "standard-2"\n  | "standard-3"\n  | "standard-4";',
+    summary:
+      'A sandbox\'s size tier ("lite" | "basic" | "standard-1"…"standard-4") — Cloudflare container instance-type names, fixed at `create` and immutable for the sandbox\'s lifetime.',
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "SecretVisibility",
+    kind: "typeAlias",
+    sourceText:
+      '/** How a secret\'s material may leave the secret system. Extendable — e.g. a\n * future "reveal-once". */\nexport type SecretVisibility = "write-only" | "readable";',
+    summary: "How a secret's material may leave the secret system.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "SecretRefresh",
+    kind: "typeAlias",
+    sourceText:
+      '/**\n * A named credential-refresh strategy a secret runs in its own trusted DO\n * code — one shared implementation per protocol instead of a worker copied\n * into every secret. Client credentials come from the secret\'s own material\n * (`"material"`, the bring-your-own-app case) or a platform config reference\n * (built-ins). Exchange endpoints must fall within the secret\'s pinned egress\n * hosts, so refresh preserves the cell invariant: bytes only ever leave toward\n * pinned hosts.\n */\nexport type SecretRefresh =\n  | {\n      kind: "oauth-refresh-token";\n      /** RFC 6749 refresh_token grant target (e.g. the provider\'s /token URL).\n       * Its origin must be within the secret\'s pinned egress hosts. */\n      tokenEndpoint: string;\n      /** Where the Basic client credential comes from: `"material"` reads\n       * clientId/clientSecret fields of this secret\'s own material. */\n      clientCreds: PlatformCredsRef | "material";\n    }\n  | {\n      kind: "github-app-installation";\n      /** GitHub API origin (or a stand-in in e2e). Its origin must be within\n       * the secret\'s pinned egress hosts. */\n      apiBase: string;\n      /** The App id — the JWT issuer (public). */\n      appId: string;\n      /** The installation this connection acts as (public — it is the\n       * connection\'s external id, not secret material). */\n      installationId: string;\n      /** Where the App\'s RS256 private key comes from: `"material"` reads the\n       * privateKey field of this secret\'s own material (bring-your-own-App). */\n      privateKey: PlatformCredsRef | "material";\n    }\n  | {\n      kind: "waitrose-session";\n      /** The Waitrose GraphQL endpoint (or a stand-in in e2e) the `NewSession`\n       * mutation is POSTed to. Its origin must be within the secret\'s pinned\n       * egress hosts. Waitrose has no token-refresh grant — re-login IS the\n       * refresh — so this strategy re-runs the login with `username`/`password`\n       * from this secret\'s own material and stores the returned `accessToken`.\n       * Material-only by nature: a Waitrose account is always the user\'s own. */\n      graphqlUrl: string;\n    };',
+    summary:
+      "A named credential-refresh strategy a secret runs in its own trusted DO code — one shared implementation per protocol instead of a worker copied into every secret.",
+    memberSummaries: {},
+    referencedTypeNames: ["PlatformCredsRef"],
+  },
+  {
+    name: "DynamicWorkerRefBase",
+    kind: "typeAlias",
+    sourceText:
+      "/** Fields shared by every dynamic worker ref (stateless and stateful): the\n * itx scope `path` the worker binds to and the declarative `source` it is\n * built from. */\nexport type DynamicWorkerRefBase = {\n  /**\n   * itx scope path for the worker's `env.ITX` binding and for stateful worker\n   * Durable Object names. This is intentionally not the mounted capability path:\n   * one worker can be mounted at `db`, `counter`, etc. while all events still\n   * belong to the host stream path.\n   */\n  path: string;\n  source: DynamicWorkerSource;\n};",
+    summary:
+      "Fields shared by every dynamic worker ref (stateless and stateful): the itx scope `path` the worker binds to and the declarative `source` it is built from.",
+    memberSummaries: {},
+    referencedTypeNames: ["DynamicWorkerSource"],
+  },
+  {
+    name: "CollabPresence",
+    kind: "typeAlias",
+    sourceText:
+      "/** Ephemeral cursor presence for one session: who has a caret where, in the\n * sender's head coordinates. In-memory only — an eviction loses it and\n * clients re-announce on their next throttle tick — delivered on the wait()\n * long-poll when the generation advanced past the client's cursor. */\nexport type CollabPresence = {\n  clients: { anchor: number; at: number; clientId: string; head: number }[];\n  generation: number;\n};",
+    summary:
+      "Ephemeral cursor presence for one session: who has a caret where, in the sender's head coordinates.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "WorkspaceStatus",
+    kind: "typeAlias",
+    sourceText:
+      '/** Per-mount changes plus the unmounted local scratch (never committable). */\nexport type WorkspaceStatus = {\n  mounts: {\n    changes: WorkspaceChange[];\n    path: string;\n    policy: "commit-to-main" | "read-only";\n    repoPath: string;\n  }[];\n  unmounted: WorkspaceChange[];\n};',
+    summary: "Per-mount changes plus the unmounted local scratch (never committable).",
+    memberSummaries: {},
+    referencedTypeNames: ["WorkspaceChange"],
+  },
+  {
+    name: "WorkspaceCommitInput",
+    kind: "typeAlias",
+    sourceText:
+      "/** Input to `WorkspaceGit.commit` — one mount's changes become one commit on its repo's main. */\nexport type WorkspaceCommitInput = {\n  author?: { email: string; name: string };\n  message: string;\n  /** The mount to commit (its mount path). Optional when exactly one mount is dirty. */\n  scope?: string;\n};",
+    summary:
+      "Input to `WorkspaceGit.commit` — one mount's changes become one commit on its repo's main.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "WorkspaceCommitResult",
+    kind: "typeAlias",
+    sourceText:
+      "/** Result of `WorkspaceGit.commit` — the commit landed on the scoped mount's repo main. */\nexport type WorkspaceCommitResult = {\n  branch: string;\n  /** Committed paths, spelled as absolute WORKSPACE paths (mount point included). */\n  changedPaths: string[];\n  commitOid: string;\n  /** The mount the commit was scoped to (its workspace path). */\n  mount: string;\n  repoPath: string;\n};",
+    summary: "Result of `WorkspaceGit.commit` — the commit landed on the scoped mount's repo main.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "WorkspaceGitLogInput",
+    kind: "typeAlias",
+    sourceText:
+      "/** Input to `WorkspaceGit.log` — one mount's repo history. */\nexport type WorkspaceGitLogInput = {\n  limit?: number;\n  /** The mount to read (its mount path). Optional when the table has exactly one mount. */\n  scope?: string;\n};",
+    summary: "Input to `WorkspaceGit.log` — one mount's repo history.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "WorkspaceGitLogEntry",
+    kind: "typeAlias",
+    sourceText:
+      "/** One commit returned by `WorkspaceGit.log` (a mounted repo's main history). */\nexport type WorkspaceGitLogEntry = {\n  author: { email: string; name: string };\n  message: string;\n  oid: string;\n  /** Epoch milliseconds. */\n  timestamp: number;\n};",
+    summary: "One commit returned by `WorkspaceGit.log` (a mounted repo's main history).",
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -1832,7 +2432,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "StreamSubscriberDescriptor",
     kind: "typeAlias",
     sourceText:
-      "/** Serializable subscriber identity carried on presence facts and the runtime connection table. */\nexport type StreamSubscriberDescriptor = {\n  description?: string | undefined;\n  processor?:\n    | {\n        announcement: {\n          slug: string;\n          version: string;\n          description: string;\n          consumes: string[];\n          emits: string[];\n          ownedEvents: { type: string; description?: string | undefined }[];\n        };\n      }\n    | undefined;\n};",
+      "/** Serializable subscriber identity carried on presence facts and the runtime connection table. */\nexport type StreamSubscriberDescriptor = {\n  description?: string | undefined;\n  user?:\n    | {\n        id?: string | undefined;\n        email: string;\n        name?: string | undefined;\n        picture?: string | undefined;\n      }\n    | undefined;\n  processor?:\n    | {\n        announcement: {\n          slug: string;\n          version: string;\n          description: string;\n          consumes: string[];\n          emits: string[];\n          ownedEvents: { type: string; description?: string | undefined }[];\n        };\n      }\n    | undefined;\n};",
     summary:
       "Serializable subscriber identity carried on presence facts and the runtime connection table.",
     memberSummaries: {},
@@ -1859,137 +2459,13 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: ["MinuteWindow", "ThroughputSeries"],
   },
   {
-    name: "StreamEventBatch",
+    name: "SettleStreamWakeDelivery",
     kind: "typeAlias",
     sourceText:
-      "/**\n * Batch delivered to stream processors and live subscribers.\n *\n * Kept named because callback retention, processor hosts, and tests all depend\n * on the same cross-RPC batch envelope.\n */\nexport type StreamEventBatch = {\n  projectId: string | null;\n  path: string;\n  events: StreamEvent[];\n  streamMaxOffset: number;\n  state: unknown;\n};",
-    summary: "Batch delivered to stream processors and live subscribers.",
+      "/**\n * One-shot acknowledgement capability owned by a single durable wake batch.\n *\n * It is deliberately independent of the sink call's return value. A\n * processor may append back to the stream that delivered the batch; making\n * the stream pull that sink result creates a cyclic actor-drain dependency.\n */\nexport type SettleStreamWakeDelivery = (settlement: StreamWakeDeliverySettlement) => unknown;",
+    summary: "One-shot acknowledgement capability owned by a single durable wake batch.",
     memberSummaries: {},
-    referencedTypeNames: ["StreamEvent"],
-  },
-  {
-    name: "StreamPingInput",
-    kind: "typeAlias",
-    sourceText:
-      "/**\n * The mutual ping's request half (NTP-style, for real latency measurement\n * between a stream and its subscribers): the requester stamps `t0` on its own\n * clock and observes `t3` when the reply lands.\n */\nexport type StreamPingInput = { t0: number };",
-    summary:
-      "The mutual ping's request half (NTP-style, for real latency measurement between a stream and its subscribers): the requester stamps `t0` on its own clock and observes `t3` when the reply lands.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "StreamPingReply",
-    kind: "typeAlias",
-    sourceText:
-      "/**\n * The mutual ping's reply half: the responder echoes `t0` and reports when it\n * received the request (`t1`) and sent the reply (`t2`) on ITS clock.\n * `rtt = (t3 - t0) - (t2 - t1)` excludes responder processing time, and\n * `((t1 - t0) + (t2 - t3)) / 2` estimates the responder−requester clock\n * offset (see stream-runtime-metrics.pingRoundTrip). Purely observational:\n * ping failures drop the sample and never affect delivery or liveness.\n */\nexport type StreamPingReply = { t0: number; t1: number; t2: number };",
-    summary:
-      "The mutual ping's reply half: the responder echoes `t0` and reports when it received the request (`t1`) and sent the reply (`t2`) on ITS clock.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "AgentPolicyEventInput",
-    kind: "typeAlias",
-    sourceText:
-      "/** The policy events an agent is born with, as append inputs. Typed\n * structurally (not against the full event catalog) so the SDK projection\n * stays self-contained. */\nexport type AgentPolicyEventInput = {\n  type: string;\n  idempotencyKey: string;\n  payload: Record<string, unknown>;\n};",
-    summary: "The policy events an agent is born with, as append inputs.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "CfImageTransformInput",
-    kind: "typeAlias",
-    sourceText:
-      "/** Input to the Images capability's `transform`: the source image stream,\n * ordered transform steps, optional overlay draws (watermarks — each with its\n * own transforms), and the output encoding. */\nexport type CfImageTransformInput = {\n  image: ReadableStream<Uint8Array>;\n  transforms?: CfImageTransformOptions[];\n  draws?: Array<{\n    image: ReadableStream<Uint8Array>;\n    options?: CfImageDrawOptions;\n    transforms?: CfImageTransformOptions[];\n  }>;\n  output: CfImageOutputOptions;\n};",
-    summary:
-      "Input to the Images capability's `transform`: the source image stream, ordered transform steps, optional overlay draws (watermarks — each with its own transforms), and the output encoding.",
-    memberSummaries: {},
-    referencedTypeNames: ["CfImageTransformOptions", "CfImageDrawOptions", "CfImageOutputOptions"],
-  },
-  {
-    name: "CfVideoTransformInput",
-    kind: "typeAlias",
-    sourceText:
-      "/** Input to the videos capability's `transform`: the source video stream,\n * optional transform options, and the output selection. */\nexport type CfVideoTransformInput = {\n  video: ReadableStream<Uint8Array>;\n  transform?: CfVideoTransformOptions;\n  output: CfVideoOutputOptions;\n};",
-    summary:
-      "Input to the videos capability's `transform`: the source video stream, optional transform options, and the output selection.",
-    memberSummaries: {},
-    referencedTypeNames: ["CfVideoTransformOptions", "CfVideoOutputOptions"],
-  },
-  {
-    name: "SecretRefresh",
-    kind: "typeAlias",
-    sourceText:
-      '/**\n * A named credential-refresh strategy a secret runs in its own trusted DO\n * code — one shared implementation per protocol instead of a worker copied\n * into every secret. Client credentials come from the secret\'s own material\n * (`"material"`, the bring-your-own-app case) or a platform config reference\n * (built-ins). Exchange endpoints must fall within the secret\'s pinned egress\n * hosts, so refresh preserves the cell invariant: bytes only ever leave toward\n * pinned hosts.\n */\nexport type SecretRefresh =\n  | {\n      kind: "oauth-refresh-token";\n      /** RFC 6749 refresh_token grant target (e.g. the provider\'s /token URL).\n       * Its origin must be within the secret\'s pinned egress hosts. */\n      tokenEndpoint: string;\n      /** Where the Basic client credential comes from: `"material"` reads\n       * clientId/clientSecret fields of this secret\'s own material. */\n      clientCreds: PlatformCredsRef | "material";\n    }\n  | {\n      kind: "github-app-installation";\n      /** GitHub API origin (or a stand-in in e2e). Its origin must be within\n       * the secret\'s pinned egress hosts. */\n      apiBase: string;\n      /** The App id — the JWT issuer (public). */\n      appId: string;\n      /** The installation this connection acts as (public — it is the\n       * connection\'s external id, not secret material). */\n      installationId: string;\n      /** Where the App\'s RS256 private key comes from: `"material"` reads the\n       * privateKey field of this secret\'s own material (bring-your-own-App). */\n      privateKey: PlatformCredsRef | "material";\n    }\n  | {\n      kind: "waitrose-session";\n      /** The Waitrose GraphQL endpoint (or a stand-in in e2e) the `NewSession`\n       * mutation is POSTed to. Its origin must be within the secret\'s pinned\n       * egress hosts. Waitrose has no token-refresh grant — re-login IS the\n       * refresh — so this strategy re-runs the login with `username`/`password`\n       * from this secret\'s own material and stores the returned `accessToken`.\n       * Material-only by nature: a Waitrose account is always the user\'s own. */\n      graphqlUrl: string;\n    };',
-    summary:
-      "A named credential-refresh strategy a secret runs in its own trusted DO code — one shared implementation per protocol instead of a worker copied into every secret.",
-    memberSummaries: {},
-    referencedTypeNames: ["PlatformCredsRef"],
-  },
-  {
-    name: "DynamicWorkerRefBase",
-    kind: "typeAlias",
-    sourceText:
-      "/** Fields shared by every dynamic worker ref (stateless and stateful): the\n * itx scope `path` the worker binds to and the declarative `source` it is\n * built from. */\nexport type DynamicWorkerRefBase = {\n  /**\n   * ITX scope path for the worker's `env.ITX` binding and for stateful worker\n   * Durable Object names. This is intentionally not the mounted capability path:\n   * one worker can be mounted at `db`, `counter`, etc. while all events still\n   * belong to the host stream path.\n   */\n  path: string;\n  source: DynamicWorkerSource;\n};",
-    summary:
-      "Fields shared by every dynamic worker ref (stateless and stateful): the itx scope `path` the worker binds to and the declarative `source` it is built from.",
-    memberSummaries: {},
-    referencedTypeNames: ["DynamicWorkerSource"],
-  },
-  {
-    name: "JsonValue",
-    kind: "typeAlias",
-    sourceText:
-      "/** JSON subset accepted by WorkerEntrypoint props and script results. */\nexport type JsonValue =\n  | string\n  | number\n  | boolean\n  | null\n  | JsonValue[]\n  | { [key: string]: JsonValue };",
-    summary: "JSON subset accepted by WorkerEntrypoint props and script results.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "WorkspaceChange",
-    kind: "typeAlias",
-    sourceText:
-      '/**\n * One overlay change returned by `WorkspaceGit.status`: a local file that\n * shadows a parent file ("modified"), one the parent does not have ("added"),\n * or a parent file hidden by a local delete ("deleted"). "modified" means\n * shadowed, not necessarily different — the overlay never diffs content.\n */\nexport type WorkspaceChange = {\n  change: "added" | "deleted" | "modified";\n  path: string;\n};',
-    summary:
-      'One overlay change returned by `WorkspaceGit.status`: a local file that shadows a parent file ("modified"), one the parent does not have ("added"), or a parent file hidden by a local delete ("deleted").',
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "WorkspacePublishResult",
-    kind: "typeAlias",
-    sourceText:
-      "/** Result of `WorkspaceGit.commit` — the commit landed on the config repo's main. */\nexport type WorkspacePublishResult = {\n  /** The repo branch the commit landed on — the config repo's default (main). */\n  branch: string;\n  /** Paths committed (after .gitignore filtering) plus deletions applied. */\n  changedPaths: string[];\n  commitOid: string;\n};",
-    summary: "Result of `WorkspaceGit.commit` — the commit landed on the config repo's main.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "WorkspaceGitLogEntry",
-    kind: "typeAlias",
-    sourceText:
-      "/** One commit returned by `WorkspaceGit.log` (the config repo's main history). */\nexport type WorkspaceGitLogEntry = {\n  author: { email: string; name: string };\n  message: string;\n  oid: string;\n  /** Epoch milliseconds. */\n  timestamp: number;\n};",
-    summary: "One commit returned by `WorkspaceGit.log` (the config repo's main history).",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "MinuteWindow",
-    kind: "typeAlias",
-    sourceText:
-      '/** One rolling-minute throughput window. */\nexport type MinuteWindow = {\n  /** Events in the last 60 seconds. */\n  count: number;\n  /** Payload bytes in the last 60 seconds. */\n  bytes: number;\n  /** `count / 60` — the "events/s over the last minute" number. */\n  perSecond: number;\n};',
-    summary: "One rolling-minute throughput window.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "ThroughputSeries",
-    kind: "typeAlias",
-    sourceText:
-      "/** Per-second buckets over the trailing minute, oldest→newest, length 60. */\nexport type ThroughputSeries = {\n  counts: number[];\n  bytes: number[];\n};",
-    summary: "Per-second buckets over the trailing minute, oldest→newest, length 60.",
-    memberSummaries: {},
-    referencedTypeNames: [],
+    referencedTypeNames: ["StreamWakeDeliverySettlement"],
   },
   {
     name: "CfImageTransformOptions",
@@ -2054,36 +2530,109 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "DynamicWorkerSource",
     kind: "typeAlias",
     sourceText:
-      "/**\n * Declarative source for a dynamic worker: an orthogonal file source plus\n * Cloudflare-compatible build options.\n *\n * Materialization resolves `files` to a file map and builds it through\n * Cloudflare's worker bundler; the loader-ready output is cached by a\n * deterministic build key, so the same source+options never builds twice.\n */\nexport type DynamicWorkerSource = {\n  files: WorkerFileSource;\n  options?: WorkerBuildOptions;\n};",
-    summary:
-      "Declarative source for a dynamic worker: an orthogonal file source plus Cloudflare-compatible build options.",
+      "/**\n * One direct worker-bundler call. The wrapper names deliberately match the\n * upstream functions; OS resolves the repo-aware `files` value, applies the\n * deployment-specific `iterate` package pin, and caches the returned build.\n */\nexport type DynamicWorkerSource =\n  | { createApp: WorkerBundlerCreateAppOptions }\n  | { createWorker: WorkerBundlerCreateWorkerOptions };",
+    summary: "One direct worker-bundler call.",
     memberSummaries: {},
-    referencedTypeNames: ["WorkerFileSource", "WorkerBuildOptions"],
+    referencedTypeNames: ["WorkerBundlerCreateAppOptions", "WorkerBundlerCreateWorkerOptions"],
+  },
+  {
+    name: "WorkspaceChange",
+    kind: "typeAlias",
+    sourceText:
+      '/**\n * One overlay change: a local file that shadows a mount file ("modified" —\n * shadowed, not content-diffed), one the mount does not have ("added"), or a\n * mount file hidden by a local delete ("deleted").\n */\nexport type WorkspaceChange = {\n  change: "added" | "deleted" | "modified";\n  path: string;\n};',
+    summary:
+      'One overlay change: a local file that shadows a mount file ("modified" — shadowed, not content-diffed), one the mount does not have ("added"), or a mount file hidden by a local delete ("deleted").',
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "MinuteWindow",
+    kind: "typeAlias",
+    sourceText:
+      '/** One rolling-minute throughput window. */\nexport type MinuteWindow = {\n  /** Events in the last 60 seconds. */\n  count: number;\n  /** Payload bytes in the last 60 seconds. */\n  bytes: number;\n  /** `count / 60` — the "events/s over the last minute" number. */\n  perSecond: number;\n};',
+    summary: "One rolling-minute throughput window.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "ThroughputSeries",
+    kind: "typeAlias",
+    sourceText:
+      "/** Per-second buckets over the trailing minute, oldest→newest, length 60. */\nexport type ThroughputSeries = {\n  counts: number[];\n  bytes: number[];\n};",
+    summary: "Per-second buckets over the trailing minute, oldest→newest, length 60.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "StreamWakeDeliverySettlement",
+    kind: "typeAlias",
+    sourceText:
+      '/** The subscriber\'s terminal verdict for one durable wake delivery. */\nexport type StreamWakeDeliverySettlement =\n  | { outcome: "ok" }\n  | { outcome: "error"; error: StreamWakeDeliveryError };',
+    summary: "The subscriber's terminal verdict for one durable wake delivery.",
+    memberSummaries: {},
+    referencedTypeNames: ["StreamWakeDeliveryError"],
+  },
+  {
+    name: "WorkerBundlerCreateAppOptions",
+    kind: "typeAlias",
+    sourceText:
+      "/** Serializable `createApp` input. The generated browser bundles and explicit\n * text assets are retained in the host and served by worker-bundler's own\n * asset handler. ArrayBuffer assets and the esbuild plugin callback are the\n * only upstream inputs omitted from this data-only boundary. */\nexport type WorkerBundlerCreateAppOptions = WorkerBundlerOptions & {\n  assetConfig?: WorkerBundlerAssetConfig;\n  assets?: Record<string, string>;\n  client?: string | string[];\n  files: WorkerFileSource;\n  server?: string;\n};",
+    summary: "Serializable `createApp` input.",
+    memberSummaries: {},
+    referencedTypeNames: ["WorkerBundlerOptions", "WorkerBundlerAssetConfig", "WorkerFileSource"],
+  },
+  {
+    name: "WorkerBundlerCreateWorkerOptions",
+    kind: "typeAlias",
+    sourceText:
+      "/** Serializable `createWorker` input. `files` is repo-aware; after resolving\n * it, OS passes the resulting path-to-source map to worker-bundler unchanged.\n * The plugin callback and custom `FileSystem` variants cannot cross Workers\n * RPC, so those are the only upstream inputs omitted here. */\nexport type WorkerBundlerCreateWorkerOptions = WorkerBundlerOptions & {\n  files: WorkerFileSource;\n  entryPoint?: string;\n  virtualModules?: Record<string, string>;\n};",
+    summary: "Serializable `createWorker` input.",
+    memberSummaries: {},
+    referencedTypeNames: ["WorkerBundlerOptions", "WorkerFileSource"],
+  },
+  {
+    name: "StreamWakeDeliveryError",
+    kind: "typeAlias",
+    sourceText:
+      "/**\n * Serializable failure reported after a durable wake delivery finishes.\n *\n * The settlement crosses an independent one-way RPC hop, so preserve the\n * lifecycle flags the stream uses to distinguish a dead Durable Object from\n * an application failure. Error prototypes and arbitrary properties do not\n * survive that hop reliably.\n */\nexport type StreamWakeDeliveryError = {\n  name: string;\n  message: string;\n  durableObjectReset?: true;\n  overloaded?: true;\n  retryable?: true;\n};",
+    summary: "Serializable failure reported after a durable wake delivery finishes.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "WorkerBundlerOptions",
+    kind: "typeAlias",
+    sourceText:
+      '/**\n * The serializable `@cloudflare/worker-bundler` options shared by\n * `createWorker` and `createApp`.\n *\n * These fields are passed through unchanged. The method-specific types below\n * replace only `files` with a repo-aware value and omit callbacks that cannot\n * cross the isolated bundler Worker\'s RPC boundary.\n */\nexport type WorkerBundlerOptions = {\n  bundle?: boolean;\n  conditions?: string[];\n  define?: Record<string, string>;\n  externals?: string[];\n  jsx?: "transform" | "preserve" | "automatic";\n  jsxImportSource?: string;\n  loader?: Record<string, WorkerBundlerLoader>;\n  minify?: boolean;\n  registry?: string;\n  sourcemap?: boolean;\n  target?: string;\n};',
+    summary:
+      "The serializable `@cloudflare/worker-bundler` options shared by `createWorker` and `createApp`.",
+    memberSummaries: {},
+    referencedTypeNames: ["WorkerBundlerLoader"],
+  },
+  {
+    name: "WorkerBundlerAssetConfig",
+    kind: "typeAlias",
+    sourceText:
+      '/** JSON-safe `AssetConfig` accepted by worker-bundler\'s asset handler. */\nexport type WorkerBundlerAssetConfig = {\n  headers?: Record<string, { set?: Record<string, string>; unset?: string[] }>;\n  html_handling?: "auto-trailing-slash" | "force-trailing-slash" | "drop-trailing-slash" | "none";\n  not_found_handling?: "single-page-application" | "404-page" | "none";\n  redirects?: {\n    dynamic?: Record<string, { status: number; to: string }>;\n    static?: Record<string, { status: number; to: string }>;\n  };\n};',
+    summary: "JSON-safe `AssetConfig` accepted by worker-bundler's asset handler.",
+    memberSummaries: {},
+    referencedTypeNames: [],
   },
   {
     name: "WorkerFileSource",
     kind: "typeAlias",
     sourceText:
-      '/**\n * Where a dynamic worker\'s source files come from.\n *\n * `inline` supplies the file map directly — the primitive behind run-script and\n * worker-backed provided capabilities where the caller hands over a small\n * TypeScript entry file, helpers, and optionally a `package.json`. `repo` names\n * a project repo snapshot: a branch (late-bound, so future commits affect the\n * next use) or a pinned commit, narrowed by include/exclude glob masks so a\n * large repo does not become build input by default.\n */\nexport type WorkerFileSource =\n  | {\n      type: "inline";\n      files: Record<string, string>;\n    }\n  | {\n      type: "repo";\n      repoPath: string;\n      /**\n       * Defaults to the repo\'s default branch when omitted. A pinned commit\n       * may name the branch it lives on — clones are single-branch, so an\n       * off-default-branch commit is unreachable without it.\n       */\n      ref?: { branch: string } | { commitOid: string; branch?: string };\n      include?: string[];\n      exclude?: string[];\n    };',
+      '/**\n * Where a dynamic worker\'s source files come from.\n *\n * `inline` supplies the file map directly — the primitive behind run-script and\n * worker-backed provided capabilities where the caller hands over a small\n * TypeScript entry file, helpers, and optionally a `package.json`. `repo` names\n * a project repo snapshot: a branch (late-bound, so future commits affect the\n * next use) or a pinned commit. The whole snapshot is passed through by\n * default; optional include/exclude glob masks let callers narrow it.\n */\nexport type WorkerFileSource =\n  | {\n      type: "inline";\n      files: Record<string, string>;\n    }\n  | {\n      type: "repo";\n      repoPath: string;\n      /**\n       * Defaults to the repo\'s default branch when omitted. A pinned commit\n       * may name the branch it lives on — clones are single-branch, so an\n       * off-default-branch commit is unreachable without it.\n       */\n      ref?: { branch: string } | { commitOid: string; branch?: string };\n      include?: string[];\n      exclude?: string[];\n    };',
     summary: "Where a dynamic worker's source files come from.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
   {
-    name: "WorkerBuildOptions",
-    kind: "typeAlias",
-    sourceText:
-      '/**\n * Build options for a dynamic worker.\n *\n * This mirrors Cloudflare\'s `CreateWorkerOptions` from\n * `@cloudflare/worker-bundler` minus `files` (OS supplies files from the\n * selected {@link WorkerFileSource}) — deliberately not a parallel option\n * language (drift fails typecheck via the assignability pin\n * `workerBuildOptionsMatchCloudflare` below). `bundle: false` is allowed; the\n * invariant is one OS materialization pipeline, not one bundled output file.\n * When the file map has a `package.json` with dependencies, the bundler\n * installs them from the npm registry at build time.\n */\nexport type WorkerBuildOptions = {\n  /** Entry point file path relative to the source root (e.g. "worker.ts"). */\n  entryPoint?: string;\n  /** Bundle all dependencies into a single output file. Default: true. */\n  bundle?: boolean;\n  /** Modules kept external ("cloudflare:*" always is). */\n  externals?: string[];\n  /** Target environment. Default: "es2022". */\n  target?: string;\n  minify?: boolean;\n  sourcemap?: boolean;\n  /** npm registry URL for dependency installs. */\n  registry?: string;\n  jsx?: "transform" | "preserve" | "automatic";\n  jsxImportSource?: string;\n  define?: Record<string, string>;\n  loader?: Record<string, WorkerBundlerLoader>;\n  conditions?: string[];\n  virtualModules?: Record<string, string>;\n};',
-    summary: "Build options for a dynamic worker.",
-    memberSummaries: {},
-    referencedTypeNames: ["WorkerBundlerLoader"],
-  },
-  {
     name: "WorkerBundlerLoader",
     kind: "typeAlias",
     sourceText:
-      '/** Loader names accepted by Cloudflare\'s worker bundler `loader` option. */\nexport type WorkerBundlerLoader =\n  | "js"\n  | "jsx"\n  | "ts"\n  | "tsx"\n  | "json"\n  | "css"\n  | "text"\n  | "binary"\n  | "base64"\n  | "dataurl";',
-    summary: "Loader names accepted by Cloudflare's worker bundler `loader` option.",
+      '/** Portable loader names accepted by `@cloudflare/worker-bundler`. */\nexport type WorkerBundlerLoader =\n  | "js"\n  | "jsx"\n  | "ts"\n  | "tsx"\n  | "json"\n  | "css"\n  | "text"\n  | "binary"\n  | "base64"\n  | "dataurl";',
+    summary: "Portable loader names accepted by `@cloudflare/worker-bundler`.",
     memberSummaries: {},
     referencedTypeNames: [],
   },

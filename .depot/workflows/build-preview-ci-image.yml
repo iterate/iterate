@@ -1,13 +1,20 @@
 name: Build Preview CI Image
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - "**/package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "scripts/depot-ci/bake-preview-ci-image.sh"
+      - ".depot/workflows/build-preview-ci-image.yml"
   schedule:
-    # Weekly (Mondays 04:17 UTC). This image has no consumer today — the
-    # preview workflow runs on Depot CI's standard runners, not this snapshot
-    # — so a daily bake was spending compute on an unused artifact. Weekly
-    # keeps it available and reasonably fresh; make it daily again (or delete
-    # this workflow) only once something actually consumes the image. See
-    # docs/ci-preview-performance.md.
+    # Weekly (Mondays 04:17 UTC) repairs drift even when dependency inputs have
+    # not changed. Relevant mainline changes rebuild immediately so consumers
+    # rarely spend startup time reconciling a stale snapshot. The reconcile
+    # step remains the correctness authority. See docs/depot-ci.md.
     - cron: "17 4 * * 1"
   workflow_dispatch: {}
 

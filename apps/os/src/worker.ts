@@ -16,38 +16,34 @@
  */
 import handler from "@tanstack/react-start/server-entry";
 import { newHttpBatchRpcResponse, newWorkersWebSocketRpcResponse } from "capnweb";
-import { withEvlog } from "@iterate-com/shared/evlog";
 import type { Env } from "./env.ts";
 import { decideIngressRoute, type IngressResolvers } from "./ingress.ts";
 import { readProjectByHostname } from "./project-hostname-directory.ts";
-import { resolveProjectIdBySlug } from "./project-directory.ts";
-import { isWorkerBuildInProgressError } from "./domains/workers/worker-loader.ts";
-import {
-  WORKER_FETCH_DISPATCH_HEADER,
-  workerBuildingResponse,
-} from "./domains/workers/worker-fetch-dispatch.ts";
+import { readProjectById, readProjectBySlug, resolveProjectIdBySlug } from "./project-directory.ts";
+import { WORKER_FETCH_DISPATCH_HEADER } from "./domains/workers/worker-fetch-dispatch.ts";
+import { serveProjectResponse } from "./domains/workers/project-serve.ts";
 import { DynamicWorkerRunner } from "./domains/workers/worker-runner.ts";
 import { UnauthenticatedOsRpcTarget } from "./rpc-targets.ts";
 import { defaultProjectWorkerRef } from "./domains/repos/utils.ts";
 import { handleIntegrationWebhookApiRequest } from "./domains/integrations/integration-webhook-api.ts";
 import { handleInboundEmail } from "./domains/email/email-ingress.ts";
 import { FILES_APP_SLUG, serveProjectFileRequest } from "./domains/files/project-files.ts";
-import { handleCapnwebAdminCookieRequest } from "./auth/admin-auth-cookie.ts";
+import { handleOperatorSessionRequest } from "./auth/operator-session.ts";
 import { rewriteMcpHostRequest } from "./ingress/mcp-host-rewrite.ts";
 import { AppConfig, parseConfig } from "./config.ts";
 import type { RequestContext } from "./request-context.ts";
-import {
-  handleEventQueueBatch,
-  isWorkerEventsQueue,
-} from "./domains/events/event-queue-entrypoint.ts";
-
-/** Long enough for warm-cache loads and quick bundles; past it, show the page. */
-const PROJECT_HOST_BUILD_BUDGET_MS = 15_000;
+import { runHttpWideLog } from "./observability/operation.ts";
+import { wideLogger } from "./observability/wide-log.ts";
+import { createItxRpcSessionOptions } from "./itx/itx-observability.ts";
+import { schedulePosthogException, withPosthogExceptionCapture } from "./observability/posthog.ts";
+import { STREAM_CONTEXT_HEADER } from "./domains/projects/stream-context.ts";
 
 // Every Durable Object class in the product, plus the loopback entrypoints
 // (`ctx.exports`) shared by the itx runtime.
 export { AgentDurableObject } from "./domains/agents/agent-durable-object.ts";
+export { AgentCollectionDurableObject } from "./domains/agents/agent-collection-durable-object.ts";
 export { CapabilityHostDurableObject } from "./domains/capability-host/capability-host-durable-object.ts";
+export { DeviceDurableObject } from "./domains/devices/device-durable-object.ts";
 // One sandbox container class per instance type — see src/domains/sandboxes/instance-types.ts.
 export {
   SandboxBasicDurableObject,
@@ -61,9 +57,10 @@ export { ProjectDurableObject } from "./domains/projects/project-durable-object.
 export { RepoDurableObject } from "./domains/repos/repo-durable-object.ts";
 export { SchedulerDurableObject } from "./domains/scheduler/scheduler-durable-object.ts";
 export { SecretDurableObject } from "./domains/secrets/secret-durable-object.ts";
+export { WorkerBuildCoordinatorDurableObject } from "./domains/workers/worker-build-coordinator-durable-object.ts";
 export { StatefulWorkerDurableObject } from "./domains/workers/stateful-worker-durable-object.ts";
 export { StreamDurableObject } from "./domains/streams/stream-durable-object.ts";
-export { WorkspaceDurableObject } from "./domains/workspaces/workspace-durable-object.ts";
+export { WorkspaceV2DurableObject } from "./domains/workspaces/workspace-durable-object.ts";
 export { ItxEntrypoint } from "./domains/itx/itx-entrypoint.ts";
 export { ProjectEgressEntrypoint } from "./domains/projects/egress.ts";
 export { ScriptExecutionEntrypoint } from "./domains/capability-host/script-execution-entrypoint.ts";
@@ -82,46 +79,52 @@ export default {
     // set by our own routing below. Strip whatever the outside world sent so
     // downstream code can rely on them.
     const request = stripInternalHeaders(inbound);
-
-    // Parse config per request, not at module scope: workerd may reuse an
-    // isolate across binding-only deploys, so a module-scope copy can serve
-    // stale secrets after a rotation. Parsing is pure and cheap.
     const config = parseConfig(env);
-
-    const mcpRequest = rewriteMcpHostRequest({ config, request });
-    if (mcpRequest) return await appFetch(mcpRequest, ctx, config, { isEventDocsHost: false });
-
-    const route = await decideIngressRoute({
-      config,
-      headers: request.headers,
-      method: request.method,
-      resolvers: directoryResolvers(config, env),
-      url: request.url,
-    });
-    if (route.lane !== "os") return await apiFetch(request, ctx, config, route);
-
-    return await appFetch(request, ctx, config, {
-      isEventDocsHost: route.hostKind === "eventDocs",
-    });
-  },
-
-  async queue(batch: MessageBatch, env: Env) {
-    if (isWorkerEventsQueue(batch.queue, env)) {
-      await handleEventQueueBatch(batch, env);
-      return;
-    }
-
-    console.warn(`[os] received queue batch from unhandled queue ${batch.queue}`);
+    return await withPosthogExceptionCapture(
+      { config, operation: ctx, request, waitUntil: (promise) => ctx.waitUntil(promise) },
+      () => runHttpWideLog(() => fetchWithoutWideLog(request, env, ctx, config)),
+    );
   },
 
   // Inbound project email: Cloudflare Email Routing's catch-all rule for each
   // project hostname base (e.g. `*@iterate.app`) delivers here. setReject is
   // the permanent-failure channel; a thrown error is a temporary failure the
   // sending MTA retries — so infra errors deliberately propagate.
-  async email(message: ForwardableEmailMessage) {
-    await handleInboundEmail(message);
+  async email(message: ForwardableEmailMessage, env: Env, ctx: ExecutionContext) {
+    const config = parseConfig(env);
+    await withPosthogExceptionCapture(
+      { config, operation: ctx, waitUntil: (promise) => ctx.waitUntil(promise) },
+      () => handleInboundEmail(message),
+    );
   },
 };
+
+async function fetchWithoutWideLog(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  config: AppConfig,
+) {
+  const mcpRequest = rewriteMcpHostRequest({ config, request });
+  if (mcpRequest) {
+    wideLogger.set({ ingress: { lane: "mcp" } });
+    return await appFetch(mcpRequest, ctx, config, { isEventDocsHost: false });
+  }
+
+  const route = await decideIngressRoute({
+    config,
+    headers: request.headers,
+    method: request.method,
+    resolvers: directoryResolvers(env),
+    url: request.url,
+  });
+  wideLogger.set(ingressLogFields(request, route));
+  if (route.lane !== "os") return await apiFetch(request, env, ctx, config, route);
+
+  return await appFetch(request, ctx, config, {
+    isEventDocsHost: route.hostKind === "eventDocs",
+  });
+}
 
 /**
  * The dashboard app: TanStack Start SSR, server functions, and the remaining
@@ -134,37 +137,33 @@ async function appFetch(
   config: AppConfig,
   host: { isEventDocsHost: boolean },
 ) {
-  return withEvlog(
-    { request, app: { name: "@iterate-com/os", slug: "os" }, config, executionCtx: ctx },
-    async ({ log }) => {
-      // When baseUrl is not configured (for example workers.dev previews),
-      // the request origin is the app's own URL. After this, baseUrl is
-      // always set.
-      const requestConfig: AppConfig = config.baseUrl
-        ? config
-        : { ...config, baseUrl: new URL(request.url).origin as AppConfig["baseUrl"] };
+  // When baseUrl is not configured (for example workers.dev previews),
+  // the request origin is the app's own URL. After this, baseUrl is
+  // always set.
+  const requestConfig: AppConfig = config.baseUrl
+    ? config
+    : { ...config, baseUrl: new URL(request.url).origin as AppConfig["baseUrl"] };
 
-      const context: RequestContext = {
-        config: requestConfig,
-        executionCtx: ctx,
-        isEventDocsHost: host.isEventDocsHost,
-        log,
-        rawRequest: request,
-        waitUntil: (promise) => ctx.waitUntil(promise),
-      };
+  const context: RequestContext = {
+    config: requestConfig,
+    executionCtx: ctx,
+    isEventDocsHost: host.isEventDocsHost,
+    log: wideLogger,
+    rawRequest: request,
+    waitUntil: (promise) => ctx.waitUntil(promise),
+  };
 
-      return await handler.fetch(request, { context });
-    },
-  );
+  return await handler.fetch(request, { context });
 }
 
 /**
  * The api pipeline: the capnweb surface at `/api`, the
- * `/api/admin-cookie` browser auth bridge, Slack webhooks, and project ingress
+ * operator-session browser auth, Slack webhooks, and project ingress
  * — every lane `decideIngressRoute` (src/ingress.ts) can resolve.
  */
 async function apiFetch(
   request: Request,
+  env: Env,
   ctx: ExecutionContext,
   config: AppConfig,
   route: Exclude<Awaited<ReturnType<typeof decideIngressRoute>>, { lane: "os" }>,
@@ -199,32 +198,64 @@ async function apiFetch(
     // worker (`itx.worker.*`) stays on RPC dispatch; HTTP never does.
     const ref = defaultProjectWorkerRef();
     const runner = new DynamicWorkerRunner({
+      streamContext: { kind: "scope", scopePath: ref.path },
       exports: ctx.exports,
       projectId: route.resolved.projectId,
       scopePath: ref.path,
-      waitUntil: (promise) => ctx.waitUntil(promise),
     });
-    try {
-      return await runner.fetch({
-        buildBudgetMs: PROJECT_HOST_BUILD_BUDGET_MS,
-        ref,
-        request: new Request(route.fetch.url, init),
-      });
-    } catch (error) {
-      // A cold build (first use after a commit) shows a refreshing "building"
-      // page rather than hanging the request; the build keeps running in the
-      // builder worker and refreshes hit the artifact cache.
-      if (!isWorkerBuildInProgressError(error)) throw error;
-      return workerBuildingResponse();
-    }
+    // The serve envelope (domains/workers/project-serve.ts) owns everything a
+    // browser sees around the dispatch: cold-build budget, building /
+    // build-failed / serve-error stand-in pages, the @iterate overlay, and
+    // the default user-space favicon.
+    const { outcome, response } = await serveProjectResponse({
+      fetchWorker: (buildBudgetMs) =>
+        runner.fetch({
+          buildBudgetMs,
+          ref,
+          request: new Request(route.fetch.url, init),
+          traceRole: "project_config",
+        }),
+      // The catch-all page swallows the throw, so the capture boundary above
+      // never sees the error — report it from here instead.
+      onError: (error) => {
+        console.error("project serve failed", error);
+        schedulePosthogException({
+          config,
+          error,
+          operation: ctx,
+          projectId: route.resolved.projectId,
+          request,
+          waitUntil: (promise) => ctx.waitUntil(promise),
+        });
+      },
+      // Use the worker-visible URL so the /prj_<id>/... development lane
+      // recognizes reserved project paths after its prefix rewrite. Preserve
+      // the routed headers: serve policy only needs request metadata.
+      request: new Request(route.fetch.url, {
+        headers: route.fetch.headers,
+        method: route.fetch.method,
+      }),
+    });
+    if (outcome !== null) wideLogger.setOutcome(outcome);
+    return response;
   }
 
   if (route.lane === "notFound") {
     return Response.json({ error: "not found" }, { status: 404 });
   }
 
-  if (url.pathname === "/api/admin-cookie") {
-    return await handleCapnwebAdminCookieRequest({ config, request });
+  if (
+    url.pathname === "/api/operator-sessions" ||
+    url.pathname.startsWith("/api/operator-sessions/")
+  ) {
+    return await handleOperatorSessionRequest({
+      config,
+      request,
+      resolveProject: async (reference) =>
+        reference.startsWith("prj_")
+          ? await readProjectById(env.PROJECT_DIRECTORY, reference)
+          : await readProjectBySlug(env.PROJECT_DIRECTORY, reference),
+    });
   }
 
   // Integration webhook ingress (Slack, GitHub, …) lives here (not the app
@@ -240,16 +271,48 @@ async function apiFetch(
     headers: request.headers,
     requestUrl: request.url,
   });
+  const itxObservability = (transport: "http" | "websocket") => {
+    const sessionId = `itx_session_${crypto.randomUUID().replaceAll("-", "")}`;
+    wideLogger.set({ itx: { sessionId } });
+    return createItxRpcSessionOptions({
+      transport,
+      sessionId,
+      parentLogId: wideLogger.id(),
+    });
+  };
   if (request.method === "POST") {
-    return newHttpBatchRpcResponse(request, unauthenticated);
+    return newHttpBatchRpcResponse(request, unauthenticated, itxObservability("http"));
   }
-  return newWorkersWebSocketRpcResponse(request, unauthenticated);
+  return newWorkersWebSocketRpcResponse(request, unauthenticated, itxObservability("websocket"));
 }
 
-function directoryResolvers(config: AppConfig, env: Env): IngressResolvers {
+function ingressLogFields(request: Request, route: Awaited<ReturnType<typeof decideIngressRoute>>) {
+  const path = new URL(request.url).pathname;
+  return {
+    ingress: {
+      lane: route.lane,
+      ...((route.lane === "api" && path === "/api") || route.lane === "project"
+        ? {
+            transport:
+              request.headers.get("upgrade")?.toLowerCase() === "websocket"
+                ? ("websocket" as const)
+                : ("http" as const),
+          }
+        : {}),
+      ...(route.lane === "project"
+        ? {
+            projectId: route.resolved.projectId,
+            appSlug: route.resolved.appSlug ?? undefined,
+          }
+        : {}),
+    },
+  };
+}
+
+function directoryResolvers(env: Env): IngressResolvers {
   return {
     projectIdBySlug: (identifier) =>
-      resolveProjectIdBySlug({ config, directory: env.PROJECT_DIRECTORY, identifier }),
+      resolveProjectIdBySlug({ directory: env.PROJECT_DIRECTORY, identifier }),
     projectByHostname: async (host) => {
       const found = await readProjectByHostname(env.PROJECT_DIRECTORY, host);
       return found ? { appSlug: found.appSlug, projectId: found.record.id } : null;
@@ -264,6 +327,7 @@ function stripInternalHeaders(request: Request) {
   headers.delete("x-itx-project-id");
   headers.delete("x-iterate-url-prefix");
   headers.delete(WORKER_FETCH_DISPATCH_HEADER);
+  headers.delete(STREAM_CONTEXT_HEADER);
   headers.delete("x-forwarded-host");
   headers.delete("x-forwarded-proto");
   return new Request(request, { headers });

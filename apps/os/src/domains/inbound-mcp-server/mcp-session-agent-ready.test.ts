@@ -1,42 +1,24 @@
-import { describe, expect, it } from "vitest";
-import type { StreamEvent, StreamEventInput } from "../streams/schemas.ts";
+import { describe, expect, it, vi } from "vitest";
 import {
-  ASK_ASSISTANT_SESSION_READY_TIMEOUT_MS,
-  ensureMcpSessionAgentReady,
-} from "./mcp-session-agent-ready.ts";
+  MCP_AGENT_SYSTEM_PROMPT,
+  MCP_AGENT_SYSTEM_PROMPT_REVISION,
+} from "../agents/agent-defaults.ts";
+import { ensureMcpSessionAgentReady } from "./mcp-session-agent-ready.ts";
 
 describe("ensureMcpSessionAgentReady", () => {
-  it("creates the session stream and waits for the agent system prompt before returning", async () => {
-    const promptReady = Promise.withResolvers<StreamEvent>();
-    const appended: StreamEventInput[] = [];
-    const waitCalls: Array<{
-      afterOffset?: number;
-      eventTypes?: readonly string[];
-      timeoutMs: number;
-    }> = [];
+  it("waits for zero-argument creation before appending the session policy", async () => {
+    const created = Promise.withResolvers<void>();
+    const create = vi.fn(() => created.promise);
+    const append = vi.fn().mockResolvedValue([]);
     let requestedPath: string | undefined;
 
     const ready = ensureMcpSessionAgentReady({
       agentPath: "/agents/mcp/session-test",
       projectItx: {
-        streams: {
+        agents: {
           get(path) {
             requestedPath = path;
-            return {
-              async append(...events) {
-                appended.push(...events);
-                return events.map((event, index) => ({
-                  ...event,
-                  createdAt: new Date(index + 1).toISOString(),
-                  offset: index + 1,
-                  path,
-                }));
-              },
-              async waitForEvent(args) {
-                waitCalls.push(args);
-                return await promptReady.promise;
-              },
-            };
+            return { append, create };
           },
         },
       },
@@ -45,20 +27,8 @@ describe("ensureMcpSessionAgentReady", () => {
     await Promise.resolve();
 
     expect(requestedPath).toBe("/agents/mcp/session-test");
-    expect(appended).toEqual([
-      {
-        type: "events.iterate.com/mcp/session-agent-warmup",
-        idempotencyKey: "mcp/session-agent-warmup:/agents/mcp/session-test",
-        payload: { agentPath: "/agents/mcp/session-test" },
-      },
-    ]);
-    expect(waitCalls).toEqual([
-      {
-        afterOffset: 0,
-        eventTypes: ["events.iterate.com/agent/system-prompt-updated"],
-        timeoutMs: ASK_ASSISTANT_SESSION_READY_TIMEOUT_MS,
-      },
-    ]);
+    expect(create).toHaveBeenCalledWith();
+    expect(append).not.toHaveBeenCalled();
 
     let returned = false;
     void ready.then(() => {
@@ -67,15 +37,43 @@ describe("ensureMcpSessionAgentReady", () => {
     await Promise.resolve();
     expect(returned).toBe(false);
 
-    promptReady.resolve({
-      type: "events.iterate.com/agent/system-prompt-updated",
-      payload: { systemPrompt: "ready" },
-      createdAt: new Date().toISOString(),
-      offset: 2,
-      path: "/agents/mcp/session-test",
-    });
+    created.resolve();
     await ready;
 
     expect(returned).toBe(true);
+    expect(append).toHaveBeenCalledWith({
+      type: "events.iterate.com/agents/context-added",
+      idempotencyKey: `agent/mcp-system-prompt:v${MCP_AGENT_SYSTEM_PROMPT_REVISION}`,
+      payload: {
+        role: "system",
+        key: "agent/system-prompt",
+        content: MCP_AGENT_SYSTEM_PROMPT,
+        // The processor ignores the defaulted policy on system items.
+        llmRequestPolicy: { behaviour: "after-current-request" },
+      },
+    });
+  });
+
+  it("retries the same exact policy occurrence after idempotent creation", async () => {
+    const create = vi.fn().mockResolvedValue(undefined);
+    const append = vi.fn().mockResolvedValue([]);
+    const projectItx = {
+      agents: {
+        get: () => ({ append, create }),
+      },
+    };
+
+    await ensureMcpSessionAgentReady({
+      agentPath: "/agents/mcp/session-test",
+      projectItx,
+    });
+    await ensureMcpSessionAgentReady({
+      agentPath: "/agents/mcp/session-test",
+      projectItx,
+    });
+
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(append).toHaveBeenCalledTimes(2);
+    expect(append.mock.calls[1]).toEqual(append.mock.calls[0]);
   });
 });

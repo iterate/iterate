@@ -79,6 +79,15 @@ export interface DeployedEnv {
    */
   cloudflareForSaasProjectHostnameBases: string[];
   /**
+   * Owned Cloudflare zones where OS serves project custom-domain traffic at the
+   * apex and single-label subdomains (`apex/*`, `*.apex/*`). More-specific
+   * routes on the same zone (`os.`, `auth.`, `mcp.`, …) stay with their workers
+   * and win by specificity. Used for the prod website: `iterate.com` → the
+   * `iterate` project worker (also requires `hostname:iterate.com` in
+   * PROJECT_DIRECTORY KV).
+   */
+  ownedProjectCustomApexes: string[];
+  /**
    * How agent LLM turns travel through the Cloudflare AI Gateway: `unified`
    * = partner models on Cloudflare's unified billing; `byok` = the gateway's
    * universal endpoint with our own OpenAI key (correct prompt-cache
@@ -123,6 +132,7 @@ function previewSlot(n: number, resources: DeployedEnv["resources"]): DeployedEn
     authBaseUrl: `https://auth.iterate-preview-${n}.com`,
     projectHostnameBases: [`iterate-preview-${n}.app`],
     cloudflareForSaasProjectHostnameBases: [],
+    ownedProjectCustomApexes: [],
     cloudflareAiGatewayTransport: "byok",
     // 7 days: long enough that overnight marathons and PR-lifetime reruns
     // replay each other, short enough that stale answers age out on their own.
@@ -143,6 +153,7 @@ export const envs = {
     authBaseUrl: "https://auth.iterate.com",
     projectHostnameBases: ["iterate.app"],
     cloudflareForSaasProjectHostnameBases: ["iterate.app"],
+    ownedProjectCustomApexes: ["iterate.com"],
     // BYOK, like every other env: unified billing meters OpenAI-prompt-cached
     // tokens at the uncached price (~6x at our hit rate), and BYOK benchmarked
     // latency-neutral-or-better. NO response cache here — that knob stays
@@ -199,10 +210,86 @@ export const envs = {
     workerBuildCacheKvId: "3599fdcb79db418db0ead561f1ef85f7",
     authDbId: "ebf149cb-d3ed-48c5-a2d0-010166b25033",
   }),
+  preview_10: previewSlot(10, {
+    projectDirectoryKvId: "975b82fbaaf94f2285c2a080b0893f9d",
+    workerBuildCacheKvId: "225a2d03540343c8a80a80e8ee81a92e",
+    authDbId: "7f7562b4-f76a-4c4d-a51e-003e6995f591",
+  }),
+  preview_11: previewSlot(11, {
+    projectDirectoryKvId: "37e3b6b8d8644cb2b3f8d71cfbdb6adc",
+    workerBuildCacheKvId: "85edcb497a9c4d10bde0022da2228838",
+    authDbId: "b6912e60-8277-4c60-9416-4058670491c6",
+  }),
+  preview_12: previewSlot(12, {
+    projectDirectoryKvId: "1852d3bdbcb543b48913aba870df041a",
+    workerBuildCacheKvId: "78d193b3ceb5487db2784f286a72997e",
+    authDbId: "99b3a290-0b0c-4c50-9311-9d4b0f34ac49",
+  }),
+  preview_13: previewSlot(13, {
+    projectDirectoryKvId: "2e070d546cd84a718b20ab9c887c9493",
+    workerBuildCacheKvId: "96ca19d3add14f21854af80979385884",
+    authDbId: "19c09ae5-f1a9-4e9e-9789-6729ea5c56f3",
+  }),
+  preview_14: previewSlot(14, {
+    projectDirectoryKvId: "437e3e8bfbbe4ad7b4d1c7dcc3b5fcb7",
+    workerBuildCacheKvId: "0e12021cc75844a7bb340d0649a75fa5",
+    authDbId: "f47f6543-9893-4d83-9175-841886b1132f",
+  }),
+  preview_15: previewSlot(15, {
+    projectDirectoryKvId: "cf71da84c3f0494d9c77f7079371de9b",
+    workerBuildCacheKvId: "f2bd516c48424f97878341cb70f74b2f",
+    authDbId: "e407fdcd-5a13-40b8-90a9-4e9e3b74d902",
+  }),
+  preview_16: previewSlot(16, {
+    projectDirectoryKvId: "1284f65e2e6d48389c3e24db0f008f9f",
+    workerBuildCacheKvId: "c02600858b3145f386e27b7def5a59cf",
+    authDbId: "02937e8d-c094-4c27-b2c7-faccf9f4d40e",
+  }),
+  preview_17: previewSlot(17, {
+    projectDirectoryKvId: "07bf59cf202d4db389bf29f252d6013c",
+    workerBuildCacheKvId: "8d8bd21f6ec648049a2d4331a2e1a9bc",
+    authDbId: "013a87bd-647e-46a8-a41b-e8df561d4cac",
+  }),
+  preview_18: previewSlot(18, {
+    projectDirectoryKvId: "f65665b9c7cf4c718349f6f2343ca0bc",
+    workerBuildCacheKvId: "e77f68c63752430a8af531e53157cf89",
+    authDbId: "2f61f8f0-b16a-4d53-89ef-b75b2982452c",
+  }),
+  preview_19: previewSlot(19, {
+    projectDirectoryKvId: "916fa97c2ec84067997012702f242646",
+    workerBuildCacheKvId: "a22450ba186a40549cfe2cff29079aca",
+    authDbId: "f9facd1f-0699-4766-8aa4-b00c7a59ff34",
+  }),
 } satisfies Record<string, DeployedEnv>;
 
 /** A deployed environment name, e.g. "prd" or "preview_3". */
 export type EnvName = keyof typeof envs;
+export type PreviewEnvName = Extract<EnvName, `preview_${number}`>;
+
+/** Preview environments, derived from the canonical deployed environment map. */
+export const deployedPreviewEnvs = Object.values(envs).filter((env) =>
+  env.dopplerConfig.startsWith("preview_"),
+);
+
+/** Extract the numeric slot from a canonical preview environment. */
+export function previewEnvironmentSlotNumber(env: Pick<DeployedEnv, "dopplerConfig">) {
+  const match = /^preview_(\d+)$/.exec(env.dopplerConfig);
+  if (!match) {
+    throw new Error(`Invalid preview Doppler config ${JSON.stringify(env.dopplerConfig)}.`);
+  }
+  return Number(match[1]);
+}
+
+/** Preview slot numbers used by provisioning and the Semaphore lease inventory. */
+export const previewEnvironmentSlotNumbers = deployedPreviewEnvs.map(previewEnvironmentSlotNumber);
+
+function mapDeployedPreviewEnvs<Value>(
+  mapEnv: (env: (typeof deployedPreviewEnvs)[number]) => Value,
+): Record<PreviewEnvName, Value> {
+  return Object.fromEntries(
+    deployedPreviewEnvs.map((env) => [env.dopplerConfig, mapEnv(env)]),
+  ) as Record<PreviewEnvName, Value>;
+}
 
 /**
  * apps/auth deploys everywhere os does, PLUS `dev_global`
@@ -236,15 +323,7 @@ function authEnvFromDeployedEnv(
 
 export const authEnvs = {
   prd: authEnvFromDeployedEnv(envs.prd, { fixedTestOtpEnabled: false }),
-  preview_1: authEnvFromDeployedEnv(envs.preview_1, { fixedTestOtpEnabled: true }),
-  preview_2: authEnvFromDeployedEnv(envs.preview_2, { fixedTestOtpEnabled: true }),
-  preview_3: authEnvFromDeployedEnv(envs.preview_3, { fixedTestOtpEnabled: true }),
-  preview_4: authEnvFromDeployedEnv(envs.preview_4, { fixedTestOtpEnabled: true }),
-  preview_5: authEnvFromDeployedEnv(envs.preview_5, { fixedTestOtpEnabled: true }),
-  preview_6: authEnvFromDeployedEnv(envs.preview_6, { fixedTestOtpEnabled: true }),
-  preview_7: authEnvFromDeployedEnv(envs.preview_7, { fixedTestOtpEnabled: true }),
-  preview_8: authEnvFromDeployedEnv(envs.preview_8, { fixedTestOtpEnabled: true }),
-  preview_9: authEnvFromDeployedEnv(envs.preview_9, { fixedTestOtpEnabled: true }),
+  ...mapDeployedPreviewEnvs((env) => authEnvFromDeployedEnv(env, { fixedTestOtpEnabled: true })),
   dev_global: {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
     dopplerConfig: "dev_global",
@@ -268,8 +347,8 @@ export interface SemaphoreEnv {
   baseUrl: string;
   /**
    * The env's apps/auth deployment. Semaphore is a relying party of the same
-   * issuer as os: deploys bake the issuer's JWKS and requests authenticate
-   * with iterate sessions or bearer access tokens.
+   * issuer as os: deploys derive its public signing key from Doppler, and
+   * requests authenticate with iterate sessions or bearer access tokens.
    */
   authBaseUrl: string;
   resources: {
@@ -307,7 +386,17 @@ export const semaphoreEnvs = {
   preview_7: semaphorePreviewSlot(7, "f4b1b641-71bd-4952-8726-3c2c543383fe"),
   preview_8: semaphorePreviewSlot(8, "77af433e-c870-43a6-be8e-1d2452feb23d"),
   preview_9: semaphorePreviewSlot(9, "53522759-5f82-4055-b0c2-248d66988b7d"),
-} satisfies Record<string, SemaphoreEnv>;
+  preview_10: semaphorePreviewSlot(10, "384502bd-21e2-47df-88dd-b1b76c8ccb40"),
+  preview_11: semaphorePreviewSlot(11, "89a91a9b-6277-437b-9687-1f4b5efe27e5"),
+  preview_12: semaphorePreviewSlot(12, "63d10828-212f-4c20-9ec7-c2e27c42e150"),
+  preview_13: semaphorePreviewSlot(13, "3eb37481-d6ca-4baf-835d-2f38e42976a7"),
+  preview_14: semaphorePreviewSlot(14, "4abfc09f-cd6f-40c7-a76f-62dfe78df357"),
+  preview_15: semaphorePreviewSlot(15, "c6cf12a5-cce8-4edf-a0b2-b2e4cf90ef79"),
+  preview_16: semaphorePreviewSlot(16, "69bd6563-c889-484e-ada3-d0e3f94021b9"),
+  preview_17: semaphorePreviewSlot(17, "8fc3a6ff-f42b-4215-b6e5-aaacba27b82c"),
+  preview_18: semaphorePreviewSlot(18, "c8762bd2-f4d0-4207-b038-0c03a83aabed"),
+  preview_19: semaphorePreviewSlot(19, "d1eab1d5-8a03-46b7-9c43-73b10f6133e0"),
+} satisfies Record<EnvName, SemaphoreEnv>;
 
 /**
  * apps/tunnels — the captun gateway. prd only; dev tunnels ride prd.
@@ -349,8 +438,8 @@ export interface StreamsExampleEnv {
   baseUrl: string;
   /**
    * The env's apps/auth deployment. The playground is a relying party of the
-   * same issuer as os: deploys bake the issuer's JWKS and requests
-   * authenticate with iterate sessions or bearer access tokens.
+   * same issuer as os: deploys derive its public signing key from Doppler, and
+   * requests authenticate with iterate sessions or bearer access tokens.
    */
   authBaseUrl: string;
 }
@@ -387,16 +476,8 @@ export const dummyPetshopEnvs = {
     workerName: "dummy-petshop-prd",
     baseUrl: "https://dummy-petshop.iterate.com",
   },
-  preview_1: dummyPetshopPreviewSlot(1),
-  preview_2: dummyPetshopPreviewSlot(2),
-  preview_3: dummyPetshopPreviewSlot(3),
-  preview_4: dummyPetshopPreviewSlot(4),
-  preview_5: dummyPetshopPreviewSlot(5),
-  preview_6: dummyPetshopPreviewSlot(6),
-  preview_7: dummyPetshopPreviewSlot(7),
-  preview_8: dummyPetshopPreviewSlot(8),
-  preview_9: dummyPetshopPreviewSlot(9),
-} satisfies Record<string, DummyPetshopEnv>;
+  ...mapDeployedPreviewEnvs((env) => dummyPetshopPreviewSlot(previewEnvironmentSlotNumber(env))),
+} satisfies Record<EnvName, DummyPetshopEnv>;
 
 function streamsExamplePreviewSlot(n: number): StreamsExampleEnv {
   return {
@@ -416,13 +497,5 @@ export const streamsExampleEnvs = {
     baseUrl: "https://streams.iterate.com",
     authBaseUrl: "https://auth.iterate.com",
   },
-  preview_1: streamsExamplePreviewSlot(1),
-  preview_2: streamsExamplePreviewSlot(2),
-  preview_3: streamsExamplePreviewSlot(3),
-  preview_4: streamsExamplePreviewSlot(4),
-  preview_5: streamsExamplePreviewSlot(5),
-  preview_6: streamsExamplePreviewSlot(6),
-  preview_7: streamsExamplePreviewSlot(7),
-  preview_8: streamsExamplePreviewSlot(8),
-  preview_9: streamsExamplePreviewSlot(9),
-} satisfies Record<string, StreamsExampleEnv>;
+  ...mapDeployedPreviewEnvs((env) => streamsExamplePreviewSlot(previewEnvironmentSlotNumber(env))),
+} satisfies Record<EnvName, StreamsExampleEnv>;

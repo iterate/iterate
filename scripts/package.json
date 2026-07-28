@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "vitest run",
+    "test": "vitest run --reporter=default --reporter=../packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -14,9 +14,11 @@
     "@slack/web-api": "^7.14.1",
     "jose": "^6.2.1",
     "json5": "^2.2.3",
-    "zod": "^4.3.6"
+    "yaml": "^2.8.3",
+    "zod": "4.3.6"
   },
   "devDependencies": {
+    "@jridgewell/sourcemap-codec": "^1.5.5",
     "@types/node": "^25.0.10",
     "typescript": "^5.9.3",
     "vitest": "^4.1.7"

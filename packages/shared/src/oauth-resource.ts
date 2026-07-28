@@ -26,10 +26,7 @@ export function copyMissingSearchParams(input: {
   baseUrl?: string | URL;
 }) {
   const targetUrl = new URL(input.targetUrl, input.baseUrl);
-  const sourceSearchParams =
-    input.sourceSearch instanceof URLSearchParams
-      ? input.sourceSearch
-      : new URLSearchParams(input.sourceSearch);
+  const sourceSearchParams = new URLSearchParams(input.sourceSearch);
 
   for (const paramName of input.paramNames) {
     if (targetUrl.searchParams.has(paramName)) continue;

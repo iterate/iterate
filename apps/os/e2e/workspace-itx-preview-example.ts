@@ -48,7 +48,7 @@ function requireAdminApiSecret() {
 async function ensureProject(input: { baseUrl: URL; slug: string }) {
   using itx = createAdminOsItx({ baseUrl: input.baseUrl.toString() });
   try {
-    await itx.projects.create({ slug: input.slug });
+    await itx.projects.get(input.slug).create({});
   } catch (error) {
     const code = (error as { code?: unknown }).code;
     const message = error instanceof Error ? error.message : String(error);
@@ -94,22 +94,24 @@ async function runWorkspaceCodemodeProof(input: {
     await client.connect(transport);
 
     const tools = await client.listTools();
-    if (!tools.tools.some((tool) => tool.name === "exec_js")) {
-      throw new Error(`MCP endpoint did not expose exec_js: ${JSON.stringify(tools.tools)}`);
+    if (!tools.tools.some((tool) => tool.name === "exec_typescript")) {
+      throw new Error(
+        `MCP endpoint did not expose exec_typescript: ${JSON.stringify(tools.tools)}`,
+      );
     }
 
     const result = await client.callTool({
-      name: "exec_js",
+      name: "exec_typescript",
       arguments: {
         code: workspaceCodemodeScript(),
-        // The admin lane serves every project, so exec_js requires an explicit
+        // The admin lane serves every project, so exec_typescript requires an explicit
         // project slug (resolved through the KV project directory).
         project: input.projectSlug,
       },
     });
     const text = extractTextContent(result.content).join("\n");
     if (result.isError === true) {
-      throw new Error(`exec_js returned an error:\n${text}`);
+      throw new Error(`exec_typescript returned an error:\n${text}`);
     }
 
     return parseRunCodeResult(text);
@@ -122,7 +124,7 @@ function workspaceCodemodeScript() {
   // itx-v4 cutover: this used to drive the workspaces domain (gitClone /
   // writeFile / gitCommit / gitPush against a checkout). The workspaces
   // domain is gone — the itx repo capability commits directly to the
-  // project repo — so the proof is now: MCP exec_js -> repo.commitFiles,
+  // project repo — so the proof is now: MCP exec_typescript -> repo.commitFiles,
   // then an identical second commit whose noChanges: true is the read-back
   // (commits are content-addressed and idempotent).
   return `async (itx) => {
@@ -170,7 +172,7 @@ function parseRunCodeResult(text: string) {
   const marker = "Result:";
   const index = text.lastIndexOf(marker);
   if (index === -1) {
-    throw new Error(`exec_js did not return a Result block:\n${text}`);
+    throw new Error(`exec_typescript did not return a Result block:\n${text}`);
   }
   return JSON.parse(text.slice(index + marker.length).trim()) as unknown;
 }

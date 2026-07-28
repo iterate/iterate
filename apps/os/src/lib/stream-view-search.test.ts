@@ -1,5 +1,29 @@
 import { describe, expect, it } from "vitest";
-import { modeCapabilities, streamViewMode } from "./stream-view-search.ts";
+import { modeCapabilities, StreamViewSearch, streamViewMode } from "./stream-view-search.ts";
+
+describe("StreamViewSearch", () => {
+  it("keeps deep links to LLM requests and script executions", () => {
+    expect(
+      StreamViewSearch.parse({
+        llmRequest: 42,
+        scriptExecution: "agent-output:13647",
+      }),
+    ).toMatchObject({ llmRequest: 42, scriptExecution: "agent-output:13647" });
+  });
+
+  it("rejects offset zero because stream event identities start at one", () => {
+    expect(StreamViewSearch.parse({ llmRequest: 0 }).llmRequest).toBeUndefined();
+  });
+
+  it("keeps digit-only script ids after the router parses them as numbers", () => {
+    expect(StreamViewSearch.parse({ scriptExecution: 13647 }).scriptExecution).toBe("13647");
+  });
+
+  it("keeps deep links to the agent details sheet and drops malformed values", () => {
+    expect(StreamViewSearch.parse({ agent: true }).agent).toBe(true);
+    expect(StreamViewSearch.parse({ agent: "yes" }).agent).toBeUndefined();
+  });
+});
 
 describe("streamViewMode", () => {
   it("defaults agents to pretty and other streams to raw", () => {

@@ -116,17 +116,17 @@ it("applies every live query before notifying any listener for one change", asyn
   await database.exec(
     `CREATE TABLE feed_items (local_index INTEGER PRIMARY KEY, data TEXT NOT NULL)`,
   );
-  await database.exec(`CREATE TABLE processor_state (reduced_state TEXT NOT NULL)`);
-  await database.exec(`INSERT INTO processor_state (reduced_state) VALUES ('live')`);
+  await database.exec(`CREATE TABLE activity (label TEXT NOT NULL)`);
+  await database.exec(`INSERT INTO activity (label) VALUES ('live')`);
 
   const countHandle = database.query(`SELECT COUNT(*) AS count FROM feed_items`, []);
-  const stateHandle = database.query(`SELECT reduced_state FROM processor_state`, []);
+  const stateHandle = database.query(`SELECT label FROM activity`, []);
   // Every notification records the pair of snapshots a subscriber would render
   // from — the flicker is any frame where they disagree about the handoff.
   const observedFrames: string[] = [];
   const recordFrame = () =>
     observedFrames.push(
-      `${countHandle.getSnapshot().data[0]?.count}:${stateHandle.getSnapshot().data[0]?.reduced_state}`,
+      `${countHandle.getSnapshot().data[0]?.count}:${stateHandle.getSnapshot().data[0]?.label}`,
     );
   countHandle.subscribe(recordFrame);
   stateHandle.subscribe(recordFrame);
@@ -142,7 +142,7 @@ it("applies every live query before notifying any listener for one change", asyn
   await database.batch(
     [
       { sql: `INSERT INTO feed_items (local_index, data) VALUES (0, 'message')` },
-      { sql: `UPDATE processor_state SET reduced_state = 'settled'` },
+      { sql: `UPDATE activity SET label = 'settled'` },
     ],
     { transaction: true },
   );

@@ -19,14 +19,10 @@ export async function withStreamConnectionFromBrowser(args: {
   const webSocket = new WebSocket(toWebSocketUrl(browserUrl));
   args.onConnectionStatusChange?.("connecting", undefined);
   webSocket.addEventListener("open", () => args.onConnectionStatusChange?.("connected", undefined));
-  webSocket.addEventListener("close", (event) =>
-    args.onConnectionStatusChange?.(
-      "closed",
-      event.reason === ""
-        ? `WebSocket closed with code ${event.code}`
-        : `WebSocket closed with code ${event.code}: ${event.reason}`,
-    ),
-  );
+  webSocket.addEventListener("close", (event) => {
+    const reason = event.reason ? `: ${event.reason}` : "";
+    args.onConnectionStatusChange?.("closed", `WebSocket closed with code ${event.code}${reason}`);
+  });
   webSocket.addEventListener("error", () =>
     args.onConnectionStatusChange?.("error", "WebSocket error"),
   );
@@ -37,7 +33,7 @@ export const DEFAULT_STREAM_PROJECT_ID = "default";
 
 export function normalizeStreamPath(args: { path?: string | null }) {
   const value = args.path;
-  if (value == null || value.trim() === "") return "/";
+  if (!value?.trim()) return "/";
   const trimmed = value.trim();
   return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
 }
@@ -49,8 +45,7 @@ export function parseStreamRpcRequest(args: { url: URL }) {
   }
   const path = normalizeStreamPath({ path: args.url.searchParams.get("path") });
   const projectIdRaw = args.url.searchParams.get("projectId")?.trim();
-  const projectId =
-    projectIdRaw === undefined || projectIdRaw === "" ? DEFAULT_STREAM_PROJECT_ID : projectIdRaw;
+  const projectId = projectIdRaw || DEFAULT_STREAM_PROJECT_ID;
   return { projectId, path };
 }
 

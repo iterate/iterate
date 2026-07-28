@@ -1,19 +1,7 @@
-import type { WorkerBuildOptions } from "./schemas.ts";
 import { stableSha256 } from "./utils.ts";
 import { WORKER_BUILD_ARTIFACT_SCHEMA_VERSION } from "./artifact-store.ts";
-
-/**
- * Kept in sync with the `@cloudflare/worker-bundler` dependency in
- * apps/os/package.json (pinned there and asserted by build-key.test.ts). The
- * bundler version participates in the build key so upgrading the bundler
- * invalidates cached artifacts instead of serving output from an older
- * toolchain. The bundler is ALSO pnpm-patched
- * (patches/@cloudflare__worker-bundler@0.2.1.patch) — editing the patch
- * changes build output at the same version, so bump
- * WORKER_BUILD_ARTIFACT_SCHEMA_VERSION with it (same rule as the builtin
- * shim list in materialize.ts).
- */
-export const WORKER_BUNDLER_VERSION = "0.2.1";
+import { WORKER_BUNDLER_VERSION } from "./build-backend.ts";
+import type { DynamicWorkerSource } from "./schemas.ts";
 
 /**
  * A worker file source with all late-bound identity resolved: repo branches
@@ -21,15 +9,13 @@ export const WORKER_BUNDLER_VERSION = "0.2.1";
  * artifact filed under it) is immutable and auditable.
  *
  * `contentHash` is the checkout's content identity (from the repo's head
- * cache). When present it replaces the commit oid in the build key, so repos
- * with identical content — every freshly seeded project repo — share one
- * artifact instead of each paying a bundler run. Pinned-commit refs skip the
- * head cache and have no content identity, hence the optionality.
+ * cache). When present it replaces the commit oid in the content key, so
+ * equivalent commits reuse one artifact even across projects. Pinned-commit
+ * refs skip the head cache and have no content identity, hence the optionality.
  *
  * A plain type, not a schema: only the trusted resolver constructs this
  * value (worker-loader.ts resolveFileSource), hashes it into the key, and
- * expands it to a file map before anything crosses a boundary — the builder
- * RPC receives files by value and validates its own input.
+ * expands it to a file map before calling the compiler sidecar.
  */
 export type ResolvedWorkerFileSource =
   | {
@@ -53,24 +39,52 @@ export type ResolvedWorkerFileSource =
 export type WorkerBuildInput = {
   compatibilityDate: string;
   compatibilityFlags: string[];
-  options: WorkerBuildOptions;
-  source: ResolvedWorkerFileSource;
+  files: ResolvedWorkerFileSource;
+  /** Deployment pkg.pr.new knobs (src/pkg-pr-new.ts). Both participate in the
+   * key: they rewrite manifests pre-build, so a pinned preview build must
+   * never collide with a main build of the same source. */
+  iterateRepoPkgRef?: string;
+  iterateRepoPkgSpecOverrides?: Record<string, string>;
+  source: DynamicWorkerSource;
 };
 
 /**
- * Deterministic identity of one build: normalized source snapshot, Cloudflare
- * build options, bundler/runtime version inputs, compatibility settings, and
- * the artifact schema version. Same input, same key — concurrent callers
- * converge on one artifact and a repeated request is a cache hit.
+ * Deterministic identity of one build: normalized source snapshot, build
+ * options, the bundler pin, compatibility settings, and the artifact schema
+ * version. Same input, same key — concurrent callers converge on one artifact
+ * and a repeated request is a cache hit.
+ *
+ * Identical build requests share this key across projects. If package ranges
+ * are not locked, the first successful worker-bundler resolution becomes the
+ * cached artifact for that source+options identity until the cache expires.
  */
 export async function workerBuildKey(input: WorkerBuildInput): Promise<string> {
+  let build: unknown;
+  if ("createApp" in input.source) {
+    const { files: _files, ...options } = input.source.createApp;
+    build = {
+      method: "createApp",
+      options,
+    };
+  } else {
+    const { files: _files, virtualModules, ...options } = input.source.createWorker;
+    build = {
+      method: "createWorker",
+      options: {
+        ...options,
+        virtualModulesSha256: await stableSha256(virtualModules ?? {}),
+      },
+    };
+  }
   return await stableSha256({
     artifactSchemaVersion: WORKER_BUILD_ARTIFACT_SCHEMA_VERSION,
-    bundlerVersion: WORKER_BUNDLER_VERSION,
+    build,
     compatibilityDate: input.compatibilityDate,
     compatibilityFlags: input.compatibilityFlags,
-    options: input.options,
-    source: normalizeResolvedSource(input.source),
+    files: normalizeResolvedSource(input.files),
+    iterateRepoPkgRef: input.iterateRepoPkgRef,
+    iterateRepoPkgSpecOverrides: input.iterateRepoPkgSpecOverrides,
+    bundlerVersion: WORKER_BUNDLER_VERSION,
     type: "worker-build-key",
   });
 }
@@ -79,7 +93,6 @@ type NormalizedRepoSourceIdentity = {
   content: string;
   exclude?: string[];
   include?: string[];
-  repoPath: string;
   type: "repo";
 };
 
@@ -87,8 +100,8 @@ type NormalizedRepoSourceIdentity = {
  * Glob mask order carries no semantics (a path is included when any include
  * pattern matches and no exclude pattern matches), so sorting the masks makes
  * equivalent sources hash equal. Repo identity prefers the content hash over
- * the commit oid — same content, same artifact — falling back to the commit
- * oid for pinned refs where no content identity is known.
+ * the commit oid — same content, same content key — falling back to the
+ * commit oid for pinned refs where no content identity is known.
  */
 function normalizeResolvedSource(
   source: ResolvedWorkerFileSource,
@@ -98,7 +111,6 @@ function normalizeResolvedSource(
     content: source.contentHash ?? `commit:${source.commitOid}`,
     exclude: source.exclude === undefined ? undefined : [...source.exclude].sort(),
     include: source.include === undefined ? undefined : [...source.include].sort(),
-    repoPath: source.repoPath,
     type: "repo",
   };
 }

@@ -1,19 +1,41 @@
 import type { OutboundHandler } from "@cloudflare/containers";
-import { Sandbox, type DirectoryBackup } from "@cloudflare/sandbox";
-import type { Env } from "../../../env.ts";
+import { LiveStateRpcTarget } from "iterate/sdk/capnweb";
+import {
+  type DirectoryBackup,
+  type ExecEvent,
+  type ExecOptions,
+  type ExecResult,
+  parseSSEStream,
+  Sandbox,
+} from "@cloudflare/sandbox";
+import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
+import {
+  createStreamProcessorRegistry,
+  type RegisteredProcessorReads,
+  type StreamProcessorRegistry,
+} from "iterate/processors/cloudflare";
+import { trustedInternalAuthContext } from "../../../auth.ts";
+import { workerVersion, type Env } from "../../../env.ts";
+import { StreamProcessorRpcTarget, StreamRpcTarget } from "../../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../../durable-object-names.ts";
 import { listIntegrationConnections } from "../../integrations/connect-flows.ts";
 import { describeNode } from "../../itx/utils.ts";
 import { projectStub } from "../../projects/egress.ts";
+import { withStreamContext } from "../../projects/stream-context.ts";
+import { withWebSocketHandshakeHeaders } from "../../secrets/websocket-handshake.ts";
+import { sandboxCreationEvents } from "../sandbox-defaults.ts";
 import {
   SandboxProcessorContract,
   type SandboxLifecycleEventInput,
+  type SandboxProcessorState,
 } from "../sandbox-processor-contract.ts";
+import { SandboxProcessor } from "../sandbox-processor-implementation.ts";
 import { SANDBOX_INSTANCE_TYPE_BINDINGS, type SandboxInstanceType } from "../instance-types.ts";
 import {
   assertSandboxPath,
   assertValidSleepAfter,
   githubTokenEnvForConnections,
+  SANDBOX_GIT_CONFIG_SHELL,
 } from "../utils.ts";
 
 /**
@@ -24,6 +46,7 @@ import {
  * `exec("ls")` lists it.
  */
 const SANDBOX_WORKSPACE_DIR = "/workspace";
+const SANDBOX_PROCESSOR_WAIT_TIMEOUT_MS = 15_000;
 
 /**
  * How long a sandbox's workspace backup survives without the sandbox waking
@@ -42,7 +65,7 @@ const BACKUP_HANDLE_STORAGE_KEY = "iterate-sandbox-workspace-backup-v2";
 /**
  * Durable env-var map for the sandbox (see {@link SandboxDurableObject}).
  * A `Record<string,string>` applied to every command in the container;
- * conventionally ALL_CAPS keys whose values are `getSecret({ path })`
+ * conventionally ALL_CAPS keys whose values are `getSecret(path)`
  * placeholders — so the material stays in the secret system and is injected
  * only at egress, never entering the container.
  */
@@ -63,12 +86,29 @@ const SANDBOX_ENV_STORAGE_KEY = "iterate-sandbox-env";
 const SANDBOX_RECORD_STORAGE_KEY = "iterate-sandbox-record";
 
 type SandboxRecord = {
+  /** Setup has not returned successfully yet. Kept durably so a retry can
+   * replay the idempotent birth batch after an ambiguous stream response. */
+  creationPending?: true;
   createdAt: string;
   destroyedAt?: string;
   instanceType: SandboxInstanceType;
 };
 
 const SANDBOX_SESSION_SETUP_REDIAL_DELAYS_MS = [1_500, 3_000, 7_500, 15_000] as const;
+
+// `@cloudflare/sandbox` 0.12.3's default-session `exec` timeout only stops
+// waiting for the command. Its sessionless stream exposes the detached Linux
+// process-group leader, which lets this class own a verified TERM/KILL cleanup
+// before returning exit 124. This is the SDK's reserved token used by
+// getSandbox({ enableDefaultSession: false }); direct Durable Object stubs do
+// not pass through getSandbox, so select that execution policy explicitly.
+const SANDBOX_SESSIONLESS_EXECUTION_TOKEN = "__DISABLE_SESSION__";
+const SANDBOX_TIMEOUT_EXIT_CODE = 124;
+const SANDBOX_PROCESS_GROUP_TERM_GRACE_SECONDS = "0.5";
+const SANDBOX_PROCESS_GROUP_KILL_ATTEMPTS = 20;
+const SANDBOX_PROCESS_GROUP_POLL_SECONDS = "0.05";
+const SANDBOX_PROCESS_GROUP_CLEANUP_TIMEOUT_MS = 5_000;
+const SANDBOX_TERMINATED_STREAM_DRAIN_TIMEOUT_MS = 5_000;
 
 /**
  * The durable sandbox env-var map, as stored. The SDK's `setEnvVars` input
@@ -77,7 +117,7 @@ const SANDBOX_SESSION_SETUP_REDIAL_DELAYS_MS = [1_500, 3_000, 7_500, 15_000] as 
  */
 type SandboxEnvVars = Record<string, string>;
 
-/** An env-var input map as journaled on the `configured` event: `undefined`
+/** An env-var input map as recorded on the `configured` event: `undefined`
  * (unset) becomes an explicit `null`, because undefined values do not survive
  * JSON — and an unset should be visible in the sandbox's history. */
 function definedEnvEntries(
@@ -87,6 +127,48 @@ function definedEnvEntries(
   return Object.fromEntries(
     Object.entries(env).map(([key, value]) => [key, value === undefined ? null : value]),
   );
+}
+
+/**
+ * Shell executed in a fresh sessionless process group to terminate a DIFFERENT
+ * group. `ps`, rather than the group leader alone, is the source of truth: a
+ * cooperative leader may exit on TERM while one of its descendants ignores
+ * the signal. Zombies are already terminated and cannot execute code, so they
+ * do not keep cleanup open while PID 1 gets a chance to reap them.
+ */
+function sandboxProcessGroupCleanupCommand(processGroupId: number): string {
+  if (!Number.isSafeInteger(processGroupId) || processGroupId <= 1) {
+    throw new Error(`Invalid sandbox process-group id: ${String(processGroupId)}`);
+  }
+
+  return [
+    "set -u",
+    `pgid=${processGroupId}`,
+    "group_has_active_processes() {",
+    "  ps -eo pgid=,stat= | awk -v wanted=\"$pgid\" '$1 == wanted && $2 !~ /^Z/ { found=1 } END { exit(found ? 0 : 1) }'",
+    "}",
+    "wait_for_group_exit() {",
+    "  attempts=$1",
+    "  while group_has_active_processes; do",
+    '    if test "$attempts" -le 0; then return 1; fi',
+    `    sleep ${SANDBOX_PROCESS_GROUP_POLL_SECONDS}`,
+    "    attempts=$((attempts - 1))",
+    "  done",
+    "}",
+    'kill -TERM -- -"$pgid" 2>/dev/null || true',
+    `sleep ${SANDBOX_PROCESS_GROUP_TERM_GRACE_SECONDS}`,
+    "if ! group_has_active_processes; then exit 0; fi",
+    'kill -KILL -- -"$pgid" 2>/dev/null || true',
+    `if wait_for_group_exit ${SANDBOX_PROCESS_GROUP_KILL_ATTEMPTS}; then exit 0; fi`,
+    "printf 'sandbox process group %s survived TERM and KILL\\n' \"$pgid\" >&2",
+    "ps -eo pid=,ppid=,pgid=,stat=,args= | awk -v wanted=\"$pgid\" '$3 == wanted { print }' >&2",
+    "exit 70",
+  ].join("\n");
+}
+
+function appendSandboxTimeoutMessage(stderr: string, timeoutMs: number): string {
+  const separator = stderr.length === 0 || stderr.endsWith("\n") ? "" : "\n";
+  return `${stderr}${separator}Command timed out after ${timeoutMs}ms`;
 }
 
 // The two `readFile` result types (`ReadFileResult`, and the `encoding: "none"`
@@ -172,11 +254,21 @@ async function resolveEgressProjectId(
  * would DEFINE an own data property that shadows the accessor — the setter
  * never runs, nothing registers, and every request silently falls through to
  * a direct `fetch` (TLS still MITM'd, but egress bypasses project policy).
+ *
+ * WebSocket upgrades use the same project egress door. Project and Secret DOs
+ * pass through the upstream socket opened after policy and substitution; this
+ * final boundary replaces only the hop-specific client handshake headers.
  */
 function sandboxOutboundFor(instanceType: SandboxInstanceType): OutboundHandler<Env> {
   return async (request, env, ctx) => {
     const projectId = await resolveEgressProjectId(env, ctx.containerId, instanceType);
-    return projectStub(env.PROJECT, projectId).fetch(request);
+    const response = await projectStub(env.PROJECT, projectId).fetch(
+      withStreamContext(request, { kind: "scope", scopePath: "/" }),
+    );
+    // Container intercept converts Response.webSocket → HTTP 101 for the
+    // in-container client. Stamp Accept for this caller's key and leave frame
+    // transport to the native WebSocket response path.
+    return withWebSocketHandshakeHeaders(request, response);
   };
 }
 
@@ -186,20 +278,25 @@ function sandboxOutboundFor(instanceType: SandboxInstanceType): OutboundHandler<
  */
 type SandboxIdentity = { path: string; projectId: string };
 
+type SandboxProcessorResources = {
+  reads: RegisteredProcessorReads<SandboxProcessorState>;
+  registry: StreamProcessorRegistry<SandboxProcessorState>;
+};
+
 const IDENTITY_STORAGE_KEY = "iterate-sandbox-identity";
 
 /**
  * A project-scoped Cloudflare Sandbox: the `@cloudflare/sandbox` container
  * Durable Object, addressed like every other domain object
  * (`{projectId}.iterate{path}` in the size's namespace). The public surface
- * IS the SDK's — `itx.sandboxes.get(path)` returns this object's bare RPC
- * stub (exec, files, processes, ports, gitCheckout, …) with nothing wrapped
- * on top — plus the explicit lifecycle verbs below.
+ * IS the SDK's — the address handle from `itx.sandboxes.get(path)` dynamically
+ * replays exec, files, processes, ports, gitCheckout, and the rest onto this
+ * object, alongside the explicit lifecycle verbs below.
  *
  * Sandboxes are PETS: they exist only after an explicit
- * `itx.sandboxes.create({ name, instanceType })` (get() refuses paths that
- * were never created), their instance type is fixed for life (it is a path
- * segment, and Cloudflare fixes instance type per container class — see
+ * `itx.sandboxes.get(path).create({ instanceType })` (birth-requiring methods
+ * refuse paths that were never created), their instance type is fixed for
+ * life (Cloudflare fixes instance type per container class — see
  * instance-types.ts), and their lifecycle is imperative — `start()`,
  * `sleep()`, `destroy()` — with every command and completion appended as
  * events to the stream at the sandbox's own path (see the contract in
@@ -241,6 +338,11 @@ const IDENTITY_STORAGE_KEY = "iterate-sandbox-identity";
  *    a sandbox cannot reach the internet except through project policy.
  */
 export abstract class SandboxDurableObject extends Sandbox<Env> {
+  /** Report this incarnation's code version without starting its container. */
+  deploymentVersion(): string {
+    return workerVersion(this.env);
+  }
+
   // Intercept HTTPS as well as HTTP: without this, only plaintext egress would
   // reach the `outbound` handler and TLS traffic would bypass project policy.
   override interceptHttps = true;
@@ -250,6 +352,57 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
   // account. Static (app/component); per-sandbox identity already lives in the
   // Durable Object name and the lifecycle stream. See docs/cloudflare-sandboxes.md.
   override labels = { app: "iterate-os", component: "sandbox" };
+
+  // Preserve strict create semantics while one attempt is still executing in
+  // this incarnation. A durable pending record is resumable only after that
+  // attempt has failed (or the object restarted), not by a concurrent caller.
+  #creationInFlight = false;
+
+  // Container-backed Durable Objects do not reliably expose ctx.id.name in
+  // local development, so processor plumbing is initialized lazily after the
+  // collection has recorded the sandbox identity (see #ensureIdentity).
+  #processorResourcesValue: SandboxProcessorResources | undefined;
+
+  #processorResources(): SandboxProcessorResources {
+    if (this.#processorResourcesValue !== undefined) return this.#processorResourcesValue;
+    const { path, projectId } = this.#identity();
+    const stream = new StreamRpcTarget({
+      auth: trustedInternalAuthContext(),
+      path,
+      projectId,
+    });
+    const registry = createStreamProcessorRegistry<SandboxProcessorState>(this.ctx, {
+      stream,
+      path,
+      projectId,
+      version: workerVersion(this.env),
+    });
+    // Pure reducer: there is no consequential background work to recover after
+    // eviction, so this processor deliberately does not opt into recovery.
+    const processor = registry.register(new SandboxProcessor({ stream, path, projectId }));
+    const resources = { reads: registry.reads(processor), registry };
+    this.#processorResourcesValue = resources;
+    return resources;
+  }
+
+  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
+    return this.#processorResources().registry.wakeStreamSubscriber(args);
+  }
+
+  // Do not override alarm(): @cloudflare/containers owns this object's one
+  // alarm for container scheduling and idle expiry. The pure-reduce processor
+  // above has recovery disabled and therefore never arms a registry alarm.
+
+  get processor() {
+    const { reads, registry } = this.#processorResources();
+    return new StreamProcessorRpcTarget(reads, {
+      catchUpBeforeSnapshot: () => registry.catchUp(SandboxProcessorContract.slug),
+    });
+  }
+
+  get liveState() {
+    return new LiveStateRpcTarget<SandboxProcessorState>(this.#processorResources().registry);
+  }
 
   /** Each subclass declares its instance type here — a STATIC field, not the
    * class name (a bundler may rename classes) and not an instance field
@@ -276,25 +429,36 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     return this.#identity().projectId;
   }
 
-  /** Abort the current Durable Object incarnation; the next request boots it again. */
-  kill(): void {
+  /**
+   * Abort the current Durable Object incarnation; the next request boots it
+   * again. Append and reduce the operator intent first: `ctx.abort()` is
+   * necessarily observed by Cloudflare and the caller as a lifecycle reset,
+   * so the sandbox stream must carry the durable explanation for that reset.
+   */
+  async kill(): Promise<void> {
+    this.#assertUsable();
+    await this.#appendLifecycleEventAndWait({
+      type: "events.iterate.com/sandbox/kill-requested",
+      payload: {},
+    });
     this.ctx.abort("kill requested");
   }
 
   /**
    * Create the sandbox: write the durable record that makes it exist. The
    * instance type is validated against THIS class (the collection routed here
-   * by the type it journaled on `create-requested`) and fixed for life.
-   * Strict, not idempotent — a pet is born once; an existing or destroyed
-   * path is an error, so two callers can't silently share a sandbox they each
-   * think they created. (A retry of a create whose first attempt died between
-   * the journal append and this call finds no record and completes normally —
-   * the collection only routes here with the journaled type.)
+   * by the type it recorded on `create-requested`) and fixed for life.
+   * Idempotent once setup completes: the catalogue claim has already proved
+   * that this call names the same canonical request body, so re-entry returns
+   * the existing pet without appending or reapplying configuration. A durable
+   * `creationPending` record means a previous attempt failed before setup
+   * returned; replay the idempotent birth batch and finish that same claim
+   * instead of stranding half-created state.
    *
    * `sleepAfter` and `keepAlive` pass straight through to the SDK's own
    * durable setters (`setSleepAfter` / `setKeepAlive` — the SDK persists and
    * restores them itself); `env` merges as if by {@link setEnvVars}. The
-   * collection journals `create-requested` (the command) before calling;
+   * collection appends `create-requested` (the command) before calling;
    * this emits `created` (the completion). No container boots here — the
    * first command or an explicit `start()` does.
    */
@@ -316,39 +480,80 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     // (see assertValidSleepAfter).
     if (input.sleepAfter !== undefined) assertValidSleepAfter(input.sleepAfter);
     this.#ensureIdentity({ path: input.path, projectId: input.projectId });
+    if (this.#creationInFlight) {
+      throw new Error(`sandbox "${input.path}" creation is already in progress`);
+    }
     const existing = this.#record();
-    if (existing !== undefined) {
+    if (existing?.destroyedAt !== undefined) {
       throw new Error(
-        existing.destroyedAt !== undefined
-          ? `sandbox "${input.path}" was destroyed and its name cannot be reused — create one with a new name`
-          : `sandbox "${input.path}" already exists — itx.sandboxes.get("${input.path}") to use it`,
+        `sandbox "${input.path}" was destroyed and its name cannot be reused — create one with a new name`,
       );
     }
-    const record: SandboxRecord = {
-      createdAt: new Date().toISOString(),
-      instanceType: input.instanceType,
-    };
-    this.ctx.storage.kv.put(SANDBOX_RECORD_STORAGE_KEY, record);
-    if (input.sleepAfter !== undefined) await this.setSleepAfter(input.sleepAfter);
-    if (input.keepAlive !== undefined) await this.setKeepAlive(input.keepAlive);
-    if (input.env !== undefined && Object.keys(input.env).length > 0) {
-      await this.setEnvVars(input.env);
+    if (existing !== undefined && existing.creationPending !== true) {
+      return {
+        createdAt: existing.createdAt,
+        instanceType: existing.instanceType,
+        path: this.#identity().path,
+      };
     }
-    this.#emitLifecycleEvent({
-      type: "events.iterate.com/sandbox/created",
-      payload: { instanceType: input.instanceType },
-    });
-    return {
-      createdAt: record.createdAt,
-      instanceType: record.instanceType,
-      path: this.#identity().path,
-    };
+    if (existing?.instanceType !== undefined && existing.instanceType !== input.instanceType) {
+      throw new Error(
+        `sandbox instance-type mismatch while resuming creation: expected "${existing.instanceType}", got "${input.instanceType}"`,
+      );
+    }
+    const record: SandboxRecord =
+      existing ??
+      ({
+        creationPending: true,
+        createdAt: new Date().toISOString(),
+        instanceType: input.instanceType,
+      } satisfies SandboxRecord);
+    if (existing === undefined) {
+      this.ctx.storage.kv.put(SANDBOX_RECORD_STORAGE_KEY, record);
+    }
+    this.#creationInFlight = true;
+    try {
+      // Birth and the processor subscription are one batch, and create returns
+      // only after the hosted reducer has durably reduced through both facts.
+      // Keep the pending record if append, reduce, or configuration fails: stream
+      // RPC failures are ambiguous, and deleting it after a committed append
+      // would leave a stream-visible ghost with no command record. Both birth
+      // events are idempotency-keyed, so the next create retry safely heals the
+      // same catalogue claim and waits for the same reducer boundary.
+      await this.#appendBirth(input.instanceType, input.env);
+      if (input.sleepAfter !== undefined) await this.setSleepAfter(input.sleepAfter);
+      if (input.keepAlive !== undefined) await this.setKeepAlive(input.keepAlive);
+      if (input.env !== undefined && Object.keys(input.env).length > 0) {
+        const initialEnv = Object.fromEntries(
+          Object.entries(input.env).filter((entry): entry is [string, string] => {
+            return entry[1] !== undefined;
+          }),
+        );
+        this.ctx.storage.kv.put(SANDBOX_ENV_STORAGE_KEY, initialEnv);
+      }
+      const current = this.#record();
+      if (current === undefined) {
+        throw new Error(`sandbox "${input.path}": creation record disappeared during setup`);
+      }
+      if (current.destroyedAt !== undefined) {
+        throw new Error(`sandbox "${input.path}" was destroyed while creation was finishing`);
+      }
+      const { creationPending: _creationPending, ...completedRecord } = current;
+      this.ctx.storage.kv.put(SANDBOX_RECORD_STORAGE_KEY, completedRecord);
+      return {
+        createdAt: record.createdAt,
+        instanceType: record.instanceType,
+        path: this.#identity().path,
+      };
+    } finally {
+      this.#creationInFlight = false;
+    }
   }
 
   /**
-   * What `itx.sandboxes.get(path)` awaits before handing out the stub:
-   * getting a sandbox never creates one, so a path that was never created (or
-   * was destroyed) is refused here. Also verifies identity — see
+   * What an addressed handle awaits before replaying a birth-requiring SDK
+   * call: getting a sandbox never creates one, so a path that was never
+   * created (or was destroyed) is refused here. Also verifies identity — see
    * {@link #ensureIdentity}.
    */
   async assertCreated(identity: SandboxIdentity): Promise<void> {
@@ -356,7 +561,11 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     // storage behind (addressing never creates, not even at the storage
     // level). #ensureIdentity then only verifies-or-records for a sandbox
     // that provably exists.
-    this.#assertUsable();
+    if (this.#usableRecord().creationPending === true) {
+      throw new Error(
+        `sandbox "${identity.path}" creation did not finish — retry itx.sandboxes.get(${JSON.stringify(identity.path)}).create with the original input`,
+      );
+    }
     this.#ensureIdentity(identity);
   }
 
@@ -415,6 +624,18 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
       payload: {},
     });
     await this.#ensureWorkspaceCurrent();
+    // onStart cannot wait for the processor while it is inside the SDK's
+    // blockConcurrencyWhile budget. The ordinary command boundary can: do
+    // not return a successful start while the live controls still see the
+    // pre-start `running` projection.
+    await this.#catchUpLifecycleCompletion(this.#lastStartedOffset);
+  }
+
+  /** Recreate the running container while preserving `/workspace`. */
+  async restart(): Promise<void> {
+    this.#assertUsable();
+    await this.sleep();
+    await this.start();
   }
 
   /**
@@ -449,6 +670,9 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     }
     await super.destroy(); // container-level: the onStop hook appends `stopped`
     this.#invalidateWorkspaceMemo();
+    // Match start(): the lifecycle hook only makes `stopped` durable, while
+    // this unconstrained command boundary waits for its reduced projection.
+    await this.#catchUpLifecycleCompletion(this.#lastStoppedOffset);
   }
 
   /**
@@ -488,13 +712,16 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     // idle expiry reclaims.
     await super.destroy();
     this.#invalidateWorkspaceMemo();
+    // Reduce the terminal fact before tombstoning. Stream delivery reaches this
+    // processor through the collection without requiring a usable sandbox,
+    // but returning only after the reduction gives callers a coherent final state.
+    await this.#appendLifecycleEventAndWait({
+      type: "events.iterate.com/sandbox/destroyed",
+      payload: {},
+    });
     this.ctx.storage.kv.put(SANDBOX_RECORD_STORAGE_KEY, {
       ...record,
       destroyedAt: new Date().toISOString(),
-    });
-    this.#emitLifecycleEvent({
-      type: "events.iterate.com/sandbox/destroyed",
-      payload: {},
     });
   }
 
@@ -589,7 +816,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     const stored = this.ctx.storage.kv.get<SandboxIdentity>(IDENTITY_STORAGE_KEY);
     if (!stored) {
       throw new Error(
-        "sandbox has no identity yet — create it with itx.sandboxes.create, not a raw stub",
+        "sandbox has no identity yet — create it with itx.sandboxes.get(path).create, not a raw stub",
       );
     }
     return stored;
@@ -605,7 +832,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     const record = this.#record();
     if (record === undefined) {
       throw new Error(
-        "sandbox does not exist — sandboxes are created explicitly: itx.sandboxes.create({ name, instanceType })",
+        "sandbox does not exist — sandboxes are created explicitly: itx.sandboxes.get(path).create({ instanceType })",
       );
     }
     if (record.destroyedAt !== undefined) {
@@ -621,6 +848,8 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
   }
 
   #workspaceReady: Promise<void> | undefined;
+  #lastStartedOffset: number | undefined;
+  #lastStoppedOffset: number | undefined;
   // Whether the CURRENT container's workspace was fully provisioned (snapshot
   // restored, env applied). Gates the idle-time backup: snapshotting a
   // half-provisioned workspace would overwrite the pointer to the last GOOD
@@ -629,10 +858,6 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
 
   override async onStart(): Promise<void> {
     await super.onStart();
-    this.#emitLifecycleEvent({
-      type: "events.iterate.com/sandbox/started",
-      payload: {},
-    });
     // Each start is a fresh container process (empty disk), so a readiness
     // promise or provisioned flag from a previous container must not satisfy
     // this one. Provisioning itself is NOT kicked off here:
@@ -649,6 +874,12 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     //   guard's in-flight one.
     this.#workspaceReady = undefined;
     this.#workspaceProvisioned = false;
+    // Invalidate before touching the stream: even if the append fails and the
+    // hook rejects, no later call may reuse readiness from the old container.
+    this.#lastStartedOffset = await this.#appendLifecycleEventAndCatchUpInBackground({
+      type: "events.iterate.com/sandbox/started",
+      payload: {},
+    });
   }
 
   override async onStop(): Promise<void> {
@@ -659,7 +890,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     // This covers container crashes while the DO stays resident: without it
     // the memo would keep describing a container that no longer exists.
     this.#invalidateWorkspaceMemo();
-    this.#emitLifecycleEvent({
+    this.#lastStoppedOffset = await this.#appendLifecycleEventAndCatchUpInBackground({
       type: "events.iterate.com/sandbox/stopped",
       payload: {},
     });
@@ -735,7 +966,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
    * degrades to null so provisioning continues with an empty workspace rather
    * than failing the start. Emits nothing — `#ensureWorkspace` reports what
    * happened once provisioning completes, behind its run-identity guard, so a
-   * superseded run can't journal a restore for a container it no longer owns.
+   * superseded run can't record a restore for a container it no longer owns.
    */
   async #restoreWorkspace(): Promise<string | null> {
     const backup = this.ctx.storage.kv.get<DirectoryBackup>(BACKUP_HANDLE_STORAGE_KEY);
@@ -783,12 +1014,12 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
    * upgrade to an SDK method. The stock implementation only mutates the
    * running container's in-memory map (nothing survives a restart); ours
    * persists the merge in Durable Object storage, re-applies it on every
-   * container start, and journals a `sandbox/configured` event. Same
+   * container start, and appends a `sandbox/configured` event. Same
    * signature and semantics otherwise: keys merge in, `undefined` unsets a
    * key. Keeping the SDK's name (rather than a bespoke `configureEnvVars`)
    * means a docs-reading caller can't pick the silently-non-durable spelling.
    *
-   * The intended value shape is a `getSecret({ path })` placeholder: the
+   * The intended value shape is a `getSecret(path)` placeholder: the
    * material then stays in the secret system and is substituted only at egress
    * (the project egress path already does this for any header carrying the
    * placeholder), so code in the sandbox can read e.g. `OPENAI_API_KEY` from
@@ -857,29 +1088,16 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
   }
 
   /**
-   * Make plain `git` (and therefore `gitCheckout`) authenticate against
-   * github.com with the GH_TOKEN placeholder. `gh` reads GH_TOKEN from the
-   * environment natively, but stock git does not — it needs the
-   * `http.extraheader` config. A raw `AUTHORIZATION: Bearer <placeholder>`
-   * header (NOT a credential helper, which would send Basic auth — base64 —
-   * hiding the placeholder from egress substitution) is what lets the egress
-   * door swap in the real installation token. `$GH_TOKEN` expands INSIDE the
-   * container from the just-applied env map, so the placeholder string never
-   * needs shell-quoting here; when the project has no GitHub connection the
-   * guard makes this a no-op. Config lands on the ephemeral disk, hence
-   * re-run per container start. Best-effort: a hiccup must not fail
-   * provisioning — `gh` still works via the env var, and the next start
-   * retries.
+   * Plant stock git identity + (when `GH_TOKEN` is set) github.com HTTPS auth.
+   * See {@link SANDBOX_GIT_CONFIG_SHELL}. Identity always; auth only with a
+   * GitHub connection. Ephemeral disk → re-run per container start.
+   * Best-effort: a hiccup must not fail provisioning.
    */
-  async #configureGitAuth(): Promise<void> {
+  async #configureGit(): Promise<void> {
     try {
-      await this.#redialOnInterruptedSessionSetup(() =>
-        super.exec(
-          'if [ -n "$GH_TOKEN" ]; then git config --global http."https://github.com/".extraheader "AUTHORIZATION: Bearer $GH_TOKEN"; fi',
-        ),
-      );
+      await this.#redialOnInterruptedSessionSetup(() => super.exec(SANDBOX_GIT_CONFIG_SHELL));
     } catch (error) {
-      console.warn("sandbox git auth configuration failed; git-over-https may 401", error);
+      console.warn("sandbox git configuration failed; commits/git-over-https may misbehave", error);
     }
   }
 
@@ -943,9 +1161,226 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     }
   }
 
+  /**
+   * Execute a timed command through the SDK's sessionless STREAM door so the
+   * start event gives us the real detached process-group leader. The stock
+   * 0.12.3 timeout watches only that leader: if TERM kills the leader while a
+   * child ignores it, the SDK can return 124 with the child still running (or
+   * wait forever while that child holds an output pipe). We therefore own the
+   * deadline, verify the entire group with `ps`, escalate TERM to KILL, and
+   * synthesize 124 only after cleanup and stream drain both finish.
+   */
+  async #execSessionlessWithVerifiedTimeout(
+    command: string,
+    options: ExecOptions & { timeout: number },
+  ): Promise<ExecResult> {
+    const timeoutMs = options.timeout;
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647) {
+      throw new Error(`Sandbox exec timeout must be between 1 and 2147483647ms: ${timeoutMs}`);
+    }
+    if (options.signal?.aborted === true) throw new Error("Operation was aborted");
+
+    const startedAt = Date.now();
+    const deadlineAt = startedAt + timeoutMs;
+    const timestamp = new Date(startedAt).toISOString();
+    const stream = await this.#redialOnInterruptedSessionSetup(() =>
+      super.execStreamWithSessionToken(command, SANDBOX_SESSIONLESS_EXECUTION_TOKEN, {
+        cwd: options.cwd,
+        env: options.env,
+      }),
+    );
+
+    let stdout = "";
+    let stderr = "";
+    let sawStart = false;
+    let resolveStarted!: (pid: number) => void;
+    let rejectStarted!: (error: unknown) => void;
+    const started = new Promise<number>((resolve, reject) => {
+      resolveStarted = resolve;
+      rejectStarted = reject;
+    });
+
+    const completion = (async (): Promise<number> => {
+      try {
+        for await (const event of parseSSEStream<ExecEvent>(stream)) {
+          switch (event.type) {
+            case "start": {
+              if (sawStart)
+                throw new Error("Sandbox exec stream emitted more than one start event");
+              if (!Number.isSafeInteger(event.pid) || (event.pid ?? 0) <= 1) {
+                throw new Error(
+                  `Sandbox exec stream emitted an invalid process-group id: ${String(event.pid)}`,
+                );
+              }
+              sawStart = true;
+              resolveStarted(event.pid!);
+              break;
+            }
+            case "stdout":
+            case "stderr": {
+              const data = event.data ?? "";
+              if (event.type === "stdout") stdout += data;
+              else stderr += data;
+              if (options.stream === true) options.onOutput?.(event.type, data);
+              break;
+            }
+            case "complete": {
+              const exitCode = event.exitCode ?? event.result?.exitCode;
+              if (!Number.isInteger(exitCode)) {
+                throw new Error("Sandbox exec stream completed without an exit code");
+              }
+              return exitCode!;
+            }
+            case "error":
+              throw new Error(event.error ?? "Sandbox exec stream failed without an error message");
+          }
+        }
+        throw new Error("Sandbox exec stream ended without a completion event");
+      } catch (error) {
+        if (!sawStart) rejectStarted(error);
+        throw error;
+      }
+    })();
+
+    const processGroupId = await Promise.race([
+      started,
+      completion.then(() => {
+        throw new Error("Sandbox exec stream completed before its start event");
+      }),
+    ]);
+
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let abortListener: (() => void) | undefined;
+    const timeout = new Promise<{ kind: "timeout" }>((resolve) => {
+      // Session setup and delivery of the start event consume the caller's
+      // budget too. We still wait for the start event before enforcing an
+      // expired deadline because it is the only safe way to learn which
+      // process group must be terminated.
+      timeoutId = setTimeout(
+        () => resolve({ kind: "timeout" }),
+        Math.max(0, deadlineAt - Date.now()),
+      );
+    });
+    const aborted = new Promise<{ kind: "aborted" }>((resolve) => {
+      if (options.signal === undefined) return;
+      abortListener = () => resolve({ kind: "aborted" });
+      if (options.signal.aborted) abortListener();
+      else options.signal.addEventListener("abort", abortListener, { once: true });
+    });
+
+    let outcome:
+      | { exitCode: number; kind: "completed" }
+      | { kind: "timeout" }
+      | { kind: "aborted" };
+    try {
+      outcome = await Promise.race([
+        completion.then((exitCode) => ({ exitCode, kind: "completed" }) as const),
+        timeout,
+        aborted,
+      ]);
+    } catch (error) {
+      try {
+        await this.#terminateSandboxProcessGroup(processGroupId);
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          `Sandbox exec stream failed and process-group ${processGroupId} cleanup also failed`,
+        );
+      }
+      throw error;
+    } finally {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+      if (abortListener !== undefined) options.signal?.removeEventListener("abort", abortListener);
+    }
+
+    if (outcome.kind === "completed") {
+      const result: ExecResult = {
+        command,
+        duration: Date.now() - startedAt,
+        exitCode: outcome.exitCode,
+        stderr,
+        stdout,
+        success: outcome.exitCode === 0,
+        timestamp,
+      };
+      options.onComplete?.(result);
+      return result;
+    }
+
+    await this.#terminateSandboxProcessGroup(processGroupId);
+    await this.#waitForTerminatedSandboxStream(completion, processGroupId);
+
+    if (outcome.kind === "aborted") throw new Error("Operation was aborted");
+
+    const result: ExecResult = {
+      command,
+      duration: Date.now() - startedAt,
+      exitCode: SANDBOX_TIMEOUT_EXIT_CODE,
+      stderr: appendSandboxTimeoutMessage(stderr, timeoutMs),
+      stdout,
+      success: false,
+      timestamp,
+    };
+    options.onComplete?.(result);
+    return result;
+  }
+
+  async #terminateSandboxProcessGroup(processGroupId: number): Promise<void> {
+    const cleanup = await this.#redialOnInterruptedSessionSetup(() =>
+      super.execWithSessionToken(
+        sandboxProcessGroupCleanupCommand(processGroupId),
+        SANDBOX_SESSIONLESS_EXECUTION_TOKEN,
+        { origin: "internal", timeout: SANDBOX_PROCESS_GROUP_CLEANUP_TIMEOUT_MS },
+      ),
+    );
+    if (cleanup.exitCode === 0) return;
+    throw new Error(
+      `Sandbox process-group ${processGroupId} cleanup failed with exit ${cleanup.exitCode}: ${cleanup.stderr || cleanup.stdout}`,
+    );
+  }
+
+  async #waitForTerminatedSandboxStream(
+    completion: Promise<number>,
+    processGroupId: number,
+  ): Promise<void> {
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        completion,
+        new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(
+            () =>
+              reject(
+                new Error(
+                  `Sandbox process-group ${processGroupId} was terminated but its exec stream did not settle`,
+                ),
+              ),
+            SANDBOX_TERMINATED_STREAM_DRAIN_TIMEOUT_MS,
+          );
+        }),
+      ]);
+    } finally {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+    }
+  }
+
   override async exec(...args: Parameters<Sandbox<Env>["exec"]>) {
     await this.#ensureReady();
-    return this.#redialOnInterruptedSessionSetup(() => super.exec(...args));
+    const [command, options] = args;
+    if (options?.timeout !== undefined) {
+      try {
+        return await this.#execSessionlessWithVerifiedTimeout(command, {
+          ...options,
+          timeout: options.timeout,
+        });
+      } catch (error) {
+        if (error instanceof Error) options.onError?.(error);
+        throw error;
+      }
+    }
+    return this.#redialOnInterruptedSessionSetup(() =>
+      super.execWithSessionToken(command, SANDBOX_SESSIONLESS_EXECUTION_TOKEN, options),
+    );
   }
 
   override async execStream(...args: Parameters<Sandbox<Env>["execStream"]>) {
@@ -1067,7 +1502,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
       // document env persistence across restart), so every guarded command
       // below runs with the configured vars.
       await this.#applyStoredEnvVars();
-      await this.#configureGitAuth();
+      await this.#configureGit();
       // A container restart mid-run reset the state for a NEW, empty disk —
       // everything this run did landed on the old one. Only the still-current
       // run may mark the workspace provisioned: a stale run setting the flag
@@ -1137,25 +1572,81 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
    * project is discoverable as a stream under `/sandboxes/`. The event
    * catalog is the sandbox processor contract
    * (sandbox-processor-contract.ts); building through it keeps emission and
-   * declaration from drifting. Best-effort by design: lifecycle telemetry
-   * must never block or fail container start/stop, so errors are logged and
-   * dropped.
+   * declaration from drifting. This fire-and-forget lane is reserved for
+   * ancillary audit events. Lifecycle completions that drive `running` await
+   * their durable append and either wait for the reduction at an ordinary
+   * command boundary or schedule it outside the SDK lifecycle callback.
    */
   #emitLifecycleEvent(input: SandboxLifecycleEventInput): void {
     try {
-      const event = SandboxProcessorContract.buildEvent(input);
-      const { projectId, path } = this.#identity();
-      const stream = this.env.STREAM.getByName(
-        DurableObjectNameCodec.stringify({ projectId, path }),
-      );
       this.ctx.waitUntil(
-        Promise.resolve(stream.append(event)).catch((error: unknown) =>
+        this.#appendLifecycleEvent(input).catch((error: unknown) =>
           console.warn(`sandbox lifecycle event append failed (${input.type})`, error),
         ),
       );
     } catch (error) {
       console.warn(`sandbox lifecycle event skipped (${input.type})`, error);
     }
+  }
+
+  async #appendLifecycleEvent(input: SandboxLifecycleEventInput): Promise<number> {
+    const event = SandboxProcessorContract.buildEvent(input);
+    const [appended] = await this.#processorResources().registry.stream.append(event);
+    if (appended === undefined) {
+      throw new Error(`sandbox lifecycle append returned no event (${input.type})`);
+    }
+    return appended.offset;
+  }
+
+  async #appendBirth(
+    instanceType: SandboxInstanceType,
+    env: Record<string, string | undefined> | undefined,
+  ): Promise<void> {
+    const identity = this.#identity();
+    const { registry } = this.#processorResources();
+    const committed = await registry.stream.append(
+      ...sandboxCreationEvents({ ...identity, env, instanceType }),
+    );
+    const offset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
+    if (offset === 0) {
+      throw new Error(`sandbox "${identity.path}": birth append returned no event`);
+    }
+    await this.#waitUntilProcessed(offset);
+  }
+
+  async #appendLifecycleEventAndWait(input: SandboxLifecycleEventInput): Promise<void> {
+    await this.#waitUntilProcessed(await this.#appendLifecycleEvent(input));
+  }
+
+  /** SDK onStart/onStop run inside the container framework's
+   * blockConcurrencyWhile budget. Make the completion durable before the hook
+   * returns, then let push delivery/catch-up advance reduced state without
+   * spending that lifecycle budget waiting on another Durable Object. */
+  async #appendLifecycleEventAndCatchUpInBackground(
+    input: SandboxLifecycleEventInput,
+  ): Promise<number> {
+    const offset = await this.#appendLifecycleEvent(input);
+    this.ctx.waitUntil(this.#waitUntilProcessed(offset));
+    return offset;
+  }
+
+  /** Reduce the latest completion before an explicit lifecycle command
+   * returns. An undefined offset means this command found the container
+   * already in the requested condition; catchUp still closes any reducer lag
+   * left by an earlier incarnation's durable lifecycle append. */
+  async #catchUpLifecycleCompletion(offset: number | undefined): Promise<void> {
+    if (offset === undefined) {
+      await this.#processorResources().registry.catchUp(SandboxProcessorContract.slug);
+      return;
+    }
+    await this.#waitUntilProcessed(offset);
+  }
+
+  async #waitUntilProcessed(offset: number): Promise<void> {
+    const { reads } = this.#processorResources();
+    // The offset wait self-pulls and owns the complete read-your-writes
+    // timeout. Do not put an unbounded catch-up RPC in front of it.
+    await reads.waitUntilEvent({ offset, timeoutMs: SANDBOX_PROCESSOR_WAIT_TIMEOUT_MS });
   }
 }
 

@@ -1,6 +1,7 @@
 import { expect } from "@playwright/test";
 import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
+import { openRepoTreeFile } from "./test-support/repo-tree.ts";
 
 /**
  * JSON/YAML schema validation: a well-known file (here `package.json`, mapped
@@ -19,7 +20,7 @@ test("flags a package.json schema violation with a red squiggle", async ({
 
   using itx = await connectAdminItx(baseURL!);
   using project = itx.projects.get(fixture.project.id);
-  await project.repos.create({ path: "/repos/ide" });
+  await project.repos.get("/repos/ide").create({ type: "empty" });
   // `name` must be a string per the package.json schema — a number is a clear,
   // stable violation.
   await project.repos.get("/repos/ide").commitFiles({
@@ -29,10 +30,14 @@ test("flags a package.json schema violation with a red squiggle", async ({
 
   await page.goto(`/projects/${fixture.project.slug}/repos/ide`);
 
-  await page.locator('[data-item-path="package.json"]').click();
-  await expect(page.locator(".cm-content")).toContainText('"name": 123');
+  await openRepoTreeFile(page, "package.json");
+  await page.locator(".cm-content").filter({ hasText: '"name": 123' }).waitFor();
 
-  // Once the schema loads, the invalid value gets the lint squiggle. Allow
-  // generous time for the one-off schemastore fetch.
+  // Once the schema loads, the invalid value gets the lint squiggle. The
+  // schemastore fetch + lint pass run in the background with no spinner, so
+  // spinner-waiter clamps a locator.waitFor here to its 1ms no-spinner
+  // fail-fast; the web-first assertion is not middleware-instrumented and
+  // keeps the generous 20s budget the one-off fetch needs.
+  // oxlint-disable-next-line iterate/spec-restricted-syntax -- no spinner exists during the background schemastore fetch, so locator.waitFor gets fail-fasted to 1ms; expect().toBeVisible() polls the full 20s.
   await expect(page.locator(".cm-lintRange-error").first()).toBeVisible({ timeout: 20_000 });
 });

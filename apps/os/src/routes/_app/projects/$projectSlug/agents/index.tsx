@@ -1,21 +1,20 @@
-import { useMemo } from "react";
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { buttonVariants } from "@iterate-com/ui/components/button";
-import { ItxBoundary } from "~/components/itx-boundary.tsx";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useLiveState } from "iterate/sdk/itx/react";
+import { AgentCatalog } from "~/components/agents/agent-catalog.tsx";
+import { updateAgentSummary } from "~/components/agents/agent-summary.ts";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
-import { StreamTree } from "~/components/stream-tree.tsx";
-import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
+import {
+  breadcrumbLoaderData,
+  streamBreadcrumb,
+  streamPageStaticData,
+} from "~/lib/route-breadcrumbs.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
-import { useItx } from "~/itx/itx-react.tsx";
 
 const AGENTS_ROOT = "/agents";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/")({
-  // Agents ARE streams: this page is the /agents catalogue stream's view, with
-  // the live agent tree in the side panel. useItx never SSRs (it throws on the
-  // server), and the tree paints from its own live subscriptions once the
-  // socket connects.
+  staticData: streamPageStaticData(),
   validateSearch: StreamViewSearch,
   ssr: false,
   loader: ({ context }) =>
@@ -23,53 +22,36 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/agents/")({
       project: context.project,
       streamBreadcrumb: streamBreadcrumb(context.project, AGENTS_ROOT),
     }),
-  component: ProjectAgentsIndexPage,
+  component: ProjectAgentsIndexContent,
 });
-
-function ProjectAgentsIndexPage() {
-  return (
-    <ItxBoundary>
-      <ProjectAgentsIndexContent />
-    </ItxBoundary>
-  );
-}
 
 function ProjectAgentsIndexContent() {
   const params = Route.useParams();
-  const navigate = useNavigate();
   const { project } = Route.useLoaderData();
-  const itx = useItx();
-  const source = useMemo(() => (streamPath: string) => itx.streams.get(streamPath), [itx]);
-
-  const panel = (
-    <>
-      <Link
-        to="/projects/$projectSlug/agents/new"
-        params={{ projectSlug: params.projectSlug }}
-        search={{}}
-        className={buttonVariants({ size: "sm" })}
-      >
-        New agent
-      </Link>
-      {/* Anything under /agents is an agent and opens the chat view —
-          linkOptionsForStreamPath encodes that. */}
-      <StreamTree
-        source={source}
-        rootPath={AGENTS_ROOT}
-        scope={project.id}
-        onOpenPath={(streamPath) =>
-          void navigate(linkOptionsForStreamPath(params.projectSlug, streamPath))
-        }
-      />
-    </>
-  );
+  const navigate = useNavigate();
+  const agents = useLiveState(
+    (projectItx) => projectItx.agents.liveState,
+    (state) => state.agents,
+    [],
+  ).value;
 
   return (
     <ProjectStreamView
-      panel={panel}
+      layout="fullPanel"
+      panel={
+        <AgentCatalog
+          agents={agents}
+          projectId={project.id}
+          projectSlug={params.projectSlug}
+          onOpen={(path) => void navigate(linkOptionsForStreamPath(params.projectSlug, path))}
+          onTogglePinned={(agent) =>
+            updateAgentSummary(project.id, agent.path, { pinned: !agent.summary.pinned })
+          }
+        />
+      }
       projectId={project.id}
       streamPath={AGENTS_ROOT}
-      emptyLabel="No events on the agents catalogue stream yet."
+      emptyLabel="No events on the agents catalog stream yet."
     />
   );
 }

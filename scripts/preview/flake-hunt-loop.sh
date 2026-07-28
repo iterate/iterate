@@ -1,144 +1,195 @@
 #!/usr/bin/env bash
-# Repeatedly run the preview e2e lane against this PR's deployed slot and stop
-# on the first failure. Used by the flake hunt (docs/preview-e2e-flake-hunt.md)
-# to count consecutive green runs; each run's full output lands in
-# $LOG_DIR/run-<n>.log so a failure can be diagnosed after the fact.
-set -uo pipefail
+# Dispatch the canonical Depot preview workflow repeatedly. Every iteration is
+# a normal Cloudflare Preview run: fresh Depot runner, full-fleet deploy, all
+# e2e lanes, artifacts, GitHub check timings, and PostHog telemetry.
+set -euo pipefail
 
-PR_NUMBER="${PR_NUMBER:-1664}"
-RUNS="${RUNS:-5}"
-LOG_DIR="${LOG_DIR:-/tmp/flake-hunt}"
-START_AT="${START_AT:-1}"
-
-# macOS idle-sleeps ~15 minutes into an unattended loop; a sleeping laptop
-# freezes tests mid-flight (14-16 minute "hangs", dropped WebSockets) that
-# look exactly like server-side flakes. Re-exec under caffeinate so the
-# machine stays awake for the duration of the loop.
-if [ "$(uname)" = "Darwin" ] && [ -z "${FLAKE_HUNT_CAFFEINATED:-}" ]; then
-  export FLAKE_HUNT_CAFFEINATED=1
-  # -d display, -i idle system, -m disk, -s system-on-AC. A bare `-is` still let
-  # the machine sleep overnight once (r3d: a 5.5h gap de-provisioned the sandbox
-  # container image). caffeinate can't beat a battery+lid-closed sleep, so also
-  # keep the marathon continuous; this is best-effort on AC power.
-  exec caffeinate -dims "$0" "$@"
-fi
-
-# Match the Depot CI contract exactly: the vitest e2e lane sets its retry
-# policy and scheduling off CI=true (one retry absorbs platform blips like
-# Cloudflare's retryable "internal error; reference = ..." resets; retried
-# tests are still visible in the run log). Without this the local loop runs a
-# STRICTER config than the pipeline it is trying to de-flake.
-export CI=true
-
-mkdir -p "$LOG_DIR"
-# Watchdog for one whole run — it fails, it never retries, per the policy
-# (docs/testing.md#retries-and-timeouts). Sized to ~2x a healthy full-fleet
-# run (a few minutes), deliberately NOT to the worst-case retry stack: it MAY
-# kill a run legitimately burning per-test retries against a wedged platform,
-# and that is correct — both historical watchdog kills were genuine infra
-# wedges where retrying was hopeless (an earlier bug let a startup wedge hang
-# 9+ hours). The default must equal PREVIEW_RUN_WATCHDOG_SECS in
-# packages/shared/src/test-support/e2e-policy/budgets.ts; shell can't import
-# the constant, so scripts/preview/e2e-policy.test.ts guards the match.
+PR_NUMBER="${PR_NUMBER:?PR_NUMBER is required}"
+RUNS="${RUNS:-25}"
+MAX_RUN_DURATION_SECS="${MAX_RUN_DURATION_SECS:-420}"
 RUN_TIMEOUT_SECS="${RUN_TIMEOUT_SECS:-600}"
+POLL_INTERVAL_SECS="${POLL_INTERVAL_SECS:-5}"
+DEPOT_ORG="${DEPOT_ORG:-0p91s0lz49}"
+DEPOT_REPO="${DEPOT_REPO:-iterate/iterate}"
+REF="${REF:-$(git branch --show-current)}"
 
-# Full-fleet preflight. `preview deploy` selects apps by diffing the PR head
-# against the LAST DEPLOYED head (not the PR base), so a mid-branch commit that
-# touches only one app (e.g. an apps/os-only fix) redeploys just that app and
-# leaves the others at an older head. The test lane only tests apps whose
-# recorded head == the PR head, so the marathon then silently shrinks to the
-# changed apps and every run trips the full-fleet guard (exit 3) — or worse,
-# would count a partial lane as green if that guard were absent. `--all-apps`
-# forces the full fleet regardless of the diff, which reunifies the head.
-# So before a fresh marathon (START_AT=1) we run one deploy and assert all four
-# apps come back testable at the current head; set SKIP_PREFLIGHT_DEPLOY=1 to
-# bypass (e.g. resuming a marathon whose fleet is already unified).
-if [ "$START_AT" -eq 1 ] && [ -z "${SKIP_PREFLIGHT_DEPLOY:-}" ]; then
-  preflight="$LOG_DIR/preflight-deploy.log"
-  echo "preflight: deploying full fleet for PR $PR_NUMBER (log: $preflight)"
-  # --allow-draft: the marathon targets an arbitrary PR by number — an
-  # explicit ask, so the draft preview policy doesn't apply.
-  doppler run --project _shared --config prd -- pnpm preview deploy --all-apps --allow-draft \
-    --pull-request-number "$PR_NUMBER" >"$preflight" 2>&1
-  deploy_exit=$?
-  if [ "$deploy_exit" -ne 0 ]; then
-    echo "preflight: deploy FAILED (exit $deploy_exit) — see $preflight"
-    exit 4
+require_positive_integer() {
+  local name=$1 value=$2
+  if ! [[ "$value" =~ ^[1-9][0-9]*$ ]]; then
+    echo "$name must be a positive integer, got: $value" >&2
+    exit 64
   fi
-  if grep -qE "deploy-failed|claim-failed" "$preflight"; then
-    echo "preflight: an app failed to deploy — see $preflight"
-    exit 4
-  fi
-  echo "preflight: deploy OK"
+}
+
+require_positive_integer PR_NUMBER "$PR_NUMBER"
+require_positive_integer RUNS "$RUNS"
+require_positive_integer MAX_RUN_DURATION_SECS "$MAX_RUN_DURATION_SECS"
+require_positive_integer RUN_TIMEOUT_SECS "$RUN_TIMEOUT_SECS"
+require_positive_integer POLL_INTERVAL_SECS "$POLL_INTERVAL_SECS"
+
+if [ -z "$REF" ]; then
+  echo "REF is required when the current checkout is detached" >&2
+  exit 64
 fi
 
-# Optional slot warmup: a freshly-deployed slot is cold (os worker + DO chain +
-# sandbox containers all boot on first use), and a cold run 1 can flake on
-# timing that a warm slot never would — which would reset the streak at run 1.
-# WARMUP_RUNS uncounted `preview test` invocations warm the slot first; their
-# pass/fail is ignored on purpose (they exist only to prime caches/containers).
-WARMUP_RUNS="${WARMUP_RUNS:-0}"
-for w in $(seq 1 "$WARMUP_RUNS"); do
-  [ "$WARMUP_RUNS" -eq 0 ] && break
-  wlog="$LOG_DIR/warmup-$(printf '%02d' "$w").log"
-  echo "warmup $w/$WARMUP_RUNS: priming the slot (result ignored) -> $wlog"
-  doppler run --project _shared --config prd -- pnpm preview test \
-    --pull-request-number "$PR_NUMBER" >"$wlog" 2>&1 || true
-done
+command -v depot >/dev/null || { echo "depot CLI is required" >&2; exit 69; }
+command -v node >/dev/null || { echo "node is required" >&2; exit 69; }
 
-for i in $(seq "$START_AT" $((START_AT + RUNS - 1))); do
-  log="$LOG_DIR/run-$(printf '%03d' "$i").log"
-  started=$(date -u +%H:%M:%S)
-  doppler run --project _shared --config prd -- pnpm preview test \
-    --pull-request-number "$PR_NUMBER" >"$log" 2>&1 &
-  run_pid=$!
-  (
-    sleep "$RUN_TIMEOUT_SECS"
-    echo "run $i: WATCHDOG — killing after ${RUN_TIMEOUT_SECS}s" >>"$log"
-    # The run tree is deep (doppler -> pnpm -> trpc-cli -> inner doppler -> bash
-    # -> vitest/playwright) and SIGTERM to the top does NOT propagate down — a
-    # vitest-startup wedge survived a TERM and hung 58 min past this timeout
-    # once. Walk the whole descendant tree and SIGKILL it leaf-first so nothing
-    # is left holding the loop's `wait`.
-    kill_tree() {
-      local p=$1 c
-      for c in $(pgrep -P "$p" 2>/dev/null); do kill_tree "$c"; done
-      kill -KILL "$p" 2>/dev/null
-    }
-    kill_tree "$run_pid"
-  ) &
-  watchdog_pid=$!
-  wait "$run_pid"
-  exit_code=$?
-  kill "$watchdog_pid" 2>/dev/null
-  wait "$watchdog_pid" 2>/dev/null
-  finished=$(date -u +%H:%M:%S)
-  # `preview test` exits 0 but skips (stale head, no lease) without running
-  # anything — a skip must not count as a green run.
-  if grep -q "skipped: true" "$log"; then
-    echo "run $i: SKIPPED — not a real run ($started-$finished UTC) $log"
-    exit 2
+if [ -z "${LOG_DIR:-}" ]; then
+  LOG_DIR=$(mktemp -d /tmp/preview-e2e-marathon.XXXXXX)
+fi
+mkdir -p "$LOG_DIR"
+SUMMARY_FILE="$LOG_DIR/summary.tsv"
+printf 'run\tstatus\tduration_seconds\tretries\thead_sha\trun_id\tattempt_id\tcreated_at\tstarted_at\tfinished_at\tlog\tmetadata\n' >"$SUMMARY_FILE"
+
+json_run_id() {
+  node -e 'const fs=require("node:fs"); const value=JSON.parse(fs.readFileSync(process.argv[1], "utf8")).run_id; if (!value) process.exit(1); process.stdout.write(value)' "$1"
+}
+
+json_status() {
+  node -e 'const fs=require("node:fs"); const value=JSON.parse(fs.readFileSync(process.argv[1], "utf8")).status; if (!value) process.exit(1); process.stdout.write(value)' "$1"
+}
+
+json_attempt_id() {
+  node -e '
+    const fs = require("node:fs");
+    const status = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const workflow = status.workflows?.find((item) => item.workflow_path === "cloudflare-previews.yml");
+    const job = workflow?.jobs?.find((item) => item.job_key === "cloudflare-previews.yml:preview");
+    const attempt = job?.attempts?.at(-1);
+    if (!attempt?.attempt_id) process.exit(1);
+    process.stdout.write(attempt.attempt_id);
+  ' "$1"
+}
+
+json_run_field() {
+  node -e '
+    const fs = require("node:fs");
+    const run = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const value = run[process.argv[2]];
+    if (typeof value !== "string" || value.length === 0) process.exit(1);
+    process.stdout.write(value);
+  ' "$1" "$2"
+}
+
+retry_count() {
+  local log=$1 annotations onboarding transport
+  # Depot's finite log export renders GitHub workflow commands as
+  # `##[notice]`/`##[warning]`. Keep the raw command fallback for older CLI
+  # exports, but never sum both representations of the same annotations.
+  annotations=$(
+    sed -nE 's/.*##\[(notice|warning)\][^:]+: ([0-9]+) retried:.*/\2/p' "$log" |
+      awk '{ total += $1 } END { print total + 0 }'
+  )
+  if [ "$annotations" -eq 0 ]; then
+    annotations=$(
+      sed -nE 's/.*title=Preview e2e retries::.*: ([0-9]+) retried:.*/\1/p' "$log" |
+        awk '{ total += $1 } END { print total + 0 }'
+    )
   fi
-  # A push touching one app leaves the others' recorded states at an older
-  # head, silently shrinking the lane (observed: three 13-second "green" runs
-  # that tested only semaphore). The marathon must exercise the full fleet.
-  # Checked per app, NOT as one literal line: the preview tool's print order
-  # is not part of its contract (an order change once failed a genuinely
-  # full-fleet green run as PARTIAL).
-  testable_line=$(grep -m1 "testable apps:" "$log" || true)
-  missing=""
-  for app in os semaphore auth streams-example-app; do
-    case "$testable_line" in *"$app"*) ;; *) missing="$missing $app" ;; esac
-  done
-  if [ -z "$testable_line" ] || [ -n "$missing" ]; then
-    echo "run $i: PARTIAL — not all apps testable (missing:${missing:- unknown}) ($started-$finished UTC) $log"
-    exit 3
-  fi
-  if [ "$exit_code" -eq 0 ]; then
-    echo "run $i: PASS ($started-$finished UTC) $log"
-  else
-    echo "run $i: FAIL exit=$exit_code ($started-$finished UTC) $log"
+  onboarding=$(grep -cF '[retry-telemetry] onboarding smoke passed on attempt 2/2' "$log" || true)
+  # A fresh pre-session WebSocket dial keeps ordinary CI reliable without
+  # replaying any RPC work, but the strict proof still rejects the recovery.
+  # The same marker is emitted by the CLI and Playwright admin helpers.
+  transport=$(grep -cF '[itx-initial-connection-retry] ' "$log" || true)
+  echo $((annotations + onboarding + transport))
+}
+
+record_result() {
+  local run=$1 status=$2 duration=$3 retries=$4 head_sha=$5 run_id=$6 attempt_id=$7 created=$8 started=$9 finished=${10} log=${11} metadata=${12}
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$run" "$status" "$duration" "$retries" "$head_sha" "$run_id" "$attempt_id" "$created" "$started" "$finished" "$log" "$metadata" >>"$SUMMARY_FILE"
+}
+
+expected_head_sha="${EXPECTED_HEAD_SHA:-}"
+for run in $(seq 1 "$RUNS"); do
+  run_label=$(printf '%03d' "$run")
+  dispatch_file="$LOG_DIR/run-$run_label-dispatch.json"
+  status_file="$LOG_DIR/run-$run_label-status.json"
+  metadata_file="$LOG_DIR/run-$run_label-metadata.json"
+  log_file="$LOG_DIR/run-$run_label.log"
+  observed_started_epoch=$(date +%s)
+
+  echo "run $run/$RUNS: dispatching canonical cloudflare-previews.yml at $REF"
+  if ! depot ci dispatch \
+    --org "$DEPOT_ORG" \
+    --repo "$DEPOT_REPO" \
+    --workflow cloudflare-previews.yml \
+    --ref "$REF" \
+    --input "pull-request-number=$PR_NUMBER" \
+    --output json >"$dispatch_file"; then
+    record_result "$run" DISPATCH_FAIL 0 0 - - - - - - - "$dispatch_file"
+    echo "run $run: DISPATCH_FAIL — $dispatch_file" >&2
     exit 1
   fi
+  run_id=$(json_run_id "$dispatch_file")
+  echo "run $run/$RUNS: Depot run $run_id"
+
+  while true; do
+    depot ci status "$run_id" --org "$DEPOT_ORG" --output json >"$status_file"
+    status=$(json_status "$status_file")
+    case "$status" in
+      pending|queued|running)
+        elapsed=$(( $(date +%s) - observed_started_epoch ))
+        if [ "$elapsed" -ge "$RUN_TIMEOUT_SECS" ]; then
+          depot ci cancel "$run_id" --org "$DEPOT_ORG" >/dev/null 2>&1 || true
+          record_result "$run" WATCHDOG "$elapsed" 0 - "$run_id" - - - - - "$status_file"
+          echo "run $run: WATCHDOG after ${elapsed}s — Depot run $run_id cancelled" >&2
+          exit 1
+        fi
+        sleep "$POLL_INTERVAL_SECS"
+        ;;
+      *) break ;;
+    esac
+  done
+
+  attempt_id=$(json_attempt_id "$status_file" || true)
+  if [ -z "$attempt_id" ]; then
+    record_result "$run" OBSERVATION_FAIL 0 0 - "$run_id" - - - - - "$status_file"
+    echo "run $run: OBSERVATION_FAIL — canonical preview attempt missing from Depot run $run_id" >&2
+    exit 1
+  fi
+
+  depot ci logs "$attempt_id" --org "$DEPOT_ORG" --output-file "$log_file"
+  depot ci run show "$run_id" --org "$DEPOT_ORG" --output json >"$metadata_file"
+  created_at=$(json_run_field "$metadata_file" created_at)
+  started_at=$(json_run_field "$metadata_file" started_at)
+  finished_at=$(json_run_field "$metadata_file" finished_at)
+  head_sha=$(json_run_field "$metadata_file" head_sha)
+  duration=$(
+    node -e 'const [start,end]=process.argv.slice(1).map(Date.parse); process.stdout.write(String(Math.ceil((end-start)/1000)))' "$created_at" "$finished_at"
+  )
+  retries=$(retry_count "$log_file")
+
+  if [ -z "$expected_head_sha" ]; then
+    expected_head_sha="$head_sha"
+  elif [ "$head_sha" != "$expected_head_sha" ]; then
+    record_result "$run" HEAD_MOVED "$duration" "$retries" "$head_sha" "$run_id" "$attempt_id" "$created_at" "$started_at" "$finished_at" "$log_file" "$metadata_file"
+    echo "run $run: HEAD_MOVED ($head_sha, expected $expected_head_sha); streak rejected — Depot run $run_id" >&2
+    exit 4
+  fi
+
+  if [ "$status" != finished ]; then
+    record_result "$run" WORKFLOW_FAIL "$duration" "$retries" "$head_sha" "$run_id" "$attempt_id" "$created_at" "$started_at" "$finished_at" "$log_file" "$metadata_file"
+    echo "run $run: WORKFLOW_FAIL (${duration}s, retries=$retries) — Depot run $run_id; $log_file" >&2
+    exit 1
+  fi
+
+  if [ "$retries" -gt 0 ]; then
+    record_result "$run" RETRIED "$duration" "$retries" "$head_sha" "$run_id" "$attempt_id" "$created_at" "$started_at" "$finished_at" "$log_file" "$metadata_file"
+    echo "run $run: RETRIED (${duration}s, retries=$retries); streak rejected — Depot run $run_id; $log_file" >&2
+    exit 6
+  fi
+
+  if [ "$duration" -ge "$MAX_RUN_DURATION_SECS" ]; then
+    record_result "$run" SLOW "$duration" "$retries" "$head_sha" "$run_id" "$attempt_id" "$created_at" "$started_at" "$finished_at" "$log_file" "$metadata_file"
+    echo "run $run: SLOW (${duration}s, budget <${MAX_RUN_DURATION_SECS}s) — Depot run $run_id" >&2
+    exit 5
+  fi
+
+  record_result "$run" PASS "$duration" "$retries" "$head_sha" "$run_id" "$attempt_id" "$created_at" "$started_at" "$finished_at" "$log_file" "$metadata_file"
+  echo "run $run: PASS (${duration}s, retries=0) — Depot run $run_id"
 done
-echo "all $RUNS runs green"
+
+echo "all $RUNS canonical preview workflows passed without retries and each completed in <${MAX_RUN_DURATION_SECS}s"
+echo "ledger: $SUMMARY_FILE"

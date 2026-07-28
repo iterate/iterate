@@ -1,5 +1,9 @@
-import { describe, expect, test } from "vitest";
-import { chooseRootProjectRedirect, type RootRedirectProject } from "./project-root-redirect.ts";
+import { describe, expect, test, vi } from "vitest";
+import {
+  chooseRootProjectRedirect,
+  createMissingRootRedirectProject,
+  type RootRedirectProject,
+} from "./project-root-redirect.ts";
 
 const project = (
   overrides: Partial<RootRedirectProject> & Pick<RootRedirectProject, "id" | "slug">,
@@ -10,7 +14,7 @@ const project = (
 });
 
 describe("chooseRootProjectRedirect", () => {
-  test("prefers the current project host when that project is ready", () => {
+  test("opens a preferred ready project at its home", () => {
     expect(
       chooseRootProjectRedirect({
         preferredProjectSlug: "beta",
@@ -19,11 +23,12 @@ describe("chooseRootProjectRedirect", () => {
     ).toMatchObject({
       kind: "project",
       project: { slug: "beta" },
-      onboarding: false,
+      welcome: false,
+      ensureBirth: false,
     });
   });
 
-  test("sends the only ready project to onboarding", () => {
+  test("opens the only ready project at its home", () => {
     expect(
       chooseRootProjectRedirect({
         preferredProjectSlug: null,
@@ -32,11 +37,12 @@ describe("chooseRootProjectRedirect", () => {
     ).toMatchObject({
       kind: "project",
       project: { slug: "alpha" },
-      onboarding: true,
+      welcome: false,
+      ensureBirth: false,
     });
   });
 
-  test("sends a single auth-created missing project to onboarding", () => {
+  test("welcomes a single auth-created missing project through its creation flow", () => {
     expect(
       chooseRootProjectRedirect({
         preferredProjectSlug: null,
@@ -45,11 +51,26 @@ describe("chooseRootProjectRedirect", () => {
     ).toMatchObject({
       kind: "project",
       project: { slug: "alpha" },
-      onboarding: true,
+      welcome: true,
+      ensureBirth: false,
     });
   });
 
-  test("leaves ambiguous or unknown project sets on the projects page", () => {
+  test("recovers a single project whose deployment probe failed through its welcome flow", () => {
+    expect(
+      chooseRootProjectRedirect({
+        preferredProjectSlug: null,
+        projects: [project({ id: "prj_a", slug: "alpha", deploymentStatus: "unknown" })],
+      }),
+    ).toMatchObject({
+      kind: "project",
+      project: { slug: "alpha" },
+      welcome: true,
+      ensureBirth: true,
+    });
+  });
+
+  test("leaves ambiguous project sets on the projects page", () => {
     expect(
       chooseRootProjectRedirect({
         preferredProjectSlug: null,
@@ -59,12 +80,19 @@ describe("chooseRootProjectRedirect", () => {
         ],
       }),
     ).toEqual({ kind: "projects" });
-
-    expect(
-      chooseRootProjectRedirect({
-        preferredProjectSlug: null,
-        projects: [project({ id: "prj_a", slug: "alpha", deploymentStatus: "unknown" })],
-      }),
-    ).toEqual({ kind: "projects" });
   });
+});
+
+test("the missing-project SSR bootstrap does not wait for project readiness", async () => {
+  const create = vi.fn(async () => ({}) as never);
+
+  await createMissingRootRedirectProject(
+    { create },
+    { organizationSlug: "acme", projectId: "prj_missing" },
+  );
+
+  expect(create).toHaveBeenCalledWith(
+    { organizationSlug: "acme", projectId: "prj_missing" },
+    { waitUntilReady: false },
+  );
 });

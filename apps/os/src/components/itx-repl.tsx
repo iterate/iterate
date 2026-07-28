@@ -88,7 +88,7 @@ export function ItxRepl({
               <div className="min-w-0 space-y-1 text-sm text-muted-foreground">
                 <p>
                   <span className="text-foreground">
-                    Run TypeScript against your Iterate context.
+                    Run TypeScript against your iterate context.
                   </span>{" "}
                   Start with <code className="font-mono text-xs">itx</code>, await async calls, and
                   use <code className="font-mono text-xs">$_</code> or{" "}
@@ -323,7 +323,12 @@ function ReplPromptRow(input: { children?: ReactNode; status: string | null }) {
       <span className="font-mono text-xs text-muted-foreground">iterate&gt;</span>
       <div className="flex items-center gap-2">
         {input.status ? (
-          <span className="text-xs text-muted-foreground">{input.status}</span>
+          <span
+            className="text-xs text-muted-foreground"
+            data-spinner={input.status === "Running..." ? "true" : undefined}
+          >
+            {input.status}
+          </span>
         ) : null}
         {input.children}
       </div>

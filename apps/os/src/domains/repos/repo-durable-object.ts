@@ -1,28 +1,31 @@
 import { DurableObject } from "cloudflare:workers";
+import { Workspace } from "@cloudflare/shell";
 import { InMemoryFs } from "@cloudflare/shell";
 import { createGit, type GitLogEntry } from "@cloudflare/shell/git";
-import { createStreamProcessorHost } from "../streams/stream-processor-host.ts";
-import type {
-  StreamSubscriberWakeRequest,
-  StreamSubscriberWakeResponse,
-} from "../streams/rpc-types.ts";
-import { LiveStateRpcTarget, StreamProcessorRpcTarget } from "../../rpc-targets.ts";
+import { LiveStateRpcTarget } from "iterate/sdk/capnweb";
+import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
+import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
+import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { timedStep } from "../../lib/step-timing.ts";
 import { filterWorkerSnapshotPaths } from "../workers/source-masks.ts";
-import { stableSha256 } from "../workers/utils.ts";
+import { walkWorkspaceFiles, wipeWorkspace } from "../../lib/shell-fs.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { parseConfig } from "../../config.ts";
-import { mintGithubInstallationToken } from "../integrations/github-app.ts";
-import { ROOT_WORKSPACE_PATH } from "../workspaces/utils.ts";
+import {
+  assertGithubInstallationTokenMintAuthorized,
+  mintGithubInstallationToken,
+} from "../integrations/github-app.ts";
+import { ITERATE_GITHUB_BOT_COMMIT_AUTHOR } from "../integrations/utils.ts";
 import type {
   CommitRepoFilesInput,
   CommitRepoFilesResult,
   EditRepoFileInput,
   EditRepoFileResult,
   GithubRepoLink,
+  GithubResetResult,
   GithubSyncResult,
   RepoCommitDetails,
   RepoFileChange,
@@ -30,24 +33,56 @@ import type {
   RepoLogResult,
 } from "./types.ts";
 import { countOccurrences, replaceLiteralOccurrences } from "./edit-utils.ts";
-import { diffFileMaps } from "./line-diff.ts";
+import { replaceArtifactWithEmptyRepo } from "./artifact-replacement.ts";
 import {
-  CONFIG_REPO_PATH,
+  readCheckoutBytes,
+  readCheckoutFileBytes,
+  readCheckoutFiles,
+  readCheckoutTextFile,
+  repoContentHash,
+  walkCheckoutPaths,
+} from "./checkout-files.ts";
+import { diffFileMaps } from "./line-diff.ts";
+import { createGitWireTransport, type GitWireTransport } from "./git-wire.ts";
+import { createLazyRepoReader } from "./lazy-repo-reader.ts";
+import { sqliteGitObjectStore } from "./repo-object-store.ts";
+import {
   RepoArtifactNameCodec,
   RepoNotSeededError,
   base64ToBytes,
   bytesToBase64,
   classifyRepoAccessError,
+  gitBranchContainsCommit,
+  isRepoNotSeededError,
 } from "./utils.ts";
 import { projectRepoSeedFiles } from "./project-repo-seed.ts";
+import { RepoProcessorContract } from "./repo-processor-contract.ts";
+import { REPO_DEFAULT_BRANCH } from "./repo-defaults.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
+import { linkRepoToGithub } from "./github-link.ts";
+import {
+  decideHeadResolution,
+  isObservedPushRecord,
+  observeExternalPushTransition,
+  recordOwnPushTransition,
+  shouldRetryHeadResolution,
+  type ObservedPush,
+  type RepoHeadAuthority,
+} from "./repo-head-authority.ts";
+import { SingleFlightValue } from "./single-flight-value.ts";
+import { githubFastForwardTransferDepth, githubSyncBaseCommitOid } from "./github-sync-utils.ts";
+import { importGithubArtifactWithInitialPushCapture } from "./artifact-import.ts";
+import {
+  getOrCreateArtifact,
+  stripArtifactTokenExpiry,
+  type GetOrCreateArtifactResult,
+} from "./artifact-creation.ts";
 
-const REPO_DEFAULT_BRANCH = "main";
-
-// Sentinel for "the root workspace cache could not answer — use the clone
-// lane". Distinct from null, which is an authoritative "not at HEAD".
-const CACHE_UNAVAILABLE = Symbol("cache-unavailable");
 const REPO_WRITE_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60;
+const ARTIFACT_HEAD_VISIBILITY_RETRIES = 5;
+// Artifact creation is an at-least-once obligation. Concurrent first drives
+// must produce the same root commit instead of racing two timestamped seeds.
+const REPO_SEED_COMMIT_TIMESTAMP_SECONDS = 1_577_836_800;
 const REPO_DIR = "/repo";
 
 // The durable GitHub link record: the mirror-push hot path (every commit)
@@ -56,6 +91,17 @@ const REPO_DIR = "/repo";
 // written in the same methods that append them, so the two cannot drift.
 const GITHUB_LINK_KV_KEY = "github-link:v1";
 
+// The durable HEAD-tree cache's materialized commit oid (default branch only).
+// Presence doubles as the "materialized once" sentinel; every HEAD read
+// compares it against the durable head cursor and re-materializes only when
+// main actually moved.
+const REPO_HEAD_TREE_KEY = "repo-head-tree:v1";
+// The lazy head-record publication computes the whole-snapshot contentHash
+// (worker builds want it hot) only when the manifest is small enough for
+// that to be a cheap in-store read; bigger repos leave the record to the
+// clone lane's on-demand computation.
+const LAZY_CONTENT_HASH_MAX_BYTES = 8 * 1024 * 1024;
+
 type RepoHead = {
   branch: string;
   commitOid: string;
@@ -63,32 +109,94 @@ type RepoHead = {
 };
 
 export class RepoDurableObject extends DurableObject<Env> {
+  /** Report this incarnation's code version for the deployment rollout gate. */
+  deploymentVersion(): string {
+    return workerVersion(this.env);
+  }
+
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!, { allowNullProjectId: true });
-  readonly #host = createStreamProcessorHost(this.ctx, {
-    stream: new StreamRpcTarget({
-      auth: trustedInternalAuthContext(),
-      path: this.#name.path,
-      projectId: this.#name.projectId,
-    }),
+  readonly #stream = new StreamRpcTarget({
+    auth: trustedInternalAuthContext(),
+    path: this.#name.path,
+    projectId: this.#name.projectId,
+  });
+  readonly #registry = createStreamProcessorRegistry(this.ctx, {
+    stream: this.#stream,
     path: this.#name.path,
     projectId: this.#name.projectId,
     version: workerVersion(this.env),
   });
-  readonly #repoProcessor = this.#host.add(
-    (deps) =>
-      new RepoProcessor({
-        ...deps,
-        createRepoArtifact: (input) => this.createArtifactRepo(input),
-      }),
+  // The DO constructs the processor — no host-injected readState/writeState/
+  // keepAliveWhile deps; the runner owns durable progress and keepalive.
+  // Registered WITH recovery: creation and GitHub imports are consequential
+  // `runInBackground` work (stream-committed requested/started obligations whose
+  // OUTCOME matters). An incarnation that dies owing either must be revived.
+  // The keepalive alarm appends the `stream/processor-revived` fact, whose wake
+  // produces the eventless at-head pass that re-drives the obligations (see the
+  // registry module doc's recovery rule).
+  readonly #repoProcessor = this.#registry.register(
+    new RepoProcessor({
+      stream: this.#stream,
+      path: this.#name.path,
+      projectId: this.#name.projectId,
+      // Creation and public mutations all move the same branch. A recovered
+      // creation attempt is retry-safe, but it must not move the ref between a
+      // mutation's checked clone and push.
+      createEmptyArtifact: () => this.#serializeWrite(() => this.createEmptyArtifactRepo()),
+      importPublicGithubArtifact: (input) =>
+        this.#serializeWrite(() => this.importPublicGithubArtifact(input)),
+      linkGithub: async (input) => {
+        if (this.#name.projectId === null) {
+          throw new Error("GitHub-backed repos require a project-scoped repo.");
+        }
+        await linkRepoToGithub(
+          {
+            ...input,
+            projectId: this.#name.projectId,
+            repoPath: this.#name.path,
+          },
+          {
+            repo: {
+              configureGithubLink: (link) => this.configureGithubLink(link),
+              getGithubLink: () => this.getGithubLink(),
+              pushToGithub: (pushInput) => this.pushToGithub(pushInput),
+            },
+            // The saga is about to adopt GitHub. Pushing starter history first
+            // would be wasted for a public import and rejected for an existing
+            // private repository.
+            skipInitialPush: true,
+          },
+        );
+      },
+      syncPrivateGithub: async () => {
+        await this.syncFromGithub({ depth: 1, force: true });
+      },
+      // Sync the current GitHub head, not necessarily the delivery's SHA:
+      // GitHub webhooks may arrive out of order, and adopting a newer head
+      // also satisfies every older push delivery. syncFromGithub derives a
+      // bounded depth that still retains the previous Artifacts head.
+      syncFromGithubPush: async () => await this.syncFromGithub({ depth: 1 }),
+      observeArtifactPush: (input) =>
+        this.#observeExternalPush(input.branch, {
+          afterCommitOid: input.afterCommitOid,
+          beforeCommitOid: input.beforeCommitOid,
+        }),
+    }),
+    { recovery: true },
   );
+  // Runner-backed reads: under runner drive the runner owns the cursors and
+  // the processor instance's internal checkpoint never advances, so every
+  // read this DO serves (the processor facade, live state) goes through the
+  // runner's committed progress.
+  readonly #reads = this.#registry.reads(this.#repoProcessor);
 
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
-    return this.#host.wakeStreamSubscriber(args);
+    return this.#registry.wakeStreamSubscriber(args);
   }
 
-  /** The keepalive's revival alarm — see stream-processor-host.ts. */
-  alarm(): Promise<void> {
-    return this.#host.handleAlarm();
+  /** The registry's shared DO alarm (runner keepalives) — see stream-processor-registry.ts. */
+  alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
+    return this.#registry.handleAlarm(alarmInfo);
   }
 
   /** Abort the current Durable Object incarnation; the next request boots it again. */
@@ -97,12 +205,16 @@ export class RepoDurableObject extends DurableObject<Env> {
   }
 
   get processor() {
-    return new StreamProcessorRpcTarget(this.#repoProcessor);
+    // Runner-backed reads (#reads), never the processor instance — see the
+    // field comment: instance reads are stale forever under runner drive.
+    return new StreamProcessorRpcTarget(this.#reads, {
+      catchUpBeforeSnapshot: () => this.#registry.catchUp(RepoProcessorContract.slug),
+    });
   }
 
   /** The repo's live state — the get/set/assign/subscribe surface behind `itx.repos.get(path).liveState`. */
   get liveState() {
-    return new LiveStateRpcTarget(this.#host);
+    return new LiveStateRpcTarget(this.#registry);
   }
 
   /**
@@ -136,22 +248,26 @@ export class RepoDurableObject extends DurableObject<Env> {
     // stale head forever (the cache never self-invalidates).
     const raced = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(branch));
     if (isRepoHeadRecord(raced)) return { branch, ...raced };
-    // Same staleness rule against the recorded push: a checkout that lags the
-    // last pushed head (snapshot retries exhausted, or a syncFromGithub moved
-    // the branch while this clone was in flight) may be SERVED once, but must
-    // never be CACHED — an un-invalidatable cache entry would pin builds to
-    // the pre-sync head forever.
-    const pushed = this.ctx.storage.kv.get<string>(`repo-pushed-head:${branch}`);
-    if (typeof pushed === "string" && pushed !== head.commitOid) return { branch, ...head };
+    // Same staleness rule against the branch authority: a checkout that lags
+    // the last own push, or that cannot settle an observed external push
+    // (retries exhausted against a lagging replica), may be SERVED once, but
+    // must never be CACHED — an un-invalidatable cache entry would pin builds
+    // to the pre-push head forever.
+    const decision = decideHeadResolution(this.#branchAuthority(branch), head.commitOid);
+    if (!decision.cache) return { branch, ...head };
     this.ctx.storage.kv.put(repoHeadStorageKey(branch), head);
     return { branch, ...head };
   }
 
   /**
    * A masked file snapshot at a branch head or pinned commit — the repo file
-   * source for the worker build pipeline, and the one clone-and-read pathway
-   * every read on this object goes through. Include/exclude globs bound what
-   * becomes build input.
+   * source for the worker build pipeline. Scoped default-head reads
+   * (`paths`) serve from the LAZY snapshot first (manifest + verified store
+   * bytes, no clone); everything else rides the clone-backed lanes.
+   * Include/exclude globs bound what becomes build input; `paths` selects
+   * exact repo-relative files, which is how bulk consumers on big repos stay
+   * under the 32MiB RPC value cap (a monorepo's full HEAD tree does not fit
+   * — 43.7MB on iterate/iterate).
    *
    * With `commitOid`, `branch` names where that commit lives (git clones are
    * single-branch): worker builds pin a late-bound branch ref to the head it
@@ -163,20 +279,84 @@ export class RepoDurableObject extends DurableObject<Env> {
       commitOid?: string;
       exclude?: string[];
       include?: string[];
+      paths?: string[];
+    } = {},
+  ): Promise<{ commitOid: string; files: Record<string, string> }> {
+    const branch = input.branch ?? REPO_DEFAULT_BRANCH;
+    const cacheable =
+      branch === REPO_DEFAULT_BRANCH &&
+      input.commitOid === undefined &&
+      input.exclude === undefined &&
+      input.include === undefined;
+    if (cacheable) {
+      if (input.paths !== undefined) {
+        // Scoped head reads serve from the lazy snapshot — manifest lookups
+        // plus verified store bytes, no clone, no whole-tree materialization
+        // anywhere. This is the workspace mount-read lane: a big repo's board
+        // seed must cost its 75 files, not the 43MB tree.
+        try {
+          const paths = input.paths;
+          await this.#lazyFreshHead();
+          const { bytes, head } = await this.#lazyReader().readHeadPaths(paths);
+          const files: Record<string, string> = {};
+          const decoder = new TextDecoder();
+          paths.forEach((path, index) => {
+            const content = bytes[index];
+            if (content !== null && content !== undefined) files[path] = decoder.decode(content);
+          });
+          return { commitOid: head.commitOid, files };
+        } catch (error) {
+          console.warn(
+            `scoped head snapshot via the lazy lane failed; falling back to the whole-head cache: ${String(error)}`,
+          );
+        }
+      }
+      // The whole-head cache: worker builds want the full masked tree, and the
+      // scoped lane above falls back here when the lazy snapshot is unavailable.
+      const snapshot = await this.#headFilesSnapshot.get(
+        () => this.#loadFilesSnapshot({ branch }),
+        (snapshot) => {
+          // #checkout deliberately returns its last clone after the bounded
+          // eventual-consistency retries. Let current callers use that result,
+          // but never retain it while the branch authority calls it stale.
+          return decideHeadResolution(this.#branchAuthority(branch), snapshot.commitOid).cache;
+        },
+      );
+      if (input.paths === undefined) return snapshot;
+      const files: Record<string, string> = {};
+      for (const path of input.paths) {
+        const content = snapshot.files[path];
+        if (content !== undefined) files[path] = content;
+      }
+      return { commitOid: snapshot.commitOid, files };
+    }
+    return this.#loadFilesSnapshot(input);
+  }
+
+  async #loadFilesSnapshot(
+    input: {
+      branch?: string;
+      commitOid?: string;
+      exclude?: string[];
+      include?: string[];
+      paths?: string[];
     } = {},
   ): Promise<{ commitOid: string; files: Record<string, string> }> {
     const { filesystem, head } = await this.#checkout(input);
 
     // Mask paths BEFORE reading contents: an excluded tree (a committed
-    // node_modules/, build output) should cost a directory walk, not reads.
-    const paths = await walkCheckoutPaths(filesystem);
-    const selected = filterWorkerSnapshotPaths(paths.sort(), {
+    // node_modules/, build output) should cost a directory walk, not reads —
+    // and a `paths` selection reads only the requested files.
+    const walked = await walkCheckoutPaths(filesystem, REPO_DIR);
+    const selected = filterWorkerSnapshotPaths(walked.sort(), {
       exclude: input.exclude,
       include: input.include,
     });
+    const wanted = input.paths === undefined ? null : new Set(input.paths);
     const files: Record<string, string> = {};
     for (const path of selected) {
-      files[path] = await filesystem.readFile(`${REPO_DIR}/${path}`);
+      if (wanted !== null && !wanted.has(path)) continue;
+      files[path] = await readCheckoutTextFile(filesystem, `${REPO_DIR}/${path}`);
     }
     return { commitOid: head.oid, files };
   }
@@ -203,11 +383,12 @@ export class RepoDurableObject extends DurableObject<Env> {
     const credentials = { password: repo.token, username: "x" };
     // Read-your-write over the eventually consistent Artifacts remote: a
     // clone right after a push can serve the previous HEAD (#recordPushedHead
-    // has the full story). BOTH paths retry against the recorded push — a
-    // pinned read of a just-pushed commit (the History diff pane's flow:
-    // commit → expand → click a file) fails its checkout on a stale clone for
-    // exactly the same reason a branch read serves the previous head.
-    const expected = this.ctx.storage.kv.get<string>(`repo-pushed-head:${branch}`);
+    // has the full story). BOTH paths retry against the branch authority
+    // (own-push floor + observed external pushes) — a pinned read of a
+    // just-pushed commit (the History diff pane's flow: commit → expand →
+    // click a file) fails its checkout on a stale clone for exactly the same
+    // reason a branch read serves the previous head. The authority is re-read
+    // each attempt so an observation landing mid-retry is honored.
 
     if (input.commitOid !== undefined) {
       for (let attempt = 1; ; attempt++) {
@@ -215,22 +396,26 @@ export class RepoDurableObject extends DurableObject<Env> {
         // branch tip. Project repos are small; correctness beats depth tuning.
         const filesystem = new InMemoryFs();
         const git = createGit(filesystem, REPO_DIR);
+        let branchHead: { oid: string } | undefined;
         try {
           await git.clone({ branch, url: repo.remote, ...credentials });
+          [branchHead] = await git.log({ depth: 1, ref: branch });
         } catch (error) {
-          throw classifyRepoAccessError(error);
+          throw classifyRepoAccessError(error, branch);
         }
-        const [branchHead] = await git.log({ depth: 1 });
         if (!branchHead) throw new RepoNotSeededError("Repo has no commits.");
         try {
           await git.checkout({ ref: input.commitOid, force: true });
         } catch (error) {
-          // A clone still BEHIND the recorded push may simply predate the
+          // A clone still BEHIND the branch authority may simply predate the
           // pinned commit — retryable. A caught-up clone that lacks the oid
           // means the oid genuinely is not on this branch: fail fast.
-          if (expected && branchHead.oid !== expected && attempt <= 5) {
+          if (
+            shouldRetryHeadResolution(this.#branchAuthority(branch), branchHead.oid) &&
+            attempt <= 5
+          ) {
             console.warn(
-              `repo pinned clone is behind the last push (saw ${branchHead.oid}, pushed ${expected}); retry ${attempt} for ${input.commitOid}`,
+              `repo pinned clone is behind the branch authority (saw ${branchHead.oid}); retry ${attempt} for ${input.commitOid}`,
             );
             await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
             continue;
@@ -249,6 +434,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     const clone = async () => {
       const filesystem = new InMemoryFs();
       const git = createGit(filesystem, REPO_DIR);
+      let head: { oid: string } | undefined;
       try {
         await git.clone({
           branch,
@@ -257,19 +443,21 @@ export class RepoDurableObject extends DurableObject<Env> {
           url: repo.remote,
           ...credentials,
         });
+        [head] = await git.log({ depth: 1, ref: branch });
       } catch (error) {
-        throw classifyRepoAccessError(error);
+        throw classifyRepoAccessError(error, branch);
       }
-      const [head] = await git.log({ depth: 1 });
       if (!head) throw new RepoNotSeededError("Repo has no commits.");
       return { filesystem, git, head };
     };
 
     let { filesystem, git, head } = await clone();
-    for (let attempt = 1; expected && head.oid !== expected && attempt <= 5; attempt++) {
-      console.warn(
-        `repo clone is behind the last push (saw ${head.oid}, pushed ${expected}); retry ${attempt}`,
-      );
+    for (
+      let attempt = 1;
+      shouldRetryHeadResolution(this.#branchAuthority(branch), head.oid) && attempt <= 5;
+      attempt++
+    ) {
+      console.warn(`repo clone is behind the branch authority (saw ${head.oid}); retry ${attempt}`);
       await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
       ({ filesystem, git, head } = await clone());
     }
@@ -285,8 +473,225 @@ export class RepoDurableObject extends DurableObject<Env> {
   // writes would otherwise clone the same head and the second (non-fast-
   // forward) push would clobber the first commit — while both callers got a
   // success result. All writes funnel through this one DO by design, which
-  // is exactly what makes a local chain a sufficient lock.
+  // makes a local chain a sufficient lock. Artifacts clones can still lag a
+  // completed push, so mutateArtifactRepo also verifies that its branch HEAD
+  // is the last pushed commit before it changes anything.
   #writeChain: Promise<unknown> = Promise.resolve();
+  // Secondary repos have no root-workspace cache. Their HEAD reads otherwise
+  // clone the complete Artifact once per call; concurrent multi-file reads
+  // therefore launched full monorepo clones and could reset this isolate for
+  // exceeding memory. Share one immutable HEAD snapshot until a write or
+  // queue-observed external push invalidates it.
+  readonly #headFilesSnapshot = new SingleFlightValue<{
+    commitOid: string;
+    files: Record<string, string>;
+  }>();
+
+  // The durable HEAD-tree cache: main's checkout materialized into THIS
+  // object's own SQLite (files past the inline threshold spill to R2),
+  // refreshed only when the durable head cursor moves. HEAD reads
+  // (readFile / listFiles) serve from it with no clone and no Artifacts round
+  // trip in steady state — and unlike the in-memory snapshot above, it
+  // survives eviction, so a cold incarnation answers its first read without
+  // re-cloning. Successor of the old per-project "root workspace" cache,
+  // co-located with the head cursor so freshness is a local kv read (the
+  // cross-DO re-entrant getHead dance is gone with it).
+  readonly #headTreeCache = new Workspace({
+    sql: this.ctx.storage.sql,
+    name: () => this.ctx.id.name,
+    r2: this.env.FILES_BUCKET,
+    r2Prefix: `repo-head-cache/${this.ctx.id.name!}`,
+  });
+  // ONE chain serializes every cache read AND materialization: a reader can
+  // never interleave a refresh's wipe-and-rewrite, so no read observes a
+  // half-written tree or mixed generations. Cache reads are cheap SQLite
+  // lookups; queuing them behind at most one refresh is the whole cost.
+  #headTreeChain: Promise<unknown> = Promise.resolve();
+
+  #withHeadTree<T>(read: (commitOid: string) => Promise<T>): Promise<T> {
+    const run = async () => {
+      // The durable cursor is consulted directly — when it and the tree agree
+      // there is NO clone anywhere on this path. When either is missing or
+      // stale, ONE materialization (one checkout) refreshes both.
+      const record = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(REPO_DEFAULT_BRANCH));
+      const cached = this.ctx.storage.kv.get<string>(REPO_HEAD_TREE_KEY);
+      if (isRepoHeadRecord(record) && cached === record.commitOid) return read(cached);
+      return read(await this.#materializeHeadTree());
+    };
+    const result = this.#headTreeChain.then(run, run);
+    this.#headTreeChain = result.catch(() => {});
+    return result;
+  }
+
+  // -- the lazy repo lane -------------------------------------------------------
+  // Reads and commits without cloning: a durable git snapshot (SQLite object
+  // store + manifest, see repo-object-store.ts) synced by delta fetches and
+  // served directly — the byte tree and clone lanes below remain UNTOUCHED
+  // as the fallback authority. The lane owns no freshness policy of its own:
+  // candidates resolve through the same branch authority the clone lanes use.
+  readonly #gitObjectStore = sqliteGitObjectStore(this.ctx.storage);
+  #lazyReaderInstance: ReturnType<typeof createLazyRepoReader> | null = null;
+
+  #lazyReader(): ReturnType<typeof createLazyRepoReader> {
+    if (this.#lazyReaderInstance === null) {
+      // Tokens are minted per gitAccess() call, so the transport dials fresh
+      // credentials per operation instead of pinning one at construction.
+      const dial = async (): Promise<GitWireTransport> => {
+        const repo = await this.gitAccess();
+        return createGitWireTransport({ remote: repo.remote, token: repo.token });
+      };
+      this.#lazyReaderInstance = createLazyRepoReader({
+        branch: REPO_DEFAULT_BRANCH,
+        store: this.#gitObjectStore,
+        wire: {
+          fetchObjects: async (request) => (await dial()).fetchObjects(request),
+          lsRefs: async (prefixes) => (await dial()).lsRefs(prefixes),
+          push: async (request) => (await dial()).push(request),
+        },
+      });
+    }
+    return this.#lazyReaderInstance;
+  }
+
+  /**
+   * The lazy lane's freshness gate: the synced snapshot serves as long as the
+   * BRANCH AUTHORITY still endorses its head — our own pushes move the floor
+   * with the store already primed, and external pushes arrive as queue
+   * observations that move the frontier past us, forcing one re-resolution.
+   * Candidate heads from a possibly-lagging remote get the clone lane's exact
+   * bounded-retry treatment, and a candidate the authority rejects NEVER
+   * replaces an endorsed snapshot (that would regress below the pushed floor).
+   */
+  async #lazyFreshHead(): Promise<{ commitOid: string }> {
+    const branch = REPO_DEFAULT_BRANCH;
+    const reader = this.#lazyReader();
+    const stored = reader.head();
+    if (
+      stored !== null &&
+      decideHeadResolution(this.#branchAuthority(branch), stored.commitOid).cache
+    ) {
+      return stored;
+    }
+    let candidate: string | undefined;
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      candidate = await reader.resolveRemoteHead();
+      if (!shouldRetryHeadResolution(this.#branchAuthority(branch), candidate)) break;
+      await new Promise((resolve) => setTimeout(resolve, 150 * attempt));
+    }
+    const decision = decideHeadResolution(this.#branchAuthority(branch), candidate!);
+    let target = candidate!;
+    if (!decision.cache) {
+      // The remote's ADVERTISEMENT is still serving something the authority
+      // calls stale. Our own pushed floor is a definitely-safe target: the
+      // push succeeded, so the commit is FETCHABLE by exact oid even while
+      // ls-refs lags (probed server behavior). This heals both the
+      // install-failed-commit window and the first lazy read after
+      // clone-lane history (cold store, floor set).
+      const floor = this.ctx.storage.kv.get<string>(repoPushedHeadStorageKey(branch));
+      if (floor !== undefined && floor !== stored?.commitOid) {
+        target = floor;
+      } else if (stored !== null) {
+        return stored; // our endorsed snapshot is not worse — serve once
+      } else {
+        throw new Error(
+          `remote head ${candidate} is not endorsed by the branch authority and no lazy snapshot exists — deferring to the clone lane`,
+        );
+      }
+    }
+    // The guard re-checks INSIDE the reader's chain: a commit that lands
+    // while this sync waits moves the floor, and a target the authority no
+    // longer endorses (and that is not the current floor) must not install.
+    const head = await reader.syncToHead(target, {
+      stillWanted: () =>
+        this.ctx.storage.kv.get<string>(repoPushedHeadStorageKey(branch)) === target ||
+        decideHeadResolution(this.#branchAuthority(branch), target).cache,
+    });
+    if (this.#gitObjectStore.manifestByteSize(branch) <= LAZY_CONTENT_HASH_MAX_BYTES) {
+      await this.#publishLazyHeadRecord(head.commitOid);
+    }
+    return head;
+  }
+
+  /**
+   * Publish the head record (worker builds read it) from ONE consistent
+   * snapshot observation. Every guard runs AFTER the last await, immediately
+   * before the synchronous put: the snapshot must still name the intended
+   * commit, the authority must still endorse it, and a record a racing
+   * writer landed must never be clobbered — a stale or mixed publication
+   * would poison build-cache identity durably.
+   */
+  async #publishLazyHeadRecord(expectedCommitOid: string): Promise<void> {
+    const branch = REPO_DEFAULT_BRANCH;
+    const { files, head } = await this.#lazyReader().readHeadSnapshot();
+    const contentHash = await repoContentHash(files);
+    if (head.commitOid !== expectedCommitOid) return;
+    if (!decideHeadResolution(this.#branchAuthority(branch), head.commitOid).cache) return;
+    if (isRepoHeadRecord(this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(branch)))) return;
+    this.ctx.storage.kv.put(repoHeadStorageKey(branch), {
+      commitOid: head.commitOid,
+      contentHash,
+    });
+  }
+
+  /**
+   * ONE checkout fills everything: the byte tree, and — when the durable head
+   * record is absent — the head record itself (text snapshot + contentHash),
+   * with the same raced-authority and behind-push guards `getHead` applies.
+   * An external push therefore costs one clone, not getHead's plus this one.
+   */
+  async #materializeHeadTree(): Promise<string> {
+    // The key comes off BEFORE the wipe: if the write below dies, reads must
+    // find "no cache" and re-materialize — never an empty tree labeled main.
+    this.ctx.storage.kv.delete(REPO_HEAD_TREE_KEY);
+    await wipeWorkspace(this.#headTreeCache);
+    const { filesystem, head } = await this.#checkout({});
+    const files: Record<string, string> = {};
+    for (const path of await walkCheckoutPaths(filesystem, REPO_DIR)) {
+      const bytes = await readCheckoutFileBytes(filesystem, `${REPO_DIR}/${path}`);
+      await this.#headTreeCache.writeFileBytes(`/${path}`, bytes);
+      // Text view for the contentHash — same lossy decode as the snapshot
+      // lane, so both derivations of a head record hash identically.
+      files[path] = await readCheckoutTextFile(filesystem, `${REPO_DIR}/${path}`);
+    }
+    const branch = REPO_DEFAULT_BRANCH;
+    // The hash is computed BEFORE the authority checks: its await yields the
+    // input gate, and a commit landing in that window must win. The checks
+    // and both puts below are synchronous, so nothing can interleave them.
+    const contentHash = await repoContentHash(files);
+    // Never RECORD state the branch authority calls stale (the bounded clone
+    // retries can exhaust): serve it once, and let the next read's cursor
+    // comparison drive another materialization toward the settled head. The
+    // authority is read HERE, after the last await — an observation that
+    // landed while this clone ran must veto this fill's publication.
+    const decision = decideHeadResolution(this.#branchAuthority(branch), head.oid);
+    // A head record that appeared while this clone ran came from the write
+    // authorities and may be NEWER — never overwrite it (getHead's rule).
+    const raced = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(branch));
+    if (decision.cache && !isRepoHeadRecord(raced)) {
+      this.ctx.storage.kv.put(repoHeadStorageKey(branch), { commitOid: head.oid, contentHash });
+    }
+    if (decision.cache) this.ctx.storage.kv.put(REPO_HEAD_TREE_KEY, head.oid);
+    return head.oid;
+  }
+
+  /**
+   * Verified cache read: shell serves EMPTY content when a spilled R2 body is
+   * gone (preview buckets expire objects while the SQLite row and sentinel
+   * survive), so a size mismatch against the row's metadata is cache
+   * corruption — thrown, which invalidates the tree and falls back to the
+   * authoritative clone lane. Never serve emptiness as truth.
+   */
+  async #readHeadTreeBytesVerified(path: string): Promise<Uint8Array | null> {
+    const stat = await this.#headTreeCache.stat(`/${path}`);
+    if (stat === null || stat.type === "directory") return null;
+    const bytes = await this.#headTreeCache.readFileBytes(`/${path}`);
+    if (bytes === null || bytes.byteLength !== stat.size) {
+      throw new Error(
+        `head-tree cache lost the bytes of "${path}" (stat ${stat.size}, read ${bytes?.byteLength ?? "null"})`,
+      );
+    }
+    return bytes;
+  }
 
   #serializeWrite<T>(write: () => Promise<T>): Promise<T> {
     const result = this.#writeChain.then(write, write);
@@ -301,10 +706,28 @@ export class RepoDurableObject extends DurableObject<Env> {
   async #commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult> {
     const parsed = parseCommitFilesInput(input);
     const repo = await this.gitAccess();
+    const branch = parsed.branch ?? repo.defaultBranch;
+    if (branch === REPO_DEFAULT_BRANCH) {
+      // The lazy attempt's outcome is EXHAUSTIVE. Only "fallback-safe" — a
+      // proof the remote did not move (pre-push failure or a provably
+      // rejected CAS) — may enter the clone lane below. "indeterminate"
+      // surfaces as an error: retrying the mutation through ANY lane could
+      // apply it twice.
+      const attempt = await this.#commitFilesLazy(parsed);
+      if (attempt.kind === "completed") return attempt.result;
+      if (attempt.kind === "indeterminate") {
+        throw new Error(
+          `commit push is indeterminate (proposed ${attempt.proposedCommitOid}): ${attempt.detail} — ` +
+            "refusing to retry through any lane; re-issue the commit after the next read reconciles",
+        );
+      }
+      console.warn(`lazy commit fell back to the clone lane (safe): ${attempt.detail}`);
+    }
     const result = await commitFilesToArtifactRepo({
       author: parsed.author,
-      branch: parsed.branch ?? repo.defaultBranch,
+      branch,
       changes: parsed.changes,
+      expectedCommitOid: this.ctx.storage.kv.get<string>(repoPushedHeadStorageKey(branch)),
       message: parsed.message,
       remote: repo.remote,
       token: repo.token,
@@ -318,13 +741,133 @@ export class RepoDurableObject extends DurableObject<Env> {
       commitOid: result.commitOid,
       contentHash: result.contentHash,
     });
-    if (!result.noChanges) this.#scheduleGithubMirrorPush(result.branch);
+    if (!result.noChanges) {
+      this.#scheduleGithubMirrorPush(result.branch);
+    }
 
     return {
       branch: result.branch,
       changedPaths: result.changedPaths,
       commitOid: result.commitOid,
       noChanges: result.noChanges,
+    };
+  }
+
+  /**
+   * The clone-free commit attempt. The boundary is a three-state proof:
+   * "completed" carries the public result, "fallback-safe" means the remote
+   * PROVABLY did not move (safe to re-run through the clone lane), and
+   * "indeterminate" means a push may have applied — the caller must refuse
+   * every retry path. Nothing here throws for outcome signaling.
+   */
+  async #commitFilesLazy(
+    parsed: CommitRepoFilesInput,
+  ): Promise<
+    | { kind: "completed"; result: CommitRepoFilesResult }
+    | { detail: string; kind: "fallback-safe" }
+    | { detail: string; kind: "indeterminate"; proposedCommitOid: string }
+  > {
+    const branch = REPO_DEFAULT_BRANCH;
+    const reader = this.#lazyReader();
+    const command = {
+      author: {
+        date: new Date(),
+        email: parsed.author?.email ?? ITERATE_GITHUB_BOT_COMMIT_AUTHOR.email,
+        name: parsed.author?.name ?? ITERATE_GITHUB_BOT_COMMIT_AUTHOR.name,
+      },
+      changes: parsed.changes.map((change) => ({
+        ...change,
+        path: normalizeRepoFilePath(change.path),
+      })),
+      message: parsed.message,
+    };
+    // Everything up to and including the reader call is allowed to fail into
+    // the clone lane ONLY through the reader's own classification: a thrown
+    // error here means the push was never sent (freshness resolution, input
+    // validation, pack building) — pre-push by construction.
+    // Authority bookkeeping runs INSIDE the reader's serialized commit, the
+    // moment the push classifies as applied: the pushed floor and the new
+    // snapshot become visible together, so no concurrent freshness read can
+    // observe the snapshot under the old floor and sync backwards.
+    const onApplied = (applied: { commitOid: string; parentCommitOid: string }) => {
+      this.#recordPushedHead({
+        branch,
+        commitOid: applied.commitOid,
+        parentCommitOid: applied.parentCommitOid,
+      });
+      this.#scheduleGithubMirrorPush(branch);
+      this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
+    };
+    let outcome: Awaited<ReturnType<typeof reader.commitFiles>>;
+    try {
+      await this.#lazyFreshHead();
+      outcome = await reader.commitFiles(command, { onApplied });
+      if (outcome.kind === "rejected") {
+        // The ref moved under us (out-of-band writer): one resync + retry —
+        // the clone lane's visibility posture. A rejection is proof nothing
+        // was pushed. The resolved tip is trusted ONLY when it differs from
+        // everything we already hold — a lagging replica advertising our own
+        // base (or older) must not reinstall history; those cases skip the
+        // retry and take the clone lane, whose machinery owns that window.
+        const base = reader.head()?.commitOid;
+        const floor = this.ctx.storage.kv.get<string>(repoPushedHeadStorageKey(branch));
+        const tip = await reader.resolveRemoteHead();
+        if (tip !== base && tip !== floor) {
+          await reader.syncToHead(tip, {
+            stillWanted: () => reader.head()?.commitOid !== tip,
+          });
+          outcome = await reader.commitFiles(command, { onApplied });
+        }
+      }
+    } catch (error) {
+      return { detail: String(error), kind: "fallback-safe" };
+    }
+    if (outcome.kind === "rejected") return { detail: outcome.detail, kind: "fallback-safe" };
+    if (outcome.kind === "indeterminate") {
+      return {
+        detail: outcome.detail,
+        kind: "indeterminate",
+        proposedCommitOid: outcome.proposedCommitOid,
+      };
+    }
+    if (outcome.changedPaths.length === 0) {
+      return {
+        kind: "completed",
+        result: { branch, changedPaths: [], commitOid: outcome.commitOid, noChanges: true },
+      };
+    }
+
+    // THE PUSH IS APPLIED (floor + mirror + record-drop already ran inside
+    // the commit via onApplied). From here every failure is cache
+    // maintenance: degrade, log, and still return "completed" — never
+    // re-run the mutation.
+    try {
+      if (outcome.localInstallError !== undefined) {
+        // The remote HAS the commit but our snapshot could not install it;
+        // the next read re-syncs from the remote.
+        console.warn(
+          `lazy commit ${outcome.commitOid} pushed; local install failed: ${String(outcome.localInstallError)}`,
+        );
+      } else if (this.#gitObjectStore.manifestByteSize(branch) <= LAZY_CONTENT_HASH_MAX_BYTES) {
+        // Keep worker builds hot after config-repo commits — same guarded
+        // publisher as the sync path (snapshot must still name OUR commit
+        // and stay endorsed at the moment of the put).
+        await this.#publishLazyHeadRecord(outcome.commitOid);
+      }
+    } catch (error) {
+      this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
+      console.warn(
+        `lazy commit ${outcome.commitOid} IS pushed; post-push bookkeeping failed and was dropped: ${String(error)}`,
+      );
+    }
+    return {
+      kind: "completed",
+      result: {
+        branch,
+        changedPaths: outcome.changedPaths,
+        commitOid: outcome.commitOid,
+        noChanges: false,
+      },
     };
   }
 
@@ -335,9 +878,11 @@ export class RepoDurableObject extends DurableObject<Env> {
   async #edit(input: EditRepoFileInput): Promise<EditRepoFileResult> {
     const parsed = parseEditRepoFileInput(input);
     const repo = await this.gitAccess();
+    const branch = parsed.branch ?? repo.defaultBranch;
     const result = await editArtifactRepoFile({
       author: parsed.author,
-      branch: parsed.branch ?? repo.defaultBranch,
+      branch,
+      expectedCommitOid: this.ctx.storage.kv.get<string>(repoPushedHeadStorageKey(branch)),
       message: parsed.message,
       newString: parsed.newString,
       oldString: parsed.oldString,
@@ -354,7 +899,9 @@ export class RepoDurableObject extends DurableObject<Env> {
       commitOid: result.commitOid,
       contentHash: result.contentHash,
     });
-    if (!result.noChanges) this.#scheduleGithubMirrorPush(result.branch);
+    if (!result.noChanges) {
+      this.#scheduleGithubMirrorPush(result.branch);
+    }
 
     return {
       branch: result.branch,
@@ -377,18 +924,122 @@ export class RepoDurableObject extends DurableObject<Env> {
    * treats any DIFFERENT head as possibly-newer only after exhausting its
    * attempts.
    */
-  #recordPushedHead(result: { branch: string; commitOid: string; noChanges?: boolean }) {
+  /**
+   * Queue-delivered push observation. Cloudflare Queues does not guarantee
+   * publication-order delivery, and commit oids carry no order — so external
+   * observations NEVER assign cursors. Each observation joins the branch's
+   * observed `(before, after)` window; the chain's FRONTIER (afters no
+   * observed push builds upon) is the only set of resolutions the clone
+   * lanes may durably cache — anything else (an eventually consistent
+   * replica still serving any pre-push tip, or a push delivered out of
+   * order) is served once, uncached ({@link decideHeadResolution}). A `null`
+   * after records a ref deletion. Redeliveries and provably-superseded late
+   * pushes change nothing and keep the warm cache. The DO's own serialized
+   * write lanes stay on {@link #recordPushedHead} — their pushes really are
+   * ordered.
+   */
+  #observeExternalPush(branch: string, push: ObservedPush) {
+    const transition = observeExternalPushTransition(this.#branchAuthority(branch), push);
+    this.#writeBranchAuthority(branch, transition.authority);
+    if (!transition.invalidate) return;
+    if (branch === REPO_DEFAULT_BRANCH) {
+      this.#headFilesSnapshot.clear();
+      this.ctx.storage.kv.delete(REPO_HEAD_TREE_KEY);
+    }
+    this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
+  }
+
+  #recordPushedHead(result: {
+    branch: string;
+    commitOid: string;
+    noChanges?: boolean;
+    parentCommitOid?: string;
+  }) {
     if (result.noChanges) return;
-    this.ctx.storage.kv.put(`repo-pushed-head:${result.branch}`, result.commitOid);
+    // The push's parent must reach the observed window so that superseded tip
+    // is pruned from the frontier — otherwise, after an observation deleted
+    // the head record, an own commit would record (null -> new) and leave its
+    // real parent cacheable once the floor moves on. The commit lanes pass
+    // their checked clone's TRUE parent; lanes without one (GitHub adoption
+    // force-pushes) fall back to the pre-push head record, whose oid is
+    // exactly the tip that write superseded. A missing record reads as null,
+    // which prunes nothing: safe.
+    const previous = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(result.branch));
+    const beforeCommitOid =
+      result.parentCommitOid ?? (isRepoHeadRecord(previous) ? previous.commitOid : null);
+    if (result.branch === REPO_DEFAULT_BRANCH) {
+      this.#headFilesSnapshot.clear();
+      // The head moved: the tree sentinel is stale (the write lanes re-record
+      // the head RECORD themselves right after this).
+      this.ctx.storage.kv.delete(REPO_HEAD_TREE_KEY);
+    }
+    this.#writeBranchAuthority(
+      result.branch,
+      recordOwnPushTransition(this.#branchAuthority(result.branch), {
+        beforeCommitOid,
+        commitOid: result.commitOid,
+      }),
+    );
+  }
+
+  #invalidateArtifactState(branch: string) {
+    if (branch === REPO_DEFAULT_BRANCH) {
+      this.#headFilesSnapshot.clear();
+      this.ctx.storage.kv.delete(REPO_HEAD_TREE_KEY);
+    }
+    this.#artifactTokenPromise = undefined;
+    this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
+    this.#writeBranchAuthority(branch, { observedPushes: [], pushedFloor: undefined });
+  }
+
+  /** The branch's head authority, read fresh from durable storage (sync). */
+  #branchAuthority(branch: string): RepoHeadAuthority {
+    const rawObserved = this.ctx.storage.kv.get<unknown>(repoObservedPushesStorageKey(branch));
+    let observedPushes: ObservedPush[];
+    if (Array.isArray(rawObserved)) {
+      observedPushes = rawObserved.filter(isObservedPushRecord);
+    } else if (typeof rawObserved === "string" || rawObserved === null) {
+      // One-time migration from the pre-frontier scheme, which stored the
+      // LAST observed after-oid bare (null = deletion). That observation is
+      // still evidence — and a durable head record showing anything else may
+      // be exactly the stale pin the old scheme failed to evict. Invalidate
+      // it NOW: no new push may ever arrive to do it later.
+      observedPushes = [{ afterCommitOid: rawObserved, beforeCommitOid: null }];
+      this.ctx.storage.kv.put(repoObservedPushesStorageKey(branch), observedPushes);
+      const record = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(branch));
+      if (isRepoHeadRecord(record) && record.commitOid !== rawObserved) {
+        this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
+        if (branch === REPO_DEFAULT_BRANCH) {
+          this.#headFilesSnapshot.clear();
+          this.ctx.storage.kv.delete(REPO_HEAD_TREE_KEY);
+        }
+      }
+    } else {
+      observedPushes = [];
+    }
+    const pushed = this.ctx.storage.kv.get<string>(repoPushedHeadStorageKey(branch));
+    return { observedPushes, pushedFloor: typeof pushed === "string" ? pushed : undefined };
+  }
+
+  #writeBranchAuthority(branch: string, authority: RepoHeadAuthority) {
+    if (authority.observedPushes.length === 0) {
+      this.ctx.storage.kv.delete(repoObservedPushesStorageKey(branch));
+    } else {
+      this.ctx.storage.kv.put(repoObservedPushesStorageKey(branch), authority.observedPushes);
+    }
+    if (authority.pushedFloor === undefined) {
+      this.ctx.storage.kv.delete(repoPushedHeadStorageKey(branch));
+    } else {
+      this.ctx.storage.kv.put(repoPushedHeadStorageKey(branch), authority.pushedFloor);
+    }
   }
 
   /**
    * Committed file contents at HEAD — or, with `commitOid`, pinned to that
    * commit — null when the path does not exist there. `encoding: "base64"`
    * reads the raw bytes (images, PDFs — anything a utf8 decode would corrupt)
-   * and returns them base64-encoded. HEAD reads serve from the root workspace
-   * cache (no clone); pinned reads keep the clone lane (the cache only ever
-   * holds the head).
+   * and returns them base64-encoded. Reads serve from the clone lane's
+   * shared head snapshot (one clone per head movement per incarnation).
    */
   async readFile(input: {
     path: string;
@@ -398,14 +1049,50 @@ export class RepoDurableObject extends DurableObject<Env> {
     const path = normalizeRepoFilePath(input.path);
     if (input.commitOid !== undefined) assertCommitOid(input.commitOid);
     if (input.commitOid === undefined) {
-      const cached = await this.#readHeadFromRootCache(path, input.encoding);
-      if (cached !== CACHE_UNAVAILABLE) return cached;
+      // HEAD reads serve from the lazy snapshot: manifest lookup + verified
+      // store bytes, no clone anywhere. Failures fall through to the
+      // clone-backed byte-tree lane below, loudly.
+      try {
+        await this.#lazyFreshHead();
+        // Head label and bytes come from ONE reader observation — an
+        // interleaved install can never mix snapshots inside this response.
+        const { bytes, head } = await this.#lazyReader().readHeadPaths([path]);
+        if (bytes[0] === null || bytes[0] === undefined) return null;
+        const content =
+          input.encoding === "base64"
+            ? bytesToBase64(bytes[0])
+            : new TextDecoder().decode(bytes[0]);
+        return { commitOid: head.commitOid, content, path };
+      } catch (error) {
+        console.warn(
+          `repo head read via the lazy lane failed; falling back to the tree cache: ${String(error)}`,
+        );
+      }
+      try {
+        return await this.#withHeadTree(async (commitOid) => {
+          const bytes = await this.#readHeadTreeBytesVerified(path);
+          if (bytes === null) return null;
+          const content =
+            input.encoding === "base64" ? bytesToBase64(bytes) : new TextDecoder().decode(bytes);
+          return { commitOid, content, path };
+        });
+      } catch (error) {
+        this.ctx.storage.kv.delete(REPO_HEAD_TREE_KEY);
+        console.warn(
+          `repo head read via the head-tree cache failed; falling back to a clone: ${String(error)}`,
+        );
+      }
     }
     if (input.encoding === "base64") {
       const { filesystem, head } = await this.#checkout({ commitOid: input.commitOid });
       const absolutePath = `${REPO_DIR}/${path}`;
-      if (!(await filesystem.exists(absolutePath))) return null;
-      const bytes = await filesystem.readFileBytes(absolutePath);
+      try {
+        await filesystem.lstat(absolutePath);
+      } catch (error) {
+        if ((error as { code?: unknown })?.code === "ENOENT") return null;
+        throw error;
+      }
+      const bytes = await readCheckoutFileBytes(filesystem, absolutePath);
       return { commitOid: head.oid, content: bytesToBase64(bytes), path };
     }
     // Exact map lookup, deliberately not an include mask: glob metacharacters
@@ -415,80 +1102,32 @@ export class RepoDurableObject extends DurableObject<Env> {
     return content === undefined ? null : { commitOid, content, path };
   }
 
-  /** All committed file paths at HEAD (the project repo serves from the root workspace cache). */
+  /** All committed file paths at HEAD (served from the lazy snapshot's manifest). */
   async listFiles(): Promise<{ commitOid: string; paths: string[] }> {
-    if (this.#hasRootWorkspaceCache()) {
-      try {
-        const head = await this.getHead();
-        const paths = await this.#rootWorkspaceStub().listAllFiles();
-        return { commitOid: head.commitOid, paths: paths.map((p) => p.slice(1)).sort() };
-      } catch (error) {
-        console.warn(
-          `repo listFiles via the root workspace cache failed; falling back to a clone: ${String(error)}`,
-        );
-      }
+    try {
+      await this.#lazyFreshHead();
+      const { head, paths } = await this.#lazyReader().listHead();
+      return { commitOid: head.commitOid, paths: paths.sort() };
+    } catch (error) {
+      console.warn(
+        `repo listFiles via the lazy lane failed; falling back to the tree cache: ${String(error)}`,
+      );
+    }
+    try {
+      return await this.#withHeadTree(async (commitOid) => {
+        const paths = (await walkWorkspaceFiles(this.#headTreeCache))
+          .map((path) => path.slice(1))
+          .sort();
+        return { commitOid, paths };
+      });
+    } catch (error) {
+      this.ctx.storage.kv.delete(REPO_HEAD_TREE_KEY);
+      console.warn(
+        `repo listFiles via the head-tree cache failed; falling back to a clone: ${String(error)}`,
+      );
     }
     const { commitOid, files } = await this.getFilesSnapshot();
     return { commitOid, paths: Object.keys(files).sort() };
-  }
-
-  /**
-   * A HEAD file read served from the project's root workspace — the durable
-   * cache of main this repo already keeps fresh through its head cursor —
-   * instead of a full clone per read.
-   *
-   * Call order matters: `getHead()` FIRST warms this DO's durable head cursor
-   * (the one-time cold miss clones), so when the root workspace's freshness
-   * check dials back into this DO re-entrantly (we are awaiting its read at
-   * that moment; the input gate is open at RPC awaits), that nested
-   * `getHead()` is a synchronous kv hit. The returned oid is the cursor read
-   * before the content — a commit landing between the two can make the
-   * content newer than its label, the inherent approximation of a HEAD read.
-   *
-   * The cache is a CACHE: any failure (workspace DO unhappy, uncacheable
-   * repo) falls back to the authoritative clone lane, loudly.
-   */
-  async #readHeadFromRootCache(
-    path: string,
-    encoding: "utf8" | "base64" | undefined,
-  ): Promise<
-    { commitOid: string; content: string; path: string } | null | typeof CACHE_UNAVAILABLE
-  > {
-    if (!this.#hasRootWorkspaceCache()) return CACHE_UNAVAILABLE;
-    try {
-      const head = await this.getHead();
-      const root = this.#rootWorkspaceStub();
-      if (encoding === "base64") {
-        const bytes = await root.readFileBytes(`/${path}`);
-        return bytes === null
-          ? null
-          : { commitOid: head.commitOid, content: bytesToBase64(bytes), path };
-      }
-      const content = await root.readFile(`/${path}`);
-      return content === null ? null : { commitOid: head.commitOid, content, path };
-    } catch (error) {
-      console.warn(
-        `repo head read via the root workspace cache failed; falling back to a clone: ${String(error)}`,
-      );
-      return CACHE_UNAVAILABLE;
-    }
-  }
-
-  // The root workspace mirrors exactly ONE repo: the project repo at "/".
-  // Every other repo (secondary /repos/**, per-example scratch repos,
-  // projectId-less legacy repos) stays on the clone lane — serving them from
-  // the project root's checkout returns the WRONG repo's files.
-  #hasRootWorkspaceCache(): boolean {
-    return this.#name.projectId !== null && this.#name.path === CONFIG_REPO_PATH;
-  }
-
-  #rootWorkspaceStub() {
-    return this.env.WORKSPACE.getByName(
-      DurableObjectNameCodec.stringify({
-        path: ROOT_WORKSPACE_PATH,
-        projectId: this.#name.projectId!,
-      }),
-    );
   }
 
   /**
@@ -534,31 +1173,34 @@ export class RepoDurableObject extends DurableObject<Env> {
     const parentOid = entry.parent[0] || null;
 
     await git.checkout({ ref: entry.oid, force: true });
-    const commitFiles = await readCheckoutBytes(filesystem);
+    const commitFiles = await readCheckoutBytes(filesystem, REPO_DIR);
     let parentFiles = new Map<string, Uint8Array>();
     if (parentOid !== null) {
       await git.checkout({ ref: parentOid, force: true });
-      parentFiles = await readCheckoutBytes(filesystem);
+      parentFiles = await readCheckoutBytes(filesystem, REPO_DIR);
     }
 
     return { ...toRepoLogCommit(entry), files: diffFileMaps(parentFiles, commitFiles), parentOid };
   }
 
   // ===========================================================================
-  // GitHub mirror: an optional linked GitHub repository this repo pushes to.
+  // GitHub backing: an optional linked GitHub repository synchronized both ways.
   //
   // The Artifacts repo stays primary — commits succeed against it regardless
-  // of GitHub's availability — and the linked GitHub repo is a mirror kept
-  // fresh by a best-effort push after every commit. git push is cumulative, so
-  // a failed mirror push self-heals on the next commit; `pushToGithub` repairs
-  // on demand. `syncFromGithub` is the explicit reverse lane: adopt GitHub's
-  // branch head, fast-forward only unless forced.
+  // of GitHub's availability — and a best-effort push mirrors every commit.
+  // git push is cumulative, so a failed mirror push self-heals on the next
+  // commit; `pushToGithub` repairs on demand. GitHub push webhooks ask the repo
+  // processor to fast-forward Artifacts through `syncFromGithub`; the ensuing
+  // Artifacts queue event remains the sole source of commit facts. The public
+  // sync verb is also the explicit repair/forced-adoption lane.
   // ===========================================================================
 
   /** The current GitHub link, or null when this repo is not linked. */
   getGithubLink(): GithubRepoLink | null {
     const stored = this.ctx.storage.kv.get<unknown>(GITHUB_LINK_KV_KEY);
-    return isGithubLinkRecord(stored) ? stored : null;
+    if (stored === undefined) return null;
+    if (isGithubLinkRecord(stored)) return stored;
+    throw new Error("Stored GitHub link does not satisfy GithubRepoLink.");
   }
 
   // In both link verbs the journal append comes FIRST and the KV write last:
@@ -569,7 +1211,7 @@ export class RepoDurableObject extends DurableObject<Env> {
 
   /** Record the GitHub link durably and journal the fact on the repo stream. */
   async configureGithubLink(link: GithubRepoLink): Promise<GithubRepoLink> {
-    await this.#host.stream.append({
+    await this.#stream.append({
       type: "events.iterate.com/repo/github-link-configured",
       payload: { ...link },
     });
@@ -581,9 +1223,14 @@ export class RepoDurableObject extends DurableObject<Env> {
   async removeGithubLink(): Promise<GithubRepoLink | null> {
     const link = this.getGithubLink();
     if (link === null) return null;
-    await this.#host.stream.append({
+    await this.#stream.append({
       type: "events.iterate.com/repo/github-unlinked",
-      payload: { connection: link.connection, owner: link.owner, repo: link.repo },
+      payload: {
+        connection: link.connection,
+        owner: link.owner,
+        repo: link.repo,
+        repositoryId: link.repositoryId,
+      },
     });
     this.ctx.storage.kv.delete(GITHUB_LINK_KV_KEY);
     return link;
@@ -660,14 +1307,14 @@ export class RepoDurableObject extends DurableObject<Env> {
         );
       }
 
-      await this.#host.stream.append({
+      await this.#stream.append({
         type: "events.iterate.com/repo/github-push-completed",
         idempotencyKey: `github-push-completed:${link.owner}/${link.repo}:${head.oid}`,
         payload: { branch, commitOid: head.oid, owner: link.owner, repo: link.repo },
       });
       return { branch, commitOid: head.oid };
     } catch (error) {
-      await this.#host.stream
+      await this.#stream
         .append({
           type: "events.iterate.com/repo/github-push-failed",
           idempotencyKey: `github-push-failed:${link.owner}/${link.repo}:${commitOid ?? "pre-clone"}:${String(error).slice(0, 80)}`,
@@ -692,10 +1339,10 @@ export class RepoDurableObject extends DurableObject<Env> {
    * moment this returns — same read-your-write boundary as commitFiles.
    *
    * The history transfers in-process (checkout-free clone from GitHub +
-   * force-push to the Artifacts remote), so big histories need `depth` —
-   * which prunes the adopted history to the newest N commits. GitHub retains
-   * the full history, so nothing is lost and a later deeper sync can widen
-   * the window.
+   * force-push to the Artifacts remote). `depth` is a requested lower bound;
+   * a fast-forward always retains the previous Artifacts head as well so its
+   * queue event can compare before/after trees. GitHub retains the full
+   * history, so a later deeper sync can widen the window.
    */
   syncFromGithub(input: { depth?: number; force?: boolean } = {}): Promise<GithubSyncResult> {
     return this.#serializeWrite(() => this.#syncFromGithub(input));
@@ -705,10 +1352,11 @@ export class RepoDurableObject extends DurableObject<Env> {
     const link = this.#requireGithubLink();
     const branch = REPO_DEFAULT_BRANCH;
     const previous = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(branch));
-    const previousCommitOid = isRepoHeadRecord(previous) ? previous.commitOid : null;
-    if (input.depth !== undefined && (!Number.isInteger(input.depth) || input.depth <= 0)) {
-      throw new Error("syncFromGithub depth must be a positive integer.");
-    }
+    const previousCommitOid = githubSyncBaseCommitOid({
+      cachedHeadCommitOid: isRepoHeadRecord(previous) ? previous.commitOid : null,
+      pushedFloor: this.#branchAuthority(branch).pushedFloor,
+    });
+    assertGithubHistoryDepth(input.depth, "syncFromGithub");
     const token = await this.#mintGithubToken(link);
 
     // Fast-forward gate via the GitHub compare API: the transfer below is a
@@ -721,18 +1369,25 @@ export class RepoDurableObject extends DurableObject<Env> {
     if (headOid === previousCommitOid) {
       return { branch, changed: false, commitOid: headOid, forced: false, previousCommitOid };
     }
+    let transferDepth = input.depth;
     if (input.force !== true) {
-      const status =
+      const comparison =
         previousCommitOid === null
-          ? "unrelated"
+          ? { aheadBy: 0, status: "unrelated" }
           : await this.#githubCompareStatus({ base: previousCommitOid, branch, link, token });
-      if (status !== "ahead") {
+      if (comparison.status !== "ahead") {
         throw new Error(
-          `syncFromGithub is not a fast-forward (GitHub says "${status}" relative to this repo's head ${previousCommitOid ?? "(none)"}). Pass force: true to discard local-only history and adopt GitHub's head.`,
+          `syncFromGithub is not a fast-forward (GitHub says "${comparison.status}" relative to this repo's head ${previousCommitOid ?? "(none)"}). Pass force: true to discard local-only history and adopt GitHub's head.`,
         );
       }
+      // Preserve the old head even when the caller requested depth 1;
+      // otherwise the force-moved shallow branch makes `before` unreachable
+      // for queue-derived before/after comparisons.
+      transferDepth = githubFastForwardTransferDepth({
+        aheadBy: comparison.aheadBy,
+        requestedDepth: input.depth,
+      });
     }
-
     // ONE transfer lane: clone GitHub in this isolate and force-push to the
     // Artifacts remote. Deliberately NOT the server-side Artifacts import —
     // import cannot overwrite an existing name, and the delete-then-reimport
@@ -753,7 +1408,13 @@ export class RepoDurableObject extends DurableObject<Env> {
     // usual already-exists case keeps the one-token-per-isolate economy).
     const artifact = await this.getOrCreateArtifact(this.artifactName());
     if (artifact.created) this.#artifactTokenPromise = undefined;
-    await this.#transferGithubHistoryInProcess({ branch, depth: input.depth, link, token });
+    await this.#transferGithubHistoryInProcess({
+      branch,
+      depth: transferDepth,
+      expectedCommitOid: headOid,
+      link,
+      token,
+    });
 
     // The adopted head is recorded for read-your-write, then the head cache
     // is invalidated and rebuilt through getHead's own cold-miss path (a
@@ -765,7 +1426,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
     await this.getHead({ branch });
 
-    await this.#host.stream.append({
+    await this.#stream.append({
       type: "events.iterate.com/repo/github-synced",
       idempotencyKey: `github-synced:${link.owner}/${link.repo}:${headOid}`,
       payload: {
@@ -787,6 +1448,77 @@ export class RepoDurableObject extends DurableObject<Env> {
   }
 
   /**
+   * Destructively replace this repo's Artifacts repository with the linked
+   * GitHub repository's default-branch history. GitHub always wins: there is
+   * no ancestry check and the reset runs even when both recorded heads match.
+   *
+   * The GitHub clone completes before the destructive phase. Artifacts
+   * deletion is asynchronous, so replacement waits until `get()` reports
+   * NOT_FOUND before recreating the same addressable name; otherwise a late
+   * queued deletion can destroy the freshly created replacement.
+   */
+  resetFromGithub(input: { depth?: number } = {}): Promise<GithubResetResult> {
+    return this.#serializeWrite(() => this.#resetFromGithub(input));
+  }
+
+  async #resetFromGithub(input: { depth?: number }): Promise<GithubResetResult> {
+    assertGithubHistoryDepth(input.depth, "resetFromGithub");
+    const link = this.#requireGithubLink();
+    const branch = REPO_DEFAULT_BRANCH;
+    const previous = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(branch));
+    const previousCommitOid = isRepoHeadRecord(previous) ? previous.commitOid : null;
+    const token = await this.#mintGithubToken(link);
+    const headOid = await this.#githubBranchHead({ branch, link, token });
+
+    // Preflight the complete source transfer before destroying anything. The
+    // returned git handle owns the in-memory object database until the push.
+    const git = await this.#cloneGithubHistoryInProcess({
+      branch,
+      depth: input.depth,
+      expectedCommitOid: headOid,
+      link,
+      token,
+    });
+    const artifactName = this.artifactName();
+    await replaceArtifactWithEmptyRepo(this.requireArtifacts(), artifactName, {
+      beforeDelete: () => {
+        // From this destructive boundary onward, neither a concurrent read nor
+        // a failed replacement push may observe/cache the old Artifact head.
+        this.#invalidateArtifactState(branch);
+      },
+    });
+    // Reads are not serialized with writes: one can refill the token or head
+    // caches from the old Artifact while deletion is being polled. Discard
+    // every possible refill after recreation, immediately before this write
+    // obtains the replacement token.
+    this.#invalidateArtifactState(branch);
+    await this.#pushGithubHistoryInProcess({
+      branch,
+      git,
+      repo: await this.gitAccess(),
+    });
+
+    this.#recordPushedHead({ branch, commitOid: headOid });
+    this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
+    await this.getHead({ branch });
+
+    await this.#stream.append({
+      type: "events.iterate.com/repo/github-synced",
+      idempotencyKey: `github-reset:${link.owner}/${link.repo}:${headOid}:${crypto.randomUUID()}`,
+      payload: {
+        branch,
+        commitOid: headOid,
+        forced: true,
+        owner: link.owner,
+        previousCommitOid,
+        repo: link.repo,
+        reset: true,
+      },
+    });
+    return { artifactReplaced: true, branch, commitOid: headOid, previousCommitOid };
+  }
+
+  /**
    * The private-source transfer lane: clone GitHub into an in-memory fs
    * (checkout-free — a transfer only moves objects) and push to the Artifacts
    * remote. Scoped so the clone is collectable before the head-cache rebuild
@@ -795,10 +1527,25 @@ export class RepoDurableObject extends DurableObject<Env> {
   async #transferGithubHistoryInProcess(args: {
     branch: string;
     depth?: number;
+    expectedCommitOid: string;
     link: GithubRepoLink;
     token: string;
   }): Promise<void> {
-    const repo = await this.gitAccess();
+    const git = await this.#cloneGithubHistoryInProcess(args);
+    await this.#pushGithubHistoryInProcess({
+      branch: args.branch,
+      git,
+      repo: await this.gitAccess(),
+    });
+  }
+
+  async #cloneGithubHistoryInProcess(args: {
+    branch: string;
+    depth?: number;
+    expectedCommitOid: string;
+    link: GithubRepoLink;
+    token: string;
+  }): Promise<ReturnType<typeof createGit>> {
     const filesystem = new InMemoryFs();
     const git = createGit(filesystem, REPO_DIR);
     try {
@@ -816,16 +1563,30 @@ export class RepoDurableObject extends DurableObject<Env> {
         `Could not clone ${args.link.owner}/${args.link.repo}#${args.branch} from GitHub (missing branch or empty repository?): ${redactGitCredentials(String(error))}`,
       );
     }
+    const [head] = await git.log({ depth: 1 });
+    if (head?.oid !== args.expectedCommitOid) {
+      throw new Error(
+        `GitHub branch ${args.link.owner}/${args.link.repo}#${args.branch} moved during transfer (expected ${args.expectedCommitOid}, cloned ${head?.oid ?? "no head"}); retry the operation.`,
+      );
+    }
+    return git;
+  }
+
+  async #pushGithubHistoryInProcess(args: {
+    branch: string;
+    git: ReturnType<typeof createGit>;
+    repo: { remote: string; token: string };
+  }): Promise<void> {
     // Always forced: the fast-forward decision was already made against
     // GitHub's compare API before the transfer started, and with `depth` the
     // local clone cannot prove ancestry the remote would accept anyway.
-    await git.remote({ add: { name: "artifacts", url: repo.remote } });
-    const pushed = await git.push({
+    await args.git.remote({ add: { name: "artifacts", url: args.repo.remote } });
+    const pushed = await args.git.push({
       force: true,
       ref: args.branch,
       remote: "artifacts",
       username: "x",
-      password: repo.token,
+      password: args.repo.token,
     });
     if (!pushed.ok) {
       throw new Error(
@@ -849,12 +1610,20 @@ export class RepoDurableObject extends DurableObject<Env> {
    * needs the token as a Basic password, which the placeholder-substitution
    * pipeline cannot produce.
    */
-  #mintGithubToken(link: GithubRepoLink): Promise<string> {
+  async #mintGithubToken(link: GithubRepoLink): Promise<string> {
+    if (this.#name.projectId === null) {
+      throw new Error("GitHub-backed repos require a project-scoped repo.");
+    }
     const github = parseConfig(this.env).integrations.github;
     if (!github?.appId || !github.privateKey) {
       throw new Error("GitHub App is not configured for this deployment (appId/privateKey).");
     }
-    return mintGithubInstallationToken({
+    await assertGithubInstallationTokenMintAuthorized({
+      installationId: link.installationId,
+      privateKey: { platform: "integrations.github" },
+      projectId: this.#name.projectId,
+    });
+    return await mintGithubInstallationToken({
       apiBase: "https://api.github.com",
       appId: github.appId,
       installationId: link.installationId,
@@ -896,19 +1665,22 @@ export class RepoDurableObject extends DurableObject<Env> {
     branch: string;
     link: GithubRepoLink;
     token: string;
-  }): Promise<string> {
+  }): Promise<{ aheadBy: number; status: string }> {
     const response = await this.#githubApi(
       `/repos/${args.link.owner}/${args.link.repo}/compare/${args.base}...${encodeURIComponent(args.branch)}`,
       args.token,
     );
-    if (response.status === 404) return "unrelated";
+    if (response.status === 404) return { aheadBy: 0, status: "unrelated" };
     if (!response.ok) {
       throw new Error(
         `GitHub compare for ${args.link.owner}/${args.link.repo} failed: HTTP ${response.status}`,
       );
     }
-    const data = (await response.json()) as { status?: string };
-    return typeof data.status === "string" ? data.status : "unknown";
+    const data = (await response.json()) as { ahead_by?: number; status?: string };
+    return {
+      aheadBy: typeof data.ahead_by === "number" ? data.ahead_by : 0,
+      status: typeof data.status === "string" ? data.status : "unknown",
+    };
   }
 
   #githubApi(path: string, token: string): Promise<Response> {
@@ -938,26 +1710,69 @@ export class RepoDurableObject extends DurableObject<Env> {
     );
   }
 
-  private async createArtifactRepo(_input: { path: string; projectId: string | null }) {
+  private async importPublicGithubArtifact(input: { depth?: number; owner: string; repo: string }) {
     const artifactName = this.artifactName();
     const timing = { projectId: this.#name.projectId, path: this.#name.path };
-    await timedStep("create-timing", timing, "artifact-get-or-create", () =>
+    await timedStep("create-timing", timing, "artifact-import", async () => {
+      await importGithubArtifactWithInitialPushCapture(
+        this.requireArtifacts(),
+        {
+          branch: REPO_DEFAULT_BRANCH,
+          ...(input.depth === undefined ? {} : { depth: input.depth }),
+          name: artifactName,
+          owner: input.owner,
+          repo: input.repo,
+        },
+        {
+          append: (event) => this.#stream.append(event),
+          namespace: this.env.ARTIFACTS_NAMESPACE,
+        },
+      );
+    });
+    return {
+      artifactName,
+      defaultBranch: REPO_DEFAULT_BRANCH,
+      remote: this.artifactRemote(artifactName),
+    };
+  }
+
+  private async createEmptyArtifactRepo() {
+    const artifactName = this.artifactName();
+    const timing = { projectId: this.#name.projectId, path: this.#name.path };
+    const artifact = await timedStep("create-timing", timing, "artifact-get-or-create", () =>
       this.getOrCreateArtifact(artifactName),
     );
     const defaultBranch = REPO_DEFAULT_BRANCH;
     const remote = this.artifactRemote(artifactName);
-    const token = await timedStep("create-timing", timing, "artifact-token", () =>
-      artifactToken(this.requireArtifacts(), artifactName),
-    );
+
+    // A prior push is authoritative evidence that an existing Artifact is
+    // already seeded. Recovery only needs to journal repos/created; cloning the
+    // whole repo to rediscover that fact can exceed a Repo DO's memory limit.
+    if (artifact.lastPushAt !== null) return { artifactName, defaultBranch, remote };
+
+    // create() already minted the initial write token. Using it avoids an
+    // immediate get()+createToken() against a repository whose create result
+    // is authoritative but whose read replica may not have caught up. A
+    // recovered ALREADY_EXISTS drive has no access to that one-time token, so
+    // only that path mints a replacement after its readiness barrier.
+    const token =
+      artifact.initialWriteToken ??
+      (await timedStep("create-timing", timing, "artifact-token", () =>
+        artifactToken(this.requireArtifacts(), artifactName),
+      ));
 
     const seeded = await timedStep("create-timing", timing, "artifact-seed", () =>
       seedArtifactRepo({
         branch: defaultBranch,
-        files: projectRepoSeedFiles(parseConfig(this.env).iterateSdkPackageSpec),
+        files: projectRepoSeedFiles(parseConfig(this.env)),
         remote,
         token,
       }),
     );
+    // `repos/created` is the creation boundary. Record the seed exactly like
+    // every later push so the first read or mutation waits for an Artifacts
+    // clone that can actually reach it instead of racing a stale replica.
+    this.#recordPushedHead({ branch: defaultBranch, commitOid: seeded.commitOid });
     this.ctx.storage.kv.put(repoHeadStorageKey(defaultBranch), {
       commitOid: seeded.commitOid,
       contentHash: seeded.contentHash,
@@ -1000,20 +1815,10 @@ export class RepoDurableObject extends DurableObject<Env> {
     };
   }
 
-  private async getOrCreateArtifact(name: string): Promise<{ created: boolean }> {
-    try {
-      await this.requireArtifacts().create(name, {
-        setDefaultBranch: REPO_DEFAULT_BRANCH,
-      });
-      return { created: true };
-    } catch (error) {
-      // Only the race we mean to tolerate. The old blind catch masked real
-      // failures (an INTERNAL_ERROR here fell through to get(), which then
-      // reported a misleading NOT_FOUND).
-      if ((error as { code?: string }).code !== "ALREADY_EXISTS") throw error;
-      await this.requireArtifacts().get(name);
-      return { created: false };
-    }
+  private async getOrCreateArtifact(name: string): Promise<GetOrCreateArtifactResult> {
+    return await getOrCreateArtifact(this.requireArtifacts(), name, {
+      defaultBranch: REPO_DEFAULT_BRANCH,
+    });
   }
 
   private requireArtifacts(): Artifacts {
@@ -1035,7 +1840,7 @@ export class RepoDurableObject extends DurableObject<Env> {
 async function artifactToken(artifacts: Artifacts, name: string) {
   const repo = await artifacts.get(name);
   const { plaintext } = await repo.createToken("write", REPO_WRITE_TOKEN_TTL_SECONDS);
-  return plaintext.split("?expires=")[0] ?? plaintext;
+  return stripArtifactTokenExpiry(plaintext);
 }
 
 async function seedArtifactRepo(input: {
@@ -1048,6 +1853,7 @@ async function seedArtifactRepo(input: {
   const git = createGit(filesystem, REPO_DIR);
   const credentials = { password: input.token, username: "x" };
 
+  let cloned = false;
   try {
     await git.clone({
       branch: input.branch,
@@ -1056,11 +1862,28 @@ async function seedArtifactRepo(input: {
       url: input.remote,
       ...credentials,
     });
+    cloned = true;
   } catch {
     await git.init({ defaultBranch: input.branch });
     await git.remote({
       add: { name: "origin", url: input.remote },
     });
+  }
+
+  // Creation is create-if-absent, never reset-to-template. In particular, a
+  // create-succeeded/ready-append-failed retry must preserve every commit that
+  // may have landed since the first drive.
+  if (cloned) {
+    const [head] = await git.log({ depth: 1, ref: input.branch }).catch((error: unknown) => {
+      if (isRepoNotSeededError(classifyRepoAccessError(error, input.branch))) return [];
+      throw error;
+    });
+    if (head) {
+      return {
+        commitOid: head.oid,
+        contentHash: await repoContentHash(await readCheckoutFiles(filesystem, REPO_DIR)),
+      };
+    }
   }
 
   for (const file of input.files) {
@@ -1072,18 +1895,23 @@ async function seedArtifactRepo(input: {
     await git.add({ filepath: file.path });
   }
 
-  try {
-    await git.commit({
-      author: { email: "support@iterate.com", name: "Iterate" },
-      message: "Seed minimal ITX project worker",
-    });
-    await ensureBranchRef({ branch: input.branch, git });
-  } catch (error) {
-    if (!String(error).match(/nothing to commit|no changes/i)) throw error;
-  }
+  const identity = {
+    email: ITERATE_GITHUB_BOT_COMMIT_AUTHOR.email,
+    name: ITERATE_GITHUB_BOT_COMMIT_AUTHOR.name,
+    timestamp: REPO_SEED_COMMIT_TIMESTAMP_SECONDS,
+    timezoneOffset: 0,
+  };
+  await git.commit({
+    author: identity,
+    message: "Seed minimal itx project worker",
+  });
+  await ensureBranchRef({ branch: input.branch, git });
 
+  // When two first drives both observe an empty remote, the fixed
+  // identity/timestamp above gives them the same root oid. Never force this
+  // publication: if a different branch head appeared, creation must lose the
+  // race instead of replacing real history.
   const pushed = await git.push({
-    force: true,
     ref: input.branch,
     remote: "origin",
     ...credentials,
@@ -1092,11 +1920,11 @@ async function seedArtifactRepo(input: {
     throw new Error(`Failed to push ${input.branch}: ${JSON.stringify(pushed.refs)}`);
   }
 
-  const [head] = await git.log({ depth: 1 });
+  const [head] = await git.log({ depth: 1, ref: input.branch });
   if (!head) throw new Error(`Seeded repo has no head commit on ${input.branch}.`);
   return {
     commitOid: head.oid,
-    contentHash: await repoContentHash(await readCheckoutFiles(filesystem)),
+    contentHash: await repoContentHash(await readCheckoutFiles(filesystem, REPO_DIR)),
   };
 }
 
@@ -1104,13 +1932,15 @@ async function commitFilesToArtifactRepo(input: {
   author?: { email: string; name: string };
   branch: string;
   changes: RepoFileChange[];
+  expectedCommitOid?: string;
   message: string;
   remote: string;
   token: string;
-}): Promise<CommitRepoFilesResult & { contentHash: string }> {
+}): Promise<CommitRepoFilesResult & { contentHash: string; parentCommitOid: string }> {
   return mutateArtifactRepo({
     author: input.author,
     branch: input.branch,
+    expectedCommitOid: input.expectedCommitOid,
     message: input.message,
     remote: input.remote,
     token: input.token,
@@ -1144,6 +1974,7 @@ async function commitFilesToArtifactRepo(input: {
 async function editArtifactRepoFile(input: {
   author?: { email: string; name: string };
   branch: string;
+  expectedCommitOid?: string;
   message: string;
   newString: string;
   oldString: string;
@@ -1151,10 +1982,11 @@ async function editArtifactRepoFile(input: {
   remote: string;
   replaceAll?: boolean;
   token: string;
-}): Promise<EditRepoFileResult & { contentHash: string }> {
+}): Promise<EditRepoFileResult & { contentHash: string; parentCommitOid: string }> {
   return mutateArtifactRepo({
     author: input.author,
     branch: input.branch,
+    expectedCommitOid: input.expectedCommitOid,
     message: input.message,
     remote: input.remote,
     token: input.token,
@@ -1191,21 +2023,67 @@ async function editArtifactRepoFile(input: {
 async function mutateArtifactRepo<Extra extends Record<string, unknown>>(input: {
   author?: { email: string; name: string };
   branch: string;
+  expectedCommitOid?: string;
   message: string;
   mutate: (repo: { filesystem: InMemoryFs; git: ReturnType<typeof createGit> }) => Promise<Extra>;
   remote: string;
   token: string;
-}): Promise<CommitRepoFilesResult & { contentHash: string } & Extra> {
-  const filesystem = new InMemoryFs();
-  const git = createGit(filesystem, REPO_DIR);
+}): Promise<CommitRepoFilesResult & { contentHash: string; parentCommitOid: string } & Extra> {
   const credentials = { password: input.token, username: "x" };
+  const clone = async () => {
+    const filesystem = new InMemoryFs();
+    const git = createGit(filesystem, REPO_DIR);
+    let head: { oid: string } | undefined;
+    try {
+      await git.clone({
+        branch: input.branch,
+        singleBranch: true,
+        url: input.remote,
+        ...credentials,
+      });
+      [head] = await git.log({ depth: 1, ref: input.branch });
+    } catch (error) {
+      throw classifyRepoAccessError(error, input.branch);
+    }
+    if (!head) throw new RepoNotSeededError("Repo has no commits.");
+    return { filesystem, git, head };
+  };
 
-  await git.clone({
-    branch: input.branch,
-    singleBranch: true,
-    url: input.remote,
-    ...credentials,
-  });
+  let cloned: Awaited<ReturnType<typeof clone>> | undefined;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      cloned = await clone();
+      if (
+        input.expectedCommitOid === undefined ||
+        cloned.head.oid === input.expectedCommitOid ||
+        (await gitBranchContainsCommit({
+          branch: input.branch,
+          commitOid: input.expectedCommitOid,
+          git: cloned.git,
+        }))
+      ) {
+        break;
+      }
+      if (attempt >= ARTIFACT_HEAD_VISIBILITY_RETRIES) {
+        throw new Error(
+          `Artifact branch ${input.branch} did not contain the last pushed commit ${input.expectedCommitOid} (saw ${cloned.head.oid}); refusing to commit on a stale or diverged base.`,
+        );
+      }
+      console.warn(
+        `repo mutation clone does not contain the last push (saw ${cloned.head.oid}, pushed ${input.expectedCommitOid}); retry ${attempt + 1}`,
+      );
+    } catch (error) {
+      if (input.expectedCommitOid === undefined || attempt >= ARTIFACT_HEAD_VISIBILITY_RETRIES) {
+        throw error;
+      }
+      console.warn(
+        `repo mutation clone could not reach the last pushed commit ${input.expectedCommitOid}; retry ${attempt + 1}: ${String(error)}`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+  }
+
+  const { filesystem, git } = cloned;
 
   const extra = await input.mutate({ filesystem, git });
   const changedPaths = (await git.status()).map((entry) => entry.filepath).sort();
@@ -1216,19 +2094,24 @@ async function mutateArtifactRepo<Extra extends Record<string, unknown>>(input: 
       branch: input.branch,
       changedPaths,
       commitOid: head.oid,
-      contentHash: await repoContentHash(await readCheckoutFiles(filesystem)),
+      contentHash: await repoContentHash(await readCheckoutFiles(filesystem, REPO_DIR)),
       noChanges: true,
+      parentCommitOid: cloned.head.oid,
       ...extra,
     };
   }
 
   const commit = await git.commit({
-    author: input.author ?? { email: "support@iterate.com", name: "Iterate" },
+    author: input.author ?? {
+      email: ITERATE_GITHUB_BOT_COMMIT_AUTHOR.email,
+      name: ITERATE_GITHUB_BOT_COMMIT_AUTHOR.name,
+    },
     message: input.message,
   });
-  // No force: writes are serialized by the DO's #writeChain, so a fresh
-  // clone + one commit is always a fast-forward — a non-fast-forward push
-  // here means an out-of-band writer and should fail loudly, not clobber.
+  // No force: writes are serialized by the DO's #writeChain, and the clone
+  // above contains our last pushed commit, so one commit is a fast-forward.
+  // A rejection now means an out-of-band writer moved the ref after that
+  // checked clone and should fail loudly, not clobber.
   const pushed = await git.push({
     ref: input.branch,
     remote: "origin",
@@ -1242,8 +2125,11 @@ async function mutateArtifactRepo<Extra extends Record<string, unknown>>(input: 
     branch: input.branch,
     changedPaths,
     commitOid: commit.oid,
-    contentHash: await repoContentHash(await readCheckoutFiles(filesystem)),
+    contentHash: await repoContentHash(await readCheckoutFiles(filesystem, REPO_DIR)),
     noChanges: false,
+    // The checked clone's pre-commit head — the commit's TRUE parent, which
+    // the head authority needs to prune that tip from the observed frontier.
+    parentCommitOid: cloned.head.oid,
     ...extra,
   };
 }
@@ -1255,6 +2141,16 @@ function repoHeadStorageKey(branch: string) {
   // segment makes a contentHash recipe change a clean cache flush instead of
   // old and new hashes silently mixing in build keys.
   return `repo-head:v1:${branch}`;
+}
+
+function repoPushedHeadStorageKey(branch: string) {
+  return `repo-pushed-head:${branch}`;
+}
+
+/** The branch's observed push window — `(before, after)` pairs whose frontier
+ * is the set of cacheable resolutions ({@link decideHeadResolution}). */
+function repoObservedPushesStorageKey(branch: string): string {
+  return `repo-observed-push:${branch}`;
 }
 
 /** The git-over-HTTPS remote of a linked GitHub repository. */
@@ -1282,7 +2178,10 @@ function isGithubLinkRecord(value: unknown): value is GithubRepoLink {
     typeof record.connection === "string" &&
     typeof record.installationId === "string" &&
     typeof record.owner === "string" &&
-    typeof record.repo === "string"
+    typeof record.repo === "string" &&
+    typeof record.repositoryId === "number" &&
+    Number.isSafeInteger(record.repositoryId) &&
+    record.repositoryId > 0
   );
 }
 
@@ -1295,28 +2194,6 @@ function isRepoHeadRecord(value: unknown): value is { commitOid: string; content
     typeof record.contentHash === "string" &&
     record.contentHash.length > 0
   );
-}
-
-/** All committed files of a checkout as one path -> content map (skips
- * .git). Content-hash sites (commit/seed) need every byte; the masked
- * snapshot path deliberately walks paths first instead. */
-async function readCheckoutFiles(filesystem: InMemoryFs): Promise<Record<string, string>> {
-  const files: Record<string, string> = {};
-  for (const path of await walkCheckoutPaths(filesystem)) {
-    files[path] = await filesystem.readFile(`${REPO_DIR}/${path}`);
-  }
-  return files;
-}
-
-/** All committed files of a checkout as one path -> raw bytes map (skips
- * .git) — the tree-diff input for `commitDetails`, where a utf8 decode before
- * the binary sniff would corrupt exactly the files it needs to sniff. */
-async function readCheckoutBytes(filesystem: InMemoryFs): Promise<Map<string, Uint8Array>> {
-  const files = new Map<string, Uint8Array>();
-  for (const path of await walkCheckoutPaths(filesystem)) {
-    files.set(path, await filesystem.readFileBytes(`${REPO_DIR}/${path}`));
-  }
-  return files;
 }
 
 /** The public `RepoLogCommit` projection of a git log entry: epoch-ms
@@ -1334,6 +2211,12 @@ function toRepoLogCommit(entry: GitLogEntry): RepoLogCommit {
 const REPO_LOG_DEFAULT_LIMIT = 20;
 const REPO_LOG_MAX_LIMIT = 200;
 
+function assertGithubHistoryDepth(depth: number | undefined, method: string): void {
+  if (depth !== undefined && (!Number.isInteger(depth) || depth <= 0)) {
+    throw new Error(`${method} depth must be a positive integer.`);
+  }
+}
+
 function parseLogLimit(limit: number | undefined): number {
   if (limit === undefined) return REPO_LOG_DEFAULT_LIMIT;
   if (!Number.isInteger(limit) || limit < 1 || limit > REPO_LOG_MAX_LIMIT) {
@@ -1348,32 +2231,6 @@ function assertCommitOid(commitOid: string): void {
   if (!/^[0-9a-f]{40}$/.test(commitOid)) {
     throw new Error(`commitOid must be a full 40-character hex sha, got "${commitOid}".`);
   }
-}
-
-/** All committed file paths of a checkout (skips .git). */
-async function walkCheckoutPaths(filesystem: InMemoryFs): Promise<string[]> {
-  const paths: string[] = [];
-  const walk = async (dir: string) => {
-    for (const entry of await filesystem.readdir(dir)) {
-      if (dir === REPO_DIR && entry === ".git") continue;
-      const absolute = `${dir}/${entry}`;
-      const stat = await filesystem.stat(absolute);
-      if (stat.type === "directory") await walk(absolute);
-      else paths.push(absolute.slice(REPO_DIR.length + 1));
-    }
-  };
-  await walk(REPO_DIR);
-  return paths;
-}
-
-/**
- * Whole-checkout content identity. Build keys hash this plus the ref's masks,
- * so a commit touching only mask-excluded files still changes every build key
- * for the repo — a spurious cache miss (correct output, one extra build), the
- * accepted cost of getting fresh-seed artifact dedupe without per-mask hashes.
- */
-async function repoContentHash(files: Record<string, string>): Promise<string> {
-  return await stableSha256({ files, type: "repo-content" });
 }
 
 function parseCommitFilesInput(input: CommitRepoFilesInput): CommitRepoFilesInput {

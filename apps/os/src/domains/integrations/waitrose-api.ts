@@ -16,6 +16,7 @@
 
 import { itxEnv } from "../../env.ts";
 import { projectStub } from "../projects/egress.ts";
+import { withStreamContext, type StreamContext } from "../projects/stream-context.ts";
 import { waitroseSessionSecretPath } from "./utils.ts";
 
 /** The real Waitrose origin. */
@@ -57,7 +58,7 @@ type WaitroseShoppingContext = {
 /** How to drive the Waitrose built-in: a named connection, then a client
  * method. The single source of truth for the dispatch guard (rpc-targets). */
 export const WAITROSE_CALL_GRAMMAR =
-  'itx.integrations.waitrose expected `<connection>.<method>` (e.g. itx.integrations.waitrose["mum"].searchProducts("oat milk", { size: 5 })); use itx.integrations.list() to see connections.';
+  'Use itx.integrations.waitrose.get(connection?).<method>, for example itx.integrations.waitrose.get("mum").searchProducts("oat milk", { size: 5 }).';
 
 /** A search hit, trimmed to what picking-something-to-buy needs. `lineNumber`
  * is the id `addToTrolley` takes. */
@@ -224,16 +225,17 @@ function waitroseClient(options: {
  * `getSecret(...)` placeholder in the Authorization header, substituted
  * downstream; the `waitrose-session` strategy mints on first use and
  * re-logins on 401). The itx caller surface
- * `itx.integrations.waitrose["<connection>"]` replays the caller's method
+ * `itx.integrations.waitrose.get("<connection>")` replays the caller's method
  * path straight onto this instance.
  */
 export function connectionWaitroseClient(input: {
   connection: string;
   projectId: string;
+  streamContext: StreamContext;
 }): ReturnType<typeof waitroseClient> {
   const stub = projectStub(itxEnv.PROJECT, input.projectId);
   return waitroseClient({
-    authorization: `Bearer getSecret({ path: "${waitroseSessionSecretPath(input.connection)}", field: "accessToken" })`,
-    fetcher: (request) => stub.fetch(request),
+    authorization: `Bearer getSecret("${waitroseSessionSecretPath(input.connection)}", { field: "accessToken" })`,
+    fetcher: (request) => stub.fetch(withStreamContext(request, input.streamContext)),
   });
 }

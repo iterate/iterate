@@ -5,86 +5,169 @@ guaranteed to happen to it: **eviction**. Every deploy evicts every Durable
 Object; hibernation and crashes evict them on their own schedule. A processor
 that is only correct while its incarnation stays alive is not correct.
 
+Two hooks are the whole authoring surface: `reduce` applies each consumed event
+to state, and `processEvent` causes side effects — that is its entire job.
+The same two hooks express very different modalities, and nothing in the
+framework picks one for you. A processor can be a durable message queue,
+where every event must cause its side effect. It can be an agent, where
+events mostly update state and the interesting side effect — start an LLM
+request — is decided by looking at the state, with at most one request in
+flight. It can be a pure projector with no side effects at all. This doc is
+about writing the side-effect half so that any of those survives eviction.
+
 Companion to [domain objects and stream processors](domain-objects-and-stream-processors.md)
-(creation-as-event, fold doctrine, naming). This guide covers the half that
-doctrine document takes for granted: side effects, recovery, staleness, and
-how to test all of it in plain node
-(`apps/os/src/domains/streams/test-helpers.ts`).
+(explicit birth certificates, reduced-state doctrine, naming). This guide covers the
+half that doctrine document takes for granted: side effects, recovery,
+staleness, and how to test all of it in plain node (`iterate/processors/testing`).
 
-## The model: a processor is a reconciler
+The machinery itself — `StreamProcessor`, `defineProcessorContract`, the
+runner, the registry, keepalive/recovery durability — lives in the published
+package (`packages/iterate/src/processors`, imported as `iterate/processors`).
+apps/os hosts its domain processors on it, and a project's own worker can
+host processors on exactly the same code through the ordinary published
+dependency. The config-repo template's guestbook app
+(`apps/os/config-repo-template/apps/guestbook` — `processor.ts` plus the
+`GuestbookApp` server in `server.tsx`, bundled with its browser client by
+`createApp` and rendered via Cap'n Web + `useLiveState`) is the reference for
+that userspace hosting shape. Reduced state lives on the project stream at
+`/guestbook`.
 
-A processor is two halves plus a comparison:
+## Expose the processor vocabulary directly
 
-- **Desired state** — the fold. `reduce` projects journaled facts into "what
-  should be the case": open LLM requests, pending script executions, schedules
+A domain object's ordinary write door should be a typed `append(...)`, with
+its input derived mechanically as `ConsumedInput<typeof ProcessorContract>`
+and its runtime boundary validated by
+`ProcessorContract.parseConsumedInput(...)`. Do not hand-copy the event union,
+and do not replace this door with one wrapper method per event type. A named
+method is justified only when it adds real semantics such as encryption,
+external I/O, provenance, multi-stream coordination, or birth/readiness
+barriers. See
+[Prefer a typed append door to one-event wrapper methods](domain-objects-and-stream-processors.md#prefer-a-typed-append-door-to-one-event-wrapper-methods)
+for the reference implementation and raw-stream escape hatch.
+
+## State-derived side effects
+
+A queue-shaped processor needs nothing beyond "handle the event": the side
+effect follows from the event itself. An obligation-carrying processor
+(agent, capability host) additionally uses `processEvent` to compare two
+things:
+
+- **Desired state** — the reduced state. `reduce` projects stream-committed
+  facts into "what should be the case": open LLM requests, pending script executions, schedules
   that should fire. Durable, replayable, survives everything.
 - **Actual state** — the incarnation. Live executions, open sockets, armed
   timers. In-memory, dies with every eviction, **and that is fine** — it is
   never the source of truth.
-- **Reconciliation** — the `reconcile` hook compares the two and acts: start
-  attempts for desired work nobody is driving, settle work whose driver died,
-  and do it all through idempotent appends so replays converge. The base
-  class calls `reconcile` only for AT-HEAD batches (`checkpointOffset >=
-streamMaxOffset`), so overrides never need their own gate: a mid-catch-up
-  fold shows obligations whose outcomes sit in the next page, and acting on
-  it would re-drive real vendor calls. The final catch-up page qualifies by
-  construction; wake-lane push batches are consumes-filtered yet stamped with
-  the raw head, so the host runs a trailing unfiltered catch-up after any
-  behind batch — recovery always gets its pass. (Older processors spell the
-  same thing as a `processEventBatch` override with a hand-written at-head
-  gate; the gate semantics are identical, and they should migrate to
-  `reconcile` when touched.)
 
-The reference implementations, in reading order:
-`AgentProcessor.reconcile` (the canonical obligation reconciler: drive/settle
-LLM obligations, then derive scheduling — plus a last-resort backstop) and
-`CapabilityHostProcessor` (scripts — same shape, different settle policy).
+There is no framework concept for the comparison — it is ordinary
+`processEvent` code that reads `state`, checks an in-memory live-set, starts
+work nobody is running, settles work whose runner died, and does it all
+through idempotent appends so replays converge. It is usually guarded by one
+line — `if (!args.delivery.caughtUp) return` — and that guard is a choice,
+not a rule: a queue processor acts on every event and never reads the flag.
+
+`delivery.caughtUp` is the one load-bearing fact catch-up imposes: behind the
+observed head your reduced state is partial — outcomes may sit in stream
+pages not yet replayed — so state-derived effects fired there act on stale desires. It
+is the filter-aware form of "the stream's max offset at the moment this event
+was dispatched to you": a subset-consuming processor cannot compute that from
+`event.offset` alone (whether the events between it and the raw head are
+consumable is invisible to it — they were never delivered), so the runner
+answers "is anything you'd consume still ahead of you?" precomputed.
+
+Normally `caughtUp` is true on the last consumed event in a scan that reaches
+the observed raw head. If that scan contains no consumed event, the runner
+calls `processEvent` once with `event: null`, the final reduced state, and
+`caughtUp: true`; per-event dispatch must therefore guard `event !== null`.
+Consumes-filtered wake frames get a trailing unfiltered self-pull so an
+omitted or unconsumed raw tail cannot strand state-derived work.
+
+The reference implementations, in reading order: the `delivery.caughtUp`
+branch in `AgentProcessor.processEvent` (start/settle LLM obligations, then
+derive scheduling) and `CapabilityHostProcessor` (scripts — same shape,
+different settle policy).
 
 ## Two primitives, two guarantees
 
-Every side effect in a `process*` hook must pick one of these deliberately:
+This is the normal delivery-semantics trade-off, spelled as two helpers.
+`blockProcessorWhile(work)` gives the work **at-least-once** semantics
+(the checkpoint is held; a crash means redelivery; idempotency keys collapse
+the re-run). Blocking is the exception, so justify it in a call-site comment:
+name the per-event consequence that would be lost forever if the append were
+dropped.
+`runInBackground` alone gives **at-most-once**: the checkpoint
+advances immediately and an eviction loses the closure. Every asynchronous
+side effect in a `process*` hook must pick one deliberately:
 
-| Primitive                   | Guarantee                                                                              | On eviction                                                     | Use for                                            |
-| --------------------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------------------- | -------------------------------------------------- |
-| `blockProcessorWhile(work)` | at-least-once: checkpoint held, crash ⇒ redelivery, idempotency keys dedupe the re-run | batch redelivered by the spine (lag is visible stream-side)     | **short** must-happen work: appends, forwards      |
-| `runInBackground(work)`     | a **droppable attempt**: checkpoint advances, eviction loses the closure silently      | gone — no evidence, no retry, unless _you_ built the reconciler | attempts whose _outcome_ something else guarantees |
+| Primitive                   | Guarantee                                                                              | On eviction                                                   | Use for                                            |
+| --------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------- | -------------------------------------------------- |
+| `blockProcessorWhile(work)` | at-least-once: checkpoint held, crash ⇒ redelivery, idempotency keys dedupe the re-run | batch redelivered by the spine (lag is visible stream-side)   | **short** must-happen work: appends, forwards      |
+| `runInBackground(work)`     | a **droppable attempt**: checkpoint advances, eviction loses the closure silently      | gone — no evidence, no retry, unless _you_ wrote the recovery | attempts whose _outcome_ something else guarantees |
 
 `blockProcessorWhile` is not for long work: it head-of-line-blocks every later
 event — including the cancellation the user is frantically sending.
+
+A synchronous in-memory poke that is only an idempotent cache hint needs no
+side-effect lane. The cache notification in
+`repo-processor-implementation.ts` is the reference; it does not carry a
+durable consequence.
+
+Registrations run in strict FIFO order: each blocker starts only after the
+previous one settles, so a later registration in the same `processEvent` body
+observes the earlier work's appends. Order state-derived work after per-event
+work by writing it later in the function — there is no separate lane.
+
+At head, settlement appends that must land promptly use one outer
+`blockProcessorWhile`; holding the frame lets redelivery retry them. Everything
+that can be re-derived from state at leisure is a droppable `runInBackground`
+attempt: keepalive revival and the next at-head pass derive it again.
 
 The question every `runInBackground` callsite must answer in a comment or by
 obvious construction: **"what recovers the outcome if this attempt drops?"**
 Legitimate answers:
 
-- _"the reconciler, via journaled evidence"_ — the obligation pattern below;
+- _"my caughtUp branch restarts it from evidence on the stream"_ — the obligation pattern below;
 - _"nothing — the outcome genuinely doesn't matter"_ — telemetry, best-effort
   UX touches (a Slack reaction; these must also be freshness-gated — see
-  refold safety below).
+  reprocessing safety below).
 
 A naked `runInBackground` around consequential work is the exact bug class
 behind the 2026-06-10 and 2026-07-07 production wedges.
 
+## Batches are transport, not semantics
+
+A delivery batch is a catch-up paging unit and an append-coalescing unit —
+never a semantic unit. The runner reduces and processes ONE event at a time,
+and the harness pins partition invariance: one batch, singletons, or random
+partitions of the same stream must produce identical outcomes
+(`stream-processor-runner.test.ts`). A proposed failure scenario that does
+not reproduce under singleton delivery is not real. High-volume traffic
+(streaming chunks, telemetry) rides ephemeral appends, which never reach
+processor delivery at all — so no future throughput case adds batch semantics
+to this contract either.
+
 ## The obligation pattern
 
 For must-complete work that runs longer than a batch may block (LLM calls,
-scripts), the pattern is **journaled evidence + droppable attempt +
-reconciler**:
+scripts), the pattern is **durable evidence on the stream + droppable
+attempt + restart from state**:
 
-1. **Evidence**: a `…-requested` event opens the obligation; the fold tracks
-   it (with everything needed to start an attempt from state alone — model,
-   code, expiry). A `…-started` event marks that an attempt began, appended
-   durably **before** the work body runs — and if that append FAILS, the body
-   must not run and no completion may be appended: the obligation stays
-   `requested`, the failure propagates (marking the keepalive window), and a
-   later reconciliation retries the whole attempt. Release the live-set entry
-   in a `finally` either way, or the reconciler skips the id for the rest of
-   the incarnation. Terminal events (`…-completed`, a cancellation) close the
-   obligation and delete it from the fold.
+1. **Evidence**: a `…-requested` event opens the obligation; the reduced
+   state tracks it (with everything needed to start an attempt from state alone — model,
+   code, expiry). When a domain needs to distinguish whether external work may
+   have begun, a `…-started` event marks that boundary and is appended durably
+   **before** the work body runs. If that append fails, the body must not run
+   and no settlement may be appended: the obligation stays `requested`, the
+   failure propagates (marking the keepalive window), and a later at-head pass
+   retries the whole attempt. Release the live-set entry in a `finally` either
+   way, or the restart code skips the id for the rest of the incarnation.
+   Domains such as Agent that can safely adopt the recorded request need no
+   separate started fact.
 2. **Attempt**: `runInBackground`, registered in an in-memory live-set
    _synchronously, before any await_, so the same pass never classifies its
    own attempt as undriven.
-3. **Reconciler**: at the end of _every_ batch, walk the fold's open
-   obligations against the live-set:
+3. **Restart from state**: whenever `delivery.caughtUp` is true, walk the
+   reduced state's open obligations against the live-set:
    - `requested` + nobody driving + not expired → **start** (this is both the
      normal start and the lost-before-started recovery — indistinguishable on
      purpose, and neither depends on the requested event being in this batch);
@@ -93,67 +176,113 @@ reconciler**:
      **settle as orphaned failure**. Whether settling means fail-or-re-drive
      is a _domain decision_: LLM requests and scripts fail (they may have
      half-executed; the higher level re-derives); an idempotent announcement
-     could re-drive. This is why the reconciler is hand-written per
-     processor, not machinery.
+     could re-drive. This is why this code is hand-written per processor,
+     not machinery.
 
-Settlements reuse the normal completion path's **idempotency keys**, so a
-race between a late attempt and the reconciler — or a full journal refold —
-collapses to one durable outcome at the append dedup layer.
+Use one terminal event per obligation, named `…-settled`, with a result union
+whose kinds include success, failure, and cancellation; `completed` reads as
+success. Cancellation is one way the obligation settles, so it shares the
+settlement key and stale-result reduce guard; the user's separate intent to
+stop remains its own event. Do not split one terminal state across
+`…-succeeded`, `…-failed`, and `…-cancelled` event types. Repos still has split `…-completed` and
+`…-failed` terminal events for stream-compatibility reasons; that shape is
+grandfathered, not the template for new work.
+
+For most domains, the settlement result union is also the durable failure
+record. `stream/error-occurred` is the agent-visible error lane: among domain
+processors, only `AgentProcessor` emits its failures there today so the agent
+can transcribe them into model-visible context. General runner-side emission
+remains a filed follow-up.
+
+Build processor-owned idempotency keys with
+`this.idempotencyKey(key, event)` by default. When the deciding identity must
+be embedded by hand, separate it with `@` (`settle@<identity>`); when an event
+is supplied, the helper's own `@<path>:<offset>` suffix prevents same-slug
+processors forwarding into one stream from colliding. A raw string key is
+reserved for deliberate cross-processor convergence, such as shared agent
+binding and route-configuration keys, and needs a comment saying that the
+collision is the point.
+
+Settlements reuse the normal path's idempotency key. Identical bodies really
+do dedupe, but settlement bodies often contain incarnation-dependent values
+such as durations, partial text, or freshly signed URLs; when two such bodies
+race under one key, the stream rejects the loser as a same-key-different-body
+conflict. Use tolerate-as-settlement when losing the race means the obligation
+is already settled (the fleet's `#appendUnlessLostIdempotencyRace` shape). Use
+read-back-the-winner when the loser must know the authoritative outcome
+(`CapabilityHostProcessor`). Use observe-before-append when an unexpected
+occupant is a bug that must surface loudly (`SchedulerProcessor`).
 
 ## Staleness: wake whenever, act only within the intent's horizon
 
 Recovery can deliver an obligation arbitrarily late — a revival minutes after
 a deploy, or days after a crash loop finally met its antidote. **Do not enact
 side effects blindly**: check how old the intent is (and, for cross-checks,
-how far your fold sits from the stream head) before starting anything.
+how far your reduced state sits from the stream head) before starting anything.
 
-- **`expiresAt` on the requested event.** The requester stamps it; the
-  reconciler refuses to _start_ past it and settles the obligation as expired
-  instead (_only-settle-past-expiry_). This is what makes late wakes safe by
-  construction: an agent revived a week late reports a failure, it does not
-  answer a week-old prompt. Every new obligation type should carry it
-  (defaults derive from `createdAt` when raw appends omit it).
+- **`expiresAt` on the requested event.** The requester stamps it as the
+  deadline for the **whole obligation**, including its terminal settlement;
+  it is not merely a latest-start time. The processor refuses to start past
+  it and settles the obligation as expired instead. A started attempt must
+  bound every phase to the remaining budget and reserve a short final window
+  for appending its terminal outcome. This makes late wakes and wedged RPCs
+  safe by construction: an agent revived a week late reports a failure, it
+  does not answer a week-old prompt, and an attempt cannot run unbounded after
+  the intent expired. Every new obligation type should carry an explicit
+  expiry. Processors with expiry or deadline logic take `now` as a required
+  dependency; making it optional makes virtual-time tests depend on the host
+  clock. New contracts stamp expiries as epoch-ms numbers, not ISO strings.
 - **Vendor idempotency for dangerous effects.** For a payment-shaped effect,
   the obligation key must ride to the vendor (e.g. a Stripe idempotency key)
   so at-least-once attempts collapse server-side. Dangerous **and**
   non-idempotent at the vendor ⇒ short expiry, fail closed, escalate to a
   human-visible failure.
 - **Hesitation windows.** For retractable intents, put deliberate wall-clock
-  between evidence and attempt so invalidating events can land — the agent's
-  debounce between `llm-request-scheduled` and `llm-request-requested` is
-  this pattern (and its timer is a droppable attempt: losing it costs
-  latency, never the request, because the settle logic re-derives it from
-  the fold).
+  between evidence and attempt so invalidating events can land. The agent
+  computes debounce plus failure backoff from the pending trigger, then
+  appends `llm-request-requested`; its timer is a droppable attempt because
+  losing it costs latency, never the request, and the next at-head pass
+  derives the same intent from reduced state.
 
-## Refold safety: the whole journal will be replayed at you
+## Reprocessing safety: the whole stream can be replayed at you
 
-The checkpoint is a disposable CACHE of the fold. Whenever a stored snapshot
-stops parsing against the current state schema — the **normal aftermath of
-deploying a state-shape change** — the processor discards it and refolds from
-offset 0 (`StreamProcessor.#loadState`). That means `processEvent` runs again
-for every historical event, with **event-time state**: at each event, `state`
-is the fold up to that offset, not current truth.
+The reduction checkpoint is a disposable cache of the reduced state. A
+reducer-version change re-reduces from offset 0 with `reduce` only; it does
+**not** rerun `processEvent`. The
+processing cursor is separate and authoritative. But a new subscriber, an
+operator-requested `reprocessFrom`, or an at-least-once redelivery can still
+run `processEvent` over historical events, with **event-time state**: at each
+event, `state` is the reduction up to that offset, not current truth.
 
-Event-time state is therefore NOT a guard. `if (state.created) return` does
-not protect a refold: the `created` fact folds _later_ in the replay, so the
-vendor call re-fires against a repo that already exists — and the repo
-processor's seeding force-pushes the seed commit over whatever the user has
-committed since. That was a real latent bug; the same shape would have
-re-added 👀 reactions to every historical Slack message (a rate-limit
-crash-loop inside `blockProcessorWhile`, with reaction resurrection as the
-user-visible symptom).
+The explicit-birth guard is therefore NOT a replay-safety guard. It only says
+whether the processor exists at this point in its history. Once the birth has
+reduced, every later historical event passes that guard during a replay, so a
+vendor call attached directly to one of those events fires again. The same
+shape would re-add 👀 reactions to every historical Slack message (a
+rate-limit crash-loop inside `blockProcessorWhile`, with reaction
+resurrection as the user-visible symptom).
 
-Every side effect in a `process*` hook must be one of exactly three shapes:
+A per-event append under an idempotency key must have a body that is a
+deterministic function of that event and its reduced configuration. A `now()`,
+random id, or freshly signed URL in the body turns at-least-once redelivery
+into a same-key-different-body conflict that wedges the frame forever. Anchor
+deadlines to `event.createdAt`, not the delivery clock.
+
+Every consequential side effect in a `process*` hook must be one of exactly
+three shapes:
 
 1. **An append with a stable idempotency key.** Safe by construction: the
    stream dedupes the replay. This is why the durable forwards (Slack
    router → thread stream, repo → PR-agent stream) need no other gate — a
-   refold re-dials the appends and they all collapse.
-2. **An obligation reconciled from the AT-HEAD fold** (the pattern above).
-   Safe because the final fold has absorbed every journaled completion:
-   requested-and-completed pairs cancel out _before_ the reconciler acts.
-   `RepoProcessor.processEventBatch` is the minimal example — fold
-   `createRequested`, reconcile `createRequested && !created` at head.
+   replay re-dials the appends and they all collapse.
+2. **An obligation restarted from the AT-HEAD reduced state** (the pattern
+   above). Safe because the at-head reduced state has absorbed every
+   committed settlement:
+   requested-and-settled pairs cancel out _before_ `processEvent` acts.
+   The `delivery.caughtUp` branch in `RepoProcessor.processEvent` is the
+   minimal creation example—reduce `createRequest` and `birthCertificate`,
+   then provision only when the at-head state has an open request and no
+   terminal certificate.
 3. **An acknowledgement/cosmetic lane gated on FRESHNESS** — compare
    `event.createdAt` against an injected `now`. Acks mean "your message was
    just picked up"; they are only meaningful near arrival, so stale replays
@@ -162,20 +291,38 @@ Every side effect in a `process*` hook must be one of exactly three shapes:
    `integrations/utils.ts`); the status lane is additionally
    latest-fact-wins, painted at most once per at-head batch.
 
+For transient vendor cosmetics, remember the latest qualifying fact in an
+in-memory field, then at head read and clear that field first and paint it at
+most once; `#unpaintedPresenceFact` in
+`slack-agent-processor-implementation.ts` and `#unpaintedTypingFact` in
+`telegram-agent-processor-implementation.ts` are the reference pair.
+
+Integration transcription also has one concrete shape: append exactly one
+`agents/context-added` per source event, with `role: developer`, a transcript
+headed by the literal source event type, an `actor` naming the untrusted
+sender, and one `refs` entry pointing at that exact source event. Set
+`dont-trigger-request` unless that surface's wake rule fires, and turn a
+permanent enrichment failure into an explicit note inside the content rather
+than silently dropping data. `slack-agent-processor-implementation.ts`,
+`telegram-agent-processor-implementation.ts`, and
+`email-agent-processor-implementation.ts` are greppable checks of the same
+convention.
+
 Vendor work that is **idempotent-by-overwrite** inside a durable lane
 (re-downloading Slack-shared files to a per-event storage key) is acceptable:
-wasteful on refold, never wrong.
+wasteful on replay, never wrong.
 
 One guarantee holds in both directions: **processors never see ephemeral
 events** (`append({ ephemeral: true })` — LLM streaming chunks and other
 transient signals). The wake lane drops them from delivery and catch-up reads
-exclude them, so neither a live fold nor a refold ever contains one: you never
-need to filter them out yourself, and you cannot fold or side-effect on one.
-Corollary: anything your fold or reconciler depends on must NOT be appended
+exclude them, so neither a live reduction nor a replay ever contains one: you
+never need to filter them out yourself, and you cannot reduce or side-effect
+on one.
+Corollary: anything your reducer or `processEvent` depends on must NOT be appended
 ephemeral — the durable truth is always its own event (chunks →
-`output-added`).
+an assistant-role `agents/context-added` item).
 
-### The refold test
+### The replay test
 
 Every processor whose `process*` hooks touch a vendor must have one. It is a
 few lines, and it doubles as scenario 4 below:
@@ -184,32 +331,37 @@ few lines, and it doubles as scenario 4 below:
    recording.
 2. Advance the injected clock past the freshness horizon.
 3. Construct a SECOND, fresh processor instance over the SAME stream and
-   deliver the whole journal from offset 0 — that IS a refold.
+   deliver the whole stream from offset 0 — that IS a replay.
 4. Assert: the fresh instance's vendor fakes saw **zero** calls (make a
-   dangerous fake THROW, so reaching it fails loudly), the journal gained
-   **zero** events, and the refolded state equals the live instance's.
+   dangerous fake THROW, so reaching it fails loudly), the stream gained
+   **zero** events, and the replayed state equals the live instance's.
 
-References: the "refold: …" tests in `slack-processors.test.ts` (agent
-status/ack + router ack/forwards) and `pr-agent.test.ts` (repo creation).
+References: the replay tests in `slack-processor.test.ts` /
+`slack-agent-processor.test.ts` (router ack/forwards + agent status/ack) and
+`repo-processor.test.ts` (GitHub push import).
 
-## What the host gives you for free (and what it demands)
+## What the runner registry gives you for free (and what it demands)
 
-`createStreamProcessorHost` backs both primitives with a **keepalive**
-(`stream-processor-keepalive.ts`): while any registered work is in flight, a
+`createStreamProcessorRegistry` wires each durable runner to a **keepalive**
+(`stream-processor-keepalive.ts`): while registered work is in flight, a
 durable DO alarm sits ~10s ahead of it. An incarnation that dies owing work
-gets its alarm fired in a fresh incarnation, which **revives** the host:
+gets its alarm fired in a fresh incarnation, which revives the processor:
 
-1. append one `events.iterate.com/stream-processor-host/revived` fact to the
-   stream (journaled evidence; also cold-boots the stream DO, whose `woken`
+1. append one `events.iterate.com/stream/processor-revived` fact to the
+   stream (durable evidence; also cold-boots the stream DO, whose `woken`
    fan-out restores the spine's deliveries);
-2. pull every hosted processor through its pending events (unfiltered, unlike
-   wake-mode push) — the fact guarantees at least one batch, so **every
-   reconciler runs**.
+2. let ordinary delivery drive the named processor through the runner; a
+   processor may consume the fact when it reacts to the fact itself, but
+   consumption is not required for recovery: reaching head guarantees either
+   a consumed event with `caughtUp: true` or the eventless
+   `processEvent(event: null, caughtUp: true)` pass.
 
-Recovery therefore has exactly one entrypoint — batch delivery — and the
-journal narrates the whole episode: `…llm-request-requested` →
-`…/revived` → `…llm-request-completed {failure: orphaned}` →
-`…llm-request-scheduled`.
+Recovery therefore has exactly one entrypoint — batch delivery. For Agent, the
+stream story is `…llm-request-requested` → `…/revived` →
+`…llm-request-settled`: the fresh incarnation adopts the still-open request.
+When that settlement is a retryable failure, its `reduce` arm turns the
+failure into the next pending trigger under the cap; the next at-head pass
+applies backoff and records a new `…llm-request-requested` intent.
 
 The keepalive is also a **crash-loop breaker**, because a DO must never stay
 awake forever from a bug: every revival durably marks a counter _before_
@@ -219,18 +371,24 @@ only on a **quiet-clean confirmation** (a fire that finds all work settled
 successfully) or a **version change** — the antidote deploy retries
 immediately. Wedged work that never settles (a hung promise no deadline owns)
 trips a busy-fire cap after ~15 minutes and decays into the same backoff.
-Enforcement lives in DO KV _below_ the fold — deliberately: a poisoned fold
-cannot be asked to fold its own pause fact. Journal facts about crash loops
+Enforcement lives in DO KV _below_ the reduction — deliberately: a poisoned
+reducer cannot be asked to reduce its own pause fact. Stream facts about crash loops
 (`error-occurred`, key `processor-host-crash-loop:<version>`) are evidence,
 not enforcement.
 
 What hosting code must do:
 
 - **Wire `alarm()`** on every DO class that hosts processors:
-  `alarm() { return this.#processorHost.handleAlarm(); }`. A host without it
+  `alarm() { return this.#registry.handleAlarm(); }`. A registry without it
   has no revival.
+- **Stateful dynamic workers** (project-userspace DOs, hosted as workerd
+  facets) have no native alarms, but `IterateDurableObject` routes the
+  standard `ctx.storage` alarm API through the platform Durable Object
+  hosting the worker, so `this.ctx` just works as the registry state; the
+  fire calls the class's `alarm()`. The seeded template's guestbook is the
+  reference shape.
 - **Share the alarm through slices** if the DO schedules its own work: state
-  desires via `host.setAlarmSlice(name, atMs)`; tolerate early fires; re-arm
+  desires via the registry's alarm slices; tolerate early fires; re-arm
   inside your handler (see `SchedulerDurableObject`).
 - **Worker-hosted processors** (push-lane subscribers with stream-owned
   cursors, e.g. the project worker) have no alarm and no keepalive: their
@@ -240,35 +398,23 @@ What hosting code must do:
 
 ## Testing: every failure above is a few lines of plain node
 
-The harness (`createProcessorHostHarness` in
-`apps/os/src/domains/streams/test-helpers.ts`) boots the REAL host and REAL
-processors over fake substrates: an in-memory journal, a fake
-`DurableObjectState`, a mutable virtual clock, and eviction as an operator.
+`makeProcessorHarness` has one shape for every suite: the real runner,
+`ProcessorKeepalive`, recovery adapter, Durable Object KV-backed progress,
+alarm cell, virtual clock, and `MemoryStream`. `crash()` is eviction and does
+not attach its successor; a new append or a due alarm is the production-real
+wake. See `email-agent-recovery.test.ts`, `repo-recovery.test.ts`,
+`capability-host-recovery.test.ts`, and `telegram-agent-recovery.test.ts`.
+The registry's own isolation fakes remain in
+`stream-processor-registry.test.ts` because that suite tests the registry
+layer itself.
 
-```ts
-const h = createProcessorHostHarness({
-  build: (host, ctx) => ({
-    agent: host.add(
-      (deps) =>
-        new AgentProcessor({
-          ...deps,
-          now: () => ctx.clock.now,
-          // incarnation 1 hangs (the request the deploy kills); incarnation 2 answers
-          ai: {
-            run: async () =>
-              ctx.incarnation === 1 ? new Promise(() => {}) : { response: "recovered!" },
-          },
-        }),
-    ),
-  }),
-});
-
-await h.stream.append(userMessage("hello?"));
-await h.stream.waitForEvent({ eventTypes: [llmRequestStarted], timeoutMs: 5000 });
-h.crash(); // THE DEPLOY: memory dies; journal, checkpoints, alarm survive
-await h.advance(15_000); // the alarm fires; the real revival pass runs
-await h.stream.waitForEvent({ eventTypes: [outputAdded], timeoutMs: 5000 });
-```
+With `makeProcessorHarness`, step tuples are the scenario spine; use
+`h.append(...)` and `h.advanceTime(...)` for single actions. Raw
+`h.stream.append(...)` is the committed-but-undelivered door: it commits to
+the stream without driving delivery, so reserve it for premises that need
+that distinction. When timing arithmetic depends on a config default such as
+a debounce or expiry, read it from `h.state().config...` instead of repeating
+the default as a magic number.
 
 The rules that keep these tests honest:
 
@@ -278,10 +424,10 @@ The rules that keep these tests honest:
   Every state a test exercises is thereby a _reachable_ state, and the test
   doubles as the existence proof. If you cannot reach a state through the
   dials, that is the finding.
-- **The journal is the assertion surface.** The doctrine forces every
+- **The stream is the assertion surface.** The doctrine forces every
   consequential outcome to be an event, so asserting on `h.stream.events` is
   complete. The only observables outside it: `h.store.alarm.at` (what's
-  armed) and the keepalive KV record — the deliberately-below-the-fold layer.
+  armed) and the keepalive KV record — the deliberately-below-the-reduction layer.
 - **Dead incarnations are fenced.** A crashed incarnation's stray closures (a
   debounce timer firing late) hit a fence and fail, exactly as an evicted
   isolate cannot write. If a test needs the fence _not_ to fire, the code
@@ -295,13 +441,13 @@ The rules that keep these tests honest:
 
 Scenarios every obligation-carrying processor should have (crib from
 `agent-eviction-recovery.test.ts`, `capability-host-recovery.test.ts`,
-`stream-processor-host.test.ts`):
+`stream-processor-registry.test.ts`):
 
 1. eviction mid-attempt → revival settles it and the domain retries/reports;
 2. eviction before any attempt → provably-never-ran work starts late (or
    expires);
 3. expired obligation → settled without the vendor ever being dialed;
-4. full-journal refold → completions dedupe, nothing re-executes (the refold
+4. full-stream replay → settlements dedupe, nothing re-executes (the replay
    test above — required for every processor that touches a vendor);
 5. the crash-loop breaker engaging on your processor's poison shape;
 6. a failed started-append → nothing runs, nothing settles, the live-set is
@@ -309,19 +455,39 @@ Scenarios every obligation-carrying processor should have (crib from
 
 ## Checklist for a new processor
 
+- [ ] A distinct `*/created` event whose payload contains only immutable facts
+      required for existence (and may be `{}`); nullable
+      `state.birthCertificate` stores its exact payload.
+- [ ] The created reduce arm returns the existing state when
+      `birthCertificate` is already set. Stable, payload-free creation keys
+      make identical retries dedupe and make same-key/different-body retries
+      fail loudly at append time; reduction must never wedge a committed
+      frame merely because it contains a duplicate birth fact.
+- [ ] Ordinary events stay in the processor's monolithic reducer. Actions
+      return before birth, while command/RPC methods that require existence
+      assert birth explicitly.
+- [ ] The creator appends births and setup before explicit subscriptions, then
+      calls `waitUntilProcessed` through the final creation-batch offset.
+- [ ] The domain object exposes `append(...)` as
+      `ConsumedInput<typeof ProcessorContract>` and validates it with
+      `ProcessorContract.parseConsumedInput(...)`; no one-event wrapper methods
+      without additional domain semantics.
 - [ ] Every `runInBackground` answers "what recovers the outcome?"
-- [ ] Obligations: requested/started/completed events; fold carries what an
-      attempt needs; terminal events delete the entry.
-- [ ] End-of-batch reconciler: start undriven fresh work, settle orphans and
+- [ ] Obligations: a `…-requested` event opens the reduced-state entry; an
+      optional `…-started` event records a meaningful attempt boundary; one
+      `…-settled` terminal with a success/failure/cancelled result union
+      deletes the entry.
+- [ ] `delivery.caughtUp` branch: start undriven fresh work, settle orphans and
       expired intent, idempotency keys shared with the normal path.
-- [ ] `expiresAt` stamped by the requester; reconciler honors it (and the
+- [ ] `expiresAt` stamped by the requester; the at-head branch honors it (and the
       `createdAt + DEFAULT` fallback covers raw appends).
 - [ ] A failed started-append never settles and never leaks the live-set.
-- [ ] Injected `now` dep for anything clock-dependent.
-- [ ] Every vendor side effect is one of the three refold-safe shapes:
-      idempotency-keyed append, at-head fold reconciliation, or
+- [ ] Required injected `now` dep for expiry/deadline logic; new expiry fields
+      are epoch-ms numbers.
+- [ ] Every vendor side effect is one of the three replay-safe shapes:
+      idempotency-keyed append, at-head reduced-state comparison, or
       freshness-gated ack — never guarded by event-time state alone.
-- [ ] The refold test: a fresh instance fed the full journal re-executes no
+- [ ] The replay test: a fresh instance fed the full stream re-executes no
       vendor work, appends nothing new, and converges to the same state.
-- [ ] Hosting DO wires `alarm()` (and alarm slices if it schedules).
+- [ ] Hosting DO wires `alarm()` to its registry (and alarm slices if it schedules).
 - [ ] Harness scenarios 1–6 above.

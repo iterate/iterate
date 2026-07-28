@@ -1,20 +1,24 @@
 /**
  * Project directory reads: slug -> project id, and small metadata records by
- * id. The auth worker is the source of truth (internal.project.bySlug, a
- * trusted service-token lookup); a KV cache in front of it makes the positive
- * case fast — ingress resolves EVERY project-host request through this, and
- * server-side reads use it for the stale-claims window right after create.
+ * id. The auth worker is the source of truth through the private AUTH service
+ * binding; a KV cache in front makes the positive case fast — ingress resolves
+ * EVERY project-host request through this, and server-side reads use it for
+ * the stale-claims window right after create.
  *
  * Layering per lookup: KV first (global, no expiry — slugs are immutable,
  * create overwrites its keys, and admin-lane projects have no auth-side row
  * so the cache is their only directory), then the auth worker behind a
- * short in-isolate negative memo (the only place negatives are cached; it
- * shields the auth worker from lookup storms without ever hiding a KV
- * prime from another isolate). Hits are written back, and `projects.create`
- * primes the cache eagerly so the post-create navigation never misses.
+ * short in-isolate negative memo plus a bounded shared negative marker. A
+ * visible positive KV key is ALWAYS checked first, and every authoritative
+ * prime separately makes a bounded best-effort deletion of an older marker.
+ * That shared marker matters for
+ * canonical `<app>--<project>` hosts: the whole label is a legitimate
+ * project-slug candidate, but its expected miss must not make each fresh
+ * ingress isolate round-trip through the auth worker. Hits are written back,
+ * and `projects.get(slug).create` primes the cache eagerly so post-create navigation
+ * never misses.
  */
-import { createAuthWorkerServiceClient } from "./auth/auth-worker-service.ts";
-import type { AppConfig } from "./config.ts";
+import { itxEnv } from "./env.ts";
 
 export type ProjectDirectoryRecord = {
   id: string;
@@ -23,7 +27,30 @@ export type ProjectDirectoryRecord = {
   name: string;
 };
 
+/**
+ * What `itx.identity()` returns: the directory's canonical project record,
+ * with the itx surface's `projectId` field name (the surface always says
+ * `projectId`; `id` is the directory/list convention).
+ */
+export type ProjectIdentity = {
+  projectId: string;
+  slug: string;
+  organizationId: string | null;
+  name: string;
+};
+
 const MEMO_TTL_MS = 15_000;
+// Cloudflare KV requires expirationTtl >= 60s. Reads check the separate
+// positive `slug:` key first, and positive primes best-effort delete this
+// marker; it exists only to suppress repeated authoritative misses.
+const SHARED_NEGATIVE_TTL_SECONDS = 60;
+const SHARED_NEGATIVE_MARKER = "missing";
+// These writes are exact and idempotent. Each key retries independently: a
+// transient stall on one key must not duplicate a successful sibling write
+// and turn that duplicate into a second, batch-wide stall.
+const REQUIRED_WRITE_ATTEMPT_TIMEOUT_MS = 10_000;
+const REQUIRED_WRITE_MAX_ATTEMPTS = 2;
+const CACHE_FILL_TIMEOUT_MS = 1_000;
 
 const slugMemo = new Map<string, { expiresAt: number; record: ProjectDirectoryRecord | null }>();
 
@@ -35,25 +62,29 @@ function projectKey(projectId: string) {
   return `project:${projectId}`;
 }
 
+function missingSlugKey(slug: string) {
+  return `missing-slug:${slug}`;
+}
+
 /** Resolve a slug (or a `prj_` id, passed through) to a project id. */
 export async function resolveProjectIdBySlug(input: {
-  config: AppConfig;
   directory: KVNamespace;
   identifier: string;
 }): Promise<string | null> {
   if (input.identifier.startsWith("prj_")) return input.identifier;
-  const record = await readProjectBySlug(input.config, input.directory, input.identifier);
+  const record = await readProjectBySlug(input.directory, input.identifier);
   return record?.id ?? null;
 }
 
 /** Directory record for a slug, cache-through. Null when no project has it. */
 export async function readProjectBySlug(
-  config: AppConfig,
   directory: KVNamespace,
   slug: string,
 ): Promise<ProjectDirectoryRecord | null> {
   const memoized = slugMemo.get(slug);
-  if (memoized && memoized.expiresAt > Date.now()) return memoized.record;
+  if (memoized && memoized.expiresAt > Date.now() && memoized.record !== null) {
+    return memoized.record;
+  }
 
   const cached = await directory
     .get<ProjectDirectoryRecord>(slugKey(slug), "json")
@@ -63,15 +94,58 @@ export async function readProjectBySlug(
     return cached;
   }
 
-  const lookup = await lookupAuthWorker(config, slug);
-  if (!lookup.ok) {
-    // Auth worker unreachable is NOT "no such project": don't memoize the
-    // failure, so the next request retries instead of 404ing for 15s.
+  // Unlike a positive memo, an isolate-local negative never outranks KV: a
+  // create in another isolate may have primed this slug since the miss.
+  if (memoized && memoized.expiresAt > Date.now()) return null;
+
+  // A positive record always outranks this marker. In particular, a project
+  // created after an earlier miss becomes routable as soon as its ordinary KV
+  // prime is visible; no stale negative entry can mask it.
+  const sharedMiss = await directory.get(missingSlugKey(slug)).catch(() => null);
+  if (sharedMiss === SHARED_NEGATIVE_MARKER) {
+    memoize(slug, null);
     return null;
   }
-  memoize(slug, lookup.record);
-  if (lookup.record) await writeThrough(directory, lookup.record);
-  return lookup.record;
+
+  // RPC failures propagate as dependency failures. Only a successful null
+  // response means "no such project" and is eligible for negative caching.
+  const project = await itxEnv.AUTH.getProjectBySlug({ projectSlug: slug });
+  const record = project
+    ? {
+        id: project.id,
+        slug: project.slug,
+        organizationId: project.organizationId,
+        name: project.name,
+      }
+    : null;
+  memoize(slug, record);
+  if (record) {
+    try {
+      await writeThrough(directory, record, {
+        attemptTimeoutMs: CACHE_FILL_TIMEOUT_MS,
+        maxAttempts: 1,
+      });
+    } catch (error) {
+      // Auth is authoritative for this lane. A cache-fill failure is a
+      // bounded, observable degradation, not a reason to discard its answer.
+      console.warn("[project-directory] cache fill failed; using auth result", {
+        reason: errorMessage(error),
+      });
+    }
+  } else {
+    try {
+      await directory.put(missingSlugKey(slug), SHARED_NEGATIVE_MARKER, {
+        expirationTtl: SHARED_NEGATIVE_TTL_SECONDS,
+      });
+    } catch (error) {
+      // Auth already supplied the authoritative answer. A failed optional
+      // marker only means later isolates may repeat that lookup.
+      console.warn("[project-directory] negative cache fill failed; using auth result", {
+        reason: errorMessage(error),
+      });
+    }
+  }
+  return record;
 }
 
 /** Fast existence/metadata check by project id (KV only — no auth fallback:
@@ -118,45 +192,121 @@ export async function primeProjectDirectory(
   directory: KVNamespace,
   record: ProjectDirectoryRecord,
 ): Promise<void> {
+  await Promise.all([
+    writeThrough(directory, record, {
+      attemptTimeoutMs: REQUIRED_WRITE_ATTEMPT_TIMEOUT_MS,
+      maxAttempts: REQUIRED_WRITE_MAX_ATTEMPTS,
+    }),
+    clearStaleNegativeMarker(directory, record.slug),
+  ]);
   memoize(record.slug, record);
-  await writeThrough(directory, record).catch(() => {});
 }
 
 function memoize(slug: string, record: ProjectDirectoryRecord | null) {
   slugMemo.set(slug, { expiresAt: Date.now() + MEMO_TTL_MS, record });
 }
 
-async function writeThrough(directory: KVNamespace, record: ProjectDirectoryRecord) {
-  // No expiration: slugs are immutable and `projects.create` overwrites the
+async function writeThrough(
+  directory: KVNamespace,
+  record: ProjectDirectoryRecord,
+  policy: { attemptTimeoutMs: number; maxAttempts: number },
+) {
+  // No expiration: slugs are immutable and `projects.get(slug).create` overwrites the
   // keys it primes, so entries never go stale — and admin-lane projects
   // (auth mints only an id, no directory row) have NO auth fallback, so an
   // expiring cache would break their slug ingress after the TTL.
   const body = JSON.stringify(record);
   await Promise.all([
-    directory.put(slugKey(record.slug), body),
-    directory.put(projectKey(record.id), body),
+    writeDirectoryKey(directory, slugKey(record.slug), "slug", body, policy),
+    writeDirectoryKey(directory, projectKey(record.id), "project", body, policy),
   ]);
 }
 
-async function lookupAuthWorker(
-  config: AppConfig,
-  slug: string,
-): Promise<{ ok: true; record: ProjectDirectoryRecord | null } | { ok: false }> {
-  try {
-    const record = await createAuthWorkerServiceClient({ config }).internal.project.bySlug({
-      projectSlug: slug,
-    });
-    if (!record) return { ok: true, record: null };
-    return {
-      ok: true,
-      record: {
-        id: record.id,
-        slug: record.slug,
-        organizationId: record.organizationId ?? null,
-        name: record.name,
-      },
-    };
-  } catch {
-    return { ok: false };
+async function writeDirectoryKey(
+  directory: KVNamespace,
+  key: string,
+  keyKind: "project" | "slug",
+  body: string,
+  policy: { attemptTimeoutMs: number; maxAttempts: number },
+): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= policy.maxAttempts; attempt += 1) {
+    try {
+      await writeDirectoryKeyAttempt(directory, key, body, policy.attemptTimeoutMs);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < policy.maxAttempts) {
+        console.warn("[project-directory] write failed; retrying", {
+          attempt,
+          keyKind,
+          maxAttempts: policy.maxAttempts,
+          reason: errorMessage(error),
+        });
+      }
+    }
   }
+
+  throw new Error(
+    `Project directory ${keyKind} write failed after ${policy.maxAttempts} attempts: ${errorMessage(lastError)}`,
+    { cause: lastError },
+  );
+}
+
+async function writeDirectoryKeyAttempt(
+  directory: KVNamespace,
+  key: string,
+  body: string,
+  timeoutMs: number,
+): Promise<void> {
+  await waitForDirectoryOperation(
+    directory.put(key, body),
+    timeoutMs,
+    "Project directory KV write",
+  );
+}
+
+async function clearStaleNegativeMarker(directory: KVNamespace, slug: string): Promise<void> {
+  try {
+    // This remains independent of the two required positive writes. A stuck
+    // optional delete may add at most the ordinary cache-fill bound, but can
+    // neither fail project creation nor cause either positive key to replay.
+    await waitForDirectoryOperation(
+      directory.delete(missingSlugKey(slug)),
+      CACHE_FILL_TIMEOUT_MS,
+      "Project directory KV delete",
+    );
+  } catch (error) {
+    console.warn(
+      "[project-directory] stale negative marker cleanup failed; positive write remains authoritative",
+      { reason: errorMessage(error) },
+    );
+  }
+}
+
+async function waitForDirectoryOperation(
+  operation: Promise<void>,
+  timeoutMs: number,
+  description: string,
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      operation,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${description} timed out after ${timeoutMs}ms`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    // Promise.race keeps rejection handlers attached to the operation after a
+    // timeout, so a late platform rejection remains observed.
+    clearTimeout(timer);
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

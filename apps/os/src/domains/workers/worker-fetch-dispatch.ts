@@ -1,6 +1,11 @@
 import { z } from "zod";
+import { isRepoNotSeededError } from "../repos/utils.ts";
 import type { DynamicWorkerRef } from "./schemas.ts";
 import { DynamicWorkerRef as WorkerRefSchema } from "./schemas.ts";
+import { isWorkerBuildFailedError } from "./artifact-store.ts";
+import { isWorkerBuildInProgressError } from "./worker-loader.ts";
+import { OVERLAY_OPT_OUT_HEADER } from "./worker-serve-info.ts";
+import { workerBuildFailedResponse, workerBuildingPageHtml } from "./worker-serve-overlay.ts";
 
 /**
  * The fetch lane: how HTTP (and only HTTP) reaches dynamic workers.
@@ -47,6 +52,30 @@ export function isWebSocketUpgradeRequest(request: Request): boolean {
   return request.headers.get("upgrade")?.toLowerCase() === "websocket";
 }
 
+const DOCUMENT_COLD_BUILD_BUDGET_MS = 1_500;
+
+/**
+ * The cold-build budget a fetch-lane hop should race before answering with
+ * the building page.
+ *
+ * A person navigating (`sec-fetch-dest: document` — browsers set it, nothing
+ * can spoof it from a page) is watching a blank tab for exactly as long as
+ * this race runs, so it stays short: a fast warm load still serves directly,
+ * and a real cold build swaps the blank tab for the branded building page,
+ * which polls and reloads into the app by itself. Every other client — API
+ * calls, the building page's own polls, WebSocket dials, curl — keeps the
+ * caller's budget: an HTML stand-in does nothing for them, and waiting
+ * through the race means the first response after a build lands is the real
+ * one.
+ */
+export function buildBudgetForRequest(
+  request: Request,
+  callerBudgetMs?: number,
+): number | undefined {
+  if (request.headers.get("sec-fetch-dest") !== "document") return callerBudgetMs;
+  return Math.min(callerBudgetMs ?? DOCUMENT_COLD_BUILD_BUDGET_MS, DOCUMENT_COLD_BUILD_BUDGET_MS);
+}
+
 /**
  * Marks a 503 as "the worker is cold-building" on the fetch lane, where a
  * named error cannot cross the hop the way it does over RPC. Routers that
@@ -56,32 +85,51 @@ export function isWebSocketUpgradeRequest(request: Request): boolean {
  */
 export const WORKER_BUILDING_HEADER = "x-iterate-worker-building";
 
-/** The one cold-build response every fetch-lane hop answers with: an
- * auto-refreshing page for browsers, retry-after + the marker header for
- * programmatic clients. */
-export function workerBuildingResponse(): Response {
-  return new Response(
-    `<!doctype html>
-      <html>
-        <head>
-          <meta http-equiv="refresh" content="3" />
-          <title>Building…</title>
-        </head>
-        <body>
-          <main>
-            <p>Your worker is building — this page retries automatically.</p>
-          </main>
-        </body>
-      </html>`,
-    {
-      headers: {
-        "content-type": "text/html; charset=utf-8",
-        "retry-after": "2",
-        [WORKER_BUILDING_HEADER]: "1",
-      },
-      status: 503,
+/** The one cold-build response every fetch-lane hop answers with: a polling
+ * page for browsers (meta refresh for no-JS clients), retry-after + the
+ * marker header for programmatic clients. */
+export function workerBuildingResponse(urlPrefix = ""): Response {
+  return new Response(workerBuildingPageHtml(WORKER_BUILDING_HEADER, urlPrefix), {
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "retry-after": "2",
+      [WORKER_BUILDING_HEADER]: "1",
+      // Platform chrome, not a worker page — the overlay stays out.
+      [OVERLAY_OPT_OUT_HEADER]: "1",
     },
-  );
+    status: 503,
+  });
+}
+
+/**
+ * The fetch lane's one error classifier: named build-lifecycle errors become
+ * their stand-in pages and a modeled observability outcome (they cannot cross
+ * a fetch hop the way they cross RPC), anything else is the caller's to
+ * rethrow. Every fetch-lane hop — ingress, ItxEntrypoint, the stateful worker
+ * DO — answers through this so a new serve-side state is added in exactly one
+ * place.
+ */
+export function workerBuildStatus(
+  error: unknown,
+  urlPrefix = "",
+): { outcome: "worker_build_failed" | "worker_building"; response: Response } | null {
+  // RepoNotSeededError: a browser can reach a project host inside the
+  // project's BIRTH window — the config repo's stream exists before its seed
+  // commit lands (../repos/utils.ts), so the source resolve answers "not
+  // seeded YET, retry". That is the building page's exact contract (poll,
+  // self-heal into the app); letting it escape crashed the worker with a
+  // Cloudflare 1101 on a fresh project's first app request (observed live on
+  // preview e2e, 2026-07-17).
+  if (isRepoNotSeededError(error) || isWorkerBuildInProgressError(error)) {
+    return { outcome: "worker_building", response: workerBuildingResponse(urlPrefix) };
+  }
+  if (isWorkerBuildFailedError(error)) {
+    return {
+      outcome: "worker_build_failed",
+      response: workerBuildFailedResponse(error, urlPrefix),
+    };
+  }
+  return null;
 }
 
 export function withWorkerFetchDispatchHeader(
@@ -95,8 +143,8 @@ export function withWorkerFetchDispatchHeader(
 
 /**
  * Reads and strips the dispatch header. Returns null when the header is
- * absent; throws on a malformed value (an internal caller composed it, so a
- * parse failure is a bug, not user input).
+ * absent and throws on a malformed value. Public boundaries classify that as
+ * a bad request; internal callers treat it as a composition bug.
  */
 export function takeWorkerFetchDispatch(
   request: Request,

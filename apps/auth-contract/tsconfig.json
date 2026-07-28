@@ -3,6 +3,7 @@
     "target": "esnext",
     "module": "esnext",
     "lib": ["esnext", "dom", "dom.iterable"],
+    "types": ["@cloudflare/workers-types"],
     "sourceMap": true,
     "strict": true,
     "verbatimModuleSyntax": true,

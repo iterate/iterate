@@ -1,0 +1,30 @@
+import { jwt } from "better-auth/plugins";
+import { parseAuthSigningPrivateJwk } from "../../../../scripts/lib/bake-auth-jwks.ts";
+
+export type AuthJwtPlugin = ReturnType<typeof jwt>;
+
+/** Better Auth JWT plugin backed by the one immutable key supplied by Doppler. */
+export function authJwt(privateJwkJson: string): AuthJwtPlugin {
+  const { d, ...publicJwk } = parseAuthSigningPrivateJwk(privateJwkJson);
+  const key = {
+    id: publicJwk.kid,
+    alg: "EdDSA" as const,
+    crv: "Ed25519" as const,
+    publicKey: JSON.stringify(publicJwk),
+    privateKey: JSON.stringify({ ...publicJwk, d }),
+    createdAt: new Date(0),
+  };
+
+  return jwt({
+    jwks: {
+      disablePrivateKeyEncryption: true,
+      keyPairConfig: { alg: "EdDSA", crv: "Ed25519" },
+    },
+    adapter: {
+      getJwks: async () => [key],
+      createJwk: async () => {
+        throw new Error("Auth JWT signing keys are rotated in Doppler, not generated at runtime");
+      },
+    },
+  });
+}

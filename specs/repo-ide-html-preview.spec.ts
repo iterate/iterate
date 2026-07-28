@@ -1,6 +1,6 @@
-import { expect } from "@playwright/test";
 import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
+import { openRepoTreeFile } from "./test-support/repo-tree.ts";
 
 /**
  * The html file's Code / Preview toggle: an html buffer renders in a sandboxed
@@ -17,7 +17,7 @@ test("toggle an html file between Code and its sandboxed Preview", async ({
 
   using itx = await connectAdminItx(baseURL!);
   using project = itx.projects.get(fixture.project.id);
-  await project.repos.create({ path: "/repos/ide" });
+  await project.repos.get("/repos/ide").create({ type: "empty" });
   // The template ships no html, so seed one — a heading and a script-driven
   // button, enough to show the sandbox actually runs the document.
   await project.repos.get("/repos/ide").commitFiles({
@@ -39,21 +39,19 @@ test("toggle an html file between Code and its sandboxed Preview", async ({
   await page.goto(`/projects/${fixture.project.slug}/repos/ide`);
 
   // Code view first: the header shows the toggle, the buffer shows the source.
-  await page.locator('[data-item-path="index.html"]').click();
-  await expect(page.locator(".cm-content")).toContainText("Hello from the repo IDE");
+  await openRepoTreeFile(page, "index.html");
+  await page.locator(".cm-content").filter({ hasText: "Hello from the repo IDE" }).waitFor();
 
   // Preview renders the buffer in the sandboxed iframe, which carries the
   // exact working-tree html through its srcdoc.
   await page.getByRole("tab", { name: "Preview" }).click({ timeout: 10_000 });
   const preview = page.locator('iframe[title="HTML preview"]');
-  await expect(preview).toBeVisible();
-  await expect(preview).toHaveAttribute("srcdoc", /Hello from the repo IDE/);
+  await preview.waitFor();
+  await preview.and(page.locator('[srcdoc*="Hello from the repo IDE"]')).waitFor();
   // The rendered heading is visible inside the frame.
-  await expect(
-    preview.contentFrame().getByRole("heading", { name: "Hello from the repo IDE" }),
-  ).toBeVisible();
+  await preview.contentFrame().getByRole("heading", { name: "Hello from the repo IDE" }).waitFor();
 
   // Back to Code: the editable buffer returns.
   await page.getByRole("tab", { name: "Code" }).click({ timeout: 10_000 });
-  await expect(page.locator(".cm-content")).toContainText("Hello from the repo IDE");
+  await page.locator(".cm-content").filter({ hasText: "Hello from the repo IDE" }).waitFor();
 });

@@ -12,6 +12,8 @@ mkdir -p "$artifact_root"
   echo "Source paths:"
   echo "- test-results"
   echo "- apps/os/test-results"
+  echo "- apps/os/e2e/tui-test/tui-traces"
+  echo "- apps/streams-example-app/test-results"
   echo "- /tmp/os-e2e-*"
   echo "- /tmp/os-preview-*.log"
   echo "- /tmp/marathon"
@@ -51,12 +53,21 @@ copy_files() {
 # upload root, and fold absolute/temp outputs underneath it so Depot does not
 # need to upload from mixed workspace and /tmp paths.
 copy_dir_contents "apps/os/test-results" "$artifact_root/apps-os-test-results"
+# Microsoft TUI Test keeps its PTY trace (frames, events, output) at the
+# app-local project root configured by e2e/tui-test/run.ts.
+copy_dir_contents "apps/os/e2e/tui-test/tui-traces" "$artifact_root/apps-os-tui-traces"
+# The streams example app's Playwright lane writes traces and its JSON report
+# under its own app directory (app-local playwright.config.ts).
+copy_dir_contents "apps/streams-example-app/test-results" "$artifact_root/apps-streams-example-app-test-results"
 copy_dir_contents "/tmp/marathon" "$artifact_root/marathon"
 
 shopt -s nullglob
 os_e2e_roots=(/tmp/os-e2e-*)
 os_preview_logs=(/tmp/os-preview-*.log)
-
+# Named /tmp telemetry files exist only for the orchestrator's immediate retry
+# summary. Every reporter also writes the canonical copy under the artifact
+# root's ci-telemetry/raw directory, so copying a second hard-coded file list
+# here would create a drift-prone duplicate source of truth.
 if ((${#os_e2e_roots[@]} == 0)); then
   copy_files "$artifact_root/os-e2e"
 else

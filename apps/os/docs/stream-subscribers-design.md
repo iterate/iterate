@@ -22,11 +22,12 @@ are deleted and re-expressed on this one machine.
 
 - **R1 — Warm latency:** append→processed in single-digit milliseconds on a warmed-up stream.
   Voice rides this. A CI latency probe asserts the envelope.
-- **R2 — One-way traffic:** during warm delivery, frames flow stream→subscriber only. Ephemeral
-  subscribers generate **zero** return frames (batch results disposed unpulled,
-  `stream-connections.ts:402`); durable subscribers generate exactly **one non-gating resolve
-  frame per batch**, kept deliberately as the prompt dead-connection signal (`:391-400`). The
-  pump never awaits delivery. Wire tests enforce this (they existed —
+- **R2 — Non-gating traffic:** during warm delivery, the pump never awaits a subscriber.
+  Ephemeral subscribers generate **zero** return frames (batch results are disposed unpulled).
+  Durable wake subscribers also dispose the batch result unpulled, then send exactly **one
+  explicit one-way settlement message per batch** through an independent capability. Separating
+  that verdict from the batch result avoids a cyclic actor-drain tree when a processor appends
+  back to its delivering stream. Wire tests enforce the unpulled batch result (they existed —
   `packages/streams/example-app/e2e/vitest/stream-capnweb.test.ts` "delivers event batches
   without subscriber-originated return traffic" — died in the #1525 move; resurrect them).
   Note: capnweb `ReadableStream` is structurally two-way (per-chunk write acks feed a BBR-style
@@ -59,7 +60,7 @@ are deleted and re-expressed on this one machine.
 | Offset owner    | client, in-memory                              | **subscriber** — `{offset, state}` snapshot, atomic with the fold                            | **stream** — spine row, atomic with the log                              |
 | Stream-side row | none                                           | yes — _observational_ watermark (poke coalescing, retry, lag); lost row = one redundant poke | yes — _authoritative_ cursor; lost row = bounded redelivery              |
 | Warm transport  | retained one-way callback                      | retained one-way sink (from the poke)                                                        | per-batch awaited capability call                                        |
-| Return frames   | **zero**                                       | one non-gating resolve per batch (liveness)                                                  | one awaited return per batch (**the ack**)                               |
+| Result frames   | **zero**                                       | **zero**; one explicit non-gating settlement message                                         | one awaited return per batch (**the ack**)                               |
 | Cold start      | client re-subscribes wherever it likes         | spine pokes; subscriber hands back `{checkpointOffset, sink}`                                | spine drains from `acked_offset`                                         |
 | Retry/park      | none — client's problem                        | spine: backoff rows, durable alarm, parked fact                                              | same spine, same machine                                                 |
 | Filter          | `EventSelector` on subscribe args              | `EventSelector` derived from `contract.consumes` (+ optional condition)                      | `EventSelector` in config                                                |
@@ -175,10 +176,13 @@ async wakeStreamSubscriber(request: StreamSubscriberWakeRequest): Promise<{
 }>
 ```
 
-The stream retains the returned sink (ownership transfers with the return value — no dup dance),
-streams one-way batches from `checkpointOffset + 1`, pulls each batch's resolve as the liveness
-signal (R2), and on rejection: dispose sink → spine sees watermark lag → poke with backoff. Sink
-replacement is unambiguous — the stream initiated the poke and owns both incarnations —so
+The stream retains the returned sink (ownership transfers with the return value — no dup dance)
+and streams batches from `checkpointOffset + 1` without pulling their results. Each batch carries
+an independent one-shot settlement capability; the processor reports success or a serialized
+failure after its durable attempt. On failure: dispose sink → spine sees watermark lag → poke with
+backoff. A missing settlement remains pending, so bounded idle teardown treats the sink as wedged
+and re-pokes from the processor's unchanged durable checkpoint. Sink replacement is unambiguous —
+the stream initiated the poke and owns both incarnations — so
 `supersedeConnection`, generation fencing, and the trusted-internal `subscribe({configured: true})`
 RPC entry (`rpc-targets.ts:290-298`) are all deleted. Durable connections stop being externally
 openable; only the spine creates them. Idle teardown stays (retained stubs still pin DOs while
@@ -264,7 +268,7 @@ apps/os/src/domains/streams/
                             # { store, readEvents, dial, appendFact, coreState, clock, armAlarm }.
                             # Zero cloudflare:workers imports. (Absorbs stream-connections.ts.)
   subscriber-sinks.ts       # the quarantine: stub retention (dup/dispose/onRpcBroken/
-                            # pulled-vs-disposed results). The only file that knows RPC exists.
+                            # one-way result ownership). The only file that knows RPC exists.
   subscriber-math.ts        # pure, table-testable: computeBackoff, shouldPark, applySelector,
                             # bisectLimit, deliver-policy → initial cursor
   event-selector.ts         # EventSelector schema + compile (shared JSONata cache)
@@ -339,7 +343,8 @@ A parallel session landed **#1761 (MERGED 2026-07-08): "Project worker becomes a
 subscriber: every stream pumps checkpointed events into processEventBatch"** — the worker-feed
 slice of this design, live on main — plus **#1756 (MERGED): `event.path` stamped on every
 committed event**, with **#1778 (OPEN): agent birth policy → the worker via
-`itx.agents.defaults`** on top. The single PR here **builds on #1761**, generalizing its pump
+path-triggered agent defaults** on top. That policy was later superseded by explicit
+`agents.get(path).create()` birth batches. The single PR here **builds on #1761**, generalizing its pump
 into the spine rather than adding a second mechanism.
 
 **Adopt verbatim from #1761/#1756 (already on main):**

@@ -25,9 +25,9 @@ import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 
 import * as prompts from "@clack/prompts";
-import type { RpcStub } from "capnweb";
+import type { RpcStub } from "@iterate-com/capnweb";
 
-import { connectItx } from "../../../apps/os/src/itx-client.ts";
+import { connectItx } from "./itx/itx-node-client.ts";
 import type { ItxAuthCredentials, Project } from "./itx-api.generated.ts";
 import { run } from "./run-command.ts";
 
@@ -115,7 +115,7 @@ async function askComputerName(): Promise<string> {
     placeholder: proposed,
     defaultValue: proposed,
     validate: (value) =>
-      /^[a-zA-Z][a-zA-Z0-9]*$/.test(value.trim())
+      /^[a-zA-Z][a-zA-Z0-9]*$/.test((value ?? "").trim())
         ? undefined
         : "Use a camelCase name: letters and digits, starting with a letter (e.g. jonasComputer).",
   });

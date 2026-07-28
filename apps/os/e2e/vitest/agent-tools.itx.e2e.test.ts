@@ -2,7 +2,7 @@
  * Goal coverage: an agent uses itx tools. Deterministic version of the
  * Playwright chat spec — drive an agent over itx, instruct it to run a script
  * that appends a proof event, and assert the full codemode loop on the stream:
- * llm request → output → capability-host/script-execution-requested/completed → proof
+ * llm request → output → capability-host/script-run-requested/completed → proof
  * event on the target stream → visible web reply.
  */
 import { test } from "vitest";
@@ -20,6 +20,7 @@ test(
   async ({ expect }) => {
     await using handle = await createTestProject({ slugPrefix: "agent-tools" });
     using agent = handle.agent("/agents/e2e-tools");
+    await agent.create();
 
     const marker = crypto.randomUUID().slice(0, 8);
     // Full codemode loop (LLM → script → reply) routinely exceeds the 45s ask
@@ -59,36 +60,23 @@ test(
 
     const agentEvents = await agent.stream.getEvents({ limit: 500 });
     const types = agentEvents.map((event) => event.type.replace("events.iterate.com/", ""));
-    expect(types).toContain("capability-host/script-execution-requested");
-    expect(types).toContain("capability-host/script-execution-completed");
+    expect(types).toContain("capability-host/script-run-requested");
+    expect(types).toContain("capability-host/script-run-settled");
     expect(types).toContain("agents/web-message-sent");
   },
 );
 
 test(
-  "agent answers after llm model is selected",
+  "agent answers after explicit creation applies its model configuration event",
   // See above — heavy-test ceiling.
   { timeout: 240_000 },
   async ({ expect }) => {
     await using handle = await createTestProject({ slugPrefix: "agent-model" });
     using agent = handle.agent("/agents/e2e-model");
-
-    // Force an explicitly-selected model for the assertion — the model the
-    // DEPLOYMENT defaults to (itx.agents.defaults), not a hardcoded one.
-    // What this test proves is the explicit-selection MECHANISM
-    // (llm-provider-selected wins over defaults), not any particular vendor;
-    // asking the deployment keeps it green even if account model
-    // availability shifts again (the 2026-07-10 lesson: a hardcoded
-    // an explicit OpenAI model pin was unrunnable on the preview account until
-    // unified billing was enabled, and watchdogged the whole lane).
-    using defaultsItx = handle.itx();
-    const policy = await defaultsItx.agents.defaults.forPath("/agents/e2e-model");
-    await agent.stream.append({
-      type: "events.iterate.com/agent/llm-provider-selected",
-      // The contract requires a model; a model-less append is schema-invalid
-      // and wedges the agent processor's ingest.
-      payload: { model: policy.model },
-    });
+    await agent.create();
+    const state = (await agent.processor.snapshot()).state;
+    expect(state).toMatchObject({ birthCertificate: {} });
+    expect(state.config?.llm.model).toBeTruthy();
 
     const response = await agent.ask({
       message: "Reply with a short greeting.",
@@ -97,11 +85,21 @@ test(
       // budget is saturated and the retry backoff (10/20/60s) is riding.
       timeoutMs: 180_000,
     });
-    expect(response.type).toBe("events.iterate.com/agents/web-message-sent");
+    expect(response).toMatchObject({ type: "events.iterate.com/agents/web-message-sent" });
 
+    // The turn really ran: a requested event landed and its settlement points
+    // back at that event's own offset (the request's identity).
     const agentEvents = await agent.stream.getEvents({ limit: 500 });
+    const requested = agentEvents.find(
+      (event) => event.type === "events.iterate.com/agent/llm-request-requested",
+    );
+    expect(requested).toBeDefined();
     expect(
-      agentEvents.some((event) => event.type === "events.iterate.com/agent/llm-request-started"),
+      agentEvents.some(
+        (event) =>
+          event.type === "events.iterate.com/agent/llm-request-settled" &&
+          event.payload?.requestOffset === requested?.offset,
+      ),
     ).toBe(true);
   },
 );

@@ -104,18 +104,18 @@ expression naming the method to invoke on the ordinary domain surface
 delegates to the project worker — `["streams", ["get", path], "acceptCrossPost"]`);
 webhook is the same cursor machinery pointed at plain HTTP:
 
-|                         | ephemeral                              | durable `wake`                                                      | durable `push`                                                | durable `webhook`                                |
-| ----------------------- | -------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------ |
-| who                     | browsers, tests, `waitForEvent`        | DO-hosted processors (stateful folds)                               | stateless effects: the project worker feed, `acceptCrossPost` | external HTTP receivers                          |
-| subscription            | `subscribe()` (session)                | config event, `delivery: {mode:"wake", expression, processorSlug?}` | config event, `delivery: {mode:"push", expression}`           | config event, `delivery: {mode:"webhook", url}`  |
-| offset owner            | client, in-memory                      | **subscriber** — `{offset, state}` snapshot, atomic with the fold   | **stream** — spine cursor row, atomic with the log            | **stream** — same cursor row, advanced per EVENT |
-| stream-side row         | none                                   | observational watermark (poke coalescing, lag)                      | authoritative cursor                                          | authoritative cursor                             |
-| sink arrives as         | `subscribe()` parameter                | returned from the expression-named poke                             | named by a persisted itx expression                           | the configured URL                               |
-| warm transport          | retained one-way callback              | retained one-way sink                                               | fresh awaited call per batch                                  | one `fetch` POST per event                       |
-| return frames per batch | **zero** (result disposed unpulled)    | one, non-gating (pulled as the liveness signal)                     | one, awaited (**the ack** that advances the cursor)           | the 2xx response (**the ack**), per event        |
-| retry / failure         | client's problem                       | spine: backoff rows + alarm → parked fact                           | same spine, same machine (+ `onPoison: park \| skip`)         | same spine, same machine, per-event granularity  |
-| replay                  | `replayAfterOffset` arg                | subscriber's checkpoint decides                                     | `deliver: "all" \| "new" \| {afterOffset}` + `cursor-set`     | same as push                                     |
-| filter                  | `selector` / `eventTypes` on subscribe | processor `contract.consumes` (announced on the poke)               | `selector: {eventTypes?, condition?}` in config               | same selector shape                              |
+|                         | ephemeral                                                                   | durable `wake`                                                      | durable `push`                                                         | durable `webhook`                                |
+| ----------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------ |
+| who                     | browsers, tests, `waitForEvent`                                             | DO-hosted processors (stateful folds)                               | stateless effects: the project worker feed, `acceptCrossPost`, PostHog | external HTTP receivers                          |
+| subscription            | `subscribe()` (session)                                                     | config event, `delivery: {mode:"wake", expression, processorSlug?}` | config event, `delivery: {mode:"push", expression}`                    | config event, `delivery: {mode:"webhook", url}`  |
+| offset owner            | client, in-memory                                                           | **subscriber** — `{offset, state}` snapshot, atomic with the fold   | **stream** — spine cursor row, atomic with the log                     | **stream** — same cursor row, advanced per EVENT |
+| stream-side row         | none                                                                        | observational watermark (poke coalescing, lag)                      | authoritative cursor                                                   | authoritative cursor                             |
+| sink arrives as         | `subscribe()` parameter                                                     | returned from the expression-named poke                             | named by a persisted itx expression                                    | the configured URL                               |
+| warm transport          | retained one-way callback                                                   | retained one-way sink                                               | fresh awaited call per batch                                           | one `fetch` POST per event                       |
+| result frames per batch | **zero** (result disposed unpulled)                                         | **zero**; one explicit, non-gating settlement message               | one, awaited (**the ack** that advances the cursor)                    | the 2xx response (**the ack**), per event        |
+| retry / failure         | client's problem                                                            | spine: backoff rows + alarm → parked fact                           | same spine, same machine (+ `onPoison: park \| skip`)                  | same spine, same machine, per-event granularity  |
+| replay                  | durable rows after `replayAfterOffset`; ephemeral rows only live after open | subscriber's checkpoint decides                                     | `deliver: "all" \| "new" \| {afterOffset}` + `cursor-set`              | same as push                                     |
+| filter                  | `selector` / `eventTypes` on subscribe                                      | processor `contract.consumes` (announced on the poke)               | `selector: {eventTypes?, condition?}` in config                        | same selector shape                              |
 
 ### Ephemeral events
 
@@ -127,20 +127,28 @@ breaker, same pause door), with two deliberate demotions:
   processor catch-up) skip ephemeral rows unless the caller passes
   `includeEphemeral: true`. Point reads by offset or idempotencyKey — an
   explicit request — always return them.
-- **Never delivered to durable subscribers.** The wake/push/webhook lanes
+- **Excluded from durable subscribers by default.** The wake/push/webhook lanes
   drop ephemeral events from delivery exactly the way selectors already skip
   non-matching events (skip-not-defer: cursors advance over their offsets),
-  so subscription-fed processors never fold or side-effect on one. Ephemeral
-  `subscribe()` connections receive them, live and on replay.
+  so subscription-fed product processors never fold or side-effect on one.
+  A push/webhook may explicitly set `includeEphemeral: true`; the ordinary
+  first-party PostHog subscription does so to mirror every committed row. Wake
+  processors cannot opt in. Ephemeral
+  `subscribe()` connections receive an ephemeral row only when it is appended
+  after that exact connection opens. Reconnect/catch-up replays durable rows
+  only; historical ephemeral rows are never delivered.
 
 The whole pattern in one shape — the rule is "never derive durable state
 from an ephemeral event"; the durable truth is always its own append:
 
 ```ts
-// per streamed token: live subscribers paint it; nothing durable ever sees it
+// per streamed token: live product subscribers paint it; product state never folds it
 await stream.append({ type: ".../llm-response-chunk", ephemeral: true, payload: { chunk } });
 // once, when the turn settles: THE fact processors fold
-await stream.append({ type: ".../output-added", payload: { text } });
+await stream.append({
+  type: ".../agents/context-added",
+  payload: { role: "assistant", content: text, llmRequestOffset },
+});
 
 await stream.getEvents(); //                          durable events only
 await stream.getEvents({ includeEphemeral: true }); // + surviving ephemeral rows
@@ -150,7 +158,7 @@ The e2e ("ephemeral events are second-class rows…", `streams.e2e.test.ts`)
 proves every clause of this contract end to end, and the `ephemeral-events`
 entry in the itx example catalogue is its userspace-runnable twin.
 
-The demotions are a license the stream keeps: because nothing durable can
+The demotions are a license the stream keeps: because product state cannot
 depend on an ephemeral row, a future sweep may EVICT them (memory pressure,
 DO-startup cleanup), leaving permanent offset gaps that every read path —
 including the browser mirror — already tolerates. Constraints pre-paid for
@@ -164,7 +172,8 @@ copies live on in browser mirrors); and a post-sweep state rebuild counts
 only surviving rows (`eventCount` may decrease — never compare it to
 `maxOffset`). Use ephemeral events for transient signals whose durable truth
 lands separately: the canonical case is LLM streaming chunks
-(`agent/llm-response-chunk`), superseded by the durable `output-added`.
+(`agent/llm-response-chunk`), superseded by the durable assistant
+`agents/context-added` item.
 `stream/*` control facts cannot be ephemeral — config, presence, and park
 state may never be forgotten. One consequence worth naming: a durable
 subscription (cross-post, webhook) whose selector matches only ephemeral
@@ -172,13 +181,17 @@ types delivers nothing, silently — there is nothing durable to deliver.
 
 The pump never awaits a delivery on the ephemeral and wake lanes — that is
 what keeps warm append→processed latency in single-digit milliseconds (voice
-rides this). Batch results on the ephemeral lane are disposed **unpulled**, so
-those subscriptions generate zero subscriber-originated return frames (a
-`ReadableStream` could never do this: its per-chunk acks ARE its flow
-control — see the `FlowController` in
-[capnweb](https://github.com/cloudflare/capnweb)); durable batch results are
-pulled — never awaited — purely as the prompt dead-connection signal
-([stub lifecycle rules](https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/)).
+rides this). Both batch-call results are disposed **unpulled**, so neither
+lane emits a result frame (a `ReadableStream` could never do this: its
+per-chunk acks ARE its flow control — see the `FlowController` in
+[capnweb](https://github.com/cloudflare/capnweb)). Wake batches instead carry
+a one-shot settlement capability. The subscriber sends one explicit,
+non-gating success/failure message after its durable processor attempt and
+disposes that call's result unpulled too. Keeping the settlement out of the
+batch call's result is load-bearing: processors routinely append back to the
+delivering stream, and a pulled result would make that nested append part of a
+cyclic actor-drain tree. `onRpcBroken` remains the prompt best-effort transport
+hint ([stub lifecycle rules](https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/)).
 
 ## The spine: durable delivery bookkeeping
 
@@ -243,7 +256,7 @@ delivery: {
 
 Every host's processor is a real itx node (`itx.agents.get(path).processor`,
 `itx.repos.get(path).processor`, the project root's own `itx.processor`,
-`itx.email.processor`, `itx.integrations.slack["<conn>"].processor`, …), and
+`itx.email.processor`, `itx.integrations.slack.get("<conn>").processor`, …), and
 `wakeStreamSubscriber` on it is the host's wake door — trusted-internal only,
 because the handshake's sink drives the host's durable checkpoint. The stream
 pokes; the host answers with everything:
@@ -313,6 +326,55 @@ processors never hold raw DO stubs. The browser stream mirror
 real `StreamProcessor` subclasses against wa-sqlite with the same
 announcements and checkpoints.
 
+## The browser mirror: one download, many processors
+
+The browser mirrors a stream into a per-`(projectId, path)` OPFS SQLite file so
+React views query projections (`events`, `feed_items`, …) reactively instead of
+holding history in memory. There is exactly **one** way to do it:
+
+```ts
+const { store, snapshot } = useStreamMirror({
+  projectId,
+  streamPath,
+  createStreamClient,
+});
+// store.streamDatabase carries EVERY canonical table; views query what they need
+```
+
+**One runtime per stream, one download.** `acquireStreamRuntime` is keyed by
+`(projectId, path)` — every view of a stream, on every page, joins the same
+runtime and its single capnweb subscription. That runtime downloads the stream
+once (client-paced `getEvents` catch-up while far behind the head, then the live
+tail — the server pump is one-directional and would otherwise outrun wa-sqlite;
+see the flow-control note in `stream-browser-store.ts`) and fans every batch out
+to a **fixed canonical set of processors** — the raw-events cache
+(`events` + `event_type_counts`) and the feed projection (`feed_items`). Views
+do not choose processors; the set lives in `canonical-mirror-processors.ts`, and
+adding a browser projection is an edit there, not a per-view decision.
+
+**Fan-out is a composite, so the runtime stays single-drive.**
+`CompositeMirrorDrive` (`composite-mirror-drive.ts`) holds one
+`StreamProcessorRunner` per member and answers the runtime's wake handshake as
+one unit, so the runtime's race-critical machinery (connection epochs,
+half-open transport eviction, liveness probe, ingest self-heal) never learns
+about processor lists. Its sink fans each frame to the members **sequentially**
+(they share one SQLite connection — parallel commit transactions would
+interleave) and it reports the **minimum** member checkpoint as the replay
+cursor, so catch-up covers the least-caught-up member. Over-delivery is free:
+every member's runner offset-dedupes delivered events against its own durable
+acknowledged cursor (`stream-processor-runner.ts`), so a member that is already
+ahead cheaply no-ops. Each member's projection writes and its two-cursor
+progress record commit in **one SQLite transaction** per frame
+(`processor-state-storage.ts`), so a member's mirror rows and resume cursor can
+never disagree.
+
+**Members stay independent where it matters.** Reconcile and mirror discard are
+per-member: each member keeps its own tables, schema version, and durable
+progress row **keyed by its real slug** — so a member's schema bump rebuilds
+only its tables, and unifying the download never invalidated an existing local
+cache. Only the _server subscription key_ and the _writer-lock name_ (versioned
+by a compatibility vector over all members) are mirror-level.
+
 ## File map
 
 | File                         | Role                                                                                                                                |
@@ -321,7 +383,7 @@ announcements and checkpoints.
 | `core-processor-contract.ts` | Core contract: reduced-state schema (v11) + the `events.iterate.com/stream/*` event catalog                                         |
 | `stream-storage.ts`          | Chunked SQLite event log (2 MB cell limit → JS chunking) + the spine's `subscriptions` cursor rows                                  |
 | `stream-subscribers.ts`      | Every subscriber, one module: sink table, connection pump, the durable spine (ports-only; no RPC, no clock)                         |
-| `subscriber-sinks.ts`        | The RPC quarantine: stub retention (dup/dispose/onRpcBroken, pulled-vs-disposed results)                                            |
+| `subscriber-sinks.ts`        | The RPC quarantine: stub retention (dup/dispose/onRpcBroken, one-way result ownership)                                              |
 | `subscriber-math.ts`         | Pure spine math: backoff, initial cursors, bisect, delivery ids (table-tested)                                                      |
 | `event-selector.ts`          | `EventSelector` — THE filter shape on every lane; shared JSONata compile cache                                                      |
 | `processor-contracts.ts`     | `defineProcessorContract` + event-type → payload-schema resolution machinery                                                        |

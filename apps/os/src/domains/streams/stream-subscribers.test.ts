@@ -5,21 +5,27 @@
 // skip-not-defer, backoff/park/resume, poison bisection, wake pokes with the
 // observational watermark, and the ephemeral lane.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type {
+  StreamEventBatch,
+  StreamPushEventBatch,
+  StreamSubscriberWakeRequest,
+  StreamWakeEventBatch,
+  StreamWebhookDelivery,
+} from "iterate/processors";
+import {
+  STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
+  StreamReceiverUnavailableError,
+} from "iterate/processors";
+import type { StreamEvent, StreamEventInput } from "iterate/processors";
 import type { ItxExpression } from "../../itx/expression.ts";
+import { WorkerBuildFailedError } from "../workers/artifact-store.ts";
 import type {
   CoreProcessorState,
   SubscriptionConfiguredPayload,
 } from "./core-processor-contract.ts";
 import { CoreProcessorContract } from "./core-processor-contract.ts";
-import type {
-  StreamEventBatch,
-  StreamPushEventBatch,
-  StreamSubscriberWakeRequest,
-  StreamWebhookDelivery,
-} from "./rpc-types.ts";
-import { StreamReceiverUnavailableError } from "./rpc-types.ts";
-import type { StreamEvent, StreamEventInput } from "./schemas.ts";
+import { compileEventSelector } from "./event-selector.ts";
 import type { SubscriptionCursorRow, SubscriptionCursorStore } from "./stream-storage.ts";
 import { StreamSubscribers, type SubscriberDial } from "./stream-subscribers.ts";
 import {
@@ -105,6 +111,14 @@ class FakeCursorStore implements SubscriptionCursorStore {
     row.lastError = args.error.slice(0, 2_000);
   }
 
+  park(subscriptionKey: string, args: { attempt: number; error: string }): void {
+    const row = this.rows.get(subscriptionKey);
+    if (row === undefined) return;
+    row.attempt = args.attempt;
+    row.nextAttemptAt = null;
+    row.lastError = args.error.slice(0, 2_000);
+  }
+
   setCursor(subscriptionKey: string, ackedOffset: number): void {
     const row = this.rows.get(subscriptionKey);
     if (row === undefined) return;
@@ -144,14 +158,22 @@ type ConfiguredEntry = {
   parkedAtOffset?: number;
 };
 
-function makeHarness() {
+function makeHarness(
+  options: {
+    runDurable?: (work: () => Promise<unknown>) => void;
+  } = {},
+) {
   let now = 0;
+  let assignedMaxOffset = 0;
+  let streamCreatedAt: string | undefined = "stream-v1";
   const log: StreamEvent[] = [];
   const store = new FakeCursorStore();
   const facts: StreamEventInput[] = [];
   const armedAlarms: number[] = [];
   const kept: Promise<unknown>[] = [];
   const egress: { count: number; bytes: number }[] = [];
+  let runtimeChanges = 0;
+  const pendingDeliveryStates: boolean[] = [];
   const configured: Record<string, ConfiguredEntry> = {};
 
   const pokes: StreamSubscriberWakeRequest[] = [];
@@ -197,7 +219,8 @@ function makeHarness() {
   };
 
   let storageReads = 0;
-  const subscribers = new StreamSubscribers({
+  let subscribers!: StreamSubscribers;
+  subscribers = new StreamSubscribers({
     idleTeardownMs: 60_000,
     hooks: {
       readEvents: ({ afterOffset, limit }) => {
@@ -211,7 +234,8 @@ function makeHarness() {
         CoreProcessorContract.stateSchema.parse({
           projectId: "p1",
           path: "/t",
-          maxOffset: log.at(-1)?.offset ?? 0,
+          createdAt: streamCreatedAt,
+          maxOffset: assignedMaxOffset,
           configuredSubscribersByKey: configured,
         }),
       store,
@@ -227,9 +251,18 @@ function makeHarness() {
         }
       },
       recordEgress: (count, bytes) => egress.push({ count, bytes }),
+      runtimeChanged: () => {
+        runtimeChanges += 1;
+        pendingDeliveryStates.push(
+          Object.values(subscribers.connectionRuntimeState()).some(
+            (connection) => connection.hasPendingDelivery,
+          ),
+        );
+      },
       now: () => now,
       random: () => 0.5,
       armAlarm: (atMs) => armedAlarms.push(atMs),
+      runDurable: options.runDurable ?? ((work) => kept.push(work())),
       keepAlive: (promise) => kept.push(promise),
     },
   });
@@ -250,6 +283,8 @@ function makeHarness() {
     facts,
     armedAlarms,
     egress,
+    runtimeChanges: () => runtimeChanges,
+    pendingDeliveryStates: () => pendingDeliveryStates,
     pokes,
     pushes,
     pushOutcomes,
@@ -258,11 +293,23 @@ function makeHarness() {
     configured,
     log,
     settle,
-    append: (...events: StreamEvent[]) => log.push(...events),
+    append: (...events: StreamEvent[]) => {
+      assignedMaxOffset = Math.max(assignedMaxOffset, ...events.map((event) => event.offset));
+      return log.push(...events);
+    },
+    evict: (...offsets: number[]) => {
+      const evicted = new Set(offsets);
+      for (let index = log.length - 1; index >= 0; index -= 1) {
+        if (evicted.has(log[index]!.offset)) log.splice(index, 1);
+      }
+    },
     storageReads: () => storageReads,
     now: () => now,
     advanceTo: (ms: number) => {
       now = ms;
+    },
+    setIncarnation: (createdAt: string | undefined) => {
+      streamCreatedAt = createdAt;
     },
     configure: (payload: SubscriptionConfiguredPayload, offset = 0) => {
       configured[payload.subscriptionKey] = {
@@ -331,13 +378,32 @@ function makeSink() {
   const sink = Object.assign(
     (batch: StreamEventBatch) => {
       batches.push(batch);
+      if ("settleDelivery" in batch) {
+        (batch as StreamWakeEventBatch).settleDelivery({ outcome: "ok" });
+      }
     },
     { [Symbol.dispose]: () => {} },
-  ) as RetainedProcessEventBatch;
+  ) as RetainedProcessEventBatch<StreamEventBatch>;
   return { sink, batches };
 }
 
 describe("StreamSubscribers", () => {
+  it("hands durable delivery to its scheduler without starting the receiver call", async () => {
+    const scheduled: (() => Promise<unknown>)[] = [];
+    const h = makeHarness({ runDurable: (work) => scheduled.push(work) });
+    h.configure(pushPayload(), 0);
+    h.append(evt(1, "a"));
+
+    h.subscribers.wake();
+
+    expect(scheduled).toHaveLength(1);
+    expect(h.pushes).toHaveLength(0);
+
+    await scheduled[0]!();
+    expect(h.pushes).toHaveLength(1);
+    expect(h.row("k")?.ackedOffset).toBe(1);
+  });
+
   it("a. push happy path: drains to the tail, acks, and resumes from the cursor", async () => {
     const h = makeHarness();
     h.configure(pushPayload(), 0);
@@ -453,6 +519,38 @@ describe("StreamSubscribers", () => {
     });
   });
 
+  it("parks a terminal wake target failure immediately with the exact error", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 0);
+    h.append(evt(1, "event"));
+    h.dialImpl.poke = async () => {
+      throw new WorkerBuildFailedError({
+        kind: "source",
+        message: 'Entry point "github-ai-linter-worker.ts" was not found in files.',
+      });
+    };
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.pokes).toHaveLength(1);
+    expect(h.factsOfType(PARKED)).toMatchObject([
+      {
+        payload: {
+          subscriptionKey: "k",
+          attempts: 1,
+          error: 'Entry point "github-ai-linter-worker.ts" was not found in files.',
+        },
+      },
+    ]);
+    expect(h.row("k")).toMatchObject({
+      attempt: 1,
+      nextAttemptAt: null,
+      lastError: 'Entry point "github-ai-linter-worker.ts" was not found in files.',
+    });
+    expect(h.armedAlarms).toHaveLength(0);
+  });
+
   it("d. parks at MAX_DELIVERY_ATTEMPTS with one state-guarded parked fact, then goes silent", async () => {
     const h = makeHarness();
     h.configure(pushPayload(), 0);
@@ -477,6 +575,15 @@ describe("StreamSubscribers", () => {
       error: "still down",
     });
     expect(h.configured["k"].parkedAtOffset).toBe(0);
+    // The row mirrors the park fact — retry schedule cleared (a parked row
+    // must not drive the alarm) but the failure evidence kept, so runtime
+    // state can say WHY it parked without digging the fact out of the log.
+    expect(h.row("k")).toMatchObject({
+      ackedOffset: 0,
+      attempt: MAX_DELIVERY_ATTEMPTS,
+      nextAttemptAt: null,
+      lastError: "still down",
+    });
 
     // Parked means parked: further wakes make no dial calls.
     h.subscribers.wake();
@@ -626,8 +733,14 @@ describe("StreamSubscribers", () => {
     expect(parkedFacts).toHaveLength(1);
     expect(parkedFacts[0].idempotencyKey).toBeUndefined();
     expect(parkedFacts[0].payload).toMatchObject({ subscriptionKey: "k", atOffset: 2 });
-    // NOT all events were skipped: offsets 3 and 4 are still owed delivery.
-    expect(h.row("k")?.ackedOffset).toBe(2);
+    // NOT all events were skipped: offsets 3 and 4 are still owed delivery,
+    // and the row keeps the parking error for runtime state to display.
+    expect(h.row("k")).toMatchObject({
+      ackedOffset: 2,
+      attempt: SKIP_CONFIRM_ATTEMPTS,
+      nextAttemptAt: null,
+      lastError: "receiver is down",
+    });
     expect(h.configured["k"].parkedAtOffset).toBe(2);
   });
 
@@ -689,6 +802,153 @@ describe("StreamSubscribers", () => {
     expect(h.pokes).toHaveLength(2);
     expect(h.subscribers.hasConnection("k")).toBe(true);
     expect(second.batches[0].events.map((event) => event.offset)).toEqual([4]);
+  });
+
+  it("wake selectors turn unconsumed revival facts into eventless caught-up deliveries", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 0);
+    const firstRevival = evt(1, STREAM_PROCESSOR_REVIVED_EVENT_TYPE);
+    h.append(firstRevival);
+    const { sink, batches } = makeSink();
+    h.dialImpl.poke = async () => ({
+      checkpointOffset: 0,
+      sink,
+      subscriber: {
+        processor: {
+          announcement: {
+            slug: "recovery-test",
+            version: "0.0.1",
+            description: "Does not consume processor revival facts.",
+            consumes: ["events.iterate.com/recovery-test/requested"],
+            emits: [],
+            ownedEvents: [],
+          },
+        },
+      },
+    });
+
+    h.subscribers.wake([{ event: firstRevival, byteLength: 64 }]);
+    await h.settle();
+
+    expect(h.pokes).toHaveLength(1);
+    expect(batches[0]).toMatchObject({
+      events: [],
+      scannedAfterOffset: 0,
+      scannedThroughOffset: 1,
+      streamMaxOffset: 1,
+    });
+
+    const secondRevival = evt(2, STREAM_PROCESSOR_REVIVED_EVENT_TYPE);
+    h.append(secondRevival);
+    h.subscribers.wake([{ event: secondRevival, byteLength: 64 }]);
+    await h.settle();
+
+    expect(h.pokes).toHaveLength(1);
+    expect(batches[1]).toMatchObject({
+      events: [],
+      scannedAfterOffset: 1,
+      scannedThroughOffset: 2,
+      streamMaxOffset: 2,
+    });
+  });
+
+  it("schedules idle teardown on the DO alarm without retaining the current turn", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 0);
+    h.append(evt(1, "a"));
+    const connection = makeSink();
+    h.dialImpl.poke = async () => ({ checkpointOffset: 1, sink: connection.sink });
+
+    h.subscribers.wake();
+    await h.settle();
+    expect(h.subscribers.hasConnection("k")).toBe(true);
+
+    h.subscribers.armOrClearIdleAlarm();
+    expect(h.armedAlarms.at(-1)).toBe(60_000);
+
+    // Activity restarts the quiet window. The already-armed earlier alarm may
+    // still fire, but it must only schedule the later deadline, not tear down.
+    h.advanceTo(10_000);
+    h.subscribers.armOrClearIdleAlarm();
+    expect(h.armedAlarms.at(-1)).toBe(70_000);
+    h.advanceTo(60_000);
+    h.subscribers.onAlarm();
+    expect(h.subscribers.hasConnection("k")).toBe(true);
+    expect(h.armedAlarms.at(-1)).toBe(70_000);
+
+    h.advanceTo(70_000);
+    h.subscribers.onAlarm();
+    await h.settle();
+    expect(h.subscribers.hasConnection("k")).toBe(false);
+    expect(h.factsOfType(DISCONNECTED)[0]?.payload).toMatchObject({ reason: "idle" });
+  });
+
+  it("expires an orphaned wake settlement on the DO alarm and backs off before re-poking", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 0);
+    h.append(evt(1, "a"));
+    let batch: StreamWakeEventBatch | undefined;
+    h.dialImpl.poke = async () => ({
+      checkpointOffset: 0,
+      sink: Object.assign(
+        (delivered: StreamWakeEventBatch) => {
+          batch = delivered;
+        },
+        { [Symbol.dispose]: () => {} },
+      ),
+    });
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const warningLog = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    try {
+      h.subscribers.wake();
+      await h.settle();
+      expect(batch).toBeDefined();
+      expect(h.subscribers.hasConnection("k")).toBe(true);
+      expect(h.armedAlarms).toContain(20_000);
+
+      h.advanceTo(19_999);
+      h.subscribers.onAlarm();
+      await h.settle();
+      expect(h.subscribers.hasConnection("k")).toBe(true);
+
+      h.advanceTo(20_000);
+      h.subscribers.onAlarm();
+      await h.settle();
+
+      expect(errorLog).not.toHaveBeenCalled();
+      expect(warningLog).toHaveBeenCalledWith(
+        "stream durable sink unavailable; backing off before re-poke",
+        expect.objectContaining({
+          subscriptionKey: "k",
+          reason: "delivery-failed",
+          error: expect.objectContaining({
+            name: StreamReceiverUnavailableError.NAME,
+            message: "wake k settlement timed out after 20000ms",
+          }),
+        }),
+      );
+      expect(h.subscribers.hasConnection("k")).toBe(false);
+      expect(h.row("k")).toMatchObject({
+        attempt: 1,
+        lastError: "wake k settlement timed out after 20000ms",
+      });
+      expect(h.row("k")?.nextAttemptAt).toBeGreaterThan(20_000);
+      expect(h.pokes).toHaveLength(1);
+      expect(h.factsOfType(DISCONNECTED).at(-1)?.payload).toMatchObject({
+        subscriptionKey: "k",
+        reason: "delivery-failed",
+      });
+
+      // A successor owns recovery now; an acknowledgement from the orphaned
+      // predecessor cannot clear backoff or mutate the closed connection.
+      batch!.settleDelivery({ outcome: "ok" });
+      await h.settle();
+      expect(h.row("k")?.attempt).toBe(1);
+    } finally {
+      errorLog.mockRestore();
+      warningLog.mockRestore();
+    }
   });
 
   it("j. a poke failure lands in the same backoff rows as push failures", async () => {
@@ -820,6 +1080,42 @@ describe("StreamSubscribers", () => {
     });
   });
 
+  it("a late wake settlement from a replaced connection cannot close its successor", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 0);
+    h.append(evt(1, "a"));
+    const batches: StreamWakeEventBatch[] = [];
+    h.dialImpl.poke = async () => ({
+      checkpointOffset: 0,
+      sink: Object.assign(
+        (batch: StreamWakeEventBatch) => {
+          batches.push(batch);
+        },
+        { [Symbol.dispose]: () => {} },
+      ),
+    });
+
+    h.subscribers.wake();
+    await h.settle();
+    expect(batches).toHaveLength(1);
+
+    h.configure(wakePayload(), 2);
+    h.subscribers.onSubscriptionConfigured(wakePayload(), 2);
+    await h.settle();
+    expect(batches).toHaveLength(2);
+    expect(h.subscribers.hasConnection("k")).toBe(true);
+
+    batches[0]!.settleDelivery({
+      outcome: "error",
+      error: { name: "Error", message: "obsolete connection failed late" },
+    });
+    await h.settle();
+
+    expect(h.subscribers.hasConnection("k")).toBe(true);
+    expect(h.row("k")?.attempt).toBe(0);
+    batches[1]!.settleDelivery({ outcome: "ok" });
+  });
+
   it("m. removal deletes the cursor row and closes the connection", async () => {
     const h = makeHarness();
     h.configure(wakePayload(), 0);
@@ -851,7 +1147,7 @@ describe("StreamSubscribers", () => {
     expect(h.row("k")).toBeUndefined();
   });
 
-  it("n. ephemeral: immediate replay batch, presence facts, and fire-and-forget sink results", async () => {
+  it("n. ephemeral: immediate durable replay, presence facts, and fire-and-forget sink results", async () => {
     const h = makeHarness();
     h.append(evt(1, "a"), evt(2, "b"), evt(3, "c"));
 
@@ -1036,16 +1332,29 @@ describe("StreamSubscribers", () => {
     h.append(evt(1, "a"));
 
     let checkpoint = 0;
-    h.dialImpl.poke = async () => ({ checkpointOffset: checkpoint, sink: makeSink().sink });
+    let latestBatch: StreamWakeEventBatch | undefined;
+    h.dialImpl.poke = async () => ({
+      checkpointOffset: checkpoint,
+      sink: Object.assign(
+        (batch: StreamWakeEventBatch) => {
+          latestBatch = batch;
+        },
+        { [Symbol.dispose]: () => {} },
+      ),
+    });
     h.subscribers.wake();
     await h.settle();
     expect(h.pokes).toHaveLength(1);
+    expect(latestBatch).toBeDefined();
 
-    // A post-poke sink delivery failure must run the failure machine: nack'd
-    // row, closed connection, and NO immediate re-poke — the bug this pins is
-    // the close→wake→re-poke hot loop that never backed off and never parked
-    // (each poke's ack used to reset the attempt counter too).
-    h.subscribers.onDurableDeliveryError("k", new Error("ingest rejects deterministically"));
+    // A processor's independent error settlement must run the failure
+    // machine: nack'd row, closed connection, and NO immediate re-poke — the
+    // bug this pins is the close→wake→re-poke hot loop that never backed off
+    // and never parked (each poke's ack used to reset the attempt counter).
+    latestBatch!.settleDelivery({
+      outcome: "error",
+      error: { name: "Error", message: "ingest rejects deterministically" },
+    });
     await h.settle();
     expect(h.subscribers.hasConnection("k")).toBe(false);
     expect(h.row("k")?.attempt).toBe(1);
@@ -1062,7 +1371,10 @@ describe("StreamSubscribers", () => {
 
     // Sustained deterministic failure parks at the shared threshold.
     for (let round = 0; round < 400 && h.factsOfType(PARKED).length === 0; round += 1) {
-      h.subscribers.onDurableDeliveryError("k", new Error("still failing"));
+      latestBatch!.settleDelivery({
+        outcome: "error",
+        error: { name: "Error", message: "still failing" },
+      });
       await h.settle();
       const next = h.store.minNextAttemptAt();
       if (next === null) break;
@@ -1080,6 +1392,86 @@ describe("StreamSubscribers", () => {
     await h.settle();
     expect(h.subscribers.hasConnection("k")).toBe(true);
     expect(h.row("k")?.attempt).toBe(0);
+    latestBatch!.settleDelivery({ outcome: "ok" });
+  });
+
+  it("classifies a Durable Object lifecycle reset as availability, not a delivery error", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 1);
+    h.append(evt(1, "a"));
+    h.dialImpl.poke = async () => ({ checkpointOffset: 0, sink: makeSink().sink });
+    h.subscribers.wake();
+    await h.settle();
+
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const warningLog = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const reset = Object.assign(new Error("kill requested"), { durableObjectReset: true });
+      h.subscribers.onDurableDeliveryError("k", reset);
+      await h.settle();
+
+      expect(errorLog).not.toHaveBeenCalled();
+      expect(warningLog).toHaveBeenCalledWith(
+        "stream durable sink unavailable; backing off before re-poke",
+        expect.objectContaining({ subscriptionKey: "k", error: reset }),
+      );
+      expect(h.subscribers.hasConnection("k")).toBe(false);
+      expect(h.row("k")?.attempt).toBe(1);
+      expect(h.row("k")?.nextAttemptAt).not.toBeNull();
+    } finally {
+      errorLog.mockRestore();
+      warningLog.mockRestore();
+    }
+  });
+
+  it("backs off an RPC-broken wake sink before reconciling instead of hot re-poking", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 1);
+    h.append(evt(1, "a"));
+
+    let reportBroken: ((error: unknown) => void) | undefined;
+    const dispose = vi.fn();
+    const sink = Object.assign((_batch: StreamWakeEventBatch) => undefined, {
+      [Symbol.dispose]: dispose,
+      onRpcBroken: (handler: (error: unknown) => void) => {
+        reportBroken = handler;
+      },
+    }) as RetainedProcessEventBatch<StreamWakeEventBatch>;
+    h.dialImpl.poke = async () => ({ checkpointOffset: 0, sink });
+    h.subscribers.wake();
+    await h.settle();
+    expect(h.pokes).toHaveLength(1);
+    expect(reportBroken).toBeDefined();
+
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const warningLog = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const broken = new Error("remote capability disconnected");
+      reportBroken!(broken);
+      await h.settle();
+
+      expect(errorLog).not.toHaveBeenCalled();
+      expect(warningLog).toHaveBeenCalledWith(
+        "stream durable sink unavailable; backing off before re-poke",
+        expect.objectContaining({
+          subscriptionKey: "k",
+          reason: "rpc-broken",
+          error: broken,
+        }),
+      );
+      expect(dispose).toHaveBeenCalledOnce();
+      expect(h.subscribers.hasConnection("k")).toBe(false);
+      expect(h.row("k")?.attempt).toBe(1);
+      expect(h.row("k")?.nextAttemptAt).not.toBeNull();
+      expect(h.pokes).toHaveLength(1);
+      expect(h.factsOfType(DISCONNECTED).at(-1)?.payload).toMatchObject({
+        subscriptionKey: "k",
+        reason: "rpc-broken",
+      });
+    } finally {
+      errorLog.mockRestore();
+      warningLog.mockRestore();
+    }
   });
 
   it("t. an in-flight push delivery cannot clobber a cursor seek (epoch fence)", async () => {
@@ -1263,6 +1655,38 @@ describe("StreamSubscribers", () => {
     expect(h.factsOfType(ERROR_OCCURRED)).toHaveLength(0);
   });
 
+  it("a delivery timeout is receiver unavailability, never poison", async () => {
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness();
+      h.configure(pushPayload({ onPoison: "skip" }), 0);
+      h.append(evt(1, "a"), evt(2, "a"), evt(3, "a"));
+      h.dialImpl.push = () => new Promise<void>(() => {});
+
+      h.subscribers.wake();
+      const settling = h.settle();
+      await vi.advanceTimersByTimeAsync(20_000);
+      await vi.runAllTimersAsync();
+      await settling;
+
+      // A transport stall says nothing about any individual event. The same
+      // whole batch remains owed, with a normal availability backoff; poison
+      // bisection, skip facts, and cursor movement are all forbidden.
+      expect(h.pushes.map((batch) => batch.events.map((event) => event.offset))).toEqual([
+        [1, 2, 3],
+      ]);
+      expect(h.row("k")).toMatchObject({
+        ackedOffset: 0,
+        attempt: 1,
+        lastError: "push k timed out after 20000ms",
+      });
+      expect(h.factsOfType(ERROR_OCCURRED)).toHaveLength(0);
+      expect(h.factsOfType(PARKED)).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("y. sustained receiver unavailability parks loudly instead of mass-skipping the backlog", async () => {
     const h = makeHarness();
     h.configure(pushPayload({ onPoison: "skip" }), 0);
@@ -1287,13 +1711,13 @@ describe("StreamSubscribers", () => {
     expect(h.pushes).toHaveLength(MAX_DELIVERY_ATTEMPTS);
   });
 
-  it("z. ephemeral events: dropped from push delivery (cursor still advances), delivered to ephemeral subscriptions", async () => {
+  it("z. ephemeral events: never replayed, delivered only after an ephemeral subscription opens", async () => {
     const h = makeHarness();
     h.configure(pushPayload(), 0);
     h.append(evt(1, "a"), { ...evt(2, "chunk"), ephemeral: true as const }, evt(3, "b"));
 
-    // A replaying ephemeral subscription sees everything, flagged, in order —
-    // the spine's storage read is raw.
+    // Historical durable rows replay, but the pre-existing chunk at offset 2
+    // is behind the connection's atomic live boundary and never appears.
     const batches: StreamEventBatch[] = [];
     h.subscribers.openEphemeral({
       subscriptionKey: "watcher",
@@ -1306,9 +1730,9 @@ describe("StreamSubscribers", () => {
     const seen = batches.flatMap((batch) => batch.events);
     expect(seen.map((event) => [event.offset, event.ephemeral === true])).toEqual([
       [1, false],
-      [2, true],
       [3, false],
     ]);
+    expect(batches[0]).toMatchObject({ scannedAfterOffset: 0, scannedThroughOffset: 3 });
 
     // The push drain delivered only the durable events and acked THROUGH the
     // ephemeral offset (skip-not-defer, same shape as selector skips).
@@ -1323,11 +1747,113 @@ describe("StreamSubscribers", () => {
     h.append({ ...evt(4, "chunk"), ephemeral: true as const });
     h.subscribers.wake();
     await h.settle();
+    expect(batches.flatMap((batch) => batch.events).map((event) => event.offset)).toEqual([
+      1, 3, 4,
+    ]);
+    expect(batches.at(-1)).toMatchObject({
+      scannedAfterOffset: 3,
+      scannedThroughOffset: 4,
+    });
     expect(h.pushes).toHaveLength(1);
     expect(h.row("k")?.ackedOffset).toBe(4);
     h.subscribers.wake();
     await h.settle();
     expect(h.pushes).toHaveLength(1);
+  });
+
+  it("z1. atomically rejects an unbounded replay before replacing a live connection", async () => {
+    const h = makeHarness();
+    h.append(evt(1, "a"), evt(2, "b"), evt(3, "c"));
+    const first = makeSink();
+    h.subscribers.openEphemeral({ subscriptionKey: "watcher", sink: first.sink });
+    await h.settle();
+
+    expect(() =>
+      h.subscribers.openEphemeral({
+        subscriptionKey: "watcher",
+        sink: makeSink().sink,
+        replayAfterOffset: 0,
+        maxReplayOffsetGap: 2,
+      }),
+    ).toThrow(/replay gap 3 exceeds maxReplayOffsetGap 2/);
+    expect(h.subscribers.hasConnection("watcher")).toBe(true);
+  });
+
+  it("z1a. atomically rejects a changed stream incarnation before replacing a live connection", async () => {
+    const h = makeHarness();
+    const first = makeSink();
+    h.subscribers.openEphemeral({
+      subscriptionKey: "watcher",
+      sink: first.sink,
+      expectedIncarnation: "stream-v1",
+    });
+    await h.settle();
+
+    h.setIncarnation("stream-v2");
+    expect(() =>
+      h.subscribers.openEphemeral({
+        subscriptionKey: "watcher",
+        sink: makeSink().sink,
+        replayAfterOffset: 0,
+        expectedIncarnation: "stream-v1",
+      }),
+    ).toThrow(/stream incarnation changed \(stream-v1 -> stream-v2\)/);
+    expect(h.subscribers.hasConnection("watcher")).toBe(true);
+
+    h.subscribers.openEphemeral({
+      subscriptionKey: "new-stream-watcher",
+      sink: makeSink().sink,
+      expectedIncarnation: "stream-v2",
+    });
+    expect(h.subscribers.hasConnection("new-stream-watcher")).toBe(true);
+  });
+
+  it("z1b. distinguishes an uncreated stream from a newly-created incarnation", () => {
+    const h = makeHarness();
+    h.setIncarnation(undefined);
+    h.subscribers.openEphemeral({
+      subscriptionKey: "uncreated-watcher",
+      sink: makeSink().sink,
+      expectedIncarnation: null,
+    });
+
+    h.setIncarnation("stream-v1");
+    expect(() =>
+      h.subscribers.openEphemeral({
+        subscriptionKey: "replacement",
+        sink: makeSink().sink,
+        expectedIncarnation: null,
+      }),
+    ).toThrow(/stream incarnation changed \(null -> stream-v1\)/);
+  });
+
+  it("z1c. rejects invalid replay coordinates before opening a connection", () => {
+    const h = makeHarness();
+
+    expect(() =>
+      h.subscribers.openEphemeral({
+        subscriptionKey: "negative-cursor",
+        sink: makeSink().sink,
+        replayAfterOffset: -1,
+      }),
+    ).toThrow(/replayAfterOffset must be a non-negative safe integer/);
+    expect(() =>
+      h.subscribers.openEphemeral({
+        subscriptionKey: "invalid-gap",
+        sink: makeSink().sink,
+        maxReplayOffsetGap: Number.NaN,
+      }),
+    ).toThrow(/maxReplayOffsetGap must be a non-negative safe integer/);
+    expect(() =>
+      h.subscribers.openEphemeral({
+        subscriptionKey: "invalid-incarnation",
+        sink: makeSink().sink,
+        expectedIncarnation: "   ",
+      }),
+    ).toThrow(/expectedIncarnation must be null or a non-empty string/);
+    expect(h.subscribers.hasConnection("negative-cursor")).toBe(false);
+    expect(h.subscribers.hasConnection("invalid-gap")).toBe(false);
+    expect(h.subscribers.hasConnection("invalid-incarnation")).toBe(false);
   });
 
   it("z2. configured wake connections never receive ephemeral events; the pump advances over them", async () => {
@@ -1349,6 +1875,91 @@ describe("StreamSubscribers", () => {
     h.subscribers.wake([{ event: fresh, byteLength: 64 }]);
     await h.settle();
     expect(batches.flatMap((batch) => batch.events).map((event) => event.offset)).toEqual([1, 3]);
+    expect(batches.at(-1)).toMatchObject({
+      events: [],
+      scannedAfterOffset: 3,
+      scannedThroughOffset: 4,
+      streamMaxOffset: 4,
+    });
+  });
+
+  it("z2a. a push subscription can receive ephemeral and durable rows in exact offset order", async () => {
+    const h = makeHarness();
+    h.configure({ ...pushPayload(), includeEphemeral: true }, 0);
+    h.append(
+      evt(1, "durable"),
+      { ...evt(2, "chunk"), ephemeral: true as const },
+      evt(3, "durable-again"),
+    );
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.pushes).toHaveLength(1);
+    expect(h.pushes[0]!.events.map(({ offset, ephemeral }) => ({ offset, ephemeral }))).toEqual([
+      { offset: 1, ephemeral: undefined },
+      { offset: 2, ephemeral: true },
+      { offset: 3, ephemeral: undefined },
+    ]);
+    expect(h.row("k")?.ackedOffset).toBe(3);
+  });
+
+  it("z2b. a session selector receives an empty scan envelope across non-matches", async () => {
+    const h = makeHarness();
+    h.append(evt(1, "a"), evt(2, "b"));
+    const { sink, batches } = makeSink();
+
+    h.subscribers.openEphemeral({
+      subscriptionKey: "filtered-session",
+      sink,
+      replayAfterOffset: 0,
+      selector: compileEventSelector({ eventTypes: ["never"] }),
+    });
+    await h.settle();
+
+    expect(batches).toEqual([
+      expect.objectContaining({
+        events: [],
+        scannedAfterOffset: 0,
+        scannedThroughOffset: 2,
+        streamMaxOffset: 2,
+      }),
+    ]);
+  });
+
+  it("z3. advances session and push cursors through an evicted ephemeral suffix", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload(), 0);
+    h.append(evt(1, "a"), { ...evt(2, "chunk"), ephemeral: true as const });
+    h.evict(2);
+
+    const { sink, batches } = makeSink();
+    h.subscribers.openEphemeral({
+      subscriptionKey: "watcher",
+      sink,
+      replayAfterOffset: 0,
+    });
+    await h.settle();
+
+    expect(batches).toHaveLength(2);
+    expect(batches[0]).toMatchObject({
+      events: [expect.objectContaining({ offset: 1 })],
+      scannedAfterOffset: 0,
+      scannedThroughOffset: 1,
+      streamMaxOffset: 2,
+    });
+    expect(batches[1]).toMatchObject({
+      events: [],
+      scannedAfterOffset: 1,
+      scannedThroughOffset: 2,
+      streamMaxOffset: 2,
+    });
+
+    h.subscribers.wake();
+    await h.settle();
+    expect(h.pushes).toHaveLength(1);
+    expect(h.pushes[0]!.events.map((event) => event.offset)).toEqual([1]);
+    expect(h.row("k")?.ackedOffset).toBe(2);
   });
 });
 
@@ -1376,6 +1987,7 @@ describe("StreamSubscribers runtime metrics", () => {
     expect(connection.settleLatencyMs).toBeUndefined();
     // Delivery throughput landed in the stream-level egress hook.
     expect(h.egress).toEqual([{ count: 3, bytes: connection.bytesSent }]);
+    expect(h.runtimeChanges()).toBeGreaterThan(0);
   });
 
   it("push lane records delivery duration, commit→acked settle latency, and bytes", async () => {
@@ -1398,7 +2010,7 @@ describe("StreamSubscribers runtime metrics", () => {
     expect(h.egress).toEqual([{ count: 3, bytes: subscription.bytesSent }]);
   });
 
-  it("wake-lane settle latency: the pulled batch result settling records commit→consumed", async () => {
+  it("wake-lane settle latency: the independent settlement records commit→consumed", async () => {
     const h = makeHarness();
     h.append(evt(1, "a"), evt(2, "b")); // createdAt = epoch 1..2ms
     h.advanceTo(500);
@@ -1407,21 +2019,19 @@ describe("StreamSubscribers runtime metrics", () => {
     let settleBatch: (() => void) | undefined;
     h.dialImpl.poke = async () => ({
       checkpointOffset: 0,
-      // Retained exactly like the real dial does (durable lane pulls results),
-      // so the spine's onSettled option is exercised for real.
-      sink: retainProcessEventBatch(
-        () =>
-          new Promise<void>((resolve) => {
-            settleBatch = resolve;
-          }),
-        { onDeliveryError: () => {} },
-      ),
+      // Retained exactly like the real dial does: the sink result stays
+      // unpulled and the processor reports completion out of band.
+      sink: retainProcessEventBatch((batch: StreamWakeEventBatch) => {
+        settleBatch = () => batch.settleDelivery({ outcome: "ok" });
+      }),
     });
 
     h.subscribers.wake();
     await h.settle();
     expect(settleBatch).toBeDefined();
     expect(h.subscribers.connectionRuntimeState()["k"]!.settleLatencyMs).toBeUndefined();
+    expect(h.pendingDeliveryStates().slice(-2)).toEqual([false, true]);
+    const runtimeChangesBeforeSettle = h.runtimeChanges();
 
     h.advanceTo(600);
     settleBatch!();
@@ -1431,6 +2041,8 @@ describe("StreamSubscribers runtime metrics", () => {
       last: 598,
       samples: 1,
     });
+    expect(h.pendingDeliveryStates().slice(-3)).toEqual([false, true, false]);
+    expect(h.runtimeChanges()).toBeGreaterThan(runtimeChangesBeforeSettle);
   });
 
   it("mutual ping: NTP math cancels responder clock skew; rounds are throttled", async () => {
@@ -1448,6 +2060,7 @@ describe("StreamSubscribers runtime metrics", () => {
 
     h.subscribers.samplePingsSoon();
     h.subscribers.samplePingsSoon(); // throttled: same round
+    const runtimeChangesBeforePing = h.runtimeChanges();
     await h.settle();
     expect(pings).toBe(1);
     // rtt = (t3−t0) − (t2−t1) = 40 − 5, regardless of the 100s skew.
@@ -1455,6 +2068,7 @@ describe("StreamSubscribers runtime metrics", () => {
       last: 35,
       samples: 1,
     });
+    expect(h.runtimeChanges()).toBeGreaterThan(runtimeChangesBeforePing);
 
     h.advanceTo(h.now() + 5_001);
     h.subscribers.samplePingsSoon();

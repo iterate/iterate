@@ -1,17 +1,16 @@
 import { expandOAuthResourceAudienceVariants } from "@iterate-com/shared/oauth-resource";
+import { deployedPreviewEnvs, envs, semaphoreEnvs, streamsExampleEnvs } from "../../../../envs.ts";
 
 export function getOsResourceBases() {
   return [
-    "https://os.iterate.com",
+    envs.prd.baseUrl,
     "http://localhost:5173",
     // Fully-local dev runs on arbitrary ports (http://localhost:<port>), so
     // the RFC 8707 resource/audience is the stable portless loopback origin —
     // OS sets APP_CONFIG_ITERATE_AUTH__RESOURCE to match.
     "http://localhost",
     "http://127.0.0.1",
-    ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map(
-      (previewNumber) => `https://os.iterate-preview-${previewNumber}.com`,
-    ),
+    ...deployedPreviewEnvs.map((env) => env.baseUrl),
   ];
 }
 
@@ -21,12 +20,7 @@ export function getOsResourceBases() {
  * covered by the portless loopback origins in getOsResourceBases.
  */
 export function getSemaphoreResourceBases() {
-  return [
-    "https://semaphore.iterate.com",
-    ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map(
-      (previewNumber) => `https://semaphore.iterate-preview-${previewNumber}.com`,
-    ),
-  ];
+  return Object.values(semaphoreEnvs).map((env) => env.baseUrl);
 }
 
 /**
@@ -39,20 +33,12 @@ export function getSemaphoreResourceBases() {
  * Local dev is auth-less by design and needs no entry.
  */
 export function getStreamsExampleResourceBases() {
-  return [
-    "https://streams.iterate.com",
-    ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map(
-      (previewNumber) => `https://streams.iterate-preview-${previewNumber}.com`,
-    ),
-  ];
+  return Object.values(streamsExampleEnvs).map((env) => env.baseUrl);
 }
 
 export function getOsMcpResourceBases() {
   return expandOAuthResourceAudienceVariants([
-    "https://mcp.iterate.com",
-    ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map(
-      (previewNumber) => `https://mcp.iterate-preview-${previewNumber}.com`,
-    ),
+    ...Object.values(envs).map((env) => env.mcpBaseUrl),
     "http://localhost:7301/api/__mcp",
   ]);
 }

@@ -21,38 +21,26 @@
 // instead — so proving one proves both.
 //
 // Requires a deployed OS (APP_CONFIG_BASE_URL) and a reachable dummy-petshop
-// (PETSHOP_BASE_URL, or derived). See petshop-support.ts.
+// (the exact PETSHOP_BASE_URL supplied by preview orchestration).
 
 import { generateKeyPairSync } from "node:crypto";
-import { describe, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
-import { petshopBaseUrl, petshopExpireTokens, petshopRegisterApp } from "./petshop-support.ts";
+import {
+  petshopBaseUrl,
+  petshopExpireTokens,
+  petshopRegisterApp,
+  shouldSkipPetshopE2e,
+} from "./petshop-support.ts";
 
 const RUN = crypto.randomUUID().slice(0, 8);
 
-/** Call a petshop installation-scoped API through the OS egress door with an
- * access-token placeholder: the request routes to the connection secret, whose
- * strategy mints the installation token (and re-mints on 401) before
- * substituting it and reaching petshop. */
-async function callThroughConnection(
-  project: any,
-  connectionPath: string,
-  path: string,
-): Promise<{ status: number; body: any }> {
-  const response = await project.egress.fetch(
-    new Request(`${petshopBaseUrl()}${path}`, {
-      headers: {
-        authorization: `Bearer getSecret({ path: "${connectionPath}", field: "accessToken" })`,
-      },
-    }),
-  );
-  return { status: response.status, body: await response.json().catch(() => null) };
-}
-
-// Opt-in: talks to a deployed dummy-petshop (see integrations-petshop.e2e.test).
-describe.skipIf(!process.env.PETSHOP_BASE_URL)("GitHub App installation lane", () => {
-  test("bring-your-own App: mint installation token in the Secret DO, act as the installation, re-mint on expiry", async () => {
+// Local runs opt in explicitly; preview CI supplies its leased Petshop URL
+// and fails closed if orchestration ever drops it.
+test.skipIf(shouldSkipPetshopE2e())(
+  "bring-your-own App: mint installation token in the Secret DO, act as the installation, re-mint on expiry",
+  async () => {
     const petshop = petshopBaseUrl();
     const appId = `gh-app-${RUN}`;
     const installationId = `gh-inst-${RUN}`;
@@ -69,7 +57,7 @@ describe.skipIf(!process.env.PETSHOP_BASE_URL)("GitHub App installation lane", (
 
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = itx.projects.create({ slug: `github-${RUN}` });
+    using project = await itx.projects.get(`github-${RUN}`).create({});
     await project.__describe();
 
     const connectionPath = `/secrets/integrations/mygithub-${RUN}/acme`;
@@ -79,7 +67,7 @@ describe.skipIf(!process.env.PETSHOP_BASE_URL)("GitHub App installation lane", (
     // pinned to petshop (the mint POST and the API call both go there).
     // Configuring `refresh` is the trust event.
     using connectionSecret = project.secrets.get(connectionPath);
-    await connectionSecret.update({
+    await connectionSecret.create({
       egress: { urls: [petshop] },
       material: { privateKey },
       refresh: {
@@ -100,24 +88,40 @@ describe.skipIf(!process.env.PETSHOP_BASE_URL)("GitHub App installation lane", (
     // installation token → the secret substitutes it. petshop names which
     // installation we're acting as.
     const me = await callThroughConnection(project, connectionPath, "/api/me");
-    expect(me.status).toBe(200);
-    expect(me.body).toMatchObject({ installationId, appId });
+    expect(me).toMatchObject({ status: 200, body: { installationId, appId } });
 
     // Force a real 401 (epoch bump invalidates the installation token) and call
     // again: the strategy must re-mint (sign a fresh JWT) and retry to a 200.
-    await petshopExpireTokens();
+    await petshopExpireTokens(appId);
     const afterExpiry = await callThroughConnection(project, connectionPath, "/api/me");
-    expect(afterExpiry.status).toBe(200);
-    expect(afterExpiry.body).toMatchObject({ installationId, appId });
+    expect(afterExpiry).toMatchObject({ status: 200, body: { installationId, appId } });
 
     // Confinement: the App private key never left the secret; describe() leaks
     // neither the key nor a minted token. Egress uses land on the audit trail.
     const described = await connectionSecret.__describe();
     expect(JSON.stringify(described)).not.toContain("BEGIN PRIVATE KEY");
-    expect(described.hasMaterial).toBe(true);
-    expect(described.refresh).toBe("github-app-installation");
+    expect(described).toMatchObject({ hasMaterial: true, refresh: "github-app-installation" });
     await waitForCondition(async () => (await connectionSecret.__describe()).audit.usedCount >= 1, {
       description: "github connection egress use to audit",
     });
-  });
-});
+  },
+);
+
+/** Call a petshop installation-scoped API through the OS egress door with an
+ * access-token placeholder: the request routes to the connection secret, whose
+ * strategy mints the installation token (and re-mints on 401) before
+ * substituting it and reaching petshop. */
+async function callThroughConnection(
+  project: any,
+  connectionPath: string,
+  path: string,
+): Promise<{ status: number; body: any }> {
+  const response = await project.egress.fetch(
+    new Request(`${petshopBaseUrl()}${path}`, {
+      headers: {
+        authorization: `Bearer getSecret("${connectionPath}", { field: "accessToken" })`,
+      },
+    }),
+  );
+  return { status: response.status, body: await response.json().catch(() => null) };
+}

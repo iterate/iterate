@@ -5,8 +5,8 @@ import { PlusIcon, RefreshCwIcon, Trash2Icon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
+import { connectItx } from "iterate/sdk/itx/react";
 import { ProjectProcessorContract } from "~/domains/projects/project-processor-contract.ts";
-import { connectItxBrowser } from "~/itx/itx-react.tsx";
 import {
   isReservedProjectHostname,
   isValidCustomHostname,
@@ -68,7 +68,7 @@ function CustomDomainsEditor({
         hostname: input.hostname,
         projectHostnameBases,
       });
-      const itx = await connectItxBrowser({ projectId });
+      const itx = await connectItx(projectId);
       await itx.streams.get("/").append(
         ProjectProcessorContract.buildEvent({
           type: customDomainEventType(input.action),
@@ -165,7 +165,7 @@ function normalizeProjectCustomDomainInput(input: {
     throw new Error("Enter a valid DNS hostname, such as garple.com.");
   }
   if (isReservedProjectHostname(hostname, input.projectHostnameBases)) {
-    throw new Error(`"${hostname}" is reserved for Iterate project hostnames.`);
+    throw new Error(`"${hostname}" is reserved for iterate project hostnames.`);
   }
   return hostname;
 }
@@ -183,6 +183,11 @@ function CustomDomainRow({
   onRemove: () => void;
   mutationPending: boolean;
 }) {
+  // Direct registrations (platform-owned apexes routed by worker routes + the
+  // hostname directory) have no Cloudflare provisioning lifecycle: no DNS
+  // setup steps apply, and refresh/remove must never run — the provisioning
+  // path would tear down the live routing registration.
+  const direct = domain.kind === "direct";
   const ownershipRecords = domain.ownershipVerification
     ? [{ ...domain.ownershipVerification, type: "TXT" }]
     : [];
@@ -203,41 +208,54 @@ function CustomDomainRow({
         <div className="min-w-0">
           <p className="truncate font-medium">{domain.hostname}</p>
           <p className="text-xs text-muted-foreground">
-            SSL {domain.sslStatus ?? "unknown"} / hostname {domain.hostnameStatus ?? "unknown"}
+            {direct
+              ? "Served directly by iterate — no DNS setup required"
+              : `SSL ${domain.sslStatus ?? "unknown"} / hostname ${domain.hostnameStatus ?? "unknown"}`}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-1">
+          {direct ? (
+            <span className="rounded border px-1.5 py-0.5 text-xs capitalize">Direct</span>
+          ) : null}
           <span className="rounded border px-1.5 py-0.5 text-xs capitalize">
             {domain.status.replaceAll("_", " ")}
           </span>
-          <Button
-            aria-label={`Refresh ${domain.hostname}`}
-            disabled={mutationPending || domain.status === "removing"}
-            onClick={onRefresh}
-            size="icon-xs"
-            type="button"
-            variant="ghost"
-          >
-            <RefreshCwIcon aria-hidden="true" />
-          </Button>
-          <Button
-            aria-label={`Remove ${domain.hostname}`}
-            disabled={mutationPending || domain.status === "removing"}
-            onClick={onRemove}
-            size="icon-xs"
-            type="button"
-            variant="ghost"
-          >
-            <Trash2Icon aria-hidden="true" />
-          </Button>
+          {direct ? null : (
+            <>
+              <Button
+                aria-label={`Refresh ${domain.hostname}`}
+                disabled={mutationPending || domain.status === "removing"}
+                onClick={onRefresh}
+                size="icon-xs"
+                type="button"
+                variant="ghost"
+              >
+                <RefreshCwIcon aria-hidden="true" />
+              </Button>
+              <Button
+                aria-label={`Remove ${domain.hostname}`}
+                disabled={mutationPending || domain.status === "removing"}
+                onClick={onRemove}
+                size="icon-xs"
+                type="button"
+                variant="ghost"
+              >
+                <Trash2Icon aria-hidden="true" />
+              </Button>
+            </>
+          )}
         </div>
       </div>
 
       {domain.error ? <p className="text-xs text-destructive">{domain.error}</p> : null}
 
-      <DomainSetupStep records={ownershipRecords} title="Authorize domain" />
-      <DomainSetupStep records={certificateRecords} title="Issue certificate" />
-      <DomainSetupStep records={trafficRecords} title="Connect traffic" />
+      {direct ? null : (
+        <>
+          <DomainSetupStep records={ownershipRecords} title="Authorize domain" />
+          <DomainSetupStep records={certificateRecords} title="Issue certificate" />
+          <DomainSetupStep records={trafficRecords} title="Connect traffic" />
+        </>
+      )}
     </div>
   );
 }

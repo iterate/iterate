@@ -1,3 +1,4 @@
+import type { Git } from "@cloudflare/shell/git";
 import type { StatelessDynamicWorkerRef } from "../workers/schemas.ts";
 
 type RepoArtifactNameParts = {
@@ -8,15 +9,7 @@ type RepoArtifactNameParts = {
 const SEPARATOR = "--";
 const GLOBAL_REPO_ARTIFACT_PROJECT_ID = "global";
 
-/**
- * The project's config repo — an ordinary repo at an ordinary `/repos/*`
- * path, seeded during project bootstrap and the source the default project
- * worker builds from. Keeping the path here lets project creation, project
- * processors, and worker refs share the same address instead of each baking
- * in their own literal. Its events reach the project stream `/` through the
- * `cross-post:/` subscription the bootstrap saga arms on this repo's stream.
- */
-export const CONFIG_REPO_PATH = "/repos/config";
+import { CONFIG_REPO_PATH } from "./paths.ts";
 
 /**
  * The default project worker's build entry point. This shared filename keeps
@@ -24,14 +17,6 @@ export const CONFIG_REPO_PATH = "/repos/config";
  * the same module.
  */
 const PROJECT_WORKER_ENTRY_POINT = "worker.ts";
-
-/**
- * Default masks for the default project worker's repo file source: build from
- * the whole repo, minus version control and generated/installed output. The
- * bundler only pulls modules reachable from the entry point, so a broad
- * include keeps user-added helper files importable without ref changes.
- */
-const PROJECT_WORKER_SOURCE_EXCLUDE = [".git/**", "node_modules/**", "dist/**", "build/**"];
 
 /**
  * THE canonical ref for a project's default worker: the seeded config repo,
@@ -44,12 +29,13 @@ export function defaultProjectWorkerRef(): StatelessDynamicWorkerRef {
   return {
     path: "/",
     source: {
-      files: {
-        exclude: PROJECT_WORKER_SOURCE_EXCLUDE,
-        repoPath: CONFIG_REPO_PATH,
-        type: "repo",
+      createWorker: {
+        entryPoint: PROJECT_WORKER_ENTRY_POINT,
+        files: {
+          repoPath: CONFIG_REPO_PATH,
+          type: "repo",
+        },
       },
-      options: { entryPoint: PROJECT_WORKER_ENTRY_POINT },
     },
     type: "stateless",
   };
@@ -69,28 +55,144 @@ export class RepoNotSeededError extends Error {
   override readonly name = RepoNotSeededError.NAME;
 }
 
+const ARTIFACTS_REPO_NOT_READY_CODES = new Set([
+  "NOT_FOUND",
+  "IMPORT_IN_PROGRESS",
+  "FORK_IN_PROGRESS",
+]);
+// The binding exposes both forms; 10200/10302/10303 are the documented
+// numericCode values for the three string codes above.
+const ARTIFACTS_REPO_NOT_READY_NUMERIC_CODES = new Set([10200, 10302, 10303]);
+// Workers RPC can strip ArtifactsError's own code properties. Keep the
+// fallback specific to the service's retryable repository-lifecycle wording.
+const ARTIFACTS_REPO_NOT_READY_MESSAGE =
+  /^Repository "[^"]+" is currently being (?:created|imported|forked)\. The repository is not yet available\. Retry after \d+ seconds\.$/;
+
+const RETRYABLE_ARTIFACTS_INFRASTRUCTURE_CODES = new Set([
+  "INTERNAL_ERROR",
+  "UPSTREAM_UNAVAILABLE",
+]);
+const RETRYABLE_ARTIFACTS_HTTP_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
+// The Artifacts binding can flatten a service response into a plain Error
+// without ArtifactsError's code/name (live-observed as
+// `HTTP Error: 503 Service Unavailable`). The helper is only called around
+// Artifacts operations, so an exact transient HTTP status remains enough to
+// classify the failure as infrastructure rather than poison a repo forever.
+const ARTIFACTS_HTTP_ERROR_MESSAGE = /^HTTP Error: (\d{3})(?:\s|$)/;
+
+function isArtifactsRepoNotReadyError(error: unknown) {
+  if (typeof error !== "object" || error === null) return false;
+  const code = "code" in error ? error.code : undefined;
+  const message = "message" in error ? error.message : undefined;
+  const name = "name" in error ? error.name : undefined;
+  const numericCode = "numericCode" in error ? error.numericCode : undefined;
+  return (
+    (typeof code === "string" && ARTIFACTS_REPO_NOT_READY_CODES.has(code)) ||
+    (name === "ArtifactsError" &&
+      ((typeof numericCode === "number" &&
+        ARTIFACTS_REPO_NOT_READY_NUMERIC_CODES.has(numericCode)) ||
+        (typeof message === "string" && ARTIFACTS_REPO_NOT_READY_MESSAGE.test(message))))
+  );
+}
+
 export function isRepoNotSeededError(error: unknown): boolean {
-  return (error as { name?: string } | null)?.name === RepoNotSeededError.NAME;
+  return (
+    (error as { name?: string } | null)?.name === RepoNotSeededError.NAME ||
+    isArtifactsRepoNotReadyError(error)
+  );
+}
+
+/**
+ * Whether Cloudflare Artifacts rejected an idempotent repo operation because
+ * its service was temporarily unavailable, rather than because the requested
+ * repo was invalid. Inspect causes because domain helpers may wrap the binding
+ * error with operation context before it reaches the repo processor.
+ */
+export function isRetryableArtifactsInfrastructureError(error: unknown): boolean {
+  const seen = new Set<object>();
+  let candidate = error;
+  while (typeof candidate === "object" && candidate !== null) {
+    if (seen.has(candidate)) return false;
+    seen.add(candidate);
+    const artifactError = candidate as {
+      cause?: unknown;
+      code?: unknown;
+      message?: unknown;
+      name?: unknown;
+      status?: unknown;
+      statusCode?: unknown;
+    };
+    if (
+      artifactError.name === "ArtifactsError" &&
+      typeof artifactError.code === "string" &&
+      RETRYABLE_ARTIFACTS_INFRASTRUCTURE_CODES.has(artifactError.code)
+    ) {
+      return true;
+    }
+    const status =
+      typeof artifactError.status === "number"
+        ? artifactError.status
+        : typeof artifactError.statusCode === "number"
+          ? artifactError.statusCode
+          : typeof artifactError.message === "string"
+            ? Number(ARTIFACTS_HTTP_ERROR_MESSAGE.exec(artifactError.message)?.[1])
+            : Number.NaN;
+    if (RETRYABLE_ARTIFACTS_HTTP_STATUS_CODES.has(status)) return true;
+    candidate = artifactError.cause;
+  }
+  return false;
 }
 
 /**
  * Wraps a branch-clone failure as {@link RepoNotSeededError} when it means
  * "the remote has no such ref/commits" — isomorphic-git's NotFoundError for a
  * ref (an empty Artifacts remote answers HEAD with a branch that has no
- * commits, observed as "Could not find refs/heads/master"), or the Artifacts
- * repo itself missing (`NOT_FOUND` — created lazily by the bootstrap saga).
- * Anything else returns unchanged.
+ * commits, observed as either "Could not find refs/heads/master" or "Could
+ * not find main" depending on whether isomorphic-git resolves HEAD or an
+ * explicitly requested branch), or the Artifacts repo itself missing or not
+ * materialized yet (`NOT_FOUND`, `IMPORT_IN_PROGRESS`, or
+ * `FORK_IN_PROGRESS` — created lazily by the bootstrap saga). Anything else
+ * returns unchanged.
  */
-export function classifyRepoAccessError(error: unknown): unknown {
+export function classifyRepoAccessError(error: unknown, branch?: string): unknown {
   const { code, message } = (error ?? {}) as { code?: unknown; message?: unknown };
+  const missingRequestedBranch =
+    branch !== undefined &&
+    typeof message === "string" &&
+    (message === `Could not find ${branch}.` || message === `Could not find ${branch}`);
   const notSeeded =
-    code === "NOT_FOUND" ||
-    (code === "NotFoundError" && typeof message === "string" && message.includes("refs/"));
+    isArtifactsRepoNotReadyError(error) ||
+    (code === "NotFoundError" &&
+      typeof message === "string" &&
+      (message.includes("refs/") || missingRequestedBranch));
   if (!notSeeded) return error;
   return new RepoNotSeededError(
     `Repo has no commits yet (unseeded or still seeding): ${typeof message === "string" ? message : String(error)}`,
     { cause: error },
   );
+}
+
+/**
+ * Whether `commitOid` is in a branch's ancestry in a complete local clone.
+ *
+ * @cloudflare/shell's git.log defaults to only 20 commits. Grow the walk until
+ * the commit is found or the root is reached so a remote branch that advanced
+ * beyond our recorded Artifacts head is accepted, while a stale or force-moved
+ * branch is not confused with a descendant merely because the old object still
+ * exists in the clone.
+ */
+export async function gitBranchContainsCommit(input: {
+  branch: string;
+  commitOid: string;
+  git: Git;
+}): Promise<boolean> {
+  let depth = 32;
+  for (;;) {
+    const history = await input.git.log({ depth, ref: input.branch });
+    if (history.some((commit) => commit.oid === input.commitOid)) return true;
+    if (history.length < depth) return false;
+    depth *= 2;
+  }
 }
 
 function normalizeRepoPath(path: string): string {

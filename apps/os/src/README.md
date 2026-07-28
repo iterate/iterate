@@ -12,17 +12,17 @@ programs against. When this README and `types.ts` disagree, `types.ts` wins.
 
 ## Layout
 
-| Path                       | What                                                                                                                                            |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `types.ts`                 | The public ITX contract (the design of record)                                                                                                  |
-| `rpc-targets.ts`           | ALL RpcTarget classes: the session/project/agent surfaces, MCP/OpenAPI clients, capability provision, stream subscriptions, egress              |
-| `auth.ts`                  | The auth adapter: credentials → `ItxAuth` (see below)                                                                                           |
-| `itx-client.ts`            | `connectItx()` — the Node/CLI client over a Cap'n Web WebSocket                                                                                 |
-| `ingress.ts`               | The shared routing decision (which requests belong to itx)                                                                                      |
-| `project-directory.ts`     | Slug → project id resolution against the auth worker, cached in the `PROJECT_DIRECTORY` KV namespace                                            |
-| `env.ts`                   | The single worker's binding contract ([worker topology](../docs/worker-topology.md))                                                            |
-| `worker.ts` / `builder.ts` | The worker entry and the builder sidecar entry                                                                                                  |
-| `domains/`                 | One folder per domain: `streams`, `projects`, `repos`, `agents`, `secrets`, `workers` (dynamic), `capability-host`, `itx`, `inbound-mcp-server` |
+| Path                   | What                                                                                                                                            |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `types.ts`             | The public itx contract (the design of record)                                                                                                  |
+| `rpc-targets.ts`       | ALL RpcTarget classes: the session/project/agent surfaces, MCP/OpenAPI clients, capability provision, stream subscriptions, egress              |
+| `auth.ts`              | The auth adapter: credentials → `ItxAuth` (see below)                                                                                           |
+| `itx-client.ts`        | `connectItx()` — the Node/CLI client over a Cap'n Web WebSocket                                                                                 |
+| `ingress.ts`           | The shared routing decision (which requests belong to itx)                                                                                      |
+| `project-directory.ts` | Slug → project id resolution against the auth worker, cached in the `PROJECT_DIRECTORY` KV namespace                                            |
+| `env.ts`               | The single worker's binding contract ([worker topology](../docs/worker-topology.md))                                                            |
+| `worker.ts`            | The single worker entry                                                                                                                         |
+| `domains/`             | One folder per domain: `streams`, `projects`, `repos`, `agents`, `secrets`, `workers` (dynamic), `capability-host`, `itx`, `inbound-mcp-server` |
 
 Each domain owns its Durable Object plus a stream-processor contract
 (`*-processor-contract.ts`, pure: event schemas + reducer) and implementation
@@ -41,8 +41,8 @@ live in domain files.
   "itx" is a NAMING CONVENTION, not a class: an itx is normally an instance of
   `ProjectRpcTarget` whose capability host sits at `"/"` — and sometimes at
   `"/agents/…"`, which is what "an agent context" means. Same type either way;
-  a nested scope sees its own mounted capabilities plus everything inherited
-  from enclosing scopes (child → parent → project).
+  a nested scope sees its own mounted capabilities plus everything its
+  journaled fallback host reports (usually the project root, one hop).
 - A **capability host** is the durable dynamic-capability table (and script
   journal) at one scope path — one `CapabilityHostDurableObject` per
   `{projectId, path}`. Host operations are `provideCapability`,
@@ -142,9 +142,10 @@ The itx and agent surfaces have NO dispatch machinery of their own: the
 to the injected capability host, and the host itself carries the same fallback
 (`host.foo.bar(x)` is `host.invokeCapability({ path: ["foo","bar"], args: [x] })`).
 
-The load-bearing asymmetry: **reads chain up, writes stay local.**
-`invokeCapability`/`__describe` fall through to the enclosing scope on a miss
-(agent -> namespace -> project root), so a root mount is visible everywhere.
+The load-bearing asymmetry: **reads fall back, writes stay local.**
+`invokeCapability`/`__describe` follow the scope's birth-certificate `fallback`
+expression on a miss — one direct hop, normally to the project root host, with
+no path-prefix walking — so a root mount is visible everywhere.
 `provideCapability` always mounts on exactly the host you called it on — to
 mount elsewhere, address that scope explicitly via `capabilityHosts.get(path)`.
 
@@ -167,17 +168,23 @@ using itx = session.projects.get("prj_…");
 `authenticate()` is the only way in — authority is never forged, only handed
 back by a method that checked you. Credential lanes (`auth.ts`):
 
-- `from-server-cookie` — the browser lane: the signed-in user's session cookie
-  (or the admin cookie) riding the WebSocket handshake.
+- `from-server-cookie` — the same-origin browser lane: a signed-in user's
+  session cookie or a short-lived operator cookie on the WebSocket handshake.
 - `bearer` — an auth-worker OAuth access token as RPC data.
 - `admin-secret` — the deployment admin API secret (CLI, tooling, e2e).
+- `operator-session` — a short-lived deployment- and origin-bound operator
+  grant. A project grant carries one project ID and reconstructs a synthetic
+  operator principal; it never adopts a customer identity. A platform grant is
+  a separate, explicit authority kind.
 - `impersonate` — admin-gated fake principal, so test suites can exercise
   per-project confinement without minting real users.
 
 Project access comes from auth-worker session claims, with a directory
 fallback: on a claims miss, `ensureCanAccessProject` consults the auth worker's
 project directory (through the KV cache) and widens the live context — this is
-how a just-created project is usable before the JWT refreshes.
+how a just-created project is usable before the JWT refreshes. Scoped operator
+grants disable this fallback and remain confined to their one signed project
+ID, including when the operator knows another valid project slug or ID.
 
 `connectItx` overloads are client-side convenience only:
 
@@ -189,21 +196,27 @@ using agent = connectItx({ agentPath: "/agents/demo", auth, baseUrl, projectId }
 
 ## Project creation
 
-`session.projects.create({ slug })` registers the project with the auth worker
-(the project directory — OS has no database of its own), primes the KV cache,
-then appends the create-request onto the project's root stream. The project
-processor seeds the config repo at `/repos/config` (an ordinary repo on its
-own stream — `itx.repo` is the shorthand) from the template folder at
-`apps/os/config-repo-template` (ONE TypeScript `worker.ts` — the router as
-its default export plus the example apps as named exports — and `package.json`
-— platform types come from its `iterate` devDependency's `iterate/sdk` export
-— `AGENTS.md`, `ONBOARDING.md`; codegen keeps the seeded file map in
+`session.projects.get(slug)` returns a possibly nonexistent project handle
+without creating anything. `handle.create({ organizationSlug?, projectId? })`
+registers that slug with the auth worker (the project directory — OS has no
+database of its own), adopts the directory-issued project ID, primes the KV
+cache, then appends the Project and notification birth certificates plus both
+processor subscriptions onto the project's root stream in one atomic batch.
+It waits both processors through that batch and then waits for `project/ready`
+before returning the same handle. The Project processor
+creates the root capability host, scheduler, email router, and config repo at
+`/repos/config` (an ordinary repo on its own stream — `itx.repo` is the
+shorthand). The config repo is seeded from the template folder at
+`apps/os/config-repo-template` (thin TypeScript `worker.ts` router, modular
+apps under `apps/`, and `package.json` — platform types come from its
+`iterate` devDependency's `iterate/sdk` export — `AGENTS.md`, `ONBOARDING.md`;
+codegen keeps the seeded file map in
 `domains/repos/config-repo-template.generated.ts` in sync), builds and loads
-the seeded project worker through the worker build pipeline, boots the
-onboarding agent,
-and only then emits `events.iterate.com/project/created`. The config repo's
-stream carries a `cross-post:/` subscription from birth, so every config-repo
-event (the saga's `repo/created` included) is copied onto the project stream
+the seeded project worker through the worker build pipeline, and then emits
+`project/ready`. The onboarding agent is created separately and explicitly
+when its dashboard chat opens; its path alone never creates it. The config
+repo's stream carries a `cross-post:/` subscription from birth, so every
+config-repo event (including `repos/created`) is copied onto the project stream
 `/` with provenance. Streams are the coordination layer for all of this —
 bootstrap is events and processors, not a setup RPC.
 
@@ -263,7 +276,7 @@ with zero setup.
 Secret material is write-only: `itx.secrets.get(path).update({ material,
 egress: { urls } })` stores it encrypted in the Secret Durable Object;
 `describe()` returns audit metadata, never material. Outbound requests
-reference secrets as placeholders — `getSecret({ path: "/secrets/foo" })` in a
+reference secrets as placeholders — `getSecret("/secrets/foo")` in a
 header — and `itx.egress.fetch(request)` substitutes them only when the
 request origin is in the secret's egress allowlist, recording usage audit
 events. Dynamic workers' bare `fetch()` routes through the same egress path.
@@ -276,27 +289,30 @@ the interceptor sees placeholders, never material
 `itx.workers.get(ref)` runs caller-supplied code in an isolate via the Worker
 Loader. Runners are `DynamicWorkerRunner`
 (`domains/workers/worker-runner.ts`) — its constructor is the one place a
-dynamic isolate gets its scoped ITX binding and egress fetcher. A `DynamicWorkerRef` is
+dynamic isolate gets its scoped itx binding and egress fetcher. A `DynamicWorkerRef` is
 `stateless` (a WorkerEntrypoint export, with
 optional `props`) or `stateful` (a DurableObject class export hosted by
-`StatefulWorkerDurableObject` under a `durableWorkerKey`). Its source is an
-orthogonal file source plus Cloudflare build options: files come `inline` or
-from a `repo` snapshot (branch late-bound or commit-pinned, masked by
-include/exclude globs), and the builder sidecar (`src/builder.ts` — the only
-script carrying the bundler toolchain) bundles them — multi-file
-TypeScript and `package.json` npm dependencies included — into a KV-cached,
-loader-ready artifact keyed deterministically (see
-`docs/dynamic-worker-build-requirements.md`). Builds are a direct RPC
-(`env.BUILDER.build`, files passed by value); they leave no events in the
-journal, and build failures reach the
-caller as plain errors. Inside
+`StatefulWorkerDurableObject` under a `durableWorkerKey`). Its source is a
+direct `createWorker` or `createApp` call: each function's `files` option may
+come `inline` or from a `repo` snapshot (branch late-bound or commit-pinned,
+masked by include/exclude globs), and an isolated workerd sidecar runs
+`@cloudflare/worker-bundler` (`worker-bundler.ts`). OS resolves that one
+repo-aware value and otherwise passes the serializable options and unchanged
+paths to the named library function. App layouts and entry points are not
+fixed, and worker-bundler may install root `package.json` dependencies.
+Project build commands do not run. One JSON artifact record is
+cached in KV under a deterministic key shared by identical inputs. Builds pass
+inert source text by value and leave no events in the journal; errors returned
+by worker-bundler are cached briefly, while sidecar/KV/repo errors remain
+retryable. Inside
 loaded code, `await env.ITX.get()` returns a full itx at the ref's scope path.
 `itx.worker` is the seeded project worker — the same mechanism pointed at the
 default repo's `worker.ts`.
 
 Note: method-returned itx surfaces pipeline on every transport, including
-script isolates over Workers RPC — `await itx.workers.get(ref).method(...)`
-and `await itx.agents.get(path).message(...)` work as one expression (the
+script isolates over Workers RPC — `await itx.workers.get(ref).method(...)`,
+`await itx.agents.get(path).create()`, and (after birth)
+`await itx.agents.get(path).message(...)` work as one expression (the
 dynamic-capability fallback lives on the classes' prototype chains, so the
 returned instances are genuine RpcTargets; see
 `installPrototypeInvokeCapabilityFallback`). For several calls on one
@@ -305,6 +321,7 @@ pattern:
 
 ```ts
 using agent = itx.agents.get(path); // no await
+await agent.create();
 const [sent, description] = await Promise.all([agent.message("hello"), agent.__describe()]);
 ```
 
@@ -313,21 +330,26 @@ Await a handle itself only when you truly need the settled stub.
 ## Agents
 
 An agent is a stream (`/agents/<name>`) plus processors. `agent.message()`
-appends `events.iterate.com/agents/message-received`; the single agent
-processor renders inputs into history, applies the input policy, debounces,
-and appends `events.iterate.com/agent/llm-request-requested` — **by
-reference**: no prompt body, the offset is the `llmRequestId`. That same
-processor rebuilds the request by reducing committed history up to that
-offset, runs it through the Cloudflare AI binding (`env.AI`), and appends
-started/chunk/output/completed events. The agent contract: respond with
-exactly one fenced JavaScript block containing a single
-`async (itx) => { … }`, which the ITX processor executes; replies reach the
-user via `itx.chat.sendMessage(message)`
-(`events.iterate.com/agents/web-message-sent`). Scripts behave like tool
-calls: a returned value (or thrown error) renders back into history as the
-next input and triggers another turn, while a script that returns `undefined`
-ends the loop — the completion event then carries no `result` key.
-`agent.ask({ message })` is the send-and-wait convenience.
+appends `events.iterate.com/agents/context-added`: a user-role item for an
+external caller, or a developer-role item with an agent actor for agent-to-agent
+messages. The single agent processor folds all model-visible context into a
+provider-neutral projection with a compaction-immune system lane and a history
+lane, applies user/developer request policies, debounces, and appends
+`events.iterate.com/agent/llm-request-requested` — **by reference**: no prompt
+body, and the event offset is the `llmRequestId`. That same processor rebuilds
+the request by reducing committed events through that offset, runs it through
+the Cloudflare AI binding (`env.AI`), and journals the request lifecycle plus
+the assistant context item. See [Agent context and turns](../docs/agents.md)
+for projection, key publication, provider-role, and compaction semantics.
+
+The agent contract is to respond with exactly one fenced TypeScript block
+containing a single `async (itx) => { … }`, which the capability-host processor
+executes. Replies reach the user via `itx.chat.sendMessage(message)`
+(`events.iterate.com/agents/web-message-sent`). Scripts behave like tool calls:
+a returned value (or thrown error) becomes a developer context item and
+triggers another turn, while a script that returns `undefined` ends the loop —
+the completion event then carries no `result` key. `agent.ask({ message })` is
+the send-and-wait convenience.
 
 ## Stream processor hosting
 

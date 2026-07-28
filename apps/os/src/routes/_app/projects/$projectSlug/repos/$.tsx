@@ -1,15 +1,18 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { z } from "zod";
+import { useLiveState } from "iterate/sdk/itx/react";
 import { InfoRow } from "~/components/info-row.tsx";
-import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { RepoIde } from "~/components/repo-ide/repo-ide.lazy.tsx";
-import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
+import {
+  breadcrumbLoaderData,
+  streamBreadcrumb,
+  streamPageStaticData,
+} from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
-import { useLiveState } from "~/itx/itx-react.tsx";
 
 /** The stream-view params plus the IDE's own view state (open file, diff,
- * markdown/html preview, source-control / GitHub sidebar, history sidebar +
+ * markdown/html preview, source-control/GitHub sidebar, history sidebar +
  * expanded commit). */
 const RepoDetailSearch = StreamViewSearch.extend({
   file: z.string().optional().catch(undefined),
@@ -23,6 +26,7 @@ const RepoDetailSearch = StreamViewSearch.extend({
 });
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/repos/$")({
+  staticData: streamPageStaticData(),
   validateSearch: RepoDetailSearch,
   ssr: false,
   loader: ({ context, params }) =>
@@ -30,16 +34,12 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/repos/$")({
       project: context.project,
       streamBreadcrumb: streamBreadcrumb(context.project, repoPathFromSplat(params._splat)),
     }),
-  component: ProjectRepoDetailPage,
+  // The loader depends on the project and repo path, never the IDE's URL-owned
+  // view state. Keep Code/Preview and sidebar search-param changes synchronous
+  // instead of re-running the project breadcrumb server function.
+  shouldReload: false,
+  component: ProjectRepoDetailContent,
 });
-
-function ProjectRepoDetailPage() {
-  return (
-    <ItxBoundary>
-      <ProjectRepoDetailContent />
-    </ItxBoundary>
-  );
-}
 
 function ProjectRepoDetailContent() {
   const params = Route.useParams();
@@ -67,12 +67,12 @@ function ProjectRepoDetailContent() {
       <RepoIde key={`${project.id}:${repoPath}`} projectId={project.id} repoPath={repoPath} />
     ) : (
       // data-spinner: this panel is live bootstrap progress (the processor
-      // pushes each step in), and right after repos.create it can also show a
+      // pushes each step in), and right after repo creation it can also show a
       // momentarily-stale checkpoint on a repo that IS already initialized —
       // waits must keep extending until the live push replaces it.
       <div className="overflow-y-auto p-4" data-spinner="true">
         <div className="mx-auto w-full max-w-2xl rounded-lg border bg-card">
-          <InfoRow label="Created" value={state.created ? "yes" : "not yet"} />
+          <InfoRow label="Created" value={state.birthCertificate !== null ? "yes" : "not yet"} />
           <InfoRow label="Initialized" value={state.initialized ? "yes" : "not yet"} />
           <InfoRow label="Default branch" value={state.defaultBranch ?? "(none)"} />
           <InfoRow

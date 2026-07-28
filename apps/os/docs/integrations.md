@@ -1,10 +1,11 @@
 # Integrations
 
 The unit is a **connection** at a fully qualified path:
-`/integrations/<slug>/<connection>` — `/integrations/slack/main-slack`,
-`/integrations/google/jonas`. One integration can hold many connections; there
-is no implicit or default connection — addressing something means naming it.
-The path is simultaneously the itx address, the journal home for that
+`/integrations/<provider>/<connection>` — `/integrations/slack/main-slack`,
+`/integrations/google/jonas`. One integration can hold many connections.
+Call the family's `get()` with no argument for the first connected account,
+which is the normal case; pass a connection slug when account identity matters.
+The path is simultaneously the durable address, the journal home for that
 connection's facts and routed events, and the convention root for its secrets
 (`/secrets/integrations/slack/main-slack/bot-token`). This is the platform's
 "an address is a stream coordinate" rule applied without exceptions.
@@ -13,33 +14,38 @@ connection's facts and routed events, and the convention root for its secrets
 
 `itx.integrations` is a collection, like `itx.secrets` and `itx.streams`:
 
-```js
-await itx.integrations.slack["main-slack"].chat.postMessage({ channel, thread_ts, text });
-await itx.integrations.google["jonas"].gmail.request({ path: "/users/me/messages" });
+```ts
+await itx.integrations.slack.get().chat.postMessage({ channel, thread_ts, text });
+await itx.integrations.gmail.get().request({ path: "/users/me/messages" });
+await itx.integrations.github.get().octokit.rest.repos.get({ owner, repo });
+await itx.integrations.github.get("install-123").octokit.graphql(query, variables);
 await itx.integrations.list(); // every connection, built-in and provided
 ```
 
-Two kinds of member, one address space — every dotted call is
-`{slug}.{connection}.{...method}`:
+Two kinds of member, one address space — every connection call is
+`{slug}.get(connection?).{...method}`:
 
-- **Built-in slugs are dispatch branches** (`slack`, `google`, `github`,
-  `telegram`) in the
+- **Built-in public families are dispatch branches** (`slack`, `gmail`,
+  `github`, `telegram`, `waitrose`) in the
   collection's `invokeCapability` — plain imperative branches whose code ships
-  with the OS deployment. Not classes: their only callers are untyped dotted
-  scripts, so a typed per-provider class ladder bought nothing (an earlier cut
-  had one; it was deleted). `BUILTIN_INTEGRATION_SLUGS` is the single constant
-  the dispatch, `list()`'s labeling, and the mount collision guard all share.
-- **Everything else resolves through the ordinary ITX capability table** under
+  with the OS deployment. Gmail's public name maps to the `google` OAuth
+  provider and durable connection path. Data calls and `list()` use `gmail`;
+  connection-management verbs such as `startOAuthFlow` intentionally still
+  take `provider: "google"`. `list()` reports `integration: "gmail"`
+  while retaining the internal `/integrations/google/...` journal path.
+  `BUILTIN_INTEGRATION_SLUGS` names internal providers for lifecycle and
+  mount-collision checks.
+- **Everything else resolves through the ordinary itx capability table** under
   the `integrations` prefix. A project adds its own integration with
   `provideCapability({ path: ["integrations", ...] })` — **data, not
   deployment**. No registry, no provider files, no new dispatch machinery: the
-  ITX processor's longest-prefix mount resolution does the rest. Mounting
+  itx processor's longest-prefix mount resolution does the rest. Mounting
   UNDER a built-in slug (`["integrations", "slack", ...]`) is rejected loudly
   at provide time — the dispatch would shadow it, making the mount durable,
   journaled, and silently unreachable.
 
-The old `itx.slack` / `itx.gmail` builtins are deleted; they were the
-un-nameable single-connection special case this model removes.
+The old top-level `itx.slack` / `itx.gmail` builtins are deleted; connection
+families now live under `itx.integrations`.
 
 ## Three dimensions, three properties
 
@@ -61,7 +67,7 @@ things — none of them needs a framework:
    split above. Promotion path for a provided integration: reimplement it as a
    named getter (a PR to OS); its addresses don't change.
 
-## Built-in connections (slack, google)
+## Built-in connections (Slack and Gmail/Google)
 
 A Slack connection is born at OAuth completion: the callback derives the
 connection name from the workspace domain (deterministic — reconnecting the
@@ -79,13 +85,26 @@ pick the right bot token, and how **multiple Slack workspaces in one project
 just work**. Google connections are named from the account email; tokens live
 in the connection secret, refreshed on 401 by the Secret DO's shared
 `oauth-refresh-token` strategy (nothing token-shaped ever lands on a journal).
+Gmail REST calls carry that connection's access-token placeholder through
+project egress before the Secret DO substitutes it, so the same interceptors
+and approval rules apply to reads and sends.
 
-Slack Web API calls never hold material: the request carries a
-`getSecret(path)` placeholder for the connection's token and traverses
-project egress, which substitutes it inside the Secret Durable Object and
-records `secret/used` audit events. There is **no fallback token** — a typo'd
-or disconnected connection name errors loudly instead of silently posting with
-a deployment-wide credential.
+Slack Web API calls normally never hold material: the request carries a
+`getSecret(path)` placeholder for the connection's token and traverses project
+egress, which substitutes it inside the Secret Durable Object and records
+`secret/used` audit events. If Slack rejects a live connection's token, trusted
+platform code may retry with the deployment Slack app's optional fallback token only
+after `auth.test` proves its team id matches the connection journal. A typo'd
+or disconnected connection still errors loudly instead of silently posting
+with a deployment-wide credential.
+
+That deployment token is an optional outbound fallback, not connection state.
+It can be revoked and must never be used to recreate a project association.
+Only OAuth completion owns the sequence “validated token → secret → router
+birth/subscription → connected fact → global team claim.” A validly signed
+webhook that arrives before the final claim is ACKed and ignored; creating a
+claim beside an unvalidated token therefore produces a false-connected project
+and silent inbound loss rather than a partial restoration.
 
 **Status is a journal tail-fold for every provider** — one machine, no
 per-provider mechanism: `getConnection` pages backwards from the journal head
@@ -93,14 +112,16 @@ per-provider mechanism: `getConnection` pages backwards from the journal head
 (connected/disconnected). Nothing snapshots a processor: the slack router's
 whole state is its `channel:thread_ts → streamPath` routing table.
 
-**`list()` = journals ∪ mounts, deduped by path.** Every
+**`list()` = journals ∪ credential-defined connections ∪ mounts, deduped by path.** Every
 `/integrations/<slug>/<connection>` stream in the project's catalogue is one
-entry (`source: "builtin"` for slack/google, `"provided"` otherwise — the path
-shape is the truth, deliberately not filtered), plus every capability-table
+entry (`source: "builtin"` for Slack/Gmail, `"provided"` otherwise; Gmail is
+reported by its public name even though its path contains `google`), plus every capability-table
 mount under `integrations` (`connection: null` for an integration-level
-mount). A provided integration whose webhooks journal at the same path as its
-mount is one entry. Journals persist after disconnect, so entries carry a
-status, not existence: the dashboard counts `status.connected`.
+mount). Waitrose session-secret paths contribute its credential-defined
+connections because it intentionally has no lifecycle journal. A provided
+integration whose webhooks journal at the same path as its mount is one entry.
+Journals persist after disconnect, so entries carry a status, not existence:
+the dashboard counts `status.connected`.
 
 Management verbs live on the collection: `getConnection` and `disconnect`
 are connection-scoped; `startOAuthFlow({ provider, userId })` and the
@@ -116,14 +137,14 @@ exactly one confined home, never onto journals.
 ## Waitrose: the credentials-not-OAuth builtin
 
 Waitrose is a built-in like the others —
-`itx.integrations.waitrose["<connection>"].<method>(...)` dispatches in
+`itx.integrations.waitrose.get().<method>(...)` dispatches in
 deployment code over the vendored client
 (`domains/integrations/waitrose-api.ts`: the reverse-engineered Android app's
 operations — its GraphQL gateway rejects hand-slimmed selections, so the
 queries are the app's verbatim). What makes it the interesting archetype is
 its connect flow: there is none. A connection exists when its secret does —
 
-```js
+```ts
 await itx.secrets.get("/secrets/integrations/waitrose/mum/session").update({
   egress: { urls: ["https://www.waitrose.com"] },
   material: { username: "mum@example.com", password: "…" },
@@ -134,9 +155,9 @@ await itx.secrets.get("/secrets/integrations/waitrose/mum/session").update({
 });
 ```
 
-```js
-await itx.integrations.waitrose.mum.shoppingContext();
-await itx.integrations.waitrose.mum.searchProducts("milk", { size: 5 });
+```ts
+await itx.integrations.waitrose.get("mum").shoppingContext();
+await itx.integrations.waitrose.get("mum").searchProducts("milk", { size: 5 });
 ```
 
 The connection secret holds only `{ username, password }` plus the
@@ -166,11 +187,11 @@ repo — no platform change needed. Two shapes:
   project's repo first, then calls the new surface.
 
 - **A collection mount.** For providers a project wants addressed like a
-  built-in — `itx.integrations.<slug>.<connection>.<method>()` —
+  built-in — `itx.integrations.<slug>.get(<connection>).<method>()` —
   `provideCapability({ path: ["integrations", "<slug>"], type:
 "itx-expression", flattenNestedPaths: true })` mounts any expression (a
   standalone dynamic worker, an MCP connection, …) into the collection; the
-  mount is a `capability-provided` event on the ITX journal — replayable,
+  mount is a `capability-provided` event on the itx journal — replayable,
   revocable, enumerable by `integrations.list()`. Mount at the project root
   (`itx.capabilityHosts.get("/")`) so the collection's dispatch can see it.
   Exercised in `e2e/vitest/integrations-userspace.e2e.test.ts` with an
@@ -193,19 +214,28 @@ GitHub connects as a **GitHub App installation** (deep-link to
 `installation_id`; no code exchange, no user token):
 
 - **Connect**: the callback claims the installation — connection named
-  `install-<id>`, empty material in the connection secret plus the
+  `install-<id>-<fence>` so delayed cleanup from an older ownership generation
+  cannot brick a later winner, empty material in the connection secret plus the
   `github-app-installation` refresh strategy (App id + installation id are
   public strategy config; the App private key resolves from
   `APP_CONFIG_INTEGRATIONS__GITHUB` at mint time), `github/connected` on the
   journal, `installation_id` claimed in the directory. One exchange half +
   one `recordConnection` call — the shape every provider pays.
-- **API calls**: `itx.integrations.github["<connection>"]` is a real wrapped
-  Octokit (`rest.*`, `request(...)`, `graphql(...)`) whose transport carries a
-  `getSecret` placeholder through the connection secret's fetch. The Secret
-  DO mints the installation token on first use and re-mints on 401 — trusted
-  DO code signing the App JWT, no worker, no jail.
+- **API calls**: `itx.integrations.github.get().octokit` is a real
+  wrapped Octokit (`rest.*`, `request(...)`, `graphql(...)`, `paginate(...)`).
+  The `.octokit` namespace is mandatory: it makes the SDK boundary explicit
+  and a direct `.rest` on the connection is rejected. Its transport carries a
+  `getSecret` placeholder through project egress, so interceptors and approval
+  rules run before the Secret DO mints the installation token on first use or
+  re-mints it on 401 — trusted DO code signing the App JWT, no worker, no jail.
 - **Inbound App webhooks** land on the door, verify `x-hub-signature-256`
-  with plain WebCrypto, and route on `installation_id`.
+  with plain WebCrypto, and route on `installation_id`. Each delivery is
+  appended once to `/integrations/github/<connection>` with its complete
+  decoded JSON payload plus small associations typed from Octokit's generated
+  payloads: stable repository coordinates, an optional subject pull request,
+  its content author, and mentioned users.
+  The integration does not create agents or decide what a webhook means to a
+  project.
 - **`gh` in sandboxes** works automatically, with no byte handoff: ALL
   container egress (HTTPS included, MITM'd with the container CA) routes
   through the project egress door, so a sandbox holds only a placeholder
@@ -214,15 +244,23 @@ GitHub connects as a **GitHub App installation** (deep-link to
   connection secret's `accessToken` as a `getSecret` placeholder;
   lexicographically first connection when several exist), and `gh` reads it
   from the env natively. `git` gets a
-  `git http."https://github.com/".extraheader` with a raw Bearer placeholder
-  (set by the warm-up script) — deliberately not a credential helper or
-  `gh auth setup-git`, which send Basic auth (base64) and would hide the
-  placeholder from header substitution.
+  `git http."https://github.com/".extraheader` with Basic auth
+  (`x-access-token` + base64 of the placeholder — GitHub's git smart-HTTP
+  rejects Bearer). Project egress peels Basic Authorization headers before
+  substituting so the placeholder stays findable without putting token bytes
+  in the container.
 
 The provided-lane exhibits remain in the catalogue: `github-mcp-connect`
 (GitHub's MCP server mounted under the `github-mcp` slug — built-in slugs
 cannot be shadowed) and `github-webhooks-project-worker` (deliveries landing
 on the project host's own worker).
+
+A linked repo cross-posts only matching push deliveries to its repo stream so
+the repo processor can import its default branch. Pull-request automation is
+instead ordinary userspace code: the config-repo template shows a project
+worker consuming first-hand connection-stream facts and forwarding them to
+`/agents<repo-path>/pr/<number>`. See
+[GitHub pull-request agents](./github-agents.md).
 
 ## Telegram: the fourth builtin
 
@@ -239,13 +277,13 @@ the redirect machinery:
   `recordConnection` does the rest: token in the connection secret (egress
   pinned to `https://api.telegram.org`), `telegram/connected` on the journal,
   router armed, bot id claimed. Connection named from the bot username.
-- **API calls**: `itx.integrations.telegram["<connection>"].<method>(params)`
+- **API calls**: `itx.integrations.telegram.get().<method>(params)`
   — the Bot API is flat, so exactly one method segment with one params object
   (`sendMessage`, `sendPhoto`, `getMe`, …). The Bot API authenticates in the
   **URL path** (`/bot<token>/<method>`), which is why secret substitution
   reaches the request URL's path — and only its path — per ADR 0005: the
   request carries
-  `/botgetSecret({ path: ... })/<method>` through project egress and the
+  `/botgetSecret("/secrets/…")/<method>` through project egress and the
   Secret DO fills the token in.
 - **Inbound updates** land on the per-bot door path (Telegram payloads don't
   identify the bot), verify the echoed `X-Telegram-Bot-Api-Secret-Token`
@@ -256,10 +294,12 @@ the redirect machinery:
   destination is a pure function of its chat —
   `/agents/telegram/<connection>/chat-<chatId>` (`/topic-<threadId>` appended
   for forum supergroup topics; ids verbatim, sign included). The
-  `telegram-agent` processor transcribes updates into agent input (v1: media
-  as bracketed placeholders like `[photo]`), ignores bot-authored updates, and
-  sends the `typing` chat action while the agent works; the agent replies via
-  `sendMessage` with the chat id from its own path/inputs.
+  `telegram-agent` processor transcribes updates into agent context (media gets
+  bracketed hints like `[photo]`, while the raw payload retains the `file_id`
+  needed for a token-safe `getFile` + secret-backed egress download), ignores
+  bot-authored updates, and sends the `typing` chat action while the agent
+  works; the agent replies via `sendMessage` with the chat id from its own
+  path/inputs.
 - **Disconnect**: best-effort `deleteWebhook` (through the substituting egress
   path — no material read), then the shared `recordDisconnection`.
 
@@ -277,8 +317,9 @@ the redirect machinery:
   would be a second un-shreddable durable home, and an interactive OAuth
   callback must not block on a cold cross-DO wake chain. The invariance lives
   in `recordConnection(...)`, a plain function.
-- **Implicit/default connections.** `itx.integrations.slack.chat.postMessage`
-  is an error that tells you to name a connection, not a guess.
+- **Property-name connection selection.** `itx.integrations.slack.main` and
+  `itx.integrations.slack["main"]` are errors. `get()` is the only selector:
+  no argument chooses the first connected account; a slug chooses an exact one.
 - **Webhook signature verification in project workers** — worker code cannot
   hold the HMAC secret (substitution is egress-headers/path-only); capability-URL
   tokens are the workaround. The userspace verification story returns with the

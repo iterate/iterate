@@ -1,57 +1,71 @@
-import { IterateDurableObject, IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
+import { GithubAiLinter } from "iterate/starter-apps/github-ai-linter";
+import { GuestbookApp } from "iterate/starter-apps/guestbook";
+import { IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
+import { TodoApp } from "iterate/starter-apps/todo";
 
-// The whole seeded worker in ONE file, so reading this module is reading the
-// whole system: the root project worker (default export) routes HTTP and
-// reacts to project events, and the example apps are named exports — a
-// stateless HelloApp and a stateful CounterApp with live WebSocket updates.
-// Both apps build from THIS file with a different entry class; split an app
-// into its own file (and point its ref's entryPoint at it) when it earns one.
+// An iterate project is, in the abstract, just a fetch function.
+// HTTP clients on the internet can send us Requests, and we will send responses and
+// occasionally send HTTP requests outwards to the world to take influence on it.
 //
-// Everything extends the iterate/sdk base classes — IterateWorkerEntrypoint
-// (stateless) and IterateDurableObject (stateful) — which carry the platform
-// surface: `processEventBatch`/`processEvent` (event delivery — override
-// `processEvent` to react), `invokeCapability` (flattened `itx.worker.<path>`
-// dispatch — any getter or method you add becomes a capability surface), and
-// `fetchDynamicWorker` (HTTP into sibling workers, WebSockets included). Env
-// defaults to `{ ITX: ItxBinding }`, the one binding the platform supplies.
+// Internally, different parts of a project communicate by appending and subscribing to append-only
+// event streams.
+//
+// Hence, the essence of an iterate project can be expressed as two functions:
+// { fetch, processEvent }
 
 export default class ProjectWorker extends IterateWorkerEntrypoint {
+  #aiLintApp = GithubAiLinter.create(this.env, {
+    policyVersion: "2",
+    rules: {
+      glob: "rules/**/*.md",
+      repoPath: "/repos/config",
+    },
+  });
+  #guestbookApp = GuestbookApp.create(this.env);
+  #todoApp = TodoApp.create(this.env);
+
+  // The base class delivers committed events on ANY stream here at least once and in
+  // per-stream order.
+  protected override async processEvent(event: StreamEvent): Promise<void> {
+    await this.#aiLintApp.processEvent(event);
+    await this.#guestbookApp.processEvent(event);
+  }
+
   async fetch(req: Request): Promise<Response> {
-    // Each app is a repo-backed dynamic worker; ingress selects one via the
-    // trusted x-iterate-app header (hosts like hello--<slug>.<base> or
-    // <app>.<custom-hostname>). Requests with no app selected get the static
-    // homepage below. `fetchDynamicWorker` dispatches over the platform's
-    // fetch-native worker lane — its docstring explains why app HTTP must
-    // ride a real fetch hop, never an RPC method call.
     const app = req.headers.get("x-iterate-app");
-    if (app === "hello") {
-      return this.fetchDynamicWorker(req, {
-        type: "stateless",
-        path: "/",
-        entrypoint: "HelloApp",
-        source: {
-          files: { type: "repo", repoPath: "/repos/config" },
-          options: { entryPoint: "worker.ts" },
-        },
-      });
+    if (app === "todo") {
+      using itx = await this.env.ITX.get();
+      const authResponse = await itx.auth.get({ policy: "project-member" }).fetch(req);
+      if (authResponse) return authResponse;
+      return this.#todoApp.fetch(req);
     }
-    if (app === "counter") {
-      return this.fetchDynamicWorker(req, {
-        type: "stateful",
-        path: "/",
-        className: "CounterApp",
-        durableWorkerKey: "app-counter",
-        source: {
-          files: { type: "repo", repoPath: "/repos/config" },
-          options: { entryPoint: "worker.ts" },
-        },
-      });
+    if (app === "guestbook") {
+      return this.#guestbookApp.fetch(req);
+    }
+    if (app === "tasks") {
+      // Member-gated reverse proxy (pages, assets, WebSockets) to the hosted
+      // tasks board (github.com/iterate/tasks), which authenticates each
+      // visitor back to os.iterate.com. The kv knob targets a dev tunnel
+      // while developing the tasks app itself.
+      using itx = await this.env.ITX.get();
+      const denied = await itx.auth.get({ policy: "project-member" }).fetch(req);
+      if (denied) return denied;
+      const tasksUrl = new URL(req.url);
+      tasksUrl.protocol = "https:";
+      const origin = await itx.kv.get("tasks-app-origin");
+      tasksUrl.host =
+        typeof origin === "string" && origin !== "" ? origin : "tasks.iterate.workers.dev";
+      return fetch(
+        new Request(tasksUrl, {
+          method: req.method,
+          headers: req.headers,
+          body: req.body,
+          redirect: "manual",
+        }),
+      );
     }
     if (app) return new Response(`unknown app: ${app}`, { status: 404 });
 
-    // The seeded homepage is a static page linking to the apps. Platform
-    // hosts use "<app>--<project>.<base>"; custom domains use
-    // "<app>.<custom-hostname>".
     const url = new URL(req.url);
     const hostKind = req.headers.get("x-iterate-host-kind");
     const appUrl = (slug: string) =>
@@ -61,10 +75,11 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         <html>
           <body>
             <main>
-              <p>Hello from your Iterate project worker.</p>
+              <p>Hello from your iterate project worker.</p>
               <ul>
-                <li><a href="${appUrl("hello")}">hello</a> (stateless)</li>
-                <li><a href="${appUrl("counter")}">counter</a> (stateful)</li>
+                <li><a href="${appUrl("todo")}">todo</a> (LiveState + Cap'n Web, project members only)</li>
+                <li><a href="${appUrl("guestbook")}">guestbook</a> (stream processor reduce on /guestbook, public)</li>
+                <li><a href="${appUrl("tasks")}">tasks</a> (collaborative task board over tasks/, project members only)</li>
               </ul>
               <p>Edit worker.ts in the project repo to change this.</p>
             </main>
@@ -72,142 +87,5 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         </html>`,
       { headers: { "content-type": "text/html; charset=utf-8" } },
     );
-  }
-
-  // The base class delivers every committed event on every stream in this
-  // project here, one call per event — in per-stream order, at-least-once
-  // (its docstring has the full contract). React with one `if` per reaction,
-  // keyed on event.path + event.type; anything a reaction appends should
-  // carry an idempotency key.
-  async processEvent(event: StreamEvent): Promise<void> {
-    // THIS WORKER configures new agents. When any stream under /agents/ is
-    // born (a web chat, the onboarding agent, a chat or email thread), the
-    // platform announces it on the project root stream and this
-    // reaction appends the agent's policy: system prompt, model,
-    // capability mounts, boot context. `itx.agents.defaults.forPath` returns
-    // the platform's defaults as data — edit the result (or pass overrides:
-    // { systemPrompt, model }) to change how YOUR agents behave.
-    if (event.path === "/" && event.type === "events.iterate.com/stream/child-stream-created") {
-      const childPath = event.payload?.childPath;
-      if (typeof childPath === "string" && childPath.startsWith("/agents/")) {
-        // env.ITX.get() hands this isolate an RPC stub; releasing it when the
-        // reaction ends keeps the runtime's "stub was not disposed" warning
-        // out of the logs (one agent birth = one reaction). try/finally, not
-        // a `using` declaration: this repo builds through the platform
-        // bundler at target es2022, which cannot transform `using` yet.
-        const itx = await this.env.ITX.get();
-        try {
-          const defaults = await itx.agents.defaults.forPath(childPath);
-          await itx.streams.get(childPath).append(...defaults.events);
-        } finally {
-          // Guarded: stub disposal is contractually non-throwing, but a throw
-          // HERE would reject processEvent AFTER the append side effect —
-          // redelivery would then apply the defaults twice.
-          try {
-            itx[Symbol.dispose]?.();
-          } catch {}
-        }
-      }
-    }
-  }
-}
-
-// A stateless app the root project worker routes to when ingress selects the
-// "hello" app. It gets the full project itx through env.ITX, and the same
-// base-class surface as the root worker — add a getter here and it's an
-// `itx.worker` capability on THIS app via `project.workers.get(ref)`.
-export class HelloApp extends IterateWorkerEntrypoint {
-  async fetch(req: Request): Promise<Response> {
-    const project = await this.env.ITX.get();
-    try {
-      const description = await project.__describe();
-      return Response.json({
-        app: "hello",
-        path: new URL(req.url).pathname,
-        projectId: description.projectId,
-      });
-    } finally {
-      // Release the itx stub (see the processEvent comment above); guarded so
-      // a throwing dispose can never mask the response.
-      try {
-        project[Symbol.dispose]?.();
-      } catch {}
-    }
-  }
-}
-
-// A stateful app: a Durable Object hosted as a repo-backed stateful dynamic
-// worker. State survives across requests under its durableWorkerKey, and
-// every open page gets live updates over a WebSocket. The /ws upgrade's 101
-// response reaches this Durable Object over the platform's fetch-native
-// worker lane (the ProjectWorker router above, via `fetchDynamicWorker`) —
-// an `app.fetch(req)` RPC method call could not carry a socket. Copy this
-// shape for anything real-time.
-export class CounterApp extends IterateDurableObject {
-  private sockets = new Set<WebSocket>();
-
-  async fetch(req: Request): Promise<Response> {
-    // The path lane advertises its stripped URL prefix; host lanes have none.
-    const prefix = req.headers.get("x-iterate-url-prefix") ?? "";
-    const url = new URL(req.url);
-
-    if (url.pathname === "/ws") {
-      if (req.headers.get("upgrade")?.toLowerCase() !== "websocket") {
-        return new Response("expected websocket", { status: 426 });
-      }
-      const pair = new WebSocketPair();
-      const ws = pair[1];
-      ws.accept();
-      this.sockets.add(ws);
-      const drop = () => this.sockets.delete(ws);
-      ws.addEventListener("close", drop);
-      ws.addEventListener("error", drop);
-      // Greet every new socket with the current count, so a fresh tab is
-      // correct before anyone clicks.
-      ws.send(String(await this.current()));
-      return new Response(null, { status: 101, webSocket: pair[0] });
-    }
-
-    if (req.method === "POST" && url.pathname === "/increment") {
-      return Response.json({ count: await this.increment() });
-    }
-
-    // A mini client-side app: the count renders server-side, the button
-    // POSTs /increment, and the WebSocket pushes every new value to every
-    // open tab. The button stays disabled — with a visible "connecting…"
-    // state — until the socket is open, so a click always has a live update
-    // lane and anyone (tests included) can SEE why the button isn't ready
-    // yet.
-    return new Response(
-      `<!doctype html>
-        <html>
-          <body>
-            <main>
-              <p>count: <span id="n">${await this.current()}</span></p>
-              <button id="b" disabled>increment</button>
-              <p id="s">connecting…</p>
-            </main>
-            <script>
-              const button = document.getElementById("b");
-              button.onclick = () => fetch("${prefix}/increment", { method: "POST" });
-              const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "${prefix}/ws");
-              ws.onopen = () => { button.disabled = false; document.getElementById("s").remove(); };
-              ws.onmessage = (event) => { document.getElementById("n").textContent = event.data; };
-            </script>
-          </body>
-        </html>`,
-      { headers: { "content-type": "text/html; charset=utf-8" } },
-    );
-  }
-
-  async increment(): Promise<number> {
-    const n = (this.ctx.storage.kv.get<number>("n") ?? 0) + 1;
-    this.ctx.storage.kv.put("n", n);
-    for (const ws of this.sockets) ws.send(String(n));
-    return n;
-  }
-
-  async current(): Promise<number> {
-    return this.ctx.storage.kv.get<number>("n") ?? 0;
   }
 }

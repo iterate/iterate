@@ -103,10 +103,67 @@ request":
 - **The building page.** Named errors do not survive fetch hops the way they
   survive RPC, so a budget-expired cold build answers a single shared
   response from whichever hop hit it (`workerBuildingResponse()`): a 503
-  that auto-refreshes in browsers, is marked `x-iterate-worker-building` for
-  routers that want to substitute their own page, and reads as a retryable
-  close to a WebSocket reconnect loop. RPC callers of `workers.get` still
-  get the named `WorkerBuildInProgressError` instead.
+  that polls itself (meta-refresh for no-JS clients), is marked
+  `x-iterate-worker-building` for routers that want to substitute their own
+  page, and reads as a retryable close to a WebSocket reconnect loop. RPC
+  callers of `workers.get` still get the named `WorkerBuildInProgressError`
+  instead.
+
+## The serve-side status surface and overlay
+
+A cold request waits only for its build budget, and the budget depends on who
+is waiting (`buildBudgetForRequest`): a document navigation
+(`sec-fetch-dest: document`) races only briefly — a person watching a blank
+tab should see the branded building page almost immediately, and the page
+polls its way into the app — while other clients (API calls, the building
+page's own polls, WebSocket dials) keep the caller's budget, since a stand-in
+HTML page does nothing for them. Ingress applies this to the root project
+worker's build and `ItxEntrypoint.fetch` clamps the dispatch header's budget
+the same way, so an app-level first build behind the seeded router shows the
+page just as fast. If the build is still running past the budget the request
+receives `workerBuildingResponse()`: a 503 that polls itself and is marked
+`x-iterate-worker-building`. A build failure receives a terminal build-failed
+page; it is not cached, so a reload or later request tries the build again
+without turning a transient bundler outage into a persisted source failure.
+RPC calls wait for the build and receive the named error instead. There is no
+stale artifact, last-good pointer, distributed build lock, or background
+refresh policy.
+
+That named error is created at the public caller boundary. Internally, source
+failure remains a plain discriminated result through the coordinator and, for
+stateful workers, the hosting Durable Object. Infrastructure failures remain
+exceptions. This keeps delivery policy intact across Workers RPC without
+reconstructing properties stripped from serialized errors.
+
+Ingress itself answers through one serve envelope
+(`serveProjectResponse`, domains/workers/project-serve.ts): budget, the
+stand-in pages, the overlay, and a catch-all — any serve failure that is not
+a modeled build state answers a branded self-retrying error page (marked
+`x-iterate-worker-serve-error`, details only in logs) instead of escaping as
+a naked 500/1101, so a project host always shows platform chrome.
+
+Successful repo-backed fetches carry platform-authored
+`x-iterate-worker-serve: <commit oid>`. The platform
+removes any value user code tried to spoof before stamping this header.
+Project ingress uses it to inject the small **Iterate overlay** into HTML
+documents (HTMLRewriter, appended before `</body>`). Injection is skipped for
+non-documents, encoded bodies, and responses opting out through
+`x-iterate-overlay`. The live overlay is scriptless declarative shadow DOM;
+native details/summary provides its click-open panel. For a CSP-protected
+document, ingress generates a per-response nonce, authorizes it only in the
+style directive governing elements (in every header or meta policy), and puts
+it on the overlay's isolated stylesheet. When styles fall back to
+`default-src`, ingress copies those sources into a new `style-src` directive
+before adding the nonce; the nonce never enters `default-src`, where it could
+also become script permission. It never adds `unsafe-inline` or a new host
+source. The same streaming transform adds an
+inverted Iterate favicon at document end when the app has no `rel=icon` link
+anywhere in its document. Its reserved same-origin asset lives at
+`/.iterate/favicon.svg`, so normal self-only CSPs accept it without embedding
+the full SVG in every document. On the `/prj_<id>` path lane, the link keeps
+that browser-visible prefix while dispatch serves the rewritten project path.
+Overlay opt-out does not affect the favicon fallback; an app-provided icon
+always wins. See `worker-serve-overlay.ts`.
 
 ## Live capabilities and WebSockets: the specification, and today's boundary
 
@@ -144,9 +201,10 @@ deliberately not blessed here: the specification above is the intended shape.
   lane. Project ingress and the seeded router already do this for app hosts;
   worker-to-worker HTTP is `env.ITX.fetch` with the dispatch header.
 - WebSockets specifically: `fetch` checks the `upgrade` header, returns
-  `new Response(null, { status: 101, webSocket })`. The seeded `CounterApp`'s
-  `/ws` route (a named export of the one-file seeded `worker.ts`) is the
-  reference; `project-ingress.e2e.test.ts` proves the lane end to end.
+  `new Response(null, { status: 101, webSocket })`. The seeded guestbook's
+  `/api` route (`newWorkersWebSocketRpcResponse` in
+  `apps/guestbook/server.tsx`) is the reference;
+  `project-ingress.e2e.test.ts` proves the lane end to end.
 - Calling methods on a worker (`itx.worker.<getter>.<method>`, provided
   capabilities, probes)? That is the capability tree — RPC dispatch,
   serialized results, `flattenNestedPaths` if the worker wants to interpret

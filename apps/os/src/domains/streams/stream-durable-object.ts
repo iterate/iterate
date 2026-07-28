@@ -1,30 +1,40 @@
 import { DurableObject } from "cloudflare:workers";
 import { z } from "zod";
-import type { Env } from "../../env.ts";
-import type { Stream } from "../../itx-api.generated.ts";
-import { StreamSubscriptionRpcTarget } from "../../rpc-targets.ts";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { buildAcceptCrossPostAppendInputs } from "./cross-post.ts";
 import type {
   ProcessorRuntimeState,
   StreamPushEventBatch,
   StreamSubscriptionHandle,
-} from "./rpc-types.ts";
-import type { StreamEvent, StreamEventInput } from "./schemas.ts";
-import { StreamEventInput as StreamEventInputSchema } from "./schemas.ts";
+} from "iterate/processors";
+import { idempotencyConflictMessage, sameIdempotentEvent } from "iterate/processors";
+import { StreamOffsetConflictError, streamOffsetConflictMessage } from "iterate/processors";
+import type { StreamEvent, StreamEventInput } from "iterate/processors";
+import { StreamEventInput as StreamEventInputSchema } from "iterate/processors";
+import { StreamRuntimeMetrics } from "iterate/processors";
+import { LiveState, LiveStateRpcTarget } from "iterate/sdk/capnweb";
+import { streamDeliveryAuthContext } from "../../auth.ts";
+import { workerVersion, type Env } from "../../env.ts";
+import type { Stream } from "../../itx-api.generated.ts";
+import {
+  deploymentItxForInternal,
+  itxForScope,
+  StreamSubscriptionRpcTarget,
+} from "../../rpc-targets.ts";
+import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { posthogSubscriptionEvent } from "../integrations/posthog.ts";
+import { buildAcceptCrossPostAppendInputs } from "./cross-post.ts";
 import { compileEventSelector } from "./event-selector.ts";
 import {
   reconcileSubscriptionCursorRows,
   SqliteSubscriptionCursorStore,
   StreamEventLog,
 } from "./stream-storage.ts";
-import {
-  StreamSubscribers,
-  type ConnectionRuntimeState,
-  type SubscriptionRuntimeState,
-} from "./stream-subscribers.ts";
-import { StreamRuntimeMetrics, type StreamThroughputMetrics } from "./stream-runtime-metrics.ts";
+import { StreamSubscribers } from "./stream-subscribers.ts";
+import type { StreamRuntimeDebugState } from "./stream-runtime-state.ts";
 import { createSubscriberDial } from "./subscriber-sinks.ts";
+import {
+  isDurableObjectLifecycleError,
+  STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX,
+} from "./stream-unavailable.ts";
 import {
   CORE_STATE_VERSION,
   CoreProcessorContract,
@@ -35,6 +45,138 @@ import {
 
 const DEFAULT_GET_EVENTS_LIMIT = 500;
 const MAX_GET_EVENTS_LIMIT = 500;
+const STREAM_PAUSED_ERROR_PREFIX = "stream paused: ";
+
+function isStreamPausedError(error: unknown): error is Error {
+  return (
+    error instanceof Error &&
+    error.name === "Error" &&
+    error.message.startsWith(STREAM_PAUSED_ERROR_PREFIX)
+  );
+}
+
+/**
+ * Observe fire-and-forget stream-core work without handing a rejected promise
+ * to `waitUntil`. A deployment replaces the current Durable Object
+ * incarnation and rejects its in-flight stub calls; that is a lifecycle
+ * interruption, while an application rejection remains an error.
+ */
+export async function settleStreamCoreBackgroundWork(work: () => Promise<unknown>): Promise<void> {
+  try {
+    await work();
+  } catch (error) {
+    if (isStreamPausedError(error)) {
+      console.info("stream core background work reached a paused stream", {
+        message: error.message,
+      });
+      return;
+    }
+    if (isDurableObjectLifecycleError(error)) {
+      console.info("stream core background work interrupted by durable object lifecycle", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    console.error("stream core background work failed", error);
+  }
+}
+
+/**
+ * Cuts durable delivery out of the append request's actor-drain tree.
+ *
+ * A Stream append can itself be nested inside a subscriber processor. If its
+ * post-commit delivery is attached to that append with `ctx.waitUntil`, a
+ * delivery back to the caller closes a cycle: caller waits for append, append
+ * waits for delivery, and delivery waits for caller. Outside an alarm turn we
+ * therefore retain only the short `setAlarm(now)` operation. The alarm starts
+ * a fresh invocation, re-derives owed work from durable cursors, and may then
+ * retain the delivery attempt without holding any append caller open.
+ *
+ * The work closure is deliberately NOT remembered between turns. Its durable
+ * representation is the subscription cursor lag; `onAlarm()` reconciles that
+ * state and supplies a fresh closure even after isolate eviction.
+ */
+type StreamDeliveryAlarmBoundaryHooks = {
+  armAlarm(atMs: number): void;
+  now(): number;
+  waitUntil(work: Promise<unknown>): void;
+};
+
+type StreamAlarmStorage = {
+  setAlarm(atMs: number): Promise<void>;
+};
+
+/**
+ * Issues the native alarm write in the same synchronous storage turn as the
+ * cursor/event write that made delivery necessary. Durable Object output
+ * gates make that load-bearing: a failed setAlarm resets the object and
+ * suppresses its outgoing response, so cursor lag cannot commit as an
+ * acknowledged success without its wakeup.
+ *
+ * Do not add a getAlarm/await before setAlarm. Multiple writes made without
+ * an intervening await coalesce into one implicit transaction. A fresh Stream
+ * incarnation appends `woken`, so its first useful arm is immediate and may
+ * safely replace an inherited later alarm.
+ *
+ * https://developers.cloudflare.com/durable-objects/reference/glossary/#output-gate
+ * https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/#understand-how-input-and-output-gates-work
+ */
+export class StreamAlarmArmer {
+  readonly #storage: StreamAlarmStorage;
+  #armedForMs: number | null = null;
+
+  constructor(storage: StreamAlarmStorage) {
+    this.#storage = storage;
+  }
+
+  armNoLaterThan(atMs: number): void {
+    const previous = this.#armedForMs;
+    if (previous !== null && previous <= atMs) return;
+    this.#armedForMs = atMs;
+    try {
+      // Deliberately not awaited or caught: the native output gate owns the
+      // write and turns an asynchronous failure into an invocation failure.
+      void this.#storage.setAlarm(atMs);
+    } catch (cause) {
+      this.#armedForMs = previous;
+      throw new Error("stream alarm arming failed", { cause });
+    }
+  }
+
+  markFired(): void {
+    this.#armedForMs = null;
+  }
+}
+
+export class StreamDeliveryAlarmBoundary {
+  readonly #hooks: StreamDeliveryAlarmBoundaryHooks;
+  #inAlarmTurn = false;
+
+  constructor(hooks: StreamDeliveryAlarmBoundaryHooks) {
+    this.#hooks = hooks;
+  }
+
+  scheduleOrRun(work: () => Promise<unknown>): void {
+    if (this.#inAlarmTurn) {
+      this.#hooks.waitUntil(settleStreamCoreBackgroundWork(work));
+      return;
+    }
+    // setAlarm is itself an output-gated storage write. Issue it directly in
+    // this append turn: wrapping it in a settling waitUntil would cross the
+    // implicit-transaction boundary and could acknowledge lag without a wake.
+    this.#hooks.armAlarm(this.#hooks.now());
+  }
+
+  runAlarmTurn(work: () => void): void {
+    const wasInAlarmTurn = this.#inAlarmTurn;
+    this.#inAlarmTurn = true;
+    try {
+      work();
+    } finally {
+      this.#inAlarmTurn = wasInAlarmTurn;
+    }
+  }
+}
 
 /**
  * The subscription key of the birth-certificate worker feed every
@@ -71,6 +213,13 @@ const PROJECT_WORKER_SUBSCRIPTION_KEY = "project-worker";
  * that touch SQLite/KV must remain synchronous.
  */
 export class StreamDurableObject extends DurableObject<Env> {
+  /** Report this incarnation's code version for the deployment rollout gate. */
+  deploymentVersion(): string {
+    return workerVersion(this.env);
+  }
+
+  #liveState!: LiveState<StreamRuntimeDebugState>;
+  #liveStateRefreshScheduled = false;
   readonly name = parseStreamDurableObjectName(this.ctx.id.name);
   readonly #log = new StreamEventLog(this.ctx.storage.sql, this.name.path);
   /**
@@ -78,9 +227,17 @@ export class StreamDurableObject extends DurableObject<Env> {
    * because the core-state rebuild path also reconciles these rows against
    * the freshly folded config — see #readCoreProcessorState.
    */
-  readonly #subscriptionCursorStore = new SqliteSubscriptionCursorStore(this.ctx.storage.sql);
+  readonly #subscriptionCursorStore = new SqliteSubscriptionCursorStore(this.ctx.storage.sql, {
+    onMutation: () => this.#refreshLiveState(),
+  });
   /** In-memory throughput accounting (events/s, bytes in/out); resets with the incarnation. */
   readonly #metrics = new StreamRuntimeMetrics(Date.now());
+  readonly #alarmArmer = new StreamAlarmArmer(this.ctx.storage);
+  readonly #deliveryAlarmBoundary = new StreamDeliveryAlarmBoundary({
+    armAlarm: (atMs) => this.#alarmArmer.armNoLaterThan(atMs),
+    now: () => Date.now(),
+    waitUntil: (work) => this.ctx.waitUntil(work),
+  });
   readonly #subscribers = new StreamSubscribers({
     idleTeardownMs: idleTeardownMs(this.env),
     hooks: {
@@ -94,8 +251,8 @@ export class StreamDurableObject extends DurableObject<Env> {
           limit: args.limit,
           // RAW, ephemeral included: the spine's cursors advance over every
           // offset (skip-not-defer, like selector-filtered events), and the
-          // ephemeral lane delivers them; the durable lanes filter them from
-          // DELIVERY in stream-subscribers.ts.
+          // ephemeral lane delivers them; durable lanes filter them from
+          // DELIVERY unless their ordinary subscription explicitly opts in.
           includeEphemeral: true,
         }),
       coreState: () => this.#coreProcessorState,
@@ -103,6 +260,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       dial: createSubscriberDial({
         projectId: this.name.projectId,
         exports: this.ctx.exports,
+        createAuthorityRoot: () => this.#createSubscriberAuthorityRoot(),
         onDurableDeliveryError: (subscriptionKey, error) =>
           this.#subscribers.onDurableDeliveryError(subscriptionKey, error),
       }),
@@ -113,39 +271,69 @@ export class StreamDurableObject extends DurableObject<Env> {
         try {
           this.append(event);
         } catch (error) {
+          if (isDurableObjectLifecycleError(error)) {
+            console.info("stream delivery fact append interrupted by durable object lifecycle", {
+              message: error instanceof Error ? error.message : String(error),
+              type: event.type,
+            });
+            return;
+          }
           console.error("stream delivery fact append failed", { type: event.type, error });
         }
       },
-      recordEgress: (count, bytes) => this.#metrics.egress.bump(Date.now(), count, bytes),
+      recordEgress: (count, bytes) => {
+        this.#metrics.egress.bump(Date.now(), count, bytes);
+        this.#refreshLiveState();
+      },
+      runtimeChanged: () => this.#refreshLiveState(),
       now: () => Date.now(),
       random: () => Math.random(),
-      armAlarm: (atMs) => void this.#armAlarmNoLaterThan(atMs),
+      armAlarm: (atMs) => this.#alarmArmer.armNoLaterThan(atMs),
+      runDurable: (work) => this.#deliveryAlarmBoundary.scheduleOrRun(work),
       keepAlive: (promise) => this.#runInBackground(() => promise),
     },
   });
   #coreProcessorState: CoreProcessorState;
 
+  /**
+   * Creates a fresh in-isolate root for one stream delivery evaluation. It
+   * carries narrowly branded delivery auth and owns no Workers RPC lifetime.
+   */
+  #createSubscriberAuthorityRoot(): unknown {
+    const auth = streamDeliveryAuthContext();
+    return this.name.projectId === null
+      ? deploymentItxForInternal({ auth, ctx: this.ctx })
+      : itxForScope({
+          auth,
+          ctx: this.ctx,
+          streamContext: { kind: "scope", scopePath: "/" },
+          path: "/",
+          projectId: this.name.projectId,
+        });
+  }
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.#coreProcessorState = this.#readCoreProcessorState();
+    this.#liveState = new LiveState(this.#readRuntimeState());
 
     // The first boot appends the stream's birth certificate; every wake
     // (fetch, RPC, alarm) appends a `woken` fact, whose post-commit fan-out is
     // also what re-establishes durable deliveries after hibernation.
     //
-    // For project-scoped streams the birth certificate includes the worker
-    // feed: a `subscription-configured` push subscription to the project
-    // worker's `processEventBatch`, appended by the stream TO ITSELF in the
-    // same synchronous turn as `created`. Born-configured means zero wiring
-    // window — the feed is armed before the first user event can land (a
-    // voice stream streams from birth) — while remaining ordinary config:
-    // one registry, one spine, overridable by re-appending the same key.
+    // Project streams are born with their ordinary platform feeds. Declaring
+    // both here means there is no asynchronous wiring window before the first
+    // user event, while the subscription facts remain removable/replaceable
+    // through the same public lifecycle as any other subscription.
     if (this.#coreProcessorState.eventCount === 0) {
       this.append({
         type: "events.iterate.com/stream/created",
         payload: { projectId: this.name.projectId, path: this.name.path },
       });
-      if (this.name.projectId !== null) {
+      // The standalone streams playground reuses this DO without hosting a
+      // project worker. Do not invent a fake subscriber there: OS's PROJECT
+      // binding is the capability that makes this feed real.
+      if (this.name.projectId !== null && "PROJECT" in this.env) {
         this.append({
           type: "events.iterate.com/stream/subscription-configured",
           payload: {
@@ -159,6 +347,10 @@ export class StreamDurableObject extends DurableObject<Env> {
             onPoison: "skip",
           } satisfies SubscriptionConfiguredPayload,
         });
+        // The standalone streams playground also has no PostHog credential or
+        // receiver. Deployed OS environments require the credential, so its
+        // presence is the integration boundary.
+        if ("APP_CONFIG_POSTHOG" in this.env) this.append(posthogSubscriptionEvent());
       }
     }
     this.append({
@@ -167,34 +359,16 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
   }
 
-  /** The DO alarm: the spine's durable retry timer. */
+  /** Use Cloudflare's native alarm invocation as the trace root; retry work remains background. */
   alarm(): void {
-    this.#alarmArmedForMs = null;
+    this.#alarmArmer.markFired();
     // The constructor's `woken` append already ran `#subscribers.wake()` via
     // post-commit fan-out; this call re-arms the alarm for the next due retry
     // (wake() itself only attempts rows whose backoff has elapsed).
-    this.#subscribers.onAlarm();
-    this.#flushCoreProcessorState();
-  }
-
-  /**
-   * The earliest alarm time armed this incarnation, tracked in memory so two
-   * concurrent arms can't race each other through the async getAlarm/setAlarm
-   * pair (both observing null and the LATER one winning). Reset when the
-   * alarm fires; a stale-low value merely re-arms an already-set time.
-   */
-  #alarmArmedForMs: number | null = null;
-
-  /** Move the DO alarm earlier, never later (many rows share one alarm). */
-  async #armAlarmNoLaterThan(atMs: number): Promise<void> {
-    if (this.#alarmArmedForMs !== null && this.#alarmArmedForMs <= atMs) return;
-    this.#alarmArmedForMs = atMs;
-    try {
-      const current = await this.ctx.storage.getAlarm();
-      if (current === null || atMs < current) await this.ctx.storage.setAlarm(atMs);
-    } catch (error) {
-      console.error("stream alarm arming failed", error);
-    }
+    this.#deliveryAlarmBoundary.runAlarmTurn(() => {
+      this.#subscribers.onAlarm();
+      this.#flushCoreProcessorState();
+    });
   }
 
   // ===========================================================================
@@ -247,6 +421,9 @@ export class StreamDurableObject extends DurableObject<Env> {
           if (expectedOffset !== undefined && expectedOffset !== existing.offset) {
             throw new Error(`idempotency hit at offset ${existing.offset}, got ${expectedOffset}`);
           }
+          if (!sameIdempotentEvent(existing, body)) {
+            throw new Error(idempotencyConflictMessage(body.idempotencyKey, existing.offset));
+          }
           events.push(existing);
           continue;
         }
@@ -261,7 +438,9 @@ export class StreamDurableObject extends DurableObject<Env> {
         path: this.name.path,
       };
       if (expectedOffset !== undefined && expectedOffset !== committed.offset) {
-        throw new Error(`expected offset ${committed.offset}, got ${expectedOffset}`);
+        throw new StreamOffsetConflictError(
+          streamOffsetConflictMessage(expectedOffset, committed.offset),
+        );
       }
 
       const previousState = workingState;
@@ -298,6 +477,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       newEvents.length,
       byteLengths.reduce((sum, bytes) => sum + bytes, 0),
     );
+    this.#refreshLiveState();
 
     // 3. Post-commit fan-out. Core side effects are fire-and-forget where
     // async, so nothing here can fail the append. One wake covers every lane:
@@ -313,10 +493,11 @@ export class StreamDurableObject extends DurableObject<Env> {
       newEvents.map((event, index) => ({ event, byteLength: byteLengths[index]! })),
     );
 
-    // Re-arm (or clear) the idle timer against the post-append connection set,
+    // Re-arm (or clear) idle teardown against the post-append connection set,
     // so a stream that just went quiet sheds its durable delivery sessions
-    // and lets both DOs hibernate.
-    this.#subscribers.armOrClearIdleTimer();
+    // and lets both DOs hibernate. This uses the native DO alarm, never an
+    // actor setTimeout that would retain the current JS-RPC invocation.
+    this.#subscribers.armOrClearIdleAlarm();
 
     return events;
   }
@@ -365,6 +546,26 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
   }
 
+  /** The committed head used to pin a recoverable public wait's replay cursor. */
+  getMaxOffset(): number {
+    return this.#coreProcessorState.maxOffset;
+  }
+
+  /**
+   * Both heads in one read, for exact-offset CAS appends that also need a
+   * fold barrier: `maxOffset` is the raw assignable head (ephemeral rows hold
+   * offsets too — the CAS target), while `maxDurableOffset` is the tail a
+   * default catch-up can actually fold through — the only head a
+   * `waitUntilEvent` barrier can be pinned to without wedging on a trailing
+   * ephemeral suffix that processor reads never see.
+   */
+  getHeadOffsets(): { maxDurableOffset: number; maxOffset: number } {
+    return {
+      maxDurableOffset: this.#log.highestDurableOffset(),
+      maxOffset: this.#coreProcessorState.maxOffset,
+    };
+  }
+
   // ===========================================================================
   // The core processor.
   //
@@ -411,18 +612,17 @@ export class StreamDurableObject extends DurableObject<Env> {
       // persisted expressions are NAMES — every delivery re-derives authority
       // from THIS stream's own itx root (project-scoped, or the deployment
       // root for projectId: null streams).
-      const event = CoreProcessorContract.parseEventInput(
-        "events.iterate.com/stream/subscription-configured",
-        args.event,
-      );
-      if (event.payload.delivery.mode === "webhook" && this.name.projectId === null) {
+      const payload = CoreProcessorContract.events[
+        "events.iterate.com/stream/subscription-configured"
+      ].payloadSchema.parse(args.event.payload);
+      if (payload.delivery.mode === "webhook" && this.name.projectId === null) {
         // Webhook POSTs ride the project egress lane (attribution +
         // interception); a global stream has no project to attribute them to.
         throw new Error("webhook subscriptions require a project-scoped stream");
       }
       // An unparseable selector condition must be rejected before it commits,
       // not discovered as a per-event error forever after. (compile throws.)
-      compileEventSelector(event.payload.selector);
+      compileEventSelector(payload.selector);
     }
 
     if (!args.state.paused) return;
@@ -440,7 +640,9 @@ export class StreamDurableObject extends DurableObject<Env> {
       case "events.iterate.com/stream/subscription-parked":
         return;
       default:
-        throw new Error(`stream paused: ${args.state.pauseReason ?? "unknown reason"}`);
+        throw new Error(
+          `${STREAM_PAUSED_ERROR_PREFIX}${args.state.pauseReason ?? "unknown reason"}`,
+        );
     }
   }
 
@@ -488,7 +690,6 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   #reduceCore(args: { event: StreamEvent; state: CoreProcessorState }): CoreProcessorState {
-    const parse = CoreProcessorContract.parseEvent;
     let next: CoreProcessorState = {
       ...args.state,
       eventCount: args.state.eventCount + 1,
@@ -508,9 +709,13 @@ export class StreamDurableObject extends DurableObject<Env> {
       return this.#reduceCircuitBreaker({ event: args.event, state: next });
     }
 
-    switch (args.event.type) {
+    const event = parseCoreEvent(args.event);
+    if (event === undefined) {
+      return this.#reduceCircuitBreaker({ event: args.event, state: next });
+    }
+
+    switch (event.type) {
       case "events.iterate.com/stream/created": {
-        const event = parse("events.iterate.com/stream/created", args.event);
         if (event.offset !== 1) {
           throw new Error(
             "events.iterate.com/stream/created must be the first event and have offset 1",
@@ -528,7 +733,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
 
       case "events.iterate.com/stream/woken": {
-        const event = parse("events.iterate.com/stream/woken", args.event);
         // A new stream incarnation means every previous delivery connection
         // died with the old one. Clearing the roster here is what keeps it
         // truthful without heartbeats: surviving subscribers reconnect and
@@ -537,7 +741,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
 
       case "events.iterate.com/stream/paused": {
-        const event = parse("events.iterate.com/stream/paused", args.event);
         return {
           ...next,
           paused: true,
@@ -547,7 +750,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
 
       case "events.iterate.com/stream/resumed": {
-        const event = parse("events.iterate.com/stream/resumed", args.event);
         return {
           ...next,
           paused: false,
@@ -557,7 +759,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
 
       case "events.iterate.com/stream/configured": {
-        const event = parse("events.iterate.com/stream/configured", args.event);
         const circuitBreaker = event.payload.config.circuitBreaker;
         if (circuitBreaker === undefined) return next;
         return {
@@ -573,7 +774,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
 
       case "events.iterate.com/stream/subscriber-connected": {
-        const event = parse("events.iterate.com/stream/subscriber-connected", args.event);
         const { subscriptionKey, subscriber, subscriptionType } = event.payload;
         // Ephemeral connections are runtime facts, not reduced state: their
         // lifetime is the live socket, tracked in #subscribers. Folding them
@@ -597,7 +797,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
 
       case "events.iterate.com/stream/subscriber-disconnected": {
-        const event = parse("events.iterate.com/stream/subscriber-disconnected", args.event);
         const { [event.payload.subscriptionKey]: _closed, ...connectionsByKey } =
           next.connectionsByKey;
         return this.#reduceCircuitBreaker({
@@ -607,7 +806,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
 
       case "events.iterate.com/stream/subscription-configured": {
-        const event = parse("events.iterate.com/stream/subscription-configured", args.event);
         return this.#reduceCircuitBreaker({
           event: args.event,
           state: {
@@ -628,7 +826,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
 
       case "events.iterate.com/stream/subscription-removed": {
-        const event = parse("events.iterate.com/stream/subscription-removed", args.event);
         const { [event.payload.subscriptionKey]: _removed, ...configuredSubscribersByKey } =
           next.configuredSubscribersByKey;
         return this.#reduceCircuitBreaker({
@@ -638,7 +835,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
 
       case "events.iterate.com/stream/subscription-parked": {
-        const event = parse("events.iterate.com/stream/subscription-parked", args.event);
         const existing = next.configuredSubscribersByKey[event.payload.subscriptionKey];
         // A parked fact for a since-removed subscription folds to nothing.
         if (existing === undefined) {
@@ -660,7 +856,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
 
       case "events.iterate.com/stream/subscription-resumed": {
-        const event = parse("events.iterate.com/stream/subscription-resumed", args.event);
         const existing = next.configuredSubscribersByKey[event.payload.subscriptionKey];
         if (existing === undefined) {
           return this.#reduceCircuitBreaker({ event: args.event, state: next });
@@ -681,11 +876,9 @@ export class StreamDurableObject extends DurableObject<Env> {
       case "events.iterate.com/stream/subscription-cursor-set":
         // The seek itself is a side effect on the spine's cursor row (see
         // #processEvent); the fold only validates and counts the fact.
-        parse("events.iterate.com/stream/subscription-cursor-set", args.event);
         return this.#reduceCircuitBreaker({ event: args.event, state: next });
 
       case "events.iterate.com/stream/child-stream-created": {
-        const event = parse("events.iterate.com/stream/child-stream-created", args.event);
         if (next.path === undefined) {
           return this.#reduceCircuitBreaker({ event: args.event, state: next });
         }
@@ -700,7 +893,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
 
       case "events.iterate.com/stream/error-occurred":
-        parse("events.iterate.com/stream/error-occurred", args.event);
         return this.#reduceCircuitBreaker({ event: args.event, state: next });
 
       default:
@@ -725,36 +917,23 @@ export class StreamDurableObject extends DurableObject<Env> {
       return;
     }
 
-    switch (args.event.type) {
+    const event = parseCoreEvent(args.event);
+    if (event === undefined) return;
+
+    switch (event.type) {
       case "events.iterate.com/stream/subscription-configured": {
-        const event = CoreProcessorContract.parseEvent(
-          "events.iterate.com/stream/subscription-configured",
-          args.event,
-        );
         this.#subscribers.onSubscriptionConfigured(event.payload, event.offset);
         return;
       }
       case "events.iterate.com/stream/subscription-removed": {
-        const event = CoreProcessorContract.parseEvent(
-          "events.iterate.com/stream/subscription-removed",
-          args.event,
-        );
         this.#subscribers.onSubscriptionRemoved(event.payload.subscriptionKey);
         return;
       }
       case "events.iterate.com/stream/subscription-resumed": {
-        const event = CoreProcessorContract.parseEvent(
-          "events.iterate.com/stream/subscription-resumed",
-          args.event,
-        );
         this.#subscribers.onResumed(event.payload.subscriptionKey);
         return;
       }
       case "events.iterate.com/stream/subscription-cursor-set": {
-        const event = CoreProcessorContract.parseEvent(
-          "events.iterate.com/stream/subscription-cursor-set",
-          args.event,
-        );
         this.#subscribers.onCursorSet(event.payload.subscriptionKey, event.payload.afterOffset);
         return;
       }
@@ -877,17 +1056,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   #runInBackground(work: () => Promise<unknown>): void {
-    let promise: Promise<unknown>;
-    try {
-      promise = work();
-    } catch (error) {
-      console.error("stream core background work failed", error);
-      return;
-    }
-    this.ctx.waitUntil(promise);
-    void promise.catch((error: unknown) => {
-      console.error("stream core background work failed", error);
-    });
+    this.ctx.waitUntil(settleStreamCoreBackgroundWork(work));
   }
 
   // ===========================================================================
@@ -916,10 +1085,16 @@ export class StreamDurableObject extends DurableObject<Env> {
       // row; a row's backoff may blame code the new version replaced). Drop
       // rows with no surviving config; keep progress (ackedOffset is
       // monotonic truth about the same immutable log) but clear failure state
-      // so every survivor gets an immediate fresh try under the new fold.
+      // so every survivor gets an immediate fresh try under the new fold —
+      // except parked survivors, which stay parked through the replay and
+      // keep their row's failure evidence for the stalled-warning sheet.
+      const configured = Object.entries(state.configuredSubscribersByKey);
       reconcileSubscriptionCursorRows(
         this.#subscriptionCursorStore,
-        new Set(Object.keys(state.configuredSubscribersByKey)),
+        new Set(configured.map(([key]) => key)),
+        new Set(
+          configured.filter(([, entry]) => entry.parkedAtOffset !== undefined).map(([key]) => key),
+        ),
       );
     }
 
@@ -1040,8 +1215,10 @@ export class StreamDurableObject extends DurableObject<Env> {
    * callers still observe an async call through their stub.
    *
    * `subscribe({ subscriptionKey: "s", processEventBatch })` live-tails by
-   * default. `replayAfterOffset: 0` replays from the first event; `3` starts at
-   * offset 4. Re-subscribing with the same key replaces the old connection.
+   * default. `replayAfterOffset: 0` replays durable events from the first row;
+   * `3` starts durable replay at offset 4. Ephemeral rows are delivered only
+   * if appended after this exact connection opens and are never replayed.
+   * Re-subscribing with the same key replaces the old connection.
    * Omit `subscriptionKey` for an anonymous subscription (the stream assigns a
    * random key). Call the returned `unsubscribe()` to stop delivery.
    *
@@ -1065,12 +1242,25 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
     if (
       args.replayAfterOffset !== undefined &&
-      (!Number.isInteger(args.replayAfterOffset) || args.replayAfterOffset < 0)
+      (!Number.isSafeInteger(args.replayAfterOffset) || args.replayAfterOffset < 0)
     ) {
       // NaN binds as SQL NULL downstream (`offset > NULL` matches nothing), so
       // an unvalidated cursor produces a live-looking subscription that
       // silently delivers nothing forever.
       throw new Error(`replayAfterOffset must be a non-negative integer`);
+    }
+    if (
+      args.expectedIncarnation !== undefined &&
+      args.expectedIncarnation !== null &&
+      args.expectedIncarnation.trim().length === 0
+    ) {
+      throw new Error(`expectedIncarnation must be null or a non-empty string`);
+    }
+    if (
+      args.maxReplayOffsetGap !== undefined &&
+      (!Number.isSafeInteger(args.maxReplayOffsetGap) || args.maxReplayOffsetGap < 0)
+    ) {
+      throw new Error(`maxReplayOffsetGap must be a non-negative integer`);
     }
 
     // Validate the caller-supplied descriptor at the boundary. The public
@@ -1098,6 +1288,8 @@ export class StreamDurableObject extends DurableObject<Env> {
       subscriptionKey,
       sink: args.processEventBatch,
       replayAfterOffset: args.replayAfterOffset,
+      expectedIncarnation: args.expectedIncarnation,
+      maxReplayOffsetGap: args.maxReplayOffsetGap,
       selector,
       events: args.events,
       presence,
@@ -1114,11 +1306,12 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * One-shot convenience over `subscribe()`: replay from the requested cursor,
-   * then live-tail until a caller predicate accepts an event.
+   * One-shot convenience over `subscribe()`: replay durable events from the
+   * requested cursor, then live-tail until a caller predicate accepts an event.
    *
-   * Rides an ephemeral subscription, so it CAN match ephemeral events —
-   * remember their rows may be evicted later if you record the offset.
+   * Rides an ephemeral subscription, so it CAN match an ephemeral event
+   * appended after this wait opens. It never matches a historical ephemeral
+   * row, regardless of `afterOffset`.
    *
    * Intentionally not a durable waiter. If the RPC caller or this DO
    * incarnation dies, the wait dies too; callers that need retry semantics
@@ -1133,9 +1326,9 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
     if (
       args.afterOffset !== undefined &&
-      (!Number.isInteger(args.afterOffset) || args.afterOffset < 0)
+      (!Number.isSafeInteger(args.afterOffset) || args.afterOffset < 0)
     ) {
-      throw new Error("waitForEvent afterOffset must be a non-negative integer.");
+      throw new Error("waitForEvent afterOffset must be a non-negative safe integer.");
     }
 
     const predicate = args.predicate ?? (() => true);
@@ -1146,6 +1339,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     // event (events can be multi-megabyte).
     let seenCount = 0;
     const recentTypes: string[] = [];
+    let settled = false;
 
     // Scan delivered batches in order. Predicate work is chained instead of run
     // inline so an async predicate never blocks stream delivery, and a later
@@ -1159,20 +1353,31 @@ export class StreamDurableObject extends DurableObject<Env> {
       processEventBatch: ({ events }) => {
         scan = scan.then(async () => {
           for (const event of events) {
+            if (settled) break;
             seenCount += 1;
             recentTypes.push(event.type);
             if (recentTypes.length > 20) recentTypes.shift();
-            if (await predicate(event)) found.resolve(event);
+            if (await predicate(event)) {
+              settled = true;
+              found.resolve(event);
+              break;
+            }
           }
         });
-        void scan.catch((error: unknown) => found.reject(error));
+        void scan.catch((error: unknown) => {
+          if (settled) return;
+          settled = true;
+          found.reject(error);
+        });
       },
     });
 
     const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
       found.reject(
         new Error(
-          `Timed out waiting for stream event after ${args.timeoutMs}ms ` +
+          `${STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX}Timed out waiting for stream event after ${args.timeoutMs}ms ` +
             `(saw ${seenCount} events; recent types: ${recentTypes.join(", ") || "none"}).`,
         ),
       );
@@ -1192,20 +1397,39 @@ export class StreamDurableObject extends DurableObject<Env> {
     return this.#subscribers.getProcessorRuntimeState(args.subscriptionKey);
   }
 
-  runtimeState(): {
-    coreProcessorState: CoreProcessorState;
-    runtime: {
-      connections: Record<string, ConnectionRuntimeState>;
-      subscriptions: Record<string, SubscriptionRuntimeState>;
-      metrics: StreamThroughputMetrics;
-      /** SQLite database size in bytes (event log + spine rows + chunks). */
-      storageSizeBytes: number;
-    };
-  } {
+  runtimeState(): StreamRuntimeDebugState {
     // Observer-driven RTT sampling: being asked for runtime state IS the
     // signal someone is watching. The round runs in the background (this
-    // method is synchronous); the caller's next poll reads the samples.
+    // method is synchronous); a later read or live update carries the sample.
     this.#subscribers.samplePingsSoon();
+    return this.#readRuntimeState();
+  }
+
+  /** Push-driven twin of `runtimeState()` for polling-free debug surfaces. */
+  get liveState(): LiveStateRpcTarget<StreamRuntimeDebugState> {
+    return new LiveStateRpcTarget({
+      live: this.#liveState,
+      loadAndRefreshLive: () => {
+        this.#subscribers.samplePingsSoon();
+        this.#liveState.setState(this.#readRuntimeState());
+      },
+    });
+  }
+
+  /** Materialize at most once per mutation burst, and only while observed. */
+  #refreshLiveState(): void {
+    // Cursor reconciliation can reach this before the constructor assigns
+    // #liveState; the optional read is therefore intentional.
+    const liveState = this.#liveState;
+    if (liveState?.observed !== true || this.#liveStateRefreshScheduled) return;
+    this.#liveStateRefreshScheduled = true;
+    queueMicrotask(() => {
+      this.#liveStateRefreshScheduled = false;
+      if (liveState.observed) liveState.setState(this.#readRuntimeState());
+    });
+  }
+
+  #readRuntimeState(): StreamRuntimeDebugState {
     return {
       coreProcessorState: this.#coreProcessorState,
       runtime: {
@@ -1245,6 +1469,10 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 }
 
+/** Idempotency deduplicates one logical event, not arbitrary writes sharing a
+ * key. Provenance is deliberately excluded: a processor may retry the same
+ * logical output after a deploy changes its source-version stamp. */
+
 /**
  * What `append` accepts over the wire: a public event input plus the optional
  * `offset` optimistic-concurrency assertion (split off before validation).
@@ -1265,6 +1493,13 @@ type ReducedCoreEvent = {
   previousState: CoreProcessorState;
   state: CoreProcessorState;
 };
+
+/** Parse only event types owned by the core contract; application events are inert here. */
+function parseCoreEvent(event: StreamEvent) {
+  return Object.hasOwn(CoreProcessorContract.events, event.type)
+    ? CoreProcessorContract.parseEvent(event)
+    : undefined;
+}
 
 function resetCircuitBreaker(
   circuitBreaker: CoreProcessorState["circuitBreaker"],

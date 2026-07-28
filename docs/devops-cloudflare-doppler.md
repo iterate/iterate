@@ -36,8 +36,7 @@ the envs.ts entry, so a wrong-config wrap fails loudly. Destructive scripts
 ## Core Doppler model
 
 - Every independently deployable app has a Doppler project: `os`, `auth`,
-  `semaphore`, `tunnels`, `streams-example-app`, `dummy-petshop`,
-  `iterate-com`.
+  `semaphore`, `tunnels`, `streams-example-app`, `dummy-petshop`.
 - `doppler.yaml` maps directories to projects; the working directory picks
   the project unless a command passes `--project`.
 - `_shared` owns values inherited by apps, including the per-environment
@@ -92,12 +91,24 @@ deploys.
 
 ## Bringing up a new environment
 
+For a new preview slot, use [Adding preview slots](adding-preview-slots.md).
+Preview slots also require lease inventory, OAuth audiences, Doppler branch
+configs, external integration apps, and fleet verification; the steps below
+cover only the shared Cloudflare resource/deploy skeleton.
+
 1. Add the entry to envs.ts (preview slots: `previewSlot(N, {...UNPROVISIONED})`).
 2. `pnpm ensure-resources --env <name>` per app — creates missing D1/KV/DNS
-   and prints the IDs to paste into envs.ts.
+   and prints the IDs to paste into envs.ts. A brand-new OS Worker defers its
+   inbound-email catch-all until deploy because Cloudflare does not accept a
+   route to a missing script.
 3. Commit envs.ts (wrangler.jsonc is generated on demand, never committed).
-4. Deploy auth first (`pnpm --dir apps/auth run deploy --env <name>`), then
-   os (its deploy bakes auth's JWKS and fails fast if auth isn't serving).
+4. After Doppler and resources are ready, deploy auth and os concurrently.
+   Both consume one Doppler-owned signing key; os derives only its public half
+   and never waits for auth's JWKS endpoint. A brand-new environment still
+   needs the auth service to exist before Cloudflare can resolve os's service
+   binding, but subsequent revisions have no JWT-driven deployment order. The
+   os deploy also requires the post-upload inbound-email catch-all to
+   reconcile.
 
 ## Cloudflare accounts
 

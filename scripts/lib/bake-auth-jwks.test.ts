@@ -1,63 +1,43 @@
 import { describe, expect, it } from "vitest";
-import { bakeStaticAuthJwks } from "./bake-auth-jwks.ts";
+import { bakeStaticAuthJwks, parseAuthSigningPrivateJwk } from "./bake-auth-jwks.ts";
+
+const privateJwk = {
+  alg: "EdDSA",
+  crv: "Ed25519",
+  d: "private",
+  kid: "auth-signing",
+  kty: "OKP",
+  x: "public",
+};
 
 describe("bakeStaticAuthJwks", () => {
-  it("ignores a pinned Doppler JWKS when baking deploy JWKS", async () => {
-    const baked = await bakeStaticAuthJwks({
-      authBaseUrl: "https://auth.iterate.com",
-      dopplerConfig: "prd",
-      envName: "prd",
-      secrets: {
-        APP_CONFIG_ITERATE_AUTH__JWKS: JSON.stringify(jwks("pinned")),
-      },
-      fetchJwks: async () => jwks("live"),
+  it("derives the public JWKS from the Doppler-owned private key", () => {
+    const baked = bakeStaticAuthJwks({
+      dopplerConfig: "preview_1",
+      envName: "preview_1",
+      secrets: { AUTH_FORGE_PRIVATE_JWK: JSON.stringify(privateJwk) },
     });
 
-    expect(JSON.parse(baked)).toEqual(jwks("live"));
+    expect(JSON.parse(baked)).toEqual({
+      keys: [{ alg: "EdDSA", crv: "Ed25519", kid: "auth-signing", kty: "OKP", x: "public" }],
+    });
   });
 
-  it("fails closed when the live auth JWKS cannot be fetched", async () => {
-    await expect(
+  it("keeps the production forge-key opt-in fail closed", () => {
+    expect(() =>
       bakeStaticAuthJwks({
-        authBaseUrl: "https://auth.iterate.com",
         dopplerConfig: "prd",
         envName: "prd",
-        secrets: {
-          APP_CONFIG_ITERATE_AUTH__JWKS: JSON.stringify(jwks("pinned")),
-        },
-        fetchJwks: async () => {
-          throw new Error("auth unavailable");
-        },
+        secrets: { AUTH_FORGE_PRIVATE_JWK: JSON.stringify(privateJwk) },
       }),
-    ).rejects.toThrow(/auth unavailable/);
-  });
-
-  it("merges the forge public key into the live auth JWKS", async () => {
-    const baked = await bakeStaticAuthJwks({
-      authBaseUrl: "https://auth.iterate.com",
-      dopplerConfig: "prd",
-      envName: "prd",
-      secrets: {
-        AUTH_FORGE_ALLOW_PRODUCTION: "true",
-        AUTH_FORGE_PRIVATE_JWK: JSON.stringify({ ...key("forge"), d: "private" }),
-      },
-      fetchJwks: async () => jwks("live"),
-    });
-
-    expect(JSON.parse(baked)).toEqual({ keys: [key("live"), key("forge")] });
+    ).toThrow(/AUTH_FORGE_ALLOW_PRODUCTION=true/);
   });
 });
 
-function jwks(kid: string) {
-  return { keys: [key(kid)] };
-}
-
-function key(kid: string) {
-  return {
-    alg: "EdDSA",
-    crv: "Ed25519",
-    kid,
-    kty: "OKP",
-    x: `${kid}-public`,
-  };
-}
+describe("parseAuthSigningPrivateJwk", () => {
+  it("rejects a public-only or non-Ed25519 key", () => {
+    expect(() =>
+      parseAuthSigningPrivateJwk(JSON.stringify({ ...privateJwk, d: undefined })),
+    ).toThrow(/private Ed25519 JWK/);
+  });
+});

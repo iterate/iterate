@@ -10,10 +10,12 @@ setup:
     path: packages/shared/
   - project: _shared
     path: ./
-  - project: iterate-com
-    path: apps/iterate-com/
   - project: os
     path: apps/os/
+  # The mobile app is a client of OS deployments; its live e2e lane reads the
+  # same env (admin secret, forge key, auth issuer) as apps/os.
+  - project: os
+    path: apps/mobile/
   - project: semaphore
     path: apps/semaphore/
   - project: streams-example-app

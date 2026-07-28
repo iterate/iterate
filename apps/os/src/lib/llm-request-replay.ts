@@ -1,11 +1,11 @@
 import { z } from "zod";
 import { extractCloudflareChunkDeltas } from "@iterate-com/ui/components/events/agent-ui-reducer";
+import { StreamEvent } from "iterate/processors";
 import { AgentProcessorContract } from "~/domains/agents/agent-processor-contract.ts";
 import {
   buildAgentLlmRequestBody,
   flattenMessageToText,
 } from "~/domains/agents/agent-processor-implementation.ts";
-import { StreamEvent } from "~/domains/streams/schemas.ts";
 
 // The agent processor never journals an LLM request's input — it REBUILDS it
 // from committed history on every attempt (buildAgentLlmRequestBody), keyed by
@@ -22,18 +22,16 @@ import { StreamEvent } from "~/domains/streams/schemas.ts";
 export const LLM_REPLAY_EVENT_TYPES: readonly string[] = AgentProcessorContract.consumes;
 
 /**
- * The streamed-chunk event type, for the trace panel's second mirror query.
- * Chunks are emitted-only (the processor's fold never consumes them), so they
- * ride outside LLM_REPLAY_EVENT_TYPES and are fetched per-request instead —
- * one request's chunks, not every request's.
+ * The streamed-chunk event type for pure replay callers that already hold a
+ * live batch. Browser mirrors never persist or replay these ephemeral rows.
  */
-export const LLM_RESPONSE_CHUNK_EVENT_TYPE = "events.iterate.com/agent/llm-response-chunk";
+const LLM_RESPONSE_CHUNK_EVENT_TYPE = "events.iterate.com/agent/llm-response-chunk";
 
 export type LlmRequestReplayMessage = {
   /** Stable identity: a message IS its position in the replayed request (the
    * journal is immutable, so the same offset always folds to the same list). */
   id: string;
-  role: "system" | "user" | "assistant";
+  role: "system" | "developer" | "user" | "assistant";
   /** Flattened exactly as sent: file attachments become their hint lines. */
   content: string;
 };
@@ -45,7 +43,7 @@ export type LlmRequestReplayResponse = {
   text: string;
   /** Streamed reasoning ("thinking") text, where the model reported any. */
   thinkingText: string;
-  /** "output" = the committed output-added fact; "chunks" = re-assembled
+  /** "output" = the committed assistant context item; "chunks" = re-assembled
    * from streamed deltas (partial or pre-settle). */
   source: "output" | "chunks";
 };
@@ -60,9 +58,12 @@ export type LlmRequestReplayStats = {
     reasoningOutputTokens: number | null;
     maxContextTokens: number;
   } | null;
-  /** llm-request-started (the dial) → the first streamed chunk landing. */
+  /** The llm-request-requested event's own append time → the first streamed
+   * chunk landing. There is no separate dial event in this model, so the
+   * window includes any pre-dial delay (debounce leftovers, transport
+   * connect) before streaming began. */
   timeToFirstChunkMs: number | null;
-  /** First chunk → completion — the generation window; falls back to the
+  /** First chunk → settled — the generation window; falls back to the
    * last chunk for requests that never settled. */
   generationMs: number | null;
   chunkCount: number;
@@ -72,7 +73,7 @@ export type LlmRequestReplayStats = {
    * where the transport recorded one — a HIT means the whole response was
    * served from the gateway's cache without touching the model. */
   gatewayCacheStatus: string | null;
-  /** The completed event's verbatim result.rawResponse — whatever the
+  /** The settled event's verbatim result.rawResponse — whatever the
    * transport recorded (usage dialects, gateway cache status, …). */
   rawResponse: unknown;
 };
@@ -97,20 +98,8 @@ export type LlmRequestReplay = {
 // source of truth; these read just the fields the panel shows). Loose on
 // purpose: a payload that grew fields must still replay.
 const RequestedPayloadSlice = z.looseObject({ model: z.string() });
-const CompletedPayloadSlice = z.looseObject({
-  durationMs: z.number(),
-  llmRequestOffset: z.number(),
-  result: z.union([
-    z.looseObject({ status: z.literal("success"), rawResponse: z.unknown().optional() }),
-    z.looseObject({
-      status: z.literal("failure"),
-      error: z.looseObject({ message: z.string() }),
-      rawResponse: z.unknown().optional(),
-    }),
-  ]),
-});
-/** Any lifecycle payload's back-reference to its request (started, completed,
- * chunks, usage all carry it) — the probe replayStats scopes events with. */
+/** A chunk row's back-reference to its request — the probe replayStats
+ * scopes chunk events with. */
 const RequestScopedPayloadSlice = z.looseObject({ llmRequestOffset: z.number() });
 const TokenUsagePayloadSlice = z.looseObject({
   llmRequestOffset: z.number(),
@@ -120,11 +109,21 @@ const TokenUsagePayloadSlice = z.looseObject({
   cachedInputTokens: z.number().optional(),
   reasoningOutputTokens: z.number().optional(),
 });
-const CancelledPayloadSlice = z.looseObject({
-  phase: z.literal("requested"),
-  llmRequestOffset: z.number(),
+const SettledPayloadSlice = z.looseObject({
+  requestOffset: z.number(),
+  durationMs: z.number().optional(),
+  result: z.union([
+    z.looseObject({ status: z.literal("succeeded"), rawResponse: z.unknown().optional() }),
+    z.looseObject({
+      status: z.literal("failed"),
+      errorMessage: z.string(),
+      rawResponse: z.unknown().optional(),
+    }),
+    z.looseObject({ status: z.literal("cancelled"), partialText: z.string().optional() }),
+  ]),
 });
 const OutputPayloadSlice = z.looseObject({
+  role: z.literal("assistant"),
   content: z.string(),
   llmRequestOffset: z.number(),
 });
@@ -179,7 +178,12 @@ export function replayLlmRequest(input: {
     model: requested.data.model,
     requestedAt: requestedEvent.createdAt,
     response: replayResponse({ events, chunkEvents, llmRequestOffset: input.llmRequestOffset }),
-    stats: replayStats({ events, chunkEvents, llmRequestOffset: input.llmRequestOffset }),
+    stats: replayStats({
+      events,
+      chunkEvents,
+      llmRequestOffset: input.llmRequestOffset,
+      requestedEvent,
+    }),
     outcome: replayOutcome(events, input.llmRequestOffset),
   };
 }
@@ -201,7 +205,7 @@ function parseEventRows(rawEventJsons: readonly string[]): StreamEvent[] {
 }
 
 /**
- * The request's response: the committed output-added text is authoritative
+ * The request's response: committed assistant context is authoritative
  * when the turn settled with one; thinking text only ever exists in the
  * streamed chunks. Without an output (cancelled, failed, or still in
  * flight), the chunks' re-assembled partial text is all there is.
@@ -213,7 +217,7 @@ function replayResponse(input: {
 }): LlmRequestReplayResponse | null {
   let outputText: string | null = null;
   for (const event of input.events) {
-    if (event.type !== "events.iterate.com/agent/output-added") continue;
+    if (event.type !== "events.iterate.com/agents/context-added") continue;
     const parsed = OutputPayloadSlice.safeParse(event.payload);
     if (!parsed.success || parsed.data.llmRequestOffset !== input.llmRequestOffset) continue;
     outputText = parsed.data.content;
@@ -245,43 +249,50 @@ function replayResponse(input: {
   if (streamedText !== "" || thinkingText !== "") {
     return { text: streamedText, thinkingText, source: "chunks" };
   }
+  // An interrupted request has no committed output, and its chunks are
+  // ephemeral (gone from durable mirrors) — the settled fact's partialText is
+  // the durable record of what streamed before the abort.
+  for (const event of input.events) {
+    if (event.type !== "events.iterate.com/agent/llm-request-settled") continue;
+    const parsed = SettledPayloadSlice.safeParse(event.payload);
+    if (!parsed.success || parsed.data.requestOffset !== input.llmRequestOffset) continue;
+    const result = parsed.data.result;
+    if (result.status === "cancelled" && typeof result.partialText === "string") {
+      return { text: result.partialText, thinkingText, source: "output" };
+    }
+    break;
+  }
   return null;
 }
 
 /**
  * Everything else the journal knows about this request: normalized token
  * counts (token-usage-reported), latency derived from the lifecycle events'
- * own timestamps (started = the dial, chunks = streaming, completed = done),
- * and the completed event's verbatim rawResponse. All server-stamped append
+ * own timestamps (requested = the ask, chunks = streaming, settled = done),
+ * and the settled event's verbatim rawResponse. All server-stamped append
  * times, so the numbers are the stream's truth rather than a client clock.
  */
 function replayStats(input: {
   events: readonly StreamEvent[];
   chunkEvents: readonly StreamEvent[];
   llmRequestOffset: number;
+  requestedEvent: StreamEvent;
 }): LlmRequestReplayStats {
-  const forThisRequest = (event: StreamEvent, type: string) => {
-    if (event.type !== type) return false;
+  const requestedAt = timestampOf(input.requestedEvent);
+  const settledEvent = input.events.find((event) => {
+    if (event.type !== "events.iterate.com/agent/llm-request-settled") return false;
+    const parsed = SettledPayloadSlice.safeParse(event.payload);
+    return parsed.success && parsed.data.requestOffset === input.llmRequestOffset;
+  });
+  const settledAt = timestampOf(settledEvent);
+  const settled =
+    settledEvent === undefined ? undefined : SettledPayloadSlice.safeParse(settledEvent.payload);
+
+  const chunks = input.chunkEvents.filter((event) => {
+    if (event.type !== LLM_RESPONSE_CHUNK_EVENT_TYPE) return false;
     const parsed = RequestScopedPayloadSlice.safeParse(event.payload);
     return parsed.success && parsed.data.llmRequestOffset === input.llmRequestOffset;
-  };
-  const startedAt = timestampOf(
-    input.events.find((event) =>
-      forThisRequest(event, "events.iterate.com/agent/llm-request-started"),
-    ),
-  );
-  const completedEvent = input.events.find((event) =>
-    forThisRequest(event, "events.iterate.com/agent/llm-request-completed"),
-  );
-  const completedAt = timestampOf(completedEvent);
-  const completed =
-    completedEvent === undefined
-      ? undefined
-      : CompletedPayloadSlice.safeParse(completedEvent.payload);
-
-  const chunks = input.chunkEvents.filter((event) =>
-    forThisRequest(event, LLM_RESPONSE_CHUNK_EVENT_TYPE),
-  );
+  });
   const firstChunkAt = timestampOf(chunks[0]);
   const lastChunkAt = timestampOf(chunks.at(-1));
 
@@ -300,9 +311,12 @@ function replayStats(input: {
     break;
   }
 
+  // Anchored on the requested event's own append time: the model has no
+  // separate dial event, so this window includes any pre-dial delay before
+  // the transport connected, not just streaming latency.
   const timeToFirstChunkMs =
-    startedAt != null && firstChunkAt != null ? Math.max(0, firstChunkAt - startedAt) : null;
-  const generationEndAt = completedAt ?? lastChunkAt;
+    requestedAt != null && firstChunkAt != null ? Math.max(0, firstChunkAt - requestedAt) : null;
+  const generationEndAt = settledAt ?? lastChunkAt;
   const generationMs =
     firstChunkAt != null && generationEndAt != null
       ? Math.max(0, generationEndAt - firstChunkAt)
@@ -312,7 +326,10 @@ function replayStats(input: {
       ? Math.round((tokens.outputTokens / (generationMs / 1000)) * 10) / 10
       : null;
 
-  const rawResponse = completed?.success ? (completed.data.result.rawResponse ?? null) : null;
+  const rawResponse =
+    settled?.success && settled.data.result.status !== "cancelled"
+      ? (settled.data.result.rawResponse ?? null)
+      : null;
   const gatewayCacheStatus = GatewayCacheSlice.safeParse(rawResponse);
   return {
     tokens,
@@ -333,28 +350,27 @@ function timestampOf(event: StreamEvent | undefined): number | null {
   return Number.isNaN(parsed) ? null : parsed;
 }
 
-/** The request's settled outcome: completed beats cancelled (a late completion
- * under the shared idempotency key is the durable fact); null = in flight. */
+/** The request's outcome: the settled event is the ONE terminal fact —
+ * there is no other settlement source; null = still in flight. */
 function replayOutcome(
   events: readonly StreamEvent[],
   llmRequestOffset: number,
 ): LlmRequestReplay["outcome"] {
   for (const event of events) {
-    if (event.type !== "events.iterate.com/agent/llm-request-completed") continue;
-    const parsed = CompletedPayloadSlice.safeParse(event.payload);
-    if (!parsed.success || parsed.data.llmRequestOffset !== llmRequestOffset) continue;
+    if (event.type !== "events.iterate.com/agent/llm-request-settled") continue;
+    const parsed = SettledPayloadSlice.safeParse(event.payload);
+    if (!parsed.success || parsed.data.requestOffset !== llmRequestOffset) continue;
     const result = parsed.data.result;
     return {
-      status: result.status,
-      durationMs: parsed.data.durationMs,
-      errorMessage: result.status === "failure" ? result.error.message : null,
+      status:
+        result.status === "succeeded"
+          ? "success"
+          : result.status === "failed"
+            ? "failure"
+            : "cancelled",
+      durationMs: parsed.data.durationMs ?? null,
+      errorMessage: result.status === "failed" ? result.errorMessage : null,
     };
-  }
-  for (const event of events) {
-    if (event.type !== "events.iterate.com/agent/llm-request-cancelled") continue;
-    const parsed = CancelledPayloadSlice.safeParse(event.payload);
-    if (!parsed.success || parsed.data.llmRequestOffset !== llmRequestOffset) continue;
-    return { status: "cancelled", durationMs: null, errorMessage: null };
   }
   return null;
 }

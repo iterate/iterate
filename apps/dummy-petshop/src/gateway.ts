@@ -86,16 +86,15 @@ export function helloFrame(): string {
 
 /**
  * What the gateway must do with the state it needs to validate a token: the
- * sealing key (to unseal it) and the current access-token epoch (to reject
- * epoch-revoked tokens). Structurally a subset of PetshopDeps so the route
- * handler passes its own deps straight through.
+ * sealing key (to unseal it) and the current revocation epoch for the token's
+ * client. Structurally a subset of PetshopDeps so the route handler passes its
+ * own deps straight through.
  */
 export interface GatewayDeps {
   sealKey: string;
-  /** Reads the CURRENT access-token epoch at auth time — not a value snapshotted
-   * at upgrade — so a token revoked by expire-tokens between upgrade and auth is
-   * rejected, exactly like the HTTP routes. */
-  getAccessTokenEpoch: () => Promise<number>;
+  /** Reads the client's CURRENT epoch at auth time—not a value snapshotted at
+   * upgrade—so targeted expiry between upgrade and auth is still enforced. */
+  getAccessTokenEpoch: (clientId: string) => Promise<number>;
 }
 
 /**
@@ -145,7 +144,7 @@ async function accessGrantFromToken(
   if (typeof token !== "string" || token.length === 0) return null;
   const grant = await unseal<AccessPayload>(token, deps.sealKey);
   if (!grant || grant.t !== "access" || grant.exp < nowSeconds()) return null;
-  if (grant.epoch !== (await deps.getAccessTokenEpoch())) return null;
+  if (grant.epoch !== (await deps.getAccessTokenEpoch(grant.clientId))) return null;
   return grant;
 }
 

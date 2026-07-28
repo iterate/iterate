@@ -98,15 +98,52 @@ export function CorePrettyState({
               const mode = typeof delivery?.mode === "string" ? delivery.mode : "unknown";
               const runtimeSub = readRuntimeRecord(runtimeSubscriptions[key]);
               const lag = readNumber(runtimeSub, "lag");
+              const selector = readRuntimeRecord(payload?.selector);
+              const eventTypes = Array.isArray(selector?.eventTypes)
+                ? selector.eventTypes.filter((t): t is string => typeof t === "string")
+                : [];
+              const condition =
+                typeof selector?.condition === "string" ? selector.condition : undefined;
+              const destination = readAcceptCrossPostPath(delivery?.expression);
+              const deliveryHint =
+                typeof delivery?.url === "string"
+                  ? `POST ${delivery.url}`
+                  : destination != null
+                    ? `cross-post → ${destination}`
+                    : formatItxExpressionHint(delivery?.expression);
               return (
                 <div key={key} className="rounded-xl bg-muted/40 px-3 py-2">
                   <div className="flex items-baseline justify-between gap-2">
-                    <div className="min-w-0 truncate font-mono text-xs">{key}</div>
+                    <div className="min-w-0 break-all font-mono text-xs">{key}</div>
                     <div className="shrink-0 font-mono text-[10px] text-muted-foreground">
                       {mode}
                       {lag == null ? "" : ` · lag ${lag}`}
                     </div>
                   </div>
+                  {typeof payload?.description !== "string" ||
+                  payload.description.trim() === "" ? null : (
+                    <div className="mt-1 text-[11px] leading-snug text-foreground/80">
+                      {payload.description.trim()}
+                    </div>
+                  )}
+                  {deliveryHint == null ? null : (
+                    <div className="mt-1 break-all font-mono text-[11px] text-foreground/70">
+                      {deliveryHint}
+                    </div>
+                  )}
+                  {eventTypes.length === 0 && condition == null ? null : (
+                    <div className="mt-1 text-[11px] text-muted-foreground">
+                      {/* `*` anywhere means "all types" — same convention as EventSelector. */}
+                      {eventTypes.length === 0 || eventTypes.includes("*")
+                        ? "all events"
+                        : eventTypes
+                            .map((type) => type.replace("events.iterate.com/", ""))
+                            .join(", ")}
+                      {condition == null
+                        ? ""
+                        : ` when ${condition.length > 48 ? `${condition.slice(0, 45)}…` : condition}`}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -156,51 +193,53 @@ export function AgentPrettyState({ state }: { state: unknown }) {
     return <SerializedObjectCodeBlock className="max-h-[28rem]" data={state} />;
   }
 
-  const currentRequest =
-    agent.currentRequest != null && typeof agent.currentRequest === "object"
-      ? (agent.currentRequest as Record<string, unknown>)
+  const openRequest =
+    agent.openRequest != null && typeof agent.openRequest === "object"
+      ? (agent.openRequest as Record<string, unknown>)
       : null;
-  const phase =
-    currentRequest == null
-      ? "idle"
-      : currentRequest.phase === "scheduled"
-        ? "scheduled"
-        : "requested";
-  const history = Array.isArray(agent.history) ? agent.history : [];
+  const paused =
+    agent.paused != null && typeof agent.paused === "object"
+      ? (agent.paused as Record<string, unknown>)
+      : null;
+  const phase = paused != null ? "paused" : openRequest == null ? "idle" : "requested";
+  const config = readRuntimeRecord(agent.config);
+  const llm = readRuntimeRecord(config?.llm);
+  const contextItems = Array.isArray(agent.contextItems) ? agent.contextItems : [];
+  const isSystem = (item: unknown) => readItemPayload(item)?.role === "system";
+  const system = contextItems.filter(isSystem);
+  const history = contextItems.filter((item) => !isSystem(item));
   const lastMessage = history.length > 0 ? history[history.length - 1] : null;
-  const lastPreview =
-    lastMessage != null && typeof lastMessage === "object" && lastMessage !== null
-      ? previewChatMessage(lastMessage as Record<string, unknown>)
-      : null;
-  const scripts = Array.isArray(agent.inProgressScriptExecutions)
-    ? agent.inProgressScriptExecutions
+  const lastPreview = lastMessage == null ? null : previewProjectedItem(lastMessage);
+  const scripts = Array.isArray(agent.activeScriptExecutionIds)
+    ? agent.activeScriptExecutionIds
     : [];
-  const systemPrompt = typeof agent.systemPrompt === "string" ? agent.systemPrompt : "";
 
   return (
     <div className="flex flex-col gap-3">
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         <RuntimeStateStat label="phase" value={phase} />
-        <RuntimeStateStat label="provider" value={String(agent.llmProvider ?? "—")} />
-        <RuntimeStateStat
-          label="model"
-          value={String(
-            agent.llmConfig != null &&
-              typeof agent.llmConfig === "object" &&
-              "model" in agent.llmConfig
-              ? (agent.llmConfig as { model?: unknown }).model
-              : "—",
-          )}
-        />
+        <RuntimeStateStat label="published" value={`#${String(agent.lastLlmRequestOffset ?? 0)}`} />
+        <RuntimeStateStat label="model" value={String(llm?.model ?? "—")} />
         <RuntimeStateStat label="failures" value={String(agent.consecutiveLlmFailures ?? 0)} />
       </div>
 
-      {currentRequest == null ? null : (
+      {openRequest == null ? null : (
         <div className="rounded-xl bg-muted/40 px-3 py-2">
           <div className="text-[10px] uppercase tracking-wide text-muted-foreground/70">
-            Current request
+            Open request
           </div>
-          <div className="mt-1 font-mono text-xs break-all">{JSON.stringify(currentRequest)}</div>
+          <div className="mt-1 font-mono text-xs break-all">{JSON.stringify(openRequest)}</div>
+        </div>
+      )}
+
+      {paused == null ? null : (
+        <div className="rounded-xl bg-amber-500/10 px-3 py-2">
+          <div className="text-[10px] uppercase tracking-wide text-amber-700/80 dark:text-amber-300/80">
+            Paused
+          </div>
+          <div className="mt-1 text-xs text-foreground/80">
+            {typeof paused.reason === "string" ? paused.reason : "Scheduling paused."}
+          </div>
         </div>
       )}
 
@@ -208,25 +247,14 @@ export function AgentPrettyState({ state }: { state: unknown }) {
         <div>
           <SectionHeading>In-progress scripts</SectionHeading>
           <div className="flex flex-col gap-1.5">
-            {scripts.map((script, index) => {
-              const row =
-                script != null && typeof script === "object"
-                  ? (script as Record<string, unknown>)
-                  : {};
-              return (
-                <div
-                  key={String(row.executionId ?? index)}
-                  className="rounded-xl bg-muted/40 px-3 py-2"
-                >
-                  <div className="font-mono text-[10px] text-muted-foreground">
-                    {String(row.executionId ?? "script")}
-                  </div>
-                  <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap font-mono text-[11px] text-foreground/80">
-                    {String(row.code ?? "").slice(0, 400)}
-                  </pre>
-                </div>
-              );
-            })}
+            {scripts.map((executionId, index) => (
+              <div
+                key={String(executionId ?? index)}
+                className="rounded-xl bg-muted/40 px-3 py-2 font-mono text-xs"
+              >
+                {String(executionId ?? "script")}
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -236,7 +264,7 @@ export function AgentPrettyState({ state }: { state: unknown }) {
           <div className="text-[10px] uppercase tracking-wide text-muted-foreground/70">
             History
           </div>
-          <div className="font-mono text-xs text-muted-foreground">{history.length} messages</div>
+          <div className="font-mono text-xs text-muted-foreground">{history.length} items</div>
         </div>
         {lastPreview == null ? (
           <div className="mt-1 text-xs text-muted-foreground">No messages yet.</div>
@@ -247,24 +275,24 @@ export function AgentPrettyState({ state }: { state: unknown }) {
           </div>
         )}
         <div className="mt-1 text-[10px] text-muted-foreground/70">
-          Full history is in Raw view (and in the Pretty feed).
+          Full projected history is in Raw view (and in the Pretty feed).
         </div>
       </div>
 
-      {systemPrompt === "" ? null : (
+      {system.length === 0 ? null : (
         <details className="rounded-xl bg-muted/40 px-3 py-2">
           <summary className="cursor-pointer text-[10px] uppercase tracking-wide text-muted-foreground/70">
-            System prompt
+            System context ({system.length})
           </summary>
           <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap text-xs text-foreground/80">
-            {systemPrompt}
+            {system.map(renderProjectedContextItem).join("\n\n")}
           </pre>
         </details>
       )}
 
       <div className="grid grid-cols-2 gap-2">
         <RuntimeStateStat label="autonomous turns" value={String(agent.autonomousTurnCount ?? 0)} />
-        <RuntimeStateStat label="request gen" value={String(agent.requestGeneration ?? 0)} />
+        <RuntimeStateStat label="pending scripts" value={String(scripts.length)} />
       </div>
     </div>
   );
@@ -273,11 +301,40 @@ export function AgentPrettyState({ state }: { state: unknown }) {
 function asAgentState(state: unknown): Record<string, unknown> | null {
   if (state == null || typeof state !== "object") return null;
   const record = state as Record<string, unknown>;
-  // Heuristic: agent reduced state always has history + llmProvider-ish keys.
-  if (!("history" in record) && !("currentRequest" in record) && !("systemPrompt" in record)) {
+  // Agent state is recognized by its provider-neutral context projection
+  // (`contextItems`) plus its config.
+  if (!("contextItems" in record) || !("config" in record)) {
     return null;
   }
   return record;
+}
+
+/** A projected context item is `{ offset, payload }`; the model-visible fields
+ * (role, content, key) live on the payload. */
+function readItemPayload(item: unknown): Record<string, unknown> | null {
+  if (item == null || typeof item !== "object") return null;
+  const payload = (item as Record<string, unknown>).payload;
+  return payload != null && typeof payload === "object"
+    ? (payload as Record<string, unknown>)
+    : null;
+}
+
+function renderProjectedContextItem(item: unknown): string {
+  if (item == null || typeof item !== "object") return String(item);
+  const record = item as Record<string, unknown>;
+  const payload = readItemPayload(item) ?? {};
+  const fields = [
+    typeof record.offset === "number" ? `@${record.offset}` : "@?",
+    typeof payload.key === "string" ? `key=${JSON.stringify(payload.key)}` : null,
+    typeof record.updatesOffset === "number" ? `updates=@${record.updatesOffset}` : null,
+    typeof payload.role === "string" ? `role=${payload.role}` : null,
+  ].filter((field): field is string => field !== null);
+  return `${fields.join(" ")}\n${String(payload.content ?? "")}`;
+}
+
+function previewProjectedItem(item: unknown): { role: string; text: string } | null {
+  const payload = readItemPayload(item);
+  return payload == null ? null : previewChatMessage(payload);
 }
 
 function previewChatMessage(message: Record<string, unknown>): { role: string; text: string } {
@@ -299,4 +356,41 @@ function previewChatMessage(message: Record<string, unknown>): { role: string; t
   text = text.replace(/\s+/g, " ").trim();
   if (text.length > 160) text = `${text.slice(0, 157)}…`;
   return { role, text: text || "(empty)" };
+}
+
+/** `["streams", ["get", path], "acceptCrossPost"]` → path. */
+function readAcceptCrossPostPath(expression: unknown): string | null {
+  if (!Array.isArray(expression) || expression.length < 3) return null;
+  if (expression[0] !== "streams") return null;
+  if (expression[expression.length - 1] !== "acceptCrossPost") return null;
+  const getStep = expression[1];
+  if (!Array.isArray(getStep) || getStep[0] !== "get") return null;
+  return typeof getStep[1] === "string" ? getStep[1] : null;
+}
+
+/** Compact itx expression for core-state list rows. */
+function formatItxExpressionHint(expression: unknown): string | null {
+  if (!Array.isArray(expression) || expression.length === 0) return null;
+  const steps: string[] = [];
+  for (const step of expression) {
+    if (typeof step === "string") {
+      steps.push(step);
+    } else if (Array.isArray(step) && typeof step[0] === "string") {
+      const args = step
+        .slice(1)
+        .map((arg) => {
+          try {
+            return JSON.stringify(arg);
+          } catch {
+            return "…";
+          }
+        })
+        .join(", ");
+      steps.push(`${step[0]}(${args})`);
+    } else {
+      return null;
+    }
+  }
+  const call = steps.join(".");
+  return `itx.${call.endsWith(")") ? call : `${call}()`}`;
 }

@@ -1,3 +1,5 @@
+import { InMemoryFs } from "@cloudflare/shell";
+import { createGit } from "@cloudflare/shell/git";
 import { describe, expect, test } from "vitest";
 import { countOccurrences, replaceLiteralOccurrences } from "./edit-utils.ts";
 import {
@@ -6,7 +8,9 @@ import {
   base64ToBytes,
   bytesToBase64,
   classifyRepoAccessError,
+  gitBranchContainsCommit,
   isRepoNotSeededError,
+  isRetryableArtifactsInfrastructureError,
 } from "./utils.ts";
 
 describe("RepoArtifactNameCodec", () => {
@@ -75,6 +79,35 @@ describe("classifyRepoAccessError", () => {
     expect(isRepoNotSeededError(classifyRepoAccessError(raw))).toBe(true);
   });
 
+  test.each(["IMPORT_IN_PROGRESS", "FORK_IN_PROGRESS"])(
+    "wraps an Artifacts repo that is still being materialized (%s)",
+    (code) => {
+      const raw = Object.assign(new Error("repository is currently being created"), { code });
+      expect(isRepoNotSeededError(classifyRepoAccessError(raw))).toBe(true);
+    },
+  );
+
+  test.each([
+    [10200, "NOT_FOUND"],
+    [10302, "IMPORT_IN_PROGRESS"],
+    [10303, "FORK_IN_PROGRESS"],
+  ])("wraps the Artifacts binding numeric code %s (%s)", (numericCode) => {
+    const raw = Object.assign(new Error("repository is not ready"), {
+      name: "ArtifactsError",
+      numericCode,
+    });
+    expect(isRepoNotSeededError(classifyRepoAccessError(raw))).toBe(true);
+  });
+
+  test("wraps an explicitly requested branch missing from an empty Artifacts repo", () => {
+    const raw = Object.assign(new Error("Could not find main."), {
+      code: "NotFoundError",
+    });
+
+    expect(isRepoNotSeededError(classifyRepoAccessError(raw, "main"))).toBe(true);
+    expect(classifyRepoAccessError(raw)).toBe(raw);
+  });
+
   test("passes every other failure through unchanged", () => {
     const network = new Error("fetch failed");
     expect(classifyRepoAccessError(network)).toBe(network);
@@ -94,6 +127,127 @@ describe("classifyRepoAccessError", () => {
     ).toBe(true);
     expect(isRepoNotSeededError(new Error("x"))).toBe(false);
     expect(isRepoNotSeededError(null)).toBe(false);
+  });
+
+  test("matches the property-stripped Artifacts error observed across Workers RPC", () => {
+    const pending = Object.assign(
+      new Error(
+        'Repository "project--repo" is currently being created. The repository is not yet available. Retry after 5 seconds.',
+      ),
+      { name: "ArtifactsError" },
+    );
+    expect(isRepoNotSeededError(pending)).toBe(true);
+
+    const internal = Object.assign(new Error("unexpected storage failure"), {
+      name: "ArtifactsError",
+    });
+    expect(isRepoNotSeededError(internal)).toBe(false);
+  });
+});
+
+describe("isRetryableArtifactsInfrastructureError", () => {
+  test.each(["INTERNAL_ERROR", "UPSTREAM_UNAVAILABLE"])(
+    "matches the retryable Artifacts service code %s",
+    (code) => {
+      expect(
+        isRetryableArtifactsInfrastructureError(
+          Object.assign(new Error("Artifacts service unavailable"), {
+            code,
+            name: "ArtifactsError",
+          }),
+        ),
+      ).toBe(true);
+    },
+  );
+
+  test("walks a wrapped error cause", () => {
+    const artifactError = Object.assign(new Error("An internal error occurred."), {
+      code: "INTERNAL_ERROR",
+      name: "ArtifactsError",
+    });
+    expect(
+      isRetryableArtifactsInfrastructureError(
+        new Error("Could not create config repo", { cause: artifactError }),
+      ),
+    ).toBe(true);
+  });
+
+  test.each([
+    new Error("HTTP Error: 503 Service Unavailable"),
+    Object.assign(new Error("Artifacts request failed"), { status: 503 }),
+    Object.assign(new Error("Artifacts request failed"), { statusCode: 429 }),
+  ])("matches transient Artifacts HTTP failures after client metadata loss", (error) => {
+    expect(isRetryableArtifactsInfrastructureError(error)).toBe(true);
+  });
+
+  test("rejects domain errors and lookalike codes", () => {
+    expect(
+      isRetryableArtifactsInfrastructureError(
+        Object.assign(new Error("invalid repo"), {
+          code: "INVALID_REPO_NAME",
+          name: "ArtifactsError",
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isRetryableArtifactsInfrastructureError(
+        Object.assign(new Error("different service"), { code: "INTERNAL_ERROR" }),
+      ),
+    ).toBe(false);
+    expect(isRetryableArtifactsInfrastructureError(new Error("HTTP Error: 404 Not Found"))).toBe(
+      false,
+    );
+  });
+});
+
+describe("gitBranchContainsCommit", () => {
+  test("accepts a newer descendant beyond git.log's default depth", async () => {
+    const filesystem = new InMemoryFs();
+    const git = createGit(filesystem, "/repo");
+    await git.init({ defaultBranch: "main" });
+    await filesystem.writeFile("/repo/value.txt", "root");
+    await git.add({ filepath: "value.txt" });
+    const root = await git.commit({
+      author: { email: "test@iterate.com", name: "Test" },
+      message: "root",
+    });
+
+    for (let index = 1; index <= 40; index += 1) {
+      await filesystem.writeFile("/repo/value.txt", String(index));
+      await git.add({ filepath: "value.txt" });
+      await git.commit({
+        author: { email: "test@iterate.com", name: "Test" },
+        message: `commit ${index}`,
+      });
+    }
+
+    await expect(
+      gitBranchContainsCommit({ branch: "main", commitOid: root.oid, git }),
+    ).resolves.toBe(true);
+  });
+
+  test("rejects an object that exists outside the branch ancestry", async () => {
+    const filesystem = new InMemoryFs();
+    const git = createGit(filesystem, "/repo");
+    await git.init({ defaultBranch: "main" });
+    await filesystem.writeFile("/repo/value.txt", "root");
+    await git.add({ filepath: "value.txt" });
+    await git.commit({
+      author: { email: "test@iterate.com", name: "Test" },
+      message: "root",
+    });
+    await git.checkout({ branch: "other" });
+    await filesystem.writeFile("/repo/value.txt", "other");
+    await git.add({ filepath: "value.txt" });
+    const other = await git.commit({
+      author: { email: "test@iterate.com", name: "Test" },
+      message: "other",
+    });
+    await git.checkout({ ref: "main" });
+
+    await expect(
+      gitBranchContainsCommit({ branch: "main", commitOid: other.oid, git }),
+    ).resolves.toBe(false);
   });
 });
 

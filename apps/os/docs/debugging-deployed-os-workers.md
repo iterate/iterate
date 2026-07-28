@@ -51,7 +51,7 @@ doppler run --config prd -- pnpm cli itx run \
   -e 'const stream = itx.streams.get("/debugging-docs/example"); const [appended] = await stream.append({ type: "events.iterate.com/debugging-docs/example", payload: { source: "itx" } }); const history = await stream.getEvents({ afterOffset: appended.offset - 1 }); return { appended, history }'
 ```
 
-List project ids from the global admin session:
+List project IDs with the CLI's platform-wide admin-secret authority:
 
 ```bash
 doppler run --config prd -- pnpm cli itx run \
@@ -67,7 +67,7 @@ advertises `https://mcp.iterate.com` as the canonical OAuth resource URL, and
 ingress rewrites that hostname to the same route. The app-host
 `https://os.iterate.com/api/mcp` route is also valid. Fully-local dev defaults
 to `<baseUrl>/api/mcp`. `/projects/:slug/mcp` is the dashboard UI, not the
-transport URL. Admin-token sessions expose all projects and the `exec_js` tool
+transport URL. Admin-token sessions expose all projects and the `exec_typescript` tool
 requires a project slug when it runs.
 
 ```text
@@ -81,7 +81,7 @@ cd apps/os
 doppler run --config prd -- pnpm cli claude-mcp
 ```
 
-By default the MCP server exposes only `exec_js`. If you deliberately want the
+By default the MCP server exposes only `exec_typescript`. If you deliberately want the
 plain-language project-agent bridge too, opt in with the URL parameter via the
 CLI flag:
 

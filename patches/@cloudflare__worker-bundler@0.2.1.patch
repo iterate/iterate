@@ -1,69 +1,147 @@
 diff --git a/dist/index.js b/dist/index.js
-index ec1f8602518e51ae151a238e5a51fe3c0dbc2e72..6bfbe6f570caf304a53a2062e86fff4eeae46b31 100644
+index ec1f8602518e51ae151a238e5a51fe3c0dbc2e72..f5e2058fbccc0c1f15cc20c08ee6305b2a632261 100644
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -29,7 +29,7 @@ const DEFAULT_EXTENSIONS = [
- * @returns Resolved path or external marker
- */
- function resolveModule(specifier, options) {
--	const { files, importer = "", conditions = ["import", "browser"], extensions = DEFAULT_EXTENSIONS } = options;
-+	const { files, importer = "", conditions = ["import", "browser"], extensions = DEFAULT_EXTENSIONS, require: isRequire = false } = options;
- 	if (specifier.startsWith(".") || specifier.startsWith("/")) {
- 		const resolved = resolveRelative(specifier, importer, files, extensions);
- 		if (resolved) return {
-@@ -38,7 +38,7 @@ function resolveModule(specifier, options) {
- 		};
- 		throw new Error(`Cannot resolve relative import '${specifier}' from '${importer}'`);
- 	}
--	return resolvePackage(specifier, files, conditions, extensions);
-+	return resolvePackage(specifier, files, conditions, extensions, isRequire);
- }
- /**
- * Resolve a relative import
-@@ -49,7 +49,7 @@ function resolveRelative(specifier, importer, files, extensions) {
- /**
- * Resolve a package specifier
- */
--function resolvePackage(specifier, files, conditions, extensions) {
-+function resolvePackage(specifier, files, conditions, extensions, isRequire = false) {
- 	const { packageName, subpath } = parsePackageSpecifier(specifier);
- 	const packageJsonPath = `node_modules/${packageName}/package.json`;
- 	const packageJson = files.read(packageJsonPath);
-@@ -66,7 +66,7 @@ function resolvePackage(specifier, files, conditions, extensions) {
- 	}
- 	const entrySubpath = subpath ? `./${subpath}` : ".";
- 	try {
--		const resolved = resolveExports.resolve(pkg, entrySubpath, { conditions });
-+		const resolved = resolveExports.resolve(pkg, entrySubpath, { conditions, require: isRequire });
- 		if (resolved && resolved.length > 0) {
- 			const resolvedPath = resolved[0];
- 			if (resolvedPath) {
-@@ -81,8 +81,9 @@ function resolvePackage(specifier, files, conditions, extensions) {
- 	const legacyEntry = resolveExports.legacy(pkg, { fields: ["module", "main"] });
- 	if (legacyEntry && typeof legacyEntry === "string") {
- 		const fullPath = `node_modules/${packageName}/${normalizeRelativePath(legacyEntry)}`;
--		if (files.read(fullPath) !== null) return {
--			path: fullPath,
-+		const resolvedLegacy = resolveWithExtensions(fullPath, files, extensions);
-+		if (resolvedLegacy) return {
-+			path: resolvedLegacy,
- 			external: false
- 		};
- 	}
-@@ -255,7 +256,7 @@ async function bundleWithEsbuild(options) {
+@@ -254,26 +254,51 @@ async function bundleWithEsbuild(options) {
+ 						path: args.path,
  						external: true
  					};
++					// Iterate patch: an import the resolver cannot satisfy used to be
++					// SILENTLY marked external, shipping a bundle that fails at worker
++					// startup with `No such module`. Attach a warning so the build
++					// boundary can refuse the artifact. Scheme'd specifiers
++					// (cloudflare:*, node:*) and dynamic imports stay silent: the
++					// runtime may provide the former, and a guarded `await import()`
++					// is a legitimate pattern for the latter.
++					const warnUnresolved = (reason) => {
++						if (args.kind === "dynamic-import") return [];
++						if (/^[a-zA-Z][\w+.-]*:/.test(args.path)) return [];
++						return [{ text: `Failed to resolve '${args.path}' from ${args.importer || "entry"}: ${reason} (kept as an external import)` }];
++					};
  					try {
--						const result = resolveModule(args.path, { files });
-+						const result = resolveModule(args.path, { files, ...conditions !== void 0 ? { conditions } : {}, require: args.kind === "require-call" || args.kind === "require-resolve" });
+ 						const result = resolveModule(args.path, { files });
  						if (!result.external) return {
  							path: result.path,
  							namespace: "virtual"
-@@ -296,6 +297,7 @@ async function bundleWithEsbuild(options) {
- 		name: "virtual-modules",
- 		setup(build) {
- 			build.onResolve({ filter: /.*/ }, (args) => {
-+				if (args.namespace === "virtual-module" && args.importer === args.path) return null;
- 				if (Object.hasOwn(virtualModules, args.path)) return {
+ 						};
+-					} catch {}
+-					return {
+-						path: args.path,
+-						external: true
+-					};
++						const packageName = args.path.startsWith("@") ? args.path.split("/").slice(0, 2).join("/") : args.path.split("/")[0];
++						const installed = files.read(`node_modules/${packageName}/package.json`) !== null;
++						return {
++							path: args.path,
++							external: true,
++							warnings: warnUnresolved(installed ? `the installed '${packageName}' package does not provide this entry` : `package '${packageName}' is not installed`)
++						};
++					} catch (error) {
++						return {
++							path: args.path,
++							external: true,
++							warnings: warnUnresolved(error instanceof Error ? error.message : String(error))
++						};
++					}
+ 				}
+ 				const normalizedPath = args.path.startsWith("/") ? args.path.slice(1) : args.path;
+ 				if (files.read(normalizedPath) !== null) return {
+ 					path: normalizedPath,
+ 					namespace: "virtual"
+ 				};
++				// Iterate patch (same rationale as the bare-specifier branch above):
++				// only "./" and "/" paths that failed to resolve reach here, and an
++				// unresolvable relative import always fails at worker startup.
+ 				return {
  					path: args.path,
- 					namespace: "virtual-module"
+-					external: true
++					external: true,
++					warnings: args.kind === "dynamic-import" ? [] : [{ text: `Failed to resolve '${args.path}' from ${args.importer || "entry"}: file does not exist (kept as an external import)` }]
+ 				};
+ 			});
+ 			build.onLoad({
+diff --git a/dist/installer-Ns4ivVf5.js b/dist/installer-Ns4ivVf5.js
+index 0220df7c889d58e6a670214eb1b6e1aa10215b2f..5d7ad46ff85fb9cfeb752e4d440a9c60e03aae54 100644
+--- a/dist/installer-Ns4ivVf5.js
++++ b/dist/installer-Ns4ivVf5.js
+@@ -75,22 +75,42 @@ async function installPackage(name, versionRange, result, fileSystem, installedP
+ 	if (existing) return existing;
+ 	const installPromise = (async () => {
+ 		try {
+-			const metadata = await fetchPackageMetadata(name, registry);
+-			const version = resolveVersion(versionRange, metadata);
+-			if (!version) {
+-				result.warnings.push(`Could not resolve version for ${name}@${versionRange}`);
+-				return;
+-			}
+-			const versionMetadata = metadata.versions[version];
+-			if (!versionMetadata) {
+-				result.warnings.push(`Version ${version} not found for ${name}`);
+-				return;
++			const tarballUrl = directTarballUrl(versionRange);
++			let packageFiles;
++			let versionMetadata;
++			if (tarballUrl) {
++				packageFiles = await fetchPackageFiles(name, {
++					version: versionRange,
++					dist: { tarball: tarballUrl }
++				});
++				versionMetadata = packageMetadataFromTarball(name, tarballUrl, packageFiles);
++			} else {
++				const metadata = await fetchPackageMetadata(name, registry);
++				const version = resolveVersion(versionRange, metadata);
++				if (!version) {
++					result.warnings.push(`Could not resolve version for ${name}@${versionRange}`);
++					return;
++				}
++				versionMetadata = metadata.versions[version];
++				if (!versionMetadata) {
++					result.warnings.push(`Version ${version} not found for ${name}`);
++					return;
++				}
++				packageFiles = await fetchPackageFiles(name, versionMetadata);
+ 			}
++			const version = versionMetadata.version;
+ 			installedPackages.set(name, version);
+ 			result.installed.push(`${name}@${version}`);
+-			const packageFiles = await fetchPackageFiles(name, versionMetadata);
+ 			for (const [filePath, content] of Object.entries(packageFiles)) fileSystem.write(`node_modules/${name}/${filePath}`, content);
+-			const deps = versionMetadata.dependencies ?? {};
++			// Temporary until Iterate publishes its SDK separately: userspace workers
++			// must not install the CLI dependency graph for SDK-only imports.
++			const dependencies = versionMetadata.dependencies ?? {};
++			const deps = name === "iterate" ? Object.fromEntries(Object.entries(dependencies).filter(([dependency]) => [
++				"@iterate-com/capnweb",
++				"@tanstack/react-query",
++				"react",
++				"zod"
++			].includes(dependency))) : dependencies;
+ 			await Promise.all(Object.entries(deps).map(([depName, depVersion]) => installPackage(depName, depVersion, result, fileSystem, installedPackages, inProgress, registry)));
+ 		} catch (error) {
+ 			const message = error instanceof Error ? error.message : String(error);
+@@ -104,6 +124,25 @@ async function installPackage(name, versionRange, result, fileSystem, installedP
+ 		inProgress.delete(name);
+ 	}
+ }
++/** Return an HTTP(S) dependency spec as a normalized direct-tarball URL. */
++function directTarballUrl(versionRange) {
++	if (!versionRange.startsWith("https://") && !versionRange.startsWith("http://")) return;
++	return new URL(versionRange).toString();
++}
++/** Read and validate the identity and dependency metadata inside a direct tarball. */
++function packageMetadataFromTarball(expectedName, tarballUrl, packageFiles) {
++	const packageJson = packageFiles["package.json"];
++	if (!packageJson) throw new Error(`Direct tarball for ${expectedName} has no package.json (${tarballUrl})`);
++	let metadata;
++	try {
++		metadata = JSON.parse(packageJson);
++	} catch {
++		throw new Error(`Direct tarball for ${expectedName} has an invalid package.json (${tarballUrl})`);
++	}
++	if (metadata.name !== expectedName) throw new Error(`Direct tarball dependency ${expectedName} contains package ${JSON.stringify(metadata.name)} (${tarballUrl})`);
++	if (typeof metadata.version !== "string" || metadata.version.length === 0) throw new Error(`Direct tarball for ${expectedName} has no valid package version (${tarballUrl})`);
++	return metadata;
++}
+ /**
+ * Fetch package metadata from npm registry.
+ */

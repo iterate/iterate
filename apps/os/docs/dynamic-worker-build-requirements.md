@@ -1,236 +1,167 @@
-# Dynamic Worker Build Requirements
+# Dynamic worker builds
 
-Status: implemented (see apps/os/src/domains/workers/), with one deliberate
-revision to this document:
-build coordination is a direct RPC to a dedicated **builder worker**, not a
-stream processor. The stream-processor design below was built first and then
-removed — build lifecycle events bought observability nobody planned to
-consume, at the price of a processor subscription on every scope, a
-claim/stale-window dedupe fold, and callers waiting on eventually-consistent
-KV. The builder worker keeps every property that mattered (one bundler
-toolchain in one script, deduped concurrent builds, deterministic
-content-addressed artifacts) with none of the coordination machinery; build
-failures reach callers as plain errors. The journal records what dynamic
-workers DO (script executions, capability mounts), not how their bytes were
-produced.
+Dynamic Workers are compiled by a small workerd sidecar whose public RPC
+accepts source values and returns Worker Loader values. The OS Worker never
+imports the 13 MiB esbuild Wasm module. There is no container, shell,
+filesystem checkout, Wrangler subprocess, or project build command in this
+path.
 
-## Goal
+## Thin worker-bundler adapter
 
-Bring back multi-file TypeScript dynamic workers in the refactored `apps/os`
-itx stack without restoring the pre-itx-v4 implementation wholesale. The system should
-let a worker source be represented as a set of files, build those files through
-Cloudflare's dynamic worker bundler, store the build output outside the event
-log, and load the result through the existing Worker Loader path.
+A dynamic-worker source contains exactly one property named after the upstream function:
+`createWorker` or `createApp`. Its value has the same shape as that function's
+options. The one substitution is `files`: it may point at an inline map or a
+project repo snapshot because a custom worker-bundler `FileSystem` object
+cannot cross the service-binding boundary.
 
-This is not only for the default project worker. The same build model should
-make worker-backed provided capabilities easy: a caller can provide a short
-TypeScript entry file, a `package.json`, supporting files, and Cloudflare
-bundler options, then mount the resulting WorkerEntrypoint or Durable Object as
-an ITX capability.
+On a cache miss OS routes the immutable build key through one keyed
+`WorkerBuildCoordinatorDurableObject`. The elected caller resolves the file
+descriptor to `Record<string, string>` and puts the map back into the same
+options object. Paths are not rewritten. OS then makes exactly the call the
+source names:
 
-## Current Shape
+- `createWorker({ ...source.createWorker, files: resolvedFiles })`; or
+- `createApp({ ...source.createApp, files: resolvedFiles })`.
 
-Dynamic workers are currently recipes passed to `project.workers.get(ref)` or
-stored indirectly in durable stream facts:
+There are no OS rules for the number or names of files. Entry points may be
+explicit or left for worker-bundler to detect from wrangler config,
+`package.json`, or its defaults. A `package.json` is passed through untouched;
+worker-bundler attempts to install the root manifest's `dependencies` from the
+selected npm registry before resolving the graph.
 
-- ITX capability mounts store `itx-expression` records that can call
-  `workers.get(workerRef)`.
-- Stream subscriptions may store `{ type: "worker", workerRef }` as a configured
-  subscriber.
-- `project.worker` is a convenience alias for a default repo-backed stateless
-  worker.
-- `StatefulWorkerDurableObject` hosts stateful dynamic worker facets, but there
-  is no worker stream processor today.
-- Repo-backed source materialization is currently a Repo DO projection of a
-  single JavaScript file.
+Ordinary Worker builds additionally receive these platform-owned virtual
+modules by exact specifier:
 
-## Desired Model
+- `@iterate-com/capnweb`
+- `iterate/sdk/capnweb`
+- `iterate/processors`
+- `iterate/processors/cloudflare`
+- `iterate/sdk`
 
-Separate source selection from build execution.
+The public data options mirror worker-bundler's serializable knobs: `bundle`,
+`externals`, `target`, `minify`, `sourcemap`, `registry`, `jsx`,
+`jsxImportSource`, `define`, `loader`, and `conditions`, plus the relevant
+worker or app entry points, `createWorker.virtualModules`, and
+`createApp.assets`/`assetConfig`. The library's esbuild-plugin escape hatch,
+custom `FileSystem` objects, and binary `ArrayBuffer` assets are not exposed
+because they cannot cross the public data boundary unchanged.
 
-File source answers: where do the source files come from?
+## Seeded app example
 
-- Repo source: files are read from a Git artifact at a branch or commit.
-- Inline source: files are provided directly by the caller.
-
-Build execution answers: how do source files become Worker Loader modules?
-
-- Use `@cloudflare/worker-bundler` and its `createWorker()` API.
-- Treat the public build options as Cloudflare's `CreateWorkerOptions` without
-  `files`; files are supplied by the selected file source.
-- Keep `entryPoint` in the build input. It is a first-class bundler option and
-  should not be renamed or duplicated as `sourcePath`.
-- Prefer one materialization path for all dynamic workers. A single-file
-  JavaScript worker is still passed through `createWorker()`. Expose
-  Cloudflare's options as-is, including `bundle: false`; the invariant is one
-  materialization pipeline, not necessarily one bundled output file.
-
-`DynamicWorkerRef.source` should move to this orthogonal model instead of
-preserving the current `inline | repo` source union as the target API. The old
-shape can be accepted temporarily by a compatibility parser, but the durable
-recipe should clearly say: here is the file source, and here are the
-Cloudflare-compatible build options.
-
-## File Source Requirements
-
-Repo file sources must be able to limit the files included in a build snapshot,
-so large repos do not become build inputs by default. The exact pattern language
-should be include and exclude glob patterns. This keeps repo snapshots bounded
-without requiring callers to enumerate the full dependency graph by hand.
-
-Inline file sources are a first-class use case, especially for worker-backed
-provided capabilities. A capability provider should be able to pass a small file
-map such as `worker.ts`, `package.json`, and a helper module, then rely on the
-same bundler/build pipeline as repo-backed workers.
-
-Do not specify inline file size limits in this design pass.
-
-Open shape:
+Todo and Guestbook deliberately use only `server.tsx` and `client.tsx`, but
+that is their example layout, not the build contract. Their refs spell out the
+ordinary `createApp` options:
 
 ```ts
-type WorkerFileSource =
-  | {
-      type: "repo";
-      repoPath: string;
-      ref: { branch: string } | { commitOid: string };
-      include?: string[];
-      exclude?: string[];
-    }
-  | {
-      type: "inline";
-      files: Record<string, string>;
-    };
+source: {
+  createApp: {
+    bundle: false,
+    client: "apps/todo/client.tsx",
+    files: { type: "repo", repoPath: "/repos/config" },
+    server: "apps/todo/server.tsx",
+  },
+}
 ```
 
-## Build Input Requirements
+With `bundle: false`, worker-bundler transforms the server as separate modules
+while still compiling each client entry into a browser bundle. React and the
+Iterate browser SDK are ordinary `package.json` dependencies and imports.
+`createApp` may return any number of client bundles and explicit text assets.
+OS caches the returned content, manifest, config, and Wrangler compatibility
+settings, then delegates requests to worker-bundler's own
+`handleAssetRequest` before falling through to the server Worker. HTML routing,
+redirects, headers, conditional requests, cache policy, and SPA fallbacks
+therefore remain worker-bundler behavior rather than an OS imitation. The
+platform still injects the Iterate status overlay into eligible HTML
+responses.
 
-The build input should stay close to Cloudflare's API instead of inventing a
-parallel option language.
+## Cache and failure model
 
-```ts
-import type { CreateWorkerOptions } from "@cloudflare/worker-bundler";
+The build key includes normalized source identity, all build options,
+compatibility settings, bundler version, artifact schema version, and (for
+ordinary Workers) the complete generated platform-module contents. Identical
+requests share cached artifacts across projects. With an unlocked dependency
+range, the first successful registry resolution becomes that key's cached
+artifact until expiry.
 
-type WorkerBuildOptions = Omit<CreateWorkerOptions, "files">;
+KV stores one complete modules/assets JSON record per successful key with a
+30-day TTL. Build failures are not cached because worker-bundler does not
+distinguish deterministic source failures from transient registry or runtime
+failures; a later request tries again.
 
-type WorkerBuildRequest = {
-  source: WorkerFileSource;
-  options: WorkerBuildOptions;
-};
-```
+Expected compiler rejection crosses the build coordinator as a JSON-safe
+result (`{ ok: false, failure: { kind: "source", message } }`). Repo, KV,
+sidecar transport, and programming failures still throw. Stateful capability
+dispatch keeps the source-failure result as data through its outer Durable
+Object hop, then creates the public terminal error locally; this avoids
+depending on custom `Error` properties, which Workers RPC does not preserve.
 
-The implementation resolves `source` to files, then calls:
+KV is only the immutable result cache, never a lock: [its eventually
+consistent model](https://developers.cloudflare.com/kv/concepts/how-kv-works/#consistency)
+has no atomic lease primitive. After the caller's fast KV read misses, every
+request for the same key reaches the globally named coordinator object. Its
+leader rechecks KV, reads the repo snapshot, calls the bundler, and writes the
+artifact once; concurrent followers receive the same plain-data result through
+promises owned by their own RPC invocations. After success, the coordinator
+retains the immutable artifact for the rest of that object
+incarnation. That in-memory tier bridges KV's distributed negative-cache window:
+later callers whose local KV read still sees the old miss receive the retained
+plain data without starting another flight, including callers with a zero build
+budget. Retention never extends the object lifetime and failures are never
+retained. Different build keys address
+different objects and therefore build in parallel, following Cloudflare's
+[one coordination atom per Durable
+Object](https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/#model-your-durable-objects-around-your-atom-of-coordination)
+guidance. A coordinator reset may retry the idempotent build, but normal
+cross-isolate concurrency cannot create a stampede.
 
-```ts
-await createWorker({
-  ...request.options,
-  files,
-});
-```
+Coordinator telemetry reflects these tiers: `worker-build.settled` is normally
+about once per key per object incarnation, `worker-build.reused` records later
+incarnation-local hits. The retained value is content-addressed immutable build
+output, not a last-good or stale artifact; an object reset simply drops it and
+resumes through the durable KV cache.
 
-## Build Coordination Requirements
+Browser fetches may stop waiting at a small budget while the coordinator's
+elected operation continues under `waitUntil`; callers see the self-refreshing
+building page. There is deliberately no last-good artifact, stale serving, KV
+lease, or refresh policy.
 
-(REVISED — see the status note above. The original requirement here was a
-worker-build stream processor with `worker-build/requested|completed|failed`
-events on the ref's scope stream; it was implemented, then removed.)
+## Actual boundaries
 
-Builds are coordinated by a direct RPC from the resolver (which runs only in
-the worker worker) to the dedicated builder worker's `build()` entrypoint. The
-builder is the only script carrying the bundler toolchain, deduplicates
-concurrent builds of one key in-process, writes the artifact cache, and
-returns the artifact by value so callers never wait on KV propagation. Build
-failures propagate to the caller as plain errors. Stream events record what
-dynamic workers DO (script executions, capability mounts) — not how their
-bytes were produced.
+`@cloudflare/worker-bundler` 0.2.1 is experimental and runs only in workerd.
+Its registry client, package-format support, resolver, esbuild Wasm startup,
+CPU/memory limits, and output behavior are the build system's limits. There is
+no Vite, Tailwind CLI, TanStack Start adapter, lifecycle-script runner, or
+native module toolchain around it.
 
-## Build Output Requirements
+The current upstream installer has deliberately narrow npm semantics:
 
-The output of a build must be stored outside the stream event log, behind a
-`WorkerBuildArtifactStore` abstraction. The first production implementation
-should be a KV-backed build artifact cache.
+- it reads only the root `package.json` and installs `dependencies` plus their
+  recursive `dependencies`; it does not install root `devDependencies`, peer
+  dependencies, workspaces, or lockfiles;
+- exact versions, semver ranges, `latest`/`*`, and dist-tags resolve through
+  registry metadata; git, URL, file, and workspace specifications do not;
+- it runs no lifecycle scripts and exposes a registry URL, not registry auth;
+- package tarballs are reduced to a fixed set of text extensions. Native
+  binaries, Wasm payloads, images, fonts, and other binary package files are
+  omitted.
 
-The artifact store should persist loader-ready build output:
+The OS artifact is one JSON KV value, so Cloudflare KV's 25 MiB value limit is
+a hard upper bound before JSON overhead. Builds and Loader isolates also live
+under Workers' 128 MiB isolate memory limit, including esbuild Wasm and
+in-memory source/artifact maps. See the official [KV
+limits](https://developers.cloudflare.com/kv/platform/limits/) and [Workers
+limits](https://developers.cloudflare.com/workers/platform/limits/).
 
-- `mainModule`
-- `modules`
-- build metadata needed by Worker Loader, such as compatibility date and flags
+Today each asset lookup sends the cached text asset map through the bundler
+service so it can use the upstream handler. That is faithful and simple for
+small apps, but not a large-asset architecture. Cloudflare's own [Dynamic
+Worker static-assets
+guidance](https://developers.cloudflare.com/dynamic-workers/usage/static-assets/)
+points toward host-owned KV or R2 asset storage; moving assets there is a
+follow-up once the package exposes a host-friendly handler boundary.
 
-The build key should be deterministic from the normalized source snapshot,
-Cloudflare `CreateWorkerOptions`, bundler/runtime version inputs, compatibility
-settings, and the artifact schema version. If the same input is requested again,
-the processor should check KV for the completed artifact before rebuilding.
-
-KV is a good fit for the primary cache because artifacts are content-addressed
-and immutable: the system writes each build key once, then reads it by exact key.
-That avoids the problematic KV pattern of repeatedly updating the same key. KV
-also supports expiring entries through `expirationTtl`, so build artifacts can
-be cached without needing a separate cleanup worker. R2 remains a possible later
-escape hatch for oversized artifacts or archival storage, but it should not be
-the default requirement.
-
-Recommended KV layout:
-
-- `worker-build/v1/<buildKey>/manifest.json`
-- `worker-build/v1/<buildKey>/modules/<encodedModuleName>`
-
-The manifest is the presence marker. It should include `mainModule`, module key
-list, module hashes or sizes, compatibility date and flags, bundler/runtime
-version inputs, artifact schema version, and any other metadata needed to load
-or audit the build. Module keys should be written first; the manifest should be
-written last. If a manifest exists but one of its module keys is missing, the
-artifact should be treated as a cache miss and rebuilt from the deterministic
-input.
-
-Prefix listing is acceptable as a recovery or diagnostic path, but runtime loads
-should prefer the manifest's explicit module key list. KV `list({ prefix })`
-supports prefix filtering but is paginated, and using the manifest avoids
-depending on list completeness or ordering in the hot path.
-
-The event log should store only enough information to find and audit the output:
-
-- build id or cache key
-- source identity
-- build options hash
-- artifact key
-- `mainModule`
-- module path list, not module contents
-- compatibility date and flags
-- error details for failed builds
-
-## Template Requirements
-
-The project repo template should be a real folder of files, not TypeScript string
-literals. It should typecheck as a worker project under `apps/os`, and codegen
-should generate the seeded repo file map from that folder.
-
-Out-of-sync generated seed code should be a fixable lint error.
-
-## Open Questions
-
-Resolved: worker build events live on the ITX scope stream named by
-`DynamicWorkerRef.path`. The repo path is only a file source, not the build event
-owner.
-
-Resolved: the worker build processor is installed alongside the ITX processor
-for every ITX scope, rather than lazily per first build.
-
-Resolved: the target `DynamicWorkerRef.source` shape should be the orthogonal
-file-source plus build-options model. The current `inline | repo` union is
-legacy/migration surface, not the desired durable representation.
-
-Resolved: inline file sources are allowed in durable build events and are a
-first-class path for worker-backed provided capabilities. Size limits are out of
-scope for this requirements pass.
-
-Resolved: expose Cloudflare's `bundle?: boolean` option as-is. `bundle: false`
-is allowed; OS should still call `createWorker()` for materialization.
-
-Resolved: repo file source masks use include/exclude glob patterns. Typical
-default for a project worker should include the entrypoint, app/source folders,
-`package.json`, and `tsconfig.json`, while excluding `.git/**`, `node_modules/**`,
-and generated output directories.
-
-Resolved: build output storage uses a `WorkerBuildArtifactStore` abstraction.
-The first production target is a KV-backed cache with content-addressed,
-immutable artifacts and TTL-based expiration. DO or in-memory storage is
-acceptable for local dev and tests behind the same interface. R2 is a later
-escape hatch for oversized artifacts or archival storage.
+Warnings are preserved as successful build metadata and logged; OS does not
+reinterpret them as errors. The JSON artifact cache currently accepts text
+assets and JSON-safe Worker Loader modules. An ArrayBuffer asset/module is an
+explicit build failure until the cache grows a binary encoding.

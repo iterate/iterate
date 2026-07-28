@@ -1,13 +1,14 @@
 import { createServerFn } from "@tanstack/react-start";
+import { getCookie } from "@tanstack/react-start/server";
 import { env } from "cloudflare:workers";
 import type { ProjectDeploymentStatus } from "../project-deployment-status.ts";
 import { itxAuthFromPrincipal } from "~/auth.ts";
-import { authenticateCapnwebAdmin } from "~/auth/admin-auth-cookie.ts";
 import { getUserPrincipal } from "~/auth/principal.ts";
-import { isOnboardingActive } from "~/lib/onboarding-agent.ts";
+import { canReadDirectoryProject } from "~/lib/project-directory-authorization.ts";
 import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
 import {
   chooseRootProjectRedirect,
+  createMissingRootRedirectProject,
   type RootProjectRedirectDecision,
 } from "~/lib/project-root-redirect.ts";
 import { readProjectBySlug } from "~/project-directory.ts";
@@ -19,8 +20,8 @@ import type { RequestContext } from "~/request-context.ts";
  * throws during SSR), so SSR loaders read projects through these instead.
  *
  * These are deliberately minimal: the browser talks to the itx session
- * directly (`session.projects.list()` / `session.projects.create()` — see
- * ~/itx/itx-react.tsx consumers). What remains here is only what MUST run
+ * directly (`session.projects.list()` / `session.projects.get(slug).create()` — see
+ * iterate/sdk/itx/react consumers). What remains here is only what MUST run
  * server-side:
  * - `getProjectBySlugServerFn` — the project layout's `beforeLoad` (SSR).
  * - `getRootProjectRedirectServerFn` — the root `/` redirect decision (SSR);
@@ -56,17 +57,21 @@ type ProjectWithIngressUrl = Project & { ingressUrl: string };
 
 /**
  * The root `/` redirect decision, made entirely server-side so `/` answers
- * with one redirect straight to the final page (onboarding agent stream,
- * project home, or the projects list) before anything renders.
+ * with one redirect straight to the project home or projects list before
+ * anything renders.
  *
  * A brand-new auth signup creates the user/org/project records in auth before
  * OS has a project stream. When that single auth-known project is still
- * missing, this starts the OS bootstrap with `waitUntilCreated: false`. Single
- * project users then route straight to the onboarding agent stream; that page
- * can render immediately while stream processors catch up.
+ * missing, this runs the OS bootstrap through the explicit project handle,
+ * waiting only until the project exists (identity registered, directory
+ * primed, birth events appended) — the saga runs behind the handle.
+ * Single-project users then enter the project home's welcome flow, which
+ * renders the remaining bootstrap progress from live state before onboarding.
  *
- * Failures degrade to `/projects`, where the client-side recovery button and
- * auto-recovery still render the real list.
+ * If the deployment-status probe or server-side birth fails, the decision
+ * carries an explicit `ensureBirth` handoff. The authenticated welcome page
+ * makes the same idempotent create once, so recovery preserves the intended
+ * onboarding destination instead of succeeding silently on `/projects`.
  */
 export const getRootProjectRedirectServerFn: (input?: {
   data?: { preferredProjectSlug: string | null };
@@ -76,56 +81,43 @@ export const getRootProjectRedirectServerFn: (input?: {
   }))
   .handler(async ({ context, data }) => {
     // The middleware-resolved principal, not the /api cookie door: the root
-    // redirect must follow the signed-in user's claims even when the capnweb
-    // admin cookie rides the same request.
+    // redirect must follow the request's user or scoped operator claims.
     const principal = context.principal;
     if (!principal) return { kind: "projects" };
 
     try {
       const projects = new ProjectCollectionRpcTarget({
-        auth: itxAuthFromPrincipal(context.config, principal),
+        auth: itxAuthFromPrincipal(principal, {
+          allowDirectoryFallback: context.operatorSession == null,
+        }),
         config: context.config,
         ctx: context.executionCtx,
       });
       const decision = chooseRootProjectRedirect({
-        preferredProjectSlug: data.preferredProjectSlug,
+        preferredProjectSlug:
+          data.preferredProjectSlug ?? getCookie("iterate_recent_project") ?? null,
         projects: await projects.list({ scope: "mine" }),
       });
 
       if (
         decision.kind === "project" &&
-        decision.onboarding &&
-        decision.project.deploymentStatus === "ready"
+        decision.welcome &&
+        (decision.project.deploymentStatus === "missing" || decision.ensureBirth)
       ) {
         try {
-          const project = await projects.get(decision.project.id);
-          const { state } = await project.processor.snapshot();
-          // The agent stream route can render before the agent capability is
-          // listed. `onboardingActive` is the phase marker; waiting for the
-          // reduced agent list here can wrongly send fresh signups to home.
-          decision.onboarding = isOnboardingActive(state);
-        } catch {
-          // Do not guess "home" on a transient project snapshot failure. The
-          // /projects list still shows the project, while direct home would
-          // strand an in-progress signup away from onboarding.
-          return { kind: "projects" };
-        }
-      }
-
-      if (
-        decision.kind === "project" &&
-        decision.onboarding &&
-        decision.project.deploymentStatus === "missing"
-      ) {
-        try {
-          await projects.create({
+          const project = await projects.get(decision.project.slug);
+          await createMissingRootRedirectProject(project, {
             projectId: decision.project.id,
-            slug: decision.project.slug,
-            waitUntilCreated: false,
             ...organizationSlugForProject(context, decision.project),
           });
-        } catch {
-          return { kind: "projects" };
+          return { ...decision, ensureBirth: false };
+        } catch (error) {
+          console.error("root redirect: missing project bootstrap failed", {
+            projectId: decision.project.id,
+            slug: decision.project.slug,
+            message: error instanceof Error ? error.message : String(error),
+          });
+          return { ...decision, ensureBirth: true };
         }
       }
 
@@ -160,18 +152,25 @@ export const getProjectBySlugServerFn: (input: {
     }
 
     // Claims miss: consult the directory (KV cache in front of the auth
-    // worker — src/project-directory.ts). Admin sessions (admin cookie
-    // or admin-role user) may read any project; a signed-in user may read a
-    // project whose owning organization they belong to (covers the
-    // stale-claims window right after a create on another device).
-    const record = await readProjectBySlug(context.config, env.PROJECT_DIRECTORY, data.slug);
+    // worker — src/project-directory.ts). A platform operator grant or
+    // admin-role user may read any project; an ordinary signed-in user may
+    // read a project whose owning organization they belong to (covers the
+    // stale-claims window right after a create on another device). A scoped
+    // operator grant may never use this fallback: its one project claim is
+    // the complete authorization boundary.
+    const isProjectScopedOperator = context.operatorSession?.grant.kind === "project";
+    if (isProjectScopedOperator) throw new Error(`Project ${data.slug} not found`);
+
+    const record = await readProjectBySlug(env.PROJECT_DIRECTORY, data.slug);
     if (!record) throw new Error(`Project ${data.slug} not found`);
 
-    const userPrincipal = getUserPrincipal(context.principal);
-    const memberOfOwningOrg = userPrincipal?.organizations.some(
-      (organization) => organization.id === record.organizationId,
-    );
-    if (!isAdminContext(context) && !memberOfOwningOrg) {
+    if (
+      !canReadDirectoryProject({
+        isProjectScopedOperator,
+        principal: context.principal,
+        recordOrganizationId: record.organizationId,
+      })
+    ) {
       throw new Error(`Project ${data.slug} not found`);
     }
 
@@ -185,16 +184,6 @@ export const getProjectBySlugServerFn: (input: {
       deploymentStatus: "unknown",
     });
   });
-
-/** Admin cookie, admin-role user, or the capnweb admin header. */
-function isAdminContext(context: RequestContext): boolean {
-  return (
-    context.principal?.type === "admin" ||
-    getUserPrincipal(context.principal)?.isAdmin === true ||
-    (context.rawRequest != null &&
-      authenticateCapnwebAdmin({ config: context.config, request: context.rawRequest }) !== null)
-  );
-}
 
 function withIngressUrl(
   context: Pick<RequestContext, "config">,

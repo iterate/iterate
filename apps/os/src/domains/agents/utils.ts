@@ -1,16 +1,13 @@
-import { DurableObjectNameCodec, normalizePath } from "../durable-object-names.ts";
+import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { AgentPath, type AgentPath as AgentPathValue } from "./agent-presence.ts";
 
 /**
- * Agent RPC and agent-scoped ITX both use stream paths as durable identity.
+ * Agent RPC and agent-scoped itx both use stream paths as durable identity.
  * This guard keeps the `/agents/...` contract at the edge where callers choose
- * a path, before a stream, ITX Durable Object, or worker scope is minted for it.
+ * a path, before a stream, itx Durable Object, or worker scope is minted for it.
  */
-export function normalizeAgentPath(path: string): string {
-  const normalized = normalizePath(path);
-  if (!normalized.startsWith("/agents/")) {
-    throw new Error(`agent path must start with "/agents/", got "${normalized}"`);
-  }
-  return normalized;
+export function parseAgentPath(path: string): AgentPathValue {
+  return AgentPath.parse(path);
 }
 
 /**
@@ -20,10 +17,13 @@ export function normalizeAgentPath(path: string): string {
  * climbs (the parent agent of `/agents/a/b` is `".."`). Empty
  * segments are rejected: messaging a path births an agent, so a `"//"` (or
  * trailing-slash) typo must error, not mint a junk stream. Climbing above
- * `/agents/` fails the normalize guard.
+ * `/agents/` fails the canonical-path parser.
  */
-export function resolveAgentPath(path: string, sourceScopePath: string | undefined): string {
-  if (path.startsWith("/")) return normalizeAgentPath(path);
+export function resolveAgentPath(
+  path: string,
+  sourceScopePath: string | undefined,
+): AgentPathValue {
+  if (path.startsWith("/")) return parseAgentPath(path);
   if (sourceScopePath === undefined || !sourceScopePath.startsWith("/agents/")) {
     throw new Error(
       `relative agent path ${JSON.stringify(path)} needs an agent scope to resolve against — use an absolute "/agents/..." path`,
@@ -39,11 +39,11 @@ export function resolveAgentPath(path: string, sourceScopePath: string | undefin
     }
     resolved.push(segment);
   }
-  return normalizeAgentPath(`/${resolved.join("/")}`);
+  return parseAgentPath(`/${resolved.join("/")}`);
 }
 
 export function parseAgentDurableObjectName(name: string) {
   const parsed = DurableObjectNameCodec.parse(name);
-  normalizeAgentPath(parsed.path);
+  parseAgentPath(parsed.path);
   return parsed;
 }

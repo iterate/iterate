@@ -4,19 +4,15 @@ import { createServerFn } from "@tanstack/react-start";
 import { useMutation } from "@tanstack/react-query";
 import { z } from "zod/v4";
 import { Button } from "@iterate-com/ui/components/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@iterate-com/ui/components/card";
+import { IterateLogo } from "@iterate-com/ui/components/iterate-logo";
 import { Input } from "@iterate-com/ui/components/input";
 import { InputOTP, InputOTPGroup, InputOTPSlot } from "@iterate-com/ui/components/input-otp";
 import { Label } from "@iterate-com/ui/components/label";
 import { Separator } from "@iterate-com/ui/components/separator";
 import { toast } from "@iterate-com/ui/components/sonner";
+import { AuthRedirectError } from "../components/auth-redirect-error.tsx";
 import { parseConfig } from "../config.ts";
+import { getLoginRedirectSearch } from "../utils/auth-redirect-error.ts";
 import { authClient } from "../utils/auth-client.ts";
 import { AccountChooser } from "./-login-account-chooser.tsx";
 
@@ -46,14 +42,42 @@ export const Route = createFileRoute("/login")({
     // `login_hint=email` doubles as the deep-linkable "email code" mode of
     // this page; `login_hint=google` auto-starts the Google flow once.
     login_hint: z.enum(["email", "google"]).optional().catch(undefined),
+    account_chooser_method: z.literal("email").optional().catch(undefined),
     sig: z.string().optional(),
+    error: z.string().optional(),
+    error_description: z.string().optional(),
   }),
   beforeLoad: async ({ search }) => {
+    const normalizedRedirect = search.redirect
+      ? getLoginRedirectSearch(search.redirect)
+      : undefined;
+    if (normalizedRedirect?.error && !isOAuthProviderFlowSearch(search)) {
+      throw redirect({
+        to: "/login",
+        replace: true,
+        search: {
+          ...search,
+          ...normalizedRedirect,
+          error: search.error || normalizedRedirect.error,
+          error_description: search.error_description || normalizedRedirect.error_description,
+        },
+      });
+    }
+
     const loginState = await getLoginState();
     // Already signed in and not inside an OAuth authorization flow: nothing
     // to do here, go where the caller wanted. (In the OAuth flow we stay and
     // render "continue as this account" instead.)
     if (loginState.user && !isOAuthProviderFlowSearch(search)) {
+      if (search.error) {
+        throw redirect({
+          to: "/",
+          search: {
+            error: search.error,
+            error_description: search.error_description,
+          },
+        });
+      }
       // `href`, not `to`: the target is a runtime-arbitrary same-origin path
       // (already sanitized by safeRedirectPath), while `to` is typed against
       // the route tree. A path-only href stays a client-side navigation:
@@ -79,41 +103,52 @@ function RouteComponent() {
         : undefined;
 
   return (
-    <div className="flex min-h-screen items-center justify-center p-4">
-      <Card className={signedInUser ? "w-full max-w-md" : "w-full max-w-sm"}>
-        <CardHeader className="text-center">
-          <CardTitle className="text-xl">
-            {signedInUser ? "Choose an account" : "Sign in"}
-          </CardTitle>
-          <CardDescription>
-            {signedInUser
-              ? "Continue with an Iterate account or sign in as someone else."
-              : "Sign in to your Iterate account"}
-          </CardDescription>
-        </CardHeader>
-        <Separator />
-        <CardContent className="pt-6">
-          {signedInUser ? (
-            <AccountChooser
-              currentUser={signedInUser}
-              continueWithAccount={() =>
-                window.location.assign(getPostLoginRedirectUrl(redirectTo))
-              }
-              refreshCurrentPage={() => {
-                window.location.assign(window.location.pathname + window.location.search);
-              }}
-            >
-              <LoginActions redirectTo={redirectTo} emailOtpEnabled={emailOtpEnabled} />
-            </AccountChooser>
-          ) : (
+    <div className="flex min-h-screen items-center justify-center p-6">
+      <main className={signedInUser ? "w-full max-w-md" : "w-full max-w-xs"}>
+        <div className="mb-8 flex items-center gap-4">
+          <IterateLogo className="size-12 shadow-sm" />
+          <div className="min-w-0">
+            <h1 className="text-lg font-semibold">
+              {signedInUser ? "Choose an account" : "Sign in"}
+            </h1>
+            <p className="text-sm text-muted-foreground">
+              {signedInUser
+                ? "Continue with an iterate account or use another sign-in method."
+                : "Sign in to your iterate account"}
+            </p>
+          </div>
+        </div>
+        {search.error ? (
+          <div className="mb-4">
+            <AuthRedirectError error={search.error} errorDescription={search.error_description} />
+          </div>
+        ) : null}
+        {signedInUser ? (
+          <AccountChooser
+            currentUser={signedInUser}
+            continueWithAccount={() => window.location.assign(getPostLoginRedirectUrl(redirectTo))}
+            refreshCurrentPage={() => {
+              window.location.assign(window.location.pathname + window.location.search);
+            }}
+          >
             <LoginActions
               redirectTo={redirectTo}
               emailOtpEnabled={emailOtpEnabled}
-              loginHint={loginHint}
+              loginHint={search.account_chooser_method}
+              emailModeSearchKey="account_chooser_method"
+              methodDivider="before"
             />
-          )}
-        </CardContent>
-      </Card>
+          </AccountChooser>
+        ) : (
+          <LoginActions
+            redirectTo={redirectTo}
+            emailOtpEnabled={emailOtpEnabled}
+            loginHint={loginHint}
+            emailModeSearchKey="login_hint"
+            methodDivider="between"
+          />
+        )}
+      </main>
     </div>
   );
 }
@@ -122,10 +157,14 @@ function LoginActions({
   redirectTo,
   emailOtpEnabled,
   loginHint,
+  emailModeSearchKey,
+  methodDivider,
 }: {
   redirectTo: string;
   emailOtpEnabled: boolean;
   loginHint?: "email" | "google";
+  emailModeSearchKey: "login_hint" | "account_chooser_method";
+  methodDivider: "before" | "between";
 }) {
   const navigate = Route.useNavigate();
   // The email step is part of the URL (login_hint=email) so a refresh or a
@@ -150,14 +189,16 @@ function LoginActions({
     },
   });
 
-  const setEmailMode = (expanded: boolean) =>
-    navigate({
-      search: (previous) => ({
-        ...previous,
-        login_hint: expanded ? ("email" as const) : undefined,
-      }),
+  const setEmailMode = (expanded: boolean) => {
+    const emailMode = expanded ? ("email" as const) : undefined;
+    return navigate({
+      search: (previous) =>
+        emailModeSearchKey === "account_chooser_method"
+          ? { ...previous, account_chooser_method: emailMode }
+          : { ...previous, login_hint: emailMode },
       replace: true,
     });
+  };
 
   useEffect(() => {
     setIsHydrated(true);
@@ -194,6 +235,8 @@ function LoginActions({
 
   return (
     <div className="space-y-4" data-hydrated={isHydrated}>
+      {methodDivider === "before" ? <LoginMethodDivider /> : null}
+
       {emailOtpEnabled ? (
         <EmailOtpSignIn
           redirectTo={redirectTo}
@@ -205,14 +248,7 @@ function LoginActions({
 
       {!emailMode ? (
         <>
-          {emailOtpEnabled ? (
-            <div className="relative">
-              <Separator />
-              <span className="bg-card text-muted-foreground absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 px-2 text-xs uppercase tracking-[0.2em]">
-                Or
-              </span>
-            </div>
-          ) : null}
+          {emailOtpEnabled && methodDivider === "between" ? <LoginMethodDivider /> : null}
           <Button
             className="w-full"
             variant="outline"
@@ -226,6 +262,16 @@ function LoginActions({
           </Button>
         </>
       ) : null}
+    </div>
+  );
+}
+
+function LoginMethodDivider() {
+  return (
+    <div className="flex items-center gap-3">
+      <Separator className="flex-1" />
+      <span className="text-xs tracking-[0.2em] text-muted-foreground uppercase">or</span>
+      <Separator className="flex-1" />
     </div>
   );
 }
@@ -306,13 +352,10 @@ function EmailOtpSignIn({
           Continue with email
         </Button>
       ) : (
-        <div className="space-y-4 rounded-xl border bg-muted/30 p-4">
-          <div className="space-y-1">
-            <p className="text-sm font-medium text-foreground">Continue with email</p>
-            <p className="text-xs text-muted-foreground">
-              We&apos;ll send a one-time code to your email.
-            </p>
-          </div>
+        <div className="space-y-4">
+          <p className="text-xs text-muted-foreground">
+            We&apos;ll send a one-time code to your email.
+          </p>
 
           <div className="space-y-1.5">
             <Label htmlFor="email">Email</Label>
@@ -413,6 +456,18 @@ function getPostLoginRedirectUrl(fallbackRedirect: string) {
   const redirectUrl = new URL("/api/auth/oauth2/authorize", window.location.origin);
   searchParams.delete("exp");
   searchParams.delete("sig");
+  searchParams.delete("account_chooser_method");
+  searchParams.delete("error");
+  searchParams.delete("error_description");
+  const remainingPrompts = searchParams
+    .get("prompt")
+    ?.split(" ")
+    .filter((prompt) => prompt && prompt !== "select_account");
+  if (remainingPrompts?.length) {
+    searchParams.set("prompt", remainingPrompts.join(" "));
+  } else {
+    searchParams.delete("prompt");
+  }
   redirectUrl.search = searchParams.toString();
   return redirectUrl.toString();
 }

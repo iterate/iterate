@@ -13,13 +13,16 @@ import {
 import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
-import type { SecretDescription } from "../../../../../domains/secrets/types.ts";
+import { useItx, useLiveState } from "iterate/sdk/itx/react";
+import type { SecretDescription, SecretUpdateInput } from "../../../../../domains/secrets/types.ts";
 import { InfoRow } from "~/components/info-row.tsx";
-import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
-import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
+import {
+  breadcrumbLoaderData,
+  streamBreadcrumb,
+  streamPageStaticData,
+} from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
-import { useItx, useLiveState } from "~/itx/itx-react.tsx";
 
 const UpdateSecretForm = z.object({
   material: z.string(),
@@ -27,6 +30,7 @@ const UpdateSecretForm = z.object({
 });
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/secrets/$secretId")({
+  staticData: streamPageStaticData(),
   validateSearch: StreamViewSearch,
   ssr: false,
   loader: ({ context, params }) =>
@@ -34,16 +38,8 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/secrets/$secre
       project: context.project,
       streamBreadcrumb: streamBreadcrumb(context.project, `/secrets/${params.secretId}`),
     }),
-  component: ProjectSecretDetailPage,
+  component: ProjectSecretDetailContent,
 });
-
-function ProjectSecretDetailPage() {
-  return (
-    <ItxBoundary>
-      <ProjectSecretDetailContent />
-    </ItxBoundary>
-  );
-}
 
 function ProjectSecretDetailContent() {
   const params = Route.useParams();
@@ -89,15 +85,29 @@ function SecretDetail({
   const itx = useItx();
 
   const updateSecret = useMutation({
-    mutationFn: async (input: { material?: string; egress?: { urls: string[] } }) => {
+    mutationFn: async (input: SecretUpdateInput) => {
       return await itx.secrets.get(secretPath).update(input);
     },
     onSuccess: () => {
       form.reset();
+      // A revealed value on screen is stale the moment material rotates —
+      // drop it so the next look is an explicit fresh reveal.
+      revealSecret.reset();
       toast.success("Secret updated");
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
   });
+  // Only secrets born `visibility: "readable"` (e.g. the project API key)
+  // answer reveal(); everything else is write-only server-side and the
+  // section below never renders.
+  const revealSecret = useMutation({
+    mutationFn: async () => await itx.secrets.get(secretPath).reveal(),
+    onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
+  });
+  const revealedText =
+    typeof revealSecret.data === "string"
+      ? revealSecret.data
+      : JSON.stringify(revealSecret.data, null, 2);
   // TODO: the itx secret surface has no delete verb yet;
   // the delete button returns when it does.
   const form = useForm({
@@ -115,10 +125,11 @@ function SecretDetail({
         .split("\n")
         .map((url) => url.trim())
         .filter((url) => url !== "");
-      await updateSecret.mutateAsync({
-        ...(parsed.material === "" ? {} : { material: parsed.material }),
-        egress: { urls },
-      });
+      await updateSecret.mutateAsync(
+        parsed.material === ""
+          ? { egress: { urls } }
+          : { egress: { urls }, material: parsed.material },
+      );
     },
   });
 
@@ -126,6 +137,7 @@ function SecretDetail({
     <>
       <div className="rounded-lg border bg-card">
         <InfoRow label="Material" value={secret.hasMaterial ? "Stored" : "Missing"} />
+        <InfoRow label="Visibility" value={secret.visibility} />
         <InfoRow
           label="Egress URLs"
           value={secret.egress.urls.length > 0 ? secret.egress.urls.join(", ") : "(none)"}
@@ -135,6 +147,49 @@ function SecretDetail({
         <InfoRow label="Last used by" value={secret.audit.lastUsedBy ?? "(unknown)"} />
         <InfoRow label="Last used URL" value={secret.audit.lastUsedUrl ?? "(unknown)"} />
       </div>
+
+      {secret.visibility === "readable" ? (
+        <div className="space-y-2 rounded-lg border bg-card p-4">
+          <div className="flex items-center justify-between">
+            <div className="text-sm font-medium">Value</div>
+            {revealSecret.data === undefined ? (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => revealSecret.mutate()}
+                disabled={revealSecret.isPending || !secret.hasMaterial}
+              >
+                {revealSecret.isPending ? "Revealing..." : "Reveal"}
+              </Button>
+            ) : (
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    void navigator.clipboard.writeText(revealedText);
+                    toast.success("Copied");
+                  }}
+                >
+                  Copy
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => revealSecret.reset()}>
+                  Hide
+                </Button>
+              </div>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            This secret was born readable — reveal it as often as you need. Update below to rotate
+            it.
+          </p>
+          {revealSecret.data === undefined ? null : (
+            <pre className="overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs">
+              {revealedText}
+            </pre>
+          )}
+        </div>
+      ) : null}
 
       <div className="space-y-3 rounded-lg border bg-card p-4">
         <form
@@ -164,7 +219,8 @@ function SecretDetail({
                       aria-invalid={isInvalid}
                     />
                     <FieldDescription>
-                      Leave blank to keep the current material; filling it rotates the material.
+                      Leave blank to clear the current material. Entering a value replaces it and
+                      binds it to the egress origins below.
                     </FieldDescription>
                     {isInvalid ? <FieldError errors={field.state.meta.errors} /> : null}
                   </Field>
@@ -190,7 +246,8 @@ function SecretDetail({
                       aria-invalid={isInvalid}
                     />
                     <FieldDescription>
-                      One URL pattern per line. The secret can only be sent to matching egress URLs.
+                      One URL pattern per line. Updating these origins without entering a
+                      replacement value above clears the stored material.
                     </FieldDescription>
                     {isInvalid ? <FieldError errors={field.state.meta.errors} /> : null}
                   </Field>

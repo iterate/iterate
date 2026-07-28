@@ -42,12 +42,12 @@ function SignInRoute() {
 
   function startEmailSignIn() {
     setRedirectingTo("email");
-    signIn({ returnTo, loginHint: "email" });
+    signIn({ returnTo, loginHint: "email", prompt: "select_account" });
   }
 
   function startGoogleSignIn() {
     setRedirectingTo("google");
-    signIn({ returnTo, loginHint: "google" });
+    signIn({ returnTo, loginHint: "google", prompt: "select_account" });
   }
 
   return (
@@ -55,7 +55,7 @@ function SignInRoute() {
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
           <CardTitle className="text-xl">Sign in</CardTitle>
-          <CardDescription>Sign in to your Iterate account</CardDescription>
+          <CardDescription>Sign in to your iterate account</CardDescription>
         </CardHeader>
         <Separator />
         <CardContent className="space-y-3 pt-6">
@@ -98,7 +98,7 @@ const signInErrorCopy = {
   session_verification_failed: {
     title: "Sign-in could not be verified",
     description:
-      "Auth returned a session, but OS could not verify it. Try signing in again; if this keeps happening, contact Iterate support.",
+      "Auth returned a session, but OS could not verify it. Try signing in again; if this keeps happening, contact iterate support.",
   },
 } satisfies Record<(typeof SIGN_IN_AUTH_ERRORS)[number], { title: string; description: string }>;
 

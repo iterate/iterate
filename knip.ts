@@ -17,10 +17,10 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       "e2e/tui-test/tui-test.config.ts",
       "e2e/tui-test/run.ts",
       "e2e/tui-test/data-layer-smoke.ts",
-      // The sidecar worker entries (wrangler.{builder,typechecker}.jsonc,
+      // The sidecar worker entries (wrangler.{worker-bundler,typechecker}.jsonc,
       // generated and gitignored — knip cannot see the configs that
       // reference them).
-      "src/builder.ts",
+      "src/worker-bundler.ts",
       "src/typechecker.ts",
       // Local operational commands mounted by scripts/cli.ts.
       "scripts/cli.ts",
@@ -28,6 +28,9 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       "scripts/itx.ts",
       // Operational smoke for the create-project -> onboarding-greeting path.
       "e2e/vitest/onboarding-smoke.ts",
+      // Seeded as a standalone worker entry outside apps/os/src. Tests import
+      // parts of it, but the deployed config-repo worker uses the whole file.
+      "config-repo-template/worker.ts",
       // Used by apps/streams-example-app through its `~` alias into apps/os
       // src; knip does not resolve that cross-workspace alias.
       "src/domains/streams/client-libraries/processors/browser-event-feed/contract.ts",
@@ -90,6 +93,39 @@ function makeStreamsExampleAppWorkspace(): WorkspaceConfig {
   };
 }
 
+function makeTanstackTodoWorkspace(): WorkspaceConfig {
+  return {
+    entry: ["vite.config.ts", "playwright.config.ts", "src/worker.ts!", "e2e/**/*.ts"],
+    project: ["src/**/*.{ts,tsx}!", "e2e/**/*.ts", "!dist/**!"],
+    vite: false,
+    // wrangler backs the @cloudflare/vite-plugin at runtime; nothing imports
+    // it directly in this minimal app.
+    ignoreDependencies: ["cloudflare", "wrangler"],
+    ignoreBinaries: ["playwright"],
+  };
+}
+
+function makeTasksWorkspace(): WorkspaceConfig {
+  return {
+    entry: [
+      "vite.config.ts",
+      "vitest.config.ts",
+      "src/worker.ts!",
+      // Operational probe/dev scripts, run by hand against live deployments.
+      "scripts/**/*.mjs",
+    ],
+    project: ["src/**/*.{ts,tsx}!", "scripts/**/*.mjs", "!dist/**!"],
+    vite: false,
+    paths: {
+      "~/*": ["../os/src/*"],
+    },
+    // tailwindcss backs the @tailwindcss/vite plugin and the ui package's
+    // globals.css; nothing imports it from TS. `cloudflare:workers` parses as
+    // the "cloudflare" package — same posture as the other app workspaces.
+    ignoreDependencies: ["cloudflare", "tailwindcss"],
+  };
+}
+
 function makeCloudflareTanStackAppWorkspace(workerEnvShim: string): WorkspaceConfig {
   return {
     entry: ["vite.config.ts", "scripts/router.ts", "scripts/**/*.ts", "src/worker.ts!"],
@@ -126,11 +162,16 @@ function makeIterateCliWorkspace(): WorkspaceConfig {
       "src/worker.ts",
       "src/cli.ts",
       "bin/iterate.js",
+      "scripts/*.ts",
+      "tsdown.app-clients.config.ts",
       "tsdown.config.ts",
       "vitest.config.ts",
+      // tsdown reads these entrypoint paths as data; Knip cannot follow them
+      // from the config object into the two standalone browser programs.
+      "src/starter-apps/{guestbook,todo}/client.tsx",
       "src/**/*.test.{ts,tsx}",
     ],
-    project: ["src/**/*.{ts,tsx}", "bin/**/*.js"],
+    project: ["src/**/*.{ts,tsx}", "bin/**/*.js", "scripts/**/*.ts", "tsdown*.ts"],
     // `cloudflare:workers` (typed by src/cloudflare-workers.d.ts) parses as
     // the "cloudflare" package — same posture as the app workspaces.
     ignoreDependencies: ["cloudflare"],
@@ -175,6 +216,8 @@ const config: KnipConfig = {
     "!apps/os",
     "!apps/semaphore",
     "!apps/streams-example-app",
+    "!apps/tanstack",
+    "!apps/tasks",
     "packages/*",
     "!packages/shared",
     "!packages/ui",
@@ -191,11 +234,15 @@ const config: KnipConfig = {
     // TanStack Start resolves the router factory by convention from the
     // entrypoint, so there is no direct import Knip can follow.
     "apps/semaphore/src/router.tsx": ["exports"],
+    "apps/tanstack/src/router.tsx": ["exports"],
+    "apps/tasks/src/router.tsx": ["exports"],
   },
   workspaces: {
     "apps/semaphore": makeSemaphoreCloudflareAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/os": makeOsCloudflareAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/streams-example-app": makeStreamsExampleAppWorkspace(),
+    "apps/tanstack": makeTanstackTodoWorkspace(),
+    "apps/tasks": makeTasksWorkspace(),
     "packages/shared": makeSharedWorkspace(),
     "packages/ui": makeUiWorkspace(),
     "packages/iterate": makeIterateCliWorkspace(),

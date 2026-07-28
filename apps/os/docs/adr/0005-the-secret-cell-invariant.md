@@ -8,9 +8,43 @@ There is no read lane, no reveal lane, no compute lane (`hmac`/`sign`/
 material-touching verb is `fetch()`: substitute `getSecret(...)` placeholders
 in trusted DO code and dispatch to a host on the secret's egress allowlist.
 Substitution reaches headers and the request URL PATH (added for Telegram,
-whose Bot API authenticates in the path `/bot<token>/…`) — never the query
-string, never the body; a placeholder anywhere else in the URL is rejected
-loudly rather than passed through. One request references one secret.
+whose Bot API authenticates in the path `/bot<token>/…`). Callers may also
+explicitly mark an `application/json` or `+json` body with
+`x-iterate-secret-template: json`; the cell parses it and substitutes only
+complete string values that are exact `getSecret(...)` references before
+re-encoding the JSON. It never scans ordinary bodies, interpolates references
+inside longer JSON strings, substitutes object keys, or substitutes URL query
+strings. A placeholder elsewhere in the URL is rejected loudly rather than
+passed through. The marker is consumed before vendor egress. One request
+references one secret.
+
+The egress pin is part of the material's authenticated context. Ciphertext is
+bound to its project, secret path, exact effective origins, and the offset of
+the event that stores it. Every update event without replacement material
+clears retained material, including egress-only and refresh-only updates;
+replacement material must carry its complete egress policy in that same
+authorized update, so it never inherits a policy selected by a public event.
+Copying ciphertext into another event, path, project, or policy cannot re-pin
+it because authentication fails. Credential-bearing
+fetches own redirect handling: every hop is manual, bounded, and revalidated.
+Same-origin redirects may retain credentials; cross-origin redirects are
+rejected, even when both origins appear in an allowlist, so headers and bodies
+never acquire a new destination implicitly. Terminal responses are
+reconstructed before returning to callers: fetch provenance
+(`url`/`redirected`), URL-bearing navigation headers, and credential-bearing
+runtime errors do not leave the cell.
+
+Secret streams remain readable and accept user-appended events, including
+`events.iterate.com/secret/*` facts. Those facts can change metadata or clear
+material, but they cannot forge usable material: only trusted code can produce
+ciphertext that authenticates against the exact context and event offset where
+it is stored.
+
+A refresh also authenticates its state transition: the strategy and reducer-owned
+update offset selected by a request must still be current before provider I/O
+begins, and the result is compare-appended at the exact next event offset. Any
+intervening update, even one repeating the same strategy, therefore cannot mint
+or resurrect material from a stale request.
 
 Credential refresh does not weaken the invariant, because it runs INSIDE the
 cell: a **named strategy** (`oauth-refresh-token`, `github-app-installation`,
@@ -68,6 +102,6 @@ lane, where a project-authored worker (in-jail `read()`, arbitrary
 credential-exchange bodies for providers the platform carries no named
 strategy for) extends the cell to DO + jail with the same boundary: bytes only
 leave toward pinned hosts, and installing the worker is gated like a material
-write. WebSocket egress is likewise deferred, not foreclosed: an Upgrade is
-just a fetch through the same `fetch()` surface, and the relay returns as a
-pure addition when a consumer exists.
+write. WebSocket egress uses the same `fetch()` surface for upgrade-header
+credentials; application frames remain opaque and are never scanned for
+placeholders. See [sandbox-websocket-egress.md](../sandbox-websocket-egress.md).

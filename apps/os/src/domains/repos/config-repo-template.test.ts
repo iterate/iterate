@@ -1,3 +1,10 @@
+// Structural shape of the seeded config-repo template. Exact-string anchors
+// on the template's SOURCE (class names, import lines, host-kind expressions,
+// review-rule prose) were deliberately deleted — they are the docs/testing.md
+// antipattern of a unit test re-asserting another artifact's fixtures.
+// Behavior is proven where it runs: worker-build.e2e.test.ts edits and
+// rebuilds a seeded worker, and the seeded-apps/github-review flows exercise
+// the template live.
 import { expect, test } from "vitest";
 import { PROJECT_REPO_INITIAL_FILES } from "./config-repo-template.generated.ts";
 
@@ -5,66 +12,86 @@ function templateFile(path: string): string {
   return PROJECT_REPO_INITIAL_FILES.find((file) => file.path === path)!.content;
 }
 
-test("template is one worker file with no vendor SDK cruft", () => {
-  // The whole seeded worker lives in worker.ts — the router (default export)
-  // plus the example apps as named exports — so reading one module is reading
-  // the whole system. Vendor SDK surfaces are NOT seeded: built-ins live at
-  // itx.integrations.<slug>, and a project that wants its own updates its own
-  // worker first (worker-build.e2e.test.ts walks exactly that path).
+test("template ships packaged apps behind a thin router", () => {
+  // Vendor SDK surfaces are NOT seeded (built-ins live at
+  // itx.integrations.<slug>), projects grow their own apps/ and
+  // integrations/ by editing their repo. Shared apps such as the GitHub
+  // linter come from the iterate package instead of copied source.
   const paths = PROJECT_REPO_INITIAL_FILES.map((file) => file.path);
   expect(paths).not.toContain("sdk.ts");
-  expect(paths.filter((path) => path.startsWith("apps/"))).toEqual([]);
   expect(paths.filter((path) => path.startsWith("integrations/"))).toEqual([]);
+  expect(paths.filter((path) => path.startsWith("agents/"))).toEqual([]);
+  expect(paths).not.toContain("github-reviews.ts");
+  expect(paths.filter((path) => path.startsWith("apps/review-bot/"))).toEqual([]);
 
-  const worker = templateFile("worker.ts");
-  expect(worker).toContain("export default class ProjectWorker");
-  expect(worker).toContain("export class HelloApp");
-  expect(worker).toContain("export class CounterApp");
-  expect(worker).not.toMatch(/slack/i);
-  expect(worker).not.toMatch(/waitrose/i);
+  const appPaths = paths.filter((path) => path.startsWith("apps/"));
+  expect(appPaths).toEqual([
+    "apps/guestbook/client.tsx",
+    "apps/guestbook/server.tsx",
+    "apps/guestbook/tsconfig.json",
+  ]);
+  expect(paths.filter((path) => path.startsWith("apps/todo/"))).toEqual([]);
 
   const templatePackageJson = JSON.parse(templateFile("package.json")) as {
     dependencies: Record<string, string>;
   };
-  expect(templatePackageJson.dependencies).toEqual({});
+  // React and zod remain temporarily because old persisted createApp refs may
+  // compile the two Guestbook source-upgrade bridges once before the packaged
+  // app removes their WAKE subscription.
+  expect(templatePackageJson.dependencies).toMatchObject({
+    iterate: expect.any(String),
+    react: expect.any(String),
+    zod: expect.any(String),
+  });
+});
+
+test("packaged apps stay behind the thin router", () => {
+  const worker = templateFile("worker.ts");
+  expect(worker).not.toContain("rootDir");
+  expect(worker).not.toContain("clientEntryPoint");
+  expect(worker).not.toContain("pipeline:");
+  expect(worker).not.toContain("tanstack");
+  expect(worker).toContain('from "iterate/starter-apps/guestbook"');
+  expect(worker).toContain("this.#guestbookApp.processEvent(event)");
+  expect(worker).toContain("this.#guestbookApp.fetch(req)");
+  expect(templateFile("apps/guestbook/server.tsx")).toContain(
+    'from "iterate/starter-apps/guestbook/configured-worker"',
+  );
+  expect(templateFile("apps/guestbook/client.tsx")).toContain(
+    'import "iterate/starter-apps/guestbook/client"',
+  );
 });
 
 test("template gets the platform sdk from iterate/sdk, not a committed snapshot", () => {
-  // Seeded repos used to carry a 2000-line sdk.ts, a copy of the itx contract
-  // frozen at seed time (later a small runtime companion). Now worker.ts
-  // imports straight from `iterate/sdk`: types resolve through the published
-  // package (pkg.pr.new's @main URL resolves to the latest build published
-  // from main — .github/workflows/pkg-pr-new.yml — so `npm install` in a
-  // seeded repo always gets the contract the platform currently speaks), and
-  // the RUNTIME imports (the IterateWorkerEntrypoint/IterateDurableObject
-  // base classes) are satisfied at build time by the platform-injected
-  // virtual module (worker-loader.ts), never by an npm install. The platform
-  // ceremony — processEventBatch unpacking, invokeCapability path-walking,
-  // fetchDynamicWorker — lives on the base classes; the template only
-  // overrides processEvent.
-  const worker = templateFile("worker.ts");
-  expect(worker).toContain('from "iterate/sdk"');
-  expect(worker).toContain("extends IterateWorkerEntrypoint");
-  expect(worker).toContain("extends IterateDurableObject");
-  expect(worker).toContain("async processEvent(");
-  // The ceremony methods live on the base classes — the template may mention
-  // them in prose but must not reimplement them.
-  expect(worker).not.toContain("async processEventBatch(");
-  expect(worker).not.toContain("async invokeCapability(");
+  // Seeded repos used to carry a 2000-line sdk.ts frozen at seed time. Now
+  // worker.ts imports straight from `iterate/sdk` and worker builds
+  // npm-install the published package (pkg.pr.new's @main URL tracks the
+  // latest build from main; preview deploys pin their PR's build through the
+  // in-memory manifest rewrite).
+  expect(templateFile("worker.ts")).toContain('from "iterate/sdk"');
+  expect(templateFile("worker.ts")).toContain('from "iterate/starter-apps/github-ai-linter"');
+  expect(templateFile("worker.ts")).toContain('from "iterate/starter-apps/guestbook"');
+  expect(templateFile("worker.ts")).toContain('from "iterate/starter-apps/todo"');
 
   const templatePackageJson = JSON.parse(templateFile("package.json")) as {
-    devDependencies: Record<string, string>;
+    dependencies: Record<string, string>;
   };
-  expect(templatePackageJson.devDependencies).toMatchObject({
+  expect(templatePackageJson.dependencies).toMatchObject({
     iterate: "https://pkg.pr.new/iterate/iterate/iterate@main",
   });
 });
 
-test("template app links use custom-domain subdomains only for custom host routes", () => {
-  const worker = templateFile("worker.ts");
-
-  expect(worker).toContain('req.headers.get("x-iterate-host-kind")');
-  expect(worker).toContain(
-    'hostKind === "custom" ? `${slug}.${url.host}` : `${slug}--${url.host}`',
+test("seeded GitHub AI linter reads editable rules shipped in the config repo", () => {
+  expect(templateFile("worker.ts")).toContain(
+    'glob: "rules/**/*.md",\n      repoPath: "/repos/config"',
   );
+
+  const rulePaths = PROJECT_REPO_INITIAL_FILES.map((file) => file.path).filter((path) =>
+    path.startsWith("rules/"),
+  );
+  expect(rulePaths).toEqual([
+    "rules/structure/no-small-single-use-helper.md",
+    "rules/typescript/explain-type-cast.md",
+    "rules/typescript/no-inferable-type-annotation.md",
+  ]);
 });

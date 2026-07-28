@@ -3,12 +3,11 @@ import { exportJWK, generateKeyPair } from "jose";
 
 // Generate an iterate "forge" keypair.
 //
-// A forge key is the master key behind offline identity minting
-// (scripts/auth/mint-session.ts): its PRIVATE half lives in a Doppler config
-// and signs minted JWTs; its PUBLIC half is baked into the OS worker's trusted
-// JWKS at deploy (apps/os/scripts/deploy.ts) so those JWTs verify like
-// issuer-signed ones. Whoever holds the private half can mint a session as any
-// user — guard it like a production credential.
+// This is the environment's Auth signing key. Its PRIVATE half lives in
+// Doppler and is shipped to Auth; relying-party deploys derive and ship only
+// its PUBLIC half. Offline identity minting uses the same key, so whoever
+// holds the private half can mint a session as any user — guard it like a
+// production credential.
 //
 // The existing keys (kid `iterate-forge-dev` / `iterate-forge-preview` /
 // `iterate-forge-prd`) were made with this script. Each environment gets its
@@ -18,7 +17,7 @@ import { exportJWK, generateKeyPair } from "jose";
 //
 // Store the printed JWK as AUTH_FORGE_PRIVATE_JWK in the target Doppler config
 // (for prod, also set AUTH_FORGE_ALLOW_PRODUCTION=true). The deploy strips the
-// private `d` field before baking the public half — nothing else to do.
+// private `d` field before shipping the public half — nothing else to do.
 
 const { values: args } = parseArgs({
   options: {

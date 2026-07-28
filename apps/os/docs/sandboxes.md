@@ -13,15 +13,15 @@ Sandboxes are project-scoped Cloudflare Sandbox containers, kept like
 **pets**: each one is explicitly created with a name and a Cloudflare instance type, lives at a
 stable path, and has an imperative lifecycle. Nothing on the platform mints a
 sandbox implicitly — agents don't get one at birth, and `get()` refuses paths
-that were never created.
+that were never created when a birth-requiring method is called.
 
-```js
+```ts
 // Create once (strict: an existing or destroyed name is an error) …
-const { path } = await itx.sandboxes.create({ name: "main", instanceType: "basic" });
+const path = "/sandboxes/main";
+const sandbox = await itx.sandboxes.get(path).create({ instanceType: "basic" });
 
-// … then address it by path, forever. get() returns the BARE
-// @cloudflare/sandbox stub — the SDK's whole surface, nothing wrapped on top.
-const sandbox = await itx.sandboxes.get(path); // "/sandboxes/main"
+// … then address it by path, forever. The handle dynamically replays the
+// @cloudflare/sandbox SDK's whole surface onto the claimed container stub.
 await sandbox.exec("echo hi"); // first command boots the container
 await sandbox.gitCheckout("https://github.com/acme/repo", { targetDir: "/workspace/repo" });
 await sandbox.startProcess("bun server.js");
@@ -53,9 +53,9 @@ streams system materializes every path prefix as a stream (a new stream
 announces itself to all ancestors), so a nested path like
 `/sandboxes/lite/main` would mint a meaningless intermediate "folder" stream
 (`/sandboxes/lite`) that shows up in listings but is not a sandbox. The path
-scheme otherwise follows the domain-prefix convention (`/secrets/...`,
-`/repos/...`, `/agents/...`): a project path names exactly one kind of
-object, and every sandbox is discoverable as a stream under `/sandboxes/`.
+scheme otherwise follows the collection-prefix convention (`/secrets/...`,
+`/repos/...`, `/agents/...`). The prefix makes sandbox addresses
+discoverable; it does not implicitly create a processor on any stream.
 
 The image is the **stock Cloudflare sandbox image**
 (`sandbox/Dockerfile` is a one-line `FROM docker.io/cloudflare/sandbox:<sdk-version>`
@@ -72,21 +72,25 @@ Every lifecycle verb appears on the sandbox's own stream as a
 `<verb>-requested` / past-tense pair (the command, then the reality — see
 `sandbox-processor-contract.ts`):
 
-| Command                                                                        | What happens                                                                                                                                                  | Events                                                                                           |
-| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `itx.sandboxes.create({ name, instanceType?, sleepAfter?, keepAlive?, env? })` | Durable record written; no container boots. Strict — destroyed names are retired, not recycled.                                                               | `create-requested` (on the `/sandboxes` catalogue) → `created` (+ `configured` when `env` given) |
-| `start()`                                                                      | Boot the container now, restore `/workspace`, apply env vars. Also happens implicitly when a command reaches a stopped sandbox.                               | `start-requested` → `started` (implicit wakes emit `started` only)                               |
-| `sleep()`                                                                      | Snapshot `/workspace` to R2, then tear the container down. The sandbox stays created. The idle timer (`sleepAfter`, default 10m) does the same automatically. | `sleep-requested` → `backup-created` → `stopped`                                                 |
-| `destroy()`                                                                    | Permanent: container torn down, record tombstoned, `get()` refuses the path forever.                                                                          | `destroy-requested` → `stopped` → `destroyed`                                                    |
+| Command                                                                            | What happens                                                                                                                                                  | Events                                                                                                                 |
+| ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `itx.sandboxes.get(path).create({ instanceType?, sleepAfter?, keepAlive?, env? })` | Durable record written; no container boots. Strict — destroyed names are retired, not recycled.                                                               | `create-requested` (on the `/sandboxes` catalogue) → one atomic `created` + optional `configured` + subscription batch |
+| `start()`                                                                          | Boot the container now, restore `/workspace`, apply env vars. Also happens implicitly when a command reaches a stopped sandbox.                               | `start-requested` → `started` (implicit wakes emit `started` only)                                                     |
+| `sleep()`                                                                          | Snapshot `/workspace` to R2, then tear the container down. The sandbox stays created. The idle timer (`sleepAfter`, default 10m) does the same automatically. | `sleep-requested` → `backup-created` → `stopped`                                                                       |
+| `destroy()`                                                                        | Permanent: container torn down, record tombstoned, `get()` refuses the path forever.                                                                          | `destroy-requested` → `stopped` → `destroyed`                                                                          |
 
 `started`/`stopped` are the authoritative signal (they also fire for implicit
 wakes and idle sleeps); the `-requested` events are the record of who asked.
 `create-requested` is the one durable-by-contract append — it IS the name
-claim and the routing record, so `create` awaits it. Everything else is
-best-effort by design: lifecycle telemetry never blocks or fails a container
-start/stop. `SandboxProcessor` folds the events into a small
-status projection (`status`, `instanceType`, `lastBackupId`, `env`) — it takes no
-actions and is not yet wired to a processor host.
+claim and the routing record, so `create` awaits it. Requested and ancillary
+audit facts are best-effort; the `created`/`started`/`stopped`/`destroyed`
+completions that drive UI state are appended and folded before their lifecycle
+boundary returns. `SandboxProcessor` is hosted by the Sandbox Durable Object
+and folds the events into a small projection (`status`, `running`,
+`instanceType`, `lastBackupId`, `env`) exposed through
+`itx.sandboxes.get(path).processor` and `itx.sandboxes.get(path).liveState`. It takes no
+actions, disables recovery so it does not compete for the Containers SDK's
+alarm, and receives durable stream wakes through the sandbox collection.
 
 ## `/workspace` persists across stop/sleep (R2 backup/restore)
 
@@ -159,7 +163,7 @@ and pushed.
 Every sandbox carries a durable env-var map applied to every command —
 `create({ env })` seeds it, `setEnvVars(vars)` merges into it (the SDK's own method name, made durable) (each call
 emits a `configured` event). Values are conventionally
-`getSecret({ path })` placeholders: the material stays in the secret system
+`getSecret(path)` placeholders: the material stays in the secret system
 and is substituted only at the egress door, so code in the sandbox reads e.g.
 `OPENAI_API_KEY` from its environment and calls the provider while the real
 key never enters the container (or its snapshots). **Never pass raw secret
@@ -168,9 +172,13 @@ material as a value** — it would land on the durable stream.
 When the project has a GitHub connection, the sandbox plants **`GH_TOKEN`**
 automatically (a placeholder for the connection secret's `accessToken`,
 re-discovered per container start; lexicographically-first connection wins;
-`setEnvVars({ GH_TOKEN })` overrides) — so `gh` and git-over-https
-against github.com work out of the box, and `gitCheckout` is the way to get
-code into a sandbox. Nothing else is planted: there is no baked coding agent
+`setEnvVars({ GH_TOKEN })` overrides) and configures git with Basic
+`http.extraheader` for github.com — so `gh`, curl-with-Bearer, and
+git-over-https against github.com work out of the box, and `gitCheckout` is
+the way to get code into a sandbox. Every sandbox also gets stock git
+`user.name` / `user.email` as **`iterate`** + the first-party GitHub App bot
+noreply address so commits pushed from the sandbox show the iterate app
+avatar. Nothing else is planted: there is no baked coding agent
 and no automatic repo checkout — a sandbox starts as the stock image plus
 whatever its snapshots carry.
 
@@ -182,6 +190,13 @@ the `@cloudflare/containers` proxy and forwarded to the owning project's
 Durable Object, the same decision point `ProjectEgressEntrypoint` gives dynamic
 workers' `globalOutbound`. So a sandbox reaches the outside world only through
 the same allow/deny/secret-substitution policy as the rest of the project.
+
+**WebSockets:** outbound HTTP/1.1 `wss://` handshakes and duplex frames use this
+same MITM path. Header secrets use `getSecret` on the upgrade; application
+frames remain opaque. Released `ws` receives complete close semantics, but the
+stock image's built-in Node `WebSocket` currently misses the reciprocal close
+event and can wait until timeout. Details:
+[sandbox-websocket-egress.md](./sandbox-websocket-egress.md).
 
 Wiring (three points):
 
@@ -203,6 +218,22 @@ Wiring (three points):
   `SANDBOX_INTERCEPT_HTTPS` is set, which the SDK sets from the `interceptHttps`
   flag — so no Dockerfile change is needed for the container to trust it.
 
+### OpenAI → Cloudflare AI Gateway
+
+JSON **POST/PUT** to **`api.openai.com`** (chat/completions, responses, …) are
+routed at **project egress** (sandbox MITM, worker `egress.fetch`, …). An
+explicit project or platform `getSecret(...)` reference takes the normal
+pinned secret lane; this keeps the same credential if a WebSocket client falls
+back to HTTP. Without an explicit reference, JSON POST/PUT uses the Workers AI
+**gateway binding only** — the same door and **platform** OpenAI key as agent
+BYOK — and caller `Authorization` is replaced, so a dummy key is sufficient.
+Gateway requests carry `cf-aig-metadata` with at least
+`{ projectId, source: "project-egress" }`, plus BYOK-parity collect-log headers.
+`OpenAI-*` and `Accept` caller headers are forwarded. Other bare methods (for
+example GET `/v1/models`) are **not** rewritten and use normal project egress
+(dummy keys will 401). Implementation: `openai-ai-gateway-egress.ts` +
+`ProjectDurableObject.#egressOpenAiViaAiGateway`.
+
 ## Deployment
 
 The domain lives in `src/domains/sandboxes/`; the container classes are
@@ -216,17 +247,20 @@ warning otherwise). Per-class `instance_type` and `max_instances` are set in
 `scripts/generate-wrangler-config.ts` (`SANDBOX_MAX_INSTANCES`) — deploy-time
 memory quota is validated per account, so preview caps are small.
 
-## Identity: why `get()` is async
+## Identity: address first, route after the claim
 
 Every domain object derives identity from its Durable Object name
 (`{projectId}.iterate{path}`). Container-backed Durable Objects are the
 exception: the runtime does not reliably surface `ctx.id.name` to them (the
 local dev runtime drops it entirely), which is why the upstream SDK's
 `getSandbox()` helper pushes the name in rather than reading it. We do the
-same, at create: `itx.sandboxes.create` records the identity write-once, and
-`itx.sandboxes.get(path)` awaits `assertCreated({ projectId, path })` on the
-stub before handing it out — which is also what enforces "pets are created,
-never minted by addressing". Consequence: dial sandboxes through
+same, at create: `itx.sandboxes.get(path).create` records the identity write-once, and
+`itx.sandboxes.get(path)` returns a local address handle without choosing a
+container namespace. `create()` writes the catalogue claim and identity;
+later birth-requiring calls resolve that claim and await
+`assertCreated({ projectId, path })` on the selected stub. This enforces "pets
+are created, never minted by addressing" while keeping `get()` side-effect
+free. Consequence: dial sandboxes through
 `itx.sandboxes` — a raw `env.SANDBOX_*.getByName(...)` stub that was never
 created refuses every command.
 
@@ -253,8 +287,8 @@ Smoke test (against a project you created locally):
 ```bash
 doppler run --project os --config dev -- pnpm --dir apps/os cli itx run \
   --context prj_… \
-  -e 'const { path } = await itx.sandboxes.create({ name: "smoke", instanceType: "lite" });
-      const sb = await itx.sandboxes.get(path);
+  -e 'const path = "/sandboxes/smoke";
+      const sb = await itx.sandboxes.get(path).create({ instanceType: "lite" });
       const r = await sb.exec("ls /");
       return { exitCode: r.exitCode, stdout: r.stdout };'
 ```

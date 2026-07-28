@@ -1,14 +1,21 @@
-import { useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { ItxBoundary } from "~/components/itx-boundary.tsx";
-import { ONBOARDING_AGENT_PATH } from "~/lib/onboarding-agent.ts";
+import { toast } from "@iterate-com/ui/components/sonner";
+import { connectItx, useLiveState } from "iterate/sdk/itx/react";
+import { AgentDetailsSheet } from "~/components/agents/agent-details-sheet.tsx";
+import { filesToAgentPayload } from "~/lib/web-agent.ts";
+import { ONBOARDING_AGENT_PATH, ensureOnboardingAgentReady } from "~/lib/onboarding-agent.ts";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
-import { connectItxBrowser } from "~/itx/itx-react.tsx";
-import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
+import {
+  breadcrumbLoaderData,
+  streamBreadcrumb,
+  streamPageStaticData,
+} from "~/lib/route-breadcrumbs.ts";
 import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/streams/$")({
+  staticData: streamPageStaticData(),
   params: {
     parse: (raw) => ({
       _splat: streamPathFromSplat(raw._splat),
@@ -24,87 +31,122 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/agents/streams
       project: context.project,
       streamBreadcrumb: streamBreadcrumb(context.project, params._splat),
     }),
-  component: ProjectAgentDetailPage,
+  component: ProjectAgentDetailContent,
 });
-
-function ProjectAgentDetailPage() {
-  // The boundary is only for the lazily-loaded stream-view chunk. The feed
-  // runtime dials itx imperatively, so a reconnect is handled inside the
-  // stream mirror without blanking the whole page.
-  return (
-    <ItxBoundary>
-      <ProjectAgentDetailContent />
-    </ItxBoundary>
-  );
-}
 
 function ProjectAgentDetailContent() {
   const { project } = Route.useLoaderData();
   const { _splat: streamPath } = Route.useParams();
+  const onboardingBirthRef = useRef<{ key: string; promise: Promise<void> } | null>(null);
+  const agents =
+    useLiveState(
+      (itx) => itx.agents.liveState,
+      (state) => state.agents,
+      [],
+    ).value ?? {};
+  const agentRuntimeTransition = useLiveState(
+    (itx) => itx.agents.get(streamPath).liveState,
+    (state) => state.runtimeChange,
+    [streamPath],
+    { slug: project.id },
+  ).value;
 
   // THE onboarding-agent birth: the agent is deliberately not born during
   // project bootstrap (it costs a real LLM turn), so opening its chat is what
-  // births it. configure({}) is the idempotent birth-with-defaults door — on a
-  // fresh path it establishes the full default policy (prompt, model, the
-  // "Start onboarding now" kickoff) in the SAME append that creates the
-  // stream, so there is no stock-defaults window; on an already-born agent
-  // every keyed event dedupes away. Retries cover the create-flow window where
-  // the itx session's claims may still be catching up.
-  useEffect(() => {
-    if (streamPath !== ONBOARDING_AGENT_PATH) return;
-    let cancelled = false;
-    void (async () => {
-      for (let attempt = 0; attempt < 3 && !cancelled; attempt++) {
+  // births it. The onboarding prompt and kickoff are appended explicitly here
+  // after generic creation rather than inferred from the stream path. One
+  // shared promise closes the race between this eager birth and a user sending
+  // immediately; retries cover the create-flow window where the itx session's
+  // claims may still be catching up.
+  const ensureOnboardingAgent = useCallback((): Promise<void> => {
+    if (streamPath !== ONBOARDING_AGENT_PATH) return Promise.resolve();
+
+    const key = `${project.id}:${streamPath}`;
+    if (onboardingBirthRef.current?.key === key) {
+      return onboardingBirthRef.current.promise;
+    }
+
+    const promise = (async () => {
+      let lastError: unknown;
+      for (let attempt = 0; attempt < 3; attempt++) {
         try {
-          const itx = await connectItxBrowser({ projectId: project.id });
-          await itx.agents.get(ONBOARDING_AGENT_PATH).configure({});
+          const itx = await connectItx(project.id);
+          const agent = itx.agents.get(ONBOARDING_AGENT_PATH);
+          await ensureOnboardingAgentReady({ agent });
           return;
-        } catch {
-          await new Promise((resolve) => setTimeout(resolve, 2_000 * (attempt + 1)));
+        } catch (error) {
+          lastError = error;
+          if (attempt < 2) {
+            await new Promise((resolve) => setTimeout(resolve, 2_000 * (attempt + 1)));
+          }
         }
       }
+      throw new Error("Could not create the onboarding agent.", { cause: lastError });
     })();
-    return () => {
-      cancelled = true;
-    };
+
+    onboardingBirthRef.current = { key, promise };
+    void promise.catch(() => {
+      if (onboardingBirthRef.current?.promise === promise) {
+        onboardingBirthRef.current = null;
+      }
+    });
+    return promise;
   }, [project.id, streamPath]);
+
+  useEffect(() => {
+    let active = true;
+    void ensureOnboardingAgent().catch((error: unknown) => {
+      if (active) {
+        toast.error(error instanceof Error ? error.message : String(error));
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [ensureOnboardingAgent]);
   // The stream view subscribes live, so a send needs no cache invalidation —
-  // the new events arrive over the socket. Agent setup is owned by project and
-  // agent processor facts; sendMessage only appends the user-facing input fact.
+  // the new events arrive over the socket. Agent setup is represented by
+  // explicit project and agent facts; sendMessage appends only the user-facing
+  // input fact.
   // The socket is keyed by project ID (the provider pre-warmed it), and agents
   // are addressed by their stream path (e.g. "/agents/onboarding").
   async function submitAgentMessage(message: string) {
-    const itx = await connectItxBrowser({ projectId: project.id });
+    await ensureOnboardingAgent();
+    const itx = await connectItx(project.id);
     // Returned so the composer can feed the committed offset into the
     // store's consume-own-append metric (real append→observed latency).
     return await itx.agents.get(streamPath).message(message);
   }
 
   async function submitAgentFiles({ files, message }: { files: File[]; message: string }) {
-    const itx = await connectItxBrowser({ projectId: project.id });
+    await ensureOnboardingAgent();
+    const itx = await connectItx(project.id);
     // One addFiles call → ONE input event carrying every attachment, so the
     // feed shows a single message and the agent gets one turn trigger.
     const { event } = await itx.agents.get(streamPath).addFiles({
-      files: await Promise.all(
-        files.map(async (file) => ({
-          contentType: file.type || "application/octet-stream",
-          data: new Uint8Array(await file.arrayBuffer()),
-          filename: file.name,
-        })),
-      ),
+      files: await filesToAgentPayload(files),
       ...(message ? { message } : {}),
     });
     return event;
   }
 
-  async function interruptAgentMessage(llmRequestOffset: number) {
-    const itx = await connectItxBrowser({ projectId: project.id });
+  async function interruptAgentMessage() {
+    // Cancellation is a property of new input, never a free-standing command:
+    // the agent processor settles the open request as cancelled
+    // (interrupted-by-user-input) when an interrupting context item lands. A
+    // developer item stays out of the chat feed while telling the model why
+    // its response stopped; the USER actor is load-bearing — it classifies
+    // the stop as an external trigger (a no-actor developer item counts as
+    // the agent loop's own feedback, which would not refill the
+    // autonomous-turn budget and could trip the loop breaker).
+    const itx = await connectItx(project.id);
     await itx.streams.get(streamPath).append({
-      type: "events.iterate.com/agent/llm-request-cancelled",
+      type: "events.iterate.com/agents/context-added",
       payload: {
-        phase: "requested",
-        llmRequestOffset,
-        reason: "interrupted-by-user-input",
+        role: "developer",
+        content: "The user interrupted the in-progress response from the web chat.",
+        actor: { type: "user", origin: "web" },
+        llmRequestPolicy: { behaviour: "interrupt-current-request" },
       },
     });
   }
@@ -118,7 +160,16 @@ function ProjectAgentDetailContent() {
       <div className="flex min-h-0 flex-1 flex-col">
         <ProjectStreamView
           autoFocusMessageComposer
-          emptyLabel="No events on this agent stream yet."
+          contextHeader={
+            <AgentDetailsSheet
+              agents={agents}
+              path={streamPath}
+              projectId={project.id}
+              projectSlug={project.slug}
+              runtimeTransition={agentRuntimeTransition}
+            />
+          }
+          emptyLabel={null}
           messageComposer={{
             onInterrupt: interruptAgentMessage,
             onSubmit: submitAgentMessage,
@@ -127,6 +178,7 @@ function ProjectAgentDetailContent() {
           }}
           projectId={project.id}
           projectSlug={project.slug}
+          agentRuntimeTransition={agentRuntimeTransition ?? null}
           streamPath={streamPath}
         />
       </div>

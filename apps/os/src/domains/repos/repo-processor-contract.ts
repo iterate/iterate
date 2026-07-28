@@ -1,300 +1,360 @@
-import { z } from "zod";
-import { defineProcessorContract, type ProcessorState } from "../streams/processor-contracts.ts";
-import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
+// The repo processor CONTRACT. Self-contained: state schema, events,
+// consumes/emits, deps — schemas are spelled INLINE in the contract; the
+// schemas it genuinely uses twice (the creation request, the birth
+// certificate, the creation failure, the GitHub link, the import-request
+// coordinates) are hoisted functions defined below the contract, so the
+// contract still opens the file.
+//
+// One stream per repo (`/repos/<name>`). The events tell the repo's whole
+// story: the creation saga (`repos/create-requested` → `repos/created` |
+// `repos/create-failed` — the terminal certificate carries the backing
+// Cloudflare Artifacts coordinates), Git pushes observed through the
+// Artifacts event queue (`repo/cloudflare-artifact-event-received` →
+// `repo/commit-completed`), and the optional GitHub mirror: link lifecycle,
+// mirror-push outcomes, and the durable default-branch import obligation
+// (`github-import-requested/started/completed/failed`) opened by cross-posted
+// GitHub push webhooks.
 
-/**
- * The GitHub repository one repo mirrors to: a named GitHub connection (the
- * App installation whose token authenticates pushes) plus the owner/repo
- * coordinates. Folded from the latest `repo/github-link-configured` event.
- */
-const GithubLinkPayload = z.object({
-  connection: z.string().trim().min(1),
-  installationId: z.string().trim().min(1),
-  owner: z.string().trim().min(1),
-  repo: z.string().trim().min(1),
-});
+import { z } from "zod";
+import { defineProcessorContract, type ProcessorState } from "iterate/processors";
+import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 
 export const RepoProcessorContract = defineProcessorContract({
   slug: "repo",
-  version: "0.1.0",
-  description: "Tiny fake repo projection for the ITX reference implementation.",
+  version: "0.6.0",
+  description: "Projects repo lifecycle, Git activity, and linked GitHub default-branch imports.",
   stateSchema: z.object({
-    artifactName: z.string().nullable().default(null),
-    /** An open creation OBLIGATION: `create-requested` folded, `created` not
-     * yet. The end-of-batch reconciler compares this pair at head — never
-     * event-time state, which a journal refold replays with `created` still
-     * false (docs/writing-stream-processors.md, "Refold safety"). */
-    createRequested: z.boolean().default(false),
-    created: z.boolean().default(false),
-    defaultBranch: z.string().nullable().default(null),
-    github: GithubLinkPayload.nullable().default(null),
-    initialized: z.boolean().default(false),
-    lastGithubPush: z
+    createRequest: repoCreateRequestSchema().nullable().default(null).meta({
+      description:
+        "The durable creation intent, from repos/create-requested; null until the saga opens.",
+    }),
+    createFailure: repoCreateFailureSchema()
+      .nullable()
+      .default(null)
+      .meta({
+        description:
+          "The terminal creation failure, from repos/create-failed; a failed repo is closed for " +
+          "good (fail-closed) — nothing else ever reacts on its stream.",
+      }),
+    birthCertificate: repoBirthCertificateSchema()
+      .nullable()
+      .default(null)
+      .meta({
+        description:
+          "Existence marker: null until repos/created reduces; then the exact terminal " +
+          "certificate — the creation request plus the backing Artifacts coordinates.",
+      }),
+    artifactName: z.string().nullable().default(null).meta({
+      description: "The backing Cloudflare Artifacts repository name, recorded by repos/created.",
+    }),
+    defaultBranch: z
+      .string()
+      .nullable()
+      .default(null)
+      .meta({
+        description:
+          "The branch whose pushes produce commit-completed and task facts. Set to main the " +
+          "moment create-requested reduces (every creation mode targets main), confirmed by " +
+          "repos/created.",
+      }),
+    github: githubLinkSchema()
+      .nullable()
+      .default(null)
+      .meta({
+        description:
+          "The linked GitHub repository, from the latest repo/github-link-configured event; " +
+          "null when unlinked.",
+      }),
+    githubImport: z
       .object({
-        at: z.string(),
-        branch: z.string(),
-        commitOid: z.string().nullable(),
-        error: z.string().nullable(),
-        ok: z.boolean(),
+        branch: z.string().meta({ description: "The branch being imported." }),
+        requestId: z.string().meta({
+          description:
+            "The obligation's identity: the coordinates (path:offset) of the webhook event " +
+            "that requested it.",
+        }),
+        requestedCommitOid: z
+          .string()
+          .meta({ description: "The GitHub head the push delivery announced." }),
+        status: z.enum(["requested", "started"]).meta({
+          description:
+            "requested = no attempt has durably begun; started = an attempt journaled its " +
+            "started fact (a started import with no live driver is re-driven — the sync is an " +
+            "idempotent current-head fast-forward).",
+        }),
       })
       .nullable()
-      .default(null),
-    remote: z.string().nullable().default(null),
+      .default(null)
+      .meta({
+        description:
+          "The one open GitHub default-branch import obligation, or null. The webhook is " +
+          "first normalized into github-import-requested; the at-head pass then drives the " +
+          "vendor sync without holding the stream cursor.",
+      }),
+    initialized: z
+      .boolean()
+      .default(false)
+      .meta({
+        description:
+          "True once the underlying stream's stream/created event reduced. Nothing reads it " +
+          "today; kept because the reduced state is public itx surface.",
+      }),
+    lastGithubPush: z
+      .object({
+        at: z.string().meta({ description: "When the outcome was recorded (event createdAt)." }),
+        branch: z.string().meta({ description: "The branch the mirror push targeted." }),
+        commitOid: z.string().nullable().meta({
+          description:
+            "The head that was pushed, or null when the push failed before resolving one.",
+        }),
+        error: z.string().nullable().meta({ description: "What went wrong, or null on success." }),
+        ok: z.boolean().meta({ description: "Whether the newest mirror push succeeded." }),
+      })
+      .nullable()
+      .default(null)
+      .meta({
+        description:
+          "The NEWEST mirror-push outcome (completed, failed, or synced), for status surfaces; " +
+          "cleared when the link changes.",
+      }),
+    remote: z.string().nullable().default(null).meta({
+      description: "The backing artifact's Git remote URL, recorded by repos/created.",
+    }),
   }),
   events: {
-    "events.iterate.com/repo/create-requested": {
-      description: "A repo creation was requested.",
-      payloadSchema: z.object({
-        projectId: z.string().nullable(),
-        path: z.string(),
-      }),
-      examples: [
-        {
-          description: 'Project bootstrap requested the config repo at path "/repos/config".',
-          payload: {
-            projectId: "prj_01jzp3v9qkfxeb2m4n8r7wd5ha",
-            path: "/repos/config",
-          },
-        },
-      ],
+    "events.iterate.com/repos/create-requested": {
+      description:
+        "Requests the repo creation saga: seed an empty repo, import a private GitHub repo at depth one, or import a public GitHub repo through Cloudflare Artifacts (full history unless depth is set). Terminates in repos/created or repos/create-failed.",
+      payloadSchema: repoCreateRequestSchema(),
     },
-    "events.iterate.com/repo/created": {
-      description: "The repo was created.",
+    "events.iterate.com/repos/created": {
+      description:
+        "The repo creation saga completed and its backing Artifact is ready — the repo's birth certificate.",
+      payloadSchema: repoBirthCertificateSchema(),
+    },
+    "events.iterate.com/repos/create-failed": {
+      description:
+        "The repo creation saga reached a terminal failure and did not declare the repo created. Fail-closed: nothing else ever reacts on a failed repo's stream.",
+      payloadSchema: repoCreateFailureSchema(),
+    },
+    "events.iterate.com/repo/cloudflare-artifact-event-received": {
+      description:
+        "A Cloudflare Artifacts lifecycle or Git event captured from the deployment's event queue and routed to this repo stream.",
+      payloadSchema: z
+        .object({
+          artifactName: z
+            .string()
+            .meta({ description: "The Artifacts repository the event is about." }),
+          body: z.object({}).loose().meta({ description: "Cloudflare's event body, verbatim." }),
+          cloudflareEventType: z
+            .string()
+            .optional()
+            .meta({ description: "Cloudflare's event type, when the queue surfaced one." }),
+          namespace: z.string().meta({ description: "The Artifacts namespace (per deployment)." }),
+        })
+        .loose(),
+    },
+    "events.iterate.com/repo/commit-completed": {
+      description:
+        "The repo's default branch advanced, normalized from a Cloudflare Artifacts pushed event. This includes pushes made outside OS through Git.",
       payloadSchema: z.object({
-        artifactName: z.string(),
-        defaultBranch: z.string(),
-        path: z.string(),
-        projectId: z.string().nullable(),
-        remote: z.string(),
+        beforeCommitOid: z.string().trim().min(1).nullable().meta({
+          description: "The branch head before the push, or null for a newly created ref.",
+        }),
+        branch: z.string().trim().min(1).meta({ description: "The branch that advanced." }),
+        commitOid: z.string().trim().min(1).meta({ description: "The new branch head." }),
       }),
-      examples: [
-        {
-          description:
-            "The project's config repo finished bootstrapping: its git remote is a Cloudflare Artifacts repository named after the project id and path.",
-          payload: {
-            artifactName: "prj_01jzp3v9qkfxeb2m4n8r7wd5ha--L3JlcG9zL2NvbmZpZw",
-            defaultBranch: "main",
-            path: "/repos/config",
-            projectId: "prj_01jzp3v9qkfxeb2m4n8r7wd5ha",
-            remote:
-              "https://6d7f0e2c4b9a5138f2ce7a1b8d3e4f50.artifacts.cloudflare.net/git/os-prd-repos/prj_01jzp3v9qkfxeb2m4n8r7wd5ha--L3JlcG9zL2NvbmZpZw.git",
-          },
-        },
-      ],
     },
     "events.iterate.com/repo/github-link-configured": {
-      description: "The repo was linked to a GitHub repository (mirror-out on every commit).",
-      payloadSchema: GithubLinkPayload,
-      examples: [
-        {
-          description:
-            "The repo was linked to acme-inc/acme-config through the GitHub App installation's connection.",
-          payload: {
-            connection: "install-87654321",
-            installationId: "87654321",
-            owner: "acme-inc",
-            repo: "acme-config",
-          },
-        },
-      ],
+      description:
+        "The repo was linked to a GitHub repository (mirror commits out and import fast-forward default-branch pushes).",
+      payloadSchema: githubLinkSchema(),
     },
     "events.iterate.com/repo/github-unlinked": {
       description: "The repo's GitHub link was removed.",
       payloadSchema: z.object({
-        connection: z.string(),
-        owner: z.string(),
-        repo: z.string(),
+        connection: z.string().meta({ description: "The GitHub connection that was unlinked." }),
+        owner: z.string().meta({ description: "GitHub owner of the unlinked repository." }),
+        repo: z.string().meta({ description: "GitHub name of the unlinked repository." }),
+        repositoryId: z
+          .number()
+          .int()
+          .positive()
+          .meta({ description: "GitHub's numeric repository id." }),
       }),
-      examples: [
-        {
-          description: "The link to acme-inc/acme-config was removed; mirroring stops.",
-          payload: {
-            connection: "install-87654321",
-            owner: "acme-inc",
-            repo: "acme-config",
-          },
-        },
-      ],
     },
     "events.iterate.com/repo/github-push-completed": {
       description: "A mirror push delivered the branch head to the linked GitHub repository.",
       payloadSchema: z.object({
-        branch: z.string(),
-        commitOid: z.string(),
-        owner: z.string(),
-        repo: z.string(),
+        branch: z.string().meta({ description: "The branch that was mirrored." }),
+        commitOid: z.string().meta({ description: "The head that was pushed to GitHub." }),
+        owner: z.string().meta({ description: "GitHub owner of the mirror target." }),
+        repo: z.string().meta({ description: "GitHub name of the mirror target." }),
       }),
-      examples: [
-        {
-          description: "The default branch's new head was mirrored to GitHub after a commit.",
-          payload: {
-            branch: "main",
-            commitOid: "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01",
-            owner: "acme-inc",
-            repo: "acme-config",
-          },
-        },
-      ],
     },
     "events.iterate.com/repo/github-push-failed": {
       description:
         "A mirror push to the linked GitHub repository failed. Best-effort mirroring self-heals: the next commit's push carries every missing commit, and repo.pushToGithub() repairs on demand.",
       payloadSchema: z.object({
-        branch: z.string(),
-        commitOid: z.string().nullable(),
-        error: z.string(),
-        owner: z.string(),
-        repo: z.string(),
+        branch: z.string().meta({ description: "The branch the push targeted." }),
+        commitOid: z.string().nullable().meta({
+          description: "The head being pushed, or null when the push failed before resolving one.",
+        }),
+        error: z.string().meta({ description: "What GitHub (or token minting) reported." }),
+        owner: z.string().meta({ description: "GitHub owner of the mirror target." }),
+        repo: z.string().meta({ description: "GitHub name of the mirror target." }),
       }),
-      examples: [
-        {
-          description:
-            "GitHub rejected the mirror push as non-fast-forward: GitHub has commits this repo does not.",
-          payload: {
-            branch: "main",
-            commitOid: "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01",
-            error:
-              'Error: GitHub push of main was rejected (non-fast-forward means GitHub has commits this repo does not; use syncFromGithub() to adopt them or pushToGithub({ force: true }) to overwrite): {"refs/heads/main":"fetch first"}',
-            owner: "acme-inc",
-            repo: "acme-config",
-          },
-        },
-        {
-          description:
-            "The push failed before a head was resolved (null commitOid): the connection's installation token could not be minted.",
-          payload: {
-            branch: "main",
-            commitOid: null,
-            error:
-              'Error: GitHub connection "install-87654321" has no usable installation token (HttpError: Not Found). Use itx.integrations.list() to see connections.',
-            owner: "acme-inc",
-            repo: "acme-config",
-          },
-        },
-      ],
     },
     "events.iterate.com/repo/github-synced": {
-      description: "The repo adopted the linked GitHub repository's branch head (syncFromGithub).",
+      description:
+        "The repo adopted the linked GitHub repository's branch head (syncFromGithub or resetFromGithub).",
       payloadSchema: z.object({
-        branch: z.string(),
-        commitOid: z.string(),
-        forced: z.boolean(),
-        owner: z.string(),
-        previousCommitOid: z.string().nullable(),
-        repo: z.string(),
+        branch: z.string().meta({ description: "The branch that was synced." }),
+        commitOid: z.string().meta({ description: "The adopted GitHub head." }),
+        forced: z
+          .boolean()
+          .meta({ description: "True when diverged local history was overwritten." }),
+        owner: z.string().meta({ description: "GitHub owner of the sync source." }),
+        previousCommitOid: z.string().nullable().meta({
+          description: "The local head before the sync, or null when the branch was empty.",
+        }),
+        repo: z.string().meta({ description: "GitHub name of the sync source." }),
+        reset: z.boolean().optional().meta({
+          description: "True when the artifact was destroyed and recreated (resetFromGithub).",
+        }),
       }),
-      examples: [
-        {
-          description: "A fast-forward sync adopted GitHub's newer branch head.",
-          payload: {
-            branch: "main",
-            commitOid: "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01",
-            forced: false,
-            owner: "acme-inc",
-            previousCommitOid: "4c1a9b0e2d3f5a6b7c8d9e0f1a2b3c4d5e6f7a80",
-            repo: "acme-config",
-          },
-        },
-        {
-          description: "A forced sync overwrote diverged local history with GitHub's branch head.",
-          payload: {
-            branch: "main",
-            commitOid: "b7e2f0a9c8d14e3fa6570b2c9d8e1f4a3b5c6d70",
-            forced: true,
-            owner: "acme-inc",
-            previousCommitOid: "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01",
-            repo: "acme-config",
-          },
-        },
-      ],
+    },
+    "events.iterate.com/repo/github-import-requested": {
+      description: "A linked GitHub default-branch push opened a durable import obligation.",
+      payloadSchema: githubImportRequestSchema(),
+    },
+    "events.iterate.com/repo/github-import-started": {
+      description:
+        "The repo processor durably began a GitHub import attempt — journaled BEFORE the sync body runs, so an attempt that dies with its incarnation is visibly owed.",
+      payloadSchema: githubImportRequestSchema(),
+    },
+    "events.iterate.com/repo/github-import-completed": {
+      description:
+        "A GitHub import obligation completed, including when Artifacts was already at the current GitHub head.",
+      payloadSchema: z.object({
+        branch: z.string().trim().min(1).meta({ description: "The imported branch." }),
+        commitOid: z
+          .string()
+          .trim()
+          .min(1)
+          .meta({
+            description:
+              "The head Artifacts now holds — the CURRENT GitHub head, which may be newer than " +
+              "the requested one (out-of-order deliveries are satisfied by any newer head).",
+          }),
+        requestId: z
+          .string()
+          .trim()
+          .min(1)
+          .meta({ description: "The settled obligation's identity." }),
+        requestedCommitOid: z
+          .string()
+          .trim()
+          .min(1)
+          .meta({ description: "The head the original push delivery announced." }),
+      }),
+    },
+    "events.iterate.com/repo/github-import-failed": {
+      description:
+        "A GitHub import obligation failed without blocking later repo events; a later push or explicit sync can retry.",
+      payloadSchema: z.object({
+        branch: z.string().trim().min(1).meta({ description: "The branch the import targeted." }),
+        error: z.string().meta({ description: "What the sync reported." }),
+        requestId: z
+          .string()
+          .trim()
+          .min(1)
+          .meta({ description: "The settled obligation's identity." }),
+        requestedCommitOid: z
+          .string()
+          .trim()
+          .min(1)
+          .meta({ description: "The head the original push delivery announced." }),
+      }),
     },
     "events.iterate.com/github/webhook-received": {
       description:
-        "One GitHub webhook delivery, captured verbatim on the connection stream and cross-posted here by the repo's linkGithub rule. Maximally loose: bodies are GitHub's, stored rows must always re-parse.",
-      payloadSchema: z.object({}).loose(),
-      examples: [
-        {
-          description:
-            "A push delivery (trimmed): GitHub's webhook body under `body`, plus the delivery headers and the routing installation id.",
-          payload: {
-            body: {
-              ref: "refs/heads/main",
-              before: "4c1a9b0e2d3f5a6b7c8d9e0f1a2b3c4d5e6f7a80",
-              after: "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01",
-              commits: [
-                {
-                  id: "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01",
-                  message: "Update worker routing",
-                  author: { name: "Jane Doe", email: "jane@acme-inc.com" },
-                },
-              ],
-              repository: { full_name: "acme-inc/acme-config" },
-              sender: { login: "jane-doe" },
-              installation: { id: 87654321 },
-            },
-            headers: {
-              githubDelivery: "72d3162e-cc78-11e3-81ab-4c9367dc0958",
-              githubEvent: "push",
-            },
-            installationId: "87654321",
-          },
-        },
-      ],
-    },
-    "events.iterate.com/github-pr/route-configured": {
-      description:
-        "Binds one PR agent stream to its pull request: the GitHub coordinates (via the repo's link), the PR number, and the repo path the webhooks route from. Appended to the agent stream by the repo processor's PR webhook forward.",
+        "One GitHub push delivery, captured as decoded JSON on the connection stream and cross-posted here by the repo's linkGithub subscription. The trusted envelope is structural while the vendor body stays loose.",
       payloadSchema: z
         .object({
-          connection: z.string(),
-          installationId: z.string(),
-          number: z.number(),
-          owner: z.string(),
-          repo: z.string(),
-          repoPath: z.string(),
-          streamPath: z.string(),
+          body: z
+            .object({
+              repository: z
+                .object({
+                  id: z
+                    .number()
+                    .int()
+                    .positive()
+                    .meta({ description: "GitHub's numeric repository id." }),
+                })
+                .loose()
+                .meta({ description: "The repository the delivery is about." }),
+            })
+            .loose()
+            .meta({ description: "GitHub's webhook body, verbatim." }),
+          delivery: z.object({
+            id: z
+              .string()
+              .trim()
+              .min(1)
+              .meta({ description: "GitHub's unique delivery id (X-GitHub-Delivery)." }),
+            name: z
+              .string()
+              .trim()
+              .min(1)
+              .meta({ description: 'GitHub\'s event name (X-GitHub-Event), e.g. "push".' }),
+          }),
+          installationId: z
+            .string()
+            .trim()
+            .min(1)
+            .meta({ description: "The GitHub App installation the delivery was routed by." }),
         })
         .loose(),
-      examples: [
-        {
-          description:
-            "The first PR webhook for acme-inc/acme-config#42 bound its agent stream to the pull request.",
-          payload: {
-            connection: "install-87654321",
-            installationId: "87654321",
-            number: 42,
-            owner: "acme-inc",
-            repo: "acme-config",
-            repoPath: "/repos/config",
-            streamPath: "/agents/repos/config/pull-requests/42",
-          },
-        },
-      ],
     },
   },
   processorDeps: [CoreProcessorContract],
   consumes: [
-    "events.iterate.com/repo/create-requested",
-    "events.iterate.com/repo/created",
+    "events.iterate.com/repos/create-requested",
+    "events.iterate.com/repos/created",
+    "events.iterate.com/repos/create-failed",
+    "events.iterate.com/repo/cloudflare-artifact-event-received",
+    "events.iterate.com/repo/commit-completed",
     "events.iterate.com/repo/github-link-configured",
     "events.iterate.com/repo/github-unlinked",
     "events.iterate.com/repo/github-push-completed",
     "events.iterate.com/repo/github-push-failed",
     "events.iterate.com/repo/github-synced",
+    "events.iterate.com/repo/github-import-requested",
+    "events.iterate.com/repo/github-import-started",
+    "events.iterate.com/repo/github-import-completed",
+    "events.iterate.com/repo/github-import-failed",
     "events.iterate.com/github/webhook-received",
+    // The stream's own birth fact (core-owned): reduces `initialized`.
     "events.iterate.com/stream/created",
+    // Recovery's eventless at-head pass re-drives open creation and GitHub
+    // import obligations without consuming the platform revival fact.
   ],
   emits: [
-    "events.iterate.com/repo/created",
-    "events.iterate.com/github/webhook-received",
-    "events.iterate.com/github-pr/route-configured",
+    "events.iterate.com/repos/created",
+    "events.iterate.com/repos/create-failed",
+    "events.iterate.com/repo/commit-completed",
+    "events.iterate.com/repo/github-import-requested",
+    "events.iterate.com/repo/github-import-started",
+    "events.iterate.com/repo/github-import-completed",
+    "events.iterate.com/repo/github-import-failed",
   ],
 });
 
 /**
  * The contract's type under the same identifier, so type-level helpers read
  * without `typeof`: `ProcessorState<RepoProcessorContract>`,
- * `ConsumedEvent<RepoProcessorContract>`, `ProcessorEvent<RepoProcessorContract, T>`.
+ * `ConsumedEvent<RepoProcessorContract>`.
  */
 export type RepoProcessorContract = typeof RepoProcessorContract;
 
@@ -303,3 +363,156 @@ export type RepoProcessorContract = typeof RepoProcessorContract;
  * `stateSchema` — the one definition of the shape.
  */
 export type RepoProcessorState = ProcessorState<RepoProcessorContract>;
+
+/**
+ * The creation request's TYPE, derived from the contract. The runtime schema
+ * is reached through the contract:
+ * `RepoProcessorContract.events["events.iterate.com/repos/create-requested"].payloadSchema`.
+ */
+export type RepoCreateRequest = z.output<
+  RepoProcessorContract["events"]["events.iterate.com/repos/create-requested"]["payloadSchema"]
+>;
+
+/**
+ * The creation request — the whole saga's durable intent. Used four times:
+ * the create-requested payload, inside the birth certificate and the failure
+ * record, and the reduced state's createRequest slot.
+ */
+function repoCreateRequestSchema() {
+  return z.discriminatedUnion("type", [
+    z
+      .strictObject({
+        type: z.literal("empty"),
+      })
+      .meta({ description: "Seed a fresh repo with iterate's starter files." }),
+    z
+      .strictObject({
+        type: z.literal("github-private"),
+        connection: z
+          .string()
+          .trim()
+          .min(1)
+          .meta({ description: "The named GitHub connection (App installation) minting tokens." }),
+        owner: z.string().trim().min(1).meta({ description: "GitHub owner (org or user)." }),
+        repo: z.string().trim().min(1).meta({ description: "GitHub repository name." }),
+      })
+      .meta({
+        description:
+          "Seed an empty Artifact, link the GitHub repository, then pull its default branch " +
+          "through the Worker at depth one.",
+      }),
+    z
+      .strictObject({
+        type: z.literal("github-public"),
+        connection: z
+          .string()
+          .trim()
+          .min(1)
+          .meta({ description: "The named GitHub connection (App installation) minting tokens." }),
+        depth: z.number().int().positive().optional().meta({
+          description:
+            "Shallow-import depth; omit to let Cloudflare Artifacts import the full history.",
+        }),
+        owner: z.string().trim().min(1).meta({ description: "GitHub owner (org or user)." }),
+        repo: z.string().trim().min(1).meta({ description: "GitHub repository name." }),
+      })
+      .meta({
+        description:
+          "Have Cloudflare Artifacts clone the public GitHub repository directly (no transfer " +
+          "through the Worker), then link it.",
+      }),
+  ]);
+}
+
+/**
+ * The terminal birth certificate — used twice (the repos/created payload and
+ * the reduced state's birthCertificate slot): the creation request plus the
+ * backing Cloudflare Artifacts coordinates the saga established.
+ */
+function repoBirthCertificateSchema() {
+  return z.strictObject({
+    request: repoCreateRequestSchema().meta({
+      description: "The creation request this certificate settles.",
+    }),
+    artifactName: z
+      .string()
+      .trim()
+      .min(1)
+      .meta({ description: "The Cloudflare Artifacts repository name." }),
+    defaultBranch: z
+      .string()
+      .trim()
+      .min(1)
+      .meta({ description: "The branch commit and task facts derive from." }),
+    remote: z.string().url().meta({ description: "The artifact's Git remote URL." }),
+  });
+}
+
+/** The terminal creation failure — used twice (the repos/create-failed
+ * payload and the reduced state's createFailure slot). */
+function repoCreateFailureSchema() {
+  return z.strictObject({
+    error: z
+      .string()
+      .trim()
+      .min(1)
+      .meta({ description: "What the failed creation attempt reported." }),
+    request: repoCreateRequestSchema().meta({
+      description: "The creation request that failed.",
+    }),
+  });
+}
+
+/**
+ * The GitHub repository one repo mirrors to — used twice (the
+ * repo/github-link-configured payload and the reduced state's github slot): a
+ * named GitHub connection (the App installation whose token authenticates
+ * pushes) plus the owner/repo coordinates.
+ */
+function githubLinkSchema() {
+  return z.object({
+    connection: z
+      .string()
+      .trim()
+      .min(1)
+      .meta({ description: "The named GitHub connection (App installation) minting tokens." }),
+    installationId: z
+      .string()
+      .trim()
+      .min(1)
+      .meta({ description: "The GitHub App installation id webhook deliveries are routed by." }),
+    owner: z.string().trim().min(1).meta({ description: "GitHub owner (org or user)." }),
+    repo: z.string().trim().min(1).meta({ description: "GitHub repository name." }),
+    repositoryId: z
+      .number()
+      .int()
+      .positive()
+      .meta({
+        description:
+          "GitHub's numeric repository id — the identity webhook deliveries are matched on " +
+          "(names can be reused; ids cannot).",
+      }),
+  });
+}
+
+/** The import obligation's coordinates — used twice (github-import-requested
+ * opens the obligation; github-import-started marks a durable attempt). */
+function githubImportRequestSchema() {
+  return z.object({
+    branch: z.string().trim().min(1).meta({ description: "The branch to import." }),
+    requestId: z
+      .string()
+      .trim()
+      .min(1)
+      .meta({
+        description:
+          "The obligation's identity: the coordinates (path:offset) of the webhook event that " +
+          "opened it — no synthetic ids.",
+      }),
+    requestedCommitOid: z
+      .string()
+      .trim()
+      .min(1)
+      .meta({ description: "The GitHub head the push delivery announced." }),
+  });
+}

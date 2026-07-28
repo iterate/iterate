@@ -1,8 +1,11 @@
+import { tracing } from "cloudflare:workers";
 import { itxEnv as env } from "../../env.ts";
 import { itxEntrypointBinding, itxEntrypointProps } from "../itx/utils.ts";
+import type { StreamContext } from "../projects/stream-context.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { invokePreferringFlattenedPath, replayPath } from "../capability-host/live-capability.ts";
+import { WorkerBuildFailedError, type WorkerBuildFailure } from "./artifact-store.ts";
 import type {
   StatefulDynamicWorkerRef,
   StatelessDynamicWorkerRef,
@@ -12,13 +15,16 @@ import {
   isWebSocketUpgradeRequest,
   withWorkerFetchDispatchHeader,
 } from "./worker-fetch-dispatch.ts";
+import { withWorkerCommit } from "./worker-serve-info.ts";
 import {
   loadResolvedWorker,
-  resolveCachedArtifact,
   resolveWorkerSource,
   type ResolvedWorkerSource,
+  type ResolvedWorkerSourceResult,
   type WorkerBindings,
 } from "./worker-loader.ts";
+
+export type DynamicWorkerTraceRole = "project_config" | "run_script" | "scheduler_action";
 
 // Structural shadow of StatefulWorkerDurableObject.invokeCapability instead
 // of the DO's own type: the DO imports this module (cycle), and a typed
@@ -27,17 +33,20 @@ import {
 type StatefulWorkerRpc = {
   invokeCapability(input: {
     args?: unknown[];
+    buildFailureNonce: string;
     buildBudgetMs?: number;
     flattenNestedPath?: boolean;
     path: string[];
     ref: StatefulDynamicWorkerRef;
   }): Promise<unknown>;
   kill(): Promise<void>;
+  setAlarm(input: { atMs: number | null; ref: StatefulDynamicWorkerRef }): Promise<void>;
+  getAlarm(): Promise<number | null>;
 };
 
 /**
  * Small internal executor for DynamicWorkerRefs — the authority boundary
- * where a dynamic isolate gets its env: a scoped ITX loopback binding
+ * where a dynamic isolate gets its env: a scoped itx loopback binding
  * (capability-tree access as the hosting scope) and the project egress
  * fetcher as globalOutbound (all network the isolate does flows through it —
  * secret substitution, egress control). This is intentionally not an
@@ -48,25 +57,32 @@ export class DynamicWorkerRunner {
   readonly #globalOutbound: Fetcher;
   readonly #projectId: string;
   readonly #scopePath: string;
-  readonly #waitUntil: (promise: Promise<unknown>) => void;
+  readonly #streamContext: StreamContext;
 
   constructor(props: {
+    streamContext: StreamContext;
     /** The hosting context's `ctx.exports` — loopback entrypoints are minted
      * from it, so the isolate's authority is the host's, never the ref's. */
     exports: ExecutionContext["exports"];
     projectId: string;
     /** The itx scope the loaded code runs in (its `env.ITX` answers here). */
     scopePath: string;
-    /** The host's `ctx.waitUntil` — keeps budget-expired cold builds alive
-     * past the request that gave up on them (see resolveWorkerSource). */
-    waitUntil: (promise: Promise<unknown>) => void;
   }) {
-    const itxScope = itxEntrypointProps({ path: props.scopePath, projectId: props.projectId });
+    const itxScope = itxEntrypointProps({
+      streamContext: props.streamContext,
+      path: props.scopePath,
+      projectId: props.projectId,
+      purpose: "userspace",
+    });
     this.#bindings = { ITX: itxEntrypointBinding(props.exports, itxScope) };
-    this.#globalOutbound = projectEgressFetcher(props.exports, props.projectId);
+    this.#globalOutbound = projectEgressFetcher(
+      props.exports,
+      props.projectId,
+      props.streamContext,
+    );
     this.#projectId = props.projectId;
     this.#scopePath = props.scopePath;
-    this.#waitUntil = props.waitUntil;
+    this.#streamContext = props.streamContext;
   }
 
   /**
@@ -78,9 +94,13 @@ export class DynamicWorkerRunner {
   async #getStatelessEntrypoint<T = unknown>(
     ref: StatelessDynamicWorkerRef,
     buildBudgetMs?: number,
-  ): Promise<T> {
-    const { worker } = await this.#load(ref, buildBudgetMs);
-    return worker.getEntrypoint(ref.entrypoint, { props: ref.props ?? {} }) as T;
+  ): Promise<{ ok: true; target: T } | { failure: WorkerBuildFailure; ok: false }> {
+    const loaded = await this.#load(ref, buildBudgetMs);
+    if (!loaded.ok) return loaded;
+    return {
+      ok: true,
+      target: loaded.worker.getEntrypoint(ref.entrypoint, { props: ref.props ?? {} }) as T,
+    };
   }
 
   /**
@@ -91,24 +111,17 @@ export class DynamicWorkerRunner {
   async loadStatefulClass<T extends DurableObjectClass = DurableObjectClass>(
     ref: StatefulDynamicWorkerRef,
     buildBudgetMs?: number,
-  ): Promise<{ klass: T; resolved: ResolvedWorkerSource }> {
-    const { resolved, worker } = await this.#load(ref, buildBudgetMs);
-    return { klass: this.#durableObjectClass<T>(ref, worker), resolved };
-  }
-
-  /**
-   * A stateful class from a previously built artifact, by exact cache key —
-   * never triggers a build (see resolveCachedArtifact). Null when the
-   * artifact is gone.
-   */
-  async loadStatefulClassFromCacheKey<T extends DurableObjectClass = DurableObjectClass>(
-    ref: StatefulDynamicWorkerRef,
-    cacheKey: string,
-  ): Promise<{ klass: T; resolved: ResolvedWorkerSource } | null> {
-    const resolved = await resolveCachedArtifact(cacheKey);
-    if (resolved === null) return null;
-    const worker = this.#loadResolved(ref, resolved);
-    return { klass: this.#durableObjectClass<T>(ref, worker), resolved };
+  ): Promise<
+    | { klass: T; ok: true; resolved: ResolvedWorkerSource }
+    | { failure: WorkerBuildFailure; ok: false }
+  > {
+    const loaded = await this.#load(ref, buildBudgetMs);
+    if (!loaded.ok) return loaded;
+    return {
+      klass: this.#durableObjectClass<T>(ref, loaded.worker),
+      ok: true,
+      resolved: loaded.resolved,
+    };
   }
 
   #durableObjectClass<T extends DurableObjectClass>(
@@ -137,20 +150,70 @@ export class DynamicWorkerRunner {
     buildBudgetMs,
     ref,
     request,
+    traceRole,
   }: {
     /** Give up on a cold build after this long (see resolveWorkerSource). */
     buildBudgetMs?: number;
     ref: DynamicWorkerRef;
     request: Request;
+    traceRole?: DynamicWorkerTraceRole;
   }): Promise<Response> {
-    if (ref.type === "stateful") {
-      const stub = env.WORKER.getByName(
-        statefulWorkerDurableObjectName(this.#projectId, ref),
-      ) as unknown as Fetcher;
-      return await stub.fetch(withWorkerFetchDispatchHeader(request, { buildBudgetMs, ref }));
-    }
-    const entrypoint = await this.#getStatelessEntrypoint<Fetcher>(ref, buildBudgetMs);
-    return await entrypoint.fetch(request);
+    return this.#trace(ref, "fetch", traceRole, async (span) => {
+      let resolved: ResolvedWorkerSource | undefined;
+      if (
+        "createApp" in ref.source &&
+        !isWebSocketUpgradeRequest(request) &&
+        (request.method === "GET" || request.method === "HEAD")
+      ) {
+        const result = await resolveWorkerSource({
+          buildBudgetMs,
+          projectId: this.#projectId,
+          source: ref.source,
+        });
+        if (!result.ok) throw new WorkerBuildFailedError(result.failure);
+        resolved = result.source;
+        const asset = await env.WORKER_BUNDLER.handleAssetRequest(
+          request,
+          resolved.assetManifest,
+          resolved.assets,
+          resolved.assetConfig,
+        );
+        if (asset !== null) {
+          const response = withWorkerCommit(asset, resolved.commitOid);
+          span.setAttribute("http.response.status_code", response.status);
+          return response;
+        }
+      }
+
+      let response: Response;
+      if (ref.type === "stateful") {
+        // The hosting DO resolves the facet and stamps its trusted build
+        // header after the user response returns.
+        response = await (
+          env.WORKER.getByName(
+            statefulWorkerDurableObjectName(this.#projectId, ref),
+          ) as unknown as Fetcher
+        ).fetch(withWorkerFetchDispatchHeader(request, { buildBudgetMs, ref }));
+      } else {
+        if (resolved === undefined) {
+          const result = await resolveWorkerSource({
+            buildBudgetMs,
+            projectId: this.#projectId,
+            source: ref.source,
+          });
+          if (!result.ok) throw new WorkerBuildFailedError(result.failure);
+          resolved = result.source;
+        }
+        // The serve header is trusted platform output on the fetch lane —
+        // stamped (and any user-set value dropped) at this authority boundary.
+        const entrypoint = this.#loadResolved(resolved).getEntrypoint(ref.entrypoint, {
+          props: ref.props ?? {},
+        }) as Fetcher;
+        response = withWorkerCommit(await entrypoint.fetch(request), resolved.commitOid);
+      }
+      span.setAttribute("http.response.status_code", response.status);
+      return response;
+    });
   }
 
   async invokeCapability({
@@ -159,6 +222,7 @@ export class DynamicWorkerRunner {
     flattenNestedPath = false,
     path,
     ref,
+    traceRole,
   }: {
     args?: unknown[];
     /** Give up on a cold build after this long (see resolveWorkerSource). */
@@ -166,6 +230,7 @@ export class DynamicWorkerRunner {
     flattenNestedPath?: boolean;
     path: string[];
     ref: DynamicWorkerRef;
+    traceRole?: DynamicWorkerTraceRole;
   }): Promise<unknown> {
     // Capability dispatch is method calls; no name is protocol-special here,
     // `fetch` included (see docs/dynamic-worker-dispatch.md). A WebSocket
@@ -184,28 +249,44 @@ export class DynamicWorkerRunner {
       );
     }
 
-    if (ref.type === "stateful") {
-      // Method replay must happen inside StatefulWorkerDurableObject. Returning
-      // a dynamic facet stub through one DO and then invoking it from another RPC
-      // target has produced opaque internal RPC failures; keeping the replay at
-      // the owning DO boundary also keeps storage affinity explicit. Stateful
-      // refs are also deliberately lazy: mounting a worker capability only
-      // commits the recipe to the stream, while this first real invocation is the
-      // point where source loading, version-marker writes, and facet restarts are
-      // allowed to mutate durable runtime state.
-      return await this.#statefulWorker(ref).invokeCapability({
-        args,
-        buildBudgetMs,
-        flattenNestedPath,
-        path,
-        ref,
-      });
-    }
+    return this.#trace(ref, "call", traceRole, async () => {
+      if (ref.type === "stateful") {
+        // Method replay must happen inside StatefulWorkerDurableObject. Returning
+        // a dynamic facet stub through one DO and then invoking it from another RPC
+        // target has produced opaque internal RPC failures; keeping the replay at
+        // the owning DO boundary also keeps storage affinity explicit. Stateful
+        // refs are also deliberately lazy: mounting a worker capability only
+        // commits the ref to the stream, while this first real invocation is the
+        // point where source loading, version-marker writes, and facet restarts are
+        // allowed to mutate durable runtime state.
+        // Successful values pass through untouched because they may contain
+        // live RPC stubs whose ownership transfers to our caller. A nonce-tagged
+        // array lets the host return the build-failure branch as plain data:
+        // Array.isArray can distinguish it without probing an RPC stub property.
+        const buildFailureNonce = crypto.randomUUID();
+        const result = await this.#statefulWorker(ref).invokeCapability({
+          args,
+          buildFailureNonce,
+          buildBudgetMs,
+          flattenNestedPath,
+          path,
+          ref,
+        });
+        if (Array.isArray(result) && result[0] === buildFailureNonce) {
+          // The worker never sees the random nonce, so only the hosting DO can
+          // produce this tuple; successful customer arrays cannot collide.
+          const failure = result[1] as WorkerBuildFailure;
+          throw new WorkerBuildFailedError(failure);
+        }
+        return result;
+      }
 
-    const target = await this.#getStatelessEntrypoint(ref, buildBudgetMs);
-    return flattenNestedPath
-      ? await invokePreferringFlattenedPath({ args, path, target })
-      : await replayPath({ args, path, target });
+      const loaded = await this.#getStatelessEntrypoint(ref, buildBudgetMs);
+      if (!loaded.ok) throw new WorkerBuildFailedError(loaded.failure);
+      return flattenNestedPath
+        ? await invokePreferringFlattenedPath({ args, path, target: loaded.target })
+        : await replayPath({ args, path, target: loaded.target });
+    });
   }
 
   /** Abort a stateful dynamic worker's outer Durable Object and hosted facet. */
@@ -213,27 +294,44 @@ export class DynamicWorkerRunner {
     await this.#statefulWorker(ref).kill();
   }
 
+  /** Arm (or with null, disarm) a stateful dynamic worker's durable alarm. */
+  async setAlarm(ref: StatefulDynamicWorkerRef, atMs: number | null): Promise<void> {
+    await this.#statefulWorker(ref).setAlarm({ atMs, ref });
+  }
+
+  /** The stateful dynamic worker's currently armed alarm time, if any. */
+  async getAlarm(ref: StatefulDynamicWorkerRef): Promise<number | null> {
+    return await this.#statefulWorker(ref).getAlarm();
+  }
+
   async #load(
     ref: DynamicWorkerRef,
     buildBudgetMs?: number,
-  ): Promise<{ resolved: ResolvedWorkerSource; worker: WorkerStub }> {
-    const resolved = await resolveWorkerSource({
+  ): Promise<
+    | { ok: true; resolved: ResolvedWorkerSource; worker: WorkerStub }
+    | { failure: WorkerBuildFailure; ok: false }
+  > {
+    const result: ResolvedWorkerSourceResult = await resolveWorkerSource({
       buildBudgetMs,
       projectId: this.#projectId,
       source: ref.source,
-      waitUntil: this.#waitUntil,
     });
-    return { resolved, worker: this.#loadResolved(ref, resolved) };
+    if (!result.ok) return result;
+    return {
+      ok: true,
+      resolved: result.source,
+      worker: this.#loadResolved(result.source),
+    };
   }
 
-  #loadResolved(ref: DynamicWorkerRef, resolved: ResolvedWorkerSource): WorkerStub {
+  #loadResolved(resolved: ResolvedWorkerSource): WorkerStub {
     return loadResolvedWorker({
       bindings: this.#bindings,
       globalOutbound: this.#globalOutbound,
       projectId: this.#projectId,
-      ref,
       resolved,
       scopePath: this.#scopePath,
+      streamContext: this.#streamContext,
     });
   }
 
@@ -242,12 +340,32 @@ export class DynamicWorkerRunner {
       statefulWorkerDurableObjectName(this.#projectId, ref),
     ) as unknown as StatefulWorkerRpc;
   }
+
+  #trace<T>(
+    ref: DynamicWorkerRef,
+    operation: "call" | "fetch",
+    traceRole: DynamicWorkerTraceRole | undefined,
+    callback: (span: {
+      setAttribute(name: string, value: boolean | number | string): void;
+    }) => Promise<T>,
+  ): Promise<T> {
+    const source =
+      "createApp" in ref.source ? ref.source.createApp.files : ref.source.createWorker.files;
+    const kind = traceRole ?? (ref.type === "stateful" ? "stateful" : source.type);
+    return tracing.enterSpan(`dynamic_worker.${kind}.${operation}`, async (span) => {
+      span.setAttribute("iterate.worker.kind", kind);
+      span.setAttribute("iterate.worker.operation", operation);
+      span.setAttribute("iterate.worker.source", source.type);
+      span.setAttribute("iterate.worker.type", ref.type);
+      return await callback(span);
+    });
+  }
 }
 
 /**
  * Durable identity for a stateful worker.
  *
- * The path is the event stream / ITX scope path. The worker-specific durable key
+ * The path is the event stream / itx scope path. The worker-specific durable key
  * is a query prop so a DO name remains fetchable at the stream path in the
  * future while still allowing multiple durable workers under that path.
  */

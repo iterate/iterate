@@ -25,7 +25,6 @@
 
 import { itxEnv } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import type { SecretRefresh } from "../secrets/types.ts";
 import type {
   CompleteConnectResult,
@@ -47,22 +46,18 @@ import {
   latestStreamEventOfTypes,
   lookupConnectionClaim,
 } from "./integration-streams.ts";
+import {
+  buildIntegrationRouterCreatedEvent,
+  buildIntegrationRouterSubscriptionConfiguredEvent,
+} from "./integration-router-events.ts";
 import { callProjectSlackWebApi } from "./slack-api.ts";
 import { SlackProcessorContract } from "./slack-processor-contract.ts";
 import { callProjectTelegramBotApi, telegramApiBaseUrl } from "./telegram-api.ts";
 import { TelegramProcessorContract } from "./telegram-processor-contract.ts";
 import {
-  GITHUB_CONNECTED_EVENT_TYPE,
   GITHUB_CONNECTION_EGRESS_URLS,
-  GITHUB_DISCONNECTED_EVENT_TYPE,
-  GOOGLE_CONNECTED_EVENT_TYPE,
   GOOGLE_CONNECTION_EGRESS_URLS,
-  GOOGLE_DISCONNECTED_EVENT_TYPE,
   GOOGLE_OAUTH_TOKEN_URL,
-  SLACK_CONNECTED_EVENT_TYPE,
-  SLACK_DISCONNECTED_EVENT_TYPE,
-  TELEGRAM_CONNECTED_EVENT_TYPE,
-  TELEGRAM_DISCONNECTED_EVENT_TYPE,
   githubConnectionSecretPath,
   googleConnectionSecretPath,
   integrationCoordinatesFromStreamPath,
@@ -204,10 +199,10 @@ export async function startOAuthFlow(input: {
  * storage half is the shared {@link recordConnection}.
  */
 export async function completeConnect(input: {
-  /** OAuth authorization code (slack/google). */
+  /** OAuth authorization code (Slack/Google, or GitHub's proof callback). */
   code?: string;
   config: AppConfig;
-  /** GitHub App installation id — github's callback carries this, not a code. */
+  /** Untrusted GitHub setup-URL installation id, verified through user OAuth. */
   installationId?: string;
   projectId: string;
   provider: OAuthProviderSlug;
@@ -226,10 +221,7 @@ export async function completeConnect(input: {
       }
       return await completeGoogleConnect({ ...input, code: input.code });
     case "github":
-      if (input.installationId === undefined) {
-        return { callbackUrl: null, error: "github_missing_installation_id", ok: false };
-      }
-      return await completeGithubConnect({ ...input, installationId: input.installationId });
+      return await completeGithubConnect(input);
   }
 }
 
@@ -295,9 +287,6 @@ async function recordConnection(input: {
    * route inbound events). Connect time is THE arming point — connection
    * streams are born here, not at project create. */
   processorSubscription?: {
-    idempotencyKey: string;
-    /** Itx expression to the router's processor node (see the subscription builder). */
-    processor: (string | [string, ...unknown[]])[];
     processorSlug: string;
   };
   /** Claim this connection's external id in the deployment-wide directory
@@ -313,25 +302,29 @@ async function recordConnection(input: {
 }): Promise<void> {
   const streamPath = integrationConnectionStreamPath(input.slug, input.connection);
   for (const secret of input.secrets) {
-    await itxEnv.SECRET.getByName(
+    const secretStub = itxEnv.SECRET.getByName(
       DurableObjectNameCodec.stringify({ projectId: input.projectId, path: secret.path }),
-    ).update({
+    );
+    const secretInput = {
       egress: { urls: [...secret.egressUrls] },
       material: secret.material,
       ...(secret.refresh ? { refresh: secret.refresh } : {}),
-    });
+    };
+    if ((await secretStub.describe()).created) await secretStub.update(secretInput);
+    else await secretStub.create(secretInput);
   }
   await integrationStreamStub(input.projectId, streamPath).append(
     ...(input.processorSubscription
       ? [
-          buildDurableObjectProcessorSubscriptionConfiguredEvent({
-            durableObjectName: DurableObjectNameCodec.stringify({
-              projectId: input.projectId,
-              path: streamPath,
-            }),
-            idempotencyKey: input.processorSubscription.idempotencyKey,
-            processor: input.processorSubscription.processor,
+          buildIntegrationRouterCreatedEvent({
+            connection: input.connection,
+            slug: input.slug,
+          }),
+          buildIntegrationRouterSubscriptionConfiguredEvent({
+            connection: input.connection,
+            projectId: input.projectId,
             processorSlug: input.processorSubscription.processorSlug,
+            slug: input.slug,
           }),
         ]
       : []),
@@ -454,7 +447,7 @@ async function recordSlackConnection(input: {
     // never re-folds, the team never re-claims). The OAuth code exchange is
     // single-use, so the callback cannot double-fire these appends.
     connectedEvent: {
-      type: SLACK_CONNECTED_EVENT_TYPE,
+      type: "events.iterate.com/slack/connected",
       payload: {
         connection: input.connection,
         externalId: input.teamId,
@@ -466,8 +459,6 @@ async function recordSlackConnection(input: {
       },
     },
     processorSubscription: {
-      idempotencyKey: `slack-router-subscription:${input.projectId}:${input.connection}`,
-      processor: ["integrations", "slack", input.connection, "processor"],
       processorSlug: SlackProcessorContract.slug,
     },
     directoryClaim: { externalId: input.teamId },
@@ -475,8 +466,9 @@ async function recordSlackConnection(input: {
 }
 
 async function completeGithubConnect(input: {
+  code?: string;
   config: AppConfig;
-  installationId: string;
+  installationId?: string;
   projectId: string;
   state: string;
   userId: string | null;
@@ -487,52 +479,494 @@ async function completeGithubConnect(input: {
     provider: "github",
   });
   if (!gate.ok) return gate.result;
-  const { callbackUrl } = gate;
+  const { callbackUrl, stateData } = gate;
 
   const github = requireGithubConfig(input.config);
   if (!github.appId) {
     return { callbackUrl, error: "github_app_not_configured", ok: false };
   }
 
-  // App installation (D5), not OAuth-user: no code exchange, no user lookup. The
-  // installation id is the stable handle (it names the connection AND is the
-  // directory external id the webhook door routes on). It is public, so it
-  // lives in the refresh strategy config, not in material: the Secret DO's
-  // github-app-installation strategy mints the installation token on first use
-  // (and re-mints on 401) by signing an App JWT with the first-party App key
-  // resolved from deployment config — trusted DO code.
-  const connection = `install-${sanitizeConnectionName(input.installationId)}`;
-  await recordConnection({
+  // GitHub warns that setup-URL installation_id values are spoofable. Treat
+  // the first callback only as a prompt to start user OAuth. The signed second
+  // state carries that tentative id; the user token must enumerate it before
+  // we persist a claim or create a platform-key refresh strategy.
+  if (stateData.githubInstallationId === undefined) {
+    if (input.installationId === undefined) {
+      return { callbackUrl, error: "github_missing_installation_id", ok: false };
+    }
+    const codeVerifier = randomBase64Url(32);
+    const state = await createOAuthState(
+      {
+        callbackUrl: stateData.callbackUrl,
+        codeVerifier,
+        githubInstallationId: input.installationId,
+        projectId: input.projectId,
+        provider: "github",
+        userId: stateData.userId,
+      },
+      itxEnv.SECRET_ENCRYPTION_KEY,
+    );
+    const authorizationUrl = new URL("https://github.com/login/oauth/authorize");
+    authorizationUrl.searchParams.set("client_id", github.oauthClientId);
+    authorizationUrl.searchParams.set(
+      "redirect_uri",
+      oauthRedirectUri({ baseUrl: requestBaseUrl(input), provider: "github" }),
+    );
+    authorizationUrl.searchParams.set("state", state);
+    authorizationUrl.searchParams.set("code_challenge", await sha256Base64Url(codeVerifier));
+    authorizationUrl.searchParams.set("code_challenge_method", "S256");
+    // completeConnect's existing success shape names the browser's next
+    // destination. The second callback restores the product callbackUrl from
+    // the newly signed state above.
+    return { callbackUrl: authorizationUrl.toString(), ok: true };
+  }
+
+  if (input.code === undefined) {
+    return { callbackUrl, error: "github_oauth_missing_code", ok: false };
+  }
+  if (
+    input.installationId !== undefined &&
+    input.installationId !== stateData.githubInstallationId
+  ) {
+    return { callbackUrl, error: "github_installation_mismatch", ok: false };
+  }
+
+  const userAccessToken = await exchangeGithubUserCode({
+    code: input.code,
+    codeVerifier: stateData.codeVerifier,
+    config: input.config,
+  });
+  if (userAccessToken === null) {
+    return { callbackUrl, error: "github_oauth_failed", ok: false };
+  }
+  const installationId = stateData.githubInstallationId;
+  if (!(await githubUserCanAccessInstallation(userAccessToken, installationId))) {
+    return { callbackUrl, error: "github_installation_not_authorized", ok: false };
+  }
+
+  const existingClaim = await lookupConnectionClaim("github", installationId);
+  if (existingClaim !== null && existingClaim.projectId !== input.projectId) {
+    return {
+      callbackUrl,
+      error: "github_installation_already_claimed",
+      githubStealState: await createGithubStealState({
+        callbackUrl: stateData.callbackUrl,
+        installationId,
+        projectId: input.projectId,
+        userId: stateData.userId,
+      }),
+      ok: false,
+    };
+  }
+
+  // The user token above is proof only and is discarded. The durable
+  // connection still acts as the App installation. A fresh connection name
+  // fences delayed cleanup from every previous ownership generation; the
+  // public installation id remains in the refresh strategy, and the Secret DO
+  // mints its short-lived installation token with the platform App key.
+  const connection = existingClaim?.connection || newGithubConnectionName(installationId);
+  await recordGithubConnection({
     connection,
+    directoryClaim: { externalId: installationId },
+    githubAppId: github.appId,
+    installationId,
+    projectId: input.projectId,
+  });
+
+  // The directory fold preserves the first live project owner. Re-check after
+  // append to close the race where two projects both observed an unclaimed
+  // installation: the losing project's connection is immediately bricked and
+  // marked disconnected, so it cannot mint or use an installation token.
+  const recordedClaim = await lookupConnectionClaim("github", installationId);
+  if (recordedClaim?.projectId !== input.projectId || recordedClaim.connection !== connection) {
+    await disconnectGithub({ connection, projectId: input.projectId });
+    return {
+      callbackUrl,
+      error: "github_installation_already_claimed",
+      githubStealState: await createGithubStealState({
+        callbackUrl: stateData.callbackUrl,
+        installationId,
+        projectId: input.projectId,
+        userId: stateData.userId,
+      }),
+      ok: false,
+    };
+  }
+
+  return { callbackUrl, ok: true };
+}
+
+function createGithubStealState(input: {
+  callbackUrl?: string;
+  installationId: string;
+  projectId: string;
+  userId: string;
+}): Promise<string> {
+  return createOAuthState(
+    {
+      callbackUrl: input.callbackUrl,
+      githubInstallationAuthorized: true,
+      githubInstallationId: input.installationId,
+      projectId: input.projectId,
+      provider: "github",
+      userId: input.userId,
+    },
+    itxEnv.SECRET_ENCRYPTION_KEY,
+  );
+}
+
+/**
+ * Complete the explicit dashboard confirmation for moving a GitHub App
+ * installation. The signed state was minted only after GitHub user OAuth
+ * proved access to the installation; this call re-verifies its target project
+ * and user before changing either project.
+ */
+export async function confirmGithubSteal(input: {
+  config: AppConfig;
+  projectId: string;
+  state: string;
+  userId: string;
+}): Promise<{ connection: string; ok: true }> {
+  const stateData = await verifyOAuthState(
+    { provider: "github", state: input.state },
+    itxEnv.SECRET_ENCRYPTION_KEY,
+  );
+  if (
+    stateData === null ||
+    stateData.projectId !== input.projectId ||
+    stateData.userId !== input.userId ||
+    stateData.githubInstallationAuthorized !== true ||
+    stateData.githubInstallationId === undefined
+  ) {
+    throw new Error("Invalid or expired GitHub installation move confirmation.");
+  }
+
+  const installationId = stateData.githubInstallationId;
+  const github = requireGithubConfig(input.config);
+  if (!github.appId) throw new Error("GitHub App is not configured.");
+  const existingClaim = await lookupConnectionClaim("github", installationId);
+  if (
+    existingClaim?.projectId === input.projectId &&
+    (await restoreOwnedGithubConnection({
+      connection: existingClaim.connection,
+      githubAppId: github.appId,
+      installationId,
+      projectId: input.projectId,
+    }))
+  ) {
+    return { connection: existingClaim.connection, ok: true };
+  }
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const existingClaim = await lookupConnectionClaim("github", installationId);
+    if (existingClaim?.projectId === input.projectId) {
+      if (
+        await restoreOwnedGithubConnection({
+          connection: existingClaim.connection,
+          githubAppId: github.appId,
+          installationId,
+          projectId: input.projectId,
+        })
+      ) {
+        return { connection: existingClaim.connection, ok: true };
+      }
+      continue;
+    }
+
+    // A connection name is an ownership fence, not only a display label.
+    // Every claim attempt gets a new one so cleanup delayed from an older
+    // transfer can brick only that older generation after this project (or a
+    // foreign project) has reclaimed and returned success.
+    const connection = newGithubConnectionName(installationId);
+    await recordGithubConnection({
+      connection,
+      directoryClaim: null,
+      githubAppId: github.appId,
+      installationId,
+      projectId: input.projectId,
+    });
+    const claim = await lookupConnectionClaim("github", installationId);
+    if (claim?.projectId === input.projectId) {
+      await recordDisconnection({
+        connection,
+        disconnectedEvent: {
+          type: "events.iterate.com/github/disconnected",
+          payload: {
+            connection,
+            projectId: input.projectId,
+            reason: "installation-move-race-lost",
+          },
+        },
+        projectId: input.projectId,
+        secretPath: githubConnectionSecretPath(connection),
+        slug: "github",
+      });
+      if (
+        await restoreOwnedGithubConnection({
+          connection: claim.connection,
+          githubAppId: github.appId,
+          installationId,
+          projectId: input.projectId,
+        })
+      ) {
+        return { connection: claim.connection, ok: true };
+      }
+      continue;
+    }
+    await appendConnectionDirectoryEvents([
+      ...(claim === null
+        ? []
+        : [
+            {
+              claimed: false,
+              connection: claim.connection,
+              externalId: installationId,
+              projectId: claim.projectId,
+              slug: "github",
+            },
+          ]),
+      {
+        claimed: true,
+        connection,
+        externalId: installationId,
+        projectId: input.projectId,
+        slug: "github",
+      },
+    ]);
+    if (claim !== null) {
+      // Clean every owner this confirmation attempted to displace, not only
+      // the owner from the attempt that finally verifies. Another stealer can
+      // take ownership between this atomic directory batch and the read below;
+      // a retry must not leave the earlier owner's installation secret live.
+      await recordDisconnection({
+        connection: claim.connection,
+        disconnectedEvent: {
+          type: "events.iterate.com/github/disconnected",
+          payload: {
+            connection: claim.connection,
+            projectId: claim.projectId,
+            reason: "stolen-by-another-project",
+          },
+        },
+        projectId: claim.projectId,
+        secretPath: githubConnectionSecretPath(claim.connection),
+        slug: "github",
+      });
+    }
+    const recordedClaim = await lookupConnectionClaim("github", installationId);
+    if (recordedClaim?.projectId === input.projectId && recordedClaim.connection === connection) {
+      if (
+        await restoreOwnedGithubConnection({
+          connection,
+          githubAppId: github.appId,
+          installationId,
+          projectId: input.projectId,
+        })
+      ) {
+        return { connection, ok: true };
+      }
+      continue;
+    }
+    await recordDisconnection({
+      connection,
+      disconnectedEvent: {
+        type: "events.iterate.com/github/disconnected",
+        payload: {
+          connection,
+          projectId: input.projectId,
+          reason: "installation-move-race-lost",
+        },
+      },
+      projectId: input.projectId,
+      secretPath: githubConnectionSecretPath(connection),
+      slug: "github",
+    });
+  }
+
+  const recordedClaim = await lookupConnectionClaim("github", installationId);
+  if (recordedClaim?.projectId === input.projectId) {
+    if (
+      await restoreOwnedGithubConnection({
+        connection: recordedClaim.connection,
+        githubAppId: github.appId,
+        installationId,
+        projectId: input.projectId,
+      })
+    ) {
+      return { connection: recordedClaim.connection, ok: true };
+    }
+  }
+
+  throw new Error("GitHub installation ownership changed repeatedly; please try again.");
+}
+
+async function recordGithubConnection(input: {
+  connection: string;
+  directoryClaim: { externalId: string } | null;
+  githubAppId: string;
+  installationId: string;
+  projectId: string;
+}): Promise<void> {
+  const secret = githubConnectionSecret({
+    githubAppId: input.githubAppId,
+    installationId: input.installationId,
+  });
+  await recordConnection({
+    connection: input.connection,
     projectId: input.projectId,
     slug: "github",
     secrets: [
       {
-        egressUrls: GITHUB_CONNECTION_EGRESS_URLS,
-        material: {},
-        path: githubConnectionSecretPath(connection),
-        refresh: {
-          kind: "github-app-installation",
-          apiBase: "https://api.github.com",
-          appId: github.appId,
-          installationId: input.installationId,
-          privateKey: { platform: "integrations.github" },
-        },
+        ...secret,
+        path: githubConnectionSecretPath(input.connection),
       },
     ],
-    connectedEvent: {
-      type: GITHUB_CONNECTED_EVENT_TYPE,
+    connectedEvent: githubConnectedEvent(input),
+    ...(input.directoryClaim ? { directoryClaim: input.directoryClaim } : {}),
+  });
+}
+
+/**
+ * A concurrent stealer can brick this project's secret after it briefly owns
+ * the directory claim. Restore the credential, then prove the exact fenced
+ * connection still owns the claim. If not, brick that obsolete generation
+ * again before the caller retries.
+ */
+async function restoreOwnedGithubConnection(input: {
+  connection: string;
+  githubAppId: string;
+  installationId: string;
+  projectId: string;
+}): Promise<boolean> {
+  const secret = githubConnectionSecret(input);
+  await itxEnv.SECRET.getByName(
+    DurableObjectNameCodec.stringify({
+      path: githubConnectionSecretPath(input.connection),
+      projectId: input.projectId,
+    }),
+  ).update({
+    egress: { urls: [...secret.egressUrls] },
+    material: secret.material,
+    refresh: secret.refresh,
+  });
+  const status = await getConnectionStatus({
+    connection: input.connection,
+    projectId: input.projectId,
+    provider: "github",
+  });
+  if (!status.connected) {
+    await integrationStreamStub(
+      input.projectId,
+      integrationConnectionStreamPath("github", input.connection),
+    ).append(githubConnectedEvent(input));
+  }
+  const restoredClaim = await lookupConnectionClaim("github", input.installationId);
+  if (
+    restoredClaim?.projectId === input.projectId &&
+    restoredClaim.connection === input.connection
+  ) {
+    return true;
+  }
+  await recordDisconnection({
+    connection: input.connection,
+    disconnectedEvent: {
+      type: "events.iterate.com/github/disconnected",
       payload: {
-        connection,
-        externalId: input.installationId,
-        installationId: input.installationId,
+        connection: input.connection,
         projectId: input.projectId,
+        reason: "installation-move-race-lost",
       },
     },
-    directoryClaim: { externalId: input.installationId },
+    projectId: input.projectId,
+    secretPath: githubConnectionSecretPath(input.connection),
+    slug: "github",
   });
+  return false;
+}
 
-  return { callbackUrl, ok: true };
+function newGithubConnectionName(installationId: string): string {
+  return `install-${sanitizeConnectionName(installationId)}-${randomBase64Url(9)}`.toLowerCase();
+}
+
+function githubConnectedEvent(input: {
+  connection: string;
+  installationId: string;
+  projectId: string;
+}) {
+  return {
+    type: "events.iterate.com/github/connected",
+    payload: {
+      connection: input.connection,
+      externalId: input.installationId,
+      installationId: input.installationId,
+      projectId: input.projectId,
+    },
+  };
+}
+
+function githubConnectionSecret(input: { githubAppId: string; installationId: string }) {
+  return {
+    egressUrls: GITHUB_CONNECTION_EGRESS_URLS,
+    material: {},
+    refresh: {
+      kind: "github-app-installation" as const,
+      apiBase: "https://api.github.com",
+      appId: input.githubAppId,
+      installationId: input.installationId,
+      privateKey: { platform: "integrations.github" as const },
+    },
+  };
+}
+
+async function exchangeGithubUserCode(input: {
+  code: string;
+  codeVerifier?: string;
+  config: AppConfig;
+}): Promise<string | null> {
+  const github = requireGithubConfig(input.config);
+  const response = await fetch("https://github.com/login/oauth/access_token", {
+    body: new URLSearchParams({
+      client_id: github.oauthClientId,
+      client_secret: github.oauthClientSecret.exposeSecret(),
+      code: input.code,
+      ...(input.codeVerifier === undefined ? {} : { code_verifier: input.codeVerifier }),
+      redirect_uri: oauthRedirectUri({
+        baseUrl: requestBaseUrl({ config: input.config }),
+        provider: "github",
+      }),
+    }),
+    headers: { accept: "application/json", "content-type": "application/x-www-form-urlencoded" },
+    method: "POST",
+  });
+  if (!response.ok) return null;
+  const data = (await response.json()) as { access_token?: unknown; error?: unknown };
+  return typeof data.access_token === "string" ? data.access_token : null;
+}
+
+async function githubUserCanAccessInstallation(
+  userAccessToken: string,
+  installationId: string,
+): Promise<boolean> {
+  for (let page = 1; ; page += 1) {
+    const url = new URL("https://api.github.com/user/installations");
+    url.searchParams.set("page", String(page));
+    url.searchParams.set("per_page", "100");
+    const response = await fetch(url, {
+      headers: {
+        accept: "application/vnd.github+json",
+        authorization: `Bearer ${userAccessToken}`,
+        "user-agent": "iterate-os",
+        "x-github-api-version": "2022-11-28",
+      },
+    });
+    if (!response.ok) return false;
+    const data = (await response.json()) as { installations?: Array<{ id?: unknown }> };
+    const installations = Array.isArray(data.installations) ? data.installations : [];
+    if (installations.some((installation) => String(installation.id) === installationId)) {
+      return true;
+    }
+    if (installations.length < 100) return false;
+  }
 }
 
 async function completeGoogleConnect(input: {
@@ -623,7 +1057,7 @@ async function completeGoogleConnect(input: {
       },
     ],
     connectedEvent: {
-      type: GOOGLE_CONNECTED_EVENT_TYPE,
+      type: "events.iterate.com/google/connected",
       payload: {
         connection,
         email: userInfo.email,
@@ -727,7 +1161,7 @@ export async function connectTelegram(input: {
     // No idempotency keys on the connected/claim facts — same reasoning as
     // Slack: a disconnect->reconnect cycle must append fresh facts.
     connectedEvent: {
-      type: TELEGRAM_CONNECTED_EVENT_TYPE,
+      type: "events.iterate.com/telegram/connected",
       payload: {
         botFirstName: bot.firstName,
         botId: bot.id,
@@ -738,8 +1172,6 @@ export async function connectTelegram(input: {
       },
     },
     processorSubscription: {
-      idempotencyKey: `telegram-router-subscription:${input.projectId}:${connection}`,
-      processor: ["integrations", "telegram", connection, "processor"],
       processorSlug: TelegramProcessorContract.slug,
     },
     directoryClaim: {
@@ -766,7 +1198,7 @@ export async function connectTelegram(input: {
     await recordDisconnection({
       connection: foreignClaim.connection,
       disconnectedEvent: {
-        type: TELEGRAM_DISCONNECTED_EVENT_TYPE,
+        type: "events.iterate.com/telegram/disconnected",
         payload: {
           botId: bot.id,
           botUsername: bot.username,
@@ -817,7 +1249,7 @@ export async function connectTelegram(input: {
     await recordDisconnection({
       connection,
       disconnectedEvent: {
-        type: TELEGRAM_DISCONNECTED_EVENT_TYPE,
+        type: "events.iterate.com/telegram/disconnected",
         payload: {
           botId: bot.id,
           connection,
@@ -952,9 +1384,9 @@ export async function getConnectionStatus(input: {
   switch (input.provider) {
     case "slack": {
       const fact = await latestLifecycleFact({
-        connectedType: SLACK_CONNECTED_EVENT_TYPE,
+        connectedType: "events.iterate.com/slack/connected",
         connection: input.connection,
-        disconnectedType: SLACK_DISCONNECTED_EVENT_TYPE,
+        disconnectedType: "events.iterate.com/slack/disconnected",
         projectId: input.projectId,
         slug: "slack",
       });
@@ -971,9 +1403,9 @@ export async function getConnectionStatus(input: {
     }
     case "github": {
       const fact = await latestLifecycleFact({
-        connectedType: GITHUB_CONNECTED_EVENT_TYPE,
+        connectedType: "events.iterate.com/github/connected",
         connection: input.connection,
-        disconnectedType: GITHUB_DISCONNECTED_EVENT_TYPE,
+        disconnectedType: "events.iterate.com/github/disconnected",
         projectId: input.projectId,
         slug: "github",
       });
@@ -987,9 +1419,9 @@ export async function getConnectionStatus(input: {
     }
     case "telegram": {
       const fact = await latestLifecycleFact({
-        connectedType: TELEGRAM_CONNECTED_EVENT_TYPE,
+        connectedType: "events.iterate.com/telegram/connected",
         connection: input.connection,
-        disconnectedType: TELEGRAM_DISCONNECTED_EVENT_TYPE,
+        disconnectedType: "events.iterate.com/telegram/disconnected",
         projectId: input.projectId,
         slug: "telegram",
       });
@@ -1008,9 +1440,9 @@ export async function getConnectionStatus(input: {
     }
     case "google": {
       const fact = await latestLifecycleFact({
-        connectedType: GOOGLE_CONNECTED_EVENT_TYPE,
+        connectedType: "events.iterate.com/google/connected",
         connection: input.connection,
-        disconnectedType: GOOGLE_DISCONNECTED_EVENT_TYPE,
+        disconnectedType: "events.iterate.com/google/disconnected",
         projectId: input.projectId,
         slug: "google",
       });
@@ -1146,12 +1578,13 @@ async function disconnectSlack(input: {
     connection: input.connection,
     method: "auth.revoke",
     projectId: input.projectId,
+    streamContext: { kind: "scope", scopePath: "/" },
   }).catch(() => null);
   const teamId = status.metadata.teamId as string | undefined;
   await recordDisconnection({
     connection: input.connection,
     disconnectedEvent: {
-      type: SLACK_DISCONNECTED_EVENT_TYPE,
+      type: "events.iterate.com/slack/disconnected",
       payload: {
         connection: input.connection,
         externalId: status.externalId ?? undefined,
@@ -1181,7 +1614,7 @@ async function disconnectGithub(input: {
   await recordDisconnection({
     connection: input.connection,
     disconnectedEvent: {
-      type: GITHUB_DISCONNECTED_EVENT_TYPE,
+      type: "events.iterate.com/github/disconnected",
       payload: { connection: input.connection, projectId: input.projectId },
     },
     projectId: input.projectId,
@@ -1205,12 +1638,13 @@ async function disconnectTelegram(input: {
     connection: input.connection,
     method: "deleteWebhook",
     projectId: input.projectId,
+    streamContext: { kind: "scope", scopePath: "/" },
   }).catch(() => null);
   const botId = status.metadata.botId as string | undefined;
   await recordDisconnection({
     connection: input.connection,
     disconnectedEvent: {
-      type: TELEGRAM_DISCONNECTED_EVENT_TYPE,
+      type: "events.iterate.com/telegram/disconnected",
       payload: {
         botId,
         botUsername: (status.metadata.botUsername as string | undefined) ?? undefined,
@@ -1238,7 +1672,7 @@ async function disconnectGoogle(input: {
   await recordDisconnection({
     connection: input.connection,
     disconnectedEvent: {
-      type: GOOGLE_DISCONNECTED_EVENT_TYPE,
+      type: "events.iterate.com/google/disconnected",
       payload: { projectId: input.projectId },
     },
     projectId: input.projectId,

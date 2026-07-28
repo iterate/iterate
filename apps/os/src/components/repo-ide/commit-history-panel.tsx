@@ -1,8 +1,8 @@
 import { Suspense } from "react";
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
+import { useItxQuery } from "iterate/sdk/itx/react";
 import type { RepoCommitFileChange } from "~/domains/repos/types.ts";
 import { formatTimeAgo } from "~/lib/format-relative-time.ts";
-import { useItxQuery } from "~/itx/itx-react.tsx";
 
 /**
  * The History sidebar of the repo mini-IDE: a linear newest-first commit list

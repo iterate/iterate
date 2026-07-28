@@ -23,16 +23,19 @@ import {
   TableHeader,
   TableRow,
 } from "@iterate-com/ui/components/table";
+import { useItx, useLiveState } from "iterate/sdk/itx/react";
 import { AddRepoFromGithub } from "~/components/add-repo-from-github.tsx";
-import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { RepoArtifactNameCodec } from "~/domains/repos/utils.ts";
 import { buildCloudflareArtifactDashboardUrl } from "~/lib/artifact-viewer-url.ts";
 import { formatTimeAgo } from "~/lib/format-relative-time.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
-import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
+import {
+  breadcrumbLoaderData,
+  streamBreadcrumb,
+  streamPageStaticData,
+} from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
-import { useItx, useLiveState } from "~/itx/itx-react.tsx";
 
 const CreateRepoForm = z.object({
   path: z
@@ -50,6 +53,7 @@ type SortKey = "path" | "createdAt";
 type SortDirection = "asc" | "desc";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/repos/")({
+  staticData: streamPageStaticData(),
   validateSearch: StreamViewSearch,
   ssr: false,
   loader: async ({ context }) =>
@@ -58,16 +62,8 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/repos/")({
       routeConfig: await getPublicRouteConfig(),
       streamBreadcrumb: streamBreadcrumb(context.project, "/repos"),
     }),
-  component: ProjectReposIndexPage,
+  component: ProjectReposIndexContent,
 });
-
-function ProjectReposIndexPage() {
-  return (
-    <ItxBoundary>
-      <ProjectReposIndexContent />
-    </ItxBoundary>
-  );
-}
 
 function ProjectReposIndexContent() {
   const params = Route.useParams();
@@ -89,7 +85,7 @@ function ProjectReposIndexContent() {
   const reposList = projectState?.repos;
   const createRepo = useMutation({
     mutationFn: async (input: { path: string }) => {
-      await itx.repos.create({ path: input.path });
+      await itx.repos.get(input.path).create({ type: "empty" });
       return input.path;
     },
     onSuccess: (path) => {

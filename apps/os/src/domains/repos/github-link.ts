@@ -9,7 +9,7 @@
 //      path + a `repo/github-link-configured` fact on the repo stream);
 //   3. installs a cross-post subscription on the connection stream — a push
 //      subscription whose expression addresses the repo stream's
-//      `acceptCrossPost` sink — so every GitHub webhook about that repository is copied onto
+//      `acceptCrossPost` sink — so each push webhook about that repository is copied onto
 //      the repo's own stream, durably and at-least-once. The generic stream
 //      subscription primitive, not GitHub-special routing.
 //
@@ -21,10 +21,7 @@ import { DurableObjectNameCodec, normalizePath } from "../durable-object-names.t
 import { getConnectionStatus } from "../integrations/connect-flows.ts";
 import { connectionOctokit, normalizeGithubError } from "../integrations/github-api.ts";
 import { integrationStreamStub } from "../integrations/integration-streams.ts";
-import {
-  GITHUB_WEBHOOK_RECEIVED_EVENT_TYPE,
-  integrationConnectionStreamPath,
-} from "../integrations/utils.ts";
+import { integrationConnectionStreamPath } from "../integrations/utils.ts";
 import type { GithubRepoLink, LinkGithubResult } from "./types.ts";
 
 /** Whether a failed repo-create was GitHub's 422 "name already exists" — the
@@ -54,6 +51,7 @@ function githubCrossPostSubscriptionKey(repoPath: string): string {
 function githubCrossPostSubscriptionEvent(input: {
   owner: string;
   repo: string;
+  repositoryId: number;
   repoPath: string;
   subscriptionKey: string;
 }) {
@@ -61,9 +59,10 @@ function githubCrossPostSubscriptionEvent(input: {
     type: "events.iterate.com/stream/subscription-configured",
     payload: {
       subscriptionKey: input.subscriptionKey,
+      description: `Copies GitHub webhooks for ${input.owner}/${input.repo} onto this repo's stream so default-branch pushes can be imported.`,
       selector: {
-        eventTypes: [GITHUB_WEBHOOK_RECEIVED_EVENT_TYPE],
-        condition: `payload.body.repository.full_name = ${JSON.stringify(`${input.owner}/${input.repo}`)}`,
+        eventTypes: ["events.iterate.com/github/webhook-received"],
+        condition: `payload.delivery.name = "push" and payload.body.repository.id = ${input.repositoryId}`,
       },
       delivery: {
         mode: "push",
@@ -78,16 +77,28 @@ function githubCrossPostSubscriptionEvent(input: {
   };
 }
 
-export async function linkRepoToGithub(input: {
-  connection: string;
-  owner: string;
-  projectId: string;
-  repo: string;
-  repoPath: string;
-}): Promise<LinkGithubResult> {
+type LinkRepoToGithubOptions = {
+  repo?: {
+    configureGithubLink(link: GithubRepoLink): Promise<GithubRepoLink>;
+    getGithubLink(): GithubRepoLink | null | Promise<GithubRepoLink | null>;
+    pushToGithub(input: { force?: boolean }): Promise<{ branch: string; commitOid: string }>;
+  };
+  skipInitialPush?: boolean;
+};
+
+export async function linkRepoToGithub(
+  input: {
+    connection: string;
+    owner: string;
+    projectId: string;
+    repo: string;
+    repoPath: string;
+  },
+  options: LinkRepoToGithubOptions = {},
+): Promise<LinkGithubResult> {
   const repoPath = normalizePath(input.repoPath);
   // Trim at the boundary: a padded owner/repo would store a link (and a
-  // full_name webhook condition) GitHub payloads never match — mirroring
+  // GitHub coordinates) API calls never match — mirroring
   // would appear to work while webhook cross-post silently didn't.
   const owner = input.owner.trim();
   const repo = input.repo.trim();
@@ -105,10 +116,16 @@ export async function linkRepoToGithub(input: {
     );
   }
 
-  const octokit = connectionOctokit({ connection: input.connection, projectId: input.projectId });
+  const octokit = connectionOctokit({
+    connection: input.connection,
+    streamContext: { kind: "scope", scopePath: repoPath },
+    projectId: input.projectId,
+  });
   let created = false;
+  let repositoryId: number;
   try {
-    await octokit.rest.repos.get({ owner, repo });
+    const response = await octokit.rest.repos.get({ owner, repo });
+    repositoryId = githubRepositoryId(response.data.id, `${owner}/${repo}`);
   } catch (error) {
     if ((error as { status?: number }).status !== 404) {
       throw normalizeGithubError(error, input.connection);
@@ -118,11 +135,12 @@ export async function linkRepoToGithub(input: {
     // write); under a user account GitHub answers 404 here — surface that as
     // the actionable "create it on GitHub first" case.
     try {
-      await octokit.rest.repos.createInOrg({
+      const response = await octokit.rest.repos.createInOrg({
         name: repo,
         org: owner,
         private: true,
       });
+      repositoryId = githubRepositoryId(response.data.id, `${owner}/${repo}`);
       created = true;
     } catch (createError) {
       // "name already exists" means the earlier 404 was an ACCESS miss, not a
@@ -145,9 +163,10 @@ export async function linkRepoToGithub(input: {
     installationId: status.externalId,
     owner,
     repo,
+    repositoryId,
   };
-  const repoStub = repoDurableObjectStub(input.projectId, repoPath);
-  const previous = await repoStub.getGithubLink();
+  const repoTarget = options.repo ?? repoDurableObjectStub(input.projectId, repoPath);
+  const previous = await repoTarget.getGithubLink();
   const subscriptionKey = githubCrossPostSubscriptionKey(repoPath);
 
   // Re-linking through a DIFFERENT connection: the previous connection's
@@ -170,7 +189,7 @@ export async function linkRepoToGithub(input: {
     });
   }
 
-  // The webhook lane: GitHub App webhooks already land verbatim on the
+  // The webhook lane: GitHub App webhooks already land as decoded JSON on the
   // connection stream (`/integrations/github/<connection>`); this push
   // subscription copies the ones about the linked repository onto the repo's
   // own stream. The subscription goes in BEFORE the link is recorded —
@@ -183,14 +202,21 @@ export async function linkRepoToGithub(input: {
   );
   try {
     await connectionStream.append(
-      githubCrossPostSubscriptionEvent({ owner, repo, repoPath, subscriptionKey }),
+      githubCrossPostSubscriptionEvent({
+        owner,
+        repo,
+        repositoryId,
+        repoPath,
+        subscriptionKey,
+      }),
     );
-    await repoStub.configureGithubLink(link);
+    await repoTarget.configureGithubLink(link);
   } catch (error) {
     const compensations: string[] = [];
     // Roll back the new subscription (a no-op fold if the failure happened
-    // before it committed) and restore the previous connection's subscription
-    // so the still-recorded old link keeps its webhook lane. Both best-effort:
+    // before it committed) and restore the previous subscription, including a
+    // previous repository on this same connection, so the still-recorded old
+    // link keeps its webhook lane. Both best-effort:
     // compensation failures are named in the surfaced error, and a re-run of
     // linkGithub repairs everything (subscriptions replace by key).
     try {
@@ -203,7 +229,7 @@ export async function linkRepoToGithub(input: {
         `rolling back the webhook subscription "${subscriptionKey}" on connection "${input.connection}" failed (${String(rollbackError)})`,
       );
     }
-    if (previous !== null && previous.connection !== input.connection) {
+    if (previous !== null) {
       try {
         await integrationStreamStub(
           input.projectId,
@@ -212,6 +238,7 @@ export async function linkRepoToGithub(input: {
           githubCrossPostSubscriptionEvent({
             owner: previous.owner,
             repo: previous.repo,
+            repositoryId: previous.repositoryId,
             repoPath,
             subscriptionKey,
           }),
@@ -234,11 +261,15 @@ export async function linkRepoToGithub(input: {
   // pre-existing GitHub repo with unrelated history is the expected case —
   // the caller then picks syncFromGithub() or pushToGithub({ force: true })).
   let initialPush: LinkGithubResult["initialPush"];
-  try {
-    const pushed = await repoStub.pushToGithub({});
-    initialPush = { commitOid: pushed.commitOid, ok: true };
-  } catch (error) {
-    initialPush = { error: String(error), ok: false };
+  if (options.skipInitialPush === true) {
+    initialPush = { ok: true, skipped: true };
+  } else {
+    try {
+      const pushed = await repoTarget.pushToGithub({});
+      initialPush = { commitOid: pushed.commitOid, ok: true };
+    } catch (error) {
+      initialPush = { error: String(error), ok: false };
+    }
   }
 
   return { ...link, created, initialPush };
@@ -270,4 +301,9 @@ export async function unlinkRepoFromGithub(input: {
 
 function repoDurableObjectStub(projectId: string, repoPath: string) {
   return itxEnv.REPO.getByName(DurableObjectNameCodec.stringify({ path: repoPath, projectId }));
+}
+
+function githubRepositoryId(value: unknown, fullName: string): number {
+  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return value;
+  throw new Error(`GitHub returned no valid repository id for ${fullName}.`);
 }

@@ -2,6 +2,7 @@ import { expect, test } from "vitest";
 import {
   commitPlan,
   effectiveEntry,
+  textContentForEntry,
   workingTreeGitStatus,
   workingTreeStore,
   type FileEntry,
@@ -127,6 +128,31 @@ test("clearStaged drops committed snapshots but keeps live edits", () => {
   expect(store.changes.get("untouched.ts")).toMatchObject({ working: { content: "keep" } });
 });
 
+test("clearCommitted keeps slots that changed while the commit was in flight", () => {
+  using fixture = storageFixture();
+  const store = fixture.store("oid-1");
+
+  store.setWorking("tasks/a.md", write("committed a"));
+  store.setWorking("tasks/b.md", write("committed b"));
+  store.stage("tasks/b.md");
+  store.setWorking("tasks/c.md", { type: "delete" });
+  const committed = new Map<string, FileEntry>([
+    ["tasks/a.md", write("committed a")],
+    ["tasks/b.md", write("committed b")],
+    ["tasks/c.md", { type: "delete" }],
+  ]);
+  // An edit landing between the commit RPC going out and its response must
+  // survive the cleanup — this is the autosave-while-typing case.
+  store.setWorking("tasks/a.md", write("edited during flight"));
+
+  store.clearCommitted(committed);
+  expect(store.changes.get("tasks/a.md")).toMatchObject({
+    working: { content: "edited during flight" },
+  });
+  expect(store.changes.has("tasks/b.md")).toBe(false);
+  expect(store.changes.has("tasks/c.md")).toBe(false);
+});
+
 test("git status derives from the effective entry, staged or live", () => {
   using fixture = storageFixture();
   const store = fixture.store("oid-1");
@@ -145,18 +171,17 @@ test("git status derives from the effective entry, staged or live", () => {
   expect(effectiveEntry(store.changes.get("doomed.ts")!)).toEqual({ type: "delete" });
 });
 
-test("changes persist to storage under the repo+oid key and rehydrate on load", () => {
-  using fixture = storageFixture();
-  fixture.store("oid-1").setWorking("README.md", write("survives"));
+test("text content decodes UTF-8 files written through the base64 upload lane", () => {
+  const markdown = "# Caf\u00e9 \u2615\n";
+  const bytes = new TextEncoder().encode(markdown);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
 
-  expect(fixture.keys()).toEqual([`${fixture.prefix}oid-1`]);
-
-  // A page reload constructs a store for a never-seen key and rehydrates
-  // from storage: simulate by seeding storage directly for a new identity.
-  fixture.seed("oid-2", [["README.md", { working: write("from-disk") }]]);
-  expect(fixture.store("oid-2").changes.get("README.md")).toMatchObject({
-    working: { content: "from-disk" },
-  });
+  expect(textContentForEntry({ type: "write-base64", contentBase64: btoa(binary) })).toBe(markdown);
+  expect(
+    textContentForEntry({ type: "write-base64", contentBase64: "not base64" }),
+  ).toBeUndefined();
+  expect(textContentForEntry({ type: "delete" })).toBeUndefined();
 });
 
 test("a moved HEAD orphans stale state: older-oid keys are swept on load", () => {

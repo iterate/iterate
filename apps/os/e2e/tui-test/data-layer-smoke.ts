@@ -1,7 +1,9 @@
 // Headless smoke of the chat TUI's data layer — the exact modules the OpenTUI
-// adapter renders from, minus the PTY: connect via the shared itx client,
-// fold the live subscription through the shared agent-ui reducer, send a user
-// message, and wait for the assistant reply to land as a settled feed item.
+// adapter renders from, minus the PTY: point the shared one-socket keeper
+// (`iterate/client`, same code path the TUI's `configureIterateSession` sets
+// up) at the deployment, subscribe the agent stream on it, fold the live
+// subscription through the shared agent-ui reducer, send a user message, and
+// wait for the assistant reply to land as a settled feed item.
 //
 //   cd apps/os && doppler run -- pnpm exec tsx e2e/tui-test/data-layer-smoke.ts
 //
@@ -9,11 +11,17 @@
 // Exits 0 on PASS, 1 on timeout/failure.
 
 import process from "node:process";
-import { createAgentFeedModel } from "../../../../packages/iterate/src/stream-tui/agent-feed-model.ts";
+import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
+import NodeWebSocket from "ws";
 import {
-  connectAgentFeed,
-  resolveItxAuth,
-} from "../../../../packages/iterate/src/stream-tui/agent-connection.ts";
+  configureIterateSession,
+  connectItx,
+  releaseItxSubscription,
+  type ItxLiveSubscriptionHandle,
+} from "iterate/client";
+import { createAgentFeedModel } from "../../../../packages/iterate/src/stream-tui/agent-feed-model.ts";
+import { resolveItxAuth } from "../../../../packages/iterate/src/stream-tui/itx-auth.ts";
+import { ensureOnboardingAgentReady } from "../../src/lib/onboarding-agent.ts";
 import { createTestProject } from "../test-support/create-test-project.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 
@@ -21,33 +29,50 @@ const AGENT_PATH = "/agents/onboarding";
 const REPLY_TIMEOUT_MS = 120_000;
 const startedAt = Date.now();
 
+const workerVersionHeaders = cloudflareWorkerVersionOverrideHeaders(process.env);
+if (Object.keys(workerVersionHeaders).length > 0) {
+  // Node's browser-compatible global WebSocket cannot attach handshake
+  // headers. Preview CI swaps in the repo's existing Node transport so this
+  // keeper socket proves the same immutable Worker versions as every other
+  // HTTP and WebSocket entrypoint. Local runs keep the TUI's native transport.
+  class PreviewWebSocket extends NodeWebSocket {
+    constructor(url: string | URL, protocols?: string | string[]) {
+      super(url, protocols, { headers: workerVersionHeaders });
+    }
+  }
+  globalThis.WebSocket = PreviewWebSocket as unknown as typeof globalThis.WebSocket;
+}
+
 const project = await createTestProject({ slugPrefix: "tui-smoke" });
 log(`created project ${project.project.id} at ${project.baseUrl}`);
-
-// The onboarding agent births lazily on first use (the dashboard's chat page
-// does this same configure({}) when it opens); without it there is no
-// unprompted greeting to fold.
-{
-  using agent = project.agent(AGENT_PATH);
-  await agent.configure({});
-}
 
 const model = createAgentFeedModel();
 let notifyChange = () => {};
 
-const connection = connectAgentFeed({
-  auth: resolveItxAuth({ configName: undefined }),
+// The TUI's exact connection setup: one keeper socket, explicit target +
+// credentials (admin secret in doppler/e2e lanes).
+configureIterateSession({
   baseUrl: project.baseUrl,
-  projectId: project.project.id,
-  agentPath: AGENT_PATH,
-  replayAfterOffset: () => model.snapshot().lastOffset,
-  onEvents: (events) => {
-    if (model.applyEvents(events)) notifyChange();
-  },
-  onStatus: (status) => log(`connection: ${status.kind}`),
+  credentials: resolveItxAuth({ configName: undefined }),
 });
+const itx = await connectItx(project.project.id);
+const agent = itx.agents.get(AGENT_PATH);
+let subscription: ItxLiveSubscriptionHandle | undefined;
 
 try {
+  // Fresh project: birth the onboarding agent with the real birth batch when
+  // unborn — the same create-if-unborn the TUI's subscribeAgentFeed performs
+  // (births are deferred to first chat-open; they cost a real LLM turn).
+  await ensureOnboardingAgentReady({ agent });
+  subscription = await agent.stream.subscribe({
+    processEventBatch: (batch) => {
+      if (model.applyEvents(batch.events)) notifyChange();
+    },
+    replayAfterOffset: model.snapshot().lastOffset,
+    subscriber: { description: "TUI data-layer smoke" },
+  });
+  log("subscribed on the shared keeper socket");
+
   // 1. Feed renders live: the onboarding bootstrap greets unprompted, so the
   //    subscription must deliver events and the reducer must fold them —
   //    including the greeting as a settled assistant item — before we type.
@@ -60,7 +85,7 @@ try {
 
   // 2. Send through the same door the TUI composer uses.
   const message = "Reply with exactly: pong";
-  await connection.sendMessage(message);
+  await agent.message(message);
   log(`sent: ${message}`);
 
   await waitFor("user message settles as a feed item", 30_000, () =>
@@ -93,7 +118,7 @@ try {
   );
   process.exit(1);
 } finally {
-  connection.dispose();
+  if (subscription) releaseItxSubscription(subscription);
   await project[Symbol.asyncDispose]();
 }
 

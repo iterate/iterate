@@ -18,8 +18,13 @@ Each Slack app should own its complete runtime config in
 ```
 
 OS Slack Web API calls use the connected project workspace bot token first. If
-a project has no connected Slack token, OS falls back to this environment's
-`APP_CONFIG_INTEGRATIONS__SLACK.botToken`.
+Slack rejects that token, OS verifies that this environment's
+`APP_CONFIG_INTEGRATIONS__SLACK.botToken` belongs to the connection's recorded
+Slack team before retrying with it. Projects without a live Slack connection
+cannot use the fallback token. This token is optional operational fallback,
+not the source of a project's Slack connection and not production-recreation
+material. A configured value can be revoked; validate it with `auth.test`
+against its expected team rather than treating Doppler presence as proof.
 
 `Niterate (CI bot)` is not the production Slack app. The production Slack app
 is `iterate`; `Niterate (CI bot)` is the visible identity associated with the
@@ -47,8 +52,16 @@ preview_8
 preview_9
 ```
 
-Affected workers still need to be redeployed before they can use newly
-uploaded Doppler values.
+This is an inventory of configured values, not a validity statement. During the
+July 17, 2026 production recreation, the configured `prd` value returned
+`invalid_auth`; the normal project OAuth installation was therefore required.
+Affected workers still need to be redeployed before they can use newly uploaded
+Doppler values.
+
+Never restore a project by writing this value into
+`/secrets/integrations/slack/<connection>/bot-token` and manually appending
+connection or directory facts. Complete **Connect Slack** OAuth, then run the
+[post-recreation verifier](slack-testing.md#post-recreation-proof).
 
 ## OAuth pages
 

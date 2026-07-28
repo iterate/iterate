@@ -11,9 +11,6 @@ import { normalizeProjectHostnameBase } from "../../lib/project-host-routing.ts"
  * events, inbound `email/received`/`email/rejected` events, and the email
  * router's `email/thread-route-configured` facts. */
 export const EMAIL_INTEGRATION_STREAM_PATH = "/integrations/email";
-export const EMAIL_SENT_EVENT_TYPE = "events.iterate.com/email/sent";
-export const EMAIL_RECEIVED_EVENT_TYPE = "events.iterate.com/email/received";
-export const EMAIL_REJECTED_EVENT_TYPE = "events.iterate.com/email/rejected";
 
 /** Inbound messages larger than this are rejected at the door (Cloudflare
  * itself caps inbound at 25 MiB; this keeps stream events and parse memory
@@ -143,12 +140,6 @@ export function mintOutboundEmailThreadId(): string {
 export function isEmailAgentPath(agentPath: string): boolean {
   const normalized = agentPath.toLowerCase();
   return normalized === "/agents/email" || normalized.startsWith("/agents/email/");
-}
-
-/** The `t<threadId>` segment of an email agent path, or null off-shape. */
-export function emailThreadIdFromAgentPath(agentPath: string): string | null {
-  const match = /^\/agents\/email\/t([a-z0-9-]+)$/i.exec(agentPath);
-  return match?.[1] ?? null;
 }
 
 /**

@@ -38,10 +38,19 @@ export const LOCAL_DEV_AUTH_DB_ID = "local-dev-auth-db";
  * `deploy.ts` fails before deploying when the Doppler config is missing one.
  */
 export const REQUIRED_SECRETS = [
+  // One Doppler-owned key signs Auth JWTs; relying-party deploys derive only
+  // its public half, so they never wait for Auth's live JWKS endpoint.
+  "AUTH_FORGE_PRIVATE_JWK",
   "APP_CONFIG_BETTER_AUTH_SECRET",
   "APP_CONFIG_EMAIL_SENDER_DOMAIN",
   "APP_CONFIG_GOOGLE_CLIENT_ID",
   "APP_CONFIG_GOOGLE_CLIENT_SECRET",
+  // Shared with the os app, which verifies project-app-session tokens
+  // locally. REQUIRED here (though the code falls back to the better-auth
+  // secret) because the failure mode of auth minting under one secret while
+  // os verifies under another is a project-host login loop — deploys must
+  // not be able to drift the pair apart.
+  "APP_CONFIG_PROJECT_APP_SESSION_SECRET",
   "APP_CONFIG_SERVICE_AUTH_TOKEN",
   "APP_CONFIG_SIGNUP_ALLOWLIST",
 ];
@@ -113,12 +122,16 @@ function envBlock(env: AuthDeployedEnv) {
     }),
     send_email: sendEmailBindings,
     vars: envShapedVars(env),
-    secrets: { required: [...REQUIRED_SECRETS, ...DERIVED_SECRETS] },
+    // Derived values do not exist until deploy.ts computes them after secret
+    // collection. Listing them as build requirements makes the Vite plugin
+    // report them missing even though deploy.ts always supplies them
+    // atomically through --secrets-file.
+    secrets: { required: [...REQUIRED_SECRETS] },
     observability: OBSERVABILITY,
   };
 }
 
-const config = {
+export const config = {
   $schema: "node_modules/wrangler/config-schema.json",
   // Env-less service name: wrangler tags every `--env` deploy with
   // `cf:service=<top-level name>`, so a "-dev" suffix here would mis-bucket

@@ -1,136 +1,177 @@
 # Preview CI performance
 
-The **Cloudflare Previews** check (deploy every app to a leased preview slot,
-then run the full e2e suite against it) is the slowest thing that runs on every
-PR push, so it gets a dedicated performance budget. As of 2026-07-02 it lands
-in **~2m30s** end-to-end. This doc explains how, and — more importantly — how
-to keep it there.
+The **Cloudflare Previews** check deploys every affected app to one leased
+preview slot and runs its deployed e2e coverage. Its target is **under 3m30s
+end-to-end**. The 20-minute workflow timeout is only a runaway backstop.
 
-For the mechanics (where the workflows live, how to run them locally, the
-Doppler wiring), see [Depot CI](depot-ci.md). This doc is about speed
-and cost.
+For workflow commands, logs, and metrics, see [Depot CI](depot-ci.md). This
+document defines the critical-path model and the rules that keep it fast.
 
-## Where the time goes
+## Critical-path model
 
-| Phase  | Budget   | Typical | What it is                              |
-| ------ | -------- | ------- | --------------------------------------- |
-| Pickup | —        | ~7s     | Depot CI assigns a runner               |
-| Setup  | —        | ~20s    | checkout + `pnpm install` + Doppler CLI |
-| Deploy | 55s (OS) | ~40s    | all apps deploy in parallel to the slot |
-| Tests  | 80s (OS) | ~60s    | full e2e against the deployed slot      |
+The preview lifecycle has two barriers:
 
-The OS deploy and the OS e2e lane are the long poles; the other apps finish in
-seconds and run alongside OS.
+1. Start every selected app deployment together; wait until every deployment
+   and readiness check finishes.
+2. Start every selected app test lane together; wait until every lane finishes.
 
-## The optimizations (and why each one is load-bearing)
+Every freshly deployed live suite that addresses Durable Objects respects one
+bounded deployment-age clock. Short Semaphore, Streams, and Petshop suites wait
+at their own command boundary. OS starts its onboarding smoke, explicit TUI
+quarantine marker, Chromium setup, and Playwright immediately; browser and auth
+setup continue while project-backed Playwright fixture creation and high-fanout
+Vitest wait for the same absolute boundary. The clock normally finishes under
+Playwright's longer critical path. Therefore, healthy wall time should approach:
 
-- **Runs on Depot CI, not GitHub Actions.** GitHub's runner assignment was
-  measured at 20s–3m39s (and once ~40min during a webhook incident), because a
-  push has to clear GitHub's run creation → scheduling → `workflow_job` webhook
-  → dispatch chain before any runner starts. Depot CI receives the push webhook
-  directly and picks up in ~7s. The whole preview lifecycle — deploy + e2e and
-  the PR-close cleanup — lives in one Depot workflow
-  (`.depot/workflows/cloudflare-previews.yml`); there is no GitHub Actions
-  preview workflow (see [Depot CI](depot-ci.md)).
-- **Deploys run in one parallel batch.** OS bakes the auth JWKS at deploy time,
-  but instead of waiting for auth to finish first, the OS deploy _polls_ the
-  slot's auth worker for JWKS (`bakeStaticAuthJwks` in `apps/os/scripts/deploy.ts`). All
-  apps deploy at once.
-- **File-level parallelism.** Every e2e test provisions its own project, so
-  files are independent; CI runs them in parallel (`fileParallelism`,
-  `maxWorkers: 4`, `retry: 1` in `apps/os/e2e/vitest.config.ts`). Intra-file
-  concurrency (`sequence.concurrent`) would go faster still, but the deployed
-  slot — not the runner — is the bottleneck: ~4 concurrent project creates is
-  the ceiling before "Durable Object storage operation exceeded timeout". The
-  real speedup for the slow itx suite is splitting its monolith file so
-  file-level parallelism covers it (`tasks/raise-e2e-maxconcurrency.md`).
-- **All test lanes run concurrently.** The `pnpm e2e` vitest suite (its `node`
-  project — engine e2e + itx catalogue matrix in one config) and the root
-  Playwright specs run at the same time against the slot, and the four apps'
-  suites run concurrently too (`scripts/preview/preview.ts`).
-- **Playwright runs 6 workers, `fullyParallel`, in CI** (`playwright.config.ts`)
-  — every spec creates its own fixture project.
-- **One sequential create-saga smoke runs before the burst.** The first real
-  project create pays the genuine cold-start costs (cold DO chain, repo seed,
-  worker probe) once, sequentially, instead of surfacing as rotating timeout
-  flakes across the concurrent suites — and fails loudly if the slot is
-  broken. The curl-round HTTP warmups that used to accompany it existed to
-  absorb post-deploy edge 499/522s; those were zombie worker routes (routes
-  visible in the API but dead at the edge). Routes now ride the generated
-  wrangler config as ensure-only (the worker script is never deleted, so a
-  deploy can't strand them) with proxied DNS ensured by `ensureProxiedDnsRecord`
-  (`scripts/lib/deploy-helpers.ts`), and slot teardowns leave routes parked, so
-  the curls are gone.
-- **The chromium install overlaps the smoke.** `playwright install chromium`
-  hits no slot, so it runs in the background while the smoke runs and the
-  vitest lanes start, instead of blocking the specs.
-- **GitHub API calls retry transient 5xx.** The preview script fetches PR
-  context from GitHub's REST API at the start of each step; that API
-  intermittently 5xxs (its "Unicorn!" 503 page failed a run mid-flight). The
-  calls retry with backoff (`withGithubRetry` in `scripts/preview/preview.ts`)
-  so a blip doesn't fail the whole run and force a re-run.
-- **Right-sized runner.** The job is network-bound; Depot metrics showed peak
-  CPU ~30% / memory ~10% of a 16-core box, so it runs on 8 cores.
+```text
+pickup + setup + slowest deploy + slowest test lane + reporting
+```
+
+It must not approach the sum of app deployments, app test suites, or OS
+sub-lanes. Soft warnings currently fire above 90 seconds for OS deploy or 100
+seconds for OS tests; crossing one is evidence to investigate, not a reason to
+raise the budget automatically.
+
+## Parallel execution
+
+- `previewDependencies` co-selects apps so a slot contains one coherent head;
+  it is not a deployment-order edge. Each deploy owns its readiness check, and
+  tests start only after the whole selected fleet is ready.
+- Different app suites run concurrently.
+- The short Semaphore, Streams, and Petshop commands wait independently at
+  their own rollout boundary; this does not serialize them with OS or with one
+  another. Auth has no live Durable Object suite and starts immediately.
+- OS smoke, the explicit TUI quarantine marker, Chromium setup, Playwright, and
+  the rollout-age clock run concurrently. Playwright workers may perform
+  browser/auth setup immediately, but their shared project-creation helpers
+  wait on the clock's absolute deadline before addressing fresh project-backed
+  Durable Objects. High-fanout Vitest waits only for the smoke and clock; every
+  background process is joined even if another one fails, so a failure cannot
+  orphan work or discard another lane's result.
+- Chromium installation begins before the four OS lanes and overlaps their
+  startup.
+- OS Vitest gives every current file a worker immediately and permits at most
+  two concurrent tests per file in CI. Each file owns isolated projects; the
+  examples matrix still overlaps its isolated runtimes inside each case.
+- Root Playwright uses sixteen fully parallel workers in CI. The latest
+  zero-retry full-suite sample carried about 1,554 seconds of aggregate work and
+  a 117-second longest case: sixteen workers make that longest case, rather than
+  worker queueing, the expected floor. Preview runs queue the long
+  reconnect/resume specs first so their fixed probe windows overlap the
+  ordinary catalogue.
+- The job uses a 16-core Depot runner. Measurements on larger runners showed
+  the overlapping local work peaking below ten cores; the deployed Worker and
+  Durable Objects, rather than host CPU, are the integration boundary. The
+  marathon is the capacity and tail-latency proof for the resulting remote
+  burst.
+
+Tests make this safe by owning isolated state. Test clients give every project
+create a collision-resistant caller-owned `prj_…` identifier, avoiding an
+unnecessary deployment-global ID-mint hop. The examples matrix exclusively
+leases two reusable projects per runtime so mutable project-global state stays
+isolated while runtimes overlap. Only the sandbox example runs its runtimes
+serially because they intentionally share one warm container.
+
+## Reliability rules
+
+- **Retries live only at the individual-test layer.** CI permits one retry;
+  app lanes and the whole workflow never retry automatically.
+- **Watchdogs fail rather than retry.** The TUI quarantine marker and
+  Vitest/Playwright processes retain their own bounded `timeout`s, inside the
+  workflow backstop.
+- **Readiness proves the uploaded edge version.** OS and the streams example
+  report `CF_VERSION_METADATA`; the orchestrator requires wrangler's exact
+  final version on the health probe (no multi-second dwell after first match).
+  The probe is a cheap public health request and never wakes synthetic Durable
+  Objects.
+- **Global Durable Object rollout gets a bounded age gate.** Cloudflare
+  documents that Worker/DO updates are globally eventually consistent even
+  after the new edge Worker answers, and changing an object's assigned version
+  resets that object. Every freshly deployed app whose live suite calls Durable
+  Objects therefore waits until 90 seconds after its successful deploy command.
+  Short suites wait immediately before their command. Root Playwright receives
+  OS's absolute deadline instead: its process and non-project work begin
+  immediately, while forged-session and real-signup helpers wait at the
+  project-create operation; OS Vitest waits at its fan-out boundary. All app
+  lanes remain concurrent, and reused old deployments wait zero seconds. This
+  is one visible lifecycle boundary per deployment, not a retry or a synthetic
+  placement sample.
+- **Warm OS deploys skip only proven-unchanged container work.** Wrangler
+  otherwise builds and reconciles the six stock sandbox image applications
+  serially even when all six report `no changes`. The orchestrator requests
+  `--containers-rollout none` only when the same slot has an exact prior OS
+  deployment and GitHub's ancestry diff contains no image, generated config,
+  cap, package, or Wrangler-config input. New slots, bootstraps, force-pushes,
+  truncated/unavailable comparisons, and relevant changes use the full
+  rollout.
+- **Product operations still handle lifecycle resets.** The CI age gate avoids
+  deliberately launching the densest test burst during the documented rollout
+  window; it cannot make arbitrary in-flight product operations replay-safe.
+  Idempotent operations must still redeliver after an explicit lifecycle
+  outcome without committing terminal failure state.
+- **Readiness retries are bounded and diagnostic.** Each request has a short
+  watchdog, the overall deploy check has a hard deadline, and the final HTTP
+  response body or transport error is retained in the failure message.
+- **Retries remain visible.** Vitest and Playwright write compact retry
+  telemetry that is folded into the preview state in the PR description. The
+  quarantined TUI marker writes an empty ledger and names its restoration task.
+- **Do not serialize around a product defect.** Repeated storage, RPC, stream,
+  or project-birth tails require diagnosis. Parallel tests are allowed to
+  expose real shared-capacity limits.
 
 ## Keeping it fast
 
-**The budget guardrail.** `scripts/preview/preview.ts` sets
-`previewDeployBudgetMs` and `previewTestBudgetMs` on the OS app. When a phase
-runs slower than its budget, the preview script emits a `::warning::`
-annotation that shows up on the PR — it never fails the run, it just makes
-creep visible. If you see one:
+- Every new e2e test should create uniquely named state and must not depend on
+  another test's side effects.
+- Add coverage to an existing concurrent lane. A new serial phase adds its
+  entire duration to the critical path.
+- Start fixed-duration or historically slow work first. Once the phase is
+  parallel, late scheduling of the longest item is the usual avoidable tail.
+- Keep file scheduling out of the critical path: every isolated file should be
+  runnable immediately. If that remote burst exposes a real shared-capacity
+  defect, diagnose it rather than adding ad-hoc serial lanes.
+- Split composite tests when their internal serial work becomes the phase
+  floor. This improves both scheduling and retry granularity.
 
-1. Find out _why_ it got slower (a new serial suite? a heavier test? more
-   round-trips to the slot?) and fix the cause.
-2. Only if the new floor is legitimate and unavoidable, raise the budget in
-   `preview.ts` — in the same PR, with a note saying why. Don't bump the budget
-   to silence a regression.
+## Measuring a run
 
-**Rules that keep the concurrency safe and the pipeline fast:**
+- `depot ci metrics --run <run-id> --org 0p91s0lz49` shows host CPU and memory.
+- `[preview] deploy passed: <app> (Ns)` and `[preview] test passed: <app> (Ns)`
+  in the run log show phase wall times.
+- `[preview:os] lane start/finish` lines show the overlapping OS work, including
+  the visible `rollout-settle` clock and when Vitest was released.
+- `[preview] rollout settle start/finish` lines expose the independent boundary
+  for each short Durable Object-backed app suite.
+- The managed preview block in the PR body records per-app deploy duration,
+  test duration, and consumed retries.
+- The reporting tail remains part of the end-to-end budget. Test events are
+  packed into size-bounded PostHog batches (5 MB of encoded events, below the
+  20 MB request limit), so telemetry volume does not turn into one serial HTTP
+  round trip per 100 events.
 
-- **Every e2e test must self-provision** (its own uniquely-suffixed project,
-  fixture, marker). Shared mutable state breaks `sequence.concurrent`. This is
-  what makes test-level parallelism safe — don't introduce a test that depends
-  on another test's side effects.
-- **Prefer test-level parallelism over adding lanes.** A new check that runs
-  _after_ the existing lanes adds its whole duration to the critical path. If
-  you must add coverage, fold it into an existing concurrent lane.
-- **Never serialize what can self-provision.** The apps' suites and the vitest
-  lanes run concurrently on purpose; keep it that way.
-- **Keep the create-saga smoke.** Removing it brings back the rotating
-  "saw 0 events" cold-start flakes across the concurrent suites, which fail or
-  retry and make runs _slower_, not faster.
-- **Mind slot load, not just runner load.** More Playwright workers or higher
-  `maxConcurrency` increases concurrent pressure on the _deployed slot_, which
-  is where the known stream-delivery race lives
-  (`tasks/streams-event-delivery-flake-under-concurrent-load.md`). Flakes cost
-  retry time. Raise concurrency only with evidence it stays green.
+Use at least three unchanged warm-slot runs when changing concurrency. A single
+green run proves neither the tail nor the retry rate. Classify every retry and
+audit matching Cloudflare errors before calling an operational change proven.
 
-**How to measure:**
+For a release-level stability proof, run the thin Depot orchestrator:
 
-- `depot ci metrics --run <run-id> --org 0p91s0lz49` — CPU/memory utilization,
-  the evidence for runner sizing.
-- The `[preview] deploy passed: <app> (Ns)` / `[preview] test passed: <app>
-(Ns)` lines in the run log — per-phase wall time.
-- The preview state block on the PR body records `deployDurationMs` /
-  `testDurationMs` per app.
+```bash
+PR_NUMBER=<pr> REF=<branch> RUNS=25 ./scripts/preview/flake-hunt-loop.sh
+```
+
+It sequentially dispatches the canonical `cloudflare-previews.yml` workflow;
+there is no second deploy/test implementation and no nested marathon runner.
+Every counted iteration therefore has its own ordinary Depot runner, artifacts,
+GitHub timing, and PostHog telemetry. The ledger records the immutable head,
+Depot run/attempt IDs, whole-run duration (dispatch creation through finish),
+and retry count. It fails fast on a workflow failure, moved head, absorbed test
+retry, or duration at or above seven minutes. The acceptance bar is 25
+consecutive zero-retry runs of one head.
 
 ## Cost
 
-Depot CI bills per second per vCPU (no per-minute rounding), so the levers are
-core-count and run-count, not wall-clock padding:
-
-- **Preview job: 8 cores, not 16.** Metrics-backed right-sizing (see above)
-  halves the per-second cost with peak utilization still ~60%. Re-check with
-  `depot ci metrics` before changing the size in either direction.
-- **Cleanup job: the small 2-core default runner.** It only runs a
-  Doppler-wrapped destroy; it doesn't need the preview job's cores.
-- **`cancel-in-progress: true`** on the preview workflow cancels superseded
-  runs when you push again, so only the latest commit's run pays.
-- **The preview-CI image bake is weekly, not daily.** Nothing consumes that
-  snapshot today (Depot CI uses its standard runners), so a daily bake was
-  spending compute on an unused artifact. Make it daily again — or delete
-  `.depot/workflows/build-preview-ci-image.yml` — only once something actually
-  reads the image.
-
-None of these change how long a run takes; they change how much each run costs.
+Depot bills per second per vCPU. The preview runner is sized for the measured
+local peak while its worker pools overlap; inspect total core-seconds as well as
+duration after changing it. Cleanup remains on the small default runner.
+`cancel-in-progress: true` prevents superseded pushes from continuing to
+consume preview compute.

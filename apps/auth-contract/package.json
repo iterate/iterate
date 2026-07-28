@@ -4,7 +4,8 @@
   "version": "0.0.1",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./worker": "./src/worker.ts"
   },
   "scripts": {
     "typecheck": "tsgo --noEmit"
@@ -13,9 +14,10 @@
     "@iterate-com/shared": "workspace:*",
     "@orpc/client": "^1.13.4",
     "@orpc/contract": "^1.13.5",
-    "zod": "^4.1.12"
+    "zod": "4.3.6"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "catalog:cloudflare",
     "@types/node": "^24.10.1",
     "@typescript/native-preview": "7.0.0-dev.20260315.1"
   }

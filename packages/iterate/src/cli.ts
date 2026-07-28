@@ -1,12 +1,11 @@
-import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync } from "node:fs";
+import { accessSync, constants, existsSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import process from "node:process";
 
 import * as prompts from "@clack/prompts";
-import type { RpcStub } from "capnweb";
+import type { RpcStub } from "@iterate-com/capnweb";
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import { os } from "@orpc/server";
@@ -14,13 +13,12 @@ import { createCli, parseRouter, type AnyRouter, yamlTableConsoleLogger } from "
 import { z } from "zod/v4";
 import type { StandardSchemaV1 } from "trpc-cli/dist/standard-schema/contract.js";
 import type { AuthContractClient } from "../../../apps/auth-contract/src/index.ts";
-import { connectItx } from "../../../apps/os/src/itx-client.ts";
+import { connectItx } from "./itx/itx-node-client.ts";
 import type {
   ItxAuthCredentials,
   Project,
   ProjectListEntry,
   Session,
-  Stream,
 } from "./itx-api.generated.ts";
 import {
   emitComputerNeedsLogin,
@@ -115,6 +113,8 @@ export const buildChatCommand = (input: {
   projectId: string;
   agentPath: string;
   entrypointPath: string;
+  cliPath: string;
+  configName: string;
 }) => ({
   command: "bun",
   args: [
@@ -125,32 +125,61 @@ export const buildChatCommand = (input: {
     input.projectId,
     "--agent-path",
     input.agentPath,
+    "--cli-path",
+    input.cliPath,
+    "--config-name",
+    input.configName,
   ],
 });
 
-const runInheritedProcess = async (input: {
+const resolveExecutablePath = (command: string, pathValue: string | undefined): string => {
+  const candidates =
+    isAbsolute(command) || command.includes("/")
+      ? [resolve(command)]
+      : (pathValue ?? "")
+          .split(delimiter)
+          .filter(Boolean)
+          .map((directory) => join(directory, command));
+
+  for (const candidate of candidates) {
+    try {
+      accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      // Keep searching PATH. The final error names the command, not every miss.
+    }
+  }
+
+  throw new Error(`Could not find executable "${command}" on PATH.`);
+};
+
+/**
+ * Replace the launcher with the interactive terminal process.
+ *
+ * A spawned TUI has a distinct PID and can survive when a terminal harness
+ * kills only the launcher. `execve` preserves the current stdin/stdout/stderr
+ * descriptors and process identity, so OpenTUI receives teardown signals
+ * directly.
+ */
+export const replaceWithInheritedProcess = (input: {
   command: string;
   args: string[];
   env: Record<string, string | undefined>;
-}): Promise<void> => {
-  const child = spawn(input.command, input.args, {
-    stdio: "inherit",
-    env: { ...process.env, ...input.env },
-  });
+  execve?: (file: string, args: string[], env: Record<string, string>) => never;
+}): never => {
+  const execve = input.execve ?? process.execve;
+  if (typeof execve !== "function") {
+    throw new Error("iterate chat requires Node.js 22.15 or newer on a POSIX platform.");
+  }
 
-  const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-    (resolve, reject) => {
-      child.on("error", reject);
-      child.on("exit", (code, signal) => resolve({ code, signal }));
-    },
+  const env = Object.fromEntries(
+    Object.entries({ ...process.env, ...input.env }).filter(
+      (entry): entry is [string, string] => entry[1] !== undefined,
+    ),
   );
-
-  if (result.signal) {
-    throw new Error(`${input.command} exited with signal ${result.signal}.`);
-  }
-  if (result.code !== 0) {
-    throw new Error(`${input.command} exited with code ${result.code ?? "unknown"}.`);
-  }
+  const executablePath = resolveExecutablePath(input.command, env.PATH);
+  execve(executablePath, [executablePath, ...input.args], env);
+  throw new Error(`Failed to replace the Iterate launcher with ${input.command}.`);
 };
 
 const hasConfig = (configFile: ReturnType<typeof readConfigFile>, name: string) =>
@@ -338,26 +367,19 @@ export const verifyOsSession = async (input: {
 
 const setupMissingProjectForChat = async (session: RpcStub<Session>, project: ProjectListEntry) => {
   let projectItx: RpcStub<Project> | undefined;
-  let agentStream: RpcStub<Stream> | undefined;
   try {
-    projectItx = (await session.projects.create({
-      projectId: project.id,
-      slug: project.slug,
-      ...(project.organizationSlug ? { organizationSlug: project.organizationSlug } : {}),
-      waitUntilCreated: false,
-    })) as unknown as RpcStub<Project>;
-    agentStream = projectItx.streams.get(DEFAULT_CHAT_AGENT_PATH) as RpcStub<Stream>;
-    await agentStream.waitForEvent({
-      afterOffset: 0,
-      eventTypes: ["events.iterate.com/agent/llm-provider-selected"],
-      timeoutMs: 15_000,
-    });
+    projectItx = (await session.projects.get(project.slug).create(
+      {
+        projectId: project.id,
+        ...(project.organizationSlug ? { organizationSlug: project.organizationSlug } : {}),
+      },
+      { waitUntilReady: false },
+    )) as unknown as RpcStub<Project>;
   } catch (error) {
     throw new Error(
       `Project "${project.slug}" (${project.id}) exists in auth but is missing in OS. Failed to set it up for chat: ${errorMessage(error)}`,
     );
   } finally {
-    disposeRpc(agentStream);
     disposeRpc(projectItx);
   }
   return project.id;
@@ -379,6 +401,8 @@ export const resolveChatProject = async (input: {
   createSession?: CreateOsSession;
   explicitProject?: string;
 }) => {
+  if (input.explicitProject?.startsWith("prj_")) return input.explicitProject;
+
   const configured = input.explicitProject || input.configuredDefaultProject;
 
   return await withAuthenticatedOsSession({
@@ -1018,11 +1042,15 @@ const launcherProcedures = {
         configuredDefaultProject: resolved.config.defaultProject,
         explicitProject: input.project,
       });
+      const cliPath = process.argv[1];
+      if (!cliPath) throw new Error("iterate chat could not identify its CLI entrypoint.");
       const command = buildChatCommand({
         osBaseUrl: resolved.config.osBaseUrl,
         projectId: project,
         agentPath: input.agentPath,
         entrypointPath: resolveStreamTuiEntrypointPath(),
+        cliPath,
+        configName: resolved.name,
       });
       // Auth: admin/bearer secrets from the inherited environment win (doppler,
       // e2e). Otherwise refresh the stored `iterate login` session here — the
@@ -1038,8 +1066,9 @@ const launcherProcedures = {
           );
         }
         env.ITERATE_BEARER_TOKEN = token;
+        env.ITERATE_CHAT_BEARER_FROM_STORED_SESSION = "1";
       }
-      await runInheritedProcess({ ...command, env });
+      replaceWithInheritedProcess({ ...command, env });
     }),
 
   useMyComputer: os

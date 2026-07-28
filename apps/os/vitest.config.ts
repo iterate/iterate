@@ -9,6 +9,10 @@ export default defineConfig({
     // Vitest does not apply tsconfig `paths` for `~/` reliably; mirror `~/*` -> `./src/*`.
     alias: {
       "~": resolve(appRoot, "src"),
+      // Production resolves Cap'n Web's `workerd` export. Exercise that same
+      // runtime in unit tests so Workers-only RPC hooks cannot pass via the
+      // unpatched generic build.
+      capnweb: resolve(appRoot, "node_modules/capnweb/dist/index-workers.js"),
       // The pure itx core's only platform import is RpcTarget; the shim lets
       // its no-workerd unit test (src/itx/itx.test.ts) run in plain Node.
       "cloudflare:workers": resolve(appRoot, "src/test/cloudflare-workers-shim.ts"),
@@ -20,11 +24,11 @@ export default defineConfig({
         // Ships ESM with extensionless relative imports — fine for the vite
         // bundle, but Node's ESM resolver (vitest's default for deps) rejects
         // them; inlining lets vite resolve the package instead.
-        inline: ["codemirror-json-schema"],
+        inline: ["codemirror-json-schema", /capnweb/],
       },
     },
     // Route `/api2/test` is implemented as `api2.test.ts` — not a Vitest file.
-    exclude: [...defaultExclude, "e2e/**", "**/src/routes/**/*.test.ts", "**/*.workerd.test.ts"],
+    exclude: [...defaultExclude, "e2e/**", "**/src/routes/**/*.test.ts"],
     fileParallelism: false,
     pool: "forks",
     hookTimeout: 60_000,

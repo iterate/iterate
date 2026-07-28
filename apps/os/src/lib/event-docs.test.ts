@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  documentedProcessorContracts,
   eventDocs,
   getEventDocByPath,
   getEventDocByProcessorRoute,
@@ -32,14 +31,15 @@ describe("event docs catalog", () => {
     expect(getEventDocByType("events.iterate.com/stream/created")).toBe(event);
   });
 
-  it("keeps events whose public path does not start with the processor slug under the processor", () => {
-    const event = getEventDocByPath("agents/message-received");
+  it("uses the event namespace as the agent processor's public docs path", () => {
+    const event = getEventDocByPath("agents/context-added");
 
-    expect(event?.processor.slug).toBe("agent");
-    expect(event?.href).toBe("/docs/streams/processors/agent/events/agents/message-received");
+    expect(event?.processor.slug).toBe("agents");
+    expect(event?.processor.contractSlug).toBe("agent");
+    expect(event?.href).toBe("/docs/streams/processors/agents/events/context-added");
     expect(event?.routeParams).toEqual({
-      processorSlug: "agent",
-      _splat: "agents/message-received",
+      processorSlug: "agents",
+      _splat: "context-added",
     });
   });
 
@@ -47,7 +47,7 @@ describe("event docs catalog", () => {
     expect(
       getEventDocByProcessorRoute({
         processorSlug: "stream",
-        eventPath: "agents/message-received",
+        eventPath: "agents/context-added",
       }),
     ).toBeUndefined();
   });
@@ -101,46 +101,9 @@ describe("event docs catalog", () => {
   });
 });
 
-describe("event docs examples", () => {
-  it("documents at least one example for every owned event type", () => {
-    const undocumented = eventDocs
-      .filter((event) => event.examples.length === 0)
-      .map((event) => event.type);
-    expect(
-      undocumented,
-      "every contract event needs an `examples` entry for the docs site",
-    ).toEqual([]);
-  });
-
-  it("parses every example payload against its event's payload schema", () => {
-    for (const contract of documentedProcessorContracts) {
-      for (const [type, definition] of Object.entries(contract.events)) {
-        for (const example of definition.examples ?? []) {
-          const result = definition.payloadSchema.safeParse(example.payload);
-          expect(
-            result.success,
-            `${type} example "${example.description}" must parse: ${result.error}`,
-          ).toBe(true);
-        }
-      }
-    }
-  });
-
-  it("keeps every example payload JSON-serializable", () => {
-    for (const event of eventDocs) {
-      for (const example of event.examples) {
-        const roundTripped: unknown = JSON.parse(JSON.stringify(example.payload));
-        expect(roundTripped, `${event.type} example "${example.description}"`).toEqual(
-          example.payload,
-        );
-      }
-    }
-  });
-});
-
 describe("event docs cross-references", () => {
   it("links events to the processors that emit and consume them", () => {
-    const event = getEventDocByType("events.iterate.com/agent/llm-request-completed");
+    const event = getEventDocByType("events.iterate.com/agent/summary-updated");
 
     expect(event?.emittedBy.map((processor) => processor.contractSlug)).toEqual(
       expect.arrayContaining(["agent"]),
@@ -158,10 +121,10 @@ describe("event docs cross-references", () => {
       "events.iterate.com/stream/subscription-configured",
     );
     const foreignEmit = processor?.emits.find(
-      (event) => event.type === "events.iterate.com/repo/create-requested",
+      (event) => event.type === "events.iterate.com/repos/create-requested",
     );
     expect(foreignEmit?.ownerContractSlug).toBe("repo");
-    expect(foreignEmit?.href).toBe("/docs/streams/processors/repo/events/create-requested");
+    expect(foreignEmit?.href).toBe("/docs/streams/processors/repos/events/create-requested");
   });
 
   it("links processor dependencies in both directions", () => {

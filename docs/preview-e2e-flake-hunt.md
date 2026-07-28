@@ -5,29 +5,1037 @@
 > retry telemetry) lives in [testing.md → Retries and
 > timeouts](testing.md#retries-and-timeouts).
 
-Goal: run the full preview e2e lane against a real preview environment 50
-times in a row without a single flake, fixing and documenting every failure
-encountered along the way.
+Current goal: run the complete preview pipeline against a real preview
+environment 25 times in a row without a single failure, with every full-fleet
+deploy plus e2e run completing in under seven minutes and without an absorbed
+test retry. Fix and document every failure, retry, or tail encountered along
+the way.
 
 Round 1 (PR #1644) found and fixed nine root causes and merged them to main.
 Round 2 (PR #1653, merged) added flakes 16–17 and the `preview.ts` lease/retry
 hardening, and merged main's worker-build pipeline (#1612) — whose `#writeChain`
-write serialization supersedes round 2's standalone flake-15 fix. Round 3
-(this PR) carries on toward 50 consecutive green runs, targeting the two
-pre-existing flakes still open after the round-2 merge (see "Round 3 targets").
+write serialization supersedes round 2's standalone flake-15 fix. Later rounds
+repeat the same proof after substantial platform changes and record their exact
+base revision, run IDs, and findings below.
 
-Method: deploy this PR's preview slot, then loop `pnpm preview test
---pull-request-number <N>`, failing fast on the first failure. Every failure
-gets a root-cause diagnosis and the smallest reliable fix, recorded below; a
-failure resets the consecutive-green counter. `scripts/preview/flake-hunt-loop.sh`
-drives the loop (preflight full-fleet deploy → optional warmup → counted runs).
+Method: `scripts/preview/flake-hunt-loop.sh` sequentially dispatches the
+canonical Depot `cloudflare-previews.yml` workflow. Every iteration is a normal
+fresh-runner preview check—full-fleet deploy, every e2e lane, artifact upload,
+GitHub timing, and PostHog telemetry—not a second implementation hidden inside
+one long-running job. It fails fast on the first functional failure, moved
+head, absorbed retry, or run at or above seven minutes, and writes a
+machine-readable ledger containing the immutable head plus Depot run/attempt
+IDs, whole-run duration, and retry count. Every failure, retry, or tail gets a
+root-cause diagnosis and the smallest reliable fix; any of them resets the
+consecutive-clean counter.
 
-The trustworthy count runs **in Depot CI, not on a workstation** (a laptop
-sleeping mid-loop produced hours of phantom "degradation" — see the lab note):
-`.depot/workflows/preview-e2e-marathon.yml` runs that same loop on Depot infra,
-launched with `depot ci run --workflow .depot/workflows/preview-e2e-marathon.yml`.
-Local runs are for fast iteration while fixing a flake; the 50-consecutive-green
-bar is measured on Depot.
+This zero-retry acceptance rule applies to new proof runs from 2026-07-22
+onward. Historical ledgers below retain the semantics and retry counts they
+recorded at the time; they are evidence, not retroactively relabelled runs.
+
+Once a failing test is isolated, use `pnpm preview test-target` to run its
+Vitest file or Playwright spec repeatedly against the PR's already-deployed
+preview. It does not deploy, erase, or overwrite the full-suite result; see
+[Dev environments → Story 2](dev-environments.md#story-2-run-what-ci-runs-locally)
+for exact commands. This focused loop is diagnostic only: the accepted streak
+still consists of complete deploy-plus-e2e runs on Depot.
+
+Run the orchestrator from an authenticated workstation:
+
+```bash
+PR_NUMBER=<pr> REF=<branch> RUNS=25 ./scripts/preview/flake-hunt-loop.sh
+```
+
+The workstation only dispatches and observes. Every counted attempt executes
+independently in Depot on the normal preview job's 16-core runner and sends the
+normal telemetry; if the workstation sleeps or exits, no running test is
+misclassified and no later run is silently counted. Resume by explicitly
+starting a new proof—accepted streaks are never inferred across ledgers.
+
+## Round 15 (2026-07-23, post-#2284)
+
+This round starts from merged `origin/main` at
+`0d8f96f9298f46590f6a8f3bbae1825e03c9660a`. PR #2284 aligned public project
+creation with its real nested birth barriers and added one observable,
+pre-session recovery for a spawned CLI's initial WebSocket upgrade. The
+recovery boundary cannot replay authentication, capability lookup, or user
+code, and application/RPC errors remain non-retryable.
+
+The final #2284 exact-head preview was clean functional evidence: all six
+expected E2E sources finalized, all 245 runnable test records passed, and
+Depot artifacts plus PostHog recorded zero framework retries, zero
+passed-after-retry outcomes, and zero initial-connection recovery markers. It
+does not count toward this round's consecutive proof because it is a different
+immutable head. It took 359 seconds from aggregate dispatch (346 seconds for
+the preview check), which is inside the revised seven-minute stability ceiling
+but remains a performance tail to remove after the stability proof.
+
+That run also isolated the leading time floor. OS deployment took 79.45
+seconds and OS E2E took 171.99 seconds, while OS Vitest itself took 63.55
+seconds. Fresh project creation was held until the deployment-wide Durable
+Object rollout clock reached 90 seconds, and Vitest began only after that
+boundary plus onboarding smoke settled. Round 15 begins at 0/25 and first
+measures unchanged warm-slot runs through the canonical Depot workflow before
+changing the rollout critical path.
+
+### Round 15 seven-minute proof and Project description reset
+
+Exact head `a0706e02629ec20ca205fdf12596cbc2b6f0d7f5` produced five consecutive
+clean canonical runs in 339, 333, 271, 251, and 411 seconds. The fifth run
+(`q5hjb85fr1`) completed in 6 minutes 51 seconds with zero framework retries.
+That is direct evidence for the 420-second proof ceiling: the old five-minute
+limit would have rejected a complete, clean run, while the revised limit left
+only nine seconds of headroom.
+
+Run six (`ngtx6pwk2h`) finished in 241 seconds but is rejected because
+`repo-ide-markdown-preview.spec.ts` passed only on Playwright's second attempt.
+The first attempt created its project successfully, then the pipelined
+`Project.__describe()` call was rejected with `durableObjectReset: true` and
+`Durable Object reset because its code was updated.` Exact-version Cloudflare
+trace `0bd2b7add32f43a5e61359103b532f4f` places the Project Durable Object reset
+about 140 seconds after the OS deployment was recorded—well after the existing
+90-second deployment-age gate. Repo and Stream Durable Objects reset in the
+same interval. This is therefore deployment-wide lifecycle behavior, not a
+markdown-preview assertion failure or a project-creation collision.
+
+PostHog confirms the scope: during the preceding seven days the same explicit
+code-update reset reached at least 20 different live test names across
+unrelated branches. Cloudflare documents Worker and Durable Object rollout as
+eventually consistent over seconds to minutes and provides no finite
+deployment-complete barrier for all Durable Object identities. Increasing a
+fixed pre-test sleep would add permanent critical-path latency without proving
+that a later identity cannot be reassigned.
+
+The product boundary is instead made honest: the read-only Project description
+operation now uses the existing Durable Object availability helper for exactly
+one observable replay. The whole logical read is repeated so its Project and
+Capability Host snapshots remain from one attempt. Only workerd lifecycle flags
+or the explicit cross-RPC stream-unavailable contract qualify; application
+errors remain authoritative and no mutation can be replayed. The first reset
+is logged with project and scope context, and a second failure is returned.
+Focused tests cover resets from either Durable Object branch, and the shared
+classifier tests retain the no-application-error/no-loop guarantees.
+
+The retry resets the accepted streak to 0/25. Merging current `origin/main` at
+`ecc8d1fa48d17eda5e12b9c7ff6f03b75d8d0358` also invalidates the earlier
+immutable head, so the next accepted proof starts from the merged corrective
+head with the same seven-minute ceiling.
+
+### Round 15 Secret create storage reset
+
+The automatic preview on exact head
+`52bfeb9c7d9857d2612ecbcdff294484651f4ba2` was clean in 324 seconds. PostHog
+recorded 310 preview and 3,106 unit outcomes with zero failures or retries. It
+is baseline evidence rather than a counted marathon iteration because it was
+not dispatched into the immutable proof ledger.
+
+The first ledgered run (`bmd2z9ncsd`, attempt `hs0vk1fzrm`) completed in 252
+seconds but is rejected. `waitrose-session strategy: username/password secret
+mints on first use, re-mints on 401, session works on the API` passed only on
+Vitest's second attempt after Cloudflare returned `Durable Object storage
+operation exceeded timeout which caused object to be reset.` The failure was
+therefore unrelated to the seven-minute ceiling.
+
+The raw Vitest artifact and exact-version Cloudflare events agree on the
+boundary. Project `prj_17684080138441f18be4338ddcb1be0e` was created and
+described successfully; its following `Secret.create` ran from
+`14:22:59.842Z` to `14:23:34.111Z` and failed after 34.269 seconds. The test
+retry addressed the same project and secret, and the repeated create completed
+in 449 milliseconds. At the same instant, a different project recorded a
+36.611-second project-api-key Secret seed reset. The paired stalls rule out a
+Waitrose assertion or credential failure and localize the incident to Secret
+Durable Object storage availability.
+
+PostHog supplies the recurrence bound. The named test ran 224 times in the
+available 30-day window: seven runs retried (3.12%) and two failed after their
+retry. Its prior errors include stream wait and Durable Object storage resets.
+The same storage-reset family reached unrelated stream lifecycle, dynamic
+worker, remote-app, and browser tests, so changing this test's timeout or
+quarantining it would only move the symptom.
+
+`Secret.create` already documents and implements the necessary replay
+semantics: the birth append is idempotency-keyed, an identical-policy duplicate
+keeps the first material, and a different egress, refresh, or visibility
+policy still fails. The missing piece was the outer Secret RPC boundary. It now
+uses the existing availability helper for exactly one observable replay while
+workerd's lifecycle flags are still present. Application rejections are never
+replayed, the first reset is logged with project and path context, and a second
+failure remains authoritative. Focused tests cover both lifecycle recovery and
+the application-error exclusion; the full OS unit suite and typecheck pass.
+The rejected run resets the consecutive counter to 0/25.
+
+### Round 15 shared Playwright admin connection
+
+Exact head `eb887acb553a66eb5bfe7c4402807ff429457ea9` first passed two
+canonical runs in 275 and 320 seconds with zero retries. Run three
+(`mv74spgz2j`, attempt `x6zqb8b8jj`) completed in 344 seconds but is rejected:
+`stream-resume-after-suspend.spec.ts` passed only on Playwright's second
+attempt after its control case reported `WebSocket connection failed.` The
+accepted streak therefore remains 0/25.
+
+The retained Playwright trace localizes the first failure before navigation or
+any project RPC. The fixture project
+`prj_9860ba1c2eb34ad39cd4bcc76663fbce` was created, described, and made ready
+successfully. Immediately afterward, `connectAdminItx` failed its initial
+WebSocket dial. Exact-version Cloudflare traces contain the successful fixture
+creation and simultaneous successful sessions from other tests, but no Worker
+invocation matching this failed dial. The connection therefore died locally
+or at the edge before the OS Worker accepted it; the named stream assertion
+never ran.
+
+PostHog confirms that the victim test is incidental. In the available history,
+the exact generic connection error occurred three times across two unrelated
+Playwright files: this stream control case and two REPL catalogue cases on
+other branches. All three use the shared `connectAdminItx` helper and all three
+passed on one framework retry. The stream control case itself had 196 recorded
+attempts across 186 workflow runs; its three other historical failed attempts
+were distinct stream-wait timeouts, not this transport signature.
+
+The shared Playwright helper now uses the same bounded `connectItxReady`
+boundary already proven for the CLI. It may make one fresh dial only before a
+Cap'n Web session exists, so authentication and test operations cannot be
+replayed. Project-fixture creation uses the same safe boundary before issuing
+`Project.create`. Any recovery adds an `itx: initial connection retry`
+Playwright step, a test annotation, and the structured
+`[itx-initial-connection-retry]` diagnostic with the original error and
+timings. Those records flow through the canonical artifact into PostHog, while
+the marathon ledger explicitly counts the structured marker and rejects the
+run. A second dial failure and every post-session failure remain authoritative.
+
+### Round 15 orphaned append, Artifacts 503, and signup recovery
+
+Canonical exact-head run `hrtfl6plzr` (attempt `dhkmkf2p26`) on
+`865060fa5644bf2703130611cb9a0d3bf6ee4431` completed in 302 seconds, but is
+rejected with three framework retries. The accepted streak remains 0/25.
+Artifacts and exact-version Cloudflare telemetry separate the three causes;
+none was fixed by increasing a test or project-creation timeout.
+
+The Streams Example relative-path case lost the native Durable Object RPC
+acknowledgement for its first append. The call stayed unresolved for the
+test's full 30-second budget, then completed after Vitest had already timed out
+and continued leaking the abandoned attempt's later appends. The append was
+not CPU-bound and the retry completed the complete case in about six seconds.
+Every path-resolution append now carries an idempotency key, and the shared
+Stream RPC target gives keyed native append attempts a 10-second
+acknowledgement deadline. A silent attempt is observed and disposed if it
+eventually returns, while the existing availability boundary performs exactly
+one replay with the same keys. Unkeyed appends are never deadline-replayed.
+
+The clean-close Playwright case never reached its named assertion. Its fixture
+project `prj_e8fece330f4b46b49f812ab0ade21804` completed identity, root birth,
+and every sibling birth barrier, then waited 99.201 seconds for
+`project/ready`. The retained journal supplies the durable explanation:
+`/repos/config` recorded `repos/create-failed` with
+`HTTP Error: 503 Service Unavailable` at offset 9. The Artifacts client had
+flattened the transient response into a plain Error, so the repo processor's
+code/name-only classifier permanently poisoned the repository and no
+`repos/created` certificate could make the project ready. The classifier now
+recognizes only transient Artifacts HTTP statuses (including the live 503
+shape) through wrapped causes and re-enters ordinary durable redelivery.
+Domain HTTP failures such as 404 still settle fail-closed. Focused recovery
+tests prove that the 503 writes no failure fact and a successor attempt writes
+one terminal `repos/created` fact.
+
+The new-user UI case exposed a separate navigation defect. The root
+deployment-status probe returned `unknown`, so the root decision sent the user
+to `/projects`. That page successfully created project
+`prj_445316f275f34223b49486ebf5f8346b` and made it ready in about 4.9 seconds,
+but remained on the list until the 60-second composer assertion expired. A
+single unknown project now follows the same welcome destination as a missing
+project. Server-side nonblocking birth is attempted first; if its probe or
+birth call fails, an explicit `ensureBirth` handoff lets the authenticated
+welcome page issue the same idempotent nonblocking create once. The user is no
+longer stranded after successful recovery.
+
+Focused tests (65 cases), both affected package typechecks, targeted lint and
+format checks, and the full OS unit suite are green locally. This is diagnostic
+and regression evidence only; a new immutable head must restart the canonical
+25-run proof.
+
+### Round 15 orphaned wake settlement and false root-append deadline
+
+Canonical exact-head run `mf4v6fm81q` (attempt `xswl4x4d5w`) on
+`420eac47ba9c853f5cad15a429aa6a59eada4909` completed in 331 seconds and all
+tests eventually passed, but the run is rejected because it used three
+framework retries. The accepted streak remains 0/25.
+
+The worker-alarm retry exposed a mistake in the preceding keyed-append
+hardening. Its first project continued through birth and became ready, while
+the public root append exhausted two artificial 10-second acknowledgement
+deadlines. Root birth is a larger durable saga whose callers already own
+explicit 90–100-second end-to-ready bounds; imposing the ordinary stream
+append deadline inside that saga creates a false failure under load. Keyed
+root appends are therefore excluded from deadline replay. Keyed non-root
+appends retain the bounded recovery, and unkeyed appends remain non-replayable.
+
+The repo-commit retry was not a slow commit. On its first pooled project,
+`prj_66837522b9fd4a71bb551fb96a7c9205`, durable execution
+`494d2b81-4750-4e59-b6d1-ae75209c6501` was requested at
+`16:52:08.683Z`, but the capability-host processor did not record
+`script-run-started` until `17:01:42.665Z`; it settled successfully at
+`17:01:46.475Z`. That is a 9-minute-34-second delivery gap before user work
+began. The retry used replacement project
+`prj_f906e62453b949d6b669724b90addc45`, started in 838 milliseconds, and
+settled in about 4.4 seconds.
+
+The gap came from an unbounded transport state in the wake lane. Wake delivery
+is deliberately one-way and reports its acknowledgement through an independent
+`settleDelivery` capability. A lost settlement callback that also failed to
+raise `onRpcBroken` left the predecessor connection authoritative until the
+roughly ten-minute idle teardown, so its durable cursor could not be
+redelivered. Each pending settlement now arms the Stream Durable Object's
+native alarm for 20 seconds. Expiry is an observable
+`StreamReceiverUnavailableError`: the cursor stays put, bounded backoff is
+recorded, the orphaned connection is closed, and a successor re-pokes from the
+durable checkpoint. Late predecessor settlements are fenced. The deadline uses
+the native alarm rather than an actor timer, so it does not retain the current
+JS-RPC turn.
+
+The third retry was a dynamic-worker runtime failure with platform reference
+`efqgrnq1347q3bs8in6q386a`. Durable execution
+`9578a99f-b22b-42e5-bf7b-5ea8d9ec00dc` started normally and settled failed
+about 2.1 seconds later; its replacement test project passed. This is not
+silently reclassified or generically replayed because `runScript` may contain
+mutations. It remains a proof target: recurrence in the restarted marathon
+must be localized below the user-code boundary before any recovery is added.
+
+The two new regressions pass with the complete 33-file Streams unit set
+(381 passed, one expected failure), the affected app typecheck, targeted lint,
+and formatting checks. This rejected run resets the proof to 0/25; only a new
+immutable head can restart it.
+
+## Round 14 (2026-07-23, post-#2275)
+
+PR #2275 made preview worker builds fail closed when the dependency installer
+returns warnings instead of an executable bundle, and made deployment wait in
+parallel for the exact SHA-pinned `pkg.pr.new` SDK package. Its final exact-head
+preview check ran every runnable suite in 240 seconds, and PostHog's finalizer
+matched all 6/6 expected sources. One OS Vitest case nevertheless passed only
+after retry, so the run is rejected and the strict counter remains 0/25.
+
+The retry was `Project worker processEventBatch receives events from every
+project stream and can cross-post`. Its first project failed the public
+15-second create deadline after 14.308 seconds of the remaining ready budget;
+the whole-test retry created a different project and passed. This was not a
+near-miss followed by harmless background completion. Exact-version trace
+`4d603e1afeb62f5f959255504b895244` shows the abandoned first project's config
+repository processor still waiting at offset 7 and eventually reporting
+`waitUntilProcessed timed out after 59517ms`. Its terminal stream appends
+completed around 65 seconds after `Project.create` began.
+
+PR #2273 had introduced an inconsistent timeout hierarchy: a 15-second public
+project-create deadline wrapped a 60-second sibling-birth barrier inside a
+75-second processor acknowledgement, and explicitly expected a whole-test
+retry to redial. The corrective change removes that retry-dependent contract.
+Sibling birth now owns one shared 75-second budget, the Project processor owns
+90 seconds, and the public entry-to-ready operation owns 100 seconds. Healthy
+creates still return immediately; the original caller now observes either the
+original fully ready project or one bounded failure. The existing
+`os-cold-create-latency` task retains the separate obligation to eliminate this
+tail rather than treating the upper bounds as latency targets.
+
+The corrective PR's first exact-head preview check was technically green but
+is also rejected. It took 314 seconds and
+`catalogue example "provide-live-flattened" runs identically across runtimes`
+passed only on Vitest's second attempt. The first attempt's spawned CLI exited
+with `WebSocket connection failed`; the exact-version Cloudflare trace set has
+no corresponding accepted `/api` request or server error. That localizes the
+failure before the server accepted the WebSocket upgrade, not in the named
+catalogue example.
+
+PostHog bounds both recurrence and scope. The named case ran 191 times in the
+available window and retried once, but the matrix as a whole recorded 38
+retries spread across unrelated examples. PR #2169 recorded the same spawned
+CLI signature on `repo-read-file`. The example names are incidental: every CLI
+case inherited one unobserved, one-shot initial transport dial.
+
+The fix is below the test and above user code. The Node client can wait for the
+initial WebSocket `open` event and, when explicitly requested by the CLI, make
+exactly one fresh dial after a failed upgrade. This boundary ends before a
+Cap'n Web session, authentication call, or user operation exists, so it cannot
+replay side effects. The CLI emits a structured
+`[itx-initial-connection-retry]` record with the original transport error and
+timings; the matrix turns that into a PostHog `e2e-phase` retry annotation.
+Application and RPC failures after connection are never retried.
+
+Local transport tests prove first-upgrade failure then success, no retry after
+an application failure, and a hard two-dial ceiling. Against the rejected
+run's exact OS Worker version, all 27 catalogue examples passed with
+`--retry=0` in 67.68 seconds and emitted no connection-retry record. The
+probe-based draft took 74.93 seconds; it was discarded because an extra RPC
+round trip was unnecessary. The strict full-pipeline counter remains 0/25
+until a new immutable head completes without any framework or transport retry
+and below the seven-minute ceiling.
+
+## Round 13 (2026-07-23, post-#2271 and #2273)
+
+PR #2271 removed a cyclic Durable Object RPC lifetime from durable stream wake
+delivery. Wake batches are now one-way and carry an independent one-shot
+settlement capability. Missing settlement leaves the durable checkpoint
+authoritative, delivery failure and broken transport share the same bounded
+backoff/park machine, and late signals are fenced to the connection that
+created them.
+
+Its final exact-head preview ran every canonical suite in 227 seconds with zero
+failures or absorbed retries: Depot workflow `1w2np2p7w2`, job `2xswh11402`,
+attempt `6kl9w6n7m7`. PostHog recorded 3,342 passing final test records, seven
+pre-existing explicit skips, and no failed or retried records. The formerly
+65-second `journal-is-the-record` Playwright case completed in 11.232 seconds;
+its Vitest equivalent completed in 7.639 seconds.
+
+The first post-merge proof head `31f072d6…` then produced two clean runs (285
+and 230 seconds) before run 3 absorbed one retry in `workspace.itx.e2e.test.ts`
+after Cloudflare returned opaque internal reference
+`jofnmc53etthqc74kfntuo36`. The harness rejected that otherwise-green
+234-second run. A fresh proof produced two more clean runs (245 and 231
+seconds), then run 3 failed in 311 seconds with 13 retries and three hard
+project-creation failures.
+
+PostHog and exact-version Cloudflare traces localized that failure to the
+Artifacts create/read consistency boundary. Three independent config
+repositories reported an internal create error, then `ALREADY_EXISTS`, while
+immediate reads still returned repository-not-found. Failed-run
+`artifact-get-or-create` p95 was 39.54 seconds versus 2.59–3.16 seconds in the
+adjacent clean deployments, and 30 downstream durable stream deliveries failed.
+
+PR #2273 removed that race. The authoritative initial write token returned by
+`ARTIFACTS.create()` now seeds the repository directly; the normal path no
+longer performs an immediate `get()` plus `createToken()`. Only the ambiguous
+`ALREADY_EXISTS` case uses one explicit, bounded recovery barrier. Public
+project creation now has one 15-second entry-to-ready deadline, allowing the
+framework's single test retry to redial while already-committed durable work
+finishes.
+
+The final #2273 exact-head preview was genuinely green in 247 seconds: all five
+apps deployed, all 310 tests ran, and none failed. Two explicit
+`stream-wait-timeout` outcomes recovered on the single test retry, so that run
+accepted the product fix but does not count toward the zero-retry streak.
+PostHog's finalizer matched all 9/9 expected sources. Exact-version Cloudflare
+traces showed 20/20 successful `artifact-get-or-create` operations (p95 2.237
+seconds, max 4.527 seconds), no normal-path `artifact-token` call, no durable
+sink delivery failure, and no Artifacts error.
+
+The strict consecutive counter now restarts at 0/25 on a fresh immutable proof
+head based exactly on merged `origin/main` at
+`b5fbfdee44234c69226cad52b14fb0440c142e13`.
+
+## Round 12 (2026-07-23, post-#2269)
+
+This round starts from `origin/main` at
+`c5d51cf02e0c1acf9a36bec903ecf956ae9469ae`. PR #2269 paid off three
+independent sources of preview tail latency and absorbed retries:
+
+- project-directory registration now retries only the missing slug or
+  project-index write, so a partial KV failure cannot replay a successful
+  sibling write;
+- onboarding smoke consumes the deployment-wide rollout deadline immediately
+  before project creation instead of beginning a second rollout wait; and
+- stream-backed read-your-writes paths no longer perform an unbounded,
+  redundant processor catch-up before entering the existing offset wait that
+  owns the explicit 15-second deadline.
+
+The final exact-head check for #2269 ran all five app suites in 231 seconds with
+zero retries: Depot run `b2jwhtx6q4`, attempt `nvg49cr0jp`. OS Playwright passed
+63/63 and the formerly retrying repository-edit and secret write-fence cases
+both passed on their first attempts. PostHog recorded 310 preview logical-test
+outcomes and 3,046 unit outcomes with zero failures or retries, and both
+telemetry finalizers reported complete expected source coverage. Cloudflare
+traces showed no wall-time exhaustion, resource exhaustion, or unexplained
+Durable Object reset in the test window.
+
+That run was PR acceptance evidence before the squash merge, not part of this
+post-merge consecutive proof. The round-12 counter therefore starts at 0/25 on
+this new immutable PR head.
+
+### Round 12 rejected attempt: self-alarm readback races a due alarm
+
+Run 1 on the initial proof head was clean in 281 seconds (Depot run
+`zq6s3vngt8`, attempt `sslv41jkrl`). Run 2 completed in 250 seconds but
+`stateful-worker-alarm.e2e.test.ts` failed once and passed on Vitest's single
+retry (Depot run `fgl4xv672n`, attempt `pf1mx7sj0s`). The harness rejected the
+run and reset the streak to 0/25 even though GitHub's ordinary check was green.
+
+The failing assertion expected `armSelf(3_000)` to return an armed timestamp
+but received `null`. This was a test race, not a missing alarm: the worker
+computes the due time before `ctx.storage.setAlarm` crosses the facet, project
+itx, and outer `StatefulWorkerDurableObject`; its following
+`ctx.storage.getAlarm` is another traversal. Cloudflare traces show the
+self-arm invocation already in flight by `04:09:16.843Z`, while the outer
+Durable Object did not receive `setAlarm` until `04:09:19.318Z`. About 2.5 of
+the test's 3 seconds had therefore elapsed before the real alarm was armed,
+leaving its readback free to race normal alarm consumption.
+
+PostHog shows 131 executions of this test since 2026-07-22: 129 passed first
+try and 2 absorbed a retry. The normal duration was 38.7 seconds at p50 and
+45.8 seconds at p95; the earlier retried execution took 142.4 seconds and this
+one took 75.3 seconds. The fix separates the two contracts already present in
+the test. The first alarm continues to prove delivery, deliberate handler
+failure, and native retry. Self-addressed arming now uses a safely non-due
+alarm, proves the worker-side and host-side readbacks equal the exact scheduled
+time, and immediately disarms it. A second near-term fire added no distinct
+platform coverage and made a due timer the synchronization primitive.
+
+### Round 12 proof restart after #2270
+
+PR #2270 merged that alarm-test fix to `main` at
+`78ba8ad61b3eeeba0cbdd77193510061f8466865`. Its final exact-head preview check
+ran all five app suites with zero failures and zero retries in a 254-second
+Depot run envelope: run `gdkz9dw86w`, attempt `c7zv439zvz`. The changed alarm
+test passed first try in 33.4 seconds.
+
+PostHog recorded 310 preview outcomes and 3,046 unit outcomes on that head with
+zero failures or retries. Both finalizers were complete: the preview job found
+all 9 expected artifact sources, and the unit job found all 10 expected
+workspaces. The `depot`, `github-actions`, and `github-reviews` source syncs
+were all fresh and healthy.
+
+That run accepted the fix before its squash merge; it is not part of the
+post-merge consecutive proof. The strict counter restarts at 0/25 on a fresh
+PR head based exactly on `78ba8ad61b3eeeba0cbdd77193510061f8466865`.
+
+## Round 11 (2026-07-23, post-#2265)
+
+This round starts from `origin/main` at
+`56fdbd4e447ab53f3011a60417349f76223db30d`. PR #2265's final exact-head
+canonical check ran all five suites successfully in 291 seconds from pickup to
+finish (the GitHub check itself reported 4m40s): Depot run
+[`79jc4l57lt`](https://depot.dev/orgs/0p91s0lz49/workflows/37tr66gdxx?job=nk8k8jvb81),
+attempt `c2mnb0ph28`. Playwright had zero retries, but OS Vitest absorbed one,
+so this is a useful ordinary green and a rejected formal proof; the accepted
+counter remains 0/25.
+
+The retry was `itx expression replacement records the recipe without
+evaluating it`. Its first attempt failed during fresh-project creation with
+`stream-unavailable: Durable Object is overloaded. Requests queued for too
+long.`; the full-test retry created a second project and passed. PostHog records
+153 executions of this exact case over the preceding 30 days and only this one
+retry (0.65%). Duration was normally 9.0s at p50 and 14.9s at p95; the retried
+run took 19.3s. That history does not justify quarantine, serialization, or
+project reuse.
+
+Cloudflare traces locate the first failure in project
+`prj_d2cb39d19139488fba1c5236b17d61da`, not in deployment-global state. Its
+root Project Durable Object repeatedly rejected delivery while
+`ProjectProcessor.#createSiblingProcessors` waited for the root capability-host
+birth. The stream sink durably backed off and re-poked the subscription, and
+the same project subsequently reached ready about nine seconds after
+registration. The caller nevertheless failed earlier: the processor relay
+performed its one immediate lifecycle retry, received another availability
+rejection, and threw even though `waitUntilProcessed` still had most of its
+75-second public deadline available.
+
+The round-11 fix makes only that idempotent wait operation reacquire a fresh
+processor facade after repeated availability failures. It retains one caller
+deadline, applies exponential backoff capped at one second, disposes every
+transient facade, and fails when the deadline expires. Application errors still
+propagate immediately, and non-wait processor calls keep their existing single
+retry. Focused tests cover recovery after more than two availability failures,
+decreasing timeout propagation, application-error fail-fast behavior, and
+bounded exhaustion. This pays off the product-layer wait contract instead of
+adding a test retry, longer timeout, quarantine, or global Vitest throttle.
+
+## Round 10 (2026-07-23, post-#2263)
+
+This round starts from `origin/main` at
+`7b41300708f49146603fea09766fca64a07f1eb8`, including the lazy repository lane
+from PR #2262. PR #2263 fixed the false-green
+boundary exposed by PR #2262: a head that selected no deployment work reused an
+older head's test result and returned success in six seconds. Deployment reuse
+is still allowed, but every triggered PR head now executes every runnable app
+suite against the exact recorded Worker versions. An empty runnable set fails
+loudly with `E2e was NOT run` instead of becoming a skipped success.
+
+The repaired #2262 check at head `1ef0f722…` performed all five app suites and
+passed in 3m37s with zero retries. Its later head `6f1d610f…` then provided an
+important real failure rather than another false green: Playwright and all
+non-OS suites passed, while six OS Vitest cases retried and one still failed.
+The failures spanned unrelated project, agent, MCP, egress, worker-readiness,
+and sandbox cases. One error explicitly said `Durable Object reset because its
+code was updated`; another script execution was orphaned because its
+incarnation disappeared. All affected tests owned distinct projects.
+
+PostHog places the OS deploy-phase finish at `23:05:30.758Z` and the Vitest
+start at `23:05:51.367Z`: only 20.6 seconds separated edge readiness from the
+full fan-out. Exact-version readiness itself took 58ms. The explicit reset
+arrived about 51 seconds after Wrangler uploaded the version. Cloudflare's
+[known-issues documentation](https://developers.cloudflare.com/durable-objects/platform/known-issues/)
+says Worker/DO code propagation is globally eventually consistent for seconds
+to minutes, while the
+[Durable Object lifecycle](https://developers.cloudflare.com/durable-objects/concepts/durable-object-lifecycle/)
+documents that a code update shuts an object down and can terminate in-flight
+RPC. Exact edge-version health is therefore necessary but cannot certify every
+future Durable Object placement.
+
+A control on the next #2262 head, `410c1774…`, was genuinely green in 3m48s:
+all five suites ran, OS Playwright passed 63/63, OS Vitest passed all 170
+reported cases, and raw telemetry recorded zero retries. On that run OS
+readiness naturally consumed 31.1 seconds before the smoke's 22.6-second path
+to Vitest, giving the deployment about 53.7 seconds of age before fan-out. That
+does not prove 54 seconds is a safe boundary, but the contrast localizes the
+failure cluster to the fresh global-rollout window rather than shared project
+state or one victim test.
+
+Round-10 preflight ledger:
+
+| Proof                     | Revision                                   | Accepted runs | Retries | Outcome                                      |
+| ------------------------- | ------------------------------------------ | ------------: | ------: | -------------------------------------------- |
+| Repaired #2262 full check | `1ef0f722…`                                |          0/25 |       0 | Real five-suite pass in 3m37s                |
+| Fresh-rollout failure     | `6f1d610fdea1521ca93a6e5c4a3bcdee203e5dc0` |          0/25 |       6 | OS Vitest failed after rollout-reset cluster |
+| Natural-readiness control | `410c1774d8b0a614096d89dcfe39c1e44359a9b6` |          0/25 |       0 | Real five-suite pass in 3m48s                |
+
+The smallest deterministic CI boundary is a 90-second minimum age from the
+successful OS deploy command to high-fanout Vitest. The clock starts before
+exact-version readiness and runs concurrently with readiness, onboarding
+smoke, Chromium installation, Playwright, TUI, and every other app suite;
+reused older deployments wait zero seconds. Playwright remains on the critical
+path in the observed runs, so the clock should add little or no wall time. This
+is a visible bounded lifecycle gate, not a retry, test quarantine, synthetic
+Durable Object sampler, or serial deployment barrier. The accepted counter
+remains 0/25 until the new immutable PR head completes the canonical marathon.
+
+The first formal head then passed four consecutive full runs in 231–241
+seconds with zero retries. Run 5 took 361 seconds and was rejected because two
+Playwright cases needed their permitted retry. Both failed before their named
+stimulus: one fresh onboarding feed never painted its greeting, and one REPL
+case timed out inside project creation. Cloudflare telemetry for the first
+project records successful birth/readiness followed by `durableObjectReset`
+warnings on its stream sink at `00:05:00Z` and `00:05:04Z`. Its creation began
+before the 90-second clock expired, because only Vitest consumed that boundary.
+
+The follow-up keeps the Playwright process parallel but passes the absolute
+rollout deadline into its project helpers. Forged-session creation and the real
+email-signup form wait only immediately before creating a project; Chromium,
+page setup, authentication, browser-only specs, smoke, TUI, and other app suites
+continue to overlap the rollout. The rejected 4/25 streak remains diagnostic
+evidence only; the accepted counter restarts at 0/25 on the new head.
+
+PR #2265's first formal head, `e5e9990986834b9c3c340e746b626ba0974e96bb`,
+then passed one complete run in 285 seconds with zero retries. The next run was
+rejected at 372 seconds after three permitted test retries exposed two distinct
+defects:
+
+- Semaphore and Streams addressed old Durable Object versions after their new
+  edge Workers were ready. Semaphore traces contained both the prior and new
+  code versions; Streams reported an explicit code-update reset. The 90-second
+  gate had covered only OS, so the fix applies the same
+  per-deployment boundary to every live suite that calls Durable Objects. The
+  short app commands wait at their own boundaries while all app lanes remain
+  concurrent; OS still overlaps browser/auth setup internally.
+- Playwright's empty-agent-feed case timed out while creating project
+  `prj_ddc2a50bba2941878bed307b207417ea`. Trace
+  `eb26b8dc5ae96c5da9373abef6e8606d` shows `Project.create` alive until the
+  90-second caller watchdog canceled it. The durable event history is
+  conclusive: config-repo creation began, Cloudflare Artifacts returned
+  `INTERNAL_ERROR` after 32.7 seconds, and the repo processor journaled
+  `repos/create-failed`. No `repos/created` or `project/ready` fact followed,
+  even after later wakes. The Playwright retry created a different project and
+  passed, masking the permanently poisoned first project.
+
+`INTERNAL_ERROR` and `UPSTREAM_UNAVAILABLE` are Artifacts service-availability
+outcomes, not invalid repo requests. Repo creation now leaves its existing
+idempotent durable obligation open for redelivery on those two codes, exactly
+as it already does for a Durable Object lifecycle reset or an Artifact that is
+still materializing. Input/domain errors still append terminal
+`repos/create-failed` and remain fail-closed. Focused processor tests prove both
+classifications and the failed-attempt → redelivery → one `repos/created`
+recovery path. These fixes change the immutable head, so neither formal run is
+counted and the accepted streak restarts at 0/25.
+
+## Round 9 (2026-07-22, post-#2260)
+
+This proof starts from `origin/main` at
+`7ad6d92037663ac2aba0d0b15ba9550c2a0f685b`, after deploy-phase telemetry
+(#2254), the zero-budget worker-build cache race fix (#2256), sandbox RPC
+settlement lifetime hardening (#2257), and the bundled REPL TypeScript runtime
+(#2260). PR #2261 carries the immutable proof head. The accepted counter starts
+at zero.
+
+Round-9 run ledger:
+
+| Proof              | Revision                                   | Accepted runs | Retries | Outcome                                 |
+| ------------------ | ------------------------------------------ | ------------: | ------: | --------------------------------------- |
+| Round-9 marathon 1 | `6a7e1d0956e0fc64c8913167318442752df975ba` |          0/25 |       4 | Functional pass; rejected at 363s       |
+| Round-9 marathon 2 | `6a7e1d0956e0fc64c8913167318442752df975ba` |          0/25 |       0 | Clean functional pass; rejected at 350s |
+| Round-9 marathon 3 | `64bc519b4d68d3d8fad6c4337d0ad8a137aa2332` |          0/25 |       9 | Failed OS Vitest during rollout at 270s |
+
+The first attempt was [Depot run
+`nfwh10j558`](https://depot.dev/orgs/0p91s0lz49/workflows/jc0n8v979h?job=fvhg7qc9bn&attempt=v96gml6mn4).
+All apps eventually passed, but four unrelated cases retried: agent delegation
+lost its CapabilityHost incarnation, direct MCP lost its connection, a project
+stream subscription exhausted its 120-second outer watchdog, and the browser
+half-open test did not paint an already-durable assistant event before its
+30-second UI wait. Running each exact case five more times against the unchanged
+warm deployment produced 20/20 first-attempt passes. That control does not count
+toward the streak; it localizes the shared cluster to the fresh-deployment
+window rather than four deterministic victim-test defects.
+
+The second attempt was [Depot run
+`bj3zqplkn6`](https://depot.dev/orgs/0p91s0lz49/workflows/jc0n8v979h?job=fvhg7qc9bn&attempt=whs8hfhl30).
+Every test passed on its first attempt, but the strict loop rejected the
+350-second wall time. The normalized phase evidence accounts for the whole
+critical path: roughly 40 seconds of pickup/setup, 158 seconds to the global
+deployment barrier, 143 seconds of tests, and 7 seconds of finalization. OS
+readiness alone took 72.3 seconds; streams readiness took 136.6 seconds. During
+those waits the active probes received Cloudflare 1101/HTTP 500 responses and
+later 503 `probe-timeout` responses even after all ten waves had previously
+reported ready.
+
+The readiness implementation was stale relative to the contract already
+documented in `ci-preview-performance.md`. OS created 25 synthetic Durable
+Object identities per wave across ten waves, then slept ten seconds and checked
+the complete set again: up to 500 Durable Object RPCs per deploy. Streams did
+the same with eight identities per wave: up to 160 more RPCs. Besides dominating
+the deploy tail, this finite placement sample cannot prove the rest of the fleet
+and did not prevent attempt 1's real project identities from encountering
+lifecycle transitions.
+
+PostHog confirms this was a fleet-wide tail rather than one bad runner. Across
+the preceding 24 hours, 30 OS deploy lanes spent a median 61.3 seconds in
+readiness (p90 93.9 seconds; max 118.8 seconds), while 22 streams deploy lanes
+spent a median 56.0 seconds (p90 93.5 seconds; max 136.6 seconds).
+
+PR #2261 therefore removes the synthetic Durable Object gate, its authenticated
+probe protocol, and its orchestration/test machinery. Readiness is once again a
+cheap public request that must report wrangler's exact `CF_VERSION_METADATA`
+version; the first exact match releases the test barrier with no artificial
+dwell. Product operations remain responsible for explicit Durable Object
+lifecycle outcomes, as the existing performance contract requires. This change
+resets the accepted streak to 0/25; only a canonical Depot run on its new
+immutable head can restart it.
+
+The first canonical run after removing the probes, [Depot run
+`69ccf2rkj7`](https://depot.dev/orgs/0p91s0lz49/workflows/jj6p9xkh2z?job=tqpx1h1kwr&attempt=5cj8k7kk2d),
+made the remaining boundary precise. All five deploys passed and every non-OS
+suite passed. OS Playwright passed 63/63 and the onboarding smoke completed on
+its first attempt in 26 seconds, but nine OS Vitest cases entered retry; eight
+recovered and the preview-smoke case failed both attempts. Every affected test
+was scheduled within the first second of Vitest. The errors were rollout-wide
+(`Durable Object reset because its code was updated`, failed WebSocket
+connections, and internal references), while files scheduled later had no
+retry. This is a fresh-deployment fan-out race, not nine independent test
+defects.
+
+The minimal boundary is now the existing production-shaped onboarding smoke,
+not a synthetic fleet sampler. Chromium installation, the smoke, and TUI start
+immediately; Playwright starts as soon as Chromium is ready; high-fanout Vitest
+starts only after the smoke has successfully created a real project and served
+its project/agent/stream flow. The 26-second propagation window remains hidden
+under the 139-second Playwright critical path, adds no arbitrary sleep or retry,
+and fails fast if the real canary cannot complete.
+
+## Round 8 (2026-07-22, post-#2251)
+
+This is a fresh proof from `origin/main` at
+`cd5f4a67b9df5bc05fd2e38fe5ea9eda63bd6e7b`, including the cold worker-build
+handoff from #2251 and the fixed durable-stream telemetry from #2249. It
+inherits no streak: the accepted-run counter starts at zero.
+
+The final #2251 head, `a0380f8d078ddab6a825f9a070b2a8f433d5e7e4`,
+passed its normal preview check on the first workflow attempt. The complete
+check took 5m20s. OS deployment was the critical deployment lane at 148.9s,
+while OS e2e took 133.7s: Playwright passed 63/63 tests in 2.1m and Vitest
+passed 48 files, with 2 skipped, in 78.98s. This is useful green baseline
+evidence but not an accepted marathon run because it exceeded five minutes
+and absorbed one Vitest retry.
+
+The retried case was `Project worker processEventBatch receives events from
+every project stream and can cross-post`. Its first attempt reached the
+30-second stream-wait watchdog and its retry passed, bringing the case to
+59.18s. This first occurrence is recorded rather than quarantining a
+substantial concurrency test from one observation. Any recurrence in this
+round rejects the run and triggers diagnosis; a test shown to be independently
+flaky or pathologically slow will be fixed or quarantined with a tracking task
+under the normal testing policy.
+
+Round-8 run ledger:
+
+| Proof                    | Revision                                   | Accepted runs | Retries | Outcome                                     |
+| ------------------------ | ------------------------------------------ | ------------: | ------: | ------------------------------------------- |
+| Pre-round normal preview | `a0380f8d078ddab6a825f9a070b2a8f433d5e7e4` |          0/25 |       1 | Passed in 5m20s; cross-project stream retry |
+| Round-8 marathon 1       | `e301520145a6259a743a3e300366a0a53689a009` |          0/25 |       2 | Functional pass; rejected at 311s           |
+| Round-8 marathon 2       | `c2a695fac7279da1b3b9bb64512a2d08d20aa576` |          0/25 |       0 | Clean pass; rejected at 311s                |
+| Round-8 marathon 3       | `723f73067c13fa52512593f9e2952ffc91618ef2` |          0/25 |      19 | Shared-isolate cancellation; rejected       |
+
+The first round-8 attempt was [Depot run
+`3jp43c0dbg`](https://depot.dev/orgs/0p91s0lz49/workflows/vxd3v2n769?job=xjm4379s33&attempt=lp5zq2dfp4).
+Every test eventually passed, but the proof stopped because the workflow took
+311 seconds and absorbed two retries. OS deployed in 101.7 seconds and its e2e
+lane took 152.6 seconds. Vitest passed 48 files, with 2 skipped, in 86.15
+seconds; Playwright passed 63 cases in 146 seconds.
+
+The project-worker cross-post case again exhausted its 30-second stream wait
+before passing on retry, reaching 62.79 seconds across both attempts. This
+second consecutive occurrence establishes a cold-build delivery tail rather
+than a one-off test failure. The test still exercises a fresh worker build and
+is not quarantined; its public delivery budget is temporarily 100 seconds, and
+`tasks/reduce-project-worker-cross-post-tail.md` tracks instrumentation,
+latency reduction, and restoration of the tighter budget.
+
+The other retry was the markdown-preview Playwright spec. The network trace
+showed the parent project route's identity `beforeLoad` taking 1.79 seconds
+after the Preview search-param navigation. The test selected Code while that
+first transition was still settling; `.cm-content` remained absent for roughly
+1.3 seconds, then the editor was fully rendered in the failure screenshot
+about 100 milliseconds after the action deadline. The IDE now renders a
+visible, `data-spinner`-marked status while TanStack Router is loading. This
+exposes the real product wait and lets the normal spinner-aware action deadline
+cover it; the substantial markdown editing and sanitization spec remains
+active.
+
+This head therefore contributes zero accepted runs. The next immutable head
+starts a new 0/25 streak through the same canonical Depot workflow.
+
+The next canonical attempt on that head was [Depot run
+`w9sc1f40ds`](https://depot.dev/orgs/0p91s0lz49/workflows/s5sm8wx775?job=xl2nzs4w1s&attempt=jf9f0zg4z2).
+It was the first complete zero-retry pass in this round: all 48 runnable OS
+Vitest files and all 63 Playwright cases passed on their first attempt. OS
+deployed in 116.2 seconds and its e2e lane passed in 146.9 seconds (Vitest
+113.08 seconds; Playwright 2.3 minutes). The strict proof still rejected it
+because dispatch creation through completion took 311 seconds.
+
+Reporting accounted for the avoidable final tail: normalization produced
+6,865 PostHog events, then the uploader sent 69 fixed 100-event batches
+strictly sequentially, consuming 12.9 seconds before artifact collection.
+The uploader now packs events by encoded size, with a conservative 5 MB event
+payload budget beneath PostHog's 20 MB batch-request limit. The preceding
+5,906-event artifact packs into three requests instead of 60 while preserving
+every deterministic event UUID and the existing per-batch bounded retry. The
+next canonical run, [Depot run
+`h95t4wvm5n`](https://depot.dev/orgs/0p91s0lz49/workflows/vsm4b78r2d?job=gtxq2vksbg&attempt=ppp78dt78z),
+confirmed the real upload tail fell by roughly 10 seconds. The complete check
+still took 312 seconds and absorbed 19 Vitest retries, all from one synchronized
+`Peer closed WebSocket: 1006` wave; every retry passed.
+
+Cloudflare traces identified one causal test rather than 19 independent
+flakes. The live-capability WebSocket boundary probe caught its expected
+serialization error and reported a pass, then the runtime canceled that
+session's root `GET /api` because the Worker had hung and would never generate
+a response. Three isolated apparent passes reproduced the hidden runtime
+cancellation three times out of three. Because every Vitest file correctly
+runs in parallel against the same OS deployment, that isolate cancellation
+severed unrelated sessions across otherwise-independent projects.
+
+Both cases in `live-capability-websocket.e2e.test.ts` are explicitly
+quarantined under
+`tasks/quarantined-live-capability-websocket-e2e.md`. The causal boundary case
+is deterministically runtime-fatal; the second was a `test.fails` that stopped
+on an unrelated stale-template assertion and therefore provided no active
+coverage. Ordinary live capabilities, project-app WebSockets, and all other OS
+Vitest files remain enabled. This quarantine resets the immutable head and the
+accepted streak to 0/25; only a canonical Depot run can restart it.
+
+## Round 7 (2026-07-21, post-#2226 and #2227)
+
+This is a fresh proof from `origin/main` at
+`767baafc35c774f48916a15278659e61dd8c9670`, after unified CI/test telemetry
+(#2226) and immediate OS Vitest file scheduling (#2227) merged. It inherits no
+streak: the accepted-run counter starts at zero.
+
+The exact #2227 head, `220ab10c9fd2ea51d4cd15ac4a0659fdf7562ed1`,
+passed its normal preview check on the first workflow attempt. The complete
+GitHub check took 4m59s, including pickup, setup, deployment, tests, and final
+bookkeeping. OS deployed in 115.5s and its e2e lane passed in 158.9s. Within
+that lane, all 48 runnable Vitest files were scheduled immediately and Vitest
+finished in 78.28s, down from 181.77s with the former seven-worker queue.
+
+One matrix case, `run-script`, passed on its permitted single Vitest retry
+after the separate Node runtime reported `WebSocket connection failed.` The
+run stayed green, but the retry is part of this round's evidence and will be
+compared with subsequent telemetry before any harness change. No extra retry
+layer or test-specific exception has been added.
+
+Round-7 run ledger:
+
+| Proof                        | Revision                                   | Accepted runs | Retries | Outcome                                        |
+| ---------------------------- | ------------------------------------------ | ------------: | ------: | ---------------------------------------------- |
+| Pre-round normal preview     | `220ab10c9fd2ea51d4cd15ac4a0659fdf7562ed1` |             1 |       1 | Passed in 4m59s; Node transport-open retry     |
+| Round-7 marathon 1           | `210f7ef88d6d8170daaf893380bd54f0da0cb8c2` |          0/25 |       1 | Functional pass; rejected at 318s              |
+| Round-7 exact-head preview 1 | `210f7ef88d6d8170daaf893380bd54f0da0cb8c2` |             1 |       1 | Passed in 4m34s; example-app event-count retry |
+
+The first round-7 marathon was [Depot run
+`glfbndtvnx`](https://depot.dev/orgs/0p91s0lz49/workflows/glfbndtvnx).
+Every test passed, but the proof correctly stopped because deploy plus tests
+took 318 seconds. OS was the critical app: deployment took 127.6 seconds and
+tests took 162.2 seconds. Playwright dominated the test lane at 155 seconds;
+Vitest took 77 seconds. The eight Playwright workers each performed between
+133.6 and 150.0 seconds of work, so the queue was already balanced: merely
+reordering files cannot materially shorten this lane. Depot's 16-core runner
+also peaked at only 41.7% CPU and 15.0% memory, which does not support a larger
+runner as the first optimization.
+
+One Vitest case, `MCP built-in connects directly and mounts as a described
+capability`, passed on retry after Cloudflare reported `Durable Object storage
+operation exceeded timeout which caused object to be reset.` The same Durable
+Object startup-reset class occurred on unrelated PRs #2224 and #2231, so this
+is classified as a shared Cloudflare transient rather than a defect in the
+victim test. Its one repository-level retry remains bounded and visible.
+
+The unchanged head then passed its normal preview check on [Depot run
+`r62fmqfqp5`](https://depot.dev/orgs/0p91s0lz49/workflows/r62fmqfqp5) in
+4m34s. OS deployed in 94.6 seconds and its tests took 154.6 seconds, confirming
+that rollout/readiness variance accounted for most of the rejected marathon's
+33-second overrun. The streams example app absorbed one Playwright retry after
+its scroll-away counter expected 83 events but observed 84; the retry passed.
+This first occurrence is recorded rather than quarantined. Recurrence will be
+fixed or quarantined with a tracking task under the normal testing policy.
+
+## Round 6 (2026-07-21, post-#2169)
+
+This is a fresh proof from `origin/main` at
+`a999a11a00987bd59694d79f20949353644f29f6`, after PR #2169 merged. It does not
+inherit a streak from that PR: the counter begins at zero and the complete
+deploy-plus-test critical path is run 25 more times.
+
+The exact final tested head before #2169's squash merge was
+`950a4f01726f52ec2fb185305dc4dcf9baa7745d`. Its normal preview check passed.
+Schema-v2 PostHog telemetry recorded a 187,448ms test operation, 306 logical
+test results, 95 Playwright attempt results, 208 named test phases, and 57
+module results. It also exposed one absorbed Vitest retry:
+
+- lane: OS Vitest
+- module: `apps/os/e2e/examples/examples-matrix.e2e.test.ts`
+- test: `catalogue example "repo-read-file" runs identically across runtimes`
+- first failure: the spawned CLI runtime lost its initial Cap'n Web connection
+  with `WebSocket connection failed.`
+- retry: the complete matrix case passed in 30,008ms
+
+The failure is not evidence against `repo-read-file`: the other runtimes
+completed and the retry passed. It is a transport-open failure in the genuinely
+separate CLI process. The CLI currently makes one connection attempt and the
+single Vitest retry reruns the whole isolated case, which is the repository's
+intended one retry layer. No nested transport or harness retry has been added.
+The CI diagnostic already included the enriched
+`cli process failed — stderr:` output; Node's `execFile` defaults to UTF-8
+strings, so PR #2169's Buffer-output bot comment does not describe the observed
+runtime and needs no speculative conversion.
+
+An absorbed retry remains a green run under the testing policy, but it is never
+silent: every retry in this round is classified from telemetry plus CI logs and
+artifacts. Any reproducible product or harness defect gets a minimal fix on its
+own reviewed green PR before the streak resumes. The catalogue runtime matrix
+remains intact.
+
+Round-6 run ledger (filled from the marathon's machine-readable summary):
+
+| Proof                    | Revision                                   | Accepted runs | Retries | Outcome                                           |
+| ------------------------ | ------------------------------------------ | ------------: | ------: | ------------------------------------------------- |
+| Pre-round normal preview | `950a4f01726f52ec2fb185305dc4dcf9baa7745d` |             1 |       1 | Passed; CLI transport-open retry classified above |
+| Round-6 marathon 1       | `443d7a49a6da759842248ce8b284c820db2a41ab` |          0/25 |       0 | Functional pass; rejected at 312s                 |
+
+The first round-6 marathon was [Depot run
+`2b0d59sw92`](https://depot.dev/orgs/0p91s0lz49/workflows/2b0d59sw92).
+Every test passed without retry, but the proof correctly stopped because the
+deploy-plus-test critical path took 312 seconds: 123.9 seconds deploying, then
+188.4 seconds testing. OS Vitest was the test pole at 181.8 seconds.
+
+Schema-v2 module timing showed why. The seven-worker cap made the final
+33.7-second `itx-egress.e2e.test.ts` file wait 147.6 seconds before it could
+start. The 48 OS module executions contained 1,112.7 seconds of remote work;
+even perfect seven-worker scheduling has a 159.0-second lower bound. These
+files create isolated projects and spend nearly all their time awaiting remote
+operations, so CI now gives every file a worker immediately. The in-file limit
+of two remains for the few cases that deliberately share a bounded project
+pool. The next marathon measures whether the deployed platform has a real
+capacity limit instead of encoding an assumed one in the local scheduler.
+
+## Round 5 (2026-07-21)
+
+This round starts from current main. Its baseline is PR #2140's exact tested
+head `2d156e0c3`: the complete preview job passed in 4m05s with zero test
+retries. Deploys already start together, app e2e lanes start together, and OS
+starts smoke, TUI, Vitest, and Playwright together. The remaining proof is
+distributional: 25 consecutive full deploy-and-test runs, each under five
+minutes, with every absorbed retry visible in the ledger and investigated.
+
+Progress and failure diagnoses live in the active PR's comments; this section
+is updated with the final run IDs and outcome once the proof completes.
+
+The first exact-head normal preview after the TUI fix was green but took 5m01s.
+Its OS Vitest lane was the critical path at 187s: the suite still capped 48
+isolated files at seven workers, and a stale 8s scheduling estimate started the
+`admin-project` file late when it actually took 83s. The cap and estimated-time
+sequencer are now gone. CI gives every file a worker immediately on a 64-core
+runner, so the intended bound is the slowest individual file (plus its one
+allowed retry), not several scheduling waves.
+
+The first marathon attempt (`wzg4nbj1j7`) stopped on run 1 after both TUI
+workflows hit their 45s watchdog. TUI Test 0.0.4 then reported an immediate
+`Worker terminated` for each retry and wrote no trace. Source inspection found
+two deterministic test-harness defects. The dynamic agent-path suffix made the
+header long enough to clip the literal `live` label while the terminal was in
+fact connected and fully rendered, so both tests waited on absent layout text.
+Then the framework timeout terminated the per-file worker, but its retry loop
+reused that same dead worker; trace persistence also runs inside the worker
+after the test returns. The agent path is now a short constant within each
+fresh project. The TUI lane launches its two independent workflows concurrently
+in separate processes/projects, retries only the failed workflow at the wrapper
+boundary with a new process/project, and uses assertion deadlines below the 55s
+hard watchdog so ordinary failures persist terminal diagnostics and
+per-attempt traces before process teardown. A direct preview-7 proof completed
+both workflows on their first attempt in 8.6s max (19s including the one-time
+package build and project setup).
+
+Update (2026-07-21): the TUI lane was subsequently **skipped entirely** rather
+than hardened further. A cleanup pass found the isolation harness still
+fighting more tui-test 0.0.4 shared-global defects (the cwd transform cache
+and the tmpdir zsh dotfiles folder both race across concurrent invocations),
+and the TUI has known bugs and no users yet — so `e2e/tui-test/run.ts` is now
+a no-op stub that reports an empty retry ledger, and the specs stay on disk
+for a future revival. See the stub's header and
+`apps/os/e2e/tui-test/README.md`.
+
+## Round 4 (2026-07-13/14, PR #1938)
+
+Goal: 25 consecutive green runs on Depot, re-validating the lane after a week
+of heavy merging (subagents/unified messaging, stream metrics,
+MCP OAuth, sandbox AI-gateway egress, …). The then-current method used the
+since-retired nested `preview-e2e-marathon.yml` workflow against this PR's
+leased slot, failing fast and fixing every root cause before resuming.
+
+Result: **96 consecutive green runs in one night, zero test failures, zero
+flakes found** — the goal met on the first marathon and re-proven three more
+times across six merged main heads. Detailed per-run log in the PR comments.
+
+- **marathon r4-1** `r59ccf138r` (head = main 0d53cbc7e): **25/25 green**,
+  21:51–22:53 UTC, ~2.2–2.9 min/run.
+- **marathon r4-2** `dgnsqq9jng` (merged main 9b9f3404d): **21 clean**, then
+  run 22 stopped in 4s — not a flake: the slot's semaphore lease had been
+  claimed by `main-auth-rpc-security-cutover` (the #1940 validation), whose
+  deploy replaced the PR's apps on preview-3. The ownership guard in
+  `preview test` fired exactly as designed. The marathon claimed a fresh slot
+  (preview-1) and moved on.
+- **marathon r4-3** `4xg33k0bf5` (merged main ce18a7d79): **25/25 green**,
+  01:09–02:17 UTC. Runs 24–25 slowed to ~6 min (os lane 372s/355s) with
+  recovered onboarding-stream `liveness probe` WebSocket reconnects — the
+  flake-23 pool-saturation tail signature (the pool rides at the per-type
+  `SANDBOX_MAX_INSTANCES` preview cap; #1747 replaced the flat cap-150 with
+  that table), fully absorbed by the
+  reconnect/retry machinery. The next marathon's preflight redeploy flushed
+  the pool and restored ~2.2 min/run pace from run 1, confirming the
+  mechanism (a rollout resets assigned instances).
+- **marathon r4-4** `6q6j7wlz3z` (merged main d36c2f38d): **25/25 green**,
+  02:24–03:24 UTC, no tail slowdown.
+
+Cost (measured; full breakdown in the PR): ~$54 for 101 lane executions ≈
+$0.53/run — 92% LLM tokens (gpt-5.6-sol BYOK, $49.36 uncached), with the
+AIG response cache absorbing 46.4% of requests (~$42 saved); Depot 8-core
+compute ~275 min ≈ $4.40.
+
+Round-4 lessons (no test-failure fixes needed; the PR carries only the
+slot re-claim above plus a dead-code/doc-drift sweep from the round's
+follow-up reviews):
+
+- The round-1..3 fixes have held through a week of heavy platform churn; the
+  lane's stability is structural, not a lucky streak.
+- A marathon can lose its slot mid-flight to a legitimate external claim;
+  the guard converts that into a clean fast stop. The loop now re-claims a
+  slot (full-fleet redeploy) and re-runs the interrupted run number uncounted,
+  capped at `MAX_SLOT_RECLAIMS` (2) per marathon — no tests ran under the
+  refusal, so this is environment re-establishment, not a retry layer.
+- Sandbox-pool tail pressure at the per-type preview caps is visible (slower
+  runs, recovered liveness reconnects) after ~25 runs on one deploy but
+  self-heals on redeploy and never failed a run; watch it if marathons grow
+  past ~30 runs per deploy.
 
 ## Run log
 
@@ -212,6 +1220,31 @@ through; the old per-projection materialization is gone.) See also flake 15 —
 serialized writes mean the recorded head can only move forward, never behind our
 last push.
 
+**2026-07-17, explicit-births follow-up:** requiring a mutation clone to see
+the exact advertised head closed the replica-lag case, but a retries-disabled
+preview run exposed a distinct writer. The failed repo stream had no user
+commit fact, while its Artifact history contained two consecutive
+`Seed minimal itx project worker` commits. An at-head creation obligation had
+been driven twice; the old seed path always made and force-pushed a commit even
+after cloning an existing branch, so it moved `main` between the mutation's
+checked clone and push.
+
+The creation call now shares the Repo DO's write serializer with mutations.
+Seeding is strictly create-if-absent: cloning any existing branch returns it
+untouched, including user commits. Two genuine first drives that both observe
+an empty Artifact produce the same root oid from a fixed synthetic seed
+identity and timestamp, making their pushes equivalent. Initial publication is
+also a normal fast-forward push, never forced: if a different head wins the
+race, creation fails instead of replacing it.
+
+The same retries-disabled run found an independent first-use secret race. A
+GitHub App token mint read secret state at offset 5; a
+`subscriber-connected` telemetry fact advanced the raw stream to offset 6;
+the material append's explicit offset then conflicted and was incorrectly
+reported as `secret_not_found`. Refreshed material now retries bounded offset
+conflicts while the reduced secret's `updatedOffset` and refresh policy remain
+unchanged. Any actual secret update still invalidates the in-flight mint.
+
 ### 7. Local harness must match the CI contract (vitest retry)
 
 The e2e vitest lane configures `retry: ci ? 1 : 0` — Depot CI absorbs one
@@ -274,8 +1307,10 @@ with three apps deploy-failed on the slot. Two fixes:
 - `envs.ts` + `scripts/lib/**` joined the preview shared paths (and the Depot
   workflow's `paths`): every app's wrangler config derives from envs.ts.
 - Failed states (`deploy-failed`, `claim-failed`, `tests-failed`) now retry
-  regardless of which head recorded them; only `awaiting-tests` keeps the
-  same-head guard.
+  regardless of which head recorded them. (`awaiting-tests` initially kept a
+  same-head guard; it too retries at any head since the `preview run`
+  one-step refactor — an awaiting-tests entry at any head is a deploy whose
+  e2e never ran.)
 
 ### 13. Fresh-worker bring-up: module-scope config parse + orphaned container app
 
@@ -312,8 +1347,9 @@ a failure instead of silently freezing the marathon.
 - The watchdog fired at 30 min but its `SIGTERM` did **not** propagate down the
   deep `doppler → pnpm → trpc-cli → inner doppler → bash → vitest` tree, so the
   wedged run hung ~58 min past the timeout, still holding the loop's `wait`.
-  Fix: the watchdog now walks the whole descendant tree and `SIGKILL`s it
-  leaf-first (`kill_tree` in `flake-hunt-loop.sh`).
+  Historical fix: the then-current in-process loop walked the whole descendant
+  tree and `SIGKILL`ed it leaf-first. That `kill_tree` implementation was
+  retired when the marathon became an observer of canonical Depot runs.
 - More importantly, the wedge is now **self-healing at the source** instead of
   costing a whole run: the preview test orchestration (`previewTestCommandArgs`
   in `preview.ts`) wraps the vitest node lane in `timeout` and retries it once
@@ -369,10 +1405,21 @@ structural one. The Repo DO now serializes every write through a `#writeChain`
 repo can never be in flight at once: each clones the latest HEAD, commits, and
 fast-forward pushes with **no `force`**. With a single writer at a time there is
 no compare-and-swap race to lose and no force-push to clobber a concurrent commit
-— the two failure modes above are structurally impossible. (`seedArtifactRepo`
-keeps its one force-push: it runs once at repo creation, never concurrently.)
+— the two failure modes above are structurally impossible. Repo seeding now
+uses the same non-forced publication rule.
 The diagnosis is retained here because it explains _why_ main dropped `force` and
 serialized writes; the marathon re-verifies it end-to-end.
+
+**2026-07-17 correction:** serialization prevents two calls in one Repo DO
+from overlapping, but it does not make the Artifacts clone endpoint strongly
+consistent. A second serialized write can clone a replica that still advertises
+the pre-first-write head and then lose the server's ref compare-and-swap with
+`stale ref`. Mutations now record the seed and every successful push, and wait
+boundedly until their clone's branch HEAD equals that last pushed commit before
+changing anything. Merely finding the commit object in the clone is not enough:
+Artifacts can supply the object while its advertised ref still lags. A later
+rejection therefore really does identify an out-of-band writer that moved the
+ref after the checked clone.
 
 ### 16. Marathon methodology: an incremental deploy splits the fleet head
 
@@ -387,13 +1434,10 @@ but not `semaphore, streams-example-app` — tripping the full-fleet guard
 shrink to the changed apps, and without the guard a partial lane would count as
 green.
 
-Fix (`scripts/preview/flake-hunt-loop.sh`): a fresh marathon (`START_AT=1`) now
-runs a full-fleet deploy preflight before counting runs and refuses to start on
-a `deploy-failed`/`claim-failed` app (exit 4). Because `scripts/preview/**` is a
-preview shared path, any change under it (envs.ts and scripts/lib/\*\* too) forces
-`preview deploy` to redeploy the whole fleet, reunifying the head — so the
-preflight both guarantees a unified fleet and repairs a split one. Set
-`SKIP_PREFLIGHT_DEPLOY=1` when resuming a marathon whose fleet is already unified.
+Historical fix in the then-current loop: a fresh marathon ran a full-fleet
+deploy preflight before counting. The current orchestrator instead dispatches
+the canonical workflow, whose manual-dispatch path passes `--all-apps`; every
+counted Depot run therefore deploys and tests the complete fleet directly.
 
 **Preflight hardening (round 3):** the preflight originally relied on the
 marathon commit happening to touch a fleet-shared path to force a full-fleet
@@ -499,11 +1543,9 @@ see flake 23 for the real fix (destroy on idle).
 Fix (`apps/os/scripts/generate-wrangler-config.ts`): raise the cap to **100**
 for previews and **50** for prd (`lite` instances bill on usage, not
 reservation, so a high cap is free headroom). The durable idle reaper keeps
-cleanup reliable at any cap. Also added `WARMUP_RUNS` to
-`scripts/preview/flake-hunt-loop.sh`: a freshly-deployed slot boots cold (os
-worker + DO chain + sandbox containers on first use), so the marathon can run N
-uncounted priming runs before counting, keeping a cold run 1 from resetting the
-streak.
+cleanup reliable at any cap. That round also briefly added uncounted warmups;
+they were later removed because cold-start behaviour is part of the production
+path and every proof run must count.
 
 ### 20. Sandbox tests must budget for cold container image provisioning
 
@@ -589,9 +1631,13 @@ slots at 500 `standard-1` instances exceeded the dev/preview account memory
 quota and blocked deploys; 200 fit the currently populated fleet but did not
 leave room for all nine preview slots to carry OS sandbox apps. Destroy
 remains correct — it is what lets an idle fleet drain back to zero instead of
-holding slots forever. If sustained-churn claim latency reproduces at 150,
-this becomes a Cloudflare Containers escalation (pool-manager degradation
-under DO-binding churn), not an app-side fix.
+holding slots forever. If sustained-churn claim latency reproduces at the
+cap, this becomes a Cloudflare Containers escalation (pool-manager
+degradation under DO-binding churn), not an app-side fix. (Update 2026-07-08:
+#1747 replaced the flat cap with per-instance-type caps —
+`SANDBOX_MAX_INSTANCES` in `apps/os/scripts/generate-wrangler-config.ts` is
+now the source of truth; the saturation mechanics above are unchanged, per DO
+class.)
 
 ### 21. Blank route-pending panel fast-fails the first wait after `goto`
 
@@ -651,6 +1697,25 @@ through a multi-element-safe `anySpinnerVisible()` using
 visible spinner counts as progress" is the plugin's intended semantic. Worth
 upstreaming to the middlewright package.
 
+### 23. spinner-to-content handoff can false-fail with a 1ms timeout
+
+**Signature:** `dashboard.spec.ts` reports `Timeout 1ms exceeded` waiting for
+the project link, while the failure screenshot and accessibility snapshot
+already contain that exact visible link. The page showed its route/query
+"Loading projects..." indicator continuously until the table replaced it.
+
+**Root cause:** middlewright first polls target readiness, then separately
+checks whether any spinner is visible. React can atomically commit the
+spinner-to-content replacement between those browser reads: the target was
+absent at the last poll, then the spinner was absent at its check. The waiter
+therefore took its no-spinner fast-fail path and gave the now-appearing target
+only 1ms. This is a test-waiter TOCTOU race, not missing product progress UI.
+
+**Fix:** `patches/middlewright@0.1.2.patch` gives the target one 100ms polling
+interval after observing no spinner. A genuine no-spinner failure still fails
+in about a second; an atomic loading-to-ready handoff can complete without a
+false failure.
+
 ### Round 3 targets
 
 The round-2 merge commit's own preview e2e (Depot, two attempts) failed on two
@@ -670,18 +1735,24 @@ pre-existing flakes that round 3 fixes:
   whose first dynamic-worker build on a **cold `WORKER_BUILD_CACHE` KV** (freshly
   created per slot) adds latency that widens this window on the first run.
 
+### Push-lane deployment-version barrier
+
+- **Guarded: deploy→test race: `Durable Object reset because its code was
+updated`.** `wrangler deploy` can return while Cloudflare is still propagating
+  the new code. This produced a rollout-wide failure on commit `1796831c`: the
+  onboarding smoke reset on its first attempt, 30 Vitest tests retried, and 19
+  still failed. A retry was not a sufficient boundary. OS `/api/health` now
+  reports its `CF_VERSION_METADATA` id, and the preview orchestrator parses the
+  final `Current Version ID` from the deploy (the main Worker follows its two
+  sidecars) and requires that exact version on the health probe before the test
+  phase can create a project (first match; no multi-second dwell). A plain 2xx
+  no longer counts as post-deploy readiness. The next fully settled run then
+  exposed a separate deterministic problem: E2E fixtures still relying on implicit
+  processor births. Those fixtures now create their agents, repos, secrets,
+  and integration routers explicitly.
+
 ### Observed, not yet fixed
 
-- **Push-lane deploy→test race: `Durable Object reset because its code was
-updated`.** The push-triggered cloudflare-previews lane starts tests seconds
-  after `wrangler deploy` returns; Cloudflare propagates the new code
-  asynchronously, and a DO that booted on the old version mid-test gets reset
-  when its node picks up the new one (`itx.e2e.test.ts › Project egress
-intercept…` failed BOTH vitest attempts 11s apart inside the window, commit
-  204d4ed8d). The marathon lane is immune by construction (preflight deploy →
-  uncounted warmup → counted runs). A real fix for the push lane would gate
-  the test phase on observing the new deployment version at the edge rather
-  than a sleep; vitest's `retry: 1` usually absorbs it today.
 - `packages/mock-http-proxy` unit test `msw-server-adapter.http-parity ›
 does not mark non-matching one-time handlers as used` failed once in the
   Depot `Test / test` lane with `fetch failed: bad port` — the listen(0)

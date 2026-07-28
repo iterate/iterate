@@ -33,7 +33,7 @@ export const itxTypesDeclaration: string = itxTypesFileText;
  * so snippets can name the types without importing them.
  *
  * The REPL handle is typed `Session & Project` — the same pragmatic intersection
- * `~/itx/itx-react.tsx` uses: a project REPL holds the project itx, the
+ * `iterate/sdk/itx/react` uses: a project REPL holds the project itx, the
  * global/admin REPL holds the Session catalog, and a wrong call for the
  * context fails at runtime exactly like a missing capability would. Dynamic
  * capabilities (`itx.someMountedCap...`) are runtime-typed: the editor flags

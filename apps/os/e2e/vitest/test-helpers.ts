@@ -1,5 +1,6 @@
 import type { RpcStub } from "capnweb";
-import { connectItx, type ItxWebSocketMessage } from "../../src/itx-client.ts";
+import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
+import { connectItx, type ItxWebSocketMessage } from "iterate/node";
 import type { ItxAuthCredentials } from "../../src/auth.ts";
 import type {
   Agent,
@@ -30,6 +31,20 @@ function requireAppBaseUrl(): string {
     throw new Error("itx e2e needs APP_CONFIG_BASE_URL (run under doppler or the e2e setup).");
   }
   return baseUrl;
+}
+
+/** A public deployment whose Firecracker containers are reachable by fixtures. */
+export function deployedBaseUrl(): string | null {
+  const raw = process.env.APP_CONFIG_BASE_URL?.trim();
+  if (!raw) return null;
+  const url = new URL(raw);
+  if (
+    ["localhost", "127.0.0.1", "::1"].includes(url.hostname) ||
+    url.hostname.endsWith(".localhost")
+  ) {
+    return null;
+  }
+  return url.toString();
 }
 
 type ItxSessionInput = {
@@ -80,8 +95,9 @@ export function withItxSession(
     | ProjectItxSessionInput = {},
 ): RpcStub<Agent> | RpcStub<Session> | RpcStub<ProjectRpcTarget> | RpcStub<UnauthenticatedOs> {
   const baseUrl = requireAppBaseUrl();
-  if (!("auth" in input)) return connectItx({ ...input, baseUrl });
-  if (!("projectId" in input)) return connectItx({ ...input, baseUrl });
-  if (!("agentPath" in input)) return connectItx({ ...input, baseUrl });
-  return connectItx({ ...input, baseUrl });
+  const headers = cloudflareWorkerVersionOverrideHeaders(process.env);
+  if (!("auth" in input)) return connectItx({ ...input, baseUrl, headers });
+  if (!("projectId" in input)) return connectItx({ ...input, baseUrl, headers });
+  if (!("agentPath" in input)) return connectItx({ ...input, baseUrl, headers });
+  return connectItx({ ...input, baseUrl, headers });
 }

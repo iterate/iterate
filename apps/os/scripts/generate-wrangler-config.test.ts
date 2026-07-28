@@ -1,6 +1,44 @@
 import { expect, it } from "vitest";
 
-import { builderConfig, config } from "./generate-wrangler-config.ts";
+import { envs } from "../../../envs.ts";
+import {
+  config,
+  localDevAuthJwks,
+  localAuthServiceBinding,
+  OPTIONAL_SECRETS,
+  REQUIRED_SECRETS,
+  envShapedVars,
+  typecheckerConfig,
+  workerBundlerConfig,
+} from "./generate-wrangler-config.ts";
+
+it("does not emit the local forge JWKS into deployed builds", () => {
+  const forgePrivateJwk = JSON.stringify({
+    kty: "OKP",
+    kid: "test-forge",
+    crv: "Ed25519",
+    alg: "EdDSA",
+    x: "public-key",
+    d: "private-key",
+  });
+
+  expect(localDevAuthJwks({ forgePrivateJwk, deployedEnv: "prd" })).toBeUndefined();
+  expect(localDevAuthJwks({ forgePrivateJwk, deployedEnv: undefined })).toBe(
+    JSON.stringify({
+      keys: [{ kty: "OKP", kid: "test-forge", crv: "Ed25519", alg: "EdDSA", x: "public-key" }],
+    }),
+  );
+});
+
+it.each([
+  "APP_CONFIG_LOGS",
+  "APP_CONFIG_GEMINI_API_KEY",
+  "APP_CONFIG_SLACK_BOT_TOKEN",
+  "APP_CONFIG_X_AI_API_KEY",
+])("does not ship the retired %s override", (name) => {
+  expect(OPTIONAL_SECRETS).not.toContain(name);
+  expect(REQUIRED_SECRETS).not.toContain(name);
+});
 
 // Wrangler tags every `--env` deploy with `cf:service=<top-level name>` and
 // `cf:environment=<env>`. The top-level names below are therefore the fleet's
@@ -9,7 +47,8 @@ import { builderConfig, config } from "./generate-wrangler-config.ts";
 // under a fake "dev" service (observed live on os-prd-builder, 2026-07-04).
 it("names the top-level configs by service so cf:service script tags stay env-less", () => {
   expect(config.name).toBe("os");
-  expect(builderConfig.name).toBe("os-builder");
+  expect(typecheckerConfig.name).toBe("os-typechecker");
+  expect(workerBundlerConfig.name).toBe("os-worker-bundler");
 });
 
 it("gives every deployed env its own worker name derived from the service name", () => {
@@ -17,19 +56,129 @@ it("gives every deployed env its own worker name derived from the service name",
     expect(envBlock.name, envName).toMatch(/^os-/);
     expect(envBlock.name, envName).not.toBe(config.name);
   }
-  for (const [envName, envBlock] of Object.entries(builderConfig.env)) {
-    expect(envBlock.name, envName).toMatch(/^os-.*-builder$/);
-    expect(envBlock.name, envName).not.toBe(builderConfig.name);
+});
+
+it("binds the os worker to its own env's typechecker sidecar", () => {
+  for (const [envName, envBlock] of Object.entries(config.env)) {
+    const typechecker = envBlock.services.find((service) => service.binding === "TYPECHECKER");
+    expect(typechecker?.service, envName).toBe(`${envBlock.name}-typechecker`);
+    const sidecarNames = Object.values(typecheckerConfig.env).map((sidecar) => sidecar.name);
+    expect(sidecarNames, envName).toContain(typechecker?.service);
   }
 });
 
-it("binds the os worker to its own env's builder sidecar", () => {
+it("binds the os worker to its own env's worker-bundler sidecar", () => {
   for (const [envName, envBlock] of Object.entries(config.env)) {
-    const builder = envBlock.services.find((service) => service.binding === "BUILDER");
-    expect(builder?.service, envName).toBe(`${envBlock.name}-builder`);
-    const builderNames = Object.values(builderConfig.env).map((builderEnv) => builderEnv.name);
-    expect(builderNames, envName).toContain(builder?.service);
+    const bundler = envBlock.services.find((service) => service.binding === "WORKER_BUNDLER");
+    expect(bundler?.service, envName).toBe(`${envBlock.name}-worker-bundler`);
+    const sidecarNames = Object.values(workerBundlerConfig.env).map((sidecar) => sidecar.name);
+    expect(sidecarNames, envName).toContain(bundler?.service);
   }
+});
+
+it("binds every deployed OS worker to the matching auth worker's default entrypoint", () => {
+  for (const [envName, envBlock] of Object.entries(config.env)) {
+    const auth = envBlock.services.find((service) => service.binding === "AUTH");
+    expect(auth, envName).toEqual({
+      binding: "AUTH",
+      service: envs[envName as keyof typeof envs].authWorkerName,
+    });
+  }
+});
+
+it("binds local OS to the selected auth worker's default entrypoint", () => {
+  const selected = localAuthServiceBinding({
+    issuer: process.env.APP_CONFIG_ITERATE_AUTH__ISSUER,
+    allowProductionRemote: process.env.ALLOW_REMOTE_PRODUCTION_AUTH_RPC === "1",
+  });
+  const auth = config.services.find((service) => service.binding === "AUTH");
+
+  expect(auth).toEqual({
+    binding: "AUTH",
+    service: selected.authWorkerName,
+    ...(selected.authRemote ? { remote: true } : {}),
+  });
+});
+
+it("selects the matching remote auth worker for local dev and the local worker for dev-all", () => {
+  expect(localAuthServiceBinding({ issuer: undefined, allowProductionRemote: false })).toEqual({
+    authWorkerName: "auth-dev-global",
+    authRemote: true,
+  });
+  expect(
+    localAuthServiceBinding({
+      issuer: "https://auth.iterate-preview-3.com/api/auth",
+      allowProductionRemote: false,
+    }),
+  ).toEqual({
+    authWorkerName: "auth-preview-3",
+    authRemote: true,
+  });
+  expect(
+    localAuthServiceBinding({
+      issuer: "http://localhost:50123/api/auth",
+      allowProductionRemote: false,
+    }),
+  ).toEqual({
+    authWorkerName: "auth",
+    authRemote: false,
+  });
+  expect(() =>
+    localAuthServiceBinding({
+      issuer: "https://unknown-auth.example/api/auth",
+      allowProductionRemote: false,
+    }),
+  ).toThrow(/does not match a known auth environment/);
+  expect(() =>
+    localAuthServiceBinding({
+      issuer: "https://auth.iterate.com/api/auth",
+      allowProductionRemote: false,
+    }),
+  ).toThrow(/requires ALLOW_REMOTE_PRODUCTION_AUTH_RPC=1/);
+  expect(
+    localAuthServiceBinding({
+      issuer: "https://auth.iterate.com/api/auth",
+      allowProductionRemote: true,
+    }),
+  ).toEqual({ authWorkerName: "auth-prd", authRemote: true });
+});
+
+it("never ships the old shared auth service token to OS", () => {
+  expect(OPTIONAL_SECRETS).not.toContain("APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN");
+  expect(config.secrets.required).not.toContain("APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN");
+});
+
+it("requires the first-party PostHog project token in every deployed environment", () => {
+  expect(REQUIRED_SECRETS).toContain("APP_CONFIG_POSTHOG");
+  expect(OPTIONAL_SECRETS).not.toContain("APP_CONFIG_POSTHOG");
+});
+
+it("requires the Cloudflare API token and marks only deployed environments", () => {
+  expect(REQUIRED_SECRETS).toContain("APP_CONFIG_CLOUDFLARE__API_TOKEN");
+  expect(OPTIONAL_SECRETS).not.toContain("APP_CONFIG_CLOUDFLARE__API_TOKEN");
+  expect(config.vars).not.toHaveProperty("DEPLOYMENT_ENV");
+  for (const [envName, envBlock] of Object.entries(config.env)) {
+    expect(envBlock.vars).toMatchObject({ DEPLOYMENT_ENV: envName });
+  }
+});
+
+it("emits the AI response-cache key for every deployment while keeping production disabled", () => {
+  expect(envShapedVars(envs.prd)).toMatchObject({
+    APP_CONFIG_CLOUDFLARE_AI_GATEWAY__RESPONSE_CACHE_TTL_SECONDS: "",
+  });
+  expect(envShapedVars(envs.preview_6)).toMatchObject({
+    APP_CONFIG_CLOUDFLARE_AI_GATEWAY__RESPONSE_CACHE_TTL_SECONDS: String(7 * 24 * 60 * 60),
+  });
+});
+
+it("exposes the selected environment name to browser-facing config", () => {
+  expect(config.vars.APP_CONFIG_ENVIRONMENT_NAME).toBe(process.env.DOPPLER_CONFIG?.trim() || "dev");
+  expect(envShapedVars(envs.prd).APP_CONFIG_ENVIRONMENT_NAME).toBe("prd");
+  expect(envShapedVars(envs.preview_6).APP_CONFIG_ENVIRONMENT_NAME).toBe("preview_6");
+});
+
+it("does not retain a reconciled Durable Object tombstone", () => {
+  expect(config.exports).not.toHaveProperty("CloudflareSandboxDurableObject");
 });
 
 it("routes public event docs hosts to the os worker", () => {
@@ -45,6 +194,18 @@ it("routes Cloudflare for SaaS custom hostnames through the project provider zon
   expect(config.env.prd.routes ?? []).toContainEqual({
     pattern: "*/*",
     zone_name: "iterate.app",
+  });
+});
+
+it("routes the owned iterate.com apex and single-label apps to the production os worker", () => {
+  const productionRoutes = config.env.prd.routes ?? [];
+  expect(productionRoutes).toContainEqual({
+    pattern: "iterate.com/*",
+    zone_name: "iterate.com",
+  });
+  expect(productionRoutes).toContainEqual({
+    pattern: "*.iterate.com/*",
+    zone_name: "iterate.com",
   });
 });
 

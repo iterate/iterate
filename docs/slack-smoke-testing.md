@@ -3,9 +3,13 @@
 > **Status: historical (pre-itx-v4 procedure).** The Slack integration was
 > rebuilt on itx in the itx-v4 replacement (PR #1585) — Durable Object names
 > and event routes below describe the pre-migration stack and no longer
-> exist. For current real Slack testing, preview app setup, and internal
-> duplicate-bot caveats, start with [slack-testing.md](slack-testing.md).
-> Recover the old implementation from git history if ever needed.
+> exist.
+>
+> **Current instructions:** [slack-testing.md](slack-testing.md) — including
+> `SLACK_CI_BOT_TOKEN` as the scripted trigger actor, `#slack-agent-e2e-test`,
+> joining the product bot via `itx.integrations.slack`, and ambient vs
+> `@mention` smokes. Recover the old implementation from git history if ever
+> needed.
 
 This note describes the manual production smoke test for proving that a Slack
 thread can wake a routed Slack agent and produce a real Slack reply.
@@ -19,7 +23,7 @@ The smoke test covers the OS-side production path after Slack ingress:
    event on the project's `/integrations/slack` stream.
 3. `SlackIntegrationDurableObject` routes that event to
    `/agents/slack/<channel>/ts-<thread>`.
-4. `SlackAgentDurableObject` transcribes the Slack event into agent input.
+4. `SlackAgentDurableObject` transcribes the Slack event into agent context.
 5. `AgentDurableObject` starts the LLM request.
 6. The itx script calls `itx.slack.chat.postMessage`.
 7. A real Slack reply appears in the original thread.
@@ -79,15 +83,15 @@ doppler run --project os --config prd -- sh -c 'echo "$APP_CONFIG_BASE_URL"'
    ```
 
 7. Poll the routed Slack-agent stream until
-   `events.iterate.com/itx/script-execution-completed` appears for the script
+   `events.iterate.com/itx/script-run-settled` appears for the script
    that calls `itx.slack.chat.postMessage`.
 8. Record the wall-clock duration from appending the webhook event to the
    completed itx script execution.
 9. Inspect the routed stream for these useful timestamps:
    - `events.iterate.com/slack/webhook-received`
-   - `events.iterate.com/agent/input-added`
+   - `events.iterate.com/agents/context-added`
    - `events.iterate.com/agent/llm-request-started`
-   - `events.iterate.com/itx/script-execution-completed`
+   - `events.iterate.com/itx/script-run-settled`
 
 10. Remove the temporary OS project.
 
@@ -99,4 +103,5 @@ the stream. Prefer event `createdAt` deltas when comparing code changes.
 For the ordering hotfix, the interesting check is whether the routed stream
 shows `slack-agent:` work before the slower `agent:` subscriber processes the
 raw Slack webhook. The expected effect is a faster transition from
-`slack/webhook-received` to `agent/input-added` and then to LLM request start.
+`slack/webhook-received` to the developer-role `agents/context-added` item and
+then to LLM request start.

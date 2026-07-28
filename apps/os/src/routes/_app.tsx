@@ -37,24 +37,21 @@ function AppLayout() {
   // presence + Feed/State inside the stream view) — a page publishing a
   // streamBreadcrumb IS a stream page. Only the few non-stream pages
   // (projects list, new-project, session REPL) get this minimal shell header.
-  // Project routes are client-only, so their loader data is absent from the
-  // server render. Static route data keeps the shell's first client render
-  // identical to SSR; the loader breadcrumb takes over after the route loads.
+  // Static route data also supplies labels for explicitly client-only leaves;
+  // SSR-capable project routes replace it with loader breadcrumbs when useful.
   const isStreamPage =
     matches.some(
       (match) => (match.staticData as RouteBreadcrumbStaticData | undefined)?.streamPage === true,
     ) || activeStreamBreadcrumb(matches) != null;
-  // The projects list is the one app page with no project context, so the
-  // stream ⌘K switcher has nothing to act on — hide its pill and don't mount
-  // the palette here, which also drops its global ⌘K key handler.
-  const isProjectsListPage = matches.at(-1)?.routeId === "/_app/projects/";
+  // Deepest DEFINED breadcrumb wins; an explicit "" suppresses the label
+  // (the project home blanks the layout's slug fallback this way).
   const label = matches
     .map(
       (match) =>
         (match.loaderData as RouteBreadcrumbLoaderData | undefined)?.breadcrumb ??
         (match.staticData as RouteBreadcrumbStaticData | undefined)?.breadcrumb,
     )
-    .filter(Boolean)
+    .filter((value) => value !== undefined)
     .at(-1);
 
   return (
@@ -65,25 +62,23 @@ function AppLayout() {
           <header className="flex shrink-0 items-center gap-3 px-4 pb-1 pt-2.5">
             <SidebarTrigger className="-ml-1 md:hidden" />
             {label ? <span className="truncate text-sm font-medium">{label}</span> : null}
-            {isProjectsListPage ? null : (
-              <button
-                type="button"
-                aria-haspopup="dialog"
-                title="Switch or create a stream — ⌘K"
-                onClick={openGlobalCommandPalette}
-                className="ml-auto flex h-9 shrink-0 cursor-pointer items-center gap-2 rounded-full bg-muted px-3.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
-              >
-                Streams
-                <kbd className="rounded bg-background px-1.5 py-px text-[10px]">⌘K</kbd>
-              </button>
-            )}
+            <button
+              type="button"
+              aria-haspopup="dialog"
+              title="Navigate agents and streams — ⌘K"
+              onClick={openGlobalCommandPalette}
+              className="ml-auto flex h-9 shrink-0 cursor-pointer items-center gap-2 rounded-full bg-muted px-3.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+            >
+              Navigate
+              <kbd className="rounded bg-background px-1.5 py-px text-[10px]">⌘K</kbd>
+            </button>
           </header>
         )}
         <div className="flex min-h-0 flex-1 flex-col overflow-auto">
           <Outlet />
         </div>
       </SidebarInset>
-      {isProjectsListPage ? null : <GlobalCommandPalette />}
+      <GlobalCommandPalette />
     </SidebarProvider>
   );
 }

@@ -42,7 +42,7 @@ export type McpBeginOAuthResult = {
    * messages you back so you can continue. */
   authorizationUrl: string;
   /** The `/secrets/…` path the token is stored at. Connect afterwards with
-   * `headers: { authorization: 'Bearer getSecret({ path: "<path>", field: "accessToken" })' }`. */
+   * `headers: { authorization: 'Bearer getSecret("<path>", { field: "accessToken" })' }`. */
   path: string;
 };
 
@@ -171,7 +171,7 @@ function statelessEgressFetch(egress: Fetcher): FetchLike {
       return Promise.resolve(new Response(null, { status: 405 }));
     }
 
-    // Headers may contain getSecret({ path }) placeholders. Egress owns
+    // Headers may contain getSecret(path) placeholders. Egress owns
     // substitution and origin checks, so this adapter forwards SDK-built
     // requests unchanged.
     return egress.fetch(request);

@@ -22,10 +22,10 @@ export function AppProviders<TConfig>(props: {
   theme?: Pick<ThemeProviderProps, "defaultTheme" | "enableSystem" | "forcedTheme" | "storageKey">;
 }) {
   const posthogApiKey = props.posthog?.apiKey ?? getPosthogApiKeyFromConfig(props.config);
-  const proxyUrl = props.posthog?.proxyUrl ?? "/posthog-proxy";
+  const proxyUrl = props.posthog?.proxyUrl ?? "/e";
   const uiHost = props.posthog?.uiHost;
   const appStage = props.posthog?.appStage;
-  const bootstrapFromUrl = props.posthog?.bootstrapFromUrl ?? true;
+  const capturePageviews = props.posthog?.capturePageviews;
   const sessionRecording = props.posthog?.sessionRecording;
   const posthogEnabled = props.posthog?.enabled ?? shouldEnablePosthog(posthogApiKey);
 
@@ -35,7 +35,7 @@ export function AppProviders<TConfig>(props: {
       proxyUrl,
       uiHost,
       appStage,
-      bootstrapFromUrl,
+      capturePageviews,
       sessionRecording,
     });
   }

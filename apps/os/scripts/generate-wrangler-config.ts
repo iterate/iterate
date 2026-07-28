@@ -18,7 +18,8 @@
  * exactly those keys from process.env under `doppler run -- vite dev`.
  */
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
-import { envs, PREVIEW_AND_DEV_ACCOUNT_ID, type DeployedEnv } from "../../../envs.ts";
+import { authEnvs, envs, PREVIEW_AND_DEV_ACCOUNT_ID, type DeployedEnv } from "../../../envs.ts";
+import { bakeStaticAuthJwks } from "../../../scripts/lib/bake-auth-jwks.ts";
 import {
   OBSERVABILITY,
   writeGeneratedWranglerConfig,
@@ -28,7 +29,6 @@ import {
   SANDBOX_INSTANCE_TYPES,
   type SandboxInstanceType,
 } from "../src/domains/sandboxes/instance-types.ts";
-import { workerEventsQueueName } from "../src/queue-names.ts";
 
 /**
  * Secrets every deployment MUST have (deploy.ts fails before uploading when
@@ -38,9 +38,11 @@ import { workerEventsQueueName } from "../src/queue-names.ts";
  */
 export const REQUIRED_SECRETS = [
   "APP_CONFIG_ADMIN_API_SECRET",
+  "APP_CONFIG_CLOUDFLARE__API_TOKEN",
   "APP_CONFIG_ITERATE_AUTH__CLIENT_ID",
   "APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET",
   "APP_CONFIG_OPEN_AI_API_KEY",
+  "APP_CONFIG_POSTHOG",
   "SECRET_ENCRYPTION_KEY",
 ];
 
@@ -52,8 +54,10 @@ export const REQUIRED_SECRETS = [
  * plugin loads whichever ones your Doppler config has.
  */
 export const OPTIONAL_SECRETS = [
-  "APP_CONFIG_CLOUDFLARE__API_TOKEN",
-  "APP_CONFIG_GEMINI_API_KEY",
+  // Shared with the auth app: local verification of project-app-session
+  // tokens (the project-host gate + the /api credential lane). Optional —
+  // absent, both fall back to the auth worker's validate RPC.
+  "APP_CONFIG_PROJECT_APP_SESSION_SECRET",
   // Iterate-owned Exa/Parallel API keys (platform-secrets.ts registry
   // entries) — collectSecrets ships only names listed here, so a key absent
   // from this list never reaches a deployed worker even when Doppler has it.
@@ -68,11 +72,6 @@ export const OPTIONAL_SECRETS = [
   "APP_CONFIG_INTEGRATIONS__SLACK",
   "APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED",
   "APP_CONFIG_ITERATE_AUTH__RESOURCE",
-  "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN",
-  "APP_CONFIG_LOGS",
-  "APP_CONFIG_POSTHOG",
-  "APP_CONFIG_SLACK_BOT_TOKEN",
-  "APP_CONFIG_X_AI_API_KEY",
   // R2 S3-API credentials the Sandbox SDK uses to presign workspace-backup
   // transfers (exact names the SDK reads). Optional: without them the
   // sandbox DO falls back to streaming archives through the BACKUP_BUCKET
@@ -81,6 +80,26 @@ export const OPTIONAL_SECRETS = [
   "R2_ACCESS_KEY_ID",
   "R2_SECRET_ACCESS_KEY",
 ];
+
+/**
+ * Secrets removed from the OS deployment contract. Wrangler preserves omitted
+ * secrets, so deploy.ts deletes these from any Worker that still carries them
+ * (verified removed; deploy scripts are the only Worker-secret writers) and
+ * the explicit erase/handover path deletes them before a slot changes owners.
+ */
+export const RETIRED_AUTH_SERVICE_TOKEN = "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN";
+export const RETIRED_WORKER_SECRETS = [
+  RETIRED_AUTH_SERVICE_TOKEN,
+  "APP_CONFIG_GEMINI_API_KEY",
+  // Replaced by APP_CONFIG_ITERATE_REPO_PKG_REF (name-agnostic pkg.pr.new
+  // ref pinning, src/pkg-pr-new.ts). Only preview slots ever carried it, and
+  // every pre-pinning preview deploy actively wrote it, so deploy-side
+  // deletion (not slot-erase alone) is what keeps renewed leases healthy.
+  "APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC",
+  "APP_CONFIG_LOGS",
+  "APP_CONFIG_SLACK_BOT_TOKEN",
+  "APP_CONFIG_X_AI_API_KEY",
+] as const;
 
 /**
  * Env-shaping config that is NOT secret and already lives in envs.ts —
@@ -92,25 +111,25 @@ export const OPTIONAL_SECRETS = [
 export function envShapedVars(env: DeployedEnv) {
   return {
     APP_CONFIG_BASE_URL: env.baseUrl,
+    APP_CONFIG_ENVIRONMENT_NAME: env.dopplerConfig,
     APP_CONFIG_MCP__BASE_URL: env.mcpBaseUrl,
     APP_CONFIG_PROJECT_HOSTNAME_BASES: JSON.stringify(env.projectHostnameBases),
     APP_CONFIG_ITERATE_AUTH__ISSUER: `${env.authBaseUrl}/api/auth`,
     APP_CONFIG_CLOUDFLARE_AI_GATEWAY__TRANSPORT: env.cloudflareAiGatewayTransport,
-    ...(env.cloudflareAiGatewayResponseCacheTtlSeconds === undefined
-      ? {}
-      : {
-          APP_CONFIG_CLOUDFLARE_AI_GATEWAY__RESPONSE_CACHE_TTL_SECONDS: String(
-            env.cloudflareAiGatewayResponseCacheTtlSeconds,
-          ),
-        }),
+    // Wrangler inherits missing top-level vars into env blocks. Keep the key
+    // explicit everywhere; an empty value means the response cache is off.
+    APP_CONFIG_CLOUDFLARE_AI_GATEWAY__RESPONSE_CACHE_TTL_SECONDS:
+      env.cloudflareAiGatewayResponseCacheTtlSeconds === undefined
+        ? ""
+        : String(env.cloudflareAiGatewayResponseCacheTtlSeconds),
   };
 }
 
 const ENV_SHAPED_KEYS = Object.keys(envShapedVars(envs.prd));
 
-// One compatibility date for the os worker AND the builder sidecar — a bump
-// that misses one would be silent drift. (Deliberately distinct from
-// WORKER_COMPATIBILITY_DATE in worker-loader.ts: dynamic-worker compat is
+// One compatibility date for the os worker AND both compiler sidecars — a
+// bump that misses one would be silent drift. (Deliberately distinct from
+// WORKER_COMPATIBILITY_DATE in build-backend.ts: dynamic-worker compat is
 // hashed into build keys and moves on its own schedule.)
 //
 // Policy: stay on the LATEST — keep this at the newest date the pinned workerd
@@ -121,18 +140,16 @@ const ENV_SHAPED_KEYS = Object.keys(envShapedVars(envs.prd));
 // compatibility_flags below.
 export const COMPATIBILITY_DATE = "2026-07-01";
 
-// The os worker (reader) and the builder (writer) must name the same
-// miniflare namespace in local dev or cache reads never see builds.
 const LOCAL_DEV_BUILD_CACHE_ID = "local-dev-worker-build-cache";
 
-/** The builder sidecar's worker name, derived — never spelled out in envs.ts. */
-function builderWorkerName(osWorkerName: string) {
-  return `${osWorkerName}-builder`;
-}
-
-/** The typechecker sidecar's worker name, derived the same way. */
+/** The typechecker sidecar's worker name, derived — never spelled out in envs.ts. */
 function typecheckerWorkerName(osWorkerName: string) {
   return `${osWorkerName}-typechecker`;
+}
+
+/** The worker-bundler sidecar's worker name, derived — never in envs.ts. */
+function workerBundlerWorkerName(osWorkerName: string) {
+  return `${osWorkerName}-worker-bundler`;
 }
 
 /**
@@ -163,14 +180,20 @@ const SANDBOX_SSH_AUTHORIZED_KEYS: { name: string; public_key: string }[] = [
 
 const DO_CLASSES = {
   AGENT: "AgentDurableObject",
+  AGENT_COLLECTION: "AgentCollectionDurableObject",
   CAPABILITY_HOST: "CapabilityHostDurableObject",
+  DEVICE: "DeviceDurableObject",
   PROJECT: "ProjectDurableObject",
   REPO: "RepoDurableObject",
   SCHEDULER: "SchedulerDurableObject",
   SECRET: "SecretDurableObject",
   STREAM: "StreamDurableObject",
+  WORKER_BUILD_COORDINATOR: "WorkerBuildCoordinatorDurableObject",
   WORKER: "StatefulWorkerDurableObject",
-  WORKSPACE: "WorkspaceDurableObject",
+  // Deliberately NOT "WorkspaceDurableObject": declarative exports key
+  // namespaces by class name, and the retired single-parent-overlay workspace
+  // occupied that name — reusing it would inherit the old namespace's storage.
+  WORKSPACE_V2: "WorkspaceV2DurableObject",
   // One sandbox container class PER INSTANCE TYPE (Cloudflare fixes instance_type per
   // class) — bindings and class names come from the canonical table in
   // src/domains/sandboxes/instance-types.ts.
@@ -204,10 +227,11 @@ const DO_EXPORTS = {
       { type: "durable-object", storage: "sqlite" },
     ]),
   ),
-  // Sandboxes became pets with one container class per instance type (#1747);
-  // the old implicit-size class is retired (old sandboxes were ephemeral by
-  // design and their R2 snapshots age out).
-  CloudflareSandboxDurableObject: { type: "durable-object", state: "deleted" },
+  // The retired single-parent-overlay workspace. Its overlays were disposable
+  // by contract (committed state lives on main); the tombstone destroys the
+  // namespace on the next deploy of each env. Remove once every deployed env
+  // reports "Safe to remove from `exports`".
+  WorkspaceDurableObject: { type: "durable-object", state: "deleted" },
 };
 
 /**
@@ -215,7 +239,7 @@ const DO_EXPORTS = {
  * `max_instances × instance memory` against the account's concurrent-memory
  * quota AT DEPLOY TIME, summed across every container app — and the preview
  * account is shared by every preview slot — so preview caps are deliberately
- * small (a slot's sandbox fleet reserves ~75 GiB vs production's ~260 GiB).
+ * small (a slot's sandbox fleet reserves ~67 GiB vs production's ~260 GiB).
  * Billing is while-running only (idle sandboxes are torn down and snapshotted),
  * so production headroom is cheap; raise a cap here if a real workload hits it
  * (exceeding one surfaces as HTTP 503 on sandbox start).
@@ -224,7 +248,7 @@ const SANDBOX_MAX_INSTANCES: Record<SandboxInstanceType, { preview: number; prod
   {
     lite: { preview: 20, production: 50 },
     basic: { preview: 10, production: 30 },
-    "standard-1": { preview: 5, production: 20 },
+    "standard-1": { preview: 3, production: 20 },
     "standard-2": { preview: 2, production: 10 },
     "standard-3": { preview: 2, production: 5 },
     "standard-4": { preview: 1, production: 3 },
@@ -234,6 +258,8 @@ const SANDBOX_MAX_INSTANCES: Record<SandboxInstanceType, { preview: number; prod
 function workerBindings(input: {
   workerName: string;
   accountId: string;
+  authWorkerName: string;
+  authRemote?: boolean;
   kvId?: string;
   workerBuildCacheKvId?: string;
   /** Which SANDBOX_MAX_INSTANCES column to apply — deploy-time memory quota
@@ -285,15 +311,25 @@ function workerBindings(input: {
       },
     ],
     services: [
-      // The builder sidecar (src/builder.ts, wrangler.builder.jsonc): the one
-      // script carrying the dynamic-worker bundler toolchain (esbuild-wasm,
-      // ~14MB) so the product script stays small. Bound by name — deploy.ts
-      // deploys the builder first.
-      { binding: "BUILDER", service: builderWorkerName(input.workerName) },
+      // OS's privileged auth directory and token-introspection surface. This
+      // binding is the credential: Cloudflare resolves it directly to the
+      // selected auth Worker, so no bearer secret enters the OS process.
+      // Local dev uses `remote` unless dev-all has selected its local auth
+      // Worker through a loopback issuer.
+      {
+        binding: "AUTH",
+        service: input.authWorkerName,
+        ...(input.authRemote ? { remote: true } : {}),
+      },
       // The typechecker sidecar (src/typechecker.ts,
       // wrangler.typechecker.jsonc): the one script carrying the TypeScript
-      // compiler (tswasm, ~30MB wasm). Same deploy-first rule as the builder.
+      // compiler (tswasm, ~30MB wasm). The service binding requires deploy.ts
+      // to deploy this worker first.
       { binding: "TYPECHECKER", service: typecheckerWorkerName(input.workerName) },
+      // The only script importing @cloudflare/worker-bundler and esbuild-wasm.
+      // Builds cross as inert source/result values, keeping compiler memory
+      // out of the product Worker and its Durable Object isolates.
+      { binding: "WORKER_BUNDLER", service: workerBundlerWorkerName(input.workerName) },
     ],
     ai: { binding: "AI" },
     browser: { binding: "BROWSER" },
@@ -306,17 +342,6 @@ function workerBindings(input: {
     version_metadata: { binding: "CF_VERSION_METADATA" },
     worker_loaders: [{ binding: "LOADER" }],
     artifacts: [{ binding: "ARTIFACTS", namespace: `${input.workerName}-repos` }],
-    queues: {
-      consumers: [
-        {
-          queue: workerEventsQueueName(input.workerName),
-          max_batch_size: 10,
-          max_batch_timeout: 5,
-          max_retries: 3,
-          retry_delay: 30,
-        },
-      ],
-    },
     // Sandbox workspace backups (ensure-resources.ts creates the bucket; the
     // sandbox DO snapshots /workspace here on idle and restores on start).
     // The binding MUST be named BACKUP_BUCKET — the Sandbox SDK reads it from
@@ -342,7 +367,7 @@ function workerBindings(input: {
     containers: SANDBOX_INSTANCE_TYPES.map((instanceType) => ({
       class_name: SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].className,
       image: "./sandbox/Dockerfile",
-      instance_type: instanceType,
+      instance_type: instanceType as string,
       max_instances: SANDBOX_MAX_INSTANCES[instanceType][input.sandboxCaps ?? "preview"],
       // Interactive shell into any running sandbox via `wrangler containers
       // ssh <instance-id>` (find ids with `wrangler containers instances`).
@@ -359,9 +384,10 @@ function workerBindings(input: {
 
 /**
  * Every hostname routed to the os worker: the app base URL, public event docs,
- * the MCP host, project-host patterns, and any SaaS-enabled provider-zone
- * catch-all routes. The zone is the hostname minus its first label for
- * app/MCP/event-docs hosts; project bases are themselves zones.
+ * the MCP host, project-host patterns, any SaaS-enabled provider-zone
+ * catch-all routes, and owned custom apexes (e.g. prod `iterate.com`). The
+ * zone is the hostname minus its first label for app/MCP/event-docs hosts;
+ * project bases and owned apexes are themselves zones.
  *
  * Project bases get three built-in project-host patterns: `base/*`,
  * `*.base/*`, and `*base/*`.
@@ -369,6 +395,10 @@ function workerBindings(input: {
  * only reliably invoked the worker for project hosts once all three existed
  * (observed 2026-06) — kept verbatim; collapse only with an edge experiment
  * proving it.
+ *
+ * Owned custom apexes get apex/* + *.apex/* only (not a SaaS catch-all).
+ * More-specific routes on that zone (os., auth., mcp., …) stay owned by
+ * other workers and win by specificity.
  */
 function routes(env: DeployedEnv) {
   const appHost = new URL(env.baseUrl).hostname;
@@ -390,14 +420,19 @@ function routes(env: DeployedEnv) {
         ? [{ pattern: "*/*", zone_name: base }, ...projectRoutes]
         : projectRoutes;
     }),
+    ...env.ownedProjectCustomApexes.flatMap((apex) => [
+      { pattern: `${apex}/*`, zone_name: apex },
+      { pattern: `*.${apex}/*`, zone_name: apex },
+    ]),
   ];
 }
 
-function envBlock(env: DeployedEnv) {
+function envBlock(envName: string, env: DeployedEnv) {
   const isProduction = env.osWorkerName === "os-prd";
   const bindings = workerBindings({
     workerName: env.osWorkerName,
     accountId: env.cloudflareAccountId,
+    authWorkerName: env.authWorkerName,
     kvId: env.resources.projectDirectoryKvId,
     workerBuildCacheKvId: env.resources.workerBuildCacheKvId,
     sandboxCaps: isProduction ? "production" : "preview",
@@ -407,7 +442,7 @@ function envBlock(env: DeployedEnv) {
     account_id: env.cloudflareAccountId,
     routes: routes(env),
     ...bindings,
-    vars: { ...bindings.vars, ...envShapedVars(env) },
+    vars: { ...bindings.vars, ...envShapedVars(env), DEPLOYMENT_ENV: envName },
   };
 }
 
@@ -419,13 +454,61 @@ function envBlock(env: DeployedEnv) {
  * Deploy-time generation runs without PORT, so deployed envs are unaffected
  * (they get baseUrl from envShapedVars).
  */
+export function localAuthServiceBinding(input: {
+  issuer: string | undefined;
+  allowProductionRemote: boolean;
+}) {
+  const trimmedIssuer = input.issuer?.trim();
+  if (!trimmedIssuer) {
+    return { authWorkerName: authEnvs.dev_global.authWorkerName, authRemote: true };
+  }
+
+  let issuerUrl: URL;
+  try {
+    issuerUrl = new URL(trimmedIssuer);
+  } catch {
+    throw new Error("APP_CONFIG_ITERATE_AUTH__ISSUER must be an absolute URL");
+  }
+
+  if (["localhost", "127.0.0.1", "[::1]"].includes(issuerUrl.hostname)) {
+    return { authWorkerName: "auth", authRemote: false };
+  }
+
+  const authEnv = Object.values(authEnvs).find(
+    (candidate) => new URL(candidate.authBaseUrl).origin === issuerUrl.origin,
+  );
+  if (!authEnv) {
+    throw new Error(
+      `APP_CONFIG_ITERATE_AUTH__ISSUER does not match a known auth environment: ${issuerUrl.origin}`,
+    );
+  }
+  if (authEnv === authEnvs.prd && !input.allowProductionRemote) {
+    throw new Error(
+      "Remote RPC to auth-prd requires ALLOW_REMOTE_PRODUCTION_AUTH_RPC=1 because the binding carries production write authority",
+    );
+  }
+  return { authWorkerName: authEnv.authWorkerName, authRemote: true };
+}
+
 function localDevBindings() {
-  const bindings = workerBindings({ workerName: "os", accountId: PREVIEW_AND_DEV_ACCOUNT_ID });
-  const localAuthJwks = localDevAuthJwks();
+  const authBinding = localAuthServiceBinding({
+    issuer: process.env.APP_CONFIG_ITERATE_AUTH__ISSUER,
+    allowProductionRemote: process.env.ALLOW_REMOTE_PRODUCTION_AUTH_RPC === "1",
+  });
+  const bindings = workerBindings({
+    workerName: "os",
+    accountId: PREVIEW_AND_DEV_ACCOUNT_ID,
+    ...authBinding,
+  });
+  const localAuthJwks = localDevAuthJwks({
+    forgePrivateJwk: process.env.AUTH_FORGE_PRIVATE_JWK,
+    deployedEnv: process.env.CLOUDFLARE_ENV,
+  });
   return {
     ...bindings,
     vars: {
       ...bindings.vars,
+      APP_CONFIG_ENVIRONMENT_NAME: process.env.DOPPLER_CONFIG?.trim() || "dev",
       // Local dev rides the BYOK lane with the response cache, same as the
       // preview slots: agent-loop iteration replays yesterday's answers for
       // free. In envShapedVars for deployed envs; spelled out here because
@@ -433,6 +516,18 @@ function localDevBindings() {
       APP_CONFIG_CLOUDFLARE_AI_GATEWAY__TRANSPORT: "byok",
       APP_CONFIG_CLOUDFLARE_AI_GATEWAY__RESPONSE_CACHE_TTL_SECONDS: String(7 * 24 * 60 * 60),
       ...(process.env.PORT ? { APP_CONFIG_BASE_URL: `http://localhost:${process.env.PORT}` } : {}),
+      ...(process.env.APP_CONFIG_ITERATE_REPO_PKG_REF?.trim()
+        ? {
+            APP_CONFIG_ITERATE_REPO_PKG_REF: process.env.APP_CONFIG_ITERATE_REPO_PKG_REF.trim(),
+          }
+        : {}),
+      // Local dev's SDK tarball lockstep (dev.ts + lib/dev-sdk-tarball.ts).
+      ...(process.env.APP_CONFIG_ITERATE_REPO_PKG_SPEC_OVERRIDES?.trim()
+        ? {
+            APP_CONFIG_ITERATE_REPO_PKG_SPEC_OVERRIDES:
+              process.env.APP_CONFIG_ITERATE_REPO_PKG_SPEC_OVERRIDES.trim(),
+          }
+        : {}),
       // Local dev trusts forge-minted sessions by deriving the public key from
       // AUTH_FORGE_PRIVATE_JWK. Do not read APP_CONFIG_ITERATE_AUTH__JWKS from
       // Doppler here: stale snapshots caused login verification failures.
@@ -443,18 +538,25 @@ function localDevBindings() {
 
 const LOCAL_DEV_BINDINGS = localDevBindings();
 
-function localDevAuthJwks() {
-  const forgePrivateJwk = process.env.AUTH_FORGE_PRIVATE_JWK?.trim();
+export function localDevAuthJwks(input: {
+  forgePrivateJwk: string | undefined;
+  deployedEnv: string | undefined;
+}) {
+  // The forge key is inherited from _shared in deployed Doppler configs, but
+  // this derived public JWKS is only a local-dev binding. Emitting it at the
+  // top level during a CLOUDFLARE_ENV build makes Wrangler correctly warn
+  // that the selected env does not inherit it; deployed workers receive the
+  // freshly baked JWKS atomically via --secrets-file in deploy.ts instead.
+  if (input.deployedEnv) return undefined;
+
+  const forgePrivateJwk = input.forgePrivateJwk?.trim();
   if (!forgePrivateJwk) return undefined;
 
-  const { d: _privateKey, ...publicJwk } = JSON.parse(forgePrivateJwk) as Record<
-    string,
-    unknown
-  > & { d?: string };
-  if (!publicJwk.kid || !publicJwk.kty) {
-    throw new Error("AUTH_FORGE_PRIVATE_JWK must be a JWK with kid and kty");
-  }
-  return JSON.stringify({ keys: [publicJwk] });
+  return bakeStaticAuthJwks({
+    envName: "dev",
+    dopplerConfig: process.env.DOPPLER_CONFIG ?? "local dev",
+    secrets: { AUTH_FORGE_PRIVATE_JWK: forgePrivateJwk },
+  });
 }
 
 export const config = {
@@ -471,7 +573,7 @@ export const config = {
   // compatibility_date, so anything default-on at that date is redundant).
   // nodejs_compat: @cloudflare/shell (repo git) and the dynamic worker
   // loader need Node APIs. global_fetch_strictly_public: same-zone
-  // subrequests (auth worker and project egress) must traverse Worker routes
+  // subrequests (including project egress) must traverse Worker routes
   // instead of going to origin.
   compatibility_flags: ["nodejs_compat", "global_fetch_strictly_public"],
   // No `assets` here: the vite plugin injects the client build's assets
@@ -501,43 +603,13 @@ export const config = {
       ...ENV_SHAPED_KEYS.filter((key) => !(key in LOCAL_DEV_BINDINGS.vars)),
     ],
   },
-  env: Object.fromEntries(Object.entries(envs).map(([name, env]) => [name, envBlock(env)])),
+  env: Object.fromEntries(Object.entries(envs).map(([name, env]) => [name, envBlock(name, env)])),
 };
 
 /**
- * The builder sidecar's config. The builder is deliberately the minimum
- * possible worker around the bundler toolchain: a pure build function
- * (files in, artifact out) whose only binding is the artifact-cache KV — no
- * DOs, no routes, no secrets, no service bindings. Wrangler bundles
- * src/builder.ts directly (no vite); local dev runs it as an auxiliary
- * worker in the same workerd (vite.config.ts). Slated for deletion when
- * builds move into the sandbox container (tasks/os-sandbox-worker-builds.md).
- */
-function builderEnvBlock(env: DeployedEnv) {
-  return {
-    name: builderWorkerName(env.osWorkerName),
-    account_id: env.cloudflareAccountId,
-    kv_namespaces: [{ binding: "WORKER_BUILD_CACHE", id: env.resources.workerBuildCacheKvId }],
-    observability: OBSERVABILITY,
-  };
-}
-
-export const builderConfig = {
-  $schema: "node_modules/wrangler/config-schema.json",
-  // Env-less service name — see the note on `config.name` above.
-  name: "os-builder",
-  main: "./src/builder.ts",
-  compatibility_date: COMPATIBILITY_DATE,
-  compatibility_flags: ["nodejs_compat"],
-  kv_namespaces: [{ binding: "WORKER_BUILD_CACHE", id: LOCAL_DEV_BUILD_CACHE_ID }],
-  observability: OBSERVABILITY,
-  env: Object.fromEntries(Object.entries(envs).map(([name, env]) => [name, builderEnvBlock(env)])),
-};
-
-/**
- * The typechecker sidecar's config, cut from the builder's pattern: the
- * minimum possible worker around the TypeScript compiler wasm — a pure
- * function (files in, diagnostics out) with NO bindings at all. Wrangler
+ * The typechecker sidecar's config: the minimum possible worker around the
+ * TypeScript compiler wasm — a pure function (files in, diagnostics out)
+ * with NO bindings at all. Wrangler
  * bundles src/typechecker.ts directly (no vite); local dev runs it as an
  * auxiliary worker in the same workerd (vite.config.ts).
  */
@@ -560,17 +632,41 @@ export const typecheckerConfig = {
   ),
 };
 
-/** Write wrangler.jsonc (gitignored) if changed — see writeGeneratedWranglerConfig. */
+/**
+ * The worker-bundler sidecar's config: one RPC entrypoint and no bindings.
+ * Wrangler bundles this independently so esbuild-wasm never enters the OS
+ * product script; local dev runs it as a Vite auxiliary Worker.
+ */
+export const workerBundlerConfig = {
+  $schema: "node_modules/wrangler/config-schema.json",
+  name: "os-worker-bundler",
+  main: "./src/worker-bundler.ts",
+  compatibility_date: COMPATIBILITY_DATE,
+  compatibility_flags: ["nodejs_compat"],
+  observability: OBSERVABILITY,
+  env: Object.fromEntries(
+    Object.entries(envs).map(([name, env]) => [
+      name,
+      {
+        name: workerBundlerWorkerName(env.osWorkerName),
+        account_id: env.cloudflareAccountId,
+        observability: OBSERVABILITY,
+      },
+    ]),
+  ),
+};
+
+/** Write all three gitignored Wrangler configs if changed. */
 export const writeWranglerConfig = () => {
-  writeGeneratedWranglerConfig({
-    configUrl: new URL("../wrangler.builder.jsonc", import.meta.url),
-    appLabel: "apps/os (builder sidecar)",
-    config: builderConfig,
-  });
   writeGeneratedWranglerConfig({
     configUrl: new URL("../wrangler.typechecker.jsonc", import.meta.url),
     appLabel: "apps/os (typechecker sidecar)",
     config: typecheckerConfig,
+  });
+  writeGeneratedWranglerConfig({
+    configUrl: new URL("../wrangler.worker-bundler.jsonc", import.meta.url),
+    appLabel: "apps/os (worker-bundler sidecar)",
+    config: workerBundlerConfig,
   });
   return writeGeneratedWranglerConfig({
     configUrl: new URL("../wrangler.jsonc", import.meta.url),
@@ -580,7 +676,7 @@ export const writeWranglerConfig = () => {
   });
 };
 
-/** Regenerate apps/os/wrangler{,.builder}.jsonc from the root envs.ts. */
+/** Regenerate the OS config and both compiler-sidecar configs. */
 export default function generateWranglerConfig() {
   console.log(`Wrote ${writeWranglerConfig()}`);
 }

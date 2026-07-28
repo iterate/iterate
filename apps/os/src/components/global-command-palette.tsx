@@ -1,6 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { useMatches, useNavigate } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
 import {
   Dialog,
   DialogContent,
@@ -8,17 +7,22 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@iterate-com/ui/components/dialog";
-import { StreamSwitcherDialog } from "./stream-switcher-dialog.tsx";
-import { connectItxBrowser } from "~/itx/itx-react.tsx";
+import { connectItx, connectIterateSession, useIterateSessionQuery } from "iterate/sdk/itx/react";
 import { OPEN_GLOBAL_COMMAND_PALETTE_EVENT } from "~/components/global-command-palette-events.ts";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
 import { activeStreamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
-import { fetchProjectsList, projectsListQueryKey } from "~/lib/projects-query.ts";
+import { projectsListStaleTime } from "~/lib/projects-query.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 import type { StreamNavigator } from "~/lib/stream-navigation.ts";
 
+const CommandPaletteDialog = lazy(() =>
+  import("./command-palette-dialog.tsx").then((module) => ({
+    default: module.CommandPaletteDialog,
+  })),
+);
+
 /**
- * The ⌘K stream switcher, live on EVERY app page. The active project and
+ * The global ⌘K navigator, live on every app page. The active project and
  * stream come from the deepest route match that published a streamBreadcrumb
  * (every project-scoped page does); outside a project (the projects list,
  * new-project, the session REPL) the dialog first asks which project to
@@ -51,13 +55,12 @@ export function GlobalCommandPalette() {
     if (adminStream) return adminStream;
     const streamBreadcrumb = activeStreamBreadcrumb(matches);
     if (streamBreadcrumb) return streamBreadcrumb;
-    const project = matches
-      .map(
-        (match) =>
-          (match.context as { project?: { id: string; slug: string } } | undefined)?.project,
-      )
-      .filter(Boolean)
-      .at(-1);
+    let project: { id: string; slug: string } | undefined;
+    for (const match of matches) {
+      const candidate = (match.context as { project?: { id: string; slug: string } } | undefined)
+        ?.project;
+      if (candidate !== undefined) project = candidate;
+    }
     return project ? { projectId: project.id, projectSlug: project.slug, streamPath: "/" } : null;
   }, [adminStream, matches]);
   const activeStream = useMemo(
@@ -101,16 +104,15 @@ export function GlobalCommandPalette() {
 
   const streamNavigator = useMemo<StreamNavigator | null>(() => {
     if (adminStream != null) {
-      // Admin addresses arbitrary projects through the global (admin-cookie)
-      // session and stays within the admin explorer routes.
+      // Admin addresses arbitrary projects through platform-wide operator
+      // authority and stays within the admin explorer routes.
       return {
-        source: (path) => ({
+        remoteTreeSource: (path) => ({
           async subscribe(args) {
-            const itx = await connectItxBrowser();
             const stream =
               adminStream.adminProjectId === NULL_DURABLE_OBJECT_PROJECT_ID
-                ? itx.streams.get(path)
-                : itx.projects.get(adminStream.adminProjectId).streams.get(path);
+                ? (await connectIterateSession()).streams.get(path)
+                : (await connectItx(adminStream.adminProjectId)).streams.get(path);
             return stream.subscribe(args);
           },
         }),
@@ -126,13 +128,6 @@ export function GlobalCommandPalette() {
     }
     if (activeStream == null) return null;
     return {
-      source: (path) => ({
-        async subscribe(args) {
-          // Key by project ID so we share the project provider's pooled socket.
-          const itx = await connectItxBrowser({ projectId: activeStream.projectId });
-          return itx.streams.get(path).subscribe(args);
-        },
-      }),
       onOpenPath(path) {
         setOpen(false);
         void navigate(linkOptionsForStreamPath(activeStream.projectSlug, path));
@@ -161,26 +156,27 @@ export function GlobalCommandPalette() {
     );
   }
 
-  return (
-    <StreamSwitcherDialog
-      open={open}
-      onOpenChange={handleOpenChange}
-      currentPath={activeStream.streamPath}
-      navigator={streamNavigator}
-      scope={activeStream.projectId}
-      // The admin lane browses through the global admin session, and its
-      // `__null__` deployment namespace has no project DO to index — dialing
-      // `projects.get("__null__")` would just retry forever. Admin gets the
-      // tree; the live index is the app lane's.
-      liveIndex={adminStream == null}
-    />
-  );
+  return open ? (
+    <Suspense fallback={<p role="status">Loading project navigation…</p>}>
+      <CommandPaletteDialog
+        open
+        onOpenChange={handleOpenChange}
+        currentPath={activeStream.streamPath}
+        navigator={streamNavigator}
+        scope={activeStream.projectId}
+        // The admin lane browses through platform-wide operator authority, and its
+        // `__null__` deployment namespace has no project DO to index — dialing
+        // `projects.get("__null__")` would just retry forever. Admin gets the
+        // tree; the live index is the app lane's.
+        liveIndex={adminStream == null}
+      />
+    </Suspense>
+  ) : null;
 }
 
 /**
- * The ⌘K first step outside any project: pick which project's streams to
- * browse. The list is the same cached itx `projects.list()` the sidebar keeps
- * warm, so this is usually instant.
+ * The ⌘K first step outside any project: pick which project's agents and
+ * streams to browse. The query is active only while this dialog is open.
  */
 function ProjectPickerDialog({
   onOpenChange,
@@ -191,18 +187,19 @@ function ProjectPickerDialog({
   onPick: (project: { id: string; slug: string }) => void;
   open: boolean;
 }) {
-  const { data: projects } = useQuery({
-    queryKey: projectsListQueryKey,
-    queryFn: fetchProjectsList,
+  const { data: projects } = useIterateSessionQuery({
+    key: ["projects"],
+    query: (session) => session.projects.list(),
     enabled: open,
+    staleTime: projectsListStaleTime,
   });
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Streams</DialogTitle>
-          <DialogDescription>Pick a project to browse its streams.</DialogDescription>
+          <DialogTitle>Project navigation</DialogTitle>
+          <DialogDescription>Pick a project to browse its agents and streams.</DialogDescription>
         </DialogHeader>
         <div className="max-h-80 overflow-y-auto">
           {projects == null ? (
@@ -234,7 +231,7 @@ function ProjectPickerDialog({
  * The admin stream explorer's ⌘K context: which project (or the `__null__`
  * deployment namespace) it is browsing and where it stands. Detected from the
  * /admin/streams/$projectId route params — admin navigates within its own
- * explorer routes and dials through the global admin session.
+ * explorer routes and dials through platform-wide operator authority.
  */
 function getAdminStreamContext(matches: ReturnType<typeof useMatches>) {
   const adminMatch = matches.find((match) => match.routeId.startsWith("/admin/streams/$projectId"));

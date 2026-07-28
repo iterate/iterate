@@ -1,5 +1,65 @@
 import { describe, expect, test } from "vitest";
-import { assertSandboxPath, githubTokenEnvForConnections, sandboxPathFor } from "./utils.ts";
+import { MemoryStream } from "iterate/processors/testing";
+import { ITERATE_GITHUB_BOT_COMMIT_AUTHOR } from "../integrations/utils.ts";
+import { sandboxCreateClaimEvent, sandboxCreationEvents } from "./sandbox-defaults.ts";
+import {
+  assertSandboxPath,
+  githubTokenEnvForConnections,
+  sandboxPathFor,
+  SANDBOX_GIT_CONFIG_SHELL,
+} from "./utils.ts";
+
+describe("sandboxCreationEvents", () => {
+  test("the canonical catalogue claim dedupes after a transport round trip and has one writer", async () => {
+    const stream = new MemoryStream("/sandboxes");
+    const claim = sandboxCreateClaimEvent({ create: {}, path: "/sandboxes/example" });
+    const transported = JSON.parse(JSON.stringify(claim)) as typeof claim;
+
+    const [first] = await stream.append(transported);
+    const [retry] = await stream.append(claim);
+
+    expect(retry?.offset).toBe(first?.offset);
+    expect(stream.events).toHaveLength(1);
+    expect(claim.payload).toEqual({
+      instanceType: "basic",
+      path: "/sandboxes/example",
+    });
+    expect(
+      sandboxCreationEvents({
+        instanceType: "basic",
+        path: "/sandboxes/example",
+        projectId: "prj_test",
+      }).map((event) => event.type),
+    ).not.toContain("events.iterate.com/sandbox/create-requested");
+  });
+
+  test("builds one complete instance-stream birth batch with payload-free identity keys", () => {
+    const first = sandboxCreationEvents({
+      env: { API_TOKEN: 'getSecret("/secrets/api")' },
+      instanceType: "lite",
+      path: "/sandboxes/example",
+      projectId: "prj_test",
+    });
+    const retryWithDifferentConfig = sandboxCreationEvents({
+      env: { API_TOKEN: "different" },
+      instanceType: "lite",
+      path: "/sandboxes/example",
+      projectId: "prj_test",
+    });
+
+    expect(first.map((event) => event.type)).toEqual([
+      "events.iterate.com/sandbox/created",
+      "events.iterate.com/sandbox/configured",
+      "events.iterate.com/stream/subscription-configured",
+    ]);
+    expect(first.map((event) => event.idempotencyKey)).toEqual(
+      retryWithDifferentConfig.map((event) => event.idempotencyKey),
+    );
+    expect(first[1]?.payload).toEqual({
+      env: { API_TOKEN: 'getSecret("/secrets/api")' },
+    });
+  });
+});
 
 describe("sandboxPathFor", () => {
   test("a name mints /sandboxes/<name> — flat, no intermediate folders", () => {
@@ -24,7 +84,7 @@ describe("assertSandboxPath", () => {
   });
 
   test("rejects nested paths — including every pre-flat /sandboxes/<instanceType>/<name> path", () => {
-    // The instance type is configuration (journaled on create-requested), not
+    // The instance type is configuration (recorded on create-requested), not
     // a path segment: nesting would materialize folder streams like
     // /sandboxes/lite that are not sandboxes.
     expect(() => assertSandboxPath("/sandboxes/lite/bla")).toThrow(/single-segment/);
@@ -51,7 +111,7 @@ describe("githubTokenEnvForConnections", () => {
   test("builds the connection secret's accessToken placeholder — never token bytes", () => {
     expect(
       githubTokenEnvForConnections([{ connection: "install-42", integration: "github" }]),
-    ).toBe('getSecret({ path: "/secrets/integrations/github/install-42", field: "accessToken" })');
+    ).toBe('getSecret("/secrets/integrations/github/install-42", { field: "accessToken" })');
   });
 
   test("null when the project has no GitHub connection (other integrations don't count)", () => {
@@ -66,5 +126,34 @@ describe("githubTokenEnvForConnections", () => {
       { connection: "install-10", integration: "github" },
     ]);
     expect(placeholder).toContain("/secrets/integrations/github/install-10");
+  });
+});
+
+describe("SANDBOX_GIT_CONFIG_SHELL", () => {
+  test("plants lowercase iterate identity so GitHub shows the app avatar", () => {
+    expect(ITERATE_GITHUB_BOT_COMMIT_AUTHOR.name).toBe("iterate");
+    expect(ITERATE_GITHUB_BOT_COMMIT_AUTHOR.name).toBe(
+      ITERATE_GITHUB_BOT_COMMIT_AUTHOR.name.toLowerCase(),
+    );
+    expect(SANDBOX_GIT_CONFIG_SHELL).toContain(
+      `user.name '${ITERATE_GITHUB_BOT_COMMIT_AUTHOR.name}'`,
+    );
+    expect(SANDBOX_GIT_CONFIG_SHELL).toContain(
+      `user.email '${ITERATE_GITHUB_BOT_COMMIT_AUTHOR.email}'`,
+    );
+    expect(SANDBOX_GIT_CONFIG_SHELL).toContain("users.noreply.github.com");
+    expect(SANDBOX_GIT_CONFIG_SHELL).toContain("iterate[bot]");
+  });
+
+  test("configures git extraheader as Basic x-access-token + unwrapped base64 of GH_TOKEN", () => {
+    // GitHub git smart-HTTP rejects Bearer; Basic with username x-access-token
+    // is the documented install-token shape. base64 -w0 keeps the placeholder
+    // on one line so egress can peel/substitute it.
+    expect(SANDBOX_GIT_CONFIG_SHELL).toContain('http."https://github.com/".extraheader');
+    expect(SANDBOX_GIT_CONFIG_SHELL).toContain("AUTHORIZATION: Basic");
+    expect(SANDBOX_GIT_CONFIG_SHELL).toContain("x-access-token:${GH_TOKEN}");
+    expect(SANDBOX_GIT_CONFIG_SHELL).toContain("base64 -w0");
+    expect(SANDBOX_GIT_CONFIG_SHELL).not.toMatch(/tr -d/);
+    expect(SANDBOX_GIT_CONFIG_SHELL).not.toContain("Bearer");
   });
 });

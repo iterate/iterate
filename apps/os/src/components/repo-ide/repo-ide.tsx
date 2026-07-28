@@ -1,6 +1,6 @@
 import { Suspense, useCallback } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useNavigate, useSearch } from "@tanstack/react-router";
+import { useNavigate, useRouterState, useSearch } from "@tanstack/react-router";
 import {
   FilesIcon,
   GitBranchIcon,
@@ -19,11 +19,14 @@ import {
   ResizablePanelGroup,
 } from "@iterate-com/ui/components/resizable";
 import { toast } from "@iterate-com/ui/components/sonner";
+import { Spinner } from "@iterate-com/ui/components/spinner";
+import { useItx, useItxQuery } from "iterate/sdk/itx/react";
 import { isBinaryRepoPath } from "./repo-file-kinds.ts";
 import { localFileToBase64, pickLocalFile } from "./local-file.ts";
 import { CommitDiffPane } from "./commit-diff-pane.tsx";
 import { CommitHistoryPanel } from "./commit-history-panel.tsx";
 import { RepoEditorPane } from "./repo-editor-pane.tsx";
+import { discardRepoFile } from "./repo-file-discard.ts";
 import { RepoGithubPanel } from "./repo-github-panel.tsx";
 import { RepoFileTree, type RepoTreeActions } from "./repo-file-tree.tsx";
 import {
@@ -34,7 +37,6 @@ import {
   type FileEntry,
   type WorkingTreeChanges,
 } from "./staged-changes.ts";
-import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
 
 /**
  * The repo mini-IDE: pierre file tree + per-kind file renderers over one
@@ -45,6 +47,7 @@ import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
 export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: string }) {
   const itx = useItx();
   const queryClient = useQueryClient();
+  const routePending = useRouterState({ select: (state) => state.isLoading });
   const files = useItxQuery({
     key: ["repo-files", projectId, repoPath],
     query: (itx) => itx.repos.get(repoPath).listFiles(),
@@ -89,6 +92,17 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
     store.setStaged(path, undefined);
   };
 
+  const discardPath = (path: string) =>
+    discardRepoFile({
+      path,
+      headHasPath: headPathSet.has(path),
+      selected: selectedPath === path,
+      confirmDiscard: (message) => window.confirm(message),
+      discardWorking: (trackedPath) => store.discardWorking(trackedPath),
+      removeWorkingFile: dropChange,
+      closeSelectedFile: () => selectFile(undefined),
+    });
+
   const removePath = (path: string) => {
     // Deleting a not-yet-committed file just drops its change; deleting a
     // HEAD file stages the deletion in the working slot.
@@ -114,7 +128,7 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
       store.setWorking(path, { type: "write", content: "" });
       selectFile(path);
     },
-    discard: (path) => store.discardWorking(path),
+    discard: discardPath,
     remove: (path, isFolder) => {
       for (const affected of isFolder ? pathsUnder(path) : [path]) removePath(affected);
     },
@@ -208,7 +222,17 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
   });
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-row">
+    <div className="relative flex min-h-0 min-w-0 flex-1 flex-row">
+      {routePending ? (
+        <div
+          className="pointer-events-none absolute top-2 right-2 z-20 flex items-center gap-1.5 rounded border bg-background/95 px-2 py-1 text-xs text-muted-foreground shadow-sm"
+          data-spinner="true"
+          role="status"
+        >
+          <Spinner className="size-3.5" />
+          Updating view...
+        </div>
+      ) : null}
       {/* vscode-style activity strip: Files / Source control / History / GitHub. */}
       <div className="flex shrink-0 flex-col items-center gap-1 border-r px-1 py-2">
         <Button
@@ -240,7 +264,12 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
           // accessible name ("1"), beating the title.
           aria-label="Source control"
           onClick={() =>
-            patchSearch({ scm: true, gh: undefined, history: undefined, commit: undefined })
+            patchSearch({
+              scm: true,
+              gh: undefined,
+              history: undefined,
+              commit: undefined,
+            })
           }
           className="relative text-muted-foreground"
         >
@@ -256,7 +285,12 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
           size="icon"
           title="History"
           onClick={() =>
-            patchSearch({ history: true, scm: undefined, gh: undefined, staged: undefined })
+            patchSearch({
+              history: true,
+              scm: undefined,
+              gh: undefined,
+              staged: undefined,
+            })
           }
           className="text-muted-foreground"
         >
@@ -267,7 +301,12 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
           size="icon"
           title="GitHub"
           onClick={() =>
-            patchSearch({ gh: true, scm: undefined, history: undefined, commit: undefined })
+            patchSearch({
+              gh: true,
+              scm: undefined,
+              history: undefined,
+              commit: undefined,
+            })
           }
           className="text-muted-foreground"
         >
@@ -301,7 +340,7 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
           ) : gh ? (
             // Own Suspense (like RepoEditorPane's): the panel's first
             // connections read suspends, and without a local boundary that
-            // would bubble to the route's ItxBoundary and blank the whole IDE.
+            // would bubble to the route's `<Suspense>` boundary and blank the whole IDE.
             <Suspense
               fallback={
                 <div className="p-3 text-xs text-muted-foreground" data-spinner="true">
@@ -319,7 +358,7 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
               onCommit={(message, reset) => commit.mutate(message, { onSuccess: reset })}
               onStage={(path) => store.stage(path)}
               onUnstage={(path) => store.unstage(path)}
-              onDiscard={(path) => store.discardWorking(path)}
+              onDiscard={discardPath}
               onDiscardAll={() => store.discardAll()}
               onOpen={(path, status) =>
                 patchSearch({
@@ -390,6 +429,7 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
                   }
                   onSetWorking={(entry) => store.setWorking(selectedPath, entry)}
                   onSetStaged={(entry) => store.setStaged(selectedPath, entry)}
+                  onDiscardFile={() => discardPath(selectedPath)}
                   onStageFile={() => store.stage(selectedPath)}
                   onUnstageFile={() => {
                     store.unstage(selectedPath);
@@ -603,11 +643,11 @@ function GitPanel({
  * IDE view state, URL-owned like every stream view's: `file` is the open
  * path, `diff` whether the HEAD↔staged diff is showing, `preview` whether a
  * markdown/html file shows its rendered preview instead of the editor,
- * `scm`/`gh`/`history` which sidebar shows instead of the file tree (Source
- * Control / GitHub / commit history), `commit` the expanded commit's oid
- * (which also pins the readonly commit diff the open file renders as). The
- * repo detail route validates these (RepoDetailSearch), so loose reads here
- * are safe.
+ * `scm`/`gh`/`history` which sidebar shows instead of the file tree
+ * (Source Control / GitHub / commit history), `commit` the expanded commit's
+ * oid (which also pins the readonly commit diff the open file renders as).
+ * The repo detail route validates these (RepoDetailSearch), so loose reads
+ * here are safe.
  */
 function useRepoIdeSearch() {
   const search = useSearch({ strict: false }) as {

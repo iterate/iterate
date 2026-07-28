@@ -1,7 +1,7 @@
 // The execution-runtime matrix for catalogue examples: ONE script body (an
 // example's `code`, with `itx` + `vars` in scope and a trailing `return`)
-// runs through every server-side runtime. The browser runtime lives in
-// examples-browser.test.ts (vitest's browser project); everything else is here.
+// runs through every server-side runtime. The browser runtime is proven by
+// specs/repl-examples.spec.ts (the real REPL); everything else is here.
 //
 //   node            AsyncFunction over an itx Cap'n Web stub in this process
 //   cli             spawned `tsx scripts/cli.ts itx run --eval … --context …`
@@ -15,11 +15,22 @@ import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { RpcTarget } from "capnweb";
+import { ITX_INITIAL_CONNECTION_RETRY_PREFIX } from "../../scripts/itx.ts";
 import type { ItxExample, ItxExampleRuntime } from "../../src/itx/examples.ts";
+import { runExample } from "../test-support/run-example.ts";
 import { baseUrl, connectProject } from "./e2e-env.ts";
 
 export const MATRIX_RUNTIMES = ["node", "cli", "run-script", "project-worker"] as const;
 export type MatrixRuntime = (typeof MATRIX_RUNTIMES)[number] & ItxExampleRuntime;
+export type CliInitialConnectionRetry = {
+  attemptDurationMs: number;
+  delayMs: number;
+  error: string;
+  errorCode?: string;
+  failedAttempt: number;
+  nextAttempt: number;
+  startedAt: string;
+};
 
 const AsyncFunction = async function () {}.constructor as new (
   ...args: string[]
@@ -27,24 +38,31 @@ const AsyncFunction = async function () {}.constructor as new (
 
 export async function runExampleCode(
   runtime: MatrixRuntime,
-  input: { code: string; id?: string; projectId: string; vars: Record<string, unknown> },
+  input: {
+    code: string;
+    id: string;
+    projectId: string;
+    timeoutMs: number;
+    vars: Record<string, unknown>;
+    onInitialConnectionRetry?: (retry: CliInitialConnectionRetry) => Promise<void> | void;
+  },
 ): Promise<unknown> {
-  // Worker-heavy examples running while other suites load their own dynamic
-  // workers can trip the deployment's loader isolate cap. That's shared-load
-  // contention, not a behavior bug — back off and retry that exact transient;
-  // anything else fails immediately.
-  return await retryOnWorkerStartupContention(async () => {
-    switch (runtime) {
-      case "node":
-        return await runInNode(input);
-      case "cli":
-        return await runInCli(input);
-      case "run-script":
-        return await runInRunScript(input);
-      case "project-worker":
-        return await runInProjectWorker(input);
-    }
-  });
+  // Execute user code exactly once. The CLI may make one observable fresh
+  // dial before its RPC session exists, but neither it nor these runtime
+  // adapters replay authentication or an operation. A wrapper here used to
+  // re-roll anything containing "internal error; reference =" — Cloudflare's
+  // redaction of EVERY server-side crash — which could mask real
+  // worker-startup product bugs behind a silent second retry layer.
+  switch (runtime) {
+    case "node":
+      return await runInNode(input);
+    case "cli":
+      return await runInCli(input);
+    case "run-script":
+      return await runInRunScript(input);
+    case "project-worker":
+      return await runInProjectWorker(input);
+  }
 }
 
 const execFileAsync = promisify(execFile);
@@ -53,101 +71,184 @@ const APP_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 async function runInCli(input: {
   code: string;
   projectId: string;
+  timeoutMs: number;
   vars: Record<string, unknown>;
+  onInitialConnectionRetry?: (retry: CliInitialConnectionRetry) => Promise<void> | void;
 }): Promise<unknown> {
+  const abortController = new AbortController();
+  const timeoutId = setTimeout(() => abortController.abort(), input.timeoutMs);
   // tsx directly (not `pnpm cli`) so stdout is exactly the run command's one
   // JSON document, with no package-runner banner in front of it.
-  const { stdout } = await execFileAsync(
-    "pnpm",
-    [
-      "exec",
-      "tsx",
-      "./scripts/cli.ts",
-      "itx",
-      "run",
-      "--eval",
-      input.code,
-      "--context",
-      input.projectId,
-      "--vars",
-      JSON.stringify(input.vars),
-      "--base-url",
-      baseUrl(),
-    ],
-    { cwd: APP_ROOT, env: process.env, maxBuffer: 10 * 1024 * 1024 },
-  );
-  return JSON.parse(stdout);
+  try {
+    const { stderr, stdout } = await execFileAsync(
+      "pnpm",
+      [
+        "exec",
+        "tsx",
+        "./scripts/cli.ts",
+        "itx",
+        "run",
+        "--eval",
+        input.code,
+        "--context",
+        input.projectId,
+        "--vars",
+        JSON.stringify(input.vars),
+        "--base-url",
+        baseUrl(),
+      ],
+      {
+        cwd: APP_ROOT,
+        env: process.env,
+        killSignal: "SIGKILL",
+        maxBuffer: 10 * 1024 * 1024,
+        signal: abortController.signal,
+      },
+    );
+    await reportCliDiagnostics(stderr, input.onInitialConnectionRetry);
+    return JSON.parse(stdout);
+  } catch (error) {
+    if (abortController.signal.aborted) {
+      throw new ExampleRuntimeDeadlineError("cli", input.timeoutMs, { cause: error });
+    }
+    throw cliProcessFailure(error);
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
-const LOADER_CONTENTION_MESSAGE = "Too many concurrent dynamic workers";
-// itx redacts server-side exceptions to "internal error; reference = …"
-// before they cross Cap'n Web. Mid-suite that shape is overwhelmingly loader
-// isolate saturation (each script execution and inline worker is its own
-// isolate), so treat it as the same retryable transient; a persistent itx
-// bug still fails after the backoff budget.
-const MASKED_INTERNAL_ERROR_MESSAGE = "internal error; reference =";
-// The repo examples commit then immediately read; on a COLD repo Durable
-// Object the read can lag the commit (Artifacts read-after-write), so the
-// example's own "seeded file" precondition throws. Warm repos never hit it —
-// retrying with backoff is exactly right. Underlying capability gap:
-// commitFiles resolving before read-your-write holds.
-const REPO_SEED_LAG_MESSAGE = "Expected seeded file to exist";
-const LOADER_CONTENTION_BACKOFF_MS = [2_000, 5_000, 10_000];
-
-async function retryOnWorkerStartupContention<T>(run: () => Promise<T>): Promise<T> {
-  for (const backoffMs of LOADER_CONTENTION_BACKOFF_MS) {
-    try {
-      return await run();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const retryable =
-        message.includes(LOADER_CONTENTION_MESSAGE) ||
-        message.includes(MASKED_INTERNAL_ERROR_MESSAGE) ||
-        message.includes(REPO_SEED_LAG_MESSAGE);
-      if (!retryable) throw error;
-      await new Promise((resolve) => setTimeout(resolve, backoffMs));
+async function reportCliDiagnostics(
+  stderr: string,
+  onInitialConnectionRetry:
+    | ((retry: CliInitialConnectionRetry) => Promise<void> | void)
+    | undefined,
+) {
+  for (const line of stderr.split(/\r?\n/u).filter(Boolean)) {
+    if (!line.startsWith(ITX_INITIAL_CONNECTION_RETRY_PREFIX)) {
+      console.warn(`[cli stderr] ${line}`);
+      continue;
     }
+    const retry = parseInitialConnectionRetry(
+      line.slice(ITX_INITIAL_CONNECTION_RETRY_PREFIX.length),
+    );
+    console.warn(`${ITX_INITIAL_CONNECTION_RETRY_PREFIX}${JSON.stringify(retry)}`);
+    await onInitialConnectionRetry?.(retry);
   }
-  return await run();
+}
+
+function parseInitialConnectionRetry(value: string): CliInitialConnectionRetry {
+  const parsed = JSON.parse(value) as Record<string, unknown>;
+  if (
+    typeof parsed.attemptDurationMs !== "number" ||
+    typeof parsed.delayMs !== "number" ||
+    typeof parsed.error !== "string" ||
+    typeof parsed.failedAttempt !== "number" ||
+    typeof parsed.nextAttempt !== "number" ||
+    typeof parsed.startedAt !== "string" ||
+    (parsed.errorCode !== undefined && typeof parsed.errorCode !== "string")
+  ) {
+    throw new Error(`Invalid CLI initial-connection retry diagnostic: ${value}`);
+  }
+  return parsed as CliInitialConnectionRetry;
+}
+
+function cliProcessFailure(error: unknown): unknown {
+  if (typeof error !== "object" || error === null) return error;
+  const processError = error as { stderr?: unknown; stdout?: unknown };
+  const stderr = compactProcessOutput(processError.stderr);
+  const stdout = compactProcessOutput(processError.stdout);
+  const output = stderr ?? stdout;
+  if (output === undefined) return error;
+  return new Error(
+    `cli process failed — ${stderr === undefined ? "stdout" : "stderr"}: ${output}`,
+    {
+      cause: error,
+    },
+  );
+}
+
+function compactProcessOutput(output: unknown): string | undefined {
+  if (typeof output !== "string") return undefined;
+  const compact = output.replace(/\s+/gu, " ").trim();
+  if (compact.length === 0) return undefined;
+  const limit = 2_000;
+  return compact.length > limit ? `…${compact.slice(-limit)}` : compact;
 }
 
 async function runInNode(input: {
   code: string;
   projectId: string;
+  timeoutMs: number;
   vars: Record<string, unknown>;
 }): Promise<unknown> {
   const script = new AsyncFunction("itx", "vars", "RpcTarget", input.code);
   using project = connectProject(input.projectId);
-  return await script(project, input.vars, RpcTarget);
+  return await finishBeforeRuntimeDeadline("node", input.timeoutMs, () =>
+    script(project, input.vars, RpcTarget),
+  );
 }
 
 async function runInRunScript(input: {
-  code: string;
+  id: string;
   projectId: string;
+  timeoutMs: number;
   vars: Record<string, unknown>;
 }): Promise<unknown> {
   using project = connectProject(input.projectId);
-  // runScript takes an async arrow function source string (see itx
-  // CapabilityHost contract); the example body becomes its body, with the
-  // case's vars serialized inline.
-  const execution = await project.capabilityHost.runScript(
-    `async (itx) => {\nconst vars = ${JSON.stringify(input.vars)};\n${input.code}\n}`,
+  // The shared by-id door (test-support/run-example.ts) IS this runtime:
+  // the matrix proves the exact envelope any e2e test gets from runExample.
+  return await finishBeforeRuntimeDeadline("run-script", input.timeoutMs, () =>
+    runExample(input.id, {
+      capabilityHost: project.capabilityHost,
+      vars: input.vars,
+    }),
   );
-  return execution.result;
 }
 
 async function runInProjectWorker(input: {
   code: string;
-  id?: string;
+  id: string;
   projectId: string;
+  timeoutMs: number;
   vars: Record<string, unknown>;
 }): Promise<unknown> {
-  if (!input.id) throw new Error("project-worker runs are invoked by example id.");
   using project = connectProject(input.projectId);
   const worker = project.worker as unknown as {
     runItxExample(input: { id: string; vars: Record<string, unknown> }): Promise<unknown>;
   };
-  return await worker.runItxExample({ id: input.id, vars: input.vars });
+  return await finishBeforeRuntimeDeadline("project-worker", input.timeoutMs, () =>
+    worker.runItxExample({ id: input.id, vars: input.vars }),
+  );
+}
+
+export async function finishBeforeRuntimeDeadline<Result>(
+  runtime: MatrixRuntime,
+  timeoutMs: number,
+  operation: () => Promise<Result>,
+): Promise<Result> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timeoutId = setTimeout(
+      () => reject(new ExampleRuntimeDeadlineError(runtime, timeoutMs)),
+      timeoutMs,
+    );
+  });
+  try {
+    return await Promise.race([operation(), deadline]);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+export class ExampleRuntimeDeadlineError extends Error {
+  constructor(
+    readonly runtime: MatrixRuntime,
+    readonly timeoutMs: number,
+    options?: ErrorOptions,
+  ) {
+    super(`${runtime} runtime exceeded ${timeoutMs}ms`, options);
+    this.name = "ExampleRuntimeDeadlineError";
+  }
 }
 
 /**
@@ -155,9 +256,10 @@ async function runInProjectWorker(input: {
  * example baked in as `async (itx, vars) => { <body> }`, dispatched by id
  * through ONE exported method. `project.worker.runItxExample(...)` reaches the
  * repo-sourced default worker, and the script's handle is the worker's own
- * `await this.env.ITX.get()` — the same project-scoped itx every other runtime
- * connects to from outside. Plain JavaScript: dynamic workers may import
- * "cloudflare:workers" and nothing else.
+ * `await this.env.ITX.get()`. Each runtime has an exclusive project lease, so
+ * this proves the same project-scoped itx semantics without sharing mutable
+ * repo state with the other runtimes. Plain JavaScript: dynamic workers may
+ * import "cloudflare:workers" and nothing else.
  */
 export function projectWorkerRunnerSource(examples: ItxExample[]): string {
   const scripts = examples

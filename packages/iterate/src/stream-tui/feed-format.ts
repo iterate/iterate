@@ -1,44 +1,65 @@
 /**
  * Pure terminal formatting for agent feed items. Phrasing deliberately rhymes
  * with the web feed (apps/os/src/components/agent-feed.tsx): activities read
- * "Ran code 2× · 3 requests · 7.4s", steps read "gpt-5 · 1.2s".
+ * "Ran code 2× · 3 requests · 7.4 s", steps read "gpt-5 · 1.2s". Live status
+ * is "Thinking" / "Waiting for a response" / "Running code 0.9s".
  */
 import type {
   AgentUiActivity,
   AgentUiStep,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 
-export function formatActivitySummary(activity: AgentUiActivity): string {
-  const codeCount = activity.steps.filter((step) => step.kind === "code").length;
-  const requestCount = activity.steps.filter((step) => step.kind === "llm").length;
-  const interrupted = activity.steps.some(
-    (step) => step.kind === "llm" && step.outcome === "cancelled",
-  );
-  const parts: string[] = [];
-  if (codeCount > 0) parts.push(`Ran code ${codeCount}×`);
-  parts.push(`${requestCount} request${requestCount === 1 ? "" : "s"}`);
-  if (interrupted) parts.push("interrupted");
-  const totalMs =
-    activity.endedAtMs == null ? null : Math.max(0, activity.endedAtMs - activity.startedAtMs);
-  if (totalMs != null && totalMs > 0) parts.push(formatSeconds(totalMs));
-  return parts.join(" · ");
-}
+export { formatAgentUiActivitySummary as formatActivitySummary } from "@iterate-com/ui/components/events/agent-ui-reducer";
 
 export function formatStepLine(step: AgentUiStep): string {
-  const label = step.kind === "code" ? "Ran code" : (step.model ?? "LLM request");
+  if (step.kind === "code" && step.status === "running") {
+    return "Running code";
+  }
+  const label =
+    step.kind === "code"
+      ? "Ran code"
+      : step.cancelReason === "interrupted-by-user-input"
+        ? "Stopped for your new message"
+        : step.cancelReason === "expired"
+          ? "Request expired"
+          : step.outcome === "cancelled"
+            ? "Request cancelled"
+            : (step.model ?? "LLM request");
   const parts: string[] = [label];
   if (step.kind === "llm") {
+    if (step.outcome === "cancelled" && step.model != null) parts.push(step.model);
     if (step.inputTokens != null || step.outputTokens != null) {
       parts.push(`${formatTokens(step.inputTokens)} → ${formatTokens(step.outputTokens)} tok`);
     }
     if (step.outcome === "failed") parts.push("failed");
-    if (step.outcome === "cancelled") parts.push("interrupted");
   } else if (step.success === false) {
     parts.push("failed");
   }
   if (step.durationMs != null) parts.push(formatSeconds(step.durationMs));
-  if (step.status === "running") parts.push("running");
   return parts.join(" · ");
+}
+
+/**
+ * Live spinner label for the in-flight activity. Mirrors the web feed:
+ * reasoning tokens → Thinking; otherwise Waiting for a response; code →
+ * Running code (caller may append a live `0.9s` counter).
+ */
+export function formatLiveActivityLabel(
+  activity: AgentUiActivity,
+  nowMs: number = Date.now(),
+): string {
+  const running = activity.steps.filter((step) => step.status === "running");
+  const code = running.findLast((step) => step.kind === "code");
+  if (code != null) {
+    const startedAtMs = code.startedAtMs;
+    return `Running code ${formatSeconds(Math.max(0, nowMs - startedAtMs))}`;
+  }
+  const llm = running.findLast((step) => step.kind === "llm");
+  if (llm == null || llm.kind !== "llm") {
+    return "Working…";
+  }
+  if (llm.thinkingText !== "" && llm.responseText === "") return "Thinking";
+  return "Waiting for a response";
 }
 
 function formatSeconds(ms: number): string {

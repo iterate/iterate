@@ -4,7 +4,7 @@ import { createCompiler, type Compiler } from "tswasm";
 import { createCachedFetch } from "@iterate-com/typm/cached-fetch";
 // The typescript-go compiler as a wasm module (~30MB raw, ~7MB gzip) — the
 // whole reason this is a sidecar worker: the product script stays lean, the
-// same way the builder quarantines esbuild-wasm. Two sidecars because they
+// same way the worker-bundler sidecar quarantines esbuild-wasm. Two sidecars because they
 // CANNOT be one: esbuild-wasm + tswasm gzip to ~11 MiB, over Cloudflare's
 // 10 MiB compressed script limit (upload rejected, error 10027).
 import typescriptWasm from "tswasm/tswasm.wasm";
@@ -16,6 +16,9 @@ import { createCompilerCache } from "./compiler-cache.ts";
  * names — npm type metadata (jsdelivr) and `openapi:` spec URLs. */
 const CheckInput = z.object({
   files: z.record(z.string(), z.string()),
+  /** Virtual path whose emitted JavaScript should come back as result.js —
+   * check and emit are one wasm compile, so naming it costs nothing. */
+  entrypoint: z.string().optional(),
 });
 
 /** Npm type downloads ride the Cache API (same recipe and cache name as the
@@ -41,7 +44,7 @@ const compilerCache = createCompilerCache<Compiler>(() =>
 
 /**
  * The typechecker worker's entrypoint: a pure function worker (files in,
- * diagnostics out) mirroring the builder sidecar. The os worker calls
+ * diagnostics out) mirroring the worker-bundler sidecar. The os worker calls
  * `env.TYPECHECKER.check(...)` for provide-time capability-types validation
  * and the `itx.docs.typecheck` door; a compiler upgrade redeploys one worker.
  */
@@ -51,13 +54,17 @@ export class TypecheckerEntrypoint extends WorkerEntrypoint {
     return Response.json({ worker: "os-typechecker" }, { status: 404 });
   }
 
-  async check(input: { files: Record<string, string> }): Promise<TypecheckResult> {
-    const { files } = CheckInput.parse(input);
+  async check(input: {
+    files: Record<string, string>;
+    entrypoint?: string;
+  }): Promise<TypecheckResult> {
+    const { files, entrypoint } = CheckInput.parse(input);
     const compilerPromise = compilerCache.get();
     const result = await runTypecheck({
       compiler: await compilerPromise,
       fetchImpl: typmFetch,
       files,
+      entrypoint,
     });
     // runTypecheck turns a mid-compile crash (the wasm program exiting) into a
     // code-0 diagnostic. The compiler instance may now be permanently dead, so

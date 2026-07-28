@@ -2,93 +2,24 @@
 // OAuth here: connect is getMe → claim check → setWebhook → recordConnection.
 // The Telegram Bot API side is a REAL local HTTP server (no fetch mocking),
 // pointed at via config.integrations.telegram.apiBaseUrl — the dependency
-// injection that config knob exists for. Durable Object storage is the same
-// in-memory itxEnv seam as github-connect.test.ts / google-connection.test.ts.
+// injection that config knob exists for. Durable Object storage is the shared
+// in-memory itxEnv seam (src/test/fake-itx-env.ts).
 
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
+import { listenOnFetchSafePort } from "@iterate-com/shared/test-support/fetch-safe-port";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
-  CONNECTION_CLAIMED_EVENT_TYPE,
-  CONNECTION_UNCLAIMED_EVENT_TYPE,
   INTEGRATION_DIRECTORY_STREAM_PATH,
-  TELEGRAM_CONNECTED_EVENT_TYPE,
-  TELEGRAM_DISCONNECTED_EVENT_TYPE,
   integrationConnectionStreamPath,
   telegramBotTokenSecretPath,
   telegramWebhookSecretToken,
 } from "./utils.ts";
 import { parseConfig } from "~/config.ts";
 
-const network = vi.hoisted(() => {
-  type StoredEvent = { idempotencyKey?: string; offset: number; payload: unknown; type: string };
-  const streams = new Map<string, StoredEvent[]>();
-  // One entry per append CALL: which stream, which event types — so tests can
-  // assert atomicity (e.g. the steal's [unclaim, claim] committing as one
-  // directory append, never two).
-  const appendBatches: Array<{ name: string; types: string[] }> = [];
-  const secrets = new Map<
-    string,
-    { egress?: { urls: string[] }; material?: unknown; refresh?: unknown }
-  >();
-  return {
-    SECRET: {
-      getByName(name: string) {
-        return {
-          async update(input: { egress?: { urls: string[] }; material?: unknown }) {
-            secrets.set(name, { ...secrets.get(name), ...input });
-          },
-        };
-      },
-    },
-    STREAM: {
-      getByName(name: string) {
-        let events = streams.get(name);
-        if (!events) {
-          events = [];
-          streams.set(name, events);
-        }
-        const stored = events;
-        return {
-          async append(
-            ...inputs: Array<{ idempotencyKey?: string; payload: unknown; type: string }>
-          ) {
-            appendBatches.push({ name, types: inputs.map((input) => input.type) });
-            return inputs.map((input) => {
-              const existing =
-                input.idempotencyKey === undefined
-                  ? undefined
-                  : stored.find((event) => event.idempotencyKey === input.idempotencyKey);
-              if (existing) return existing;
-              const event = { ...input, offset: stored.length + 1 };
-              stored.push(event);
-              return event;
-            });
-          },
-          async runtimeState() {
-            return { coreProcessorState: { maxOffset: stored.length } };
-          },
-          async getEvents(
-            input: { afterOffset?: number; beforeOffset?: number; limit?: number } = {},
-          ) {
-            const { afterOffset = 0, beforeOffset = Infinity, limit = 500 } = input;
-            return stored
-              .filter((event) => event.offset > afterOffset && event.offset < beforeOffset)
-              .slice(0, limit);
-          },
-        };
-      },
-    },
-    reset() {
-      streams.clear();
-      secrets.clear();
-      appendBatches.length = 0;
-    },
-    appendBatches,
-    secrets,
-    streams,
-  };
+const network = await vi.hoisted(async () => {
+  const { createFakeItxEnv } = await import("../../test/fake-itx-env.ts");
+  return createFakeItxEnv();
 });
 
 const SECRET_ENCRYPTION_KEY = "test-secret-encryption-key";
@@ -138,7 +69,7 @@ describe("connectTelegram", () => {
     await using api = await startFakeTelegramApi({
       onSetWebhook: () => {
         claimedAtSetWebhookTime = directoryEvents().filter(
-          (event) => event.type === CONNECTION_CLAIMED_EVENT_TYPE,
+          (event) => event.type === "events.iterate.com/integration/connection-claimed",
         ).length;
       },
     });
@@ -190,8 +121,9 @@ describe("connectTelegram", () => {
       material: BOT_TOKEN,
     });
 
-    // Connected fact + the router's processor subscription on the connection
-    // stream; the directory claim (botId → project + connection) for routing.
+    // Explicit router birth, its processor subscription, then the connected
+    // fact on the connection stream; the directory claim (botId → project +
+    // connection) is the independent ingress-routing projection.
     const journal = network.streams.get(
       DurableObjectNameCodec.stringify({
         projectId: PROJECT_ID,
@@ -199,10 +131,11 @@ describe("connectTelegram", () => {
       }),
     );
     expect(journal?.map((event) => event.type)).toEqual([
+      "events.iterate.com/telegram/created",
       "events.iterate.com/stream/subscription-configured",
-      TELEGRAM_CONNECTED_EVENT_TYPE,
+      "events.iterate.com/telegram/connected",
     ]);
-    expect(journal?.[1]).toMatchObject({
+    expect(journal?.[2]).toMatchObject({
       payload: {
         botId: BOT_ID,
         botUsername: "MishasHelperBot",
@@ -219,7 +152,7 @@ describe("connectTelegram", () => {
     );
     expect(claims).toHaveLength(1);
     expect(claims?.[0]).toMatchObject({
-      type: CONNECTION_CLAIMED_EVENT_TYPE,
+      type: "events.iterate.com/integration/connection-claimed",
       payload: {
         connection: "mishashelperbot",
         externalId: BOT_ID,
@@ -279,7 +212,7 @@ describe("connectTelegram", () => {
       projectId: "prj_other",
       path: telegramBotTokenSecretPath("their-bot"),
     });
-    await network.SECRET.getByName(oldSecretName).update({
+    await network.SECRET.getByName(oldSecretName).create({
       egress: { urls: ["https://api.telegram.org"] },
       material: BOT_TOKEN,
     });
@@ -307,7 +240,7 @@ describe("connectTelegram", () => {
       }),
     );
     expect(oldJournal?.at(-1)).toMatchObject({
-      type: TELEGRAM_DISCONNECTED_EVENT_TYPE,
+      type: "events.iterate.com/telegram/disconnected",
       payload: {
         connection: "their-bot",
         projectId: "prj_other",
@@ -331,9 +264,9 @@ describe("connectTelegram", () => {
       ),
     );
     expect(directory?.map((event) => event.type)).toEqual([
-      CONNECTION_CLAIMED_EVENT_TYPE,
-      CONNECTION_UNCLAIMED_EVENT_TYPE,
-      CONNECTION_CLAIMED_EVENT_TYPE,
+      "events.iterate.com/integration/connection-claimed",
+      "events.iterate.com/integration/connection-unclaimed",
+      "events.iterate.com/integration/connection-claimed",
     ]);
     // The swap is ATOMIC: old-unclaim + new-claim in ONE directory append —
     // a stolen bot has live traffic throughout, and any window between the
@@ -344,10 +277,14 @@ describe("connectTelegram", () => {
     );
     const swapBatch = network.appendBatches.find(
       (batch) =>
-        batch.name === directoryName && batch.types.includes(CONNECTION_UNCLAIMED_EVENT_TYPE),
+        batch.name === directoryName &&
+        batch.types.includes("events.iterate.com/integration/connection-unclaimed"),
     );
     expect(swapBatch).toMatchObject({
-      types: [CONNECTION_UNCLAIMED_EVENT_TYPE, CONNECTION_CLAIMED_EVENT_TYPE],
+      types: [
+        "events.iterate.com/integration/connection-unclaimed",
+        "events.iterate.com/integration/connection-claimed",
+      ],
     });
     // And the ordering around the swap eliminates every broken window: the
     // NEW connection is fully prepared (connected fact + arm) BEFORE routing
@@ -359,12 +296,13 @@ describe("connectTelegram", () => {
     const newConnectedIndex = batchIndex(
       (batch) =>
         batch.name.includes("mishashelperbot") &&
-        batch.types.includes(TELEGRAM_CONNECTED_EVENT_TYPE),
+        batch.types.includes("events.iterate.com/telegram/connected"),
     );
     const swapIndex = batchIndex((batch) => batch === swapBatch);
     const oldDisconnectedIndex = batchIndex(
       (batch) =>
-        batch.name.includes("their-bot") && batch.types.includes(TELEGRAM_DISCONNECTED_EVENT_TYPE),
+        batch.name.includes("their-bot") &&
+        batch.types.includes("events.iterate.com/telegram/disconnected"),
     );
     expect(newConnectedIndex).toBeGreaterThanOrEqual(0);
     expect(newConnectedIndex).toBeLessThan(swapIndex);
@@ -381,7 +319,7 @@ describe("connectTelegram", () => {
       }),
     );
     expect(newJournal?.at(-1)).toMatchObject({
-      type: TELEGRAM_CONNECTED_EVENT_TYPE,
+      type: "events.iterate.com/telegram/connected",
       payload: { connection: "mishashelperbot", projectId: PROJECT_ID },
     });
   });
@@ -414,7 +352,9 @@ describe("connectTelegram", () => {
       `/bot${BOT_TOKEN}/setWebhook`,
       `/bot${BOT_TOKEN}/setMyCommands`,
     ]);
-    expect(directoryEvents().map((event) => event.type)).toEqual([CONNECTION_CLAIMED_EVENT_TYPE]);
+    expect(directoryEvents().map((event) => event.type)).toEqual([
+      "events.iterate.com/integration/connection-claimed",
+    ]);
     expect(
       await getConnectionStatus({
         connection: "mishashelperbot",
@@ -444,8 +384,8 @@ describe("connectTelegram", () => {
     // unclaims it, so the fold nets to nobody holding the bot and a retry
     // re-runs cleanly.
     expect(directoryEvents().map((event) => event.type)).toEqual([
-      CONNECTION_CLAIMED_EVENT_TYPE,
-      CONNECTION_UNCLAIMED_EVENT_TYPE,
+      "events.iterate.com/integration/connection-claimed",
+      "events.iterate.com/integration/connection-unclaimed",
     ]);
     // The dashboard sees reality (never a half-connected bot whose webhook
     // was never registered)…
@@ -521,6 +461,7 @@ describe("getConnectionStatus (telegram) + disconnect", () => {
       connection: "mishashelperbot",
       method: "deleteWebhook",
       projectId: PROJECT_ID,
+      streamContext: { kind: "scope", scopePath: "/" },
     });
 
     // Secrets have no delete: the emptied egress allowlist bricks the token.
@@ -545,8 +486,8 @@ describe("getConnectionStatus (telegram) + disconnect", () => {
       ),
     );
     expect(claims?.map((event) => event.type)).toEqual([
-      CONNECTION_CLAIMED_EVENT_TYPE,
-      CONNECTION_UNCLAIMED_EVENT_TYPE,
+      "events.iterate.com/integration/connection-claimed",
+      "events.iterate.com/integration/connection-unclaimed",
     ]);
     expect(claims?.[1]).toMatchObject({
       payload: { externalId: BOT_ID, projectId: PROJECT_ID, slug: "telegram" },
@@ -560,7 +501,7 @@ describe("getConnectionStatus (telegram) + disconnect", () => {
       }),
     );
     expect(journal?.at(-1)).toMatchObject({
-      type: TELEGRAM_DISCONNECTED_EVENT_TYPE,
+      type: "events.iterate.com/telegram/disconnected",
       payload: { botId: BOT_ID, connection: "mishashelperbot", projectId: PROJECT_ID },
     });
   });
@@ -599,7 +540,7 @@ async function seedDirectoryClaim(input: { connection: string; projectId: string
       { allowNullProjectId: true },
     ),
   ).append({
-    type: CONNECTION_CLAIMED_EVENT_TYPE,
+    type: "events.iterate.com/integration/connection-claimed",
     payload: {
       connection: input.connection,
       externalId: BOT_ID,
@@ -628,7 +569,13 @@ async function startFakeTelegramApi(
       const path = request.url!;
       requests.push({ body: raw ? (JSON.parse(raw) as Record<string, unknown>) : {}, path });
       const respond = (status: number, payload: unknown) => {
-        response.writeHead(status, { "content-type": "application/json" });
+        // This disposable server is recreated on an ephemeral port for every
+        // test. Do not leave an Undici keep-alive socket pooled across server
+        // lifetimes: it can make server.close() hang or race a reused port.
+        response.writeHead(status, {
+          connection: "close",
+          "content-type": "application/json",
+        });
         response.end(JSON.stringify(payload));
       };
       if (!path.startsWith(`/bot${BOT_TOKEN}/`)) {
@@ -664,12 +611,17 @@ async function startFakeTelegramApi(
       respond(404, { ok: false, description: "Not Found" });
     });
   });
-  await new Promise<void>((resolve) => server.listen(0, resolve));
+  const port = await listenOnFetchSafePort(server);
   return {
-    baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    baseUrl: `http://127.0.0.1:${port}`,
     requests,
     async [Symbol.asyncDispose]() {
-      await new Promise((resolve) => server.close(resolve));
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error === undefined ? resolve() : reject(error)));
+        // close() first prevents new connections; the fake owns every
+        // remaining socket, so disposal can then terminate them immediately.
+        server.closeAllConnections();
+      });
     },
   };
 }

@@ -1,11 +1,12 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { trustedInternalAuthContext } from "../../auth.ts";
+import { ZodError } from "zod";
+import { streamDeliveryAuthContext, trustedInternalAuthContext } from "../../auth.ts";
 import type { Env } from "../../env.ts";
-import { deploymentItxForTrustedInternal, itxForScope } from "../../rpc-targets.ts";
-import { isWorkerBuildInProgressError } from "../workers/worker-loader.ts";
+import { deploymentItxForInternal, itxForScope } from "../../rpc-targets.ts";
 import {
+  buildBudgetForRequest,
   takeWorkerFetchDispatch,
-  workerBuildingResponse,
+  workerBuildStatus,
 } from "../workers/worker-fetch-dispatch.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import { scopeFromItxEntrypointProps, type ItxEntrypointProps } from "./utils.ts";
@@ -18,21 +19,23 @@ import { scopeFromItxEntrypointProps, type ItxEntrypointProps } from "./utils.ts
  * There is deliberately no branching on the path: an agent context is not a
  * different type, it is the same {@link ProjectRpcTarget} fronting a deeper
  * scope's capability host. The agent's own `agent`/`chat` surface and the
- * capabilities of enclosing scopes come from the itx itself (getters + the
- * capability-host scope chain), not from a special entrypoint class.
+ * capabilities beyond this scope come from the itx itself (getters + the
+ * capability host's journaled fallback), not from a special entrypoint class.
  */
 export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxEntrypointProps> {
   async get() {
-    const { path, projectId } = scopeFromItxEntrypointProps(this.ctx.props);
+    const { path, projectId, purpose, streamContext } = scopeFromItxEntrypointProps(this.ctx.props);
+    const auth =
+      purpose === "stream-delivery" ? streamDeliveryAuthContext() : trustedInternalAuthContext();
     if (projectId === null) {
       // The deployment-global scope: what a GLOBAL (projectId: null) stream's
       // delivery dial evaluates expressions against. It is the same root a
       // trusted-internal session sees — deployment-wide repos/streams — so a
       // global repo stream's wake expression walks the identical shape a
       // project stream's does.
-      return deploymentItxForTrustedInternal({ ctx: this.ctx });
+      return deploymentItxForInternal({ auth, ctx: this.ctx });
     }
-    return itxForScope({ auth: trustedInternalAuthContext(), ctx: this.ctx, path, projectId });
+    return itxForScope({ auth, ctx: this.ctx, path, projectId, streamContext });
   }
 
   /**
@@ -52,36 +55,51 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxEntrypointProps> {
    * scope's project, exactly like `project.workers.get(ref)` would.
    */
   override async fetch(request: Request): Promise<Response> {
-    const taken = takeWorkerFetchDispatch(request);
+    let taken: ReturnType<typeof takeWorkerFetchDispatch>;
+    try {
+      taken = takeWorkerFetchDispatch(request);
+    } catch (error) {
+      if (!(error instanceof SyntaxError || error instanceof ZodError)) throw error;
+      return new Response("invalid x-iterate-worker-dispatch header", { status: 400 });
+    }
     if (taken === null) {
       return new Response(
         "env.ITX.fetch requires the x-iterate-worker-dispatch header naming a worker ref",
         { status: 400 },
       );
     }
-    const { projectId } = scopeFromItxEntrypointProps(this.ctx.props);
+    const { projectId, streamContext } = scopeFromItxEntrypointProps(this.ctx.props);
     if (projectId === null) {
       return new Response("the global itx scope has no workers to dispatch to", { status: 400 });
     }
     // A worker reached through this lane runs in the itx scope of its own
     // path, mirroring project.workers.get (DynamicWorkerRpcTarget#runner).
     const runner = new DynamicWorkerRunner({
+      streamContext,
       exports: this.ctx.exports,
       projectId,
       scopePath: taken.dispatch.ref.path,
-      waitUntil: (promise) => this.ctx.waitUntil(promise),
     });
     try {
+      // Routers forward the browser's own headers, so a document navigation
+      // is recognizable on this hop too — clamp the dispatcher's budget the
+      // way ingress clamps its own, or an app-level first build holds the
+      // page blank for the SDK's full default.
       return await runner.fetch({
-        buildBudgetMs: taken.dispatch.buildBudgetMs,
+        buildBudgetMs: buildBudgetForRequest(taken.request, taken.dispatch.buildBudgetMs),
         ref: taken.dispatch.ref,
         request: taken.request,
       });
     } catch (error) {
       // Fetch responses can't carry a named error across the hop the way RPC
-      // does; a budget-expired cold build becomes the retryable building page.
-      if (!isWorkerBuildInProgressError(error)) throw error;
-      return workerBuildingResponse();
+      // does; a budget-expired cold build becomes the retryable building
+      // page, a failed first-ever build the build-failed page.
+      const buildStatus = workerBuildStatus(
+        error,
+        taken.request.headers.get("x-iterate-url-prefix") ?? "",
+      );
+      if (buildStatus !== null) return buildStatus.response;
+      throw error;
     }
   }
 }

@@ -5,9 +5,17 @@ import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import tailwindcss from "@tailwindcss/vite";
 import viteReact from "@vitejs/plugin-react";
 import { cloudflare } from "@cloudflare/vite-plugin";
+import posthog from "@posthog/rollup-plugin";
 import captunVite from "captun/vite";
 import { defineConfig, type Plugin } from "vite";
+import { canonicalizeOutputWranglerConfig } from "./scripts/canonicalize-output-wrangler-config.ts";
 import { writeWranglerConfig } from "./scripts/generate-wrangler-config.ts";
+import { serveDevSdkTarball } from "./scripts/lib/dev-sdk-tarball.ts";
+
+// Local dev pins dynamic worker builds to THIS worktree's iterate sdk (the
+// tarball dev.ts packed) — must happen before the wrangler config below bakes
+// APP_CONFIG_ITERATE_REPO_PKG_SPEC_OVERRIDES. No-op without the dev.ts env.
+await serveDevSdkTarball();
 
 // wrangler.jsonc is generated (gitignored) — refresh it from envs.ts before
 // the cloudflare plugin reads it, so dev and build can never see stale config.
@@ -15,6 +23,8 @@ writeWranglerConfig();
 
 const host = process.env.HOST ?? "127.0.0.1";
 const port = process.env.PORT ? Number(process.env.PORT) : 5173;
+const deployedEnvironment = process.env.CLOUDFLARE_ENV?.trim();
+const uploadPostHogSourceMaps = deployedEnvironment === "prd";
 
 // Container-backed Durable Objects (the sandbox class) pair every container
 // with a `proxy-everything` egress sidecar. Upstream defaults to linux/amd64;
@@ -64,10 +74,17 @@ export default defineConfig({
         chunkFileNames: safeRollupChunkFileName,
       },
     },
-    sourcemap: true,
+    // Preview versions are ephemeral and retain full Cloudflare traces/logs;
+    // generating and uploading hundreds of PostHog maps used to dominate the
+    // preview build. Production keeps the existing symbolication contract.
+    sourcemap: deployedEnvironment ? uploadPostHogSourceMaps : true,
   },
   resolve: {
     tsconfigPaths: true,
+    // apps/os consumes the workspace `iterate` package as TS source; dedupe
+    // pins the React trio to ONE instance even if a resolver walks into the
+    // linked package's own node_modules (two reacts = invalid-hook-call).
+    dedupe: ["react", "react-dom", "@tanstack/react-query"],
   },
   server: {
     host,
@@ -87,22 +104,23 @@ export default defineConfig({
     // why `doppler run -- vite dev` needs no .dev.vars file.
     cloudflare({
       viteEnvironment: { name: "ssr" },
-      // The builder and typechecker sidecars run in the same local workerd so
-      // the BUILDER/TYPECHECKER service bindings resolve in dev exactly like
-      // deployed. Deploy builds (CLOUDFLARE_ENV set) exclude them: sidecars
-      // deploy from source via `wrangler deploy --config <sidecar>.jsonc`
-      // (deploy.ts), and a second dist wrangler.json would break
-      // findBuiltWranglerConfig.
+      // Compiler sidecars run in the same local workerd so their service
+      // bindings resolve in dev exactly like deployed.
+      // Deploy builds (CLOUDFLARE_ENV set) exclude it: sidecars deploy from
+      // source via `wrangler deploy --config <sidecar>.jsonc` (deploy.ts),
+      // and a second dist wrangler.json would break findBuiltWranglerConfig.
       auxiliaryWorkers: process.env.CLOUDFLARE_ENV
         ? undefined
         : [
-            { configPath: "./wrangler.builder.jsonc" },
             { configPath: "./wrangler.typechecker.jsonc" },
+            { configPath: "./wrangler.worker-bundler.jsonc" },
           ],
     }),
     tanstackStart(),
     viteReact(),
     tailwindcss(),
+    ...posthogSourceMaps(),
+    canonicalizeOutputWranglerConfig(),
     devServerDiscoveryFile(),
     ...(captunName
       ? [
@@ -115,6 +133,32 @@ export default defineConfig({
       : []),
   ],
 });
+
+/** Upload both browser and Worker maps only for the production deploy build. */
+function posthogSourceMaps(): Plugin[] {
+  if (!uploadPostHogSourceMaps) return [];
+
+  return [
+    // This is the official Rollup/Vite plugin. Its runtime hooks are compatible;
+    // Rollup and Vite 8 only disagree structurally on their resolveId contexts.
+    posthog({
+      personalApiKey: requiredBuildSecret("POSTHOG_PERSONAL_API_KEY"),
+      projectId: requiredBuildSecret("POSTHOG_PROJECT_ID"),
+      host: "https://eu.posthog.com",
+      sourcemaps: {
+        enabled: true,
+        releaseName: "iterate-os",
+        deleteAfterUpload: true,
+      },
+    }) as unknown as Plugin,
+  ];
+}
+
+function requiredBuildSecret(name: string) {
+  const value = process.env[name]?.trim();
+  if (!value) throw new Error(`${name} is required for deployed OS builds`);
+  return value;
+}
 
 /**
  * Publishes this worktree's dev server (pid, port, url) to

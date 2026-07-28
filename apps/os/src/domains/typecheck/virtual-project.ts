@@ -15,7 +15,11 @@ import type { TypecheckDiagnostic, TypecheckResult } from "./run-typecheck.ts";
 /** The minimal typechecker interface — `env.TYPECHECKER` satisfies it, and
  * tests satisfy it with a local tswasm compiler. */
 export interface Typechecker {
-  check(input: { files: Record<string, string> }): Promise<TypecheckResult>;
+  check(input: {
+    files: Record<string, string>;
+    /** Virtual path whose emitted JavaScript comes back as result.js. */
+    entrypoint?: string;
+  }): Promise<TypecheckResult>;
 }
 
 /** Scripts bigger than this get a clean problem instead of a compile — a
@@ -40,6 +44,16 @@ const ITX_API_DECLARATIONS_BY_NAME = declarationsByName(ITX_API_DECLARATIONS);
  * sufficient.
  */
 const RUNTIME_SHIMS = `// Ambient runtime shims — see virtual-project.ts.
+// The published SDK and docs expose the exact import("octokit").Octokit type.
+// Loading that package's large transitive declaration graph into every
+// unrelated in-Worker script check exceeds the Worker memory limit, so this
+// compiler-only structural view preserves Octokit's RPC-safe entry points.
+type IterateTypecheckOctokit = {
+  rest: Record<string, Record<string, (input?: any) => Promise<any>>>;
+  graphql<T = unknown>(query: string, variables?: Record<string, unknown>): Promise<T>;
+  request<T = unknown>(route: string, parameters?: Record<string, unknown>): Promise<T>;
+  paginate<T = unknown>(route: string, parameters?: Record<string, unknown>): Promise<T[]>;
+};
 interface SymbolConstructor {
   readonly dispose: unique symbol;
   readonly asyncDispose: unique symbol;
@@ -109,8 +123,16 @@ ${[
   .join("\n")}
 `;
 
+const TYPECHECKER_ITX_TYPES = itxTypesFileText.replace(
+  'import("octokit").Octokit',
+  "IterateTypecheckOctokit",
+);
+if (TYPECHECKER_ITX_TYPES === itxTypesFileText) {
+  throw new Error("the typechecker Octokit shim no longer matches the generated itx surface");
+}
+
 const SHARED_FILES: Record<string, string> = {
-  "itx-types.ts": itxTypesFileText,
+  "itx-types.ts": TYPECHECKER_ITX_TYPES,
   "runtime.d.ts": RUNTIME_SHIMS,
   "tsconfig.json": JSON.stringify({
     compilerOptions: {
@@ -298,7 +320,10 @@ function assembleScriptProject(
     // fn(itx), extras just stay undefined) stays assignable.
     `const script: (itx: Itx, ...rest: any[]) => unknown = (`,
   ];
-  files["script.ts"] = [...prelude, code, ");"].join("\n");
+  // `export default script` makes the EMITTED JavaScript of this file a
+  // loadable module: the execution harness imports it, so what runs is the
+  // compiler's own type-stripped output — scripts are genuinely TypeScript.
+  files["script.ts"] = [...prelude, code, ");", "export default script;"].join("\n");
   return { files, preludeLineCount: prelude.length };
 }
 
@@ -310,7 +335,14 @@ function assembleScriptProject(
  * never be stopped by what the checker doesn't know.
  */
 export type ScriptExecutionCheck =
-  | { verdict: "clean" }
+  | {
+      verdict: "clean";
+      /** The compiler's emitted JavaScript module for the script (default
+       * export = the script function). Same wasm compile as the check —
+       * emit costs nothing — and it is what the runtime executes, so
+       * TypeScript syntax in scripts genuinely works. */
+      emittedJs?: string;
+    }
   | { verdict: "problems"; problems: string[] }
   | { verdict: "unchecked"; reason: string };
 
@@ -327,8 +359,8 @@ const EXECUTION_CHECK_DEADLINE_MS = 10_000;
  * errors do not: capabilities are provided dynamically (a script may mount
  * `itx.demoStream` and call it two lines later — journal-legal, invisible to
  * a static check), and the declared surface demonstrably lags the runtime in
- * places (preview e2e: `CloudflareSandbox.exec` exists at runtime but not in
- * types, handle results declared `{}`). The advisory door (checkItxScript)
+ * places (handle results declared `{}`; `CloudflareSandbox` deliberately
+ * declares only part of the sandbox SDK). The advisory door (checkItxScript)
  * still reports everything.
  */
 const TS_PROPERTY_NEAR_MISS = 2551; // Property 'X' does not exist on type 'T'. Did you mean 'Y'?
@@ -389,7 +421,7 @@ function exceedsNestingDepth(code: string, limit: number): boolean {
 }
 
 /**
- * The pre-execution typecheck for a `script-execution-requested` block:
+ * The pre-execution typecheck for a `script-run-requested` block:
  * everything checkItxScript checks, read through the permissive-by-default
  * policy above. Blocking requires an error diagnostic in the script's OWN
  * code (`script.ts`) from the allowlist: a syntax error or a near-miss typo.
@@ -427,7 +459,7 @@ export async function checkItxScriptForExecution(input: {
   let checked: TypecheckResult;
   try {
     checked = await withDeadline(
-      input.typechecker.check({ files: project.files }),
+      input.typechecker.check({ files: project.files, entrypoint: "script.ts" }),
       input.deadlineMs ?? EXECUTION_CHECK_DEADLINE_MS,
     );
   } catch (error) {
@@ -444,7 +476,13 @@ export async function checkItxScriptForExecution(input: {
       diagnostic.fileName === "script.ts" &&
       isProvableBlocker(diagnostic),
   );
-  if (blocking.length === 0) return { verdict: "clean" };
+  if (blocking.length === 0) {
+    // `js` can come back EMPTY when the program has errors anywhere (broken
+    // mount declarations included) — the compiler emits nothing it can't
+    // vouch for. Treat empty as absent: execution falls back to the raw
+    // code, exactly the unchecked path's behavior.
+    return { verdict: "clean", emittedJs: checked.js ? checked.js : undefined };
+  }
   const problems = formatProblems(blocking, {
     label: "script",
     primaryFile: "script.ts",

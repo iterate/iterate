@@ -3,14 +3,14 @@ import { createFileRoute } from "@tanstack/react-router";
 import { ActivityIcon, PlusIcon, RadioIcon, TimerIcon } from "lucide-react";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
-import type { StreamEvent } from "../../../../domains/streams/schemas.ts";
-import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import {
   useItx,
   useItxSubscription,
   useLiveState,
   type ItxSubscriptionStatus,
-} from "~/itx/itx-react.tsx";
+} from "iterate/sdk/itx/react";
+import type { StreamEvent } from "iterate/processors";
+import { breadcrumbStaticData } from "~/lib/route-breadcrumbs.ts";
 
 // The live-state PLAYGROUND — one primitive from several angles: a DO-backed
 // composite (`itx.liveState`: the project's folded `reduced` state + the streams
@@ -18,9 +18,10 @@ import {
 // the request isolate with no DO), and the SEPARATE raw event-log lane.
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/reactivity")({
+  staticData: breadcrumbStaticData("Reactivity"),
   ssr: false,
-  loader: ({ context }) => ({ breadcrumb: "Reactivity", project: context.project }),
-  component: ProjectReactivityPage,
+  loader: ({ context }) => ({ project: context.project }),
+  component: ProjectReactivityContent,
 });
 
 const REACTIVITY_TEST_STREAM_PATH = "/reactivity-test";
@@ -59,14 +60,6 @@ function useReactivityTestStream(): ReactivityTestStreamState {
     [],
   );
   return { ...feed, error: subscription.error, status: subscription.status };
-}
-
-function ProjectReactivityPage() {
-  return (
-    <ItxBoundary>
-      <ProjectReactivityContent />
-    </ItxBoundary>
-  );
 }
 
 type ReactivityActionState = {
@@ -116,8 +109,8 @@ function ProjectReactivityContent() {
   const [incrementing, setIncrementing] = useState(false);
 
   const projectState = live.value;
-  const phase = projectState === undefined ? "unknown" : projectState.created ? "ready" : "pending";
-  const projectId = projectState?.createRequest?.projectId ?? project.id;
+  const phase = projectState === undefined ? "unknown" : projectState.ready ? "ready" : "pending";
+  const projectId = project.id;
   const indexedCount =
     streamsIndex.value === undefined ? "-" : String(Object.keys(streamsIndex.value).length);
 
@@ -254,9 +247,9 @@ function ProjectReactivityContent() {
                     {phase}
                   </Badge>
                 </dd>
-                <dt className="text-muted-foreground">Created</dt>
+                <dt className="text-muted-foreground">Ready</dt>
                 <dd data-testid="reactivity-onboarding">
-                  {projectState === undefined ? "unknown" : String(projectState.created)}
+                  {projectState === undefined ? "unknown" : String(projectState.ready)}
                 </dd>
                 <dt className="text-muted-foreground">Project ID</dt>
                 <dd className="truncate font-mono text-xs" data-testid="reactivity-project-id">
@@ -293,7 +286,12 @@ function ProjectReactivityContent() {
                 <dt className="text-muted-foreground">Events</dt>
                 <dd data-testid="reactivity-stream-event-count">{testStream.events.length}</dd>
                 <dt className="text-muted-foreground">Status</dt>
-                <dd data-testid="reactivity-action-status">{action.status}</dd>
+                <dd
+                  data-spinner={action.status === "running" ? "true" : undefined}
+                  data-testid="reactivity-action-status"
+                >
+                  {action.status}
+                </dd>
                 <dt className="text-muted-foreground">Marker</dt>
                 <dd className="truncate font-mono" data-testid="reactivity-last-action-marker">
                   {action.marker || "-"}

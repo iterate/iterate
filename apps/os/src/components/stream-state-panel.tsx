@@ -1,17 +1,21 @@
 import { useEffect, useMemo, useState } from "react";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { ChevronLeftIcon, DatabaseZapIcon, RefreshCwIcon, XIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
+import { Avatar, AvatarFallback, AvatarImage } from "@iterate-com/ui/components/avatar";
 import { Sheet, SheetContent, SheetTitle } from "@iterate-com/ui/components/sheet";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
 import type {
   AgentUiPresenceEntry,
   AgentUiProcessorAnnouncement,
+  AgentUiTokenUsage,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
 import { cn } from "@iterate-com/ui/lib/utils";
-import type { ProcessorRuntimeState } from "../domains/streams/rpc-types.ts";
-import type { Stream } from "../itx-api.generated.ts";
+import { ageStreamThroughputMetrics, type ProcessorRuntimeState } from "iterate/processors";
+import { useIterateSessionLiveState, useLiveState } from "iterate/sdk/itx/react";
+import type { StreamRuntimeDebugState } from "../itx-api.generated.ts";
+import { readAgentTokenUsageVitals } from "~/lib/agent-token-usage.ts";
 import { formatBytesPerSecond, formatFileSize } from "~/lib/feed-format.ts";
 import {
   AgentPrettyState,
@@ -20,6 +24,7 @@ import {
   SectionHeading,
 } from "~/components/stream-processor-pretty-state.tsx";
 import { readNumber, readRuntimeRecord } from "~/lib/runtime-record.ts";
+import { useTickingNowMs } from "~/lib/use-ticking-now-ms.ts";
 import {
   presenceColorClasses,
   presenceInitials,
@@ -39,25 +44,42 @@ export function PresenceAvatar({
 }) {
   const label = presenceLabel(entry);
   return (
-    <span
-      className={cn(
-        "relative grid size-6 shrink-0 place-items-center rounded-full font-mono text-[9px] font-bold",
-        presenceColorClasses(label),
-        className,
-      )}
-    >
-      {presenceInitials(label)}
-      <span
-        className={cn(
-          "absolute -bottom-px -right-px size-2 rounded-full border-[1.5px] border-background",
-          entry.connected
-            ? busy
-              ? "animate-pulse bg-amber-500"
-              : "bg-emerald-500"
-            : "bg-zinc-300 dark:bg-zinc-600",
+    <Tooltip>
+      <TooltipTrigger
+        render={<Avatar className={cn("size-6 font-mono text-[9px] font-bold", className)} />}
+      >
+        {entry.user?.picture ? <AvatarImage src={entry.user.picture} alt="" /> : null}
+        <AvatarFallback className={cn("text-[9px] font-bold", presenceColorClasses(label))}>
+          {presenceInitials(label)}
+        </AvatarFallback>
+        <span
+          className={cn(
+            "absolute -bottom-px -right-px size-2 rounded-full border-[1.5px] border-background",
+            entry.connected
+              ? busy
+                ? "animate-pulse bg-amber-500"
+                : "bg-emerald-500"
+              : "bg-zinc-300 dark:bg-zinc-600",
+          )}
+        />
+      </TooltipTrigger>
+      <TooltipContent side="bottom" className="max-w-80">
+        {entry.user == null ? (
+          <span>
+            {entry.processor == null ? `${label} subscriber` : `${entry.processor.slug} processor`}
+          </span>
+        ) : (
+          <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-0.5 text-left">
+            <dt>Name</dt>
+            <dd className="min-w-0 break-all">{entry.user.name ?? "—"}</dd>
+            <dt>Email address</dt>
+            <dd className="min-w-0 break-all">{entry.user.email}</dd>
+            <dt>User ID</dt>
+            <dd className="min-w-0 break-all">{entry.user.id ?? "—"}</dd>
+          </dl>
         )}
-      />
-    </span>
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -67,12 +89,41 @@ export function PresenceAvatar({
 
 /**
  * The Stream state sheet: the stream's vitals (age, storage, events, live
- * throughput/latency) plus every subscriber — with REAL RTT/lag from the
- * stream's runtime table (polled while open — the poll is also what drives
- * the stream's observer-gated ping sampling). Clicking a subscriber drills
- * into its announced contract and self-reported metrics.
+ * throughput/latency) plus every subscriber — with REAL RTT/lag pushed from
+ * the stream's runtime LiveState while this sheet is open. Clicking a
+ * subscriber drills into its announced contract and self-reported metrics.
  */
-export type StreamRuntimeDebugState = Awaited<ReturnType<Stream["runtimeState"]>>;
+/**
+ * Desired-state slice of a durable subscription, lifted from the latest
+ * `subscription-configured` fact. Enough for the panel to explain a cross-post
+ * or webhook in human terms without re-fetching the event log.
+ */
+type ConfiguredSubscriberDetails = {
+  deliveryMode: "wake" | "push" | "webhook";
+  configuredAtOffset?: number;
+  /** The delivery target as the itx call (or webhook POST) it actually is. */
+  deliveryLabel?: string;
+  /**
+   * Destination stream path when this is a cross-post
+   * (`…acceptCrossPost` push expression).
+   */
+  crossPostDestination?: string;
+  /**
+   * Optional operator-facing note from the subscription-configured payload
+   * (why this subscription exists). Distinct from the delivery label used as
+   * the row title.
+   */
+  note?: string;
+  /** Selector event types; absent means every type. */
+  eventTypes?: string[];
+  /** Optional JSONata filter over the whole event. */
+  condition?: string;
+  /** Optional JSONata constructor for the copied event body (cross-post). */
+  transform?: string;
+  deliver?: "all" | "new" | { afterOffset: number };
+  onPoison?: "park" | "skip";
+  webhookUrl?: string;
+};
 
 type ProcessorPanelEntry = {
   subscriptionKey: string;
@@ -80,19 +131,16 @@ type ProcessorPanelEntry = {
   connected: boolean;
   direction: "inbound" | "outbound";
   description?: string;
+  user?: AgentUiPresenceEntry["user"];
   processor?: AgentUiProcessorAnnouncement;
   subscriptionType?: "configured" | "ephemeral";
   deliveryMode?: "wake" | "push" | "webhook";
   configuredAtOffset?: number;
+  /** Full configured payload details when this entry is a durable subscription. */
+  config?: ConfiguredSubscriberDetails;
   runtimeSubscription?: StreamRuntimeDebugState["runtime"]["subscriptions"][string];
   runtimeConnection?: StreamRuntimeDebugState["runtime"]["connections"][string];
 };
-
-/**
- * Overview poll cadence while the sheet is open. Also the observer signal for
- * the stream's throttled ping sampling (see runtimeState in rpc-targets.ts).
- */
-const STREAM_RUNTIME_POLL_MS = 1_000;
 
 const CORE_PROCESSOR_KEY = "__stream-core__";
 const CORE_PROCESSOR_ANNOUNCEMENT: AgentUiProcessorAnnouncement = {
@@ -120,11 +168,6 @@ const CORE_PROCESSOR_ANNOUNCEMENT: AgentUiProcessorAnnouncement = {
   ],
 };
 
-type ProcessorRuntimeStateResult = {
-  runtimeState: ProcessorRuntimeState | null;
-  streamMaxOffset: number;
-};
-
 export function StreamStatePanel({
   open,
   onOpenChange,
@@ -138,8 +181,9 @@ export function StreamStatePanel({
   onClose,
   onClearClientDatabase,
   getProcessorRuntimeState,
-  getStreamRuntimeState,
+  projectId,
   streamPath,
+  tokenUsage = null,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -147,36 +191,39 @@ export function StreamStatePanel({
   metrics: BrowserStreamMetricsView;
   eventCount: number;
   busy: boolean;
-  /** Keys the runtime poll's query cache per stream. */
-  streamPath: string;
   /** Subscription key of the focused processor (URL-backed); null = overview. */
   focusedKey: string | null;
   onFocus: (subscriptionKey: string) => void;
   onBack: () => void;
   onClose: () => void;
   onClearClientDatabase: () => Promise<void>;
-  getProcessorRuntimeState: (subscriptionKey: string) => Promise<ProcessorRuntimeStateResult>;
-  getStreamRuntimeState: () => Promise<StreamRuntimeDebugState>;
+  getProcessorRuntimeState: (subscriptionKey: string) => Promise<ProcessorRuntimeState | null>;
+  projectId: string | null;
+  streamPath: string;
+  /** Agent context fullness + lifetime totals; shown in vitals when present. */
+  tokenUsage?: AgentUiTokenUsage | null;
 }) {
-  // Poll while open: every fetch refreshes the live metrics AND asks the
-  // stream for a ping round (its RTT sampling is observer-gated on exactly
-  // this call). keepPreviousData swaps polls in place instead of flashing a
-  // loading state.
-  const streamRuntimeQuery = useQuery({
-    queryKey: ["stream-state-panel-runtime", streamPath],
-    queryFn: getStreamRuntimeState,
-    enabled: open,
-    refetchInterval: STREAM_RUNTIME_POLL_MS,
-    placeholderData: keepPreviousData,
-  });
-
-  const streamRuntime = streamRuntimeQuery.data;
-  const streamRuntimeError =
-    streamRuntimeQuery.error == null
-      ? undefined
-      : streamRuntimeQuery.error instanceof Error
-        ? streamRuntimeQuery.error.message
-        : String(streamRuntimeQuery.error);
+  const projectStreamRuntime = useLiveState(
+    (itx) => itx.streams.get(streamPath).liveState,
+    (state) => state,
+    [streamPath],
+    {
+      enabled: open && projectId !== null,
+      ...(projectId === null ? {} : { slug: projectId }),
+    },
+  );
+  const deploymentStreamRuntime = useIterateSessionLiveState(
+    (session) => session.streams.get(streamPath).liveState,
+    (state) => state,
+    [streamPath],
+    { enabled: open && projectId === null },
+  );
+  const streamRuntimeSubscription =
+    projectId === null ? deploymentStreamRuntime : projectStreamRuntime;
+  const streamRuntime = streamRuntimeSubscription.value;
+  const streamRuntimeError = streamRuntimeSubscription.error;
+  const streamRuntimeFetching = streamRuntimeSubscription.status === "connecting";
+  const streamMaxOffset = readNumber(streamRuntime?.coreProcessorState, "maxOffset");
   const entries = useMemo(
     () => buildProcessorPanelEntries(presence, streamRuntime),
     [presence, streamRuntime],
@@ -185,52 +232,48 @@ export function StreamStatePanel({
   // overview rather than a blank detail pane.
   const focused = entries.find((entry) => entry.subscriptionKey === focusedKey) ?? null;
   const focusedSubscriptionKey = focused?.subscriptionKey ?? null;
+  const focusedKind = focused?.kind ?? null;
   const focusedConnected = focused?.connected ?? false;
   const [runtimeStateLoad, setRuntimeStateLoad] = useState<ProcessorRuntimeStateLoad>({
     status: "idle",
   });
   const [refreshKey, setRefreshKey] = useState(0);
-  const focusedRuntimeStateLoad =
-    focusedSubscriptionKey == null ||
-    runtimeStateLoad.status === "idle" ||
-    runtimeStateLoad.subscriptionKey === focusedSubscriptionKey
-      ? runtimeStateLoad
-      : ({
-          status: "loading",
-          subscriptionKey: focusedSubscriptionKey,
-        } satisfies ProcessorRuntimeStateLoad);
+  const focusedRuntimeStateLoad = useMemo<ProcessorRuntimeStateLoad>(() => {
+    if (focusedSubscriptionKey == null) return { status: "idle" };
 
-  useEffect(() => {
-    if (focusedSubscriptionKey == null) {
-      setRuntimeStateLoad({ status: "idle" });
-      return;
-    }
-
-    if (focused?.kind === "core") {
-      // Error first: with keepPreviousData a failed poll leaves stale data in
-      // place alongside the error, and a metrics drill-in silently rendering
-      // stale state during an outage would be exactly the fake UI this
-      // feature exists to kill.
+    if (focusedKind === "core") {
+      // Error first: the LiveState hook deliberately keeps its last value through
+      // reconnects, but a drill-in must still surface the transport failure
+      // instead of silently presenting that retained value as current.
       if (streamRuntimeError !== undefined) {
-        setRuntimeStateLoad({
+        return {
           status: "error",
           subscriptionKey: focusedSubscriptionKey,
           message: streamRuntimeError,
-        });
-      } else if (streamRuntime !== undefined) {
+        };
+      }
+      if (streamRuntime !== undefined) {
         const coreState = streamRuntime.coreProcessorState;
-        setRuntimeStateLoad({
+        return {
           status: "loaded",
           subscriptionKey: focusedSubscriptionKey,
           runtimeState: {
             snapshot: { offset: readNumber(coreState, "maxOffset") ?? 0, state: coreState },
             runtime: streamRuntime.runtime,
           },
-          streamMaxOffset: readNumber(coreState, "maxOffset") ?? 0,
-        });
-      } else {
-        setRuntimeStateLoad({ status: "loading", subscriptionKey: focusedSubscriptionKey });
+        };
       }
+      return { status: "loading", subscriptionKey: focusedSubscriptionKey };
+    }
+
+    return runtimeStateLoad.status !== "idle" &&
+      runtimeStateLoad.subscriptionKey === focusedSubscriptionKey
+      ? runtimeStateLoad
+      : { status: "loading", subscriptionKey: focusedSubscriptionKey };
+  }, [focusedKind, focusedSubscriptionKey, runtimeStateLoad, streamRuntime, streamRuntimeError]);
+
+  useEffect(() => {
+    if (!open || focusedSubscriptionKey == null || focusedKind === "core") {
       return;
     }
 
@@ -239,7 +282,6 @@ export function StreamStatePanel({
         status: "loaded",
         subscriptionKey: focusedSubscriptionKey,
         runtimeState: null,
-        streamMaxOffset: null,
       });
       return;
     }
@@ -247,13 +289,12 @@ export function StreamStatePanel({
     let disposed = false;
     setRuntimeStateLoad({ status: "loading", subscriptionKey: focusedSubscriptionKey });
     void getProcessorRuntimeState(focusedSubscriptionKey)
-      .then(({ runtimeState, streamMaxOffset }) => {
+      .then((runtimeState) => {
         if (!disposed) {
           setRuntimeStateLoad({
             status: "loaded",
             subscriptionKey: focusedSubscriptionKey,
             runtimeState,
-            streamMaxOffset,
           });
         }
       })
@@ -271,13 +312,12 @@ export function StreamStatePanel({
       disposed = true;
     };
   }, [
-    focused,
     focusedConnected,
+    focusedKind,
     focusedSubscriptionKey,
     getProcessorRuntimeState,
+    open,
     refreshKey,
-    streamRuntime,
-    streamRuntimeError,
   ]);
 
   return (
@@ -300,19 +340,24 @@ export function StreamStatePanel({
             onFocus={onFocus}
             onClose={onClose}
             onClearClientDatabase={onClearClientDatabase}
-            onRefreshStreamRuntime={() => void streamRuntimeQuery.refetch()}
-            streamRuntimeFetching={streamRuntimeQuery.isFetching}
+            onRefreshStreamRuntime={streamRuntimeSubscription.refresh}
+            streamRuntimeFetching={streamRuntimeFetching}
             streamRuntimeError={streamRuntimeError}
             streamRuntime={streamRuntime}
+            tokenUsage={tokenUsage}
           />
         ) : (
           <ProcessorDetail
             entry={focused}
             busy={busy}
             runtimeStateLoad={focusedRuntimeStateLoad}
+            streamMaxOffset={streamMaxOffset}
             onRefreshRuntimeState={() => {
-              setRefreshKey((key) => key + 1);
-              if (focused.kind === "core") void streamRuntimeQuery.refetch();
+              if (focused.kind === "core") {
+                streamRuntimeSubscription.refresh();
+              } else {
+                setRefreshKey((key) => key + 1);
+              }
             }}
             onBack={onBack}
             onClose={onClose}
@@ -330,7 +375,6 @@ type ProcessorRuntimeStateLoad =
       status: "loaded";
       subscriptionKey: string;
       runtimeState: ProcessorRuntimeState | null;
-      streamMaxOffset: number | null;
     }
   | { status: "error"; subscriptionKey: string; message: string };
 
@@ -347,6 +391,7 @@ function ProcessorsOverview({
   streamRuntimeFetching,
   streamRuntimeError,
   streamRuntime,
+  tokenUsage,
 }: {
   entries: readonly ProcessorPanelEntry[];
   metrics: BrowserStreamMetricsView;
@@ -360,19 +405,36 @@ function ProcessorsOverview({
   streamRuntimeFetching: boolean;
   streamRuntimeError: string | undefined;
   streamRuntime: StreamRuntimeDebugState | undefined;
+  tokenUsage: AgentUiTokenUsage | null;
 }) {
   const [clearState, setClearState] = useState<"idle" | "clearing" | "error">("idle");
   const [graphMode, setGraphMode] = useState<"throughput" | "latency">("throughput");
   const sections = processorEntrySections(entries);
   const rtt = metrics.transportRttMs;
   const subscriber = metrics.subscriber;
-  const throughput = streamRuntime?.runtime.metrics;
+  const throughputSnapshot = streamRuntime?.runtime.metrics;
+  const throughputReportedAtMs = Date.parse(throughputSnapshot?.reportedAt ?? "");
+  const canAgeThroughput =
+    throughputSnapshot !== undefined && Number.isFinite(throughputReportedAtMs);
+  const throughputNowMs = useTickingNowMs(
+    1_000,
+    canAgeThroughput,
+    canAgeThroughput ? throughputReportedAtMs + 60_000 : null,
+  );
+  const throughput = useMemo(
+    () =>
+      throughputSnapshot === undefined
+        ? undefined
+        : ageStreamThroughputMetrics(throughputSnapshot, throughputNowMs),
+    [throughputNowMs, throughputSnapshot],
+  );
   const coreState = streamRuntime?.coreProcessorState;
   const createdAt = readRuntimeRecord(coreState)?.createdAt;
   const serverEventCount = readNumber(coreState, "eventCount");
   const headOffset = readNumber(coreState, "maxOffset");
   const storageSizeBytes = streamRuntime?.runtime.storageSizeBytes;
   const latencyPoints = sparklinePoints(metrics.spark, 368, 44);
+  const agentTokens = tokenUsage == null ? null : readAgentTokenUsageVitals(tokenUsage);
 
   return (
     <>
@@ -455,6 +517,27 @@ function ProcessorsOverview({
               }
               value={throughput === undefined ? "—" : sinceLabel(throughput.measuredSince)}
             />
+            {agentTokens == null ? null : (
+              <>
+                <MetricStat
+                  label="context"
+                  title={agentTokens.breakdown}
+                  value={agentTokens.contextLabel}
+                  valueClassName={agentTokens.contextPercent >= 80 ? "text-destructive" : undefined}
+                />
+                <MetricStat
+                  label="tokens · in"
+                  title={agentTokens.breakdown}
+                  value={agentTokens.inputLabel}
+                />
+                <MetricStat
+                  label="tokens · out"
+                  title={agentTokens.breakdown}
+                  value={agentTokens.outputLabel}
+                />
+                <MetricStat label="model" title={agentTokens.breakdown} value={agentTokens.model} />
+              </>
+            )}
           </div>
 
           <div className="mt-3 flex items-center justify-between gap-2 border-t border-border/60 pt-3">
@@ -473,7 +556,7 @@ function ProcessorsOverview({
             <span className="font-mono text-[10px] text-muted-foreground/70">
               {graphMode === "throughput"
                 ? "appends (area) · deliveries (dashed) · 1s buckets · last 60s"
-                : `this browser's RTT · sampled each poll · p50 ${rtt === null ? "—" : `${rtt.p50}ms`} · p95 ${rtt === null ? "—" : `${rtt.p95}ms`}`}
+                : `this browser's RTT · measured RPCs · p50 ${rtt === null ? "—" : `${rtt.p50}ms`} · p95 ${rtt === null ? "—" : `${rtt.p95}ms`}`}
             </span>
           </div>
           <div className="mt-2 flex items-end gap-3">
@@ -645,14 +728,21 @@ function ProcessorEntryButton({
       type="button"
       onClick={() => onFocus(entry.subscriptionKey)}
       className={cn(
-        "grid w-full grid-cols-[minmax(0,1fr)_52px_44px] items-center gap-1.5 rounded-xl px-3 py-2 text-left hover:bg-muted/40",
+        "grid w-full grid-cols-[minmax(0,1fr)_52px_44px] items-start gap-1.5 rounded-xl px-3 py-2 text-left hover:bg-muted/40",
         focused && "bg-muted/60 ring-1 ring-inset ring-border",
       )}
     >
-      <span className="flex min-w-0 items-center gap-2.5">
-        <PresenceAvatar entry={entry} busy={busy && isLlmish(entry)} />
+      <span className="flex min-w-0 items-start gap-2.5">
+        <PresenceAvatar entry={entry} busy={busy && isLlmish(entry)} className="mt-0.5" />
         <span className="min-w-0">
-          <span className="block truncate font-mono text-xs">{presenceLabel(entry)}</span>
+          {/*
+            break-all rather than truncate: cross-post labels are long itx
+            expressions (`itx.streams.get("/…").acceptCrossPost()`) and
+            hiding the path under ellipsis is exactly what this panel is for.
+          */}
+          <span className="block break-all font-mono text-xs leading-snug">
+            {presenceLabel(entry)}
+          </span>
           <span
             className={cn(
               "block text-xs",
@@ -667,14 +757,15 @@ function ProcessorEntryButton({
           >
             {processorEntryStatus(entry, busy)}
           </span>
+          <ConfiguredFilterSummary config={entry.config} />
         </span>
       </span>
-      <span className="text-right font-mono text-xs text-muted-foreground">
+      <span className="pt-0.5 text-right font-mono text-xs text-muted-foreground">
         {rttMs == null ? "—" : `${rttMs}ms`}
       </span>
       <span
         className={cn(
-          "text-right font-mono text-xs",
+          "pt-0.5 text-right font-mono text-xs",
           lag == null || String(lag) === "0" ? "text-muted-foreground" : "text-amber-600",
         )}
       >
@@ -705,17 +796,19 @@ function buildProcessorPanelEntries(
     const coreConnection = coreConnections[entry.subscriptionKey];
     const subscriptionType = readSubscriptionType(coreConnection) ?? "ephemeral";
     const runtimeConnection = streamRuntime?.runtime.connections[entry.subscriptionKey];
+    const config = configured[entry.subscriptionKey];
     entries.set(entry.subscriptionKey, {
       ...entry,
       kind: subscriptionType === "configured" ? "processor" : "consumer",
       subscriptionType,
       ...(runtimeConnection === undefined ? {} : { runtimeConnection }),
-      ...(configured[entry.subscriptionKey]?.deliveryMode === undefined
+      ...(config === undefined
         ? {}
-        : { deliveryMode: configured[entry.subscriptionKey].deliveryMode }),
-      ...(configured[entry.subscriptionKey]?.configuredAtOffset === undefined
-        ? {}
-        : { configuredAtOffset: configured[entry.subscriptionKey].configuredAtOffset }),
+        : {
+            deliveryMode: config.deliveryMode,
+            configuredAtOffset: config.configuredAtOffset,
+            config,
+          }),
       runtimeSubscription: streamRuntime?.runtime.subscriptions[entry.subscriptionKey],
     });
   }
@@ -724,7 +817,9 @@ function buildProcessorPanelEntries(
     if (entries.has(subscriptionKey)) continue;
     const subscriber = readRuntimeRecord(connection.subscriber);
     const announcement = readAnnouncement(subscriber?.processor);
+    const user = readSubscriberUser(subscriber?.user);
     const subscriptionType = readSubscriptionType(connection) ?? "ephemeral";
+    const config = configured[subscriptionKey];
     entries.set(subscriptionKey, {
       subscriptionKey,
       kind: subscriptionType === "configured" ? "processor" : "consumer",
@@ -733,17 +828,19 @@ function buildProcessorPanelEntries(
       ...(typeof subscriber?.description === "string"
         ? { description: subscriber.description }
         : {}),
+      ...(user === undefined ? {} : { user }),
       ...(announcement == null ? {} : { processor: announcement }),
       subscriptionType,
       ...(streamRuntime?.runtime.connections[subscriptionKey] === undefined
         ? {}
         : { runtimeConnection: streamRuntime.runtime.connections[subscriptionKey] }),
-      ...(configured[subscriptionKey]?.deliveryMode === undefined
+      ...(config === undefined
         ? {}
-        : { deliveryMode: configured[subscriptionKey].deliveryMode }),
-      ...(configured[subscriptionKey]?.configuredAtOffset === undefined
-        ? {}
-        : { configuredAtOffset: configured[subscriptionKey].configuredAtOffset }),
+        : {
+            deliveryMode: config.deliveryMode,
+            configuredAtOffset: config.configuredAtOffset,
+            config,
+          }),
       runtimeSubscription: streamRuntime?.runtime.subscriptions[subscriptionKey],
     });
   }
@@ -759,6 +856,7 @@ function buildProcessorPanelEntries(
     const subscriptionType = runtimeConnection.subscriptionType;
     const subscriber = readRuntimeRecord(runtimeConnection.subscriber);
     const announcement = readAnnouncement(subscriber?.processor);
+    const user = readSubscriberUser(subscriber?.user);
     entries.set(subscriptionKey, {
       subscriptionKey,
       kind: subscriptionType === "configured" ? "processor" : "consumer",
@@ -767,6 +865,7 @@ function buildProcessorPanelEntries(
       ...(typeof subscriber?.description === "string"
         ? { description: subscriber.description }
         : {}),
+      ...(user === undefined ? {} : { user }),
       ...(announcement == null ? {} : { processor: announcement }),
       subscriptionType,
       runtimeConnection,
@@ -785,6 +884,11 @@ function buildProcessorPanelEntries(
         subscriptionType: "configured",
         deliveryMode: config.deliveryMode,
         configuredAtOffset: config.configuredAtOffset,
+        config,
+        // Prefer the delivery label over a generic presence description so
+        // cross-posts show as `itx.streams.get(…).acceptCrossPost()` rather
+        // than a raw subscription key.
+        description: config.deliveryLabel ?? current.description,
         runtimeSubscription,
         connected: runtimeSubscription?.connected ?? current.connected,
       });
@@ -803,6 +907,7 @@ function buildProcessorPanelEntries(
       subscriptionType: "configured",
       deliveryMode: config.deliveryMode,
       configuredAtOffset: config.configuredAtOffset,
+      config,
       runtimeSubscription,
       ...(streamRuntime?.runtime.connections[subscriptionKey] === undefined
         ? {}
@@ -908,44 +1013,67 @@ function readCoreConnections(value: unknown): Record<string, Record<string, unkn
   );
 }
 
-function readConfiguredSubscribers(value: unknown): Record<
-  string,
-  {
-    deliveryMode: "wake" | "push" | "webhook";
-    configuredAtOffset?: number;
-    /** The delivery target as the itx call (or webhook POST) it actually is. */
-    deliveryLabel?: string;
-  }
-> {
+function readConfiguredSubscribers(value: unknown): Record<string, ConfiguredSubscriberDetails> {
   const record = readRuntimeRecord(value);
   const configured = readRuntimeRecord(record?.configuredSubscribersByKey);
   if (configured == null) return {};
   return Object.fromEntries(
     Object.entries(configured).flatMap(([key, entry]) => {
-      const latest = readRuntimeRecord(readRuntimeRecord(entry)?.latestConfiguredEvent);
-      const payload = readRuntimeRecord(latest?.payload);
-      const delivery = readRuntimeRecord(payload?.delivery);
-      const mode = delivery?.mode;
-      if (mode !== "wake" && mode !== "push" && mode !== "webhook") return [];
-      const configuredAtOffset = readNumber(latest, "offset") ?? undefined;
-      const deliveryLabel =
-        mode === "webhook"
-          ? typeof delivery?.url === "string"
-            ? `POST ${delivery.url}`
-            : undefined
-          : formatItxExpression(delivery?.expression);
-      return [
-        [
-          key,
-          {
-            deliveryMode: mode,
-            configuredAtOffset,
-            ...(deliveryLabel === undefined ? {} : { deliveryLabel }),
-          },
-        ],
-      ];
+      const details = readConfiguredSubscriberDetails(entry);
+      return details == null ? [] : [[key, details]];
     }),
   );
+}
+
+function readConfiguredSubscriberDetails(entry: unknown): ConfiguredSubscriberDetails | null {
+  const latest = readRuntimeRecord(readRuntimeRecord(entry)?.latestConfiguredEvent);
+  const payload = readRuntimeRecord(latest?.payload);
+  const delivery = readRuntimeRecord(payload?.delivery);
+  const mode = delivery?.mode;
+  if (mode !== "wake" && mode !== "push" && mode !== "webhook") return null;
+
+  const configuredAtOffset = readNumber(latest, "offset") ?? undefined;
+  const expression = delivery?.expression;
+  const deliveryLabel =
+    mode === "webhook"
+      ? typeof delivery?.url === "string"
+        ? `POST ${delivery.url}`
+        : undefined
+      : formatItxExpression(expression);
+  const crossPostDestination = readCrossPostDestination(expression);
+  const selector = readRuntimeRecord(payload?.selector);
+  const eventTypes = readStringArray(selector?.eventTypes);
+  const condition =
+    typeof selector?.condition === "string" && selector.condition.trim() !== ""
+      ? selector.condition
+      : undefined;
+  const params = readRuntimeRecord(payload?.params);
+  const transform =
+    typeof params?.transform === "string" && params.transform.trim() !== ""
+      ? params.transform
+      : undefined;
+  const deliver = readDeliverPolicy(payload?.deliver);
+  const onPoison =
+    payload?.onPoison === "park" || payload?.onPoison === "skip" ? payload.onPoison : undefined;
+  const webhookUrl = typeof delivery?.url === "string" ? delivery.url : undefined;
+  const note =
+    typeof payload?.description === "string" && payload.description.trim() !== ""
+      ? payload.description.trim()
+      : undefined;
+
+  return {
+    deliveryMode: mode,
+    ...(configuredAtOffset === undefined ? {} : { configuredAtOffset }),
+    ...(deliveryLabel === undefined ? {} : { deliveryLabel }),
+    ...(crossPostDestination === undefined ? {} : { crossPostDestination }),
+    ...(note === undefined ? {} : { note }),
+    ...(eventTypes === undefined ? {} : { eventTypes }),
+    ...(condition === undefined ? {} : { condition }),
+    ...(transform === undefined ? {} : { transform }),
+    ...(deliver === undefined ? {} : { deliver }),
+    ...(onPoison === undefined ? {} : { onPoison }),
+    ...(webhookUrl === undefined ? {} : { webhookUrl }),
+  };
 }
 
 /**
@@ -979,6 +1107,120 @@ function formatItxExpression(expression: unknown): string | undefined {
   }
   const call = steps.join(".");
   return `itx.${call.endsWith(")") ? call : `${call}()`}`;
+}
+
+/**
+ * `["streams", ["get", "/repos/root"], "acceptCrossPost"]` → `"/repos/root"`.
+ * Only the cross-post sink shape — other expressions leave destination unset.
+ */
+function readCrossPostDestination(expression: unknown): string | undefined {
+  if (!Array.isArray(expression) || expression.length < 3) return undefined;
+  if (expression[0] !== "streams") return undefined;
+  if (expression[expression.length - 1] !== "acceptCrossPost") return undefined;
+  const getStep = expression[1];
+  if (!Array.isArray(getStep) || getStep[0] !== "get") return undefined;
+  return typeof getStep[1] === "string" ? getStep[1] : undefined;
+}
+
+function readStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const items = value.filter(
+    (item): item is string => typeof item === "string" && item.trim() !== "",
+  );
+  return items.length === 0 ? undefined : items;
+}
+
+function readDeliverPolicy(value: unknown): "all" | "new" | { afterOffset: number } | undefined {
+  if (value === "all" || value === "new") return value;
+  const record = readRuntimeRecord(value);
+  if (record == null) return undefined;
+  const afterOffset = readNumber(record, "afterOffset");
+  return afterOffset == null ? undefined : { afterOffset };
+}
+
+/**
+ * Labeled multi-line overview under a durable subscriber row: destination,
+ * event types, condition, transform. Plain "a · b · c" made event types look
+ * like path fragments — explicit labels + chips trade a bit of height for
+ * scannability.
+ */
+function ConfiguredFilterSummary({ config }: { config: ConfiguredSubscriberDetails | undefined }) {
+  if (config == null) return null;
+  const hasEventFilter =
+    config.eventTypes != null && config.eventTypes.length > 0 && !config.eventTypes.includes("*");
+  const hasExtra =
+    config.note !== undefined ||
+    config.crossPostDestination !== undefined ||
+    hasEventFilter ||
+    config.condition !== undefined ||
+    config.transform !== undefined;
+  if (!hasExtra) return null;
+
+  const eventTypes = hasEventFilter
+    ? config.eventTypes!
+    : config.crossPostDestination !== undefined ||
+        config.condition !== undefined ||
+        config.transform !== undefined ||
+        config.note !== undefined
+      ? null // "all event types" shown as text, not chips
+      : undefined;
+
+  return (
+    <span className="mt-1.5 flex flex-col gap-1 text-[11px] leading-snug text-muted-foreground">
+      {config.note == null ? null : (
+        <span className="text-[11px] leading-snug text-foreground/75">{config.note}</span>
+      )}
+      {config.crossPostDestination == null ? null : (
+        <ConfiguredFilterLine label="to">
+          <span className="break-all font-mono text-foreground/80">
+            {config.crossPostDestination}
+          </span>
+        </ConfiguredFilterLine>
+      )}
+      {eventTypes === undefined ? null : eventTypes == null ? (
+        <ConfiguredFilterLine label="types">
+          <span className="text-foreground/70">all event types</span>
+        </ConfiguredFilterLine>
+      ) : (
+        <ConfiguredFilterLine label="types">
+          <span className="flex min-w-0 flex-wrap gap-1">
+            {eventTypes.map((type) => (
+              <span
+                key={type}
+                title={type}
+                className="rounded-md bg-violet-50 px-1.5 py-0.5 font-mono text-[10px] text-violet-700 dark:bg-violet-950 dark:text-violet-300"
+              >
+                {shortEventType(type)}
+              </span>
+            ))}
+          </span>
+        </ConfiguredFilterLine>
+      )}
+      {config.condition == null ? null : (
+        <ConfiguredFilterLine label="when">
+          <span className="break-all font-mono text-foreground/80">
+            {config.condition.length > 80 ? `${config.condition.slice(0, 77)}…` : config.condition}
+          </span>
+        </ConfiguredFilterLine>
+      )}
+      {config.transform == null ? null : (
+        <ConfiguredFilterLine label="transform">
+          <span className="text-foreground/70">JSONata (see detail)</span>
+        </ConfiguredFilterLine>
+      )}
+    </span>
+  );
+}
+
+function ConfiguredFilterLine({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <span className="flex min-w-0 items-start gap-1.5">
+      <span className="w-12 shrink-0 pt-px text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
+        {label}
+      </span>
+      <span className="min-w-0">{children}</span>
+    </span>
+  );
 }
 
 function readSubscriptionType(
@@ -1021,6 +1263,17 @@ function readAnnouncement(value: unknown): AgentUiProcessorAnnouncement | null {
       })
     : [];
   return { slug, version, description, consumes, emits, ownedEvents };
+}
+
+function readSubscriberUser(value: unknown): AgentUiPresenceEntry["user"] {
+  const user = readRuntimeRecord(value);
+  if (typeof user?.email !== "string") return undefined;
+  return {
+    ...(typeof user.id === "string" ? { id: user.id } : {}),
+    email: user.email,
+    ...(typeof user.name === "string" ? { name: user.name } : {}),
+    ...(typeof user.picture === "string" ? { picture: user.picture } : {}),
+  };
 }
 
 function isLlmish(entry: Pick<AgentUiPresenceEntry, "processor">): boolean {
@@ -1077,11 +1330,21 @@ function sinceLabel(measuredSinceIso: string): string {
   return `${(seconds / 3600).toFixed(1)}h`;
 }
 
-function MetricStat({ label, value, title }: { label: string; value: string; title?: string }) {
+function MetricStat({
+  label,
+  value,
+  title,
+  valueClassName,
+}: {
+  label: string;
+  value: string;
+  title?: string;
+  valueClassName?: string;
+}) {
   return (
     <div {...(title === undefined ? {} : { title })}>
       <div className="text-[10px] uppercase tracking-wide text-muted-foreground/70">{label}</div>
-      <div className="mt-0.5 font-mono text-sm">{value}</div>
+      <div className={cn("mt-0.5 font-mono text-sm", valueClassName)}>{value}</div>
     </div>
   );
 }
@@ -1090,6 +1353,7 @@ function ProcessorDetail({
   entry,
   busy,
   runtimeStateLoad,
+  streamMaxOffset,
   onRefreshRuntimeState,
   onBack,
   onClose,
@@ -1097,6 +1361,7 @@ function ProcessorDetail({
   entry: ProcessorPanelEntry;
   busy: boolean;
   runtimeStateLoad: ProcessorRuntimeStateLoad;
+  streamMaxOffset: number | null;
   onRefreshRuntimeState: () => void;
   onBack: () => void;
   onClose: () => void;
@@ -1115,9 +1380,11 @@ function ProcessorDetail({
         />
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-1.5">
-            <span className="truncate font-mono text-sm font-semibold">{presenceLabel(entry)}</span>
+            <span className="break-all font-mono text-sm font-semibold leading-snug">
+              {presenceLabel(entry)}
+            </span>
             {processor == null ? null : (
-              <span className="font-mono text-[10px] text-muted-foreground/70">
+              <span className="shrink-0 font-mono text-[10px] text-muted-foreground/70">
                 v{processor.version}
               </span>
             )}
@@ -1134,10 +1401,13 @@ function ProcessorDetail({
         <PanelCloseButton onClose={onClose} />
       </div>
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 pb-5 pt-2">
+        {entry.user == null ? null : <SubscriberUserDetail user={entry.user} />}
         {processor == null ? (
-          <p className="text-sm leading-relaxed text-muted-foreground">
-            {entry.description ?? "This subscriber did not announce a processor contract."}
-          </p>
+          shouldShowConfiguredDetail(entry.config) ? null : (
+            <p className="text-sm leading-relaxed text-muted-foreground">
+              {entry.description ?? "This subscriber did not announce a processor contract."}
+            </p>
+          )
         ) : (
           <>
             <p className="text-sm leading-relaxed text-foreground/70">{processor.description}</p>
@@ -1164,15 +1434,19 @@ function ProcessorDetail({
             </div>
           </>
         )}
+        {shouldShowConfiguredDetail(entry.config) ? (
+          <ConfiguredSubscriberDetail config={entry.config!} />
+        ) : null}
         {entry.kind === "core" ? null : <SubscriptionRuntimeSummary entry={entry} />}
         <ProcessorRuntimeStateView
           runtimeStateLoad={runtimeStateLoad}
+          streamMaxOffset={streamMaxOffset}
           onRefresh={onRefreshRuntimeState}
           processorSlug={processor?.slug}
         />
         <div>
           <SectionHeading>Subscription</SectionHeading>
-          <div className="rounded-xl bg-muted/40 px-3 py-2 font-mono text-xs text-muted-foreground">
+          <div className="rounded-xl bg-muted/40 px-3 py-2 font-mono text-xs text-muted-foreground break-all">
             {entry.subscriptionKey}
           </div>
         </div>
@@ -1181,19 +1455,189 @@ function ProcessorDetail({
   );
 }
 
+function SubscriberUserDetail({ user }: { user: NonNullable<AgentUiPresenceEntry["user"]> }) {
+  return (
+    <div>
+      <SectionHeading>User</SectionHeading>
+      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 rounded-xl bg-muted/40 px-4 py-3 font-mono text-xs">
+        <dt className="text-muted-foreground">Name</dt>
+        <dd className="min-w-0 break-all">{user.name ?? "—"}</dd>
+        <dt className="text-muted-foreground">Email address</dt>
+        <dd className="min-w-0 break-all">{user.email}</dd>
+        <dt className="text-muted-foreground">User ID</dt>
+        <dd className="min-w-0 break-all">{user.id ?? "—"}</dd>
+      </dl>
+    </div>
+  );
+}
+
+/**
+ * Wake processors already document what they consume via the processor
+ * contract; the interesting config surface is push/webhook (cross-posts,
+ * webhooks) and any wake entry that carries an explicit selector/transform.
+ */
+function shouldShowConfiguredDetail(
+  config: ConfiguredSubscriberDetails | undefined,
+): config is ConfiguredSubscriberDetails {
+  if (config == null) return false;
+  if (config.deliveryMode === "push" || config.deliveryMode === "webhook") return true;
+  return (
+    config.note !== undefined ||
+    config.crossPostDestination !== undefined ||
+    (config.eventTypes != null && config.eventTypes.length > 0) ||
+    config.condition !== undefined ||
+    config.transform !== undefined
+  );
+}
+
+/**
+ * Human-readable desired state for a durable push/webhook/wake config —
+ * especially cross-posts, where the interesting bit is which events are
+ * copied onto which stream, not the raw subscription key.
+ */
+function ConfiguredSubscriberDetail({ config }: { config: ConfiguredSubscriberDetails }) {
+  const isCrossPost = config.crossPostDestination !== undefined;
+  const heading = isCrossPost
+    ? "Cross-post"
+    : config.deliveryMode === "webhook"
+      ? "Webhook"
+      : config.deliveryMode === "push"
+        ? "Push delivery"
+        : "Wake delivery";
+  const eventTypes =
+    config.eventTypes == null || config.eventTypes.includes("*") ? null : config.eventTypes;
+  const deliverLabel =
+    config.deliver === undefined
+      ? isCrossPost || config.deliveryMode !== "wake"
+        ? "new (from configure time)"
+        : null
+      : config.deliver === "all"
+        ? "all history"
+        : config.deliver === "new"
+          ? "new (from configure time)"
+          : `after offset #${config.deliver.afterOffset}`;
+  const genericBlurb = isCrossPost
+    ? "When matching events land on this stream, copies are pushed onto the destination with provenance (`source.crossPostedFrom`)."
+    : config.deliveryMode === "webhook"
+      ? "Each matching event is POSTed as JSON to the configured URL."
+      : config.deliveryMode === "push"
+        ? "Matching events are dialed into the configured itx expression as push batches."
+        : "The subscriber owns its checkpoint; the stream pokes it when the watermark lags.";
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div>
+        <SectionHeading>{heading}</SectionHeading>
+        <p className="text-sm leading-relaxed text-foreground/70">{config.note ?? genericBlurb}</p>
+        {config.note == null ? null : (
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{genericBlurb}</p>
+        )}
+      </div>
+
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {config.deliveryLabel == null ? null : (
+          <DetailField label="delivers to" mono>
+            {config.deliveryLabel}
+          </DetailField>
+        )}
+        {config.crossPostDestination == null ? null : (
+          <DetailField label="destination stream" mono>
+            {config.crossPostDestination}
+          </DetailField>
+        )}
+        {config.webhookUrl == null || config.deliveryLabel != null ? null : (
+          <DetailField label="url" mono>
+            {config.webhookUrl}
+          </DetailField>
+        )}
+        {deliverLabel == null ? null : (
+          <DetailField label="starts from">{deliverLabel}</DetailField>
+        )}
+        {config.onPoison == null ? null : (
+          <DetailField label="on poison">{config.onPoison}</DetailField>
+        )}
+      </div>
+
+      <div>
+        <SectionHeading>Copies these events</SectionHeading>
+        {eventTypes == null ? (
+          <span className="text-xs text-muted-foreground">
+            All event types
+            {config.condition == null ? "" : " matching the condition below"}
+          </span>
+        ) : (
+          <div className="flex flex-wrap gap-1.5">
+            {eventTypes.map((type) => (
+              <span
+                key={type}
+                className="rounded-full bg-violet-50 px-2.5 py-0.5 font-mono text-[10px] text-violet-700 dark:bg-violet-950 dark:text-violet-300"
+                title={type}
+              >
+                {shortEventType(type)}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {config.condition == null ? null : (
+        <div>
+          <SectionHeading>Condition</SectionHeading>
+          <div className="rounded-xl bg-muted/40 px-3 py-2 font-mono text-xs leading-relaxed text-foreground/80 break-all whitespace-pre-wrap">
+            {config.condition}
+          </div>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            JSONata over the whole event — must evaluate to exactly true.
+          </p>
+        </div>
+      )}
+
+      {config.transform == null ? null : (
+        <div>
+          <SectionHeading>Transform</SectionHeading>
+          <div className="rounded-xl bg-muted/40 px-3 py-2 font-mono text-xs leading-relaxed text-foreground/80 break-all whitespace-pre-wrap">
+            {config.transform}
+          </div>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            JSONata constructor for the copied event body. Omitted fields copy verbatim; provenance
+            is stamped after the transform.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DetailField({
+  label,
+  children,
+  mono = false,
+}: {
+  label: string;
+  children: React.ReactNode;
+  mono?: boolean;
+}) {
+  return (
+    <div className="rounded-xl bg-muted/40 px-3 py-2">
+      <div className="text-[10px] uppercase tracking-wide text-muted-foreground/70">{label}</div>
+      <div className={cn("mt-0.5 text-sm break-all", mono && "font-mono text-xs")}>{children}</div>
+    </div>
+  );
+}
+
 function ProcessorRuntimeStateView({
   runtimeStateLoad,
+  streamMaxOffset,
   onRefresh,
   processorSlug,
 }: {
   runtimeStateLoad: ProcessorRuntimeStateLoad;
+  streamMaxOffset: number | null;
   onRefresh: () => void;
   processorSlug?: string;
 }) {
   const [showRaw, setShowRaw] = useState(false);
   const runtimeState = runtimeStateLoad.status === "loaded" ? runtimeStateLoad.runtimeState : null;
-  const streamMaxOffset =
-    runtimeStateLoad.status === "loaded" ? runtimeStateLoad.streamMaxOffset : null;
   const snapshot = runtimeState?.snapshot;
   const lag =
     snapshot == null || streamMaxOffset == null
@@ -1201,6 +1645,8 @@ function ProcessorRuntimeStateView({
       : Math.max(0, streamMaxOffset - snapshot.offset);
   const isAgent = processorSlug === "agent";
   const isCore = processorSlug === "core";
+  const refreshPending =
+    runtimeStateLoad.status === "loading" || runtimeStateLoad.status === "idle";
 
   return (
     <div>
@@ -1222,13 +1668,11 @@ function ProcessorRuntimeStateView({
             variant="ghost"
             size="icon-sm"
             title="Refresh reduced state"
-            disabled={runtimeStateLoad.status === "loading"}
+            disabled={refreshPending}
             onClick={onRefresh}
             className="size-6 text-muted-foreground"
           >
-            <RefreshCwIcon
-              className={cn("size-3.5", runtimeStateLoad.status === "loading" && "animate-spin")}
-            />
+            <RefreshCwIcon className={cn("size-3.5", refreshPending && "animate-spin")} />
           </Button>
         </div>
       </div>
@@ -1280,6 +1724,11 @@ function SubscriptionRuntimeSummary({ entry }: { entry: ProcessorPanelEntry }) {
   }
   const runtime = entry.runtimeSubscription;
   const connection = entry.runtimeConnection;
+  const hasLatency =
+    connection != null ||
+    runtime?.settleLatencyMs != null ||
+    runtime?.deliveryDurationMs != null ||
+    runtime?.bytesSent != null;
   return (
     <div>
       <SectionHeading>Delivery</SectionHeading>
@@ -1309,7 +1758,7 @@ function SubscriptionRuntimeSummary({ entry }: { entry: ProcessorPanelEntry }) {
           }
         />
       </div>
-      {connection == null && runtime?.settleLatencyMs == null ? null : (
+      {hasLatency ? (
         <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
           <RuntimeStateStat
             label="ping rtt"
@@ -1327,25 +1776,30 @@ function SubscriptionRuntimeSummary({ entry }: { entry: ProcessorPanelEntry }) {
             })()}
           />
           <RuntimeStateStat
-            label="delivered"
-            // Events delivered, live-connection lanes only: push/webhook
-            // subscriptions track bytes (the adjacent stat), not an event
-            // count — a dash beats relabeling bytes as events.
-            value={connection != null ? `${connection.eventsSent} ev` : "—"}
+            label="call rtt"
+            value={(() => {
+              const stats = runtime?.deliveryDurationMs;
+              return stats == null ? "—" : `${stats.last}ms · p95 ${stats.p95}ms`;
+            })()}
           />
           <RuntimeStateStat
-            label="bytes"
+            label="delivered"
+            // Live connections report events; push/webhook report bytes this
+            // incarnation (no durable event counter on the spine).
             value={
               connection != null
-                ? formatFileSize(connection.bytesSent)
+                ? `${connection.eventsSent} ev · ${formatFileSize(connection.bytesSent)}`
                 : runtime?.bytesSent != null
                   ? formatFileSize(runtime.bytesSent)
                   : "—"
             }
           />
         </div>
-      )}
-      {entry.configuredAtOffset == null && runtime?.lastError == null ? null : (
+      ) : null}
+      {entry.configuredAtOffset == null &&
+      runtime?.lastError == null &&
+      runtime?.parkedAtOffset == null &&
+      runtime?.nextAttemptAt == null ? null : (
         <div className="mt-2 rounded-xl bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
           {entry.configuredAtOffset == null ? null : (
             <div>configured at #{entry.configuredAtOffset}</div>
@@ -1357,6 +1811,12 @@ function SubscriptionRuntimeSummary({ entry }: { entry: ProcessorPanelEntry }) {
           {runtime?.lastError == null ? null : (
             <div className="mt-1 text-destructive">{runtime.lastError}</div>
           )}
+          {connection == null && runtime?.bytesSent == null && entry.deliveryMode !== "wake" ? (
+            <div className="mt-1 text-muted-foreground/80">
+              Delivery volume (bytes) resets when this stream Durable Object restarts — there is no
+              durable cross-post counter.
+            </div>
+          ) : null}
         </div>
       )}
     </div>

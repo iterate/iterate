@@ -1,5 +1,4 @@
 import { parseAppConfigFromEnv, publicValue, redacted } from "@iterate-com/shared/config";
-import { AppLogsConfig } from "@iterate-com/shared/evlog/types";
 import { z } from "zod";
 
 const JSONWebKeySet = z.object({
@@ -57,23 +56,33 @@ const DEFAULT_GOOGLE_OAUTH_SCOPES = [
  */
 export const AppConfig = z.object({
   baseUrl: publicValue(z.url().optional()),
-  logs: AppLogsConfig.default({
-    stdoutFormat: "pretty",
-    filtering: { rules: [] },
-  }),
+  /**
+   * Deployment identity used by small browser-facing environment cues. The
+   * deployed value is the envs.ts key (`prd`, `preview_N`); local dev inherits
+   * its Doppler config (`dev`, `dev_jonas`, ...).
+   */
+  environmentName: publicValue(z.string().trim().min(1).optional()),
   mcp: z
     .object({
       baseUrl: publicValue(z.url()),
     })
     .optional(),
   adminApiSecret: redacted(z.string().trim().min(1)).optional(),
+  /**
+   * Shared with the auth app (its mint side): verifies project-app-session
+   * tokens locally, so the per-request project-host gate and the /api
+   * `project-app-session` credential lane are pure HS256 checks with no
+   * auth-worker hop. Deliberately NOT the better-auth master secret — it
+   * grants only this token kind and rotates alone. Unset: both consumers
+   * fall back to the auth worker's validate RPC.
+   */
+  projectAppSessionSecret: redacted(z.string().trim().min(1)).optional(),
   iterateAuth: z
     .object({
       issuer: publicValue(z.url().default("https://auth.iterate.com/api/auth")),
       clientId: publicValue(z.string().trim().min(1)),
       clientSecret: redacted(z.string().trim().min(1)),
-      jwks: JSONWebKeySet.optional(),
-      serviceToken: redacted(z.string().trim().min(1)).optional(),
+      jwks: JSONWebKeySet,
       resource: publicValue(z.url()).optional(),
       emailOtpEnabled: publicValue(z.boolean().default(false)),
     })
@@ -100,7 +109,12 @@ export const AppConfig = z.object({
     .object({
       transport: z.enum(["unified", "byok"]).default("byok"),
       id: z.string().trim().min(1).default("default"),
-      responseCacheTtlSeconds: z.coerce.number().int().positive().optional(),
+      responseCacheTtlSeconds: z
+        .preprocess(
+          (value) => (value === "" ? undefined : value),
+          z.coerce.number().int().positive().optional(),
+        )
+        .optional(),
     })
     .prefault({}),
   cloudflare: z
@@ -113,13 +127,24 @@ export const AppConfig = z.object({
     .default({}),
   projectHostnameBases: publicValue(z.array(z.string().trim().min(1)).default([])),
   /**
-   * npm dependency specifier substituted for the `iterate` package when
-   * seeding project repos (the template ships the pkg.pr.new `@main` URL).
-   * Preview deploys set this to the PR's own pkg.pr.new build so projects
-   * created there — e2e tests included — get the branch tip's `iterate/sdk`,
-   * not main's. Unset (prod, local dev) keeps the template's `@main`.
+   * pkg.pr.new ref (commit SHA in practice) pinned onto every iterate/iterate
+   * pkg.pr.new dependency spec when seeding project repos and before every
+   * dynamic build — the template ships `@main` specs (src/pkg-pr-new.ts has
+   * the URL grammar). Preview deploys set this to the PR head SHA so projects
+   * compile against the exact packages published for that commit. Unset
+   * (prod) keeps each repo's specs. Name-agnostic on purpose: adding a
+   * first-party package to the template requires no kernel change.
    */
-  iterateSdkPackageSpec: z.string().trim().min(1).optional(),
+  iterateRepoPkgRef: z.string().trim().min(1).optional(),
+  /**
+   * Map of dependency name → replacement spec, applied wholesale when seeding
+   * and before every dynamic build. Local dev's SDK lockstep: dev.ts packs
+   * the worktree's `iterate` package and points its dependants at the local
+   * tarball URL (scripts/lib/dev-sdk-tarball.ts). Name-keyed — unlike the ref
+   * pin above — so a repo already carrying a stale local tarball spec is
+   * still re-pointed at the current one. Unset everywhere deployed.
+   */
+  iterateRepoPkgSpecOverrides: z.record(z.string(), z.string().trim().min(1)).optional(),
   /** First-party project email (itx.email + the inbound email() door). */
   email: z
     .object({
@@ -145,6 +170,10 @@ export const AppConfig = z.object({
           oauthClientId: publicValue(z.string().trim().min(1)),
           oauthClientSecret: redacted(z.string().trim().min(1)),
           webhookSigningSecret: redacted(z.string().trim().min(1)),
+          /** Same-app recovery credential for a connected workspace whose
+           * stored token has been revoked. Outbound Slack code verifies its
+           * team id against the connection journal before using it. */
+          botToken: redacted(z.string().trim().min(1)).optional(),
           scopes: publicValue(z.array(SlackScope).default(DEFAULT_SLACK_BOT_SCOPES)),
         })
         .optional(),
@@ -195,11 +224,14 @@ export const AppConfig = z.object({
        * (resolved by the Secret DO's oauth-refresh-token strategy). */
       petshop: z
         .object({
+          /** Deployment-matched dummy provider origin. Platform OAuth client
+           * credentials and the tokens they mint are confined to this origin. */
+          baseUrl: publicValue(z.url()).optional(),
           oauthClientId: publicValue(z.string().trim().min(1)),
           oauthClientSecret: redacted(z.string().trim().min(1)),
         })
         .optional(),
-      /** First-party Parallel API access. This is an Iterate-owned API key,
+      /** First-party Parallel API access. This is an iterate-owned API key,
        * not a per-project connection secret. */
       parallel: z
         .object({

@@ -29,7 +29,7 @@
 // (`clientCreds: "material"`) so the Secret DO re-mints on 401 in its own trusted
 // code. The agent then connects like any bearer MCP:
 //   itx.mcp.connect({ url, headers: { authorization:
-//     'Bearer getSecret({ path: "<path>", field: "accessToken" })' } })
+//     'Bearer getSecret("<path>", { field: "accessToken" })' } })
 //
 // The two verbs are pure — key + fetch function in, data out — so the whole round
 // trip unit-tests with no network. rpc-targets.ts (begin) and integration-api.ts
@@ -56,7 +56,7 @@ import type { SecretRefresh } from "../secrets/types.ts";
  * not a standing credential. */
 const STATE_TTL_MS = 15 * 60 * 1000;
 
-const CLIENT_NAME = "Iterate";
+const CLIENT_NAME = "iterate";
 
 /** A message meant for a human (agent or dashboard) — thrown when the flow
  * cannot proceed and the reason is worth surfacing verbatim. */

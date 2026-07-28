@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 import WebSocket from "ws";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
 
-// THE DESIRED BEHAVIOR (not yet implemented — see `test.fails` below): a live
+// THE DESIRED BEHAVIOR (not yet implemented — see the quarantined spec below): a live
 // capability whose `fetch(request)` upgrades WebSockets, provided over Cap'n
 // Web from this vitest process, serves a project app host end to end:
 //
@@ -17,10 +17,11 @@ import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
 // tunnels the socket across the Cap'n Web session as a stream pair
 // (websocket-streams.ts), but it materializes a real WebSocket at the session
 // endpoint, and the internal workerd RPC hops between there and the app
-// isolate refuse to serialize it. The passing test below pins that exact
-// boundary; the failing test is the specification. When the mesh learns to
-// carry the socket (e.g. by staying in stream-pair form until the fetch-lane
-// exit), the `test.fails` flips and this file is the to-do list.
+// isolate refuse to serialize it. The preserved specs below pin that boundary
+// and the desired behavior. Both are quarantined because the boundary probe
+// deterministically kills the shared OS isolate after catching its expected
+// error; restoration is owned by
+// tasks/quarantined-live-capability-websocket-e2e.md.
 
 /** The WebSocket surface the fork's tunnel needs on the provider side
  * (`WebSocketLike` in capnweb's websocket-streams.ts). Node has no
@@ -43,72 +44,6 @@ type ShimEnd = {
   peer: ShimEnd | undefined;
 };
 
-function socketPairShim(): [ShimSocket, ShimSocket] {
-  const makeEnd = (): ShimEnd => ({
-    buffered: [],
-    closed: false,
-    listeners: new Map(),
-    open: false,
-    peer: undefined,
-  });
-  const a = makeEnd();
-  const b = makeEnd();
-  a.peer = b;
-  b.peer = a;
-
-  const deliver = (end: ShimEnd, type: "message" | "close", event: MessageOrCloseEvent) => {
-    if (!end.open) {
-      end.buffered.push({ event, type });
-      return;
-    }
-    for (const listener of end.listeners.get(type) ?? []) listener(event);
-  };
-
-  const api = (end: ShimEnd): ShimSocket => ({
-    accept: () => {
-      end.open = true;
-      for (const { event, type } of end.buffered.splice(0)) {
-        for (const listener of end.listeners.get(type) ?? []) listener(event);
-      }
-    },
-    addEventListener: (type, listener) => {
-      const list = end.listeners.get(type) ?? [];
-      list.push(listener);
-      end.listeners.set(type, list);
-    },
-    close: (code, reason) => {
-      if (end.closed) return;
-      end.closed = true;
-      deliver(end.peer!, "close", { code: code ?? 1000, reason: reason ?? "" });
-    },
-    send: (data) => {
-      if (end.closed) return;
-      deliver(end.peer!, "message", { data });
-    },
-  });
-
-  return [api(a), api(b)];
-}
-
-/** A genuine upgrading fetch handler running in this process: echoes frames
- * back prefixed. Written exactly like a workerd handler, modulo the shim
- * standing in for WebSocketPair and the 200 status (undici refuses 1xx; the
- * fork keys on `webSocket` presence, mirroring its own makeUpgradeResponse
- * non-workerd branch). */
-function nodeWebSocketFetchHandler(request: Request): Promise<Response> {
-  if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
-    return Promise.resolve(new Response("expected websocket", { status: 426 }));
-  }
-  const [clientEnd, serverEnd] = socketPairShim();
-  serverEnd.accept();
-  serverEnd.addEventListener("message", (event) => {
-    serverEnd.send(`node-echo:${event.data ?? ""}`);
-  });
-  const response = new Response(null, { status: 200 });
-  Object.defineProperty(response, "webSocket", { configurable: true, value: clientEnd });
-  return Promise.resolve(response);
-}
-
 /** The app a user would naturally write: forward to the capability. One
  * real-fetch-lane hop terminates at this class's `fetch`; the socket would
  * have to come back through capability dispatch. */
@@ -126,7 +61,8 @@ export default class LiveWsApp extends WorkerEntrypoint<{ ITX: ItxBinding }> {
 }
 `;
 
-test("the boundary, pinned: a socket-carrying Response dies crossing the worker mesh", async () => {
+// Quarantined with tasks/quarantined-live-capability-websocket-e2e.md.
+test.skip("the boundary, pinned: a socket-carrying Response dies crossing the worker mesh", async () => {
   const marker = crypto.randomUUID().slice(0, 8);
 
   using session = withItxSession();
@@ -134,7 +70,7 @@ test("the boundary, pinned: a socket-carrying Response dies crossing the worker 
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `live-ws-pin-${marker}` });
+  using project = await itx.projects.get(`live-ws-pin-${marker}`).create({});
   await project.__describe();
 
   using _provision = await project.provideCapability({
@@ -147,7 +83,7 @@ test("the boundary, pinned: a socket-carrying Response dies crossing the worker 
   // serialize fine over capability dispatch. Only the socket cannot cross.
   // @ts-expect-error dynamic capability path
   const plain = await project.wsbackend.fetch(new Request("https://live.example.com/"));
-  expect(plain.status).toBe(426);
+  expect(plain).toMatchObject({ status: 426 });
 
   const outcome = await (async () => {
     try {
@@ -166,9 +102,10 @@ test("the boundary, pinned: a socket-carrying Response dies crossing the worker 
   expect(outcome).toContain('Could not serialize object of type "WebSocket"');
 });
 
-test.fails(
+// Quarantined with tasks/quarantined-live-capability-websocket-e2e.md.
+test.skip(
   "DESIRED: a live-capability fetch handler serves WebSockets at an app host",
-  { timeout: 150_000 },
+  { retry: 0, timeout: 150_000 },
   async () => {
     const marker = crypto.randomUUID().slice(0, 8);
     const slug = `live-ws-${marker}`;
@@ -178,7 +115,7 @@ test.fails(
       type: "admin-secret",
       secret: adminSecret(),
     });
-    using project = itx.projects.create({ slug });
+    using project = await itx.projects.get(slug).create({});
     await project.__describe();
 
     using _provision = await project.provideCapability({
@@ -195,8 +132,10 @@ test.fails(
     type: "stateless",
     path: "/",
     source: {
-      files: { type: "repo", repoPath: "/repos/config", include: ["apps/livews/**"] },
-      options: { entryPoint: "apps/livews/worker.ts" },
+      createWorker: {
+        entryPoint: "apps/livews/worker.ts",
+        files: { type: "repo", repoPath: "/repos/config", include: ["apps/livews/**"] },
+      },
     },
   },
 ${anchor}`,
@@ -264,3 +203,69 @@ ${anchor}`,
     }
   },
 );
+
+function socketPairShim(): [ShimSocket, ShimSocket] {
+  const makeEnd = (): ShimEnd => ({
+    buffered: [],
+    closed: false,
+    listeners: new Map(),
+    open: false,
+    peer: undefined,
+  });
+  const a = makeEnd();
+  const b = makeEnd();
+  a.peer = b;
+  b.peer = a;
+
+  const deliver = (end: ShimEnd, type: "message" | "close", event: MessageOrCloseEvent) => {
+    if (!end.open) {
+      end.buffered.push({ event, type });
+      return;
+    }
+    for (const listener of end.listeners.get(type) ?? []) listener(event);
+  };
+
+  const api = (end: ShimEnd): ShimSocket => ({
+    accept: () => {
+      end.open = true;
+      for (const { event, type } of end.buffered.splice(0)) {
+        for (const listener of end.listeners.get(type) ?? []) listener(event);
+      }
+    },
+    addEventListener: (type, listener) => {
+      const list = end.listeners.get(type) ?? [];
+      list.push(listener);
+      end.listeners.set(type, list);
+    },
+    close: (code, reason) => {
+      if (end.closed) return;
+      end.closed = true;
+      deliver(end.peer!, "close", { code: code ?? 1000, reason: reason ?? "" });
+    },
+    send: (data) => {
+      if (end.closed) return;
+      deliver(end.peer!, "message", { data });
+    },
+  });
+
+  return [api(a), api(b)];
+}
+
+/** A genuine upgrading fetch handler running in this process: echoes frames
+ * back prefixed. Written exactly like a workerd handler, modulo the shim
+ * standing in for WebSocketPair and the 200 status (undici refuses 1xx; the
+ * fork keys on `webSocket` presence, mirroring its own makeUpgradeResponse
+ * non-workerd branch). */
+function nodeWebSocketFetchHandler(request: Request): Promise<Response> {
+  if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+    return Promise.resolve(new Response("expected websocket", { status: 426 }));
+  }
+  const [clientEnd, serverEnd] = socketPairShim();
+  serverEnd.accept();
+  serverEnd.addEventListener("message", (event) => {
+    serverEnd.send(`node-echo:${event.data ?? ""}`);
+  });
+  const response = new Response(null, { status: 200 });
+  Object.defineProperty(response, "webSocket", { configurable: true, value: clientEnd });
+  return Promise.resolve(response);
+}

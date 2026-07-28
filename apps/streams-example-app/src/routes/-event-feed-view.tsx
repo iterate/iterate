@@ -24,14 +24,7 @@ import {
   type StreamBrowserStore,
 } from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
-import { browserProcessorStateStorage } from "~/domains/streams/client-libraries/browser/processor-state-storage.ts";
-import {
-  BROWSER_FEED_SCHEMA_VERSION,
-  BROWSER_FEED_TABLE,
-  BrowserFeedContract,
-  BrowserFeedProcessor,
-  type BrowserFeedState,
-} from "~/domains/streams/client-libraries/processors/browser-feed/implementation.ts";
+import { CANONICAL_MIRROR_PROCESSORS } from "~/domains/streams/client-libraries/browser/canonical-mirror-processors.ts";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 
 type FeedItemRow = {
@@ -56,24 +49,7 @@ export function EventFeedView({ streamView }: { streamView: StreamViewSearch }) 
         streamPath: streamView.path,
         projectId: streamView.projectId,
         createStreamClient: createCapnwebStreamClient,
-        slug: BrowserFeedContract.slug,
-        schemaVersion: BROWSER_FEED_SCHEMA_VERSION,
-        tables: [BROWSER_FEED_TABLE],
-        createProcessor({ stream, path, projectId, sql, subscriptionKey }) {
-          const storage = browserProcessorStateStorage<BrowserFeedState>({
-            sql,
-            processorSlug: BrowserFeedContract.slug,
-            subscriptionKey,
-          });
-          return new BrowserFeedProcessor({
-            stream,
-            path,
-            projectId,
-            sql,
-            readState: storage.readState,
-            writeState: storage.writeState,
-          });
-        },
+        processors: CANONICAL_MIRROR_PROCESSORS,
       }),
     [streamView.projectId, streamView.path],
   );
@@ -130,7 +106,7 @@ function FeedItemRows({
   streamStore: StreamBrowserStore;
 }) {
   const topScrollAffordanceHeight = 48;
-  const estimatedFeedRowHeight = 44;
+  const estimatedFeedRowHeight = 44; // Pending + pb-2 must measure exactly this.
   const parentRef = useRef<HTMLDivElement>(null);
   const previousItemCount = useRef(itemCount);
   const initialScrollOffset = useRef(
@@ -453,7 +429,7 @@ function FeedItemWindow({
       >
         {row === undefined ? (
           <article
-            className="box-border h-[30px] rounded-md border border-[#e1e5eb]"
+            className="box-border h-9 rounded-md border border-[#e1e5eb]"
             data-testid="feed-item-pending"
           />
         ) : (

@@ -1,18 +1,120 @@
 import { createPrivateKey, createSign, generateKeyPairSync } from "node:crypto";
 import { describe, expect, test } from "vitest";
-import { z } from "zod";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import {
+  APPROVAL_BODY_INSPECTION_LIMIT_BYTES,
+  approvalRequestBody,
   buildApprovalMessage,
   bytesToBase64,
   canonicalJson,
   derSignatureToRaw,
-  EgressRule,
   evaluateGrant,
   matchEgressRule,
   verifyApprovalSignature,
+  type EgressRule,
   type HumanApprovalKey,
 } from "./egress-approvals.ts";
+
+test("approvalRequestBody preserves readable requests within the inspection limit", () => {
+  const text = JSON.stringify({ orderId: 1234, reason: "duplicate" });
+  expect(approvalRequestBody(new TextEncoder().encode(text), "text-sha256")).toEqual({
+    encoding: "utf8",
+    content: text,
+    originalByteLength: text.length,
+    sha256: "text-sha256",
+    truncated: false,
+  });
+
+  expect(approvalRequestBody(Uint8Array.from([0, 255, 17, 128]), "binary-sha256")).toEqual({
+    encoding: "base64",
+    content: "AP8RgA==",
+    originalByteLength: 4,
+    sha256: "binary-sha256",
+    truncated: false,
+  });
+});
+
+test("approvalRequestBody caps the durable inspection payload at 64 KiB", () => {
+  const bytes = new TextEncoder().encode("a".repeat(APPROVAL_BODY_INSPECTION_LIMIT_BYTES + 10_000));
+
+  expect(approvalRequestBody(bytes, "text-sha256")).toEqual({
+    encoding: "utf8",
+    content: "a".repeat(APPROVAL_BODY_INSPECTION_LIMIT_BYTES),
+    originalByteLength: bytes.byteLength,
+    sha256: "text-sha256",
+    truncated: true,
+  });
+
+  const binary = new Uint8Array(APPROVAL_BODY_INSPECTION_LIMIT_BYTES + 10_000).fill(0xff);
+  const binaryBody = approvalRequestBody(binary, "binary-sha256");
+  expect(binaryBody).toMatchObject({
+    encoding: "base64",
+    originalByteLength: binary.byteLength,
+    sha256: "binary-sha256",
+    truncated: true,
+  });
+  expect(binaryBody.content).toBe(
+    bytesToBase64(binary.slice(0, APPROVAL_BODY_INSPECTION_LIMIT_BYTES)),
+  );
+});
+
+test("approvalRequestBody keeps UTF-8 readable when the byte cap splits a code point", () => {
+  const completePrefix = "a".repeat(APPROVAL_BODY_INSPECTION_LIMIT_BYTES - 1);
+  const bytes = new TextEncoder().encode(`${completePrefix}€ after the cap`);
+
+  expect(approvalRequestBody(bytes, "text-sha256")).toEqual({
+    encoding: "utf8",
+    content: completePrefix,
+    originalByteLength: bytes.byteLength,
+    sha256: "text-sha256",
+    truncated: true,
+  });
+});
+
+test("the approval request contract exposes one nullish body object", () => {
+  const schema =
+    ProjectProcessorContract.events["events.iterate.com/project/human-approval-requested"]
+      .payloadSchema;
+  const base = {
+    method: "POST",
+    url: "https://api.stripe.com/v1/transfers",
+    headers: {},
+    secretPaths: [],
+    ruleKey: "stripe",
+    expiresAt: "2026-07-22T15:00:00.000Z",
+  };
+
+  expect(schema.parse({ ...base, body: null })).toEqual({
+    ...base,
+    body: null,
+    ruleDescription: "",
+  });
+  expect(
+    schema.parse({
+      ...base,
+      body: {
+        encoding: "utf8",
+        content: '{"orderId":1234}',
+        originalByteLength: 16,
+        sha256: "body-sha256",
+      },
+    }),
+  ).toMatchObject({
+    body: {
+      encoding: "utf8",
+      content: '{"orderId":1234}',
+      originalByteLength: 16,
+      sha256: "body-sha256",
+      truncated: false,
+    },
+  });
+  expect(() =>
+    schema.parse({
+      ...base,
+      body: { encoding: "utf8", content: "missing hash" },
+    }),
+  ).toThrow();
+});
 
 const rule = (overrides: Partial<EgressRule> & Pick<EgressRule, "ruleKey">): EgressRule => ({
   description: "",
@@ -80,23 +182,27 @@ describe("matchEgressRule", () => {
     expect(matchEgressRule([rule({ ruleKey: "all" })], request())?.ruleKey).toBe("all");
   });
 
-  test("a rule that omits approvalTimeoutMs folds to a finite default, never NaN", () => {
+  test("a rule that omits approvalTimeoutMs reduces to a finite default, never NaN", () => {
     // The egress door computes `deadline = Date.now() + rule.approvalTimeoutMs`.
-    // A rule reaches project state only through the reduce (which parses the
-    // event payload with `z.array(EgressRule)`) or checkpoint hydration (which
-    // re-parses the whole fold through the contract's stateSchema — the same
-    // `z.array(EgressRule)`). Both apply `.default(600_000)`, so a missing
-    // timeout is always filled. Were it ever left undefined the deadline would
-    // be NaN: the held fetch would hang forever and the post-deadline sweep
-    // would page resolution events without end.
+    // A rule reaches project state only through reduce (which parses the
+    // egress-rules-configured payload through the contract) or checkpoint
+    // hydration (which re-parses the whole reduced state through the
+    // contract's stateSchema — the same rule schema). Both apply
+    // `.default(600_000)`, so a missing timeout is always filled. Were it
+    // ever left undefined the deadline would be NaN: the held fetch would
+    // hang forever and the post-deadline sweep would page resolution events
+    // without end.
     const timeoutless = {
       ruleKey: "stripe-writes",
       verdict: "hold" as const,
       match: { hosts: ["api.stripe.com"] },
     };
 
-    // Reduce gate: the per-rule parse the event payloadSchema runs.
-    expect(z.array(EgressRule).parse([timeoutless])[0].approvalTimeoutMs).toBe(600_000);
+    // Reduce gate: the parse the event payloadSchema runs.
+    const parsed = ProjectProcessorContract.events[
+      "events.iterate.com/project/egress-rules-configured"
+    ].payloadSchema.parse({ rules: [timeoutless] });
+    expect(parsed.rules[0]!.approvalTimeoutMs).toBe(600_000);
 
     // Checkpoint-hydration gate: the state schema re-parses the fold on load.
     const state = ProjectProcessorContract.stateSchema.parse({ egressRules: [timeoutless] });
@@ -138,8 +244,13 @@ describe("canonical approval message", () => {
   const requested = {
     method: "POST",
     url: "https://api.stripe.com/v1/transfers",
-    headers: { authorization: 'Bearer getSecret({ path: "/secrets/stripe/prod" })' },
-    bodySha256: "9c56cc51b374c3ba189210d5b6d4bf57790d351c96c47c02190ecf1e430ba0aa",
+    headers: { authorization: 'Bearer getSecret("/secrets/stripe/prod")' },
+    body: {
+      encoding: "utf8" as const,
+      content: '{"amount":100}',
+      sha256: "9c56cc51b374c3ba189210d5b6d4bf57790d351c96c47c02190ecf1e430ba0aa",
+      truncated: false,
+    },
     secretPaths: ["/secrets/stripe/prod"],
   };
 
@@ -161,6 +272,19 @@ describe("canonical approval message", () => {
     expect(message({ requested: { ...requested, url: "https://evil.example" } })).not.toBe(
       message(),
     );
+  });
+
+  test("keeps the body hash field explicit for a bodyless request", () => {
+    const message = new TextDecoder().decode(
+      buildApprovalMessage({
+        projectId: "prj_1",
+        approvalRequestEventOffset: 42,
+        requested: { ...requested, body: null },
+        decision: "granted",
+      }),
+    );
+
+    expect(JSON.parse(message)).toMatchObject({ bodySha256: null });
   });
 });
 
@@ -193,7 +317,7 @@ describe("verifyApprovalSignature", () => {
       method: "DELETE",
       url: "https://api.example.com/prod-db",
       headers: {},
-      bodySha256: null,
+      body: null,
       secretPaths: [],
     },
     decision: "granted",
@@ -215,7 +339,7 @@ describe("verifyApprovalSignature", () => {
         method: "DELETE",
         url: "https://api.example.com/prod-db",
         headers: {},
-        bodySha256: null,
+        body: null,
         secretPaths: [],
       },
       decision: "granted",

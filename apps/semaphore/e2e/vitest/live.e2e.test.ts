@@ -21,6 +21,7 @@ const app = createSemaphoreAppFixture({
 const semaphore = createSemaphoreClient({
   apiKey: app.apiKey,
   baseURL: app.baseURL,
+  fetch: app.networkFetch,
 });
 
 describe.sequential("live semaphore E2E", () => {
@@ -263,6 +264,80 @@ describe.sequential("live semaphore E2E", () => {
     expect(waitingLease.slug).toBe("only");
   }, 120_000);
 
+  test("a waiter does not block capacity allowed for a later waiter", async () => {
+    const type = uniqueType();
+    for (const slug of ["alpha", "beta"]) {
+      await semaphore.resources.add({ type, slug, data: { token: `secret-${slug}` } });
+      createdResources.push({ type, slug });
+    }
+
+    const alphaLease = await semaphore.resources.acquireSpecific({
+      type,
+      slug: "alpha",
+      leaseMs: 60_000,
+    });
+    const betaLease = await semaphore.resources.acquireSpecific({
+      type,
+      slug: "beta",
+      leaseMs: 60_000,
+    });
+    expect(alphaLease).not.toBeNull();
+    expect(betaLease).not.toBeNull();
+    leasedResources.push(
+      { type, slug: "alpha", leaseId: alphaLease!.leaseId },
+      { type, slug: "beta", leaseId: betaLease!.leaseId },
+    );
+
+    const waitingForAlpha = semaphore.resources.acquire({
+      type,
+      leaseMs: 60_000,
+      waitMs: 5_000,
+      allowedSlugs: ["alpha"],
+    });
+    const waitingForBeta = semaphore.resources.acquire({
+      type,
+      leaseMs: 60_000,
+      waitMs: 5_000,
+      allowedSlugs: ["beta"],
+    });
+    // Attach rejection handlers to both concurrent requests immediately. If
+    // one assertion/release fails, the sibling waiter can still reach its
+    // bounded timeout; leaving it unobserved makes Vitest report an unhandled
+    // rejection during the retry even when the retry itself passes.
+    const waiterSettlements = Promise.allSettled([waitingForAlpha, waitingForBeta]);
+    try {
+      await sleep(250);
+
+      await semaphore.resources.release({
+        type,
+        slug: "beta",
+        leaseId: betaLease!.leaseId,
+      });
+      leasedResources.splice(
+        leasedResources.findIndex((lease) => lease.leaseId === betaLease!.leaseId),
+        1,
+      );
+      const reassignedBeta = await waitingForBeta;
+      leasedResources.push({ type, slug: "beta", leaseId: reassignedBeta.leaseId });
+      expect(reassignedBeta.slug).toBe("beta");
+
+      await semaphore.resources.release({
+        type,
+        slug: "alpha",
+        leaseId: alphaLease!.leaseId,
+      });
+      leasedResources.splice(
+        leasedResources.findIndex((lease) => lease.leaseId === alphaLease!.leaseId),
+        1,
+      );
+      const reassignedAlpha = await waitingForAlpha;
+      leasedResources.push({ type, slug: "alpha", leaseId: reassignedAlpha.leaseId });
+      expect(reassignedAlpha.slug).toBe("alpha");
+    } finally {
+      await waiterSettlements;
+    }
+  }, 120_000);
+
   test("records the lease holder and honors force acquire/release", async () => {
     const type = uniqueType();
     const created = await semaphore.resources.add({
@@ -319,6 +394,32 @@ describe.sequential("live semaphore E2E", () => {
     expect(releasedList[0]).toMatchObject({ leaseState: "available", holder: null });
   }, 120_000);
 
+  test("specific acquisition stays inside the caller's allowed slugs", async () => {
+    const type = uniqueType();
+    for (const slug of ["alpha", "beta"]) {
+      await semaphore.resources.add({ type, slug, data: { token: `secret-${slug}` } });
+      createdResources.push({ type, slug });
+    }
+
+    expect(
+      await semaphore.resources.acquireSpecific({
+        type,
+        slug: "beta",
+        leaseMs: 60_000,
+        allowedSlugs: ["alpha"],
+      }),
+    ).toBeNull();
+
+    const lease = await semaphore.resources.acquireSpecific({
+      type,
+      slug: "beta",
+      leaseMs: 60_000,
+      allowedSlugs: ["beta"],
+    });
+    expect(lease).not.toBeNull();
+    leasedResources.push({ type, slug: lease!.slug, leaseId: lease!.leaseId });
+  }, 120_000);
+
   test("hands out the least recently released resource first", async () => {
     const type = uniqueType();
     for (const slug of ["alpha", "beta"]) {
@@ -347,6 +448,23 @@ describe.sequential("live semaphore E2E", () => {
     const fourth = await semaphore.resources.acquire({ type, leaseMs: 60_000 });
     leasedResources.push({ type, slug: fourth.slug, leaseId: fourth.leaseId });
     expect(fourth.slug).toBe("beta");
+  }, 120_000);
+
+  test("acquires only from the caller's allowed slugs", async () => {
+    const type = uniqueType();
+    for (const slug of ["alpha", "beta", "gamma"]) {
+      await semaphore.resources.add({ type, slug, data: { token: `secret-${slug}` } });
+      createdResources.push({ type, slug });
+    }
+
+    const lease = await semaphore.resources.acquire({
+      type,
+      leaseMs: 60_000,
+      allowedSlugs: ["beta", "gamma"],
+    });
+    leasedResources.push({ type, slug: lease.slug, leaseId: lease.leaseId });
+
+    expect(lease.slug).toBe("beta");
   }, 120_000);
 
   test("supports the contract client against the live worker", async () => {

@@ -1,99 +1,74 @@
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { FilterIcon, XIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
+import { useAuthClient } from "@iterate-com/auth/client";
 import { Sheet, SheetContent, SheetTitle } from "@iterate-com/ui/components/sheet";
 import { toast } from "@iterate-com/ui/components/sonner";
-import type {
-  AgentUiLlmStep,
-  AgentUiState,
-  AgentUiStep,
+import {
+  isAgentUiActivityWorking,
+  reduceAgentUiRuntime,
+  type AgentUiLlmStep,
+  type AgentUiRuntimeTransition,
+  type AgentUiState,
+  type AgentUiStep,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
+import {
+  connectItx,
+  connectIterateSession,
+  reportTransportSuspicion,
+  useLiveState,
+} from "iterate/sdk/itx/react";
 import type { Stream } from "../itx-api.generated.ts";
-import { parseBrowserCoreProcessorState } from "~/domains/streams/client-libraries/browser/core-processor-state.ts";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
-import { useStreamProcessorStore } from "~/domains/streams/client-libraries/browser/hooks/use-stream-processor-store.ts";
+import { useStreamMirror } from "~/domains/streams/client-libraries/browser/hooks/use-stream-mirror.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
-import {
-  asBrowserStreamClient,
-  type StreamBrowserStore,
-} from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
-import {
-  BROWSER_RAW_EVENTS_SCHEMA_VERSION,
-  BROWSER_RAW_EVENTS_TABLES,
-  BrowserRawEventsContract,
-  BrowserRawEventsProcessor,
-  type BrowserRawEventsState,
-} from "~/domains/streams/client-libraries/processors/browser-raw-events/implementation.ts";
-import {
-  BROWSER_FEED_SCHEMA_VERSION,
-  BROWSER_FEED_TABLE,
-  BrowserFeedContract,
-  BrowserFeedProcessor,
-  type BrowserFeedState,
-} from "~/domains/streams/client-libraries/processors/browser-feed/implementation.ts";
-import { AgentTokenUsageStrip, QueuedMessagesPanel } from "~/components/agent-feed.tsx";
+import type { StreamBrowserStore } from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
+import { asBrowserStreamClient } from "~/domains/streams/client-libraries/browser/stream-transport.ts";
+import { BrowserFeedContract } from "~/domains/streams/client-libraries/processors/browser-feed/implementation.ts";
+import { isCurrentBrowserFeedState } from "~/domains/streams/client-libraries/processors/browser-feed/projector.ts";
+import { QueuedMessagesPanel } from "~/components/agent-feed.tsx";
+import { DeferredSurface } from "~/components/deferred-surface.tsx";
 import { StreamFeedView } from "~/components/stream-feed-view.tsx";
-import { RawEventInspectorPanel } from "~/components/raw-event-inspector-panel.tsx";
-import { LlmRequestInspectorPanel } from "~/components/llm-request-inspector-panel.tsx";
+import { RawEventInspectorContent } from "~/components/raw-event-inspector-panel.tsx";
+import { LlmRequestInspectorContent } from "~/components/llm-request-inspector-panel.tsx";
+import { ScriptExecutionInspectorContent } from "~/components/script-execution-inspector-panel.tsx";
 import { StreamFeedFilterRow } from "~/components/stream-feed-filters.tsx";
-import {
-  StreamStatePanel,
-  type StreamRuntimeDebugState,
-} from "~/components/stream-state-panel.tsx";
+import { StreamStatePanel } from "~/components/stream-state-panel.tsx";
 import {
   StreamViewComposer,
   type StreamInterrupt,
   type StreamMessageComposer,
 } from "~/components/stream-view-composer.tsx";
-import { StreamModeTabs, StreamViewHeader } from "~/components/stream-view-header.tsx";
 import {
-  defaultPresetForMode,
-  feedItemsFilterFromSearch,
-  presetsForStream,
-} from "~/lib/stream-feed-filters.ts";
+  StreamModeTabs,
+  StreamStateButton,
+  StreamViewHeader,
+} from "~/components/stream-view-header.tsx";
+import { feedItemsFilterFromSearch } from "~/lib/stream-feed-filters.ts";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
-import { connectItxBrowser, evictItxSocket, evictItxSocketIfCurrent } from "~/itx/itx-react.tsx";
-import { useBrowserStreamMetrics } from "~/lib/stream-presence.ts";
+import { useBrowserStreamMetrics, type BrowserStreamMetricsView } from "~/lib/stream-presence.ts";
 import {
   modeCapabilities,
   streamViewMode,
   useStreamViewPanels,
   useStreamViewSearch,
 } from "~/lib/stream-view-search.ts";
+import type { BrowserStreamSubscriberUser } from "~/domains/streams/client-libraries/browser/browser-subscriber.ts";
 
 type ItxStreamSource = (streamPath: string) => Stream | Promise<Stream>;
 
-/**
- * The stream view: every domain page's main pane. Renders mode-owned feed
- * surfaces under the shared header (Pretty / Pretty+raw / Raw on agents),
- * with the composer below and right-edge overlays (raw-event inspector,
- * processors sheet) on top.
- *
- * This component is the orchestrator: it owns the two browser-hosted
- * processors that mirror the stream into local SQLite (the raw `events` log
- * and the single `feed_items` projection) and hands their stores/databases to
- * focused child components. All view state (mode, filters, open panels) lives in the URL —
- * see ~/lib/stream-view-search.ts — so children read it themselves; the
- * component stays mounted across ⌘K stream switches (the switcher navigates
- * with an empty search, resetting the view to the new stream's defaults).
- */
-export function ProjectStreamView({
-  autoFocusMessageComposer = false,
-  defaultComposerMode,
-  emptyLabel = "No events in this stream yet.",
-  layout = "split",
-  messageComposer,
-  panel,
-  projectId,
-  projectSlug,
-  resetStreamSourceTransport,
-  showHeader = true,
-  streamSource,
-  streamPath,
-}: {
+type ProjectStreamViewProps = {
+  /**
+   * Runtime supplied by a parent which already owns the selected agent's live
+   * subscription. `undefined` lets this generic stream view subscribe itself;
+   * `null` means the parent has no transition yet.
+   */
+  agentRuntimeTransition?: AgentUiRuntimeTransition | null;
   autoFocusMessageComposer?: boolean;
+  /** Domain identity shown directly below the generic stream header. */
+  contextHeader?: ReactNode;
   defaultComposerMode?: "message" | "raw";
-  emptyLabel?: string;
+  emptyLabel?: string | null;
   /**
    * "split" (default) shows the panel beside the feed; "fullPanel" hands the
    * panel the whole content area and relegates the feed (with its filter row,
@@ -120,90 +95,105 @@ export function ProjectStreamView({
   showHeader?: boolean;
   streamSource?: ItxStreamSource;
   streamPath: string;
-}) {
-  const streamRuntimeProjectKey = projectId ?? NULL_DURABLE_OBJECT_PROJECT_ID;
-  // Dial itx imperatively (never `useItx()`), and PER CALL: the stream view's
-  // shell — header, tabs, composer, panel — must paint before the socket
-  // connects (a hook read here would suspend the whole view into the nearest
-  // route boundary), and the stream runtimes this source feeds outlive the
-  // render — a captured capnweb stub pins whatever transport it was born on,
-  // so after a suspend/resume killed that socket every reconnect would ride
-  // the corpse and the feed would wedge until a reload (the repro in
-  // specs/stream-resume-after-suspend.spec.ts).
-  const resolvedStreamSource = useMemo<ItxStreamSource>(
-    () =>
-      streamSource ??
-      (async (path) =>
-        (await connectItxBrowser(projectId == null ? {} : { projectId })).streams.get(path)),
-    [projectId, streamSource],
-  );
-  const streamClientFactory = useMemo(() => {
-    if (streamSource !== undefined) {
-      // Custom source: we can't see its transport, so no identity-bound
-      // evictor — the runtime falls back to resetStreamSourceTransport.
-      return async (input: { streamPath: string }) => {
-        const stub = await streamSource(input.streamPath);
-        // The stub's REAL dispose, so every reconnect releases its stream
-        // export on the (possibly long-lived, healthy) session instead of
-        // stranding one per reconnect in the cap table on both sides.
-        return asBrowserStreamClient(stub, () => (stub as Partial<Disposable>)[Symbol.dispose]?.());
-      };
-    }
-    const address = projectId == null ? {} : { projectId };
-    return async (input: { streamPath: string }) => {
-      // The connecting promise IS the socket's identity: binding the evictor
-      // to it means a suspicion verdict against THIS connection can only ever
-      // evict THIS socket — never a successor another runtime already dialed.
-      const connection = connectItxBrowser(address);
-      const stub = (await connection).streams.get(input.streamPath);
-      return asBrowserStreamClient(
-        stub,
-        () => (stub as Partial<Disposable>)[Symbol.dispose]?.(),
-        () => evictItxSocketIfCurrent(address, connection),
-      );
-    };
-  }, [streamSource, projectId]);
-  // The half-open lane: a suspended page's socket can die without a close
-  // frame, so the socket map keeps handing out the corpse and per-call dialing
-  // alone can't recover. When the runtimes' probes/dials time out they call
-  // this to evict it; the next dial is fresh. Eviction must target the exact
-  // context the source dials, so a custom streamSource brings its own
-  // resetTransport (or none) and only the default source wires the default.
-  const resetTransport = useMemo(
-    () =>
-      resetStreamSourceTransport ??
-      (streamSource === undefined
-        ? () => evictItxSocket(projectId == null ? {} : { projectId })
-        : undefined),
-    [resetStreamSourceTransport, streamSource, projectId],
-  );
+};
 
-  // Two browser-hosted processors share the stream's per-path SQLite mirror:
-  // the verbatim raw-event `events` log (also the composer's append target)
-  // and the browser-feed projector, whose single `feed_items` table backs
-  // every mode (pretty chat rows and raw rows in one total order) and whose
-  // reduced state carries the live activity + presence the header derives
-  // presence/busy from — which is why it mounts here, not in the feed body.
-  const { store, snapshot } = useStreamProcessorStore<BrowserRawEventsState>({
-    createStreamClient: streamClientFactory,
-    ...(resetTransport === undefined ? {} : { resetTransport }),
-    projectId: streamRuntimeProjectKey,
+const EMPTY_STREAM_METRICS: BrowserStreamMetricsView = {
+  spark: [],
+  transportRttMs: null,
+  subscriber: undefined,
+};
+
+/**
+ * The stream view: every domain page's main pane. Renders mode-owned feed
+ * surfaces under the shared header (Pretty / Pretty+raw / Raw on agents),
+ * with the composer below and standard right-edge sheets (inspectors and
+ * processor state) on top.
+ *
+ * This component is the orchestrator: it owns the two browser-hosted
+ * processors that mirror the stream into local SQLite (the raw `events` log
+ * and the single `feed_items` projection) and hands their stores/databases to
+ * focused child components. All view state (mode, filters, open panels) lives in the URL —
+ * see ~/lib/stream-view-search.ts — so children read it themselves; the
+ * component stays mounted across ⌘K stream switches (the switcher navigates
+ * with an empty search, resetting the view to the new stream's defaults).
+ */
+export function ProjectStreamView(props: ProjectStreamViewProps) {
+  if (props.layout === "fullPanel") return <FullPanelProjectStreamView {...props} />;
+  return <MirroredProjectStreamView {...props} />;
+}
+
+/**
+ * Full-panel domain pages keep their stream available as a secondary Events
+ * sheet without paying for its historical download, SQLite mirror, or live
+ * subscription while that sheet is closed.
+ */
+function FullPanelProjectStreamView({
+  contextHeader,
+  panel,
+  streamPath,
+  ...mirrorProps
+}: ProjectStreamViewProps) {
+  const panels = useStreamViewPanels();
+  const mirrorActive = panels.eventsSheetOpen || panels.processorsPanelOpen;
+
+  return (
+    <section className="flex min-h-0 flex-1 flex-col bg-background">
+      <StreamViewHeader
+        agentBusy={false}
+        eventsToggle={{}}
+        metrics={EMPTY_STREAM_METRICS}
+        presence={[]}
+        streamPath={streamPath}
+      />
+      {contextHeader}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">{panel}</div>
+      <DeferredSurface active={mirrorActive}>
+        <MirroredProjectStreamView
+          {...mirrorProps}
+          contextHeader={contextHeader}
+          layout="fullPanel"
+          panel={panel}
+          streamPath={streamPath}
+        />
+      </DeferredSurface>
+    </section>
+  );
+}
+
+function MirroredProjectStreamView({
+  agentRuntimeTransition: suppliedAgentRuntimeTransition,
+  autoFocusMessageComposer = false,
+  defaultComposerMode,
+  emptyLabel = "No events in this stream yet.",
+  contextHeader,
+  layout = "split",
+  messageComposer,
+  panel,
+  projectId,
+  projectSlug,
+  resetStreamSourceTransport,
+  showHeader = true,
+  streamSource,
+  streamPath,
+}: ProjectStreamViewProps) {
+  const { session: authSession } = useAuthClient();
+  const subscriberUser = useMemo<BrowserStreamSubscriberUser | undefined>(() => {
+    if (!authSession?.authenticated) return undefined;
+    const name = authSession.user.name?.trim();
+    const picture = authSession.user.picture?.trim();
+    return {
+      id: authSession.user.id,
+      email: authSession.user.email,
+      ...(name === undefined || name === "" ? {} : { name }),
+      ...(picture === undefined || picture === "" ? {} : { picture }),
+    };
+  }, [authSession]);
+  const { resolvedStreamSource, store, snapshot } = useProjectStreamMirror({
+    projectId,
+    resetStreamSourceTransport,
+    subscriberUser,
+    streamSource,
     streamPath,
-    slug: BrowserRawEventsContract.slug,
-    schemaVersion: BROWSER_RAW_EVENTS_SCHEMA_VERSION,
-    tables: BROWSER_RAW_EVENTS_TABLES,
-    Processor: BrowserRawEventsProcessor,
-  });
-  const { store: feedStore, snapshot: feedSnapshot } = useStreamProcessorStore<BrowserFeedState>({
-    createStreamClient: streamClientFactory,
-    ...(resetTransport === undefined ? {} : { resetTransport }),
-    projectId: streamRuntimeProjectKey,
-    streamPath,
-    slug: BrowserFeedContract.slug,
-    schemaVersion: BROWSER_FEED_SCHEMA_VERSION,
-    resetOnSchemaVersionChange: true,
-    tables: [BROWSER_FEED_TABLE],
-    Processor: BrowserFeedProcessor,
   });
 
   // Trigger-maintained counts (O(#types)) instead of COUNT(*) (full mirror
@@ -214,7 +204,7 @@ export function ProjectStreamView({
     `SELECT COALESCE(SUM(n), 0) AS count FROM event_type_counts`,
   );
   const eventCount = Number(countResult.data[0]?.count ?? 0);
-  const agentUiState = useAgentUiReducedState(feedStore.streamDatabase);
+  const agentUiState = useAgentUiReducedState(store.streamDatabase, store, snapshot.liveRevision);
   // Real, browser-measured: transport RTT from RPCs the store already makes,
   // plus the hosted processor's self-measured consumption report.
   const metrics = useBrowserStreamMetrics(store);
@@ -223,12 +213,6 @@ export function ProjectStreamView({
   const panels = useStreamViewPanels();
   const activeMode = streamViewMode(search, streamPath);
   const caps = modeCapabilities(search, streamPath);
-  // Feed-items presets apply whenever the mode shows raw feed_items.
-  const presets = useMemo(() => presetsForStream(streamPath), [streamPath]);
-  const defaultPreset = defaultPresetForMode(streamPath, activeMode);
-  const activePreset = caps.rawPresets
-    ? (presets.find((preset) => preset.id === search.preset) ?? defaultPreset)
-    : defaultPreset;
   // Trimmed: a whitespace-only query must read as "no filter", not a LIKE
   // pattern of spaces that hides every row.
   const feedSearch = (search.q ?? "").trim();
@@ -239,11 +223,36 @@ export function ProjectStreamView({
   // the user's message not appearing until the next paced probe (or a reload).
   const nudgeDeliveries = useCallback(() => {
     void store.nudge();
-    void feedStore.nudge();
-  }, [store, feedStore]);
+  }, [store]);
+
+  const subscribedAgentRuntimeTransition = useLiveState(
+    (itx) => itx.agents.get(streamPath).liveState,
+    (state) => state.runtimeChange,
+    [streamPath],
+    {
+      slug: projectId ?? "",
+      enabled:
+        suppliedAgentRuntimeTransition === undefined &&
+        projectId !== null &&
+        streamPath.startsWith("/agents/"),
+    },
+  ).value;
+  const agentRuntimeTransition =
+    suppliedAgentRuntimeTransition === undefined
+      ? subscribedAgentRuntimeTransition
+      : (suppliedAgentRuntimeTransition ?? undefined);
+  const agentPresentation = useMemo(() => {
+    if (agentUiState == null || agentRuntimeTransition == null) {
+      return { state: agentUiState, transientItems: [] };
+    }
+    const projected = reduceAgentUiRuntime(agentUiState, agentRuntimeTransition);
+    return { state: projected.endState, transientItems: projected.items };
+  }, [agentUiState, agentRuntimeTransition]);
+  const presentedAgentUiState = agentPresentation.state;
+  const agentRuntime = agentRuntimeTransition?.runtime;
 
   const runningLlmRequestId =
-    agentUiState?.live?.steps.find(isRunningLlmStep)?.llmRequestOffset ?? null;
+    presentedAgentUiState?.live?.steps.find(isRunningLlmStep)?.llmRequestOffset ?? null;
   const interrupt = useAgentInterrupt({
     onInterrupt: messageComposer?.onInterrupt,
     runningLlmRequestId,
@@ -251,26 +260,31 @@ export function ProjectStreamView({
   });
 
   async function clearClientDatabases() {
-    // Sequential on purpose: the two runtimes share one per-path SQLite
-    // mirror, and each clear deletes its tables and VACUUMs — interleaving
-    // them would race writes and compactions on the same file.
-    await feedStore.clearLocalDatabase();
+    // One mirror now: clear all canonical tables + checkpoints and reload.
     await store.clearLocalDatabase();
     window.location.reload();
   }
 
-  const { getProcessorRuntimeState, getStreamRuntimeState } = useProcessorsPanelDebugState({
+  const { getProcessorRuntimeState } = useProcessorsPanelDebugState({
     resolvedStreamSource,
-    store,
     streamPath,
   });
 
+  // Election starts only after createStreamClient resolves, so every non-idle
+  // role has a usable transport (including followers, which never subscribe).
+  const streamTransportReady = snapshot.subscriptionStatus !== "idle";
+  // Cached rows can paint immediately. With an empty local mirror, a leader
+  // stays pending until reconcile and the atomic live subscribe have finished;
+  // a follower reads the mirror already owned by another tab.
+  const streamContentsReady =
+    eventCount > 0 ||
+    snapshot.subscriptionStatus === "follower" ||
+    snapshot.connectionStatus === "subscribed";
   const connectionLabel =
-    snapshot.connectionError ??
-    (snapshot.connectionStatus === "subscribed" ? emptyLabel : snapshot.connectionStatus);
+    snapshot.connectionError ?? (streamTransportReady ? emptyLabel : snapshot.connectionStatus);
   // Busy = work is actively running, independent of chat-message timing.
-  const agentBusy = agentUiState?.live?.steps.some((step) => step.status === "running") ?? false;
-  const presence = agentUiState?.presence ?? [];
+  const agentBusy = isAgentUiActivityWorking(presentedAgentUiState?.live ?? null, agentRuntime);
+  const presence = presentedAgentUiState?.presence ?? [];
   const agentPauseControl = useAgentPauseControl({
     database: store.streamDatabase,
     resolvedStreamSource,
@@ -286,11 +300,9 @@ export function ProjectStreamView({
   const filterRow =
     search.filter !== true ? null : (
       <StreamFeedFilterRow
-        activePreset={activePreset}
         eventCount={eventCount}
         connectionStatus={snapshot.connectionStatus}
-        feedDatabase={feedStore.streamDatabase}
-        presets={presets}
+        feedDatabase={store.streamDatabase}
         streamPath={streamPath}
       />
     );
@@ -301,66 +313,91 @@ export function ProjectStreamView({
   const modeBody = (
     <StreamFeedView
       // Fresh virtualizer state per stream mirror + mode (see StreamFeedView docs).
-      key={`${feedStore.streamDatabase.databasePath}:${activeMode}`}
-      database={feedStore.streamDatabase}
+      key={`${store.streamDatabase.databasePath}:${activeMode}`}
+      database={store.streamDatabase}
       filter={{
         agent: caps.agentFeed
           ? { showDebug: caps.agentShowDebug, searchQuery: feedSearch === "" ? null : feedSearch }
           : null,
         raw: caps.rawFeed ? rawFilter : null,
       }}
-      liveState={caps.agentFeed ? agentUiState : null}
+      liveState={caps.agentFeed ? presentedAgentUiState : null}
+      transientAgentItems={caps.agentFeed ? agentPresentation.transientItems : []}
+      runtime={agentRuntime}
       {...(caps.eventInspector ? { onInspectEvent: panels.inspectEvent } : {})}
       {...(caps.agentFeed ? { onInspectLlmRequest: panels.inspectLlmRequest } : {})}
+      {...(caps.agentFeed ? { onInspectScriptExecution: panels.inspectScriptExecution } : {})}
       emptyLabel={connectionLabel}
       projectSlug={projectSlug}
-      isPending={agentUiState == null && feedSnapshot.connectionStatus !== "subscribed"}
+      isPending={caps.agentFeed ? agentUiState == null : !streamContentsReady}
+      pendingLabel={caps.agentFeed ? "Initializing agent" : undefined}
     />
   );
 
-  const queuedUserMessages = caps.agentFeed ? (agentUiState?.queuedUserMessages ?? []) : [];
+  const queuedUserMessages = caps.agentFeed
+    ? (presentedAgentUiState?.queuedUserMessages ?? [])
+    : [];
 
-  // The feed column — mode body with overlays on top, composer below. One JSX
-  // value so the split layout and the fullPanel Events sheet render the same
-  // thing.
+  // The feed column — mode body with inspectors on top. The composer joins it
+  // only in the split layout: the fullPanel Events sheet is an inspection
+  // surface, so it gets no composer at all.
   const feedColumn = (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
         {modeBody}
-        <StreamInspectorOverlay caps={caps} panels={panels} database={store.streamDatabase} />
+        <StreamInspectorSheet
+          agentUiState={presentedAgentUiState}
+          caps={caps}
+          panels={panels}
+          database={store.streamDatabase}
+        />
       </div>
 
-      <div className="shrink-0 px-4 pb-2.5 pt-2.5">
-        <div className="mx-auto flex w-full max-w-3xl flex-col gap-1.5">
-          <div>
-            {/* Queued messages are part of the composer: the panel tucks
+      {layout === "fullPanel" ? null : (
+        <div className="shrink-0 px-4 pb-2.5 pt-2.5">
+          <div className="mx-auto flex w-full max-w-3xl flex-col gap-1.5">
+            {eventCount > 0 && !streamTransportReady ? (
+              <p
+                className="px-4 text-xs text-muted-foreground"
+                data-testid="stream-cache-status"
+                role="status"
+              >
+                Showing cached events while
+                {snapshot.connectionStatus === "reconnecting" || snapshot.connectionError != null
+                  ? " reconnecting…"
+                  : " connecting…"}
+              </p>
+            ) : null}
+            <div>
+              {/* Queued messages are part of the composer: the panel tucks
                 behind the pill (painted first, overlapped via its negative
                 bottom margin) and grows the composer column, which the feed's
                 stick-to-bottom already follows on viewport resize. */}
-            <QueuedMessagesPanel
-              messages={queuedUserMessages}
-              isInterrupting={interrupt?.isInterrupting ?? false}
-              {...(interrupt == null ? {} : { onInterrupt: interrupt.run })}
-            />
-            <StreamViewComposer
-              autoFocusMessage={autoFocusMessageComposer}
-              {...(defaultComposerMode == null
-                ? caps.agentFeed
-                  ? { defaultMode: "message" as const }
-                  : { defaultMode: "raw" as const }
-                : { defaultMode: defaultComposerMode })}
-              interrupt={interrupt}
-              {...(messageComposer == null ? {} : { messageComposer })}
-              onNudgeDeliveries={nudgeDeliveries}
-              presence={presence}
-              store={store}
-            />
+              <QueuedMessagesPanel
+                messages={queuedUserMessages}
+                isInterrupting={interrupt?.isInterrupting ?? false}
+                {...(interrupt == null || !streamTransportReady
+                  ? {}
+                  : { onInterrupt: interrupt.run })}
+              />
+              <StreamViewComposer
+                autoFocusMessage={autoFocusMessageComposer}
+                {...(defaultComposerMode == null
+                  ? caps.agentFeed
+                    ? { defaultMode: "message" as const }
+                    : { defaultMode: "raw" as const }
+                  : { defaultMode: defaultComposerMode })}
+                interrupt={interrupt}
+                {...(messageComposer == null ? {} : { messageComposer })}
+                onNudgeDeliveries={nudgeDeliveries}
+                presence={presence}
+                store={store}
+                disabled={!streamTransportReady}
+              />
+            </div>
           </div>
-          {caps.agentFeed && agentUiState?.tokenUsage != null ? (
-            <AgentTokenUsageStrip tokenUsage={agentUiState.tokenUsage} />
-          ) : null}
         </div>
-      </div>
+      )}
     </div>
   );
 
@@ -380,30 +417,21 @@ export function ProjectStreamView({
       onClose={panels.closeProcessorsPanel}
       onClearClientDatabase={clearClientDatabases}
       getProcessorRuntimeState={getProcessorRuntimeState}
-      getStreamRuntimeState={getStreamRuntimeState}
+      projectId={projectId}
       streamPath={streamPath}
+      tokenUsage={caps.agentFeed ? (presentedAgentUiState?.tokenUsage ?? null) : null}
     />
   );
 
   if (layout === "fullPanel") {
     return (
-      <section className="flex min-h-0 flex-1 flex-col bg-background">
-        <StreamViewHeader
-          agentBusy={agentBusy}
-          agentPause={agentPauseControl}
-          eventsToggle={{ eventCount }}
-          metrics={metrics}
-          presence={presence}
-          streamKill={streamKillControl}
-          streamPath={streamPath}
-        />
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">{panel}</div>
+      <>
         {streamStateSheet}
-        <StreamEventsSheet streamPath={streamPath}>
+        <StreamEventsSheet streamPath={streamPath} metrics={metrics}>
           {filterRow}
           {feedColumn}
         </StreamEventsSheet>
-      </section>
+      </>
     );
   }
 
@@ -419,6 +447,7 @@ export function ProjectStreamView({
           streamPath={streamPath}
         />
       ) : null}
+      {showHeader ? contextHeader : null}
       {showHeader ? filterRow : null}
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
@@ -434,52 +463,242 @@ export function ProjectStreamView({
   );
 }
 
+/** Owns transport generation, recovery, and the one local mirror for a stream. */
+function useProjectStreamMirror({
+  projectId,
+  resetStreamSourceTransport,
+  streamSource,
+  subscriberUser,
+  streamPath,
+}: Pick<
+  ProjectStreamViewProps,
+  "projectId" | "resetStreamSourceTransport" | "streamSource" | "streamPath"
+> & { subscriberUser?: BrowserStreamSubscriberUser }) {
+  const streamRuntimeProjectKey = projectId ?? NULL_DURABLE_OBJECT_PROJECT_ID;
+  // The stream mirror rides the ONE shared session socket — the same connection
+  // the page's ordinary queries use. It can page tens of thousands of historical
+  // events and owns an aggressive reconnect loop, but it NEVER closes the shared
+  // socket itself: on a suspected half-open transport it REPORTS the suspicion to
+  // the socket-owned verifier ({@link reportTransportSuspicion}), the only thing
+  // that may retire the shared socket — and only after two failed probes against
+  // the same generation.
+  //
+  // Resolve the session PER CALL (never `useItx()`): these runtimes outlive the
+  // render, so capturing a capnweb stub would pin a dead transport after resume.
+  const resolvedStreamSource = useMemo<ItxStreamSource>(
+    () =>
+      streamSource ??
+      (async (path) =>
+        projectId == null
+          ? (await connectIterateSession()).streams.get(path)
+          : (await connectItx(projectId)).streams.get(path)),
+    [projectId, streamSource],
+  );
+  const streamClientFactory = useMemo(() => {
+    if (streamSource !== undefined) {
+      return async (input: { streamPath: string }) => {
+        const stub = await streamSource(input.streamPath);
+        return asBrowserStreamClient(stub, () => (stub as Partial<Disposable>)[Symbol.dispose]?.());
+      };
+    }
+    return async (input: { streamPath: string }) => {
+      const stub =
+        projectId == null
+          ? (await connectIterateSession()).streams.get(input.streamPath)
+          : (await connectItx(projectId)).streams.get(input.streamPath);
+      return asBrowserStreamClient(
+        stub,
+        () => (stub as Partial<Disposable>)[Symbol.dispose]?.(),
+        // Report suspicion; the socket-owned verifier alone may retire the
+        // shared socket, and only after proving it is genuinely half-open.
+        reportTransportSuspicion,
+      );
+    };
+  }, [projectId, streamSource]);
+  const resetTransport = useMemo(
+    () =>
+      resetStreamSourceTransport ??
+      (streamSource === undefined ? reportTransportSuspicion : undefined),
+    [resetStreamSourceTransport, streamSource],
+  );
+  // One download fans out into the raw-event mirror and browser-feed projector.
+  const mirror = useStreamMirror({
+    createStreamClient: streamClientFactory,
+    ...(resetTransport === undefined ? {} : { resetTransport }),
+    projectId: streamRuntimeProjectKey,
+    ...(subscriberUser === undefined ? {} : { subscriberUser }),
+    streamPath,
+  });
+  return { resolvedStreamSource, ...mirror };
+}
+
 /**
- * The feed's right-edge inspector, or nothing. At most one inspector holds
+ * The feed's standard right-edge inspector sheet. At most one inspector holds
  * the edge (useStreamViewPanels keeps their URL keys mutually exclusive):
  * the raw-event inspector when the mode offers it and `?event=` is set,
- * else the LLM request inspector when `?llmRequest=` is set — the latter in
- * EVERY mode, so a shared link works regardless of the viewer's tab. Both
- * read the RAW events mirror (not feed_items): the fold reads the journal,
+ * else an LLM or script inspector when its deep-link parameter is set — in
+ * EVERY mode, so a shared link works regardless of the viewer's tab. All
+ * inspectors read the RAW events mirror (not feed_items): the fold reads the journal,
  * the same source the processor read.
  */
-function StreamInspectorOverlay({
+function StreamInspectorSheet({
+  agentUiState,
   caps,
   panels,
   database,
 }: {
+  agentUiState: AgentUiState | null;
   caps: ReturnType<typeof modeCapabilities>;
   panels: ReturnType<typeof useStreamViewPanels>;
   database: StreamBrowserDatabase;
 }) {
-  if (caps.eventInspector && panels.inspectedOffset != null) {
-    return (
-      <RawEventInspectorPanel
-        database={database}
-        offset={panels.inspectedOffset}
-        onNavigate={panels.inspectEvent}
-        onClose={panels.closeInspector}
-      />
-    );
+  const activeInspector = useMemo<
+    | { kind: "event"; offset: number }
+    | { kind: "llm"; offset: number }
+    | { kind: "script"; executionId: string }
+    | null
+  >(() => {
+    if (caps.eventInspector && panels.inspectedOffset != null) {
+      return { kind: "event", offset: panels.inspectedOffset };
+    }
+    if (panels.inspectedLlmRequestOffset != null) {
+      return { kind: "llm", offset: panels.inspectedLlmRequestOffset };
+    }
+    if (panels.inspectedScriptExecutionId != null) {
+      return { kind: "script", executionId: panels.inspectedScriptExecutionId };
+    }
+    return null;
+  }, [
+    caps.eventInspector,
+    panels.inspectedLlmRequestOffset,
+    panels.inspectedOffset,
+    panels.inspectedScriptExecutionId,
+  ]);
+  const activeInspectorContext = useMemo(
+    () =>
+      activeInspector == null
+        ? null
+        : {
+            inspector: activeInspector,
+            database,
+            agentUiState,
+          },
+    [activeInspector, agentUiState, database],
+  );
+  const [retainedInspectorContext, setRetainedInspectorContext] = useState(activeInspectorContext);
+  const activeInspectorKey =
+    activeInspector?.kind === "script"
+      ? `script:${activeInspector.executionId}`
+      : activeInspector == null
+        ? null
+        : `${activeInspector.kind}:${activeInspector.offset}`;
+  // Base UI reports dismissal before TanStack Router commits the URL search
+  // update. Suppress that exact inspector immediately so retained exit content
+  // cannot navigate and write its deep link back during the closing frame.
+  // Keep suppression latched past animation completion if the router is slow;
+  // release it only after the URL actually leaves this selection.
+  const [dismissedInspectorKey, setDismissedInspectorKey] = useState<string | null>(null);
+  const inspectorOpen = activeInspectorKey != null && activeInspectorKey !== dismissedInspectorKey;
+
+  useEffect(() => {
+    if (dismissedInspectorKey != null && activeInspectorKey !== dismissedInspectorKey) {
+      setDismissedInspectorKey(null);
+    }
+  }, [activeInspectorKey, dismissedInspectorKey]);
+
+  // Base UI keeps the popup mounted for its exit transition. Retain the last
+  // target and the stream data it belongs to while URL-driven navigation
+  // closes the sheet, so a stream switch cannot briefly query the new stream
+  // with the previous stream's inspector identifier.
+  useEffect(() => {
+    if (activeInspectorContext != null) setRetainedInspectorContext(activeInspectorContext);
+  }, [activeInspectorContext]);
+
+  const inspectorContext = activeInspectorContext ?? retainedInspectorContext;
+  let content: ReactNode = null;
+  let testId: string | undefined;
+
+  if (inspectorContext != null) {
+    const { inspector } = inspectorContext;
+    if (inspector.kind === "event") {
+      testId = "raw-event-inspector";
+      content = (
+        <RawEventInspectorContent
+          database={inspectorContext.database}
+          navigationEnabled={inspectorOpen && activeInspector?.kind === "event"}
+          offset={inspector.offset}
+          onNavigate={panels.inspectEvent}
+        />
+      );
+    } else if (inspector.kind === "llm") {
+      const liveStep = inspectorContext.agentUiState?.live?.steps.find(
+        (step): step is AgentUiLlmStep =>
+          step.kind === "llm" &&
+          step.llmRequestOffset === inspector.offset &&
+          step.status === "running",
+      );
+      testId = "llm-request-inspector";
+      content = (
+        <LlmRequestInspectorContent
+          database={inspectorContext.database}
+          {...(liveStep == null ? {} : { liveStep })}
+          llmRequestOffset={inspector.offset}
+        />
+      );
+    } else {
+      testId = "script-execution-inspector";
+      content = (
+        <ScriptExecutionInspectorContent
+          database={inspectorContext.database}
+          executionId={inspector.executionId}
+        />
+      );
+    }
   }
-  if (panels.inspectedLlmRequestOffset != null) {
-    return (
-      <LlmRequestInspectorPanel
-        database={database}
-        llmRequestOffset={panels.inspectedLlmRequestOffset}
-        onClose={panels.closeLlmRequestInspector}
-      />
-    );
-  }
-  return null;
+
+  return (
+    <Sheet
+      open={inspectorOpen}
+      onOpenChange={(open) => {
+        if (!open) {
+          setDismissedInspectorKey(activeInspectorKey);
+          panels.closeInspector();
+        }
+      }}
+      onOpenChangeComplete={(open) => {
+        if (!open) {
+          setRetainedInspectorContext(null);
+        }
+      }}
+    >
+      <SheetContent
+        side="right"
+        className="w-full gap-0 p-0 data-[side=right]:sm:w-[min(92vw,72rem)] data-[side=right]:sm:max-w-[92vw]"
+        data-testid={testId}
+        inert={!inspectorOpen}
+      >
+        {content}
+      </SheetContent>
+    </Sheet>
+  );
 }
 
 /**
  * Full-panel layouts relegate the feed to this right-edge sheet behind the
  * header's Events button (`?events=true`). Children are the filter row +
- * feed column the split layout renders inline.
+ * feed column the split layout renders inline. The strip carries the same
+ * stream-state/latency button as the page header — the processors sheet
+ * stacks on top of this one.
  */
-function StreamEventsSheet({ children, streamPath }: { children: ReactNode; streamPath: string }) {
+function StreamEventsSheet({
+  children,
+  metrics,
+  streamPath,
+}: {
+  children: ReactNode;
+  metrics: BrowserStreamMetricsView;
+  streamPath: string;
+}) {
   const { search, setSearch } = useStreamViewSearch();
   const { eventsSheetOpen, openEventsSheet, closeEventsSheet } = useStreamViewPanels();
   return (
@@ -489,7 +708,7 @@ function StreamEventsSheet({ children, streamPath }: { children: ReactNode; stre
     >
       <SheetContent
         side="right"
-        className="flex w-full flex-col gap-0 p-0 data-[side=right]:sm:w-[56vw] data-[side=right]:sm:max-w-[92vw]"
+        className="flex w-full flex-col gap-0 p-0 data-[side=right]:sm:w-[min(92vw,72rem)] data-[side=right]:sm:max-w-[92vw]"
         showCloseButton={false}
       >
         <SheetTitle className="sr-only">Stream events for {streamPath}</SheetTitle>
@@ -498,25 +717,28 @@ function StreamEventsSheet({ children, streamPath }: { children: ReactNode; stre
             {streamPath}
           </span>
           <div className="ml-auto flex items-center gap-1">
+            <StreamStateButton metrics={metrics} />
             <StreamModeTabs streamPath={streamPath} />
             <Button
               variant="ghost"
               size="icon"
               title="Search & filter"
+              aria-label="Search and filter stream events"
               aria-expanded={search.filter === true}
               onClick={() => setSearch({ filter: search.filter === true ? undefined : true })}
               className="rounded-full text-muted-foreground"
             >
-              <FilterIcon className="size-3.5" />
+              <FilterIcon aria-hidden="true" className="size-3.5" />
             </Button>
             <Button
               variant="ghost"
               size="icon"
               title="Close events"
+              aria-label="Close stream events"
               onClick={closeEventsSheet}
               className="rounded-full text-muted-foreground"
             >
-              <XIcon className="size-3.5" />
+              <XIcon aria-hidden="true" className="size-3.5" />
             </Button>
           </div>
         </div>
@@ -527,41 +749,23 @@ function StreamEventsSheet({ children, streamPath }: { children: ReactNode; stre
 }
 
 /**
- * The processors sheet's on-demand debug accessors: server-side runtime state
- * for one processor subscription (plus the stream's max offset for lag math)
- * and for the stream itself. Dialed fresh per call — debug reads must see the
- * server's CURRENT state, not a cached snapshot.
+ * The processors sheet's one on-demand debug accessor: reduced state for the
+ * focused processor. Stream runtime diagnostics arrive separately through
+ * the LiveState subscription, including the head offset used for lag math.
  */
 function useProcessorsPanelDebugState(args: {
   resolvedStreamSource: ItxStreamSource;
-  store: StreamBrowserStore;
   streamPath: string;
 }) {
-  const { resolvedStreamSource, store, streamPath } = args;
+  const { resolvedStreamSource, streamPath } = args;
   const getProcessorRuntimeState = useCallback(
     async (subscriptionKey: string) => {
       const stream = await resolvedStreamSource(streamPath);
-      const [runtimeState, streamRuntimeState] = await Promise.all([
-        stream.getProcessorRuntimeState({ subscriptionKey }),
-        stream.runtimeState(),
-      ]);
-      return {
-        runtimeState,
-        // The itx Stream.runtimeState() types coreProcessorState as
-        // unknown; parse out the slice this panel needs.
-        streamMaxOffset: parseBrowserCoreProcessorState(streamRuntimeState.coreProcessorState)
-          .maxOffset,
-      };
+      return stream.getProcessorRuntimeState({ subscriptionKey });
     },
     [resolvedStreamSource, streamPath],
   );
-  // Through the store's leader socket, not a fresh dial: the same call then
-  // doubles as a transport-RTT sample for the header/panel metrics.
-  const getStreamRuntimeState = useCallback(
-    (): Promise<StreamRuntimeDebugState> => store.debugRuntimeState(),
-    [store],
-  );
-  return { getProcessorRuntimeState, getStreamRuntimeState };
+  return { getProcessorRuntimeState };
 }
 
 /**
@@ -691,30 +895,39 @@ function useAgentInterrupt(args: {
 }
 
 /**
- * The browser-feed projector persists its reduced state — whose `agent` slice
- * holds the live activity with streaming text and the presence roster — to
- * `processor_state` on every checkpoint; reading it reactively is how the
- * live tail re-renders per delta batch. Null until the projector's first
- * checkpoint lands.
+ * The browser-feed projector persists the durable `agent` slice to
+ * `processor_progress`. Genuinely live ephemeral chunks stay in the store's
+ * in-memory tail; `liveRevision` makes those batches reactive without ever
+ * writing or replaying them. Null until either source has produced state.
  */
-function useAgentUiReducedState(database: StreamBrowserDatabase): AgentUiState | null {
+function useAgentUiReducedState(
+  database: StreamBrowserDatabase,
+  store: StreamBrowserStore,
+  liveRevision: number,
+): AgentUiState | null {
   const result = useStreamQuery(
     database,
     // subscription_key is part of the primary key, so multiple rows can exist
     // for the slug (e.g. after a key-format change); read the most advanced one.
-    `SELECT reduced_state FROM processor_state WHERE processor_slug = ?
-     ORDER BY max_offset DESC LIMIT 1`,
+    `SELECT reduced_state FROM processor_progress WHERE processor_slug = ?
+     ORDER BY acknowledged_through_offset DESC LIMIT 1`,
     [BrowserFeedContract.slug],
   );
   return useMemo(() => {
+    // Volatile live batches do not write SQLite; the revision is the reactive
+    // signal that makes this snapshot read run again.
+    void liveRevision;
+    const live = store.agentUiState();
+    if (live !== null) return live;
     const raw = result.data[0]?.reduced_state;
     if (typeof raw !== "string") return null;
     try {
-      return (JSON.parse(raw) as { agent?: AgentUiState }).agent ?? null;
+      const parsed: unknown = JSON.parse(raw);
+      return isCurrentBrowserFeedState(parsed) ? parsed.agent : null;
     } catch {
       return null;
     }
-  }, [result.data]);
+  }, [liveRevision, result.data, store]);
 }
 
 function useStreamPauseState(database: StreamBrowserDatabase): {

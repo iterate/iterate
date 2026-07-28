@@ -6,10 +6,12 @@
  * that retires their classes, so the reset deploys the checked-in parked
  * worker (parked-worker/worker.js — 503 + queue ack) with a `state:
  * "deleted"` tombstone for every class that exists on the worker — except
- * container-bearing classes, which are kept alive (see the inline comment
- * for the upstream Cloudflare gap that forces this). Plain `wrangler
- * deploy`; the tombstone map is the only generated content, and it is a
- * readback of live reality — no checked-in file can know what a previous
+ * container-bearing classes still declared by the incoming branch, which
+ * are kept alive (see the inline comment for the upstream Cloudflare gap
+ * that forces this). Retired container applications are deleted first so
+ * their classes can be tombstoned too. Plain `wrangler deploy`; the tombstone
+ * map is generated from live reality plus the incoming branch's current
+ * container classes — no checked-in tombstone can know what a previous
  * branch left on a shared slot.
  *
  * The worker script and its routes stay (deleting a script cascades its
@@ -23,10 +25,24 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { DeployableEnv, EnvContext } from "./env-context.ts";
+import { CloudflareApiError, type DeployableEnv, type EnvContext } from "./env-context.ts";
 
 /** The slice of EnvContext the reset needs: the account-scoped CF API fetch. */
 type CfContext = Pick<EnvContext<DeployableEnv>, "cf">;
+
+type WorkerBinding = Record<string, unknown> & {
+  name?: unknown;
+  namespace_id?: unknown;
+  script_name?: unknown;
+  type?: unknown;
+};
+
+type WorkerSettings = {
+  annotations?: Record<string, unknown>;
+  bindings?: WorkerBinding[];
+};
+
+const SETTINGS_SCAN_CONCURRENCY = 10;
 
 const PARKED_WORKER_MODULE = new URL("./parked-worker/worker.js", import.meta.url);
 
@@ -77,6 +93,189 @@ export async function getWorkerDoNamespaces(
   return namespaces;
 }
 
+function isBindingToWorker(
+  binding: WorkerBinding,
+  workerName: string,
+  namespaceIds: ReadonlySet<string>,
+) {
+  return (
+    binding.type === "durable_object_namespace" &&
+    (binding.script_name === workerName ||
+      (typeof binding.namespace_id === "string" && namespaceIds.has(binding.namespace_id)))
+  );
+}
+
+function writableAnnotations(annotations: WorkerSettings["annotations"]) {
+  return Object.fromEntries(
+    ["workers/message", "workers/tag"].flatMap((key) =>
+      typeof annotations?.[key] === "string" ? [[key, annotations[key]]] : [],
+    ),
+  );
+}
+
+function bindingNames(bindings: readonly WorkerBinding[], workerName: string) {
+  const names = bindings.map((binding) => binding.name);
+  if (names.some((name) => typeof name !== "string" || name.length === 0)) {
+    throw new Error(
+      `DO reset: ${workerName} has a binding without a usable name; refusing to rewrite its settings`,
+    );
+  }
+  return names as string[];
+}
+
+async function forEachWithConcurrency<T>(
+  items: readonly T[],
+  concurrency: number,
+  visit: (item: T) => Promise<void>,
+) {
+  const queue = [...items];
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
+      for (let item = queue.shift(); item !== undefined; item = queue.shift()) await visit(item);
+    }),
+  );
+}
+
+/**
+ * Remove bindings in other Workers that keep this Worker's Durable Object
+ * namespaces alive. Workers themselves and every unrelated binding remain:
+ * the settings API's `inherit` binding copies each survivor from the latest
+ * version, including redacted secrets that cannot safely be reconstructed
+ * from a settings GET.
+ *
+ * Readback is part of the operation, not a diagnostic. A tombstone deploy
+ * must never start while Cloudflare still reports a reference to a namespace
+ * it is about to retire.
+ */
+/** The preview-slot family a worker name belongs to (`os-preview-16` and
+ * `auth-preview-16-typechecker` are both slot 16), or null for every
+ * non-slot name (prd, dev, personal, and unknown workers). */
+export function previewSlotOfWorkerName(workerName: string): number | null {
+  const match = /-preview-(\d+)(?:-|$)/.exec(workerName);
+  return match ? Number(match[1]) : null;
+}
+
+export async function detachExternalDurableObjectBindings(input: {
+  ctx: CfContext;
+  targetWorkerName: string;
+  targetNamespaceIds: readonly string[];
+  workerNames: readonly string[];
+}): Promise<{ workerName: string; removedBindingNames: string[] }[]> {
+  const namespaceIds = new Set(input.targetNamespaceIds);
+  const detached: { workerName: string; removedBindingNames: string[] }[] = [];
+  // When the target belongs to a preview slot, workers that clearly belong
+  // to a DIFFERENT slot are skipped: a cross-slot Durable Object binding
+  // would be a platform bug, and settings-scanning every slot's workers is
+  // what exhausts the account's API quota (dozens of GETs per erase, every
+  // preview lane, concurrently — the 429 storms that also starve prd
+  // deploys, since Cloudflare rate-limits per API user). Non-slot names
+  // (prd, dev, personal, unknown) are still swept.
+  const targetSlot = previewSlotOfWorkerName(input.targetWorkerName);
+  const candidates = input.workerNames.filter((workerName) => {
+    if (workerName === input.targetWorkerName) return false;
+    if (targetSlot === null) return true;
+    const slot = previewSlotOfWorkerName(workerName);
+    return slot === null || slot === targetSlot;
+  });
+
+  await forEachWithConcurrency(candidates, SETTINGS_SCAN_CONCURRENCY, async (workerName) => {
+    const path = `/workers/scripts/${encodeURIComponent(workerName)}/settings`;
+    const before = await input.ctx.cf<WorkerSettings>(path);
+    const bindings = before.bindings ?? [];
+    const removed = bindings.filter((binding) =>
+      isBindingToWorker(binding, input.targetWorkerName, namespaceIds),
+    );
+    if (removed.length === 0) return;
+
+    const remaining = bindings.filter(
+      (binding) => !isBindingToWorker(binding, input.targetWorkerName, namespaceIds),
+    );
+    const remainingNames = bindingNames(remaining, workerName);
+    const removedBindingNames = bindingNames(removed, workerName).sort();
+    const annotations = writableAnnotations(before.annotations);
+    const settings = {
+      annotations,
+      bindings: remainingNames.map((name) => ({ name, type: "inherit" })),
+    };
+    const form = new FormData();
+    form.append(
+      "settings",
+      new Blob([JSON.stringify(settings)], { type: "application/json" }),
+      "settings.json",
+    );
+    await input.ctx.cf(path, { method: "PATCH", body: form });
+
+    const after = await input.ctx.cf<WorkerSettings>(path);
+    const afterBindings = after.bindings ?? [];
+    const afterNames = bindingNames(afterBindings, workerName).sort();
+    const expectedNames = [...remainingNames].sort();
+    if (
+      afterBindings.some((binding) =>
+        isBindingToWorker(binding, input.targetWorkerName, namespaceIds),
+      ) ||
+      JSON.stringify(afterNames) !== JSON.stringify(expectedNames) ||
+      JSON.stringify(writableAnnotations(after.annotations)) !== JSON.stringify(annotations)
+    ) {
+      throw new Error(
+        `DO reset: ${workerName} settings readback did not preserve the expected bindings and annotations`,
+      );
+    }
+    detached.push({ workerName, removedBindingNames });
+    console.log(
+      `DO reset: detached ${workerName} bindings ${removedBindingNames.join(", ")} from ${input.targetWorkerName}`,
+    );
+  });
+
+  return detached.sort((a, b) => a.workerName.localeCompare(b.workerName));
+}
+
+function namedExternalBindingWorkers(input: {
+  failure: unknown;
+  targetWorkerName: string;
+  workerNames: readonly string[];
+  alreadyDetached: ReadonlySet<string>;
+}) {
+  const message =
+    input.failure instanceof CloudflareApiError
+      ? String(JSON.stringify(input.failure.details))
+      : String(input.failure);
+  if (!/bind/i.test(message) || !/(referenc|depend|namespace|delete-class)/i.test(message)) {
+    return [];
+  }
+  return input.workerNames.filter((workerName) => {
+    if (workerName === input.targetWorkerName || input.alreadyDetached.has(workerName))
+      return false;
+    const escaped = workerName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`(^|[^A-Za-z0-9_-])${escaped}($|[^A-Za-z0-9_-])`).test(message);
+  });
+}
+
+/**
+ * A rejected class retirement is atomic, and Cloudflare names every Worker
+ * whose external binding blocked it. Inspect only those Workers; a normal
+ * handover must not spend one settings request on every Worker in the
+ * account. An unclassified failure remains fail-closed.
+ */
+async function detachExternalBindingsNamedByFailure(input: {
+  ctx: CfContext;
+  failure: unknown;
+  targetWorkerName: string;
+  targetNamespaceIds: readonly string[];
+  workerNames: readonly string[];
+  alreadyDetached: Set<string>;
+}) {
+  const namedWorkers = namedExternalBindingWorkers(input);
+  if (namedWorkers.length === 0) return false;
+  await detachExternalDurableObjectBindings({
+    ctx: input.ctx,
+    targetWorkerName: input.targetWorkerName,
+    targetNamespaceIds: input.targetNamespaceIds,
+    workerNames: [input.targetWorkerName, ...namedWorkers],
+  });
+  for (const workerName of namedWorkers) input.alreadyDetached.add(workerName);
+  return true;
+}
+
 /**
  * Destroy every Durable Object on a worker and leave it parked at 503 until
  * the next deploy. No-op when the worker doesn't exist or has no DO classes.
@@ -92,6 +291,8 @@ export async function resetWorkerDurableObjects(input: {
   credentials: Record<string, string>;
   /** The worker's compatibility date — reuse the app's own so the parked module never trails it. */
   compatibilityDate: string;
+  /** Container-bearing classes declared by the branch that will deploy next. */
+  containerClassNames: readonly string[];
 }): Promise<
   | { action: "skipped"; reason: string }
   | { action: "reset"; deletedClasses: string[]; keptContainerClasses: string[] }
@@ -109,8 +310,8 @@ export async function resetWorkerDurableObjects(input: {
     return { action: "skipped", reason: "no Durable Object classes" };
   }
 
-  // Container-bearing classes are KEPT, not destroyed. Cloudflare's exports
-  // reconciliation cannot container-enable a namespace it creates (upstream
+  // CURRENT container-bearing classes are KEPT, not destroyed. Cloudflare's
+  // exports reconciliation cannot container-enable a namespace it creates (upstream
   // gap, verified live 2026-07-08: recreating a container class under
   // `exports` fails its container application with
   // DURABLE_OBJECT_NOT_CONTAINER_ENABLED, and exports is one-way — error
@@ -119,10 +320,51 @@ export async function resetWorkerDurableObjects(input: {
   // unreachable orphans like every pre-teardown DO did (D1/KV are wiped;
   // running containers are reaped by the sandbox destroy-on-idle sweeper),
   // and their container applications stay attached to the live namespaces.
-  const applications =
+  let applications =
     await input.ctx.cf<{ id: string; name: string; durable_objects?: { namespace_id?: string } }[]>(
       `/containers/applications`,
     );
+  const namespaceById = new Map<string, (typeof namespaces)[number]>();
+  for (const namespace of namespaces) namespaceById.set(namespace.namespaceId, namespace);
+  const currentContainerClasses = new Set(input.containerClassNames);
+  const retiredApplications = applications.filter((application) => {
+    const namespaceId = application.durable_objects?.namespace_id;
+    const namespace = namespaceId ? namespaceById.get(namespaceId) : undefined;
+    return namespace !== undefined && !currentContainerClasses.has(namespace.className);
+  });
+  for (const application of retiredApplications) {
+    const namespaceId = application.durable_objects?.namespace_id;
+    const namespace = namespaceId ? namespaceById.get(namespaceId) : undefined;
+    await input.ctx.cf(`/containers/applications/${encodeURIComponent(application.id)}`, {
+      method: "DELETE",
+    });
+    console.log(
+      `DO reset: deleted retired container application ${application.name} ` +
+        `(class ${namespace?.className ?? "unknown"})`,
+    );
+  }
+  if (retiredApplications.length > 0) {
+    applications =
+      await input.ctx.cf<
+        { id: string; name: string; durable_objects?: { namespace_id?: string } }[]
+      >(`/containers/applications`);
+    const retiredNamespaceIds = new Set(
+      retiredApplications.flatMap((application) => {
+        const namespaceId = application.durable_objects?.namespace_id;
+        return namespaceId ? [namespaceId] : [];
+      }),
+    );
+    const lingering = applications.filter((application) => {
+      const namespaceId = application.durable_objects?.namespace_id;
+      return namespaceId !== undefined && retiredNamespaceIds.has(namespaceId);
+    });
+    if (lingering.length > 0) {
+      throw new Error(
+        `DO reset: Cloudflare kept retired container applications ` +
+          `${lingering.map((application) => application.name).join(", ")}; refusing to park ${input.workerName}`,
+      );
+    }
+  }
   const containerNamespaceIds = new Set(
     applications
       .map((application) => application.durable_objects?.namespace_id)
@@ -171,35 +413,62 @@ export async function resetWorkerDurableObjects(input: {
     .join("\n");
   const parkedModuleWithKeptClasses = `${parkedModule}\n${stubExports}\n`;
 
-  const form = new FormData();
-  form.append(
-    "metadata",
-    JSON.stringify({
-      main_module: "parked.mjs",
-      compatibility_date: input.compatibilityDate,
-      bindings: [],
-      // The load-bearing line (see block comment above): kept container
-      // classes stay container-enabled only while every upload that exports
-      // them also names them here.
-      containers: kept.map((className) => ({ class_name: className })),
-      migrations: {
-        ...(script.migration_tag ? { old_tag: script.migration_tag } : {}),
-        new_tag: `do-reset-${tagHash([script.migration_tag ?? null, deletedClasses])}`,
-        steps: [{ deleted_classes: deletedClasses }],
-      },
-    }),
-  );
-  form.append(
-    "parked.mjs",
-    new File([parkedModuleWithKeptClasses], "parked.mjs", {
-      type: "application/javascript+module",
-    }),
-    "parked.mjs",
-  );
-  try {
-    await input.ctx.cf(`/workers/scripts/${input.workerName}`, { method: "PUT", body: form });
-  } catch (error) {
-    if (!String(error).includes("100403")) throw error;
+  const createLegacyParkForm = () => {
+    const form = new FormData();
+    form.append(
+      "metadata",
+      JSON.stringify({
+        main_module: "parked.mjs",
+        compatibility_date: input.compatibilityDate,
+        bindings: [],
+        // The load-bearing line (see block comment above): kept container
+        // classes stay container-enabled only while every upload that exports
+        // them also names them here.
+        containers: kept.map((className) => ({ class_name: className })),
+        migrations: {
+          ...(script.migration_tag ? { old_tag: script.migration_tag } : {}),
+          new_tag: `do-reset-${tagHash([script.migration_tag ?? null, deletedClasses])}`,
+          steps: [{ deleted_classes: deletedClasses }],
+        },
+      }),
+    );
+    form.append(
+      "parked.mjs",
+      new File([parkedModuleWithKeptClasses], "parked.mjs", {
+        type: "application/javascript+module",
+      }),
+      "parked.mjs",
+    );
+    return form;
+  };
+  const workerNames = scripts.map((candidate) => candidate.id);
+  const targetNamespaceIds = namespaces.map((namespace) => namespace.namespaceId);
+  const detachedWorkers = new Set<string>();
+  let useExportsFlow = false;
+  for (;;) {
+    try {
+      await input.ctx.cf(`/workers/scripts/${input.workerName}`, {
+        method: "PUT",
+        body: createLegacyParkForm(),
+      });
+      break;
+    } catch (error) {
+      if (String(error).includes("100403")) {
+        useExportsFlow = true;
+        break;
+      }
+      const detached = await detachExternalBindingsNamedByFailure({
+        ctx: input.ctx,
+        failure: error,
+        targetWorkerName: input.workerName,
+        targetNamespaceIds,
+        workerNames,
+        alreadyDetached: detachedWorkers,
+      });
+      if (!detached) throw error;
+    }
+  }
+  if (useExportsFlow) {
     console.log(
       `DO reset: ${input.workerName} is on the declarative exports flow (API 100403) — parking via exports tombstones instead`,
     );
@@ -262,6 +531,15 @@ export async function resetWorkerDurableObjects(input: {
           credentials: input.credentials,
         });
         if (viaExports.ok) break;
+        const detached = await detachExternalBindingsNamedByFailure({
+          ctx: input.ctx,
+          failure: viaExports.output,
+          targetWorkerName: input.workerName,
+          targetNamespaceIds,
+          workerNames,
+          alreadyDetached: detachedWorkers,
+        });
+        if (detached) continue;
         const missingClass = viaExports.output.match(
           /does not export class '([A-Za-z0-9_$]+)'/,
         )?.[1];

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { StreamEvent } from "../../../schemas.ts";
+import type { StreamEvent } from "iterate/processors";
 import {
+  BROWSER_FEED_SCHEMA_VERSION,
   initialBrowserFeedState,
   MAX_GROUP_EVENTS,
   planBrowserFeedOps,
@@ -21,14 +22,27 @@ function event(offset: number, type: string, payload: unknown = { offset }): Str
 const CREATED = "events.iterate.com/stream/created";
 const WOKEN = "events.iterate.com/stream/woken";
 const DEBUG = "events.iterate.com/debug/random-event";
-const MESSAGE_RECEIVED = "events.iterate.com/agents/message-received";
+const CONTEXT_ADDED = "events.iterate.com/agents/context-added";
 const WEB_MESSAGE_SENT = "events.iterate.com/agents/web-message-sent";
-
 function userMessage(offset: number, text: string): StreamEvent {
-  return event(offset, MESSAGE_RECEIVED, { content: text, from: { kind: "user", origin: "web" } });
+  return event(offset, CONTEXT_ADDED, {
+    role: "user",
+    actor: { type: "user", origin: "web" },
+    content: text,
+    llmRequestPolicy: { behaviour: "after-current-request" },
+  });
 }
 
 const START = initialBrowserFeedState();
+
+describe("browser-feed projector state boundary", () => {
+  it("identifies every newly projected state as the current clean-cut schema", () => {
+    expect(START.schemaVersion).toBe(BROWSER_FEED_SCHEMA_VERSION);
+    expect(planBrowserFeedOps(START, [event(1, DEBUG)]).endState.schemaVersion).toBe(
+      BROWSER_FEED_SCHEMA_VERSION,
+    );
+  });
+});
 
 describe("browser-feed projector — raw lens", () => {
   it("writes specific-renderer events as their own raw singleton rows", () => {
@@ -155,7 +169,11 @@ describe("browser-feed projector — raw lens", () => {
     // One coalesced op per bounded group: two full groups plus a partial third.
     expect(ops).toHaveLength(3);
     expect(ops.map((op) => op.localIndex)).toEqual([0, 1, 2]);
-    expect(ops.map((op) => op.eventCount)).toEqual([MAX_GROUP_EVENTS, MAX_GROUP_EVENTS, 5]);
+    expect(ops.map((op) => ("eventCount" in op ? op.eventCount : null))).toEqual([
+      MAX_GROUP_EVENTS,
+      MAX_GROUP_EVENTS,
+      5,
+    ]);
     expect(endState.open?.eventCount).toBe(5);
     expect(endState.nextLocalIndex).toBe(3);
   });
@@ -214,27 +232,45 @@ describe("browser-feed projector — one interleaved order", () => {
     ]);
   });
 
-  it("carries agent reduced state (live activity) without emitting rows until work settles", () => {
-    const request = event(2, "events.iterate.com/agent/llm-request-requested", {
-      model: "gpt-test",
-    });
-    const first = planBrowserFeedOps(START, [userMessage(1, "run it"), request]);
-    expect(first.endState.agent.live?.steps).toHaveLength(1);
-    // Only the bubble + two raw groups so far — the activity is still live.
-    expect(
-      first.ops.filter((op) => op.kind === "insert" && op.itemKind === "agent.activity"),
-    ).toHaveLength(0);
-
-    const completed = event(3, "events.iterate.com/agent/llm-request-completed", {
-      llmRequestOffset: 2,
-      result: { status: "success" },
-    });
-    const second = planBrowserFeedOps(first.endState, [completed]);
-    expect(second.endState.agent.live).toBeNull();
-    const settled = second.ops.find(
-      (op) => op.kind === "insert" && op.itemKind === "agent.activity",
+  it("collapses consecutive pretty stream wakes into the final wake with a count", () => {
+    const { ops, endState } = planBrowserFeedOps(START, [
+      event(1, CREATED),
+      event(2, WOKEN),
+      event(3, WOKEN),
+      event(4, WOKEN),
+      userMessage(5, "wake boundary"),
+      event(6, WOKEN),
+      event(7, WOKEN),
+    ]);
+    const agentOps = ops.filter(
+      (op) => op.kind === "replace" || (op.kind === "insert" && op.itemKind.startsWith("agent.")),
     );
-    expect(settled).toBeDefined();
+
+    expect(agentOps).toMatchObject([
+      { kind: "insert", localIndex: 2, data: { kind: "stream-woken", id: "stream-woken-3" } },
+      {
+        kind: "replace",
+        localIndex: 2,
+        data: { kind: "stream-woken", id: "stream-woken-4", count: 2 },
+      },
+      { kind: "insert", localIndex: 5, data: { kind: "user", id: "user-5" } },
+      { kind: "insert", localIndex: 7, data: { kind: "stream-woken", id: "stream-woken-6" } },
+      {
+        kind: "replace",
+        localIndex: 7,
+        data: { kind: "stream-woken", id: "stream-woken-7", count: 2 },
+      },
+    ]);
+    expect(endState.nextLocalIndex).toBe(10);
+  });
+
+  it("does not retain replacement indexes for ordinary settled feed items", () => {
+    const projected = planBrowserFeedOps(START, [
+      userMessage(1, "hello"),
+      event(2, WEB_MESSAGE_SENT, { message: "hi" }),
+    ]);
+
+    expect(projected.endState.provisionalAgentItemIndexes).toEqual({});
   });
 
   it("is deterministic and folds identically event-by-event and whole-batch", () => {

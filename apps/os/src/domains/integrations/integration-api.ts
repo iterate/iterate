@@ -63,12 +63,15 @@ async function handleOAuthCallback(input: {
   const callbackUrl = unverified.callbackUrl ?? null;
   if (error) return redirectWithError(callbackUrl, `${input.provider}_oauth_denied`);
 
-  // GitHub connects via App installation: the callback carries `installation_id`
-  // (+ setup_action), not an OAuth `code`. slack/google carry a code.
+  // GitHub is a two-stage callback. The setup URL first supplies an untrusted
+  // installation_id; completeConnect redirects through GitHub user OAuth, and
+  // the second callback supplies the code that proves access to that id.
   const code = url.searchParams.get("code") ?? undefined;
   const installationId = url.searchParams.get("installation_id") ?? undefined;
   if (input.provider === "github") {
-    if (!installationId) return redirectWithError(callbackUrl, "github_missing_installation_id");
+    if (!installationId && !code) {
+      return redirectWithError(callbackUrl, "github_missing_installation_id");
+    }
   } else if (!code) {
     return redirectWithError(callbackUrl, `${input.provider}_oauth_missing_code`);
   }
@@ -101,6 +104,9 @@ async function handleOAuthCallback(input: {
     }
     if (result.error.endsWith("_invalid_state")) {
       return Response.json({ error: "Invalid or expired OAuth state." }, { status: 400 });
+    }
+    if (result.error === "github_installation_already_claimed" && "githubStealState" in result) {
+      return redirectWithGithubSteal(result.callbackUrl ?? callbackUrl, result.githubStealState);
     }
     return redirectWithError(result.callbackUrl ?? callbackUrl, result.error);
   }
@@ -138,21 +144,26 @@ async function handleMcpOAuthCallback(input: {
     // token is about to overwrite a project secret.
     if (input.auth?.type !== "user") return redirectWithError(null, "mcp_oauth_sign_in_required");
     try {
-      itxAuthFromPrincipal(input.context.config, input.auth).assertCanAccessProject(
-        state.projectId,
-      );
+      itxAuthFromPrincipal(input.auth, {
+        allowDirectoryFallback: input.context.operatorSession == null,
+      }).assertCanAccessProject(state.projectId);
     } catch {
       return redirectWithError(null, "mcp_oauth_not_a_member");
     }
-    const egress = projectEgressFetcher(input.context.executionCtx.exports, state.projectId);
+    const egress = projectEgressFetcher(input.context.executionCtx.exports, state.projectId, {
+      kind: "scope",
+      scopePath: "/",
+    });
     const result = await completeMcpOAuth(state, {
       code,
       ...(iss ? { iss } : {}),
       fetchFn: fetchLikeFromFetcher(egress),
     });
-    await itxEnv.SECRET.getByName(
+    const secret = itxEnv.SECRET.getByName(
       DurableObjectNameCodec.stringify({ projectId: state.projectId, path: result.path }),
-    ).update(result.secret);
+    );
+    if ((await secret.describe()).created) await secret.update(result.secret);
+    else await secret.create(result.secret);
 
     // Best-effort notify: the token is stored regardless, so a notify failure
     // must not read as total failure (the user would redo it; the agent waits).
@@ -169,7 +180,7 @@ async function handleMcpOAuthCallback(input: {
             `The OAuth connection to ${result.mcpUrl} is done. The token is stored write-only at ` +
               `"${result.path}" (pinned to ${result.secret.egress.urls.join(", ")}). Connect with ` +
               `itx.mcp.connect({ url: "${result.mcpUrl}", headers: { authorization: ` +
-              `'Bearer getSecret({ path: "${result.path}", field: "accessToken" })' } }).`,
+              `'Bearer getSecret("${result.path}", { field: "accessToken" })' } }).`,
           );
       } catch (cause) {
         console.error("mcp-oauth: failed to notify", result.notify, cause);
@@ -201,6 +212,14 @@ function redirectWithError(callbackUrl: string | null, error: string) {
   const url = new URL(callbackUrl);
   url.searchParams.set("error", error);
   return redirectResponse(url.toString());
+}
+
+function redirectWithGithubSteal(callbackUrl: string | null, state: string) {
+  const location = callbackUrl || "/";
+  const url = new URL(location, "https://os.iterate.com");
+  url.searchParams.set("error", "github_installation_already_claimed");
+  url.searchParams.set("githubSteal", state);
+  return redirectResponse(callbackUrl ? url.toString() : `${url.pathname}${url.search}`);
 }
 
 // Response.redirect rejects relative URLs, and the app's own origin is not

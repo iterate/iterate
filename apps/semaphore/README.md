@@ -20,7 +20,7 @@ admin** identity:
   auth worker); the dashboard and its server functions use the
   `iterate_session` cookie.
 - **API/CLI:** `Authorization: Bearer <access token>`, verified as a JWT
-  against the JWKS baked at deploy (issuer keys + forge public key). CLIs
+  against Auth's Doppler-derived public signing key. CLIs
   mint admin tokens offline with the config's `AUTH_FORGE_PRIVATE_JWK`
   (`scripts/auth/semaphore-token.ts`, same mechanism as `pnpm auth:mint`), or
   accept a pre-minted token via `SEMAPHORE_API_TOKEN`.

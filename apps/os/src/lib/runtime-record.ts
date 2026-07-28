@@ -3,9 +3,10 @@
 // the processors panel and its pretty-state renderers.
 
 export function readRuntimeRecord(value: unknown): Record<string, unknown> | undefined {
-  return value != null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return;
+  // Runtime payloads are untyped; the guards above prove the record shape,
+  // and cloning it would only add work without improving safety.
+  return value as Record<string, unknown>;
 }
 
 export function readNumber(value: unknown, key: string): number | null {

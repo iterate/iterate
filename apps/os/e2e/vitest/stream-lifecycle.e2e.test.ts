@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import type { StreamEvent, StreamEventInput } from "../../src/domains/streams/schemas.ts";
+import type { StreamEvent, StreamEventInput } from "iterate/processors";
 import type { Stream } from "../../src/itx-api.generated.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
@@ -77,7 +77,7 @@ test("configured processor subscriptions are recorded as configured runtime conn
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `lifecycle-configured-${marker}` });
+  using project = await itx.projects.get(`lifecycle-configured-${marker}`).create({});
   using stream = project.streams.get("/");
 
   const { keys, state } = await waitForConfiguredProcessorConnections(stream);
@@ -105,14 +105,14 @@ test("ephemeral subscriptions cannot reuse a configured subscription key", async
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `lifecycle-key-reserved-${marker}` });
+  using project = await itx.projects.get(`lifecycle-key-reserved-${marker}`).create({});
   using stream = project.streams.get("/");
 
-  const { keys } = await waitForConfiguredProcessorConnections(stream);
-  const [subscriptionKey] = keys;
-  if (subscriptionKey === undefined) {
-    throw new Error("expected project bootstrap to configure at least one subscriber");
-  }
+  // The subscribe guard is keyed by durable desired state, not by whether a
+  // wake subscriber happens to have a live delivery connection right now.
+  // Requiring the latter made this policy test race ordinary wake/redial work
+  // during the full parallel preview burst.
+  const subscriptionKey = await waitForConfiguredSubscriptionKey(stream);
 
   await expect(async () => {
     const handle = await stream.subscribe({
@@ -142,7 +142,7 @@ test("delivery expressions must end in a property step, rejected before commit",
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `configured-call-tail-${marker}` });
+  using project = await itx.projects.get(`configured-call-tail-${marker}`).create({});
   using stream = project.streams.get(`/configured-call-tail-${marker}`);
 
   await expect(
@@ -172,7 +172,7 @@ test("webhook subscriptions validate their URL before commit", async () => {
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `configured-webhook-url-${marker}` });
+  using project = await itx.projects.get(`configured-webhook-url-${marker}`).create({});
   using stream = project.streams.get(`/configured-webhook-url-${marker}`);
 
   await expect(
@@ -225,7 +225,7 @@ test("subscription and subscribe inputs are validated at the door", async () => 
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `lifecycle-input-gates-${marker}` });
+  using project = await itx.projects.get(`lifecycle-input-gates-${marker}`).create({});
   using stream = project.streams.get(`/lifecycle-input-gates-${marker}`);
 
   await expect(
@@ -254,13 +254,11 @@ test("subscription and subscribe inputs are validated at the door", async () => 
 test("wake expressions traverse dynamic dispatch surfaces (the slack router shape)", async () => {
   // Every other wake expression walks real getters (agents.get(p).processor,
   // repos.get(p).processor, ...). The slack router's walks the integrations
-  // collection's DYNAMIC dotted proxy — ["integrations", "slack", <conn>,
-  // "processor", "wakeStreamSubscriber"] — over the loopback RPC: awaited
-  // property steps over proxy/function stubs, a different transport mechanic
-  // entirely, and it replaced the old typed-target dial with no other running
-  // coverage (thermo round 3, blocker 2). This pins the whole walk live: the
-  // poke resolves the handshake through the proxy and a durable connection
-  // lands on the stream.
+  // collection's DYNAMIC dotted proxy — ["integrations", "slack", ["get", <conn>],
+  // "processor", "wakeStreamSubscriber"] — through awaited property steps
+  // over proxy/function stubs, a different transport mechanic from the typed
+  // getters. This pins the whole walk live: the poke resolves the handshake
+  // through the proxy and a durable connection lands on the stream.
   const marker = crypto.randomUUID();
   const connection = `e2e-${marker.slice(0, 8)}`;
 
@@ -269,7 +267,7 @@ test("wake expressions traverse dynamic dispatch surfaces (the slack router shap
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `lifecycle-dynamic-wake-${marker}` });
+  using project = await itx.projects.get(`lifecycle-dynamic-wake-${marker}`).create({});
   using stream = project.streams.get(`/integrations/slack/${connection}`);
 
   const subscriptionKey = `dynamic-wake-${marker}`;
@@ -278,7 +276,13 @@ test("wake expressions traverse dynamic dispatch surfaces (the slack router shap
       subscriptionKey,
       delivery: {
         mode: "wake",
-        expression: ["integrations", "slack", connection, "processor", "wakeStreamSubscriber"],
+        expression: [
+          "integrations",
+          "slack",
+          ["get", connection],
+          "processor",
+          "wakeStreamSubscriber",
+        ],
         processorSlug: "slack",
       },
     }),
@@ -322,7 +326,7 @@ test("project streams are born with the project-worker push feed and replace it 
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `lifecycle-worker-feed-${marker}` });
+  using project = await itx.projects.get(`lifecycle-worker-feed-${marker}`).create({});
   using stream = project.streams.get(`/lifecycle-worker-feed-${marker}`);
 
   // Born configured: a fresh child stream's runtime subscription table shows
@@ -377,7 +381,7 @@ test("stream idle teardown severs configured processor subscriptions", async () 
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `lifecycle-idle-${marker}` });
+  using project = await itx.projects.get(`lifecycle-idle-${marker}`).create({});
   using stream = project.streams.get("/");
 
   const { keys } = await waitForConfiguredProcessorConnections(stream, { settled: true });
@@ -423,7 +427,7 @@ test("append after idle teardown re-wakes configured subscriber from its checkpo
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `lifecycle-redial-${marker}` });
+  using project = await itx.projects.get(`lifecycle-redial-${marker}`).create({});
   using stream = project.streams.get("/");
 
   const { keys } = await waitForConfiguredProcessorConnections(stream, { settled: true });
@@ -463,7 +467,7 @@ test("closing a Cap'n Web session without unsubscribe removes its stream subscri
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = observerItx.projects.create({ slug: `lifecycle-session-close-${marker}` });
+  using project = await observerItx.projects.get(`lifecycle-session-close-${marker}`).create({});
   const { projectId } = await project.__describe();
   using observerStream = project.streams.get(streamPath);
 
@@ -525,7 +529,7 @@ test.skip("dropping a WebSocket waitForEvent caller cleans up the internal waitF
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = observerItx.projects.create({ slug: `lifecycle-wait-${marker}` });
+  using project = await observerItx.projects.get(`lifecycle-wait-${marker}`).create({});
   const { projectId } = await project.__describe();
   using observerStream = project.streams.get(streamPath);
 
@@ -560,6 +564,46 @@ test.skip("dropping a WebSocket waitForEvent caller cleans up the internal waitF
   } finally {
     disposeRpc(waiterSession);
   }
+});
+
+test("a stream DO kill mid-call rejects with the stream-unavailable tag", async () => {
+  // The retryability contract: a rejection caused by the DO incarnation dying
+  // (kill/eviction/deploy reset) must cross the wire tagged
+  // `stream-unavailable: …` so clients can retry instead of treating it as an
+  // app-level failure — the browser mirror's appendBatch rides exactly this
+  // tag to survive kills mid-blast (see domains/streams/stream-unavailable.ts;
+  // workerd's `durableObjectReset` flag never survives capnweb, so the worker
+  // door is the only hop that can tell the two apart). The parked waitForEvent
+  // makes the proof deterministic: its runtime connection registering proves
+  // the call is in flight inside the DO when kill() lands.
+  const marker = crypto.randomUUID();
+
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "admin-secret",
+    secret: adminSecret(),
+  });
+  using project = await itx.projects.get(`lifecycle-kill-tag-${marker}`).create({});
+  using stream = project.streams.get(`/lifecycle-kill-tag-${marker}`);
+
+  const parked = (async () => {
+    try {
+      await stream.waitForEvent({ eventTypes: [WAIT_FOR_EVENT_TYPE], timeoutMs: 60_000 });
+      return undefined;
+    } catch (error) {
+      return error;
+    }
+  })();
+  await waitForWaitForEventConnection(stream);
+
+  // The abort can take the kill() call itself down with it — that rejection
+  // is incidental; the parked call's is the one under test.
+  await stream.kill().catch(() => undefined);
+
+  const rejection = await parked;
+  expect(rejection).toBeInstanceOf(Error);
+  expect((rejection as Error).message).toContain("stream-unavailable: ");
+  expect((rejection as Error).message).toContain("kill requested");
 });
 
 async function waitForConfiguredProcessorConnections(
@@ -609,6 +653,19 @@ async function waitForConfiguredProcessorConnections(
   };
 }
 
+async function waitForConfiguredSubscriptionKey(stream: Stream): Promise<string> {
+  let subscriptionKey: string | undefined;
+  await waitForCondition(
+    async () => {
+      const state = asStreamRuntimeState(await stream.runtimeState());
+      [subscriptionKey] = Object.keys(state.coreProcessorState.configuredSubscribersByKey ?? {});
+      return subscriptionKey !== undefined;
+    },
+    { description: "project bootstrap to durably configure a subscriber" },
+  );
+  return subscriptionKey!;
+}
+
 async function waitForRuntimeConnection(
   stream: Stream,
   subscriptionKey: string,
@@ -637,7 +694,14 @@ async function waitForWaitForEventConnection(stream: Stream): Promise<string> {
       )?.[0];
       return key !== undefined;
     },
-    { description: "waitForEvent internal subscription to become visible" },
+    {
+      description: "waitForEvent internal subscription to become visible",
+      // Registration rides a fresh project's first stream calls: on a cold
+      // preview DO under full lane contention that takes longer than the 5s
+      // default (each runtimeState poll is its own RPC round-trip) — the
+      // kill-tag test hit exactly this wall on preview CI.
+      timeoutMs: 30_000,
+    },
   );
   return key!;
 }
@@ -681,6 +745,7 @@ function subscriptionConfiguredEvent(input: {
   // Stream Durable Object itself is the trust boundary.
   return {
     type: "events.iterate.com/stream/subscription-configured",
+    idempotencyKey: `test/subscription-configured:${input.subscriptionKey}`,
     payload: {
       subscriptionKey: input.subscriptionKey,
       delivery: input.delivery,

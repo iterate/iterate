@@ -20,6 +20,7 @@ function entry(
     action: { kind: "itx-script", script: "async () => {}" },
     definedAtOffset: 1,
     nextTriggerAt: null,
+    path: "/scheduler/primary",
     recurrence: { every: 60 },
     runCount: 0,
     setAt: new Date(BASE).toISOString(),
@@ -49,7 +50,7 @@ describe("initialTriggerAtMs", () => {
     );
   });
 
-  it("returns null instead of throwing for an unparseable cron (raw appends must not poison the fold)", () => {
+  it("returns null instead of throwing for an unparseable cron (raw appends must not poison reduce)", () => {
     expect(initialTriggerAtMs({ cron: "not a cron" }, BASE)).toBeNull();
     expect(initialTriggerAtMs({ at: "not a date" }, BASE)).toBeNull();
   });

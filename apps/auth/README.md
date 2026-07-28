@@ -1,7 +1,7 @@
 # Auth
 
 Iterate's identity provider and organization/project directory. One Cloudflare
-Worker per environment (`auth-prd`, `auth-dev`, `auth-preview-N`), served at
+Worker per environment (`auth-prd`, `auth-dev-global`, `auth-preview-N`), served at
 `auth.iterate.com` / `auth.iterate-dev.com` / `auth.iterate-preview-N.com`.
 
 Built on [better-auth](https://better-auth.com) with the
@@ -20,29 +20,39 @@ It answers three questions for the rest of the platform:
   tables and is the sole minter of the `prj_` id space; OS has no database of
   its own and treats auth as its project directory.
 
-## The three surfaces
+## The four surfaces
 
-One worker, three ways in — each with its own credential. Keeping them straight
+One worker, four ways in — each with its own credential. Keeping them straight
 is the single most important thing to understand about this app.
 
-| Surface                | Transport                                     | Callers                                                    | Credential                                                 |
-| ---------------------- | --------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- |
-| OIDC / OAuth2 provider | `/api/auth/*` on the public hostname          | Browsers, OS login, the `iterate` CLI, MCP clients         | The protocol's own (auth codes, PKCE, client secrets)      |
-| UI                     | all other paths (TanStack Start SSR + assets) | Humans                                                     | better-auth session cookie                                 |
-| oRPC service API       | `/api/orpc/*` on the public hostname          | The auth UI, the CLI, OS workers, deploy-time Node scripts | Session cookie, bearer token, or `x-iterate-service-token` |
+| Surface                | Transport                                     | Callers                                            | Credential                                                 |
+| ---------------------- | --------------------------------------------- | -------------------------------------------------- | ---------------------------------------------------------- |
+| OIDC / OAuth2 provider | `/api/auth/*` on the public hostname          | Browsers, OS login, the `iterate` CLI, MCP clients | The protocol's own (auth codes, PKCE, client secrets)      |
+| UI                     | all other paths (TanStack Start SSR + assets) | Humans                                             | better-auth session cookie                                 |
+| oRPC service API       | `/api/orpc/*` on the public hostname          | The auth UI, CLI, deploy-time Node scripts         | Session cookie, bearer token, or `x-iterate-service-token` |
+| Workers RPC            | Cloudflare `AUTH` service binding             | OS workers only                                    | Possession of the same-account binding                     |
 
-The entrypoint that ties them together is `src/server/worker.ts` — a single
-Hono app exported as the worker's default `fetch` handler. Static assets + SSR
-still work: asset routing happens at the edge before `fetch` is invoked, and
-`run_worker_first: ["/api/*"]` (in the generated `wrangler.jsonc`) sends the API
+The entrypoint that ties them together is in `src/server/worker.ts`. The
+default `AuthWorker extends WorkerEntrypoint` delegates `fetch` to the Hono app
+and implements the Workers RPC methods. Public requests can invoke only
+`fetch`; OS receives an RPC stub because its deployment holds the required
+same-account `AUTH` service binding. The binding intentionally omits an
+`entrypoint` selector, which targets the worker's default export.
+
+Using the default entrypoint is deliberate. Auth has one internal capability
+role, and every OS caller holding `AUTH` receives the same complete typed
+contract. A named entrypoint would add another exported surface and a binding
+selector without narrowing that authority. Cloudflare explicitly supports
+[`fetch` alongside RPC methods on a default `WorkerEntrypoint`](https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/rpc/),
+with [`fetch` reserved for HTTP dispatch](https://developers.cloudflare.com/workers/runtime-apis/rpc/reserved-methods/).
+If Auth later needs independently grantable RPC roles, that is the point to
+split them into named entrypoints. Project-controlled workers never receive
+`AUTH`; their generated bindings expose only project-scoped capabilities such
+as `ITX`.
+
+Static assets + SSR still work: asset routing happens at the edge before `fetch` is invoked, and
+`run_worker_first: ["/api/*"]` (in the generated `wrangler.jsonc`) sends API
 paths to the worker.
-
-> **Planned:** OS→auth runtime calls (the `internal.project.*` directory
-> procedures) currently ride surface 3 over the public internet with an
-> `x-iterate-service-token`. They are slated to move to a Cloudflare **Workers
-> RPC service binding** — worker-to-worker, no public hop, no shared secret. See
-> `tasks/os-auth-service-binding.md`. Until then, everything below describes the
-> HTTP path that is actually in production.
 
 ### 1. OIDC / OAuth2 provider — `/api/auth/*`
 
@@ -53,13 +63,14 @@ surface most consumers see, and it must stay on the public hostname —
 browsers, the CLI, and third-party OAuth/MCP clients cannot hold service
 bindings.
 
-Relying parties consume it through **`@iterate-com/auth/server`**
-(`src/lib/server.ts`), a small OIDC relying-party library this package exports.
+Relying parties consume it through **`@iterate-com/auth/server`**, the narrow
+public surface declared in `src/lib/server-public.ts`.
 It runs _inside the relying party's worker_ (apps/os, apps/auth-example), does
 the authorization-code + PKCE dance, verifies JWTs, refreshes tokens
-(single-flighted so a rotated refresh token is never presented twice), and
-manages the session cookie. See "How it fits with apps/os" and "The auth
-example app" below.
+(single-flighted per worker isolate to collapse concurrent use of one refresh token), and
+manages the session cookie. See the concise
+[`relying-party auth guide`](docs/relying-party-auth.md) and the working example
+app below.
 
 ### 2. UI — everything else
 
@@ -93,7 +104,6 @@ call into the auth worker that isn't the OIDC protocol or a browser page:
 
 - **The auth UI itself** (session cookie) — org/project CRUD, `user.myOrganizations`, the project-access selection store.
 - **The `iterate` CLI** (bearer token from the device/OAuth flow) — `user.myOrganizations`.
-- **OS workers** (`x-iterate-service-token`) — the `internal.project.*` directory procedures (slug lookup, create, mint id) and `internal.oauth.introspectAccessToken` for opaque MCP tokens. See "How it fits with apps/os".
 - **Deploy-time Node scripts** (`x-iterate-service-token`) — the `internal.oauth.*` client-provisioning procedures and the `internal.user`/`internal.organization` test-seeding procedures.
 
 Two role namespaces run through the middlewares in `src/server/orpc/orpc.ts`;
@@ -103,20 +113,34 @@ they are easy to confuse, so they're documented there:
   plugin) — bypasses every membership check.
 - `membership.role` is scoped to one organization — `owner | admin | member`.
 
+### 4. Workers RPC — the `AUTH` service binding
+
+OS's runtime-only privileged operations are RPC methods on auth's default
+`AuthWorker`: project creation, slug lookup, user-project membership,
+project-id minting, project-app session issuance/validation, and opaque OAuth
+token introspection. Its shared base class
+is the `/worker` export of `@iterate-com/auth-contract`; implementation lives in
+`src/server/project-directory.ts` and `src/server/oauth-token-introspection.ts`.
+
+There is deliberately no HTTP route or bearer-token fallback for these
+methods. Every OS environment declares a required binding to the matching auth
+worker in its generated Wrangler config. Cloudflare creates the RPC stub only
+for a worker deployment carrying that binding, so the binding is both
+transport and credential. Inputs are still parsed because OS and auth versions
+can be briefly skewed during rollout.
+
 ## How it fits with apps/os
 
 OS has no database. It leans on the auth worker in three distinct ways:
 
 ```
-                         apps/os worker(s)
-      ┌───────────────────────┼──────────────────────────┐
-      │ (a) OIDC protocol      │ (c) oRPC service API      │
-      │  @iterate-com/auth/    │  createAuthWorkerService  │
-      │  server, public host   │  Client().internal.       │
-      ▼                        │   project.bySlug / ...    │
-  auth.iterate.com/api/auth    ▼   ...createForOrganization │
-   authorize/token/jwks/    auth.iterate.com/api/orpc
-   userinfo/revoke           (x-iterate-service-token)
+                         apps/os worker
+                    ┌──────────┴──────────┐
+      public OIDC    │                     │ private Workers RPC
+      issuer         ▼                     ▼ AUTH binding
+  auth host `/api/auth/*`             auth default `AuthWorker`
+  authorize/token/jwks                project directory +
+  userinfo/revoke                     token introspection
 ```
 
 **(a) Login & tokens — OIDC on the public hostname.** OS is an OAuth client of
@@ -127,39 +151,34 @@ resulting session/bearer tokens. Users with no organization are redirected to
 auth's `/project-access` page. The MCP server advertises auth as its
 authorization server.
 
-**(b) JWT verification — a JWKS baked at OS deploy time.** OS verifies
-auth-issued tokens against a JWKS. To avoid a runtime round-trip on every cold
-isolate, `apps/os/scripts/deploy.ts` fetches `${issuer}/jwks` at _deploy_ time and
-bakes it into OS's config; if the deploy-time fetch keeps failing, the OS
-deploy fails closed. The verifier can still fall back to the issuer's live
-JWKS when a token kid is missing from an already-baked set, which bridges
-auth-issued tokens across key drift until the next deploy. The forge public
-key (for `pnpm auth:mint`) is merged into the baked JWKS.
+**(b) JWT verification — one Doppler-owned signing key.** Auth's Better Auth
+JWT adapter signs with `AUTH_FORGE_PRIVATE_JWK`. OS, Semaphore, and Streams
+derive only its public half during deploy and verify locally; they neither wait
+for Auth's live JWKS nor fall back to it at runtime. `pnpm auth:mint` uses the
+same private key, so minted and Auth-issued tokens have one trust path.
 
-**(c) The project directory — HTTP oRPC behind a KV cache.** OS ingress resolves
+**(c) Runtime authority — Workers RPC behind a KV cache.** OS ingress resolves
 every project host (`<slug>.iterate.app`) to a project id. The
-`internal.project.*` procedures are the source of truth;
-`apps/os/src/auth/auth-worker-service.ts` builds the service-token HTTP client
-and `apps/os/src/project-directory.ts` puts a `PROJECT_DIRECTORY` KV cache in
-front so the hot path rarely pays the round-trip. Project creation
-(`internal.project.createForOrganization` / `mintProjectId`) and the
-stale-claims membership check (`internal.project.bySlug` in
-`apps/os/src/auth.ts`) go through the same client. OS decides _which_
-organization may own a new project from the caller's verified JWT claims first,
-then asks auth to create it — the service token is fully trusted, so auth does
-no user-level authorization on these routes. (This is the traffic slated to
-move to a Workers RPC binding — see the note under "The three surfaces".)
+`AUTH.getProjectBySlug()` binding method is the source of truth;
+`apps/os/src/project-directory.ts` puts a `PROJECT_DIRECTORY` KV cache in front
+so the hot path rarely pays the round-trip. Project creation and the stale-
+claims membership check use the same binding, while MCP uses it to introspect
+opaque access tokens. OS decides _which_ organization may own a new project
+from the caller's verified claims before calling auth. These RPC methods trust
+the OS binding and intentionally perform no second user authorization step.
 
 ## Trust model
 
 - A **session cookie** identifies a human; oRPC middlewares layer org/project
   membership checks on top.
-- The **service token** (`APP_CONFIG_SERVICE_AUTH_TOKEN` in Doppler) is a shared
-  secret trusted by the `internal.*` oRPC procedures — OS's runtime directory
-  calls and deploy-time scripts both present it. It also doubles as the seeded
-  bootstrap admin's password (`scripts/render-admin-seed.ts` writes that
-  credential row), which is how deploy scripts reach better-auth admin APIs that
-  insist on a session.
+- The **`AUTH` service binding** is the credential for OS runtime calls. OS does
+  not receive `APP_CONFIG_SERVICE_AUTH_TOKEN` or an equivalent auth-wide secret.
+- The auth-side **service token** (`APP_CONFIG_SERVICE_AUTH_TOKEN` in Doppler)
+  remains a shared secret for public `internal.*` oRPC procedures used by
+  deploy and test-seeding scripts, which cannot hold a Workers binding. It also
+  doubles as the seeded bootstrap admin's password
+  (`scripts/render-admin-seed.ts` writes that credential row), allowing those
+  scripts to reach better-auth admin APIs that insist on a session.
 
 ## Identity model
 
@@ -174,7 +193,7 @@ move to a Workers RPC binding — see the note under "The three surfaces".)
   `src/server/platform-admin.ts`.
 - **Organizations & projects** live in auth's D1 and are the durable source of
   truth. OS keeps per-environment rows and re-adopts from auth after a reset;
-  `src/server/project-slugs.ts` documents the adoption/conflict rules (same
+  `src/server/project-directory.ts` implements the adoption/conflict rules (same
   slug + same org = adopt; same slug + other org = conflict; slugs never get
   random suffixes so OS can recreate the exact slug).
 - **Tokens** carry Iterate's custom claims (orgs, projects, admin flag),
@@ -240,9 +259,58 @@ Doppler secrets shipped atomically via `--secrets-file`, a JWKS smoke probe,
 then the declarative OAuth client seed (`scripts/seed-oauth-clients.ts`, driven
 by `AUTH_SEED_OAUTH_CLIENTS`).
 
-Each preview slot needs its own auth worker (`auth-preview-N`) — no pipeline
-deploys it; it's a manual `pnpm run deploy --env preview_N`. See the repo's
-preview-slot notes.
+Each preview slot has its own auth worker (`auth-preview-N`). The preview
+orchestrator expands relying-party changes to include auth, then deploys every
+selected app concurrently. A local manual deployment is still available with
+`pnpm run deploy --env preview_N`, but it is not the normal preview path.
+
+For the first deployment of a brand-new environment, create Auth before OS so
+Cloudflare can resolve OS's service binding. Once both workers exist, the fixed
+signing key removes JWT deployment sequencing. Breaking RPC interface changes
+still need their own coordinated rollout; additive changes do not.
+
+Production uses `.depot/workflows/deploy-os.yml` as the single coordinated
+Auth + OS rollout. It checks out one revision, deploys `auth-prd`, and only
+then deploys `os-prd`. Every dispatch uses one fixed, non-cancelling concurrency
+group because the target Workers are the same even when the requested Git ref
+differs. `.depot/workflows/deploy-auth.yml` owns only the shared development auth
+worker. Do not add a second production auth job: independent workflows can race
+and leave OS bound to an incompatible revision.
+
+Every OS deploy now treats the removed
+`APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN` as a forbidden invariant. Before any
+sidecar or OS version is uploaded, it fails unless the resolved Doppler config
+and the current Worker's secret bindings both omit that name. This check is
+deliberately non-mutating: an operator must remove resurrected credential state
+explicitly and then retry. After deployment, OS forces a fresh project-host
+lookup through `AUTH`; the random slug bypasses KV and in-isolate negative
+caches, and the probe requires OS's exact JSON 404 body, so an edge-level 404
+cannot produce a false green.
+
+The one-release preview-fleet cutover completed on 2026-07-14. All nine slots
+deployed Auth before OS, passed fresh RPC lookup probes, and finished with the
+retired OS token absent from both the live Worker bindings and Doppler. The
+temporary fleet workflow and global concurrency gate were removed after that
+verification. Normal preview deploy and cleanup jobs are again serialized per
+PR, and ordinary slot acquisition never force-evicts another lifecycle's
+lease. The preview CI workflow retains `scripts/preview/deployment-epoch` as a
+pre-deploy floor: a stale PR branch fails before Auth can be rolled back and
+must rebase. A direct manual deployment from an old checkout bypasses that CI
+guard and is unsupported; operators must deploy previews from current `main`.
+Config provisioning and OAuth-client sync do not mutate forbidden credential
+state.
+
+The coordinated workflow sets `ALLOW_REMOTE_PRODUCTION_AUTH_RPC=1` while
+generating OS's complete Wrangler config. A manual production OS deployment
+must set the same explicit guard; local processes otherwise fail closed rather
+than acquiring production write authority from a Doppler issuer accidentally.
+
+This migration shipped without compatibility routes, token fallback, or a
+dual-read period. The first production rollout was a short maintenance cutover:
+Auth deployed first, then the coordinated job immediately replaced the old OS
+revision that could no longer call the removed HTTP procedures. Future
+additive RPC methods can deploy Auth first without interrupting the previous
+OS revision.
 
 **Gotchas that have bitten before:**
 
@@ -256,9 +324,12 @@ preview-slot notes.
 
 ## The auth example app
 
-`apps/auth-example` is a ~30-line reference relying party (`src/worker.ts`): a
-Hono worker that mounts `@iterate-com/auth/server`'s handler at
-`/api/iterate-auth/*` and a `/api/protected` route that calls `.authenticate()`.
+`apps/auth-example` is a small reference relying party (`src/worker.ts`): a
+Hono worker that composes `@iterate-com/auth/server` through the same
+`auth.fetch(request)` partial-fetch method used by first-party request
+middleware, then protects `/api/protected` with `.authenticateSession()`. It
+applies the returned response headers so refresh-token rotation is atomic from
+the browser's perspective.
 It exercises the exact same OIDC surface OS uses, so it's the cheapest end-to-end
 check that a change to the auth worker didn't break relying parties. It talks
 _only_ to surface 1 (the public OIDC provider) — nothing in it depends on the

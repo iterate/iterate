@@ -1,29 +1,147 @@
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Link, useParams } from "@tanstack/react-router";
+import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import { ExternalLinkIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
-import { Input } from "@iterate-com/ui/components/input";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
 import { toast } from "@iterate-com/ui/components/sonner";
+import { useItx, useItxQuery, useLiveState } from "iterate/sdk/itx/react";
 import type { RepoProcessorState } from "../../domains/repos/repo-processor-contract.ts";
-import { useItx, useItxQuery, useLiveState } from "~/itx/itx-react.tsx";
+import {
+  GITHUB_UI_FORCE_PULL_DEPTH,
+  githubHistoryMergeAgentInstructions,
+  githubHistoryMergeAgentPath,
+  isGithubHistoryConflictError,
+  preferredResolutionForSyncConflict,
+} from "./github-history-resolution.ts";
+import {
+  listGithubConnections,
+  type InstallationRepo,
+} from "~/components/github-installation-repos.ts";
+import { InstallationRepoPicker } from "~/components/github-installation-repos.tsx";
+
+type Conflict = {
+  owner: string;
+  repo: string;
+  reason: string;
+  /** Pre-selected action: pull after connect/sync, push after push. */
+  prefer: "pull" | "push";
+};
 
 /**
- * The GitHub sidebar of the repo IDE: shows the repo's GitHub link (owner/
- * repo, connection, last mirror-push outcome) with push/sync/unlink actions,
- * or — when unlinked — a link form over the project's GitHub connections.
- * Once linked, commits mirror to GitHub automatically and GitHub webhooks
- * about the repository land on the repo's stream; the processor state is
- * live, so link and push facts fold into this panel as they happen.
+ * GitHub sidebar: link (picker + pull-first), push/sync/unlink, and a tiny
+ * conflict step when histories diverge (force-pull / force-push / agent).
  */
 export function RepoGithubPanel({ projectId, repoPath }: { projectId: string; repoPath: string }) {
-  const repoProcessor = useLiveState(
+  const itx = useItx();
+  const navigate = useNavigate();
+  const params = useParams({ strict: false }) as { projectSlug?: string };
+  const [conflict, setConflict] = useState<Conflict | null>(null);
+  const state = useLiveState(
     (itx) => itx.repos.get(repoPath).liveState,
-    (state) => state,
+    (s) => s,
     [repoPath],
-  );
-  const state = repoProcessor.value;
+  ).value;
+
+  const link = useMutation({
+    mutationFn: async (input: { connection: string; owner: string; repo: string }) => {
+      const repo = itx.repos.get(repoPath);
+      // linkGithub persists the link before this returns. After it resolves we
+      // never throw — live state already shows LinkedPanel; a throw would toast
+      // "could not link" while the repo is linked.
+      const result = await repo.linkGithub(input);
+      try {
+        const sync = await repo.syncFromGithub({});
+        return { kind: "ok" as const, result, sync };
+      } catch (e) {
+        if (isGithubHistoryConflictError(e)) {
+          return {
+            kind: "conflict" as const,
+            result,
+            reason: e instanceof Error ? e.message : String(e),
+          };
+        }
+        return {
+          kind: "linked" as const,
+          result,
+          warning: e instanceof Error ? e.message : String(e),
+        };
+      }
+    },
+    onSuccess: (out) => {
+      if (out.kind === "conflict") {
+        setConflict({
+          owner: out.result.owner,
+          repo: out.result.repo,
+          reason: out.reason,
+          prefer: preferredResolutionForSyncConflict(out.reason),
+        });
+        return;
+      }
+      const name = `${out.result.owner}/${out.result.repo}`;
+      if (out.kind === "ok" && out.sync.changed) {
+        toast.success(`Linked ${name} at ${out.sync.commitOid.slice(0, 7)}.`);
+        return;
+      }
+      if (out.kind === "linked") {
+        toast.warning(
+          `Linked ${name}, but pulling from GitHub failed: ${out.warning} Use Sync from GitHub or Push now.`,
+        );
+        return;
+      }
+      toast.success(`Linked ${name}.`);
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Could not link."),
+  });
+
+  const resolve = useMutation({
+    mutationFn: async (choice: "pull" | "push" | "agent") => {
+      if (!conflict) throw new Error("Nothing to resolve.");
+      const repo = itx.repos.get(repoPath);
+      if (choice === "pull") {
+        return {
+          kind: "pull" as const,
+          r: await repo.syncFromGithub({ force: true, depth: GITHUB_UI_FORCE_PULL_DEPTH }),
+        };
+      }
+      if (choice === "push") {
+        return { kind: "push" as const, r: await repo.pushToGithub({ force: true }) };
+      }
+      const agentPath = githubHistoryMergeAgentPath(repoPath);
+      const agent = itx.agents.get(agentPath);
+      const snapshot = await agent.processor.snapshot();
+      if (snapshot.state.birthCertificate === null) await agent.create();
+      await agent.message(
+        githubHistoryMergeAgentInstructions({
+          owner: conflict.owner,
+          repo: conflict.repo,
+          repoPath,
+        }),
+      );
+      return { kind: "agent" as const, agentPath };
+    },
+    onSuccess: (out) => {
+      setConflict(null);
+      if (out.kind === "pull") {
+        toast.success(
+          out.r.changed
+            ? `Now at GitHub's ${out.r.commitOid.slice(0, 7)}.`
+            : "Already at GitHub's head.",
+        );
+      } else if (out.kind === "push") {
+        toast.success(`Force-pushed ${out.r.commitOid.slice(0, 7)}.`);
+      } else if (params.projectSlug) {
+        toast.success("Started merge agent.");
+        void navigate({
+          to: "/projects/$projectSlug/agents/streams/$",
+          params: { projectSlug: params.projectSlug, _splat: out.agentPath },
+          search: {},
+        });
+      }
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Resolve failed."),
+  });
+
   if (state === undefined) {
     return (
       <div className="p-3 text-xs text-muted-foreground" data-spinner="true">
@@ -31,10 +149,41 @@ export function RepoGithubPanel({ projectId, repoPath }: { projectId: string; re
       </div>
     );
   }
-  return state.github === null ? (
-    <LinkForm projectId={projectId} repoPath={repoPath} />
-  ) : (
-    <LinkedPanel repoPath={repoPath} github={state.github} lastPush={state.lastGithubPush} />
+  if (conflict) {
+    return (
+      <ConflictStep
+        prefer={conflict.prefer}
+        reason={conflict.reason}
+        busy={resolve.isPending}
+        onCancel={() => setConflict(null)}
+        onPick={(c) => resolve.mutate(c)}
+      />
+    );
+  }
+  // Don't swap to LinkedPanel while link→pull is mid-flight.
+  if (link.isPending) {
+    return (
+      <div className="p-3 text-xs text-muted-foreground" data-spinner="true">
+        Linking and pulling from GitHub…
+      </div>
+    );
+  }
+  if (state.github === null) {
+    return (
+      <LinkForm
+        projectId={projectId}
+        onLink={(input) => link.mutate(input)}
+        busy={link.isPending}
+      />
+    );
+  }
+  return (
+    <LinkedPanel
+      repoPath={repoPath}
+      github={state.github}
+      lastPush={state.lastGithubPush}
+      onConflict={setConflict}
+    />
   );
 }
 
@@ -42,31 +191,52 @@ function LinkedPanel({
   repoPath,
   github,
   lastPush,
+  onConflict,
 }: {
   repoPath: string;
   github: NonNullable<RepoProcessorState["github"]>;
   lastPush: RepoProcessorState["lastGithubPush"];
+  onConflict: (c: Conflict) => void;
 }) {
   const itx = useItx();
   const push = useMutation({
     mutationFn: () => itx.repos.get(repoPath).pushToGithub({}),
-    onSuccess: (result) => toast.success(`Pushed ${result.commitOid.slice(0, 7)} to GitHub.`),
-    onError: (error) => toast.error(error instanceof Error ? error.message : "Push failed."),
+    onSuccess: (r) => toast.success(`Pushed ${r.commitOid.slice(0, 7)}.`),
+    onError: (e) => {
+      if (isGithubHistoryConflictError(e)) {
+        onConflict({
+          owner: github.owner,
+          repo: github.repo,
+          prefer: "push",
+          reason: e instanceof Error ? e.message : String(e),
+        });
+        return;
+      }
+      toast.error(e instanceof Error ? e.message : "Push failed.");
+    },
   });
   const sync = useMutation({
     mutationFn: () => itx.repos.get(repoPath).syncFromGithub({}),
-    onSuccess: (result) =>
-      toast.success(
-        result.changed
-          ? `Synced to GitHub's head ${result.commitOid.slice(0, 7)}.`
-          : "Already at GitHub's head.",
-      ),
-    onError: (error) => toast.error(error instanceof Error ? error.message : "Sync failed."),
+    onSuccess: (r) =>
+      toast.success(r.changed ? `Synced ${r.commitOid.slice(0, 7)}.` : "Already at GitHub's head."),
+    onError: (e) => {
+      if (isGithubHistoryConflictError(e)) {
+        const reason = e instanceof Error ? e.message : String(e);
+        onConflict({
+          owner: github.owner,
+          repo: github.repo,
+          prefer: preferredResolutionForSyncConflict(reason),
+          reason,
+        });
+        return;
+      }
+      toast.error(e instanceof Error ? e.message : "Sync failed.");
+    },
   });
   const unlink = useMutation({
     mutationFn: () => itx.repos.get(repoPath).unlinkGithub(),
-    onSuccess: () => toast.success("GitHub link removed."),
-    onError: (error) => toast.error(error instanceof Error ? error.message : "Could not unlink."),
+    onSuccess: () => toast.success("Unlinked."),
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Unlink failed."),
   });
   const busy = push.isPending || sync.isPending || unlink.isPending;
 
@@ -137,50 +307,28 @@ function LinkedPanel({
   );
 }
 
-function LinkForm({ projectId, repoPath }: { projectId: string; repoPath: string }) {
-  const itx = useItx();
+function LinkForm({
+  projectId,
+  onLink,
+  busy,
+}: {
+  projectId: string;
+  onLink: (input: { connection: string; owner: string; repo: string }) => void;
+  busy: boolean;
+}) {
   const params = useParams({ strict: false }) as { projectSlug?: string };
   const connections = useItxQuery({
     key: ["github-connections", projectId],
-    query: async (itx) => {
-      const entries = await itx.integrations.list();
-      // Only builtin GitHub connections can back a repo (they carry the App
-      // installation the mirror pushes authenticate through).
-      return entries.flatMap((entry) =>
-        entry.source === "builtin" && entry.integration === "github" ? [entry.connection] : [],
-      );
-    },
+    query: (itx) => listGithubConnections(itx),
   });
-  const [connection, setConnection] = useState("");
-  const [owner, setOwner] = useState("");
-  const [repo, setRepo] = useState("");
-  const link = useMutation({
-    // Trimmed at the call, not just in the enable-check: a padded owner/repo
-    // would store a link (and a full_name webhook condition) GitHub payloads
-    // never match — mirroring would work while cross-post silently didn't.
-    mutationFn: () =>
-      itx.repos.get(repoPath).linkGithub({ connection, owner: owner.trim(), repo: repo.trim() }),
-    onSuccess: (result) => {
-      if (result.initialPush.ok) {
-        toast.success(
-          `Linked to ${result.owner}/${result.repo}${result.created ? " (created)" : ""}; mirror seeded at ${result.initialPush.commitOid?.slice(0, 7)}.`,
-        );
-      } else {
-        toast.warning(
-          `Linked to ${result.owner}/${result.repo}, but the initial push failed: ${result.initialPush.error}. Use "Sync from GitHub" to adopt its history, or "Push now" to retry.`,
-        );
-      }
-    },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "Could not link."),
-  });
+  const [connection, setConnection] = useState(connections[0] ?? "");
+  const [selected, setSelected] = useState<InstallationRepo | null>(null);
 
   if (connections.length === 0) {
     return (
       <div className="p-3 text-xs text-muted-foreground">
-        Back this repo with GitHub by connecting a GitHub account on the{" "}
-        {params.projectSlug === undefined ? (
-          "integrations page"
-        ) : (
+        Connect GitHub on the{" "}
+        {params.projectSlug ? (
           <Link
             className="underline underline-offset-2"
             to="/projects/$projectSlug/integrations"
@@ -188,8 +336,10 @@ function LinkForm({ projectId, repoPath }: { projectId: string; repoPath: string
           >
             integrations page
           </Link>
+        ) : (
+          "integrations page"
         )}
-        , then linking a repository here.
+        , then link a repository here.
       </div>
     );
   }
@@ -197,53 +347,123 @@ function LinkForm({ projectId, repoPath }: { projectId: string; repoPath: string
   return (
     <form
       className="flex flex-col gap-2 p-3"
-      onSubmit={(event) => {
-        event.preventDefault();
-        if (connection === "" || owner.trim() === "" || repo.trim() === "") return;
-        link.mutate();
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (!connection || !selected || busy) return;
+        onLink({ connection, owner: selected.owner, repo: selected.name });
       }}
     >
       <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
         Back this repo with GitHub
       </span>
       <p className="text-xs text-muted-foreground">
-        Commits mirror out automatically; GitHub webhooks about the repository land on this repo's
-        stream. The repository is created (private) if missing and the installation can create org
-        repositories.
+        Pick a repo the App can see. Linking pulls from GitHub by default.
       </p>
-      <NativeSelect
-        size="sm"
-        className="w-full"
-        value={connection}
-        onChange={(event) => setConnection(event.target.value)}
-      >
-        <NativeSelectOption value="">Pick a connection…</NativeSelectOption>
-        {connections.map((name) => (
-          <NativeSelectOption key={name} value={name}>
-            {name}
-          </NativeSelectOption>
-        ))}
-      </NativeSelect>
-      <Input
-        placeholder="Owner (org)"
-        className="h-8 text-xs"
-        value={owner}
-        onChange={(event) => setOwner(event.target.value)}
-      />
-      <Input
-        placeholder="Repository"
-        className="h-8 text-xs"
-        value={repo}
-        onChange={(event) => setRepo(event.target.value)}
-      />
-      <Button
-        type="submit"
-        size="sm"
-        className="text-xs"
-        disabled={link.isPending || connection === "" || owner.trim() === "" || repo.trim() === ""}
-      >
-        {link.isPending ? "Linking…" : "Link to GitHub"}
+      {connections.length > 1 ? (
+        <NativeSelect
+          size="sm"
+          className="w-full"
+          value={connection}
+          onChange={(e) => {
+            setConnection(e.target.value);
+            setSelected(null);
+          }}
+        >
+          {connections.map((c) => (
+            <NativeSelectOption key={c} value={c}>
+              {c}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+      ) : (
+        <span className="text-xs text-muted-foreground">via {connection}</span>
+      )}
+      {connection ? (
+        <Suspense
+          fallback={
+            <div className="text-xs text-muted-foreground" data-spinner="true">
+              Loading repositories…
+            </div>
+          }
+        >
+          {/* key remounts the picker so filter text does not stick across connections */}
+          <InstallationRepoPicker
+            key={connection}
+            connection={connection}
+            projectId={projectId}
+            selected={selected}
+            onSelect={setSelected}
+          />
+        </Suspense>
+      ) : null}
+      <Button type="submit" size="sm" className="text-xs" disabled={busy || !selected}>
+        {busy ? "Linking…" : selected ? "Link to GitHub" : "Pick a repository"}
       </Button>
     </form>
+  );
+}
+
+/** Three actions — no radio chrome. Default button is the recommended path. */
+function ConflictStep({
+  prefer,
+  reason,
+  busy,
+  onCancel,
+  onPick,
+}: {
+  prefer: "pull" | "push";
+  reason: string;
+  busy: boolean;
+  onCancel: () => void;
+  onPick: (c: "pull" | "push" | "agent") => void;
+}) {
+  return (
+    <div className="flex flex-col gap-2 p-3" data-testid="github-history-resolution">
+      <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        Histories diverged
+      </span>
+      <p className="text-xs text-muted-foreground">
+        {prefer === "pull"
+          ? "Default: replace this project with GitHub's main (discards project-only commits)."
+          : "Default: force-push this project to GitHub (overwrites remote)."}
+      </p>
+      <p className="break-all text-[11px] text-muted-foreground/80">{reason}</p>
+      <Button
+        size="sm"
+        variant="destructive"
+        className="text-xs"
+        disabled={busy}
+        onClick={() => onPick(prefer)}
+      >
+        {busy
+          ? prefer === "pull"
+            ? "Pulling…"
+            : "Force pushing…"
+          : prefer === "pull"
+            ? "Use GitHub's version"
+            : "Force push to GitHub"}
+      </Button>
+      <Button
+        size="sm"
+        variant="outline"
+        className="text-xs"
+        disabled={busy}
+        onClick={() => onPick(prefer === "pull" ? "push" : "pull")}
+      >
+        {prefer === "pull" ? "Force push to GitHub instead" : "Use GitHub's version instead"}
+      </Button>
+      <Button
+        size="sm"
+        variant="outline"
+        className="text-xs"
+        disabled={busy}
+        onClick={() => onPick("agent")}
+      >
+        {busy ? "Starting…" : "Ask an agent to merge"}
+      </Button>
+      <Button size="sm" variant="ghost" className="text-xs" disabled={busy} onClick={onCancel}>
+        Cancel
+      </Button>
+    </div>
   );
 }

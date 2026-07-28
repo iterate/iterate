@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { UNPROVISIONED } from "../../envs.ts";
+import { fetchCloudflareWith429Retry } from "./cloudflare-429-retry.ts";
 
 /**
  * The minimum an app's envs.ts entry must carry for the deploy tooling:
@@ -10,6 +11,21 @@ import { UNPROVISIONED } from "../../envs.ts";
 export interface DeployableEnv {
   cloudflareAccountId: string;
   dopplerConfig: string;
+}
+
+/** Structured Cloudflare API failure so callers can handle specific statuses without parsing text. */
+export class CloudflareApiError extends Error {
+  constructor(
+    readonly method: string,
+    readonly path: string,
+    readonly status: number,
+    readonly details: unknown,
+  ) {
+    super(
+      `Cloudflare API ${method} ${path} failed (${status}): ${String(JSON.stringify(details) ?? details).slice(0, 500)}`,
+    );
+    this.name = "CloudflareApiError";
+  }
 }
 
 /**
@@ -78,20 +94,34 @@ export async function resolveEnvContext<E extends DeployableEnv>(options: {
   }
 
   const cfV4 = async <T>(path: string, init?: RequestInit): Promise<T> => {
-    const response = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
-      ...init,
-      headers: {
-        authorization: `Bearer ${secrets.CLOUDFLARE_API_TOKEN}`,
-        ...(init?.body && typeof init.body === "string"
-          ? { "content-type": "application/json" }
-          : {}),
-        ...init?.headers,
-      },
-    });
+    // This fetch is THE choke point for every Cloudflare API call the deploy
+    // tooling makes (ctx.cf / ctx.cfV4 across deploy, ensure-resources and
+    // erase-data scripts), so 429 backoff lives here once instead of at each
+    // call site. Request bodies are always strings (see the content-type
+    // sniff below), so replaying the same init per attempt is safe.
+    const response = await fetchCloudflareWith429Retry(
+      `${init?.method ?? "GET"} ${path}`,
+      () =>
+        fetch(`https://api.cloudflare.com/client/v4${path}`, {
+          ...init,
+          headers: {
+            authorization: `Bearer ${secrets.CLOUDFLARE_API_TOKEN}`,
+            ...(init?.body && typeof init.body === "string"
+              ? { "content-type": "application/json" }
+              : {}),
+            ...init?.headers,
+          },
+        }),
+      // A caller's abort also cuts the backoff wait short, not just the fetch.
+      { signal: init?.signal ?? undefined },
+    );
     const body: any = await response.json().catch(() => null);
     if (!response.ok || body?.success === false) {
-      throw new Error(
-        `Cloudflare API ${init?.method ?? "GET"} ${path} failed (${response.status}): ${JSON.stringify(body?.errors ?? body).slice(0, 500)}`,
+      throw new CloudflareApiError(
+        init?.method ?? "GET",
+        path,
+        response.status,
+        body?.errors ?? body,
       );
     }
     // Fail loudly instead of silently acting on a truncated listing.

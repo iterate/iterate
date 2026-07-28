@@ -28,6 +28,21 @@ const GENERIC_EMAIL_DOMAINS = new Set([
 ]);
 
 /**
+ * Proposes an organization name for first-run onboarding.
+ *
+ * Prefer the OAuth display name when the provider gave us one
+ * ("Jonas Templestein" → "Jonas Templestein's Organization"). Fall back to
+ * the email-only heuristic when name is missing.
+ */
+export function suggestOrganizationName(input: { name?: string | null; email?: string | null }) {
+  const displayName = input.name?.trim();
+  if (displayName) {
+    return `${displayName}'s Organization`;
+  }
+  return suggestOrganizationNameFromEmail(input.email || "");
+}
+
+/**
  * Proposes an organization name from an email address: the company domain's
  * first label when the domain looks like a company ("jonas@nustom.com" →
  * "Nustom"), otherwise the local part ("jane.doe+work@gmail.com" → "Jane
@@ -38,10 +53,10 @@ export function suggestOrganizationNameFromEmail(email: string): string {
   if (!rawLocalPart || !rawDomain) return "";
 
   if (!GENERIC_EMAIL_DOMAINS.has(rawDomain)) {
-    return titleCaseWords(rawDomain.split(".")[0] ?? "");
+    return titleCaseWords(rawDomain.split(".")[0] || "");
   }
 
-  return titleCaseWords(rawLocalPart.split("+")[0] ?? "");
+  return titleCaseWords(rawLocalPart.split("+")[0] || "");
 }
 
 function titleCaseWords(value: string): string {

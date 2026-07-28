@@ -43,11 +43,18 @@ Strip pnpm banner from stdout before JSON.parse (find first `[\n`).
 
 ## 2. Diagnose
 
-Print conversation: `user-message-received` payload.content vs `web-message-sent` payload.message, with offsets. Find where user visibly lost: silence after input, wrong answer, error leak. Zoom into offsets around bad part — full payloads. Complaint = user-level symptom, not mechanism. If there was an API error but the system recovered fine, that's probably not what the complaint is about. Write down the complaint before reading product code.
+Print conversation: `agents/context-added` user items (`payload.role === "user"`)
+vs `agents/web-message-sent`, with offsets. Developer items with integration or
+agent actors are also conversation inputs; assistant items carrying an
+`llmRequestOffset` are provider outputs. Find where the user visibly lost:
+silence after input, wrong answer, error leak. Zoom into offsets around the bad
+part and print full payloads. Complaint = user-level symptom, not mechanism. If
+there was an API error but the system recovered fine, that's probably not what
+the complaint is about. Write down the complaint before reading product code.
 
 ## 3. Repro test — in-memory, not e2e
 
-Real LLM slow/expensive/flaky. Bug almost always deterministic at transport boundary -> in-memory test: real processors + real reducers, fake transport, no deployment, no real LLM. Harness lives in `apps/os/src/domains/agents/test-helpers.ts`: `MemoryStream`, `deliverNewEvents`; fake the `ai` dep (`env.AI.run`) on `AgentProcessor` — see `agent-processors.test.ts` for usage of all.
+Real LLM slow/expensive/flaky. Bug almost always deterministic at transport boundary -> in-memory test: real processors + real reducers, fake transport, no deployment, no real LLM. Harness lives in `apps/os/src/domains/streams/test-helpers.ts`: `MemoryStream`, `MemoryStreamNetwork`, `deliverNewEvents`; fake the `ai` dep (`env.AI.run`) on `AgentProcessor` — see `agent-processors.test.ts` for usage of all.
 
 Test file: `apps/os/src/domains/agents/stream-repros/<slug>-<id>-<complaint>.test.ts`. Fixture JSON next to it.
 
@@ -95,7 +102,12 @@ await stream.waitForEvent({
 await deliverAll(); // provider executes
 ```
 
-**Assertion appropriately broad** — user level, not mechanism: "agent eventually appends `agent/output-added` after the user input". Not "request body lacks input_image" — that's the fix, not the complaint.
+**Assertion appropriately broad** — user level, not mechanism: "agent
+eventually sends the expected visible reply after the user context item". Not
+"request body lacks input_image" — that's the fix, not the complaint. If the
+reported symptom occurs before a visible reply, assert the closest durable
+outcome, such as an assistant-role `agents/context-added` item with the matching
+`llmRequestOffset`.
 
 ## 4. Confirm red FOR RIGHT REASON, push
 
@@ -120,7 +132,15 @@ Smallest product fix consistent with existing design intent (grep for existing f
 Preamble events usually irrelevant. Loop:
 
 1. Revert fix locally (`git checkout <red-commit> -- <product-file>`) -> test red again. If not red, minimisation broke repro — back up.
-2. Cut fixture. Known-good minimal recipe: `agent/llm-provider-selected` + the last complete turn before bad part (user-message-received through its script-execution-completed) — ends quiescent (currentRequest null, pendingTriggerOffset null). Watch pendingTriggerOffset: seeding an `input-added` with trigger behaviour but WITHOUT its llm-request-scheduled leaves pending trigger armed -> spurious request on first deliver.
+2. Cut fixture. Known-good minimal recipe: the keyed system context,
+   `agent/llm-provider-selected`, and the last complete turn before the bad part
+   (its triggering `agents/context-added` item through
+   `capability-host/script-execution-completed`) — ending quiescent
+   (`currentRequest` and `pendingTriggerOffset` null). Watch
+   `pendingTriggerOffset`: seeding a user/developer context item whose
+   `llmRequestPolicy` triggers a turn, but not its
+   `agent/llm-request-scheduled`, leaves the pending trigger armed and causes a
+   spurious request on the first delivery.
 3. Commit + push red-minimal state (CI proves minimal fixture repros), restore fix (`git checkout <green-commit> -- <file>`), run green, commit + push.
 
 End state: fixture tens of events, not thousands. Test readable top-to-bottom: seed, bad event, broad assertion.

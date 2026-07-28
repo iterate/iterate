@@ -68,7 +68,7 @@ none. `ItxProps = { context, access?, cap? }` where `access` only matters on
 global-context handles. Project-context handles imply access to exactly that
 project regardless of what props claim — the restorer overwrites, mirroring
 the old "config worker can't escalate scopes" rule. Org-membership flows stay
-in oRPC for now; `itx.projects.create` is admin-only.
+in oRPC for now; `itx.projects.get(slug).create` is admin-only.
 
 ## D8: Worker caps gain network access via ProjectEgress (they had none)
 
@@ -289,7 +289,7 @@ query })` is the one read — it wraps `useSuspenseQuery` (the QueryClient alrea
   opens its own. A component never disposes the root stub (capnweb closes the
   WebSocket when the root stub is disposed, killing the shared connection);
   per-component RPC objects (subscription stubs, callbacks) ARE component-owned
-  and disposed on unmount. The only deliberate root-dispose is **`reconnectItx()`**
+  and disposed on unmount. The only deliberate root-dispose is **`reconnectIterateSession()`**
   (evict + re-dial), used when the connect-time principal must change (creating a
   project; unlocking admin).
 - **No reconnect machinery.** Socket death drops the Map entry and wakes mounted
@@ -332,23 +332,25 @@ been circling:
   dispatches; the code payload only crosses RPC inside the loader's
   cold-isolate miss callback. The DO is where the worker's source of truth
   lives, nothing more.
-- **Project creation is event-sourced, fire-and-return.** `createProject`
-  appends `project/create-requested` and returns the (purely computed)
-  summary immediately — no waiting. The ProjectProcessor — slug `project`,
-  hosted on the DO — runs the idempotent steps (D1 projection, iterate-config
-  repo, example secret, agents root) and leaves the trail: `created`,
-  `repo-initialized`, `create-completed`, plus a cross-post of
-  create-requested to the global namespace's `/projects` stream. Callers
-  redirect to the project page right away and watch
-  `itx.project.processor.snapshot()` (phase: creating → ready) for
-  progress — the processor is a public RpcTarget getter on the DO, and
+- **Project creation is event-sourced and explicitly born.**
+  `projects.get(slug)` returns a prospective handle without side effects.
+  `handle.create()` registers the slug, adopts the directory-issued project
+  ID, then atomically appends the Project and Notification birth certificates
+  plus both subscriptions. The Project processor explicitly births the root
+  capability host, scheduler, config repo, and email router; `project/ready`
+  records completion. Create always waits both root processors through the
+  batch, then waits for readiness by default and returns the same handle.
+  Callers that render bootstrap progress themselves pass
+  `{ waitUntilReady: false }` as the second argument to skip only the final
+  ready barrier.
+  The processor is a public RpcTarget getter on the DO, and
   `itx.project` is a path proxy (replayPathCall awaits intermediate
   segments), so deep traversal works in one expression even though workerd
   itself does not pipeline calls through property accesses on raw stubs
   (capnweb's RpcTarget IS cloudflare:workers' inside workerd). Callers that need routing before the processor catches up
-  (dashboard, itx.projects.create) insert the D1 projects row themselves
-  first, as they always did. The worker build never gates creation (ingress
-  self-heals builds); `config-worker-built` remains the historical event
+  (dashboard, `itx.projects.get(slug).create`) insert the D1 projects row themselves
+  first, as they always did. The default worker readiness probe gates create;
+  ingress also self-heals builds. `config-worker-built` remains the historical event
   string. The DO keeps NO bespoke tables: the processor snapshot is the
   project's durable state (with a pure `projectFacts()` + D1-slug fallback
   for cold snapshots), and "config worker" is now just **the worker**
@@ -388,8 +390,8 @@ One PR (deliberately breaking; prd gets redeployed), five moves:
   platform's trust posture (Law 4 ITERATE scoping, Law 5 egress outbound)
   is wired into loaded isolates; the registry's source caps and the project
   worker both use it.
-- **Auth is the ONLY project-id minter.** Even operator/recovery creates
-  round-trip through auth's `/internal/project/mint-project-id`;
+- **Auth is the ONLY project-id minter.** Even operator/recovery creates call
+  `AUTH.mintProjectId()` on auth's private Workers RPC entrypoint;
   `mintProjectId` is deleted from OS.
 - **Legacy afterAppend/runner shapes are gone** from the agent, slack-agent,
   slack-integration, and repo DOs (delivery has been on the host model for a
@@ -422,3 +424,80 @@ One PR (deliberately breaking; prd gets redeployed), five moves:
 - **The project-host `/__itx` connect door is deleted** (premature). Connect
   is `/api/itx[/:target]` on the OS origin only; `:target` is a project
   id/slug (the root context) or a full URL-encoded ref.
+
+## D24: ONE socket per tab — a Session gate + slug-addressed itx + invisible reconnect (supersedes D21's socket-Map-per-context)
+
+D21 keyed a WebSocket per `{ projectId, connectionKey }` context in a module
+`Map`, so a dashboard held THREE sockets at once: a global one for the sidebar
+catalog, a project one for the page, and an isolated one for the browser stream
+mirror (whose aggressive reconnect loop must not reject the page's reads). The
+map + `connectionKey` + identity-bound eviction existed ONLY to keep those
+independent sockets from killing each other. Collapse to one:
+
+- **`authenticate()` is the top noun.** The provider/hook gives a **Session**
+  (`useIterateSession()` / `connectIterateSession()`); a project itx is derived from it —
+  `useItx(slug)` / `connectItx(slug)` = `session.projects.get(slug)`, and
+  `projects.get` now accepts a **URL slug** (or `prj_` id), so the browser passes
+  `params.projectSlug` straight through with no client-side slug→id hop.
+  There is **no provider**: the socket is module-global and every hook dials it
+  lazily, so `<ProjectScope slug>` just carries the ambient slug (for `useItx()`
+  with no arg) and pre-warms the socket — the sidebar / ⌘K / admin use itx with
+  no `<ProjectScope>` at all.
+- **Reconnect is invisible.** React reads an immutable `Snapshot`;
+  `snapshot.session` keeps the last live session across a transport gap, so
+  `useIterateSession()` suspends exactly once (first load) and reads are
+  stale-while-revalidate (TanStack keeps cached data; only in-flight reads retry,
+  on a finite transport-only policy). A dropped socket always re-dials — with a
+  session in hand invisibly, without one by keeping `use()` suspended on ONE
+  stable first-connect promise (per-dial rejections never reach the suspended
+  tree — React replays a never-committed component against the thenable it first
+  used, so rejecting it would error-boundary a page whose paced re-dial is
+  already underway) — the connection hook is never a re-suspend point and never
+  wedges. (The session is the AWAITED `authenticate()` result — one settled stub
+  identity for the snapshot, imperative awaiters, and the stub cache; resolving
+  with the raw pipelined RpcPromise would assimilate and fork identities. The
+  dial timeout spans the whole handshake, and a REAL auth rejection over a
+  working socket is terminal — surfaced from the connecting promise — while a
+  transport death mid-handshake re-dials. This supersedes the earlier
+  publish-on-open-without-awaiting design, which codex's thermo review showed
+  forked the session identity.)
+- **Project stubs are session-owned**, cached in a module `WeakMap` keyed by the
+  session stub (NOT `useMemo` — React may discard/re-run memo calcs and leak
+  undisposed capnweb import entries). The handle stays a REAL capnweb stub (a
+  lazy wrapper that awaited the session per call would break pipelining, fork
+  v0.8.0); its identity changes once per reconnect, re-running keyed effects.
+  The cache serves the PERSISTENT handle paths (`useItx`/`connectItx`);
+  `useItxQuery` deliberately bypasses it with a per-fetch stub it disposes when
+  the read resolves. Nuance: `await connectItx(...)` hands back the pulled
+  resolution of the cached pipelined stub (thenable assimilation, one level
+  down) — same underlying import, so it shares the cache's lifetime; unifying
+  that identity too needs a capnweb `dup()`-semantics probe and is deferred.
+- **Transport health is socket-owned and generation-guarded.** One verifier per
+  generation (periodic + visibility/online, two-strike) is the only thing that
+  retires the socket; the mirror and subscription watchdog REPORT suspicion
+  (`reportTransportSuspicion`) rather than evicting. Generation OBJECT IDENTITY
+  (`current === generation`) is the compare-and-swap that stops a late verdict
+  from closing a healthy successor (the monotonic snapshot number exists only as
+  the React effect dep). `reconnectIterateSession()` remains the deliberate
+  SEMANTIC reset (new claims after create/unlock), distinct from transport
+  recovery.
+- **Deleted:** the socket `Map`, `connectionKey`, `ItxAddress`,
+  `evictItxSocket`/`evictItxSocketIfCurrent`, the `Session & Project` handle
+  intersection, the mirror's dedicated socket, **`<ItxProvider>`** (no provider is
+  needed above a module-global socket — its pre-warm folded into `<ProjectScope>`),
+  and the **12 per-page `<ItxBoundary>` wrappers** (TanStack Router already wraps
+  every route match in `<Suspense>` via its `defaultPendingComponent`). The mirror
+  rides the shared session and can no longer blank the page on its own reconnect.
+
+Reviewed before implementation by codex (gpt-5.6-sol, max reasoning) for React
+19 / TanStack Start idiom; its corrections — immutable snapshot, session-owned
+(not `useMemo`) stub cache, generation-guarded reconnect, typed transport-only
+query retry, unconditional scope read — are folded in. Its
+confirm-auth-before-publish suggestion was initially rejected (the original
+shipped optimistic, publishing the pipelined root on `open`) and then ADOPTED in
+the second thermo round: the optimistic design turned out to fork the session
+identity via thenable assimilation and to leave a hung authenticate un-timed-out,
+so publish now happens on the awaited authenticate result. One suggestion stays
+NOT adopted: auto-prefixing query keys with the slug (it broke the existing
+`invalidateQueries`/`setQueryData` sites and duplicated the project id the keys
+already carry — the ambient slug drives the connection, not the cache key).

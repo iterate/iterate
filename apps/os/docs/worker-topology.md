@@ -1,8 +1,9 @@
 # Worker topology
 
-OS deploys as **one Cloudflare Worker per environment** (`os-prd`,
-`os-preview-N`): the TanStack Start dashboard, the capnweb itx API, ingress
-routing, and **all eight Durable Object classes** live in a single script.
+OS deploys one product Worker per environment (`os-prd`, `os-preview-N`): the
+TanStack Start dashboard, the capnweb itx API, ingress routing, and all OS
+Durable Object classes live in a single script. Two stateless compiler
+sidecars keep large Wasm toolchains out of that product isolate.
 
 The entry is [`src/worker.ts`](../src/worker.ts). Its fetch handler makes the
 one hostname/path routing decision (shared logic in `src/ingress.ts`):
@@ -10,29 +11,39 @@ one hostname/path routing decision (shared logic in `src/ingress.ts`):
 | Lane            | What                                                                       |
 | --------------- | -------------------------------------------------------------------------- |
 | MCP host        | rewritten onto the app's `/api/mcp` mount                                  |
-| api lanes       | capnweb `/api` (+ `/api/admin-cookie`), Slack webhooks, project ingress    |
+| api lanes       | capnweb `/api`, operator sessions, Slack webhooks, project ingress         |
 | everything else | dashboard SSR + server functions; client assets served from Workers Assets |
 
 Durable Object classes (all same-script bindings — declared by class name in
 wrangler.jsonc, no namespace IDs, no cross-script anything): Agent,
-CapabilityHost, Project, Repo, Secret, Stream, StatefulWorker, and the
-container-backed CloudflareSandbox (`sandbox/Dockerfile`, built by
-`wrangler deploy`).
+AgentCollection, CapabilityHost, Device, Project, Repo, Scheduler, Secret,
+Stream, StatefulWorker, WorkerBuildCoordinator, WorkspaceV2, and one
+container-backed CloudflareSandbox class per supported instance size
+(`sandbox/Dockerfile`, built by `wrangler deploy`). WorkerBuildCoordinator is
+sharded by immutable build key and holds only live single-flight state; build
+artifacts remain in KV.
 
-## The builder sidecar (the "+1")
+## Compiler sidecars (the "+2")
 
-One deliberate exception to "one worker": dynamic worker BUILDS run in a
-separate `os-<env>-builder` worker ([`src/builder.ts`](../src/builder.ts),
-generated config `wrangler.builder.jsonc`) — the only script carrying the
-bundler toolchain (esbuild-wasm, ~14MB), so the product script stays small.
-It is the minimum possible worker: a pure build function (files in, artifact
-out) whose only binding is the `WORKER_BUILD_CACHE` KV — no DOs, no routes,
-no secrets. The os worker calls it via the `BUILDER` service binding on
-artifact-cache misses; deploy.ts deploys it first (a name binding to a
-missing script fails the deploy). Local dev runs it as a vite
-`auxiliaryWorkers` entry in the same workerd. Slated for deletion when
-builds move into the sandbox container
-([tasks/os-sandbox-worker-builds.md](../../../tasks/os-sandbox-worker-builds.md)).
+`itx.docs.typecheck` runs in a
+separate `os-<env>-typechecker` worker (`src/typechecker.ts`, generated
+config `wrangler.typechecker.jsonc`) — the only script carrying the
+TypeScript compiler (tswasm, ~30MB wasm), so the product script stays small.
+It is the minimum possible worker: a pure function (files in, diagnostics
+out) with no bindings at all. The os worker calls it via the `TYPECHECKER`
+service binding; deploy.ts deploys it first (a name binding to a missing
+script fails the deploy). Local dev runs it as a vite `auxiliaryWorkers`
+entry in the same workerd.
+
+Dynamic worker builds run in the equally small
+`os-<env>-worker-bundler` sidecar (`src/worker-bundler.ts`, generated config
+`wrangler.worker-bundler.jsonc`). It accepts inert source strings over a
+service binding and makes the source's direct `createWorker` or `createApp`
+call. It has no state, project authority, filesystem checkout, shell, or
+container. App assets stay in OS's artifact cache and asset requests re-enter
+the sidecar so worker-bundler's own `handleAssetRequest` owns their routing;
+only server modules enter Worker Loader. Deploy and local Vite start both
+compiler sidecars before/beside OS.
 
 ## Why one worker
 

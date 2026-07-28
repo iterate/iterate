@@ -1,52 +1,242 @@
-// Implements the "telegram" webhook-router processor on itx — the Telegram
-// sibling of slack-processor-implementation.ts. Emitted event types, payloads,
-// and idempotency keys are stable wire formats.
-
-import { StreamProcessor } from "../streams/stream-processor.ts";
-import { readRecord, telegramChatStreamPath } from "./utils.ts";
+import { StreamProcessor } from "iterate/processors";
+import type { EmittedInput, ProcessEventArgs, ReduceArgs } from "iterate/processors";
+import {
+  agentCreationForPath,
+  telegramAgentSystemPrompt,
+  TELEGRAM_AGENT_SYSTEM_PROMPT_REVISION,
+} from "../agents/agent-defaults.ts";
+import { TelegramAgentProcessorContract } from "./telegram-agent-processor-contract.ts";
+import {
+  coerceTelegramId,
+  readRecord,
+  telegramChatStreamPath,
+  webhookAckIsFresh,
+} from "./utils.ts";
 import {
   TelegramProcessorContract,
   type TelegramProcessorState,
 } from "./telegram-processor-contract.ts";
 
-type TelegramProcessorDeps = {
-  /**
-   * The named connection this router serves — a projection of the host DO's
-   * own name (`/integrations/telegram/{connection}`), not folded state, so it
-   * is total from the first webhook and independent of event ordering. Null
-   * when the host is not a connection stream — reachable only if a telegram
-   * subscription is mis-armed on some other stream, which processEvent treats
-   * as a loud error rather than a silent drop (the Slack 2026-06-15 lesson).
-   */
-  connection: string | null;
-};
-
-/** The forwarded-payload annotation for an update that replies to an earlier
- * message: which thread that message belongs to, and how we know. The agent
- * transcription renders it; routing NEVER acts on it. */
-type TelegramReplyHint = {
-  resolvedBy: "reply-date" | "sent-claim";
-  sessionPath: string;
-};
-
+/**
+ * The "telegram" webhook-router processor, mounted on each per-project
+ * `/integrations/telegram/{connection}` stream (armed at connect time by
+ * connectTelegram's `recordConnection` processorSubscription) — the Telegram
+ * sibling of SlackProcessor. Emitted event types, payloads, and idempotency
+ * keys are stable wire formats.
+ *
+ * HOW IT WORKS, end to end:
+ *
+ * The webhook door appends each raw Telegram Update to this stream as
+ * `telegram/webhook-received`. This processor is ONLY a router: it decides
+ * which chat the update belongs to and forwards it — verbatim, plus an
+ * optional `replyHint` — to that chat's routed agent stream, explicitly
+ * creating the Agent, CapabilityHost, and Telegram facet (and installing
+ * their subscriptions) ahead of the forward. The `telegram-agent` processor
+ * on the routed stream does the transcription; this one never decides whether
+ * an update is meaningful.
+ *
+ * `reduce` maintains the thread model (the Slack router's `routes` table,
+ * reshaped for Telegram's primitives):
+ *
+ * - `sessionsByChat`: per-chat `/new` session starts, reduced straight off
+ *   the webhook events — the webhook IS the session-start fact, so replaying
+ *   the stream rebuilds the exact same model with no extra event type. Every
+ *   update routes to the LATEST session (ordered by `(date, message_id)`; a
+ *   duplicate or out-of-order delivery can never roll the live session
+ *   backwards); a chat with no `/new` yet routes to the bare chat path —
+ *   session zero, the v1 shape.
+ * - `sentMessages`: `chatId:messageId → sessionPath` provenance for bot-sent
+ *   messages, reduced from the `message-sent` claims the telegram-agent
+ *   processor cross-posts here after each journaled send. Replies to bot
+ *   messages get EXACT thread hints from this map; replies to user messages
+ *   fall back to "latest session started at or before the replied-to date".
+ *
+ * reply_to does NOT route (a reply-to-quote and a reply-to-continue are the
+ * same gesture — a routing rule cannot disambiguate them); it becomes a HINT
+ * on the forwarded payload (`replyHint`) that the agent transcription renders.
+ *
+ * Authorization: the SENDER's user id (never the chat — a permitted group
+ * must not grant every member project access) is checked against the
+ * `access-configured` allowlist. Denied ordinary messages get a settings-link
+ * handoff; the welcome for newly-allowed users and that denial are
+ * best-effort background notifications, freshness-gated so a full replay
+ * (the routine aftermath of a reducer-version deploy) never re-sends them.
+ * The forward itself is the one durable obligation: it runs under
+ * `blockProcessorWhile` because it is the only copy of the message on its way
+ * to the agent, and its idempotency key derives from the source event's
+ * offset so redeliveries dedupe instead of double-forwarding.
+ */
 export class TelegramProcessor extends StreamProcessor<
   TelegramProcessorContract,
   TelegramProcessorDeps
 > {
   readonly contract = TelegramProcessorContract;
 
-  protected override reduce({
-    event,
-    state,
-  }: Parameters<StreamProcessor<TelegramProcessorContract>["reduce"]>[0]): TelegramProcessorState {
-    switch (event.type) {
+  // ------------------------------------------------------------ processEvent
+  // Lanes, chosen here at the dispatch site: the forward is the only
+  // per-event consequence that must never be lost (blockProcessorWhile); the
+  // welcome and denial notifications are best-effort, freshness-gated UX
+  // (runInBackground — nothing recovers a dropped attempt, and that is the
+  // point: a blocked bot or a Telegram rejection must not wedge the router
+  // and hold later inbound traffic). This processor has no at-head work.
+  protected override processEvent(args: ProcessEventArgs<TelegramProcessorContract>): undefined {
+    const { appendTo, blockProcessorWhile, event, previousState, runInBackground, state } = args;
+    const connection = state.birthCertificate?.config.connection;
+    if (connection === undefined) return;
+    switch (event?.type) {
+      case "events.iterate.com/telegram/access-configured": {
+        if (!webhookAckIsFresh(event, this.deps.now())) return;
+        const previouslyAllowed = new Set(previousState.allowedUserIds);
+        for (const userId of state.allowedUserIds) {
+          if (previouslyAllowed.has(userId)) continue;
+          // A useful notification, not an authorization obligation: a user
+          // who blocked the bot must not hold the router checkpoint and
+          // wedge later inbound traffic.
+          runInBackground(async () => {
+            await this.deps.sendTelegramMessage({
+              connection,
+              body: {
+                chat_id: coerceTelegramId(userId),
+                text: TELEGRAM_ACCESS_WELCOME_TEXT,
+              },
+            });
+          });
+        }
+        return;
+      }
       case "events.iterate.com/telegram/webhook-received": {
-        // `/new` starts a session: fold it straight off the webhook — the
+        // The router deliberately does not decide whether an update is
+        // meaningful to the agent. Its only job is: which chat does this
+        // update belong to? Chat-less updates (inline queries, poll
+        // results, …) are dropped — v1 handles chat-scoped updates only.
+        const target = telegramChatFromUpdate(event.payload.body);
+        if (target == null) return;
+
+        const senderId = telegramSenderIdFromUpdate(event.payload.body);
+        if (senderId === undefined) return;
+        if (!state.allowedUserIds.includes(senderId)) {
+          // Denial is deterministic router work: no agent stream, context,
+          // or LLM exists for an unauthorized sender. Only ordinary messages
+          // receive the handoff; service updates and button callbacks are
+          // denied silently. Freshness-gated: a replay of historical
+          // webhooks must not re-send months-old denials.
+          if (
+            readRecord(readRecord(event.payload.body)?.message) !== null &&
+            webhookAckIsFresh(event, this.deps.now())
+          ) {
+            runInBackground(async () => {
+              if (this.projectId === null) {
+                throw new Error(
+                  "Telegram router cannot build access settings without a project id",
+                );
+              }
+              const settingsUrl = await this.deps.telegramAccessSettingsUrl({
+                connection,
+                projectId: this.projectId,
+              });
+              await this.deps.sendTelegramMessage({
+                connection,
+                body: {
+                  chat_id: coerceTelegramId(target.chatId),
+                  ...(target.messageThreadId === undefined
+                    ? {}
+                    : { message_thread_id: coerceTelegramId(target.messageThreadId) }),
+                  text: telegramAccessDeniedMessage({ settingsUrl, userId: senderId }),
+                },
+              });
+            });
+          }
+          return;
+        }
+
+        // Everything routes to the chat's LATEST session — `state` is
+        // post-reduce, so a `/new` update routes ITSELF (and its trailing
+        // text) into the fresh session it just started. No `/new` yet =
+        // session zero, the bare v1 path.
+        const chatKey = telegramChatKey(target);
+        const sessions = state.sessionsByChat[chatKey] ?? [];
+        const streamPath =
+          sessions.at(-1)?.sessionPath ??
+          telegramChatStreamPath({
+            ...target,
+            connection,
+          });
+
+        // reply_to is a HINT, not a routing rule: annotate which thread the
+        // replied-to message belongs to and let the agent decide what to do.
+        const replyHint = resolveTelegramReplyHint({
+          body: event.payload.body,
+          chatId: target.chatId,
+          connection,
+          routedStreamPath: streamPath,
+          sessions,
+          sentMessages: state.sentMessages,
+          target,
+        });
+
+        blockProcessorWhile(async () => {
+          if (this.projectId === null) {
+            throw new Error("Telegram router cannot create a project agent without a project id");
+          }
+          await appendTo(
+            streamPath,
+            ...telegramAgentCreationEvents({
+              chatId: target.chatId,
+              connection,
+              messageThreadId: target.messageThreadId,
+              path: streamPath,
+              projectId: this.projectId,
+            }),
+            {
+              type: "events.iterate.com/telegram/webhook-received",
+              idempotencyKey: `telegram:forward-webhook:${event.offset}`,
+              payload: { ...event.payload, ...(replyHint === null ? {} : { replyHint }) },
+            },
+          );
+        });
+        return;
+      }
+      // telegram/created and telegram/message-sent matter through reduce
+      // only; the event-less at-head pass has nothing to do.
+    }
+  }
+
+  // ------------------------------------------------------------------ reduce
+  protected override reduce(args: ReduceArgs<TelegramProcessorContract>): TelegramProcessorState {
+    const { event, state } = args;
+    switch (event.type) {
+      case "events.iterate.com/telegram/created":
+        if (state.birthCertificate !== null) return state;
+        return { ...state, birthCertificate: event.payload };
+      case "events.iterate.com/telegram/access-configured":
+        return {
+          ...state,
+          accessPolicyConfigured: true,
+          allowedUserIds: [...new Set(event.payload.allowedUserIds)],
+          // A reducer-version replay must reconstruct pre-allowlist `/new`
+          // history, otherwise deploying access control silently sends every
+          // existing chat back to session zero. On the first explicit
+          // policy, retain only sessions started by users the owner has now
+          // authorized.
+          sessionsByChat: state.accessPolicyConfigured
+            ? state.sessionsByChat
+            : filterTelegramSessionsByAllowedUsers(
+                state.sessionsByChat,
+                event.payload.allowedUserIds,
+              ),
+        };
+      case "events.iterate.com/telegram/webhook-received": {
+        // `/new` starts a session: reduce it straight off the webhook — the
         // webhook event itself is the session-start fact, so replay rebuilds
         // the exact same thread model with no extra event type.
-        if (this.deps.connection === null) return state;
+        const connection = state.birthCertificate?.config.connection;
+        if (connection === undefined) return state;
+        const senderId = telegramSenderIdFromUpdate(event.payload.body);
+        if (senderId === undefined) return state;
+        if (state.accessPolicyConfigured && !state.allowedUserIds.includes(senderId)) return state;
         const sessionStart = telegramSessionStartFromUpdate(event.payload.body, {
-          connection: this.deps.connection,
+          connection,
+          senderId,
         });
         if (sessionStart === null) return state;
         const existing = state.sessionsByChat[sessionStart.chatKey] ?? [];
@@ -70,6 +260,7 @@ export class TelegramProcessor extends StreamProcessor<
               {
                 date: sessionStart.date,
                 messageId: sessionStart.messageId,
+                senderId: sessionStart.senderId,
                 sessionPath: sessionStart.sessionPath,
               },
             ],
@@ -78,8 +269,8 @@ export class TelegramProcessor extends StreamProcessor<
       }
       case "events.iterate.com/telegram/message-sent": {
         // The journaled-send claim (cross-posted here by the telegram-agent
-        // effect): bot message_id → the session stream its request lived on,
-        // so replies to bot messages resolve to their exact thread.
+        // processor): bot message_id → the session stream its request lived
+        // on, so replies to bot messages resolve to their exact thread.
         const { chatId, messageId, sessionPath } = event.payload;
         if (chatId === undefined || sessionPath === undefined) return state;
         return {
@@ -94,70 +285,92 @@ export class TelegramProcessor extends StreamProcessor<
         return state;
     }
   }
+}
 
-  protected override processEvent({
-    appendTo,
-    blockProcessorWhile,
-    event,
-    state,
-  }: Parameters<StreamProcessor<TelegramProcessorContract>["processEvent"]>[0]): undefined {
-    if (event.type !== "events.iterate.com/telegram/webhook-received") return;
+// -----------------------------------------------------------------------------
+// Injected dependencies.
+// -----------------------------------------------------------------------------
 
-    if (this.deps.connection === null) {
-      // A telegram subscription armed on a non-connection stream is a
-      // misconfiguration, not a routable state: throwing holds the checkpoint
-      // and keeps the webhook replayable instead of silently dropping the
-      // only copy of the message.
-      throw new Error(
-        "telegram router woke on a stream whose path carries no connection; expected /integrations/telegram/{connection}",
-      );
-    }
-    const connection = this.deps.connection;
+type TelegramProcessorDeps = {
+  /** Injectable clock for the notification freshness gates. */
+  now(): number;
+  /** Bot API sendMessage for the best-effort welcome/denial notifications
+   * (the routed sends live on the telegram-agent processor, not here). */
+  sendTelegramMessage(input: {
+    body: Record<string, unknown>;
+    connection: string;
+  }): Promise<unknown>;
+  /** The authenticated OS page where a project owner edits this bot's
+   * allowlist — linked from the denial handoff. */
+  telegramAccessSettingsUrl(input: { connection: string; projectId: string }): Promise<string>;
+};
 
-    // The router deliberately does not decide whether an update is meaningful
-    // to the agent. Its only job is: which chat does this update belong to?
-    // Chat-less updates (inline queries, poll results, …) are dropped — v1
-    // handles chat-scoped updates only.
-    const target = telegramChatFromUpdate(event.payload.body);
-    if (target == null) return;
+// -----------------------------------------------------------------------------
+// Pure helpers.
+// -----------------------------------------------------------------------------
 
-    // Everything routes to the chat's LATEST session — `state` is post-reduce,
-    // so a `/new` update routes ITSELF (and its trailing text) into the fresh
-    // session it just started. No `/new` yet = session zero, the bare v1 path.
-    const chatKey = telegramChatKey(target);
-    const sessions = state.sessionsByChat[chatKey] ?? [];
-    const streamPath =
-      sessions.at(-1)?.sessionPath ??
-      telegramChatStreamPath({
-        ...target,
-        connection,
-      });
+export const TELEGRAM_ACCESS_WELCOME_TEXT =
+  "Hello! You now have access to this iterate project through this bot. Send me a message to get started.";
 
-    // reply_to is a HINT, not a routing rule: annotate which thread the
-    // replied-to message belongs to and let the agent decide what to do.
-    const replyHint = resolveTelegramReplyHint({
-      body: event.payload.body,
-      chatId: target.chatId,
-      connection,
-      routedStreamPath: streamPath,
-      sessions,
-      sentMessages: state.sentMessages,
-      target,
-    });
+/** The forwarded-payload annotation for an update that replies to an earlier
+ * message: which thread that message belongs to, and how we know. The agent
+ * transcription renders it; routing NEVER acts on it. */
+type TelegramReplyHint = {
+  resolvedBy: "reply-date" | "sent-claim";
+  sessionPath: string;
+};
 
-    // Durable obligation, NOT best-effort: this forward is the only copy of
-    // the Telegram message on its way to the agent. `blockProcessorWhile`
-    // holds the checkpoint on failure so the host replays this webhook until
-    // it lands; the idempotency key derives from the source event, so the
-    // replay dedupes instead of double-forwarding.
-    blockProcessorWhile(async () => {
-      await appendTo(streamPath, {
-        type: "events.iterate.com/telegram/webhook-received",
-        idempotencyKey: `telegram:forward-webhook:${event.offset}`,
-        payload: { ...event.payload, ...(replyHint === null ? {} : { replyHint }) },
-      });
-    });
-  }
+function telegramAgentCreationEvents(input: {
+  chatId: string;
+  connection: string;
+  messageThreadId?: string;
+  path: string;
+  projectId: string;
+}): EmittedInput<TelegramProcessorContract>[] {
+  const creation = agentCreationForPath({
+    agentPath: input.path,
+    projectId: input.projectId,
+    initialEvents: [
+      {
+        type: "events.iterate.com/agent/binding-set",
+        idempotencyKey: `agent/binding:${input.projectId}:${input.path}`,
+        payload: {
+          type: "telegram_thread",
+          connection: input.connection,
+          chatId: input.chatId,
+          ...(input.messageThreadId === undefined
+            ? {}
+            : { messageThreadId: input.messageThreadId }),
+        },
+      },
+    ],
+    systemPromptPolicy: {
+      content: telegramAgentSystemPrompt({
+        agentPath: input.path,
+        chatId: input.chatId,
+        connection: input.connection,
+      }),
+      id: "telegram",
+      revision: TELEGRAM_AGENT_SYSTEM_PROMPT_REVISION,
+    },
+    sibling: {
+      birthCertificate: TelegramAgentProcessorContract.buildEvent({
+        type: "events.iterate.com/telegram-agent/created",
+        idempotencyKey: `telegram-agent/created:${input.projectId}:${input.path}`,
+        payload: {
+          config: {
+            chatId: input.chatId,
+            connection: input.connection,
+            ...(input.messageThreadId === undefined
+              ? {}
+              : { messageThreadId: input.messageThreadId }),
+          },
+        },
+      }),
+      processorSlug: TelegramAgentProcessorContract.slug,
+    },
+  });
+  return creation.events satisfies EmittedInput<TelegramProcessorContract>[];
 }
 
 /** The chat-scoped part of a routed stream path (`chat-{id}` or
@@ -188,8 +401,14 @@ export function telegramNewCommand(text: unknown): { trailingText: string | null
  */
 function telegramSessionStartFromUpdate(
   body: unknown,
-  input: { connection: string },
-): { chatKey: string; date: number; messageId: number; sessionPath: string } | null {
+  input: { connection: string; senderId: string },
+): {
+  chatKey: string;
+  date: number;
+  messageId: number;
+  senderId: string;
+  sessionPath: string;
+} | null {
   const update = readRecord(body);
   const message = readRecord(update?.message);
   if (message == null) return null;
@@ -203,6 +422,7 @@ function telegramSessionStartFromUpdate(
     chatKey: telegramChatKey(target),
     date,
     messageId,
+    senderId: input.senderId,
     sessionPath: telegramChatStreamPath({
       ...target,
       connection: input.connection,
@@ -211,9 +431,22 @@ function telegramSessionStartFromUpdate(
   };
 }
 
+function filterTelegramSessionsByAllowedUsers(
+  sessionsByChat: TelegramProcessorState["sessionsByChat"],
+  allowedUserIds: string[],
+): TelegramProcessorState["sessionsByChat"] {
+  const allowed = new Set(allowedUserIds);
+  return Object.fromEntries(
+    Object.entries(sessionsByChat).flatMap(([chatKey, sessions]) => {
+      const retained = sessions.filter((session) => allowed.has(session.senderId));
+      return retained.length === 0 ? [] : [[chatKey, retained]];
+    }),
+  );
+}
+
 /**
  * Which thread does the replied-to message belong to? Bot messages resolve
- * EXACTLY from the folded send claims; user messages fall back to "latest
+ * EXACTLY from the reduced send claims; user messages fall back to "latest
  * session started at or before the replied-to message" (compared by
  * `(date, message_id)` — `reply_to_message` embeds the original including its
  * `date`, so no lookup is needed); older than the first session = session
@@ -307,4 +540,31 @@ function readTelegramId(value: unknown): string | undefined {
   if (typeof value === "number" && Number.isSafeInteger(value)) return String(value);
   if (typeof value === "string" && value !== "") return value;
   return undefined;
+}
+
+/** The human who caused one update. This identity, not the chat, is the
+ * authorization principal: a permitted group must not grant every member
+ * project access. */
+function telegramSenderIdFromUpdate(body: unknown): string | undefined {
+  const update = readRecord(body);
+  const sender =
+    readRecord(readRecord(update?.message)?.from) ||
+    readRecord(readRecord(update?.edited_message)?.from) ||
+    readRecord(readRecord(update?.channel_post)?.from) ||
+    readRecord(readRecord(update?.edited_channel_post)?.from) ||
+    readRecord(readRecord(update?.callback_query)?.from) ||
+    readRecord(readRecord(update?.my_chat_member)?.from) ||
+    readRecord(readRecord(update?.chat_member)?.from) ||
+    readRecord(readRecord(update?.chat_join_request)?.from);
+  if (sender?.is_bot === true) return undefined;
+  return readTelegramId(sender?.id);
+}
+
+function telegramAccessDeniedMessage(input: { settingsUrl: string; userId: string }): string {
+  return [
+    "Access denied. This Telegram account is not allowed to use this iterate project.",
+    `Ask a project owner to add Telegram user ID ${input.userId} to this bot's allowlist:`,
+    input.settingsUrl,
+    "You can forward this message to them.",
+  ].join("\n\n");
 }
