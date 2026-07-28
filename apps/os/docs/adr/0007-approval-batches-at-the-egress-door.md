@@ -1,9 +1,8 @@
 # Approvals are batches: coalesce at the egress door, decide with one signed event
 
-Supersedes ADR 0006 (the debounced NotificationProcessor state machine).
-
-A `Promise.all` script run can hold N egress requests at once. ADR 0006 kept
-per-request `human-approval-requested`/`granted`/`rejected` events and
+A `Promise.all` script run can hold N egress requests at once. This PR's
+first design (never landed, no separate ADR) kept per-request
+`human-approval-requested`/`granted`/`rejected` events and
 reassembled the burst downstream — a debounce state machine in
 `NotificationProcessor` (its one exception to stateless-per-event), a
 computed "Approval Group" on every approver surface, and N signed grant
@@ -28,7 +27,7 @@ All-reject decisions (including the door's own expiry) are never signed —
 deny stays the fail-safe direction. Settlement stays per released request:
 `human-approval-settled` carries the batch offset plus an `index`.
 
-What this deletes: the ADR 0006 state machine (NotificationProcessor is
+What this deletes: the debounce state machine (NotificationProcessor is
 stateless-per-event again — one batch event, one push), the
 `approvals-group` notification destination, client-side grouping in every
 approver surface, and the mobile client's sign-N-then-append-N loop whose

@@ -6,7 +6,6 @@ import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 
 export * as configRepo from "./reset-config-repo.ts";
-export * as approvals from "./approvals.ts";
 export * as dev from "./dev.ts";
 export * as itx from "./itx.ts";
 export * as projectSeed from "./project-seed.ts";
