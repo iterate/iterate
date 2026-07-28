@@ -362,6 +362,10 @@ function SheetBody({
           <TaskComments
             source={liveSource?.() ?? task.source}
             identity={commentIdentity}
+            // While the editor is attaching, a transform would fall through
+            // to the raw write lane — which the arriving session then
+            // overwrites with its older snapshot, dropping the comment.
+            busy={status === "connecting…"}
             onTransform={onApplyTransform}
           />
         </Suspense>

@@ -30,10 +30,15 @@ type DiscussionOp = (doc: StructuredDocument) => { raw: string };
 export function TaskComments({
   source,
   identity,
+  busy,
   onTransform,
 }: {
   source: string;
   identity: CommentIdentity | null;
+  /** True while the file's live editor is still attaching. Mutations must
+   * wait it out: the raw-write fallback lane races the arriving session,
+   * which then flushes its older snapshot over the write. */
+  busy: boolean;
   /** Route a whole-file transform to the live editor or the write lane. */
   onTransform: (transform: (source: string) => string) => void;
 }) {
@@ -46,6 +51,10 @@ export function TaskComments({
   // since this render, so ops must re-find their targets by id — and back off
   // to a no-op (surfacing the reason) instead of corrupting the file.
   const apply = (op: DiscussionOp): boolean => {
+    if (busy) {
+      setOpError("Comment change failed: the editor is still connecting — retry in a moment");
+      return false;
+    }
     let ok = false;
     let failure = "the file changed mid-edit";
     onTransform((current) => {

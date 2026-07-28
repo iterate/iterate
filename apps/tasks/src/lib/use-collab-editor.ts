@@ -76,6 +76,11 @@ export function useCollabEditor(input: {
   );
 
   useEffect(() => {
+    // Every (re)connect must announce the attach window: an editorEpoch
+    // remount reuses the consumer's state, so without this a stale
+    // "live · vN" would keep attach-gated UI (the comments strip) open
+    // while the new session is still seeding.
+    setStatus("connecting…");
     const connection = new CollabConnection(checkoutId, repoPath, `/${path}`);
     connection.onStatus = setStatus;
     const redlineLayer = new Compartment();
