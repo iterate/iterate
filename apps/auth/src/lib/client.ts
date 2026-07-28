@@ -21,6 +21,13 @@ type LoginOptions = {
   loginHint?: "email" | "google";
   /** Require the authorization server to let the user choose an account. */
   prompt?: "select_account";
+  /**
+   * End this relying party's current session before starting OAuth. The
+   * authorization-server session stays intact, so its account chooser can
+   * switch to another remembered account without orphaning the current app
+   * refresh token.
+   */
+  replaceCurrentSession?: boolean;
 };
 
 type RefreshOptions = {
@@ -89,7 +96,14 @@ export function createIterateAuthClient(config: IterateAuthClientConfig = {}) {
       if (options.prompt) {
         url.searchParams.set("prompt", options.prompt);
       }
-      window.location.href = url.toString();
+      if (options.replaceCurrentSession) {
+        const logoutUrl = new URL(`${base}/logout`, window.location.origin);
+        logoutUrl.searchParams.set("global", "false");
+        logoutUrl.searchParams.set("return_to", url.toString());
+        window.location.href = logoutUrl.toString();
+      } else {
+        window.location.href = url.toString();
+      }
     },
     fetchSession,
     async logout(options: LogoutOptions = {}): Promise<void> {
