@@ -57,7 +57,7 @@ describe("custom domain provisioning", () => {
     );
   });
 
-  test("creates a wildcard Cloudflare custom hostname without routing before validation is active", async () => {
+  test("creates a wildcard Cloudflare custom hostname with a KV ownership reservation", async () => {
     const { cloudflare, directory, provisioner } = setup();
 
     const snapshot = await provisioner.ensure({ hostname: "garple.com", project });
@@ -86,11 +86,17 @@ describe("custom domain provisioning", () => {
       ],
       wildcard: true,
     });
-    await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toBeNull();
-    await expect(readProjectByHostname(directory, "counter.garple.com")).resolves.toBeNull();
+    await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toEqual(
+      project,
+    );
+    await expect(readProjectByHostname(directory, "counter.garple.com")).resolves.toEqual({
+      appSlug: "counter",
+      record: project,
+    });
   });
 
-  test("calls Cloudflare fetch without binding the client input as this", async () => {
+  test("claims KV before calling Cloudflare and does not bind fetch input as this", async () => {
+    const directory = new MemoryKv() as unknown as KVNamespace;
     const cloudflare = createCloudflareFetchMock();
     let fetchCalls = 0;
     const fetchWithThisAssertion = async function (
@@ -99,9 +105,12 @@ describe("custom domain provisioning", () => {
     ) {
       fetchCalls += 1;
       expect(this).toBeUndefined();
+      await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toEqual(
+        project,
+      );
       return await cloudflare.fetch(...args);
     } as typeof fetch;
-    const { provisioner } = setup({ fetch: fetchWithThisAssertion });
+    const provisioner = createProvisioner({ directory, fetch: fetchWithThisAssertion });
 
     await expect(provisioner.ensure({ hostname: "garple.com", project })).resolves.toMatchObject({
       hostname: "garple.com",
@@ -170,7 +179,7 @@ describe("custom domain provisioning", () => {
     }
   });
 
-  test("removes same-project routing KV when a refreshed hostname is no longer active", async () => {
+  test("retains same-project KV ownership while a refreshed hostname is not active", async () => {
     const { cloudflare, directory, provisioner } = setup({ hostnames: [cloudflareHostname()] });
 
     await expect(provisioner.refresh({ hostname: "garple.com", project })).resolves.toMatchObject({
@@ -184,7 +193,9 @@ describe("custom domain provisioning", () => {
     await expect(provisioner.refresh({ hostname: "garple.com", project })).resolves.toMatchObject({
       status: "pending_validation",
     });
-    await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toBeNull();
+    await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toEqual(
+      project,
+    );
   });
 
   test.for([
@@ -206,10 +217,14 @@ describe("custom domain provisioning", () => {
       expectedRegistration: otherProject,
     },
     {
-      name: "clears a failed local custom domain without deleting an unclaimed Cloudflare hostname",
+      name: "clears a failed local custom domain without deleting an unclaimed Cloudflare hostname even with a recorded id",
       hostnames: [cloudflareHostname()],
       act: (provisioner: Provisioner) =>
-        provisioner.remove({ cloudflareHostnameId: null, hostname: "garple.com", project }),
+        provisioner.remove({
+          cloudflareHostnameId: "custom-hostname-1",
+          hostname: "garple.com",
+          project,
+        }),
       expectedRegistration: null,
     },
     {

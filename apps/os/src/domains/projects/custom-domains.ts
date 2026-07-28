@@ -119,16 +119,11 @@ export async function primeDirectProjectCustomDomain(input: {
   projectHostnameBases: readonly string[];
 }): Promise<string> {
   const hostname = normalizeProjectCustomDomain(input);
-  await assertHostnameAvailable({
+  await claimProjectHostname({
     directory: input.directory,
     hostname,
-    projectId: input.project.id,
+    project: input.project,
   });
-  await primeProjectHostname(input.directory, hostname, input.project);
-  const registration = await readProjectHostnameRegistration(input.directory, hostname);
-  if (registration?.id !== input.project.id) {
-    throw new Error(`Direct hostname "${hostname}" was not registered for ${input.project.id}.`);
-  }
   return hostname;
 }
 
@@ -145,10 +140,10 @@ export function createCloudflareCustomDomainProvisioner(options: {
         hostname,
         projectHostnameBases: options.config.projectHostnameBases ?? [],
       });
-      await assertHostnameAvailable({
+      await claimProjectHostname({
         directory: options.directory,
         hostname: normalized,
-        projectId: project.id,
+        project,
       });
 
       const client = await cloudflareClient({ config: options.config, fetch: fetcher });
@@ -165,12 +160,7 @@ export function createCloudflareCustomDomainProvisioner(options: {
         customHostname,
         fallbackHostname: normalized,
       });
-      await reconcileProjectHostnameRegistration({
-        directory: options.directory,
-        hostname: normalized,
-        project,
-        snapshot,
-      });
+      await assertProjectHostnameClaim(options.directory, normalized, project.id);
       return snapshot;
     },
 
@@ -179,10 +169,10 @@ export function createCloudflareCustomDomainProvisioner(options: {
         hostname,
         projectHostnameBases: options.config.projectHostnameBases ?? [],
       });
-      await assertHostnameAvailable({
+      await claimProjectHostname({
         directory: options.directory,
         hostname: normalized,
-        projectId: project.id,
+        project,
       });
       const client = await cloudflareClient({ config: options.config, fetch: fetcher });
       const customHostname = await resolveCloudflareCustomHostname({
@@ -198,12 +188,7 @@ export function createCloudflareCustomDomainProvisioner(options: {
         customHostname,
         fallbackHostname: normalized,
       });
-      await reconcileProjectHostnameRegistration({
-        directory: options.directory,
-        hostname: normalized,
-        project,
-        snapshot,
-      });
+      await assertProjectHostnameClaim(options.directory, normalized, project.id);
       return snapshot;
     },
 
@@ -212,31 +197,53 @@ export function createCloudflareCustomDomainProvisioner(options: {
         hostname,
         projectHostnameBases: options.config.projectHostnameBases ?? [],
       });
-      await assertHostnameAvailable({
-        directory: options.directory,
-        hostname: normalized,
-        projectId: project.id,
-      });
-      const client = await cloudflareClient({ config: options.config, fetch: fetcher });
       const registeredProject = await readProjectHostnameRegistration(
         options.directory,
         normalized,
       );
-      let id: string | null = null;
-      if (cloudflareHostnameId || registeredProject?.id === project.id) {
-        const customHostname = await resolveCloudflareCustomHostname({
-          client,
-          cloudflareHostnameId,
-          hostname: normalized,
-        });
-        id = stringValue(customHostname?.id) ?? cloudflareHostnameId ?? null;
+      if (registeredProject === null) return;
+      if (registeredProject.id !== project.id) {
+        throw new Error(`"${normalized}" is already routed to another project.`);
       }
+
+      const client = await cloudflareClient({ config: options.config, fetch: fetcher });
+      const customHostname = await resolveCloudflareCustomHostname({
+        client,
+        cloudflareHostnameId,
+        hostname: normalized,
+      });
+      await assertProjectHostnameClaim(options.directory, normalized, project.id);
+      const id = stringValue(customHostname?.id) ?? cloudflareHostnameId ?? null;
       if (id) await client.deleteCustomHostname(id);
-      if (registeredProject?.id === project.id) {
-        await deleteProjectHostname(options.directory, normalized);
-      }
+      await assertProjectHostnameClaim(options.directory, normalized, project.id);
+      await deleteProjectHostname(options.directory, normalized);
     },
   };
+}
+
+async function claimProjectHostname(input: {
+  directory: KVNamespace;
+  hostname: string;
+  project: ProjectDirectoryRecord;
+}): Promise<void> {
+  await assertHostnameAvailable({
+    directory: input.directory,
+    hostname: input.hostname,
+    projectId: input.project.id,
+  });
+  await primeProjectHostname(input.directory, input.hostname, input.project);
+  await assertProjectHostnameClaim(input.directory, input.hostname, input.project.id);
+}
+
+async function assertProjectHostnameClaim(
+  directory: KVNamespace,
+  hostname: string,
+  projectId: string,
+): Promise<void> {
+  const registration = await readProjectHostnameRegistration(directory, hostname);
+  if (registration?.id !== projectId) {
+    throw new Error(`Custom hostname "${hostname}" is not registered for ${projectId}.`);
+  }
 }
 
 async function assertHostnameAvailable(input: {
@@ -313,37 +320,6 @@ async function fetchCustomHostnameDetails(
   const id = stringValue(customHostname.id);
   if (!id) return customHostname;
   return await client.getCustomHostname(id).catch(() => customHostname);
-}
-
-async function reconcileProjectHostnameRegistration(input: {
-  directory: KVNamespace;
-  hostname: string;
-  project: ProjectDirectoryRecord;
-  snapshot: ProjectCustomDomainCloudflareSnapshot;
-}): Promise<void> {
-  if (input.snapshot.status !== "active") {
-    const registeredProject = await readProjectHostnameRegistration(
-      input.directory,
-      input.hostname,
-    );
-    if (registeredProject?.id === input.project.id) {
-      await deleteProjectHostname(input.directory, input.hostname);
-    }
-    return;
-  }
-
-  await assertHostnameAvailable({
-    directory: input.directory,
-    hostname: input.hostname,
-    projectId: input.project.id,
-  });
-  await primeProjectHostname(input.directory, input.hostname, input.project);
-  const registeredProject = await readProjectHostnameRegistration(input.directory, input.hostname);
-  if (registeredProject?.id !== input.project.id) {
-    throw new Error(
-      `Custom hostname "${input.hostname}" was not registered for ${input.project.id}.`,
-    );
-  }
 }
 
 function assertCloudflareHostnameMatches(
