@@ -5828,13 +5828,6 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     });
     const before = await this.processor.snapshot();
     const existing = before.state.customDomains.find((domain) => domain.hostname === hostname);
-    if (
-      existing?.kind === "cloudflare" &&
-      existing.status === "active" &&
-      existing.error === null
-    ) {
-      return { hostname };
-    }
     if (existing?.kind === "direct") {
       throw new Error(
         `Hostname "${hostname}" is already registered as a platform-owned direct hostname.`,
