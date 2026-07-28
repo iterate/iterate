@@ -5,7 +5,7 @@
 // runtime state, and delivered events. Guarded test capabilities are used only
 // for deterministic fault/lifecycle injection. Pure reducer ordering and
 // validation cases belong beside the core processor; cross-stream sending and
-// callback behavior belong here. Local runs skip the three destructive-lifecycle
+// callback behavior belong here. Local runs skip the two destructive-lifecycle
 // proofs that require a preview deployment.
 
 import { expect, test } from "vitest";
@@ -2329,7 +2329,7 @@ test("an ITX-expression receiver invokes the project worker in awaited batches",
   );
 });
 
-test("an ITX-expression receiver bisects a batch, skips one repeatedly failing event, and continues", async () => {
+test("an ITX-expression receiver isolates one repeatedly failing event, skips it, and continues", async () => {
   const marker = crypto.randomUUID();
   const sourcePath = `/e2e/subscriptions/itx-failing-event/source/${marker}`;
   const outputPath = `/e2e/subscriptions/itx-failing-event/output/${marker}`;
