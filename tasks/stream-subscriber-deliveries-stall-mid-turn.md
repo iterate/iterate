@@ -15,7 +15,7 @@ message triggers an agent turn, deliveries flow for part of the turn (e.g.
 events 1–40 of 99 reach the mirror), then stop — while the journal keeps
 growing and the subscriber's socket stays healthy (`runtimeState()` on the
 same connection answers with the current `maxOffset`). No close frame, no
-error, no `subscriber-disconnected` fact. The same symptom reproduced in
+error, no `connection-closed` fact. The same symptom reproduced in
 local dev throughout (previously filed mentally under "#1500 dev weirdness",
 but preview shows it is not dev-only).
 

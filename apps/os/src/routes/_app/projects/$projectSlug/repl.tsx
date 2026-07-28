@@ -25,8 +25,8 @@ function ProjectItxReplPage() {
           scope={{ projectId: project.id }}
         />
       </div>
-      {/* useItxSubscription connects from an effect and never suspends, so the
-          activity tail is safe in the server-rendered project shell. */}
+      {/* useStreamConnection never suspends, and the route is client-only, so the
+          activity tail needs no ClientOnly/Suspense wrapper. */}
       <div className="flex max-h-56 min-h-0 flex-col">
         <ItxActivityTail />
       </div>

@@ -77,10 +77,9 @@ export class ReviewBotProcessor extends StreamProcessor<
   protected override processEvent(args: ProcessEventArgs<ReviewBotProcessorContract>): undefined {
     const { blockProcessorWhile, event } = args;
     if (event === null || event.type !== "events.iterate.com/github/webhook-received") return;
-    // First-hand facts only: a copy carrying cross-post provenance is another
-    // stream's history (e.g. the agent-stream copy this router itself
-    // appends), never input.
-    if (event.source?.crossPostedFrom !== undefined) return;
+    // First-hand facts only: a copy received from another stream is history,
+    // never fresh input for this router.
+    if (event.source?.copiedFrom !== undefined) return;
     const now = this.deps.now || Date.now;
     if (now() - Date.parse(event.createdAt) > reviewBotFreshnessHorizonMs) return;
     blockProcessorWhile(async () => {
@@ -196,32 +195,10 @@ export async function handleGithubPullRequestWebhook(
     streamPath: event.path,
     type: "event",
   };
-  // The copied webhook is durable agent-stream history but is deliberately
-  // outside the Agent processor's consumed vocabulary. Its companion tasks
-  // may therefore share this raw stream batch. The typed append below is only
-  // a schema-validating convenience; either append API has identical reducer
-  // meaning for a valid Agent event.
-  const agentEvents: StreamEventInput[] = [
-    {
-      type: event.type,
-      payload: event.payload,
-      ...(event.metadata === undefined ? {} : { metadata: event.metadata }),
-      idempotencyKey: `github-pr/webhook:${event.path}:${event.offset}`,
-      source: {
-        ...event.source,
-        crossPostedFrom: [
-          {
-            subscriptionKey: `userspace:github-pr:${repoPath}`,
-            createdAt: event.createdAt,
-            offset: event.offset,
-            path: event.path,
-            projectId: await itx.projectId,
-            type: event.type,
-          },
-        ],
-      },
-    },
-  ];
+  // The durable receive rule below records every matching webhook on the
+  // agent stream with platform-authored source.copiedFrom history. These are
+  // only the companion agent events that should trigger work.
+  const agentEvents: StreamEventInput[] = [];
 
   const pullRequest = webhook.body.pull_request;
   const headSha = pullRequest?.head?.sha;
@@ -296,6 +273,16 @@ export async function handleGithubPullRequestWebhook(
   }
 
   if (!exists) await agent.create();
+  await agent.stream.subscribeToEventsFrom({
+    sourceStreamPath: event.path,
+    subscriptionKey: `userspace:github-pr:${repoPath}`,
+    description: `Verified GitHub webhooks for ${repository.owner}/${repository.repo}#${number}`,
+    filter: {
+      eventTypes: ["events.iterate.com/github/webhook-received"],
+      jsonataCondition: `payload.associations.repository.id = ${repository.id} and payload.associations.pullRequest.number = ${number}`,
+    },
+    start: "beginning",
+  });
   await agent.append(
     {
       type: "events.iterate.com/agents/context-added",

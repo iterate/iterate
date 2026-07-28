@@ -1657,7 +1657,7 @@ race, creation fails instead of replacing it.
 
 The same retries-disabled run found an independent first-use secret race. A
 GitHub App token mint read secret state at offset 5; a
-`subscriber-connected` telemetry fact advanced the raw stream to offset 6;
+`connection-opened` telemetry fact advanced the raw stream to offset 6;
 the material append's explicit offset then conflicted and was incorrectly
 reported as `secret_not_found`. Refreshed material now retries bounded offset
 conflicts while the reduced secret's `updatedOffset` and refresh policy remain

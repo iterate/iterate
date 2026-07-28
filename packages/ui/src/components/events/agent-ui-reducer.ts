@@ -255,8 +255,8 @@ export type AgentUiProcessorAnnouncement = {
 };
 
 export type AgentUiPresenceEntry = {
-  subscriptionKey: string;
-  direction: "inbound" | "outbound";
+  connectionKey: string;
+  connectionKind: "hosted" | "session";
   connected: boolean;
   description?: string;
   user?: { id?: string; email: string; name?: string; picture?: string };
@@ -301,7 +301,7 @@ export type AgentUiState = {
   /** User messages that landed while the current request was already running. */
   queuedUserMessages: AgentUiMessageItem[];
   eventCount: number;
-  /** Connection roster reduced from subscriber-connected/disconnected facts. */
+  /** Connection roster reduced from connection-opened/connection-closed facts. */
   presence: AgentUiPresenceEntry[];
   /** Lifetime token totals + the latest report (context fullness). */
   tokenUsage: AgentUiTokenUsage;
@@ -391,8 +391,8 @@ const AgentUiProcessorAnnouncementSchema = z.strictObject({
 }) satisfies z.ZodType<AgentUiProcessorAnnouncement>;
 
 const AgentUiPresenceEntrySchema = z.strictObject({
-  subscriptionKey: z.string(),
-  direction: z.enum(["inbound", "outbound"]),
+  connectionKey: z.string(),
+  connectionKind: z.enum(["hosted", "session"]),
   connected: z.boolean(),
   description: z.string().optional(),
   user: z
@@ -546,8 +546,8 @@ const SCRIPT_EXECUTION_COMPLETED = "events.iterate.com/capability-host/script-ru
 const SLACK_WEBHOOK_RECEIVED = "events.iterate.com/slack/webhook-received";
 const TELEGRAM_WEBHOOK_RECEIVED = "events.iterate.com/telegram/webhook-received";
 const TELEGRAM_SEND_REQUESTED = "events.iterate.com/telegram/send-requested";
-const STREAM_SUBSCRIBER_CONNECTED = "events.iterate.com/stream/subscriber-connected";
-const STREAM_SUBSCRIBER_DISCONNECTED = "events.iterate.com/stream/subscriber-disconnected";
+const STREAM_CONNECTION_OPENED = "events.iterate.com/stream/connection-opened";
+const STREAM_CONNECTION_CLOSED = "events.iterate.com/stream/connection-closed";
 const STREAM_WOKEN = "events.iterate.com/stream/woken";
 const STREAM_PROCESSOR_REVIVED = "events.iterate.com/stream/processor-revived";
 const STREAM_CHILD_STREAM_CREATED = "events.iterate.com/stream/child-stream-created";
@@ -870,39 +870,35 @@ function reduceAgentUiEvent(
       });
     }
 
-    case STREAM_SUBSCRIBER_CONNECTED: {
+    case STREAM_CONNECTION_OPENED: {
       const payload = readPayloadRecord(event);
       if (payload == null) return state;
-      const subscriptionKey =
-        typeof payload.subscriptionKey === "string" ? payload.subscriptionKey : null;
-      if (subscriptionKey == null) return state;
-      const direction = payload.direction === "inbound" ? "inbound" : "outbound";
-      const subscriber = isRecord(payload.subscriber) ? payload.subscriber : undefined;
-      const announcement = readProcessorAnnouncement(subscriber?.processor);
-      const subscriberUser = isRecord(subscriber?.user) ? subscriber.user : undefined;
+      const connectionKey =
+        typeof payload.connectionKey === "string" ? payload.connectionKey : null;
+      if (connectionKey == null) return state;
+      const connectionKind = payload.kind === "hosted" ? "hosted" : "session";
+      const openedBy = isRecord(payload.openedBy) ? payload.openedBy : undefined;
+      const announcement = readProcessorAnnouncement(openedBy?.processor);
+      const openerUser = isRecord(openedBy?.user) ? openedBy.user : undefined;
       const user =
-        typeof subscriberUser?.email === "string"
+        typeof openerUser?.email === "string"
           ? {
-              ...(typeof subscriberUser.id === "string" ? { id: subscriberUser.id } : {}),
-              email: subscriberUser.email,
-              ...(typeof subscriberUser.name === "string" ? { name: subscriberUser.name } : {}),
-              ...(typeof subscriberUser.picture === "string"
-                ? { picture: subscriberUser.picture }
-                : {}),
+              ...(typeof openerUser.id === "string" ? { id: openerUser.id } : {}),
+              email: openerUser.email,
+              ...(typeof openerUser.name === "string" ? { name: openerUser.name } : {}),
+              ...(typeof openerUser.picture === "string" ? { picture: openerUser.picture } : {}),
             }
           : undefined;
       const entry: AgentUiPresenceEntry = {
-        subscriptionKey,
-        direction,
+        connectionKey,
+        connectionKind,
         connected: true,
-        ...(typeof subscriber?.description === "string"
-          ? { description: subscriber.description }
-          : {}),
+        ...(typeof openedBy?.description === "string" ? { description: openedBy.description } : {}),
         ...(user === undefined ? {} : { user }),
         ...(announcement == null ? {} : { processor: announcement }),
       };
       const existingIndex = state.presence.findIndex(
-        (candidate) => candidate.subscriptionKey === subscriptionKey,
+        (candidate) => candidate.connectionKey === connectionKey,
       );
       const presence =
         existingIndex === -1
@@ -911,13 +907,13 @@ function reduceAgentUiEvent(
       return { ...state, presence };
     }
 
-    case STREAM_SUBSCRIBER_DISCONNECTED: {
-      const subscriptionKey = readString(event, "subscriptionKey");
-      if (subscriptionKey == null) return state;
+    case STREAM_CONNECTION_CLOSED: {
+      const connectionKey = readString(event, "connectionKey");
+      if (connectionKey == null) return state;
       return {
         ...state,
         presence: state.presence.map((entry) =>
-          entry.subscriptionKey === subscriptionKey ? { ...entry, connected: false } : entry,
+          entry.connectionKey === connectionKey ? { ...entry, connected: false } : entry,
         ),
       };
     }

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   isExplicitStreamKillLifecycleError,
   isDurableObjectLifecycleError,
+  isDurableObjectOverloadError,
   isRetryableDurableObjectAvailabilityError,
   isStreamWaitTimeoutError,
   isStreamUnavailableError,
@@ -51,6 +52,17 @@ describe("isExplicitStreamKillLifecycleError", () => {
       ),
     ).toBe(false);
     expect(isExplicitStreamKillLifecycleError(new Error(STREAM_KILL_REASON))).toBe(false);
+  });
+});
+
+describe("isDurableObjectOverloadError", () => {
+  it("recognises direct and wrapped overload without treating lifecycle resets as overload", () => {
+    const overload = withFlag("overloaded");
+    expect(isDurableObjectOverloadError(overload)).toBe(true);
+    expect(
+      isDurableObjectOverloadError(new Error("receiver unavailable", { cause: overload })),
+    ).toBe(true);
+    expect(isDurableObjectOverloadError(withFlag("durableObjectReset"))).toBe(false);
   });
 });
 
@@ -125,7 +137,7 @@ describe("retryIdempotentDurableObjectOperation", () => {
 });
 
 describe("rethrowStreamUnavailable", () => {
-  it("tags DO-lifecycle rejections and keeps the original as cause", () => {
+  it("tags DO-lifecycle rejections and terminates the remote error shape", () => {
     const original = withFlag("durableObjectReset");
     let caught: unknown;
     try {
@@ -135,11 +147,12 @@ describe("rethrowStreamUnavailable", () => {
     }
     expect(caught).toBeInstanceOf(Error);
     expect((caught as Error).message).toBe(`${STREAM_UNAVAILABLE_MESSAGE_PREFIX}kill requested`);
-    expect((caught as Error).cause).toBe(original);
+    expect(caught).not.toBe(original);
+    expect((caught as Error).cause).toBeUndefined();
     expect(isStreamUnavailableError(caught)).toBe(true);
   });
 
-  it("rethrows app-level rejections untouched (identity, not a copy)", () => {
+  it("preserves an app-level rejection's message in a plain local error", () => {
     const appError = new Error("waitForEvent requires eventTypes or predicate.");
     let caught: unknown;
     try {
@@ -147,7 +160,8 @@ describe("rethrowStreamUnavailable", () => {
     } catch (error) {
       caught = error;
     }
-    expect(caught).toBe(appError);
+    expect(caught).not.toBe(appError);
+    expect(caught).toEqual(new Error(appError.message));
     expect(isStreamUnavailableError(caught)).toBe(false);
   });
 });

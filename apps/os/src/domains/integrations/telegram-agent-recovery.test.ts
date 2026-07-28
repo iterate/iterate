@@ -24,7 +24,7 @@ function makeHarness() {
     substrate: {
       clock,
       stream: network.get(HOME),
-      progress: makeMemoryProgressStore(),
+      progress: makeMemoryProgressStore(TelegramAgentProcessorContract),
     },
     createProcessor: (deps) =>
       new TelegramAgentProcessor({

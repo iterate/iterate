@@ -49,6 +49,7 @@ interface DurableObjectStorage {
   kv: {
     get<T = unknown>(key: string): T | undefined;
     put(key: string, value: unknown): void;
+    delete(key: string): boolean;
   };
   sql: {
     exec(

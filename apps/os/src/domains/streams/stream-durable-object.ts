@@ -2,16 +2,26 @@ import { DurableObject } from "cloudflare:workers";
 import { z } from "zod";
 import type {
   ProcessorRuntimeState,
-  StreamPushEventBatch,
-  StreamSubscriptionHandle,
+  StreamDeliveryBatch,
+  StreamProcessorWakeRequest,
+  StreamWebhookDelivery,
+  CopyReceipt,
+  StreamConnectionHandle,
   StreamWakeDeliverySettlementReport,
 } from "iterate/processors";
-import { idempotencyConflictMessage, sameIdempotentEvent } from "iterate/processors";
+import {
+  idempotencyConflictMessage,
+  jsonValuesEqual,
+  sameIdempotentEvent,
+  StreamIdMismatchError,
+  streamIdMismatchMessage,
+  StreamReceiverUnavailableError,
+} from "iterate/processors";
 import { StreamOffsetConflictError, streamOffsetConflictMessage } from "iterate/processors";
 import type { StreamEvent, StreamEventInput } from "iterate/processors";
 import { StreamEventInput as StreamEventInputSchema } from "iterate/processors";
 import { StreamRuntimeMetrics } from "iterate/processors";
-import { LiveState, LiveStateRpcTarget } from "iterate/sdk/capnweb";
+import { disposeIgnoredRpcResult, LiveState, LiveStateRpcTarget } from "iterate/sdk/capnweb";
 import { streamDeliveryAuthContext } from "../../auth.ts";
 import {
   workerDeploymentVersionRpcResponse,
@@ -19,24 +29,42 @@ import {
   type WorkerDeploymentVersion,
   type WorkerDeploymentVersionFormat,
 } from "../../env.ts";
+import { evaluateItxExpression, type ItxExpression } from "../../itx/expression.ts";
 import type { Stream } from "../../itx-api.generated.ts";
 import {
   deploymentItxForInternal,
   itxForScope,
-  StreamSubscriptionRpcTarget,
+  StreamConnectionRpcTarget,
 } from "../../rpc-targets.ts";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { canonicalizeStreamPath, DurableObjectNameCodec } from "../durable-object-names.ts";
 import { posthogSubscriptionEvent } from "../integrations/posthog.ts";
-import { buildAcceptCrossPostAppendInputs } from "./cross-post.ts";
-import { compileEventSelector } from "./event-selector.ts";
+import { projectEgressFetcher } from "../projects/utils.ts";
+import { buildCopyAppends } from "./copy-appends.ts";
 import {
-  reconcileSubscriptionCursorRows,
+  assertCoreProcessorCheckpointGrowthFits,
+  STREAM_PAUSED_ERROR_PREFIX,
+  StreamCoreProcessor,
+} from "./core-processor.ts";
+import { compileEventFilter } from "./event-filter.ts";
+import {
+  internalStreamId,
+  isInternalStreamIdempotencyKey,
+  sameCopiedEventIdentity,
+} from "./stream-delivery-utils.ts";
+import {
+  pruneOrphanedSubscriptionCursorRows,
+  clearSubscriptionCursorFailuresAfterStateRebuild,
   SqliteSubscriptionCursorStore,
   StreamEventLog,
 } from "./stream-storage.ts";
-import { StreamSubscribers } from "./stream-subscribers.ts";
+import {
+  computeBackoffMs,
+  StreamEventSender,
+  type ExpectedHostedDeliveryState,
+  type SubscriptionReceiverCalls,
+} from "./stream-event-sender.ts";
 import type { StreamRuntimeDebugState } from "./stream-runtime-state.ts";
-import { createSubscriberDial } from "./subscriber-sinks.ts";
+import { retainProcessorWakeResponse } from "./retained-event-callbacks.ts";
 import {
   isDurableObjectLifecycleError,
   STREAM_KILL_REASON,
@@ -45,14 +73,24 @@ import {
 import {
   CORE_STATE_VERSION,
   CoreProcessorContract,
-  StreamSubscriberDescriptor as StreamSubscriberDescriptorSchema,
+  ConnectionOpenerDescriptor as ConnectionOpenerDescriptorSchema,
+  parseCommittedCoreEvent,
+  subscriptionKeyForConfiguredEvent,
+  type CommittedSubscriptionConfiguredEvent,
+  type CommittedSubscriptionRemovedEvent,
   type CoreProcessorState,
   type SubscriptionConfiguredPayload,
 } from "./core-processor-contract.ts";
 
 const DEFAULT_GET_EVENTS_LIMIT = 500;
 const MAX_GET_EVENTS_LIMIT = 500;
-const STREAM_PAUSED_ERROR_PREFIX = "stream paused: ";
+const CORE_STATE_REBUILD_KEY = "coreStateRebuild";
+const CORE_STATE_REBUILD_CHECKPOINT_EVERY_PAGES = 8;
+
+const CoreStateRebuildCheckpoint = z.strictObject({
+  stateVersion: z.literal(CORE_STATE_VERSION),
+  state: CoreProcessorContract.stateSchema,
+});
 
 function isStreamPausedError(error: unknown): error is Error {
   return (
@@ -89,9 +127,9 @@ export async function settleStreamCoreBackgroundWork(work: () => Promise<unknown
 }
 
 /**
- * Cuts durable delivery out of the append request's actor-drain tree.
+ * Starts durable sends outside the append request's current promise chain.
  *
- * A Stream append can itself be nested inside a subscriber processor. If its
+ * A Stream append can itself run inside a hosted processor callback. If its
  * post-commit delivery is attached to that append with `ctx.waitUntil`, a
  * delivery back to the caller closes a cycle: caller waits for append, append
  * waits for delivery, and delivery waits for caller. Outside an alarm turn we
@@ -100,8 +138,8 @@ export async function settleStreamCoreBackgroundWork(work: () => Promise<unknown
  * retain the delivery attempt without holding any append caller open.
  *
  * The work closure is deliberately NOT remembered between turns. Its durable
- * representation is the subscription cursor lag; `onAlarm()` reconciles that
- * state and supplies a fresh closure even after isolate eviction.
+ * representation is subscription cursor lag; `onAlarm()` reads that lag
+ * and supplies a fresh closure even after isolate eviction.
  */
 type StreamDeliveryAlarmBoundaryHooks = {
   armAlarm(atMs: number): void;
@@ -185,6 +223,127 @@ export class StreamDeliveryAlarmBoundary {
   }
 }
 
+// The concrete calls a source stream can make to subscription receivers.
+// Callback retention is separate in retained-event-callbacks.ts.
+
+const WORKERS_HUNG_ENTRYPOINT_MESSAGE =
+  "The Workers runtime canceled this request because it detected that your Worker's code had hung and would never generate a response.";
+
+function isWorkersHungEntrypointError(error: unknown): error is Error {
+  return (
+    error instanceof Error &&
+    error.name === "Error" &&
+    error.message.startsWith(WORKERS_HUNG_ENTRYPOINT_MESSAGE)
+  );
+}
+
+/** Convert a canceled project-worker call into the receiver-availability error contract. */
+function rethrowItxDeliveryError(error: unknown): never {
+  if (isWorkersHungEntrypointError(error)) {
+    throw new StreamReceiverUnavailableError(
+      `project worker receiver was canceled before acknowledgement: ${error.message}`,
+      { cause: error },
+    );
+  }
+  throw error;
+}
+
+/** Build the four concrete calls used by the receiver union. */
+function createSubscriptionReceiverCalls(deps: {
+  projectId: string | null;
+  exports: unknown;
+  createAuthorityRoot(): unknown;
+  copyToStream(path: string, batch: StreamDeliveryBatch): Promise<CopyReceipt>;
+  onHostedDeliveryError(
+    subscriptionKey: string,
+    error: unknown,
+    expectedDelivery: ExpectedHostedDeliveryState,
+  ): void;
+}): SubscriptionReceiverCalls {
+  let webhookEgress: ReturnType<typeof projectEgressFetcher> | undefined;
+
+  const evaluateItxDelivery = async (expression: ItxExpression, batch: StreamDeliveryBatch) => {
+    let value: unknown;
+    try {
+      ({ value } = await evaluateItxExpression(
+        deps.createAuthorityRoot(),
+        toInvocation(expression, batch),
+      ));
+    } catch (error) {
+      rethrowItxDeliveryError(error);
+    }
+    try {
+      disposeIgnoredRpcResult(value);
+    } catch (error) {
+      // The completed call is the acknowledgement. Cleanup failure is visible,
+      // but must not retry and send the same batch twice.
+      console.warn("ITX stream delivery result dispose failed after acknowledgement", { error });
+    }
+  };
+
+  return {
+    async wakeStreamProcessor(
+      expression: ItxExpression,
+      request: StreamProcessorWakeRequest,
+      expectedDelivery: ExpectedHostedDeliveryState,
+    ) {
+      const { value } = await evaluateItxExpression(
+        deps.createAuthorityRoot(),
+        toInvocation(expression, request),
+      );
+      return retainProcessorWakeResponse({
+        value,
+        onDeliveryError: (error) =>
+          deps.onHostedDeliveryError(request.subscriptionKey, error, expectedDelivery),
+      });
+    },
+
+    async deliverToItx(expression: ItxExpression, batch: StreamDeliveryBatch) {
+      await evaluateItxDelivery(expression, batch);
+    },
+
+    async copyToStream(path: string, batch: StreamDeliveryBatch) {
+      return deps.copyToStream(path, batch);
+    },
+
+    async deliverToWebhook(url: string, delivery: StreamWebhookDelivery) {
+      if (deps.projectId === null) {
+        throw new Error("webhook subscriptions require a project-scoped stream");
+      }
+      webhookEgress ??= projectEgressFetcher(
+        deps.exports as ExecutionContext["exports"],
+        deps.projectId,
+        { kind: "scope", scopePath: "/" },
+      );
+      const egress = webhookEgress;
+      try {
+        const response = await egress.fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(delivery),
+        });
+        await response.body?.cancel();
+        if (!response.ok) {
+          throw new Error(`webhook responded ${response.status} ${response.statusText}`);
+        }
+      } catch (error) {
+        if (webhookEgress === egress) webhookEgress = undefined;
+        (egress as Partial<Disposable>)[Symbol.dispose]?.();
+        throw error;
+      }
+    },
+  };
+}
+
+/** Turn the final property step into a receiver-bound method call. */
+function toInvocation(expression: ItxExpression, payload: unknown): ItxExpression {
+  const methodName = expression.at(-1);
+  if (typeof methodName !== "string") {
+    throw new Error("delivery expression must end in a property step naming the method to invoke");
+  }
+  return [...expression.slice(0, -1), [methodName, payload]];
+}
+
 /**
  * The subscription key of the birth-certificate worker feed every
  * project-scoped stream configures on itself (see the constructor). Userspace
@@ -199,19 +358,17 @@ const PROJECT_WORKER_SUBSCRIPTION_KEY = "project-worker";
  *
  * 1. `append(...)` — the synchronous commit point. Offsets are assigned, the
  *    core state is reduced, and event rows are persisted in one await-free
- *    turn; everything after that is post-commit fan-out.
- * 2. The core processor — the same `validateAppend` → `reduce` → `processEvent`
- *    shape every hosted `StreamProcessor` subclass has, with contract/schemas
- *    in `core-processor-contract.ts`. It runs inline instead of behind a
- *    subscription because it holds the two powers no hosted processor has: it
- *    is synchronous with the commit, and `validateAppend` can REJECT an event
- *    before it becomes a durable fact.
+ *    turn; everything after that is post-commit callback and subscription work.
+ * 2. The core processor — synchronous `validate` → `reduce`, with
+ *    contract/schemas in `core-processor-contract.ts`. Runtime delivery is
+ *    reconciled from the resulting state after commit rather than dispatched
+ *    from one-shot event hooks.
  * 3. Its checkpoint — reduced state in DO KV, rebuilt from the SQL event log
  *    (`stream-storage.ts`) when missing or version-skewed.
- * 4. Delivery — every lane (ephemeral connections, wake pokes, push drains)
- *    lives in `stream-subscribers.ts`, dialing transports through
- *    `subscriber-sinks.ts`; this class only decides policy (who may
- *    subscribe, what a config event means, which facts to append).
+ * 4. Delivery — session callbacks, hosted processors, copies, ITX calls,
+ *    and webhooks live in `stream-event-sender.ts`, calling receivers through
+ *    `createSubscriptionReceiverCalls` above; this class only decides policy
+ *    (who may connect, what a subscription event means, which events to append).
  *
  * HTTP/WebSocket Cap'n Web termination belongs at the fronting Worker, which
  * exposes this DO through `StreamRpcTarget`. This class is deliberately NOT
@@ -236,9 +393,9 @@ export class StreamDurableObject extends DurableObject<Env> {
   readonly name = parseStreamDurableObjectName(this.ctx.id.name);
   readonly #log = new StreamEventLog(this.ctx.storage.sql, this.name.path);
   /**
-   * The spine's durable cursor rows. A field (not inlined into the hooks)
-   * because the core-state rebuild path also reconciles these rows against
-   * the freshly folded config — see #readCoreProcessorState.
+   * Durable subscription cursor rows. A field (not inlined into the hooks)
+   * because the core-state rebuild path removes rows whose configuration no
+   * longer exists — see #readCoreProcessorState.
    */
   readonly #subscriptionCursorStore = new SqliteSubscriptionCursorStore(this.ctx.storage.sql, {
     onMutation: () => this.#refreshLiveState(),
@@ -251,47 +408,52 @@ export class StreamDurableObject extends DurableObject<Env> {
     now: () => Date.now(),
     waitUntil: (work) => this.ctx.waitUntil(work),
   });
-  readonly #subscribers = new StreamSubscribers({
+  readonly #eventSender = new StreamEventSender({
     idleTeardownMs: idleTeardownMs(this.env),
     hooks: {
-      // Straight to the sized log read: the spine wants byte lengths for its
+      // Straight to the sized log read: delivery needs byte lengths for its
       // batch cap (getEvents would re-stringify to size a batch), and its
       // limits are already bounded well under the public read clamp.
       readEvents: (args) =>
         this.#log.getRangeSized({
           afterOffset: args.afterOffset,
-          beforeOffset: Number.MAX_SAFE_INTEGER,
+          beforeOffset: args.beforeOffset,
           limit: args.limit,
-          // RAW, ephemeral included: the spine's cursors advance over every
-          // offset (skip-not-defer, like selector-filtered events), and the
-          // ephemeral lane delivers them; durable lanes filter them from
-          // DELIVERY unless their ordinary subscription explicitly opts in.
+          // RAW, ephemeral included: durable cursors advance over every
+          // offset (skip-not-defer, like filter-excluded events); durable
+          // subscriptions never deliver them.
           includeEphemeral: true,
         }),
       coreState: () => this.#coreProcessorState,
       store: this.#subscriptionCursorStore,
-      dial: createSubscriberDial({
+      receiverCalls: createSubscriptionReceiverCalls({
         projectId: this.name.projectId,
         exports: this.ctx.exports,
-        createAuthorityRoot: () => this.#createSubscriberAuthorityRoot(),
-        onDurableDeliveryError: (subscriptionKey, error) =>
-          this.#subscribers.onDurableDeliveryError(subscriptionKey, error),
+        createAuthorityRoot: () => this.#createEventDeliveryAuthorityRoot(),
+        copyToStream: (path, batch) => this.#streamStub(path).receiveCopiedEvents(batch),
+        onHostedDeliveryError: (subscriptionKey, error, expectedDelivery) =>
+          this.#eventSender.connections.onHostedDeliveryError(
+            subscriptionKey,
+            error,
+            expectedDelivery,
+          ),
       }),
-      appendFact: (event) => {
-        // Facts the delivery machinery produces (presence, parked, poison
-        // records) are observations; appending one must never mask the
-        // delivery-path operation that produced it, so failures log.
+      appendDeliveryEvent: (event) => {
+        // A lifecycle interruption is expected while this incarnation is
+        // disappearing and is reported to the caller for retry. Every other
+        // append failure is an unexplained product defect and propagates.
         try {
-          this.append(event);
+          this.#append({ authority: "core-event" }, [event]);
+          return true;
         } catch (error) {
           if (isDurableObjectLifecycleError(error)) {
-            console.info("stream delivery fact append interrupted by durable object lifecycle", {
+            console.info("stream delivery event append interrupted by durable object lifecycle", {
               message: error instanceof Error ? error.message : String(error),
               type: event.type,
             });
-            return;
+            return false;
           }
-          console.error("stream delivery fact append failed", { type: event.type, error });
+          throw error;
         }
       },
       recordEgress: (count, bytes) => {
@@ -308,13 +470,18 @@ export class StreamDurableObject extends DurableObject<Env> {
     },
   });
   #coreProcessorState: CoreProcessorState;
+  #invalidCheckpointError: unknown = undefined;
+  readonly #coreProcessor = new StreamCoreProcessor({
+    projectId: this.name.projectId,
+  });
+  #consecutiveReconciliationFailures = 0;
 
   /**
    * Creates a fresh in-isolate root for one stream delivery evaluation. It
    * carries narrowly branded delivery auth and owns no Workers RPC lifetime.
    */
-  #createSubscriberAuthorityRoot(): unknown {
-    const auth = streamDeliveryAuthContext();
+  #createEventDeliveryAuthorityRoot(): unknown {
+    const auth = streamDeliveryAuthContext(this.name.projectId);
     return this.name.projectId === null
       ? deploymentItxForInternal({ auth, ctx: this.ctx })
       : itxForScope({
@@ -328,37 +495,67 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    this.#coreProcessorState = this.#readCoreProcessorState();
+    const loaded = this.#readCoreProcessorState();
+    if (loaded.kind === "ready") {
+      this.#coreProcessorState = loaded.state;
+      this.#finishInitialization();
+      return;
+    }
+
+    // Only a missing, invalid, or old-version checkpoint takes the async
+    // initialization lane. blockConcurrencyWhile keeps every RPC/alarm out
+    // until the rebuilt state has been promoted, while the replay itself can
+    // await storage.sync() between bounded chunks. Those awaits are the real
+    // transaction boundaries that make progress survive a 30-second
+    // initialization reset.
+    this.#coreProcessorState = CoreProcessorContract.stateSchema.parse({});
+    void this.ctx.blockConcurrencyWhile(async () => {
+      this.#coreProcessorState = await this.#recoverCoreProcessorStateFromEventLog();
+      this.#finishInitialization();
+    });
+  }
+
+  #finishInitialization(): void {
     this.#liveState = new LiveState(this.#readRuntimeState());
 
     // The first boot appends the stream's birth certificate; every wake
-    // (fetch, RPC, alarm) appends a `woken` fact, whose post-commit fan-out is
+    // (fetch, RPC, alarm) appends a `woken` event, whose post-commit sends are
     // also what re-establishes durable deliveries after hibernation.
     //
     // Project streams are born with their ordinary platform feeds. Declaring
     // both here means there is no asynchronous wiring window before the first
-    // user event, while the subscription facts remain removable/replaceable
+    // user event, while subscription events remain removable/replaceable
     // through the same public lifecycle as any other subscription.
     if (this.#coreProcessorState.eventCount === 0) {
-      this.append({
-        type: "events.iterate.com/stream/created",
-        payload: { projectId: this.name.projectId, path: this.name.path },
-      });
+      this.#append({ authority: "core-event" }, [
+        {
+          type: "events.iterate.com/stream/created",
+          payload: {
+            projectId: this.name.projectId,
+            path: this.name.path,
+            streamId: crypto.randomUUID(),
+          },
+        },
+      ]);
       // The standalone streams playground reuses this DO without hosting a
-      // project worker. Do not invent a fake subscriber there: OS's PROJECT
+      // project worker. Do not invent a fake callback owner there: OS's PROJECT
       // binding is the capability that makes this feed real.
       if (this.name.projectId !== null && "PROJECT" in this.env) {
         this.append({
           type: "events.iterate.com/stream/subscription-configured",
           payload: {
             subscriptionKey: PROJECT_WORKER_SUBSCRIPTION_KEY,
-            delivery: { mode: "push", expression: ["processEventBatch"] },
-            // Everything, from the beginning: the worker sees the stream's
-            // full history once it first builds. No default selector —
-            // selection is the worker's own code (or a same-key override).
-            deliver: "all",
-            // One poison event must not silence a project's entire feed.
-            onPoison: "skip",
+            receiver: {
+              action: "itx-call",
+              expression: ["processEventBatch"],
+              delivery: {
+                // Everything, from the beginning: the worker sees the
+                // stream's full history once it first builds.
+                start: "beginning",
+                // One failing event must not silence a project's entire feed.
+                onFailingEvent: "skip",
+              },
+            },
           } satisfies SubscriptionConfiguredPayload,
         });
         // The standalone streams playground also has no PostHog credential or
@@ -367,21 +564,39 @@ export class StreamDurableObject extends DurableObject<Env> {
         if ("APP_CONFIG_POSTHOG" in this.env) this.append(posthogSubscriptionEvent());
       }
     }
-    this.append({
-      type: "events.iterate.com/stream/woken",
-      payload: { incarnationId: crypto.randomUUID() },
-    });
+    if (this.#invalidCheckpointError !== undefined) {
+      console.error("stream core-state checkpoint was invalid; rebuilt from the event log", {
+        path: this.name.path,
+        stateVersion: CORE_STATE_VERSION,
+        error: this.#invalidCheckpointError,
+      });
+      this.#append({ authority: "core-event" }, [
+        {
+          type: "events.iterate.com/stream/error-occurred",
+          idempotencyKey: internalStreamId(
+            "invalid-core-state-checkpoint-rebuilt",
+            CORE_STATE_VERSION,
+            this.#coreProcessorState.maxOffset,
+          ),
+          payload: {
+            message: `core-state checkpoint for ${this.name.path} failed validation under version ${CORE_STATE_VERSION}; rebuilt from the event log`,
+          },
+        },
+      ]);
+    }
+    this.#append({ authority: "core-event" }, [
+      {
+        type: "events.iterate.com/stream/woken",
+        payload: { incarnationId: crypto.randomUUID() },
+      },
+    ]);
   }
 
   /** Use Cloudflare's native alarm invocation as the trace root; retry work remains background. */
   alarm(): void {
     this.#alarmArmer.markFired();
-    // The constructor's `woken` append already ran `#subscribers.wake()` via
-    // post-commit fan-out; this call re-arms the alarm for the next due retry
-    // (wake() itself only attempts rows whose backoff has elapsed).
     this.#deliveryAlarmBoundary.runAlarmTurn(() => {
-      this.#subscribers.onAlarm();
-      this.#flushCoreProcessorState();
+      this.#reconcileCommittedState({ alarmTurn: true });
     });
   }
 
@@ -397,34 +612,189 @@ export class StreamDurableObject extends DurableObject<Env> {
    * storage writes and core state changes must happen in one synchronous turn.
    *
    * What happens for `append(a, b)` on a stream at `maxOffset: 4`:
-   * 1. `a` becomes offset 5, `b` becomes offset 6; each passes `validateAppend`
+   * 1. `a` becomes offset 5, `b` becomes offset 6; each passes `validate`
    *    and is folded through `reduce`. An event whose `idempotencyKey` already
    *    exists is skipped and the existing event is returned in its place (so
    *    the returned array stays input-aligned).
    * 2. Event rows + the new core state are written in one await-free turn.
    *    After this line the append has succeeded.
-   * 3. Post-commit fan-out: core `processEvent` side effects run, every live
-   *    connection's pump is woken, configured subscriptions without a live
-   *    connection are re-woken. None of this can fail the append.
+   * 3. Post-commit work reconciles runtime delivery from the new reduced state.
+   *    Failures are reported and get an immediate durable repair alarm; they
+   *    cannot change the already-committed append result.
    *
    * Returns the persisted events (including offsets + `createdAt`) in input order.
    */
   append(...eventInputs: StreamEventInput[]): StreamEvent[] {
+    return this.#append({ authority: "public" }, eventInputs);
+  }
+
+  /**
+   * Commit only while this path still names `streamId`. The identity check is
+   * synchronous with the append commit, which closes the read-then-append race
+   * for work retained across a stream deletion and recreation.
+   */
+  appendIfStreamId(args: { streamId: string; events: StreamEventInput[] }): StreamEvent[] {
+    if (args.streamId.trim().length === 0) {
+      throw new Error("streamId must be a non-empty string");
+    }
+    const currentStreamId = this.#coreProcessorState.streamId;
+    if (currentStreamId !== args.streamId) {
+      throw new StreamIdMismatchError(streamIdMismatchMessage(args.streamId, currentStreamId));
+    }
+    return this.#append({ authority: "public" }, args.events);
+  }
+
+  /**
+   * Commit one copy subscription on this source stream and return the
+   * committed configuration event. No probe call, no confirmation wait: the
+   * receiver learns about the subscription when its first copy arrives, and
+   * a broken receiver surfaces later as a durable halt.
+   *
+   * A caller-supplied key means "ensure/replace this source-local
+   * subscription" — an identical configuration is level-triggered and returns
+   * the existing committed event without moving the cursor. An omitted key
+   * always means "create another subscription"; its effective key is derived
+   * from the committed event offset, so a keyless command must supply an
+   * event idempotency key to make a retry unable to create a duplicate.
+   */
+  setCopySubscription(args: {
+    configuration: SubscriptionConfiguredPayload;
+    idempotencyKey?: string;
+  }): {
+    subscriptionKey: string;
+    subscriptionConfiguredEvent: CommittedSubscriptionConfiguredEvent;
+  } {
+    const canonical = CoreProcessorContract.parseEventInput({
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: args.configuration,
+    }).payload;
+    if (canonical.receiver.action !== "copy-to-stream") {
+      throw new Error("setCopySubscription requires a copy action");
+    }
+    if (canonical.subscriptionKey === undefined && args.idempotencyKey === undefined) {
+      throw new Error(
+        "a keyless copy subscription requires idempotencyKey so setup is safe to retry",
+      );
+    }
+
+    const explicitSubscriptionKey = canonical.subscriptionKey;
+    const existing =
+      explicitSubscriptionKey === undefined
+        ? undefined
+        : this.#coreProcessorState.subscriptions.outbound.byKey[explicitSubscriptionKey];
+
+    let configuredEvent: StreamEvent;
+    if (existing !== undefined && jsonValuesEqual(existing.configuration, canonical)) {
+      const event = this.getEvent({ offset: existing.configuredAtOffset });
+      if (event?.type !== "events.iterate.com/stream/subscription-configured") {
+        throw new Error(
+          `subscription "${explicitSubscriptionKey}" points to a missing configuration event at offset ${existing.configuredAtOffset}`,
+        );
+      }
+      // A halted subscription still satisfies an identical ensure: the durable
+      // instruction is already correct, and the halt is delivery state with
+      // its own repair verbs. Throwing here would fail automated retries
+      // (linkGithub, birth replays) that only need the existing event back.
+      configuredEvent = event;
+    } else {
+      configuredEvent = this.#append({ authority: "public" }, [
+        {
+          type: "events.iterate.com/stream/subscription-configured",
+          ...(args.idempotencyKey === undefined ? {} : { idempotencyKey: args.idempotencyKey }),
+          payload: canonical,
+        },
+      ])[0]!;
+    }
+
+    const subscriptionConfiguredEvent = parseCommittedCoreEvent(
+      configuredEvent,
+      "events.iterate.com/stream/subscription-configured",
+    );
+    return {
+      subscriptionKey: subscriptionKeyForConfiguredEvent(subscriptionConfiguredEvent),
+      subscriptionConfiguredEvent,
+    };
+  }
+
+  /** Internal platform-event append used only by sibling Stream Durable Objects. */
+  appendCoreEvent(eventInput: StreamEventInput): StreamEvent {
+    return this.#append({ authority: "core-event" }, [eventInput])[0]!;
+  }
+
+  /** Internal atomic platform-event append used by deterministic live fault injection. */
+  appendCoreEvents(eventInputs: StreamEventInput[]): StreamEvent[] {
+    return this.#append({ authority: "core-event" }, eventInputs);
+  }
+
+  /**
+   * Source-side removal command for a copy. Await-free: validation and append
+   * share one DO turn, so a same-key replacement cannot be removed through a
+   * stale ownership read. Repeated calls are level-triggered, and a
+   * replacement owned by a different receiver is protected by
+   * `expectedReceiverPath`.
+   */
+  removeCopySubscription(args: {
+    subscriptionKey: string;
+    expectedReceiverPath: string;
+  }):
+    | { status: "removed"; subscriptionRemovedEvent: CommittedSubscriptionRemovedEvent }
+    | { status: "already-absent" } {
+    const removal = CoreProcessorContract.parseEventInput({
+      type: "events.iterate.com/stream/subscription-removed",
+      payload: { subscriptionKey: args.subscriptionKey, reason: "requested" },
+    }).payload;
+    const subscriptionKey = removal.subscriptionKey;
+    const expectedReceiverPath = canonicalizeStreamPath(args.expectedReceiverPath);
+    const configured = this.#coreProcessorState.subscriptions.outbound.byKey[subscriptionKey];
+    if (
+      configured === undefined ||
+      configured.configuration.receiver.action !== "copy-to-stream" ||
+      configured.configuration.receiver.receivingStreamPath !== expectedReceiverPath
+    ) {
+      return { status: "already-absent" };
+    }
+    return {
+      status: "removed",
+      subscriptionRemovedEvent: parseCommittedCoreEvent(
+        this.#append({ authority: "public" }, [
+          {
+            type: "events.iterate.com/stream/subscription-removed",
+            payload: { subscriptionKey, reason: "requested" },
+          },
+        ])[0]!,
+        "events.iterate.com/stream/subscription-removed",
+      ),
+    };
+  }
+
+  #append(
+    options: {
+      authority: "public" | "core-event" | "copy";
+    },
+    eventInputs: readonly StreamEventInput[],
+  ): StreamEvent[] {
     let workingState = this.#coreProcessorState;
     const events: StreamEvent[] = [];
     const newEvents: StreamEvent[] = [];
-    const reducedEvents: ReducedCoreEvent[] = [];
     const idempotencyHitsInBatch = new Map<string, StreamEvent>();
 
     // 1. Validate inputs, assign offsets, and reduce state.
     for (const eventInput of eventInputs) {
       // `offset` is an optional optimistic-concurrency assertion, not part of the
       // event body. Split it off immediately so it never reaches core-event
-      // validation or the committed event: `validateAppend` strict-parses the
+      // validation or the committed event: `validate` strict-parses the
       // body against the contract schema, which has no `offset` key, so leaving
       // it attached made every asserted append of a core policy event fail with
       // a spurious "Unrecognized key: offset" instead of performing the assertion.
-      const { offset: expectedOffset, ...body } = StreamAppendInput.parse(eventInput);
+      const { offset: expectedOffset, ...parsedBody } = StreamAppendInput.parse(eventInput);
+      const body = this.#coreProcessor.canonicalize(parsedBody);
+
+      // This check deliberately precedes the idempotency lookup. Otherwise a
+      // public caller could supply a platform key that already exists and have
+      // the lookup return that trusted event before validation runs.
+      if (options.authority === "public" && isInternalStreamIdempotencyKey(body.idempotencyKey)) {
+        throw new Error("iterate-internal idempotency keys are platform-authored");
+      }
 
       if (body.idempotencyKey !== undefined) {
         // Same-batch idempotency should behave like already-persisted idempotency.
@@ -435,6 +805,24 @@ export class StreamDurableObject extends DurableObject<Env> {
           if (expectedOffset !== undefined && expectedOffset !== existing.offset) {
             throw new Error(`idempotency hit at offset ${existing.offset}, got ${expectedOffset}`);
           }
+          if (options.authority === "copy") {
+            // Copied product-event copies are identified by their final
+            // source hop. The receiver's own drop-audit records have no hop;
+            // their deterministic body and internal key are the complete
+            // identity.
+            const isSameCopyAppend =
+              body.source?.copiedFrom?.at(-1) === undefined
+                ? sameIdempotentEvent(existing, body)
+                : sameCopiedEventIdentity(existing, body);
+            if (isSameCopyAppend) {
+              events.push(existing);
+              continue;
+            }
+            // Copy keys name source coordinates, not merely an event
+            // body. Never let a pre-existing ordinary append masquerade as a
+            // successful delivery just because type/payload happen to match.
+            throw new Error(idempotencyConflictMessage(body.idempotencyKey, existing.offset));
+          }
           if (!sameIdempotentEvent(existing, body)) {
             throw new Error(idempotencyConflictMessage(body.idempotencyKey, existing.offset));
           }
@@ -443,7 +831,11 @@ export class StreamDurableObject extends DurableObject<Env> {
         }
       }
 
-      this.#validateAppend({ event: body, state: workingState });
+      this.#coreProcessor.validate({
+        event: body,
+        state: workingState,
+        authority: options.authority,
+      });
 
       const committed: StreamEvent = {
         ...body,
@@ -456,14 +848,24 @@ export class StreamDurableObject extends DurableObject<Env> {
           streamOffsetConflictMessage(expectedOffset, committed.offset),
         );
       }
+      if (
+        options.authority === "public" &&
+        committed.source?.copiedFrom === undefined &&
+        committed.type === "events.iterate.com/stream/subscription-configured"
+      ) {
+        const configured = parseCommittedCoreEvent(
+          committed,
+          "events.iterate.com/stream/subscription-configured",
+        );
+        const subscriptionKey = subscriptionKeyForConfiguredEvent(configured);
+        if (this.#eventSender.connections.connectionKind(subscriptionKey) === "session") {
+          throw new Error(
+            `subscriptionKey "${subscriptionKey}" is already used by a live session connection`,
+          );
+        }
+      }
 
-      const previousState = workingState;
-      workingState = this.#reduce({ event: committed, state: previousState }, "append");
-
-      // Core side effects are deferred until after the commit below: they can
-      // call back into stream runtime state, so running them mid-batch would
-      // observe stale `this.#coreProcessorState`.
-      reducedEvents.push({ event: committed, previousState, state: workingState });
+      workingState = this.#coreProcessor.reduce({ event: committed, state: workingState });
 
       events.push(committed);
       newEvents.push(committed);
@@ -474,15 +876,20 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     if (newEvents.length === 0) return events;
 
-    // 2. Persist event rows and reduced core state. Durable Object SQL storage
-    // runs synchronously in the object's thread; each sql.exec() is atomic and
-    // Output Gates hold responses until writes are durable:
+    // 2. Persist event rows and advance the in-memory reduction. Durable Object
+    // SQL storage runs synchronously in the object's thread; each sql.exec() is
+    // atomic and Output Gates hold responses until writes are durable:
     // https://developers.cloudflare.com/durable-objects/api/sql-storage/
     // https://blog.cloudflare.com/sqlite-in-durable-objects/
-    // Keep this section await-free: event rows + core state are the append
-    // boundary. The KV state checkpoint is DEBOUNCED (see
+    // Keep this section await-free: the event rows are the append boundary.
+    // The KV state checkpoint is DEBOUNCED (see
     // #checkpointCoreProcessorState) — event rows are the durable truth, and
     // boot catch-up folds past a lagging checkpoint by design.
+    assertCoreProcessorCheckpointGrowthFits({
+      before: this.#coreProcessorState,
+      events: newEvents,
+      next: workingState,
+    });
     const byteLengths = this.#log.insert(newEvents);
     this.#coreProcessorState = workingState;
     this.#checkpointCoreProcessorState(newEvents.length);
@@ -493,25 +900,16 @@ export class StreamDurableObject extends DurableObject<Env> {
     );
     this.#refreshLiveState();
 
-    // 3. Post-commit fan-out. Core side effects are fire-and-forget where
-    // async, so nothing here can fail the append. One wake covers every lane:
-    // live connection pumps re-arm, lagging wake subscribers get poked,
-    // lagging push subscriptions drain. The spine triggers on WATERMARK LAG,
-    // never on event types — a subscriber-disconnected fact whose teardown
-    // pre-advanced the watermark reconciles to a no-op instead of needing the
-    // event-type carve-out the old reconciler carried. The wake hands over the
-    // just-committed events (sized by the log write) so caught-up consumers
-    // skip the per-lane SQLite re-read.
-    for (const reduced of reducedEvents) this.#processEvent(reduced);
-    this.#subscribers.wake(
-      newEvents.map((event, index) => ({ event, byteLength: byteLengths[index]! })),
-    );
-
-    // Re-arm (or clear) idle teardown against the post-append connection set,
-    // so a stream that just went quiet sheds its durable delivery sessions
-    // and lets both DOs hibernate. This uses the native DO alarm, never an
-    // actor setTimeout that would retain the current JS-RPC invocation.
-    this.#subscribers.armOrClearIdleAlarm();
+    // 3. Reconcile every mutable/runtime projection from the committed state.
+    // Each operation is isolated so one defect cannot skip its siblings. Any
+    // failure gets an immediate native alarm in this same output-gated turn;
+    // the alarm and a fresh incarnation both run the same level checks.
+    this.#reconcileCommittedState({
+      justCommittedEvents: newEvents.map((event, index) => ({
+        event,
+        byteLength: byteLengths[index]!,
+      })),
+    });
 
     return events;
   }
@@ -560,466 +958,124 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
   }
 
-  /** The committed head used to pin a recoverable public wait's replay cursor. */
+  /**
+   * Read one event page and the stream lifetime that owns its offsets in the
+   * same synchronous Durable Object turn. A separate identity read could race
+   * a stream recreation between calls.
+   */
+  getEventPage(
+    args: {
+      afterOffset?: number;
+      beforeOffset?: number | null;
+      eventTypes?: readonly string[];
+      limit?: number;
+      includeEphemeral?: boolean;
+    } = {},
+  ): { streamId: string; streamMaxOffset: number; events: StreamEvent[] } {
+    const streamId = this.#coreProcessorState.streamId;
+    if (streamId === undefined) {
+      throw new Error("stream identity is unavailable after stream creation");
+    }
+    return {
+      streamId,
+      streamMaxOffset: this.#coreProcessorState.maxOffset,
+      events: this.getEvents(args),
+    };
+  }
+
+  /** The committed maximum offset used to pin a recoverable public wait's replay cursor. */
   getMaxOffset(): number {
     return this.#coreProcessorState.maxOffset;
   }
 
   /**
-   * Both heads in one read, for exact-offset CAS appends that also need a
-   * fold barrier: `maxOffset` is the raw assignable head (ephemeral rows hold
-   * offsets too — the CAS target), while `maxDurableOffset` is the tail a
-   * default catch-up can actually fold through — the only head a
+   * Both maximum offsets in one read, for exact-offset CAS appends that also need a
+   * fold barrier: `maxOffset` is the highest assigned offset (ephemeral rows hold
+   * offsets too — the CAS target), while `maxDurableOffset` is the latest offset a
+   * default catch-up can actually fold through — the only maximum offset a
    * `waitUntilEvent` barrier can be pinned to without wedging on a trailing
    * ephemeral suffix that processor reads never see.
    */
-  getHeadOffsets(): { maxDurableOffset: number; maxOffset: number } {
+  getMaxOffsets(): { maxDurableOffset: number; maxOffset: number } {
     return {
       maxDurableOffset: this.#log.highestDurableOffset(),
       maxOffset: this.#coreProcessorState.maxOffset,
     };
   }
 
-  // ===========================================================================
-  // The core processor.
-  //
-  // Rhymes with every hosted `StreamProcessor` subclass — a contract file
-  // (core-processor-contract.ts) plus `reduce` (pure fold) and `processEvent`
-  // (post-commit side effects) — with two extra powers that come from running
-  // inline in the append turn instead of behind a subscription:
-  //
-  // - it is synchronous with the commit, so its state is never behind the log;
-  // - `validateAppend` runs BEFORE the commit and can reject an event, which
-  //   no subscription-fed processor can ever do.
-  // ===========================================================================
+  // Core validation and reduction live in core-processor.ts. This Durable
+  // Object reconciles mutable delivery state after the durable commit.
+
+  #ancestorsAnnouncedThisIncarnation = false;
+  #ancestorAnnouncementInFlight = false;
 
   /**
-   * Pre-append gate. Stream-owned policy, not a hosted-processor hook: only the
-   * stream itself can reject an append based on core state.
+   * Bring every mutable delivery projection into line with current reduced
+   * state. Each operation is level-triggered and safe to run again after an
+   * interruption, eviction, or alarm retry.
    */
-  #validateAppend(args: { event: StreamEventInput; state: CoreProcessorState }): void {
-    if (args.event.ephemeral && args.event.type.startsWith("events.iterate.com/stream/")) {
-      // Control facts fold into config/presence/park state and may never be
-      // evicted; an ephemeral one would be a fact the stream is licensed to
-      // forget.
-      throw new Error("stream control events cannot be ephemeral");
-    }
-
-    // Control facts must be first-hand: a copied (cross-posted) stream/*
-    // control event is stored and visible but must never fold or validate as
-    // config — otherwise a cross-post subscription matching stream/* would
-    // replicate CONFIGURATION into its target (config propagation by copy).
-    // The reducer applies the same guard on the fold side.
-    const isFirstHand = args.event.source?.crossPostedFrom === undefined;
-
-    if (isFirstHand && args.event.type === "events.iterate.com/stream/subscription-configured") {
-      // Durable subscriptions are desired state. Once this event is committed,
-      // the reducer stores it and the spine is allowed to deliver against it
-      // forever. So validation must happen here, before offset assignment and
-      // storage — not inside the later fire-and-forget delivery path, where an
-      // invalid target/expression would already be durable state every future
-      // append re-reconciles. The lifecycle e2e tests assert both the
-      // rejection and that no event was committed.
-      // The contract schema already carries the structural delivery
-      // validation (expression grammar + the property-step tail rule, webhook
-      // URL shape); cross-project reach needs no check at all because
-      // persisted expressions are NAMES — every delivery re-derives authority
-      // from THIS stream's own itx root (project-scoped, or the deployment
-      // root for projectId: null streams).
-      const payload = CoreProcessorContract.events[
-        "events.iterate.com/stream/subscription-configured"
-      ].payloadSchema.parse(args.event.payload);
-      if (payload.delivery.mode === "webhook" && this.name.projectId === null) {
-        // Webhook POSTs ride the project egress lane (attribution +
-        // interception); a global stream has no project to attribute them to.
-        throw new Error("webhook subscriptions require a project-scoped stream");
+  #reconcileCommittedState(args: {
+    alarmTurn?: boolean;
+    justCommittedEvents?: Parameters<StreamEventSender["sendDue"]>[0];
+  }): void {
+    let repairNeeded = false;
+    const attempt = (operation: string, work: () => void | boolean) => {
+      try {
+        if (work() === false) repairNeeded = true;
+      } catch (error) {
+        repairNeeded = true;
+        console.error("stream post-commit reconciliation failed", { operation, error });
       }
-      // An unparseable selector condition must be rejected before it commits,
-      // not discovered as a per-event error forever after. (compile throws.)
-      compileEventSelector(payload.selector);
-    }
-
-    if (!args.state.paused) return;
-
-    // Presence and park facts pass through the pause door alongside
-    // resume/error/woken: a paused stream still has subscribers attaching
-    // (e.g. an operator's browser) and deliveries failing, and both rosters
-    // must stay truthful for the stream to recover.
-    switch (args.event.type) {
-      case "events.iterate.com/stream/resumed":
-      case "events.iterate.com/stream/error-occurred":
-      case "events.iterate.com/stream/woken":
-      case "events.iterate.com/stream/subscriber-connected":
-      case "events.iterate.com/stream/subscriber-disconnected":
-      case "events.iterate.com/stream/subscription-parked":
-        return;
-      default:
-        throw new Error(
-          `${STREAM_PAUSED_ERROR_PREFIX}${args.state.pauseReason ?? "unknown reason"}`,
-        );
-    }
-  }
-
-  // Pure fold of one committed event into the next core state. Runs per event
-  // on the synchronous append hot path. Known core event payloads are parsed
-  // from the contract before state access; non-core events still count toward
-  // the offset/event counters.
-  //
-  // Do NOT re-parse the whole state on the way out: `state` was already
-  // validated at the trust boundary (the KV read and event-log recovery path
-  // both parse). Re-validating the growing record fields on every append was
-  // quadratic work for no added safety.
-  /**
-   * `mode` decides what a fold failure means. On the APPEND path a parse
-   * failure must THROW — the fold is part of the pre-commit gate for every
-   * core event #validateAppend does not special-case, and swallowing it would
-   * let malformed facts commit (thermo round 2, blocker 2: live-proven on
-   * preview). On the REPLAY path (state rebuild from the log) the same
-   * failure folds as INERT — counters + breaker only — because the event is
-   * already durable and throwing would brick the constructor forever (the
-   * #1714 parse-poison posture; pre-v10 journal shapes are the expected case).
-   */
-  #reduce(
-    args: { event: StreamEvent; state: CoreProcessorState },
-    mode: "append" | "replay",
-  ): CoreProcessorState {
-    if (mode === "append") return this.#reduceCore(args);
-    try {
-      return this.#reduceCore(args);
-    } catch (error) {
-      console.error("stream core reduce skipped unparseable event", {
-        offset: args.event.offset,
-        type: args.event.type,
-        error,
-      });
-      return this.#reduceCircuitBreaker({
-        event: args.event,
-        state: {
-          ...args.state,
-          eventCount: args.state.eventCount + 1,
-          maxOffset: args.event.offset,
-        },
-      });
-    }
-  }
-
-  #reduceCore(args: { event: StreamEvent; state: CoreProcessorState }): CoreProcessorState {
-    let next: CoreProcessorState = {
-      ...args.state,
-      eventCount: args.state.eventCount + 1,
-      maxOffset: args.event.offset,
     };
 
-    // Control facts must be first-hand: a cross-posted copy of a stream/*
-    // control event is stored and visible (it still counts toward offsets and
-    // the circuit breaker) but INERT — it configures nothing, connects
-    // nothing, parks nothing. This closes the config-propagation-by-copy hole
-    // no matter what selectors people write. See #validateAppend for the
-    // matching write-side guard on subscription-configured.
-    if (
-      args.event.type.startsWith("events.iterate.com/stream/") &&
-      args.event.source?.crossPostedFrom !== undefined
-    ) {
-      return this.#reduceCircuitBreaker({ event: args.event, state: next });
+    attempt("append circuit-breaker pause", () => this.#appendOwedCircuitBreakerPause());
+    attempt("announce stream to ancestors", () => this.#announceToAncestors());
+    attempt("send pending events", () =>
+      args.alarmTurn === true
+        ? this.#eventSender.onAlarm()
+        : this.#eventSender.sendDue(args.justCommittedEvents),
+    );
+    attempt("arm hosted-connection idle alarm", () =>
+      this.#eventSender.connections.armOrClearIdleAlarm(),
+    );
+    if (args.alarmTurn === true) {
+      attempt("flush core state checkpoint", () => this.#flushCoreProcessorState());
     }
 
-    const event = parseCoreEvent(args.event);
-    if (event === undefined) {
-      return this.#reduceCircuitBreaker({ event: args.event, state: next });
-    }
-
-    switch (event.type) {
-      case "events.iterate.com/stream/created": {
-        if (event.offset !== 1) {
-          throw new Error(
-            "events.iterate.com/stream/created must be the first event and have offset 1",
-          );
-        }
-        return this.#reduceCircuitBreaker({
-          event: args.event,
-          state: {
-            ...next,
-            projectId: event.payload.projectId,
-            path: event.payload.path,
-            createdAt: event.createdAt,
-          },
-        });
-      }
-
-      case "events.iterate.com/stream/woken": {
-        // A new stream incarnation means every previous delivery connection
-        // died with the old one. Clearing the roster here is what keeps it
-        // truthful without heartbeats: surviving subscribers reconnect and
-        // their fresh subscriber-connected events re-land below.
-        return { ...next, incarnationId: event.payload.incarnationId, connectionsByKey: {} };
-      }
-
-      case "events.iterate.com/stream/paused": {
-        return {
-          ...next,
-          paused: true,
-          pauseReason: event.payload.reason ?? null,
-          circuitBreaker: resetCircuitBreaker(next.circuitBreaker, event.createdAt),
-        };
-      }
-
-      case "events.iterate.com/stream/resumed": {
-        return {
-          ...next,
-          paused: false,
-          pauseReason: null,
-          circuitBreaker: resetCircuitBreaker(next.circuitBreaker, event.createdAt),
-        };
-      }
-
-      case "events.iterate.com/stream/configured": {
-        const circuitBreaker = event.payload.config.circuitBreaker;
-        if (circuitBreaker === undefined) return next;
-        return {
-          ...next,
-          circuitBreaker: {
-            availableTokens: circuitBreaker.burstCapacity,
-            lastRefillAtMs: Date.parse(event.createdAt),
-            burstCapacity: circuitBreaker.burstCapacity,
-            refillRatePerMinute: circuitBreaker.refillRatePerMinute,
-            trippedAtOffset: null,
-          },
-        };
-      }
-
-      case "events.iterate.com/stream/subscriber-connected": {
-        const { subscriptionKey, subscriber, subscriptionType } = event.payload;
-        // Ephemeral connections are runtime facts, not reduced state: their
-        // lifetime is the live socket, tracked in #subscribers. Folding them
-        // here would leave dead roster entries whenever a disconnect fact is
-        // lost (eviction, deploy rollover), and nothing reads them.
-        if (subscriptionType === "ephemeral") {
-          return this.#reduceCircuitBreaker({ event: args.event, state: next });
-        }
-        next = {
-          ...next,
-          connectionsByKey: {
-            ...next.connectionsByKey,
-            [subscriptionKey]: {
-              subscriptionType,
-              connectedAtOffset: event.offset,
-              ...(subscriber === undefined ? {} : { subscriber }),
-            },
-          },
-        };
-        return this.#reduceCircuitBreaker({ event: args.event, state: next });
-      }
-
-      case "events.iterate.com/stream/subscriber-disconnected": {
-        const { [event.payload.subscriptionKey]: _closed, ...connectionsByKey } =
-          next.connectionsByKey;
-        return this.#reduceCircuitBreaker({
-          event: args.event,
-          state: { ...next, connectionsByKey },
-        });
-      }
-
-      case "events.iterate.com/stream/subscription-configured": {
-        return this.#reduceCircuitBreaker({
-          event: args.event,
-          state: {
-            ...next,
-            configuredSubscribersByKey: {
-              ...next.configuredSubscribersByKey,
-              [event.payload.subscriptionKey]: {
-                latestConfiguredEvent: {
-                  offset: event.offset,
-                  type: event.type,
-                  payload: event.payload,
-                  createdAt: event.createdAt,
-                },
-              },
-            },
-          },
-        });
-      }
-
-      case "events.iterate.com/stream/subscription-removed": {
-        const { [event.payload.subscriptionKey]: _removed, ...configuredSubscribersByKey } =
-          next.configuredSubscribersByKey;
-        return this.#reduceCircuitBreaker({
-          event: args.event,
-          state: { ...next, configuredSubscribersByKey },
-        });
-      }
-
-      case "events.iterate.com/stream/subscription-parked": {
-        const existing = next.configuredSubscribersByKey[event.payload.subscriptionKey];
-        // A parked fact for a since-removed subscription folds to nothing.
-        if (existing === undefined) {
-          return this.#reduceCircuitBreaker({ event: args.event, state: next });
-        }
-        return this.#reduceCircuitBreaker({
-          event: args.event,
-          state: {
-            ...next,
-            configuredSubscribersByKey: {
-              ...next.configuredSubscribersByKey,
-              [event.payload.subscriptionKey]: {
-                ...existing,
-                parkedAtOffset: event.payload.atOffset,
-              },
-            },
-          },
-        });
-      }
-
-      case "events.iterate.com/stream/subscription-resumed": {
-        const existing = next.configuredSubscribersByKey[event.payload.subscriptionKey];
-        if (existing === undefined) {
-          return this.#reduceCircuitBreaker({ event: args.event, state: next });
-        }
-        const { parkedAtOffset: _cleared, ...resumed } = existing;
-        return this.#reduceCircuitBreaker({
-          event: args.event,
-          state: {
-            ...next,
-            configuredSubscribersByKey: {
-              ...next.configuredSubscribersByKey,
-              [event.payload.subscriptionKey]: resumed,
-            },
-          },
-        });
-      }
-
-      case "events.iterate.com/stream/subscription-cursor-set":
-        // The seek itself is a side effect on the spine's cursor row (see
-        // #processEvent); the fold only validates and counts the fact.
-        return this.#reduceCircuitBreaker({ event: args.event, state: next });
-
-      case "events.iterate.com/stream/child-stream-created": {
-        if (next.path === undefined) {
-          return this.#reduceCircuitBreaker({ event: args.event, state: next });
-        }
-        const childPath = immediateChildPath(next.path, event.payload.childPath);
-        if (childPath === null || next.childPaths.includes(childPath)) {
-          return this.#reduceCircuitBreaker({ event: args.event, state: next });
-        }
-        return this.#reduceCircuitBreaker({
-          event: args.event,
-          state: { ...next, childPaths: [...next.childPaths, childPath] },
-        });
-      }
-
-      case "events.iterate.com/stream/error-occurred":
-        return this.#reduceCircuitBreaker({ event: args.event, state: next });
-
-      default:
-        return this.#reduceCircuitBreaker({ event: args.event, state: next });
+    if (repairNeeded) {
+      // This setAlarm write deliberately remains uncaught. The output gate
+      // suppresses the append response if durable repair cannot be recorded;
+      // returning success with neither applied effects nor a future turn would
+      // violate the stream's commit contract.
+      this.#consecutiveReconciliationFailures += 1;
+      this.#alarmArmer.armNoLaterThan(
+        Date.now() + computeBackoffMs(this.#consecutiveReconciliationFailures, Math.random()),
+      );
+    } else {
+      this.#consecutiveReconciliationFailures = 0;
     }
   }
 
-  /**
-   * Post-commit side effects for one just-reduced event. Historical catch-up
-   * only reduces state; it never replays side effects. Async work goes through
-   * `#runInBackground`, so nothing here can fail the append that triggered it.
-   */
-  #processEvent(args: ReducedCoreEvent): void {
-    this.#pauseIfCircuitBreakerTripped(args);
-
-    // Copied control events folded to nothing (first-hand guard in #reduce);
-    // they must produce no side effects either.
-    if (
-      args.event.type.startsWith("events.iterate.com/stream/") &&
-      args.event.source?.crossPostedFrom !== undefined
-    ) {
-      return;
-    }
-
-    const event = parseCoreEvent(args.event);
-    if (event === undefined) return;
-
-    switch (event.type) {
-      case "events.iterate.com/stream/subscription-configured": {
-        this.#subscribers.onSubscriptionConfigured(event.payload, event.offset);
-        return;
-      }
-      case "events.iterate.com/stream/subscription-removed": {
-        this.#subscribers.onSubscriptionRemoved(event.payload.subscriptionKey);
-        return;
-      }
-      case "events.iterate.com/stream/subscription-resumed": {
-        this.#subscribers.onResumed(event.payload.subscriptionKey);
-        return;
-      }
-      case "events.iterate.com/stream/subscription-cursor-set": {
-        this.#subscribers.onCursorSet(event.payload.subscriptionKey, event.payload.afterOffset);
-        return;
-      }
-      case "events.iterate.com/stream/woken":
-        // Every incarnation re-announces this stream to its ancestors, not
-        // just the birth one. The appends are idempotent (stable key per
-        // ancestor/path pair, deduped in the ancestor's log), so re-announcing
-        // is a cheap no-op once landed — and an announcement lost in flight
-        // (isolate recycled by a deploy mid birth turn, transient ancestor
-        // failure) heals on the next wake instead of orphaning the stream:
-        // ancestors would otherwise never fold `child-stream-created`, leaving
-        // listings blind and birth reactions unarmed forever. Fire-and-forget
-        // by design — a newborn must never block its own boot on ancestor
-        // health (the parent's processor may be mid-append INTO this stream,
-        // so waiting on the parent's ack here is a reentrant deadlock).
-        this.#announceToAncestors(args);
-        return;
-      default:
-        return;
-    }
-  }
-
-  #reduceCircuitBreaker(args: {
-    event: StreamEvent;
-    state: CoreProcessorState;
-  }): CoreProcessorState {
-    if (args.event.type === "events.iterate.com/stream/woken") return args.state;
-
-    const timestampMs = Date.parse(args.event.createdAt);
-    if (!Number.isFinite(timestampMs)) return args.state;
-    const elapsedMs =
-      args.state.circuitBreaker.lastRefillAtMs === null
-        ? 0
-        : Math.max(0, timestampMs - args.state.circuitBreaker.lastRefillAtMs);
-    const tokens =
-      Math.min(
-        args.state.circuitBreaker.burstCapacity,
-        args.state.circuitBreaker.availableTokens +
-          elapsedMs * (args.state.circuitBreaker.refillRatePerMinute / 60_000),
-      ) - 1;
-
-    return {
-      ...args.state,
-      circuitBreaker: {
-        ...args.state.circuitBreaker,
-        availableTokens: tokens,
-        lastRefillAtMs: timestampMs,
-        trippedAtOffset:
-          tokens < 0 && !args.state.paused && args.state.circuitBreaker.trippedAtOffset === null
-            ? args.event.offset
-            : args.state.circuitBreaker.trippedAtOffset,
+  #appendOwedCircuitBreakerPause(): void {
+    const tripOffset = this.#coreProcessorState.circuitBreaker.trippedAtOffset;
+    if (tripOffset === null || this.#coreProcessorState.paused) return;
+    this.#append({ authority: "core-event" }, [
+      {
+        type: "events.iterate.com/stream/paused",
+        idempotencyKey: internalStreamId("stream-paused", tripOffset),
+        payload: { reason: "circuit breaker tripped: burst rate limit exceeded" },
       },
-    };
-  }
-
-  #pauseIfCircuitBreakerTripped(args: ReducedCoreEvent): void {
-    if (args.state.circuitBreaker.trippedAtOffset !== args.event.offset) return;
-    if (args.previousState.circuitBreaker.trippedAtOffset === args.event.offset) return;
-    if (args.event.type === "events.iterate.com/stream/paused") return;
-    this.append({
-      type: "events.iterate.com/stream/paused",
-      idempotencyKey: `stream-paused:${args.event.offset}`,
-      payload: {
-        reason: "circuit breaker tripped: burst rate limit exceeded",
-      },
-    });
+    ]);
   }
 
   /** Tell every ancestor stream (up to the root) that this stream exists. */
-  #announceToAncestors(args: ReducedCoreEvent): void {
-    const path = args.state.path;
-    if (path === undefined || path === "/") return;
+  #announceToAncestors(): void {
+    if (this.#ancestorsAnnouncedThisIncarnation || this.#ancestorAnnouncementInFlight) return;
+    const path = this.#coreProcessorState.path;
+    if (path === undefined || path === "/") {
+      this.#ancestorsAnnouncedThisIncarnation = true;
+      return;
+    }
 
     const pathSegments = path.split("/").filter(Boolean);
     const ancestorPaths = ["/"];
@@ -1027,55 +1083,63 @@ export class StreamDurableObject extends DurableObject<Env> {
       ancestorPaths.push(`/${pathSegments.slice(0, index).join("/")}`);
     }
 
+    this.#ancestorAnnouncementInFlight = true;
     this.#runInBackground(async () => {
-      await Promise.all(
-        ancestorPaths.map((ancestorPath) =>
-          this.#appendToStreamPath(ancestorPath, {
-            type: "events.iterate.com/stream/child-stream-created",
-            idempotencyKey: `child-stream-created:${ancestorPath}:${path}`,
-            payload: { childPath: path },
-          }),
-        ),
-      );
+      try {
+        await Promise.all(
+          ancestorPaths.map((ancestorPath) =>
+            this.#appendCoreEventToStreamPath(ancestorPath, {
+              type: "events.iterate.com/stream/child-stream-created",
+              idempotencyKey: internalStreamId("child-stream-created", ancestorPath, path),
+              payload: { childPath: path },
+            }),
+          ),
+        );
+        this.#ancestorsAnnouncedThisIncarnation = true;
+      } finally {
+        this.#ancestorAnnouncementInFlight = false;
+      }
     });
   }
 
+  #streamStub(path: string) {
+    return this.env.STREAM.getByName(
+      DurableObjectNameCodec.stringify(
+        { projectId: this.name.projectId, path },
+        { allowNullProjectId: true },
+      ),
+    );
+  }
+
   /**
-   * Cross-post receiving end — an ordinary push SINK on the target stream
-   * (`(batch) => void`, the same shape every subscriber provides), reached by
-   * a source stream's push subscription (sugar: `crossPostTo`). All
-   * cross-post semantics — provenance, loop protection, idempotency keys,
-   * the optional JSONata transform — live in `cross-post.ts`; this method
+   * Receive events from another stream. Adding `source.copiedFrom`, the
+   * inbound stamp fence, cycle prevention, and idempotency keys live in
+   * `copy-appends.ts`; this method
    * only appends the built inputs in its own synchronous turn.
    */
-  acceptCrossPost(batch: StreamPushEventBatch): void {
-    const inputs = buildAcceptCrossPostAppendInputs(batch, {
-      projectId: this.name.projectId,
-      path: this.name.path,
+  receiveCopiedEvents(batch: StreamDeliveryBatch): CopyReceipt {
+    const { inputs, receipt } = buildCopyAppends({
+      batch,
+      self: { projectId: this.name.projectId, path: this.name.path },
+      inbound: this.#coreProcessorState.subscriptions.inbound.bySourcePath[batch.path],
     });
-    if (inputs.length > 0) this.append(...inputs);
+    if (inputs.length > 0) {
+      this.#append({ authority: "copy" }, inputs);
+    }
+    return receipt;
   }
 
   /**
    * Trusted-internal, session-independent acknowledgement for a configured
    * wake delivery. The opaque settlement ID fences duplicates and reports
-   * from replaced subscriber connections inside StreamSubscribers.
+   * from replaced processor connections inside StreamConnections.
    */
   settleWakeDelivery(report: StreamWakeDeliverySettlementReport): void {
-    this.#subscribers.settleWakeDelivery(report);
+    this.#eventSender.connections.settleWakeDelivery(report);
   }
 
-  #appendToStreamCoordinate(
-    coordinate: { projectId: string | null; path: string },
-    ...events: StreamEventInput[]
-  ) {
-    return this.env.STREAM.getByName(
-      DurableObjectNameCodec.stringify(coordinate, { allowNullProjectId: true }),
-    ).append(...events);
-  }
-
-  #appendToStreamPath(path: string, ...events: StreamEventInput[]) {
-    return this.#appendToStreamCoordinate({ path, projectId: this.name.projectId }, ...events);
+  #appendCoreEventToStreamPath(path: string, event: StreamEventInput) {
+    return this.#streamStub(path).appendCoreEvent(event);
   }
 
   #runInBackground(work: () => Promise<unknown>): void {
@@ -1086,45 +1150,41 @@ export class StreamDurableObject extends DurableObject<Env> {
   // Core state checkpoint: reduced state in KV, rebuilt from the event log.
   // ===========================================================================
 
-  #readCoreProcessorState(): CoreProcessorState {
+  #readCoreProcessorState(): { kind: "ready"; state: CoreProcessorState } | { kind: "rebuild" } {
     const stored = this.ctx.storage.kv.get<unknown>("state");
     const storedVersion = this.ctx.storage.kv.get<unknown>("stateVersion") ?? 1;
     // State persisted by a reducer of a different version is incomplete (it
     // was reduced before newer derived fields existed), so it is discarded and
     // rebuilt from the event log rather than trusted.
-    const storedStateIsCurrent = stored !== undefined && storedVersion === CORE_STATE_VERSION;
-    const storedState = storedStateIsCurrent
-      ? CoreProcessorContract.stateSchema.parse(stored)
-      : this.#recoverCoreProcessorStateFromEventLog();
-    if (storedState === undefined) return CoreProcessorContract.stateSchema.parse({});
+    if (stored !== undefined && storedVersion === CORE_STATE_VERSION) {
+      const parsed = CoreProcessorContract.stateSchema.safeParse(stored);
+      if (parsed.success) {
+        this.#deleteCoreStateRebuildCheckpoint();
+        const state = this.#catchUpCoreProcessorState(parsed.data);
+        const configuredSubscriptionKeys = new Set(Object.keys(state.subscriptions.outbound.byKey));
 
-    const state = this.#catchUpCoreProcessorState(storedState);
+        // A lifecycle interruption can land after a removal event commits but
+        // before its post-commit cursor cleanup. Reduced source configuration
+        // is authoritative on every boot, not only after a reducer-version
+        // migration.
+        pruneOrphanedSubscriptionCursorRows(
+          this.#subscriptionCursorStore,
+          configuredSubscriptionKeys,
+        );
 
-    if (!storedStateIsCurrent) {
-      // A version-mismatch rebuild replayed the config from the log, but the
-      // spine's SQLite cursor rows are storage and survived as-is — possibly
-      // describing a world the new fold no longer derives (a subscription
-      // whose config event no longer parses loses its config but kept its
-      // row; a row's backoff may blame code the new version replaced). Drop
-      // rows with no surviving config; keep progress (ackedOffset is
-      // monotonic truth about the same immutable log) but clear failure state
-      // so every survivor gets an immediate fresh try under the new fold —
-      // except parked survivors, which stay parked through the replay and
-      // keep their row's failure evidence for the stalled-warning sheet.
-      const configured = Object.entries(state.configuredSubscribersByKey);
-      reconcileSubscriptionCursorRows(
-        this.#subscriptionCursorStore,
-        new Set(configured.map(([key]) => key)),
-        new Set(
-          configured.filter(([, entry]) => entry.parkedAtOffset !== undefined).map(([key]) => key),
-        ),
-      );
+        if (state.maxOffset !== parsed.data.maxOffset) {
+          this.#writeCoreProcessorState(state);
+        }
+        return { kind: "ready", state };
+      }
+      this.#invalidCheckpointError = parsed.error;
     }
 
-    if (!storedStateIsCurrent || state.maxOffset !== storedState.maxOffset) {
-      this.#writeCoreProcessorState(state);
+    if (this.#log.highestOffset() === 0) {
+      this.#deleteCoreStateRebuildCheckpoint();
+      return { kind: "ready", state: CoreProcessorContract.stateSchema.parse({}) };
     }
-    return state;
+    return { kind: "rebuild" };
   }
 
   #stateVersionWritten = false;
@@ -1178,41 +1238,59 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
   }
 
-  /** Fold any event-log rows past the checkpoint into the state (no side effects). */
+  /** Reduce one bounded page, wrapping the exact historical row on failure. */
+  #reduceNextCoreProcessorPage(
+    state: CoreProcessorState,
+    highestOffset: number,
+  ): CoreProcessorState | undefined {
+    const page = this.#log.getRange({
+      afterOffset: state.maxOffset,
+      beforeOffset: highestOffset + 1,
+      limit: 500,
+      // Ephemeral rows folded on append (counters + circuit breaker), so the
+      // rebuild re-folds them. Exactly identical only while their rows
+      // survive: a post-eviction rebuild counts fewer events and re-burns
+      // fewer breaker tokens — bookkeeping drift, not correctness (see
+      // eventCount's doc in core-processor-contract.ts).
+      includeEphemeral: true,
+    });
+    if (page.length === 0) return undefined;
+
+    let next = state;
+    for (const event of page) {
+      if (event.offset <= next.maxOffset) continue;
+      try {
+        next = this.#coreProcessor.reduce({ event, state: next });
+      } catch (error) {
+        throw new Error(
+          `failed to replay core event at path "${this.name.path}", offset ${event.offset}, type "${event.type}", state version ${CORE_STATE_VERSION}`,
+          { cause: error },
+        );
+      }
+    }
+    return next;
+  }
+
+  #applyHighestAssignedOffset(state: CoreProcessorState): CoreProcessorState {
+    // The fold recovers maxOffset from surviving rows; the assigned floor
+    // covers rows a future ephemeral eviction sweep deleted. Without it a
+    // rebuild after the latest row was evicted would reissue offsets that live
+    // open callbacks already received (the browser event table hard-ABORTs on a reused
+    // offset carrying different JSON).
+    const assignedFloor = this.#log.highestAssignedOffset();
+    return assignedFloor > state.maxOffset ? { ...state, maxOffset: assignedFloor } : state;
+  }
+
+  /** Fold the small bounded tail after an ordinary current checkpoint. */
   #catchUpCoreProcessorState(state: CoreProcessorState): CoreProcessorState {
     const highestOffset = this.#log.highestOffset();
     let next = state;
-    // PAGED, never one monolithic read: this is also the version-bump rebuild
-    // path (replay from offset 0), and a capture stream's full log
-    // materialized into one array can exceed the DO's 128MB heap — an OOM in
-    // the CONSTRUCTOR, i.e. a stream bricked on every wake. The fold is
-    // incremental; only the read needed paging.
     while (next.maxOffset < highestOffset) {
-      const page = this.#log.getRange({
-        afterOffset: next.maxOffset,
-        beforeOffset: highestOffset + 1,
-        limit: 500,
-        // Ephemeral rows folded on append (counters + circuit breaker), so
-        // the rebuild re-folds them. Exactly identical only while their rows
-        // survive: a post-eviction rebuild counts fewer events and re-burns
-        // fewer breaker tokens — bookkeeping drift, not correctness (see
-        // eventCount's doc in core-processor-contract.ts).
-        includeEphemeral: true,
-      });
-      if (page.length === 0) break;
-      for (const event of page) {
-        if (event.offset <= next.maxOffset) continue;
-        next = this.#reduce({ event, state: next }, "replay");
-      }
+      const reduced = this.#reduceNextCoreProcessorPage(next, highestOffset);
+      if (reduced === undefined) break;
+      next = reduced;
     }
-    // The fold recovers maxOffset from surviving rows; the assigned floor
-    // covers rows a future ephemeral eviction sweep deleted. Without it a
-    // rebuild after head-row eviction would reissue offsets that live
-    // subscribers already saw (the browser mirror hard-ABORTs on a reused
-    // offset carrying different JSON).
-    const assignedFloor = this.#log.highestAssignedOffset();
-    if (assignedFloor > next.maxOffset) next = { ...next, maxOffset: assignedFloor };
-    return next;
+    return this.#applyHighestAssignedOffset(next);
   }
 
   /**
@@ -1221,63 +1299,155 @@ export class StreamDurableObject extends DurableObject<Env> {
    * event log instead of treating the stream as empty and trying to insert
    * offset 1 again.
    */
-  #recoverCoreProcessorStateFromEventLog(): CoreProcessorState | undefined {
-    if (this.#log.highestOffset() === 0) return undefined;
-    return this.#catchUpCoreProcessorState(CoreProcessorContract.stateSchema.parse({}));
+  async #recoverCoreProcessorStateFromEventLog(): Promise<CoreProcessorState> {
+    const highestOffset = this.#log.highestOffset();
+    if (highestOffset === 0) {
+      throw new Error("cannot rebuild core processor state from an empty event log");
+    }
+    let state =
+      this.#readCoreStateRebuildCheckpoint() ?? CoreProcessorContract.stateSchema.parse({});
+    let pagesReduced = 0;
+    while (state.maxOffset < highestOffset) {
+      const reduced = this.#reduceNextCoreProcessorPage(state, highestOffset);
+      if (reduced === undefined) break;
+      state = reduced;
+      pagesReduced += 1;
+      if (pagesReduced % CORE_STATE_REBUILD_CHECKPOINT_EVERY_PAGES === 0) {
+        this.ctx.storage.kv.put(CORE_STATE_REBUILD_KEY, {
+          stateVersion: CORE_STATE_VERSION,
+          state,
+        });
+        // Synchronous SQL/KV writes before one JavaScript await share an
+        // implicit transaction. This explicit flush is what makes the staged
+        // replay state survive an initialization timeout or reset.
+        await this.ctx.storage.sync();
+      }
+    }
+    state = this.#applyHighestAssignedOffset(state);
+
+    const configuredSubscriptionKeys = new Set(Object.keys(state.subscriptions.outbound.byKey));
+    this.ctx.storage.transactionSync(() => {
+      pruneOrphanedSubscriptionCursorRows(
+        this.#subscriptionCursorStore,
+        configuredSubscriptionKeys,
+      );
+      // The SQLite cursor rows survived the reducer-version change. Keep
+      // monotonic acknowledged progress, but clear stale failure state so
+      // every surviving subscription gets a fresh attempt under the new reducer.
+      clearSubscriptionCursorFailuresAfterStateRebuild(
+        this.#subscriptionCursorStore,
+        configuredSubscriptionKeys,
+      );
+      this.#writeCoreProcessorState(state);
+      this.#deleteCoreStateRebuildCheckpoint();
+    });
+    await this.ctx.storage.sync();
+    return state;
+  }
+
+  #readCoreStateRebuildCheckpoint(): CoreProcessorState | undefined {
+    const raw = this.ctx.storage.kv.get<unknown>(CORE_STATE_REBUILD_KEY);
+    if (raw === undefined) return undefined;
+    const version = z.object({ stateVersion: z.number().int() }).safeParse(raw);
+    if (version.success && version.data.stateVersion !== CORE_STATE_VERSION) {
+      // Expected deploy residue: a staged replay has exactly the same reducer
+      // compatibility boundary as the promoted checkpoint. It cannot be
+      // resumed under another version, but it is not evidence of corruption.
+      this.#deleteCoreStateRebuildCheckpoint();
+      return undefined;
+    }
+    const parsed = CoreStateRebuildCheckpoint.safeParse(raw);
+    if (parsed.success) {
+      const state = parsed.data.state;
+      let creationMatches = false;
+      try {
+        const firstEvent = this.#log.getByOffset(1);
+        if (firstEvent !== undefined) {
+          const created = parseCommittedCoreEvent(firstEvent, "events.iterate.com/stream/created");
+          creationMatches =
+            created.payload.projectId === this.name.projectId &&
+            created.payload.path === this.name.path &&
+            created.payload.streamId === state.streamId &&
+            created.createdAt === state.createdAt;
+        }
+      } catch (error) {
+        this.#invalidCheckpointError ??= error;
+      }
+      const belongsToThisLog =
+        creationMatches &&
+        state.eventCount > 0 &&
+        state.projectId === this.name.projectId &&
+        state.path === this.name.path &&
+        state.maxOffset > 0 &&
+        state.maxOffset <= this.#log.highestAssignedOffset();
+      if (belongsToThisLog) return state;
+      this.#invalidCheckpointError ??= new Error(
+        `core-state rebuild checkpoint does not describe ${this.name.path}'s current event log`,
+      );
+    } else {
+      this.#invalidCheckpointError ??= parsed.error;
+    }
+    this.#deleteCoreStateRebuildCheckpoint();
+    return undefined;
+  }
+
+  #deleteCoreStateRebuildCheckpoint(): void {
+    if (this.ctx.storage.kv.get(CORE_STATE_REBUILD_KEY) === undefined) return;
+    this.ctx.storage.kv.delete(CORE_STATE_REBUILD_KEY);
   }
 
   // ===========================================================================
-  // Subscriptions: the public delivery surface.
+  // Connections: the public live event-callback surface.
   // ===========================================================================
 
   /**
-   * Subscribes to catch-up then live event batches.
+   * Opens a session-owned callback connection for catch-up and live batches.
    *
    * Synchronous because it mutates the in-memory connection table and returns
    * the live handle for the current Durable Object incarnation; cross-RPC
    * callers still observe an async call through their stub.
    *
-   * `subscribe({ subscriptionKey: "s", processEventBatch })` live-tails by
+   * `openConnection({ connectionKey: "s", processEventBatch })` receives new events by
    * default. `replayAfterOffset: 0` replays durable events from the first row;
    * `3` starts durable replay at offset 4. Ephemeral rows are delivered only
    * if appended after this exact connection opens and are never replayed.
-   * Re-subscribing with the same key replaces the old connection.
-   * Omit `subscriptionKey` for an anonymous subscription (the stream assigns a
-   * random key). Call the returned `unsubscribe()` to stop delivery.
+   * Opening the same key again replaces the old connection. Omit
+   * `connectionKey` to let the stream assign a random key. Call `close()` on
+   * the returned handle to stop delivery.
    *
    * Every batch carries the stream's core reduced `state` as of
-   * `streamMaxOffset`, and every subscription — with or without replay —
-   * immediately receives one batch on open so the subscriber can paint its
-   * first render without a separate getState call. Pass `events: false` for a
-   * state-only subscription: same batches, `events` always `[]`, consecutive
+   * `streamMaxOffset`, and every connection — with or without replay —
+   * immediately receives one batch on open so its callback can paint a first
+   * render without a separate getState call. Pass `events: false` for a
+   * state-only connection: same batches, `events` always `[]`, consecutive
    * appends coalesced into one state delivery.
    *
-   * This verb opens EPHEMERAL subscriptions only — session-scoped, forgotten
-   * on disconnect, zero return frames on the wire. Durable subscriptions are
-   * desired state (`subscription-configured` events); their connections are
-   * created exclusively by the stream's own spine (a poke's returned sink),
-   * never by an inbound subscribe call.
+   * This method opens session-scoped connections only: they are forgotten on
+   * disconnect and callback results are not pulled back over the wire.
+   * Durable subscriptions are stored configuration
+   * (`subscription-configured` events); the source stream wakes a hosted
+   * processor and retains the `processEventBatch` callback it returns.
    */
-  subscribe(args: Parameters<Stream["subscribe"]>[0]): StreamSubscriptionHandle {
-    const subscriptionKey = args.subscriptionKey?.trim() || crypto.randomUUID();
-    if (this.#coreProcessorState.configuredSubscribersByKey[subscriptionKey] !== undefined) {
-      throw new Error(`subscriptionKey "${subscriptionKey}" is reserved for a durable subscriber`);
+  openConnection(args: Parameters<Stream["openConnection"]>[0]): StreamConnectionHandle {
+    const connectionKey = args.connectionKey?.trim() || crypto.randomUUID();
+    if (this.#coreProcessorState.subscriptions.outbound.byKey[connectionKey] !== undefined) {
+      throw new Error(`connectionKey "${connectionKey}" is reserved by a subscription`);
     }
     if (
       args.replayAfterOffset !== undefined &&
       (!Number.isSafeInteger(args.replayAfterOffset) || args.replayAfterOffset < 0)
     ) {
       // NaN binds as SQL NULL downstream (`offset > NULL` matches nothing), so
-      // an unvalidated cursor produces a live-looking subscription that
+      // an unvalidated cursor produces a live-looking connection that
       // silently delivers nothing forever.
       throw new Error(`replayAfterOffset must be a non-negative integer`);
     }
     if (
-      args.expectedIncarnation !== undefined &&
-      args.expectedIncarnation !== null &&
-      args.expectedIncarnation.trim().length === 0
+      args.expectedStreamId !== undefined &&
+      args.expectedStreamId !== null &&
+      args.expectedStreamId.trim().length === 0
     ) {
-      throw new Error(`expectedIncarnation must be null or a non-empty string`);
+      throw new Error(`expectedStreamId must be null or a non-empty string`);
     }
     if (
       args.maxReplayOffsetGap !== undefined &&
@@ -1287,52 +1457,52 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
 
     // Validate the caller-supplied descriptor at the boundary. The public
-    // `Stream.subscribe` contract types `subscriber` as `unknown`, so without
+    // `Stream.openConnection` contract types `openedBy` as `unknown`, so without
     // this check a malformed descriptor would only fail later, deep inside the
-    // reducer, while appending the `subscriber-connected` presence fact. That
-    // append is wrapped in a catch-and-log, so the connection would already be
-    // live and delivering with NO entry on the presence roster — the runtime
-    // connection table and its event-sourced mirror would silently disagree.
+    // reducer, while appending the `connection-opened` presence event. The open
+    // path appends that event before publishing the callback, but validating at
+    // this boundary still gives the caller the direct descriptor error instead
+    // of a deep core-contract failure.
     // The live `getRuntimeState` capability rides as a SIBLING argument (the
-    // same position the wake handshake gives it), never inside the descriptor.
-    const presence =
-      args.subscriber === undefined
+    // same position the processor wake response gives it), never inside the descriptor.
+    const openedBy =
+      args.openedBy === undefined
         ? undefined
-        : StreamSubscriberDescriptorSchema.parse(args.subscriber);
+        : ConnectionOpenerDescriptorSchema.parse(args.openedBy);
 
-    // One filter shape everywhere: `eventTypes` is sugar for the selector's
-    // type list (compileEventSelector also validates any condition upfront).
-    const selector = compileEventSelector({
-      ...args.selector,
+    // One filter shape everywhere: `eventTypes` is sugar for the filter's
+    // type list (compileEventFilter also validates any condition upfront).
+    const filter = compileEventFilter({
+      ...args.filter,
       ...(args.eventTypes === undefined ? {} : { eventTypes: [...args.eventTypes] }),
     });
 
-    const connection = this.#subscribers.openEphemeral({
-      subscriptionKey,
-      sink: args.processEventBatch,
+    const connection = this.#eventSender.connections.openSession({
+      connectionKey,
+      processEventBatch: args.processEventBatch,
       replayAfterOffset: args.replayAfterOffset,
-      expectedIncarnation: args.expectedIncarnation,
+      expectedStreamId: args.expectedStreamId,
       maxReplayOffsetGap: args.maxReplayOffsetGap,
-      selector,
+      filter,
       events: args.events,
-      presence,
+      openedBy,
       getRuntimeState: args.getRuntimeState,
       ping: args.ping,
     });
 
-    return new StreamSubscriptionRpcTarget({
-      close: () => connection.close("unsubscribed"),
+    return new StreamConnectionRpcTarget({
+      close: () => connection.close("closed-by-owner"),
       isLive: () => connection.isLive(),
-      subscriptionKey,
+      connectionKey,
       streamMaxOffset: this.#coreProcessorState.maxOffset,
     });
   }
 
   /**
-   * One-shot convenience over `subscribe()`: replay durable events from the
-   * requested cursor, then live-tail until a caller predicate accepts an event.
+   * One-shot convenience over `openConnection()`: replay durable events from the
+   * requested cursor, then receive newly appended events until a caller predicate accepts one.
    *
-   * Rides an ephemeral subscription, so it CAN match an ephemeral event
+   * Rides a session connection, so it CAN match a transient event
    * appended after this wait opens. It never matches a historical ephemeral
    * row, regardless of `afterOffset`.
    *
@@ -1369,10 +1539,10 @@ export class StreamDurableObject extends DurableObject<Env> {
     // batch can never overtake an earlier one. The first match wins; a predicate
     // that throws rejects the wait.
     let scan: Promise<void> = Promise.resolve();
-    const handle = this.subscribe({
+    const handle = this.openConnection({
       eventTypes: args.eventTypes,
       replayAfterOffset: args.afterOffset,
-      subscriber: { description: "waitForEvent" },
+      openedBy: { description: "waitForEvent" },
       processEventBatch: ({ events }) => {
         scan = scan.then(async () => {
           for (const event of events) {
@@ -1410,21 +1580,21 @@ export class StreamDurableObject extends DurableObject<Env> {
       return await found.promise;
     } finally {
       clearTimeout(timer);
-      handle.unsubscribe();
+      handle.close();
     }
   }
 
   getProcessorRuntimeState(args: {
     subscriptionKey: string;
   }): Promise<ProcessorRuntimeState | null> {
-    return this.#subscribers.getProcessorRuntimeState(args.subscriptionKey);
+    return this.#eventSender.connections.getProcessorRuntimeState(args.subscriptionKey);
   }
 
   runtimeState(): StreamRuntimeDebugState {
     // Observer-driven RTT sampling: being asked for runtime state IS the
     // signal someone is watching. The round runs in the background (this
     // method is synchronous); a later read or live update carries the sample.
-    this.#subscribers.samplePingsSoon();
+    this.#eventSender.connections.samplePingsSoon();
     return this.#readRuntimeState();
   }
 
@@ -1433,7 +1603,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     return new LiveStateRpcTarget({
       live: this.#liveState,
       loadAndRefreshLive: () => {
-        this.#subscribers.samplePingsSoon();
+        this.#eventSender.connections.samplePingsSoon();
         this.#liveState.setState(this.#readRuntimeState());
       },
     });
@@ -1441,7 +1611,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   /** Materialize at most once per mutation burst, and only while observed. */
   #refreshLiveState(): void {
-    // Cursor reconciliation can reach this before the constructor assigns
+    // Cursor cleanup can reach this before the constructor assigns
     // #liveState; the optional read is therefore intentional.
     const liveState = this.#liveState;
     if (liveState?.observed !== true || this.#liveStateRefreshScheduled) return;
@@ -1456,8 +1626,8 @@ export class StreamDurableObject extends DurableObject<Env> {
     return {
       coreProcessorState: this.#coreProcessorState,
       runtime: {
-        connections: this.#subscribers.connectionRuntimeState(),
-        subscriptions: this.#subscribers.subscriptionRuntimeState(),
+        connections: this.#eventSender.connections.runtimeState(),
+        subscriptions: this.#eventSender.subscriptionRuntimeState(),
         metrics: this.#metrics.report(Date.now()),
         storageSizeBytes: this.ctx.storage.sql.databaseSize,
       },
@@ -1470,31 +1640,31 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   /** Sever every idle durable connection now — the idle timer's action, exposed for tests/operators. */
   runIdleTeardownNow(): void {
-    this.#subscribers.runIdleTeardownNow();
+    this.#eventSender.runIdleTeardownNow();
     // A stream going quiet checkpoints before it hibernates, so the next wake
     // rebuilds from a fresh checkpoint instead of folding the debounce window.
     this.#flushCoreProcessorState();
-  }
-
-  /**
-   * Wipes this stream's durable storage and aborts the current incarnation.
-   * The next request boots a fresh stream (new `created` + `woken` events).
-   */
-  async reset(): Promise<void> {
-    await this.ctx.storage.deleteAll();
-    await this.ctx.storage.sync();
-    this.kill();
   }
 
   /** Kills the current Durable Object incarnation so experiments can observe restart behavior. */
   kill(): void {
     this.ctx.abort(STREAM_KILL_REASON);
   }
+
+  /**
+   * Wipe this stream's durable storage and abort the current incarnation.
+   * The next request creates the stream again with new `created` and `woken` events.
+   */
+  async reset(): Promise<void> {
+    await this.ctx.storage.deleteAll();
+    await this.ctx.storage.sync();
+    this.kill();
+  }
 }
 
 /** Idempotency deduplicates one logical event, not arbitrary writes sharing a
- * key. Provenance is deliberately excluded: a processor may retry the same
- * logical output after a deploy changes its source-version stamp. */
+ * key. `source.copiedFrom` is deliberately excluded: a processor may retry
+ * the same logical output after a deploy changes its source-version stamp. */
 
 /**
  * What `append` accepts over the wire: a public event input plus the optional
@@ -1506,55 +1676,11 @@ const StreamAppendInput = StreamEventInputSchema.extend({
   offset: z.number().int().nonnegative().optional(),
 }).strict();
 
-/**
- * One committed event with the core state before and after reducing it — what
- * the append loop hands to `#processEvent` after the commit (the same shape
- * hosted processors receive per reduced event).
- */
-type ReducedCoreEvent = {
-  event: StreamEvent;
-  previousState: CoreProcessorState;
-  state: CoreProcessorState;
-};
-
-/** Parse only event types owned by the core contract; application events are inert here. */
-function parseCoreEvent(event: StreamEvent) {
-  return Object.hasOwn(CoreProcessorContract.events, event.type)
-    ? CoreProcessorContract.parseEvent(event)
-    : undefined;
-}
-
-function resetCircuitBreaker(
-  circuitBreaker: CoreProcessorState["circuitBreaker"],
-  createdAt: string,
-): CoreProcessorState["circuitBreaker"] {
-  const createdAtMs = Date.parse(createdAt);
-  return {
-    ...circuitBreaker,
-    availableTokens: circuitBreaker.burstCapacity,
-    lastRefillAtMs: Number.isFinite(createdAtMs) ? createdAtMs : circuitBreaker.lastRefillAtMs,
-    trippedAtOffset: null,
-  };
-}
-
 function parseStreamDurableObjectName(name: string | undefined) {
   if (!name) {
     throw new Error("Stream Durable Object must be addressed by name.");
   }
   return DurableObjectNameCodec.parse(name, { allowNullProjectId: true });
-}
-
-/**
- * The immediate child segment of `parentPath` that `announcedPath` descends
- * through, or null when the announcement is not beneath this stream.
- */
-function immediateChildPath(parentPath: string, announcedPath: string): string | null {
-  if (announcedPath === parentPath) return null;
-  const parentPrefix = parentPath === "/" ? "/" : `${parentPath}/`;
-  if (!announcedPath.startsWith(parentPrefix)) return null;
-  const [firstSegment] = announcedPath.slice(parentPrefix.length).split("/").filter(Boolean);
-  if (firstSegment === undefined) return null;
-  return parentPath === "/" ? `/${firstSegment}` : `${parentPath}/${firstSegment}`;
 }
 
 /** How long a stream may hold idle configured delivery connections before severing them. */

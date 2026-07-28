@@ -1,10 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { LiveStateRpcTarget } from "iterate/sdk/capnweb";
-import type {
-  StreamPushEventBatch,
-  StreamSubscriberWakeRequest,
-  StreamSubscriberWakeResponse,
-} from "iterate/processors";
+import type { StreamProcessorWakeRequest, StreamProcessorWakeResponse } from "iterate/processors";
 import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import {
@@ -20,8 +16,10 @@ import {
   isRetryableDurableObjectAvailabilityError,
   STREAM_UNAVAILABLE_MESSAGE_PREFIX,
 } from "../streams/stream-unavailable.ts";
-import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
+import { buildHostedProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import {
+  AGENT_COLLECTION_CREATED_EVENT_TYPE,
+  AGENT_COLLECTION_SUBSCRIPTION_KEY,
   AgentCollectionProcessorContract,
   type AgentCollectionProcessorState,
 } from "./agent-collection-processor-contract.ts";
@@ -62,8 +60,28 @@ export class AgentCollectionDurableObject extends DurableObject<Env> {
   );
   readonly #reads = this.#registry.reads(this.#processor);
 
-  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
-    return this.#registry.wakeStreamSubscriber(args);
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+    ctx.blockConcurrencyWhile(async () => {
+      const durableObjectName = DurableObjectNameCodec.stringify(this.#name);
+      await this.#stream.append(
+        AgentCollectionProcessorContract.buildEvent({
+          type: AGENT_COLLECTION_CREATED_EVENT_TYPE,
+          idempotencyKey: `agent-collection/created:${durableObjectName}`,
+          payload: {},
+        }),
+        buildHostedProcessorSubscriptionConfiguredEvent({
+          durableObjectName,
+          idempotencyKey: `stream/subscription-configured:${durableObjectName}#${AgentCollectionProcessorContract.slug}`,
+          processor: ["agents", "processor"],
+          processorSlug: AgentCollectionProcessorContract.slug,
+        }),
+      );
+    });
+  }
+
+  wakeStreamProcessor(args: StreamProcessorWakeRequest): Promise<StreamProcessorWakeResponse> {
+    return this.#registry.wakeStreamProcessor(args);
   }
 
   alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
@@ -113,7 +131,8 @@ export class AgentCollectionDurableObject extends DurableObject<Env> {
     const delivered = this.#reads.waitUntilEvent({
       predicate: (event) =>
         event.type === "events.iterate.com/agent/created" &&
-        event.source?.crossPostedFrom?.at(-1)?.path === path,
+        event.source?.copiedFrom?.at(-1)?.path === path &&
+        event.source.copiedFrom.at(-1)?.subscriptionKey === AGENT_COLLECTION_SUBSCRIPTION_KEY,
       timeoutMs,
       signal: observationAbort.signal,
     });
@@ -158,24 +177,5 @@ export class AgentCollectionDurableObject extends DurableObject<Env> {
       await observedDelivery;
       void observedCatchUp;
     }
-  }
-
-  /** Receive the collection's deliberately narrow agent-stream push lane. */
-  async processEvent(batch: StreamPushEventBatch): Promise<void> {
-    const durableObjectName = DurableObjectNameCodec.stringify(this.#name);
-    await this.#stream.append(
-      AgentCollectionProcessorContract.buildEvent({
-        type: "events.iterate.com/agent-collection/created",
-        idempotencyKey: `agent-collection/created:${durableObjectName}`,
-        payload: {},
-      }),
-      buildDurableObjectProcessorSubscriptionConfiguredEvent({
-        durableObjectName,
-        idempotencyKey: `stream/subscription-configured:${durableObjectName}#${AgentCollectionProcessorContract.slug}`,
-        processor: ["agents", "processor"],
-        processorSlug: AgentCollectionProcessorContract.slug,
-      }),
-    );
-    await this.#stream.acceptCrossPost(batch);
   }
 }

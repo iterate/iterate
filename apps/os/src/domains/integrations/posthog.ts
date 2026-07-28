@@ -1,7 +1,7 @@
 import { tracing } from "cloudflare:workers";
 import { v5 as uuidv5 } from "uuid";
 import { z } from "zod";
-import type { StreamPushEventBatch } from "iterate/processors";
+import type { StreamDeliveryBatch } from "iterate/processors";
 import type { StreamEvent } from "iterate/processors";
 import type { SubscriptionConfiguredPayload } from "../streams/core-processor-contract.ts";
 import { truncateJsonToBytes } from "./truncate-json.ts";
@@ -16,26 +16,25 @@ const ProjectGroupBirthPayload = z.object({
   }),
 });
 
-/** The ordinary durable subscription appended to every new project stream. */
+/** The durable subscription appended to every new project stream. */
 export function posthogSubscriptionEvent() {
   return {
     type: "events.iterate.com/stream/subscription-configured",
     // Bump when the subscription payload changes so new stream births land
     // the revised config. Existing streams still rely on capture-side filtering
     // until they are recreated or reconfigured.
-    idempotencyKey: "iterate-platform-posthog-subscription-v2",
+    idempotencyKey: "iterate-platform-posthog-subscription-v3",
     payload: {
       subscriptionKey: "iterate-platform-posthog",
-      description: "iterate's first-party durable-event PostHog feed",
-      delivery: {
-        mode: "push",
+      description: "Iterate's first-party durable-event PostHog feed",
+      receiver: {
+        action: "itx-call",
         expression: ["integrations", "posthog", "processEventBatch"],
+        delivery: {
+          start: "beginning",
+          onFailingEvent: "halt",
+        },
       },
-      deliver: "all",
-      // High-volume transient rows (LLM chunks, progress ticks) stay off the
-      // analytics feed; durable product facts are what PostHog should index.
-      includeEphemeral: false,
-      onPoison: "park",
     } satisfies SubscriptionConfiguredPayload,
   };
 }
@@ -48,10 +47,11 @@ function eventIdentity(
   workerName: string,
   projectId: string,
   path: string,
+  streamId: string,
   event: Pick<StreamEvent, "offset"> & { createdAt: string },
 ): string {
-  // Deployment identity and the durable stream coordinate distinguish
-  // preview/prd and every committed row, while an exact at-least-once
+  // Deployment identity, durable stream coordinate, and stream-lifetime ID
+  // distinguish preview/prd and every committed row, while an exact at-least-once
   // redelivery keeps the same PostHog UUID. PostHog's ingestion-side UUID
   // deduplication is best-effort, so the source stream remains authoritative:
   // https://posthog.com/docs/api/capture
@@ -59,10 +59,11 @@ function eventIdentity(
   // contains `/`. A recovered row at the same coordinate is the same source
   // occurrence.
   return posthogUuid([
-    "stream-event-v1",
+    "stream-event-v2",
     workerName,
     projectId,
     path,
+    streamId,
     event.offset,
     event.createdAt,
   ]);
@@ -76,7 +77,7 @@ function normalizeEventTimestamp(createdAt: string): string {
 }
 
 function projectBirthEvents(args: {
-  batch: StreamPushEventBatch;
+  batch: StreamDeliveryBatch;
   distinctId: string;
   projectId: string;
   workerName: string;
@@ -142,7 +143,7 @@ function projectBirthEvents(args: {
 }
 
 function posthogEvents(args: {
-  batch: StreamPushEventBatch;
+  batch: StreamDeliveryBatch;
   projectId: string;
   workerName: string;
 }) {
@@ -158,14 +159,13 @@ function posthogEvents(args: {
     projectId,
   ])}`;
   const groups = { project: projectId };
-  // Capture-side filter is deliberate defense in depth: subscriptions born
-  // before includeEphemeral flipped to false may still deliver ephemeral rows.
-  // Never index those in PostHog.
+  // Capture-side filtering is deliberate defense in depth: durable lanes
+  // never deliver ephemeral rows, but never index one in PostHog either way.
   const durableEvents = batch.events.filter((event) => event.ephemeral !== true);
   const occurrences = durableEvents.map((event) => {
     const createdAt = normalizeEventTimestamp(event.createdAt);
     const streamEvent = truncateJsonToBytes(event, POSTHOG_STREAM_EVENT_MAX_JSON_BYTES);
-    const eventUuid = eventIdentity(workerName, projectId, batch.path, {
+    const eventUuid = eventIdentity(workerName, projectId, batch.path, batch.streamId, {
       createdAt,
       offset: event.offset,
     });
@@ -203,7 +203,7 @@ function posthogEvents(args: {
 }
 
 /**
- * Submit one durable subscriber batch through PostHog's supported public
+ * Submit one batch sent by a durable subscription through PostHog's public
  * batch-capture endpoint. A successful response acknowledges HTTP acceptance,
  * not completion of PostHog's asynchronous ingestion pipeline. The stream
  * owns transport retries; PostHog's asynchronous ingestion health is a
@@ -214,7 +214,7 @@ function posthogEvents(args: {
 export async function capturePosthogStreamEventBatch(
   args: {
     apiKey: string;
-    batch: StreamPushEventBatch;
+    batch: StreamDeliveryBatch;
     projectId: string;
     workerName: string;
   },
@@ -229,9 +229,15 @@ export async function capturePosthogStreamEventBatch(
     throw new Error("PostHog stream delivery batch must contain an event");
   }
   await tracing.enterSpan("posthog.capture_stream_events", async (span) => {
-    const streamId = posthogUuid(["stream-v1", args.workerName, args.projectId, args.batch.path]);
+    const streamPathId = posthogUuid([
+      "stream-path-v1",
+      args.workerName,
+      args.projectId,
+      args.batch.path,
+    ]);
     span.setAttribute("iterate.project.id", args.projectId);
-    span.setAttribute("iterate.stream.id", streamId);
+    span.setAttribute("iterate.stream.id", args.batch.streamId);
+    span.setAttribute("iterate.stream.path_id", streamPathId);
     span.setAttribute("iterate.stream.event_count", args.batch.events.length);
     span.setAttribute("iterate.stream.delivery_id", args.batch.deliveryId);
     span.setAttribute("iterate.stream.delivery_attempt", args.batch.attempt);
@@ -244,7 +250,7 @@ export async function capturePosthogStreamEventBatch(
     const durableCount = events.filter((event) => event.event === "stream:append").length;
     span.setAttribute("iterate.stream.durable_event_count", durableCount);
     // An all-ephemeral delivery (or one that yields no PostHog rows) is a
-    // successful no-op — do not fail the subscriber or call the capture API.
+    // successful no-op — do not fail event sending or call the capture API.
     if (events.length === 0) {
       return;
     }

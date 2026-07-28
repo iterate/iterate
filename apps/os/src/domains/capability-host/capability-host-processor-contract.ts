@@ -91,7 +91,7 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
                 }),
             }),
             z.strictObject({
-              type: z.literal("itx-expression").meta({
+              type: z.literal("itx-call").meta({
                 description:
                   "A durable mount: the recorded expression is re-evaluated against this " +
                   "scope's own itx on every call — no live connection is held.",
@@ -242,7 +242,7 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
               }),
           }),
           z.strictObject({
-            type: z.literal("itx-expression").meta({
+            type: z.literal("itx-call").meta({
               description:
                 "A durable mount: the recorded expression is re-evaluated against this " +
                 "scope's own itx on every call.",
@@ -350,12 +350,13 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
     "events.iterate.com/capability-host/script-run-requested",
     "events.iterate.com/capability-host/script-run-started",
     "events.iterate.com/capability-host/script-run-settled",
-    // Deliberately NOT consumed: `stream/woken` and
-    // `stream/subscriber-connected`. Old versions consumed them as extra
+    // Deliberately NOT consumed: `stream/woken` and the
+    // `stream/connection-opened` / `stream/connection-closed` presence facts.
+    // Old versions consumed platform lifecycle events as extra
     // "re-check at head" turns for the script-obligation pass, but the runner
     // now guarantees an at-head `processEvent` pass (event: null) whenever a
     // delivery reaches head without a consumed event carrying it — so any
-    // append that wakes the stream, those two included, already produces the
+    // append that wakes the stream, those lifecycle events included, already produces the
     // turn that retries a transiently failed settlement.
     // Recovery relies on the eventless at-head pass, not consumption of the
     // platform revival fact, to re-drive open script obligations.

@@ -1,5 +1,5 @@
 // Single-writer election via the Web Locks API. Exactly one compatible tab holds the named
-// lock at a time and is the WRITER: it owns the stream subscription and writes events into
+// lock at a time and is the WRITER: it owns the stream callback connection and writes events into
 // the shared OPFS database. Every other compatible tab is a READER (its own wa-sqlite
 // connection reads the same file). When the writer tab closes or navigates away the lock
 // auto-releases and a waiting tab's callback fires, so failover is seamless with no leases or
@@ -9,10 +9,10 @@
 // The compatibility version is part of the lock name on purpose. During deploys, old tabs can
 // keep running old JS while a new tab opens a newer local SQLite schema and drops/recreates
 // the shared OPFS table. If both versions contended for the same lock, the new tab could sit
-// forever as a follower with an empty migrated DB while the old lock holder never replays
+// forever as a reader with an empty migrated DB while the old lock holder never replays
 // history. A versioned lock lets the new runtime take over immediately; the stream Durable
-// Object still receives only one browser subscriber because every same-profile tab uses the
-// same subscriptionKey and `subscribe()` replaces the old connection for that key.
+// Object still holds only one browser callback because every same-profile tab uses the
+// same connectionKey and `openConnection()` replaces the old connection for that key.
 
 export type WriterRole = {
   /**
@@ -22,6 +22,12 @@ export type WriterRole = {
    * settles this does so precisely because ownership has already moved on).
    */
   whenWriter: Promise<void>;
+  /**
+   * Keep a granted lock until this writer's already-started database work
+   * settles, even if `release()` is requested meanwhile. Register work before
+   * yielding back to the event loop.
+   */
+  holdUntil(work: Promise<unknown>): void;
   /** Resign writer role (releases the lock so another tab can take over). */
   release(): void;
 };
@@ -32,16 +38,21 @@ export function acquireWriterRole(args: {
    * "exclusive" (the default) is the writer election. "shared" is a WATCH on
    * someone else's exclusive lock: granted only once the holder is gone, and
    * multiple watchers coexist without queueing behind each other — see
-   * {@link findSupersedingMirrorWriterLock}, which deliberately ignores shared
+   * {@link findNewerStreamDatabaseWriterLock}, which deliberately ignores shared
    * holders so a watch never reads as a live writer.
    */
   mode?: "exclusive" | "shared";
 }): WriterRole {
-  let release = () => {};
+  let releaseLock = () => {};
   // The lock is held until this promise resolves; resolving it === resigning.
   const held = new Promise<void>((resolve) => {
-    release = resolve;
+    releaseLock = resolve;
   });
+  const heldWork = new Set<Promise<unknown>>();
+  let releaseRequested = false;
+  const finishReleaseIfReady = () => {
+    if (releaseRequested && heldWork.size === 0) releaseLock();
+  };
   let signalWriter = () => {};
   const whenWriter = new Promise<void>((resolve) => {
     signalWriter = resolve;
@@ -49,8 +60,8 @@ export function acquireWriterRole(args: {
   // An AbortSignal lets `release()` actually relinquish the request even before the lock
   // is granted (a pending request would otherwise keep us queued forever). Aborting a
   // not-yet-granted request rejects `locks.request` with an AbortError; aborting after the
-  // callback ran is a no-op. Either way release() also resolves `held`, so the callback's
-  // `await held` returns and the held lock is freed.
+  // callback ran is a no-op. `release()` resolves `held` once registered work
+  // settles, so the callback's `await held` then returns and frees the lock.
   const abortController = new AbortController();
   navigator.locks
     .request(
@@ -65,69 +76,83 @@ export function acquireWriterRole(args: {
       // AbortError is the expected outcome of release()-before-grant; anything else is a
       // genuine failure to acquire the lock and must not be swallowed silently.
       if (error instanceof DOMException && error.name === "AbortError") return;
-      console.error(`[stream-leader] writer lock request failed for ${args.lockName}`, error);
+      console.error(`[stream-writer] writer lock request failed for ${args.lockName}`, error);
     });
   return {
     whenWriter,
+    holdUntil: (work) => {
+      if (releaseRequested) {
+        throw new Error("cannot register writer work after the writer role was released");
+      }
+      const tracked = Promise.resolve(work);
+      heldWork.add(tracked);
+      void tracked.then(
+        () => {
+          heldWork.delete(tracked);
+          finishReleaseIfReady();
+        },
+        () => {
+          heldWork.delete(tracked);
+          finishReleaseIfReady();
+        },
+      );
+    },
     release: () => {
       // Abort a not-yet-granted request, free a held lock, and settle whenWriter so an election
-      // awaiting it can't hang forever when it's released before the lock is ever granted.
+      // awaiting it can't hang forever when it's released before the lock was ever granted.
+      // Registered work keeps a granted lock until it settles, so a late
+      // SQLite mutation cannot overlap the successor.
+      releaseRequested = true;
       abortController.abort();
-      release();
       signalWriter();
+      finishReleaseIfReady();
     },
   };
 }
 
 /**
- * A deterministic compatibility vector over a mirror's member set, baked into
- * the writer-lock name so a deploy that bumps ANY member's schema changes the
- * lock and lets a fresh tab re-elect (instead of sitting forever behind an old
- * tab's lock). Derived from the members — never hand-maintained, so there is no
- * number to forget to bump. Sorted so member order can't change the identity.
+ * A deterministic key containing every browser processor's schema version.
+ * The key is part of the database-writer lock name, so a tab running a new
+ * schema does not wait behind a tab running old code. Sorting makes processor
+ * configuration order irrelevant.
  */
-export function mirrorLockVersionVector(
-  members: readonly { slug: string; schemaVersion: number }[],
+export function processorSchemaVersionKey(
+  processors: readonly { slug: string; schemaVersion: number }[],
 ): string {
-  return members
-    .map((member) => `${member.slug}@${member.schemaVersion}`)
+  return processors
+    .map((processor) => `${processor.slug}@${processor.schemaVersion}`)
     .sort()
     .join("|");
 }
 
 /**
- * The Web Lock name electing the single writer for one stream MIRROR (the
- * runtime that downloads once and fans out to the canonical processor set).
- * Versioned by {@link mirrorLockVersionVector}, so a deploy that migrates any
- * member's projection lets a fresh tab re-elect immediately instead of waiting
- * behind an old tab's lock — the same failover a per-processor lock gave, now
- * per mirror.
+ * The Web Lock name for the tab that writes one stream's local SQLite database.
+ * It includes {@link processorSchemaVersionKey}, so a tab with changed tables
+ * can acquire a different lock instead of waiting behind old code.
  *
- * The versioned name means cross-deploy tabs hold DIFFERENT locks over the
- * SAME shared OPFS file, so the lock alone cannot arbitrate between them.
- * {@link findSupersedingMirrorWriterLock} is the other half of the contract:
- * a tab that finds a strictly-newer vector's lock held must resign as writer
- * instead of rebuilding the mirror down to its own older schema (two writers
- * rebuilding in opposite directions fence each other's cursors forever — the
- * deploy-boundary livelock).
+ * Different app versions therefore hold different locks over the same OPFS
+ * file, so the lock alone cannot choose between them.
+ * {@link findNewerStreamDatabaseWriterLock} is the other half of the contract:
+ * old code that sees a lock for newer shared processor schemas stops writing
+ * instead of repeatedly replacing the newer tables with its old schema.
  */
-export function streamMirrorWriterLockName(args: {
+export function streamDatabaseWriterLockName(args: {
   projectId: string;
   streamPath: string;
-  versionVector: string;
+  processorSchemaVersionKey: string;
 }): string {
-  return streamMirrorWriterLockPrefix(args) + args.versionVector;
+  return streamDatabaseWriterLockPrefix(args) + args.processorSchemaVersionKey;
 }
 
-/** Shared name prefix for every version vector's writer lock on one stream mirror. */
-function streamMirrorWriterLockPrefix(args: { projectId: string; streamPath: string }): string {
-  return `stream-writer:${args.projectId}:${args.streamPath}:browser-stream-mirror:`;
+/** Shared prefix for every app version's database-writer lock for one stream. */
+function streamDatabaseWriterLockPrefix(args: { projectId: string; streamPath: string }): string {
+  return `stream-writer:${args.projectId}:${args.streamPath}:browser-stream-database:`;
 }
 
-/** Parse a {@link mirrorLockVersionVector} string back into per-member schema versions. */
-export function parseLockVersionVector(vector: string): Map<string, number> {
+/** Parse a {@link processorSchemaVersionKey} into versions keyed by processor slug. */
+export function parseProcessorSchemaVersionKey(key: string): Map<string, number> {
   const versions = new Map<string, number>();
-  for (const entry of vector.split("|")) {
+  for (const entry of key.split("|")) {
     const at = entry.lastIndexOf("@");
     if (at <= 0) continue;
     const version = Number(entry.slice(at + 1));
@@ -138,20 +163,18 @@ export function parseLockVersionVector(vector: string): Map<string, number> {
 }
 
 /**
- * Whether `other` is a strictly NEWER compatibility vector than `ours`: every
- * member both vectors share is at least our version, and at least one shared
- * member is ahead. Members only one side has are ignored — deploys add and
- * remove members, and an unshared member carries no before/after ordering.
- * Incomparable or equal vectors answer false: when in doubt, contend as usual
- * rather than resign (a wrong "not newer" costs one bounded fence/re-elect
- * cycle; a wrong "newer" would park a healthy writer forever).
+ * Whether `otherKey` proves that another tab has newer schemas: every processor
+ * present in both keys is at least our version, and at least one is newer.
+ * Processors present in only one key are ignored because adding or removing a
+ * processor establishes no version order. Equal or mixed-newer-and-older keys
+ * return false.
  */
-export function vectorSupersedes(other: string, ours: string): boolean {
-  if (other === ours) return false;
-  const otherVersions = parseLockVersionVector(other);
+export function hasNewerSharedProcessorSchema(otherKey: string, ourKey: string): boolean {
+  if (otherKey === ourKey) return false;
+  const otherVersions = parseProcessorSchemaVersionKey(otherKey);
   let strictlyNewer = false;
-  for (const [member, ourVersion] of parseLockVersionVector(ours)) {
-    const otherVersion = otherVersions.get(member);
+  for (const [processorSlug, ourVersion] of parseProcessorSchemaVersionKey(ourKey)) {
+    const otherVersion = otherVersions.get(processorSlug);
     if (otherVersion === undefined) continue;
     if (otherVersion < ourVersion) return false;
     if (otherVersion > ourVersion) strictlyNewer = true;
@@ -165,13 +188,10 @@ type LocksQuerySnapshot = {
 };
 
 /**
- * The name of a HELD EXCLUSIVE writer lock for this stream mirror whose
- * version vector {@link vectorSupersedes} ours — proof a newer-deploy tab is
- * ALIVE and owns the shared mirror right now — or undefined when no such tab
- * exists. Undefined is also the answer when the Locks API is unavailable or
- * the query fails: without evidence of a live newer writer we keep today's
- * behavior (rebuild to our own schema), which is what heals a rollback or an
- * abandoned upgrade.
+ * Return a held exclusive database-writer lock whose shared processor schemas
+ * are newer than ours, or undefined when none is visible. A failed Locks API
+ * query also returns undefined; without evidence of a newer live writer this
+ * tab proceeds with its own schema.
  *
  * Only held exclusive locks count. A writer always holds its lock exclusively,
  * while a resigned tab's death WATCH rides the same name in shared mode — if
@@ -179,10 +199,10 @@ type LocksQuerySnapshot = {
  * each read the other's watch as a live newer writer and neither would ever
  * take over.
  */
-export async function findSupersedingMirrorWriterLock(args: {
+export async function findNewerStreamDatabaseWriterLock(args: {
   projectId: string;
   streamPath: string;
-  versionVector: string;
+  processorSchemaVersionKey: string;
   queryLocks?: () => Promise<LocksQuerySnapshot>;
 }): Promise<string | undefined> {
   const queryLocks =
@@ -197,13 +217,15 @@ export async function findSupersedingMirrorWriterLock(args: {
   } catch {
     return undefined;
   }
-  const prefix = streamMirrorWriterLockPrefix(args);
-  const ourName = streamMirrorWriterLockName(args);
+  const prefix = streamDatabaseWriterLockPrefix(args);
+  const ourName = streamDatabaseWriterLockName(args);
   for (const lock of state.held ?? []) {
     const name = lock?.name;
     if (name == null || name === ourName || !name.startsWith(prefix)) continue;
     if (lock.mode === "shared") continue;
-    if (vectorSupersedes(name.slice(prefix.length), args.versionVector)) return name;
+    if (hasNewerSharedProcessorSchema(name.slice(prefix.length), args.processorSchemaVersionKey)) {
+      return name;
+    }
   }
   return undefined;
 }

@@ -144,7 +144,11 @@ describe("SandboxProcessor", () => {
 
     const replay = makeProcessorHarness<SandboxProcessorContract>({
       createProcessor: (deps) => new SandboxProcessor(deps),
-      substrate: { clock: h.clock, stream: h.stream, progress: makeMemoryProgressStore() },
+      substrate: {
+        clock: h.clock,
+        stream: h.stream,
+        progress: makeMemoryProgressStore(SandboxProcessorContract),
+      },
     });
     await replay.settle(); // reduces the whole stream from offset zero
     expect(replay.state()).toEqual(h.state());

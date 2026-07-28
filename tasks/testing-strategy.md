@@ -283,7 +283,7 @@ they ride the next PR out of this branch.)
       `exec-typescript-description.test.ts` (keep the positional truncation
       invariants), the string anchors in `config-repo-template.test.ts`
       (keep structural asserts), constant restatements in
-      `subscriber-math.test.ts:19-27`.
+      `delivery-math.test.ts:19-27`.
 - [x] **`scripts/deploy.test.ts` mock theater** (slimmed in this PR) (9× `vi.mock`): slim to the
       security kernels (forbidden-service-token, exact-project-miss).
 - [x] **Internal-CLI arg tests** (deleted in this PR) (`cli.test.ts`, `session.test.ts`,
@@ -313,7 +313,7 @@ they ride the next PR out of this branch.)
       philosophy section — the spinner-waiter incentive loop (Misha; quote
       the middlewright README), specs-as-product-specs (`specs/AGENTS.md`),
       fresh-project-per-test isolation, the one-retry ladder, harness-
-      fidelity honesty (the `stream-subscribers.teardown` pattern), the
+      fidelity honesty (the `stream-event-sender.teardown` pattern), the
       no-workerd doctrine. Fold or retire `docs/vitest-patterns.md` (it
       recommends inline snapshots; the corpus has exactly one).
 - [ ] **`llmRecover`**: Misha's soft-fail LLM-recovery middlewright plugin

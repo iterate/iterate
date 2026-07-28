@@ -1,4 +1,4 @@
-// The browser stream runtime's transport: the capnweb `Stream` stub it dials,
+// The browser stream runtime's transport: the capnweb `Stream` stub it opens,
 // plus the ability to REPORT that the shared session socket looks half-open (the
 // socket-owned verifier decides whether to retire it). Kept apart from the
 // runtime so the connection state machine imports a named transport concept
@@ -12,7 +12,7 @@ export type BrowserStreamClient = Disposable &
   Stream & {
     /**
      * Report that this client's transport looks half-open (see
-     * reportTransportSuspicion) — NEVER a direct socket teardown: the mirror
+     * reportTransportSuspicion) — NEVER a direct socket teardown: the browser database
      * shares the one session socket with the page's reads, so only the
      * socket-owned verifier may retire it, and only after two failed probes
      * against the same generation. Absent on clients whose factory doesn't wire
@@ -32,9 +32,9 @@ export type BrowserStreamClientFactory = (args: {
 }) => Promise<BrowserStreamClient>;
 
 /**
- * How a runtime reaches (and, on suspicion, evicts) the server: the dial and
+ * How a runtime opens (and, on suspicion, evicts) a server connection: the factory and
  * its evictor travel as ONE value so they can never come from two different
- * transports (a factory dialing socket A while timeouts evict socket B would
+ * transports (a factory opening socket A while timeouts evict socket B would
  * re-arm the wedge the store exists to prevent).
  */
 export type BrowserStreamTransport = {

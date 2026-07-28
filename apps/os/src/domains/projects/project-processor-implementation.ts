@@ -43,7 +43,7 @@ const SIBLING_BIRTH_BARRIER_TIMEOUT_MS = 75_000;
  * reaction creates every sibling processor a project is born with — the root
  * capability host on `/`, the primary scheduler on `/scheduler/primary`, the
  * config repo on `/repos/config` (its `repos/create-requested` batch also
- * arms the `cross-post:/` rule that copies later config-repo events back
+ * arms the `project-config-to-root` subscription that copies later config-repo events
  * onto `/`), and the email router on `/integrations/email` (seeded with the
  * creator's email as the first sender-allowlist entry). Every appended event
  * carries a deterministic idempotency key, so a redelivered birth frame
@@ -53,12 +53,12 @@ const SIBLING_BIRTH_BARRIER_TIMEOUT_MS = 75_000;
  * must not race the capabilities it promises.
  *
  * READY. The config repo's creation saga commits its terminal
- * `repos/created` certificate on its own stream; the cross-post rule copies
+ * `repos/created` certificate on its own stream; that subscription copies
  * it here. The reaction completes the default worker's platform-owned
- * readiness handshake and then appends
+ * readiness handshake (whose probes block on any cold build) and then appends
  * `project/ready` — the fact `projects.get(slug).create()` callers await.
  *
- * CATALOGS. `reduce` projects cross-posted domain facts into list state:
+ * CATALOGS. `reduce` projects received domain facts into list state:
  * physical streams (`stream/created`, `stream/child-stream-created`),
  * devices, repos and secrets (their `created` facts, keyed by the source
  * stream's path). Purely physical bookkeeping — a path in the catalog never
@@ -105,12 +105,12 @@ export class ProjectProcessor extends StreamProcessor<
         break;
       }
       case "events.iterate.com/repos/created": {
-        // Arrives as a cross-posted copy: the config repo commits its
-        // terminal certificate on its own stream, and the `cross-post:/`
-        // rule armed at create copies it here — this saga only ever reacts
+        // Arrives as a copied event: the config repo commits its terminal
+        // certificate on its own stream, and the `project-config-to-root`
+        // subscription copies it here — this saga only ever reacts
         // to events ON `/`. The certificate payload carries no path, so the
-        // config repo is recognized by cross-post provenance.
-        const origin = event.source?.crossPostedFrom?.at(-1);
+        // config repo is recognized by its recorded source coordinates.
+        const origin = event.source?.copiedFrom?.at(-1);
         if (
           origin?.projectId !== this.deps.itx.projectId ||
           origin.path !== CONFIG_REPO_PATH ||
@@ -254,11 +254,11 @@ export class ProjectProcessor extends StreamProcessor<
       ),
       // The config repo is an ordinary repo on its own stream. Its request
       // batch contains the creation intent (`repos/create-requested`, empty
-      // starter seed), the repo processor subscription, and the cross-post
-      // rule that copies subsequent config-repo events onto the project
+      // starter seed), the repo processor subscription, and the stream subscription
+      // that copies subsequent config-repo events onto the project
       // stream `/` — including the saga's terminal `repos/created`
       // certificate, which is what marks the project ready and catalogs the
-      // repo (so no dedicated catalog subscription here).
+      // repo (so no separate catalog rule is needed here).
       timedStep("create-timing", timing, "config-repo-append", () =>
         appendTo(
           CONFIG_REPO_PATH,
@@ -268,18 +268,19 @@ export class ProjectProcessor extends StreamProcessor<
           }),
           {
             type: "events.iterate.com/stream/subscription-configured",
-            idempotencyKey: `config-repo-cross-post:${this.deps.itx.projectId}`,
+            idempotencyKey: `config-repo-subscription:${this.deps.itx.projectId}`,
             payload: {
-              // The key crossPostTo would pick for destination "/", so
-              // `removeCrossPost({ path: "/" })` can manage this rule.
-              subscriptionKey: "cross-post:/",
+              subscriptionKey: "project-config-to-root",
               description:
-                "Special project config repo: every event after the birth/setup batch is cross-posted to the project root so the project processor can react when config changes.",
-              delivery: {
-                mode: "push",
-                expression: ["streams", ["get", "/"], "acceptCrossPost"],
+                "Sends every config-repo event after the birth batch to the project root so the project processor can react when configuration changes.",
+              receiver: {
+                action: "copy-to-stream",
+                receivingStreamPath: "/",
+                delivery: {
+                  start: "now",
+                  onFailingEvent: "halt",
+                },
               },
-              deliver: "new",
             },
           },
         ),
@@ -645,7 +646,7 @@ function recordDomainObject<
   State extends { devices: StreamListItem[]; repos: StreamListItem[]; secrets: StreamListItem[] },
   Key extends "devices" | "repos" | "secrets",
 >(state: State, key: Key, event: StreamEvent): State {
-  const path = event.source?.processor?.stream.path ?? event.source?.crossPostedFrom?.[0]?.path;
+  const path = event.source?.processor?.stream.path ?? event.source?.copiedFrom?.[0]?.path;
   if (path === undefined) return state;
   return {
     ...state,

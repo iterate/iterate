@@ -50,7 +50,7 @@ import {
  * idempotency key derives from an offset.
  *
  * The requested event comes back through the processor's own subscription;
- * the reduce opens `state.openRequest`, and the at-head pass finds an open
+ * the reducer opens `state.openRequest`, and the at-head pass finds an open
  * request this incarnation is not executing and starts the LLM call — the
  * ONE place work ever starts. The prompt is a pure reduction of committed
  * history up to the request's offset (`buildAgentLlmRequestBody`), so every
@@ -359,7 +359,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       }
       case "events.iterate.com/stream/error-occurred": {
         // EVERY error on the stream — this processor's own LLM failures, the
-        // runner's poison skips, anything else — is transcribed into
+        // sender's repeatedly failing events that were skipped, anything else — is transcribed into
         // model-visible context, without itself triggering a turn (retries
         // are the reduce's job). The integration actor demotes the error text
         // to user role at prompt time: error strings are data, not
@@ -588,22 +588,21 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           // The attempt can never outlive its intent: dial + stream drain
           // self-cap at whatever validity the request has left.
           deadlineMs: Math.max(1, open.expiresAt - this.#now()),
-          onChunk: (chunk) => {
+          onChunk: async (chunk) => {
             if (inFlight.controller.signal.aborted) return;
             inFlight.partialText += extractChunkText(chunk);
             const sequence = chunkSequence;
             chunkSequence += 1;
-            // Ephemeral streaming: best-effort, never awaited, never reduced.
-            void args
-              .append({
-                type: "events.iterate.com/agent/llm-response-chunk",
-                payload: {
-                  chunk: jsonCompatible(chunk),
-                  llmRequestOffset: requestOffset,
-                  sequence,
-                },
-              })
-              .catch(() => undefined);
+            // Each append obtains a fresh Durable Object stub, so await the
+            // commit to preserve provider order across those RPCs.
+            await args.append({
+              type: "events.iterate.com/agent/llm-response-chunk",
+              payload: {
+                chunk: jsonCompatible(chunk),
+                llmRequestOffset: requestOffset,
+                sequence,
+              },
+            });
           },
         });
         // A non-streaming transport reports no chunks, so its text exists
@@ -718,7 +717,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     messages: WorkersAiMessage[];
     signal: AbortSignal;
     deadlineMs: number;
-    onChunk: (chunk: unknown) => void;
+    onChunk: (chunk: unknown) => Promise<void>;
   }): Promise<{
     text: string;
     usage?: {
@@ -809,7 +808,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         ),
         signal: new AbortController().signal,
         deadlineMs,
-        onChunk: () => {},
+        onChunk: async () => {},
       });
 
       await this.append({
@@ -990,7 +989,8 @@ export type AgentLlmTransport = (args: {
   model: string;
   messages: WorkersAiMessage[];
   signal: AbortSignal;
-  onChunk?: (text: string) => void;
+  /** The transport awaits each result before delivering the next chunk. */
+  onChunk?: (text: string) => Promise<void>;
 }) => Promise<{
   text: string;
   usage?: {

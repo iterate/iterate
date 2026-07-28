@@ -24,7 +24,7 @@ import {
   type StreamBrowserStore,
 } from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
-import { CANONICAL_MIRROR_PROCESSORS } from "~/domains/streams/client-libraries/browser/canonical-mirror-processors.ts";
+import { BROWSER_STREAM_PROCESSORS } from "~/domains/streams/client-libraries/browser/browser-stream-processors.ts";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 
 type FeedItemRow = {
@@ -49,7 +49,7 @@ export function EventFeedView({ streamView }: { streamView: StreamViewSearch }) 
         streamPath: streamView.path,
         projectId: streamView.projectId,
         createStreamClient: createCapnwebStreamClient,
-        processors: CANONICAL_MIRROR_PROCESSORS,
+        processors: BROWSER_STREAM_PROCESSORS,
       }),
     [streamView.projectId, streamView.path],
   );
@@ -236,7 +236,7 @@ function FeedItemRows({
         <FeedRuntimeNotice itemCount={itemCount} snapshot={snapshot} />
         {itemCount === 0 ? (
           <div className="flex min-h-60 flex-1 items-center justify-center gap-2.5 text-sm text-slate-500">
-            {snapshot.connectionStatus === "subscribed" ? null : (
+            {snapshot.connectionStatus === "receiving-events" ? null : (
               <div
                 className="size-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600"
                 aria-hidden="true"
@@ -244,7 +244,7 @@ function FeedItemRows({
             )}
             <span>
               {snapshot.connectionError === undefined
-                ? snapshot.connectionStatus === "subscribed"
+                ? snapshot.connectionStatus === "receiving-events"
                   ? "No feed items yet"
                   : `Stream connection is ${snapshot.connectionStatus}`
                 : `Stream connection is ${snapshot.connectionStatus}: ${snapshot.connectionError}`}
@@ -354,16 +354,16 @@ function FeedRuntimeNotice({
     );
   }
 
-  if (itemCount === 0 && snapshot.subscriptionStatus === "follower") {
+  if (itemCount === 0 && snapshot.databaseRole === "reader") {
     return (
       <output
         className="grid gap-[3px] border-b border-[#fedf89] bg-[#fff8e6] py-[9px] pr-4 text-xs text-[#7a4b00]"
         data-testid="stream-warning"
       >
-        <strong>Follower with empty feed mirror</strong>
+        <strong>Reader with empty local feed copy</strong>
         <span>
-          This tab is waiting for the elected writer tab to mirror feed items into local SQLite.
-          Reload or close older tabs if this does not resolve.
+          This tab is waiting for the elected writer tab to store feed items in local SQLite. Reload
+          or close older tabs if this does not resolve.
         </span>
       </output>
     );

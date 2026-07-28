@@ -1,7 +1,7 @@
-// Pure runtime-metrics primitives for the stream and its subscribers.
+// Pure runtime-metrics primitives for a stream and the callbacks it invokes.
 //
 // Everything here is clock-free and transport-free (timestamps are
-// parameters, like subscriber-math.ts), so the rings and buckets are
+// parameters, like the delivery math atop stream-event-sender.ts), so the rings and buckets are
 // table-testable in plain node and shared verbatim by the Durable Object,
 // the server processor host, and the browser store. All of it is in-memory
 // observability — reset on eviction/reload by design; `measuredSince` tells
@@ -165,7 +165,7 @@ export type StreamThroughputMetrics = {
   reportedAt: string;
   /** Appends committed (all producers). */
   ingress: ThroughputReport;
-  /** Deliveries dispatched (all lanes, all subscribers). */
+  /** Event batches sent to all receiving streams and open callbacks. */
   egress: ThroughputReport;
 };
 
@@ -239,8 +239,8 @@ export function ageStreamThroughputMetrics(
 }
 
 /**
- * The mutual ping's NTP-style math, shared by both requesters (the stream
- * pinging subscribers; anything pinging the stream). The requester stamps
+ * The mutual ping's NTP-style math, shared by both requesters (a stream
+ * pinging a callback owner; anything pinging the stream). The requester stamps
  * `t0` and observes `t3`; the responder reports receive/reply-send times on
  * ITS clock. RTT excludes responder processing time; `clockOffsetMs`
  * estimates `responderClock - requesterClock`.

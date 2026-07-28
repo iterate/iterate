@@ -10,9 +10,10 @@ project Durable Object.
 1. Every project has one AgentCollectionDurableObject, addressed by the
    project id and the fixed stream path /agents.
 2. AgentCollectionRpcTarget.processEvent(batch) is stateless. After checking
-   that the caller is the trusted stream-push lane, it calls the singleton
+   that the caller has trusted stream-delivery authority, it calls the singleton
    collection DO and does nothing else.
-3. Every agent stream installs one push subscription in its creation batch.
+3. Every agent stream installs one outbound ITX-expression subscription in its
+   creation batch.
    The subscription selects exactly:
    - events.iterate.com/agent/created
    - events.iterate.com/agent/summary-updated
@@ -32,9 +33,9 @@ agent stream /agents/<path>
   agent/created
   agent/summary-updated
           |
-          | push subscription
+          | outbound ITX-expression receiver
           | expression: ["agents", "processEvent"]
-          | deliver: "all"
+          | start: beginning
           v
 AgentCollectionRpcTarget.processEvent(batch)
           |
@@ -43,7 +44,7 @@ AgentCollectionRpcTarget.processEvent(batch)
 singleton AgentCollectionDurableObject
   projectId + "/agents"
           |
-          | acceptCrossPost(batch)
+          | receiveCopiedEvents(batch)
           v
 /agents collection stream
           |
@@ -55,8 +56,8 @@ AgentDatabase reduced state
 ```
 
 The source agent's subscription is committed in the same creation batch as
-its birth event. deliver: "all" lets a newly configured subscription deliver
-that birth fact. Cross-post provenance retains the source project, path,
+its birth event. Starting at the beginning lets it deliver that birth fact.
+Stream-receiver provenance retains the source project, path,
 offset, event type, and creation time; the collection reducer derives agent
 identity from that provenance rather than trusting a path in the payload.
 
@@ -71,7 +72,7 @@ AgentCollectionRpcTarget resolves the collection DO with:
 }
 ```
 
-Its processEvent method is intentionally only an internal push sink. It does
+Its processEvent method is intentionally only an internal ITX receiver. It does
 not fold records, touch Project state, append agent facts itself, or schedule
 detached work.
 
@@ -81,15 +82,15 @@ infrastructure to its own stream:
 - agent-collection/created;
 - the normal wake subscription for the agent-collection processor.
 
-It then passes the pushed batch to acceptCrossPost. From that point onward the
+It then passes the delivered batch to receiveCopiedEvents. From that point onward the
 normal stream processor registry owns wakeup, reduction, durable progress,
 snapshot, and live-state publication.
 
 The DO exposes the same conventional surfaces as other processor hosts:
 
 - processor for snapshots and waitUntilProcessed;
-- liveState for push-driven reduced state;
-- wakeStreamSubscriber and alarm for the processor registry.
+- liveState for callback-driven reduced state;
+- wakeStreamProcessor and alarm for the processor registry.
 
 ## Agent Database
 
@@ -147,14 +148,14 @@ the same update semantics.
 ### Reduction rules
 
 - agent-collection/created creates the singleton processor.
-- A copied agent/created creates one row using the source path and event
+- A received agent/created creates one row using the source path and event
   creation time.
-- A copied agent/summary-updated merges the bounded summary update and
+- A received agent/summary-updated merges the bounded summary update and
   updates summary timestamps.
-- A second creation for one path, summary before creation, or copied agent
-  facts without cross-post provenance are data-model violations and fail
+- A second creation for one path, summary before creation, or received agent
+  facts without source-stream provenance are data-model violations and fail
   loudly.
-- Exact redelivery is handled by normal stream cross-post and processor
+- Exact redelivery is handled by normal copy and processor
   idempotency.
 
 waitingFor clears use the summary event family too. A processor-authored
@@ -264,7 +265,7 @@ write, and no tolerated divergence between two catalogs.
 The implementation is guarded by tests that prove:
 
 - the agent creation batch installs the exact two-event selector and
-  ["agents", "processEvent"] push expression;
+  ["agents", "processEvent"] ITX receiver address;
 - the collection processor folds creation and summary, retains source
   provenance, rejects invalid ordering, and applies conditional waiting clears
   safely;

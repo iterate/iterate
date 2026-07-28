@@ -6,7 +6,7 @@ import { NotificationProcessorContract } from "./notification-processor-contract
  * The project's notification-policy processor: it decides WHICH project
  * domain facts deserve a human notification and journals each decision as
  * one channel-neutral `notification/requested` intent. It knows nothing
- * about channels — delivery (the device processor's cross-post subscription
+ * about channels — delivery (the device processor's copy subscription
  * today) independently resolves the audience to recipients and journals its
  * own outcomes.
  *

@@ -1,6 +1,6 @@
 // The stream capability's availability-error contract, shared by the worker
 // door that MINTS the tag (StreamRpcTarget in rpc-targets.ts) and the clients
-// that CLASSIFY it (the browser mirror's appendBatch retry loop). Kept
+// that CLASSIFY it (the browser database writer's appendBatch retry loop). Kept
 // zero-dependency on purpose: the browser bundle imports this file directly.
 //
 // Why a message prefix and not an error subclass or a property: the flags
@@ -42,7 +42,7 @@ export const STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX = "stream-wait-timeout: ";
  * Whether workerd rejected a Durable Object stub call because the target
  * incarnation disappeared or was temporarily unavailable, rather than
  * because application code threw. Keep this classifier local and
- * dependency-free: the browser mirror imports this module directly.
+ * dependency-free: the browser stream database imports this module directly.
  */
 export function isDurableObjectLifecycleError(error: unknown): boolean {
   if (typeof error !== "object" || error === null) return false;
@@ -54,6 +54,24 @@ export function isDurableObjectLifecycleError(error: unknown): boolean {
   return (
     flags.overloaded !== true && (flags.durableObjectReset === true || flags.retryable === true)
   );
+}
+
+/**
+ * Whether workerd rejected a Durable Object call because the target is
+ * overloaded. This is intentionally separate from lifecycle recovery:
+ * callers must not immediately replay overload, while a durable delivery
+ * owner may still put it through its bounded backoff ladder.
+ */
+export function isDurableObjectOverloadError(error: unknown): boolean {
+  const seen = new Set<object>();
+  let candidate = error;
+  while (typeof candidate === "object" && candidate !== null) {
+    if ((candidate as { overloaded?: unknown }).overloaded === true) return true;
+    if (seen.has(candidate)) return false;
+    seen.add(candidate);
+    candidate = (candidate as { cause?: unknown }).cause;
+  }
+  return false;
 }
 
 /**
@@ -114,18 +132,22 @@ export async function retryIdempotentDurableObjectOperation<Result>(args: {
 }
 
 /**
- * Rethrow `error` tagged with {@link STREAM_UNAVAILABLE_MESSAGE_PREFIX} when
- * it is a DO-lifecycle failure, unchanged otherwise. `.catch` this onto stream
- * stub calls that return plain data promises — never onto ones returning
- * stubs (a `.catch` collapses an RpcPromise into a settled promise and loses
- * the stub).
+ * Terminate a Durable Object RPC rejection at the public worker boundary.
+ * Lifecycle failures receive {@link STREAM_UNAVAILABLE_MESSAGE_PREFIX};
+ * application failures retain their message. Every outcome becomes a fresh,
+ * plain `Error`: a native Workers RPC exception can carry remote internals
+ * that cannot safely be forwarded through Cap'n Web as a second RPC error.
+ *
+ * `.catch` this onto stream stub calls that return plain data promises — never
+ * onto ones returning stubs (a `.catch` collapses an RpcPromise into a settled
+ * promise and loses the stub).
  */
 export function rethrowStreamUnavailable(error: unknown): never {
+  const message = error instanceof Error ? error.message : String(error);
   if (isDurableObjectLifecycleError(error)) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`${STREAM_UNAVAILABLE_MESSAGE_PREFIX}${message}`, { cause: error });
+    throw new Error(`${STREAM_UNAVAILABLE_MESSAGE_PREFIX}${message}`);
   }
-  throw error;
+  throw new Error(message);
 }
 
 /**

@@ -61,8 +61,13 @@ export function GuestbookClient() {
           required
           rows={4}
         />
+        {/* Pending text while the sign round trip is in flight: the append,
+            read-your-writes catch-up, and LiveState push cross several
+            workers, which takes over a second on a fresh deployment. Real
+            users need the progress cue — and it is the visible-progress
+            contract the e2e spinner policy extends its waits on. */}
         <button disabled={api == null || signing} type="submit">
-          Sign guestbook
+          {signing ? "Signing…" : "Sign guestbook"}
         </button>
       </form>
       {signing && (

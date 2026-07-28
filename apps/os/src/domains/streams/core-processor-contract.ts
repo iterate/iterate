@@ -1,22 +1,26 @@
 // Defines the built-in "core" processor contract.
-// This processor owns stream runtime state such as max offset, stream config,
-// configured subscriber desired state, the subscriber presence roster, and the
-// paused/resumed door. The Stream Durable Object runs it inline during append
-// instead of through a subscription runner. Token-bucket rate limiting lives in
-// the circuit-breaker processor.
+// This processor owns stream durable state such as max offset, stream config,
+// configured subscriptions, and whether appends are paused. Live
+// connection presence belongs exclusively to runtime state. The Stream
+// Durable Object runs it inline during append instead of through the normal
+// event-batch runner. The same reducer also maintains the stream's token-bucket
+// circuit-breaker state.
 //
-// Contract files are the schema/type layer: plumbing modules (types.ts, the
-// processor host) import payload schemas from here, and processors that
-// reconcile on presence facts list this contract in their `processorDeps`.
+// Contract files are the schema/type layer: types.ts and the processor host
+// import payload schemas from here, and processors that
+// react to presence events list this contract in their `processorDeps`.
 
 import { z } from "zod";
 import {
   defineProcessorContract,
   ProcessorContractAnnouncement,
+  type SubscriptionConfigurationForDelivery,
+  type StreamEvent,
   STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
 } from "iterate/processors";
 import { ItxExpression } from "../../itx/expression.ts";
-import { EventSelector } from "./event-selector.ts";
+import { canonicalizeStreamPath } from "../durable-object-names.ts";
+import { EventFilter } from "./event-filter.ts";
 
 // Version of the persisted core reduced state ("state" in KV). Bump this when
 // the core reducer starts deriving NEW state from already-reduced events
@@ -24,46 +28,34 @@ import { EventSelector } from "./event-selector.ts";
 // path). On wake, a stored version that differs from this constant discards
 // the persisted state and rebuilds it by replaying the full event log from the
 // DO's own SQLite -- the same path used when KV state is missing entirely.
-//
-// History:
-// - 1 (implicit; no "stateVersion" key in KV): pre-descendantPaths state.
-// - 2: childPaths gained a sibling descendantPaths (full announced paths).
-// - 3: descendantPaths removed; callers should walk immediate childPaths.
-// - 4: subscriber presence -- connectionsByKey roster added; processorsBySlug
-//      reshaped to fold contract announcements from subscriber-connected
-//      events instead of the removed processor-registered event.
-// - 5: stream coordinate fields normalized to projectId/path.
-// - 6: configured subscriber state and typed subscriber targets replaced the
-//      old transport-direction subscription model.
-// - 7: core's empty state is expressed directly by this schema's optional and
-//      defaulted fields instead of a separate initial state object.
-// - 8: cross-post stream rules are reduced into core state.
-// - 9: stream circuit breaker token bucket added.
-// - 10: durable subscriptions unified — one `subscription-configured` payload
-//      carries a delivery mode (`wake` to a Durable Object processor, `push`
-//      to a persisted itx expression) plus selector / deliver / onPoison;
-//      spine facts (subscription-parked/-resumed/-cursor-set) fold into the
-//      subscription records; cross-post rules deleted (a cross-post is a push
-//      subscription addressing the target stream's `acceptCrossPost`); worker wake
-//      targets deleted (stateless workers consume via push).
-// - 11: one addressing grammar for every durable mode — wake targets are itx
-//      expressions too, naming the domain node's processor (`["agents",
-//      ["get", path], "processor", "wakeStreamSubscriber"]`) instead of a
-//      typed Durable Object address, and `webhook` joins as the third mode
-//      (per-EVENT HTTP POST on the push spine's cursor machinery).
-// - 12: dead derived state deleted — `processorsBySlug` (written on every
-//      connect fold, read by nothing; announcements live on presence facts)
-//      and `metadata` + its `metadata-updated` event (no appender, no reader).
-// - 13: seek verbs orthogonalized — `subscription-resumed` loses `afterOffset`
-//      (resume = pure un-park at the cursor where delivery stopped);
-//      `subscription-cursor-set` is the one and only seek. A redrive is two
-//      facts (cursor-set + resumed), each honest about what it did.
-// - 14: ephemeral subscriber connections no longer fold into
-//      `connectionsByKey` — the roster tracks configured subscriptions only.
-//      Live ephemeral consumers are runtime state (the in-memory connection
-//      table); dead ones used to linger here forever when their disconnect
-//      fact was lost to an eviction or deploy rollover.
-export const CORE_STATE_VERSION = 14;
+// Version 22 establishes the current vocabulary: subscriptions are stored
+// instructions, connections are live callbacks, deliveries are attempted
+// batches or HTTP calls, and checkpoints/cursors record completed work.
+// Version 24 makes each receiving stream's copy-list status a durable,
+// replayable state machine instead of inferring a blocked list from a
+// per-subscription halt or the SQLite retry scheduler.
+// Version 25 records a random stream-lifetime identity. Creation time still
+// orders destructive recreations, while the random ID prevents two lifetimes
+// created in the same millisecond from sharing delivery-deduplication keys.
+// Version 26 stores optional automatic-removal conditions directly on a
+// subscription instead of beneath a redundant always-durable lifetime wrapper.
+// Version 27 gives subscriptions one hierarchy: inbound subscriptions are
+// grouped by source path and outbound subscriptions are keyed by their
+// source-local key. Complete copy-list delivery work is separate because
+// an empty list is still work the source must deliver.
+// Version 28 deletes the copy-list handshake: inbound records are passive,
+// derived from the `source.copiedFrom` stamps on committed copied events,
+// capped at MAX_INBOUND_SOURCE_RECORDS, and exist only to fence stale source
+// lifetimes/config generations and feed the debug card. The same version also
+// removed the version-26 `endWhen` automatic-removal conditions and the
+// copy-to-stream transform option. Still within version 28 (one undeployed
+// flag day), the webhook-post receiver returned as the lane for
+// remotely-hosted processors driven by webhooks, the JSONata fields took
+// language-naming names (`jsonataCondition`, `jsonataTransform`), and the
+// optional `jsonataTransform` became available on every push receiver (copy,
+// ITX call, webhook) — never on processor-wake, whose delivery must feed the
+// processor its committed log verbatim.
+export const CORE_STATE_VERSION = 28;
 
 // Restored from the old built-in circuit-breaker processor. These defaults are
 // intentionally high for normal browser/load tests; the breaker exists to stop
@@ -73,11 +65,11 @@ const DEFAULT_CIRCUIT_BREAKER_REFILL_RATE_PER_MINUTE = 6_000_000;
 
 /**
  * A delivery-addressing expression: an {@link ItxExpression} whose FINAL step
- * is a property step naming the method the spine will invoke. The dial turns
- * that tail into a call step at delivery time (`[..., [tail, payload]]`), so
+ * is a property step naming the method the stream will invoke. The call builder turns
+ * that final item into a call step (`[..., [methodName, payload]]`), so
  * the invocation happens receiver-bound on the remote side — reading the
  * method as a property and applying it locally detaches it from `this` across
- * a real RPC hop. Enforced here so an invalid tail is rejected before the
+ * a real RPC hop. Enforced here so an invalid final item is rejected before the
  * config event commits, not discovered as a delivery failure forever after.
  */
 const DeliveryExpression = ItxExpression.refine(
@@ -85,133 +77,194 @@ const DeliveryExpression = ItxExpression.refine(
   { message: "delivery expression must end in a property step naming the method to invoke" },
 );
 
-export const StreamSubscriptionType = z.enum(["configured", "ephemeral"]);
-/** How a subscriber is attached: `configured` = durable desired state; `ephemeral` = session-scoped live socket. */
-export type StreamSubscriptionType = z.infer<typeof StreamSubscriptionType>;
+/** The canonical URL-path identity persisted in stream subscription events. */
+const StreamPath = z.string().trim().min(1).transform(canonicalizeStreamPath);
+
+export const StreamConnectionKind = z.enum(["session", "hosted"]);
+/** Who owns a live event-batch callback: the current session or a hosted processor. */
+export type StreamConnectionKind = z.infer<typeof StreamConnectionKind>;
+
+/** Where a copy, ITX-call, or webhook subscription starts reading the source stream. */
+export const SubscriptionStart = z.enum(["beginning", "now"]);
+
+export type SubscriptionStart = z.infer<typeof SubscriptionStart>;
 
 /**
- * How a durable subscription's events reach the subscriber — the three
- * modalities of the streams README's axes table. Wake and push share ONE
- * addressing grammar: a persisted {@link ItxExpression itx expression},
- * evaluated at delivery time against the stream's own authority root (the
- * project itx for project streams, the trusted deployment root for global
- * streams). The mode picks the delivery protocol, never the addressing:
- *
- * - `wake`: the subscriber is a stateful fold (a Durable-Object-hosted
- *   processor) that owns its own `{offset, state}` checkpoint. The expression
- *   names the poke method on the domain node's processor (`["agents", ["get",
- *   path], "processor", "wakeStreamSubscriber"]`, `["repos", …]`, the project
- *   root's own `["processor", "wakeStreamSubscriber"]`, …); the poke returns
- *   the checkpoint and a live one-way sink, and the stream streams batches
- *   into the sink from there. The stream-side cursor is an OBSERVATIONAL
- *   watermark (poke coalescing + lag); the subscriber's checkpoint is the
- *   truth.
- * - `push`: the subscriber is a stateless effect named by the expression
- *   (`["processEventBatch"]` — the project root's own dispatch point the
- *   birth-certificate worker feed names, `["streams", ["get", path],
- *   "acceptCrossPost"]`, …). The stream owns the AUTHORITATIVE cursor, dials the
- *   expression fresh per batch, and advances only on a successful awaited
- *   call.
- * - `webhook`: push semantics over plain HTTP, one event per POST — the
- *   receiver is outside the itx world, and external webhook consumers expect
- *   individual events, so the cursor advances per event instead of per batch.
- *   POSTs ride the project egress lane (attributed + interceptable, never
- *   bare global fetch), so webhooks require a project-scoped stream.
- *
- * The criterion: the offset lives with whoever owns the state it must be
- * transactionally consistent with.
+ * What a copy, ITX-call, or webhook subscription does when one specific event keeps failing
+ * while the receiver is otherwise alive: `halt` (default) stops delivery and
+ * appends a `subscription-delivery-halted` event — ordered receivers like stream
+ * must never skip (a skip is a silent gap in the target stream); `skip`
+ * retries the failing event alone (webhook deliveries are already single
+ * events), records an idempotent `error-occurred`, and
+ * steps over it — right for feeds where one bad event must not silence
+ * everything after it (the project worker feed).
  */
-const SubscriptionDelivery = z.discriminatedUnion("mode", [
+const OnFailingEventPolicy = z.enum(["halt", "skip"]);
+
+/** Event sending halts only when delivering matching events exhausts its retry budget. */
+const SubscriptionHaltReason = z.literal("delivery-failed");
+
+/** Policy that exists only when the source owns an awaited delivery cursor. */
+const DeliveryPolicy = z.strictObject({
+  start: SubscriptionStart,
+  onFailingEvent: OnFailingEventPolicy,
+});
+
+/** Ordered stream copies may retry or halt, but can never skip a missing event. */
+const StreamReceiverDeliveryPolicy = DeliveryPolicy.extend({
+  onFailingEvent: z.literal("halt"),
+});
+
+/**
+ * What one subscription does with matching source events. The action makes
+ * invalid combinations unrepresentable: processor wake-ups own their
+ * checkpoint; the other actions store their cursor and delivery policy on the source. A
+ * copy names the receiving stream directly instead of hiding it inside
+ * an ITX expression.
+ */
+export const SubscriptionReceiver = z.discriminatedUnion("action", [
   z.strictObject({
-    mode: z.literal("wake"),
+    // No jsonataTransform here, ever: a hosted processor's reduced state must
+    // equal folding its stream's committed events. Wake delivery feeds the
+    // processor its own log, so transforming it would break replay/rebuild
+    // determinism.
+    action: z.literal("processor-wake"),
     expression: DeliveryExpression,
-    /**
-     * Which hosted processor the wake is for — multi-processor hosts (an
-     * agent DO hosts agent + slack-agent + more) resolve on it;
-     * single-processor hosts may omit it. Rides the wake request verbatim.
-     */
     processorSlug: z.string().trim().min(1).optional(),
   }),
-  z.strictObject({ mode: z.literal("push"), expression: DeliveryExpression }),
-  z.strictObject({ mode: z.literal("webhook"), url: z.url({ protocol: /^https?$/ }) }),
+  z.strictObject({
+    action: z.literal("copy-to-stream"),
+    receivingStreamPath: StreamPath,
+    /**
+     * Optional JSONata constructor evaluated per event to shape what the
+     * receiving stream commits (`{ type?, payload?, metadata? }`; omitted
+     * fields copy verbatim). The receiver applies it, then the platform
+     * stamps `source.copiedFrom` and the source-coordinate idempotency key —
+     * a transform can reshape the body but can never forge provenance or
+     * affect deduplication. Parse-validated at configure time; an evaluation
+     * failure at delivery time is an ordinary delivery failure.
+     */
+    jsonataTransform: z.string().trim().min(1).optional(),
+    delivery: StreamReceiverDeliveryPolicy,
+  }),
+  z.strictObject({
+    action: z.literal("itx-call"),
+    expression: DeliveryExpression,
+    /**
+     * Optional JSONata constructor evaluated per event to shape each event in
+     * the delivered batch (`{ type?, payload?, metadata? }`; omitted fields
+     * copy verbatim) while the coordinates keep naming the source rows.
+     * Parse-validated at configure time; an evaluation failure at send time
+     * is an ordinary delivery failure.
+     */
+    jsonataTransform: z.string().trim().min(1).optional(),
+    delivery: DeliveryPolicy,
+  }),
+  z.strictObject({
+    action: z.literal("webhook-post"),
+    url: z.url({ protocol: /^https?$/ }),
+    /**
+     * Optional JSONata constructor evaluated per event to shape the POSTed
+     * event body (`{ type?, payload?, metadata? }`; omitted fields copy
+     * verbatim) while the envelope keeps the real source coordinates.
+     * Parse-validated at configure time; an evaluation failure at send time
+     * is an ordinary delivery failure.
+     */
+    jsonataTransform: z.string().trim().min(1).optional(),
+    delivery: DeliveryPolicy,
+  }),
 ]);
 
-/** A durable subscription's delivery lane: wake (hosted processor poke), push (per-batch call), or webhook (per-event POST). */
-export type SubscriptionDelivery = z.infer<typeof SubscriptionDelivery>;
+export type SubscriptionReceiver = z.infer<typeof SubscriptionReceiver>;
 
 /**
- * Initial cursor for a stream-owned-cursor subscription (push/webhook).
- * `"new"` pins to the configuring event's own offset — deterministic under
- * log replay, no clock — and is the default. `"all"` replays the full history
- * (`afterOffset: 0`).
+ * Bounded because every key is retained in reduced state on both sides of a
+ * delivery — outbound configuration here, and one passive inbound record per
+ * (source path, key) on each receiver. 500 covers the longest legitimate
+ * platform generator, the default processor-wake key
+ * `${durableObjectName}#${processorSlug}` over a ≤256-byte Durable Object
+ * name, with room to spare; generated keys are `subscription:<offset>`.
  */
-const DeliverPolicy = z.union([
-  z.literal("all"),
-  z.literal("new"),
-  z.strictObject({ afterOffset: z.number().int().nonnegative() }),
-]);
+const SubscriptionKey = z.string().trim().min(1).max(500);
 
-export type DeliverPolicy = z.infer<typeof DeliverPolicy>;
-
-/**
- * What a push/webhook subscription does when one specific batch keeps failing
- * while the receiver is otherwise alive: `park` (default) stops delivery and
- * records a `subscription-parked` fact — ordered receivers like cross-post
- * must never skip (a skip is a silent gap in the target stream); `skip`
- * bisects the batch to isolate the poison event (webhook batches are already
- * single events), records an idempotent `error-occurred`, and steps over it —
- * right for feeds where one bad event must not silence everything after it
- * (the project worker feed).
- */
-const OnPoisonPolicy = z.enum(["park", "skip"]);
-
-// Payloads shared between the event catalog below and the reduced-state
-// records that store the latest committed configuration event, so the two can
-// never drift apart.
-const SubscriptionConfiguredPayload = z
-  .object({
-    subscriptionKey: z.string().trim().min(1),
-    delivery: SubscriptionDelivery,
-    /**
-     * Optional human-readable note for operators and the stream state panel
-     * (e.g. why a cross-post exists). Not interpreted by the delivery spine.
-     */
-    description: z.string().trim().min(1).optional(),
-    /** Which events this subscription receives. Absent = everything. */
-    selector: EventSelector.optional(),
-    /** Initial cursor for push/webhook (see {@link DeliverPolicy}). Ignored for wake mode. */
-    deliver: DeliverPolicy.optional(),
-    /** Push/webhook poison policy (see {@link OnPoisonPolicy}). Ignored for wake mode. */
-    onPoison: OnPoisonPolicy.optional(),
-    /** Include ephemeral rows in push/webhook delivery. Absent = durable rows only. */
-    includeEphemeral: z.boolean().optional(),
-    /**
-     * Receiver-owned configuration, passed through VERBATIM on every delivery
-     * (the frame carries the configured event). The platform never interprets
-     * this bag — the generic spine filters and dials, nothing more; a NAMED
-     * receiver documents and applies its own params (selectors filter, receivers
-     * transform). `Stream.acceptCrossPost` reads `params.transform` here, for example.
-     */
-    params: z.record(z.string(), z.unknown()).optional(),
-  })
-  .superRefine((payload, ctx) => {
-    // Honesty at append time: these knobs are cursor policy for the
-    // stream-owned-cursor modes. Accepting them on a wake config (where the
-    // subscriber owns its checkpoint) would commit config that silently does
-    // nothing.
-    if (payload.delivery.mode !== "wake") return;
-    for (const field of ["deliver", "onPoison", "includeEphemeral"] as const) {
-      if (payload[field] !== undefined) {
-        ctx.addIssue({
-          code: "custom",
-          path: [field],
-          message: `"${field}" only applies to push/webhook subscriptions (wake subscribers own their checkpoint)`,
-        });
-      }
-    }
-  });
+export const SubscriptionConfiguredPayload = z.strictObject({
+  /**
+   * A caller-selected source-local identity. Omitting it creates a new
+   * subscription whose effective key is derived from this event's committed
+   * offset (`subscription:<offset>`).
+   */
+  subscriptionKey: SubscriptionKey.optional(),
+  description: z.string().trim().min(1).optional(),
+  filter: EventFilter.optional(),
+  receiver: SubscriptionReceiver,
+}) satisfies z.ZodType<SubscriptionConfigurationForDelivery["payload"]>;
 
 export type SubscriptionConfiguredPayload = z.infer<typeof SubscriptionConfiguredPayload>;
+
+type AssertTrue<Value extends true> = Value;
+type MutuallyAssignable<Left, Right> = [Left] extends [Right]
+  ? [Right] extends [Left]
+    ? true
+    : false
+  : false;
+
+/**
+ * Compile-time proof that the app's validating schema and the delivery
+ * envelope's shared payload type have exactly the same fields in both
+ * directions.
+ *
+ * @public — never imported; the export exists so the compiler must evaluate
+ * the assertion.
+ */
+export type SubscriptionConfiguredDeliveryPayloadContractMatches = AssertTrue<
+  MutuallyAssignable<
+    z.output<typeof SubscriptionConfiguredPayload>,
+    SubscriptionConfigurationForDelivery["payload"]
+  >
+>;
+
+/** Reduced outbound configuration always contains the effective key. */
+const EffectiveSubscriptionConfiguration = SubscriptionConfiguredPayload.safeExtend({
+  subscriptionKey: SubscriptionKey,
+});
+
+/** Hard bound on how many subscriptions one source may point at one receiving stream. */
+export const MAX_SUBSCRIPTIONS_PER_RECEIVING_STREAM = 64;
+
+/** The effective source-local key for one committed configuration event. */
+export function subscriptionKeyForConfiguredEvent(event: {
+  offset: number;
+  payload: Pick<SubscriptionConfiguredPayload, "subscriptionKey">;
+}): string {
+  return event.payload.subscriptionKey ?? `subscription:${event.offset}`;
+}
+
+/**
+ * Reconstruct the payload that was committed in a subscription-configured
+ * event from reduced outbound state. Generated keys exist only in reduced
+ * state: the original event omitted the key and derives it from its offset.
+ *
+ * Fresh callers cannot claim the `subscription:` namespace, and a later
+ * replacement necessarily has a later offset, so equality with this event's
+ * generated key is unambiguous.
+ */
+export function subscriptionConfiguredPayloadFromReducedState(args: {
+  configuration: z.infer<typeof EffectiveSubscriptionConfiguration>;
+  configuredAtOffset: number;
+}): SubscriptionConfiguredPayload {
+  if (
+    args.configuration.subscriptionKey !==
+    subscriptionKeyForConfiguredEvent({
+      offset: args.configuredAtOffset,
+      payload: {},
+    })
+  ) {
+    return args.configuration;
+  }
+
+  const { subscriptionKey: _generatedKey, ...committedPayload } = args.configuration;
+  return committedPayload;
+}
 
 const CircuitBreakerConfig = z.object({
   burstCapacity: z.number().int().positive(),
@@ -224,26 +277,14 @@ const StreamConfiguredPayload = z.object({
   }),
 });
 
-/** Durable desired-state record: the latest committed configuration event for one key. */
-const latestConfiguredEvent = <const Type extends string, Payload extends z.ZodType>(
-  type: Type,
-  payload: Payload,
-) =>
-  z.object({
-    latestConfiguredEvent: z.object({
-      offset: z.number().int().min(0),
-      type: z.literal(type),
-      payload,
-      createdAt: z.string(),
-    }),
-  });
+const SubscriptionRemovalReason = z.literal("requested");
 
 /**
- * Identity the connecting party passes in its subscribe call. All fields are
- * optional: anonymous ephemeral watchers (a stream-viewer tab) may pass nothing,
+ * Identity the caller passes when it opens a connection. All fields are
+ * optional: anonymous session watchers (a stream-viewer tab) may pass nothing,
  * processor hosts pass their incarnation id plus a processor announcement.
  */
-export const StreamSubscriberDescriptor = z.object({
+export const ConnectionOpenerDescriptor = z.object({
   /** Human-readable label, e.g. "browser" or "orpc-bridge". */
   description: z.string().optional(),
   /**
@@ -262,36 +303,36 @@ export const StreamSubscriberDescriptor = z.object({
   /** Present when the subscriber is a stream processor. */
   processor: z
     .object({
-      /** Serializable processor contract announcement persisted into presence facts. */
+      /** Serializable processor contract announcement persisted into presence events. */
       announcement: ProcessorContractAnnouncement,
     })
     .optional(),
 });
 
-/** Serializable subscriber identity carried on presence facts and the runtime connection table. */
-export type StreamSubscriberDescriptor = z.infer<typeof StreamSubscriberDescriptor>;
+/** Serializable identity of the caller that opened a connection. */
+export type ConnectionOpenerDescriptor = z.infer<typeof ConnectionOpenerDescriptor>;
 
-export const StreamSubscriberDisconnectReason = z.enum([
-  /** A new connection for the same subscriptionKey replaced this one. */
+export const ConnectionCloseReason = z.enum([
+  /** A new connection for the same connectionKey replaced this one. */
   "replaced",
-  /** The subscriber called unsubscribe(). */
-  "unsubscribed",
-  /** The RPC session to the subscriber broke (subscriber crashed or was evicted). */
+  /** The owner closed the connection. */
+  "closed-by-owner",
+  /** The RPC session to the caller broke (it crashed or was evicted). */
   "rpc-broken",
-  /** Delivering a batch into the subscriber failed (stub dead or callback threw). */
+  /** Calling processEventBatch failed (stub dead or callback threw). */
   "delivery-failed",
-  /** The configured subscriber's durable configuration was removed. */
+  /** The hosted processor's subscription was removed. */
   "subscription-removed",
   /**
    * The stream went quiet for longer than its idle window, so the Stream DO
-   * deliberately dropped every configured connection to let itself (and its subscribers)
+   * deliberately dropped every hosted connection so both sides can
    * hibernate instead of accruing billable duration on idle cross-isolate RPC
-   * sessions. The durable subscription config is kept; the next append re-wakes.
+   * sessions. The subscription is kept; the next append wakes the processor again.
    */
   "idle",
 ]);
 
-export type StreamSubscriberDisconnectReason = z.infer<typeof StreamSubscriberDisconnectReason>;
+export type ConnectionCloseReason = z.infer<typeof ConnectionCloseReason>;
 
 export const CoreProcessorContract = defineProcessorContract({
   slug: "core",
@@ -300,6 +341,7 @@ export const CoreProcessorContract = defineProcessorContract({
   stateSchema: z.object({
     projectId: z.string().trim().min(1).nullable().optional(),
     path: z.string().trim().min(1).optional(),
+    streamId: z.uuid().optional(),
     createdAt: z.string().optional(),
     incarnationId: z.string().trim().min(1).optional(),
     /**
@@ -333,44 +375,84 @@ export const CoreProcessorContract = defineProcessorContract({
         refillRatePerMinute: DEFAULT_CIRCUIT_BREAKER_REFILL_RATE_PER_MINUTE,
         trippedAtOffset: null,
       }),
-    configuredSubscribersByKey: z
-      .record(
-        z.string(),
-        latestConfiguredEvent(
-          "events.iterate.com/stream/subscription-configured",
-          SubscriptionConfiguredPayload,
-        ).extend({
-          /**
-           * Set by a `subscription-parked` fact (delivery gave up after
-           * sustained failure), cleared by `subscription-resumed` or by a
-           * fresh `subscription-configured` for the key (new config = fresh
-           * chance). While set, the spine does not deliver. The cursor itself
-           * is NOT here: acked offsets are storage (the spine's SQLite rows),
-           * not facts — see the streams README doctrine.
-           */
-          parkedAtOffset: z.number().int().min(0).optional(),
-        }),
-      )
-      .default({}),
-    /**
-     * Live presence roster for CONFIGURED subscriptions: which durable
-     * subscribers are connected right now, keyed by subscriptionKey — the
-     * event-sourced mirror of the runtime connection map. `stream/woken`
-     * clears it (every connection died with the previous stream incarnation;
-     * survivors reconnect and re-land), connected adds, disconnected removes.
-     * Ephemeral connections never fold in (state version 14): their lifetime
-     * is the live socket, tracked only in the runtime connection table.
-     */
-    connectionsByKey: z
-      .record(
-        z.string(),
-        z.object({
-          subscriptionType: StreamSubscriptionType,
-          connectedAtOffset: z.number().int().min(0),
-          subscriber: StreamSubscriberDescriptor.optional(),
-        }),
-      )
-      .default({}),
+    subscriptions: z
+      .object({
+        /**
+         * Passive per-(source path, subscription key) records derived from the
+         * `source.copiedFrom` stamps on committed copied events — never from a
+         * configure-time handshake. They fence stale deliveries (an older
+         * source lifetime, or an older config generation of the same
+         * lifetime) and feed the debug card; the receiver learns about a
+         * subscription only when its first copy arrives.
+         */
+        inbound: z
+          .object({
+            bySourcePath: z
+              .record(
+                z.string(),
+                z.record(
+                  z.string(),
+                  z.object({
+                    /** Random identity of the source stream lifetime last accepted. */
+                    streamId: z.uuid(),
+                    /** Creation time of that lifetime; orders destructive recreations. */
+                    streamCreatedAt: z.string().trim().min(1),
+                    /** Configure/cursor-set offset of the config generation last accepted. */
+                    cursorChangedAtSourceOffset: z.number().int().positive(),
+                    numEventsReceived: z.number().int().nonnegative(),
+                    lastEventReceivedAt: z.string().optional(),
+                  }),
+                ),
+              )
+              .default({}),
+          })
+          .default({ bySourcePath: {} }),
+        /** Subscriptions configured on this source stream. */
+        outbound: z
+          .object({
+            byKey: z
+              .record(
+                z.string(),
+                z.object({
+                  configuration: EffectiveSubscriptionConfiguration,
+                  configuredAtOffset: z.number().int().positive(),
+                  configuredAt: z.string(),
+                  /**
+                   * Present when the first configuration omitted its key. It
+                   * lets the returned generated key name later replacements
+                   * while fresh callers remain unable to claim that namespace.
+                   */
+                  subscriptionKeyWasGenerated: z.literal(true).optional(),
+                  /**
+                   * Latest explicit source read position. Delivery applies this
+                   * level-triggered to its SQLite cursor row, so a post-commit
+                   * interruption cannot lose an audited seek.
+                   */
+                  cursorSet: z
+                    .strictObject({
+                      afterOffset: z.number().int().nonnegative(),
+                      setAtSourceOffset: z.number().int().positive(),
+                    })
+                    .optional(),
+                  deliveryHalted: z
+                    .strictObject({
+                      reason: SubscriptionHaltReason,
+                      /** Source-owned delivery cursor when this subscription stopped. */
+                      afterOffset: z.number().int().nonnegative(),
+                      attempts: z.number().int().positive(),
+                      error: z.string().trim().min(1).optional(),
+                    })
+                    .optional(),
+                }),
+              )
+              .default({}),
+          })
+          .default({ byKey: {} }),
+      })
+      .default({
+        inbound: { bySourcePath: {} },
+        outbound: { byKey: {} },
+      }),
   }),
   events: {
     "events.iterate.com/stream/created": {
@@ -378,6 +460,7 @@ export const CoreProcessorContract = defineProcessorContract({
       payloadSchema: z.object({
         projectId: z.string().trim().min(1).nullable(),
         path: z.string().trim().min(1),
+        streamId: z.uuid(),
       }),
     },
     "events.iterate.com/stream/woken": {
@@ -398,64 +481,149 @@ export const CoreProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/stream/subscription-configured": {
       description:
-        "Configures or replaces a durable subscription for this stream (wake or push delivery; latest event per subscriptionKey wins). Re-configuring keeps the existing delivery cursor unless `deliver` is set, and clears any parked state — new config is a fresh chance.",
+        "Configures or replaces one durable subscription for sending this stream's events to a receiver. This is the sole event that enables delivery.",
       payloadSchema: SubscriptionConfiguredPayload,
+      examples: [
+        {
+          description:
+            "A hosted agent processor owns its checkpoint and is woken by calling its durable ITX method.",
+          payload: {
+            subscriptionKey: "prj_01jzp3v9qkfxeb2m4n8r7wd5ha.iterate/agents/onboarding#agent",
+            receiver: {
+              action: "processor-wake",
+              expression: [
+                "agents",
+                ["get", "/agents/onboarding"],
+                "processor",
+                "wakeStreamProcessor",
+              ],
+              processorSlug: "agent",
+            },
+          },
+        },
+        {
+          description:
+            "A copy copies one repository's GitHub webhooks from a connection stream, starting with new events from now on.",
+          payload: {
+            subscriptionKey: "github-repo:/repos/root",
+            description:
+              "Delivers GitHub webhooks for acme/widgets to this repo's stream so the repo processor can react to them.",
+            filter: {
+              eventTypes: ["events.iterate.com/github/webhook-received"],
+              jsonataCondition: 'payload.body.repository.full_name = "acme/widgets"',
+            },
+            receiver: {
+              action: "copy-to-stream",
+              receivingStreamPath: "/repos/root",
+              delivery: {
+                start: "now",
+                onFailingEvent: "halt",
+              },
+            },
+          },
+        },
+        {
+          description:
+            "An ITX call sends matching task events to a project worker method and stores the completed offset on this source stream.",
+          payload: {
+            subscriptionKey: "tasks-for-project-worker",
+            filter: { eventTypes: ["events.example/task-created"] },
+            receiver: {
+              action: "itx-call",
+              expression: ["worker", "processEventBatch"],
+              delivery: {
+                start: "beginning",
+                onFailingEvent: "halt",
+              },
+            },
+          },
+        },
+        {
+          description:
+            "Webhook delivery: one HTTP POST per event to an external receiver, stepping over a repeatedly failing event instead of halting all later sends.",
+          payload: {
+            subscriptionKey: "ops-webhook",
+            receiver: {
+              action: "webhook-post",
+              url: "https://hooks.example.com/iterate/stream-events",
+              delivery: {
+                start: "now",
+                onFailingEvent: "skip",
+              },
+            },
+          },
+        },
+      ],
     },
     "events.iterate.com/stream/subscription-removed": {
-      description:
-        "Removes a durable subscription. Deleting the config is revocation: the stream is the only holder of the delivery machinery, and its cursor row is dropped with it.",
-      payloadSchema: z.object({
+      description: "Removes one durable subscription.",
+      payloadSchema: z.strictObject({
         subscriptionKey: z.string().trim().min(1),
+        reason: SubscriptionRemovalReason,
       }),
     },
-    "events.iterate.com/stream/subscription-parked": {
+    "events.iterate.com/stream/subscription-delivery-halted": {
       description:
-        "Delivery for one subscription gave up after sustained failure and stopped. Appended by the stream's own delivery spine, idempotent per (subscriptionKey, atOffset). Parked is a fact, loud by design; resume it explicitly with subscription-resumed.",
-      payloadSchema: z.object({
+        "One subscription stopped after delivering matching source events exhausted the bounded retry count.",
+      payloadSchema: z.strictObject({
         subscriptionKey: z.string().trim().min(1),
-        /** The cursor at park time: delivery stopped without acking past this offset. */
-        atOffset: z.number().int().min(0),
+        reason: SubscriptionHaltReason,
+        /** The cursor at halt time: delivery stopped without acking past this offset. */
+        afterOffset: z.number().int().min(0),
         attempts: z.number().int().positive(),
-        error: z.string().trim().min(1).optional(),
+        error: z.string().trim().min(1).max(4_096).optional(),
       }),
     },
-    "events.iterate.com/stream/subscription-resumed": {
-      description:
-        "Operator/agent verb: un-parks a subscription and kicks delivery, resuming at the cursor where it stopped. Moving the cursor is a different act with its own fact — append `subscription-cursor-set` first for a redrive (skip past a bad offset, replay a window).",
-      payloadSchema: z.object({
+    "events.iterate.com/stream/subscription-delivery-resumed": {
+      description: "Resumes one halted subscription at its existing cursor.",
+      payloadSchema: z.strictObject({
         subscriptionKey: z.string().trim().min(1),
       }),
     },
     "events.iterate.com/stream/subscription-cursor-set": {
       description:
-        "Operator/agent verb: THE seek — explicitly moves a push subscription's cursor (exclusive afterOffset semantics: 0 replays everything). The audited form of replay — the cursor row itself is storage, but moving it deliberately is a fact. For a parked subscription, follow with `subscription-resumed` to restart delivery.",
-      payloadSchema: z.object({
+        "Changes the next source offset read by one copy, ITX-call, or webhook subscription (exclusive afterOffset semantics). It rejects offsets beyond the current stream head. A receiver call already in progress may still finish, but cannot advance this new position. Hosted processors reject this event because the processor stores its own checkpoint.",
+      payloadSchema: z.strictObject({
         subscriptionKey: z.string().trim().min(1),
         afterOffset: z.number().int().min(0),
       }),
+      examples: [
+        {
+          description:
+            "Replays the stream's full history into the project worker feed (afterOffset is exclusive; 0 replays everything).",
+          payload: { subscriptionKey: "project-worker", afterOffset: 0 },
+        },
+        {
+          description:
+            "Makes future copy sends read after offset 512; a receiver call already in progress may still finish.",
+          payload: { subscriptionKey: "github-repo:/repos/root", afterOffset: 512 },
+        },
+      ],
     },
-    "events.iterate.com/stream/subscriber-connected": {
+    "events.iterate.com/stream/connection-opened": {
       description:
-        "A delivery connection to one subscriber opened. Appended by the stream itself, once per actual open — which is why presence facts carry no idempotency keys: a re-handshake after a transient break genuinely is a new connection and must re-land on the roster. It is always the tail of any batch it shares (appended after the handshake fixes the replay offset), so state-at-event equals batch-final state.",
+        "A live connection from this stream to a processEventBatch callback opened. Appended by the stream itself once per actual open; reconnecting after a transient break is a new connection.",
       payloadSchema: z.object({
-        subscriptionKey: z.string().trim().min(1),
-        subscriptionType: StreamSubscriptionType,
-        subscriber: StreamSubscriberDescriptor.optional(),
+        connectionKey: z.string().trim().min(1),
+        kind: StreamConnectionKind,
+        openedBy: ConnectionOpenerDescriptor.optional(),
       }),
     },
-    "events.iterate.com/stream/subscriber-disconnected": {
+    "events.iterate.com/stream/connection-closed": {
       description:
-        "A delivery connection to one subscriber closed. Appended by the stream itself, once per actual close.",
+        "Observes that a live connection from this stream to a processEventBatch callback closed. Abrupt Durable Object teardown can end an in-memory connection without leaving this best-effort close fact; runtime connection state is authoritative for what is open now.",
       payloadSchema: z.object({
-        subscriptionKey: z.string().trim().min(1),
-        reason: StreamSubscriberDisconnectReason,
+        connectionKey: z.string().trim().min(1),
+        reason: ConnectionCloseReason,
+        /** Present when the connection closed because an operation failed. */
+        error: z.string().trim().min(1).optional(),
       }),
     },
     [STREAM_PROCESSOR_REVIVED_EVENT_TYPE]: {
       description:
         "A recovery-wired stream processor was revived after its incarnation died owing background work (in-flight obligations lost to an eviction). Appended by the platform's recovery keepalive, never emitted by a processor; the payload's processorSlug names which processor was revived (the type string is shared by every recovery-wired processor). Consumption is optional and only needed when the processor reacts to the fact itself; an unconsumed tail still receives the runner's eventless at-head turn so open obligations are not stranded.",
       // Loose ON PURPOSE: the payload is authored by the shared recovery
-      // adapter (durableObjectRecovery.appendRevived), and future fields it
+      // durable recovery adapter, and future fields it
       // grows must not turn historical revivals into parse failures.
       payloadSchema: z.looseObject({
         processorSlug: z.string(),
@@ -498,19 +666,19 @@ export const CoreProcessorContract = defineProcessorContract({
     "events.iterate.com/stream/child-stream-created",
     "events.iterate.com/stream/subscription-configured",
     "events.iterate.com/stream/subscription-removed",
-    "events.iterate.com/stream/subscription-parked",
-    "events.iterate.com/stream/subscription-resumed",
+    "events.iterate.com/stream/subscription-delivery-halted",
+    "events.iterate.com/stream/subscription-delivery-resumed",
     "events.iterate.com/stream/subscription-cursor-set",
-    "events.iterate.com/stream/subscriber-connected",
-    "events.iterate.com/stream/subscriber-disconnected",
+    "events.iterate.com/stream/connection-opened",
+    "events.iterate.com/stream/connection-closed",
     "events.iterate.com/stream/error-occurred",
     "events.iterate.com/stream/paused",
     "events.iterate.com/stream/resumed",
   ],
   emits: [
-    "events.iterate.com/stream/subscriber-connected",
-    "events.iterate.com/stream/subscriber-disconnected",
-    "events.iterate.com/stream/subscription-parked",
+    "events.iterate.com/stream/connection-opened",
+    "events.iterate.com/stream/connection-closed",
+    "events.iterate.com/stream/subscription-delivery-halted",
     "events.iterate.com/stream/child-stream-created",
   ],
 });
@@ -522,4 +690,56 @@ export const CoreProcessorContract = defineProcessorContract({
  */
 export type CoreProcessorContract = typeof CoreProcessorContract;
 
+/** Durable state reduced from the events in one stream. */
 export type CoreProcessorState = z.infer<typeof CoreProcessorContract.stateSchema>;
+
+type ParsedCoreEvent = ReturnType<typeof CoreProcessorContract.parseEvent>;
+
+/** One exact committed event from the core processor contract. */
+export type CommittedCoreEvent<Type extends ParsedCoreEvent["type"]> = Extract<
+  ParsedCoreEvent,
+  { type: Type }
+>;
+
+/** One committed event that created or replaced a subscription on its source stream. */
+export type CommittedSubscriptionConfiguredEvent =
+  CommittedCoreEvent<"events.iterate.com/stream/subscription-configured">;
+/** One committed event that removed a subscription from its source stream. */
+export type CommittedSubscriptionRemovedEvent =
+  CommittedCoreEvent<"events.iterate.com/stream/subscription-removed">;
+
+/** Parse a committed event returned by an index or another Stream Durable Object. */
+export function parseCommittedCoreEvent<const Type extends ParsedCoreEvent["type"]>(
+  event: StreamEvent,
+  expectedType: Type,
+): CommittedCoreEvent<Type> {
+  if (event.type !== expectedType) {
+    throw new Error(
+      `stream event boundary returned "${event.type}" where "${expectedType}" was expected`,
+    );
+  }
+  return CoreProcessorContract.parseEvent(
+    event as StreamEvent & { type: Type },
+  ) as CommittedCoreEvent<Type>;
+}
+
+/**
+ * Validate a committed subscription configuration and keep only the fields a
+ * delivery receiver is promised. This intentionally drops event metadata,
+ * provenance, and idempotency bookkeeping.
+ */
+export function subscriptionConfigurationForDelivery(
+  event: StreamEvent,
+): SubscriptionConfigurationForDelivery {
+  const configured = parseCommittedCoreEvent(
+    event,
+    "events.iterate.com/stream/subscription-configured",
+  );
+  return {
+    type: configured.type,
+    offset: configured.offset,
+    createdAt: configured.createdAt,
+    path: configured.path,
+    payload: configured.payload,
+  };
+}

@@ -17,7 +17,7 @@ const activity = (overrides: Partial<AgentUiActivity>): AgentUiActivity => ({
 });
 
 describe("formatActivitySummary", () => {
-  test("mirrors the web feed phrasing", () => {
+  test("matches the web feed phrasing", () => {
     const summary = formatActivitySummary(
       activity({
         endedAtMs: 8400,

@@ -24,9 +24,9 @@ type LiveSession = {
 };
 
 /**
- * Cross-tab relay for the current subscription's volatile agent projection.
+ * Cross-tab relay for the current event connection's volatile agent projection.
  * Nothing in this class touches SQLite: old ephemeral events can never become
- * history merely because another tab needs to paint the live tail.
+ * history merely because another tab needs to paint newly received events.
  */
 export class LiveAgentStateChannel implements Disposable {
   readonly #port: LiveAgentStateChannelPort;
@@ -56,7 +56,7 @@ export class LiveAgentStateChannel implements Disposable {
     this.#post({ kind: "request" });
   }
 
-  /** Become the writer for a fresh live subscription. */
+  /** Become the writer for a newly opened event connection. */
   claim(state: AgentUiState | null): void {
     this.#assertOpen();
     const localSession: LiveSession = {
@@ -70,7 +70,7 @@ export class LiveAgentStateChannel implements Disposable {
     this.#sendSnapshot(localSession);
   }
 
-  /** Publish the writer's newest in-memory projection. Followers never persist it. */
+  /** Publish the writer's newest in-memory projection. Readers never persist it. */
   publish(state: AgentUiState | null): void {
     const session = this.#localSession;
     if (session === undefined || this.#disposed) return;
@@ -85,7 +85,7 @@ export class LiveAgentStateChannel implements Disposable {
     });
   }
 
-  /** Clear followers before relinquishing the writer lock. */
+  /** Clear readers before relinquishing the writer lock. */
   release(): void {
     if (this.#localSession === undefined) return;
     this.publish(null);
@@ -160,13 +160,13 @@ export class LiveAgentStateChannel implements Disposable {
 export function liveAgentStateChannelName(args: {
   projectId: string;
   streamPath: string;
-  versionVector: string;
+  processorSchemaVersionKey: string;
 }): string {
   return [
     "stream-live-agent",
     encodeURIComponent(args.projectId),
     encodeURIComponent(args.streamPath),
-    encodeURIComponent(args.versionVector),
+    encodeURIComponent(args.processorSchemaVersionKey),
   ].join(":");
 }
 

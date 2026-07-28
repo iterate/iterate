@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { StreamEvent } from "iterate/processors";
 import { StreamProcessorRunner } from "iterate/processors";
 import type { Stream } from "../../../../../itx-api.generated.ts";
-import { CompositeMirrorDrive } from "../../browser/composite-mirror-drive.ts";
+import { BrowserStreamProcessorGroup } from "../../browser/browser-stream-processor-group.ts";
 import { browserProcessorProgressStore } from "../../browser/processor-state-storage.ts";
 import type { SqlClient, SqlValue } from "../../browser/stream-browser-db.ts";
 import { BrowserFeedContract } from "./contract.ts";
@@ -11,6 +11,8 @@ import { BrowserFeedProcessor } from "./implementation.ts";
 import type { BrowserFeedState } from "./projector.ts";
 
 type ScalarSqlValue = Exclude<SqlValue, number[]>;
+
+const TEST_STREAM_ID = "11111111-1111-4111-8111-111111111111";
 
 function sqliteClient(): SqlClient {
   const database = new DatabaseSync(":memory:");
@@ -48,9 +50,14 @@ function event(
   };
 }
 
-function makeHarness(sql: SqlClient, subscriptionKey = "browser-feed-test") {
+function makeHarness(sql: SqlClient, progressKey = "browser-feed-test") {
   const stream = {
     append: async () => [],
+    getEventPage: async () => ({
+      streamId: TEST_STREAM_ID,
+      streamMaxOffset: 0,
+      events: [],
+    }),
     readEvents: async () => [],
   } as unknown as Stream;
   const processor = new BrowserFeedProcessor({
@@ -66,17 +73,17 @@ function makeHarness(sql: SqlClient, subscriptionKey = "browser-feed-test") {
       progress: browserProcessorProgressStore<BrowserFeedState>({
         sql,
         processorSlug: BrowserFeedContract.slug,
-        subscriptionKey,
+        progressKey,
         ensureProjectionSchema: (client) => processor.ensureProjectionSchema(client),
         projection: processor.projectionBuffer,
       }),
     },
   });
-  const composite = new CompositeMirrorDrive([
+  const processorGroup = new BrowserStreamProcessorGroup([
     { slug: BrowserFeedContract.slug, processor, runner },
   ]);
   return {
-    composite,
+    processorGroup,
     processor,
     runner,
     async deliver(args: {
@@ -84,8 +91,12 @@ function makeHarness(sql: SqlClient, subscriptionKey = "browser-feed-test") {
       scannedAfterOffset: number;
       scannedThroughOffset: number;
     }) {
-      const opened = await composite.openDelivery();
-      await opened.sink({ ...args, streamMaxOffset: args.scannedThroughOffset });
+      const opened = await processorGroup.openEventBatchCallback();
+      await opened.processEventBatch({
+        ...args,
+        streamId: TEST_STREAM_ID,
+        streamMaxOffset: args.scannedThroughOffset,
+      });
     },
   };
 }
@@ -139,7 +150,7 @@ describe("BrowserFeedProcessor live ephemerals", () => {
       scannedThroughOffset: 2,
     });
 
-    expect(harness.composite.agentUiState?.live?.steps[0]).toMatchObject({
+    expect(harness.processorGroup.agentUiState?.live?.steps[0]).toMatchObject({
       kind: "llm",
       responseText: "hello",
     });
@@ -152,12 +163,12 @@ describe("BrowserFeedProcessor live ephemerals", () => {
       { count: 1 },
     ]);
 
-    harness.composite.clearVolatileState();
-    expect(harness.composite.agentUiState).toBeNull();
+    harness.processorGroup.clearVolatileState();
+    expect(harness.processorGroup.agentUiState).toBeNull();
     expect(harness.runner.currentState.agent.live?.steps[0]).toMatchObject({ responseText: "" });
   });
 
-  it("seeds a cold live tail from its persisted checkpoint and skips replay overlap", async () => {
+  it("starts new-event state from its stored checkpoint and skips replay overlap", async () => {
     const sql = sqliteClient();
     const requested = event(1, "events.iterate.com/agent/llm-request-requested", {
       model: "test/model",
@@ -170,8 +181,8 @@ describe("BrowserFeedProcessor live ephemerals", () => {
       scannedThroughOffset: 1,
     });
 
-    // A new runtime may subscribe from a sibling processor's older checkpoint.
-    // Its first live envelope can therefore overlap this feed's checkpoint.
+    // The shared callback starts from the smallest processor checkpoint. Its
+    // first batch can therefore include offsets this feed already committed.
     const reader = makeHarness(sql);
     await reader.deliver({
       events: [requested],

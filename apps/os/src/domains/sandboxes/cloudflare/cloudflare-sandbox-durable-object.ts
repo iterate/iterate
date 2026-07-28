@@ -8,7 +8,7 @@ import {
   parseSSEStream,
   Sandbox,
 } from "@cloudflare/sandbox";
-import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
+import type { StreamProcessorWakeRequest, StreamProcessorWakeResponse } from "iterate/processors";
 import {
   createStreamProcessorRegistry,
   type RegisteredProcessorReads,
@@ -374,8 +374,8 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     return resources;
   }
 
-  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
-    return this.#processorResources().registry.wakeStreamSubscriber(args);
+  wakeStreamProcessor(args: StreamProcessorWakeRequest): Promise<StreamProcessorWakeResponse> {
+    return this.#processorResources().registry.wakeStreamProcessor(args);
   }
 
   // Do not override alarm(): @cloudflare/containers owns this object's one

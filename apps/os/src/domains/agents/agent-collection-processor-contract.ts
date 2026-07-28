@@ -1,5 +1,5 @@
 // The agent-collection CONTRACT: the per-project agent catalog, reduced from
-// agent facts cross-posted off the individual agent streams. The collection
+// agent facts copied off the individual agent streams. The collection
 // owns ONE event (its own birth); everything else it consumes resolves
 // through `processorDeps: [AgentProcessorContract]` — `agent/created` and
 // `agent/summary-updated` are the agent processor's vocabulary, never
@@ -35,7 +35,7 @@ export const AgentCollectionProcessorContract = defineProcessorContract({
       .meta({
         description:
           "The agent database: one catalog record per agent, keyed by canonical agent path, " +
-          "reduced from the cross-posted agent/created and agent/summary-updated facts. " +
+          "reduced from the copied agent/created and agent/summary-updated facts. " +
           "Timestamps preserve SOURCE-stream chronology, never collection ingest time.",
       }),
     waitingForSinceOffsets: z
@@ -69,3 +69,5 @@ export type AgentCollectionProcessorState = ProcessorState<AgentCollectionProces
 
 /** The one canonical stream path a project's agent collection lives at. */
 export const AGENT_COLLECTION_PATH = "/agents";
+export const AGENT_COLLECTION_SUBSCRIPTION_KEY = "agent-collection";
+export const AGENT_COLLECTION_CREATED_EVENT_TYPE = "events.iterate.com/agent-collection/created";

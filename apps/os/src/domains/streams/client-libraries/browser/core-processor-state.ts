@@ -1,4 +1,4 @@
-// The slice of the server stream's core reduced state the browser mirror needs.
+// The slice of server stream state needed by the browser's local event database.
 //
 // `Stream.runtimeState()` deliberately types `coreProcessorState` as `unknown`
 // (the full `CoreProcessorState` is server internals), so the browser runtime
@@ -6,22 +6,16 @@
 // through unvalidated; a missing/mis-typed field fails loudly instead of
 // silently reconciling against garbage.
 //
-// INCARNATION IDENTITY: `createdAt` is the commit timestamp of the stream's
-// `events.iterate.com/stream/created` event (always offset 1). It is stable for
-// the stream's whole lifetime and changes exactly when the stream's storage was
-// deleted and recreated (offsets restart from 1) — which is the reincarnation
-// the mirror must detect before trusting an offset comparison. The other
-// candidate, core state's `incarnationId` (from `stream/woken`), is NOT
-// suitable: it changes on every Durable Object restart while the event log —
-// and therefore the mirror — remains perfectly valid. `createdAt` is optional
-// because a stream that has not committed its `created` event yet has no
-// incarnation; the store treats "no incarnation recorded" as untrustworthy and
-// rebuilds, which is always safe for a cache.
+// `streamId` identifies one lifetime of the stream's event log. It stays the
+// same across Durable Object restarts and changes when the stream is deleted
+// and recreated, exactly when offsets restart from 1. It is optional only for
+// the empty fold before the `stream/created` event has committed. A browser
+// cache cannot trust offset comparisons until that ID exists.
 
 import { z } from "zod";
 
 const BrowserCoreProcessorState = z.object({
-  createdAt: z.string().optional(),
+  streamId: z.uuid().optional(),
   maxOffset: z.number().int().min(0).default(0),
 });
 
@@ -35,7 +29,7 @@ export function parseBrowserCoreProcessorState(value: unknown): BrowserCoreProce
  * The wider slice stream NAVIGATION views (tree browser, breadcrumb child
  * pickers) render: the reconcile fields plus the immediate child paths and
  * event count from the server's core reduced state. Kept separate from
- * `BrowserCoreProcessorState` so the mirror runtime's reconcile contract stays
+ * `BrowserCoreProcessorState` so the browser runtime's server-state check stays
  * exactly the two fields it depends on.
  */
 export const BrowserCoreStreamTreeState = BrowserCoreProcessorState.extend({

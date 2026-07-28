@@ -10,8 +10,8 @@ import type { SchedulerProcessorState } from "./scheduler-processor-contract.ts"
 
 /**
  * While the scheduler holds ANY state, its alarm re-arms at most this far
- * out. The heartbeat is the self-healing backstop for lost subscriber wakes
- * (a schedule set while the push chain is wedged costs at most one heartbeat
+ * out. The heartbeat is the self-healing backstop when a processor wake is lost
+ * (a schedule set while event sending is stuck costs at most one heartbeat
  * of latency) and re-launches pending executions orphaned by a mid-run
  * Durable Object restart. An EMPTY scheduler deletes its alarm instead —
  * there is nothing to heal, and the command path re-arms on the next set.

@@ -50,18 +50,32 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 // payload types from the same declaration and typos fail at the definition site.
 // =============================================================================
 
-/** One owned event: its payload schema plus an optional human description. */
+/**
+ * One documented example payload for an owned event, rendered on the public
+ * event docs site (events.iterate.com). The payload must parse against the
+ * event's `payloadSchema` — enforced by the event-docs unit tests rather than
+ * at module load, so a bad example fails CI instead of bricking a worker boot.
+ */
+export type EventExample = {
+  /** What this example shows, e.g. "Durable delivery to another stream". */
+  description: string;
+  /** The example payload, in the payload schema's input shape. */
+  payload: unknown;
+};
+
+/** One owned event: its payload schema plus optional human description and examples. */
 export type EventDefinition<PayloadOutput = unknown, PayloadInput = PayloadOutput> = {
   description?: string;
   payloadSchema: z.ZodType<PayloadOutput, PayloadInput>;
   /**
-   * FORCIBLY ephemeral: every append/parse lane built from this definition
+   * FORCIBLY ephemeral: every append and parse built from this definition
    * defaults the envelope's `ephemeral` flag to `true` and REJECTS an explicit
    * `ephemeral: false`. For events that must never become durable stream
    * facts (streaming chunks) — declaring it here makes forgetting the flag at
    * an append site impossible instead of a silent storage leak.
    */
   ephemeral?: true;
+  examples?: readonly EventExample[];
 };
 
 /** A contract's owned events, keyed by the durable event type string. */
@@ -286,7 +300,7 @@ export type ConsumedEvent<Contract> = Contract extends {
 
 /**
  * Union of durable append-input shapes accepted by a contract's `consumes`
- * list. Ephemeral rows are excluded because wake processors cannot consume
+ * list. Ephemeral rows are excluded because hosted processors cannot consume
  * them; append those intentionally through the raw Stream door. This is a
  * schema/vocabulary union, not proof that an event is valid in the processor's
  * current state or came from a particular provenance.
@@ -384,7 +398,7 @@ type ProcessorContractParseEvent<
  * Same as `parseEvent`, but for append inputs that do not yet have an offset or
  * createdAt. This exists for stream-owned pre-commit policy: the Stream Durable
  * Object must reject some contract-owned events BEFORE they become durable
- * facts (see `validateAppend` in stream-durable-object.ts) — validating them
+ * facts (see the core processor's `validate`) — validating them
  * later, in the wake side effect, would leave the invalid event committed and
  * reduced into durable state. The lifecycle e2e tests assert both the rejection
  * and that nothing was committed.
@@ -912,11 +926,9 @@ function getProcessorSlug(contract: unknown): string {
 export const STREAM_PROCESSOR_REVIVED_EVENT_TYPE = "events.iterate.com/stream/processor-revived";
 
 /**
- * A processor contract announcement carried on the connect event when the
- * subscriber is a hosted stream processor. UIs and tooling read it from the
- * presence facts (the `subscriber-connected` events) and, for configured
- * subscriptions, from the reduced roster
- * (`connectionsByKey[..].subscriber.processor.announcement`).
+ * A processor contract announcement carried on `connection-opened` when the
+ * callback owner is a hosted stream processor. UIs and tooling read it from
+ * that event and from `runtime.connections[..].openedBy`.
  */
 export const ProcessorContractAnnouncement = z.object({
   slug: z.string().trim().min(1),

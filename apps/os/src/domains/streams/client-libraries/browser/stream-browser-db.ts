@@ -96,9 +96,9 @@ export class StreamBrowserDatabase implements Disposable {
       if (ok) pending.resolve(result);
       else pending.reject(new Error(error ?? "stream db worker error"));
     };
-    // The cache version namespaces the channel too: a tab from an older deploy
-    // mirrors the same stream into a different OPFS file, and its change
-    // notifications must not re-run this mirror's queries (or vice versa).
+    // The cache version namespaces the channel too. An older tab writes a
+    // different OPFS file, so its notifications must not rerun this database's
+    // queries.
     this.#channel = new BroadcastChannel(
       `stream-db:${DATABASE_CACHE_VERSION}:${encodeURIComponent(projectId)}:${encodeURIComponent(streamPath)}`,
     );
@@ -190,53 +190,53 @@ export class StreamBrowserDatabase implements Disposable {
   }
 
   /**
-   * The server stream incarnation (its `created` identity) this mirror was last built
-   * against, or undefined if never recorded. Used to detect a server reset()/reincarnation
-   * so the mirror is rebuilt rather than reconciled by an offset that restarted.
+   * The server stream ID for which this processor's local rows were written,
+   * or undefined if never recorded. A changed ID means source offsets restarted,
+   * so the processor's tables and progress must be cleared.
    *
    * Keyed per processor slug: multiple runtimes share this database and each
-   * reconciles (and discards) its own tables independently — a shared key would
-   * let the first runtime's rebuild mask another runtime's pending discard.
+   * compares and clears its own tables independently. A shared key would let
+   * one processor's clear hide another processor's stale rows.
    */
-  async readMirrorIncarnation(slug: string): Promise<string | undefined> {
-    await this.#ensureMirrorMetaSchema();
-    const [row] = await this.exec(`SELECT value FROM mirror_meta WHERE key = ? LIMIT 1`, [
-      `incarnation:${slug}`,
+  async readProcessorStreamId(processorSlug: string): Promise<string | undefined> {
+    await this.#ensureProcessorMetadataSchema();
+    const [row] = await this.exec(`SELECT value FROM processor_metadata WHERE key = ? LIMIT 1`, [
+      `stream-id:${processorSlug}`,
     ]);
     return typeof row?.value === "string" ? row.value : undefined;
   }
 
-  async writeMirrorIncarnation(slug: string, incarnation: string): Promise<void> {
-    await this.#ensureMirrorMetaSchema();
+  async writeProcessorStreamId(processorSlug: string, streamId: string): Promise<void> {
+    await this.#ensureProcessorMetadataSchema();
     await this.exec(
-      `INSERT INTO mirror_meta (key, value) VALUES (?, ?)
+      `INSERT INTO processor_metadata (key, value) VALUES (?, ?)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-      [`incarnation:${slug}`, incarnation],
+      [`stream-id:${processorSlug}`, streamId],
     );
   }
 
-  async readMirrorSchemaVersion(slug: string): Promise<number | undefined> {
-    await this.#ensureMirrorMetaSchema();
-    const [row] = await this.exec(`SELECT value FROM mirror_meta WHERE key = ? LIMIT 1`, [
-      `schema-version:${slug}`,
+  async readProcessorSchemaVersion(processorSlug: string): Promise<number | undefined> {
+    await this.#ensureProcessorMetadataSchema();
+    const [row] = await this.exec(`SELECT value FROM processor_metadata WHERE key = ? LIMIT 1`, [
+      `schema-version:${processorSlug}`,
     ]);
     if (typeof row?.value !== "string") return undefined;
     const version = Number(row.value);
     return Number.isFinite(version) ? version : undefined;
   }
 
-  async writeMirrorSchemaVersion(slug: string, schemaVersion: number): Promise<void> {
-    await this.#ensureMirrorMetaSchema();
+  async writeProcessorSchemaVersion(processorSlug: string, schemaVersion: number): Promise<void> {
+    await this.#ensureProcessorMetadataSchema();
     await this.exec(
-      `INSERT INTO mirror_meta (key, value) VALUES (?, ?)
+      `INSERT INTO processor_metadata (key, value) VALUES (?, ?)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-      [`schema-version:${slug}`, String(schemaVersion)],
+      [`schema-version:${processorSlug}`, String(schemaVersion)],
     );
   }
 
-  async #ensureMirrorMetaSchema(): Promise<void> {
+  async #ensureProcessorMetadataSchema(): Promise<void> {
     await this.exec(
-      `CREATE TABLE IF NOT EXISTS mirror_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
+      `CREATE TABLE IF NOT EXISTS processor_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
     );
   }
 
@@ -292,8 +292,9 @@ export class StreamBrowserDatabase implements Disposable {
     };
     this.#queries.set(key, entry);
     // Arm GC at creation too: a `query()` whose handle is read for a snapshot but never
-    // subscribed (e.g. a render that unmounts before useSyncExternalStore subscribes)
-    // would otherwise leak in `#queries` forever. subscribe() cancels this timer.
+    // observed by React (e.g. a render that unmounts before useSyncExternalStore
+    // registers its listener) would otherwise leak in `#queries` forever. The
+    // React-store subscribe() method cancels this timer.
     this.#armQueryGc(key, entry);
     return entry.handle;
   }
@@ -376,7 +377,7 @@ export class StreamBrowserDatabase implements Disposable {
    * listener calls into a single render. Notifying per query as each worker
    * round-trip resolved let views composing several queries (the agent feed's
    * item count + visible rows + live processor state) commit inconsistent
-   * intermediate frames — the live→settled handoff flicker.
+   * intermediate snapshots — the live→settled handoff flicker.
    *
    * Passes are serialized: the worker answers queries in order anyway, and a
    * later pass must not interleave its snapshot writes with an earlier one.
@@ -442,13 +443,13 @@ export class StreamBrowserDatabase implements Disposable {
 }
 
 // OPFS layout: one folder per projectId, one SQLite file per stream path inside it.
-// Bump this when the local mirror file itself can be wedged by browser OPFS state;
-// the mirror is a cache and will be replayed from the durable stream.
-// "v4" is the itx namespace: pre-itx-v4 mirrors on the same origin
-// live under "v3", so the two engines can never open (or clear) each other's files.
+// Bump this when browser OPFS state can leave the local cache unusable. The
+// database contains replayable cache data, so a new version may use a new file.
+// "v4" is the itx namespace: older clients on the same origin use "v3", so
+// old and new code cannot open or clear each other's files.
 const DATABASE_CACHE_VERSION = "v4";
 
-/** OPFS directory path for the cached SQLite mirror of one stream. */
+/** OPFS path for one stream's local SQLite cache. */
 function databasePathFor(projectId: string, streamPath: string) {
   return `${encodeURIComponent(projectId)}/${DATABASE_CACHE_VERSION}/${databaseSlugForStreamPath(streamPath)}.sqlite3`;
 }

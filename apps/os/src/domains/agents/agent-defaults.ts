@@ -7,12 +7,16 @@ import { AGENT_SUMMARY_UPDATED_EVENT_TYPE } from "@iterate-com/shared/agent-even
 import type { z } from "zod";
 import type { StreamEventInput } from "iterate/processors";
 import { PROJECT_REPO_INITIAL_FILES } from "../repos/config-repo-template.generated.ts";
-import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
+import { buildHostedProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { agentWorkspacePath } from "../workspaces/utils.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { capabilityHostCreationEvents } from "../capability-host/capability-host-defaults.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import {
+  AGENT_COLLECTION_PATH,
+  AGENT_COLLECTION_SUBSCRIPTION_KEY,
+} from "./agent-collection-processor-contract.ts";
 import { AgentProcessorContract } from "./agent-processor-contract.ts";
 
 const TYPESCRIPT_FENCE_INSTRUCTION =
@@ -150,7 +154,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   '  // (["streams", ["get", "/memos"]]) and dynamic workers (["workers", ["get", ref]]) mount the same way:',
   "  await itx.provideCapability({",
   '    path: ["petstore"],',
-  '    type: "itx-expression",',
+  '    type: "itx-call",',
   '    expression: ["openapi", ["connect", { specUrl: "https://petstore3.swagger.io/api/v3/openapi.json" }]],',
   '    instructions: "Swagger Petstore: itx.petstore.findPetsByStatus({ status }) — any operationId from the spec.",',
   "  });",
@@ -300,7 +304,7 @@ export function telegramAgentSystemPrompt(input: {
     "The code block must contain a single async arrow function: async (itx) => { ... }.",
     "Incoming Telegram webhook updates arrive as your inputs (message text, sender, chat).",
     `To reply in the chat, append a SEND REQUEST to your own stream — it is delivered reliably and recorded in this thread's journal: await ${sendRequest(input.agentPath, '"..."')}. The payload is a plain Bot API sendMessage body: chat_id${chatIdNote} is set for you and ALWAYS this stream's chat (to message a different chat, use the raw sendMessage call below instead); other sendMessage params (parse_mode, reply_to_message_id, ...) can ride along in the payload. Never use itx.chat.sendMessage for Telegram replies.`,
-    `THREADS: this stream is one conversation session — /new from the user rotates the chat to a fresh session stream. When an input carries a reply-hint note (the user REPLIED to a message from a different thread, its stream path is in the note), or the user references earlier conversation you don't have, READ the referenced thread FIRST — before any repo/workspace exploration: await itx.streams.get(path).getEvents({ eventTypes: ["events.iterate.com/telegram/webhook-received", "events.iterate.com/telegram/send-requested"] }). Those two event types ARE the transcript (user text in payload.body.message.text, your replies in payload.text); do NOT call getEvents unfiltered — the first page is subscriber/llm plumbing, not conversation — and if exactly 500 events come back, page with afterOffset: events.at(-1).offset to reach the recent end. Only then answer: INTO that thread by appending your send request to that stream instead of your own, or here — your judgement.`,
+    `THREADS: this stream is one conversation session — /new from the user rotates the chat to a fresh session stream. When an input carries a reply-hint note (the user REPLIED to a message from a different thread, its stream path is in the note), or the user references earlier conversation you don't have, READ the referenced thread FIRST — before any repo/workspace exploration: await itx.streams.get(path).getEvents({ eventTypes: ["events.iterate.com/telegram/webhook-received", "events.iterate.com/telegram/send-requested"] }). Those two event types ARE the transcript (user text in payload.body.message.text, your replies in payload.text); do NOT call getEvents unfiltered — the first page is connection and LLM control events, not conversation — and if exactly 500 events come back, page with afterOffset: events.at(-1).offset to reach the recent end. Only then answer: INTO that thread by appending your send request to that stream instead of your own, or here — your judgement.`,
     `For any other Bot API call (sendPhoto, sendDocument, editMessageText, answerCallbackQuery, …) use ${telegramConnection}.<method>(params) with ONE params object (https://core.telegram.org/bots/api) — these are immediate calls, not journaled sends, so pass chat_id yourself.`,
     'Messages are plain text by default. For formatting pass parse_mode: "HTML" with simple tags (<b>, <i>, <code>, <pre>, <a href>) — Telegram does NOT render markdown headings or tables, so prefer short plain-text replies.',
     `MEDIA: the raw webhook retains file_id. Use ${telegramConnection}.getFile, project egress with the connection's write-only bot-token secret, and itx.agent.addFiles.`,
@@ -443,7 +447,10 @@ export function agentCreationForPath<
   // (created + processor subscription), with the default one-hop fallback to
   // the project root host journaled at birth — no path walking.
   const [capabilityHostBirthCertificate, capabilityHostSubscription] = capabilityHostCreationEvents(
-    { path: agentPath, projectId },
+    {
+      path: agentPath,
+      projectId,
+    },
   );
   const workspaceProvided = CapabilityHostProcessorContract.buildEvent({
     // The agent's own workspace, a durable itx-expression re-evaluated per
@@ -454,7 +461,7 @@ export function agentCreationForPath<
     idempotencyKey: `capability-host/workspace-provided:v${AGENT_WORKSPACE_POLICY_REVISION}:${projectId}:${agentPath}`,
     payload: {
       path: ["workspace"],
-      type: "itx-expression",
+      type: "itx-call",
       expression: ["workspaces", ["get", agentWorkspacePath(agentPath)]],
       instructions:
         `THIS agent's own workspace at "${agentWorkspacePath(agentPath)}" (your agent path under /workspaces): a mount-routed, copy-on-write filesystem living in a Durable Object — no container, no clone, always warm. By default the config repo is mounted at "/", so reads see its latest main until you shadow a path; writes/edits/deletes stay private until committed (readFile/writeFile/edit/glob/listAllFiles; paths are absolute). ` +
@@ -512,7 +519,7 @@ export function agentCreationForPath<
     },
   });
   const durableObjectName = DurableObjectNameCodec.stringify({ projectId, path: agentPath });
-  const agentSubscription = buildDurableObjectProcessorSubscriptionConfiguredEvent({
+  const agentSubscription = buildHostedProcessorSubscriptionConfiguredEvent({
     durableObjectName,
     idempotencyKey: `stream/subscription-configured:${durableObjectName}#${AgentProcessorContract.slug}`,
     processor: ["agents", ["get", agentPath], "processor"],
@@ -522,14 +529,20 @@ export function agentCreationForPath<
     type: "events.iterate.com/stream/subscription-configured",
     idempotencyKey: `stream/subscription-configured:${durableObjectName}#agent-collection`,
     payload: {
-      subscriptionKey: "agent-collection",
+      subscriptionKey: AGENT_COLLECTION_SUBSCRIPTION_KEY,
       description: "Project agent collection projection",
-      selector: {
+      filter: {
         eventTypes: ["events.iterate.com/agent/created", AGENT_SUMMARY_UPDATED_EVENT_TYPE],
       },
-      delivery: { mode: "push", expression: ["agents", "processEvent"] },
-      // The subscription is configured in the same birth batch as created.
-      deliver: "all",
+      receiver: {
+        action: "copy-to-stream",
+        receivingStreamPath: AGENT_COLLECTION_PATH,
+        delivery: {
+          // The subscription is configured in the same birth batch as created.
+          start: "beginning",
+          onFailingEvent: "halt",
+        },
+      },
     },
   });
   const siblingBirthCertificates: SiblingBirthCertificate[] =
@@ -538,7 +551,7 @@ export function agentCreationForPath<
     input.sibling === undefined
       ? []
       : [
-          buildDurableObjectProcessorSubscriptionConfiguredEvent({
+          buildHostedProcessorSubscriptionConfiguredEvent({
             durableObjectName,
             idempotencyKey: `stream/subscription-configured:${durableObjectName}#${input.sibling.processorSlug}`,
             processor: ["agents", ["get", agentPath], "processor"],

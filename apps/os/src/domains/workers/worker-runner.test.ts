@@ -324,7 +324,7 @@ it("turns a stateful source-build result into a local terminal delivery error", 
   });
 
   const invocation = runner.invokeCapability({
-    path: ["processor", "wakeStreamSubscriber"],
+    path: ["processor", "wakeStreamProcessor"],
     ref: statefulRef,
   });
 
@@ -359,7 +359,7 @@ it("returns a stateful worker's successful value without wrapping its live stubs
 
   await expect(
     runner.invokeCapability({
-      path: ["processor", "wakeStreamSubscriber"],
+      path: ["processor", "wakeStreamProcessor"],
       ref: statefulRef,
     }),
   ).resolves.toBe(returned);
@@ -385,7 +385,7 @@ it("returns a bare stateful RPC stub without probing it for a build failure", as
 
   await expect(
     runner.invokeCapability({
-      path: ["processor", "wakeStreamSubscriber"],
+      path: ["processor", "wakeStreamProcessor"],
       ref: statefulRef,
     }),
   ).resolves.toBe(returned);

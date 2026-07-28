@@ -83,6 +83,31 @@ describe("runWorkersAiAttempt", () => {
     expect(chunks).toEqual([{ response: "hel" }]);
   });
 
+  it("applies the attempt deadline while a chunk callback is in flight", async () => {
+    const encoder = new TextEncoder();
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"response":"hel"}\n\n'));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+
+    await expect(
+      runWorkersAiAttempt({
+        ai: { run: async () => body },
+        deadlineMs: 50,
+        messages: [{ role: "user", content: "hi" }],
+        model: "test-model",
+        onChunk: () => new Promise(() => {}),
+      }),
+    ).rejects.toThrow(/timed out/);
+
+    expect(cancelled).toBe(true);
+  });
+
   it("caps the dial itself, not just the drain", async () => {
     await expect(
       runWorkersAiAttempt({

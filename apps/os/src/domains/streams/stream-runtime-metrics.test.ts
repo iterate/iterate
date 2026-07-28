@@ -1,6 +1,7 @@
 // Table tests for the pure metrics primitives: the latency ring, the rolling
-// minute buckets, and the mutual-ping NTP math. The spine/host wiring on top
-// is exercised in stream-subscribers.test.ts and subscriber-metrics.test.ts.
+// minute buckets, and the mutual-ping NTP math. The subscription wiring
+// on top is exercised through the public seam in stream-connections-and-subscriptions.e2e.test.ts;
+// host-side metric correlation has its own primitive tests.
 
 import { describe, expect, it, test } from "vitest";
 import {

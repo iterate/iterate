@@ -2,7 +2,7 @@
 // channel-neutral `notification/requested` intent. It is a contract
 // DEPENDENCY, never a separately hosted processor — the notification
 // processor emits the intent, and each channel (the device processor's
-// cross-post subscription today) consumes it and reaches into this contract
+// copy subscription today) consumes it and reaches into this contract
 // for the pieces it needs (`NotificationIntentContract.events[...]
 // .payloadSchema`, `.shape.destination`), so producer and channels can never
 // drift apart.

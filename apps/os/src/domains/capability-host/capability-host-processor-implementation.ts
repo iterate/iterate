@@ -339,7 +339,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
         flattenNestedPath,
         target: input.capability,
       };
-    } else if (input.type === "itx-expression") {
+    } else if (input.type === "itx-call") {
       if (!Array.isArray(input.expression)) {
         throw new Error(
           '"expression" must be an ARRAY of steps — property names and [method, ...args] calls ' +
@@ -353,7 +353,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
         flattenNestedPaths: input.flattenNestedPaths === true ? true : undefined,
         instructions: input.instructions,
         path,
-        type: "itx-expression",
+        type: "itx-call",
         types: input.types ?? (await this.#selfDescribedTypes(input.expression)),
       };
     } else {
@@ -466,7 +466,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
     if (path[path.length - 1] === "__describe") {
       return this.#describeMount(hit.record, path.slice(0, -1));
     }
-    if (hit.record.type === "itx-expression") {
+    if (hit.record.type === "itx-call") {
       const evaluated = await evaluateItxExpression(this.deps.itx, hit.record.expression);
       const provider = await normalizeCapabilityProvider(evaluated, hit.record);
       return await invokeNormalizedCapability(provider, hit.rest, args);
@@ -517,7 +517,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
    * userspace processors — bypass this method entirely).
    */
   async #selfDescribedTypes(
-    expression: Extract<ProvideCapabilityInput, { type: "itx-expression" }>["expression"],
+    expression: Extract<ProvideCapabilityInput, { type: "itx-call" }>["expression"],
   ): Promise<string | undefined> {
     // The catch rides the promise itself, BEFORE the race: describing may
     // lose to the deadline and fail later, and an abandoned rejection must
@@ -540,7 +540,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
   }
 
   async #describeExpressionTypes(
-    expression: Extract<ProvideCapabilityInput, { type: "itx-expression" }>["expression"],
+    expression: Extract<ProvideCapabilityInput, { type: "itx-call" }>["expression"],
   ): Promise<string | undefined> {
     const evaluated = await evaluateItxExpression(this.deps.itx, expression);
     const value = (await evaluated.value) as {
@@ -1110,7 +1110,7 @@ function settlementFromSettledEvent(
 }
 
 function assertExpressionDoesNotReferenceOwnMount(
-  input: Extract<ProvideCapabilityInput, { type: "itx-expression" }>,
+  input: Extract<ProvideCapabilityInput, { type: "itx-call" }>,
 ): void {
   const startsWithOwnPath = input.path.every(
     (segment, index) => input.expression[index] === segment,

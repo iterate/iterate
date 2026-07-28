@@ -26,8 +26,8 @@ test("a declared GitHub AI linter subscribes each linked connection without conf
         {
           idempotencyKey: "review-bot/subscription:v4:/:3",
           payload: {
-            delivery: {
-              mode: "wake",
+            receiver: {
+              action: "processor-wake",
               expression: [
                 "workers",
                 [
@@ -40,7 +40,7 @@ test("a declared GitHub AI linter subscribes each linked connection without conf
                   },
                 ],
                 "processor",
-                "wakeStreamSubscriber",
+                "wakeStreamProcessor",
               ],
               processorSlug: "review-bot",
             },
@@ -52,7 +52,7 @@ test("a declared GitHub AI linter subscribes each linked connection without conf
     },
   ]);
   const subscription: any = appended[0]?.events[0];
-  const ref: any = subscription.payload.delivery.expression[1][1];
+  const ref: any = subscription.payload.receiver.expression[1][1];
   expect(ref).toMatchObject({
     source: {
       createWorker: {
@@ -124,7 +124,7 @@ test("connection slugs with underscores produce distinct runtime-valid durable k
 
   const durableWorkerKeys = appended.map((append) => {
     const subscription: any = append.events[0];
-    return subscription.payload.delivery.expression[1][1].durableWorkerKey;
+    return subscription.payload.receiver.expression[1][1].durableWorkerKey;
   });
   expect(durableWorkerKeys).toEqual([
     "app-review-bot-install--42--a-ub",

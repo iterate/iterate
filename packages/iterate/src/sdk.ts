@@ -21,13 +21,13 @@ import type {
   StatefulDynamicWorkerRef,
   StreamEvent,
   StreamEventPager,
-  StreamPushEventBatch,
 } from "./itx-api.generated.ts";
 import type { ProcessorStream, ProcessorStreamPager } from "./processors/stream-handle.ts";
 import type {
   ProcessorSnapshot,
-  StreamSubscriberWakeRequest,
-  StreamSubscriberWakeResponse,
+  StreamDeliveryBatch,
+  StreamProcessorWakeRequest,
+  StreamProcessorWakeResponse,
 } from "./processors/rpc-types.ts";
 import {
   createStreamProcessorRegistry,
@@ -247,8 +247,10 @@ export function itxProjectStream(env: IterateEnv, path: string): ProcessorStream
     withProject(env, (project) => fn(project.streams));
   return {
     append: (...events) => withStream((streams) => streams.get(path).append(...events)),
+    appendIfStreamId: (args) => withStream((streams) => streams.get(path).appendIfStreamId(args)),
     getEvent: (args) => withStream((streams) => streams.get(path).getEvent(args)),
     getEvents: (args) => withStream((streams) => streams.get(path).getEvents(args)),
+    getEventPage: (args) => withStream((streams) => streams.get(path).getEventPage(args)),
     readEvents: (args): ProcessorStreamPager => {
       let opened: Promise<{ pager: StreamEventPager; project: Disposable }> | undefined;
       let closed = false;
@@ -343,8 +345,8 @@ function selfAlarmState<State extends DurableObjectState>(ctx: State, env: Itera
  *   committed DURABLE event on every stream in the project as checkpointed
  *   per-stream batches — in per-stream order, at-least-once. Events appended
  *   with `ephemeral: true` (LLM streaming chunks and other transient
- *   signals) never arrive here — they ride live `subscribe()` connections
- *   only; react to the durable fact that supersedes them (e.g.
+ *   signals) never arrive here — only callbacks already opened with
+ *   `openConnection()` receive them; react to the durable fact that supersedes them (e.g.
  *   an assistant-role `agents/context-added` item). The base unpacks batches
  *   into one `processEvent(event)` call per event; override `processEvent` to react
  *   (one `if` per reaction, keyed on event.path + event.type). Throwing (or a worker that fails to build) leaves that
@@ -380,7 +382,7 @@ export class IterateWorkerEntrypoint<
   /** Platform entry point for event delivery (see the class docstring for
    * the delivery contract). Override `processEvent`, not this, unless you
    * need whole-batch atomicity. */
-  async processEventBatch(batch: StreamPushEventBatch): Promise<void> {
+  async processEventBatch(batch: StreamDeliveryBatch): Promise<void> {
     for (const event of batch.events) await this.processEvent(event);
   }
 
@@ -444,7 +446,7 @@ export class IterateDurableObject<Env extends IterateEnv = IterateEnv> extends D
 
   /** Platform entry point for event delivery — see
    * `IterateWorkerEntrypoint.processEventBatch`. */
-  async processEventBatch(batch: StreamPushEventBatch): Promise<void> {
+  async processEventBatch(batch: StreamDeliveryBatch): Promise<void> {
     for (const event of batch.events) await this.processEvent(event);
   }
 
@@ -468,11 +470,11 @@ const HOST_STREAM_PATH_KEY = "iterate:processor-host:stream-path";
 type WakeRegistryLookup = (
   projectId: string,
   path: string,
-) => Pick<StreamProcessorRegistry<object>, "wakeStreamSubscriber">;
+) => Pick<StreamProcessorRegistry<object>, "wakeStreamProcessor">;
 
 /** The wake door the stream spine dials. It crosses Workers RPC as a property
  * read before its method is called, so it must be a real RpcTarget. */
-class ProcessorWakeSubscriber extends RpcTarget {
+class ProcessorWakeTarget extends RpcTarget {
   readonly #registryFor: WakeRegistryLookup;
 
   constructor(registryFor: WakeRegistryLookup) {
@@ -480,18 +482,18 @@ class ProcessorWakeSubscriber extends RpcTarget {
     this.#registryFor = registryFor;
   }
 
-  async wakeStreamSubscriber(
-    request: StreamSubscriberWakeRequest,
-  ): Promise<StreamSubscriberWakeResponse> {
+  async wakeStreamProcessor(
+    request: StreamProcessorWakeRequest,
+  ): Promise<StreamProcessorWakeResponse> {
     if (request.stream.projectId === null) {
-      throw new Error("stream-processor hosts subscribe on project streams only");
+      throw new Error("hosted stream processors require project streams");
     }
     // The registry fences mismatched coordinates itself, so a host with a
     // fixed home stream rejects a stray wake instead of adopting its path.
     return await this.#registryFor(
       request.stream.projectId,
       request.stream.path,
-    ).wakeStreamSubscriber(request);
+    ).wakeStreamProcessor(request);
   }
 }
 
@@ -502,7 +504,7 @@ export type ProcessorHost<State extends object> = {
   /** One consistent read of the hosted processor's committed fold. */
   snapshot(): Promise<ProcessorSnapshot<State>>;
   /** Assign to a `processor` getter — the wake door the stream spine dials. */
-  readonly wakeSubscriber: ProcessorWakeSubscriber;
+  readonly wakeProcessor: ProcessorWakeTarget;
   /** Route the Durable Object's `alarm()` here. Nothing cached means no
    * registry ever armed one, so a stray fire is a no-op. */
   handleAlarm(alarmInfo?: AlarmInvocationInfo): Promise<void>;
@@ -576,7 +578,7 @@ export function createProcessorHost<State extends object = Record<string, unknow
   return {
     registry: async () => (await buildOutsideWake()).registry,
     snapshot: async () => await (await buildOutsideWake()).reads.snapshot(),
-    wakeSubscriber: new ProcessorWakeSubscriber(
+    wakeProcessor: new ProcessorWakeTarget(
       (projectId, path) => ensure(projectId, args.path ?? path).registry,
     ),
     async handleAlarm(alarmInfo?: AlarmInvocationInfo) {

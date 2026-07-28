@@ -1,6 +1,6 @@
 import type { z } from "zod";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
+import { buildHostedProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { EmailProcessorContract } from "./email-processor-contract.ts";
 import { EMAIL_INTEGRATION_STREAM_PATH } from "./utils.ts";
 
@@ -37,7 +37,7 @@ export function emailRouterCreationEvents(input: {
             payload: { pattern: initialSender, reason: "project-owner" },
           }),
         ]),
-    buildDurableObjectProcessorSubscriptionConfiguredEvent({
+    buildHostedProcessorSubscriptionConfiguredEvent({
       durableObjectName,
       idempotencyKey: `stream/subscription-configured:${durableObjectName}#${EmailProcessorContract.slug}`,
       processor: ["email", "processor"],

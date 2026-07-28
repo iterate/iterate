@@ -16,8 +16,8 @@ import NodeWebSocket from "ws";
 import {
   configureIterateSession,
   connectItx,
-  releaseItxSubscription,
-  type ItxLiveSubscriptionHandle,
+  releaseItxConnection,
+  type ItxRecoverableConnectionHandle,
 } from "iterate/client";
 import { createAgentFeedModel } from "../../../../packages/iterate/src/stream-tui/agent-feed-model.ts";
 import { resolveItxAuth } from "../../../../packages/iterate/src/stream-tui/itx-auth.ts";
@@ -57,19 +57,19 @@ configureIterateSession({
 });
 const itx = await connectItx(project.project.id);
 const agent = itx.agents.get(AGENT_PATH);
-let subscription: ItxLiveSubscriptionHandle | undefined;
+let subscription: ItxRecoverableConnectionHandle | undefined;
 
 try {
   // Fresh project: birth the onboarding agent with the real birth batch when
   // unborn — the same create-if-unborn the TUI's subscribeAgentFeed performs
   // (births are deferred to first chat-open; they cost a real LLM turn).
   await ensureOnboardingAgentReady({ agent });
-  subscription = await agent.stream.subscribe({
+  subscription = await agent.stream.openConnection({
     processEventBatch: (batch) => {
       if (model.applyEvents(batch.events)) notifyChange();
     },
     replayAfterOffset: model.snapshot().lastOffset,
-    subscriber: { description: "TUI data-layer smoke" },
+    openedBy: { description: "TUI data-layer smoke" },
   });
   log("subscribed on the shared keeper socket");
 
@@ -118,7 +118,7 @@ try {
   );
   process.exit(1);
 } finally {
-  if (subscription) releaseItxSubscription(subscription);
+  if (subscription) releaseItxConnection(subscription);
   await project[Symbol.asyncDispose]();
 }
 

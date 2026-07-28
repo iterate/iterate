@@ -100,7 +100,7 @@ function makeScriptedLlm() {
   const calls: {
     model: string;
     messages: WorkersAiMessage[];
-    onChunk?: (text: string) => void;
+    onChunk?: (text: string) => Promise<void>;
     signal: AbortSignal;
     resolve: (result: {
       text: string;
@@ -120,7 +120,7 @@ function makeScriptedLlm() {
       model: string;
       messages: WorkersAiMessage[];
       signal: AbortSignal;
-      onChunk?: (text: string) => void;
+      onChunk?: (text: string) => Promise<void>;
     }) =>
       new Promise<{ text: string; usage?: { inputTokens: number; outputTokens: number } }>(
         (resolve, reject) => {
@@ -146,6 +146,7 @@ function makeAgentHarness(substrate?: HarnessSubstrate, extraDeps?: Partial<Agen
 const REQUESTED = "events.iterate.com/agent/llm-request-requested";
 const SETTLED = "events.iterate.com/agent/llm-request-settled";
 const CONTEXT_ADDED = "events.iterate.com/agents/context-added";
+const RESPONSE_CHUNK = "events.iterate.com/agent/llm-response-chunk";
 
 // =============================================================================
 // The turn lifecycle
@@ -207,6 +208,39 @@ describe("AgentProcessor turn lifecycle", () => {
     expect(h.state().tokenUsage).toMatchObject({ totalInputTokens: 10, totalOutputTokens: 2 });
   });
 
+  it("backpressures streamed response chunks so append order stays provider order", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("Stream some code")],
+      ["advanceTime", 10_000],
+    );
+
+    const realAppend = h.stream.append.bind(h.stream);
+    let releaseFirstChunk = () => {};
+    const firstChunkHeld = new Promise<void>((resolve) => {
+      releaseFirstChunk = resolve;
+    });
+    h.stream.append = async (...inputs) => {
+      const chunk = inputs.find((input) => input.type === RESPONSE_CHUNK);
+      if (chunk?.payload?.sequence === 0) await firstChunkHeld;
+      return realAppend(...inputs);
+    };
+
+    const streaming = (async () => {
+      await h.llm.calls[0]!.onChunk?.("const answer = ");
+      await h.llm.calls[0]!.onChunk?.("42;");
+    })();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // The transport must not deliver chunk 2 while chunk 1 is still appending.
+    expect(h.events(RESPONSE_CHUNK)).toEqual([]);
+
+    releaseFirstChunk();
+    await streaming;
+    await h.settle();
+    expect(h.events(RESPONSE_CHUNK).map((event) => event.payload.sequence)).toEqual([0, 1]);
+  });
+
   it("debounce coalesces a burst: two inputs, ONE open request covering both", async () => {
     const h = makeAgentHarness();
     await h.play(
@@ -262,9 +296,9 @@ describe("AgentProcessor turn lifecycle", () => {
     await h.play(
       ["append", ...NEW_AGENT_EVENTS, userMessage("Hello")],
       ["advanceTime", 10_000],
-      () => {
-        h.llm.calls[0]!.onChunk?.("Hel");
-        h.llm.calls[0]!.onChunk?.("lo");
+      async () => {
+        await h.llm.calls[0]!.onChunk?.("Hel");
+        await h.llm.calls[0]!.onChunk?.("lo");
       },
       ["append", userMessage("actually stop", { behaviour: "interrupt-current-request" })],
     );
@@ -1307,7 +1341,7 @@ describe("AgentProcessor script execution", () => {
     const replay = makeAgentHarness({
       clock: h.clock,
       stream: h.stream,
-      progress: makeMemoryProgressStore(),
+      progress: makeMemoryProgressStore(AgentProcessorContract),
     });
     await replay.settle(); // replays the whole journal; a wedge would throw here
 
@@ -1326,14 +1360,14 @@ describe("AgentProcessor stream facts", () => {
       ...NEW_AGENT_EVENTS,
       {
         type: "events.iterate.com/stream/error-occurred",
-        payload: { message: 'subscription "worker" skipped poison event at offset 7' },
+        payload: { message: 'subscription "worker" skipped failing event at offset 7' },
       },
     ]);
 
     expect(h.state().contextItems.at(-1)).toMatchObject({
       payload: {
         role: "developer",
-        content: expect.stringContaining("skipped poison"),
+        content: expect.stringContaining("skipped failing event"),
         actor: { type: "integration", name: "stream-error" },
         llmRequestPolicy: { behaviour: "dont-trigger-request" },
       },
@@ -2104,7 +2138,7 @@ describe("AgentProcessor compaction", () => {
     const replay = makeAgentHarness({
       clock: h.clock,
       stream: h.stream,
-      progress: makeMemoryProgressStore(),
+      progress: makeMemoryProgressStore(AgentProcessorContract),
     });
     await replay.settle();
     expect(replay.llm.calls).toHaveLength(0);

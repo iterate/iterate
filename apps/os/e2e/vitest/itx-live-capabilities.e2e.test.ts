@@ -348,14 +348,14 @@ test("itx expression replacement records the recipe without evaluating it", asyn
       ["get", { source: { createWorker: { files: { type: "inline" } } }, type: "stateless" }],
     ],
     path: ["replaceProbe"],
-    type: "itx-expression",
+    type: "itx-call",
   });
   const description = await project.__describe();
   expect(description).toMatchObject({
     capabilities: expect.arrayContaining([
       expect.objectContaining({
         path: ["replaceProbe"],
-        type: "itx-expression",
+        type: "itx-call",
       }),
     ]),
   });
