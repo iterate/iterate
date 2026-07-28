@@ -18,7 +18,8 @@ export const GithubAiLinter = {
       async processEvent(event: StreamEvent) {
         if (
           event.type !== "events.iterate.com/github/webhook-received" &&
-          event.type !== "events.iterate.com/repo/github-link-configured"
+          event.type !== "events.iterate.com/repo/github-link-configured" &&
+          event.type !== "events.iterate.com/repo/github-unlinked"
         ) {
           return;
         }
@@ -26,6 +27,10 @@ export const GithubAiLinter = {
           event.type === "events.iterate.com/github/webhook-received" &&
           event.source?.copiedFrom !== undefined
         ) {
+          return;
+        }
+        if (event.type === "events.iterate.com/repo/github-unlinked") {
+          linkedRepos = undefined;
           return;
         }
         using itx = await env.ITX.get();
