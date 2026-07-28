@@ -7,14 +7,12 @@
 // chunking would still require binding the oversized value first, so event
 // JSON is chunked in JS.
 //
-// A third table, `subscriptions`, holds the delivery spine's cursor rows (see
-// stream-subscribers.ts). They live in the same SQLite as the log on purpose:
+// A third table, `subscription_cursors`, holds delivery cursors. It lives in
+// the same SQLite as the log on purpose:
 // a cursor advance and the events it acknowledges commit under the same
 // output gate, so the cursor can never disagree with the log it points into.
-// Cursor rows are STORAGE, not facts — per-batch acks must not double the
-// journal — while park/resume transitions are facts appended to the log
-// (streams README: "acked offsets are storage, not facts; park and resume are
-// facts, not storage").
+// Cursor rows are mutable STORAGE — per-batch acknowledgements must not double
+// the event log — while halt/resume transitions are events appended to that log.
 //
 // Every method here is synchronous and must stay that way: the Stream
 // Durable Object's append commit point assigns offsets, reduces state, and
@@ -54,13 +52,6 @@ export class StreamEventLog {
         ephemeral integer not null default 0
       )
     `);
-    // Live streams predate the ephemeral column; adopt their table in place.
-    // Synchronous and cheap (one pragma per constructor), same posture as the
-    // create-if-not-exists DDL above.
-    const eventColumns = this.sql.exec<{ name: string }>("pragma table_info(events)").toArray();
-    if (!eventColumns.some((column) => column.name === "ephemeral")) {
-      this.sql.exec("alter table events add column ephemeral integer not null default 0");
-    }
     this.sql.exec(`
       -- Full committed event JSON split into ordered byte chunks. The WITHOUT ROWID
       -- primary key is the lookup index used by point reads and range replay.
@@ -82,8 +73,8 @@ export class StreamEventLog {
     );
   }
 
-  /** The highest DURABLE offset — the tail a default (ephemeral-excluding)
-   * catch-up read can actually reach, and so the only head a fold barrier
+  /** The highest DURABLE offset — the last row a default (ephemeral-excluding)
+   * catch-up read can actually reach, and therefore the only maximum offset a fold barrier
    * may wait for. Robust against a future ephemeral-row eviction sweep. */
   highestDurableOffset(): number {
     return (
@@ -101,7 +92,7 @@ export class StreamEventLog {
    * offsets included) and survives row deletion. This is the offset
    * allocator's recovery floor: a future ephemeral-row eviction sweep may
    * delete the highest row, and reseeding the allocator from max(offset)
-   * would then reissue offsets that live subscribers already saw.
+   * would then reissue offsets that open callback connections already saw.
    */
   highestAssignedOffset(): number {
     const sequence =
@@ -113,14 +104,15 @@ export class StreamEventLog {
 
   /**
    * Returns each event's serialized byte length (the exact bytes written to
-   * `event_chunks`), so the commit path can hand delivery fan-out a sized
-   * fresh tail without anyone re-stringifying what was just serialized here.
+   * `event_chunks`), so the commit path can hand the send loops a sized
+   * just-committed events without serializing them again.
    */
   insert(events: readonly StreamEvent[]): number[] {
     const byteLengths: number[] = [];
     for (const event of events) {
       this.sql.exec(
-        "insert into events (offset, type, created_at, idempotency_key, ephemeral) values (?, ?, ?, ?, ?)",
+        `insert into events (offset, type, created_at, idempotency_key, ephemeral)
+         values (?, ?, ?, ?, ?)`,
         event.offset,
         event.type,
         event.createdAt,
@@ -190,9 +182,12 @@ export class StreamEventLog {
     // One indexed metadata subquery picks the replay window; the join then streams each
     // event's chunks in primary-key order (offset, chunk_index).
     const chunks = this.sql
-      .exec<{ offset: number; chunkBytes: ArrayBuffer }>(
+      .exec<{ offset: number; chunkIndex: number | null; chunkBytes: ArrayBuffer | null }>(
         `
-          select selected.offset as offset, event_chunks.chunk_bytes as chunkBytes
+          select
+            selected.offset as offset,
+            event_chunks.chunk_index as chunkIndex,
+            event_chunks.chunk_bytes as chunkBytes
           from (
             select offset
             from events
@@ -203,7 +198,7 @@ export class StreamEventLog {
             order by offset asc
             limit ?
           ) selected
-          join event_chunks on event_chunks.offset = selected.offset
+          left join event_chunks on event_chunks.offset = selected.offset
           order by selected.offset asc, event_chunks.chunk_index asc
         `,
         args.afterOffset,
@@ -214,10 +209,23 @@ export class StreamEventLog {
       .toArray();
     const chunksByOffset = new Map<number, ArrayBuffer[]>();
     for (const chunk of chunks) {
+      if (chunk.chunkIndex === null || chunk.chunkBytes === null) {
+        throw new Error(`stream event at path "${this.path}", offset ${chunk.offset} has no body`);
+      }
       const eventChunks = chunksByOffset.get(chunk.offset);
       if (eventChunks === undefined) {
+        if (chunk.chunkIndex !== 0) {
+          throw new Error(
+            `stream event at path "${this.path}", offset ${chunk.offset} starts at body chunk ${chunk.chunkIndex}`,
+          );
+        }
         chunksByOffset.set(chunk.offset, [chunk.chunkBytes]);
       } else {
+        if (chunk.chunkIndex !== eventChunks.length) {
+          throw new Error(
+            `stream event at path "${this.path}", offset ${chunk.offset} is missing body chunk ${eventChunks.length}`,
+          );
+        }
         eventChunks.push(chunk.chunkBytes);
       }
     }
@@ -242,81 +250,132 @@ export class StreamEventLog {
 
   #parseEvent(chunks: ArrayBuffer[]): StreamEvent {
     const parsed = JSON.parse(decodeChunks(chunks)) as unknown;
-    return StreamEventSchema.parse(addLegacyEventPath(parsed, this.path));
+    return StreamEventSchema.parse(parsed);
   }
 }
 
 /**
- * One durable subscription's delivery cursor row. `ackedOffset` is exclusive
- * (delivery resumes at +1). For push subscriptions it is the AUTHORITATIVE
- * cursor: it only advances when the receiver's awaited call resolved. For wake
- * subscriptions it is an OBSERVATIONAL watermark: the checkpoint the
- * subscriber reported on the last successful poke, used only for poke
- * coalescing and lag display — the subscriber's own `{offset, state}` snapshot
- * is the truth, and a lost or stale row costs one redundant poke, nothing
+ * One stored subscription's delivery cursor row. `acknowledgedOffset` is exclusive
+ * (delivery resumes at +1). For copy, ITX-call, and webhook subscriptions
+ * it is the authoritative cursor: it advances only when the awaited call resolves. For
+ * hosted processors it is the checkpoint reported by the processor on its
+ * hosted processor reported on the last successful wake, used only to decide
+ * whether another wake is needed and to display lag — the processor's
+ * own `{offset, state}` snapshot is the truth, and a lost or stale row costs one
+ * redundant wake call, nothing
  * more.
  */
 export type SubscriptionCursorRow = {
   subscriptionKey: string;
-  ackedOffset: number;
-  /** Consecutive delivery/poke failures since the last success. */
+  acknowledgedOffset: number;
+  /** Offset of the source configuration this row belongs to. */
+  configuredAtOffset: number;
+  /** Consecutive delivery or hosted-processor wake failures since the last success. */
   attempt: number;
-  /** Wall-clock ms before which the spine must not retry; null when not backing off. */
+  /** Source offset whose receiver-specific failure is being confirmed. */
+  failingEventOffset: number | null;
+  /** Failures attributable to that exact event, independent of receiver outages. */
+  failingEventAttempt: number;
+  /**
+   * Confirmed failing events skipped without an intervening successful
+   * delivery. Durable because eviction must not reset the mass-skip fuse.
+   */
+  failingEventSkipsSinceLastSuccess: number;
+  /** Wall-clock ms before which delivery must not retry; null when not backing off. */
   nextAttemptAt: number | null;
+  /**
+   * Deadline for one dispatched hosted-processor batch that has not acknowledged yet.
+   * Persisted before the callback leaves the source DO, so eviction turns a
+   * vanished in-memory connection into a bounded delivery failure on the next alarm.
+   */
+  inFlightDeadlineAt: number | null;
+  /** Live connection generation that owns the watchdog; ignores a late older result. */
+  inFlightConnectionGeneration: number | null;
   lastError: string | null;
   /**
-   * Seek fence. Bumped by every explicit cursor move (`setCursor`) and fresh
-   * on every row creation, so an ack fenced on the epoch a drain READ cannot
-   * clobber a seek (or a remove+recreate) that landed while its delivery was
-   * in flight — `ack`'s monotonic max alone would silently swallow the seek.
+   * Offset of the configuration or cursor-set event that most recently chose
+   * this cursor. A delivery remembers this offset before calling its receiver;
+   * its late acknowledgement is ignored if an operator moved the cursor or
+   * replaced the subscription while the call was running.
    */
-  epoch: number;
+  cursorChangedAtOffset: number;
 };
 
 /**
- * The delivery spine's durable rows, behind an interface so the spine's logic
- * is unit-testable with an in-memory twin (stream-subscribers.test.ts). All
- * methods synchronous — same rule as the event log above.
+ * Durable delivery cursor rows. All methods are synchronous — the same
+ * transaction boundary as the event log above.
  */
 export type SubscriptionCursorStore = {
   get(subscriptionKey: string): SubscriptionCursorRow | undefined;
   list(): SubscriptionCursorRow[];
-  /** Create the row if absent (configure); never resets an existing cursor. */
-  ensure(subscriptionKey: string, ackedOffset: number): void;
+  /**
+   * Create the row, or move it to a newly appended source configuration at
+   * that configuration's declared initial cursor, resetting its counters.
+   */
+  ensure(subscriptionKey: string, acknowledgedOffset: number, configuredAtOffset: number): void;
   /**
    * Successful delivery: advance the cursor (monotonic), clear failure state.
-   * With `epoch`, the ack is FENCED: it no-ops unless the row's epoch still
-   * matches the one the caller read before dialing — a seek that landed while
-   * the delivery was in flight wins over the delivery's ack.
+   * When `cursorChangedAtOffset` is supplied, the acknowledgement is ignored
+   * unless the row still names that exact configuration or cursor-set event.
    */
-  ack(subscriptionKey: string, ackedOffset: number, epoch?: number): void;
+  ack(
+    subscriptionKey: string,
+    acknowledgedOffset: number,
+    options?: {
+      cursorChangedAtOffset?: number;
+      preserveFailingEventSkips?: boolean;
+    },
+  ): void;
   /**
-   * Advance the wake lane's observational watermark (monotonic) after a poke
-   * whose checkpoint did NOT progress. Clears the retry schedule (the poke
-   * consumed it; a live connection has no pending retry to arm) but KEEPS the
-   * failure streak — a successful handshake proves the host is reachable, not
-   * that deliveries succeed, and resetting the counter here is what let a
-   * deterministically failing subscriber spin forever without ever parking.
+   * Atomically step over one confirmed failing event while incrementing the
+   * durable consecutive-skip fuse. The configuration/cursor-set event offset
+   * must still match, so replacement or seek wins over an in-flight failure.
    */
-  advanceWatermark(subscriptionKey: string, ackedOffset: number): void;
+  ackFailingEventSkipped(
+    subscriptionKey: string,
+    acknowledgedOffset: number,
+    cursorChangedAtOffset: number,
+  ): void;
+  /**
+   * Record a hosted processor's reported checkpoint after a wake response
+   * whose checkpoint did NOT progress. Clears the retry schedule (the wake call
+   * consumed it; a live connection has no pending retry to arm) but KEEPS the
+   * failure streak — a successful wake proves the host is reachable, not
+   * that deliveries succeed, and resetting the counter here is what let a
+   * deterministically failing processor spin forever without ever halting.
+   */
+  recordReportedCheckpoint(subscriptionKey: string, acknowledgedOffset: number): void;
+  /** Persist one hosted batch's watchdog before invoking its remote callback. */
+  markInFlight(
+    subscriptionKey: string,
+    args: {
+      deadlineAt: number;
+      connectionGeneration: number;
+      cursorChangedAtOffset: number;
+    },
+  ): void;
+  /** Clear a successful hosted batch's watchdog and consecutive failure state. */
+  clearInFlight(
+    subscriptionKey: string,
+    args: { connectionGeneration: number; cursorChangedAtOffset: number },
+  ): void;
   /** Failed delivery: record the consecutive attempt count and when to retry. */
   nack(
     subscriptionKey: string,
-    args: { attempt: number; nextAttemptAt: number; error: string },
+    args: {
+      attempt: number;
+      nextAttemptAt: number;
+      error: string;
+      failingEvent?: { offset: number; attempt: number };
+    },
   ): void;
-  /**
-   * Parked: stop the retry schedule (a parked row must not drive the alarm)
-   * but KEEP the failure evidence — the attempt count and error the park fact
-   * recorded stay on the row, so runtime state can answer "why is this
-   * parked" without digging the fact back out of the event log. `ack`
-   * (resume) or `setCursor` clears them.
-   */
-  park(subscriptionKey: string, args: { attempt: number; error: string }): void;
-  /** Explicit seek (cursor-set / resume-with-afterOffset). Clears failure state, bumps the epoch. */
-  setCursor(subscriptionKey: string, ackedOffset: number): void;
+  /** Apply an explicit cursor-set event and clear delivery failure state. */
+  setCursor(
+    subscriptionKey: string,
+    acknowledgedOffset: number,
+    cursorSetEventOffset: number,
+  ): void;
   delete(subscriptionKey: string): void;
-  /** Earliest pending retry across all rows, for arming the DO alarm. */
-  minNextAttemptAt(): number | null;
 };
 
 /** SQLite-backed {@link SubscriptionCursorStore}, sharing the stream's own database. */
@@ -324,61 +383,41 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
   static db = defineConfig({
     // The desired schema now (`sqlfu draft` diffs new migrations against it).
     definitions: sql`
-      create table subscriptions (
+      create table subscription_cursors (
         subscription_key text primary key,
-        acked_offset integer not null,
+        acknowledged_offset integer not null,
         attempt integer not null default 0,
         next_attempt_at integer,
+        in_flight_deadline_at integer,
+        in_flight_connection_generation integer,
         last_error text,
-        epoch integer not null default 0,
+        failing_event_offset integer,
+        failing_event_attempt integer not null default 0,
+        failing_event_skips_since_last_success integer not null default 0,
+        cursor_changed_at_offset integer not null,
+        configured_at_offset integer not null,
         updated_at text not null
       );
     `,
     migrations: [
       {
-        // The #1784 table, verbatim. `if not exists` is load-bearing: live DOs
-        // created their table from raw constructor DDL before sqlfu owned it,
-        // so this migration adopts an existing pre-epoch table as readily as
-        // it creates a fresh one.
-        name: "20260709000001_create_subscriptions",
+        name: "20260721000001_create_subscription_cursors",
         content: sql`
-          create table if not exists subscriptions (
+          create table subscription_cursors (
             subscription_key text primary key,
-            acked_offset integer not null,
+            acknowledged_offset integer not null,
             attempt integer not null default 0,
             next_attempt_at integer,
+            in_flight_deadline_at integer,
+            in_flight_connection_generation integer,
             last_error text,
+            failing_event_offset integer,
+            failing_event_attempt integer not null default 0,
+            failing_event_skips_since_last_success integer not null default 0,
+            cursor_changed_at_offset integer not null,
+            configured_at_offset integer not null,
             updated_at text not null
           );
-        `,
-      },
-      {
-        // `epoch` postdates the table (#1784 shipped without it, #1792 queries
-        // it). This is a rebuild rather than `alter table add column` because
-        // the migration meets THREE live shapes with empty sqlfu history: no
-        // table (migration 1 just created it), the pre-epoch #1784 table, and
-        // the with-epoch table #1792-era constructors created — a plain ALTER
-        // would throw "duplicate column name" on the last one. Rows and
-        // cursor progress are preserved; epoch restarts at 0 (the fence value
-        // fresh #1784 rows had). Resetting a with-epoch table's fences is
-        // safe here: this runs in the DO constructor, and no in-flight
-        // delivery (the only reader of a stale epoch) survives a DO restart.
-        name: "20260709000002_add_epoch",
-        content: sql`
-          alter table subscriptions rename to subscriptions_pre_epoch;
-          create table subscriptions (
-            subscription_key text primary key,
-            acked_offset integer not null,
-            attempt integer not null default 0,
-            next_attempt_at integer,
-            last_error text,
-            epoch integer not null default 0,
-            updated_at text not null
-          );
-          insert into subscriptions (subscription_key, acked_offset, attempt, next_attempt_at, last_error, updated_at)
-          select subscription_key, acked_offset, attempt, next_attempt_at, last_error, updated_at
-          from subscriptions_pre_epoch;
-          drop table subscriptions_pre_epoch;
         `,
       },
     ],
@@ -387,51 +426,154 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         parameters: { subscriptionKey: string };
         result: SubscriptionCursorRowRecord;
       }>`
-        select subscription_key, acked_offset, attempt, next_attempt_at, last_error, epoch
-        from subscriptions
+        select subscription_key, acknowledged_offset, configured_at_offset,
+               attempt, next_attempt_at, in_flight_deadline_at,
+               in_flight_connection_generation, last_error,
+               failing_event_offset, failing_event_attempt,
+               failing_event_skips_since_last_success, cursor_changed_at_offset
+        from subscription_cursors
         where subscription_key = :subscriptionKey
       `,
       list: sql.many<{ result: SubscriptionCursorRowRecord }>`
-        select subscription_key, acked_offset, attempt, next_attempt_at, last_error, epoch
-        from subscriptions
+        select subscription_key, acknowledged_offset, configured_at_offset,
+               attempt, next_attempt_at, in_flight_deadline_at,
+               in_flight_connection_generation, last_error,
+               failing_event_offset, failing_event_attempt,
+               failing_event_skips_since_last_success, cursor_changed_at_offset
+        from subscription_cursors
       `,
       ensure: sql.run<{
         parameters: {
           subscriptionKey: string;
-          ackedOffset: number;
-          epoch: number;
+          acknowledgedOffset: number;
+          configuredAtOffset: number;
+          cursorChangedAtOffset: number;
           updatedAt: string;
         };
       }>`
-        insert into subscriptions (subscription_key, acked_offset, epoch, updated_at)
-        values (:subscriptionKey, :ackedOffset, :epoch, :updatedAt)
-        on conflict (subscription_key) do nothing
+        insert into subscription_cursors (
+          subscription_key, acknowledged_offset, configured_at_offset,
+          cursor_changed_at_offset, updated_at
+        ) values (
+          :subscriptionKey, :acknowledgedOffset, :configuredAtOffset,
+          :cursorChangedAtOffset, :updatedAt
+        )
+        on conflict (subscription_key) do update set
+          acknowledged_offset = excluded.acknowledged_offset,
+          configured_at_offset = excluded.configured_at_offset,
+          attempt = 0,
+          next_attempt_at = null,
+          in_flight_deadline_at = null,
+          in_flight_connection_generation = null,
+          last_error = null,
+          failing_event_offset = null,
+          failing_event_attempt = 0,
+          failing_event_skips_since_last_success = 0,
+          cursor_changed_at_offset = excluded.cursor_changed_at_offset,
+          updated_at = excluded.updated_at
+        where subscription_cursors.configured_at_offset <> excluded.configured_at_offset
       `,
       ack: sql.run<{
-        parameters: { subscriptionKey: string; ackedOffset: number; updatedAt: string };
-      }>`
-        update subscriptions
-        set acked_offset = max(acked_offset, :ackedOffset), attempt = 0, next_attempt_at = null, last_error = null, updated_at = :updatedAt
-        where subscription_key = :subscriptionKey
-      `,
-      ackFenced: sql.run<{
         parameters: {
           subscriptionKey: string;
-          ackedOffset: number;
-          epoch: number;
+          acknowledgedOffset: number;
+          preserveFailingEventSkips: number;
           updatedAt: string;
         };
       }>`
-        update subscriptions
-        set acked_offset = max(acked_offset, :ackedOffset), attempt = 0, next_attempt_at = null, last_error = null, updated_at = :updatedAt
-        where subscription_key = :subscriptionKey and epoch = :epoch
-      `,
-      advanceWatermark: sql.run<{
-        parameters: { subscriptionKey: string; ackedOffset: number; updatedAt: string };
-      }>`
-        update subscriptions
-        set acked_offset = max(acked_offset, :ackedOffset), next_attempt_at = null, updated_at = :updatedAt
+        update subscription_cursors
+        set acknowledged_offset = max(acknowledged_offset, :acknowledgedOffset),
+            attempt = 0, next_attempt_at = null, in_flight_deadline_at = null,
+            in_flight_connection_generation = null,
+            last_error = null,
+            failing_event_offset = null, failing_event_attempt = 0,
+            failing_event_skips_since_last_success = case
+              when :preserveFailingEventSkips = 1 then failing_event_skips_since_last_success else 0 end,
+            updated_at = :updatedAt
         where subscription_key = :subscriptionKey
+      `,
+      ackIfCursorUnchanged: sql.run<{
+        parameters: {
+          subscriptionKey: string;
+          acknowledgedOffset: number;
+          preserveFailingEventSkips: number;
+          cursorChangedAtOffset: number;
+          updatedAt: string;
+        };
+      }>`
+        update subscription_cursors
+        set acknowledged_offset = max(acknowledged_offset, :acknowledgedOffset),
+            attempt = 0, next_attempt_at = null, in_flight_deadline_at = null,
+            in_flight_connection_generation = null,
+            last_error = null,
+            failing_event_offset = null, failing_event_attempt = 0,
+            failing_event_skips_since_last_success = case
+              when :preserveFailingEventSkips = 1 then failing_event_skips_since_last_success else 0 end,
+            updated_at = :updatedAt
+        where subscription_key = :subscriptionKey
+          and cursor_changed_at_offset = :cursorChangedAtOffset
+      `,
+      ackFailingEventSkipped: sql.run<{
+        parameters: {
+          subscriptionKey: string;
+          acknowledgedOffset: number;
+          cursorChangedAtOffset: number;
+          updatedAt: string;
+        };
+      }>`
+        update subscription_cursors
+        set acknowledged_offset = max(acknowledged_offset, :acknowledgedOffset),
+            attempt = 0, next_attempt_at = null, in_flight_deadline_at = null,
+            in_flight_connection_generation = null,
+            last_error = null,
+            failing_event_offset = null, failing_event_attempt = 0,
+            failing_event_skips_since_last_success = failing_event_skips_since_last_success + 1,
+            updated_at = :updatedAt
+        where subscription_key = :subscriptionKey
+          and cursor_changed_at_offset = :cursorChangedAtOffset
+      `,
+      recordReportedCheckpoint: sql.run<{
+        parameters: { subscriptionKey: string; acknowledgedOffset: number; updatedAt: string };
+      }>`
+        update subscription_cursors
+        set acknowledged_offset = max(acknowledged_offset, :acknowledgedOffset), next_attempt_at = null,
+            in_flight_deadline_at = null, in_flight_connection_generation = null,
+            updated_at = :updatedAt
+        where subscription_key = :subscriptionKey
+      `,
+      markInFlight: sql.run<{
+        parameters: {
+          subscriptionKey: string;
+          deadlineAt: number;
+          connectionGeneration: number;
+          cursorChangedAtOffset: number;
+          updatedAt: string;
+        };
+      }>`
+        update subscription_cursors
+        set in_flight_deadline_at = :deadlineAt,
+            in_flight_connection_generation = :connectionGeneration,
+            updated_at = :updatedAt
+        where subscription_key = :subscriptionKey
+          and cursor_changed_at_offset = :cursorChangedAtOffset
+      `,
+      clearInFlight: sql.run<{
+        parameters: {
+          subscriptionKey: string;
+          connectionGeneration: number;
+          cursorChangedAtOffset: number;
+          updatedAt: string;
+        };
+      }>`
+        update subscription_cursors
+        set attempt = 0, next_attempt_at = null, last_error = null,
+            in_flight_deadline_at = null, in_flight_connection_generation = null,
+            failing_event_offset = null, failing_event_attempt = 0,
+            failing_event_skips_since_last_success = 0,
+            updated_at = :updatedAt
+        where subscription_key = :subscriptionKey
+          and cursor_changed_at_offset = :cursorChangedAtOffset
+          and in_flight_connection_generation = :connectionGeneration
       `,
       nack: sql.run<{
         parameters: {
@@ -439,48 +581,40 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
           attempt: number;
           nextAttemptAt: number;
           error: string;
+          failingEventOffset: number | null;
+          failingEventAttempt: number;
           updatedAt: string;
         };
       }>`
-        update subscriptions
-        set attempt = :attempt, next_attempt_at = :nextAttemptAt, last_error = :error, updated_at = :updatedAt
-        where subscription_key = :subscriptionKey
-      `,
-      park: sql.run<{
-        parameters: {
-          subscriptionKey: string;
-          attempt: number;
-          error: string;
-          updatedAt: string;
-        };
-      }>`
-        update subscriptions
-        set attempt = :attempt, next_attempt_at = null, last_error = :error, updated_at = :updatedAt
+        update subscription_cursors
+        set attempt = :attempt, next_attempt_at = :nextAttemptAt, last_error = :error,
+            in_flight_deadline_at = null,
+            in_flight_connection_generation = null,
+            failing_event_offset = :failingEventOffset, failing_event_attempt = :failingEventAttempt,
+            updated_at = :updatedAt
         where subscription_key = :subscriptionKey
       `,
       setCursor: sql.run<{
         parameters: {
           subscriptionKey: string;
-          ackedOffset: number;
-          epoch: number;
+          acknowledgedOffset: number;
+          cursorChangedAtOffset: number;
           updatedAt: string;
         };
       }>`
-        update subscriptions
-        set acked_offset = :ackedOffset, attempt = 0, next_attempt_at = null, last_error = null, epoch = :epoch, updated_at = :updatedAt
+        update subscription_cursors
+        set acknowledged_offset = :acknowledgedOffset, attempt = 0, next_attempt_at = null, last_error = null,
+            in_flight_deadline_at = null,
+            in_flight_connection_generation = null,
+            failing_event_offset = null, failing_event_attempt = 0, failing_event_skips_since_last_success = 0,
+            cursor_changed_at_offset = :cursorChangedAtOffset, updated_at = :updatedAt
         where subscription_key = :subscriptionKey
       `,
       delete: sql.run<{ parameters: { subscriptionKey: string } }>`
-        delete from subscriptions where subscription_key = :subscriptionKey
-      `,
-      minNextAttemptAt: sql.one<{ result: { next: number | null } }>`
-        select min(next_attempt_at) as next from subscriptions where next_attempt_at is not null
+        delete from subscription_cursors where subscription_key = :subscriptionKey
       `,
     },
   });
-
-  /** Monotonic within this instance; wall-clock floor covers restarts. */
-  #lastEpoch = 0;
 
   #db: ReturnType<
     typeof SqliteSubscriptionCursorStore.db<ReturnType<typeof createDurableObjectClient>>
@@ -498,11 +632,6 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     this.#db.migrate();
   }
 
-  #nextEpoch(): number {
-    this.#lastEpoch = Math.max(this.#lastEpoch + 1, Date.now());
-    return this.#lastEpoch;
-  }
-
   get(subscriptionKey: string): SubscriptionCursorRow | undefined {
     const record = this.#db.get({ subscriptionKey });
     return record ? rowFromRecord(record) : undefined;
@@ -512,33 +641,90 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     return this.#db.list().map(rowFromRecord);
   }
 
-  ensure(subscriptionKey: string, ackedOffset: number): void {
+  ensure(subscriptionKey: string, acknowledgedOffset: number, configuredAtOffset: number): void {
     this.#db.ensure({
       subscriptionKey,
-      ackedOffset,
-      // Fresh rows get a fresh epoch, so an ack fenced on a DELETED row's
-      // epoch cannot land on a same-key recreation (the remove+recreate
-      // deliver:"all" clobber).
-      epoch: this.#nextEpoch(),
+      acknowledgedOffset,
+      configuredAtOffset,
+      // The immutable configuration event offset also distinguishes a
+      // remove+recreate using the same key.
+      cursorChangedAtOffset: configuredAtOffset,
       updatedAt: new Date().toISOString(),
     });
     this.#onMutation();
   }
 
-  ack(subscriptionKey: string, ackedOffset: number, epoch?: number): void {
-    const params = { subscriptionKey, ackedOffset, updatedAt: new Date().toISOString() };
-    if (epoch === undefined) {
+  ack(
+    subscriptionKey: string,
+    acknowledgedOffset: number,
+    options: {
+      cursorChangedAtOffset?: number;
+      preserveFailingEventSkips?: boolean;
+    } = {},
+  ): void {
+    const params = {
+      subscriptionKey,
+      acknowledgedOffset,
+      preserveFailingEventSkips: options.preserveFailingEventSkips === true ? 1 : 0,
+      updatedAt: new Date().toISOString(),
+    };
+    if (options.cursorChangedAtOffset === undefined) {
       this.#db.ack(params);
     } else {
-      this.#db.ackFenced({ ...params, epoch });
+      this.#db.ackIfCursorUnchanged({
+        ...params,
+        cursorChangedAtOffset: options.cursorChangedAtOffset,
+      });
     }
     this.#onMutation();
   }
 
-  advanceWatermark(subscriptionKey: string, ackedOffset: number): void {
-    this.#db.advanceWatermark({
+  ackFailingEventSkipped(
+    subscriptionKey: string,
+    acknowledgedOffset: number,
+    cursorChangedAtOffset: number,
+  ): void {
+    this.#db.ackFailingEventSkipped({
       subscriptionKey,
-      ackedOffset,
+      acknowledgedOffset,
+      cursorChangedAtOffset,
+      updatedAt: new Date().toISOString(),
+    });
+    this.#onMutation();
+  }
+
+  recordReportedCheckpoint(subscriptionKey: string, acknowledgedOffset: number): void {
+    this.#db.recordReportedCheckpoint({
+      subscriptionKey,
+      acknowledgedOffset,
+      updatedAt: new Date().toISOString(),
+    });
+    this.#onMutation();
+  }
+
+  markInFlight(
+    subscriptionKey: string,
+    args: {
+      deadlineAt: number;
+      connectionGeneration: number;
+      cursorChangedAtOffset: number;
+    },
+  ): void {
+    this.#db.markInFlight({
+      subscriptionKey,
+      ...args,
+      updatedAt: new Date().toISOString(),
+    });
+    this.#onMutation();
+  }
+
+  clearInFlight(
+    subscriptionKey: string,
+    args: { connectionGeneration: number; cursorChangedAtOffset: number },
+  ): void {
+    this.#db.clearInFlight({
+      subscriptionKey,
+      ...args,
       updatedAt: new Date().toISOString(),
     });
     this.#onMutation();
@@ -546,7 +732,12 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
 
   nack(
     subscriptionKey: string,
-    args: { attempt: number; nextAttemptAt: number; error: string },
+    args: {
+      attempt: number;
+      nextAttemptAt: number;
+      error: string;
+      failingEvent?: { offset: number; attempt: number };
+    },
   ): void {
     this.#db.nack({
       subscriptionKey,
@@ -554,27 +745,22 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
       nextAttemptAt: args.nextAttemptAt,
       // Bound the stored error so a pathological message cannot bloat the row.
       error: args.error.slice(0, 2_000),
+      failingEventOffset: args.failingEvent?.offset ?? null,
+      failingEventAttempt: args.failingEvent?.attempt ?? 0,
       updatedAt: new Date().toISOString(),
     });
     this.#onMutation();
   }
 
-  park(subscriptionKey: string, args: { attempt: number; error: string }): void {
-    this.#db.park({
-      subscriptionKey,
-      attempt: args.attempt,
-      // Same bound as nack: a pathological message must not bloat the row.
-      error: args.error.slice(0, 2_000),
-      updatedAt: new Date().toISOString(),
-    });
-    this.#onMutation();
-  }
-
-  setCursor(subscriptionKey: string, ackedOffset: number): void {
+  setCursor(
+    subscriptionKey: string,
+    acknowledgedOffset: number,
+    cursorSetEventOffset: number,
+  ): void {
     this.#db.setCursor({
       subscriptionKey,
-      ackedOffset,
-      epoch: this.#nextEpoch(),
+      acknowledgedOffset,
+      cursorChangedAtOffset: cursorSetEventOffset,
       updatedAt: new Date().toISOString(),
     });
     this.#onMutation();
@@ -584,72 +770,86 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     this.#db.delete({ subscriptionKey });
     this.#onMutation();
   }
+}
 
-  minNextAttemptAt(): number | null {
-    return this.#db.minNextAttemptAt().next;
+/**
+ * Clear stale failure state after rebuilding reduced configuration from the
+ * event log (core state version mismatch). Cursor rows survive the KV state,
+ * so after a rebuild they can describe a world the new fold no longer
+ * derives: a row whose config event no longer parses is orphaned (its
+ * `next_attempt_at` would arm alarms forever), and a surviving row's backoff
+ * may blame code the new version replaced. Progress is kept — `acknowledgedOffset`
+ * is monotonic truth about the same immutable log — while failure state is
+ * cleared so every survivor gets an immediate fresh try under the new fold.
+ * Delivery-halted subscriptions keep their failure evidence in the durable
+ * halt event, so their mutable cursor rows can be cleaned in the same way as
+ * active subscriptions.
+ */
+export function clearSubscriptionCursorFailuresAfterStateRebuild(
+  store: SubscriptionCursorStore,
+  configuredSubscriptionKeys: ReadonlySet<string>,
+): void {
+  for (const row of store.list()) {
+    if (
+      configuredSubscriptionKeys.has(row.subscriptionKey) &&
+      (row.attempt !== 0 ||
+        row.nextAttemptAt !== null ||
+        row.inFlightDeadlineAt !== null ||
+        row.lastError !== null ||
+        row.failingEventOffset !== null ||
+        row.failingEventAttempt !== 0 ||
+        row.failingEventSkipsSinceLastSuccess !== 0)
+    ) {
+      // ack at the row's own offset: keeps the cursor, clears attempt/backoff.
+      store.ack(row.subscriptionKey, row.acknowledgedOffset);
+    }
   }
 }
 
 /**
- * Reconciles the spine's cursor rows against a freshly REBUILT config fold
- * (core state version mismatch). Rows are storage and survive the KV state,
- * so after a rebuild they can describe a world the new fold no longer
- * derives: a row whose config event no longer parses is orphaned (its
- * `next_attempt_at` would arm alarms forever), and a surviving row's backoff
- * may blame code the new version replaced. Progress is kept — `ackedOffset`
- * is monotonic truth about the same immutable log — while failure state is
- * cleared so every survivor gets an immediate fresh try under the new fold.
- * PARKED survivors are the exception: the fold keeps them parked, so there is
- * no fresh try to prime, and their attempt/lastError is the evidence the
- * stalled-warning sheet shows — it must survive the rebuild.
+ * Remove rows with no configured subscription. Run on every boot: a
+ * lifecycle interruption may land after the removal event commits but before
+ * its post-commit row deletion side effect.
  */
-export function reconcileSubscriptionCursorRows(
+export function pruneOrphanedSubscriptionCursorRows(
   store: SubscriptionCursorStore,
-  configuredKeys: ReadonlySet<string>,
-  parkedKeys: ReadonlySet<string>,
+  configuredSubscriptionKeys: ReadonlySet<string>,
 ): void {
   for (const row of store.list()) {
-    if (!configuredKeys.has(row.subscriptionKey)) {
-      store.delete(row.subscriptionKey);
-      continue;
-    }
-    // A parked row's retry schedule is already clear (park guarantees it), so
-    // there is nothing alarm-driving to reconcile away — keep its evidence.
-    // If storage somehow holds a stray next_attempt_at anyway, fall through
-    // to the ack: losing the evidence beats an eternally re-armed alarm.
-    if (parkedKeys.has(row.subscriptionKey) && row.nextAttemptAt === null) continue;
-    if (row.attempt !== 0 || row.nextAttemptAt !== null || row.lastError !== null) {
-      // ack at the row's own offset: keeps the cursor, clears attempt/backoff.
-      store.ack(row.subscriptionKey, row.ackedOffset);
-    }
+    if (!configuredSubscriptionKeys.has(row.subscriptionKey)) store.delete(row.subscriptionKey);
   }
 }
 
 type SubscriptionCursorRowRecord = {
   subscription_key: string;
-  acked_offset: number;
+  acknowledged_offset: number;
+  configured_at_offset: number;
   attempt: number;
   next_attempt_at: number | null;
+  in_flight_deadline_at: number | null;
+  in_flight_connection_generation: number | null;
   last_error: string | null;
-  epoch: number;
+  failing_event_offset: number | null;
+  failing_event_attempt: number;
+  failing_event_skips_since_last_success: number;
+  cursor_changed_at_offset: number;
 };
 
 function rowFromRecord(record: SubscriptionCursorRowRecord): SubscriptionCursorRow {
   return {
     subscriptionKey: record.subscription_key,
-    ackedOffset: record.acked_offset,
+    acknowledgedOffset: record.acknowledged_offset,
+    configuredAtOffset: record.configured_at_offset,
     attempt: record.attempt,
     nextAttemptAt: record.next_attempt_at,
+    inFlightDeadlineAt: record.in_flight_deadline_at,
+    inFlightConnectionGeneration: record.in_flight_connection_generation,
     lastError: record.last_error,
-    epoch: record.epoch,
+    failingEventOffset: record.failing_event_offset,
+    failingEventAttempt: record.failing_event_attempt,
+    failingEventSkipsSinceLastSuccess: record.failing_event_skips_since_last_success,
+    cursorChangedAtOffset: record.cursor_changed_at_offset,
   };
-}
-
-function addLegacyEventPath(value: unknown, path: string): unknown {
-  if (value !== null && typeof value === "object" && !("path" in value)) {
-    return { ...value, path };
-  }
-  return value;
 }
 
 function* chunkBytes(value: Uint8Array, chunkSize: number): Generator<[number, ArrayBuffer]> {

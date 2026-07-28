@@ -346,7 +346,7 @@ The TypeScript class/export name for the Agent Durable Object.
 _Avoid_: Subagent class, Agent DO class
 
 **createStreamProcessorHost**:
-The factory that hosts StreamProcessor instances inside a domain Durable Object: `host.add((deps) => new SomeProcessor(deps))` registers a processor under its contract slug, and `host.wakeStreamSubscriber` answers stream wakeups by re-subscribing from the processor's durable checkpoint.
+The factory that hosts StreamProcessor instances inside a domain Durable Object: `host.add((deps) => new SomeProcessor(deps))` registers a processor under its contract slug, and `host.wakeStreamProcessor` answers stream wakeups by re-subscribing from the processor's durable checkpoint.
 _Avoid_: withStreamProcessor, host mixin, dynamic processor registry
 
 **Stream Processor keepAliveWhile**:

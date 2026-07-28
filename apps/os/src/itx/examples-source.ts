@@ -87,7 +87,7 @@ return await itx.projects.get(pid).__describe();
       const description = await itx.__describe();
 
       // Built-ins are the children map; dynamic mounts appear in capabilities
-      // with type "live" or "itx-expression" plus the offset of the event that
+      // with type "live" or "itx-call" plus the offset of the event that
       // mounted them.
       return {
         builtins: Object.keys(description.children),
@@ -181,10 +181,10 @@ return await itx.projects.get(pid).__describe();
     id: "ephemeral-events",
     title: "Ephemeral events: transient signals whose durable truth lands separately",
     description:
-      "append({ ephemeral: true }) commits a second-class product event: live subscribe() connections see it (streaming UI), default getEvents reads skip it unless includeEphemeral: true, and ordinary durable subscribers exclude it by default. A push/webhook can explicitly opt in; iterate's ordinary PostHog feed does not. Use ephemeral events for high-volume transient signals (LLM streaming chunks, progress ticks); append the durable product fact as its own ordinary event.",
+      "append({ ephemeral: true }) commits a transient event: callbacks already opened with openConnection() see it, getEvents() skips it unless includeEphemeral is true, and durable subscriptions never deliver it. Use them for high-volume signals such as LLM chunks and progress ticks, then append the durable fact as its own ordinary event.",
     runtimes: ALL_RUNTIMES,
     fn: async (itx, vars: { path?: string }) => {
-      // Transient signal: live product subscribers see it; product state never will.
+      // Transient signal: callbacks already open see it; product state never will.
       const stream = itx.streams.get(vars.path ?? "/repl/ephemeral-demo");
       const [tick] = await stream.append({
         type: "events.iterate.repl/progress-ticked",
@@ -331,7 +331,7 @@ return await itx.projects.get(pid).__describe();
         expression: ["streams", ["get", vars.path ?? "/repl/expression-demo"]],
         instructions: "A demo stream alias: itx.demoStream.append({ type, payload }).",
         path: ["demoStream"],
-        type: "itx-expression",
+        type: "itx-call",
       });
 
       // The alias IS the stream capability.
@@ -899,7 +899,7 @@ return await itx.projects.get(pid).__describe();
       const provision = await itx.provideCapability({
         expression: ["streams", ["get", "/repl/journal-demo"]],
         path: [capPath],
-        type: "itx-expression",
+        type: "itx-call",
       });
       await provision.revoke();
 
@@ -1072,7 +1072,7 @@ await itx.provideCapability({
   instructions:
     "Public MCP search client. Call itx.publicMcp.web_search_exa({ query, numResults }) or itx.publicMcp.web_fetch_exa({ urls, maxCharacters }).",
   path: ["publicMcp"],
-  type: "itx-expression",
+  type: "itx-call",
 });
 
 const mountedSearch = await itx.publicMcp.web_search_exa({
@@ -1141,7 +1141,7 @@ return {
       //     headers: { authorization: 'Bearer getSecret("' + path + '", { field: "accessToken" })' } }]],
       //   instructions: "Cloudflare MCP server (OAuth). Tool names discovered from the server.",
       //   path: ["cloudflare"],
-      //   type: "itx-expression",
+      //   type: "itx-call",
       // });
     },
   }),
@@ -1156,7 +1156,7 @@ return {
         expression: ["streams", ["get", "/"]],
         instructions: "The project root stream, mounted at rootStream.",
         path: ["rootStream"],
-        type: "itx-expression",
+        type: "itx-call",
         types: "export type RootStream = Stream;",
       });
 
@@ -1213,7 +1213,7 @@ await itx.provideCapability({
   instructions:
     "Swagger Petstore OpenAPI client. Call itx.petstore.findPetsByStatus({ status: 'available' }) or any other operationId from the spec.",
   path: ["petstore"],
-  type: "itx-expression",
+  type: "itx-call",
 });
 
 const soldPets = await itx.petstore.findPetsByStatus({ status: "sold" });
@@ -1294,7 +1294,7 @@ return {
     e2eProven: false,
     title: "Back a project repo with a real GitHub repository",
     description:
-      "linkGithub({ connection, owner, repo }) backs a project repo with GitHub: the GitHub repository is created (private) if the installation can create org repos, later commits mirror out automatically, and fast-forward default-branch pushes on GitHub import through Cloudflare Artifacts. GitHub webhooks are also cross-posted onto the repo's own stream. syncFromGithub() remains the manual repair/forced-adoption verb. Needs a connected GitHub installation — interactive-only.",
+      "linkGithub({ connection, owner, repo }) backs a project repo with GitHub: the GitHub repository is created (private) if the installation can create org repos, later commits mirror out automatically, and fast-forward default-branch pushes on GitHub import through Cloudflare Artifacts. GitHub webhooks are also delivered to the repo's own stream. syncFromGithub() remains the manual repair/forced-adoption verb. Needs a connected GitHub installation — interactive-only.",
     runtimes: ALL_RUNTIMES,
     fn: async (itx, vars: { owner?: string; repo?: string }) => {
       const connections = await itx.integrations.list();
@@ -1323,20 +1323,23 @@ return {
     },
   }),
   projectExample({
-    id: "stream-cross-post",
-    title: "Cross-post matching events between streams",
+    id: "stream-receive-events-from",
+    title: "Receive matching events from another stream",
     description:
-      "stream.crossPostTo({ path, eventTypes, condition?, description? }) copies every later matching event onto the target stream — sugar over a durable push subscription targeting the destination's acceptCrossPost sink, so copies are at-least-once. The optional condition is a JSONata expression over the whole event that must evaluate to exactly true; description is an optional human note shown in the stream state panel. Copies carry source.crossPostedFrom (the full hop chain), cross-posts never copy into a stream already on the chain (cycles are safe), and removeCrossPost({ path }) removes one.",
+      "receiver.subscribeToEventsFrom({ sourceStreamPath: source, subscriptionKey, filter?, jsonataTransform?, description? }) starts durable copying from the named source into this receiving stream. filter.eventTypes selects event types and filter.jsonataCondition is a JSONata expression over the whole event that must evaluate to exactly true. jsonataTransform is a JSONata constructor shaping what this stream commits ({ type?, payload?, metadata? }; omitted fields copy verbatim) while provenance and dedupe stay keyed to the source event. Each received event records every stream hop in source.copiedFrom; self-receive is rejected and multi-hop cycles stop before appending to a stream already in that list.",
     runtimes: ALL_RUNTIMES,
     fn: async (itx, vars: { source?: string; target?: string }) => {
-      const source = itx.streams.get(vars.source ?? "/examples/cross-post/source");
-      const target = itx.streams.get(vars.target ?? "/examples/cross-post/target");
+      const source = itx.streams.get(vars.source ?? "/examples/receive-events/source");
+      const target = itx.streams.get(vars.target ?? "/examples/receive-events/target");
 
-      await source.crossPostTo({
-        path: vars.target ?? "/examples/cross-post/target",
+      await target.subscribeToEventsFrom({
+        sourceStreamPath: vars.source ?? "/examples/receive-events/source",
+        subscriptionKey: "example/high-importance-notes",
         description: "Demo: high-importance notes land on the target stream.",
-        eventTypes: ["events.iterate.example/note"],
-        condition: 'payload.importance = "high"', // JSONata over the event; optional
+        filter: {
+          eventTypes: ["events.iterate.example/note"],
+          jsonataCondition: 'payload.importance = "high"', // JSONata over the event; optional
+        },
       });
 
       await source.append(
@@ -1349,7 +1352,7 @@ return {
         afterOffset: 0,
         timeoutMs: 10_000,
       });
-      return { copied: copied.payload, provenance: copied.source?.crossPostedFrom };
+      return { copied: copied.payload, copiedFrom: copied.source?.copiedFrom };
     },
   }),
   projectExample<{
@@ -1456,7 +1459,7 @@ return {
       // own-scope itx.provideCapability from an agent is unreachable there.
       await itx.capabilityHosts.get("/").provideCapability({
         path: ["integrations", "github-mcp", connection],
-        type: "itx-expression",
+        type: "itx-call",
         instructions:
           "GitHub via the official MCP server: create_issue({ owner, repo, title }), list_pull_requests, get_file_contents, search_code, ...",
         expression: [
@@ -1481,7 +1484,7 @@ return {
     e2eProven: false,
     title: "GitHub webhooks land on the project's own host",
     description:
-      "Per-project webhook ingress already exists: every project host routes to the repo-backed worker.ts, whose fetch can append inbound deliveries to the connection's /integrations/github/{connection} journal — where a configured worker or agent subscriber picks them up. Point the GitHub repo/app webhook URL at https://<project-slug>.<base>/webhooks/github/<random-token> (the unguessable token in the path is the auth — worker code cannot hold the HMAC signing secret, by design). MUTATING: this REPLACES the seeded worker.ts (homepage + app router) wholesale — merge the route into your existing fetch instead if you have one. Run it interactively.",
+      "Per-project webhook ingress already exists: every project host routes to the repo-backed worker.ts, whose fetch can append inbound requests to the connection's /integrations/github/{connection} stream. A configured worker or agent processor then receives those events. Point the GitHub repo/app webhook URL at https://<project-slug>.<base>/webhooks/github/<random-token> (the unguessable token in the path is the auth — worker code cannot hold the HMAC signing secret, by design). MUTATING: this REPLACES the seeded worker.ts (homepage + app router) wholesale — merge the route into your existing fetch instead if you have one. Run it interactively.",
     runtimes: LIVE_SESSION_RUNTIMES,
     fn: async (itx, vars: { connection?: string; urlToken?: string }) => {
       const connection = vars.connection ?? "main";

@@ -157,7 +157,7 @@ test("Project repos, workers, runScript, and dynamic worker refs compose", async
       ],
     ],
     path: ["probe"],
-    type: "itx-expression",
+    type: "itx-call",
   });
   // @ts-expect-error - dynamic capability root
   expect(await project.probe.inspect()).toEqual({
@@ -182,7 +182,7 @@ test("Project repos, workers, runScript, and dynamic worker refs compose", async
       ],
     ],
     path: ["projectWorkerRef"],
-    type: "itx-expression",
+    type: "itx-call",
   });
   // @ts-expect-error - dynamic capability root
   const workerRefResponse = await project.projectWorkerRef.fetch(
@@ -210,7 +210,7 @@ test("Project repos, workers, runScript, and dynamic worker refs compose", async
       ],
     ],
     path: ["counterFacet"],
-    type: "itx-expression",
+    type: "itx-call",
   });
   // @ts-expect-error - dynamic capability root
   expect(await project.counterFacet.increment()).toBe(1);
@@ -237,7 +237,7 @@ test("Project repos, workers, runScript, and dynamic worker refs compose", async
       ],
     ],
     path: ["db"],
-    type: "itx-expression",
+    type: "itx-call",
   });
   // @ts-expect-error - dynamic database capability mounted by this test.
   await project.db.sql("CREATE TABLE records (value TEXT)");
@@ -347,7 +347,7 @@ test("Worker expression capabilities dispatch nested RpcTarget paths", async () 
       ],
     ],
     path: ["statelessRouter"],
-    type: "itx-expression",
+    type: "itx-call",
   });
   // @ts-expect-error - dynamic capability root
   expect(await project.statelessRouter.tools.echo("hello")).toEqual({
@@ -379,7 +379,7 @@ test("Worker expression capabilities dispatch nested RpcTarget paths", async () 
       ],
     ],
     path: ["statefulRouter"],
-    type: "itx-expression",
+    type: "itx-call",
   });
   // @ts-expect-error - dynamic capability root
   expect(await project.statefulRouter.tools.echo("hello")).toEqual({
@@ -667,12 +667,12 @@ test("Worker capabilities cover project/agent, stateful/stateless, repo/inline r
       ],
     ],
     path: ["repoCounter"],
-    type: "itx-expression",
+    type: "itx-call",
   });
   using _inlineProjectProvision = await project.provideCapability({
     expression: ["workers", ["get", inlineProjectStateless]],
     path: ["inlineProject"],
-    type: "itx-expression",
+    type: "itx-call",
   });
   using _repoAgentProvision = await agent.provideCapability({
     expression: [
@@ -688,12 +688,12 @@ test("Worker capabilities cover project/agent, stateful/stateless, repo/inline r
       ],
     ],
     path: ["repoAgent"],
-    type: "itx-expression",
+    type: "itx-call",
   });
   using _inlineCounterProvision = await agent.provideCapability({
     expression: ["workers", ["get", inlineAgentStateful]],
     path: ["inlineCounter"],
-    type: "itx-expression",
+    type: "itx-call",
   });
 
   const projectCapabilities = project as typeof project & {

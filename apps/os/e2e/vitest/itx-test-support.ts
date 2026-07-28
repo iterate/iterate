@@ -1,13 +1,9 @@
 import http from "node:http";
 import { RpcTarget } from "capnweb";
-import { z } from "zod";
-import { defineProcessorContract } from "iterate/processors";
 import { isStreamOffsetConflictError } from "iterate/processors";
-import { StreamProcessor } from "iterate/processors";
 import type { Stream, StreamEvent, StreamEventInput } from "../../src/itx-api.generated.ts";
 import type { DynamicWorkerRef } from "../../src/domains/workers/schemas.ts";
 
-export const PROJECT_WORKER_FORWARDED_EVENT_TYPE = "events.iterate.test/project-worker-forwarded";
 export const AGENT_WEB_MESSAGE_SENT_TYPE = "events.iterate.com/agents/web-message-sent";
 export const AGENT_CONTEXT_ADDED_TYPE = "events.iterate.com/agents/context-added";
 export const EGRESS_PROOF_HEADER = "x-itx-egress-proof";
@@ -24,7 +20,7 @@ export async function appendSyntheticProviderOutput(
 ): Promise<{ assistantContext: StreamEvent; llmRequestOffset: number }> {
   const model = "e2e/synthetic-provider";
   // `offset` is the Stream DO's hidden optimistic assertion. Keeping the
-  // whole lifecycle in one asserted append means no subscriber can observe a
+  // whole lifecycle in one asserted append means no processor callback can observe a
   // bare requested event and start a real provider attempt in the gap. The
   // generated public type omits this expert-only assertion intentionally, so
   // this e2e helper contains the one local cast.
@@ -85,49 +81,6 @@ export async function appendSyntheticProviderOutput(
     }
   }
   throw new Error("Synthetic provider output exhausted its offset retries.");
-}
-
-// Not exported: only the processor class below crosses module boundaries;
-// the contract value/type stay internal (knip flags unused exports).
-const ProjectWorkerForwardingProbeContract = defineProcessorContract({
-  slug: "minimal-itx-v4.project-worker-forwarding-probe",
-  version: "0.1.0",
-  description:
-    "Records project worker processEventBatch deliveries observed through an itx stream.",
-  stateSchema: z.object({
-    childPaths: z.array(z.string()).default([]),
-    markers: z.array(z.string()).default([]),
-  }),
-  events: {
-    [PROJECT_WORKER_FORWARDED_EVENT_TYPE]: {
-      payloadSchema: z.object({
-        childPath: z.string(),
-        marker: z.string(),
-        originalType: z.string(),
-      }),
-    },
-  },
-  consumes: [PROJECT_WORKER_FORWARDED_EVENT_TYPE],
-  emits: [],
-});
-type ProjectWorkerForwardingProbeContract = typeof ProjectWorkerForwardingProbeContract;
-export type ProjectWorkerForwardingProbeState = {
-  childPaths: string[];
-  markers: string[];
-};
-
-export class ProjectWorkerForwardingProbeProcessor extends StreamProcessor<ProjectWorkerForwardingProbeContract> {
-  readonly contract = ProjectWorkerForwardingProbeContract;
-
-  protected override reduce({
-    event,
-    state,
-  }: Parameters<StreamProcessor<ProjectWorkerForwardingProbeContract>["reduce"]>[0]) {
-    return {
-      childPaths: [...state.childPaths, event.payload.childPath],
-      markers: [...state.markers, event.payload.marker],
-    };
-  }
 }
 
 function parseBody(body: string, contentType: string | string[] | undefined): Record<string, any> {

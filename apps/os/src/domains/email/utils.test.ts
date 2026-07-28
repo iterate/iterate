@@ -10,6 +10,7 @@ import {
   emailAgentPath,
   emailThreadReplyAddress,
   isEmailAgentPath,
+  normalizeInboundEmailAllowedSender,
   normalizeMessageId,
   parseInboundRecipient,
   parseMessageIdList,
@@ -118,6 +119,22 @@ describe("senderMatchesAllowlist", () => {
   ])("$name", ({ address, patterns, expected }) => {
     expect(senderMatchesAllowlist({ address, patterns })).toBe(expected);
   });
+});
+
+describe("normalizeInboundEmailAllowedSender", () => {
+  test("canonicalizes exact addresses and whole-domain rules", () => {
+    expect(normalizeInboundEmailAllowedSender(" Jonas@Example.COM ")).toBe("jonas@example.com");
+    expect(normalizeInboundEmailAllowedSender("*@Iterate.COM")).toBe("*@iterate.com");
+  });
+
+  test.for(["jonas", "@example.com", "jo*@example.com", "*@localhost", "jonas@"])(
+    "rejects unsupported pattern %s",
+    (pattern) => {
+      expect(() => normalizeInboundEmailAllowedSender(pattern)).toThrow(
+        /exact address or \*@domain/,
+      );
+    },
+  );
 });
 
 describe("dmarcPasses", () => {

@@ -3,8 +3,8 @@ import type { AgentUiPresenceEntry } from "@iterate-com/ui/components/events/age
 import { presenceLabel } from "./stream-presence.ts";
 
 const browserPresence = (user: { email: string; name?: string }): AgentUiPresenceEntry => ({
-  subscriptionKey: "browser:tab-1",
-  direction: "inbound",
+  connectionKey: "browser:tab-1",
+  connectionKind: "session",
   connected: true,
   description: "browser",
   user,

@@ -21,7 +21,7 @@ import {
   compileBangCommand,
   eyesReactionTargetFromWebhookPayload,
 } from "./slack-agent-processor-implementation.ts";
-import type { SlackAgentProcessorContract } from "./slack-agent-processor-contract.ts";
+import { SlackAgentProcessorContract } from "./slack-agent-processor-contract.ts";
 
 type AgentEventInput = ConsumedInput<SlackAgentProcessorContract>;
 
@@ -1061,7 +1061,7 @@ describe("SlackAgentProcessor", () => {
     expect(h.events("events.iterate.com/capability-host/script-run-requested")).toHaveLength(1);
 
     const replay = makeSlackAgentHarness({
-      substrate: { ...h.substrate, progress: makeMemoryProgressStore() },
+      substrate: { ...h.substrate, progress: makeMemoryProgressStore(SlackAgentProcessorContract) },
     });
     await replay.settle(); // replays the whole stream; a wedge would throw here
 

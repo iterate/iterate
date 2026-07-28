@@ -30,7 +30,7 @@ export function useBrowserStreamMetrics(store: {
   const [view, setView] = useState<BrowserStreamMetricsView>({
     spark: [],
     transportRttMs: null,
-    subscriber: undefined,
+    eventConsumption: undefined,
   });
 
   useEffect(() => {
@@ -100,7 +100,7 @@ export function presenceLabel(entry: AgentUiPresenceEntry): string {
     entry.user?.email ??
     entry.processor?.slug ??
     entry.description ??
-    entry.subscriptionKey
+    entry.connectionKey
   );
 }
 

@@ -14,15 +14,15 @@ import {
  * Enrollment happens in the device Durable Object: it stores the Expo push
  * token in a write-only Secret and appends `device/created` carrying only the
  * Secret's path and update offset — the token never rides this stream. The
- * created event's per-event lane cross-posts the birth fact to the project
+ * created event's per-event lane copies the birth fact to the project
  * root stream (the catalog the project processor lists devices from) and
  * configures a notification-intent subscription there, so every project-level
  * `notification/requested` intent is copied onto this device stream.
- * `push-token-updated` re-arms that subscription (re-enrollment also clears a
+ * `push-token-updated` re-arms that rule (re-enrollment also clears a
  * standing revocation); `device/revoked` removes it.
  *
  * A push obligation opens when a `device/notification-requested` (direct) or
- * `notification/requested` (cross-posted intent) event reduces into
+ * `notification/requested` (copied intent) event reduces into
  * `state.notifications`, keyed by the requesting event's OFFSET — the
  * obligation's identity; there are no synthetic ids anywhere, and every later
  * fact points back with that requestOffset.
@@ -74,7 +74,7 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
   // The side-effect lanes are chosen HERE, at the dispatch site, never inside
   // helpers:
   //
-  // - PER-EVENT consequences (the created/updated/revoked cross-posts to the
+  // - PER-EVENT consequences (the created/updated/revoked copies to the
   //   project root stream) use `blockProcessorWhile`: each rides an event
   //   delivered once — a dropped append would lose the catalog entry or leave
   //   the intent subscription wrong forever.
@@ -95,8 +95,8 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
               idempotencyKey: this.idempotencyKey("catalog-created", event),
               payload: event.payload,
             },
-            notificationIntentCrossPost({
-              idempotencyKey: this.idempotencyKey("notification-intent-cross-post", event),
+            notificationIntentSubscriptionEvent({
+              idempotencyKey: this.idempotencyKey("notification-intent-subscription", event),
               path: this.path,
             }),
           ),
@@ -106,8 +106,8 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
         blockProcessorWhile(() =>
           appendTo(
             "/",
-            notificationIntentCrossPost({
-              idempotencyKey: this.idempotencyKey("notification-intent-cross-post", event),
+            notificationIntentSubscriptionEvent({
+              idempotencyKey: this.idempotencyKey("notification-intent-subscription", event),
               path: this.path,
             }),
           ),
@@ -117,8 +117,11 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
         blockProcessorWhile(() =>
           appendTo("/", {
             type: "events.iterate.com/stream/subscription-removed",
-            idempotencyKey: this.idempotencyKey("notification-intent-cross-post-removed", event),
-            payload: { subscriptionKey: `notification-intent:${this.path}` },
+            idempotencyKey: this.idempotencyKey("notification-intent-subscription-removed", event),
+            payload: {
+              subscriptionKey: `notification-intent:${this.path}`,
+              reason: "requested",
+            },
           }),
         );
         break;
@@ -575,24 +578,27 @@ type DeviceProcessorDeps = {
 // -----------------------------------------------------------------------------
 
 /**
- * The notification-intent subscription on the project root stream: copies
+ * The notification-intent subscription on the project root stream: sends
  * every project-level `notification/requested` intent onto this device's
  * stream, where it reduces into a push obligation. Keyed per device path, so
- * created/updated re-arms converge on one subscription.
+ * created/updated re-arms converge on one rule.
  */
-function notificationIntentCrossPost(input: { idempotencyKey: string; path: string }) {
+function notificationIntentSubscriptionEvent(input: { idempotencyKey: string; path: string }) {
   return {
     type: "events.iterate.com/stream/subscription-configured" as const,
     idempotencyKey: input.idempotencyKey,
     payload: {
       subscriptionKey: `notification-intent:${input.path}`,
-      description: `Copies project notification intents to ${input.path} for device-owned delivery.`,
-      selector: { eventTypes: ["events.iterate.com/notification/requested"] },
-      delivery: {
-        mode: "push" as const,
-        expression: ["streams", ["get", input.path], "acceptCrossPost"],
+      description: `Delivers project notification intents to ${input.path} for device-owned delivery.`,
+      filter: { eventTypes: ["events.iterate.com/notification/requested"] },
+      receiver: {
+        action: "copy-to-stream" as const,
+        receivingStreamPath: input.path,
+        delivery: {
+          start: "now" as const,
+          onFailingEvent: "halt" as const,
+        },
       },
-      deliver: "new" as const,
     },
   };
 }

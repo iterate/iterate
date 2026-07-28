@@ -1,5 +1,5 @@
 // `iterate/processors/cloudflare` — the Durable-Object HOSTING layer:
-// the per-DO registry (alarm multiplex, wake handshake, live-state assembly)
+// the per-DO registry (alarm scheduling, processor wake response, live-state assembly)
 // and the DO-backed durability adapters (KV progress store, keepalive
 // recovery). Split from the pure `iterate/processors` entry because this is
 // the only layer that touches the Cloudflare runtime (`cloudflare:workers`

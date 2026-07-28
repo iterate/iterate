@@ -543,7 +543,7 @@ function telegramWebhookAgentInput(
     lines.push(
       "",
       // The taught read is FILTERED to the two conversation event types — an
-      // unfiltered getEvents returns the OLDEST raw events (subscriber/llm
+      // unfiltered getEvents returns the OLDEST raw events (connection and LLM
       // plumbing), which is how a live agent failed to recover a thread.
       `IMPORTANT: this message REPLIES to a message from a different thread: ${replyHintPath} (resolved by ${readString(replyHint?.resolvedBy) ?? "unknown"}). Before answering — and before any other exploration — read that thread's transcript: await itx.streams.get(${JSON.stringify(replyHintPath)}).getEvents({ eventTypes: ["events.iterate.com/telegram/webhook-received", "events.iterate.com/telegram/send-requested"] }) (user text is in payload.body.message.text, your earlier replies in payload.text; if exactly 500 events come back, repeat with afterOffset: events.at(-1).offset to reach the recent end). Then answer in THAT thread by appending your send request to that stream instead of this one, or answer here — your judgement, but only after reading it.`,
     );

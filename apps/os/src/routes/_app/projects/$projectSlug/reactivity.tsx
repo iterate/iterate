@@ -5,9 +5,9 @@ import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   useItx,
-  useItxSubscription,
+  useStreamConnection,
   useLiveState,
-  type ItxSubscriptionStatus,
+  type ItxConnectionStatus,
 } from "iterate/sdk/itx/react";
 import type { StreamEvent } from "iterate/processors";
 import { breadcrumbStaticData } from "~/lib/route-breadcrumbs.ts";
@@ -33,19 +33,19 @@ type ReactivityTestStreamState = {
   batchCount: number;
   error?: string;
   events: ReactivityTestEvent[];
-  status: ItxSubscriptionStatus;
+  status: ItxConnectionStatus;
 };
 
 /**
  * Live raw-EVENT subscription — the lane that stays separate from live state.
- * Recovery is all `useItxSubscription`'s; this hook only accumulates delivered
+ * Recovery is all `useStreamConnection`'s; this hook only accumulates delivered
  * events, deduped by offset so a re-subscription's replay is idempotent.
  */
 function useReactivityTestStream(): ReactivityTestStreamState {
   const [feed, setFeed] = useState({ batchCount: 0, events: [] as ReactivityTestEvent[] });
-  const subscription = useItxSubscription(
+  const subscription = useStreamConnection(
     (itx) =>
-      itx.streams.get(REACTIVITY_TEST_STREAM_PATH).subscribe({
+      itx.streams.get(REACTIVITY_TEST_STREAM_PATH).openConnection({
         replayAfterOffset: 0,
         processEventBatch: (batch: { events: StreamEvent[] }) => {
           const events = (batch.events || [])

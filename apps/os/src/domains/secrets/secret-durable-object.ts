@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { LiveStateRpcTarget } from "iterate/sdk/capnweb";
 import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
-import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
+import type { StreamProcessorWakeRequest, StreamProcessorWakeResponse } from "iterate/processors";
 import { isStreamOffsetConflictError } from "iterate/processors";
 import type { StreamEventInput } from "iterate/processors";
 import type { ProcessorState } from "iterate/processors";
@@ -20,6 +20,7 @@ import { secretCreationEvents } from "./secret-defaults.ts";
 import type {
   SecretCreateInput,
   SecretDescription,
+  SecretProjectSeedExport,
   SecretRefresh,
   SecretUpdateInput,
 } from "./types.ts";
@@ -88,7 +89,7 @@ export class SecretDurableObject extends DurableObject<Env> {
   // The DO constructs the processor — no host-injected readState/writeState/
   // keepAliveWhile deps; the runner owns durable progress and keepalive. NO
   // recovery on purpose: the processor's only side effect (the secret/created
-  // catalog cross-post) is a blocked per-event append — the cursor holds until
+  // catalog copy) is a blocked per-event append — the cursor holds until
   // it commits, so an eviction just redelivers the event; there is no
   // runInBackground work an eviction could lose (see the registry module
   // doc's rule).
@@ -115,8 +116,8 @@ export class SecretDurableObject extends DurableObject<Env> {
   // public stream appends remain concurrent and are handled by the assertion.
   #updates: Promise<void> = Promise.resolve();
 
-  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
-    return this.#registry.wakeStreamSubscriber(args);
+  wakeStreamProcessor(args: StreamProcessorWakeRequest): Promise<StreamProcessorWakeResponse> {
+    return this.#registry.wakeStreamProcessor(args);
   }
 
   /** The registry's shared DO alarm (runner keepalives) — see stream-processor-registry.ts. */
@@ -378,6 +379,27 @@ export class SecretDurableObject extends DurableObject<Env> {
     // read-your-writes even when the configured subscription's wake is slow
     // or was dropped.
     return describeSecretState(await this.#snapshot());
+  }
+
+  /**
+   * Operator-only recovery input. The public Secret RPC checks admin authority
+   * before calling this method. It returns the current encrypted cell, not
+   * plaintext and not stream history.
+   */
+  async exportForProjectSeed(): Promise<SecretProjectSeedExport> {
+    const state = await this.#snapshot();
+    assertSecretCreated(state, this.#name.path);
+    if (state.encryptedMaterial === null) {
+      throw new Error(`secret has no material: ${this.#name.path}`);
+    }
+    const { offset, ...encrypted } = state.encryptedMaterial;
+    return {
+      egressUrls: state.egress.urls,
+      encrypted,
+      offset,
+      refresh: state.refresh,
+      visibility: state.birthCertificate!.config.visibility,
+    };
   }
 
   /**
@@ -816,7 +838,7 @@ export class SecretDurableObject extends DurableObject<Env> {
   async #commitRefreshedMaterial(material: unknown, snapshot: SecretSnapshot): Promise<void> {
     let current = snapshot;
     for (let attempt = 1; attempt <= MAX_MATERIAL_APPEND_ATTEMPTS; attempt += 1) {
-      // Offset-only stream facts (subscriber connection telemetry, wake facts,
+      // Offset-only stream facts (callback-connection telemetry, processor wake facts,
       // or concurrent audit events) may advance the raw stream while a token
       // is being minted. They do not invalidate the refresh. A real secret
       // update does: updatedOffset covers material, egress, and refresh policy.

@@ -121,7 +121,7 @@ describe("connectTelegram", () => {
       material: BOT_TOKEN,
     });
 
-    // Explicit router birth, its processor subscription, then the connected
+    // Explicit router-created event, its processor subscription, then the connected
     // fact on the connection stream; the directory claim (botId → project +
     // connection) is the independent ingress-routing projection.
     const journal = network.streams.get(

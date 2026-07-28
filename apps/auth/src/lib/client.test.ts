@@ -22,6 +22,30 @@ it("starts a Google login that requires account selection", async () => {
   });
 });
 
+it("ends only the current app session before switching accounts", async () => {
+  using browser = installBrowserLocation("https://os.iterate.com/projects/old-project");
+  const client = createIterateAuthClient();
+
+  await client.login({
+    returnTo: "https://os.iterate.com/projects",
+    prompt: "select_account",
+    replaceCurrentSession: true,
+  });
+
+  const logoutUrl = new URL(browser.href);
+  assert.equal(logoutUrl.origin, "https://os.iterate.com");
+  assert.equal(logoutUrl.pathname, "/api/iterate-auth/logout");
+  assert.equal(logoutUrl.searchParams.get("global"), "false");
+
+  const loginUrl = new URL(logoutUrl.searchParams.get("return_to") ?? "");
+  assert.equal(loginUrl.origin, "https://os.iterate.com");
+  assert.equal(loginUrl.pathname, "/api/iterate-auth/login");
+  assert.deepEqual(Object.fromEntries(loginUrl.searchParams), {
+    return_to: "https://os.iterate.com/projects",
+    prompt: "select_account",
+  });
+});
+
 function installBrowserLocation(href: string) {
   const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
   const location = { href, origin: new URL(href).origin };

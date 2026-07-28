@@ -1,7 +1,7 @@
 /**
  * An OS deployment's `/api` WebSocket URL from its http(s) base — the ONE
  * place that knows the path and the ws/wss protocol swap, shared by the
- * session keeper and the node one-shot dial.
+ * shared session and the one-shot Node client.
  */
 export function apiWebSocketUrl(baseUrl: string): URL {
   const base = baseUrl.trim().replace(/\/+$/, "");

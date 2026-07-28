@@ -134,7 +134,7 @@ type AgentCatalogTimestamps = z.infer<typeof AgentCatalogTimestamps>;
 
 /** One entry in the collection processor's durable agent database. Every
  * field is reducible from the collection's deliberately narrow created +
- * summary event subscription. */
+ * summary-event subscription. */
 export const AgentCatalogRecord = z.strictObject({
   path: AgentPath,
   summary: AgentSummary,

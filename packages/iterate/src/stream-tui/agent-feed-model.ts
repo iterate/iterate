@@ -1,7 +1,7 @@
 /**
  * In-memory agent conversation feed for the chat TUI.
  *
- * This is the node-side sibling of the browser mirror's feed projector
+ * This is the node-side sibling of the browser database's feed projector
  * (apps/os/src/domains/streams/client-libraries/processors/browser-feed):
  * both fold the SAME shared reducer (`reduceAgentUi` from @iterate-com/ui)
  * over agent stream events. The browser persists settled items into SQLite for

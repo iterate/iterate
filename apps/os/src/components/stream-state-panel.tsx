@@ -28,21 +28,35 @@ import { useTickingNowMs } from "~/lib/use-ticking-now-ms.ts";
 import {
   presenceColorClasses,
   presenceInitials,
-  presenceLabel,
   sparklinePoints,
   type BrowserStreamMetricsView,
 } from "~/lib/stream-presence.ts";
+
+type PresenceAvatarEntry = Pick<
+  AgentUiPresenceEntry,
+  "connected" | "description" | "processor" | "user"
+> &
+  ({ connectionKey: string } | { key: string });
+
+function eventReceiverLabel(entry: PresenceAvatarEntry): string {
+  return (
+    entry.processor?.slug ??
+    entry.description ??
+    ("connectionKey" in entry ? entry.connectionKey : entry.key)
+  );
+}
 
 export function PresenceAvatar({
   entry,
   busy,
   className,
 }: {
-  entry: AgentUiPresenceEntry;
+  entry: PresenceAvatarEntry;
   busy: boolean;
   className?: string;
 }) {
-  const label = presenceLabel(entry);
+  const label = eventReceiverLabel(entry);
+  const initialsLabel = entry.user?.name ?? entry.user?.email ?? label;
   return (
     <Tooltip>
       <TooltipTrigger
@@ -50,7 +64,7 @@ export function PresenceAvatar({
       >
         {entry.user?.picture ? <AvatarImage src={entry.user.picture} alt="" /> : null}
         <AvatarFallback className={cn("text-[9px] font-bold", presenceColorClasses(label))}>
-          {presenceInitials(label)}
+          {presenceInitials(initialsLabel)}
         </AvatarFallback>
         <span
           className={cn(
@@ -66,7 +80,7 @@ export function PresenceAvatar({
       <TooltipContent side="bottom" className="max-w-80">
         {entry.user == null ? (
           <span>
-            {entry.processor == null ? `${label} subscriber` : `${entry.processor.slug} processor`}
+            {entry.processor == null ? `${label} callback` : `${entry.processor.slug} processor`}
           </span>
         ) : (
           <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-0.5 text-left">
@@ -89,57 +103,56 @@ export function PresenceAvatar({
 
 /**
  * The Stream state sheet: the stream's vitals (age, storage, events, live
- * throughput/latency) plus every subscriber — with REAL RTT/lag pushed from
+ * throughput/latency) plus every live callback and durable subscription — with REAL RTT/lag pushed from
  * the stream's runtime LiveState while this sheet is open. Clicking a
- * subscriber drills into its announced contract and self-reported metrics.
+ * receiver drills into its announced contract and self-reported metrics.
  */
-/**
- * Desired-state slice of a durable subscription, lifted from the latest
- * `subscription-configured` fact. Enough for the panel to explain a cross-post
- * or webhook in human terms without re-fetching the event log.
- */
-type ConfiguredSubscriberDetails = {
-  deliveryMode: "wake" | "push" | "webhook";
+/** Stored instruction for sending matching events to one receiver. */
+type SubscriptionDetails = {
+  subscriptionAction: "processor-wake" | "copy-to-stream" | "itx-call" | "webhook-post";
   configuredAtOffset?: number;
+  halted?: {
+    reason: "delivery-failed";
+    afterOffset: number;
+    attempts: number;
+    error?: string;
+  };
   /** The delivery target as the itx call (or webhook POST) it actually is. */
   deliveryLabel?: string;
+  /** Destination path for a copy. */
+  destinationStream?: string;
   /**
-   * Destination stream path when this is a cross-post
-   * (`…acceptCrossPost` push expression).
-   */
-  crossPostDestination?: string;
-  /**
-   * Optional operator-facing note from the subscription-configured payload
+   * Optional operator-facing note from the subscription payload
    * (why this subscription exists). Distinct from the delivery label used as
    * the row title.
    */
   note?: string;
-  /** Selector event types; absent means every type. */
+  /** Filter event types; absent means every type. */
   eventTypes?: string[];
   /** Optional JSONata filter over the whole event. */
-  condition?: string;
-  /** Optional JSONata constructor for the copied event body (cross-post). */
-  transform?: string;
-  deliver?: "all" | "new" | { afterOffset: number };
-  onPoison?: "park" | "skip";
+  jsonataCondition?: string;
+  /** Optional JSONata constructor shaping the delivered event body (copy, ITX call, webhook). */
+  jsonataTransform?: string;
+  start?: "beginning" | "now";
+  onFailingEvent?: "halt" | "skip";
   webhookUrl?: string;
 };
 
 type ProcessorPanelEntry = {
-  subscriptionKey: string;
-  kind: "core" | "processor" | "subscriber" | "consumer";
+  key: string;
+  rowKind: "core-processor" | "processor-wake" | "durable-subscription" | "live-callback";
   connected: boolean;
-  direction: "inbound" | "outbound";
   description?: string;
   user?: AgentUiPresenceEntry["user"];
   processor?: AgentUiProcessorAnnouncement;
-  subscriptionType?: "configured" | "ephemeral";
-  deliveryMode?: "wake" | "push" | "webhook";
+  connectionKind?: "hosted" | "session";
+  subscriptionAction?: SubscriptionDetails["subscriptionAction"];
   configuredAtOffset?: number;
-  /** Full configured payload details when this entry is a durable subscription. */
-  config?: ConfiguredSubscriberDetails;
-  runtimeSubscription?: StreamRuntimeDebugState["runtime"]["subscriptions"][string];
+  /** Full configured payload details when this entry comes from a subscription. */
+  config?: SubscriptionDetails;
+  subscriptionProgress?: StreamRuntimeDebugState["runtime"]["subscriptions"][string];
   runtimeConnection?: StreamRuntimeDebugState["runtime"]["connections"][string];
+  receivingStreamPath?: string;
 };
 
 const CORE_PROCESSOR_KEY = "__stream-core__";
@@ -147,22 +160,23 @@ const CORE_PROCESSOR_ANNOUNCEMENT: AgentUiProcessorAnnouncement = {
   slug: "core",
   version: "0.1.0",
   description:
-    "Maintains the stream's own reduced state: head offset, child streams, durable subscriptions, presence, pause state, and append circuit breaker.",
+    "Maintains the stream's own reduced state: head offset, child streams, subscriptions, pause state, and append circuit breaker.",
   consumes: ["*"],
   emits: [
-    "events.iterate.com/stream/subscriber-connected",
-    "events.iterate.com/stream/subscriber-disconnected",
+    "events.iterate.com/stream/connection-opened",
+    "events.iterate.com/stream/connection-closed",
     "events.iterate.com/stream/subscription-configured",
-    "events.iterate.com/stream/subscription-parked",
-    "events.iterate.com/stream/subscription-resumed",
+    "events.iterate.com/stream/subscription-delivery-halted",
+    "events.iterate.com/stream/subscription-delivery-resumed",
   ],
   ownedEvents: [
     { type: "events.iterate.com/stream/created" },
     { type: "events.iterate.com/stream/woken" },
     { type: "events.iterate.com/stream/configured" },
     { type: "events.iterate.com/stream/subscription-configured" },
-    { type: "events.iterate.com/stream/subscriber-connected" },
-    { type: "events.iterate.com/stream/subscriber-disconnected" },
+    { type: "events.iterate.com/stream/subscription-removed" },
+    { type: "events.iterate.com/stream/connection-opened" },
+    { type: "events.iterate.com/stream/connection-closed" },
     { type: "events.iterate.com/stream/paused" },
     { type: "events.iterate.com/stream/resumed" },
   ],
@@ -191,7 +205,7 @@ export function StreamStatePanel({
   metrics: BrowserStreamMetricsView;
   eventCount: number;
   busy: boolean;
-  /** Subscription key of the focused processor (URL-backed); null = overview. */
+  /** Connection or subscription key of the focused row; null = overview. */
   focusedKey: string | null;
   onFocus: (subscriptionKey: string) => void;
   onBack: () => void;
@@ -218,11 +232,11 @@ export function StreamStatePanel({
     [streamPath],
     { enabled: open && projectId === null },
   );
-  const streamRuntimeSubscription =
+  const streamRuntimeLiveState =
     projectId === null ? deploymentStreamRuntime : projectStreamRuntime;
-  const streamRuntime = streamRuntimeSubscription.value;
-  const streamRuntimeError = streamRuntimeSubscription.error;
-  const streamRuntimeFetching = streamRuntimeSubscription.status === "connecting";
+  const streamRuntime = streamRuntimeLiveState.value;
+  const streamRuntimeError = streamRuntimeLiveState.error;
+  const streamRuntimeFetching = streamRuntimeLiveState.status === "connecting";
   const streamMaxOffset = readNumber(streamRuntime?.coreProcessorState, "maxOffset");
   const entries = useMemo(
     () => buildProcessorPanelEntries(presence, streamRuntime),
@@ -230,25 +244,25 @@ export function StreamStatePanel({
   );
   // A stale or never-connected key (e.g. after a reconnect) falls back to the
   // overview rather than a blank detail pane.
-  const focused = entries.find((entry) => entry.subscriptionKey === focusedKey) ?? null;
-  const focusedSubscriptionKey = focused?.subscriptionKey ?? null;
-  const focusedKind = focused?.kind ?? null;
+  const focused = entries.find((entry) => entry.key === focusedKey) ?? null;
+  const focusedEntryKey = focused?.key ?? null;
+  const focusedKind = focused?.rowKind ?? null;
   const focusedConnected = focused?.connected ?? false;
   const [runtimeStateLoad, setRuntimeStateLoad] = useState<ProcessorRuntimeStateLoad>({
     status: "idle",
   });
   const [refreshKey, setRefreshKey] = useState(0);
   const focusedRuntimeStateLoad = useMemo<ProcessorRuntimeStateLoad>(() => {
-    if (focusedSubscriptionKey == null) return { status: "idle" };
+    if (focusedEntryKey == null) return { status: "idle" };
 
-    if (focusedKind === "core") {
+    if (focusedKind === "core-processor") {
       // Error first: the LiveState hook deliberately keeps its last value through
       // reconnects, but a drill-in must still surface the transport failure
       // instead of silently presenting that retained value as current.
       if (streamRuntimeError !== undefined) {
         return {
           status: "error",
-          subscriptionKey: focusedSubscriptionKey,
+          subscriptionKey: focusedEntryKey,
           message: streamRuntimeError,
         };
       }
@@ -256,44 +270,44 @@ export function StreamStatePanel({
         const coreState = streamRuntime.coreProcessorState;
         return {
           status: "loaded",
-          subscriptionKey: focusedSubscriptionKey,
+          subscriptionKey: focusedEntryKey,
           runtimeState: {
             snapshot: { offset: readNumber(coreState, "maxOffset") ?? 0, state: coreState },
             runtime: streamRuntime.runtime,
           },
         };
       }
-      return { status: "loading", subscriptionKey: focusedSubscriptionKey };
+      return { status: "loading", subscriptionKey: focusedEntryKey };
     }
 
     return runtimeStateLoad.status !== "idle" &&
-      runtimeStateLoad.subscriptionKey === focusedSubscriptionKey
+      runtimeStateLoad.subscriptionKey === focusedEntryKey
       ? runtimeStateLoad
-      : { status: "loading", subscriptionKey: focusedSubscriptionKey };
-  }, [focusedKind, focusedSubscriptionKey, runtimeStateLoad, streamRuntime, streamRuntimeError]);
+      : { status: "loading", subscriptionKey: focusedEntryKey };
+  }, [focusedKind, focusedEntryKey, runtimeStateLoad, streamRuntime, streamRuntimeError]);
 
   useEffect(() => {
-    if (!open || focusedSubscriptionKey == null || focusedKind === "core") {
+    if (!open || focusedEntryKey == null || focusedKind === "core-processor") {
       return;
     }
 
     if (!focusedConnected) {
       setRuntimeStateLoad({
         status: "loaded",
-        subscriptionKey: focusedSubscriptionKey,
+        subscriptionKey: focusedEntryKey,
         runtimeState: null,
       });
       return;
     }
 
     let disposed = false;
-    setRuntimeStateLoad({ status: "loading", subscriptionKey: focusedSubscriptionKey });
-    void getProcessorRuntimeState(focusedSubscriptionKey)
+    setRuntimeStateLoad({ status: "loading", subscriptionKey: focusedEntryKey });
+    void getProcessorRuntimeState(focusedEntryKey)
       .then((runtimeState) => {
         if (!disposed) {
           setRuntimeStateLoad({
             status: "loaded",
-            subscriptionKey: focusedSubscriptionKey,
+            subscriptionKey: focusedEntryKey,
             runtimeState,
           });
         }
@@ -302,7 +316,7 @@ export function StreamStatePanel({
         if (!disposed) {
           setRuntimeStateLoad({
             status: "error",
-            subscriptionKey: focusedSubscriptionKey,
+            subscriptionKey: focusedEntryKey,
             message: error instanceof Error ? error.message : String(error),
           });
         }
@@ -311,14 +325,7 @@ export function StreamStatePanel({
     return () => {
       disposed = true;
     };
-  }, [
-    focusedConnected,
-    focusedKind,
-    focusedSubscriptionKey,
-    getProcessorRuntimeState,
-    open,
-    refreshKey,
-  ]);
+  }, [focusedConnected, focusedKind, focusedEntryKey, getProcessorRuntimeState, open, refreshKey]);
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -328,7 +335,7 @@ export function StreamStatePanel({
         className="flex h-full w-full flex-col gap-0 p-0 data-[side=right]:sm:w-[56vw] data-[side=right]:sm:max-w-[92vw]"
       >
         <SheetTitle className="sr-only">
-          {focused == null ? "Stream state" : `Subscriber ${presenceLabel(focused)}`}
+          {focused == null ? "Stream state" : `Event receiver ${eventReceiverLabel(focused)}`}
         </SheetTitle>
         {focused == null ? (
           <ProcessorsOverview
@@ -340,7 +347,7 @@ export function StreamStatePanel({
             onFocus={onFocus}
             onClose={onClose}
             onClearClientDatabase={onClearClientDatabase}
-            onRefreshStreamRuntime={streamRuntimeSubscription.refresh}
+            onRefreshStreamRuntime={streamRuntimeLiveState.refresh}
             streamRuntimeFetching={streamRuntimeFetching}
             streamRuntimeError={streamRuntimeError}
             streamRuntime={streamRuntime}
@@ -353,8 +360,8 @@ export function StreamStatePanel({
             runtimeStateLoad={focusedRuntimeStateLoad}
             streamMaxOffset={streamMaxOffset}
             onRefreshRuntimeState={() => {
-              if (focused.kind === "core") {
-                streamRuntimeSubscription.refresh();
+              if (focused.rowKind === "core-processor") {
+                streamRuntimeLiveState.refresh();
               } else {
                 setRefreshKey((key) => key + 1);
               }
@@ -411,7 +418,7 @@ function ProcessorsOverview({
   const [graphMode, setGraphMode] = useState<"throughput" | "latency">("throughput");
   const sections = processorEntrySections(entries);
   const rtt = metrics.transportRttMs;
-  const subscriber = metrics.subscriber;
+  const eventConsumption = metrics.eventConsumption;
   const throughputSnapshot = streamRuntime?.runtime.metrics;
   const throughputReportedAtMs = Date.parse(throughputSnapshot?.reportedAt ?? "");
   const canAgeThroughput =
@@ -441,7 +448,9 @@ function ProcessorsOverview({
       <div className="flex shrink-0 items-center gap-2 px-5 pb-2 pt-4">
         <div className="min-w-0 flex-1">
           <div className="text-base font-semibold">Stream state</div>
-          <div className="text-xs text-muted-foreground">vitals · metrics · subscribers</div>
+          <div className="text-xs text-muted-foreground">
+            vitals · metrics · callbacks & subscriptions
+          </div>
         </div>
         <PanelCloseButton onClose={onClose} />
       </div>
@@ -469,7 +478,7 @@ function ProcessorsOverview({
             />
             <MetricStat
               label="storage"
-              title="Stream Durable Object SQLite size (event log + delivery spine)"
+              title="Stream Durable Object SQLite size (event log + sending cursors)"
               value={storageSizeBytes === undefined ? "—" : formatFileSize(storageSizeBytes)}
             />
             <MetricStat
@@ -483,7 +492,7 @@ function ProcessorsOverview({
             />
             <MetricStat
               label="out · 5s"
-              title="Bytes delivered to all subscribers per second, trailing 5s"
+              title="Bytes sent through all callbacks and subscriptions per second, trailing 5s"
               value={
                 throughput === undefined
                   ? "—"
@@ -494,18 +503,18 @@ function ProcessorsOverview({
               label="append · last"
               title="Most recent append call → commit acknowledged (this browser's own appends)"
               value={
-                subscriber?.appendRoundTripMs == null
+                eventConsumption?.appendRoundTripMs == null
                   ? "—"
-                  : `${subscriber.appendRoundTripMs.last}ms`
+                  : `${eventConsumption.appendRoundTripMs.last}ms`
               }
             />
             <MetricStat
               label="own loop · last"
-              title="Most recent append call → this browser's own subscription ingested the committed event"
+              title="Most recent append call → this browser's event connection received the committed event"
               value={
-                subscriber?.consumeOwnAppendMs == null
+                eventConsumption?.consumeOwnAppendMs == null
                   ? "—"
-                  : `${subscriber.consumeOwnAppendMs.last}ms`
+                  : `${eventConsumption.consumeOwnAppendMs.last}ms`
               }
             />
             <MetricStat
@@ -677,10 +686,10 @@ function ProcessorEntrySection({
         ) : (
           entries.map((entry) => (
             <ProcessorEntryButton
-              key={entry.subscriptionKey}
+              key={entry.key}
               entry={entry}
               busy={busy}
-              focused={entry.subscriptionKey === focusedKey}
+              focused={entry.key === focusedKey}
               onFocus={onFocus}
             />
           ))
@@ -701,32 +710,31 @@ function ProcessorEntryButton({
   focused: boolean;
   onFocus: (subscriptionKey: string) => void;
 }) {
-  // Real numbers only: the ping RTT when the subscriber answers pings, else
-  // the last commit→settled sample (wake). Push/webhook subscribers never
-  // hold a live connection, so their delivery-call duration shows regardless
+  // Real numbers only: the ping RTT when the callback owner answers pings, else
+  // the last commit→settled sample (hosted processor). Source-owned receivers
+  // never hold a live connection, so their delivery-call duration shows regardless
   // of `connected` — it's the last acked delivery's real round trip. "—"
   // until data exists — never a synthesized value.
   const rttMs =
     (entry.connected
       ? (entry.runtimeConnection?.pingRttMs?.last ??
-        entry.runtimeConnection?.settleLatencyMs?.last ??
+        entry.runtimeConnection?.completionLatencyMs?.last ??
         null)
       : null) ??
-    entry.runtimeSubscription?.deliveryDurationMs?.last ??
+    entry.subscriptionProgress?.deliveryDurationMs?.last ??
     null;
-  // Live connection cursor first: the wake lane's spine row is an
-  // OBSERVATIONAL watermark that deliberately goes stale while a connection
-  // streams (see stream-subscribers.ts #poke), so a healthy connected
-  // processor would otherwise show a scary fake backlog. The subscription
-  // row's lag is the real number for the lanes without a live connection.
+  // Live connection progress first: while its callback stays open, the source
+  // sends batches without rewriting the hosted processor's durable checkpoint.
+  // That checkpoint is only used when the source must call the processor again,
+  // so showing it here would make a healthy open connection look behind.
   const lag =
-    entry.kind === "core"
+    entry.rowKind === "core-processor"
       ? "0"
-      : (entry.runtimeConnection?.lag ?? entry.runtimeSubscription?.lag ?? null);
+      : (entry.runtimeConnection?.lag ?? entry.subscriptionProgress?.lag ?? null);
   return (
     <button
       type="button"
-      onClick={() => onFocus(entry.subscriptionKey)}
+      onClick={() => onFocus(entry.key)}
       className={cn(
         "grid w-full grid-cols-[minmax(0,1fr)_52px_44px] items-start gap-1.5 rounded-xl px-3 py-2 text-left hover:bg-muted/40",
         focused && "bg-muted/60 ring-1 ring-inset ring-border",
@@ -736,12 +744,12 @@ function ProcessorEntryButton({
         <PresenceAvatar entry={entry} busy={busy && isLlmish(entry)} className="mt-0.5" />
         <span className="min-w-0">
           {/*
-            break-all rather than truncate: cross-post labels are long itx
-            expressions (`itx.streams.get("/…").acceptCrossPost()`) and
-            hiding the path under ellipsis is exactly what this panel is for.
+            break-all rather than truncate: ITX receiver expressions can be
+            long, and hiding the target under ellipsis is exactly what this
+            panel is for.
           */}
           <span className="block break-all font-mono text-xs leading-snug">
-            {presenceLabel(entry)}
+            {eventReceiverLabel(entry)}
           </span>
           <span
             className={cn(
@@ -750,7 +758,7 @@ function ProcessorEntryButton({
                 ? busy && isLlmish(entry)
                   ? "text-amber-600"
                   : "text-emerald-600"
-                : entry.subscriptionType === "configured"
+                : entry.config !== undefined
                   ? "text-muted-foreground"
                   : "text-muted-foreground/60",
             )}
@@ -780,146 +788,135 @@ function buildProcessorPanelEntries(
   streamRuntime: StreamRuntimeDebugState | undefined,
 ): ProcessorPanelEntry[] {
   const entries = new Map<string, ProcessorPanelEntry>();
-  const coreConnections = readCoreConnections(streamRuntime?.coreProcessorState);
-  const configured = readConfiguredSubscribers(streamRuntime?.coreProcessorState);
+  const configured = readConfiguredSubscriptions(streamRuntime?.coreProcessorState);
 
   entries.set(CORE_PROCESSOR_KEY, {
-    subscriptionKey: CORE_PROCESSOR_KEY,
-    kind: "core",
+    key: CORE_PROCESSOR_KEY,
+    rowKind: "core-processor",
     connected: true,
-    direction: "outbound",
     description: CORE_PROCESSOR_ANNOUNCEMENT.description,
     processor: CORE_PROCESSOR_ANNOUNCEMENT,
   });
 
   for (const entry of presence) {
-    const coreConnection = coreConnections[entry.subscriptionKey];
-    const subscriptionType = readSubscriptionType(coreConnection) ?? "ephemeral";
-    const runtimeConnection = streamRuntime?.runtime.connections[entry.subscriptionKey];
-    const config = configured[entry.subscriptionKey];
-    entries.set(entry.subscriptionKey, {
-      ...entry,
-      kind: subscriptionType === "configured" ? "processor" : "consumer",
-      subscriptionType,
+    const key = entry.connectionKey;
+    const runtimeConnection = streamRuntime?.runtime.connections[key];
+    const connectionKind = runtimeConnection?.kind ?? entry.connectionKind;
+    const config = configured[key];
+    const rowKind =
+      config?.subscriptionAction === "processor-wake" || connectionKind === "hosted"
+        ? "processor-wake"
+        : config === undefined
+          ? "live-callback"
+          : "durable-subscription";
+    entries.set(key, {
+      key,
+      rowKind,
+      // The pushed runtime table is authoritative once it has loaded. Before
+      // that first snapshot, keep the reduced presence entry visible instead
+      // of making every open session callback disappear from the panel.
+      connected: streamRuntime === undefined ? entry.connected : runtimeConnection !== undefined,
+      connectionKind,
+      ...(entry.description === undefined ? {} : { description: entry.description }),
+      ...(entry.processor === undefined ? {} : { processor: entry.processor }),
+      ...(entry.user === undefined ? {} : { user: entry.user }),
       ...(runtimeConnection === undefined ? {} : { runtimeConnection }),
       ...(config === undefined
         ? {}
         : {
-            deliveryMode: config.deliveryMode,
+            subscriptionAction: config.subscriptionAction,
             configuredAtOffset: config.configuredAtOffset,
             config,
           }),
-      runtimeSubscription: streamRuntime?.runtime.subscriptions[entry.subscriptionKey],
+      subscriptionProgress: streamRuntime?.runtime.subscriptions[key],
     });
   }
 
-  for (const [subscriptionKey, connection] of Object.entries(coreConnections)) {
-    if (entries.has(subscriptionKey)) continue;
-    const subscriber = readRuntimeRecord(connection.subscriber);
-    const announcement = readAnnouncement(subscriber?.processor);
-    const user = readSubscriberUser(subscriber?.user);
-    const subscriptionType = readSubscriptionType(connection) ?? "ephemeral";
-    const config = configured[subscriptionKey];
-    entries.set(subscriptionKey, {
-      subscriptionKey,
-      kind: subscriptionType === "configured" ? "processor" : "consumer",
+  // Live callback connections the reduced roster doesn't carry exist only in
+  // the runtime table. This browser's reduced presence may have started after
+  // the connection-opened event, so the runtime table decides "open now".
+  for (const [key, runtimeConnection] of Object.entries(streamRuntime?.runtime.connections ?? {})) {
+    const entryKey = runtimeConnection.kind === "hosted" ? runtimeConnection.subscriptionKey : key;
+    if (entries.has(entryKey)) continue;
+    const config = configured[entryKey];
+    const openedBy = readRuntimeRecord(runtimeConnection.openedBy);
+    const announcement = readAnnouncement(openedBy?.processor);
+    const user = readSubscriberUser(openedBy?.user);
+    entries.set(entryKey, {
+      key: entryKey,
+      rowKind:
+        config?.subscriptionAction === "processor-wake" || runtimeConnection.kind === "hosted"
+          ? "processor-wake"
+          : config === undefined
+            ? "live-callback"
+            : "durable-subscription",
       connected: true,
-      direction: "outbound",
-      ...(typeof subscriber?.description === "string"
-        ? { description: subscriber.description }
-        : {}),
+      ...(typeof openedBy?.description === "string" ? { description: openedBy.description } : {}),
       ...(user === undefined ? {} : { user }),
       ...(announcement == null ? {} : { processor: announcement }),
-      subscriptionType,
-      ...(streamRuntime?.runtime.connections[subscriptionKey] === undefined
-        ? {}
-        : { runtimeConnection: streamRuntime.runtime.connections[subscriptionKey] }),
+      connectionKind: runtimeConnection.kind,
+      runtimeConnection,
       ...(config === undefined
         ? {}
         : {
-            deliveryMode: config.deliveryMode,
+            subscriptionAction: config.subscriptionAction,
             configuredAtOffset: config.configuredAtOffset,
             config,
           }),
-      runtimeSubscription: streamRuntime?.runtime.subscriptions[subscriptionKey],
+      subscriptionProgress: streamRuntime?.runtime.subscriptions[entryKey],
     });
   }
 
-  // Live connections the reduced roster doesn't carry: ephemeral consumers
-  // exist ONLY in the runtime connection table (core state v14), and this
-  // client's presence roster may not know consumers that connected before its
-  // mirror subscribed. The runtime table is the authority on "connected now".
-  for (const [subscriptionKey, runtimeConnection] of Object.entries(
-    streamRuntime?.runtime.connections ?? {},
-  )) {
-    if (entries.has(subscriptionKey)) continue;
-    const subscriptionType = runtimeConnection.subscriptionType;
-    const subscriber = readRuntimeRecord(runtimeConnection.subscriber);
-    const announcement = readAnnouncement(subscriber?.processor);
-    const user = readSubscriberUser(subscriber?.user);
-    entries.set(subscriptionKey, {
-      subscriptionKey,
-      kind: subscriptionType === "configured" ? "processor" : "consumer",
-      connected: true,
-      direction: "outbound",
-      ...(typeof subscriber?.description === "string"
-        ? { description: subscriber.description }
-        : {}),
-      ...(user === undefined ? {} : { user }),
-      ...(announcement == null ? {} : { processor: announcement }),
-      subscriptionType,
-      runtimeConnection,
-      runtimeSubscription: streamRuntime?.runtime.subscriptions[subscriptionKey],
-    });
-  }
-
-  for (const [subscriptionKey, config] of Object.entries(configured)) {
-    const current = entries.get(subscriptionKey);
-    const runtimeSubscription = streamRuntime?.runtime.subscriptions[subscriptionKey];
-    const kind = config.deliveryMode === "wake" ? "processor" : "subscriber";
+  for (const [key, config] of Object.entries(configured)) {
+    const current = entries.get(key);
+    const subscriptionProgress = streamRuntime?.runtime.subscriptions[key];
+    const runtimeConnection = readHostedConnectionForSubscription(streamRuntime, key);
+    const rowKind =
+      config.subscriptionAction === "processor-wake" ? "processor-wake" : "durable-subscription";
     if (current != null) {
-      entries.set(subscriptionKey, {
+      entries.set(key, {
         ...current,
-        kind,
-        subscriptionType: "configured",
-        deliveryMode: config.deliveryMode,
+        rowKind,
+        subscriptionAction: config.subscriptionAction,
         configuredAtOffset: config.configuredAtOffset,
         config,
-        // Prefer the delivery label over a generic presence description so
-        // cross-posts show as `itx.streams.get(…).acceptCrossPost()` rather
-        // than a raw subscription key.
+        // Prefer the receiver label over a generic presence description.
         description: config.deliveryLabel ?? current.description,
-        runtimeSubscription,
-        connected: runtimeSubscription?.connected ?? current.connected,
+        subscriptionProgress,
+        connected: runtimeConnection !== undefined,
+        ...(config.destinationStream === undefined
+          ? {}
+          : { receivingStreamPath: config.destinationStream }),
       });
       continue;
     }
-    entries.set(subscriptionKey, {
-      subscriptionKey,
-      kind,
-      connected: runtimeSubscription?.connected ?? false,
-      direction: "outbound",
+    entries.set(key, {
+      key,
+      rowKind,
+      connected: runtimeConnection !== undefined,
       description:
         config.deliveryLabel ??
-        (config.deliveryMode === "wake"
-          ? "Durable wake processor"
-          : `Durable ${config.deliveryMode} subscriber`),
-      subscriptionType: "configured",
-      deliveryMode: config.deliveryMode,
+        (config.subscriptionAction === "processor-wake"
+          ? "Durable hosted processor"
+          : `Durable ${config.subscriptionAction} subscription`),
+      subscriptionAction: config.subscriptionAction,
       configuredAtOffset: config.configuredAtOffset,
       config,
-      runtimeSubscription,
-      ...(streamRuntime?.runtime.connections[subscriptionKey] === undefined
+      subscriptionProgress,
+      ...(config.destinationStream === undefined
         ? {}
-        : { runtimeConnection: streamRuntime.runtime.connections[subscriptionKey] }),
+        : { receivingStreamPath: config.destinationStream }),
+      ...(runtimeConnection === undefined
+        ? {}
+        : { runtimeConnection, connectionKind: runtimeConnection.kind }),
     });
   }
 
-  // Dead ephemeral consumers are noise: an ephemeral connection IS its live
-  // socket, so a disconnected one is just a tab that left. Durable entries
-  // keep showing while disconnected (asleep/parked is real state).
+  // A session callback is only meaningful while its connection is open.
+  // Durable entries remain visible while their hosted processor sleeps or
+  // their receiver is waiting, retrying, or halted.
   return [...entries.values()]
-    .filter((entry) => entry.kind !== "consumer" || entry.connected)
+    .filter((entry) => entry.rowKind !== "live-callback" || entry.connected)
     .sort(compareProcessorEntries);
 }
 
@@ -932,156 +929,187 @@ function processorEntrySections(entries: readonly ProcessorPanelEntry[]): Array<
     {
       title: "Core processor",
       emptyLabel: "Core stream state has not loaded yet.",
-      entries: entries.filter((entry) => entry.kind === "core"),
+      entries: entries.filter((entry) => entry.rowKind === "core-processor"),
     },
     {
-      title: "Durable processors",
-      emptyLabel: "No durable processors are configured on this stream.",
-      entries: entries.filter((entry) => entry.kind === "processor"),
+      title: "Hosted processors",
+      emptyLabel: "No hosted processors receive events from this stream.",
+      entries: entries.filter((entry) => entry.rowKind === "processor-wake"),
     },
     {
-      title: "Durable subscribers",
-      emptyLabel: "No durable push or webhook subscribers are configured.",
-      entries: entries.filter((entry) => entry.kind === "subscriber"),
+      title: "Durable subscriptions",
+      emptyLabel: "No copy, ITX-call, or webhook-post subscriptions are configured.",
+      entries: entries.filter((entry) => entry.rowKind === "durable-subscription"),
     },
     {
-      title: "Ephemeral consumers",
-      emptyLabel: "No ephemeral consumers are connected.",
-      entries: entries.filter((entry) => entry.kind === "consumer"),
+      title: "Open session callbacks",
+      emptyLabel: "No session callbacks are open.",
+      entries: entries.filter((entry) => entry.rowKind === "live-callback"),
     },
   ];
 }
 
 function compareProcessorEntries(a: ProcessorPanelEntry, b: ProcessorPanelEntry): number {
-  const rank = { core: 0, processor: 1, subscriber: 2, consumer: 3 } satisfies Record<
-    ProcessorPanelEntry["kind"],
-    number
-  >;
+  const rank = {
+    "core-processor": 0,
+    "processor-wake": 1,
+    "durable-subscription": 2,
+    "live-callback": 3,
+  } satisfies Record<ProcessorPanelEntry["rowKind"], number>;
   return (
-    rank[a.kind] - rank[b.kind] ||
-    presenceLabel(a).localeCompare(presenceLabel(b)) ||
-    a.subscriptionKey.localeCompare(b.subscriptionKey)
+    rank[a.rowKind] - rank[b.rowKind] ||
+    eventReceiverLabel(a).localeCompare(eventReceiverLabel(b)) ||
+    a.key.localeCompare(b.key)
   );
 }
 
 /**
- * The row status speaks the subscription machinery's own vocabulary: durable
- * subscriptions are desired state from a `subscription-configured` fact, and
- * a missing live connection is a NORMAL spine state, not a vague sleep —
- * wake mode gets re-poked when the watermark lags, push/webhook cursors are
- * either acked to head, mid-drain, or in retry backoff, and `parked` is the
- * spine's own give-up fact.
+ * A missing live connection is normal: hosted processors are woken when their
+ * checkpoint lags; copy, ITX-call, and webhook subscriptions are caught
+ * up, sending, waiting to retry, or halted.
  */
 function processorEntryStatus(entry: ProcessorPanelEntry, busy: boolean): string {
-  if (entry.kind === "core") return "running";
+  if (entry.rowKind === "core-processor") return "running";
   if (entry.connected) {
     if (busy && isLlmish(entry)) return "processing";
-    return entry.subscriptionType === "configured" ? "connected durable" : "connected ephemeral";
+    return entry.connectionKind === "hosted" ? "hosted callback open" : "session callback open";
   }
-  const subscription = entry.runtimeSubscription;
-  if (subscription?.parkedAtOffset != null) {
-    return `subscription-parked at #${subscription.parkedAtOffset}`;
+  const subscriptionProgress = entry.subscriptionProgress;
+  if (entry.config?.halted != null) {
+    return `${entry.config.halted.reason} halted after #${entry.config.halted.afterOffset}`;
   }
-  if (entry.subscriptionType === "configured") {
+  if (entry.config !== undefined) {
     const configured =
       entry.configuredAtOffset == null ? "configured" : `configured #${entry.configuredAtOffset}`;
-    if (subscription != null && subscription.nextAttemptAt !== null) {
-      return `${configured} · retry backoff (attempt ${subscription.attempt})`;
+    if (subscriptionProgress != null && subscriptionProgress.nextAttemptAt !== null) {
+      return `${configured} · retry backoff (attempt ${subscriptionProgress.attempt})`;
     }
-    if (entry.deliveryMode === "wake") {
-      return `${configured} · poked on next append`;
+    if (entry.subscriptionAction === "processor-wake") {
+      return `${configured} · called when events are waiting`;
     }
-    if (subscription != null) {
-      return subscription.lag === 0
+    if (subscriptionProgress != null) {
+      return subscriptionProgress.lag === 0
         ? `${configured} · acked to head`
-        : `${configured} · draining, lag ${subscription.lag}`;
+        : `${configured} · sending, lag ${subscriptionProgress.lag}`;
     }
     return configured;
   }
   return "disconnected";
 }
 
-function readCoreConnections(value: unknown): Record<string, Record<string, unknown>> {
-  const record = readRuntimeRecord(value);
-  const connections = readRuntimeRecord(record?.connectionsByKey);
-  if (connections == null) return {};
-  return Object.fromEntries(
-    Object.entries(connections).flatMap(([key, connection]) => {
-      const value = readRuntimeRecord(connection);
-      return value == null ? [] : [[key, value]];
-    }),
+function readHostedConnectionForSubscription(
+  streamRuntime: StreamRuntimeDebugState | undefined,
+  subscriptionKey: string,
+): StreamRuntimeDebugState["runtime"]["connections"][string] | undefined {
+  return Object.values(streamRuntime?.runtime.connections ?? {}).find(
+    (connection) => connection.kind === "hosted" && connection.subscriptionKey === subscriptionKey,
   );
 }
 
-function readConfiguredSubscribers(value: unknown): Record<string, ConfiguredSubscriberDetails> {
+function readConfiguredSubscriptions(value: unknown): Record<string, SubscriptionDetails> {
   const record = readRuntimeRecord(value);
-  const configured = readRuntimeRecord(record?.configuredSubscribersByKey);
+  const subscriptions = readRuntimeRecord(record?.subscriptions);
+  const outbound = readRuntimeRecord(subscriptions?.outbound);
+  const configured = readRuntimeRecord(outbound?.byKey);
   if (configured == null) return {};
   return Object.fromEntries(
     Object.entries(configured).flatMap(([key, entry]) => {
-      const details = readConfiguredSubscriberDetails(entry);
+      const details = readSubscriptionDetails(entry);
       return details == null ? [] : [[key, details]];
     }),
   );
 }
 
-function readConfiguredSubscriberDetails(entry: unknown): ConfiguredSubscriberDetails | null {
-  const latest = readRuntimeRecord(readRuntimeRecord(entry)?.latestConfiguredEvent);
-  const payload = readRuntimeRecord(latest?.payload);
-  const delivery = readRuntimeRecord(payload?.delivery);
-  const mode = delivery?.mode;
-  if (mode !== "wake" && mode !== "push" && mode !== "webhook") return null;
+function readSubscriptionDetails(entry: unknown): SubscriptionDetails | null {
+  const configured = readRuntimeRecord(entry);
+  const payload = readRuntimeRecord(configured?.configuration);
+  const receiver = readRuntimeRecord(payload?.receiver);
+  const subscriptionAction = receiver?.action;
+  if (
+    subscriptionAction !== "processor-wake" &&
+    subscriptionAction !== "copy-to-stream" &&
+    subscriptionAction !== "itx-call" &&
+    subscriptionAction !== "webhook-post"
+  ) {
+    return null;
+  }
 
-  const configuredAtOffset = readNumber(latest, "offset") ?? undefined;
-  const expression = delivery?.expression;
+  const configuredAtOffset = readNumber(configured, "configuredAtOffset") ?? undefined;
+  const haltedRecord = readRuntimeRecord(configured?.deliveryHalted);
+  const haltedReason = haltedRecord?.reason;
+  const haltedAfterOffset = readNumber(haltedRecord, "afterOffset") ?? undefined;
+  const haltedAttempts = readNumber(haltedRecord, "attempts") ?? undefined;
+  const halted: SubscriptionDetails["halted"] =
+    haltedReason === "delivery-failed" &&
+    haltedAfterOffset !== undefined &&
+    haltedAttempts !== undefined
+      ? {
+          reason: haltedReason,
+          afterOffset: haltedAfterOffset,
+          attempts: haltedAttempts,
+          ...(typeof haltedRecord?.error === "string" ? { error: haltedRecord.error } : {}),
+        }
+      : undefined;
+  const delivery = readRuntimeRecord(receiver?.delivery);
   const deliveryLabel =
-    mode === "webhook"
-      ? typeof delivery?.url === "string"
-        ? `POST ${delivery.url}`
+    subscriptionAction === "webhook-post"
+      ? typeof receiver?.url === "string"
+        ? `POST ${receiver.url}`
         : undefined
-      : formatItxExpression(expression);
-  const crossPostDestination = readCrossPostDestination(expression);
-  const selector = readRuntimeRecord(payload?.selector);
-  const eventTypes = readStringArray(selector?.eventTypes);
-  const condition =
-    typeof selector?.condition === "string" && selector.condition.trim() !== ""
-      ? selector.condition
+      : subscriptionAction === "copy-to-stream"
+        ? typeof receiver?.receivingStreamPath === "string"
+          ? `copy to ${receiver.receivingStreamPath}`
+          : undefined
+        : formatItxExpression(receiver?.expression);
+  const destinationStream =
+    subscriptionAction === "copy-to-stream" && typeof receiver?.receivingStreamPath === "string"
+      ? receiver.receivingStreamPath
       : undefined;
-  const params = readRuntimeRecord(payload?.params);
-  const transform =
-    typeof params?.transform === "string" && params.transform.trim() !== ""
-      ? params.transform
+  const filter = readRuntimeRecord(payload?.filter);
+  const eventTypes = readStringArray(filter?.eventTypes);
+  const jsonataCondition =
+    typeof filter?.jsonataCondition === "string" && filter.jsonataCondition.trim() !== ""
+      ? filter.jsonataCondition
       : undefined;
-  const deliver = readDeliverPolicy(payload?.deliver);
-  const onPoison =
-    payload?.onPoison === "park" || payload?.onPoison === "skip" ? payload.onPoison : undefined;
-  const webhookUrl = typeof delivery?.url === "string" ? delivery.url : undefined;
+  const jsonataTransform =
+    typeof receiver?.jsonataTransform === "string" && receiver.jsonataTransform.trim() !== ""
+      ? receiver.jsonataTransform
+      : undefined;
+  const start =
+    delivery?.start === "beginning" || delivery?.start === "now" ? delivery.start : undefined;
+  const onFailingEvent =
+    delivery?.onFailingEvent === "halt" || delivery?.onFailingEvent === "skip"
+      ? delivery.onFailingEvent
+      : undefined;
+  const webhookUrl =
+    subscriptionAction === "webhook-post" && typeof receiver?.url === "string"
+      ? receiver.url
+      : undefined;
   const note =
     typeof payload?.description === "string" && payload.description.trim() !== ""
       ? payload.description.trim()
       : undefined;
 
   return {
-    deliveryMode: mode,
+    subscriptionAction,
     ...(configuredAtOffset === undefined ? {} : { configuredAtOffset }),
+    ...(halted === undefined ? {} : { halted }),
     ...(deliveryLabel === undefined ? {} : { deliveryLabel }),
-    ...(crossPostDestination === undefined ? {} : { crossPostDestination }),
+    ...(destinationStream === undefined ? {} : { destinationStream }),
     ...(note === undefined ? {} : { note }),
     ...(eventTypes === undefined ? {} : { eventTypes }),
-    ...(condition === undefined ? {} : { condition }),
-    ...(transform === undefined ? {} : { transform }),
-    ...(deliver === undefined ? {} : { deliver }),
-    ...(onPoison === undefined ? {} : { onPoison }),
+    ...(jsonataCondition === undefined ? {} : { jsonataCondition }),
+    ...(jsonataTransform === undefined ? {} : { jsonataTransform }),
+    ...(start === undefined ? {} : { start }),
+    ...(onFailingEvent === undefined ? {} : { onFailingEvent }),
     ...(webhookUrl === undefined ? {} : { webhookUrl }),
   };
 }
 
 /**
  * A persisted delivery expression rendered as the itx call it names:
- * `["processEventBatch"]` → `itx.processEventBatch()`,
- * `["streams", ["get", "/x"], "acceptCrossPost"]` →
- * `itx.streams.get("/x").acceptCrossPost()` — subscribers are labeled by
- * what the stream actually dials, not a generic lane name.
+ * `["processEventBatch"]` → `itx.processEventBatch()` — receivers are
+ * labeled by the method the stream actually calls, not a generic category name.
  */
 function formatItxExpression(expression: unknown): string | undefined {
   if (!Array.isArray(expression) || expression.length === 0) return undefined;
@@ -1109,19 +1137,6 @@ function formatItxExpression(expression: unknown): string | undefined {
   return `itx.${call.endsWith(")") ? call : `${call}()`}`;
 }
 
-/**
- * `["streams", ["get", "/repos/root"], "acceptCrossPost"]` → `"/repos/root"`.
- * Only the cross-post sink shape — other expressions leave destination unset.
- */
-function readCrossPostDestination(expression: unknown): string | undefined {
-  if (!Array.isArray(expression) || expression.length < 3) return undefined;
-  if (expression[0] !== "streams") return undefined;
-  if (expression[expression.length - 1] !== "acceptCrossPost") return undefined;
-  const getStep = expression[1];
-  if (!Array.isArray(getStep) || getStep[0] !== "get") return undefined;
-  return typeof getStep[1] === "string" ? getStep[1] : undefined;
-}
-
 function readStringArray(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const items = value.filter(
@@ -1130,37 +1145,27 @@ function readStringArray(value: unknown): string[] | undefined {
   return items.length === 0 ? undefined : items;
 }
 
-function readDeliverPolicy(value: unknown): "all" | "new" | { afterOffset: number } | undefined {
-  if (value === "all" || value === "new") return value;
-  const record = readRuntimeRecord(value);
-  if (record == null) return undefined;
-  const afterOffset = readNumber(record, "afterOffset");
-  return afterOffset == null ? undefined : { afterOffset };
-}
-
 /**
- * Labeled multi-line overview under a durable subscriber row: destination,
+ * Labeled multi-line overview under a durable subscription row: destination,
  * event types, condition, transform. Plain "a · b · c" made event types look
  * like path fragments — explicit labels + chips trade a bit of height for
  * scannability.
  */
-function ConfiguredFilterSummary({ config }: { config: ConfiguredSubscriberDetails | undefined }) {
+function ConfiguredFilterSummary({ config }: { config: SubscriptionDetails | undefined }) {
   if (config == null) return null;
   const hasEventFilter =
     config.eventTypes != null && config.eventTypes.length > 0 && !config.eventTypes.includes("*");
   const hasExtra =
     config.note !== undefined ||
-    config.crossPostDestination !== undefined ||
+    config.destinationStream !== undefined ||
     hasEventFilter ||
-    config.condition !== undefined ||
-    config.transform !== undefined;
+    config.jsonataCondition !== undefined;
   if (!hasExtra) return null;
 
   const eventTypes = hasEventFilter
     ? config.eventTypes!
-    : config.crossPostDestination !== undefined ||
-        config.condition !== undefined ||
-        config.transform !== undefined ||
+    : config.destinationStream !== undefined ||
+        config.jsonataCondition !== undefined ||
         config.note !== undefined
       ? null // "all event types" shown as text, not chips
       : undefined;
@@ -1170,11 +1175,9 @@ function ConfiguredFilterSummary({ config }: { config: ConfiguredSubscriberDetai
       {config.note == null ? null : (
         <span className="text-[11px] leading-snug text-foreground/75">{config.note}</span>
       )}
-      {config.crossPostDestination == null ? null : (
+      {config.destinationStream == null ? null : (
         <ConfiguredFilterLine label="to">
-          <span className="break-all font-mono text-foreground/80">
-            {config.crossPostDestination}
-          </span>
+          <span className="break-all font-mono text-foreground/80">{config.destinationStream}</span>
         </ConfiguredFilterLine>
       )}
       {eventTypes === undefined ? null : eventTypes == null ? (
@@ -1196,16 +1199,13 @@ function ConfiguredFilterSummary({ config }: { config: ConfiguredSubscriberDetai
           </span>
         </ConfiguredFilterLine>
       )}
-      {config.condition == null ? null : (
+      {config.jsonataCondition == null ? null : (
         <ConfiguredFilterLine label="when">
           <span className="break-all font-mono text-foreground/80">
-            {config.condition.length > 80 ? `${config.condition.slice(0, 77)}…` : config.condition}
+            {config.jsonataCondition.length > 80
+              ? `${config.jsonataCondition.slice(0, 77)}…`
+              : config.jsonataCondition}
           </span>
-        </ConfiguredFilterLine>
-      )}
-      {config.transform == null ? null : (
-        <ConfiguredFilterLine label="transform">
-          <span className="text-foreground/70">JSONata (see detail)</span>
         </ConfiguredFilterLine>
       )}
     </span>
@@ -1221,15 +1221,6 @@ function ConfiguredFilterLine({ label, children }: { label: string; children: Re
       <span className="min-w-0">{children}</span>
     </span>
   );
-}
-
-function readSubscriptionType(
-  value: Record<string, unknown> | undefined,
-): "configured" | "ephemeral" | undefined {
-  const subscriptionType = value?.subscriptionType;
-  return subscriptionType === "configured" || subscriptionType === "ephemeral"
-    ? subscriptionType
-    : undefined;
 }
 
 function readAnnouncement(value: unknown): AgentUiProcessorAnnouncement | null {
@@ -1381,7 +1372,7 @@ function ProcessorDetail({
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-1.5">
             <span className="break-all font-mono text-sm font-semibold leading-snug">
-              {presenceLabel(entry)}
+              {eventReceiverLabel(entry)}
             </span>
             {processor == null ? null : (
               <span className="shrink-0 font-mono text-[10px] text-muted-foreground/70">
@@ -1395,7 +1386,8 @@ function ProcessorDetail({
               entry.connected ? "text-emerald-600" : "text-muted-foreground/60",
             )}
           >
-            {processorEntryStatus(entry, busy)} · {entry.deliveryMode ?? entry.direction}
+            {processorEntryStatus(entry, busy)} ·{" "}
+            {entry.subscriptionAction ?? entry.connectionKind ?? "event callback"}
           </div>
         </div>
         <PanelCloseButton onClose={onClose} />
@@ -1405,7 +1397,7 @@ function ProcessorDetail({
         {processor == null ? (
           shouldShowConfiguredDetail(entry.config) ? null : (
             <p className="text-sm leading-relaxed text-muted-foreground">
-              {entry.description ?? "This subscriber did not announce a processor contract."}
+              {entry.description ?? "This callback owner did not announce a processor contract."}
             </p>
           )
         ) : (
@@ -1435,9 +1427,9 @@ function ProcessorDetail({
           </>
         )}
         {shouldShowConfiguredDetail(entry.config) ? (
-          <ConfiguredSubscriberDetail config={entry.config!} />
+          <SubscriptionDetail config={entry.config!} />
         ) : null}
-        {entry.kind === "core" ? null : <SubscriptionRuntimeSummary entry={entry} />}
+        {entry.rowKind === "core-processor" ? null : <EventDeliverySummary entry={entry} />}
         <ProcessorRuntimeStateView
           runtimeStateLoad={runtimeStateLoad}
           streamMaxOffset={streamMaxOffset}
@@ -1445,9 +1437,11 @@ function ProcessorDetail({
           processorSlug={processor?.slug}
         />
         <div>
-          <SectionHeading>Subscription</SectionHeading>
+          <SectionHeading>
+            {entry.config === undefined ? "Connection key" : "Subscription key"}
+          </SectionHeading>
           <div className="rounded-xl bg-muted/40 px-3 py-2 font-mono text-xs text-muted-foreground break-all">
-            {entry.subscriptionKey}
+            {entry.key}
           </div>
         </div>
       </div>
@@ -1471,58 +1465,38 @@ function SubscriberUserDetail({ user }: { user: NonNullable<AgentUiPresenceEntry
   );
 }
 
-/**
- * Wake processors already document what they consume via the processor
- * contract; the interesting config surface is push/webhook (cross-posts,
- * webhooks) and any wake entry that carries an explicit selector/transform.
- */
 function shouldShowConfiguredDetail(
-  config: ConfiguredSubscriberDetails | undefined,
-): config is ConfiguredSubscriberDetails {
-  if (config == null) return false;
-  if (config.deliveryMode === "push" || config.deliveryMode === "webhook") return true;
-  return (
-    config.note !== undefined ||
-    config.crossPostDestination !== undefined ||
-    (config.eventTypes != null && config.eventTypes.length > 0) ||
-    config.condition !== undefined ||
-    config.transform !== undefined
-  );
+  config: SubscriptionDetails | undefined,
+): config is SubscriptionDetails {
+  return config != null;
 }
 
-/**
- * Human-readable desired state for a durable push/webhook/wake config —
- * especially cross-posts, where the interesting bit is which events are
- * copied onto which stream, not the raw subscription key.
- */
-function ConfiguredSubscriberDetail({ config }: { config: ConfiguredSubscriberDetails }) {
-  const isCrossPost = config.crossPostDestination !== undefined;
-  const heading = isCrossPost
-    ? "Cross-post"
-    : config.deliveryMode === "webhook"
-      ? "Webhook"
-      : config.deliveryMode === "push"
-        ? "Push delivery"
-        : "Wake delivery";
+/** Human-readable configuration for one stored subscription. */
+function SubscriptionDetail({ config }: { config: SubscriptionDetails }) {
+  const heading =
+    config.subscriptionAction === "copy-to-stream"
+      ? "Copy destination"
+      : config.subscriptionAction === "webhook-post"
+        ? "Webhook POST"
+        : config.subscriptionAction === "itx-call"
+          ? "ITX-expression receiver"
+          : "Hosted processor";
   const eventTypes =
     config.eventTypes == null || config.eventTypes.includes("*") ? null : config.eventTypes;
-  const deliverLabel =
-    config.deliver === undefined
-      ? isCrossPost || config.deliveryMode !== "wake"
-        ? "new (from configure time)"
-        : null
-      : config.deliver === "all"
-        ? "all history"
-        : config.deliver === "new"
-          ? "new (from configure time)"
-          : `after offset #${config.deliver.afterOffset}`;
-  const genericBlurb = isCrossPost
-    ? "When matching events land on this stream, copies are pushed onto the destination with provenance (`source.crossPostedFrom`)."
-    : config.deliveryMode === "webhook"
-      ? "Each matching event is POSTed as JSON to the configured URL."
-      : config.deliveryMode === "push"
-        ? "Matching events are dialed into the configured itx expression as push batches."
-        : "The subscriber owns its checkpoint; the stream pokes it when the watermark lags.";
+  const startLabel =
+    config.start === undefined
+      ? null
+      : config.start === "beginning"
+        ? "beginning (all history)"
+        : "now (from configure time)";
+  const genericBlurb =
+    config.subscriptionAction === "copy-to-stream"
+      ? "Matching events are appended to the destination stream in order with source provenance."
+      : config.subscriptionAction === "webhook-post"
+        ? "Each matching event is POSTed as JSON to the configured URL."
+        : config.subscriptionAction === "itx-call"
+          ? "Matching events are delivered in awaited batches to the configured ITX expression."
+          : "The hosted processor stores its checkpoint. When events are waiting, the source calls it and sends batches through the returned callback.";
 
   return (
     <div className="flex flex-col gap-3">
@@ -1540,9 +1514,9 @@ function ConfiguredSubscriberDetail({ config }: { config: ConfiguredSubscriberDe
             {config.deliveryLabel}
           </DetailField>
         )}
-        {config.crossPostDestination == null ? null : (
+        {config.destinationStream == null ? null : (
           <DetailField label="destination stream" mono>
-            {config.crossPostDestination}
+            {config.destinationStream}
           </DetailField>
         )}
         {config.webhookUrl == null || config.deliveryLabel != null ? null : (
@@ -1550,20 +1524,18 @@ function ConfiguredSubscriberDetail({ config }: { config: ConfiguredSubscriberDe
             {config.webhookUrl}
           </DetailField>
         )}
-        {deliverLabel == null ? null : (
-          <DetailField label="starts from">{deliverLabel}</DetailField>
-        )}
-        {config.onPoison == null ? null : (
-          <DetailField label="on poison">{config.onPoison}</DetailField>
+        {startLabel == null ? null : <DetailField label="starts from">{startLabel}</DetailField>}
+        {config.onFailingEvent == null ? null : (
+          <DetailField label="on failing event">{config.onFailingEvent}</DetailField>
         )}
       </div>
 
       <div>
-        <SectionHeading>Copies these events</SectionHeading>
+        <SectionHeading>Receives these events</SectionHeading>
         {eventTypes == null ? (
           <span className="text-xs text-muted-foreground">
             All event types
-            {config.condition == null ? "" : " matching the condition below"}
+            {config.jsonataCondition == null ? "" : " matching the condition below"}
           </span>
         ) : (
           <div className="flex flex-wrap gap-1.5">
@@ -1580,11 +1552,11 @@ function ConfiguredSubscriberDetail({ config }: { config: ConfiguredSubscriberDe
         )}
       </div>
 
-      {config.condition == null ? null : (
+      {config.jsonataCondition == null ? null : (
         <div>
           <SectionHeading>Condition</SectionHeading>
           <div className="rounded-xl bg-muted/40 px-3 py-2 font-mono text-xs leading-relaxed text-foreground/80 break-all whitespace-pre-wrap">
-            {config.condition}
+            {config.jsonataCondition}
           </div>
           <p className="mt-1 text-[11px] text-muted-foreground">
             JSONata over the whole event — must evaluate to exactly true.
@@ -1592,15 +1564,15 @@ function ConfiguredSubscriberDetail({ config }: { config: ConfiguredSubscriberDe
         </div>
       )}
 
-      {config.transform == null ? null : (
+      {config.jsonataTransform == null ? null : (
         <div>
           <SectionHeading>Transform</SectionHeading>
           <div className="rounded-xl bg-muted/40 px-3 py-2 font-mono text-xs leading-relaxed text-foreground/80 break-all whitespace-pre-wrap">
-            {config.transform}
+            {config.jsonataTransform}
           </div>
           <p className="mt-1 text-[11px] text-muted-foreground">
-            JSONata constructor for the copied event body. Omitted fields copy verbatim; provenance
-            is stamped after the transform.
+            JSONata constructor shaping the delivered event body. Omitted fields copy verbatim;
+            delivery keeps the real source coordinates for provenance and deduplication.
           </p>
         </div>
       )}
@@ -1713,41 +1685,44 @@ function ProcessorRuntimeStateView({
   );
 }
 
-function SubscriptionRuntimeSummary({ entry }: { entry: ProcessorPanelEntry }) {
+function EventDeliverySummary({ entry }: { entry: ProcessorPanelEntry }) {
   if (
-    entry.subscriptionType == null &&
-    entry.deliveryMode == null &&
-    entry.runtimeSubscription == null &&
+    entry.connectionKind == null &&
+    entry.subscriptionAction == null &&
+    entry.subscriptionProgress == null &&
     entry.configuredAtOffset == null
   ) {
     return null;
   }
-  const runtime = entry.runtimeSubscription;
+  const runtime = entry.subscriptionProgress;
   const connection = entry.runtimeConnection;
   const hasLatency =
     connection != null ||
-    runtime?.settleLatencyMs != null ||
+    runtime?.completionLatencyMs != null ||
     runtime?.deliveryDurationMs != null ||
     runtime?.bytesSent != null;
   return (
     <div>
       <SectionHeading>Delivery</SectionHeading>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <RuntimeStateStat label="type" value={entry.subscriptionType ?? "unknown"} />
-        <RuntimeStateStat label="mode" value={entry.deliveryMode ?? runtime?.mode ?? "live"} />
+        <RuntimeStateStat label="row" value={entry.rowKind} />
+        <RuntimeStateStat
+          label="action"
+          value={entry.subscriptionAction ?? entry.connectionKind ?? "callback"}
+        />
         <RuntimeStateStat
           label="acked"
           value={
             connection != null
-              ? `#${connection.cursor}`
+              ? `#${connection.deliveredThroughOffset}`
               : runtime != null
-                ? `#${runtime.ackedOffset}`
+                ? `#${runtime.acknowledgedOffset}`
                 : "—"
           }
         />
         <RuntimeStateStat
           label="lag"
-          // Connection cursor first: the wake spine row's watermark goes
+          // Live connection progress first: the stored checkpoint goes
           // stale by design while a connection streams (see the row list).
           value={
             connection != null
@@ -1771,7 +1746,7 @@ function SubscriptionRuntimeSummary({ entry }: { entry: ProcessorPanelEntry }) {
           <RuntimeStateStat
             label="settle"
             value={(() => {
-              const stats = connection?.settleLatencyMs ?? runtime?.settleLatencyMs;
+              const stats = connection?.completionLatencyMs ?? runtime?.completionLatencyMs;
               return stats == null ? "—" : `${stats.last}ms · p95 ${stats.p95}ms`;
             })()}
           />
@@ -1784,8 +1759,9 @@ function SubscriptionRuntimeSummary({ entry }: { entry: ProcessorPanelEntry }) {
           />
           <RuntimeStateStat
             label="delivered"
-            // Live connections report events; push/webhook report bytes this
-            // incarnation (no durable event counter on the spine).
+            // Live connections report events; copy, ITX-call, and webhook
+            // subscriptions report bytes this incarnation (the durable sending row
+            // does not count events).
             value={
               connection != null
                 ? `${connection.eventsSent} ev · ${formatFileSize(connection.bytesSent)}`
@@ -1798,23 +1774,30 @@ function SubscriptionRuntimeSummary({ entry }: { entry: ProcessorPanelEntry }) {
       ) : null}
       {entry.configuredAtOffset == null &&
       runtime?.lastError == null &&
-      runtime?.parkedAtOffset == null &&
+      entry.config?.halted == null &&
       runtime?.nextAttemptAt == null ? null : (
         <div className="mt-2 rounded-xl bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
           {entry.configuredAtOffset == null ? null : (
             <div>configured at #{entry.configuredAtOffset}</div>
           )}
-          {runtime?.parkedAtOffset == null ? null : <div>parked at #{runtime.parkedAtOffset}</div>}
+          {entry.config?.halted == null ? null : (
+            <div>
+              {entry.config.halted.reason} halted after #{entry.config.halted.afterOffset} after{" "}
+              {entry.config.halted.attempts} attempts
+            </div>
+          )}
           {runtime?.nextAttemptAt == null ? null : (
             <div>next attempt {new Date(runtime.nextAttemptAt).toLocaleString()}</div>
           )}
           {runtime?.lastError == null ? null : (
             <div className="mt-1 text-destructive">{runtime.lastError}</div>
           )}
-          {connection == null && runtime?.bytesSent == null && entry.deliveryMode !== "wake" ? (
+          {connection == null &&
+          runtime?.bytesSent == null &&
+          entry.subscriptionAction !== "processor-wake" ? (
             <div className="mt-1 text-muted-foreground/80">
               Delivery volume (bytes) resets when this stream Durable Object restarts — there is no
-              durable cross-post counter.
+              durable delivery-volume counter.
             </div>
           ) : null}
         </div>

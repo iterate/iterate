@@ -204,3 +204,4 @@ from your machine, and when you need a public callback URL. Doppler/Cloudflare/d
 - [OS architecture & operations](apps/os/docs/architecture-and-operations.md)
 - [Debugging deployed OS workers](apps/os/docs/debugging-deployed-os-workers.md)
 - [Doppler-backed scripts](apps/os/docs/doppler-backed-scripts.md)
+- [Project seeds](apps/os/docs/project-seeds.md) — capture and semantically restore selected projects across deliberate production erases

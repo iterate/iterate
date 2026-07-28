@@ -50,7 +50,7 @@ import { isRepoNotSeededError, isRetryableArtifactsInfrastructureError } from ".
  * racing the terminal certificate still lands its facts.
  *
  * GitHub is an ingress lane, not a second source of commit facts. A
- * cross-posted `github/webhook-received` push delivery — provenance-checked
+ * received `github/webhook-received` push delivery — source-checked
  * against the linked connection stream, installation, repository id, and
  * default branch — is normalized per-event into
  * `repo/github-import-requested`, which opens the one import obligation in
@@ -146,7 +146,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
       }
       case "events.iterate.com/github/webhook-received": {
         const push = repoGithubPushFromWebhookPayload(event.payload);
-        const origin = event.source?.crossPostedFrom?.at(-1);
+        const origin = event.source?.copiedFrom?.at(-1);
         if (
           push === null ||
           state.github === null ||
@@ -450,7 +450,7 @@ type RepoProcessorDeps = {
     remote: string;
   }>;
   /** Link the repo to the GitHub repository (configure the link, arm webhook
-   * cross-posting) without pushing starter history first. */
+   * webhook delivery) without pushing starter history first. */
   linkGithub(input: { connection: string; owner: string; repo: string }): Promise<void>;
   /** Pull the linked private repository's default branch through the Worker
    * at depth one, overwriting the empty Artifact seed. */

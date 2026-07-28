@@ -188,7 +188,7 @@ heavy new transport / breaking contract change).
     default 5m), `#armOrClearIdleTimer()` (arm only when outbound connections
     exist), `runIdleTeardownNow()`; `#appendBatchHere` re-dials severed
     subscriptions on the next DOMAIN append and re-arms/clears the timer.
-  - Bug caught by the test: the teardown's own `subscriber-disconnected` fact
+  - Bug caught by the test: the teardown's own `connection-closed` fact
     re-triggered `needsOutboundReconcile` and instantly re-dialed — fixed by
     gating re-dial to non-`stream/*` (domain) appends.
   - Tests green: new `stream-idle-teardown.workers.test.ts` (sever → reason "idle"
@@ -200,7 +200,7 @@ heavy new transport / breaking contract change).
 
 - 2026-06-14 — Public PR opened: https://github.com/iterate/iterate/pull/1518 (draft).
 - 2026-06-14 — Narrowed the re-dial gate per Jonas: exclude EXACTLY the
-  `subscriber-disconnected` event (the one self-undoing trigger), not the whole
+  `connection-closed` event (the one self-undoing trigger), not the whole
   `stream/*` namespace. Documented inline in `stream.ts`.
 - 2026-06-14 — Subscriber-side belt-and-braces landed (host idle disconnect):
   - `stream-processor-host.ts`: in-memory idle timer (`HOST_IDLE_TEARDOWN_MS`, 5m),

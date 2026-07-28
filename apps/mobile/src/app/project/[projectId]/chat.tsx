@@ -1,10 +1,10 @@
 // Chat thread — one agent stream rendered as a feed. The heart of the app.
 //
 // Data flow: useLiveEvents reads the stream, then uses iterate/sdk/itx/react's
-// useItxSubscription to feed server-pushed batches into the same query cache.
+// useStreamConnection to feed server-pushed batches into the same query cache.
 // Sending appends to the agent stream over itx (the same lane the web dashboard
 // uses); the echo of our own message and everything the agent does arrive
-// through the subscription.
+// through the connection.
 //
 // Rendering runs the SAME reduction as the web dashboard (packages/ui
 // agent-ui-reducer via lib/feed.ts): user/assistant bubbles plus activity

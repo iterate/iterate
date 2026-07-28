@@ -127,8 +127,12 @@ doppler run --config prd -- pnpm cli itx run \
         (event) => event.type === "events.iterate.com/github/webhook-received",
       ),
       processorSubscriptions: agentEvents
-        .filter((event) => event.type === "events.iterate.com/stream/subscription-configured")
-        .map((event) => event.payload?.delivery?.processorSlug),
+        .filter(
+          (event) =>
+            event.type ===
+            "events.iterate.com/stream/subscription-configured",
+        )
+        .map((event) => event.payload?.receiver?.processorSlug),
     };
   '
 ```

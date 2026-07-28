@@ -1,7 +1,7 @@
 // Stream navigation helpers for the platform-wide admin stream explorer.
 
 import { useMemo } from "react";
-import type { ItxLiveSubscriptionHandle } from "iterate/sdk/itx/react";
+import type { StreamConnectionHandle } from "iterate/processors";
 import { connectItx, connectIterateSession, reportTransportSuspicion } from "iterate/sdk/itx/react";
 import {
   parseBrowserCoreStreamTreeState,
@@ -9,13 +9,13 @@ import {
 } from "~/domains/streams/client-libraries/browser/core-processor-state.ts";
 
 /**
- * Where remote admin tree nodes get state: path → subscribable stream.
+ * Where remote admin tree nodes get state: path → stream callback connection.
  */
 export type StreamTreeSource = (streamPath: string) => {
-  subscribe(args: {
+  openConnection(args: {
     events?: boolean;
     processEventBatch(batch: { state: unknown }): unknown;
-  }): Promise<ItxLiveSubscriptionHandle>;
+  }): Promise<StreamConnectionHandle>;
 };
 
 /**
@@ -28,9 +28,9 @@ export type StreamNavigator = {
 };
 
 /**
- * Reads one remote admin stream's state via a one-shot subscription: the first
- * push carries current state (DECISIONS D20), so subscribe → first push →
- * unsubscribe is the cheapest "fetch".
+ * Reads one remote admin stream's state via a short-lived callback connection:
+ * the first push carries current state (DECISIONS D20), so open → first push
+ * → close is the cheapest "fetch".
  */
 export function readStreamStateOnce(
   source: StreamTreeSource,
@@ -53,7 +53,7 @@ export function readStreamStateOnce(
       finish();
     }, READ_STATE_TIMEOUT_MS);
     source(streamPath)
-      .subscribe({
+      .openConnection({
         events: false,
         processEventBatch: (batch) => {
           if (done) return;
@@ -66,13 +66,13 @@ export function readStreamStateOnce(
           finish();
         },
       })
-      .then((subscription) => {
+      .then((connection) => {
         release = () =>
-          void Promise.resolve(subscription.unsubscribe())
+          void Promise.resolve(connection.close())
             .catch(() => {})
             // Release the stub too: on the tab-long shared socket, an
             // undisposed handle leaks one import-table entry per ⌘K node read.
-            .finally(() => (subscription as Partial<Disposable>)[Symbol.dispose]?.());
+            .finally(() => (connection as Partial<Disposable>)[Symbol.dispose]?.());
         if (done) finish();
       })
       .catch((error: unknown) => {
