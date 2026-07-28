@@ -469,7 +469,8 @@ describe("userspace GitHub pull-request routing", () => {
         name: "issue_comment",
       }),
     );
-    expect(ignored.appendBatches[0]?.events).toHaveLength(1);
+    expect(ignored.repoList).not.toHaveBeenCalled();
+    expect(ignored.appendBatches).toHaveLength(0);
   });
 
   it("takes submitted review text from the committed webhook without rereading its ref", async () => {
@@ -503,7 +504,8 @@ describe("userspace GitHub pull-request routing", () => {
       }),
     );
 
-    expect(test.appendBatches[0]?.events).toHaveLength(1);
+    expect(test.repoList).not.toHaveBeenCalled();
+    expect(test.appendBatches).toHaveLength(0);
   });
 
   it("creates the pull-request agent from a trusted mention", async () => {
@@ -548,15 +550,13 @@ describe("userspace GitHub pull-request routing", () => {
     expect(test.appendBatches[0]?.events).toHaveLength(1);
   });
 
-  it("copies native thread resolution without waking the agent", async () => {
+  it("leaves native thread resolution to the durable agent subscription", async () => {
     const test = harness({ agentExists: true });
     await handleGithubPullRequestWebhook(
       test.itx,
       webhook({ action: "resolved", name: "pull_request_review_thread" }),
     );
-    expect(test.appendBatches[0]?.events).toHaveLength(1);
-    expect(test.appendBatches[0]?.events[0]).toMatchObject({
-      type: "events.iterate.com/agent/binding-set",
-    });
+    expect(test.repoList).not.toHaveBeenCalled();
+    expect(test.appendBatches).toHaveLength(0);
   });
 });

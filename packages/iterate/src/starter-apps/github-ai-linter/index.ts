@@ -1,5 +1,9 @@
 import type { ItxBinding, Project, StreamEvent } from "../../sdk.ts";
-import { handleGithubPullRequestWebhook } from "./review-bot.ts";
+import {
+  handleGithubPullRequestWebhook,
+  loadLinkedGithubRepos,
+  type LinkedGithubRepo,
+} from "./review-bot.ts";
 import { loadGithubAiLinterRules, type GithubAiLinterRuleSource } from "./rules.ts";
 
 export type GithubAiLinterConfig = {
@@ -9,11 +13,13 @@ export type GithubAiLinterConfig = {
 
 export const GithubAiLinter = {
   create(env: { ITX: ItxBinding }, config: GithubAiLinterConfig) {
+    let linkedRepos: LinkedGithubRepo[] | undefined;
     return {
       async processEvent(event: StreamEvent) {
         if (
           event.type !== "events.iterate.com/github/webhook-received" &&
-          event.type !== "events.iterate.com/repo/github-link-configured"
+          event.type !== "events.iterate.com/repo/github-link-configured" &&
+          event.type !== "events.iterate.com/repo/github-unlinked"
         ) {
           return;
         }
@@ -23,8 +29,13 @@ export const GithubAiLinter = {
         ) {
           return;
         }
+        if (event.type === "events.iterate.com/repo/github-unlinked") {
+          linkedRepos = undefined;
+          return;
+        }
         using itx = await env.ITX.get();
         if (event.type === "events.iterate.com/repo/github-link-configured") {
+          linkedRepos = undefined;
           const connection = event.payload?.connection;
           if (typeof connection === "string" && connection.length > 0) {
             await retireHostedReviewBot(itx, connection);
@@ -32,6 +43,7 @@ export const GithubAiLinter = {
           return;
         }
         await handleGithubPullRequestWebhook(itx, event, {
+          loadLinkedRepos: async () => (linkedRepos ??= await loadLinkedGithubRepos(itx)),
           loadRules: () => loadGithubAiLinterRules(itx, config.rules),
           policyVersion: config.policyVersion,
         });
