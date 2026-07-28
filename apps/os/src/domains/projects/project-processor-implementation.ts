@@ -10,19 +10,24 @@ import { schedulerCreationEvents } from "../scheduler/scheduler-defaults.ts";
 import { SCHEDULER_PRIMARY_PATH } from "../scheduler/utils.ts";
 import { emailRouterCreationEvents } from "../email/email-defaults.ts";
 import { EMAIL_INTEGRATION_STREAM_PATH } from "../email/utils.ts";
-import { WORKER_BUILDING_HEADER } from "../workers/worker-fetch-dispatch.ts";
+import { defaultProjectWorkerRef, isRepoNotSeededError } from "../repos/utils.ts";
+import { isRetryableDurableObjectAvailabilityError } from "../streams/stream-unavailable.ts";
+import { isWorkerBuildInProgressError } from "../workers/worker-loader.ts";
+import type { ProjectWorker } from "../workers/schemas.ts";
 import type { ProjectCustomDomainDeps } from "./custom-domains.ts";
 import {
   ProjectProcessorContract,
   type ProjectProcessorState,
 } from "./project-processor-contract.ts";
 
-// Not a bound on build time: the probe fetch carries no buildBudgetMs, so
-// each attempt BLOCKS until the seeded worker's cold build (npm install
-// included) resolves or fails. The retry window only papers over transient
-// dispatch errors around that first build.
-const PROJECT_WORKER_READY_ATTEMPTS = 20;
-const PROJECT_WORKER_READY_RETRY_MS = 100;
+// One bounded recovery window for the expected source/build/DO lifecycle
+// between the config repo's durable creation certificate and its worker
+// becoming callable. The 60s horizon sits above the observed 47.5s
+// non-retried preview-e2e tail; 500ms polling avoids amplifying full-suite
+// build pressure. Unknown/application failures remain immediately terminal.
+const PROJECT_WORKER_READY_TIMEOUT_MS = 60_000;
+const PROJECT_WORKER_READY_BUILD_BUDGET_MS = 5_000;
+const PROJECT_WORKER_READY_RETRY_MS = 500;
 // Bounds each sibling-birth wait so a broken sibling fails the frame into
 // ordinary durable redelivery instead of pinning project creation forever;
 // the config repo's birth includes a git artifact push and has produced an
@@ -49,8 +54,8 @@ const SIBLING_BIRTH_BARRIER_TIMEOUT_MS = 75_000;
  *
  * READY. The config repo's creation saga commits its terminal
  * `repos/created` certificate on its own stream; the cross-post rule copies
- * it here. The reaction probes the default project worker (each probe
- * attempt blocks on the worker's cold build) and then appends
+ * it here. The reaction completes the default worker's platform-owned
+ * readiness handshake and then appends
  * `project/ready` — the fact `projects.get(slug).create()` callers await.
  *
  * CATALOGS. `reduce` projects cross-posted domain facts into list state:
@@ -361,51 +366,69 @@ export class ProjectProcessor extends StreamProcessor<
     );
   }
 
-  /**
-   * Probe the default project worker until it answers without the
-   * still-building marker. Each probe attempt BLOCKS on the seeded worker's
-   * cold build (npm install included); the retry window only papers over
-   * transient dispatch errors around that first build.
-   */
+  /** Complete the default worker's platform handshake, retrying only
+   * explicitly classified source/build/DO lifecycle states within one
+   * deadline. The handshake is a primitive value, not an application HTTP
+   * response or live Response stub. */
   async #waitForDefaultProjectWorker(): Promise<void> {
+    const startedAt = this.#now();
+    const transientOutcomes = new Map<ProjectWorkerReadinessTransientOutcome, number>();
+    let attempts = 0;
     let lastError: unknown;
-    for (let attempt = 1; attempt <= PROJECT_WORKER_READY_ATTEMPTS; attempt += 1) {
+    while (attempts === 0 || this.#now() - startedAt < PROJECT_WORKER_READY_TIMEOUT_MS) {
+      const remainingBeforeAttemptMs = PROJECT_WORKER_READY_TIMEOUT_MS - (this.#now() - startedAt);
+      attempts += 1;
+      let acknowledgement: unknown;
       try {
-        // Capability dispatch, on purpose: `worker.fetch` here is an ordinary
-        // method call whose Response comes back as a serialized copy — exactly
-        // enough for "the worker built, loaded, and answered". Protocol traffic
-        // (real HTTP, WebSockets) rides the fetch lane instead; a probe has no
-        // protocol needs (docs/dynamic-worker-dispatch.md).
-        const response = await this.deps.itx.worker.fetch(
-          new Request("https://iterate-project.localhost/__itx_project_ready"),
-        );
-        try {
-          if (response.headers.get(WORKER_BUILDING_HEADER) === "1") {
-            throw new Error("Default project worker is still building");
-          }
-          if (!response.ok) {
-            throw new Error(
-              `Default project worker readiness probe returned HTTP ${response.status}`,
-            );
-          }
-          return;
-        } finally {
-          // The returned Response can be a Cap'n Web RPC stub, and keeping
-          // that stub alive after the probe finishes is exactly the lifecycle
-          // pattern these stream tests are trying to avoid. Dispose on every
-          // attempt; local/miniflare Response objects without the hook are a
-          // no-op here.
-          disposeRpcResult(response);
-        }
+        acknowledgement = await this.deps.itx.workers
+          .get<ProjectWorker>(defaultProjectWorkerRef(), {
+            buildBudgetMs: Math.min(PROJECT_WORKER_READY_BUILD_BUDGET_MS, remainingBeforeAttemptMs),
+            flattenNestedPaths: true,
+          })
+          .invokeCapability({
+            args: [],
+            path: ["__iteratePlatformReady"],
+          });
       } catch (error) {
+        const outcome = classifyProjectWorkerReadinessTransient(error);
+        if (outcome === null) {
+          throw new Error(
+            `Default project worker readiness handshake failed terminally on attempt ${attempts}: ${errorIdentity(error)}`,
+            { cause: error },
+          );
+        }
         lastError = error;
-        if (attempt === PROJECT_WORKER_READY_ATTEMPTS) break;
-        await this.#sleep(PROJECT_WORKER_READY_RETRY_MS);
+        transientOutcomes.set(outcome, (transientOutcomes.get(outcome) ?? 0) + 1);
+        const remainingMs = PROJECT_WORKER_READY_TIMEOUT_MS - (this.#now() - startedAt);
+        if (remainingMs <= 0) break;
+        await this.#sleep(Math.min(PROJECT_WORKER_READY_RETRY_MS, remainingMs));
+        continue;
       }
+
+      if (acknowledgement !== true) {
+        throw new Error(
+          "Default project worker readiness handshake violated its protocol on " +
+            `attempt ${attempts}: expected true, received ${String(acknowledgement)} ` +
+            `(${typeof acknowledgement})`,
+        );
+      }
+      if (attempts > 1) {
+        console.info("default project worker readiness converged", {
+          attempts,
+          projectId: this.deps.itx.projectId,
+          transientOutcomes: Object.fromEntries(transientOutcomes),
+          waitedMs: this.#now() - startedAt,
+        });
+      }
+      return;
     }
-    throw new Error("Default project worker did not become ready before project/ready.", {
-      cause: lastError,
-    });
+    throw new Error(
+      `Default project worker did not become ready within ${PROJECT_WORKER_READY_TIMEOUT_MS}ms ` +
+        `after ${attempts} attempts; transient outcomes: ${[...transientOutcomes]
+          .map(([outcome, count]) => `${outcome}=${count}`)
+          .join(", ")}; last error: ${errorIdentity(lastError)}`,
+      { cause: lastError },
+    );
   }
 
   #customDomainProvisioner(): ProjectCustomDomainDeps {
@@ -665,7 +688,26 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function disposeRpcResult(value: unknown): void {
-  const dispose = (value as { [Symbol.dispose]?: () => void } | null | undefined)?.[Symbol.dispose];
-  dispose?.call(value);
+type ProjectWorkerReadinessTransientOutcome =
+  | "durable_object_unavailable"
+  | "repo_not_seeded"
+  | "worker_build_in_progress";
+
+function classifyProjectWorkerReadinessTransient(
+  error: unknown,
+): ProjectWorkerReadinessTransientOutcome | null {
+  if (isWorkerBuildInProgressError(error)) return "worker_build_in_progress";
+  if (isRepoNotSeededError(error)) return "repo_not_seeded";
+  if (isRetryableDurableObjectAvailabilityError(error)) return "durable_object_unavailable";
+  return null;
+}
+
+function errorIdentity(error: unknown): string {
+  if (typeof error === "object" && error !== null) {
+    const candidate = error as { message?: unknown; name?: unknown };
+    if (typeof candidate.name === "string" && typeof candidate.message === "string") {
+      return `${candidate.name}: ${candidate.message}`;
+    }
+  }
+  return String(error);
 }

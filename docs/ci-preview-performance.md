@@ -106,6 +106,12 @@ serially because they intentionally share one warm container.
 - **Readiness retries are bounded and diagnostic.** Each request has a short
   watchdog, the overall deploy check has a hard deadline, and the final HTTP
   response body or transport error is retained in the failure message.
+  Fresh-project readiness is a platform-owned primitive capability handshake,
+  not an application HTTP request: only named repo/build/DO availability
+  states retry inside one 60-second window, each cold-build wait is clamped to
+  the time remaining in that window, and the reserved SDK dispatcher owns the
+  acknowledgement. An application failure or invalid acknowledgement remains
+  immediately terminal and retains its identity.
 - **Retries remain visible.** Vitest and Playwright write compact retry
   telemetry that is folded into the preview state in the PR description. The
   quarantined TUI marker writes an empty ledger and names its restoration task.

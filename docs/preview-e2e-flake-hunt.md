@@ -129,10 +129,49 @@ script was never requested and never ran. The concurrency assertion also
 prints every rejected script index and reason instead of a generic object
 diff.
 
-The new immutable-head proof remains at 0/25 until these fixes pass a fresh
-exact-head preview with zero retries. As in every current round, each counted
-iteration is a separate canonical Depot run with ordinary artifacts and
-PostHog telemetry.
+The corrected `935ca2e93` head then passed its exact-head preflight with zero
+retries: Depot run `0znz7824db` finished in 2 minutes 40 seconds and the
+finalizer normalized all ten telemetry artifacts into 6,744 PostHog events.
+The first strict iteration (`6f6c34k211`) was finally green in 3 minutes 41
+seconds, but correctly reset the proof to 0/25 because the live-state Vitest
+case absorbed a retry. Its first attempt spent 99.3 seconds waiting for a new
+project to become ready; the fresh-project retry passed in 16 seconds.
+
+PostHog established the tail rather than treating it as an isolated slow run.
+Across 313 executions of that exact test in 90 days, all on Depot, two had
+retried. Normal duration was 11.8 seconds at p50, 18.7 seconds at p95, and 29.1
+seconds at p99; the longest zero-retry success was 47.5 seconds, while this
+retry reached 115.3 seconds. A separate July 22 test retry had surfaced the
+same generic `Default project worker did not become ready before
+project/ready` failure.
+
+Cloudflare traces showed that project birth and the config-repo seed completed,
+the exact default-worker build artifact was already cached, and an isolated
+project created immediately afterwards became ready and served successfully.
+Under the failed full-suite burst, however, the root processor repeatedly ran
+the same roughly six-second readiness loop. That loop used an application HTTP
+`fetch`, blindly retried every error 20 times, then threw one generic outer
+error whose cause was lost across the Durable Object boundary. It therefore
+could neither classify the failing condition nor distinguish platform
+readiness from the seeded app's HTTP behavior.
+
+Project birth now calls a platform-owned primitive handshake inherited from
+`IterateWorkerEntrypoint`. It retries only the named repo-not-seeded,
+worker-build-in-progress, and Durable Object availability states, polls every
+500ms under one 60-second deadline (above the observed zero-retry success
+tail), clamps each cold-build wait to at most five seconds and the remaining
+deadline, and reports aggregate outcome counts on convergence. The SDK owns
+the reserved acknowledgement instead of dispatching it into application code.
+An application error or invalid acknowledgement fails on the first attempt
+with its name/message embedded in the outer error; deadline exhaustion records
+the attempt count, every transient class, and the last error. This removes
+both the Response-stub/application coupling and the unobservable blanket
+retry.
+
+The new immutable-head proof remains at 0/25 until this latest fix passes a
+fresh exact-head preview with zero retries. As in every current round, each
+counted iteration is a separate canonical Depot run with ordinary artifacts
+and PostHog telemetry.
 
 ## Round 15 (2026-07-23, post-#2284)
 

@@ -17,7 +17,7 @@ import {
 } from "iterate/processors/testing";
 import type { ProjectDirectoryRecord } from "../../project-directory.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
-import { workerBuildingResponse } from "../workers/worker-fetch-dispatch.ts";
+import { defaultProjectWorkerRef } from "../repos/utils.ts";
 import { projectCreationEvents } from "./project-defaults.ts";
 import type {
   ProjectProcessorContract,
@@ -69,6 +69,18 @@ const PROJECT: ProjectDirectoryRecord = {
   slug: "garple",
 };
 
+function errorCauseMessages(error: unknown): string[] {
+  const messages: string[] = [];
+  const seen = new Set<object>();
+  let candidate = error;
+  while (typeof candidate === "object" && candidate !== null && !seen.has(candidate)) {
+    seen.add(candidate);
+    if (candidate instanceof Error) messages.push(`${candidate.name}: ${candidate.message}`);
+    candidate = (candidate as { cause?: unknown }).cause;
+  }
+  return messages;
+}
+
 function customDomainSnapshot(
   input: Partial<ProjectCustomDomainCloudflareSnapshot> = {},
 ): ProjectCustomDomainCloudflareSnapshot {
@@ -94,8 +106,10 @@ const SIBLINGS = ["capability-host", "scheduler", "repo", "email"] as const;
 function makeProjectHarness(
   options: {
     substrate?: HarnessSubstrate;
-    /** Served to successive worker readiness probes; a 204 after the list runs out. */
-    workerResponses?: Response[];
+    /** Served to successive worker readiness handshakes; `true` after the list runs out. */
+    workerReadinessResults?: Array<true | false | Error>;
+    /** Virtual duration of each readiness call, clamped to its cold-build budget. */
+    workerReadinessAdvanceMs?: number[];
     /** Parks the named sibling's waitUntilProcessed until the promise resolves. */
     siblingWaitBarriers?: Partial<Record<SiblingName, Promise<void>>>;
     /** Advance the virtual clock by this much inside the named sibling's wait,
@@ -104,7 +118,11 @@ function makeProjectHarness(
     processorClass?: typeof ProjectProcessor;
   } = {},
 ) {
-  let workerFetchCalls = 0;
+  let workerReadinessCalls = 0;
+  const workerReadinessDispatches: Array<{
+    buildBudgetMs?: number;
+    flattenNestedPaths?: boolean;
+  }> = [];
   const siblingWaits: { processor: SiblingName; offset: number; timeoutMs?: number }[] = [];
   const siblingWaitStarted = {} as Record<SiblingName, Promise<void>>;
   const resolveSiblingWaitStarted = {} as Record<SiblingName, () => void>;
@@ -139,11 +157,22 @@ function makeProjectHarness(
     projectId: "prj_test",
     repo: { processor: { waitUntilProcessed: waitUntilProcessed("repo") } },
     scheduler: { processor: { waitUntilProcessed: waitUntilProcessed("scheduler") } },
-    worker: {
-      fetch: async () => {
-        const response = options.workerResponses?.[workerFetchCalls];
-        workerFetchCalls += 1;
-        return response ?? new Response(null, { status: 204 });
+    workers: {
+      get: (ref: unknown, dispatch: { buildBudgetMs?: number; flattenNestedPaths?: boolean }) => {
+        expect(ref).toEqual(defaultProjectWorkerRef());
+        workerReadinessDispatches.push(dispatch);
+        return {
+          invokeCapability: async (input: { args?: unknown[]; path: string[] }) => {
+            expect(input).toEqual({ args: [], path: ["__iteratePlatformReady"] });
+            const call = workerReadinessCalls;
+            const result = options.workerReadinessResults?.[call];
+            workerReadinessCalls += 1;
+            const advanceMs = options.workerReadinessAdvanceMs?.[call] ?? 0;
+            clockBox.advance(Math.min(advanceMs, dispatch.buildBudgetMs ?? advanceMs));
+            if (result instanceof Error) throw result;
+            return result ?? true;
+          },
+        };
       },
     },
   } as unknown as ProjectRpcTarget;
@@ -154,10 +183,13 @@ function makeProjectHarness(
     createProcessor: (deps) =>
       new Processor({
         ...deps,
-        // The worker probe's retry pause: immediate but still async. The
-        // project processor is not time-driven, so nothing here needs the
-        // virtual clock's advanceTime choreography.
-        sleep: () => new Promise((resolve) => setTimeout(resolve, 0)),
+        // Readiness retries use the real bounded-time algorithm without
+        // making the unit suite wait: each sleep advances this harness's
+        // virtual clock by the requested amount.
+        sleep: async (ms) => {
+          clockBox.advance(ms);
+          await Promise.resolve();
+        },
         itx,
         customDomains,
       }),
@@ -176,7 +208,8 @@ function makeProjectHarness(
     customDomains,
     siblingWaits,
     siblingWaitStarted,
-    workerFetchCalls: () => workerFetchCalls,
+    workerReadinessCalls: () => workerReadinessCalls,
+    workerReadinessDispatches,
   };
 }
 
@@ -278,18 +311,116 @@ describe("ProjectProcessor bootstrap", () => {
     expect(h.state().birthCertificate).toEqual(PROJECT_CREATED.payload);
   });
 
-  it("waits through a cold-build probe response before marking the project ready", async () => {
+  it.each([
+    {
+      error: Object.assign(new Error("coordinator still owns the build"), {
+        name: "WorkerBuildInProgressError",
+      }),
+      outcome: "worker_build_in_progress",
+    },
+    {
+      error: Object.assign(new Error("config repo is still materializing"), {
+        name: "RepoNotSeededError",
+      }),
+      outcome: "repo_not_seeded",
+    },
+    {
+      error: Object.assign(new Error("incarnation reset during dispatch"), {
+        retryable: true,
+      }),
+      outcome: "durable_object_unavailable",
+    },
+  ])("waits through classified $outcome before marking the project ready", async (fixture) => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      const h = makeProjectHarness({
+        workerReadinessResults: [fixture.error, true],
+      });
+      await h.play(["append", PROJECT_CREATED], ["append", CONFIG_REPO_READY]);
+
+      expect(h.events("events.iterate.com/project/ready")).toHaveLength(1);
+      expect(h.workerReadinessCalls()).toBe(2);
+      expect(h.workerReadinessDispatches).toEqual([
+        { buildBudgetMs: 5_000, flattenNestedPaths: true },
+        { buildBudgetMs: 5_000, flattenNestedPaths: true },
+      ]);
+      expect(h.state().ready).toBe(true);
+      expect(info).toHaveBeenCalledWith("default project worker readiness converged", {
+        attempts: 2,
+        projectId: "prj_test",
+        transientOutcomes: { [fixture.outcome]: 1 },
+        waitedMs: 500,
+      });
+    } finally {
+      info.mockRestore();
+    }
+  });
+
+  it("fails an unclassified worker error immediately with its identity preserved", async () => {
     const h = makeProjectHarness({
-      workerResponses: [
-        workerBuildingResponse(),
-        Response.json({ app: "hello", projectId: "prj_test" }),
+      workerReadinessResults: [
+        Object.assign(new Error("customer module initialization exploded"), {
+          name: "CustomerModuleError",
+        }),
       ],
     });
-    await h.play(["append", PROJECT_CREATED], ["append", CONFIG_REPO_READY]);
 
-    expect(h.events("events.iterate.com/project/ready")).toHaveLength(1);
-    expect(h.workerFetchCalls()).toBe(2);
-    expect(h.state().ready).toBe(true);
+    const failure = h.play(["append", PROJECT_CREATED], ["append", CONFIG_REPO_READY]);
+
+    await expect(failure).rejects.toSatisfy((error: unknown) => {
+      const messages = errorCauseMessages(error);
+      return (
+        messages.includes(
+          "Error: Default project worker readiness handshake failed terminally on attempt 1: " +
+            "CustomerModuleError: customer module initialization exploded",
+        ) && messages.includes("CustomerModuleError: customer module initialization exploded")
+      );
+    });
+    expect(h.workerReadinessCalls()).toBe(1);
+    expect(h.events("events.iterate.com/project/ready")).toHaveLength(0);
+  });
+
+  it("rejects an invalid platform acknowledgement without retrying it", async () => {
+    const h = makeProjectHarness({ workerReadinessResults: [false] });
+
+    const failure = h.play(["append", PROJECT_CREATED], ["append", CONFIG_REPO_READY]);
+
+    await expect(failure).rejects.toSatisfy((error: unknown) =>
+      errorCauseMessages(error).includes(
+        "Error: Default project worker readiness handshake violated its protocol on attempt 1: " +
+          "expected true, received false (boolean)",
+      ),
+    );
+    expect(h.workerReadinessCalls()).toBe(1);
+    expect(h.events("events.iterate.com/project/ready")).toHaveLength(0);
+  });
+
+  it("bounds classified readiness recovery and reports every observed outcome", async () => {
+    const building = Object.assign(new Error("coordinator still owns the build"), {
+      name: "WorkerBuildInProgressError",
+    });
+    const h = makeProjectHarness({
+      workerReadinessResults: Array.from({ length: 200 }, () => building),
+      workerReadinessAdvanceMs: Array.from({ length: 200 }, () => 4_000),
+    });
+
+    const failure = h.play(["append", PROJECT_CREATED], ["append", CONFIG_REPO_READY]);
+
+    await expect(failure).rejects.toSatisfy((error: unknown) =>
+      errorCauseMessages(error).some(
+        (message) =>
+          message ===
+          "Error: Default project worker did not become ready within 60000ms after 14 attempts; " +
+            "transient outcomes: worker_build_in_progress=14; last error: " +
+            "WorkerBuildInProgressError: coordinator still owns the build",
+      ),
+    );
+    expect(h.workerReadinessCalls()).toBe(14);
+    expect(h.workerReadinessDispatches.at(-1)).toEqual({
+      buildBudgetMs: 1_500,
+      flattenNestedPaths: true,
+    });
+    expect(h.events("events.iterate.com/project/ready")).toHaveLength(0);
   });
 });
 

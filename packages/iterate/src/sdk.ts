@@ -353,6 +353,8 @@ function selfAlarmState<State extends DurableObjectState>(ctx: State, env: Itera
  *   anything a reaction appends should carry an idempotency key.
  * - `invokeCapability`: the flattened `itx.worker.<path>` dispatcher — add a
  *   getter or method to your class and it becomes a capability surface.
+ * - `__iteratePlatformReady`: the reserved platform-owned primitive
+ *   handshake used while creating a freshly seeded project.
  * - `fetchDynamicWorker`: forward HTTP (WebSockets included) to another of
  *   the project's dynamic workers.
  */
@@ -389,6 +391,12 @@ export class IterateWorkerEntrypoint<
   /** Platform entry point for flattened `itx.worker.<path>` capability
    * calls (see the class docstring). */
   async invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown> {
+    if (input.path.length === 1 && input.path[0] === "__iteratePlatformReady") {
+      if ((input.args?.length ?? 0) !== 0) {
+        throw new Error("__iteratePlatformReady does not accept arguments");
+      }
+      return true;
+    }
     return await invokeCapability(this, input);
   }
 }
