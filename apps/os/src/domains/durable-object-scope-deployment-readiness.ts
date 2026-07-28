@@ -7,22 +7,15 @@ import {
   type WorkerDeploymentVersionLike,
 } from "./durable-object-deployment-readiness.ts";
 
-export type CreatedScopeDeploymentTarget = {
-  getTarget: () => DurableObjectDeploymentTarget;
-  kind: string;
-};
-
 type WaitForCreatedScopeDeploymentVersionInput = {
   expectedVersion: WorkerDeploymentVersionLike;
   projectId: string | null;
   scopeKind: string;
   scopePath: string;
-  targets: CreatedScopeDeploymentTarget[];
-};
-
-export type CreatedScopeDeploymentReadiness = {
-  kind: string;
-  readiness: DeploymentVersionReadiness;
+  targets: Array<{
+    getTarget: () => DurableObjectDeploymentTarget;
+    kind: string;
+  }>;
 };
 
 function targetNotReadyError(
@@ -49,7 +42,7 @@ function targetNotReadyError(
 export async function waitForCreatedScopeDeploymentVersion(
   input: WaitForCreatedScopeDeploymentVersionInput,
   readinessOptions: DeploymentVersionReadinessOptions = {},
-): Promise<CreatedScopeDeploymentReadiness[]> {
+): Promise<Array<{ kind: string; readiness: DeploymentVersionReadiness }>> {
   const results = await Promise.all(
     input.targets.map(async (target) => {
       const { readiness } = await acquireDurableObjectDeploymentTarget({
