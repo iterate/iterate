@@ -461,6 +461,23 @@ describe("ProjectProcessor bootstrap", () => {
     await h.play(["append", PROJECT_CREATE_REQUESTED], ["append", PROJECT_CREATED]);
     expect(h.state().birthCertificate).toEqual(PROJECT_CREATED.payload);
   });
+
+  it("keeps trusted historical creation terminals valid across contract version bumps", async () => {
+    const historicalTerminal = {
+      ...PROJECT_CREATED,
+      source: {
+        processor: {
+          ...PROJECT_CREATED.source.processor,
+          version: "0.2.0",
+        },
+      },
+    } satisfies ProjectEventInput;
+    const h = makeProjectHarness();
+
+    await h.play(["append", PROJECT_CREATE_REQUESTED], ["append", historicalTerminal]);
+
+    expect(h.state().birthCertificate).toEqual(PROJECT_CREATED.payload);
+  });
 });
 
 // =============================================================================
@@ -572,11 +589,11 @@ describe("ProjectProcessor custom domains", () => {
     ]);
   });
 
-  it("falls back to a directory record built from state when the project directory has no entry", async () => {
+  it("uses the creation-request slug before terminal creation when the directory has no entry", async () => {
     const h = makeProjectHarness();
     h.customDomains.readProject.mockResolvedValueOnce(null);
     await h.play(
-      ["append", PROJECT_CREATE_REQUESTED, PROJECT_CREATED],
+      ["append", PROJECT_CREATE_REQUESTED],
       [
         "append",
         {
@@ -586,6 +603,7 @@ describe("ProjectProcessor custom domains", () => {
       ],
     );
 
+    expect(h.state().birthCertificate).toBeNull();
     expect(h.customDomains.ensure).toHaveBeenCalledWith({
       hostname: "garple.com",
       project: { id: "prj_test", slug: "demo", organizationId: null, name: "demo" },

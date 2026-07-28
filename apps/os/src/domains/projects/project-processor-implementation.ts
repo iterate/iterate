@@ -793,10 +793,13 @@ function upsertCustomDomain<
 
 /** The directory record fallback when the project directory has no entry yet. */
 function projectRecordFromState(
-  state: { birthCertificate: { config: { slug: string } } | null },
+  state: {
+    birthCertificate: { config: { slug: string } } | null;
+    createRequest: { config: { slug: string } } | null;
+  },
   projectId: string,
 ): ProjectDirectoryRecord {
-  const slug = state.birthCertificate?.config.slug ?? projectId;
+  const slug = state.birthCertificate?.config.slug ?? state.createRequest?.config.slug ?? projectId;
   return { id: projectId, slug, organizationId: null, name: slug };
 }
 

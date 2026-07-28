@@ -510,12 +510,14 @@ export function parseProjectCreationTerminal(input: {
 }): ProjectCreationTerminal | null {
   const { event, projectId, request, requestOffset } = input;
   const processor = event.source?.processor;
+  // The stamped version describes which Project processor originally emitted
+  // the fact; it must not be pinned to today's version or a later refold would
+  // discard an otherwise trusted historical terminal.
   if (
     event.path !== "/" ||
     event.source?.crossPostedFrom !== undefined ||
     processor?.authority !== "platform" ||
     processor.slug !== ProjectProcessorContract.slug ||
-    processor.version !== ProjectProcessorContract.version ||
     processor.stream.path !== "/" ||
     processor.stream.projectId !== projectId
   ) {
