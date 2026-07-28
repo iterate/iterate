@@ -337,20 +337,18 @@ alarm/watchdog behavior, or receiver batch construction.
 
 ## File map
 
-| File                                                         | What it does                                                                  |
-| ------------------------------------------------------------ | ----------------------------------------------------------------------------- |
-| `stream-durable-object.ts`                                   | Appends events, exposes stream methods, and starts post-commit reconciliation |
-| `core-processor-contract.ts`                                 | Declares stream control events and reduced state                              |
-| `core-processor.ts`                                          | Validates and reduces core events without making calls                        |
-| `stream-storage.ts`                                          | Stores the event log and delivery cursors                                     |
-| `stream-connections.ts`                                      | Opens live callbacks, replays history, and sends newly appended events        |
-| `stream-event-sender.ts`                                     | Sends events for durable subscriptions and owns their cursors and retries     |
-| `subscription-receiver-calls.ts`                             | Calls hosted processors, ITX methods, and receiving streams                   |
-| `retained-event-callbacks.ts`                                | Retains and releases session and hosted-processor callback capabilities       |
-| `copy-appends.ts`                                            | Builds copied events, enforces the inbound stamp fence, and suppresses cycles |
-| `event-filter.ts`                                            | Compiles and evaluates event-type and JSONata filters                         |
-| `packages/iterate/src/processors/stream-processor.ts`        | Defines the processor class and its event-handling helpers                    |
-| `packages/iterate/src/processors/stream-processor-runner.ts` | Folds hosted processor events and stores checkpoints                          |
+| File                                                         | What it does                                                                                     |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
+| `stream-durable-object.ts`                                   | Appends events, exposes stream methods, calls receivers, and starts post-commit reconciliation   |
+| `core-processor-contract.ts`                                 | Declares stream control events and reduced state                                                 |
+| `core-processor.ts`                                          | Validates and reduces core events without making calls                                           |
+| `stream-storage.ts`                                          | Stores the event log and delivery cursors                                                        |
+| `stream-event-sender.ts`                                     | Opens live callbacks, sends events for durable subscriptions, and owns their cursors and retries |
+| `retained-event-callbacks.ts`                                | Retains and releases session and hosted-processor callback capabilities                          |
+| `copy-appends.ts`                                            | Builds copied events, enforces the inbound stamp fence, and suppresses cycles                    |
+| `event-filter.ts`                                            | Compiles and evaluates event-type and JSONata filters                                            |
+| `packages/iterate/src/processors/stream-processor.ts`        | Defines the processor class and its event-handling helpers                                       |
+| `packages/iterate/src/processors/stream-processor-runner.ts` | Folds hosted processor events and stores checkpoints                                             |
 
 The public stream surface is written in `src/rpc-targets.ts` and generated into
 `src/itx-api.generated.ts` and `packages/iterate/src/itx-api.generated.ts`.

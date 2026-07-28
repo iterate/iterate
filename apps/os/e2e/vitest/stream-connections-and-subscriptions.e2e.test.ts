@@ -22,7 +22,7 @@ import type {
   Stream,
   StreamRuntimeDebugState,
 } from "../../src/itx-api.generated.ts";
-import { deliveryId as streamDeliveryId } from "../../src/domains/streams/delivery-math.ts";
+import { deliveryId as streamDeliveryId } from "../../src/domains/streams/stream-event-sender.ts";
 import { subscriptionConfigurationForDelivery } from "../../src/domains/streams/core-processor-contract.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import {

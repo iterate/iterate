@@ -8,7 +8,7 @@ import type {
   CoreProcessorState,
   SubscriptionConfiguredPayload,
 } from "./core-processor-contract.ts";
-import { deliveryId } from "./delivery-math.ts";
+import { deliveryId } from "./stream-event-sender.ts";
 import { buildCopyAppends } from "./copy-appends.ts";
 
 const PROJECT_ID = "prj_stream_receiver";

@@ -494,12 +494,6 @@ export const CoreProcessorContract = defineProcessorContract({
         subscriptionKey: z.string().trim().min(1),
         reason: SubscriptionRemovalReason,
       }),
-      examples: [
-        {
-          description: "An agent explicitly stops receiving repository events.",
-          payload: { subscriptionKey: "github-repo:/repos/root", reason: "requested" },
-        },
-      ],
     },
     "events.iterate.com/stream/subscription-delivery-halted": {
       description:
@@ -512,33 +506,12 @@ export const CoreProcessorContract = defineProcessorContract({
         attempts: z.number().int().positive(),
         error: z.string().trim().min(1).max(4_096).optional(),
       }),
-      examples: [
-        {
-          description:
-            "A webhook receiver stayed down through the whole retry ladder, so delivery gave up loudly.",
-          payload: {
-            subscriptionKey: "ops-webhook",
-            reason: "delivery-failed",
-            afterOffset: 1874,
-            attempts: 15,
-            error:
-              "webhook POST https://hooks.example.com/iterate/stream-events failed with status 503",
-          },
-        },
-      ],
     },
     "events.iterate.com/stream/subscription-delivery-resumed": {
       description: "Resumes one halted subscription at its existing cursor.",
       payloadSchema: z.strictObject({
         subscriptionKey: z.string().trim().min(1),
       }),
-      examples: [
-        {
-          description:
-            "Resumes a subscription after the receiver recovered; delivery continues from the cursor where it halted.",
-          payload: { subscriptionKey: "ops-webhook" },
-        },
-      ],
     },
     "events.iterate.com/stream/subscription-cursor-set": {
       description:
@@ -568,50 +541,6 @@ export const CoreProcessorContract = defineProcessorContract({
         kind: StreamConnectionKind,
         openedBy: ConnectionOpenerDescriptor.optional(),
       }),
-      examples: [
-        {
-          description:
-            "A durable hosted processor was woken, returned its callback, and announced its contract (consumes/emits abridged).",
-          payload: {
-            connectionKey: "prj_01jzp3v9qkfxeb2m4n8r7wd5ha.iterate/agents/onboarding#agent",
-            kind: "hosted",
-            openedBy: {
-              processor: {
-                announcement: {
-                  slug: "agent",
-                  version: "5.0.0",
-                  description:
-                    "Maintains model-visible history, schedules debounced offset-identified LLM turns, and executes scripts through the capability host.",
-                  consumes: [
-                    "events.iterate.com/agents/context-added",
-                    "events.iterate.com/agent/llm-request-settled",
-                  ],
-                  emits: [
-                    "events.iterate.com/agents/context-added",
-                    "events.iterate.com/agent/llm-request-requested",
-                  ],
-                  ownedEvents: [
-                    {
-                      type: "events.iterate.com/agents/context-added",
-                      description: "A model-visible context item was added.",
-                    },
-                    { type: "events.iterate.com/agent/llm-request-requested" },
-                  ],
-                },
-              },
-            },
-          },
-        },
-        {
-          description:
-            "An anonymous session connection: a browser stream-viewer tab receiving newly appended events.",
-          payload: {
-            connectionKey: "d4f8a1b2-6c3e-4e9a-8b57-0f1c2d3e4a5b",
-            kind: "session",
-            openedBy: { description: "browser" },
-          },
-        },
-      ],
     },
     "events.iterate.com/stream/connection-closed": {
       description:
@@ -622,23 +551,6 @@ export const CoreProcessorContract = defineProcessorContract({
         /** Present when the connection closed because an operation failed. */
         error: z.string().trim().min(1).optional(),
       }),
-      examples: [
-        {
-          description: "A stream-viewer tab closed its session connection.",
-          payload: {
-            connectionKey: "d4f8a1b2-6c3e-4e9a-8b57-0f1c2d3e4a5b",
-            reason: "closed-by-owner",
-          },
-        },
-        {
-          description:
-            "The stream went quiet past its idle window and dropped its configured connections so everyone can hibernate; the durable config is kept and the next append re-wakes.",
-          payload: {
-            connectionKey: "prj_01jzp3v9qkfxeb2m4n8r7wd5ha.iterate/agents/onboarding#agent",
-            reason: "idle",
-          },
-        },
-      ],
     },
     [STREAM_PROCESSOR_REVIVED_EVENT_TYPE]: {
       description:
@@ -665,28 +577,6 @@ export const CoreProcessorContract = defineProcessorContract({
           })
           .optional(),
       }),
-      examples: [
-        {
-          description:
-            'The stream stepped over a confirmed failing event on an onFailingEvent: "skip" subscription.',
-          payload: {
-            message:
-              'subscription "project-worker" skipped failing event at offset 812 after 3 attempts: receiver rejected payload',
-          },
-        },
-        {
-          description:
-            "A processor skipped an event that fails its contract's schema, with the structured cause attached.",
-          payload: {
-            message:
-              'stream processor "agent" skipped event at offset 42 ("events.iterate.com/agents/context-added"): it fails the contract\'s schema',
-            error: {
-              name: "ZodError",
-              message: 'Invalid input: expected string, received number at "content"',
-            },
-          },
-        },
-      ],
     },
     "events.iterate.com/stream/paused": {
       description: "Records that the stream is paused and should reject ordinary appends.",

@@ -3,6 +3,7 @@ import { z } from "zod";
 import type {
   ProcessorRuntimeState,
   StreamDeliveryBatch,
+  StreamProcessorWakeRequest,
   CopyReceipt,
   StreamConnectionHandle,
 } from "iterate/processors";
@@ -12,14 +13,16 @@ import {
   sameIdempotentEvent,
   StreamIdMismatchError,
   streamIdMismatchMessage,
+  StreamReceiverUnavailableError,
 } from "iterate/processors";
 import { StreamOffsetConflictError, streamOffsetConflictMessage } from "iterate/processors";
 import type { StreamEvent, StreamEventInput } from "iterate/processors";
 import { StreamEventInput as StreamEventInputSchema } from "iterate/processors";
 import { StreamRuntimeMetrics } from "iterate/processors";
-import { LiveState, LiveStateRpcTarget } from "iterate/sdk/capnweb";
+import { disposeIgnoredRpcResult, LiveState, LiveStateRpcTarget } from "iterate/sdk/capnweb";
 import { streamDeliveryAuthContext } from "../../auth.ts";
 import { workerVersion, type Env } from "../../env.ts";
+import { evaluateItxExpression, type ItxExpression } from "../../itx/expression.ts";
 import type { Stream } from "../../itx-api.generated.ts";
 import {
   deploymentItxForInternal,
@@ -40,16 +43,20 @@ import {
   isInternalStreamIdempotencyKey,
   sameCopiedEventIdentity,
 } from "./stream-delivery-utils.ts";
-import { computeBackoffMs } from "./delivery-math.ts";
 import {
   pruneOrphanedSubscriptionCursorRows,
   clearSubscriptionCursorFailuresAfterStateRebuild,
   SqliteSubscriptionCursorStore,
   StreamEventLog,
 } from "./stream-storage.ts";
-import { StreamEventSender } from "./stream-event-sender.ts";
+import {
+  computeBackoffMs,
+  StreamEventSender,
+  type ExpectedHostedDeliveryState,
+  type SubscriptionReceiverCalls,
+} from "./stream-event-sender.ts";
 import type { StreamRuntimeDebugState } from "./stream-runtime-state.ts";
-import { createSubscriptionReceiverCalls } from "./subscription-receiver-calls.ts";
+import { retainProcessorWakeResponse } from "./retained-event-callbacks.ts";
 import {
   isDurableObjectLifecycleError,
   STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX,
@@ -207,6 +214,96 @@ export class StreamDeliveryAlarmBoundary {
   }
 }
 
+// The concrete calls a source stream can make to subscription receivers.
+// Callback retention is separate in retained-event-callbacks.ts.
+
+const WORKERS_HUNG_ENTRYPOINT_MESSAGE =
+  "The Workers runtime canceled this request because it detected that your Worker's code had hung and would never generate a response.";
+
+function isWorkersHungEntrypointError(error: unknown): error is Error {
+  return (
+    error instanceof Error &&
+    error.name === "Error" &&
+    error.message.startsWith(WORKERS_HUNG_ENTRYPOINT_MESSAGE)
+  );
+}
+
+/** Convert a canceled project-worker call into the receiver-availability error contract. */
+function rethrowItxDeliveryError(error: unknown): never {
+  if (isWorkersHungEntrypointError(error)) {
+    throw new StreamReceiverUnavailableError(
+      `project worker receiver was canceled before acknowledgement: ${error.message}`,
+      { cause: error },
+    );
+  }
+  throw error;
+}
+
+/** Build the three concrete calls used by the receiver union. */
+function createSubscriptionReceiverCalls(deps: {
+  createAuthorityRoot(): unknown;
+  copyToStream(path: string, batch: StreamDeliveryBatch): Promise<CopyReceipt>;
+  onHostedDeliveryError(
+    subscriptionKey: string,
+    error: unknown,
+    expectedDelivery: ExpectedHostedDeliveryState,
+  ): void;
+}): SubscriptionReceiverCalls {
+  const evaluateItxDelivery = async (expression: ItxExpression, batch: StreamDeliveryBatch) => {
+    let value: unknown;
+    try {
+      ({ value } = await evaluateItxExpression(
+        deps.createAuthorityRoot(),
+        toInvocation(expression, batch),
+      ));
+    } catch (error) {
+      rethrowItxDeliveryError(error);
+    }
+    try {
+      disposeIgnoredRpcResult(value);
+    } catch (error) {
+      // The completed call is the acknowledgement. Cleanup failure is visible,
+      // but must not retry and send the same batch twice.
+      console.warn("ITX stream delivery result dispose failed after acknowledgement", { error });
+    }
+  };
+
+  return {
+    async wakeStreamProcessor(
+      expression: ItxExpression,
+      request: StreamProcessorWakeRequest,
+      expectedDelivery: ExpectedHostedDeliveryState,
+    ) {
+      const { value } = await evaluateItxExpression(
+        deps.createAuthorityRoot(),
+        toInvocation(expression, request),
+      );
+      return retainProcessorWakeResponse({
+        value,
+        onDeliveryError: (error) =>
+          deps.onHostedDeliveryError(request.subscriptionKey, error, expectedDelivery),
+      });
+    },
+
+    async deliverToItx(expression: ItxExpression, batch: StreamDeliveryBatch) {
+      await evaluateItxDelivery(expression, batch);
+    },
+
+    async copyToStream(path: string, batch: StreamDeliveryBatch) {
+      return deps.copyToStream(path, batch);
+    },
+  };
+}
+
+/** Turn the final property step into a receiver-bound method call. */
+function toInvocation(expression: ItxExpression, payload: unknown): ItxExpression {
+  const methodName = expression.at(-1);
+  if (typeof methodName !== "string") {
+    throw new Error("delivery expression must end in a property step naming the method to invoke");
+  }
+  return [...expression.slice(0, -1), [methodName, payload]];
+}
+
 /**
  * The subscription key of the birth-certificate worker feed every
  * project-scoped stream configures on itself (see the constructor). Userspace
@@ -230,8 +327,8 @@ const PROJECT_WORKER_SUBSCRIPTION_KEY = "project-worker";
  *    (`stream-storage.ts`) when missing or version-skewed.
  * 4. Delivery — session callbacks, hosted processors, copies, ITX calls,
  *    and webhooks live in `stream-event-sender.ts`, calling receivers through
- *    `subscription-receiver-calls.ts`; this class only decides policy (who may
- *    connect, what a subscription event means, which events to append).
+ *    `createSubscriptionReceiverCalls` above; this class only decides policy
+ *    (who may connect, what a subscription event means, which events to append).
  *
  * HTTP/WebSocket Cap'n Web termination belongs at the fronting Worker, which
  * exposes this DO through `StreamRpcTarget`. This class is deliberately NOT
@@ -287,7 +384,11 @@ export class StreamDurableObject extends DurableObject<Env> {
         createAuthorityRoot: () => this.#createEventDeliveryAuthorityRoot(),
         copyToStream: (path, batch) => this.#streamStub(path).receiveCopiedEvents(batch),
         onHostedDeliveryError: (subscriptionKey, error, expectedDelivery) =>
-          this.#eventSender.onHostedDeliveryError(subscriptionKey, error, expectedDelivery),
+          this.#eventSender.connections.onHostedDeliveryError(
+            subscriptionKey,
+            error,
+            expectedDelivery,
+          ),
       }),
       appendDeliveryEvent: (event) => {
         // A lifecycle interruption is expected while this incarnation is
@@ -709,7 +810,7 @@ export class StreamDurableObject extends DurableObject<Env> {
           "events.iterate.com/stream/subscription-configured",
         );
         const subscriptionKey = subscriptionKeyForConfiguredEvent(configured);
-        if (this.#eventSender.connectionKind(subscriptionKey) === "session") {
+        if (this.#eventSender.connections.connectionKind(subscriptionKey) === "session") {
           throw new Error(
             `subscriptionKey "${subscriptionKey}" is already used by a live session connection`,
           );
@@ -886,7 +987,9 @@ export class StreamDurableObject extends DurableObject<Env> {
         ? this.#eventSender.onAlarm()
         : this.#eventSender.sendDue(args.justCommittedEvents),
     );
-    attempt("arm hosted-connection idle alarm", () => this.#eventSender.armOrClearIdleAlarm());
+    attempt("arm hosted-connection idle alarm", () =>
+      this.#eventSender.connections.armOrClearIdleAlarm(),
+    );
     if (args.alarmTurn === true) {
       attempt("flush core state checkpoint", () => this.#flushCoreProcessorState());
     }
@@ -1317,7 +1420,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       ...(args.eventTypes === undefined ? {} : { eventTypes: [...args.eventTypes] }),
     });
 
-    const connection = this.#eventSender.openSession({
+    const connection = this.#eventSender.connections.openSession({
       connectionKey,
       processEventBatch: args.processEventBatch,
       replayAfterOffset: args.replayAfterOffset,
@@ -1427,14 +1530,14 @@ export class StreamDurableObject extends DurableObject<Env> {
   getProcessorRuntimeState(args: {
     subscriptionKey: string;
   }): Promise<ProcessorRuntimeState | null> {
-    return this.#eventSender.getProcessorRuntimeState(args.subscriptionKey);
+    return this.#eventSender.connections.getProcessorRuntimeState(args.subscriptionKey);
   }
 
   runtimeState(): StreamRuntimeDebugState {
     // Observer-driven RTT sampling: being asked for runtime state IS the
     // signal someone is watching. The round runs in the background (this
     // method is synchronous); a later read or live update carries the sample.
-    this.#eventSender.samplePingsSoon();
+    this.#eventSender.connections.samplePingsSoon();
     return this.#readRuntimeState();
   }
 
@@ -1443,7 +1546,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     return new LiveStateRpcTarget({
       live: this.#liveState,
       loadAndRefreshLive: () => {
-        this.#eventSender.samplePingsSoon();
+        this.#eventSender.connections.samplePingsSoon();
         this.#liveState.setState(this.#readRuntimeState());
       },
     });
@@ -1466,7 +1569,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     return {
       coreProcessorState: this.#coreProcessorState,
       runtime: {
-        connections: this.#eventSender.connectionRuntimeState(),
+        connections: this.#eventSender.connections.runtimeState(),
         subscriptions: this.#eventSender.subscriptionRuntimeState(),
         metrics: this.#metrics.report(Date.now()),
         storageSizeBytes: this.ctx.storage.sql.databaseSize,

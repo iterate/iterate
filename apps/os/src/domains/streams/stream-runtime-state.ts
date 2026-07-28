@@ -1,7 +1,6 @@
 import type { StreamThroughputMetrics } from "iterate/processors";
 import type { CoreProcessorState } from "./core-processor-contract.ts";
-import type { ConnectionRuntimeState } from "./stream-connections.ts";
-import type { SubscriptionRuntimeState } from "./stream-event-sender.ts";
+import type { ConnectionRuntimeState, SubscriptionRuntimeState } from "./stream-event-sender.ts";
 
 /** Serializable stream-core and delivery-runtime state exposed through `Stream.liveState`. */
 export type StreamRuntimeDebugState = {
