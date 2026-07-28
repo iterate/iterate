@@ -166,6 +166,42 @@ describe("addThread", () => {
     expect(result.doc.discussion?.threads[0]?.anchor?.selector).toEqual(selector);
   });
 
+  test("a quote ending an unterminated file keeps the marker beside it", () => {
+    const doc = structured("Alpha beta");
+    const result = addThread(doc, {
+      ...WHO,
+      body: "Note.",
+      threadId: "th_1",
+      commentId: "cm_1",
+      anchor: createAnchorSelector(doc.body, 6, 10),
+    });
+    expect(result.raw).toBe(
+      md(
+        "Alpha beta [T1](#thread-th_1)",
+        "",
+        "<!-- task-discussions:v1 -->",
+        "",
+        "## Discussion",
+        "",
+        "<!-- task-thread:v1 begin id=th_1 status=open -->",
+        '<a id="thread-th_1"></a>',
+        "### T1 · Open",
+        "",
+        '<!-- task-anchor:v1 {"quote":{"exact":"beta","prefix":"Alpha ","suffix":""},"position":{"start":6,"end":10}} -->',
+        "",
+        "<!-- task-comment:v1 begin id=cm_1 author=jonas created=2026-07-28T10:00:00Z -->",
+        "#### Jonas · 2026-07-28 10:00 UTC",
+        "",
+        "Note.",
+        "<!-- task-comment:v1 end id=cm_1 -->",
+        "",
+        "<!-- task-thread:v1 end id=th_1 -->",
+        "",
+      ),
+    );
+    expectMinimalDiff("Alpha beta", result);
+  });
+
   test("labels count up from existing threads and a second thread appends", () => {
     const first = addThread(structured(BARE), {
       ...WHO,

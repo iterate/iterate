@@ -284,16 +284,11 @@ export function addThread(doc: StructuredDocument, options: AddThreadOptions): A
     formatThreadEnd(threadId),
   ];
 
+  // The marker splice goes FIRST: when the anchored quote runs to the very
+  // end of an unterminated file, it shares an offset with the store append,
+  // and the stable splice sort must put the marker beside the quote, not
+  // after the freshly created store.
   const splices: Splice[] = [];
-  const insertAt = doc.raw.length;
-  const storePreamble =
-    doc.discussion === null ? [formatStoreSentinel(), "", "## Discussion", ""] : [];
-  splices.push({
-    range: { start: insertAt, end: insertAt },
-    insert:
-      blockPadding(doc.raw, insertAt, eol) + [...storePreamble, ...blockLines].join(eol) + eol,
-  });
-
   if (anchor !== undefined && options.insertMarker !== false) {
     const resolved = resolveThreadAnchor(doc.body, threadId, anchor);
     if (resolved.state === "attached" && resolved.range !== null) {
@@ -306,6 +301,14 @@ export function addThread(doc: StructuredDocument, options: AddThreadOptions): A
       });
     }
   }
+  const insertAt = doc.raw.length;
+  const storePreamble =
+    doc.discussion === null ? [formatStoreSentinel(), "", "## Discussion", ""] : [];
+  splices.push({
+    range: { start: insertAt, end: insertAt },
+    insert:
+      blockPadding(doc.raw, insertAt, eol) + [...storePreamble, ...blockLines].join(eol) + eol,
+  });
   const result = finish(doc, splices);
   return { ...result, threadId, commentId, label };
 }

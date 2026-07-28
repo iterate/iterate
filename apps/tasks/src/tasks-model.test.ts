@@ -82,6 +82,25 @@ describe("parseTaskCard with discussions", () => {
     });
   });
 
+  it("never takes the board title from inside a broken store", () => {
+    const source = md(
+      "---",
+      "state: todo",
+      "---",
+      "",
+      "no heading in the real body",
+      "",
+      "<!-- task-discussions:v1 -->",
+      "<!-- task-thread:v1 begin id=th_a status=open -->",
+      "<!-- task-comment:v1 begin id=cm_a author=importer created=2026-07-26T10:00:00Z -->",
+      "# Sneaky store heading",
+      "<!-- task-thread:v1 end id=th_a -->",
+      "",
+    );
+    const card = parseTaskCard("tasks/mangled.md", source);
+    expect(card).toMatchObject({ title: "tasks/mangled.md", state: "todo", commentCount: 0 });
+  });
+
   it("still flags broken YAML as a frontmatter error", () => {
     const card = parseTaskCard("tasks/broken.md", md("---", "state: [unclosed", "---", "", "# Broken", ""));
     expect(card).toMatchObject({ frontmatterError: true, state: "todo", title: "Broken", commentCount: 0 });

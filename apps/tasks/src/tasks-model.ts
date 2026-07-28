@@ -58,7 +58,7 @@ export function parseTaskCard(path: string, source: string): TaskCard {
     // the UI surfaces the breakage instead of guessing.
     return {
       path,
-      title: firstHeadingTitle(source) ?? path,
+      title: firstHeadingTitle(beforeDiscussionStore(source)) ?? path,
       state: normalizeTaskState(undefined),
       labels: [],
       agent: null,
@@ -74,7 +74,10 @@ export function parseTaskCard(path: string, source: string): TaskCard {
   const metadata = markdownFrontmatterRecord(frontmatter.document);
   return {
     path,
-    title: stringValue(metadata.title) ?? firstHeadingTitle(frontmatter.body) ?? path,
+    title:
+      stringValue(metadata.title) ??
+      firstHeadingTitle(beforeDiscussionStore(frontmatter.body)) ??
+      path,
     state: normalizeTaskState(stringValue(metadata.state)),
     labels: uniqueStrings([...stringArray(metadata.tags), ...stringArray(metadata.labels)]),
     agent: stringValue(metadata.agent) ?? null,
@@ -276,6 +279,16 @@ function normalizeTaskState(state: string | undefined): string {
 function firstHeadingTitle(body: string): string | undefined {
   const match = /^#\s+(.+?)\s*#*\s*$/m.exec(body);
   return match?.[1]?.trim();
+}
+
+/**
+ * On the codec's plain fallback the store may be malformed but still present;
+ * headings inside it (comment prose) must never become the board title.
+ */
+function beforeDiscussionStore(text: string): string {
+  if (text.startsWith("<!-- task-discussions:")) return "";
+  const at = text.indexOf("\n<!-- task-discussions:");
+  return at === -1 ? text : text.slice(0, at);
 }
 
 function parseMarkdownFrontmatter(content: string): {
