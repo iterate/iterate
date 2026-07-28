@@ -394,6 +394,36 @@ side-effect boundary, but now records phases that distinguish setup from the
 terminal probe. The strict streak remains 0/25 pending the next immutable-head
 preflight.
 
+The automatic exact-head preflight for those changes (`7c4588c80`, Depot run
+`00l7zv4v38`, canonical workflow `7mwxwltjdb`, job `dc1bf9fxbf`, attempt
+`zbwcnhvgt0`) was fast and functionally green in 2 minutes 56 seconds, but was
+strictly rejected with seven framework retries. Its canonical finalizer
+normalized all ten expected artifacts into 7,096 events. PostHog independently
+recorded the same seven retries under workflow run id `399488891498`, with
+`runner_provider=depot` on every canonical event; the separate ordinary Depot
+test workflow contributed 3,964 corroborating events and zero retries but does
+not count toward the streak.
+
+Five OS Vitest retries and the markdown-preview project fixture overlapped one
+rollout/storage incident. Cloudflare recorded 32 OpenTelemetry `Network
+connection lost` errors, 16 code-update resets, 15 internal Durable Object
+storage resets, keyed-append timeouts, stream-delivery backoff, and the exact
+scheduler failure reference in the same test window. Fourteen intentional
+`kill requested` events were classified separately. This is rejected
+platform-wide failure evidence, not permission to lengthen whole-test
+timeouts or accept finally-green retries.
+
+The seventh retry had a narrower test-owned race. In the split-view Streams
+case, the exact `/next` stream path logged a tagged Durable Object reset and
+the product correctly entered its bounded, idempotent append recovery. The
+composer still said `appending` when the test's independent 15-second event
+assertion abandoned the operation; the retry began immediately afterwards and
+passed. The shared composer helper now waits up to 45 seconds for the append's
+terminal state, then requires the expected `appended` or `error` outcome.
+Terminal application errors therefore fail immediately, while one supported
+rollout recovery can complete without asking Playwright to rerun the test.
+The strict streak remains 0/25 pending a fresh immutable-head preflight.
+
 ## Round 15 (2026-07-23, post-#2284)
 
 This round starts from merged `origin/main` at

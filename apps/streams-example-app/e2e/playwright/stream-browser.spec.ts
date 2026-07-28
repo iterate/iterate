@@ -91,10 +91,14 @@ test("sidebar stream gate pauses and resumes ordinary appends", async ({ page })
   await expect(eventMeta(page, "events.iterate.com/stream/paused").first()).toBeVisible();
 
   // Ordinary appends are rejected while the gate is paused.
-  await appendComposerEvent(page, {
-    type: "events.iterate.com/debug/playwright-paused-rejected",
-    payload: { streamPath, value: crypto.randomUUID() },
-  });
+  await appendComposerEvent(
+    page,
+    {
+      type: "events.iterate.com/debug/playwright-paused-rejected",
+      payload: { streamPath, value: crypto.randomUUID() },
+    },
+    "error",
+  );
   await expect(page.getByTestId("composer-state").first()).toHaveText("error");
   await expect(eventMeta(page, "events.iterate.com/debug/playwright-paused-rejected")).toHaveCount(
     0,
@@ -1197,12 +1201,22 @@ function eventRowByOffset(scope: Page | Locator, offset: number) {
   return scope.locator(`[data-testid='event-meta'][data-event-offset='${offset}']`);
 }
 
-async function appendComposerEvent(scope: Page | Locator, event: unknown) {
-  await scope
-    .getByLabel("Event JSON")
-    .first()
-    .fill(JSON.stringify(event, null, 2));
-  await scope.getByRole("button", { name: "Append event" }).first().click();
+async function appendComposerEvent(
+  scope: Page | Locator,
+  event: unknown,
+  expectedState: "appended" | "error" = "appended",
+) {
+  const composer = scope.getByTestId("stream-composer").first();
+  await composer.getByLabel("Event JSON").fill(JSON.stringify(event, null, 2));
+  await composer.getByRole("button", { name: "Append event" }).click();
+
+  // appendBatch has an idempotent, bounded recovery path for a tagged
+  // Durable Object reset. Wait for that operation to finish instead of racing
+  // its event delivery with a shorter assertion timeout. Any terminal error
+  // still fails immediately and preserves the product failure as evidence.
+  const terminalState = composer.getByTestId("composer-state");
+  await expect(terminalState).toHaveText(/^(?:appended|error)$/, { timeout: 45_000 });
+  expect(await terminalState.textContent()).toBe(expectedState);
 }
 
 function splitPane(page: Page, streamPath: string) {
