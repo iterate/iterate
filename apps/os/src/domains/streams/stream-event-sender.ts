@@ -1378,8 +1378,8 @@ export type ConnectionRuntimeState = ConnectionRuntimeDetails &
       }
   );
 
-/** One live event-batch callback. Copy, ITX-call, and webhook subscriptions do not appear here. */
-export type StreamConnection = {
+/** One live event-batch callback. Copy and ITX-call subscriptions do not appear here. */
+type StreamConnection = {
   readonly kind: StreamConnectionKind;
   readonly expectedHostedDelivery?: ExpectedHostedDeliveryState;
   readonly startedAt: string;
