@@ -61,8 +61,8 @@ export function GuestbookClient() {
           required
           rows={4}
         />
-        <button disabled={api == null || signing} type="submit">
-          Sign guestbook
+        <button data-spinner={signing || undefined} disabled={api == null || signing} type="submit">
+          {signing ? "Signing…" : "Sign guestbook"}
         </button>
       </form>
       {error !== undefined && <p role="alert">{error}</p>}
