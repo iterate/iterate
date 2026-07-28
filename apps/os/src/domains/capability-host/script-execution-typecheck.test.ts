@@ -63,17 +63,29 @@ function makeProcessor(options: {
     path: options.path ?? "/",
     projectId: null,
     scriptExecutionEntrypoint: {
-      run: async (code) => {
+      start: async (code, startOptions) => {
         const result = await (
           options.run ??
           (() => {
             throw new Error("must not run in this scenario");
           })
         )(code);
-        return {
-          status: "succeeded" as const,
-          ...(result === undefined ? {} : { result }),
-        };
+        await options.stream.appendIfStreamId({
+          streamId: startOptions.streamId,
+          events: [
+            {
+              type: T.completed,
+              idempotencyKey: `capability-host/script-run-settled@${startOptions.streamContext.executionId}`,
+              payload: {
+                executionId: startOptions.streamContext.executionId,
+                settlement: {
+                  status: "succeeded",
+                  ...(result === undefined ? {} : { result }),
+                },
+              },
+            },
+          ],
+        });
       },
     },
     typecheckScript: options.typecheckScript,

@@ -329,7 +329,7 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/capability-host/script-run-started": {
       description:
-        "An attempt to run the script began. Appended BEFORE the script body executes, so requested-without-started provably never ran (safe to start late) while started-without-settled died mid-run (settled as failure, never re-run).",
+        "An attempt to run the script began. Appended BEFORE the script body executes, so requested-without-started provably never ran (safe to start late). The independently-lived executor commits the terminal fact directly; a host recovering an unexpired started-without-settled obligation resumes only that durable-settlement wait, never the arbitrary script. If no settlement lands by the original absolute deadline, it settles orphaned as failure.",
       payloadSchema: z.looseObject({
         executionId: z.string().meta({ description: "The obligation this attempt belongs to." }),
       }),

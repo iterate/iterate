@@ -2,6 +2,7 @@ import {
   ScriptExecutionSettlement as ScriptExecutionSettlementSchema,
   type ScriptExecutionSettlement as ScriptExecutionSettlementValue,
 } from "@iterate-com/shared/script-execution";
+import type { StreamEvent } from "iterate/processors";
 import type { DeadlineOutcome } from "../execution-deadline.ts";
 import { SCRIPT_EXECUTION_SETTLEMENT_GRACE_MS } from "./script-execution-budgets.ts";
 
@@ -104,4 +105,22 @@ export function scriptCompletionInput(input: {
     // constructing the completion cannot introduce a new failure boundary.
     payload: { executionId: input.executionId, settlement: input.settlement },
   } as const;
+}
+
+/** Read one exact script settlement back from the durable stream. Shared by
+ * the capability-host recovery writer and the independently-lived executor:
+ * either side may lose an append acknowledgement, and only a parsed event
+ * under the execution's exact key is proof that the obligation is closed. */
+export function settlementFromScriptCompletionEvent(
+  event: StreamEvent | undefined,
+  executionId: string,
+): ScriptExecutionSettlementValue | undefined {
+  if (
+    event?.type !== "events.iterate.com/capability-host/script-run-settled" ||
+    event.payload?.executionId !== executionId
+  ) {
+    return undefined;
+  }
+  const parsed = ScriptExecutionSettlement.safeParse(event.payload.settlement);
+  return parsed.success ? parsed.data : undefined;
 }

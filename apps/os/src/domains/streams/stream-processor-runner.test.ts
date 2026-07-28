@@ -1659,6 +1659,24 @@ describe("StreamProcessorRunner.waitUntilEvent", () => {
     );
   });
 
+  it("predicate form remains pending until a matching future delivery is acknowledged", async () => {
+    const harness = makeHarness();
+    let settled = false;
+    const waiting = harness.runner.waitUntilEvent({
+      predicate: (event) => event.type === REQUESTED && event.payload?.id === "match",
+      timeoutMs: 500,
+    });
+    waiting.finally(() => (settled = true)).catch(() => undefined);
+
+    await tick();
+    expect(settled).toBe(false);
+
+    harness.journal.seed({ type: REQUESTED, payload: { id: "match" } });
+    await harness.deliverBatches([harness.journal.rows().slice()]);
+    await expect(waiting).resolves.toBeUndefined();
+    expect(settled).toBe(true);
+  });
+
   it("offset form reaches an already-appended event by SELF-PULL — read-your-writes never depends on push delivery", async () => {
     const harness = makeHarness();
     // Read-your-writes: the event is already on the stream, but NO delivery is

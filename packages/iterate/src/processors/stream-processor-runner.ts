@@ -506,7 +506,8 @@ export class StreamProcessorRunner<
       return await reached.promise;
     }
     const { predicate, signal, timeoutMs } = args;
-    await this.#waitForEventCondition({ kind: "predicate", predicate }, { signal, timeoutMs });
+    await this.#waitForEventCondition({ kind: "predicate", predicate }, { signal, timeoutMs })
+      .promise;
   }
 
   /** Release processor resources. Idempotent; a disposed runner rejects new work. */

@@ -29,7 +29,30 @@ function makeHarness() {
       new CapabilityHostProcessor({
         ...deps,
         itx: {} as Project,
-        scriptExecutionEntrypoint: { run: (code) => run.impl(code) },
+        scriptExecutionEntrypoint: {
+          start: async (code, options) => {
+            // Production returns from this handoff immediately and lets the
+            // independently-lived entrypoint append its own settlement.
+            const work = Promise.resolve()
+              .then(() => run.impl(code))
+              .then((settlement) =>
+                deps.stream.appendIfStreamId({
+                  streamId: options.streamId,
+                  events: [
+                    {
+                      type: T.completed,
+                      idempotencyKey: `capability-host/script-run-settled@${options.streamContext.executionId}`,
+                      payload: {
+                        executionId: options.streamContext.executionId,
+                        settlement: settlement as Record<string, unknown>,
+                      },
+                    },
+                  ],
+                }),
+              );
+            void work.catch(() => undefined);
+          },
+        },
         reads: deps.reads,
       }),
   });
@@ -97,7 +120,10 @@ describe("script execution recovery at head", () => {
       type: "events.iterate.com/stream/woken",
       payload: { incarnationId: "retry" },
     });
-    await h.settle();
+    await vi.waitFor(async () => {
+      await h.settle();
+      expect(h.events(T.completed)).toHaveLength(1);
+    });
 
     expect(h.events(T.completed)).toMatchObject([
       {
@@ -110,36 +136,34 @@ describe("script execution recovery at head", () => {
     expect(ran).toEqual(["async () => 5"]);
   });
 
-  it("settles and cancels a started script when its absolute deadline passes", async () => {
+  it("keeps a started obligation open while the independent executor is still within deadline", async () => {
     const h = makeHarness();
-    const run = new Promise<unknown>(() => {}) as Promise<unknown> & {
-      [Symbol.dispose]: ReturnType<typeof vi.fn>;
-    };
-    run[Symbol.dispose] = vi.fn();
-    h.run.impl = () => run;
+    h.run.impl = () => new Promise<never>(() => {});
     await h.append({
       type: T.requested,
       payload: {
         code: 'async (itx) => itx.sandboxes.get("/sandboxes/test")',
         executionId: "agent-output:13980",
-        expiresAt: h.clock.now + 15_020,
+        expiresAt: h.clock.now + 60_000,
       },
     });
 
-    await vi.waitFor(() => {
-      expect(h.events(T.completed)[0]?.payload).toMatchObject({
-        executionId: "agent-output:13980",
-        settlement: { status: "failed", failureKind: "deadline", phase: "execution" },
-      });
+    await vi.waitFor(() => expect(h.events(T.started)).toHaveLength(1));
+    expect(h.events(T.completed)).toHaveLength(0);
+    expect(h.state().scriptExecutions["agent-output:13980"]).toMatchObject({
+      status: "started",
     });
-    expect(run[Symbol.dispose]).toHaveBeenCalledOnce();
   });
 });
 
 describe("eviction recovery end to end", () => {
-  it("revives at zero lag and settles the orphan without re-running it", async () => {
+  it("revives at zero lag, resumes the settlement watch, and never re-runs the script", async () => {
     const h = makeHarness();
-    h.run.impl = () => new Promise<never>(() => {});
+    let finish!: (value: unknown) => void;
+    h.run.impl = () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      });
     await h.append({
       type: T.requested,
       payload: { code: "async () => 1", executionId: "exec-1", expiresAt: h.clock.now + 60_000 },
@@ -163,11 +187,19 @@ describe("eviction recovery end to end", () => {
         },
       },
     ]);
+    expect(h.events(T.completed)).toHaveLength(0);
+    expect(h.state().scriptExecutions["exec-1"]).toMatchObject({ status: "started" });
+
+    finish({ status: "succeeded", result: "survived" });
+    await vi.waitFor(async () => {
+      await h.settle();
+      expect(h.events(T.completed)).toHaveLength(1);
+    });
     expect(h.events(T.completed)).toMatchObject([
       {
         payload: {
           executionId: "exec-1",
-          settlement: { status: "failed", failureKind: "orphaned" },
+          settlement: { status: "succeeded", result: "survived" },
         },
       },
     ]);

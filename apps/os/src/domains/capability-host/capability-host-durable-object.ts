@@ -13,20 +13,26 @@ import { trustedInternalAuthContext } from "../../auth.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { itxForScope, StreamRpcTarget } from "../../rpc-targets.ts";
+import type { StreamContext } from "../projects/stream-context.ts";
 import { checkCapabilityTypes, checkItxScriptForExecution } from "../typecheck/virtual-project.ts";
 import {
   CapabilityHostProcessor,
   type CapabilityHostProcessorReads,
 } from "./capability-host-processor-implementation.ts";
 import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
-import type { ScriptExecutionSettlement } from "./script-execution-settlement.ts";
 import type { ProvideCapabilityInput } from "./types.ts";
 
 type ScriptExecutionEntrypoint = {
-  run(
+  start(
     code: string,
-    options: { emittedJs?: string; expiresAt: number },
-  ): Promise<ScriptExecutionSettlement>;
+    options: {
+      emittedJs?: string;
+      executionExpiresAt: number;
+      settlementExpiresAt: number;
+      streamContext: Extract<StreamContext, { kind: "script-execution" }>;
+      streamId: string;
+    },
+  ): Promise<void>;
 };
 
 type ScriptExecutionLoopbackExports = {

@@ -11,7 +11,12 @@
 // zero-lag end-to-end proof.
 
 import { describe, expect, it, vi } from "vitest";
-import { KEEPALIVE_ALARM_LEAD_MS, type ConsumedInput } from "iterate/processors";
+import {
+  KEEPALIVE_ALARM_LEAD_MS,
+  type ConsumedInput,
+  type StreamEvent,
+  type StreamEventInput,
+} from "iterate/processors";
 import {
   makeMemoryProgressStore,
   makeProcessorHarness,
@@ -53,39 +58,62 @@ function scriptRunRequested(
 }
 
 // -----------------------------------------------------------------------------
-// Scripted script-execution worker: every run() call parks until the test
-// settles it, so the test controls exactly when (and whether) a script body
-// "finishes". The worker returns a ScriptExecutionSettlement value, like the
-// production loopback entrypoint.
+// Scripted script-execution entrypoint: start() records the short handoff and
+// returns immediately. `succeed()` models the independently-lived executor by
+// committing its keyed terminal fact directly to the exact stream lifetime.
 // -----------------------------------------------------------------------------
 
 function makeScriptedWorker() {
+  let stream:
+    | {
+        appendIfStreamId(args: {
+          streamId: string;
+          events: StreamEventInput[];
+        }): Promise<StreamEvent[]>;
+      }
+    | undefined;
   const calls: {
     code: string;
     options: {
       emittedJs?: string;
-      expiresAt: number;
+      executionExpiresAt: number;
+      settlementExpiresAt: number;
       streamContext: Extract<StreamContext, { kind: "script-execution" }>;
+      streamId: string;
     };
-    resolve: (settlement: unknown) => void;
-    reject: (error: Error) => void;
   }[] = [];
   return {
     calls,
-    succeed(result: unknown) {
-      calls.at(-1)!.resolve({ status: "succeeded", result });
+    attach(target: typeof stream) {
+      stream = target;
     },
-    run(
+    async succeed(result: unknown, callIndex = calls.length - 1) {
+      const call = calls[callIndex]!;
+      await stream!.appendIfStreamId({
+        streamId: call.options.streamId,
+        events: [
+          {
+            type: SETTLED,
+            idempotencyKey: `capability-host/script-run-settled@${call.options.streamContext.executionId}`,
+            payload: {
+              executionId: call.options.streamContext.executionId,
+              settlement: { status: "succeeded", result },
+            },
+          },
+        ],
+      });
+    },
+    async start(
       code: string,
       options: {
         emittedJs?: string;
-        expiresAt: number;
+        executionExpiresAt: number;
+        settlementExpiresAt: number;
         streamContext: Extract<StreamContext, { kind: "script-execution" }>;
+        streamId: string;
       },
     ) {
-      return new Promise<unknown>((resolve, reject) => {
-        calls.push({ code, options, resolve, reject });
-      });
+      calls.push({ code, options });
     },
   };
 }
@@ -104,12 +132,13 @@ function makeHostHarness(
         ...deps,
         itx: {} as Project,
         reads: deps.reads,
-        scriptExecutionEntrypoint: { run: (code, options) => worker.run(code, options) },
+        scriptExecutionEntrypoint: { start: (code, options) => worker.start(code, options) },
         ...(args.typecheckScript === undefined ? {} : { typecheckScript: args.typecheckScript }),
       }),
     path: "/capability-host-test",
     ...(args.substrate === undefined ? {} : { substrate: args.substrate }),
   });
+  worker.attach(harness.stream);
   return { ...harness, worker };
 }
 
@@ -276,21 +305,55 @@ describe("CapabilityHostProcessor script runs", () => {
 // =============================================================================
 
 describe("CapabilityHostProcessor recovery", () => {
-  it("crash mid-execution: the revival turn settles the orphan as a FAILURE and never re-runs the body", async () => {
+  it("crash mid-execution: the successor resumes the settlement watch and accepts the executor result", async () => {
+    const h = makeHostHarness();
+    await h.play(
+      ["append", ...NEW_HOST_EVENTS],
+      ["append", scriptRunRequested("exec-survives-host", h.clock.now + 60_000)],
+    );
+    expect(h.worker.calls).toHaveLength(1);
+
+    await h.play(["crash"], ["advanceTime", KEEPALIVE_ALARM_LEAD_MS + 1]);
+
+    // Losing the host-side waiter does NOT imply the independently-lived
+    // executor died. The successor waits under the original deadline and
+    // never invokes arbitrary script code a second time.
+    expect(h.worker.calls).toHaveLength(1);
+    expect(h.events(SETTLED)).toHaveLength(0);
+    expect(h.state().scriptExecutions["exec-survives-host"]).toMatchObject({
+      status: "started",
+    });
+
+    await h.play(() => h.worker.succeed("completed after host reset"));
+    expect(h.events(SETTLED)).toMatchObject([
+      {
+        payload: {
+          executionId: "exec-survives-host",
+          settlement: { status: "succeeded", result: "completed after host reset" },
+        },
+      },
+    ]);
+    expect(h.state().scriptExecutions).toEqual({});
+  });
+
+  it("a started execution with no durable result settles orphaned only after its original deadline", async () => {
     const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => undefined);
     try {
       const h = makeHostHarness();
       await h.play(
         ["append", ...NEW_HOST_EVENTS],
-        ["append", scriptRunRequested("exec-orphan", h.clock.now + 60_000)],
+        ["append", scriptRunRequested("exec-orphan", h.clock.now + 20_000)],
       );
-      expect(h.worker.calls).toHaveLength(1); // the doomed attempt, parked
+      await h.play(
+        ["crash"],
+        ["advanceTime", KEEPALIVE_ALARM_LEAD_MS + 1],
+        // The first successor correctly resumed the watch while unexpired.
+        // Evict it too; the next revival occurs after the absolute deadline
+        // and is the first turn allowed to classify the obligation orphaned.
+        ["crash"],
+        ["advanceTime", KEEPALIVE_ALARM_LEAD_MS + 1],
+      );
 
-      await h.play(["crash"], ["advanceTime", KEEPALIVE_ALARM_LEAD_MS + 1]);
-
-      // The successor's at-head pass found `started` with no live run: the
-      // body may have half-executed, so it settles failed/orphaned — the
-      // worker is NOT dialed again.
       expect(h.worker.calls).toHaveLength(1);
       expect(h.events(SETTLED)).toMatchObject([
         {
@@ -308,46 +371,6 @@ describe("CapabilityHostProcessor recovery", () => {
       expect(h.state().scriptExecutions).toEqual({});
     } finally {
       consoleInfo.mockRestore();
-    }
-  });
-
-  it("a zombie worker finishing after the successor settled loses the settle race and is superseded", async () => {
-    const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => undefined);
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    try {
-      const h = makeHostHarness();
-      await h.play(
-        ["append", ...NEW_HOST_EVENTS],
-        ["append", scriptRunRequested("exec-late", h.clock.now + 60_000)],
-      );
-      await h.play(["crash"], ["advanceTime", KEEPALIVE_ALARM_LEAD_MS + 1]);
-      expect(h.events(SETTLED)).toMatchObject([
-        { payload: { settlement: { failureKind: "orphaned", status: "failed" } } },
-      ]);
-
-      // The old incarnation's worker call survives the crash as a zombie
-      // closure and finishes anyway: its settle append carries the same
-      // `script-run-settled@exec-late` key with a DIFFERENT body, the stream
-      // rejects it, and the zombie reads back the durable orphan outcome and
-      // stands down — an observed loser, not error telemetry.
-      await h.play(() => h.worker.calls[0]!.resolve({ status: "succeeded", result: "too late" }));
-
-      expect(h.events(SETTLED)).toHaveLength(1);
-      expect(h.events(SETTLED)[0]!.payload).toMatchObject({
-        settlement: { status: "failed", failureKind: "orphaned" },
-      });
-      expect(consoleInfo).toHaveBeenCalledWith(
-        "[capability-host] late script settlement superseded by durable outcome",
-        expect.objectContaining({
-          attemptedStatus: "succeeded",
-          durableFailureKind: "orphaned",
-          executionId: "exec-late",
-        }),
-      );
-      expect(consoleError).not.toHaveBeenCalled();
-    } finally {
-      consoleInfo.mockRestore();
-      consoleError.mockRestore();
     }
   });
 
@@ -385,50 +408,6 @@ describe("CapabilityHostProcessor recovery", () => {
         { payload: { executionId: "exec-2", settlement: { status: "succeeded", result: "ok" } } },
       ]);
     } finally {
-      consoleError.mockRestore();
-    }
-  });
-
-  it("a failed settle append is retried with the SAME known settlement — never reclassified as an orphan", async () => {
-    const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => undefined);
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    try {
-      const h = makeHostHarness();
-      await h.play(
-        ["append", ...NEW_HOST_EVENTS],
-        ["append", scriptRunRequested("exec-retry", h.clock.now + 60_000)],
-      );
-      expect(h.worker.calls).toHaveLength(1);
-
-      // The worker finishes but the settle append hits a transient stream
-      // outage: the exact outcome is remembered in-memory, the obligation
-      // stays open.
-      await h.play(
-        () => {
-          h.stream.failAppendsOfType = SETTLED;
-        },
-        () => h.worker.succeed("ok"),
-      );
-      expect(h.events(SETTLED)).toHaveLength(0);
-      expect(h.state().scriptExecutions["exec-retry"]).toMatchObject({ status: "started" });
-
-      // The stream recovers; the next delivery reaching head retries the
-      // remembered settlement verbatim — NOT an invented orphan
-      // classification.
-      await h.play(() => {
-        h.stream.failAppendsOfType = undefined;
-      }, ["advanceTime", KEEPALIVE_ALARM_LEAD_MS + 1]);
-      expect(h.events(SETTLED)).toMatchObject([
-        {
-          payload: { executionId: "exec-retry", settlement: { status: "succeeded", result: "ok" } },
-        },
-      ]);
-      expect(consoleInfo).not.toHaveBeenCalledWith(
-        "[capability-host] recovering undriven script execution",
-        expect.anything(),
-      );
-    } finally {
-      consoleInfo.mockRestore();
       consoleError.mockRestore();
     }
   });

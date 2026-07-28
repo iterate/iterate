@@ -1,17 +1,53 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
+import {
+  isStreamIdMismatchError,
+  type StreamEvent,
+  type StreamEventInput,
+} from "iterate/processors";
+import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
 import type { Env } from "../../env.ts";
-import { normalizePath } from "../durable-object-names.ts";
+import { DurableObjectNameCodec, normalizePath } from "../durable-object-names.ts";
 import type { StreamContext } from "../projects/stream-context.ts";
+import {
+  retryIdempotentDurableObjectOperation,
+  STREAM_UNAVAILABLE_MESSAGE_PREFIX,
+} from "../streams/stream-unavailable.ts";
 import type { JsonValue, StatelessDynamicWorkerRef } from "../workers/schemas.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import { settleByDeadline } from "../execution-deadline.ts";
+import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
 import { SCRIPT_EXTERNAL_CLEANUP_GRACE_MS } from "./script-execution-budgets.ts";
-import type { ScriptExecutionSettlement } from "./script-execution-settlement.ts";
+import {
+  scriptCompletionInput,
+  settlementFromScriptCompletionEvent,
+  type ScriptExecutionSettlement,
+} from "./script-execution-settlement.ts";
 
 export { SCRIPT_EXTERNAL_CLEANUP_GRACE_MS } from "./script-execution-budgets.ts";
 
 const DEADLINE_EXCEEDED_ERROR =
   "Script execution exceeded its absolute deadline after it started. Its worker execution context ended, but arbitrary external work cannot be proven terminated. It may have partially executed; it was NOT re-run.";
+const SETTLEMENT_APPEND_ATTEMPT_TIMEOUT_MS = 5_000;
+
+type ScriptExecutionStartOptions = {
+  /**
+   * The typecheck gate's emitted JavaScript for this script (its default
+   * export is the script function) — check and emit are one compile, so
+   * running the compiler's own output is what makes scripts genuinely
+   * TypeScript. Absent when the gate was skipped or the sidecar was
+   * unreachable: then `code` embeds raw, which still runs every
+   * plain-JavaScript script and surfaces TS-only syntax as the loader's
+   * error into the corrective-retry lane.
+   */
+  emittedJs?: string;
+  /** Absolute epoch-ms deadline for the dynamic-worker call. */
+  executionExpiresAt: number;
+  /** Later absolute deadline reserved for committing the durable settlement. */
+  settlementExpiresAt: number;
+  streamContext: Extract<StreamContext, { kind: "script-execution" }>;
+  /** Exact lifetime on which the script-run-started obligation was committed. */
+  streamId: string;
+};
 
 /**
  * Compute the timeout forwarded to one sandbox command inside a script. This
@@ -43,31 +79,21 @@ export function sandboxExecTimeout(input: {
  * Stateless loopback executor for capability-host runScript.
  *
  * The capability-host Durable Object journals script lifecycle events, but this
- * entrypoint owns the Dynamic Worker load and invocation. That keeps concurrent
- * script starts from sharing the DO as the Worker Loader owner.
+ * entrypoint owns the Dynamic Worker load, invocation, AND durable settlement.
+ * `start()` is only a short handoff: it schedules the long execution with this
+ * entrypoint's own waitUntil and returns immediately. The host therefore never
+ * retains a multi-minute Workers RPC result channel whose cancellation can
+ * orphan otherwise healthy work.
  */
 export class ScriptExecutionEntrypoint extends WorkerEntrypoint<
   Env,
   { projectId: string; scopePath: string }
 > {
-  async run(
-    code: string,
-    options: {
-      /**
-       * The typecheck gate's emitted JavaScript for this script (its default
-       * export is the script function) — check and emit are one compile, so
-       * running the compiler's own output is what makes scripts genuinely
-       * TypeScript. Absent when the gate was skipped or the sidecar was
-       * unreachable: then `code` embeds raw, which still runs every
-       * plain-JavaScript script and surfaces TS-only syntax as the loader's
-       * error into the corrective-retry lane.
-       */
-      emittedJs?: string;
-      /** Absolute epoch-ms deadline for the complete dynamic-worker call. */
-      expiresAt: number;
-      streamContext: Extract<StreamContext, { kind: "script-execution" }>;
-    },
-  ): Promise<ScriptExecutionSettlement> {
+  start(code: string, options: ScriptExecutionStartOptions): void {
+    this.ctx.waitUntil(this.#runAndSettle(code, options));
+  }
+
+  async #runAndSettle(code: string, options: ScriptExecutionStartOptions): Promise<void> {
     const projectId = this.ctx.props.projectId;
     const scopePath = normalizePath(this.ctx.props.scopePath);
     const dynamicWorkers = new DynamicWorkerRunner({
@@ -84,40 +110,67 @@ export class ScriptExecutionEntrypoint extends WorkerEntrypoint<
       ref: scriptWorkerRef({
         code,
         emittedJs: options.emittedJs,
-        expiresAt: options.expiresAt,
+        expiresAt: options.executionExpiresAt,
         scopePath,
       }),
       traceRole: "run_script",
     });
-    const outcome = await settleByDeadline(invocation, options.expiresAt, Date.now);
-    if (outcome.status === "deadline") {
-      // This timer lives in the RPC entrypoint that owns the dynamic-worker
-      // call. Returning ends this handler after a bounded wait, but it is not
-      // a cancellation acknowledgement for arbitrary RPC work the script may
-      // already have started. Sandbox exec has its own earlier, process-tree
-      // terminating deadline; every other external effect remains explicitly
-      // classified as possibly continuing.
-      return {
-        status: "failed",
-        error: DEADLINE_EXCEEDED_ERROR,
-        failureKind: "deadline",
-        phase: "execution",
-        executionMayHaveOccurred: true,
-        cancellation: "external-work-may-continue",
-      };
-    }
-    if (outcome.status === "rejected") {
-      return {
-        status: "failed",
-        error: outcome.error instanceof Error ? outcome.error.message : String(outcome.error),
-        failureKind: "runtime",
-        phase: "execution",
-        executionMayHaveOccurred: true,
-        // A rejected worker call proves this handler stopped waiting, not
-        // that arbitrary fire-and-forget capability work has terminated.
-        cancellation: "external-work-may-continue",
-      };
-    }
+    const settlement = await settlementFromScriptInvocation(invocation, options.executionExpiresAt);
+    await appendScriptExecutionSettlement({
+      executionId: options.streamContext.executionId,
+      getStream: () =>
+        this.env.STREAM.getByName(
+          DurableObjectNameCodec.stringify({
+            projectId,
+            path: scopePath,
+          }),
+        ),
+      projectId,
+      scopePath,
+      settlement,
+      settlementExpiresAt: options.settlementExpiresAt,
+      streamId: options.streamId,
+    });
+  }
+}
+
+/** Convert the dynamic worker's raw result into the one JSON settlement that
+ * will be journaled. This runs in the independently-lived entrypoint, so every
+ * terminal worker outcome is constructed before the direct stream append. */
+export async function settlementFromScriptInvocation(
+  invocation: Promise<unknown>,
+  executionExpiresAt: number,
+): Promise<ScriptExecutionSettlement> {
+  const outcome = await settleByDeadline(invocation, executionExpiresAt, Date.now);
+  if (outcome.status === "deadline") {
+    // This timer lives in the RPC entrypoint that owns the dynamic-worker
+    // call. Its expiry is not a cancellation acknowledgement for arbitrary
+    // work the script may already have started. Sandbox exec has its own
+    // earlier, process-tree terminating deadline; every other external
+    // effect remains explicitly classified as possibly continuing.
+    return {
+      status: "failed",
+      error: DEADLINE_EXCEEDED_ERROR,
+      failureKind: "deadline",
+      phase: "execution",
+      executionMayHaveOccurred: true,
+      cancellation: "external-work-may-continue",
+    };
+  }
+  if (outcome.status === "rejected") {
+    return {
+      status: "failed",
+      error: outcome.error instanceof Error ? outcome.error.message : String(outcome.error),
+      failureKind: "runtime",
+      phase: "execution",
+      executionMayHaveOccurred: true,
+      // A rejected worker call proves this handler stopped waiting, not that
+      // arbitrary fire-and-forget capability work has terminated.
+      cancellation: "external-work-may-continue",
+    };
+  }
+
+  try {
     const result = outcome.value;
     // This is an RPC/event JSON boundary, not a deep-clone operation. Preserve
     // JSON's deliberate normalization and rejection semantics (Dates become
@@ -130,6 +183,155 @@ export class ScriptExecutionEntrypoint extends WorkerEntrypoint<
         ? {}
         : { result: JSON.parse(serializedResult) as JsonValue }),
     };
+  } catch (error) {
+    return {
+      status: "failed",
+      error: error instanceof Error ? error.message : String(error),
+      failureKind: "runtime",
+      phase: "execution",
+      executionMayHaveOccurred: true,
+      cancellation: "external-work-may-continue",
+    };
+  }
+}
+
+/**
+ * Commit the executor-owned terminal fact onto the exact stream lifetime that
+ * recorded `script-run-started`. The event is keyed, so one lifecycle replay
+ * is safe; a lost acknowledgement is accepted only after reading back a valid
+ * settlement under that same execution key.
+ */
+type ScriptSettlementStream = {
+  appendIfStreamId(args: {
+    streamId: string;
+    events: StreamEventInput[];
+  }): Promise<StreamEvent[]> | StreamEvent[];
+  getEvent(args: {
+    idempotencyKey: string;
+  }): Promise<StreamEvent | undefined> | StreamEvent | undefined;
+};
+
+export async function appendScriptExecutionSettlement(input: {
+  executionId: string;
+  getStream: () => ScriptSettlementStream;
+  projectId: string;
+  scopePath: string;
+  settlement: ScriptExecutionSettlement;
+  settlementExpiresAt: number;
+  streamId: string;
+}): Promise<void> {
+  const idempotencyKey = `${CapabilityHostProcessorContract.slug}/script-run-settled@${input.executionId}`;
+  const event: StreamEventInput = {
+    ...scriptCompletionInput({
+      executionId: input.executionId,
+      idempotencyKey,
+      settlement: input.settlement,
+    }),
+    source: {
+      processor: {
+        slug: CapabilityHostProcessorContract.slug,
+        version: CapabilityHostProcessorContract.version,
+        stream: {
+          path: input.scopePath,
+          projectId: input.projectId,
+          streamId: input.streamId,
+        },
+      },
+    },
+  };
+
+  try {
+    await retryIdempotentDurableObjectOperation({
+      operation: async () => {
+        const invocation = Promise.resolve(
+          input.getStream().appendIfStreamId({
+            streamId: input.streamId,
+            events: [event],
+          }),
+        );
+        const outcome = await settleByDeadline(
+          invocation,
+          Math.min(input.settlementExpiresAt, Date.now() + SETTLEMENT_APPEND_ATTEMPT_TIMEOUT_MS),
+          Date.now,
+        );
+        if (outcome.status === "fulfilled") {
+          disposeIgnoredRpcResult(outcome.value);
+          return;
+        }
+        if (outcome.status === "rejected") throw outcome.error;
+        // A late keyed append may still commit. Observe/release its result; the
+        // one permitted replay carries the exact same body and therefore
+        // dedupes if the first acknowledgement alone was lost.
+        void invocation.then(disposeIgnoredRpcResult, () => undefined);
+        throw new Error(
+          `${STREAM_UNAVAILABLE_MESSAGE_PREFIX}script settlement append received no response within ` +
+            `${SETTLEMENT_APPEND_ATTEMPT_TIMEOUT_MS}ms`,
+        );
+      },
+      onRetry: ({ attempt, error, maxAttempts }) => {
+        console.warn("[script-execution] retrying keyed settlement append", {
+          attempt,
+          error,
+          executionId: input.executionId,
+          maxAttempts,
+          path: input.scopePath,
+          projectId: input.projectId,
+        });
+      },
+    });
+    return;
+  } catch (appendError) {
+    if (isStreamIdMismatchError(appendError)) {
+      // Deleting/recreating the stream closes the old lifetime and all of its
+      // obligations. Never leak the old executor's outcome into the new log.
+      console.info("[script-execution] settlement abandoned with replaced stream lifetime", {
+        executionId: input.executionId,
+        path: input.scopePath,
+        projectId: input.projectId,
+        streamId: input.streamId,
+      });
+      return;
+    }
+
+    let durableSettlement: ScriptExecutionSettlement | undefined;
+    try {
+      const read = Promise.resolve(input.getStream().getEvent({ idempotencyKey }));
+      const readOutcome = await settleByDeadline(
+        read,
+        Math.min(input.settlementExpiresAt, Date.now() + SETTLEMENT_APPEND_ATTEMPT_TIMEOUT_MS),
+        Date.now,
+      );
+      if (readOutcome.status === "deadline") {
+        void read.then(disposeIgnoredRpcResult, () => undefined);
+        throw new Error("timed out reading back the script settlement");
+      }
+      if (readOutcome.status === "rejected") throw readOutcome.error;
+      try {
+        durableSettlement = settlementFromScriptCompletionEvent(
+          readOutcome.value,
+          input.executionId,
+        );
+      } finally {
+        disposeIgnoredRpcResult(readOutcome.value);
+      }
+      if (durableSettlement === undefined) throw appendError;
+    } catch (verificationError) {
+      if (verificationError === appendError) throw appendError;
+      throw new AggregateError(
+        [appendError, verificationError],
+        "script executor settlement append failed and its durable outcome could not be verified",
+      );
+    }
+
+    console.info("[script-execution] late settlement superseded by durable outcome", {
+      attemptedFailureKind:
+        input.settlement.status === "failed" ? input.settlement.failureKind : undefined,
+      attemptedStatus: input.settlement.status,
+      durableFailureKind:
+        durableSettlement.status === "failed" ? durableSettlement.failureKind : undefined,
+      durableStatus: durableSettlement.status,
+      executionId: input.executionId,
+    });
   }
 }
 

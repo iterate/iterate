@@ -69,7 +69,7 @@ async function makeProcessor(options: {
     path: options.path ?? "/",
     projectId: null,
     scriptExecutionEntrypoint: {
-      run: () => {
+      start: () => {
         throw new Error("must not run in this scenario");
       },
     },
@@ -221,6 +221,35 @@ describe("capability fallback resolution", () => {
 });
 
 describe("provide-time types validation", () => {
+  it("keys each provide command independently so a Stream DO reset can replay only its journal append", async () => {
+    const stream = capabilityHostStream();
+    const harness = await makeProcessor({ stream });
+    await provideDelivered(harness, {
+      expression: ["streams"],
+      path: ["first"],
+      type: "itx-call",
+    });
+    await provideDelivered(harness, {
+      expression: ["streams"],
+      path: ["second"],
+      type: "itx-call",
+    });
+
+    const keys = stream.events
+      .filter((event) => event.type === PROVIDED)
+      .map((event) => event.idempotencyKey);
+    expect(keys).toHaveLength(2);
+    expect(new Set(keys).size).toBe(2);
+    expect(keys).toEqual([
+      expect.stringMatching(
+        /^capability-host\/capability-provided@[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+      expect.stringMatching(
+        /^capability-host\/capability-provided@[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    ]);
+  });
+
   it("rejects authored types that do not compile, appending nothing", async () => {
     const stream = capabilityHostStream();
     const { processor } = await makeProcessor({

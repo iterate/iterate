@@ -17,11 +17,10 @@ import { retainLiveCapabilityProvider, type LiveCapability } from "./live-capabi
 import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
 import {
   SCRIPT_EXECUTION_SETTLEMENT_GRACE_MS,
-  ScriptExecutionSettlement,
   scriptCompletionInput,
   settlementAppendDeadline,
   settlementForUndrivenScript,
-  settlementFromWorkerOutcome,
+  settlementFromScriptCompletionEvent,
   type ScriptExecutionSettlement as ScriptExecutionSettlementValue,
 } from "./script-execution-settlement.ts";
 import {
@@ -63,21 +62,22 @@ import {
  * state alone — recovery never re-reads the request event.
  *
  * The at-head pass in `processEvent` (under `delivery.caughtUp`) compares the
- * open obligations in state against `#liveExecutions` — the script runs alive
- * in THIS incarnation — and for every obligation nobody here is driving it
- * either STARTS it (status `requested` and unexpired: typecheck gate → started
- * evidence → worker RPC → settled, all in one background attempt) or SETTLES
- * it: expired before any attempt began, or `started` with no live run — the
- * incarnation running it died, so it settles as an orphan FAILURE and is NEVER
- * re-run (a script may have half-executed non-idempotent side effects; the
- * agent renders the failure and the model decides whether to retry).
+ * open obligations in state against `#liveExecutions` — attempts this host
+ * incarnation is currently handing off or watching. A `requested` obligation
+ * runs the typecheck gate, records `started`, and makes one short handoff to a
+ * stateless executor. The executor owns the long Dynamic Worker invocation and
+ * commits the terminal fact directly onto this exact stream lifetime. The host
+ * waits only for that durable fact. A replacement host seeing an unexpired
+ * `started` obligation resumes the wait, not the arbitrary script; only the
+ * original absolute deadline permits an orphan settlement.
  *
  * RECOVERY rides that same at-head pass. When an incarnation dies owing script
  * work, the keepalive alarm revives the processor and appends
  * `events.iterate.com/stream/processor-revived`; its wake produces the
  * eventless at-head pass that re-drives the open obligations — fresh requested
- * scripts start, orphaned started scripts settle. Starting fresh and
- * recovering after an eviction are the same code path. The pass is
+ * scripts start, while unexpired started scripts resume their durable
+ * settlement watch. Starting fresh and recovering after an eviction are the
+ * same code path. The pass is
  * BLOCKED (one outer `blockProcessorWhile` per at-head pass): a settle append
  * that fails keeps the frame retryable, so the transport's redelivery — not a
  * timer — is what retries a transiently failed settlement. Settle appends are
@@ -96,8 +96,9 @@ export class CapabilityHostProcessor extends StreamProcessor<
    * the providing connection and dies with it. */
   readonly #liveCapabilities = new Map<string, LiveCapability>();
 
-  /** Script executions alive in THIS incarnation — the "actually running" half
-   * the at-head pass compares the reduced obligations against. */
+  /** Script obligations THIS incarnation is handing off or watching. The
+   * arbitrary body runs independently in ScriptExecutionEntrypoint; this set
+   * only prevents duplicate host-side drivers within one incarnation. */
   readonly #liveExecutions = new Set<string>();
 
   /**
@@ -153,12 +154,12 @@ export class CapabilityHostProcessor extends StreamProcessor<
    *
    * - a settlement this incarnation already knows (`#pendingSettlements`) is
    *   re-appended verbatim — never reclassified;
-   * - `requested` and unexpired → start the attempt in the background (the
-   *   whole typecheck → started → worker → settled pipeline);
-   * - anything else — expired before an attempt, or `started` with its
-   *   incarnation gone — settles via {@link settlementForUndrivenScript}: an
-   *   orphaned `started` script is a FAILURE and is never re-run, because the
-   *   body may have half-executed and scripts are not assumed idempotent.
+   * - `requested` and unexpired → start the attempt in the background
+   *   (typecheck → started → short executor handoff → durable-settlement wait);
+   * - `started` and unexpired → resume only the durable-settlement wait;
+   * - expired → settle via {@link settlementForUndrivenScript}: an orphaned
+   *   `started` script is a FAILURE and is never re-run, because the body may
+   *   have half-executed and scripts are not assumed idempotent.
    *
    * Recovery is this same code: the platform's revived fact (appended after an
    * eviction took in-flight work) is consumed by the contract purely so its
@@ -201,6 +202,20 @@ export class CapabilityHostProcessor extends StreamProcessor<
             expiresAt: execution.expiresAt,
             fallback,
             requestedAtOffset: execution.requestedAtOffset,
+          }),
+        );
+        continue;
+      }
+      if (execution.status === "started" && now < execution.expiresAt) {
+        this.#liveExecutions.add(executionId);
+        // The executor owns the arbitrary script and writes its result
+        // directly to this stream. A successor must never infer "orphaned"
+        // merely from losing the old host's waiter; it recreates only that
+        // waiter and preserves the original absolute deadline.
+        args.runInBackground(() =>
+          this.#waitForExecutorSettlement({
+            executionId,
+            expiresAt: execution.expiresAt,
           }),
         );
         continue;
@@ -384,6 +399,11 @@ export class CapabilityHostProcessor extends StreamProcessor<
     try {
       const [committed] = await this.append({
         type: "events.iterate.com/capability-host/capability-provided",
+        // One key per public command, minted before the append. This does not
+        // replay the caller-owned live capability or collapse two intentional
+        // provides; it only lets the inner Stream DO retry the exact journal
+        // commit once when its incarnation resets before acknowledging it.
+        idempotencyKey: this.idempotencyKey(`capability-provided@${crypto.randomUUID()}`),
         payload: record,
       });
       committedOffset = committed.offset;
@@ -675,10 +695,11 @@ export class CapabilityHostProcessor extends StreamProcessor<
   }
 
   /**
-   * One attempt at one script obligation, start to settled — background work:
-   * it can run for minutes, and the stream (not this closure) is what survives
-   * an eviction. Typecheck gate → started evidence → worker RPC → settled,
-   * with the deadline enforced at every stage.
+   * Start one script obligation — background work owned by this host only
+   * through the short handoff and durable-settlement watch. The arbitrary body
+   * runs under ScriptExecutionEntrypoint's independent waitUntil and commits
+   * its own keyed terminal fact, so no multi-minute Workers RPC result channel
+   * connects its lifetime to this Durable Object incarnation.
    */
   async #executeScript(input: {
     capabilities: CapabilityRecord[];
@@ -743,7 +764,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
       // never ran, so no settlement may be appended — the obligation stays
       // `requested`, the rethrow marks the keepalive window failed, and a
       // later at-head pass retries the whole attempt.
-      await this.#awaitAppendWithin(
+      const [started] = await this.#awaitAppendWithin(
         this.append({
           type: "events.iterate.com/capability-host/script-run-started",
           idempotencyKey: this.idempotencyKey(`script-run-started@${input.executionId}`),
@@ -752,6 +773,12 @@ export class CapabilityHostProcessor extends StreamProcessor<
         executionExpiresAt,
         `record the start of script execution "${input.executionId}"`,
       );
+      const streamId = started?.source?.processor?.stream.streamId;
+      if (streamId === undefined) {
+        throw new Error(
+          `script-run-started "${input.executionId}" committed without processor stream identity`,
+        );
+      }
       if (now() >= executionExpiresAt) {
         await this.#appendSettlementWithin(
           {
@@ -771,42 +798,119 @@ export class CapabilityHostProcessor extends StreamProcessor<
         return;
       }
 
-      // The entrypoint owns a timer around the dynamic-worker invocation, but
-      // the RPC carrying that result back to this host is a second failure
-      // boundary. Bound it independently: a half-open worker stub must not
-      // keep the obligation (and its stream-native public waiter) alive forever
-      // even if the remote timer fired correctly.
-      const runPromise = this.deps.scriptExecutionEntrypoint.run(input.code, {
-        emittedJs: checked.emittedJs,
-        expiresAt: executionExpiresAt,
-        streamContext: {
-          kind: "script-execution",
-          streamPath: this.#scopePath,
-          scriptRunRequestedEventOffset: input.requestedAtOffset,
-          executionId: input.executionId,
-        },
-      });
-      const runOutcome = await settleByDeadline(runPromise, executionExpiresAt, now);
-      if (runOutcome.status === "deadline") {
-        // Workers RPC promises are disposable capabilities at runtime. End
-        // this host's retained call as soon as its absolute wait expires;
-        // the durable settlement still conservatively says arbitrary
-        // external work may continue because disposal is not a cancellation
-        // acknowledgement from code the script already invoked.
-        (runPromise as Promise<unknown> & Partial<Disposable>)[Symbol.dispose]?.();
+      // The entrypoint method schedules its long work under ITS execution
+      // context and returns. Bound this handoff independently: a transport
+      // rejection or missing acknowledgement is ambiguous (the executor may
+      // already own the script), so neither outcome authorizes replaying the
+      // body. Both proceed to the durable-settlement watch.
+      let startPromise: Promise<unknown>;
+      try {
+        startPromise = this.deps.scriptExecutionEntrypoint.start(input.code, {
+          emittedJs: checked.emittedJs,
+          executionExpiresAt,
+          settlementExpiresAt: input.expiresAt,
+          streamContext: {
+            kind: "script-execution",
+            streamPath: this.#scopePath,
+            scriptRunRequestedEventOffset: input.requestedAtOffset,
+            executionId: input.executionId,
+          },
+          streamId,
+        });
+      } catch (error) {
+        startPromise = Promise.reject(error);
       }
-      const settlement = settlementFromWorkerOutcome(runOutcome);
-      // Deliberately outside the worker-invocation catch: a failed stream
-      // append must never be reclassified as a script runtime failure. It
-      // rejects this tracked attempt, and the next at-head pass retries the
-      // same idempotent settlement.
-      await this.#appendSettlementWithin(
-        { executionId: input.executionId, settlement },
-        input.expiresAt,
+      const handoffOutcome = await settleByDeadline(
+        startPromise,
+        Math.min(executionExpiresAt, now() + SCRIPT_EXECUTION_HANDOFF_TIMEOUT_MS),
+        now,
       );
+      if (handoffOutcome.status === "deadline") {
+        (startPromise as Promise<unknown> & Partial<Disposable>)[Symbol.dispose]?.();
+        console.warn("[capability-host] script executor handoff acknowledgement timed out", {
+          executionId: input.executionId,
+          timeoutMs: SCRIPT_EXECUTION_HANDOFF_TIMEOUT_MS,
+        });
+      } else if (handoffOutcome.status === "rejected") {
+        console.warn("[capability-host] script executor handoff acknowledgement failed", {
+          error: handoffOutcome.error,
+          executionId: input.executionId,
+        });
+      }
+
+      await this.#waitForExecutorSettlement({
+        executionId: input.executionId,
+        expiresAt: input.expiresAt,
+      });
     } finally {
       this.#liveExecutions.delete(input.executionId);
     }
+  }
+
+  /**
+   * Wait for the executor's keyed terminal fact, not an RPC return value.
+   * Register the predicate before reading the current fold: if settlement
+   * raced this watcher, it is either caught as a future delivery or already
+   * absent from the snapshot. On host eviction the waiter disappears and the
+   * successor recreates it from the still-open `started` obligation.
+   */
+  async #waitForExecutorSettlement(input: {
+    executionId: string;
+    expiresAt: number;
+  }): Promise<void> {
+    const abort = new AbortController();
+    const wait = this.deps.reads.waitUntilEvent({
+      predicate: (event) =>
+        event.type === "events.iterate.com/capability-host/script-run-settled" &&
+        event.payload?.executionId === input.executionId,
+      signal: abort.signal,
+    });
+    const outcomePromise = settleByDeadline(wait, input.expiresAt, () => this.#now());
+    let state: ProcessorState<CapabilityHostProcessorContract>;
+    try {
+      ({ state } = await this.deps.reads.snapshot());
+    } catch (error) {
+      abort.abort(new Error("script settlement snapshot failed"));
+      await wait.catch(() => undefined);
+      throw error;
+    }
+    if (state.scriptExecutions[input.executionId] === undefined) {
+      abort.abort(new Error("script settlement already reduced"));
+      await wait.catch(() => undefined);
+      await outcomePromise;
+      return;
+    }
+
+    const outcome = await outcomePromise;
+    if (outcome.status === "fulfilled") return;
+    if (outcome.status === "rejected") {
+      // The node harness exposes incarnation disposal by rejecting its local
+      // in-process waiter. Production eviction destroys the whole execution
+      // context instead. In both cases the durable `started` obligation is the
+      // recovery signal; surfacing this expected teardown as an error would
+      // misclassify the very lifecycle transition the successor handles.
+      if (
+        outcome.error instanceof Error &&
+        outcome.error.message === "StreamProcessorRunner disposed"
+      ) {
+        return;
+      }
+      throw outcome.error;
+    }
+
+    abort.abort(new Error("script settlement deadline reached"));
+    await wait.catch(() => undefined);
+    // The executor never committed a terminal fact by the caller's original
+    // deadline. The body may have run, so classify it once as orphaned and
+    // never replay it. A simultaneous late executor result races under the
+    // same settlement key; the durable winner is read back by either writer.
+    await this.#appendSettlementWithin(
+      {
+        executionId: input.executionId,
+        settlement: settlementForUndrivenScript("started"),
+      },
+      input.expiresAt,
+    );
   }
 
   async #awaitAppendWithin<T>(
@@ -872,7 +976,10 @@ export class CapabilityHostProcessor extends StreamProcessor<
               const event = await this.stream.getEvent({
                 idempotencyKey: settlement.idempotencyKey,
               });
-              const durable = settlementFromSettledEvent(event, inputs[index]!.executionId);
+              const durable = settlementFromScriptCompletionEvent(
+                event,
+                inputs[index]!.executionId,
+              );
               if (durable === undefined) throw appendError;
               return durable;
             }),
@@ -934,12 +1041,14 @@ export class CapabilityHostProcessor extends StreamProcessor<
 // -----------------------------------------------------------------------------
 
 type ScriptExecutionEntrypoint = {
-  run(
+  start(
     code: string,
     options: {
       emittedJs?: string;
-      expiresAt: number;
+      executionExpiresAt: number;
+      settlementExpiresAt: number;
       streamContext: Extract<StreamContext, { kind: "script-execution" }>;
+      streamId: string;
     },
   ): Promise<unknown>;
 };
@@ -1045,6 +1154,10 @@ const MAX_DESCRIBED_TYPES_CHARS = 16_000;
 // provide/revoke are read-your-write boundaries. A broken delivery path must
 // reject the command rather than retain an RPC forever.
 const INGEST_WAIT_TIMEOUT_MS = 15_000;
+// `start()` only registers entrypoint-owned background work. Its acknowledgement
+// should be prompt; a missing ack is ambiguous and therefore switches to the
+// durable settlement watch rather than replaying arbitrary script code.
+const SCRIPT_EXECUTION_HANDOFF_TIMEOUT_MS = 10_000;
 
 function truncatedTypes(types: string, mountPoint: string): string {
   if (types.length <= MAX_DESCRIBED_TYPES_CHARS) return types;
@@ -1093,20 +1206,6 @@ function resolveLongestPrefix(records: CapabilityRecord[], path: string[]) {
     }
   }
   return best;
-}
-
-function settlementFromSettledEvent(
-  event: StreamEvent | undefined,
-  executionId: string,
-): ScriptExecutionSettlementValue | undefined {
-  if (
-    event?.type !== "events.iterate.com/capability-host/script-run-settled" ||
-    event.payload?.executionId !== executionId
-  ) {
-    return undefined;
-  }
-  const parsed = ScriptExecutionSettlement.safeParse(event.payload.settlement);
-  return parsed.success ? parsed.data : undefined;
 }
 
 function assertExpressionDoesNotReferenceOwnMount(
