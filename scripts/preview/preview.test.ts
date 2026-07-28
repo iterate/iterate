@@ -748,6 +748,10 @@ describe("draft preview policy", () => {
     expect(workflow).toContain(
       "${{ github.event_name == 'workflow_dispatch' && '--allow-draft --all-apps' || '' }}",
     );
+    expect(workflow).toContain("fresh_data:");
+    expect(workflow).toContain(
+      "${{ github.event_name == 'workflow_dispatch' && inputs.fresh_data && '--fresh-data' || '' }}",
+    );
   });
 });
 
@@ -930,6 +934,7 @@ describe("preview test commands", () => {
       previewDeployBudgetMs: 90_000,
       previewReadyStaticAssets: {
         directory: "dist/client/assets",
+        documentPath: "/",
         publicPathPrefix: "/assets",
       },
       previewReadyWorkerVersion: true,
@@ -1060,11 +1065,14 @@ describe("preview readiness URLs", () => {
     }
   });
 
-  test("brackets a complete exact-version static-asset proof with health checks", async () => {
+  test("waits for two coherent exact-version HTML and asset cohorts", async () => {
     vi.useFakeTimers();
+    const previousVersion = "11111111-1111-4111-8111-111111111111";
     const expectedVersion = "22222222-2222-4222-8222-222222222222";
     let fontAttempts = 0;
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    let documentAttempts = 0;
+    let documentAssetAttempts = 0;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const url = new URL(input instanceof Request ? input.url : input.toString());
       if (url.pathname === "/api/health") {
         return new Response(null, {
@@ -1072,19 +1080,48 @@ describe("preview readiness URLs", () => {
           headers: { "x-iterate-worker-version": expectedVersion },
         });
       }
-      if (url.pathname === "/assets/app.js") return new Response(null, { status: 200 });
-      if (url.pathname === "/assets/font.woff2") {
+      if (url.pathname === "/") {
+        documentAttempts += 1;
+        return new Response(
+          documentAttempts === 1
+            ? '<script src="/assets/old.js"></script>'
+            : '<script src="/assets/app.js"></script><link href="/assets/document.css" rel="stylesheet">',
+          {
+            status: 200,
+            headers: {
+              "content-type": "text/html; charset=utf-8",
+              "x-iterate-worker-version":
+                documentAttempts === 1 ? previousVersion : expectedVersion,
+            },
+          },
+        );
+      }
+      if (init?.method === "HEAD" && url.pathname === "/assets/app.js") {
+        return new Response(null, { status: 200 });
+      }
+      if (init?.method === "HEAD" && url.pathname === "/assets/font.woff2") {
         fontAttempts += 1;
         return new Response(null, { status: fontAttempts === 1 ? 404 : 200 });
+      }
+      if (init?.method === "GET" && url.pathname === "/assets/app.js") {
+        return new Response(null, { status: 200 });
+      }
+      if (init?.method === "GET" && url.pathname === "/assets/document.css") {
+        documentAssetAttempts += 1;
+        return new Response(null, {
+          status: documentAssetAttempts === 1 ? 404 : 200,
+        });
       }
       throw new Error(`unexpected readiness request ${url}`);
     });
 
     try {
       const readiness = waitForPreviewAppReadiness({
+        documentPath: "/",
         publicUrl: "https://os.iterate-preview-8.com",
         readyUrlPath: "/api/health",
         signal: undefined,
+        staticAssetPathPrefix: "/assets",
         staticAssetPaths: ["/assets/app.js", "/assets/font.woff2"],
         timeoutMs: 10_000,
         workerVersion: {
@@ -1093,15 +1130,17 @@ describe("preview readiness URLs", () => {
         },
       });
 
-      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(5_000);
       await expect(readiness).resolves.toEqual({ ok: true });
       expect(fontAttempts).toBe(2);
+      expect(documentAttempts).toBe(4);
+      expect(documentAssetAttempts).toBe(3);
       expect(
         fetchMock.mock.calls.filter(([input]) => {
           const url = new URL(input instanceof Request ? input.url : input.toString());
-          return url.pathname === "/assets/app.js";
+          return url.pathname === "/assets/old.js";
         }),
-      ).toHaveLength(1);
+      ).toHaveLength(0);
       expect(
         fetchMock.mock.calls.filter(([input]) => {
           const url = new URL(input instanceof Request ? input.url : input.toString());
@@ -1113,7 +1152,8 @@ describe("preview readiness URLs", () => {
         expect(new Headers(init?.headers).get("Cloudflare-Workers-Version-Overrides")).toBe(
           `os-preview-8="${expectedVersion}"`,
         );
-        expect(init?.method).toBe(url.pathname === "/api/health" ? "GET" : "HEAD");
+        if (url.pathname === "/assets/font.woff2") expect(init?.method).toBe("HEAD");
+        if (url.pathname === "/") expect(init?.method).toBe("GET");
       }
     } finally {
       fetchMock.mockRestore();

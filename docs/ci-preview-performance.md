@@ -163,12 +163,14 @@ PR_NUMBER=<pr> REF=<branch> RUNS=25 ./scripts/preview/flake-hunt-loop.sh
 
 It sequentially dispatches the canonical `cloudflare-previews.yml` workflow;
 there is no second deploy/test implementation and no nested marathon runner.
-Every counted iteration therefore has its own ordinary Depot runner, artifacts,
-GitHub timing, and PostHog telemetry. The ledger records the immutable head,
-Depot run/attempt IDs, whole-run duration (dispatch creation through finish),
-and retry count. It fails fast on a workflow failure, moved head, absorbed test
-retry, or duration at or above seven minutes. The acceptance bar is 25
-consecutive zero-retry runs of one head.
+Every counted iteration therefore has its own ordinary Depot runner, a
+clean-slot-data reset followed by a full-fleet deploy, artifacts, GitHub
+timing, and PostHog telemetry. The reset is an explicit flake-hunt dispatch
+input; automatic PR runs retain their persistent preview data. The ledger
+records the immutable head, Depot run/attempt IDs, whole-run duration (dispatch
+creation through finish), and retry count. It fails fast on a workflow failure,
+moved head, absorbed test retry, or duration at or above seven minutes. The
+acceptance bar is 25 consecutive zero-retry runs of one head.
 
 ## Cost
 

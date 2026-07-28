@@ -9,9 +9,11 @@ import { isRetryableDurableObjectAvailabilityError } from "./streams/stream-unav
 const DEPLOYMENT_WAIT_TIMEOUT_MS = 30_000;
 const DEPLOYMENT_PROBE_TIMEOUT_MS = 2_000;
 const DEPLOYMENT_POLL_INTERVAL_MS = 250;
+const DEPLOYMENT_MAX_POLL_INTERVAL_MS = 4_000;
 const TRANSIENT_PLATFORM_INTERNAL_ERROR = /^internal error; reference = [a-z0-9]{24}$/iu;
 
 export type DeploymentVersionReadinessOptions = {
+  maxPollIntervalMs?: number;
   now?: () => number;
   pollIntervalMs?: number;
   probeTimeoutMs?: number;
@@ -96,6 +98,7 @@ export async function waitForDurableObjectDeploymentVersion(
   const deadline = startedAt + (input.timeoutMs ?? DEPLOYMENT_WAIT_TIMEOUT_MS);
   const probeTimeoutMs = input.probeTimeoutMs ?? DEPLOYMENT_PROBE_TIMEOUT_MS;
   const pollIntervalMs = input.pollIntervalMs ?? DEPLOYMENT_POLL_INTERVAL_MS;
+  const maxPollIntervalMs = input.maxPollIntervalMs ?? DEPLOYMENT_MAX_POLL_INTERVAL_MS;
   const expectedVersion = normalizeDeploymentVersion(input.expectedVersion);
   let lastObservedVersion: WorkerDeploymentVersion | undefined;
   let lifecycleFailures = 0;
@@ -103,6 +106,7 @@ export async function waitForDurableObjectDeploymentVersion(
   let platformFailures = 0;
   let probeTimeouts = 0;
   let probes = 0;
+  let retryableOutcomes = 0;
 
   while (now() < deadline) {
     probes += 1;
@@ -152,9 +156,18 @@ export async function waitForDurableObjectDeploymentVersion(
       probeTimeouts += 1;
     }
 
+    retryableOutcomes += 1;
     const remainingMs = deadline - now();
     if (remainingMs <= 0) break;
-    await wait(Math.min(pollIntervalMs, remainingMs));
+    // A stale Durable Object needs an idle window in which Cloudflare can
+    // replace its old incarnation. A constant 250ms probe cadence kept one
+    // observed Workspace continuously busy for the full 30s deadline (91
+    // related spans), preventing the handoff this gate was waiting for.
+    // Exponential rollout backoff still detects fast convergence quickly but
+    // opens a deliberate multi-second quiet window for a persistent mismatch.
+    const backoffMultiplier = 2 ** Math.min(Math.max(0, retryableOutcomes - 1), 16);
+    const nextPollMs = Math.min(maxPollIntervalMs, pollIntervalMs * backoffMultiplier);
+    await wait(Math.min(nextPollMs, remainingMs));
   }
 
   const lastObservation =
@@ -187,6 +200,7 @@ export async function acquireDurableObjectDeploymentTarget<
   let readyTarget: Target | undefined;
   const readiness = await waitForDurableObjectDeploymentVersion({
     expectedVersion: input.expectedVersion,
+    maxPollIntervalMs: input.maxPollIntervalMs,
     notReadyError: input.notReadyError,
     now: input.now,
     pollIntervalMs: input.pollIntervalMs,

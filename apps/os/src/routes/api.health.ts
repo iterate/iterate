@@ -1,7 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { itxEnv, workerVersion } from "../env.ts";
-
-const workerVersionHeader = "x-iterate-worker-version";
+import { WORKER_VERSION_RESPONSE_HEADER } from "../worker-response-version.ts";
 
 /**
  * Trivial liveness probe. Preview readiness compares the version header with
@@ -18,7 +17,7 @@ export const Route = createFileRoute("/api/health")({
           {
             headers: {
               "cache-control": "no-store",
-              [workerVersionHeader]: version,
+              [WORKER_VERSION_RESPONSE_HEADER]: version,
             },
           },
         );

@@ -78,6 +78,11 @@ on:
       pull-request-number:
         description: PR number to deploy + test
         required: true
+      fresh_data:
+        description: Erase slot-persistent data before the full-fleet deploy
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: cloudflare-previews-${{ github.event.pull_request.number || inputs.pull-request-number }}
@@ -139,11 +144,13 @@ jobs:
           set -euo pipefail
           # A manual dispatch is an explicit ask for a fresh preview, so it
           # overrides the draft policy and redeploys even when this exact head
-          # was previously cleaned up and recorded as released.
+          # was previously cleaned up and recorded as released. The flake-hunt
+          # harness also requests a clean slot so repetitions are independent.
           doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview run \
             --github-token "$GITHUB_TOKEN" \
             --pull-request-number "${{ github.event.pull_request.number || inputs.pull-request-number }}" \
-            ${{ github.event_name == 'workflow_dispatch' && '--allow-draft --all-apps' || '' }}
+            ${{ github.event_name == 'workflow_dispatch' && '--allow-draft --all-apps' || '' }} \
+            ${{ github.event_name == 'workflow_dispatch' && inputs.fresh_data && '--fresh-data' || '' }}
       - name: Normalize and send preview test telemetry
         if: always()
         env:

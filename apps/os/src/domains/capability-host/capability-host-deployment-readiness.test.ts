@@ -87,6 +87,38 @@ describe("waitForCapabilityHostDeploymentVersion", () => {
     });
   });
 
+  it("opens progressively longer quiet windows for a stale object to hand off", async () => {
+    let time = 0;
+    const sleeps: number[] = [];
+    const readVersion = vi
+      .fn<() => Promise<string>>()
+      .mockResolvedValueOnce("version-old")
+      .mockResolvedValueOnce("version-old")
+      .mockResolvedValueOnce("version-old")
+      .mockResolvedValueOnce("version-old")
+      .mockResolvedValueOnce("version-new");
+
+    await expect(
+      waitForCapabilityHostDeploymentVersion({
+        ...BASE_INPUT,
+        maxPollIntervalMs: 1_000,
+        now: () => time,
+        pollIntervalMs: 250,
+        readVersion,
+        sleep: async (durationMs) => {
+          sleeps.push(durationMs);
+          time += durationMs;
+        },
+        timeoutMs: 5_000,
+      }),
+    ).resolves.toMatchObject({
+      mismatches: 4,
+      probes: 5,
+      waitedMs: 2_750,
+    });
+    expect(sleeps).toEqual([250, 500, 1_000, 1_000]);
+  });
+
   it("waits rather than guessing the order of a legacy target id", async () => {
     let time = 0;
     const readVersion = vi

@@ -479,9 +479,12 @@ retries: ...` (the Vitest `RetryTelemetryReporter` lives in
   what the on-demand marathon is for
   (`scripts/preview/flake-hunt-loop.sh`, N sequential dispatches of the
   canonical full preview workflow on Depot). Every iteration follows the same
-  runner and PostHog path as ordinary preview CI. The orchestrator records the
-  retry and exits non-zero immediately; only zero-retry runs advance its
-  accepted streak.
+  runner and PostHog path as ordinary preview CI. Its explicit `fresh_data`
+  dispatch input erases slot-persistent data before the full-fleet deploy, so
+  one iteration's projects and Durable Object backlog cannot contaminate the
+  next; ordinary automatic PR previews remain persistent. The orchestrator
+  records the retry and exits non-zero immediately; only zero-retry runs
+  advance its accepted streak.
 
 When telemetry trends up without failures, investigate it. If the test is
 repeatedly flaky or adds disproportionate tail latency, use the quarantine

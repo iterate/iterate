@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Dispatch the canonical Depot preview workflow repeatedly. Every iteration is
-# a normal Cloudflare Preview run: fresh Depot runner, full-fleet deploy, all
-# e2e lanes, artifacts, GitHub check timings, and PostHog telemetry.
+# a normal Cloudflare Preview run: fresh Depot runner, clean preview-slot data,
+# full-fleet deploy, all e2e lanes, artifacts, GitHub check timings, and
+# PostHog telemetry.
 set -euo pipefail
 
 PR_NUMBER="${PR_NUMBER:?PR_NUMBER is required}"
@@ -171,6 +172,7 @@ for run in $(seq 1 "$RUNS"); do
     --workflow cloudflare-previews.yml \
     --ref "$REF" \
     --input "pull-request-number=$PR_NUMBER" \
+    --input "fresh_data=true" \
     --output json >"$dispatch_file"; then
     record_result "$run" DISPATCH_FAIL 0 0 - - - - - - - "$dispatch_file"
     echo "run $run: DISPATCH_FAIL — $dispatch_file" >&2

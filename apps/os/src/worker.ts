@@ -16,7 +16,7 @@
  */
 import handler from "@tanstack/react-start/server-entry";
 import { newHttpBatchRpcResponse, newWorkersWebSocketRpcResponse } from "capnweb";
-import type { Env } from "./env.ts";
+import { workerVersion, type Env } from "./env.ts";
 import { decideIngressRoute, type IngressResolvers } from "./ingress.ts";
 import { readProjectByHostname } from "./project-hostname-directory.ts";
 import { readProjectById, readProjectBySlug, resolveProjectIdBySlug } from "./project-directory.ts";
@@ -37,6 +37,7 @@ import { wideLogger } from "./observability/wide-log.ts";
 import { createItxRpcSessionOptions } from "./itx/itx-observability.ts";
 import { schedulePosthogException, withPosthogExceptionCapture } from "./observability/posthog.ts";
 import { STREAM_CONTEXT_HEADER } from "./domains/projects/stream-context.ts";
+import { stampHtmlWorkerVersion } from "./worker-response-version.ts";
 
 // Every Durable Object class in the product, plus the loopback entrypoints
 // (`ctx.exports`) shared by the itx runtime.
@@ -108,7 +109,7 @@ async function fetchWithoutWideLog(
   const mcpRequest = rewriteMcpHostRequest({ config, request });
   if (mcpRequest) {
     wideLogger.set({ ingress: { lane: "mcp" } });
-    return await appFetch(mcpRequest, ctx, config, { isEventDocsHost: false });
+    return await appFetch(mcpRequest, ctx, config, { isEventDocsHost: false }, workerVersion(env));
   }
 
   const route = await decideIngressRoute({
@@ -121,9 +122,15 @@ async function fetchWithoutWideLog(
   wideLogger.set(ingressLogFields(request, route));
   if (route.lane !== "os") return await apiFetch(request, env, ctx, config, route);
 
-  return await appFetch(request, ctx, config, {
-    isEventDocsHost: route.hostKind === "eventDocs",
-  });
+  return await appFetch(
+    request,
+    ctx,
+    config,
+    {
+      isEventDocsHost: route.hostKind === "eventDocs",
+    },
+    workerVersion(env),
+  );
 }
 
 /**
@@ -136,6 +143,7 @@ async function appFetch(
   ctx: ExecutionContext,
   config: AppConfig,
   host: { isEventDocsHost: boolean },
+  version: string,
 ) {
   // When baseUrl is not configured (for example workers.dev previews),
   // the request origin is the app's own URL. After this, baseUrl is
@@ -153,7 +161,7 @@ async function appFetch(
     waitUntil: (promise) => ctx.waitUntil(promise),
   };
 
-  return await handler.fetch(request, { context });
+  return stampHtmlWorkerVersion(await handler.fetch(request, { context }), version);
 }
 
 /**

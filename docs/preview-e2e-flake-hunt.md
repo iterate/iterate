@@ -20,17 +20,20 @@ base revision, run IDs, and findings below.
 
 Method: `scripts/preview/flake-hunt-loop.sh` sequentially dispatches the
 canonical Depot `cloudflare-previews.yml` workflow. Every iteration is a normal
-fresh-runner preview check—full-fleet deploy, every e2e lane, artifact upload,
-GitHub timing, and PostHog telemetry—not a second implementation hidden inside
-one long-running job. It fails fast on the first functional failure, moved
-head, absorbed retry, or run at or above seven minutes, and writes a
-machine-readable ledger containing the immutable head plus Depot run/attempt
-IDs, whole-run duration, and retry count. It reads retry counts from the
-always-retained canonical telemetry artifact as well as the successful-run log
-annotation, because a failing test command can prevent the annotation from
-being emitted even though the finalizer retained the raw runner evidence.
-Every failure, retry, or tail gets a root-cause diagnosis and the smallest
-reliable fix; any of them resets the consecutive-clean counter.
+fresh-runner preview check with an explicit clean-slot-data input—full-fleet
+deploy, every e2e lane, artifact upload, GitHub timing, and PostHog
+telemetry—not a second implementation hidden inside one long-running job. The
+reset prevents projects and Durable Object processor backlog from one proof
+iteration contaminating the next; ordinary automatic PR previews remain
+persistent. It fails fast on the first functional failure, moved head,
+absorbed retry, or run at or above seven minutes, and writes a machine-readable
+ledger containing the immutable head plus Depot run/attempt IDs, whole-run
+duration, and retry count. It reads retry counts from the always-retained
+canonical telemetry artifact as well as the successful-run log annotation,
+because a failing test command can prevent the annotation from being emitted
+even though the finalizer retained the raw runner evidence. Every failure,
+retry, or tail gets a root-cause diagnosis and the smallest reliable fix; any
+of them resets the consecutive-clean counter.
 
 This zero-retry acceptance rule applies to new proof runs from 2026-07-22
 onward. Historical ledgers below retain the semantics and retry counts they
@@ -541,6 +544,59 @@ with bounded parallel `HEAD` requests, and requires the expected health
 version again. Only failed assets are retried. This replaces a timing guess
 with a direct version-and-assets proof; the strict streak remains 0/25 pending
 a clean exact-head preflight of both fixes.
+
+After merging current `origin/main` again, the automatic exact-head preflight
+for `d4d6dd9958c79ddc4c00c931bff848766d9baf4b` was correctly rejected. Depot
+aggregate `zrkbw6q8r8`, canonical workflow `g06pnrrgxw`, job `k7vfndgxdq`, and
+attempt `skhjf4bwnf` retained ten raw artifacts and normalized 7,191 PostHog
+events despite the terminal failure. The OS deploy itself took 79.3 seconds.
+Playwright finished 61 passes with two absorbed retries in 86 seconds; Vitest
+finished 47 passing files and one failed file in 206.34 seconds. Six tests
+retried in total, and the final `agent-response-cache` attempt never reached
+the cache assertion: the first fixture project's onboarding greeting exhausted
+the full 90-second wait on both attempts.
+
+The browser retry proved that build-inventory readiness was still incomplete.
+Every browser request carried the expected Worker-version override, yet a real
+SSR document executed the previous Worker and referenced 13 previous-build
+chunks; all 13 returned 404 and hydration never began. The new Worker version
+had been created 67 seconds earlier and the existing health-plus-inventory
+gate had already passed. OS now stamps every HTML response with the immutable
+Worker version that produced it. Preview readiness fetches the real SSR
+document under the exact override, requires that header, extracts its
+same-origin build assets, and fetches the whole emitted cohort. It requires two
+consecutive coherent document-and-asset cohorts before tests begin, bracketed
+by the existing exact-version health checks. This directly observes the edge
+behavior that failed instead of inferring it from a build directory.
+
+Cloudflare traces also showed why the Workspace rollout gate could worsen the
+condition it was waiting for. One stale Workspace Durable Object remained on
+the previous version for all 30 seconds while the gate issued 91 probes,
+roughly one every 250ms; individual probes took 260–530ms. The constant cadence
+kept the object continuously busy and denied it a useful quiet handoff window.
+Retryable readiness outcomes now back off exponentially from 250ms to 4
+seconds. Fast convergence is still detected immediately, while a persistent
+old incarnation gets progressively longer idle windows; terminal
+classification and the 30-second outer deadline are unchanged.
+
+The same trace window exposed a second, cross-run problem rather than an
+individual test flake. Preview 12 emitted 810
+`stream durable callback failed` errors across roughly 375 distinct projects
+during the run, all sampled as 20-second hosted-processor acknowledgement
+timeouts. Thirteen more arrived after CI had ended. Most projects did not
+belong to this run: repeated manual dispatches had reused the PR's persistent
+slot and accumulated prior-run projects and processor work. That violates the
+independence required by a statistical flake proof and can make later
+iterations fail because earlier iterations saturated the slot.
+
+The canonical workflow therefore has an opt-in `fresh_data` dispatch input.
+The flake-hunt loop sets it on every counted iteration; after taking the PR's
+lease, preview orchestration erases all slot-persistent data and then requires
+`--all-apps` so the whole fleet is rebuilt before e2e. Automatic push and
+ordinary manually dispatched previews preserve their existing persistent-data
+behavior unless the input is explicitly selected. Each counted run still uses
+the normal 16-core Depot preview job, every normal test lane, retained
+artifacts, GitHub timing, and the same PostHog finalizer.
 
 ## Round 15 (2026-07-23, post-#2284)
 

@@ -95,6 +95,12 @@ type DeployCommandOptions = PullRequestCommandOptions & {
    */
   allApps?: boolean;
   /**
+   * Erase slot-persistent data after claiming the lease and before deploying.
+   * The strict flake-hunt proof uses this with `--all-apps` so one iteration's
+   * projects, processors, and Durable Objects cannot contaminate the next.
+   */
+  freshData?: boolean;
+  /**
    * Deploy even when the PR is a draft without the `preview` label. Draft
    * PRs otherwise skip previews (or give their slot back); an explicit
    * invocation — workflow_dispatch, the flake-hunt marathon, a human at a
@@ -410,6 +416,10 @@ async function deployPreviewApps({
   runtime: PreviewRuntime;
   telemetry: PreviewE2eTelemetryArtifact;
 }) {
+  if (options.freshData && !options.allApps) {
+    throw new Error("--fresh-data requires --all-apps so an erased slot is fully redeployed.");
+  }
+
   logPreview(
     `deploy for PR #${context.pullRequestNumber} (head ${context.pullRequestHeadSha.slice(0, 7)}) — holder ${pullRequestHolder(context.pullRequestNumber)}, semaphore ${defaultSemaphoreBaseUrl}`,
   );
@@ -579,6 +589,13 @@ async function deployPreviewApps({
     environmentConfigLease: toSlotDisplay(environmentConfigLease),
     notice: claimNotice,
   }));
+
+  if (options.freshData) {
+    logPreview(
+      `--fresh-data: erasing ${environmentConfigLease.slug} before this full-fleet proof run`,
+    );
+    await makePreviewSlotDataEraser(runtime)(environmentConfigLease);
+  }
 
   // Both are read-only GitHub lookups, so overlap them before starting the
   // deploy fleet. A missing size baseline only costs the "vs main" delta;
@@ -1779,6 +1796,8 @@ export type CloudflarePreviewApp = {
    */
   previewReadyStaticAssets?: {
     directory: string;
+    /** Real SSR document whose emitted asset cohort must be reachable together. */
+    documentPath: `/${string}`;
     publicPathPrefix: `/${string}`;
   };
   previewTestBaseUrlEnvVar: string;
@@ -2135,6 +2154,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     previewReadyWorkerVersion: true,
     previewReadyStaticAssets: {
       directory: "dist/client/assets",
+      documentPath: "/",
       publicPathPrefix: "/assets",
     },
     paths: [
@@ -4304,6 +4324,7 @@ async function deployPreviewApp(input: {
 
   const readinessStartedAt = Date.now();
   let staticAssetPaths: string[] | undefined;
+  let staticAssetPathPrefix: string | undefined;
   try {
     staticAssetPaths = input.app.previewReadyStaticAssets
       ? await readPreviewStaticAssetPaths({
@@ -4311,6 +4332,7 @@ async function deployPreviewApp(input: {
           ...input.app.previewReadyStaticAssets,
         })
       : undefined;
+    staticAssetPathPrefix = input.app.previewReadyStaticAssets?.publicPathPrefix;
   } catch (error) {
     return CloudflarePreviewAppEntry.parse({
       ...baseEntry,
@@ -4343,9 +4365,11 @@ async function deployPreviewApp(input: {
     });
   }
   const readiness = await waitForPreviewAppReadiness({
+    documentPath: input.app.previewReadyStaticAssets?.documentPath,
     publicUrl: appConfig.baseUrl,
     readyUrlPath: input.app.previewReadyUrlPath,
     signal: input.signal,
+    staticAssetPathPrefix,
     staticAssetPaths,
     timeoutMs: defaultPreviewReadyTimeoutMs,
     workerVersion,
@@ -5879,9 +5903,11 @@ async function readStaticAssetRelativePaths(
 }
 
 async function waitForPreviewAppReadiness(params: {
+  documentPath?: string;
   publicUrl: string;
   readyUrlPath?: string;
   signal?: AbortSignal;
+  staticAssetPathPrefix?: string;
   staticAssetPaths?: readonly string[];
   timeoutMs: number;
   workerVersion?: PreviewWorkerVersion;
@@ -5919,9 +5945,26 @@ async function waitForPreviewAppReadiness(params: {
     });
     if (!assets.ok) return assets;
 
-    // Bracket the complete asset proof with two independently issued health
-    // requests. A version override that has only reached one request path
-    // cannot pass by serving new health once and old HTML immediately after.
+    if (params.documentPath) {
+      if (!params.staticAssetPathPrefix) {
+        return {
+          message: "Document readiness requires the static asset public path prefix.",
+          ok: false as const,
+        };
+      }
+      const document = await waitForDocumentAssetCohortReadiness({
+        assetPathPrefix: params.staticAssetPathPrefix,
+        documentPath: params.documentPath,
+        publicUrl: params.publicUrl,
+        signal: params.signal,
+        timeoutMs: Math.max(0, deadline - Date.now()),
+        workerVersion: params.workerVersion,
+      });
+      if (!document.ok) return document;
+    }
+
+    // Bracket both the build inventory and real document cohort with
+    // independently issued health requests.
     for (const url of urls) {
       const readiness = await waitForHttpReadiness({
         signal: params.signal,
@@ -6008,6 +6051,57 @@ async function waitForHttpReadiness(params: {
 
 const previewStaticAssetProbeConcurrency = 32;
 
+async function probeStaticAssetsOnce(params: {
+  assetPaths: readonly string[];
+  deadline: number;
+  headers: Record<string, string>;
+  method: "GET" | "HEAD";
+  nonce: string;
+  publicUrl: string;
+  signal?: AbortSignal;
+}): Promise<Array<{ assetPath: string; detail: string; ok: boolean }>> {
+  return await mapWithConcurrency(
+    params.assetPaths,
+    previewStaticAssetProbeConcurrency,
+    async (assetPath, index) => {
+      const remainingMs = params.deadline - Date.now();
+      if (remainingMs <= 0) {
+        return {
+          assetPath,
+          detail: "readiness deadline expired",
+          ok: false,
+        };
+      }
+
+      const url = new URL(assetPath, params.publicUrl);
+      url.searchParams.set("__iterate_preview_readiness", `${params.nonce}-${index}`);
+      try {
+        const response = await fetchReadinessResponse(url, {
+          bodyLimit: params.method === "GET" ? 0 : undefined,
+          headers: params.headers,
+          method: params.method,
+          signal: params.signal,
+          timeoutMs: Math.max(1, Math.min(previewReadinessRequestTimeoutMs, remainingMs)),
+        });
+        if (response.status >= 200 && response.status < 300) {
+          return { assetPath, detail: `HTTP ${response.status}`, ok: true };
+        }
+        return {
+          assetPath,
+          detail: `HTTP ${response.status}${formatReadinessResponseDetail(response)}`,
+          ok: false,
+        };
+      } catch (error) {
+        return {
+          assetPath,
+          detail: formatPreviewErrorMessage(error),
+          ok: false,
+        };
+      }
+    },
+  );
+}
+
 async function waitForStaticAssetReadiness(params: {
   assetPaths: readonly string[];
   publicUrl: string;
@@ -6034,45 +6128,15 @@ async function waitForStaticAssetReadiness(params: {
   while (Date.now() < deadline) {
     round += 1;
     const nonce = `${Date.now()}-${round}`;
-    const results = await mapWithConcurrency(
-      pendingPaths,
-      previewStaticAssetProbeConcurrency,
-      async (assetPath, index) => {
-        const remainingMs = deadline - Date.now();
-        if (remainingMs <= 0) {
-          return {
-            assetPath,
-            detail: "readiness deadline expired",
-            ok: false as const,
-          };
-        }
-
-        const url = new URL(assetPath, params.publicUrl);
-        url.searchParams.set("__iterate_preview_readiness", `${nonce}-${index}`);
-        try {
-          const response = await fetchReadinessResponse(url, {
-            headers,
-            method: "HEAD",
-            signal: params.signal,
-            timeoutMs: Math.max(1, Math.min(previewReadinessRequestTimeoutMs, remainingMs)),
-          });
-          if (response.status >= 200 && response.status < 300) {
-            return { assetPath, detail: `HTTP ${response.status}`, ok: true as const };
-          }
-          return {
-            assetPath,
-            detail: `HTTP ${response.status}${formatReadinessResponseDetail(response)}`,
-            ok: false as const,
-          };
-        } catch (error) {
-          return {
-            assetPath,
-            detail: formatPreviewErrorMessage(error),
-            ok: false as const,
-          };
-        }
-      },
-    );
+    const results = await probeStaticAssetsOnce({
+      assetPaths: pendingPaths,
+      deadline,
+      headers,
+      method: "HEAD",
+      nonce,
+      publicUrl: params.publicUrl,
+      signal: params.signal,
+    });
     params.signal?.throwIfAborted();
     const failures = results.flatMap((result) => (result.ok ? [] : [result]));
     if (failures.length === 0 && Date.now() < deadline) {
@@ -6097,6 +6161,135 @@ async function waitForStaticAssetReadiness(params: {
   };
 }
 
+const previewDocumentResponseBodyLimit = 1_048_576;
+const previewDocumentConsecutiveProofs = 2;
+
+async function waitForDocumentAssetCohortReadiness(params: {
+  assetPathPrefix: string;
+  documentPath: string;
+  publicUrl: string;
+  signal?: AbortSignal;
+  timeoutMs: number;
+  workerVersion: PreviewWorkerVersion;
+}) {
+  const deadline = Date.now() + params.timeoutMs;
+  const headers = {
+    ...previewWorkerVersionHeaders(params.workerVersion),
+    "cache-control": "no-cache",
+  };
+  let consecutiveProofs = 0;
+  let lastFailure = "No document response received yet.";
+  let round = 0;
+
+  while (Date.now() < deadline) {
+    round += 1;
+    const nonce = `${Date.now()}-${round}`;
+    const documentUrl = new URL(params.documentPath, params.publicUrl);
+    documentUrl.searchParams.set("__iterate_preview_readiness", nonce);
+
+    try {
+      const response = await fetchReadinessResponse(documentUrl, {
+        bodyLimit: previewDocumentResponseBodyLimit,
+        headers,
+        signal: params.signal,
+        timeoutMs: Math.max(1, Math.min(previewReadinessRequestTimeoutMs, deadline - Date.now())),
+      });
+      const contentType = response.contentType?.split(";", 1)[0]?.trim().toLowerCase();
+      if (response.status < 200 || response.status >= 300) {
+        lastFailure =
+          `Document returned HTTP ${response.status}` + formatReadinessResponseDetail(response);
+        consecutiveProofs = 0;
+      } else if (response.workerVersion !== params.workerVersion.expected) {
+        lastFailure =
+          `Document reported Worker ${response.workerVersion ?? "<missing>"}; ` +
+          `expected ${params.workerVersion.expected}.`;
+        consecutiveProofs = 0;
+      } else if (contentType !== "text/html") {
+        lastFailure = `Document returned content-type ${response.contentType ?? "<missing>"}.`;
+        consecutiveProofs = 0;
+      } else {
+        const assetPaths = extractDocumentAssetPaths({
+          assetPathPrefix: params.assetPathPrefix,
+          body: response.body,
+          documentUrl,
+          publicUrl: params.publicUrl,
+        });
+        if (assetPaths.length === 0) {
+          lastFailure =
+            `Document referenced no assets under ${params.assetPathPrefix}; ` +
+            "the SSR-to-asset cohort could not be proven.";
+          consecutiveProofs = 0;
+        } else {
+          const results = await probeStaticAssetsOnce({
+            assetPaths,
+            deadline,
+            headers,
+            method: "GET",
+            nonce: `${nonce}-document`,
+            publicUrl: params.publicUrl,
+            signal: params.signal,
+          });
+          const failures = results.filter((result) => !result.ok);
+          if (failures.length > 0) {
+            lastFailure =
+              `${failures.length}/${assetPaths.length} document-referenced assets unavailable. ` +
+              failures
+                .slice(0, 5)
+                .map((failure) => `${failure.assetPath}: ${failure.detail}`)
+                .join("; ");
+            consecutiveProofs = 0;
+          } else {
+            consecutiveProofs += 1;
+            if (consecutiveProofs >= previewDocumentConsecutiveProofs && Date.now() < deadline) {
+              return { ok: true as const };
+            }
+            lastFailure =
+              `Only ${consecutiveProofs}/${previewDocumentConsecutiveProofs} consecutive ` +
+              "document-and-asset cohorts have been proven.";
+          }
+        }
+      }
+    } catch (error) {
+      lastFailure = formatPreviewErrorMessage(error);
+      consecutiveProofs = 0;
+    }
+
+    await sleep(Math.min(1_000, Math.max(0, deadline - Date.now())), params.signal);
+  }
+
+  return {
+    message:
+      `Timed out waiting for a coherent HTML and asset cohort from exact Worker ` +
+      `${params.workerVersion.expected} at ${params.publicUrl}. ${lastFailure}`,
+    ok: false as const,
+  };
+}
+
+function extractDocumentAssetPaths(params: {
+  assetPathPrefix: string;
+  body: string;
+  documentUrl: URL;
+  publicUrl: string;
+}): string[] {
+  const publicOrigin = new URL(params.publicUrl).origin;
+  const prefix = `/${params.assetPathPrefix.replace(/^\/+|\/+$/g, "")}/`;
+  const paths = new Set<string>();
+  const attributePattern = /\b(?:href|src)\s*=\s*(["'])(.*?)\1/giu;
+  for (const match of params.body.matchAll(attributePattern)) {
+    const value = match[2]?.replaceAll("&amp;", "&");
+    if (!value) continue;
+    let url: URL;
+    try {
+      url = new URL(value, params.documentUrl);
+    } catch {
+      continue;
+    }
+    if (url.origin !== publicOrigin || !url.pathname.startsWith(prefix)) continue;
+    paths.add(`${url.pathname}${url.search}`);
+  }
+  return [...paths].sort();
+}
+
 function previewWorkerVersionHeaders(workerVersion: PreviewWorkerVersion): Record<string, string> {
   return {
     [CLOUDFLARE_WORKERS_VERSION_OVERRIDES_HEADER]: renderCloudflareWorkerVersionOverrides([
@@ -6111,6 +6304,7 @@ function previewWorkerVersionHeaders(workerVersion: PreviewWorkerVersion): Recor
 async function fetchReadinessResponse(
   url: URL,
   options: {
+    bodyLimit?: number;
     headers?: Record<string, string>;
     method?: "GET" | "HEAD";
     signal?: AbortSignal;
@@ -6132,7 +6326,8 @@ async function fetchReadinessResponse(
       signal: requestSignal,
     });
     return {
-      body: await readBoundedResponseBody(response),
+      body: await readBoundedResponseBody(response, options.bodyLimit),
+      contentType: response.headers.get("content-type"),
       status: response.status,
       workerVersion: response.headers.get(workerVersionReadinessHeader),
     };
@@ -6145,6 +6340,7 @@ async function fetchReadinessResponse(
       headers: options.headers,
       method: options.method,
       signal: requestSignal,
+      bodyLimit: options.bodyLimit,
       url,
     });
   }
@@ -6152,23 +6348,28 @@ async function fetchReadinessResponse(
 
 type ReadinessResponse = {
   body: string;
+  contentType: string | null;
   status: number;
   workerVersion: string | null;
 };
 
 const readinessResponseBodyLimit = 4_096;
 
-async function readBoundedResponseBody(response: Response): Promise<string> {
+async function readBoundedResponseBody(response: Response, limit = readinessResponseBodyLimit) {
   const reader = response.body?.getReader();
   if (!reader) return "";
+  if (limit === 0) {
+    await reader.cancel();
+    return "";
+  }
 
   const chunks: Uint8Array[] = [];
   let bytesRead = 0;
   let truncated = false;
-  while (bytesRead < readinessResponseBodyLimit) {
+  while (bytesRead < limit) {
     const { done, value } = await reader.read();
     if (done) break;
-    const remaining = readinessResponseBodyLimit - bytesRead;
+    const remaining = limit - bytesRead;
     chunks.push(value.subarray(0, remaining));
     bytesRead += Math.min(value.byteLength, remaining);
     if (value.byteLength > remaining) {
@@ -6178,7 +6379,7 @@ async function readBoundedResponseBody(response: Response): Promise<string> {
     }
   }
 
-  if (bytesRead >= readinessResponseBodyLimit && !truncated) {
+  if (bytesRead >= limit && !truncated) {
     const { done } = await reader.read();
     truncated = !done;
     if (truncated) await reader.cancel();
@@ -6203,6 +6404,7 @@ function formatReadinessResponseDetail(response: ReadinessResponse): string {
 }
 
 async function requestReadinessWithDnsResolve(input: {
+  bodyLimit?: number;
   headers?: Record<string, string>;
   method?: "GET" | "HEAD";
   signal?: AbortSignal;
@@ -6235,15 +6437,20 @@ async function requestReadinessWithDnsResolve(input: {
       },
       (response) => {
         const statusCode = response.statusCode ?? 0;
+        const rawContentType = response.headers["content-type"];
+        const contentType = Array.isArray(rawContentType)
+          ? (rawContentType[0] ?? null)
+          : (rawContentType ?? null);
         const rawWorkerVersion = response.headers[workerVersionReadinessHeader];
         const workerVersion = Array.isArray(rawWorkerVersion)
           ? (rawWorkerVersion[0] ?? null)
           : (rawWorkerVersion ?? null);
         let body = "";
         let truncated = false;
+        const bodyLimit = input.bodyLimit ?? readinessResponseBodyLimit;
         response.setEncoding("utf8");
         response.on("data", (chunk: string) => {
-          const remaining = readinessResponseBodyLimit - body.length;
+          const remaining = bodyLimit - body.length;
           if (remaining > 0) body += chunk.slice(0, remaining);
           if (chunk.length > remaining) truncated = true;
         });
@@ -6251,6 +6458,7 @@ async function requestReadinessWithDnsResolve(input: {
         response.on("end", () =>
           resolve({
             body: truncated ? `${body}…` : body,
+            contentType,
             status: statusCode,
             workerVersion,
           }),
