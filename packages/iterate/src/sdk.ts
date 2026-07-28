@@ -509,9 +509,9 @@ export type ProcessorHost<State extends object> = {
  *
  * With `path` the host serves one fixed home stream (the guestbook shape).
  * Without it the host learns its stream from the first wake request and
- * caches the coordinates durably (the review-bot shape: one Durable Object
- * per dynamic stream, keyed by the ref that names it). One host per Durable
- * Object — the cache keys assume it.
+ * caches the coordinates durably (one Durable Object per dynamic stream,
+ * keyed by the ref that names it). One host per Durable Object — the cache
+ * keys assume it.
  */
 export function createProcessorHost<State extends object = Record<string, unknown>>(args: {
   ctx: DurableObjectState;
