@@ -107,6 +107,10 @@ import {
 } from "./domains/itx/utils.ts";
 import { projectStub } from "./domains/projects/egress.ts";
 import { projectCreationEvents } from "./domains/projects/project-defaults.ts";
+import {
+  normalizeProjectCustomDomain,
+  primeDirectProjectCustomDomain,
+} from "./domains/projects/custom-domains.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
 import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
 import { CONFIG_REPO_PATH } from "./domains/repos/paths.ts";
@@ -144,6 +148,7 @@ import {
   disconnectProvider,
   getConnectionStatus,
   listIntegrationConnections,
+  restoreIntegrationConnection,
   startOAuthFlow,
   type ConnectTelegramResult,
 } from "./domains/integrations/connect-flows.ts";
@@ -258,6 +263,8 @@ import type {
   IntegrationConnectionStatus,
   IntegrationConnectionListEntry,
   OAuthProviderSlug,
+  RestoreIntegrationConnectionInput,
+  RestoreIntegrationConnectionResult,
   SlackConnection,
   TelegramConnection,
   WaitroseConnection,
@@ -335,6 +342,7 @@ import type {
   CollectSecretLink,
   SecretDescription,
   SecretCreateInput,
+  SecretProjectSeedExport,
   SecretUpdateInput,
 } from "./domains/secrets/types.ts";
 import type {
@@ -385,11 +393,15 @@ import {
   EMAIL_INTEGRATION_STREAM_PATH,
   isOwnProjectMail,
   mintOutboundEmailThreadId,
+  normalizeInboundEmailAllowedSender,
   replySubject,
   type OutboundEmailAttachment,
   type SendEmailBinding,
 } from "./domains/email/utils.ts";
-import { EmailProcessorContract } from "./domains/email/email-processor-contract.ts";
+import {
+  EmailProcessorContract,
+  type EmailProcessorState,
+} from "./domains/email/email-processor-contract.ts";
 import { EmailAgentProcessorContract } from "./domains/email/email-agent-processor-contract.ts";
 import { agentCreationForPath, type AgentCreateInput } from "./domains/agents/agent-defaults.ts";
 import { repoCreationEvents, type RepoCreateInput } from "./domains/repos/repo-defaults.ts";
@@ -1531,16 +1543,28 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
    */
   linkGithub(input: {
     connection: string;
+    /** Refuse to create a missing remote. Project-seed restore uses this
+     * because GitHub must already be the config authority. */
+    createIfMissing?: boolean;
+    /** Disable the usual starter-history push when GitHub is already the
+     * authority and the caller will immediately resetFromGithub(). */
+    initialPush?: boolean;
     owner: string;
     repo: string;
   }): Promise<LinkGithubResult> {
-    return linkRepoToGithub({
-      connection: input.connection,
-      owner: input.owner,
-      projectId: this.#requireProjectId(),
-      repo: input.repo,
-      repoPath: this.props.path,
-    });
+    return linkRepoToGithub(
+      {
+        connection: input.connection,
+        owner: input.owner,
+        projectId: this.#requireProjectId(),
+        repo: input.repo,
+        repoPath: this.props.path,
+      },
+      {
+        createIfMissing: input.createIfMissing,
+        skipInitialPush: input.initialPush === false,
+      },
+    );
   }
 
   /** Remove the GitHub link and the subscription that copies its webhooks here. */
@@ -2532,6 +2556,8 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
           "Create this secret with its initial egress, material, and refresh config; returns this same secret handle.",
         fetch:
           "Egress fetch with secret placeholders substituted server-side (HTTP headers/URL, including Upgrade handshake).",
+        exportForProjectSeed:
+          "Admin-only recovery read of the current encrypted cell; never returns plaintext or stream history.",
         kill: "Restart the secret's server-side object; the next request boots it fresh.",
         reveal:
           "Read the material back — only for a secret born readable (the project ingress key); write-only secrets throw.",
@@ -2561,6 +2587,14 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
   /** Egress fetch with this secret's placeholders substituted server-side. */
   fetch(request: Request): Promise<Response> {
     return this.durableObjectStub.fetch(request);
+  }
+
+  /** Admin-only recovery read of the current encrypted cell. */
+  exportForProjectSeed(): Promise<SecretProjectSeedExport> {
+    if (!this.props.auth.isAdmin()) {
+      throw new Error("Exporting a secret for a project seed requires an admin principal.");
+    }
+    return this.durableObjectStub.exportForProjectSeed();
   }
 
   /** Restart the secret's server-side object; the next request boots it fresh. */
@@ -3640,6 +3674,8 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
           'Connected Google accounts: gmail.get().request({ path: "/users/me/messages", query }); pass a slug only for an exact account.',
         list: "Every connection the project holds (built-in journals plus provided mounts).",
         parallel: "Parallel API RPC target using iterate's platform API key.",
+        restoreConnection:
+          "Admin-only project-seed restore for a validated Slack team token, Google refresh token, or this deployment's GitHub App installation.",
         slack:
           "Wrapped Slack WebClient: slack.get().chat.postMessage({ channel, text }); pass a slug only for an exact workspace.",
         startOAuthFlow: "Begin the OAuth connect flow; returns the authorization URL.",
@@ -3732,6 +3768,25 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
     });
   }
 
+  /**
+   * Admin-only project-seed restore. Unlike hand-appending connected facts,
+   * this validates the provider identity, writes a fresh secret and lifecycle
+   * journal through the owning connect boundary, claims webhook routing, and
+   * proves the resulting claim before returning.
+   */
+  restoreConnection(
+    input: RestoreIntegrationConnectionInput,
+  ): Promise<RestoreIntegrationConnectionResult> {
+    if (!this.props.auth.isAdmin()) {
+      throw new Error("Restoring an integration connection requires an admin principal.");
+    }
+    return restoreIntegrationConnection({
+      ...input,
+      config: parseConfig(env),
+      projectId: this.props.projectId,
+    });
+  }
+
   /** Begin the OAuth connect flow; returns the authorization URL. */
   startOAuthFlow(input: {
     callbackUrl?: string;
@@ -3821,6 +3876,8 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
       children: {
         processor:
           "The email router's stream processor (the project-class host at /integrations/email).",
+        restoreAllowedSenders:
+          "Admin-only project-seed restore for the minimum inbound sender allowlist.",
         send: "Send one email from the project's address; agent scopes get replies routed back to them. Returns { from, messageId }.",
         reply:
           "Reply within this agent's email conversation (email thread agents, or any agent that has sent/received project email); returns { from, to, messageId }.",
@@ -3833,7 +3890,7 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
    * Object at /integrations/email, whose EmailProcessor routes inbound mail.
    * Subscriptions that wake it persist `["email", "processor",
    * "wakeStreamProcessor"]`. */
-  get processor(): StreamProcessorRpc {
+  get processor(): StreamProcessorRpc<EmailProcessorState> {
     return new ProcessorRelayRpcTarget({
       auth: this.props.auth,
       host: () =>
@@ -3845,6 +3902,43 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
         ) as unknown as ProjectRouterProcessorHostStub,
       processorFacade: (host) => host.emailProcessor,
     });
+  }
+
+  /**
+   * Admin-only project-seed restore for inbound email policy. The archive is a
+   * minimum desired set: this adds or proves every declared sender, but never
+   * removes a sender omitted from an older seed.
+   */
+  async restoreAllowedSenders(input: {
+    patterns: string[];
+  }): Promise<{ allowedSenders: string[] }> {
+    if (!this.props.auth.isAdmin()) {
+      throw new Error("Restoring inbound email senders requires an admin principal.");
+    }
+    const patterns = [...new Set(input.patterns.map(normalizeInboundEmailAllowedSender))];
+    if (patterns.length > 0) {
+      const committed = await integrationStreamStub(
+        this.props.projectId,
+        EMAIL_INTEGRATION_STREAM_PATH,
+      ).append(
+        ...patterns.map((pattern) =>
+          EmailProcessorContract.buildEvent({
+            type: "events.iterate.com/email/sender-allowed",
+            idempotencyKey: `project-seed:email-sender-allowed:${this.props.projectId}:${pattern}`,
+            payload: { pattern, reason: "project-seed" },
+          }),
+        ),
+      );
+      const maxOffset = Math.max(...committed.map((event) => event.offset));
+      await this.processor.waitUntilProcessed({ offset: maxOffset });
+    }
+    const snapshot = await this.processor.snapshot();
+    for (const pattern of patterns) {
+      if (!snapshot.state.allowedSenders.includes(pattern)) {
+        throw new Error(`Inbound email sender ${JSON.stringify(pattern)} was not restored.`);
+      }
+    }
+    return { allowedSenders: snapshot.state.allowedSenders };
   }
 
   /**
@@ -5647,6 +5741,20 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     if (!this.#props.auth.isAdmin()) {
       throw new Error(`principal "${this.#props.auth.principal}" cannot create projects`);
     }
+    if (args.organizationSlug !== undefined) {
+      const result = await env.AUTH.createProjectForOrganization({
+        organizationSlug: args.organizationSlug,
+        name: args.slug,
+        slug: args.slug,
+        ...(args.projectId === undefined ? {} : { id: args.projectId }),
+      });
+      if (!result.ok) throw new Error(result.message);
+      return {
+        organizationId: result.project.organizationId,
+        projectId: result.project.id,
+        slug: result.project.slug,
+      };
+    }
     if (args.projectId !== undefined) {
       return { organizationId: null, projectId: args.projectId, slug: args.slug };
     }
@@ -5676,6 +5784,120 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       organizationId: record.organizationId,
       name: record.name,
     };
+  }
+
+  /**
+   * Admin-only project-seed repair for a platform-owned apex that already
+   * reaches this worker through Worker routes. Primes the routing directory,
+   * records a fresh current-version direct-observed fact, and waits until the
+   * project state reports the hostname active.
+   */
+  async restoreDirectHostname(input: { hostname: string }): Promise<{ hostname: string }> {
+    if (!this.#props.auth.isAdmin()) {
+      throw new Error("Restoring a direct project hostname requires an admin principal.");
+    }
+    const identity = await this.identity();
+    const hostname = await primeDirectProjectCustomDomain({
+      directory: env.PROJECT_DIRECTORY,
+      hostname: input.hostname,
+      project: {
+        id: identity.projectId,
+        name: identity.name,
+        organizationId: identity.organizationId,
+        slug: identity.slug,
+      },
+      projectHostnameBases: parseConfig(env).projectHostnameBases,
+    });
+    const [observed] = await rootStream({
+      auth: this.#props.auth,
+      projectId: this.#projectId,
+    }).append({
+      idempotencyKey: `project-seed:direct-hostname:${hostname}`,
+      type: "events.iterate.com/project/custom-domain-direct-observed",
+      payload: { hostname },
+    });
+    if (observed === undefined) {
+      throw new Error(`Direct hostname "${hostname}" append returned no event.`);
+    }
+    await this.processor.waitUntilProcessed({ offset: observed.offset });
+    const { state } = await this.processor.snapshot();
+    if (
+      !state.customDomains.some(
+        (domain) =>
+          domain.hostname === hostname && domain.kind === "direct" && domain.status === "active",
+      )
+    ) {
+      throw new Error(`Direct hostname "${hostname}" is not active in project state.`);
+    }
+    return { hostname };
+  }
+
+  /**
+   * Admin-only project-seed command for a Cloudflare-managed custom hostname.
+   * This submits a fresh current-version provision/refresh intent through the
+   * normal project processor, uses the hostname routing directory as the
+   * ownership authority, and proves active routing before returning.
+   */
+  async restoreCloudflareHostname(input: { hostname: string }): Promise<{ hostname: string }> {
+    if (!this.#props.auth.isAdmin()) {
+      throw new Error("Restoring a Cloudflare project hostname requires an admin principal.");
+    }
+    const hostname = normalizeProjectCustomDomain({
+      hostname: input.hostname,
+      projectHostnameBases: parseConfig(env).projectHostnameBases,
+    });
+    const before = await this.processor.snapshot();
+    const existing = before.state.customDomains.find((domain) => domain.hostname === hostname);
+    if (existing?.kind === "direct") {
+      throw new Error(
+        `Hostname "${hostname}" is already registered as a platform-owned direct hostname.`,
+      );
+    }
+    const type =
+      existing === undefined
+        ? ("events.iterate.com/project/custom-domain-add-requested" as const)
+        : ("events.iterate.com/project/custom-domain-refresh-requested" as const);
+    const [requested] = await rootStream({
+      auth: this.#props.auth,
+      projectId: this.#projectId,
+    }).append({
+      idempotencyKey: `project-seed:cloudflare-hostname:${type}:${hostname}:${existing?.updatedAt ?? "new"}`,
+      type,
+      payload: { hostname },
+    });
+    if (requested === undefined) {
+      throw new Error(`Cloudflare hostname "${hostname}" append returned no event.`);
+    }
+    const terminal = await rootStream({
+      auth: this.#props.auth,
+      projectId: this.#projectId,
+    }).waitForEvent({
+      afterOffset: requested.offset,
+      eventTypes: [
+        "events.iterate.com/project/custom-domain-cloudflare-observed",
+        "events.iterate.com/project/custom-domain-provision-failed",
+      ],
+      predicate: (event) => event.payload?.hostname === hostname,
+      timeoutMs: 120_000,
+    });
+    if (terminal.type === "events.iterate.com/project/custom-domain-provision-failed") {
+      throw new Error(
+        `Cloudflare hostname "${hostname}" could not be restored: ${String(terminal.payload?.error)}`,
+      );
+    }
+    await this.processor.waitUntilProcessed({ offset: terminal.offset });
+    const after = await this.processor.snapshot();
+    const restored = after.state.customDomains.find((domain) => domain.hostname === hostname);
+    if (
+      restored?.kind !== "cloudflare" ||
+      restored.status !== "active" ||
+      restored.error !== null
+    ) {
+      throw new Error(
+        `Cloudflare hostname "${hostname}" is not active after its current provision command.`,
+      );
+    }
+    return { hostname };
   }
 
   /**

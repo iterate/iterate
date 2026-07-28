@@ -1,6 +1,9 @@
 /** Trusted build metadata stamped by OS onto dynamic-worker responses. */
 export const WORKER_SERVE_HEADER = "x-iterate-worker-serve";
 
+/** Marks the explicitly retryable cold-build page on the fetch lane. */
+export const WORKER_BUILDING_HEADER = "x-iterate-worker-building";
+
 /** Marks the terminal build-failed page on the fetch lane. */
 export const WORKER_BUILD_FAILED_HEADER = "x-iterate-worker-build-failed";
 
