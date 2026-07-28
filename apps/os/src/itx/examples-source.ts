@@ -186,8 +186,10 @@ return await itx.projects.get(pid).__describe();
     fn: async (itx, vars: { path?: string }) => {
       // Transient signal: live product subscribers see it; product state never will.
       const stream = itx.streams.get(vars.path ?? "/repl/ephemeral-demo");
+      const operationId = crypto.randomUUID();
       const [tick] = await stream.append({
         type: "events.iterate.repl/progress-ticked",
+        idempotencyKey: `ephemeral-events:${operationId}:progress-ticked`,
         ephemeral: true,
         payload: { percent: 50 },
       });
@@ -195,6 +197,7 @@ return await itx.projects.get(pid).__describe();
       // The durable truth is its own ordinary event — THIS is what processors fold.
       const [done] = await stream.append({
         type: "events.iterate.repl/work-completed",
+        idempotencyKey: `ephemeral-events:${operationId}:work-completed`,
         payload: { result: "ok" },
       });
 
