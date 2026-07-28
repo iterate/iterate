@@ -1,4 +1,8 @@
-import type { WorkerDeploymentVersion } from "../env.ts";
+import {
+  WORKER_DEPLOYMENT_VERSION_METADATA_FORMAT,
+  type WorkerDeploymentVersion,
+  type WorkerDeploymentVersionFormat,
+} from "../env.ts";
 import { settleByDeadline } from "./execution-deadline.ts";
 import { isRetryableDurableObjectAvailabilityError } from "./streams/stream-unavailable.ts";
 
@@ -15,6 +19,12 @@ export type DeploymentVersionReadinessOptions = {
 };
 
 export type WorkerDeploymentVersionLike = WorkerDeploymentVersion | string;
+
+export type DurableObjectDeploymentTarget = {
+  deploymentVersion: (
+    format: WorkerDeploymentVersionFormat,
+  ) => PromiseLike<WorkerDeploymentVersionLike> | WorkerDeploymentVersionLike;
+};
 
 export type DeploymentVersionReadiness = {
   lifecycleFailures: number;
@@ -133,4 +143,44 @@ export async function waitForDurableObjectDeploymentVersion(
   throw input.notReadyError(
     `it did not converge within ${Math.max(0, now() - startedAt)}ms; ${lastObservation}`,
   );
+}
+
+type AcquireDurableObjectDeploymentTargetInput<Target extends DurableObjectDeploymentTarget> =
+  DeploymentVersionReadinessOptions & {
+    expectedVersion: WorkerDeploymentVersionLike;
+    getTarget: () => Target;
+    notReadyError: (detail: string, cause?: unknown) => Error;
+  };
+
+/**
+ * Re-acquire a Durable Object on every read-only version probe and return the
+ * exact stub whose probe crossed the rollout boundary. Callers can then issue
+ * one non-replayable operation on that stub without accidentally falling back
+ * to the incarnation whose lifecycle failure triggered the next probe.
+ */
+export async function acquireDurableObjectDeploymentTarget<
+  Target extends DurableObjectDeploymentTarget,
+>(
+  input: AcquireDurableObjectDeploymentTargetInput<Target>,
+): Promise<{ readiness: DeploymentVersionReadiness; target: Target }> {
+  let readyTarget: Target | undefined;
+  const readiness = await waitForDurableObjectDeploymentVersion({
+    expectedVersion: input.expectedVersion,
+    notReadyError: input.notReadyError,
+    now: input.now,
+    pollIntervalMs: input.pollIntervalMs,
+    probeTimeoutMs: input.probeTimeoutMs,
+    readVersion: () => {
+      readyTarget = input.getTarget();
+      return Promise.resolve(
+        readyTarget.deploymentVersion(WORKER_DEPLOYMENT_VERSION_METADATA_FORMAT),
+      );
+    },
+    sleep: input.sleep,
+    timeoutMs: input.timeoutMs,
+  });
+  if (readyTarget === undefined) {
+    throw input.notReadyError("the version probe returned no target");
+  }
+  return { readiness, target: readyTarget };
 }

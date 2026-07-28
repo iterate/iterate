@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { waitForCapabilityHostDeploymentVersion } from "./capability-host-deployment-readiness.ts";
+import {
+  provideCapabilityOnDeploymentReadyHost,
+  waitForCapabilityHostDeploymentVersion,
+} from "./capability-host-deployment-readiness.ts";
+import type { ProvideCapabilityInput } from "./types.ts";
 
 const BASE_INPUT = {
   executionId: "exec-test",
@@ -227,5 +231,94 @@ describe("waitForCapabilityHostDeploymentVersion", () => {
       'the version probe failed with "permission denied". ' +
         "The script was not requested and did not run.",
     );
+  });
+});
+
+describe("provideCapabilityOnDeploymentReadyHost", () => {
+  const capabilityInput = {
+    capability: { ping: () => "pong" },
+    path: ["tools", "probe"],
+    type: "live",
+  } satisfies ProvideCapabilityInput;
+
+  it("provides on the exact re-acquired stub that proved readiness", async () => {
+    let time = 0;
+    const staleProvide = vi.fn();
+    const readyProvide = vi.fn(async () => ({
+      path: capabilityInput.path,
+      providedAtOffset: 17,
+    }));
+    const getTarget = vi
+      .fn()
+      .mockReturnValueOnce({
+        deploymentVersion: async () => "version-old",
+        provideCapability: staleProvide,
+      })
+      .mockReturnValueOnce({
+        deploymentVersion: async () => "version-new",
+        provideCapability: readyProvide,
+      });
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+
+    await expect(
+      provideCapabilityOnDeploymentReadyHost(
+        {
+          expectedVersion: "version-new",
+          getTarget,
+          input: capabilityInput,
+          path: "/",
+          projectId: "prj_test",
+        },
+        {
+          now: () => time,
+          pollIntervalMs: 250,
+          sleep: async (durationMs) => {
+            time += durationMs;
+          },
+          timeoutMs: 1_000,
+        },
+      ),
+    ).resolves.toMatchObject({
+      provision: { providedAtOffset: 17 },
+      readiness: { mismatches: 1, probes: 2 },
+    });
+    expect(staleProvide).not.toHaveBeenCalled();
+    expect(readyProvide).toHaveBeenCalledOnce();
+    expect(readyProvide).toHaveBeenCalledWith(capabilityInput);
+    info.mockRestore();
+  });
+
+  it("does not retain or provide a live target when convergence fails", async () => {
+    let time = 0;
+    const provideCapability = vi.fn();
+
+    await expect(
+      provideCapabilityOnDeploymentReadyHost(
+        {
+          expectedVersion: "version-new",
+          getTarget: () => ({
+            deploymentVersion: async () => "version-old",
+            provideCapability,
+          }),
+          input: capabilityInput,
+          path: "/agents/test",
+          projectId: "prj_test",
+        },
+        {
+          now: () => time,
+          pollIntervalMs: 250,
+          sleep: async (durationMs) => {
+            time += durationMs;
+          },
+          timeoutMs: 500,
+        },
+      ),
+    ).rejects.toThrow(
+      'Capability host at "/agents/test" was not ready for deployment version "version-new" ' +
+        'before capability "tools.probe" was provided: it did not converge within 500ms; the ' +
+        'last observed version was "version-old". The capability was not mounted and its ' +
+        "provider was not retained.",
+    );
+    expect(provideCapability).not.toHaveBeenCalled();
   });
 });

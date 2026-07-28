@@ -11,6 +11,7 @@
  * user-visible message never went out.
  */
 import { test } from "vitest";
+import { ScriptExecutionSettlement } from "../../src/domains/capability-host/script-execution-settlement.ts";
 import { createTestProject } from "../test-support/create-test-project.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { appendSyntheticProviderOutput } from "./itx-test-support.ts";
@@ -31,37 +32,57 @@ test(
       `  await itx.chat.sendMessage("Tail (${marker}):\\n\`\`\`text\\n" + "0123456789".slice(-4) + "\\n\`\`\`");`,
       "}",
     ].join("\n");
-    await appendSyntheticProviderOutput(
+    const { assistantContext } = await appendSyntheticProviderOutput(
       agent.stream,
       `Reading the saved output now.\n\n\`\`\`ts\n${script}\n\`\`\``,
     );
+    const executionId = `agent-output:${assistantContext.offset}`;
 
-    // Sync on the script finishing, keeping its error (if any) so a
-    // regression reports the actual script failure instead of a poll timeout.
-    let completionError: string | null = null;
+    // Sync on THIS synthetic reply's script. Other agent work can settle on
+    // the same stream, so "the first settled event" is not a completion
+    // boundary for this request.
+    let settlement: ReturnType<typeof ScriptExecutionSettlement.parse> | undefined;
     await waitForCondition(
       async () => {
         const events = await agent.stream.getEvents({
           eventTypes: ["events.iterate.com/capability-host/script-run-settled"],
           limit: 100,
         });
-        const completion = events.at(0);
+        const completion = events.find((event) => event.payload?.executionId === executionId);
         if (completion === undefined) return false;
-        completionError =
-          typeof completion.payload?.error === "string" ? completion.payload.error : null;
+        settlement = ScriptExecutionSettlement.parse(completion.payload?.settlement);
         return true;
       },
-      { description: "the agent's script to finish", intervalMs: 1_000, timeoutMs: 120_000 },
+      {
+        description: `the agent's script ${executionId} to finish`,
+        intervalMs: 1_000,
+        timeoutMs: 120_000,
+      },
     );
-    expect(completionError).toBeNull();
+    expect(settlement).toMatchObject({ status: "succeeded" });
 
     // The user-visible outcome: the exact message the script sent, fence and
     // all — proof the code AFTER the embedded ``` executed.
-    const messages = await agent.stream.getEvents({
-      eventTypes: ["events.iterate.com/agents/web-message-sent"],
-      limit: 100,
-    });
-    const sent = messages.map((event) => String(event.payload?.message ?? ""));
+    let sent: string[] = [];
+    await waitForCondition(
+      async () => {
+        const messages = await agent.stream.getEvents({
+          eventTypes: ["events.iterate.com/agents/web-message-sent"],
+          limit: 100,
+        });
+        sent = messages.map((event) => String(event.payload?.message ?? ""));
+        return (
+          sent.some((message) => message.includes(marker)) &&
+          sent.some((message) => message.includes("```text\n6789\n```"))
+        );
+      },
+      {
+        description: () =>
+          `the user-visible message from ${executionId}; observed ${JSON.stringify(sent)}`,
+        intervalMs: 500,
+        timeoutMs: 30_000,
+      },
+    );
     expect(sent).toContainEqual(expect.stringContaining(marker));
     expect(sent).toContainEqual(expect.stringContaining("```text\n6789\n```"));
   },

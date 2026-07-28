@@ -1,13 +1,10 @@
 import {
+  acquireDurableObjectDeploymentTarget,
   describeDeploymentVersion,
-  waitForDurableObjectDeploymentVersion,
   type DeploymentVersionReadinessOptions,
   type WorkerDeploymentVersionLike,
 } from "../durable-object-deployment-readiness.ts";
-import {
-  WORKER_DEPLOYMENT_VERSION_METADATA_FORMAT,
-  type WorkerDeploymentVersionFormat,
-} from "../../env.ts";
+import { type WorkerDeploymentVersionFormat } from "../../env.ts";
 
 type SecretDeploymentTarget = {
   deploymentVersion: (
@@ -49,20 +46,11 @@ export async function fetchFromDeploymentReadySecret(
   input: FetchFromDeploymentReadySecretInput,
   readinessOptions: DeploymentVersionReadinessOptions = {},
 ): Promise<Response> {
-  let readySecret: SecretDeploymentTarget | undefined;
-  const readiness = await waitForDurableObjectDeploymentVersion({
+  const { readiness, target: readySecret } = await acquireDurableObjectDeploymentTarget({
     ...readinessOptions,
     expectedVersion: input.expectedVersion,
+    getTarget: input.getSecret,
     notReadyError: (detail, cause) => requestNotForwardedError(input, detail, cause),
-    readVersion: () => {
-      // A Durable Object stub can remain tied to the lifecycle failure that
-      // rejected it. Re-acquire before every read-only probe, then forward on
-      // the exact stub whose probe crossed the safe boundary.
-      readySecret = input.getSecret();
-      return Promise.resolve(
-        readySecret.deploymentVersion(WORKER_DEPLOYMENT_VERSION_METADATA_FORMAT),
-      );
-    },
   });
   if (readiness.probes > 1 || readiness.targetNewer) {
     console.info("secret deployment version converged before credential-bearing egress", {
@@ -77,9 +65,6 @@ export async function fetchFromDeploymentReadySecret(
       targetNewer: readiness.targetNewer,
       waitedMs: readiness.waitedMs,
     });
-  }
-  if (readySecret === undefined) {
-    throw requestNotForwardedError(input, "the version probe returned no target");
   }
   return await readySecret.fetch(input.request);
 }

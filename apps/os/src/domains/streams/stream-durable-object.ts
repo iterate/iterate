@@ -12,7 +12,12 @@ import { StreamEventInput as StreamEventInputSchema } from "iterate/processors";
 import { StreamRuntimeMetrics } from "iterate/processors";
 import { LiveState, LiveStateRpcTarget } from "iterate/sdk/capnweb";
 import { streamDeliveryAuthContext } from "../../auth.ts";
-import { workerVersion, type Env } from "../../env.ts";
+import {
+  workerDeploymentVersionRpcResponse,
+  type Env,
+  type WorkerDeploymentVersion,
+  type WorkerDeploymentVersionFormat,
+} from "../../env.ts";
 import type { Stream } from "../../itx-api.generated.ts";
 import {
   deploymentItxForInternal,
@@ -214,9 +219,15 @@ const PROJECT_WORKER_SUBSCRIPTION_KEY = "project-worker";
  * that touch SQLite/KV must remain synchronous.
  */
 export class StreamDurableObject extends DurableObject<Env> {
-  /** Report this incarnation's code version for the deployment rollout gate. */
-  deploymentVersion(): string {
-    return workerVersion(this.env);
+  /** Report this incarnation's code version for the deployment rollout gate.
+   * No argument preserves the legacy string RPC contract; new callers opt in
+   * to ordering metadata so both sides of a rollout remain compatible. */
+  deploymentVersion(): string;
+  deploymentVersion(format: WorkerDeploymentVersionFormat): WorkerDeploymentVersion;
+  deploymentVersion(format?: WorkerDeploymentVersionFormat): WorkerDeploymentVersion | string {
+    return format === undefined
+      ? workerDeploymentVersionRpcResponse(this.env)
+      : workerDeploymentVersionRpcResponse(this.env, format);
   }
 
   #liveState!: LiveState<StreamRuntimeDebugState>;

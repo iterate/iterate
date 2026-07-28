@@ -1,10 +1,18 @@
 import { tracing } from "cloudflare:workers";
-import { itxEnv as env } from "../../env.ts";
+import {
+  itxEnv as env,
+  workerDeploymentVersion,
+  type WorkerDeploymentVersionFormat,
+} from "../../env.ts";
 import { itxEntrypointBinding, itxEntrypointProps } from "../itx/utils.ts";
 import type { StreamContext } from "../projects/stream-context.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { invokePreferringFlattenedPath, replayPath } from "../capability-host/live-capability.ts";
+import {
+  acquireDurableObjectDeploymentTarget,
+  describeDeploymentVersion,
+} from "../durable-object-deployment-readiness.ts";
 import { WorkerBuildFailedError, type WorkerBuildFailure } from "./artifact-store.ts";
 import type {
   StatefulDynamicWorkerRef,
@@ -26,11 +34,17 @@ import {
 
 export type DynamicWorkerTraceRole = "project_config" | "run_script" | "scheduler_action";
 
+const STATEFUL_WORKER_READINESS_CACHE_LIMIT = 128;
+
 // Structural shadow of StatefulWorkerDurableObject.invokeCapability instead
 // of the DO's own type: the DO imports this module (cycle), and a typed
 // DurableObjectStub of it deep-instantiates the stub's self-referential type
 // (TS2589) — same workaround as ParentItxScope in itx-durable-object.ts.
 type StatefulWorkerRpc = {
+  deploymentVersion(
+    format: WorkerDeploymentVersionFormat,
+  ): PromiseLike<{ id: string; timestamp?: string } | string>;
+  fetch(request: Request): Promise<Response>;
   invokeCapability(input: {
     args?: unknown[];
     buildFailureNonce: string;
@@ -58,6 +72,7 @@ export class DynamicWorkerRunner {
   readonly #projectId: string;
   readonly #scopePath: string;
   readonly #streamContext: StreamContext;
+  readonly #statefulWorkerReadiness = new Map<string, Promise<StatefulWorkerRpc>>();
 
   constructor(props: {
     streamContext: StreamContext;
@@ -189,11 +204,9 @@ export class DynamicWorkerRunner {
       if (ref.type === "stateful") {
         // The hosting DO resolves the facet and stamps its trusted build
         // header after the user response returns.
-        response = await (
-          env.WORKER.getByName(
-            statefulWorkerDurableObjectName(this.#projectId, ref),
-          ) as unknown as Fetcher
-        ).fetch(withWorkerFetchDispatchHeader(request, { buildBudgetMs, ref }));
+        response = await this.#withDeploymentReadyStatefulWorker(ref, (worker) =>
+          worker.fetch(withWorkerFetchDispatchHeader(request, { buildBudgetMs, ref })),
+        );
       } else {
         if (resolved === undefined) {
           const result = await resolveWorkerSource({
@@ -264,14 +277,16 @@ export class DynamicWorkerRunner {
         // array lets the host return the build-failure branch as plain data:
         // Array.isArray can distinguish it without probing an RPC stub property.
         const buildFailureNonce = crypto.randomUUID();
-        const result = await this.#statefulWorker(ref).invokeCapability({
-          args,
-          buildFailureNonce,
-          buildBudgetMs,
-          flattenNestedPath,
-          path,
-          ref,
-        });
+        const result = await this.#withDeploymentReadyStatefulWorker(ref, (worker) =>
+          worker.invokeCapability({
+            args,
+            buildFailureNonce,
+            buildBudgetMs,
+            flattenNestedPath,
+            path,
+            ref,
+          }),
+        );
         if (Array.isArray(result) && result[0] === buildFailureNonce) {
           // The worker never sees the random nonce, so only the hosting DO can
           // produce this tuple; successful customer arrays cannot collide.
@@ -291,17 +306,22 @@ export class DynamicWorkerRunner {
 
   /** Abort a stateful dynamic worker's outer Durable Object and hosted facet. */
   async kill(ref: StatefulDynamicWorkerRef): Promise<void> {
-    await this.#statefulWorker(ref).kill();
+    const name = statefulWorkerDurableObjectName(this.#projectId, ref);
+    try {
+      await this.#withDeploymentReadyStatefulWorker(ref, (worker) => worker.kill());
+    } finally {
+      this.#statefulWorkerReadiness.delete(name);
+    }
   }
 
   /** Arm (or with null, disarm) a stateful dynamic worker's durable alarm. */
   async setAlarm(ref: StatefulDynamicWorkerRef, atMs: number | null): Promise<void> {
-    await this.#statefulWorker(ref).setAlarm({ atMs, ref });
+    await this.#withDeploymentReadyStatefulWorker(ref, (worker) => worker.setAlarm({ atMs, ref }));
   }
 
   /** The stateful dynamic worker's currently armed alarm time, if any. */
   async getAlarm(ref: StatefulDynamicWorkerRef): Promise<number | null> {
-    return await this.#statefulWorker(ref).getAlarm();
+    return await this.#withDeploymentReadyStatefulWorker(ref, (worker) => worker.getAlarm());
   }
 
   async #load(
@@ -339,6 +359,70 @@ export class DynamicWorkerRunner {
     return env.WORKER.getByName(
       statefulWorkerDurableObjectName(this.#projectId, ref),
     ) as unknown as StatefulWorkerRpc;
+  }
+
+  async #deploymentReadyStatefulWorker(ref: StatefulDynamicWorkerRef): Promise<StatefulWorkerRpc> {
+    const name = statefulWorkerDurableObjectName(this.#projectId, ref);
+    const existing = this.#statefulWorkerReadiness.get(name);
+    if (existing !== undefined) return await existing;
+
+    const expectedVersion = workerDeploymentVersion(env);
+    const readiness = acquireDurableObjectDeploymentTarget({
+      expectedVersion,
+      getTarget: () => this.#statefulWorker(ref),
+      notReadyError: (detail, cause) => {
+        const message =
+          `Stateful dynamic worker at "${ref.path}" was not ready for deployment version ` +
+          `${describeDeploymentVersion(expectedVersion)} before it accepted an operation: ` +
+          `${detail}. The operation was not sent to the dynamic worker.`;
+        return cause === undefined ? new Error(message) : new Error(message, { cause });
+      },
+    })
+      .then(({ readiness: result, target }) => {
+        if (result.probes > 1 || result.targetNewer) {
+          console.info("stateful dynamic worker deployment version converged before operation", {
+            durableWorkerKey: ref.durableWorkerKey,
+            expectedDeploymentVersion: expectedVersion,
+            lifecycleFailures: result.lifecycleFailures,
+            mismatches: result.mismatches,
+            observedDeploymentVersion: result.observedVersion,
+            path: ref.path,
+            probeTimeouts: result.probeTimeouts,
+            probes: result.probes,
+            projectId: this.#projectId,
+            targetNewer: result.targetNewer,
+            waitedMs: result.waitedMs,
+          });
+        }
+        return target;
+      })
+      .catch((error: unknown) => {
+        this.#statefulWorkerReadiness.delete(name);
+        throw error;
+      });
+    if (this.#statefulWorkerReadiness.size >= STATEFUL_WORKER_READINESS_CACHE_LIMIT) {
+      const oldest = this.#statefulWorkerReadiness.keys().next().value;
+      if (oldest !== undefined) this.#statefulWorkerReadiness.delete(oldest);
+    }
+    this.#statefulWorkerReadiness.set(name, readiness);
+    return await readiness;
+  }
+
+  async #withDeploymentReadyStatefulWorker<Result>(
+    ref: StatefulDynamicWorkerRef,
+    operation: (worker: StatefulWorkerRpc) => Promise<Result>,
+  ): Promise<Result> {
+    const name = statefulWorkerDurableObjectName(this.#projectId, ref);
+    const worker = await this.#deploymentReadyStatefulWorker(ref);
+    try {
+      return await operation(worker);
+    } catch (error) {
+      // The operation remains terminal and is never replayed: arbitrary
+      // dynamic-worker effects may have happened. Forget only the read-only
+      // proof so a later independent call must establish a fresh boundary.
+      this.#statefulWorkerReadiness.delete(name);
+      throw error;
+    }
   }
 
   #trace<T>(

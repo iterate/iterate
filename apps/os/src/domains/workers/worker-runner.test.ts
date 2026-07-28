@@ -9,16 +9,20 @@ const h = vi.hoisted(() => ({
   loadResolvedWorker: vi.fn(),
   projectEgressFetcher: vi.fn(() => ({})),
   resolveWorkerSource: vi.fn(),
+  statefulDeploymentVersion: vi.fn(),
   statefulFetch: vi.fn(),
   statefulInvokeCapability: vi.fn(),
   workerGetByName: vi.fn(),
 }));
 
 vi.mock("../../env.ts", () => ({
+  WORKER_DEPLOYMENT_VERSION_METADATA_FORMAT: "metadata-v1",
   itxEnv: {
+    CF_VERSION_METADATA: { id: "version-new" },
     WORKER: { getByName: h.workerGetByName },
     WORKER_BUNDLER: { handleAssetRequest: h.handleAssetRequest },
   },
+  workerDeploymentVersion: () => ({ id: "version-new" }),
 }));
 
 vi.mock("../itx/utils.ts", () => ({
@@ -82,11 +86,13 @@ beforeEach(() => {
   h.resolveWorkerSource
     .mockReset()
     .mockRejectedValue(new Error("stop after entering the trace span"));
+  h.statefulDeploymentVersion.mockReset().mockResolvedValue("version-new");
   h.statefulFetch.mockReset().mockRejectedValue(new Error("stop at stateful fetch"));
   h.statefulInvokeCapability
     .mockReset()
     .mockRejectedValue(new Error("stop at stateful invocation"));
   h.workerGetByName.mockReset().mockReturnValue({
+    deploymentVersion: h.statefulDeploymentVersion,
     fetch: h.statefulFetch,
     invokeCapability: h.statefulInvokeCapability,
   });
@@ -237,6 +243,70 @@ describe("createApp asset dispatch", () => {
     expect(h.handleAssetRequest).not.toHaveBeenCalled();
     expect(h.workerGetByName).toHaveBeenCalledOnce();
   });
+});
+
+it("re-acquires a stale stateful worker and invokes only the version-ready target", async () => {
+  const staleDeploymentVersion = vi.fn(async () => "version-old");
+  const staleFetch = vi.fn();
+  const readyDeploymentVersion = vi.fn(async () => "version-new");
+  const readyFetch = vi.fn(async () => new Response("ready target"));
+  h.workerGetByName
+    .mockReset()
+    .mockReturnValueOnce({
+      deploymentVersion: staleDeploymentVersion,
+      fetch: staleFetch,
+    })
+    .mockReturnValueOnce({
+      deploymentVersion: readyDeploymentVersion,
+      fetch: readyFetch,
+    });
+  const runner = new DynamicWorkerRunner({
+    streamContext: { kind: "scope", scopePath: statefulRef.path },
+    exports: {} as ExecutionContext["exports"],
+    projectId: "prj_private",
+    scopePath: statefulRef.path,
+  });
+
+  const response = await runner.fetch({
+    ref: statefulRef,
+    request: new Request("https://example.com/ready"),
+  });
+  const secondResponse = await runner.fetch({
+    ref: statefulRef,
+    request: new Request("https://example.com/cached"),
+  });
+
+  expect(await response.text()).toBe("ready target");
+  expect(await secondResponse.text()).toBe("ready target");
+  expect(staleDeploymentVersion).toHaveBeenCalledWith("metadata-v1");
+  expect(readyDeploymentVersion).toHaveBeenCalledWith("metadata-v1");
+  expect(staleFetch).not.toHaveBeenCalled();
+  expect(readyFetch).toHaveBeenCalledTimes(2);
+  expect(h.workerGetByName).toHaveBeenCalledTimes(2);
+});
+
+it("keeps a failed stateful operation terminal and forgets only its readiness proof", async () => {
+  const reset = Object.assign(new Error("Durable Object reset because its code was updated."), {
+    durableObjectReset: true,
+  });
+  h.statefulFetch.mockRejectedValue(reset);
+  const runner = new DynamicWorkerRunner({
+    streamContext: { kind: "scope", scopePath: statefulRef.path },
+    exports: {} as ExecutionContext["exports"],
+    projectId: "prj_private",
+    scopePath: statefulRef.path,
+  });
+
+  await expect(
+    runner.fetch({
+      ref: statefulRef,
+      request: new Request("https://example.com/reset"),
+    }),
+  ).rejects.toBe(reset);
+
+  expect(h.statefulDeploymentVersion).toHaveBeenCalledOnce();
+  expect(h.statefulFetch).toHaveBeenCalledOnce();
+  expect(h.workerGetByName).toHaveBeenCalledOnce();
 });
 
 it("turns a stateful source-build result into a local terminal delivery error", async () => {

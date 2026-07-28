@@ -1,47 +1,55 @@
 import { expect, test } from "vitest";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
+import { measureE2ePhase } from "@iterate-com/shared/test-support/measure-e2e-phase";
 import type { DynamicWorkerRef } from "../../src/domains/workers/schemas.ts";
 import { itxScript } from "../test-support/itx-script-builder.ts";
 import { inlineJsSource } from "./itx-test-support.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
-test("Project repos, workers, runScript, and dynamic worker refs compose", async () => {
+test("Project repos, workers, runScript, and dynamic worker refs compose", async ({ annotate }) => {
+  const measurePhase = <Value>(name: string, category: string, operation: () => Promise<Value>) =>
+    measureE2ePhase(annotate, name, category, operation);
   using session = withItxSession();
   using itx = session.authenticate({
     type: "admin-secret",
     secret: adminSecret(),
   });
 
-  using project = await itx.projects
-    .get(`dynamic-worker-${crypto.randomUUID().slice(0, 8)}`)
-    .create({});
-  const description = await project.__describe();
+  using project = await measurePhase("create dynamic-worker project", "fixture", () =>
+    itx.projects.get(`dynamic-worker-${crypto.randomUUID().slice(0, 8)}`).create({}),
+  );
+  const description = await measurePhase("describe project", "project", () => project.__describe());
 
   // The seeded root worker routes via x-iterate-app (static homepage
   // otherwise); an unknown selection echoes back in the 404 body, giving the
   // script a request-specific probe through the fetch lane with no app cold
   // build.
-  const scriptResult = await itxScript(project.capabilityHost).execute(async (itx) => {
-    const response = await itx.worker.fetch(
-      new Request("https://example.com/script", { headers: { "x-iterate-app": "script-probe" } }),
-    );
-    return {
-      repo: await itx.repo.whoami(),
-      sandboxCreate: typeof itx.sandboxes.get("/sandboxes/surface-probe").create,
-      worker: `${response.status} ${await response.text()}`,
-    };
-  });
+  const scriptResult = await measurePhase("run seeded project worker script", "script", () =>
+    itxScript(project.capabilityHost).execute(async (itx) => {
+      const response = await itx.worker.fetch(
+        new Request("https://example.com/script", {
+          headers: { "x-iterate-app": "script-probe" },
+        }),
+      );
+      return {
+        repo: await itx.repo.whoami(),
+        sandboxCreate: typeof itx.sandboxes.get("/sandboxes/surface-probe").create,
+        worker: `${response.status} ${await response.text()}`,
+      };
+    }),
+  );
   expect(scriptResult.success()).toEqual({
     repo: `repo ${description.projectId}:/repos/config`,
     sandboxCreate: "function",
     worker: "404 unknown app: script-probe",
   });
 
-  const commit = await project.repo.commitFiles({
-    changes: [
-      {
-        path: "worker.ts",
-        content: `
+  const commit = await measurePhase("commit project worker source", "repo", () =>
+    project.repo.commitFiles({
+      changes: [
+        {
+          path: "worker.ts",
+          content: `
             import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 
             export default class ProjectWorker extends WorkerEntrypoint {
@@ -79,18 +87,26 @@ test("Project repos, workers, runScript, and dynamic worker refs compose", async
               }
             }
           `,
-      },
-    ],
-    message: "Add someMethod to project worker",
-  });
+        },
+      ],
+      message: "Add someMethod to project worker",
+    }),
+  );
   expect(commit).toMatchObject({
     branch: "main",
     changedPaths: ["worker.ts"],
     noChanges: false,
   });
   expect(commit.commitOid).toMatch(/^[0-9a-f]{40}$/);
-  // @ts-expect-error - dynamic project worker method from committed source
-  expect(await project.worker.someMethod()).toEqual({
+  const projectWorkerResult = await measurePhase(
+    "invoke committed project worker",
+    "dynamic-worker",
+    () => {
+      // @ts-expect-error - dynamic project worker method from committed source
+      return project.worker.someMethod();
+    },
+  );
+  expect(projectWorkerResult).toEqual({
     projectId: description.projectId,
     source: "committed-worker",
   });
@@ -107,7 +123,12 @@ test("Project repos, workers, runScript, and dynamic worker refs compose", async
   }) as unknown as {
     someMethod(): Promise<{ projectId: string; source: string }>;
   } & Disposable;
-  expect(await explicitWorker.someMethod()).toEqual({
+  const explicitWorkerResult = await measurePhase(
+    "invoke explicit stateless worker",
+    "dynamic-worker",
+    () => explicitWorker.someMethod(),
+  );
+  expect(explicitWorkerResult).toEqual({
     projectId: description.projectId,
     source: "committed-worker",
   });
@@ -126,19 +147,30 @@ test("Project repos, workers, runScript, and dynamic worker refs compose", async
   }) as unknown as {
     sql(query: string, ...bindings: unknown[]): Promise<Array<Record<string, unknown>>>;
   } & Disposable;
-  await directDb.sql("CREATE TABLE messages (body TEXT)");
-  await directDb.sql("INSERT INTO messages VALUES (?)", "hello");
-  expect(await directDb.sql("SELECT body FROM messages")).toEqual([{ body: "hello" }]);
-  using _probeProvision = await project.provideCapability({
-    expression: [
-      "workers",
-      [
-        "get",
-        {
-          entrypoint: "ProbeEntrypoint",
-          path: "/",
-          source: inlineJsSource("probe.js", {
-            "probe.js": `
+  const directDbRows = await measurePhase(
+    "exercise direct stateful worker",
+    "dynamic-worker",
+    async () => {
+      await directDb.sql("CREATE TABLE messages (body TEXT)");
+      await directDb.sql("INSERT INTO messages VALUES (?)", "hello");
+      return await directDb.sql("SELECT body FROM messages");
+    },
+  );
+  expect(directDbRows).toEqual([{ body: "hello" }]);
+  using _probeProvision = await measurePhase(
+    "provide inline worker probe",
+    "capability-mount",
+    () =>
+      project.provideCapability({
+        expression: [
+          "workers",
+          [
+            "get",
+            {
+              entrypoint: "ProbeEntrypoint",
+              path: "/",
+              source: inlineJsSource("probe.js", {
+                "probe.js": `
                 import { WorkerEntrypoint } from "cloudflare:workers";
 
                 export class ProbeEntrypoint extends WorkerEntrypoint {
@@ -151,100 +183,138 @@ test("Project repos, workers, runScript, and dynamic worker refs compose", async
                   }
                 }
               `,
-          }),
-          type: "stateless",
-        },
-      ],
-    ],
-    path: ["probe"],
-    type: "itx-expression",
+              }),
+              type: "stateless",
+            },
+          ],
+        ],
+        path: ["probe"],
+        type: "itx-expression",
+      }),
+  );
+  const probeResult = await measurePhase("invoke inline worker probe", "dynamic-worker", () => {
+    // @ts-expect-error - dynamic capability root
+    return project.probe.inspect();
   });
-  // @ts-expect-error - dynamic capability root
-  expect(await project.probe.inspect()).toEqual({
+  expect(probeResult).toEqual({
     repo: `repo ${description.projectId}:/repos/config`,
   });
 
-  using _projectWorkerRefProvision = await project.provideCapability({
-    expression: [
-      "workers",
-      [
-        "get",
-        {
-          path: "/",
-          source: {
-            createWorker: {
-              entryPoint: "worker.ts",
-              files: { repoPath: "/repos/config", type: "repo" },
+  using _projectWorkerRefProvision = await measurePhase(
+    "provide repo-backed worker ref",
+    "capability-mount",
+    () =>
+      project.provideCapability({
+        expression: [
+          "workers",
+          [
+            "get",
+            {
+              path: "/",
+              source: {
+                createWorker: {
+                  entryPoint: "worker.ts",
+                  files: { repoPath: "/repos/config", type: "repo" },
+                },
+              },
+              type: "stateless",
             },
-          },
-          type: "stateless",
-        },
-      ],
-    ],
-    path: ["projectWorkerRef"],
-    type: "itx-expression",
-  });
-  // @ts-expect-error - dynamic capability root
-  const workerRefResponse = await project.projectWorkerRef.fetch(
-    new Request("https://example.com/ref"),
+          ],
+        ],
+        path: ["projectWorkerRef"],
+        type: "itx-expression",
+      }),
+  );
+  const workerRefResponse = await measurePhase<Response>(
+    "invoke repo-backed worker ref",
+    "dynamic-worker",
+    () => {
+      // @ts-expect-error - dynamic capability root
+      return project.projectWorkerRef.fetch(new Request("https://example.com/ref"));
+    },
   );
   expect(await workerRefResponse.text()).toBe("updated project worker fetched /ref");
 
-  using _counterFacetProvision = await project.provideCapability({
-    expression: [
-      "workers",
-      [
-        "get",
-        {
-          className: "CounterDurableObject",
-          durableWorkerKey: `counter-facet-${crypto.randomUUID()}`,
-          path: "/",
-          source: {
-            createWorker: {
-              entryPoint: "worker.ts",
-              files: { repoPath: "/repos/config", type: "repo" },
+  using _counterFacetProvision = await measurePhase(
+    "provide repo-backed stateful counter",
+    "capability-mount",
+    () =>
+      project.provideCapability({
+        expression: [
+          "workers",
+          [
+            "get",
+            {
+              className: "CounterDurableObject",
+              durableWorkerKey: `counter-facet-${crypto.randomUUID()}`,
+              path: "/",
+              source: {
+                createWorker: {
+                  entryPoint: "worker.ts",
+                  files: { repoPath: "/repos/config", type: "repo" },
+                },
+              },
+              type: "stateful",
             },
-          },
-          type: "stateful",
-        },
-      ],
-    ],
-    path: ["counterFacet"],
-    type: "itx-expression",
-  });
-  // @ts-expect-error - dynamic capability root
-  expect(await project.counterFacet.increment()).toBe(1);
-  // @ts-expect-error - dynamic capability root
-  expect(await project.counterFacet.current()).toBe(1);
+          ],
+        ],
+        path: ["counterFacet"],
+        type: "itx-expression",
+      }),
+  );
+  const counterValues = await measurePhase(
+    "exercise mounted stateful counter",
+    "dynamic-worker",
+    async () => {
+      // @ts-expect-error - dynamic capability root
+      const incremented = await project.counterFacet.increment();
+      // @ts-expect-error - dynamic capability root
+      const current = await project.counterFacet.current();
+      return { current, incremented };
+    },
+  );
+  expect(counterValues).toEqual({ current: 1, incremented: 1 });
 
-  using _dbProvision = await project.provideCapability({
-    expression: [
-      "workers",
-      [
-        "get",
-        {
-          className: "DatabaseDurableObject",
-          durableWorkerKey: `mounted-db-${crypto.randomUUID()}`,
-          path: "/",
-          source: {
-            createWorker: {
-              entryPoint: "worker.ts",
-              files: { repoPath: "/repos/config", type: "repo" },
+  using _dbProvision = await measurePhase(
+    "provide repo-backed stateful database",
+    "capability-mount",
+    () =>
+      project.provideCapability({
+        expression: [
+          "workers",
+          [
+            "get",
+            {
+              className: "DatabaseDurableObject",
+              durableWorkerKey: `mounted-db-${crypto.randomUUID()}`,
+              path: "/",
+              source: {
+                createWorker: {
+                  entryPoint: "worker.ts",
+                  files: { repoPath: "/repos/config", type: "repo" },
+                },
+              },
+              type: "stateful",
             },
-          },
-          type: "stateful",
-        },
-      ],
-    ],
-    path: ["db"],
-    type: "itx-expression",
-  });
-  // @ts-expect-error - dynamic database capability mounted by this test.
-  await project.db.sql("CREATE TABLE records (value TEXT)");
-  // @ts-expect-error - dynamic database capability mounted by this test.
-  await project.db.sql("INSERT INTO records VALUES (?)", "mounted");
-  // @ts-expect-error - dynamic database capability mounted by this test.
-  expect(await project.db.sql("SELECT value FROM records")).toEqual([{ value: "mounted" }]);
+          ],
+        ],
+        path: ["db"],
+        type: "itx-expression",
+      }),
+  );
+  const mountedDbRows = await measurePhase(
+    "exercise mounted stateful database",
+    "dynamic-worker",
+    async () => {
+      // @ts-expect-error - dynamic database capability mounted by this test.
+      await project.db.sql("CREATE TABLE records (value TEXT)");
+      // @ts-expect-error - dynamic database capability mounted by this test.
+      await project.db.sql("INSERT INTO records VALUES (?)", "mounted");
+      // @ts-expect-error - dynamic database capability mounted by this test.
+      return await project.db.sql("SELECT value FROM records");
+    },
+  );
+  expect(mountedDbRows).toEqual([{ value: "mounted" }]);
 });
 
 test("deleting the main worker file makes the next project worker build fail", async () => {

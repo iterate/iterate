@@ -1,5 +1,10 @@
 import { DurableObject } from "cloudflare:workers";
-import { workerVersion, type Env } from "../../env.ts";
+import {
+  workerDeploymentVersionRpcResponse,
+  type Env,
+  type WorkerDeploymentVersion,
+  type WorkerDeploymentVersionFormat,
+} from "../../env.ts";
 import { type WorkerBuildFailure, type WorkerBuildResult } from "./artifact-store.ts";
 import {
   WorkerBuildCoordinator,
@@ -24,9 +29,15 @@ export class WorkerBuildCoordinatorDurableObject extends DurableObject<Env> {
     { observe: observeCoordinatorEvent },
   );
 
-  /** Report this incarnation's code version for the deployment rollout gate. */
-  deploymentVersion(): string {
-    return workerVersion(this.env);
+  /** Report this incarnation's code version for the deployment rollout gate.
+   * No argument preserves the legacy string RPC contract; new callers opt in
+   * to ordering metadata so both sides of a rollout remain compatible. */
+  deploymentVersion(): string;
+  deploymentVersion(format: WorkerDeploymentVersionFormat): WorkerDeploymentVersion;
+  deploymentVersion(format?: WorkerDeploymentVersionFormat): WorkerDeploymentVersion | string {
+    return format === undefined
+      ? workerDeploymentVersionRpcResponse(this.env)
+      : workerDeploymentVersionRpcResponse(this.env, format);
   }
 
   async build(request: WorkerBuildRequest, buildBudgetMs?: number): Promise<WorkerBuildResult> {

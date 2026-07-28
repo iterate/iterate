@@ -274,8 +274,16 @@ import {
   type CapabilityHostCreateInput,
 } from "./domains/capability-host/capability-host-defaults.ts";
 import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "./domains/capability-host/capability-host-processor-contract.ts";
-import { waitForCapabilityHostDeploymentVersion } from "./domains/capability-host/capability-host-deployment-readiness.ts";
+import {
+  provideCapabilityOnDeploymentReadyHost,
+  waitForCapabilityHostDeploymentVersion,
+} from "./domains/capability-host/capability-host-deployment-readiness.ts";
 import { runCapabilityHostScript } from "./domains/capability-host/capability-host-script-run.ts";
+import {
+  acquireDurableObjectDeploymentTarget,
+  describeDeploymentVersion,
+} from "./domains/durable-object-deployment-readiness.ts";
+import { waitForCreatedScopeDeploymentVersion } from "./domains/durable-object-scope-deployment-readiness.ts";
 import { settleByDeadline, type DeadlineOutcome } from "./domains/execution-deadline.ts";
 import type { ScheduleView, SetScheduleInput } from "./domains/scheduler/types.ts";
 import { unwrapBrowserRunQuickAction } from "./domains/itx/cf-capabilities.ts";
@@ -1285,6 +1293,24 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
         `${path} could not be created: ${failureSchema.parse(terminal.payload).error}`,
       );
     }
+    await timedStep("create-timing", timing, "wait-repo-deployment-readiness", () =>
+      waitForCreatedScopeDeploymentVersion({
+        expectedVersion: workerDeploymentVersion(env),
+        projectId: this.props.projectId,
+        scopeKind: "repo",
+        scopePath: path,
+        targets: [
+          {
+            getTarget: () => stream.durableObjectStub,
+            kind: "Stream Durable Object",
+          },
+          {
+            getTarget: () => this.#durableObjectStub,
+            kind: "Repo Durable Object",
+          },
+        ],
+      }),
+    );
     return this;
   }
 
@@ -1699,6 +1725,33 @@ class SandboxRpcTarget extends IterateRpcTarget<"Sandbox"> {
   async create(input: SandboxCreateInput = {}): Promise<SandboxRpcTarget> {
     const requestedClaim = sandboxCreateClaimEvent({ create: input, path: this.props.path });
     const instanceType = requestedClaim.payload.instanceType;
+    const expectedDeploymentVersion = workerDeploymentVersion(env);
+    const { readiness, target: sandbox } = await acquireDurableObjectDeploymentTarget({
+      expectedVersion: expectedDeploymentVersion,
+      getTarget: () => this.#stub(instanceType),
+      notReadyError: (detail, cause) => {
+        const message =
+          `Sandbox at "${this.props.path}" was not ready for deployment version ` +
+          `${describeDeploymentVersion(expectedDeploymentVersion)} before create was requested: ` +
+          `${detail}. No catalogue claim or sandbox create operation was issued.`;
+        return cause === undefined ? new Error(message) : new Error(message, { cause });
+      },
+    });
+    if (readiness.probes > 1 || readiness.targetNewer) {
+      console.info("sandbox deployment version converged before create", {
+        expectedDeploymentVersion,
+        instanceType,
+        lifecycleFailures: readiness.lifecycleFailures,
+        mismatches: readiness.mismatches,
+        observedDeploymentVersion: readiness.observedVersion,
+        path: this.props.path,
+        probeTimeouts: readiness.probeTimeouts,
+        probes: readiness.probes,
+        projectId: this.props.projectId,
+        targetNewer: readiness.targetNewer,
+        waitedMs: readiness.waitedMs,
+      });
+    }
     const [claim] = await this.#catalogue.append(requestedClaim);
     if (claim === undefined) {
       throw new Error(`sandbox "${this.props.path}": the catalogue append returned no event`);
@@ -1728,7 +1781,7 @@ class SandboxRpcTarget extends IterateRpcTarget<"Sandbox"> {
               value ?? undefined,
             ]),
           );
-    await this.#stub(instanceType).create({
+    await sandbox.create({
       env: claimedEnv,
       instanceType,
       keepAlive: parsedClaim.payload.keepAlive,
@@ -4325,6 +4378,40 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
       }),
       workspaceReady,
     ]);
+    await waitForCreatedScopeDeploymentVersion({
+      expectedVersion: workerDeploymentVersion(env),
+      projectId: this.#props.projectId,
+      scopeKind: "agent",
+      scopePath: this.#path,
+      targets: [
+        {
+          getTarget: () => this.stream.durableObjectStub,
+          kind: "Stream Durable Object",
+        },
+        {
+          getTarget: () => this.durableObjectStub,
+          kind: "Agent Durable Object",
+        },
+        {
+          getTarget: () =>
+            env.CAPABILITY_HOST.getByName(
+              DurableObjectNameCodec.stringify({
+                projectId: this.#props.projectId,
+                path: this.#path,
+              }),
+            ),
+          kind: "CapabilityHost Durable Object",
+        },
+        {
+          getTarget: () => env.AGENT_COLLECTION.getByName(agentCollectionName),
+          kind: "AgentCollection Durable Object",
+        },
+        {
+          getTarget: () => workspace.durableObjectStub,
+          kind: "Workspace Durable Object",
+        },
+      ],
+    });
     return this;
   }
 
@@ -4962,13 +5049,35 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
       offset,
       timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
     });
+    await waitForCreatedScopeDeploymentVersion({
+      expectedVersion: workerDeploymentVersion(env),
+      projectId: this.#props.projectId,
+      scopeKind: "capability host",
+      scopePath: this.#props.path,
+      targets: [
+        {
+          getTarget: () => this.#stream.durableObjectStub,
+          kind: "Stream Durable Object",
+        },
+        {
+          getTarget: () => this.#durableObject,
+          kind: "CapabilityHost Durable Object",
+        },
+      ],
+    });
     return this;
   }
 
   /** Mount a capability on THIS scope; returns an ownership handle that can revoke exactly this mount. */
   async provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvisionRpcTarget> {
     rejectBuiltinCollision(ITX_SURFACE_MEMBER_NAMES, input.path);
-    const provision = await this.#durableObject.provideCapability(input);
+    const { provision } = await provideCapabilityOnDeploymentReadyHost({
+      expectedVersion: workerDeploymentVersion(env),
+      getTarget: () => this.#durableObject,
+      input,
+      path: this.#props.path,
+      projectId: this.#props.projectId,
+    });
     // The Durable Object returns the durable mount coordinates. The public RPC
     // surface returns an ownership handle that can revoke that exact mount on
     // explicit revoke or disposal.
@@ -5477,6 +5586,61 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
         this.waitUntilReady({ timeoutMs: remainingReadyTimeoutMs }),
       ),
     ]);
+    await timedStep("create-timing", timing, "wait-project-deployment-readiness", () =>
+      waitForCreatedScopeDeploymentVersion(
+        {
+          expectedVersion: workerDeploymentVersion(env),
+          projectId: registered.projectId,
+          scopeKind: "project",
+          scopePath: "/",
+          targets: [
+            {
+              getTarget: () =>
+                rootStream({
+                  auth: this.#props.auth,
+                  projectId: registered.projectId,
+                }).durableObjectStub,
+              kind: "Stream Durable Object",
+            },
+            {
+              getTarget: () => this.durableObjectStub,
+              kind: "Project Durable Object",
+            },
+            {
+              getTarget: () =>
+                env.CAPABILITY_HOST.getByName(
+                  DurableObjectNameCodec.stringify({
+                    path: "/",
+                    projectId: registered.projectId,
+                  }),
+                ),
+              kind: "CapabilityHost Durable Object",
+            },
+            {
+              getTarget: () =>
+                env.REPO.getByName(
+                  DurableObjectNameCodec.stringify({
+                    path: CONFIG_REPO_PATH,
+                    projectId: registered.projectId,
+                  }),
+                ),
+              kind: "Repo Durable Object",
+            },
+            {
+              getTarget: () =>
+                env.SCHEDULER.getByName(
+                  DurableObjectNameCodec.stringify({
+                    path: SCHEDULER_PRIMARY_PATH,
+                    projectId: registered.projectId,
+                  }),
+                ),
+              kind: "Scheduler Durable Object",
+            },
+          ],
+        },
+        { timeoutMs: Math.max(1, projectCreateDeadline - Date.now()) },
+      ),
+    );
     return this;
   }
 

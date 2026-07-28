@@ -87,6 +87,7 @@ const h = vi.hoisted(() => {
     WORKER_BUILD_CACHE: kv,
     WORKER_BUILD_COORDINATOR: {
       getByName: () => ({
+        deploymentVersion: async () => "version-1",
         build: (
           request: import("./worker-build-capability.ts").WorkerBuildRequest,
           buildBudgetMs?: number,
@@ -122,7 +123,14 @@ const h = vi.hoisted(() => {
 });
 
 vi.mock("../../env.ts", () => ({
+  WORKER_DEPLOYMENT_VERSION_METADATA_FORMAT: "metadata-v1",
   itxEnv: h.itxEnv,
+  workerDeploymentVersion: (env: { CF_VERSION_METADATA?: { id: string; timestamp?: string } }) => ({
+    id: env.CF_VERSION_METADATA?.id ?? "unversioned",
+    ...(env.CF_VERSION_METADATA?.timestamp === undefined
+      ? {}
+      : { timestamp: env.CF_VERSION_METADATA.timestamp }),
+  }),
   workerVersion: (env: { CF_VERSION_METADATA?: { id: string } }) =>
     env.CF_VERSION_METADATA?.id ?? "unversioned",
 }));

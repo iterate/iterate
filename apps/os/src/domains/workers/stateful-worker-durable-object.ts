@@ -1,5 +1,10 @@
 import { DurableObject, tracing } from "cloudflare:workers";
-import { workerVersion, type Env } from "../../env.ts";
+import {
+  workerDeploymentVersionRpcResponse,
+  type Env,
+  type WorkerDeploymentVersion,
+  type WorkerDeploymentVersionFormat,
+} from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
   invokeFlattenedPath,
@@ -36,9 +41,15 @@ function statefulWorkerVersion(ref: StatefulDynamicWorkerRef, sourceCacheKey: st
  * identity; instead the facet is aborted and re-created against the same DO.
  */
 export class StatefulWorkerDurableObject extends DurableObject<Env> {
-  /** Report this incarnation's code version for the deployment rollout gate. */
-  deploymentVersion(): string {
-    return workerVersion(this.env);
+  /** Report this incarnation's code version for the deployment rollout gate.
+   * No argument preserves the legacy string RPC contract; new callers opt in
+   * to ordering metadata so both sides of a rollout remain compatible. */
+  deploymentVersion(): string;
+  deploymentVersion(format: WorkerDeploymentVersionFormat): WorkerDeploymentVersion;
+  deploymentVersion(format?: WorkerDeploymentVersionFormat): WorkerDeploymentVersion | string {
+    return format === undefined
+      ? workerDeploymentVersionRpcResponse(this.env)
+      : workerDeploymentVersionRpcResponse(this.env, format);
   }
 
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);

@@ -5,7 +5,13 @@ import type {
   StreamSubscriberWakeRequest,
   StreamSubscriberWakeResponse,
 } from "iterate/processors";
-import { workerVersion, type Env } from "../../env.ts";
+import {
+  workerDeploymentVersionRpcResponse,
+  workerVersion,
+  type Env,
+  type WorkerDeploymentVersion,
+  type WorkerDeploymentVersionFormat,
+} from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamProcessorRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
@@ -49,9 +55,15 @@ const INGEST_WAIT_TIMEOUT_MS = 15_000;
  * successful set is read-your-writes visible AND provably alarm-armed.
  */
 export class SchedulerDurableObject extends DurableObject<Env> {
-  /** Report this incarnation's code version for the deployment rollout gate. */
-  deploymentVersion(): string {
-    return workerVersion(this.env);
+  /** Report this incarnation's code version for the deployment rollout gate.
+   * No argument preserves the legacy string RPC contract; new callers opt in
+   * to ordering metadata so both sides of a rollout remain compatible. */
+  deploymentVersion(): string;
+  deploymentVersion(format: WorkerDeploymentVersionFormat): WorkerDeploymentVersion;
+  deploymentVersion(format?: WorkerDeploymentVersionFormat): WorkerDeploymentVersion | string {
+    return format === undefined
+      ? workerDeploymentVersionRpcResponse(this.env)
+      : workerDeploymentVersionRpcResponse(this.env, format);
   }
 
   readonly #name = parseSchedulerDurableObjectName(this.ctx.id.name!);

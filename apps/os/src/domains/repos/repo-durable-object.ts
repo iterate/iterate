@@ -7,7 +7,13 @@ import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
 import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
-import { workerVersion, type Env } from "../../env.ts";
+import {
+  workerDeploymentVersionRpcResponse,
+  workerVersion,
+  type Env,
+  type WorkerDeploymentVersion,
+  type WorkerDeploymentVersionFormat,
+} from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { timedStep } from "../../lib/step-timing.ts";
 import { filterWorkerSnapshotPaths } from "../workers/source-masks.ts";
@@ -109,9 +115,15 @@ type RepoHead = {
 };
 
 export class RepoDurableObject extends DurableObject<Env> {
-  /** Report this incarnation's code version for the deployment rollout gate. */
-  deploymentVersion(): string {
-    return workerVersion(this.env);
+  /** Report this incarnation's code version for the deployment rollout gate.
+   * No argument preserves the legacy string RPC contract; new callers opt in
+   * to ordering metadata so both sides of a rollout remain compatible. */
+  deploymentVersion(): string;
+  deploymentVersion(format: WorkerDeploymentVersionFormat): WorkerDeploymentVersion;
+  deploymentVersion(format?: WorkerDeploymentVersionFormat): WorkerDeploymentVersion | string {
+    return format === undefined
+      ? workerDeploymentVersionRpcResponse(this.env)
+      : workerDeploymentVersionRpcResponse(this.env, format);
   }
 
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!, { allowNullProjectId: true });

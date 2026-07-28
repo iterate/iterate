@@ -15,7 +15,13 @@ import {
   type StreamProcessorRegistry,
 } from "iterate/processors/cloudflare";
 import { trustedInternalAuthContext } from "../../../auth.ts";
-import { workerVersion, type Env } from "../../../env.ts";
+import {
+  workerDeploymentVersionRpcResponse,
+  workerVersion,
+  type Env,
+  type WorkerDeploymentVersion,
+  type WorkerDeploymentVersionFormat,
+} from "../../../env.ts";
 import { StreamProcessorRpcTarget, StreamRpcTarget } from "../../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../../durable-object-names.ts";
 import { settleByDeadline } from "../../execution-deadline.ts";
@@ -315,9 +321,15 @@ const IDENTITY_STORAGE_KEY = "iterate-sandbox-identity";
  *    a sandbox cannot reach the internet except through project policy.
  */
 export abstract class SandboxDurableObject extends Sandbox<Env> {
-  /** Report this incarnation's code version without starting its container. */
-  deploymentVersion(): string {
-    return workerVersion(this.env);
+  /** Report this incarnation's code version without starting its container.
+   * No argument preserves the legacy string RPC contract; new callers opt in
+   * to ordering metadata so both sides of a rollout remain compatible. */
+  deploymentVersion(): string;
+  deploymentVersion(format: WorkerDeploymentVersionFormat): WorkerDeploymentVersion;
+  deploymentVersion(format?: WorkerDeploymentVersionFormat): WorkerDeploymentVersion | string {
+    return format === undefined
+      ? workerDeploymentVersionRpcResponse(this.env)
+      : workerDeploymentVersionRpcResponse(this.env, format);
   }
 
   // Intercept HTTPS as well as HTTP: without this, only plaintext egress would
