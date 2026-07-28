@@ -1,6 +1,7 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
-import type { Env } from "../../env.ts";
+import { workerVersion, type Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { fetchFromDeploymentReadyProject } from "./project-egress-deployment-readiness.ts";
 import { withStreamContext, type StreamContext } from "./stream-context.ts";
 
 /** Live replacement for project egress. It sees getSecret(...) placeholders, never material. */
@@ -40,10 +41,14 @@ export class ProjectEgressEntrypoint extends WorkerEntrypoint<
   Env,
   { projectId: string; streamContext: StreamContext }
 > {
-  fetch(request: Request): Promise<Response> {
-    return projectStub(this.env.PROJECT, this.ctx.props.projectId).fetch(
-      withStreamContext(request, this.ctx.props.streamContext),
-    );
+  async fetch(request: Request): Promise<Response> {
+    const projectId = this.ctx.props.projectId;
+    return await fetchFromDeploymentReadyProject({
+      expectedVersion: workerVersion(this.env),
+      project: projectStub(this.env.PROJECT, projectId),
+      projectId,
+      request: withStreamContext(request, this.ctx.props.streamContext),
+    });
   }
 }
 

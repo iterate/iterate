@@ -168,10 +168,44 @@ the attempt count, every transient class, and the last error. This removes
 both the Response-stub/application coupling and the unobservable blanket
 retry.
 
-The new immutable-head proof remains at 0/25 until this latest fix passes a
-fresh exact-head preview with zero retries. As in every current round, each
-counted iteration is a separate canonical Depot run with ordinary artifacts
-and PostHog telemetry.
+The exact-head preflight for that fix (`d4ddeab588`, Depot run `5b8nq1b3qs`,
+attempt `v6mtqjfkdw`) was rejected after 2 minutes 44 seconds with two Vitest
+retries. All ten artifacts still finalized normally into 6,853 PostHog events.
+The ephemeral-events catalogue test passed after one retry; the two-client
+OAuth test still failed on retry. The accepted proof therefore remains 0/25.
+
+A deduplicated 90-day PostHog review showed both signatures were rare but
+real, and every one of their 316 executions ran on Depot. Ephemeral-events had
+two passed-after-retry executions, no final failures, and durations of 7.2
+seconds at p50, 12.1 seconds at p95, and 113.6 seconds maximum. The OAuth test
+had two final retry failures, with durations of 17.5 seconds at p50, 28.4
+seconds at p95, and 52.0 seconds maximum.
+
+The ephemeral example used unkeyed appends, so the already-bounded
+stream-lifecycle recovery could not safely replay them after the target
+Durable Object reset for a code update. Each example invocation now generates
+one operation id and keys both its ephemeral progress event and durable
+completion event. They can replay together across one classified lifecycle
+reset without deduplicating a later, intentional invocation.
+
+The OAuth failure exposed a more dangerous boundary. Cloudflare trace
+`8a763589c2850186df9ec282966fe487` showed a new Project incarnation call an old
+Secret incarnation during rollout. Petshop accepted the refresh and returned
+200, but the Secret reset before it could durably commit the rotated token.
+Blind replay is invalid because an OAuth provider may invalidate the old
+refresh token. Credential-bearing egress now performs read-only exact-version
+handshakes across both edge→Project and Project→Secret boundaries before the
+request can run. Mismatches, bounded probe timeouts, and one classified
+lifecycle reset are counted on convergence; application failures, a second
+reset, and the total deadline stay terminal with an explicit guarantee that no
+request or refresh ran. The retry fixture also retains its two minted client
+identities across Vitest attempts so a diagnostic retry never compares
+durable write-only state with unrelated credentials.
+
+The new immutable-head proof remains at 0/25 until these fixes pass a fresh
+exact-head preview with zero retries. As in every current round, each counted
+iteration is a separate canonical Depot run on the normal 16-core runner, with
+ordinary artifacts and the PostHog finalizer.
 
 ## Round 15 (2026-07-23, post-#2284)
 

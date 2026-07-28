@@ -15,6 +15,7 @@ import {
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { deepRetainRpcStubs } from "../capability-host/live-capability.ts";
 import { fetchWithCredentialRedirects } from "../secrets/credential-fetch.ts";
+import { fetchFromDeploymentReadySecret } from "../secrets/secret-deployment-readiness.ts";
 import { withWebSocketHandshakeHeaders } from "../secrets/websocket-handshake.ts";
 import {
   assertPlatformApiKeyReferencesAllowed,
@@ -701,12 +702,20 @@ export class ProjectDurableObject extends DurableObject<Env> {
     // placeholders under its own host pin (cross-secret chaining is gone).
     if (secretPaths.length > 1) return secretErrorResponse("secret_reference_foreign");
     if (secretPaths.length === 1) {
-      const response = await this.env.SECRET.getByName(
+      const secretPath = secretPaths[0]!;
+      const secret = this.env.SECRET.getByName(
         DurableObjectNameCodec.stringify({
           projectId: this.#name.projectId,
-          path: secretPaths[0]!,
+          path: secretPath,
         }),
-      ).fetch(request);
+      );
+      const response = await fetchFromDeploymentReadySecret({
+        expectedVersion: workerVersion(this.env),
+        path: secretPath,
+        projectId: this.#name.projectId,
+        request,
+        secret,
+      });
       return withWebSocketHandshakeHeaders(request, response);
     }
 

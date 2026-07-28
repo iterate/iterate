@@ -19,6 +19,7 @@ describe("waitForCapabilityHostDeploymentVersion", () => {
     ).resolves.toEqual({
       lifecycleFailures: 0,
       mismatches: 0,
+      probeTimeouts: 0,
       probes: 1,
       waitedMs: expect.any(Number),
     });
@@ -46,6 +47,7 @@ describe("waitForCapabilityHostDeploymentVersion", () => {
     ).resolves.toEqual({
       lifecycleFailures: 0,
       mismatches: 1,
+      probeTimeouts: 0,
       probes: 2,
       waitedMs: 250,
     });
@@ -75,9 +77,39 @@ describe("waitForCapabilityHostDeploymentVersion", () => {
     ).resolves.toEqual({
       lifecycleFailures: 1,
       mismatches: 0,
+      probeTimeouts: 0,
       probes: 2,
       waitedMs: 100,
     });
+  });
+
+  it("classifies a bounded probe timeout before convergence", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      const readVersion = vi
+        .fn<() => Promise<string>>()
+        .mockImplementationOnce(() => new Promise<string>(() => {}))
+        .mockResolvedValueOnce("version-new");
+      const readiness = waitForCapabilityHostDeploymentVersion({
+        ...BASE_INPUT,
+        pollIntervalMs: 100,
+        probeTimeoutMs: 200,
+        readVersion,
+        timeoutMs: 1_000,
+      });
+
+      await vi.advanceTimersByTimeAsync(300);
+      await expect(readiness).resolves.toEqual({
+        lifecycleFailures: 0,
+        mismatches: 0,
+        probeTimeouts: 1,
+        probes: 2,
+        waitedMs: 300,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps a second deployment lifecycle reset terminal before journaling", async () => {

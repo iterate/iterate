@@ -2,7 +2,7 @@ import {
   ScriptExecutionSettlement as ScriptExecutionSettlementSchema,
   type ScriptExecutionSettlement as ScriptExecutionSettlementValue,
 } from "@iterate-com/shared/script-execution";
-import type { DeadlineOutcome } from "./execution-deadline.ts";
+import type { DeadlineOutcome } from "../execution-deadline.ts";
 import { SCRIPT_EXECUTION_SETTLEMENT_GRACE_MS } from "./script-execution-budgets.ts";
 
 export {

@@ -92,6 +92,7 @@ import {
   installPrototypeInvokeCapabilityFallback,
 } from "./domains/itx/utils.ts";
 import { projectStub } from "./domains/projects/egress.ts";
+import { fetchFromDeploymentReadyProject } from "./domains/projects/project-egress-deployment-readiness.ts";
 import { projectCreationEvents } from "./domains/projects/project-defaults.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
 import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
@@ -267,10 +268,7 @@ import {
 import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "./domains/capability-host/capability-host-processor-contract.ts";
 import { waitForCapabilityHostDeploymentVersion } from "./domains/capability-host/capability-host-deployment-readiness.ts";
 import { runCapabilityHostScript } from "./domains/capability-host/capability-host-script-run.ts";
-import {
-  settleByDeadline,
-  type DeadlineOutcome,
-} from "./domains/capability-host/execution-deadline.ts";
+import { settleByDeadline, type DeadlineOutcome } from "./domains/execution-deadline.ts";
 import type { ScheduleView, SetScheduleInput } from "./domains/scheduler/types.ts";
 import { unwrapBrowserRunQuickAction } from "./domains/itx/cf-capabilities.ts";
 import type {
@@ -5035,6 +5033,7 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
         lifecycleFailures: readiness.lifecycleFailures,
         mismatches: readiness.mismatches,
         path: this.#props.path,
+        probeTimeouts: readiness.probeTimeouts,
         probes: readiness.probes,
         projectId: this.#props.projectId,
         waitedMs: readiness.waitedMs,
@@ -6390,10 +6389,13 @@ class ProjectEgressRpcTarget extends IterateRpcTarget<"ProjectEgress"> {
   /** Outbound fetch with project identity and secret substitution. Set
    * `x-iterate-secret-template: json` to replace exact `getSecret(...)` string
    * values in an `application/json` (or `+json`) body. */
-  fetch(request: Request): Promise<EgressResponse> {
-    return projectStub(env.PROJECT, this.props.projectId).fetch(
-      withStreamContext(request, this.props.streamContext),
-    );
+  async fetch(request: Request): Promise<EgressResponse> {
+    return await fetchFromDeploymentReadyProject({
+      expectedVersion: workerVersion(env),
+      project: projectStub(env.PROJECT, this.props.projectId),
+      projectId: this.props.projectId,
+      request: withStreamContext(request, this.props.streamContext),
+    });
   }
 
   /** Install a live egress interceptor (last writer wins); returns a release handle. */

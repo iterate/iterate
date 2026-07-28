@@ -1,20 +1,13 @@
-import { isRetryableDurableObjectAvailabilityError } from "../streams/stream-unavailable.ts";
-import { settleByDeadline } from "./execution-deadline.ts";
+import {
+  waitForDurableObjectDeploymentVersion,
+  type DeploymentVersionReadinessOptions,
+} from "../durable-object-deployment-readiness.ts";
 
-const CAPABILITY_HOST_DEPLOYMENT_WAIT_TIMEOUT_MS = 30_000;
-const CAPABILITY_HOST_DEPLOYMENT_PROBE_TIMEOUT_MS = 2_000;
-const CAPABILITY_HOST_DEPLOYMENT_POLL_INTERVAL_MS = 250;
-
-type WaitForCapabilityHostDeploymentVersionInput = {
+type WaitForCapabilityHostDeploymentVersionInput = DeploymentVersionReadinessOptions & {
   executionId: string;
   expectedVersion: string;
-  now?: () => number;
   path: string;
-  pollIntervalMs?: number;
-  probeTimeoutMs?: number;
   readVersion: () => Promise<string>;
-  sleep?: (durationMs: number) => Promise<void>;
-  timeoutMs?: number;
 };
 
 function notStartedError(
@@ -44,63 +37,12 @@ export async function waitForCapabilityHostDeploymentVersion(
 ): Promise<{
   lifecycleFailures: number;
   mismatches: number;
+  probeTimeouts: number;
   probes: number;
   waitedMs: number;
 }> {
-  const now = input.now ?? Date.now;
-  const wait =
-    input.sleep ??
-    ((durationMs: number) => new Promise<void>((resolve) => setTimeout(resolve, durationMs)));
-  const startedAt = now();
-  const deadline = startedAt + (input.timeoutMs ?? CAPABILITY_HOST_DEPLOYMENT_WAIT_TIMEOUT_MS);
-  const probeTimeoutMs = input.probeTimeoutMs ?? CAPABILITY_HOST_DEPLOYMENT_PROBE_TIMEOUT_MS;
-  const pollIntervalMs = input.pollIntervalMs ?? CAPABILITY_HOST_DEPLOYMENT_POLL_INTERVAL_MS;
-  let lastObservedVersion: string | undefined;
-  let lifecycleFailures = 0;
-  let mismatches = 0;
-  let probes = 0;
-
-  while (now() < deadline) {
-    probes += 1;
-    const outcome = await settleByDeadline(
-      Promise.resolve().then(input.readVersion),
-      Math.min(deadline, now() + probeTimeoutMs),
-      now,
-    );
-    if (outcome.status === "fulfilled") {
-      lastObservedVersion = outcome.value;
-      if (outcome.value === input.expectedVersion) {
-        return {
-          lifecycleFailures,
-          mismatches,
-          probes,
-          waitedMs: now() - startedAt,
-        };
-      }
-      mismatches += 1;
-    } else if (outcome.status === "rejected") {
-      if (!isRetryableDurableObjectAvailabilityError(outcome.error)) {
-        const reason =
-          outcome.error instanceof Error ? outcome.error.message : String(outcome.error);
-        throw notStartedError(input, `the version probe failed with "${reason}"`, outcome.error);
-      }
-      lifecycleFailures += 1;
-      if (lifecycleFailures > 1) {
-        throw notStartedError(input, "the version probe was reset more than once", outcome.error);
-      }
-    }
-
-    const remainingMs = deadline - now();
-    if (remainingMs <= 0) break;
-    await wait(Math.min(pollIntervalMs, remainingMs));
-  }
-
-  const lastObservation =
-    lastObservedVersion === undefined
-      ? "no deployment version was returned"
-      : `the last observed version was "${lastObservedVersion}"`;
-  throw notStartedError(
-    input,
-    `it did not converge within ${Math.max(0, now() - startedAt)}ms; ${lastObservation}`,
-  );
+  return await waitForDurableObjectDeploymentVersion({
+    ...input,
+    notReadyError: (detail, cause) => notStartedError(input, detail, cause),
+  });
 }

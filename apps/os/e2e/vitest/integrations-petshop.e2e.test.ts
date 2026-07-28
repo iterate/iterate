@@ -30,6 +30,9 @@ import {
 
 const RUN = crypto.randomUUID().slice(0, 8);
 const REDIRECT_URI = "https://example.com/callback";
+let userspaceClients:
+  | [Awaited<ReturnType<typeof petshopMintClient>>, Awaited<ReturnType<typeof petshopMintClient>>]
+  | undefined;
 
 // Local runs can opt in by pointing PETSHOP_BASE_URL at a fixture. Preview CI
 // always supplies the Petshop deployment from its own leased slot and fails
@@ -42,7 +45,12 @@ test.skipIf(shouldSkipPetshopE2e())(
     // credentials live IN each connection secret's material, next to the
     // tokens (bring-your-own-app connections are self-contained cells). The
     // seeded client is reserved for the concurrently running first-party test.
-    const [clientA, clientB] = await Promise.all([petshopMintClient(), petshopMintClient()]);
+    //
+    // Vitest retries in this same module with the same RUN/project paths. Keep
+    // the client identities stable too: if attempt one created a write-only
+    // Secret before failing, attempt two must not compare that durable
+    // connection with unrelated newly minted client credentials.
+    const [clientA, clientB] = await userspaceClientsForThisRun();
     const instances = [
       { ...clientA, slug: `petshop-home-${RUN}`, connection: "jonas" },
       { ...clientB, slug: `petshop-work-${RUN}`, connection: "ops" },
@@ -167,6 +175,13 @@ test.skipIf(shouldSkipPetshopE2e())(
     expect(afterExpiry).toMatchObject({ status: 200, body: { clientId } });
   },
 );
+
+async function userspaceClientsForThisRun() {
+  if (userspaceClients !== undefined) return userspaceClients;
+  const minted = await Promise.all([petshopMintClient(), petshopMintClient()]);
+  userspaceClients = minted;
+  return minted;
+}
 
 /** Read a petshop JSON API through the OS egress door with an access-token
  * placeholder — the request routes to the connection secret, which substitutes

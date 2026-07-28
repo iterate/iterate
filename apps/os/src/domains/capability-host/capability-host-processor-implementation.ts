@@ -6,6 +6,7 @@ import type { CapabilityDescription } from "../itx/describe.ts";
 import type { Project } from "../../itx-api.generated.ts";
 import type { ScriptExecutionCheck } from "../typecheck/virtual-project.ts";
 import type { StreamContext } from "../projects/stream-context.ts";
+import { settleByDeadline } from "../execution-deadline.ts";
 import type {
   CapabilityProvidedPayload,
   CapabilityRecord,
@@ -14,7 +15,6 @@ import type {
 } from "./types.ts";
 import { retainLiveCapabilityProvider, type LiveCapability } from "./live-capability.ts";
 import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
-import { settleByDeadline } from "./execution-deadline.ts";
 import {
   SCRIPT_EXECUTION_SETTLEMENT_GRACE_MS,
   ScriptExecutionSettlement,
