@@ -192,18 +192,16 @@ export function makeProjectHarness(
     projectId: "prj_test",
     repo: { processor: { waitUntilProcessed: waitUntilProcessed("repo") } },
     scheduler: { processor: { waitUntilProcessed: waitUntilProcessed("scheduler") } },
-    worker: {
-      fetch: async () => {
-        const outcome = options.workerOutcomes?.[workerFetchCalls];
-        workerFetchCalls += 1;
-        if (outcome instanceof Error) throw outcome;
-        const response = outcome ?? new Response(null, { status: 204 });
-        return response.headers.get(WORKER_BUILDING_HEADER) === "1"
-          ? response
-          : withWorkerCommit(response, CONFIG_REPO_COMMIT_COMPLETED.payload.commitOid);
-      },
-    },
   } as unknown as ProjectRpcTarget;
+  const workerFetch = async () => {
+    const outcome = options.workerOutcomes?.[workerFetchCalls];
+    workerFetchCalls += 1;
+    if (outcome instanceof Error) throw outcome;
+    const response = outcome ?? new Response(null, { status: 204 });
+    return response.headers.get(WORKER_BUILDING_HEADER) === "1"
+      ? response
+      : withWorkerCommit(response, CONFIG_REPO_COMMIT_COMPLETED.payload.commitOid);
+  };
   const Processor = options.processorClass ?? ProjectProcessor;
   const harness = makeProcessorHarness<ProjectProcessorContract>({
     path: "/",
@@ -216,6 +214,7 @@ export function makeProjectHarness(
         sleep: options.workerRetrySleep ?? (() => new Promise((resolve) => setTimeout(resolve, 0))),
         itx,
         customDomains,
+        workerFetch,
       }),
   });
   clockBox.advance = (ms) => {

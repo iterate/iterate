@@ -529,12 +529,12 @@ export class ProjectProcessor extends StreamProcessor<
   /** Probe until the default worker answers and return OS-stamped source identity. */
   async #waitForDefaultProjectWorker(): Promise<string> {
     for (let attempt = 1; attempt <= PROJECT_WORKER_READY_ATTEMPTS; attempt += 1) {
-      // Capability dispatch, on purpose: `worker.fetch` here is an ordinary
-      // method call whose Response comes back as a serialized copy — exactly
-      // enough for "the worker built, loaded, and answered". Protocol traffic
-      // (real HTTP, WebSockets) rides the fetch lane instead; a probe has no
-      // protocol needs (docs/dynamic-worker-dispatch.md).
-      const response = await this.deps.itx.worker.fetch(
+      // Use the platform's fetch lane, not `itx.worker.fetch`: the latter is
+      // ordinary capability dispatch and returns the userspace Response
+      // without the trusted source stamp. DynamicWorkerRunner owns this
+      // authority boundary and replaces any userspace-authored serve header
+      // with the commit it actually resolved, built, loaded, and invoked.
+      const response = await this.deps.workerFetch(
         new Request("https://iterate-project.localhost/__itx_project_ready"),
       );
       try {
@@ -784,6 +784,8 @@ export class ProjectProcessor extends StreamProcessor<
 type ProjectProcessorDeps = {
   /** The project's own itx surface: sibling processor facades + worker dispatch. */
   itx: ProjectRpcTarget;
+  /** Fetch-lane dispatch into the default worker; successful responses carry OS source identity. */
+  workerFetch: (request: Request) => Promise<Response>;
   /** Cloudflare custom-hostname provisioning; absent in hosts without it. */
   customDomains?: ProjectCustomDomainDeps;
   /** Injectable clock and sleep — virtual time in tests, real time in prod. */

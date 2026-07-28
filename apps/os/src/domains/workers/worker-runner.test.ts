@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { recordedSpans, resetRecordedSpans } from "../../test/cloudflare-workers-shim.ts";
 import type { DynamicWorkerRef } from "./schemas.ts";
 import { DynamicWorkerRunner, type DynamicWorkerTraceRole } from "./worker-runner.ts";
+import { WORKER_SERVE_HEADER } from "./worker-serve-info.ts";
 
 const h = vi.hoisted(() => ({
   handleAssetRequest: vi.fn(),
@@ -114,6 +115,45 @@ it("gives bare fetch and scoped ITX the same host-minted invocation source", () 
     purpose: "userspace",
   });
   expect(h.projectEgressFetcher).toHaveBeenCalledWith(expect.anything(), "prj_private", source);
+});
+
+it("stamps the resolved repo commit on a stateless fetch response", async () => {
+  const commitOid = "b".repeat(40);
+  const fetch = vi.fn(
+    async () => new Response("ready", { headers: { [WORKER_SERVE_HEADER]: "userspace-spoof" } }),
+  );
+  h.resolveWorkerSource.mockResolvedValue({
+    ok: true,
+    source: {
+      assetConfig: undefined,
+      assetManifest: undefined,
+      assets: {},
+      cacheKey: "build-key",
+      commitOid,
+      mainModule: "worker.js",
+      modules: {},
+      wranglerConfig: undefined,
+    },
+  });
+  h.loadResolvedWorker.mockReturnValue({
+    getEntrypoint: vi.fn(() => ({ fetch })),
+  });
+  const runner = new DynamicWorkerRunner({
+    streamContext: { kind: "scope", scopePath: "/" },
+    exports: {} as ExecutionContext["exports"],
+    projectId: "prj_private",
+    scopePath: "/",
+  });
+
+  const response = await runner.fetch({
+    ref: repoRef,
+    request: new Request("https://example.com/__itx_project_ready"),
+    traceRole: "project_config",
+  });
+
+  expect(await response.text()).toBe("ready");
+  expect(response.headers.get(WORKER_SERVE_HEADER)).toBe(commitOid);
+  expect(fetch).toHaveBeenCalledOnce();
 });
 
 describe("dynamic worker spans", () => {

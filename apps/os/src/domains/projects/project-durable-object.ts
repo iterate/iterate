@@ -40,6 +40,8 @@ import { EmailProcessor } from "../email/email-processor-implementation.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
 import { NotificationProcessor } from "../notifications/notification-processor-implementation.ts";
 import { isRetryableDurableObjectAvailabilityError } from "../streams/stream-unavailable.ts";
+import { defaultProjectWorkerRef } from "../repos/utils.ts";
+import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import type { ProjectEgressIntercept, ProjectEgressInterceptor } from "./egress.ts";
 import {
   buildApprovalMessage,
@@ -134,6 +136,17 @@ export class ProjectDurableObject extends DurableObject<Env> {
         path: "/",
         projectId: this.#name.projectId,
       }),
+      workerFetch: (request) =>
+        new DynamicWorkerRunner({
+          streamContext: { kind: "scope", scopePath: "/" },
+          exports: this.ctx.exports,
+          projectId: this.#name.projectId,
+          scopePath: "/",
+        }).fetch({
+          ref: defaultProjectWorkerRef(),
+          request,
+          traceRole: "project_config",
+        }),
     }),
   );
   readonly #notificationProcessor = this.#registry.register(
