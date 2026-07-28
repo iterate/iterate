@@ -113,6 +113,7 @@ import {
   indexProjectBatchFactsWithRecovery,
   type ProjectBatchFactsIndexResult,
 } from "./domains/projects/project-batch-facts-recovery.ts";
+import { waitForProjectBirthDeploymentVersion } from "./domains/projects/project-birth-deployment-readiness.ts";
 import { projectCreationEvents } from "./domains/projects/project-defaults.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
 import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
@@ -5670,6 +5671,13 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     }
 
     const timing = { projectId: registered.projectId };
+    await timedStep("create-timing", timing, "wait-project-deployment-before-birth", () =>
+      waitForProjectBirthDeploymentVersion({
+        expectedVersion: workerDeploymentVersion(env),
+        getTarget: () => this.durableObjectStub,
+        projectId: registered.projectId,
+      }),
+    );
     const creatorEmail = userPrincipalOf(this.#props.auth)?.email;
     // Every birth event carries an idempotency key, so the keyed-append door
     // retry in StreamRpcTarget.append is the single deploy-reset recovery.
