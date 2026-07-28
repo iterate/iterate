@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { StreamDeliveryBatch } from "iterate/processors";
 import type { StreamEvent } from "iterate/processors";
 import type { SubscriptionConfiguredPayload } from "../streams/core-processor-contract.ts";
+import { internalStreamId } from "../streams/stream-delivery-utils.ts";
 import { truncateJsonToBytes } from "./truncate-json.ts";
 
 export const POSTHOG_STREAM_EVENT_MAX_JSON_BYTES = 100 * 1_024;
@@ -91,7 +92,7 @@ function projectBirthEvents(args: {
       event.path !== "/" ||
       event.ephemeral === true ||
       event.type !== "events.iterate.com/project/created" ||
-      event.idempotencyKey !== `project-created:${projectId}`
+      event.idempotencyKey !== internalStreamId("project-creation-terminal", projectId, "created")
     ) {
       return false;
     }

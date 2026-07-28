@@ -1,5 +1,11 @@
 import { StreamProcessor } from "iterate/processors";
-import type { ProcessEventArgs, ReduceArgs, StreamEvent, StreamListItem } from "iterate/processors";
+import type {
+  ProcessEventArgs,
+  ReduceArgs,
+  StreamEvent,
+  StreamEventInput,
+  StreamListItem,
+} from "iterate/processors";
 import { timedStep } from "../../lib/step-timing.ts";
 import { CONFIG_REPO_PATH } from "../repos/paths.ts";
 import { repoCreationEvents } from "../repos/repo-defaults.ts";
@@ -13,6 +19,7 @@ import { EMAIL_INTEGRATION_STREAM_PATH } from "../email/utils.ts";
 import { isWorkerBuildFailedError } from "../workers/artifact-store.ts";
 import { WORKER_BUILDING_HEADER } from "../workers/worker-fetch-dispatch.ts";
 import { WORKER_SERVE_HEADER } from "../workers/worker-serve-info.ts";
+import { internalStreamId } from "../streams/stream-delivery-utils.ts";
 import type { ProjectCustomDomainDeps } from "./custom-domains.ts";
 import {
   parseProjectCreationTerminal,
@@ -99,7 +106,7 @@ export class ProjectProcessor extends StreamProcessor<
 
   // ------------------------------------------------------------ processEvent
   protected override processEvent(args: ProcessEventArgs<ProjectProcessorContract>): undefined {
-    const { event, state, append, blockProcessorWhile } = args;
+    const { event, state, append, blockProcessorWhile, delivery } = args;
     // Nothing reacts before the request. Once it reduces, its blocking frame
     // has birthed every sibling before the cursor can reach a later command,
     // so commands appended during a non-blocking create remain actionable
@@ -139,8 +146,16 @@ export class ProjectProcessor extends StreamProcessor<
         const createRequest = state.createRequest;
         const createRequestedAtOffset = state.createRequestedAtOffset;
         blockProcessorWhile(async () => {
-          const projectCreatedIdempotencyKey = `project-created:${this.deps.itx.projectId}`;
-          const projectCreateFailedIdempotencyKey = "project/create-failed";
+          const projectCreatedIdempotencyKey = internalStreamId(
+            "project-creation-terminal",
+            this.deps.itx.projectId,
+            "created",
+          );
+          const projectCreateFailedIdempotencyKey = internalStreamId(
+            "project-creation-terminal",
+            this.deps.itx.projectId,
+            "failed",
+          );
           const [existingProjectCreated, existingProjectCreateFailed] = await Promise.all([
             this.stream.getEvent({ idempotencyKey: projectCreatedIdempotencyKey }),
             this.stream.getEvent({ idempotencyKey: projectCreateFailedIdempotencyKey }),
@@ -184,14 +199,19 @@ export class ProjectProcessor extends StreamProcessor<
           }
 
           if (event.type === "events.iterate.com/repos/create-failed") {
-            await append({
-              type: "events.iterate.com/project/create-failed",
-              idempotencyKey: projectCreateFailedIdempotencyKey,
-              payload: {
-                createRequestedAtOffset,
-                error: `Config repo creation failed: ${event.payload.error}`,
-                request: createRequest,
-              },
+            await this.deps.appendCreationEvents({
+              streamId: delivery.streamId,
+              events: [
+                ProjectProcessorContract.parseEventInput({
+                  type: "events.iterate.com/project/create-failed",
+                  idempotencyKey: projectCreateFailedIdempotencyKey,
+                  payload: {
+                    createRequestedAtOffset,
+                    error: `Config repo creation failed: ${event.payload.error}`,
+                    request: createRequest,
+                  },
+                }),
+              ],
             });
             return;
           }
@@ -204,47 +224,55 @@ export class ProjectProcessor extends StreamProcessor<
             );
           } catch (error) {
             if (!isWorkerBuildFailedError(error)) throw error;
-            await append({
-              type: "events.iterate.com/project/create-failed",
-              idempotencyKey: projectCreateFailedIdempotencyKey,
-              payload: {
-                createRequestedAtOffset,
-                error: `Default project worker bootstrap failed: ${errorMessage(error)}`,
-                request: createRequest,
-              },
+            await this.deps.appendCreationEvents({
+              streamId: delivery.streamId,
+              events: [
+                ProjectProcessorContract.parseEventInput({
+                  type: "events.iterate.com/project/create-failed",
+                  idempotencyKey: projectCreateFailedIdempotencyKey,
+                  payload: {
+                    createRequestedAtOffset,
+                    error: `Default project worker bootstrap failed: ${errorMessage(error)}`,
+                    request: createRequest,
+                  },
+                }),
+              ],
             });
             return;
           }
           await timedStep("create-timing", timing, "project-created-append", () =>
-            append(
-              {
-                type: "events.iterate.com/stream/subscription-configured",
-                idempotencyKey: `project-worker-subscription:${this.deps.itx.projectId}`,
-                payload: {
-                  subscriptionKey: "project-worker",
-                  description:
-                    "Default project worker: every later root event; project creation remains platform-owned.",
-                  receiver: {
-                    action: "itx-call",
-                    expression: ["processEventBatch"],
-                    delivery: {
-                      start: "now",
-                      onFailingEvent: "skip",
+            this.deps.appendCreationEvents({
+              streamId: delivery.streamId,
+              events: [
+                ProjectProcessorContract.parseEventInput({
+                  type: "events.iterate.com/stream/subscription-configured",
+                  idempotencyKey: `project-worker-subscription:${this.deps.itx.projectId}`,
+                  payload: {
+                    subscriptionKey: "project-worker",
+                    description:
+                      "Default project worker: every later root event; project creation remains platform-owned.",
+                    receiver: {
+                      action: "itx-call",
+                      expression: ["processEventBatch"],
+                      delivery: {
+                        start: "now",
+                        onFailingEvent: "skip",
+                      },
                     },
                   },
-                },
-              },
-              {
-                type: "events.iterate.com/project/created",
-                idempotencyKey: projectCreatedIdempotencyKey,
-                payload: { ...createRequest, createRequestedAtOffset },
-              },
-              {
-                type: "events.iterate.com/project/worker-updated",
-                idempotencyKey: `project/worker-update:${seedCommitOid}`,
-                payload: { commitOid: seedCommitOid },
-              },
-            ),
+                }),
+                ProjectProcessorContract.parseEventInput({
+                  type: "events.iterate.com/project/created",
+                  idempotencyKey: projectCreatedIdempotencyKey,
+                  payload: { ...createRequest, createRequestedAtOffset },
+                }),
+                ProjectProcessorContract.parseEventInput({
+                  type: "events.iterate.com/project/worker-updated",
+                  idempotencyKey: `project/worker-update:${seedCommitOid}`,
+                  payload: { commitOid: seedCommitOid },
+                }),
+              ],
+            }),
           );
         });
         break;
@@ -798,6 +826,8 @@ type ProjectProcessorDeps = {
   itx: ProjectRpcTarget;
   /** Fetch-lane dispatch into the default worker; successful responses carry OS source identity. */
   workerFetch: (request: Request) => Promise<Response>;
+  /** Commit the creation terminal batch through the platform-only stream door. */
+  appendCreationEvents: (args: { events: StreamEventInput[]; streamId: string }) => Promise<void>;
   /** Cloudflare custom-hostname provisioning; absent in hosts without it. */
   customDomains?: ProjectCustomDomainDeps;
   /** Injectable clock and sleep — virtual time in tests, real time in prod. */

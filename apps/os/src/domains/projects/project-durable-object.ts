@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { LiveStateRpcTarget } from "iterate/sdk/capnweb";
+import { disposeIgnoredRpcResult, LiveStateRpcTarget } from "iterate/sdk/capnweb";
 import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
 import type { StreamProcessorWakeRequest, StreamProcessorWakeResponse } from "iterate/processors";
 import type { StreamEvent } from "iterate/processors";
@@ -9,6 +9,7 @@ import { workerVersion, type Env } from "../../env.ts";
 import {
   itxForScope,
   ProjectEgressInterceptRpcTarget,
+  STREAM_DURABLE_OBJECT_STUB,
   StreamProcessorRpcTarget,
   StreamRpcTarget,
 } from "../../rpc-targets.ts";
@@ -147,6 +148,14 @@ export class ProjectDurableObject extends DurableObject<Env> {
           request,
           traceRole: "project_config",
         }),
+      appendCreationEvents: async ({ events, streamId }) => {
+        disposeIgnoredRpcResult(
+          await this.#stream[STREAM_DURABLE_OBJECT_STUB].appendCoreEventsIfStreamId({
+            events,
+            streamId,
+          }),
+        );
+      },
     }),
   );
   readonly #notificationProcessor = this.#registry.register(

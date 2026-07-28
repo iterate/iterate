@@ -13,6 +13,7 @@ import type { ProjectDirectoryRecord } from "../../project-directory.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { WORKER_BUILDING_HEADER } from "../workers/worker-fetch-dispatch.ts";
 import { withWorkerCommit } from "../workers/worker-serve-info.ts";
+import { internalStreamId } from "../streams/stream-delivery-utils.ts";
 import {
   ProjectProcessorContract,
   type ProjectCustomDomainCloudflareSnapshot,
@@ -34,22 +35,10 @@ export const PROJECT_CREATE_REQUESTED = {
 
 export const PROJECT_CREATED = {
   type: "events.iterate.com/project/created",
-  idempotencyKey: "project-created:prj_test",
+  idempotencyKey: internalStreamId("project-creation-terminal", "prj_test", "created"),
   payload: {
     ...PROJECT_CREATE_REQUESTED.payload,
     createRequestedAtOffset: 1,
-  },
-  source: {
-    processor: {
-      slug: ProjectProcessorContract.slug,
-      version: ProjectProcessorContract.version,
-      stream: {
-        path: "/",
-        projectId: "prj_test",
-        streamId: "00000000-0000-4000-8000-000000000001",
-      },
-      whileProcessing: { offset: 2, type: "events.iterate.com/repos/created" },
-    },
   },
 } satisfies ProjectEventInput;
 
@@ -234,6 +223,9 @@ export function makeProjectHarness(
         itx,
         customDomains,
         workerFetch,
+        appendCreationEvents: async ({ events, streamId }) => {
+          await deps.stream.appendIfStreamId({ events, streamId });
+        },
       }),
   });
   clockBox.advance = (ms) => {

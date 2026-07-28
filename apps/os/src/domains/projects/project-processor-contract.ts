@@ -27,11 +27,12 @@ import { CapabilityHostProcessorContract } from "../capability-host/capability-h
 import { SchedulerProcessorContract } from "../scheduler/scheduler-processor-contract.ts";
 import { DeviceProcessorContract } from "../devices/device-processor-contract.ts";
 import { NotificationLifecycleContract } from "../notifications/notification-lifecycle-contract.ts";
+import { internalStreamId } from "../streams/stream-delivery-utils.ts";
 import { StreamContext } from "./stream-context.ts";
 
 export const ProjectProcessorContract = defineProcessorContract({
   slug: "project",
-  version: "0.4.0",
+  version: "0.5.0",
   description:
     "Project root: runs the project/create-requested → project/created bootstrap saga, births " +
     "the sibling processors every project gets (root capability host, primary scheduler, config " +
@@ -536,10 +537,10 @@ type ProjectCreationTerminal =
 /**
  * Parse the one terminal fact that can settle a creation request.
  *
- * This is causal validation, not an authorization boundary: processor stamps
- * and idempotency keys are ordinary event claims. The event must be a direct
- * append by this Project processor while consuming the config repo's terminal
- * result, and its payload must settle the exact open request.
+ * The canonical idempotency key is in the stream's platform-only namespace:
+ * public appends reject it before idempotency lookup, while the Project
+ * Durable Object commits it through the server-only append path. The payload
+ * then binds that platform fact to the exact open request.
  */
 export function parseProjectCreationTerminal(input: {
   event: StreamEvent;
@@ -548,26 +549,14 @@ export function parseProjectCreationTerminal(input: {
   requestOffset: number;
 }): ProjectCreationTerminal | null {
   const { event, projectId, request, requestOffset } = input;
-  const processor = event.source?.processor;
-  // The stamped version describes which Project processor originally emitted
-  // the fact; it must not be pinned to today's version or a later refold would
-  // discard an otherwise valid historical terminal.
-  if (
-    event.path !== "/" ||
-    event.source?.copiedFrom !== undefined ||
-    processor === undefined ||
-    processor.slug !== ProjectProcessorContract.slug ||
-    processor.stream.path !== "/" ||
-    processor.stream.projectId !== projectId
-  ) {
+  if (event.path !== "/" || event.source?.copiedFrom !== undefined) {
     return null;
   }
 
   switch (event.type) {
     case "events.iterate.com/project/created": {
       if (
-        event.idempotencyKey !== `project-created:${projectId}` ||
-        processor.whileProcessing?.type !== "events.iterate.com/repos/created"
+        event.idempotencyKey !== internalStreamId("project-creation-terminal", projectId, "created")
       ) {
         return null;
       }
@@ -582,9 +571,7 @@ export function parseProjectCreationTerminal(input: {
     }
     case "events.iterate.com/project/create-failed": {
       if (
-        event.idempotencyKey !== "project/create-failed" ||
-        (processor.whileProcessing?.type !== "events.iterate.com/repos/created" &&
-          processor.whileProcessing?.type !== "events.iterate.com/repos/create-failed")
+        event.idempotencyKey !== internalStreamId("project-creation-terminal", projectId, "failed")
       ) {
         return null;
       }

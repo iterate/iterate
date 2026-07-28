@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { makeMemoryProgressStore } from "iterate/processors/testing";
 import { WorkerBuildFailedError } from "../workers/artifact-store.ts";
 import { workerBuildingResponse } from "../workers/worker-fetch-dispatch.ts";
+import { internalStreamId } from "../streams/stream-delivery-utils.ts";
 import { projectCreationEvents } from "./project-defaults.ts";
 import {
   CONFIG_REPO_COMMIT_COMPLETED,
@@ -418,7 +419,7 @@ describe("ProjectProcessor bootstrap", () => {
     expect(h.events("events.iterate.com/stream/subscription-removed")).toEqual([]);
     expect(h.events("events.iterate.com/project/create-failed")).toMatchObject([
       {
-        idempotencyKey: "project/create-failed",
+        idempotencyKey: internalStreamId("project-creation-terminal", "prj_test", "failed"),
         payload: {
           createRequestedAtOffset: 1,
           error: "Default project worker bootstrap failed: Expected ; but found is",
@@ -505,7 +506,7 @@ describe("ProjectProcessor bootstrap", () => {
 
     expect(h.events("events.iterate.com/project/create-failed")).toMatchObject([
       {
-        idempotencyKey: "project/create-failed",
+        idempotencyKey: internalStreamId("project-creation-terminal", "prj_test", "failed"),
         payload: {
           createRequestedAtOffset: 1,
           error: "Config repo creation failed: The backing repository could not be created.",
@@ -537,30 +538,46 @@ describe("ProjectProcessor bootstrap", () => {
     expect(h.customDomains.ensure).not.toHaveBeenCalled();
   });
 
+  it("does not let a public processor-source claim settle project creation", async () => {
+    const h = makeProjectHarness();
+    await h.play(
+      ["append", PROJECT_CREATE_REQUESTED],
+      [
+        "append",
+        {
+          ...PROJECT_CREATED,
+          idempotencyKey: "project-created:prj_test",
+          source: {
+            processor: {
+              slug: ProjectProcessorContract.slug,
+              version: ProjectProcessorContract.version,
+              stream: {
+                path: "/",
+                projectId: "prj_test",
+                streamId: "00000000-0000-4000-8000-000000000001",
+              },
+              whileProcessing: { offset: 2, type: "events.iterate.com/repos/created" },
+            },
+          },
+        },
+      ],
+    );
+
+    expect(h.state().birthCertificate).toBeNull();
+    expect(h.state().createFailure).toBeNull();
+  });
+
   it("reduces only a terminal fact that exactly settles the open creation request", async () => {
     const failure = {
       type: "events.iterate.com/project/create-failed",
-      idempotencyKey: "project/create-failed",
+      idempotencyKey: internalStreamId("project-creation-terminal", "prj_test", "failed"),
       payload: {
         createRequestedAtOffset: 1,
         error: "not this request",
         request: PROJECT_CREATE_REQUESTED.payload,
       },
     } satisfies ProjectEventInput;
-    const wrongProcessorSource = {
-      processor: {
-        slug: "not-project",
-        version: ProjectProcessorContract.version,
-        stream: {
-          path: "/",
-          projectId: "prj_test",
-          streamId: "00000000-0000-4000-8000-000000000001",
-        },
-        whileProcessing: { offset: 2, type: "events.iterate.com/repos/created" },
-      },
-    } as const;
     const copiedSource = {
-      ...PROJECT_CREATED.source,
       copiedFrom: [
         {
           subscriptionKey: "project-config-to-root",
@@ -577,11 +594,10 @@ describe("ProjectProcessor bootstrap", () => {
     } satisfies NonNullable<ProjectEventInput["source"]>;
 
     for (const counterfeit of [
-      { ...PROJECT_CREATED, source: undefined },
-      { ...PROJECT_CREATED, source: wrongProcessorSource },
+      { ...PROJECT_CREATED, idempotencyKey: "project-created:prj_test" },
       { ...PROJECT_CREATED, source: copiedSource },
-      failure,
-      { ...failure, source: wrongProcessorSource },
+      { ...failure, idempotencyKey: "project/create-failed" },
+      { ...failure, source: copiedSource },
     ] satisfies ProjectEventInput[]) {
       const h = makeProjectHarness();
       await h.play(["append", PROJECT_CREATE_REQUESTED], ["append", counterfeit]);
@@ -603,12 +619,10 @@ describe("ProjectProcessor bootstrap", () => {
       },
       {
         ...failure,
-        source: PROJECT_CREATED.source,
         payload: { ...failure.payload, createRequestedAtOffset: 999 },
       },
       {
         ...failure,
-        source: PROJECT_CREATED.source,
         payload: {
           ...failure.payload,
           request: {
@@ -625,23 +639,6 @@ describe("ProjectProcessor bootstrap", () => {
 
     const h = makeProjectHarness();
     await h.play(["append", PROJECT_CREATE_REQUESTED], ["append", PROJECT_CREATED]);
-    expect(h.state().birthCertificate).toEqual(PROJECT_CREATED.payload);
-  });
-
-  it("keeps historical creation terminals valid across contract version bumps", async () => {
-    const historicalTerminal = {
-      ...PROJECT_CREATED,
-      source: {
-        processor: {
-          ...PROJECT_CREATED.source.processor,
-          version: "0.2.0",
-        },
-      },
-    } satisfies ProjectEventInput;
-    const h = makeProjectHarness();
-
-    await h.play(["append", PROJECT_CREATE_REQUESTED], ["append", historicalTerminal]);
-
     expect(h.state().birthCertificate).toEqual(PROJECT_CREATED.payload);
   });
 });

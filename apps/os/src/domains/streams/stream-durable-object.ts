@@ -634,6 +634,21 @@ export class StreamDurableObject extends DurableObject<Env> {
     return this.#append({ authority: "public" }, args.events);
   }
 
+  /** Internal platform append, atomically fenced to one stream lifetime. */
+  appendCoreEventsIfStreamId(args: {
+    streamId: string;
+    events: StreamEventInput[];
+  }): StreamEvent[] {
+    if (args.streamId.trim().length === 0) {
+      throw new Error("streamId must be a non-empty string");
+    }
+    const currentStreamId = this.#coreProcessorState.streamId;
+    if (currentStreamId !== args.streamId) {
+      throw new StreamIdMismatchError(streamIdMismatchMessage(args.streamId, currentStreamId));
+    }
+    return this.#append({ authority: "core-event" }, args.events);
+  }
+
   /**
    * Commit one copy subscription on this source stream and return the
    * committed configuration event. No probe call, no confirmation wait: the
