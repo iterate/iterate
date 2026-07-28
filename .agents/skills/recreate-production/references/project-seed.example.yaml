@@ -1,0 +1,104 @@
+# Shape only. Replace every example identity and external ID. Keep the real
+# archive outside the repository.
+version: 1
+targetEnvironment: prd
+
+users:
+  - email: jonas@example.com
+    name: Jonas
+    # Minimum privilege: true re-grants platform admin; false never demotes.
+    platformAdmin: true
+  - email: misha@example.com
+    name: Misha
+    platformAdmin: false
+
+organizations:
+  - slug: iterate
+    name: Iterate
+    members:
+      - email: jonas@example.com
+        role: owner
+      - email: misha@example.com
+        role: admin
+
+projects:
+  - id: prj_replace_with_exact_id
+    slug: iterate
+    organization: iterate
+
+    # Platform-owned Worker routes already point these hostnames at OS.
+    directHostnames:
+      - iterate.com
+
+    # Cloudflare-for-SaaS records are adopted by exact hostname. OS uses its
+    # hostname KV directory for ownership/routing, not custom-hostname metadata.
+    cloudflareHostnames:
+      - app.example.com
+
+    # The inbox itself is derived as iterate@<production project hostname base>.
+    email:
+      allowedSenders:
+        - jonas@example.com
+        - "*@example.com"
+
+    # Built-in integration paths and /secrets/project-api-key are rejected.
+    # `project-seed capture` normally writes environment-key-wrapped
+    # `source: ciphertext` envelopes here. A hand-maintained archive may
+    # reference a local environment variable instead.
+    secrets:
+      - path: /secrets/example/openai
+        egressUrls:
+          - https://api.openai.com
+        material:
+          source: env
+          name: ITERATE_OPENAI_API_KEY
+        visibility: write-only
+
+    integrations:
+      - provider: slack
+        teamId: T_REPLACE
+        connection: iterate
+        botToken:
+          source: env
+          name: ITERATE_SLACK_BOT_TOKEN
+      - provider: github
+        installationId: "12345678"
+        connection: github-12345678
+      - provider: google
+        googleUserId: "12345678901234567890"
+        connection: jonas-example-com
+        material:
+          source: env
+          name: ITERATE_GOOGLE_TOKEN_JSON
+          encoding: json
+      # Telegram is optional. Its token is validated with getMe and its user
+      # allowlist is restored through the normal connection API.
+      # - provider: telegram
+      #   botToken:
+      #     source: env
+      #     name: ITERATE_TELEGRAM_BOT_TOKEN
+      #   allowedUserIds:
+      #     - "123456"
+
+    # This installationId must match a GitHub integration above. The repository
+    # must already exist. Apply never pushes local starter state to it.
+    configRepo:
+      source: github
+      installationId: "12345678"
+      owner: example
+      repo: iterate-config
+      capturedHead:
+        branch: main
+        commitOid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+
+    # Every additional project repository is restored too. A local source has
+    # `source: local`, the captured main head, and `{path, contentBase64}` files.
+    repositories:
+      - path: /repos/product
+        source: github
+        installationId: "12345678"
+        owner: example
+        repo: product
+        capturedHead:
+          branch: main
+          commitOid: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb

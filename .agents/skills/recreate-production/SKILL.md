@@ -1,142 +1,161 @@
 ---
 name: recreate-production
-description: Own a planned OS production recreation around a backwards-incompatible PR. Preserve selected project identities, capture old state as evidence, recreate semantic domain state through normal APIs, then verify production and wait for human sign-off. Use when asked to reset, roll, resuscitate, or recreate production for a breaking change.
+description: Capture stable local recovery archives for selected OS projects before a deliberate data erase, then restore those projects while keeping each linked GitHub config repository authoritative. Use when asked to back up, capture, restore, recreate, resuscitate, or roll production projects such as iterate in the proof-of-concept reset workflow.
 ---
 
-# Recreate production
+# Capture and restore production projects
 
-Own the whole cutover. Treat the breaking PR and old event histories as input
-to an operator-authored recreation, not as a storage migration. Consult the
-user at consequential forks unless they explicitly waive consultation.
+Capture or restore one named project with a local project-seed archive. The
+archive describes desired identity and configuration; it is not a database
+dump or an event-history backup. GitHub supplies current contents for linked
+repositories; local-only repositories are stored as exact file trees.
 
-## Invariants
+Read [Project seeds](../../../apps/os/docs/project-seeds.md) before operating.
+Use [the example archive](references/project-seed.example.yaml) only as a shape;
+never infer real IDs, users, credentials, or repository names from it.
 
-- Keep Auth D1 and project-directory KV when exact project IDs must survive.
-- Never import SQLite rows, preserve stream offsets, or replay old event
-  envelopes verbatim. OS deliberately exposes no stream restore capability.
-- Capture ordinary durable event histories only as evidence. Derive the desired
-  current domain state, then use normal creation/connection/update APIs. Those
-  APIs append new events with new offsets and run current validation.
-- The reconstruction program lives outside deployed OS. It may read the export
-  page files, select the small set of semantic facts named in the reconstruction
-  sheet, and map them to freshly constructed current-version event inputs or
-  public API calls. The export itself is never an executable replay payload.
-- Do not replay stream control facts, processor outputs, old idempotency keys,
-  copy provenance, or encrypted secret payloads. Recreate subscriptions
-  through their owning domain commands.
-- Secret values and integration credentials must come from an authoritative
-  external source or a deliberately audited local conversion. Old ciphertext
-  is not portable to a new stream offset. Stop if required material is unavailable.
-- Never reconstruct a built-in integration by hand-creating its secret and
-  appending `connected` or directory-claim events. The owning connect command
-  is the atomic invariant boundary: it validates fresh credentials, writes the
-  secret, creates the router/subscription, records lifecycle state, and claims
-  webhook ingress in the supported order.
-- Treat the linked GitHub repository as config authority. Record its connection,
-  owner, repo, installation ID, and head before cutover.
-- Discard ordinary streams, schedules, files, workspaces, sandboxes, derived
-  state, and other Durable Objects unless the user explicitly includes them.
-- Stop and make a separate plan if Auth or its identity contract changes.
-- Never expose plaintext secrets. Use a new mode-0700 temporary directory and
-  mode-0600 files for captured histories and reconstruction notes.
+## Boundaries
 
-## Capture before merge
+- A restore request does not authorize an erase, deployment, GitHub write, or
+  externally visible provider smoke. Do those only when the user explicitly
+  includes them.
+- A capture request authorizes read-only production inspection and writing the
+  named/default local archive. It does not authorize changing production.
+- Never archive or replay stream histories, processor output, idempotency
+  keys, SQLite rows, or Durable Object state. The capture CLI may read only
+  secret creation/update facts to fold each current ciphertext envelope.
+- Recreate subscriptions only through their current owning domain commands.
+  Never restore stream-control facts, copy provenance, or delivery offsets.
+- Never append archived ciphertext directly. It is authenticated to its source
+  project/path/egress/offset. `apply` must unwrap it in local process memory
+  with the unchanged target environment key, then pass plaintext to the owning
+  command so OS encrypts a fresh destination envelope.
+- Never print credential values or copy the archive into the repository.
+- Never delete the stable archive. Remove only temporary decrypted files and
+  clones created during this run.
+- The archive is a minimum desired set for organization membership and inbound
+  email senders. Omitted entries are not removed. Integration ownership is
+  exact: never steal a provider identity from another project.
+- When a repository is linked to GitHub, GitHub is authoritative. Restore must
+  not push starter state, create a missing remote, or force-push. A local-only
+  repository is restored from the archived file tree instead.
+- Provided integrations and other config-derived capabilities come back from
+  the restored config repository.
 
-1. Read the PR diff and inspect production. Ask which projects to retain;
-   normally suggest `iterate` and personal projects that actually exist.
-2. Record each selected project's exact ID, canonical slug, organization slug,
-   and an organization-member principal the operator can mint a session for.
-   Inventory its current secrets, built-in integrations, subscriptions, and
-   config repo using their normal read surfaces.
-3. Export only the durable histories needed to explain that current state with
-   [`scripts/export-stream-events.itx.js`](scripts/export-stream-events.itx.js).
-   Run it in the relevant project context; use an admin session without a
-   project context only for a deployment-wide stream. It pages ordinary
-   `stream.getEvents()` calls into local files at a fixed observed head.
-4. Inspect the histories locally and write an explicit reconstruction sheet:
-   each desired object, its fresh create/update/connect command, the source of
-   any required credential, and what will intentionally be lost. Histories are
-   evidence—not executable restore payloads. Write the external reconstruction
-   script against the export here: select only the required semantic facts and
-   construct new current-version inputs without copied offsets, timestamps,
-   source/provenance, idempotency keys, or stream-control events.
-5. Call `repo.pushToGithub({})` and require its commit to equal the recorded
-   config head. Summarize the reconstruction and intended losses, run
-   pre-cutover checks, and obtain destructive-step approval unless already granted.
+## Capture workflow
 
-## Cut over and reconstruct
+1. Resolve an explicit project slug/ID and destination when the user supplied
+   them. Otherwise use the CLI prompt and default
+   `~/.iterate/project-seeds/<slug>.project-seed.yaml`. Do not search broad
+   home-directory paths for archives.
+2. From the repository root, capture one project:
 
-1. Ask how main's automatic deployment should be handled. If requested,
-   disable or cancel it and confirm no production deploy is running.
-2. Merge, check out the exact merged commit, run
-   `pnpm erase-data --env prd --yes-i-mean-prd --preserve-auth`, and manually
-   deploy OS from that commit. Stop on unexplained erase or deploy warnings.
-3. For each retained project, mint or obtain a user-authenticated itx session
-   whose claims include the project's preserved organization, then call
-   `session.projects.create({ projectId, slug, organizationSlug })`. Auth
-   idempotently adopts the existing exact ID only when both its organization
-   and canonical slug match; OS then primes the preserved association and emits
-   the current project birth plus all required sibling processor births. Do not
-   use an admin session for this step: caller-supplied admin projects are
-   intentionally organization-less test/operator fixtures. Stop on any mismatch,
-   and do not hand-append historical bootstrap events.
-4. Recreate selected non-integration secrets through
-   `secrets.get(path).create/update` with freshly supplied material and egress
-   policy. Reconnect integrations only through their current connect/OAuth
-   flows. Do not seed a Slack connection from
-   `APP_CONFIG_INTEGRATIONS__SLACK.botToken`: that optional deployment fallback
-   may be stale and is not project restoration material. Do not hand-append a
-   provider's `connected`, processor-birth/subscription, or directory-claim
-   events. If interactive OAuth cannot be completed, the reconstruction is
-   incomplete and the maintenance window stays open.
-5. Recreate any other explicitly retained domain object through its current
-   public `create`/configuration command. If the domain contract is itself an
-   event API, let the external reconstruction script select the relevant old
-   fact and append a newly constructed current event—not the old envelope.
-6. Recreate the erased config repo with `repo.create()`, `repo.linkGithub()` and
-   `repo.syncFromGithub({ force: true })` without a depth limit. `linkGithub()`
-   attempts an initial mirror push, so bracket it with a GitHub ref check: the
-   recorded remote head must still exist, and if the link advanced the default
-   branch, restore that ref to the recorded head before syncing. Require both
-   the remote default branch and local Artifacts head to equal the recorded
-   head; GitHub remains authoritative.
-7. Re-enable automatic deployment if it was disabled.
+   ```bash
+   pnpm --dir apps/os cli project-seed capture \
+     --project <slug-or-prj-id> \
+     --file <archive.yaml>
+   ```
 
-## Finish only after proof
+   A direct invocation defaults to `os/prd`. Use `--environment <config>` for
+   another environment and `--force true` only when replacing the exact file
+   is intended. The result is mode 0600.
 
-Verify project IDs/routing, every recreated secret through a harmless real
-consumer, every integration's connected status and external ID, directory
-claims, [Slack webhook delivery](../../../docs/slack-testing.md#post-recreation-proof),
-the complete [GitHub production smoke](../../../docs/github-smoke-testing.md),
-and project-worker boot. Add PR-specific checks for whatever
-changed. Do not trigger externally visible provider actions without approval.
+3. Run `project-seed check` on the result and report its non-secret summary.
+   Capture must fail loudly on unsupported connected integrations or state; do
+   not edit out the error and call the archive complete.
+4. Store the archive outside the repository. Do not commit, upload, or print
+   it. It remains useful across data erases while its semantic inputs and the
+   target environment encryption key remain valid.
 
-### Production website (`iterate.com`)
+## Restore workflow
 
-The company website is the `iterate` project worker, reached on the owned apex
-via Worker routes `iterate.com/*` and `*.iterate.com/*` → `os-prd` (see
-`ownedProjectCustomApexes` in root `envs.ts`). Those routes alone are not
-enough: ingress still needs the project-directory KV registration
+1. Obtain the explicit archive path and project slug/ID. Do not search broad
+   home-directory paths for secret files. If inline material is present,
+   require mode 0600.
+2. From the repository root, validate and display the non-secret plan:
 
-```text
-hostname:iterate.com → { id, slug, organizationId, name } of project "iterate"
-```
+   ```bash
+   doppler run --project os --config prd -- \
+     pnpm --dir apps/os cli project-seed check \
+     --file <archive.yaml> --project <slug-or-prj-id>
+   ```
 
-Re-prime that key after every production erase (same shape as `slug:iterate`).
-Do **not** register `hostname:www.iterate.com` — the custom-domain parent
-fallback would treat `www` as an app slug and the seed homepage would emit
-`tasks.www.iterate.com` links. Do not add a www↔apex redirect unless a human
-explicitly asks for one.
+   Stop on a target-environment mismatch, missing reference, duplicate, invalid
+   sender rule, unsupported built-in secret path, or config-repo installation
+   mismatch.
 
-For Slack, run
-[`scripts/verify-slack-connection.itx.js`](scripts/verify-slack-connection.itx.js)
-without a project context immediately after OAuth. It requires a successful
-`auth.test`, an exact team-id match, connected lifecycle state, and the matching
-deployment-wide directory claim. Only then send a **new** mention smoke. A
-validly signed webhook delivered before the claim exists is ACKed and ignored
-by design and Slack will not replay it after association, so an earlier message
-is never proof of the re-established path.
+3. Run the read-only compatibility gate before applying:
 
-Show the evidence and intentional losses to the user and ask whether production
-is done. Continue repairing until they explicitly say yes. Only then delete the
-local capture and end the maintenance window.
+   ```bash
+   doppler run --project os --config prd -- \
+     pnpm --dir apps/os cli project-seed preflight \
+     --file <archive.yaml> --project <slug-or-prj-id>
+   ```
+
+   This disposable checkout clones a GitHub source or materializes an archived
+   local source, runs install/typecheck/tests, and evaluates explicit config
+   migration rules. For GitHub it also compares current `main` with the
+   archived working head. Inspect current OS changes affecting `packages/iterate`, the itx
+   contract, dynamic-worker builds, or `apps/os/config-repo-template` when the
+   report or the breaking PR calls for it. Treat raw template differences as
+   informational: project repos intentionally diverge. If a check or explicit
+   migration requires a GitHub change, explain it and ask before creating a
+   commit, push, or PR. Do not continue with a knowingly incompatible repo.
+
+4. If production does not yet expose the Auth/OS restore methods used by the
+   current CLI, report the exact required worker deployments and obtain
+   deployment approval before continuing.
+5. Apply the seed:
+
+   ```bash
+   doppler run --project os --config prd -- \
+     pnpm --dir apps/os cli project-seed apply \
+     --file <archive.yaml> --project <slug-or-prj-id>
+   ```
+
+   Before its first write, the CLI repeats the config-repo compatibility gate
+   and pins the observed GitHub head for the link/reset operation. It then
+   converges Auth users, minimum platform-admin privilege, and minimum
+   organization roles, recreates the exact
+   project ID, restores direct and Cloudflare-managed hostnames plus
+   inbound-email senders,
+   creates/updates generic secrets, validates and reconnects supported
+   integrations, restores each local repository file tree, links each
+   pre-existing GitHub repo without an initial push, resets local Artifacts
+   state from GitHub, and proves every returned state.
+   In particular, require the preflight remote head, post-reset local/remote
+   heads, and every canonical/direct-host
+   `x-iterate-worker-serve` header to agree. The captured head is reported
+   separately and may be an older ancestor. A successful pull/reset without
+   the served-worker proof is not a successful restore. Retry only the
+   explicitly marked cold-building response; never wave through an eventual
+   success after a build failure, serve error, wrong SHA, or unclassified
+   response. Preserve the reported Cloudflare Ray ID for diagnosis.
+   It obtains Auth's service token from `auth/<targetEnvironment>` in Doppler;
+   never paste that token into command arguments.
+
+6. Treat a successful CLI result as the structural proof, not the whole
+   product proof. Check project routing and run harmless provider reads. For
+   `iterate`, use the Slack verifier and
+   [GitHub production smoke](../../../docs/github-smoke-testing.md). Ask before
+   sending a Slack mention, email, or creating a GitHub smoke PR.
+7. Report restored state, unsupported/omitted state, compatibility evidence,
+   and any intentional loss. Do not declare the project working while a check
+   is unexplained or an expected semantic input is absent.
+
+## Failure handling
+
+- Rerun `check`, correct the archive or current code, then rerun `apply`.
+  Applying is convergent; do not repair around a failed invariant by appending
+  events manually.
+- Slack, GitHub, and Google credentials are validated against the archived
+  provider identity before their connection is recorded. Telegram validates
+  through its normal connect command. Other unsupported connection types
+  require their current interactive connect flow.
+- If GitHub is missing or inaccessible, stop. The CLI preflights its HEAD
+  before linking and proves that linking did not move it.
+- If an archive schema becomes obsolete, update the schema and an explicit
+  local conversion. Do not add runtime compatibility fallbacks.
+- If ciphertext unwrap fails, verify the exact archive/environment first. A
+  rotated or lost `SECRET_ENCRYPTION_KEY` cannot decrypt the old envelope;
+  never bypass this by replaying its event at a new offset.

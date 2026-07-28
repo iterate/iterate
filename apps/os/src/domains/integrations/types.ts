@@ -122,6 +122,40 @@ export type IntegrationConnectionStatus = {
 };
 
 /**
+ * Narrow operator-only input for rebuilding a connection from a durable
+ * project seed. Each arm carries enough provider identity to validate the
+ * credential before any project state is written.
+ */
+export type RestoreIntegrationConnectionInput =
+  | {
+      botToken: string;
+      connection?: string;
+      provider: "slack";
+      teamId: string;
+    }
+  | {
+      connection?: string;
+      installationId: string;
+      provider: "github";
+    }
+  | {
+      connection: string;
+      googleUserId: string;
+      material: {
+        accessToken?: string;
+        refreshToken: string;
+      };
+      provider: "google";
+    };
+
+/** Proven provider identity returned after an integration seed restore succeeds. */
+export type RestoreIntegrationConnectionResult = {
+  connection: string;
+  externalId: string;
+  provider: "github" | "google" | "slack";
+};
+
+/**
  * One entry of `integrations.list()`. Discriminated on `source`: built-in
  * entries always name a concrete connection (normally from
  * `/integrations/<slug>/<connection>` journals; credential-defined Waitrose

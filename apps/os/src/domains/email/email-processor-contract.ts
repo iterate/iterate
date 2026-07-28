@@ -326,6 +326,7 @@ export const EmailProcessorContract = defineProcessorContract({
 });
 export type EmailProcessorContract = typeof EmailProcessorContract;
 
+/** Reduced project email-routing state exposed through the processor capability. */
 export type EmailProcessorState = z.output<typeof EmailProcessorContract.stateSchema>;
 
 /** One parsed inbound email, as the `email/received` payload schema outputs it. */

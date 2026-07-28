@@ -192,11 +192,14 @@ To confirm membership / reactions from the CI actor:
 
 ### Post-recreation proof
 
-Recreate the association with the normal **Connect Slack** OAuth flow. Never
-hand-create the connection secret or append `slack/connected` / directory-claim
-events: OAuth completion validates and stores the fresh workspace token, creates
-the router and subscription, records the lifecycle fact, and claims webhook
-ingress as one owning operation.
+Recreate the association through an owning connection boundary: either the
+normal **Connect Slack** OAuth flow or the admin-only semantic
+[project-seed restore](../apps/os/docs/project-seeds.md). Never hand-create the
+connection secret or append `slack/connected` / directory-claim events. Both
+supported boundaries validate the workspace token, create the router and
+subscription, record lifecycle state, and claim webhook ingress in the required
+order; the seed path additionally requires the token's team ID to equal the
+archived team ID before writing.
 
 Do not use `APP_CONFIG_INTEGRATIONS__SLACK.botToken` as restoration material.
 Before sending any smoke message, prove the project token and directory claim

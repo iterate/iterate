@@ -9,6 +9,7 @@ import type { ProjectDirectoryRecord } from "../../project-directory.ts";
 import {
   createCloudflareCustomDomainProvisioner,
   normalizeProjectCustomDomain,
+  primeDirectProjectCustomDomain,
 } from "./custom-domains.ts";
 
 const project: ProjectDirectoryRecord = {
@@ -41,6 +42,21 @@ describe("custom domain provisioning", () => {
     ).toThrow(/reserved/);
   });
 
+  test("primes a direct platform-owned hostname without Cloudflare provisioning", async () => {
+    const { directory } = setup();
+    await expect(
+      primeDirectProjectCustomDomain({
+        directory,
+        hostname: " Iterate.COM. ",
+        project,
+        projectHostnameBases: ["iterate.app"],
+      }),
+    ).resolves.toBe("iterate.com");
+    await expect(readProjectHostnameRegistration(directory, "iterate.com")).resolves.toEqual(
+      project,
+    );
+  });
+
   test("creates a wildcard Cloudflare custom hostname without routing before validation is active", async () => {
     const { cloudflare, directory, provisioner } = setup();
 
@@ -48,11 +64,6 @@ describe("custom domain provisioning", () => {
 
     expect(cloudflare.createdBodies).toEqual([
       {
-        custom_metadata: {
-          projectId: "prj_garple",
-          projectSlug: "garple",
-          source: "iterate-os",
-        },
         hostname: "garple.com",
         ssl: {
           method: "txt",
@@ -123,16 +134,14 @@ describe("custom domain provisioning", () => {
       expectedAppHost: { appSlug: "counter", record: project },
     },
     {
-      name: "refreshes a recorded Cloudflare hostname id even when metadata is missing",
+      name: "refreshes a recorded Cloudflare hostname id",
       hostnames: [cloudflareHostname({ id: "custom-hostname-1" })],
-      nullifyMetadata: true,
       refreshInput: { cloudflareHostnameId: "custom-hostname-1" },
       expectedSnapshot: { status: "active" },
     },
     {
       name: "falls back to hostname lookup when the recorded Cloudflare hostname id is stale",
       hostnames: [cloudflareHostname({ id: "custom-hostname-2" })],
-      nullifyMetadata: true,
       refreshInput: { cloudflareHostnameId: "stale-custom-hostname-id" },
       expectedSnapshot: {
         cloudflareHostnameId: "custom-hostname-2",
@@ -140,30 +149,26 @@ describe("custom domain provisioning", () => {
         status: "active",
       },
     },
-  ])(
-    "$name",
-    async ({ expectedAppHost, expectedSnapshot, hostnames, nullifyMetadata, refreshInput }) => {
-      const { cloudflare, directory, provisioner } = setup({ hostnames });
-      if (nullifyMetadata) cloudflare.hostnames.get("garple.com")!.custom_metadata = null;
-      await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toBeNull();
+  ])("$name", async ({ expectedAppHost, expectedSnapshot, hostnames, refreshInput }) => {
+    const { directory, provisioner } = setup({ hostnames });
+    await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toBeNull();
 
-      const snapshot = await provisioner.refresh({
-        hostname: "garple.com",
-        project,
-        ...refreshInput,
-      });
+    const snapshot = await provisioner.refresh({
+      hostname: "garple.com",
+      project,
+      ...refreshInput,
+    });
 
-      expect(snapshot).toMatchObject(expectedSnapshot);
-      await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toEqual(
-        project,
+    expect(snapshot).toMatchObject(expectedSnapshot);
+    await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toEqual(
+      project,
+    );
+    if (expectedAppHost !== undefined) {
+      await expect(readProjectByHostname(directory, "counter.garple.com")).resolves.toEqual(
+        expectedAppHost,
       );
-      if (expectedAppHost !== undefined) {
-        await expect(readProjectByHostname(directory, "counter.garple.com")).resolves.toEqual(
-          expectedAppHost,
-        );
-      }
-    },
-  );
+    }
+  });
 
   test("removes same-project routing KV when a refreshed hostname is no longer active", async () => {
     const { cloudflare, directory, provisioner } = setup({ hostnames: [cloudflareHostname()] });
@@ -184,24 +189,25 @@ describe("custom domain provisioning", () => {
 
   test.for([
     {
-      name: "refuses to adopt a Cloudflare hostname owned by another project",
-      hostnames: [cloudflareHostname({ project: otherProject })],
-      act: (provisioner: Provisioner) => provisioner.ensure({ hostname: "garple.com", project }),
-      expectedRejection: /owned by another project/,
-      expectedRegistration: null,
-    },
-    {
-      name: "refuses to remove a Cloudflare hostname owned by another project",
-      hostnames: [cloudflareHostname({ project: otherProject })],
+      name: "refuses to adopt a hostname routed in KV to another project",
+      hostnames: [cloudflareHostname()],
       seedRegistration: otherProject,
-      act: (provisioner: Provisioner) =>
-        provisioner.remove({ cloudflareHostnameId: "stale-id", hostname: "garple.com", project }),
-      expectedRejection: /owned by another project/,
+      act: (provisioner: Provisioner) => provisioner.ensure({ hostname: "garple.com", project }),
+      expectedRejection: /already routed to another project/,
       expectedRegistration: otherProject,
     },
     {
-      name: "clears a failed local custom domain without deleting another project's Cloudflare hostname",
-      hostnames: [cloudflareHostname({ project: otherProject })],
+      name: "refuses to remove a hostname routed in KV to another project",
+      hostnames: [cloudflareHostname()],
+      seedRegistration: otherProject,
+      act: (provisioner: Provisioner) =>
+        provisioner.remove({ cloudflareHostnameId: "stale-id", hostname: "garple.com", project }),
+      expectedRejection: /already routed to another project/,
+      expectedRegistration: otherProject,
+    },
+    {
+      name: "clears a failed local custom domain without deleting an unclaimed Cloudflare hostname",
+      hostnames: [cloudflareHostname()],
       act: (provisioner: Provisioner) =>
         provisioner.remove({ cloudflareHostnameId: null, hostname: "garple.com", project }),
       expectedRegistration: null,
@@ -308,7 +314,6 @@ class MemoryKv {
 }
 
 type CloudflareHostnameFixture = Record<string, unknown> & {
-  custom_metadata?: Record<string, unknown> | null;
   hostname: string;
   id: string;
   ssl?: Record<string, unknown> | null;
@@ -319,19 +324,12 @@ function cloudflareHostname(
   input: {
     hostname?: string;
     id?: string;
-    project?: ProjectDirectoryRecord;
     status?: "active" | "pending";
   } = {},
 ): CloudflareHostnameFixture {
   const hostname = input.hostname ?? "garple.com";
-  const owner = input.project ?? project;
   const status = input.status ?? "active";
   return {
-    custom_metadata: {
-      projectId: owner.id,
-      projectSlug: owner.slug,
-      source: "iterate-os",
-    },
     hostname,
     id: input.id ?? "custom-hostname-1",
     ownership_verification: {

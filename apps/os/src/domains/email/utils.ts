@@ -186,6 +186,33 @@ export function senderMatchesAllowlist(input: { address: string; patterns: strin
 }
 
 /**
+ * Canonical form for one project-scoped inbound sender rule. The supported
+ * grammar deliberately matches the ingress policy: one exact mailbox or one
+ * whole-domain wildcard, never an arbitrary glob.
+ */
+export function normalizeInboundEmailAllowedSender(pattern: string): string {
+  const normalized = pattern.trim().toLowerCase();
+  const at = normalized.lastIndexOf("@");
+  const local = normalized.slice(0, at);
+  const domain = normalized.slice(at + 1);
+  if (
+    at <= 0 ||
+    at === normalized.length - 1 ||
+    /\s/.test(normalized) ||
+    domain.includes("@") ||
+    domain.startsWith(".") ||
+    domain.endsWith(".") ||
+    !domain.includes(".") ||
+    (local.includes("*") && local !== "*")
+  ) {
+    throw new Error(
+      `Inbound email sender ${JSON.stringify(pattern)} must be an exact address or *@domain.`,
+    );
+  }
+  return `${local}@${domain}`;
+}
+
+/**
  * True when an Authentication-Results header (added by Cloudflare's inbound
  * MX) reports `dmarc=pass`. Without this, the sender allowlist authenticates
  * nothing — anyone can put an allowlisted address in the From header.
