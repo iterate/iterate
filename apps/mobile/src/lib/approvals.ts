@@ -381,8 +381,16 @@ function indexApprovalEvents(events: readonly StreamEvent[]) {
     const ref = payload.approvalRequestEventOffset;
     if (typeof ref !== "number") continue;
     if (event.type === EVENT.decided) {
-      // Ascending order means the first decided we keep IS the one the door honors.
-      if (!decisions.has(ref) && Array.isArray(payload.verdicts)) {
+      // Ascending order means the first decided we KEEP is the one the door
+      // honors — which requires mirroring the door's rule of ignoring a
+      // decision whose verdict count doesn't match its batch (the door keeps
+      // waiting on those; treating one as terminal here would hide a live
+      // hold from the screen).
+      if (
+        !decisions.has(ref) &&
+        Array.isArray(payload.verdicts) &&
+        payload.verdicts.length === requests.get(ref)?.requests.length
+      ) {
         decisions.set(ref, {
           verdicts: payload.verdicts,
           decidedBy: payload.decidedBy === "expiry" ? "expiry" : "human",

@@ -65,6 +65,15 @@ test("only the FIRST decision counts — a later contradiction is dead weight", 
   expect(open).toEqual([]);
 });
 
+test("a length-mismatched decision is ignored like the door ignores it — the batch stays open", () => {
+  // The door keeps waiting on a decision whose verdict count doesn't match
+  // its batch, so the screen must too: a short all-reject must not hide the
+  // live hold, and a matching later decision still wins.
+  const events = [requestedBurst(1, "gmail-sends", 3), decided(2, 1, ["reject"])];
+  expect(deriveOpenBatches(events)).toMatchObject([{ offset: 1, submitted: false }]);
+  expect(deriveOpenBatches([...events, decided(3, 1, ["reject", "reject", "reject"])])).toEqual([]);
+});
+
 test("recent resolved batches retain their request details and decision", () => {
   const events = [
     requested(1, "approved-rule"),

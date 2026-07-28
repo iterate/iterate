@@ -230,6 +230,19 @@ describe("reconcileBacklog — the door honors the FIRST decision", () => {
     ).toEqual([]);
   });
 
+  test("a length-mismatched decision is ignored like the door ignores it — the batch stays open", async () => {
+    expect(await openShape([req(10, 3), decidedOf(11, 10, ["reject"])])).toEqual([
+      { offset: 10, submitted: false },
+    ]);
+    expect(
+      await openShape([
+        req(10, 3),
+        decidedOf(11, 10, ["reject"]),
+        decidedOf(12, 10, ["reject", "reject", "reject"]),
+      ]),
+    ).toEqual([]);
+  });
+
   test("expired undecided batches are excluded; cursor is the highest offset seen", async () => {
     const { open, cursor } = await reconcileBacklog(
       fakeStream([req(10, 1, -1000), req(20), decidedOf(21, 20, ["approve"])]),

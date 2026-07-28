@@ -242,9 +242,15 @@ export async function reconcileBacklog(stream: RpcStub<Stream>): Promise<{
         const indexes = settledIndexes.get(ref) ?? new Set<number>();
         indexes.add(payload.index);
         settledIndexes.set(ref, indexes);
-      } else if (!decisions.has(ref) && Array.isArray(payload.verdicts)) {
+      } else if (
+        !decisions.has(ref) &&
+        Array.isArray(payload.verdicts) &&
+        payload.verdicts.length === requests.get(ref)?.requests.length
+      ) {
         // Pages arrive ascending, so the first decided we see IS the first by
-        // offset — the one the door acted on.
+        // offset — but only one the door would act on: a decision whose
+        // verdict count doesn't match its batch is ignored by the door (it
+        // keeps waiting), so honoring it here would hide a live hold.
         decisions.set(ref, payload.verdicts);
       }
     }
