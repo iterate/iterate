@@ -23,6 +23,7 @@ import {
   SquarePen,
   SquareTerminal,
   UserCircle,
+  Users,
   type LucideIcon,
 } from "lucide-react";
 import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-path-label";
@@ -232,7 +233,7 @@ function AppSidebarCollapseButton() {
 }
 
 function AppSidebarUser() {
-  const { loading, session, signOut } = useAuthClient();
+  const { loading, session, signIn, signOut } = useAuthClient();
   const { isMobile } = useSidebar();
   const config = useConfig<PublicConfig>();
   const accountManagementUrl = authWorkerUrl(config, "/");
@@ -262,6 +263,14 @@ function AppSidebarUser() {
     });
     if (!response.ok) throw new Error(`Could not end operator session (${response.status}).`);
     window.location.assign("/");
+  }
+
+  function switchOrAddAccount() {
+    signIn({
+      prompt: "select_account",
+      replaceCurrentSession: true,
+      returnTo: `${window.location.origin}/projects`,
+    });
   }
   const debugInfo = useMemo(
     () => ({
@@ -349,6 +358,12 @@ function AppSidebarUser() {
               </DropdownMenuGroup>
               <DropdownMenuSeparator />
               <DropdownMenuGroup>
+                {!isOperatorSession ? (
+                  <DropdownMenuItem onClick={switchOrAddAccount}>
+                    <Users />
+                    <span>Switch or add account</span>
+                  </DropdownMenuItem>
+                ) : null}
                 <DropdownMenuItem onClick={() => void endCurrentSession()}>
                   <LogOut />
                   <span>{isOperatorSession ? "End operator session" : "Sign out"}</span>
