@@ -5,33 +5,40 @@ default project worker (`fetch` plus `processEvent`). It declares packaged apps
 such as `GithubAiLinter`, `GuestbookApp`, and `TodoApp`; project-owned app source
 lives under `apps/`, and the packaged linter reads editable policy from `rules/`.
 
-## Creation and reconciliation
+## Project lifecycle hooks
 
-The `processEvent` switch in `worker.ts` has two deliberate hooks:
+The `processEvent` switch in `worker.ts` exposes the raw lifecycle events. Each
+case is ordinary userspace TypeScript: get `itx` there and write whatever calls
+the project needs. There is no configuration-reconciliation framework around
+them.
 
-- `project/create-requested` is the creation-only hook. Put initial
-  subscriptions and appends in that case, with stable idempotency keys because
-  delivery is at least once. The platform does not commit terminal
-  `project/created` until this event has been processed successfully.
-- `reconcileProject()` is the idempotent desired-state hook. It runs during
-  creation, whenever the root stream wakes after an OS deployment or
-  hibernation, after a config-repo commit finishes, and when a configured
-  heartbeat fires. Add `ensure … exists` work here; it must be safe to run
-  repeatedly.
+- `project/create-requested` is the logical creation-only hook. The platform
+  does not commit terminal `project/created` until this case returns
+  successfully. Delivery is at least once, so subscriptions, appends, and
+  other effects still need stable idempotency keys. The seeded example directly
+  calls `itx.scheduler.ensure(...)` here to install one 15-minute heartbeat.
+- `project/heartbeat-triggered` is the ordinary event appended by that
+  Scheduler script. Its payload is only `{ scheduleKey }`. Put arbitrary
+  periodic itx calls directly in this case.
+- root `stream/woken` is available for work that should run when the project
+  stream wakes after hibernation or an OS deployment.
+- `repo/commit-completed`, with exact `/repos/config` cross-post provenance, is
+  available for work that should run after config source changes and the new
+  worker build handles its first event.
 
-`heartbeatSchedules` uses the scheduler's normal recurrence union:
-`{ every: seconds }`, `{ cron, timezone? }`, or `{ at: ISO timestamp }`. Add
-multiple entries for multiple cadences, use `{ every: 1 }` in a fast test
-project, or use `[]` for no periodic reconciliation. The default is one
-15-minute schedule. Missed interval occurrences coalesce; the scheduler does
-not backfill one heartbeat per missed interval.
+The heartbeat uses the Scheduler's native recurrence shape:
+`{ every: seconds }`, `{ cron, timezone? }`, or `{ at: ISO timestamp }`. Copy
+the literal `scheduler.ensure(...)` call to add another schedule, use
+`{ every: 1 }` in a fast test project, or delete it when a project needs no
+heartbeat. `ensure(...)` leaves a matching schedule's clock, run count, and
+defining event untouched.
 
-Heartbeat schedules owned by this file use the
-`iterate/config/heartbeat/` key prefix. Reconciliation calls
-`scheduler.ensure(...)` for each desired definition; the Scheduler leaves a
-matching schedule's clock, run count, and defining event untouched. It removes
-stale owned keys and never removes unrelated customer schedules. A trigger appends
-`events.iterate.com/project/reconciliation-requested` to `/` with only
-`{ scheduleKey }`; the scheduler execution ID is the append idempotency key.
-The root `project-worker` subscription key is platform-owned; creation hooks
+Nothing interprets the source file as desired state. Changing or deleting an
+existing schedule is explicit code too: call `scheduler.ensure(...)` or
+`scheduler.cancel(...)` from whichever lifecycle case should apply the change.
+Missed interval occurrences coalesce; the Scheduler does not backfill one event
+per missed interval. The scheduler execution ID is the heartbeat append's
+idempotency key.
+
+The root `project-worker` subscription key is platform-owned. Creation hooks
 install any additional subscriptions under their own distinct keys.

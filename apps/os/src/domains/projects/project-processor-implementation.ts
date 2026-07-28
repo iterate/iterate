@@ -331,9 +331,9 @@ export class ProjectProcessor extends StreamProcessor<
         });
         break;
       }
-      // created/reconciliation-requested/onboarding-completed/notification
-      // facts, catalog facts, egress rules and approval events: no platform
-      // side effect — userspace handles reconciliation-requested.
+      // created/heartbeat-triggered/onboarding-completed/notification facts,
+      // catalog facts, egress rules and approval events: no platform side
+      // effect. The project worker handles userspace lifecycle events.
     }
   }
 

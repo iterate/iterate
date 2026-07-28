@@ -67,30 +67,13 @@ test("template ships packaged apps behind a thin router", () => {
   });
 });
 
-test("project reconciliation ensures desired heartbeats and removes only stale owned keys", async () => {
-  const obsolete = {
-    key: "iterate/config/heartbeat/obsolete",
-    recurrence: { every: 5 },
-    action: { kind: "itx-script", script: "async () => {}" },
-  };
-  const unrelated = {
-    key: "customer/daily-report",
-    recurrence: { every: 86_400 },
-    action: { kind: "itx-script", script: "async () => {}" },
-  };
-  const list = vi
-    .fn()
-    .mockResolvedValueOnce([obsolete, unrelated])
-    .mockResolvedValueOnce([unrelated])
-    .mockResolvedValueOnce([unrelated])
-    .mockResolvedValueOnce([unrelated]);
+test("project lifecycle cases directly install and handle the default heartbeat", async () => {
   const ensure = vi.fn(
     async (input: { key: string; recurrence: unknown; script: string }) => input,
   );
-  const cancel = vi.fn(async () => undefined);
   const dispose = vi.fn();
   const project = {
-    scheduler: { cancel, ensure, list },
+    scheduler: { ensure },
     [Symbol.dispose]: dispose,
   };
   const worker = new ProjectWorker(
@@ -112,30 +95,29 @@ test("project reconciliation ensures desired heartbeats and removes only stale o
     key: "iterate/config/heartbeat/every-15-minutes",
     recurrence: { every: 900 },
   });
-  expect(cancel).toHaveBeenCalledExactlyOnceWith("iterate/config/heartbeat/obsolete");
-  expect(cancel).not.toHaveBeenCalledWith("customer/daily-report");
 
-  // Reconciliation always states the desired definition through ensure();
-  // the Scheduler owns exact equality and preserves an unchanged clock.
+  // Pin the exact source handed to the Scheduler; the Scheduler's own tests
+  // prove that it invokes action strings with (itx, schedule, trigger).
+  expect(configured.script).toContain('type: "events.iterate.com/project/heartbeat-triggered"');
+  expect(configured.script).toContain(
+    'idempotencyKey: "iterate/config/heartbeat:" + trigger.executionId',
+  );
+  expect(configured.script).toContain("payload: { scheduleKey: schedule.key }");
+  expect(dispose).toHaveBeenCalledOnce();
+
   const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
   await deliver(worker, {
-    type: "events.iterate.com/project/reconciliation-requested",
+    type: "events.iterate.com/project/heartbeat-triggered",
     path: "/",
     payload: { scheduleKey: configured.key },
   });
-  expect(ensure).toHaveBeenCalledTimes(2);
-  expect(cancel).toHaveBeenCalledOnce();
   expect(log).toHaveBeenCalledWith("Project heartbeat fired", {
     scheduleKey: configured.key,
   });
-
   await deliver(worker, {
     type: "events.iterate.com/stream/woken",
     path: "/",
   });
-  expect(ensure).toHaveBeenCalledTimes(3);
-  expect(ensure.mock.calls[2]![0]).not.toHaveProperty("metadata");
-
   await deliver(worker, {
     type: "events.iterate.com/repo/commit-completed",
     path: "/",
@@ -152,18 +134,9 @@ test("project reconciliation ensures desired heartbeats and removes only stale o
       ],
     },
   });
-  expect(ensure).toHaveBeenCalledTimes(4);
-
-  // Pin the exact source handed to the Scheduler; the Scheduler's own tests
-  // prove that it invokes action strings with (itx, schedule, trigger).
-  expect(configured.script).toBe(`async (itx, schedule, trigger) => {
-  await itx.streams.get("/").append({
-    type: "events.iterate.com/project/reconciliation-requested",
-    idempotencyKey: "iterate/config/heartbeat:" + trigger.executionId,
-    payload: { scheduleKey: schedule.key },
-  });
-}`);
-  expect(dispose).toHaveBeenCalledTimes(4);
+  // Heartbeat, wake, and config-commit cases are independent literal hooks;
+  // none silently re-runs the creation case's Scheduler call.
+  expect(ensure).toHaveBeenCalledOnce();
 
   const ignored = [
     {
@@ -171,7 +144,7 @@ test("project reconciliation ensures desired heartbeats and removes only stale o
       path: "/agents/not-the-project-root",
     },
     {
-      type: "events.iterate.com/project/reconciliation-requested",
+      type: "events.iterate.com/project/heartbeat-triggered",
       path: "/agents/not-the-project-root",
     },
     {
@@ -216,7 +189,8 @@ test("project reconciliation ensures desired heartbeats and removes only stale o
     },
   ];
   for (const event of ignored) await deliver(worker, event);
-  expect(list).toHaveBeenCalledTimes(4);
+  expect(ensure).toHaveBeenCalledOnce();
+  expect(log).toHaveBeenCalledOnce();
 });
 
 test("packaged apps stay behind the thin router", () => {

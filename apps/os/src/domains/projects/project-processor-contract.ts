@@ -60,7 +60,7 @@ export const ProjectProcessorContract = defineProcessorContract({
       .meta({
         description:
           "Existence marker: null until terminal project/created reduces after the default " +
-          "worker consumed project/create-requested and completed its first reconciliation.",
+          "worker consumed project/create-requested and completed its userspace creation hook.",
       }),
     onboardingActive: z
       .boolean()
@@ -184,7 +184,7 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/project/created": {
       description:
         "The project creation saga completed: sibling processors exist and the default project " +
-        "worker consumed project/create-requested, including its creation hooks and first reconciliation.",
+        "worker consumed project/create-requested, including its userspace creation hook.",
       payloadSchema: projectBirthCertificateSchema(),
     },
     "events.iterate.com/project/create-failed": {
@@ -194,15 +194,15 @@ export const ProjectProcessorContract = defineProcessorContract({
         "redelivery. Fail-closed: nothing else reacts on the failed project stream.",
       payloadSchema: projectCreationFailureSchema(),
     },
-    "events.iterate.com/project/reconciliation-requested": {
+    "events.iterate.com/project/heartbeat-triggered": {
       description:
-        "Requests an idempotent userspace configuration reconciliation. Config-repo heartbeat " +
-        "schedules append this event to the project root.",
+        "A project-owned Scheduler heartbeat fired. Userspace handles this lifecycle event " +
+        "directly in the config worker.",
       payloadSchema: z.object({
         scheduleKey: z
           .string()
           .min(1)
-          .meta({ description: "The scheduler key whose trigger requested reconciliation." }),
+          .meta({ description: "The scheduler key whose heartbeat fired." }),
       }),
     },
     "events.iterate.com/project/onboarding-completed": {
@@ -412,7 +412,7 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/project/create-requested",
     "events.iterate.com/project/created",
     "events.iterate.com/project/create-failed",
-    "events.iterate.com/project/reconciliation-requested",
+    "events.iterate.com/project/heartbeat-triggered",
     "events.iterate.com/device/created",
     "events.iterate.com/repos/created",
     "events.iterate.com/repos/create-failed",
