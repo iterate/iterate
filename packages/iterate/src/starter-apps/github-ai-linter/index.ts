@@ -33,6 +33,12 @@ export const GithubAiLinter = {
           linkedRepos = undefined;
           return;
         }
+        if (
+          event.type === "events.iterate.com/github/webhook-received" &&
+          !mightWakePullRequestAgent(event)
+        ) {
+          return;
+        }
         using itx = await env.ITX.get();
         if (event.type === "events.iterate.com/repo/github-link-configured") {
           linkedRepos = undefined;
@@ -51,6 +57,29 @@ export const GithubAiLinter = {
     };
   },
 };
+
+function mightWakePullRequestAgent(event: StreamEvent): boolean {
+  // The platform created this envelope after signature verification. This
+  // deliberately stays a loose prefilter; the handler below performs the
+  // complete authorization and payload validation after an ITX session opens.
+  const webhook = event.payload as
+    | {
+        associations?: { mentionedUsers?: unknown[] };
+        body?: { action?: unknown };
+        delivery?: { name?: unknown };
+      }
+    | undefined;
+  const name = webhook?.delivery?.name;
+  const action = webhook?.body?.action;
+  return (
+    (name === "pull_request" &&
+      (action === "opened" || action === "ready_for_review" || action === "synchronize")) ||
+    ((name === "issue_comment" ||
+      name === "pull_request_review" ||
+      name === "pull_request_review_comment") &&
+      (webhook?.associations?.mentionedUsers?.length ?? 0) > 0)
+  );
+}
 
 async function retireHostedReviewBot(itx: Project, connection: string): Promise<void> {
   const stream = itx.streams.get(`/integrations/github/${connection}`);

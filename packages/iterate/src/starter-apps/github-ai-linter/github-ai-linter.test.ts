@@ -54,7 +54,24 @@ test("the project worker handles verified GitHub webhooks directly", async () =>
     },
   });
 
-  await app.processEvent(event("events.iterate.com/github/webhook-received"));
+  await app.processEvent({
+    ...event("events.iterate.com/github/webhook-received"),
+    payload: {
+      associations: {},
+      body: { action: "completed" },
+      delivery: { name: "check_run" },
+    },
+  });
+  expect(get).toHaveBeenCalledTimes(1);
+
+  await app.processEvent({
+    ...event("events.iterate.com/github/webhook-received"),
+    payload: {
+      associations: {},
+      body: { action: "opened" },
+      delivery: { name: "pull_request" },
+    },
+  });
   expect(get).toHaveBeenCalledTimes(2);
   expect(dispose).toHaveBeenCalledTimes(2);
 });
