@@ -27,7 +27,8 @@ const otherProject: ProjectDirectoryRecord = {
 };
 
 describe("custom domain provisioning", () => {
-  test("normalizes custom domains and rejects reserved project hostnames", () => {
+  test("normalizes hostnames and primes direct Worker routes in KV", async () => {
+    const { directory } = setup();
     expect(
       normalizeProjectCustomDomain({
         hostname: " Garple.Com:443. ",
@@ -40,10 +41,7 @@ describe("custom domain provisioning", () => {
         projectHostnameBases: ["iterate.app"],
       }),
     ).toThrow(/reserved/);
-  });
 
-  test("primes a direct platform-owned hostname without Cloudflare provisioning", async () => {
-    const { directory } = setup();
     await expect(
       primeDirectProjectCustomDomain({
         directory,
@@ -57,10 +55,10 @@ describe("custom domain provisioning", () => {
     );
   });
 
-  test("creates a wildcard Cloudflare custom hostname with a KV ownership reservation", async () => {
+  test("creates a metadata-free Cloudflare hostname after claiming its KV route", async () => {
     const { cloudflare, directory, provisioner } = setup();
 
-    const snapshot = await provisioner.ensure({ hostname: "garple.com", project });
+    await expect(provisioner.ensure({ hostname: "garple.com", project })).resolves.toBeUndefined();
 
     expect(cloudflare.createdBodies).toEqual([
       {
@@ -73,19 +71,7 @@ describe("custom domain provisioning", () => {
         },
       },
     ]);
-    expect(snapshot).toMatchObject({
-      cloudflareHostnameId: "custom-hostname-1",
-      hostname: "garple.com",
-      status: "pending_validation",
-      validationRecords: [
-        {
-          name: "_acme-challenge.garple.com",
-          status: "pending",
-          value: "ssl-token",
-        },
-      ],
-      wildcard: true,
-    });
+    expect(cloudflare.requests.filter((request) => request.method === "GET")).toHaveLength(2);
     await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toEqual(
       project,
     );
@@ -95,207 +81,57 @@ describe("custom domain provisioning", () => {
     });
   });
 
-  test("claims KV before calling Cloudflare and does not bind fetch input as this", async () => {
-    const directory = new MemoryKv() as unknown as KVNamespace;
-    const cloudflare = createCloudflareFetchMock();
-    let fetchCalls = 0;
-    const fetchWithThisAssertion = async function (
-      this: unknown,
-      ...args: Parameters<typeof fetch>
-    ) {
-      fetchCalls += 1;
-      expect(this).toBeUndefined();
-      await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toEqual(
-        project,
-      );
-      return await cloudflare.fetch(...args);
-    } as typeof fetch;
-    const provisioner = createProvisioner({ directory, fetch: fetchWithThisAssertion });
-
-    await expect(provisioner.ensure({ hostname: "garple.com", project })).resolves.toMatchObject({
-      hostname: "garple.com",
+  test("reuses an existing Cloudflare hostname to heal wiped routing KV", async () => {
+    const { cloudflare, directory, provisioner } = setup({
+      hostnames: [{ hostname: "garple.com", id: "custom-hostname-1" }],
     });
-    expect(fetchCalls).toBeGreaterThan(0);
+
+    await provisioner.ensure({ hostname: "garple.com", project });
+
+    expect(cloudflare.createdBodies).toEqual([]);
+    await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toEqual(
+      project,
+    );
   });
 
-  test("rejects apex domains that would cover another project's explicit subdomain", async () => {
-    let fetchCalls = 0;
-    const { directory, provisioner } = setup({
-      fetch: (async () => {
-        fetchCalls += 1;
-        throw new Error("Cloudflare should not be called for unavailable hostnames.");
-      }) as typeof fetch,
-    });
+  test("rejects a hostname that overlaps another project's KV route before Cloudflare", async () => {
+    const { cloudflare, directory, provisioner } = setup();
     await primeProjectHostname(directory, "www.garple.com", otherProject);
 
     await expect(provisioner.ensure({ hostname: "garple.com", project })).rejects.toThrow(
       /overlaps existing custom domain "www\.garple\.com"/,
     );
-    expect(fetchCalls).toBe(0);
+    expect(cloudflare.requests).toEqual([]);
+  });
+
+  test("deletes the hostname found by name and then clears its KV route", async () => {
+    const { cloudflare, directory, provisioner } = setup({
+      hostnames: [{ hostname: "garple.com", id: "custom-hostname-1" }],
+    });
+    await primeProjectHostname(directory, "garple.com", project);
+
+    await provisioner.remove({ hostname: "garple.com", project });
+
+    expect(cloudflare.deletedIds).toEqual(["custom-hostname-1"]);
     await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toBeNull();
   });
-
-  test.for([
-    {
-      name: "refreshes an existing Cloudflare hostname and heals missing routing KV",
-      hostnames: [cloudflareHostname()],
-      expectedSnapshot: { status: "active" },
-      expectedAppHost: { appSlug: "counter", record: project },
-    },
-    {
-      name: "refreshes a recorded Cloudflare hostname id",
-      hostnames: [cloudflareHostname({ id: "custom-hostname-1" })],
-      refreshInput: { cloudflareHostnameId: "custom-hostname-1" },
-      expectedSnapshot: { status: "active" },
-    },
-    {
-      name: "falls back to hostname lookup when the recorded Cloudflare hostname id is stale",
-      hostnames: [cloudflareHostname({ id: "custom-hostname-2" })],
-      refreshInput: { cloudflareHostnameId: "stale-custom-hostname-id" },
-      expectedSnapshot: {
-        cloudflareHostnameId: "custom-hostname-2",
-        hostname: "garple.com",
-        status: "active",
-      },
-    },
-  ])("$name", async ({ expectedAppHost, expectedSnapshot, hostnames, refreshInput }) => {
-    const { directory, provisioner } = setup({ hostnames });
-    await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toBeNull();
-
-    const snapshot = await provisioner.refresh({
-      hostname: "garple.com",
-      project,
-      ...refreshInput,
-    });
-
-    expect(snapshot).toMatchObject(expectedSnapshot);
-    await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toEqual(
-      project,
-    );
-    if (expectedAppHost !== undefined) {
-      await expect(readProjectByHostname(directory, "counter.garple.com")).resolves.toEqual(
-        expectedAppHost,
-      );
-    }
-  });
-
-  test("retains same-project KV ownership while a refreshed hostname is not active", async () => {
-    const { cloudflare, directory, provisioner } = setup({ hostnames: [cloudflareHostname()] });
-
-    await expect(provisioner.refresh({ hostname: "garple.com", project })).resolves.toMatchObject({
-      status: "active",
-    });
-    await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toEqual(
-      project,
-    );
-
-    cloudflare.hostnames.set("garple.com", cloudflareHostname({ status: "pending" }));
-    await expect(provisioner.refresh({ hostname: "garple.com", project })).resolves.toMatchObject({
-      status: "pending_validation",
-    });
-    await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toEqual(
-      project,
-    );
-  });
-
-  test.for([
-    {
-      name: "refuses to adopt a hostname routed in KV to another project",
-      hostnames: [cloudflareHostname()],
-      seedRegistration: otherProject,
-      act: (provisioner: Provisioner) => provisioner.ensure({ hostname: "garple.com", project }),
-      expectedRejection: /already routed to another project/,
-      expectedRegistration: otherProject,
-    },
-    {
-      name: "refuses to remove a hostname routed in KV to another project",
-      hostnames: [cloudflareHostname()],
-      seedRegistration: otherProject,
-      act: (provisioner: Provisioner) =>
-        provisioner.remove({ cloudflareHostnameId: "stale-id", hostname: "garple.com", project }),
-      expectedRejection: /already routed to another project/,
-      expectedRegistration: otherProject,
-    },
-    {
-      name: "clears a failed local custom domain without deleting an unclaimed Cloudflare hostname even with a recorded id",
-      hostnames: [cloudflareHostname()],
-      act: (provisioner: Provisioner) =>
-        provisioner.remove({
-          cloudflareHostnameId: "custom-hostname-1",
-          hostname: "garple.com",
-          project,
-        }),
-      expectedRegistration: null,
-    },
-    {
-      // The recorded id 404s on Cloudflare: the delete is attempted, the 404
-      // swallowed as already-removed, and same-project routing still clears.
-      name: "treats stale Cloudflare delete ids as already removed and clears same-project routing",
-      hostnames: [],
-      seedRegistration: project,
-      act: (provisioner: Provisioner) =>
-        provisioner.remove({ cloudflareHostnameId: "stale-id", hostname: "garple.com", project }),
-      expectedDeletedIds: ["stale-id"],
-      expectedRegistration: null,
-    },
-  ])(
-    "$name",
-    async ({
-      act,
-      expectedDeletedIds,
-      expectedRegistration,
-      expectedRejection,
-      hostnames,
-      seedRegistration,
-    }) => {
-      const { cloudflare, directory, provisioner } = setup({ hostnames });
-      if (seedRegistration !== undefined) {
-        await primeProjectHostname(directory, "garple.com", seedRegistration);
-      }
-
-      if (expectedRejection === undefined) {
-        await expect(act(provisioner)).resolves.toBeUndefined();
-      } else {
-        await expect(act(provisioner)).rejects.toThrow(expectedRejection);
-      }
-      expect(cloudflare.deletedIds).toEqual(expectedDeletedIds ?? []);
-      await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toEqual(
-        expectedRegistration,
-      );
-    },
-  );
 });
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-type Provisioner = ReturnType<typeof createProvisioner>;
-
-/** Directory + Cloudflare fetch mock + provisioner in one call; pass `fetch`
- * to interpose on (or replace) the mock's transport. */
-function setup(input: { fetch?: typeof fetch; hostnames?: CloudflareHostnameFixture[] } = {}) {
+function setup(input: { hostnames?: CloudflareHostname[] } = {}) {
   const directory = new MemoryKv() as unknown as KVNamespace;
-  const cloudflare = createCloudflareFetchMock({ hostnames: input.hostnames });
-  const provisioner = createProvisioner({ directory, fetch: input.fetch ?? cloudflare.fetch });
-  return { cloudflare, directory, provisioner };
-}
-
-function createProvisioner(input: { directory: KVNamespace; fetch: typeof fetch }) {
-  return createCloudflareCustomDomainProvisioner({
+  const cloudflare = createCloudflareFetchMock(input.hostnames ?? []);
+  const provisioner = createCloudflareCustomDomainProvisioner({
     config: parseConfig({
       APP_CONFIG: JSON.stringify({
-        cloudflare: {
-          accountId: "account-1",
-          apiToken: "cf-token",
-        },
+        cloudflare: { accountId: "account-1", apiToken: "cf-token" },
         openAiApiKey: "openai-key",
         projectHostnameBases: ["iterate.app"],
       }),
     }),
-    directory: input.directory,
-    fetch: input.fetch,
+    directory,
+    fetch: cloudflare.fetch,
   });
+  return { cloudflare, directory, provisioner };
 }
 
 class MemoryKv {
@@ -328,64 +164,22 @@ class MemoryKv {
   }
 }
 
-type CloudflareHostnameFixture = Record<string, unknown> & {
-  hostname: string;
-  id: string;
-  ssl?: Record<string, unknown> | null;
-  status?: string;
-};
+type CloudflareHostname = { hostname: string; id: string };
 
-function cloudflareHostname(
-  input: {
-    hostname?: string;
-    id?: string;
-    status?: "active" | "pending";
-  } = {},
-): CloudflareHostnameFixture {
-  const hostname = input.hostname ?? "garple.com";
-  const status = input.status ?? "active";
-  return {
-    hostname,
-    id: input.id ?? "custom-hostname-1",
-    ownership_verification: {
-      name: `_cf-custom-hostname.${hostname}`,
-      value: "ownership-token",
-    },
-    ssl: {
-      status: status === "active" ? "active" : "pending_validation",
-      validation_records:
-        status === "active"
-          ? []
-          : [
-              {
-                status: "pending",
-                txt_name: `_acme-challenge.${hostname}`,
-                txt_value: "ssl-token",
-              },
-            ],
-      wildcard: true,
-    },
-    status,
-  };
-}
-
-function createCloudflareFetchMock(
-  input: {
-    createHostname?: (body: Record<string, unknown>) => CloudflareHostnameFixture;
-    hostnames?: CloudflareHostnameFixture[];
-  } = {},
-) {
+function createCloudflareFetchMock(initialHostnames: CloudflareHostname[]) {
   const hostnames = new Map(
-    (input.hostnames ?? []).map((hostname) => [hostname.hostname, hostname] as const),
+    initialHostnames.map((hostname) => [hostname.hostname, hostname] as const),
   );
   const createdBodies: unknown[] = [];
   const deletedIds: string[] = [];
+  const requests: Array<{ method: string; pathname: string }> = [];
 
   const fetchMock = (async (...args: Parameters<typeof fetch>) => {
     const [requestInput, init] = args;
     const request =
       requestInput instanceof Request ? requestInput : new Request(requestInput, init);
     const url = new URL(request.url);
+    requests.push({ method: request.method, pathname: url.pathname });
 
     if (url.pathname === "/client/v4/zones") {
       return Response.json({
@@ -404,47 +198,27 @@ function createCloudflareFetchMock(
           ),
         });
       }
-
       const body = (await request.json()) as Record<string, unknown>;
       createdBodies.push(body);
       const hostname = String(body.hostname);
-      const customHostname =
-        input.createHostname?.(body) ??
-        cloudflareHostname({
-          hostname,
-          status: "pending",
-        });
-      hostnames.set(customHostname.hostname, customHostname);
+      const customHostname = { hostname, id: "custom-hostname-1" };
+      hostnames.set(hostname, customHostname);
       return Response.json({ success: true, result: customHostname });
     }
 
     const hostnameId = url.pathname.match(
       /^\/client\/v4\/zones\/zone-1\/custom_hostnames\/(.+)$/,
     )?.[1];
-    if (hostnameId) {
+    if (hostnameId && request.method === "DELETE") {
       const id = decodeURIComponent(hostnameId);
+      deletedIds.push(id);
       const customHostname = [...hostnames.values()].find((candidate) => candidate.id === id);
-
-      if (request.method === "GET") {
-        return customHostname
-          ? Response.json({ success: true, result: customHostname })
-          : cloudflareNotFound();
-      }
-
-      if (request.method === "DELETE") {
-        deletedIds.push(id);
-        if (!customHostname) return cloudflareNotFound();
-        hostnames.delete(customHostname.hostname);
-        return Response.json({ success: true, result: {} });
-      }
+      if (customHostname) hostnames.delete(customHostname.hostname);
+      return Response.json({ success: true, result: {} });
     }
 
-    return cloudflareNotFound();
+    return Response.json({ success: false, errors: [{ message: "not found" }] }, { status: 404 });
   }) as typeof fetch;
 
-  return { createdBodies, deletedIds, fetch: fetchMock, hostnames };
-}
-
-function cloudflareNotFound() {
-  return Response.json({ success: false, errors: [{ message: "not found" }] }, { status: 404 });
+  return { createdBodies, deletedIds, fetch: fetchMock, requests };
 }

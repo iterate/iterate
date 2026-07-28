@@ -287,11 +287,11 @@ export async function capture(options: CaptureOptions) {
         slug: identity.slug,
         organization: authSnapshot.organization.slug,
         directHostnames: projectSnapshot.state.customDomains
-          .filter((domain) => domain.kind === "direct" && domain.status === "active")
+          .filter((domain) => domain.kind === "direct")
           .map((domain) => domain.hostname)
           .sort(),
         cloudflareHostnames: projectSnapshot.state.customDomains
-          .filter((domain) => domain.kind === "cloudflare" && domain.status === "active")
+          .filter((domain) => domain.kind === "cloudflare")
           .map((domain) => domain.hostname)
           .sort(),
         email: { allowedSenders: [...emailSnapshot.state.allowedSenders].sort() },
@@ -606,30 +606,20 @@ async function restoreConfigRepository(input: {
     throw new Error(`No GitHub connection for installation ${githubSeed.installationId}.`);
   }
   const github = input.project.integrations.github.get(connection).octokit;
-  const [before, local, snapshot] = await Promise.all([
+  const [before, local] = await Promise.all([
     readGithubHead(github, githubSeed),
     repository.listFiles(),
-    repository.processor.snapshot(),
   ]);
-  const linked = snapshot.state.github;
-  const alreadyCurrent =
-    linked?.connection === connection &&
-    linked.installationId === githubSeed.installationId &&
-    linked.owner === githubSeed.owner &&
-    linked.repo === githubSeed.repo &&
-    local.commitOid === before.commitOid;
-  let restored = before;
-  if (!alreadyCurrent) {
-    const link = await repository.linkGithub({
-      connection,
-      createIfMissing: false,
-      initialPush: false,
-      owner: githubSeed.owner,
-      repo: githubSeed.repo,
-    });
-    if (link.created) throw new Error(`${githubSeed.owner}/${githubSeed.repo} did not exist.`);
-    restored = await repository.resetFromGithub({ depth: 1 });
-  }
+  const link = await repository.linkGithub({
+    connection,
+    createIfMissing: false,
+    initialPush: false,
+    owner: githubSeed.owner,
+    repo: githubSeed.repo,
+  });
+  if (link.created) throw new Error(`${githubSeed.owner}/${githubSeed.repo} did not exist.`);
+  const needsReset = local.commitOid !== before.commitOid;
+  const restored = needsReset ? await repository.resetFromGithub({ depth: 1 }) : before;
   const after = await readGithubHead(github, githubSeed);
   if (
     before.commitOid !== restored.commitOid ||
@@ -651,7 +641,7 @@ async function restoreConfigRepository(input: {
     repo: githubSeed.repo,
     branch: restored.branch,
     commitOid: restored.commitOid,
-    reset: !alreadyCurrent,
+    reset: needsReset,
     served,
   };
 }

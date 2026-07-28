@@ -6043,8 +6043,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   /**
    * Admin-only project-seed repair for a platform-owned apex that already
    * reaches this worker through Worker routes. Primes the routing directory,
-   * records a fresh current-version direct-observed fact, and waits until the
-   * project state reports the hostname active.
+   * records the hostname in the small project catalog, and waits for it.
    */
   async restoreDirectHostname(input: { hostname: string }): Promise<{ hostname: string }> {
     if (!this.#props.auth.isAdmin()) {
@@ -6066,9 +6065,9 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       auth: this.#props.auth,
       projectId: this.#projectId,
     }).append({
-      idempotencyKey: `project-seed:direct-hostname:${hostname}`,
-      type: "events.iterate.com/project/custom-domain-direct-observed",
-      payload: { hostname },
+      idempotencyKey: `project-seed:direct-hostname:v2:${hostname}`,
+      type: "events.iterate.com/project/custom-domain-configured",
+      payload: { hostname, kind: "direct" },
     });
     if (observed === undefined) {
       throw new Error(`Direct hostname "${hostname}" append returned no event.`);
@@ -6077,20 +6076,19 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     const { state } = await this.processor.snapshot();
     if (
       !state.customDomains.some(
-        (domain) =>
-          domain.hostname === hostname && domain.kind === "direct" && domain.status === "active",
+        (domain) => domain.hostname === hostname && domain.kind === "direct",
       )
     ) {
-      throw new Error(`Direct hostname "${hostname}" is not active in project state.`);
+      throw new Error(`Direct hostname "${hostname}" is missing from project state.`);
     }
     return { hostname };
   }
 
   /**
    * Admin-only project-seed command for a Cloudflare-managed custom hostname.
-   * This submits a fresh current-version provision/refresh intent through the
-   * normal project processor, uses the hostname routing directory as the
-   * ownership authority, and proves active routing before returning.
+   * This submits a fresh idempotent provision intent through the normal
+   * project processor. The hostname routing directory is the ownership and
+   * routing authority; project state only catalogs the hostname and kind.
    */
   async restoreCloudflareHostname(input: { hostname: string }): Promise<{ hostname: string }> {
     if (!this.#props.auth.isAdmin()) {
@@ -6100,23 +6098,19 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       hostname: input.hostname,
       projectHostnameBases: parseConfig(env).projectHostnameBases,
     });
-    const before = await this.processor.snapshot();
-    const existing = before.state.customDomains.find((domain) => domain.hostname === hostname);
+    const existing = (await this.processor.snapshot()).state.customDomains.find(
+      (domain) => domain.hostname === hostname,
+    );
     if (existing?.kind === "direct") {
       throw new Error(
         `Hostname "${hostname}" is already registered as a platform-owned direct hostname.`,
       );
     }
-    const type =
-      existing === undefined
-        ? ("events.iterate.com/project/custom-domain-add-requested" as const)
-        : ("events.iterate.com/project/custom-domain-refresh-requested" as const);
     const [requested] = await rootStream({
       auth: this.#props.auth,
       projectId: this.#projectId,
     }).append({
-      idempotencyKey: `project-seed:cloudflare-hostname:${type}:${hostname}:${existing?.updatedAt ?? "new"}`,
-      type,
+      type: "events.iterate.com/project/custom-domain-add-requested",
       payload: { hostname },
     });
     if (requested === undefined) {
@@ -6128,7 +6122,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     }).waitForEvent({
       afterOffset: requested.offset,
       eventTypes: [
-        "events.iterate.com/project/custom-domain-cloudflare-observed",
+        "events.iterate.com/project/custom-domain-configured",
         "events.iterate.com/project/custom-domain-provision-failed",
       ],
       predicate: (event) => event.payload?.hostname === hostname,
@@ -6142,14 +6136,8 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     await this.processor.waitUntilProcessed({ offset: terminal.offset });
     const after = await this.processor.snapshot();
     const restored = after.state.customDomains.find((domain) => domain.hostname === hostname);
-    if (
-      restored?.kind !== "cloudflare" ||
-      restored.status !== "active" ||
-      restored.error !== null
-    ) {
-      throw new Error(
-        `Cloudflare hostname "${hostname}" is not active after its current provision command.`,
-      );
+    if (restored?.kind !== "cloudflare") {
+      throw new Error(`Cloudflare hostname "${hostname}" is missing after its provision command.`);
     }
     return { hostname };
   }

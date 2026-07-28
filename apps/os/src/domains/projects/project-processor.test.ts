@@ -19,10 +19,7 @@ import type { ProjectDirectoryRecord } from "../../project-directory.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { defaultProjectWorkerRef } from "../repos/utils.ts";
 import { projectCreationEvents } from "./project-defaults.ts";
-import {
-  ProjectProcessorContract,
-  type ProjectCustomDomainCloudflareSnapshot,
-} from "./project-processor-contract.ts";
+import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
 
 type ProjectEventInput = ConsumedInput<ProjectProcessorContract>;
@@ -83,23 +80,6 @@ function errorCauseMessages(error: unknown): string[] {
   return messages;
 }
 
-function customDomainSnapshot(
-  input: Partial<ProjectCustomDomainCloudflareSnapshot> = {},
-): ProjectCustomDomainCloudflareSnapshot {
-  return {
-    cloudflareHostnameId: "custom-hostname-1",
-    error: null,
-    hostname: "garple.com",
-    hostnameStatus: "active",
-    ownershipVerification: null,
-    sslStatus: "active",
-    status: "active",
-    validationRecords: [],
-    wildcard: true,
-    ...input,
-  };
-}
-
 type SiblingName = "capability-host" | "scheduler" | "repo" | "email";
 const SIBLINGS = ["capability-host", "scheduler", "repo", "email"] as const;
 
@@ -142,15 +122,8 @@ function makeProjectHarness(
       await options.siblingWaitBarriers?.[sibling];
     };
   const customDomains = {
-    ensure: vi.fn(async () =>
-      customDomainSnapshot({
-        hostnameStatus: "pending",
-        sslStatus: "pending_validation",
-        status: "pending_validation",
-      }),
-    ),
+    ensure: vi.fn(async () => {}),
     readProject: vi.fn(async (): Promise<ProjectDirectoryRecord | null> => PROJECT),
-    refresh: vi.fn(async () => customDomainSnapshot()),
     remove: vi.fn(async () => {}),
   };
   const itx = {
@@ -505,7 +478,7 @@ describe("ProjectProcessor catalogs", () => {
 // =============================================================================
 
 describe("ProjectProcessor custom domains", () => {
-  it("provisions an add request and reduces the observed Cloudflare status onto state", async () => {
+  it("provisions and catalogs a Cloudflare hostname", async () => {
     const h = makeProjectHarness();
     await h.play(
       ["append", PROJECT_CREATED],
@@ -522,32 +495,20 @@ describe("ProjectProcessor custom domains", () => {
       hostname: "garple.com",
       project: PROJECT,
     });
-    expect(h.events("events.iterate.com/project/custom-domain-cloudflare-observed")).toMatchObject([
+    expect(h.events("events.iterate.com/project/custom-domain-configured")).toMatchObject([
       {
         payload: {
-          cloudflareHostnameId: "custom-hostname-1",
           hostname: "garple.com",
-          status: "pending_validation",
-          wildcard: true,
+          kind: "cloudflare",
         },
       },
     ]);
-    // The add request reduced to `requested` first, then the observation
-    // replaced it with the Cloudflare snapshot.
-    expect(h.state().customDomains).toMatchObject([
-      {
-        cloudflareHostnameId: "custom-hostname-1",
-        hostname: "garple.com",
-        kind: "cloudflare",
-        status: "pending_validation",
-        wildcard: true,
-      },
-    ]);
+    expect(h.state().customDomains).toEqual([{ hostname: "garple.com", kind: "cloudflare" }]);
   });
 
-  it("falls back to a directory record built from state when the project directory has no entry", async () => {
+  it("records provisioning failure without inventing configured state", async () => {
     const h = makeProjectHarness();
-    h.customDomains.readProject.mockResolvedValueOnce(null);
+    h.customDomains.ensure.mockRejectedValueOnce(new Error("Cloudflare is unavailable"));
     await h.play(
       ["append", PROJECT_CREATED],
       [
@@ -559,278 +520,59 @@ describe("ProjectProcessor custom domains", () => {
       ],
     );
 
-    expect(h.customDomains.ensure).toHaveBeenCalledWith({
-      hostname: "garple.com",
-      project: { id: "prj_test", slug: "demo", organizationId: null, name: "demo" },
-    });
-  });
-
-  it("preserves the last Cloudflare snapshot when a refresh fails", async () => {
-    const h = makeProjectHarness();
-    await h.play(
-      ["append", PROJECT_CREATED],
-      [
-        "append",
-        {
-          type: "events.iterate.com/project/custom-domain-add-requested",
-          payload: { hostname: "garple.com" },
-        },
-      ],
-      // A later observation saw the domain go fully active.
-      [
-        "append",
-        {
-          type: "events.iterate.com/project/custom-domain-cloudflare-observed",
-          payload: customDomainSnapshot(),
-        },
-      ],
-    );
-    expect(h.state().customDomains).toMatchObject([{ hostname: "garple.com", status: "active" }]);
-
-    h.customDomains.refresh.mockRejectedValueOnce(new Error("Cloudflare is unavailable"));
-    await h.play([
-      "append",
-      {
-        type: "events.iterate.com/project/custom-domain-refresh-requested",
-        payload: { hostname: "garple.com" },
-      },
-    ]);
-
-    expect(h.customDomains.refresh).toHaveBeenCalledWith({
-      cloudflareHostnameId: "custom-hostname-1",
-      hostname: "garple.com",
-      project: PROJECT,
-    });
     expect(h.events("events.iterate.com/project/custom-domain-provision-failed")).toMatchObject([
       { payload: { error: "Cloudflare is unavailable", hostname: "garple.com" } },
     ]);
-    // The failure recorded the error but kept the active snapshot: an active
-    // domain must not drop off routing because one re-poll failed.
-    expect(h.state().customDomains).toMatchObject([
-      {
-        cloudflareHostnameId: "custom-hostname-1",
-        error: "Cloudflare is unavailable",
-        hostname: "garple.com",
-        status: "active",
-      },
-    ]);
+    expect(h.state().customDomains).toEqual([]);
   });
 
-  it("removes a domain through the provisioner and drops it from state; a failed removal records the error instead", async () => {
+  it("removes Cloudflare hostnames while direct hostnames remain operator-managed", async () => {
     const h = makeProjectHarness();
     await h.play(
       ["append", PROJECT_CREATED],
       [
         "append",
         {
+          type: "events.iterate.com/project/custom-domain-configured",
+          payload: { hostname: "garple.com", kind: "cloudflare" },
+        },
+        {
+          type: "events.iterate.com/project/custom-domain-configured",
+          payload: { hostname: "iterate.com", kind: "direct" },
+        },
+      ],
+      [
+        "append",
+        {
           type: "events.iterate.com/project/custom-domain-add-requested",
+          payload: { hostname: "iterate.com" },
+        },
+      ],
+      [
+        "append",
+        {
+          type: "events.iterate.com/project/custom-domain-remove-requested",
+          payload: { hostname: "iterate.com" },
+        },
+      ],
+      [
+        "append",
+        {
+          type: "events.iterate.com/project/custom-domain-remove-requested",
           payload: { hostname: "garple.com" },
         },
       ],
     );
 
-    // First removal attempt fails at Cloudflare: the failure is recorded and
-    // the domain stays (marked removing by the request's own reduction).
-    h.customDomains.remove.mockRejectedValueOnce(new Error("Cloudflare is unavailable"));
-    await h.play([
-      "append",
-      {
-        type: "events.iterate.com/project/custom-domain-remove-requested",
-        payload: { hostname: "garple.com" },
-      },
-    ]);
-    expect(h.events("events.iterate.com/project/custom-domain-provision-failed")).toMatchObject([
-      { payload: { error: "Cloudflare is unavailable", hostname: "garple.com" } },
-    ]);
-    expect(h.state().customDomains).toMatchObject([{ hostname: "garple.com", status: "failed" }]);
-
-    // The retried removal succeeds and the domain leaves state entirely.
-    await h.play([
-      "append",
-      {
-        type: "events.iterate.com/project/custom-domain-remove-requested",
-        payload: { hostname: "garple.com" },
-      },
-    ]);
+    expect(h.customDomains.ensure).not.toHaveBeenCalled();
     expect(h.customDomains.remove).toHaveBeenCalledWith({
-      cloudflareHostnameId: "custom-hostname-1",
       hostname: "garple.com",
       project: PROJECT,
     });
     expect(h.events("events.iterate.com/project/custom-domain-removed")).toMatchObject([
       { payload: { hostname: "garple.com" } },
     ]);
-    expect(h.state().customDomains).toEqual([]);
-  });
-
-  it("records a failure for a remove request naming a domain the project does not have", async () => {
-    const h = makeProjectHarness();
-    await h.play(
-      ["append", PROJECT_CREATED],
-      [
-        "append",
-        {
-          type: "events.iterate.com/project/custom-domain-remove-requested",
-          payload: { hostname: "nobody.example.com" },
-        },
-      ],
-    );
-
-    expect(h.customDomains.remove).not.toHaveBeenCalled();
-    expect(h.events("events.iterate.com/project/custom-domain-provision-failed")).toMatchObject([
-      {
-        payload: {
-          error: 'Custom domain "nobody.example.com" is not configured on this project.',
-          hostname: "nobody.example.com",
-        },
-      },
-    ]);
-  });
-});
-
-// =============================================================================
-// Direct custom domains
-// =============================================================================
-
-describe("ProjectProcessor direct custom domains", () => {
-  it("reduces an operator's direct-observed fact to an active direct entry without touching the provisioner", async () => {
-    const h = makeProjectHarness();
-    await h.play(
-      ["append", PROJECT_CREATED],
-      [
-        "append",
-        {
-          type: "events.iterate.com/project/custom-domain-direct-observed",
-          payload: { hostname: "iterate.com" },
-        },
-        {
-          type: "events.iterate.com/project/custom-domain-direct-observed",
-          payload: { hostname: "www.iterate.com" },
-        },
-      ],
-    );
-
-    expect(h.state().customDomains).toMatchObject([
-      {
-        cloudflareHostnameId: null,
-        error: null,
-        hostname: "iterate.com",
-        kind: "direct",
-        status: "active",
-        validationRecords: [],
-        wildcard: false,
-      },
-      { hostname: "www.iterate.com", kind: "direct", status: "active" },
-    ]);
-    // A pure reduction: no Cloudflare call, no observed/failed follow-up.
-    expect(h.customDomains.ensure).not.toHaveBeenCalled();
-    expect(h.customDomains.refresh).not.toHaveBeenCalled();
-    expect(h.customDomains.remove).not.toHaveBeenCalled();
-    expect(h.events("events.iterate.com/project/custom-domain-cloudflare-observed")).toEqual([]);
-    expect(h.events("events.iterate.com/project/custom-domain-provision-failed")).toEqual([]);
-  });
-
-  it("keeps a direct entry when a stray Cloudflare snapshot names the same hostname", async () => {
-    const h = makeProjectHarness();
-    await h.play(
-      ["append", PROJECT_CREATED],
-      [
-        "append",
-        {
-          type: "events.iterate.com/project/custom-domain-direct-observed",
-          payload: { hostname: "iterate.com" },
-        },
-      ],
-    );
-    const before = h.state().customDomains;
-
-    await h.play([
-      "append",
-      {
-        type: "events.iterate.com/project/custom-domain-cloudflare-observed",
-        payload: customDomainSnapshot({ hostname: "iterate.com" }),
-      },
-    ]);
-
-    // Direct outranks any snapshot: lifecycle fields (and the UI's
-    // refresh/remove affordances) must not resurrect.
-    expect(h.state().customDomains).toEqual(before);
-  });
-
-  it("keeps add/refresh/remove requests for a direct hostname away from the provisioner and the routing registration", async () => {
-    // The trap this guards: ensure() for an already-live direct registration
-    // creates a pending Cloudflare-for-SaaS hostname, and the non-active
-    // snapshot's reconciliation DELETES the live KV registration — taking the
-    // domain down. Requests naming a direct hostname must be inert.
-    const h = makeProjectHarness();
-    await h.play(
-      ["append", PROJECT_CREATED],
-      [
-        "append",
-        {
-          type: "events.iterate.com/project/custom-domain-direct-observed",
-          payload: { hostname: "iterate.com" },
-        },
-      ],
-    );
-    const before = h.state().customDomains;
-
-    await h.play(
-      [
-        "append",
-        {
-          type: "events.iterate.com/project/custom-domain-add-requested",
-          payload: { hostname: "iterate.com" },
-        },
-      ],
-      [
-        "append",
-        {
-          type: "events.iterate.com/project/custom-domain-refresh-requested",
-          payload: { hostname: "iterate.com" },
-        },
-      ],
-      [
-        "append",
-        {
-          type: "events.iterate.com/project/custom-domain-remove-requested",
-          payload: { hostname: "iterate.com" },
-        },
-      ],
-    );
-
-    expect(h.customDomains.ensure).not.toHaveBeenCalled();
-    expect(h.customDomains.refresh).not.toHaveBeenCalled();
-    expect(h.customDomains.remove).not.toHaveBeenCalled();
-    expect(h.events("events.iterate.com/project/custom-domain-cloudflare-observed")).toEqual([]);
-    expect(h.events("events.iterate.com/project/custom-domain-provision-failed")).toEqual([]);
-    expect(h.events("events.iterate.com/project/custom-domain-removed")).toEqual([]);
-    // Not flipped to requested/removing: the entry stays exactly as observed.
-    expect(h.state().customDomains).toEqual(before);
-  });
-
-  it("retires a direct entry through an operator-appended custom-domain-removed, a pure reduction", async () => {
-    const h = makeProjectHarness();
-    await h.play(
-      ["append", PROJECT_CREATED],
-      [
-        "append",
-        {
-          type: "events.iterate.com/project/custom-domain-direct-observed",
-          payload: { hostname: "iterate.com" },
-        },
-      ],
-      [
-        "append",
-        {
-          type: "events.iterate.com/project/custom-domain-removed",
-          payload: { hostname: "iterate.com" },
-        },
-      ],
-    );
-
-    expect(h.state().customDomains).toEqual([]);
-    expect(h.customDomains.remove).not.toHaveBeenCalled();
+    expect(h.state().customDomains).toEqual([{ hostname: "iterate.com", kind: "direct" }]);
   });
 });
 
@@ -897,7 +639,7 @@ describe("ProjectProcessor full replay", () => {
   it("a full replay (fresh cursor over the same stream) redelivers every event without wedging or duplicating", async () => {
     // The harshest at-least-once redelivery: a fresh progress store over the
     // SAME stream replays every event, so every blocked per-event append (the
-    // whole birth saga, the ready fact, the custom-domain observations)
+    // whole birth saga, the ready fact, the custom-domain configuration)
     // re-runs. Each must produce a body IDENTICAL to the committed one so the
     // idempotency keys dedupe — a same-key-different-body append would be
     // REJECTED and wedge the frame.
@@ -932,7 +674,7 @@ describe("ProjectProcessor full replay", () => {
     expect(replay.state()).toMatchObject({
       ready: true,
       notificationReady: true,
-      customDomains: [{ hostname: "garple.com", status: "pending_validation" }],
+      customDomains: [{ hostname: "garple.com", kind: "cloudflare" }],
     });
   });
 });
