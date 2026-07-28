@@ -66,10 +66,6 @@ export interface ProcessorStream {
   ): Promise<StreamEvent | undefined>;
   getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]>;
   at(path: string): ProcessorStream;
-  /**
-   * Trusted platform hosts report wake delivery through a fresh stream RPC
-   * instead of the sink session's callback. Optional so browser/in-memory
-   * hosts and an older platform stream remain wire-compatible.
-   */
+  /** Transitional receiver for the retired direct-settlement rollout. */
   settleWakeDelivery?(report: StreamWakeDeliverySettlementReport): void;
 }

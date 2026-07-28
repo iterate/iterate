@@ -1028,11 +1028,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     });
   }
 
-  /**
-   * @internal Report one configured wake delivery through a fresh, one-way
-   * Stream RPC. New processor hosts use this instead of retaining the
-   * per-frame callback carried inside the stream→processor session.
-   */
+  /** @internal Transitional trusted-only receiver for the retired direct-settlement rollout. */
   settleWakeDelivery(report: StreamWakeDeliverySettlementReport): void {
     if (this.props.auth.principal !== "trusted-internal") {
       throw new Error("wake delivery settlement is reported by processor hosts, not sessions");

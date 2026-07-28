@@ -136,10 +136,10 @@ export type ProcessEventBatch = (batch: StreamEventBatch) => unknown;
 /**
  * Serializable failure reported after a durable wake delivery finishes.
  *
- * The result crosses an independent one-way RPC hop, so preserve the
- * lifecycle flags the stream uses to distinguish a dead Durable Object from
- * an application failure. Error prototypes and arbitrary properties do not
- * survive that hop reliably.
+ * The result crosses a one-shot RPC callback, so preserve the lifecycle flags
+ * the stream uses to distinguish a dead Durable Object from an application
+ * failure. Error prototypes and arbitrary properties do not survive that hop
+ * reliably.
  */
 export type StreamWakeDeliveryError = {
   name: string;
@@ -155,12 +155,12 @@ export type StreamWakeDeliveryResult =
   | { outcome: "error"; error: StreamWakeDeliveryError };
 
 /**
- * A terminal wake-delivery report sent through the processor's own stream
- * handle, independently of the stream→subscriber sink RPC session.
+ * Transitional wire shape for the retired direct wake-delivery report.
  *
  * `settlementId` is an opaque, per-attempt nonce. The stream accepts it only
- * for the currently open connection under `subscriptionKey`, so late reports
- * from a replaced subscriber incarnation are harmless.
+ * for the currently open connection under `subscriptionKey`. New stream
+ * incarnations no longer emit these IDs; the receiver remains temporarily so
+ * an older processor call fails closed during rollout.
  */
 export type StreamWakeDeliverySettlementReport = {
   subscriptionKey: SubscriptionKey;
@@ -171,26 +171,22 @@ export type StreamWakeDeliverySettlementReport = {
 /**
  * One-shot acknowledgement capability owned by a single durable wake batch.
  *
- * Rollout compatibility only: current processors report through
- * `ProcessorStream.settleWakeDelivery`, because a callback carried by the
- * stream→processor callback remains part of that RPC session and can be trapped
- * behind the very actor-drain cycle it is meant to release. Older stream or
- * processor incarnations still use this callback during a mixed-version
- * rollout.
+ * Current hosted processors retain this callback until the durable frame
+ * attempt completes, invoke it exactly once, and do not await its result.
  */
 export type ReportStreamWakeDeliveryResult = (result: StreamWakeDeliveryResult) => unknown;
 
 /**
- * Internal hosted-processor frame: an ordinary batch plus rollout-compatible
- * acknowledgement coordinates.
+ * Internal hosted-processor frame: an ordinary batch plus its one-shot
+ * acknowledgement callback and rollout-compatible fields.
  */
 export type StreamWakeEventBatch = StreamEventBatch & {
   /**
-   * Opaque per-attempt nonce for session-independent settlement. Absent when
-   * an older stream incarnation delivered the frame.
+   * Retired direct-settlement coordinate accepted only from the immediately
+   * preceding rollout. Current stream incarnations omit it.
    */
   settlementId?: string;
-  /** Current compatibility door when direct settlement is unavailable. */
+  /** Current one-shot result callback. */
   reportDeliveryResult: ReportStreamWakeDeliveryResult;
   /**
    * Compatibility alias emitted for the immediately preceding rollout,

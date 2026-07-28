@@ -179,14 +179,13 @@ callback; it never reuses the old checkpoint. The processor stores its
 checkpoint with its reduced state.
 
 Hosted callback calls are one-way and their return values stay unpulled. Each
-batch carries an opaque settlement ID; after the durable processor attempt
-finishes, the host reports success or failure through a fresh call on its own
-Stream handle. This separation is load-bearing: processors routinely append
-back to the delivering stream, and retaining the per-batch result callback
-would keep that outbound RPC session in the nested actor-drain tree. The two
-callback field names remain in the frame only for mixed-version rollout
-compatibility, with the same 20-second native-alarm watchdog if no terminal
-report arrives.
+batch carries a one-shot result callback. The processor host retains that
+callback until the durable frame attempt finishes, reports success or failure
+exactly once, and does not await the callback result. Consequential background
+work has its own durable obligation and keepalive lane, so it does not hold the
+frame acknowledgement open. The older callback alias and retired direct-report
+receiver remain only for mixed-version rollout compatibility, with the same
+20-second native-alarm watchdog if no terminal report arrives.
 
 ### Receiving stream
 

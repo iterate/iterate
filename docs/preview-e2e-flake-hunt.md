@@ -470,6 +470,40 @@ typecheck, lint with zero warnings, formatting, Knip, generated API checks, and
 failure remain proof targets rather than accepted noise. The strict streak is
 still 0/25 until the new immutable head completes a clean preflight.
 
+After merging current `origin/main` at
+`21f416be0957c28c943971bfec10144191ca7ef0`, exact-head preflight
+`5ed121fd0b9700cc42b20739601b8be56e175b26` was correctly rejected. Depot
+aggregate `1pcg6kpg67` and canonical preview attempt `dq38xw31q7` retained all
+ten raw sources and normalized 7,207 PostHog events, but the OS lane contained
+six framework retries. Five unrelated cases passed on retry. The 20-script
+concurrency proof timed out on both 120-second attempts.
+
+The script work itself was not lost. Cloudflare traces
+`c08e19ce6d97c32f305de7685a093d24` and
+`fbe9a525f97fe1266c6db87eb3b17c78` show all 20 Dynamic Worker executions in
+each attempt finishing in about 30.3 seconds, followed by successful
+exact-stream settlement appends. The failure was the generic wake protocol:
+the same preview window emitted 896
+`stream durable callback failed; backing off before waking it again` records,
+all sampled as 20-second hosted-processor acknowledgement timeouts and spread
+across Project, Capability Host, notification, agent, and repository
+processors. A targeted trace query saw only 9 and 16 direct
+`settleWakeDelivery` calls in the two 20-script attempts.
+
+The claimed one-way direct report disposed its ignored RPC result without any
+independent event owning delivery. Cloudflare therefore had no guarantee that
+the call was dispatched before disposal. New streams now stop emitting the
+direct-settlement coordinate, and new processors deliberately use the
+retained one-shot callback even when an older frame still carries that
+coordinate. The callback result remains unpulled, while the runner's durable
+frame attempt—not its consequential `runInBackground` obligation—owns the
+acknowledgement. The retired direct receiver stays temporarily for wire
+compatibility. Focused regression tests prove new frames omit the coordinate,
+old-frame coordinates cannot select the broken path, duplicate callbacks
+cannot settle a successor batch, and background work does not delay the
+acknowledgement. The strict streak remains 0/25 pending a clean exact-head
+preflight.
+
 ## Round 15 (2026-07-23, post-#2284)
 
 This round starts from merged `origin/main` at

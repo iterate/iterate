@@ -529,7 +529,7 @@ describe("wakeStreamProcessor", () => {
     });
   });
 
-  it("settles through a fresh Stream call without retaining the legacy callback or background work", async () => {
+  it("uses the retained callback even when an older stream sends a direct-settlement coordinate", async () => {
     const h = makeHarness();
     let releaseBackground!: () => void;
     const background = new Promise<void>((resolve) => {
@@ -542,7 +542,11 @@ describe("wakeStreamProcessor", () => {
     };
     await h.stream.append({ type: REQUESTED, payload: { id: "background" } });
     const woken = await h.wake("alpha-proc");
-    const duplicateLegacyResult = vi.fn(() => vi.fn());
+    const disposeLegacyResult = vi.fn();
+    const retainedLegacyResult = Object.assign(vi.fn(), {
+      [Symbol.dispose]: disposeLegacyResult,
+    });
+    const duplicateLegacyResult = vi.fn(() => retainedLegacyResult);
     const legacyResult = Object.assign(vi.fn(), {
       dup: duplicateLegacyResult,
     });
@@ -566,23 +570,18 @@ describe("wakeStreamProcessor", () => {
     });
 
     expect(returned).toBeUndefined();
-    await expect
-      .poll(() => h.directSettlements)
-      .toEqual([
-        {
-          subscriptionKey: "wake:alpha-proc",
-          settlementId: "stream-incarnation:1",
-          settlement: { outcome: "ok" },
-        },
-      ]);
+    await expect.poll(() => retainedLegacyResult.mock.calls).toEqual([[{ outcome: "ok" }]]);
+    expect(h.directSettlements).toEqual([]);
     expect(legacyResult).not.toHaveBeenCalled();
-    expect(duplicateLegacyResult).not.toHaveBeenCalled();
+    expect(duplicateLegacyResult).toHaveBeenCalledOnce();
+    expect(disposeLegacyResult).toHaveBeenCalledOnce();
     expect(priorResult).not.toHaveBeenCalled();
     expect(duplicatePriorResult).not.toHaveBeenCalled();
 
-    // The frame acknowledgement is deliberately independent of consequential
-    // background work, whose own keepalive/revival lane remains responsible.
+    // Frame acknowledgement remains independent of consequential background
+    // work, whose own keepalive/revival lane remains responsible.
     releaseBackground();
+    await h.settle();
   });
 
   it("reports processor failures with lifecycle classification intact", async () => {

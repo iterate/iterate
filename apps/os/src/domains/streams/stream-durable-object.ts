@@ -1129,11 +1129,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     return receipt;
   }
 
-  /**
-   * Trusted-internal, session-independent acknowledgement for a configured
-   * wake delivery. The opaque settlement ID fences duplicates and reports
-   * from replaced processor connections inside StreamConnections.
-   */
+  /** Transitional receiver for the retired direct wake-settlement rollout. */
   settleWakeDelivery(report: StreamWakeDeliverySettlementReport): void {
     this.#eventSender.connections.settleWakeDelivery(report);
   }

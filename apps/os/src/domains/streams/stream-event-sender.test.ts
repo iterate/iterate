@@ -2106,7 +2106,7 @@ describe("StreamConnections hosted delivery watchdog", () => {
     expect(disposed).not.toHaveBeenCalled();
   });
 
-  it("settles hosted batches directly and ignores duplicate legacy reports", async () => {
+  it("omits retired direct coordinates and ignores duplicate callback reports", async () => {
     const h = connectionsHarness();
     const calls: DeliveryCall[] = [];
     const connection = h.connections.openHosted({
@@ -2119,43 +2119,25 @@ describe("StreamConnections hosted delivery watchdog", () => {
     connection.sendQueued();
     expect(calls).toHaveLength(1);
     const firstBatch = calls[0]!.batch as StreamWakeEventBatch;
-    expect(firstBatch.settlementId).toBe("11111111-1111-4111-8111-111111111111:1");
+    expect(firstBatch.settlementId).toBeUndefined();
 
-    h.connections.settleWakeDelivery({
-      subscriptionKey: "processor",
-      settlementId: firstBatch.settlementId!,
-      settlement: { outcome: "ok" },
-    });
+    calls[0]!.report("ok");
     await flushMicrotasks();
 
     expect(calls).toHaveLength(2);
     expect(calls[1]!.batch.events.map((event) => event.offset)).toEqual([2]);
     const secondBatch = calls[1]!.batch as StreamWakeEventBatch;
-    expect(secondBatch.settlementId).toBe("11111111-1111-4111-8111-111111111111:2");
+    expect(secondBatch.settlementId).toBeUndefined();
 
-    // Both callback names can remain live on older processor hosts. Once the
-    // direct report has won, neither a late callback nor a duplicate direct
-    // report for the first opaque ID may settle the second batch.
+    // A late duplicate from the first callback cannot settle the second batch.
     calls[0]!.report("ok");
-    h.connections.settleWakeDelivery({
-      subscriptionKey: "processor",
-      settlementId: firstBatch.settlementId!,
-      settlement: {
-        outcome: "error",
-        error: { name: "Error", message: "late duplicate" },
-      },
-    });
     await flushMicrotasks();
 
     expect(calls).toHaveLength(2);
     expect(h.deliveryFailures).not.toHaveBeenCalled();
     expect(connection.isLive()).toBe(true);
 
-    h.connections.settleWakeDelivery({
-      subscriptionKey: "processor",
-      settlementId: secondBatch.settlementId!,
-      settlement: { outcome: "ok" },
-    });
+    calls[1]!.report("ok");
     await flushMicrotasks();
     expect(calls).toHaveLength(3);
     expect(calls[2]!.batch.events.map((event) => event.offset)).toEqual([3]);

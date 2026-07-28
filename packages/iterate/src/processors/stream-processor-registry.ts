@@ -39,9 +39,9 @@
 //   3. building each runner's `durability` adapters from `ctx`
 //      (durable-object-processor-durability.ts);
 //   4. the DO transport boundary — wake sink calls return immediately and
-//      their eventual runner outcome crosses a fresh one-way call through the
-//      processor's own Stream handle. This must remain transport adaptation
-//      only; frame semantics stay in the runner.
+//      their eventual runner outcome crosses the frame's retained one-shot
+//      result callback. This must remain transport adaptation only; frame
+//      semantics stay in the runner.
 //
 // plus the two responsibilities that live ABOVE any single runner and so
 // cannot move into one: the node's LIVE-STATE assembly and the catch-up door.
@@ -647,20 +647,18 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
       // whole-attempt keepalive, and the trailing unfiltered catch-up. The
       // registry adds only the transport boundary: the stream's callback call
       // returns immediately, while this DO reports the eventual attempt
-      // outcome through a fresh call on this host's own Stream handle.
+      // outcome through the batch's retained one-shot callback.
       //
       // That separation is load-bearing. Processor blockers routinely append
       // back to the same stream that delivered them. Returning `attempt` from
       // this RPC makes the stream pull a result that cannot settle until the
       // nested append reaches the stream again — a cyclic actor-drain tree
-      // that workerd can retain until idle teardown. Reporting through the
-      // per-frame callback has the same hidden coupling: that callback belongs
-      // to the stream→processor RPC session. A fresh Stream-handle call
-      // is one-way and does not retain that session. The callback remains only
-      // as a mixed-version rollout fallback.
+      // that workerd can retain until idle teardown. The callback itself is
+      // invoked only after the runner has durably completed the frame; its
+      // result is deliberately not awaited.
       const opened = await entry.runner.openEventBatchCallback(args.stream.streamId);
       const processEventBatch = (batch: StreamWakeEventBatch) => {
-        const { reportDeliveryResult, settleDelivery, settlementId, ...rawFrame } = batch;
+        const { reportDeliveryResult, settleDelivery, ...rawFrame } = batch;
         // The immediately preceding stream protocol had no streamId on each
         // frame. Its wake request still identifies the stream lifetime, so
         // inject that already-validated ID during a mixed-version rollout.
@@ -679,41 +677,28 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
           );
         }
 
-        let reportResult: (result: StreamWakeDeliveryResult) => unknown;
-        let disposeResultCallback: (() => void) | undefined;
-        if (settlementId !== undefined && typeof options.stream.settleWakeDelivery === "function") {
-          // New↔new path: do not retain either callback parameter. The
-          // terminal result crosses a fresh Stream call owned by this host.
-          reportResult = (settlement) =>
-            options.stream.settleWakeDelivery!({
-              subscriptionKey: args.subscriptionKey,
-              settlementId,
-              settlement,
-            });
-        } else {
-          // Mixed-version path. `reportDeliveryResult` is the current callback
-          // name; `settleDelivery` was emitted by the immediately preceding
-          // rollout. Retain exactly one callback until its terminal send.
-          const resultCallback =
-            typeof reportDeliveryResult === "function" ? reportDeliveryResult : settleDelivery;
-          if (typeof resultCallback !== "function") {
-            console.error("stream wake delivery result callback is missing");
-            return;
-          }
-          let retainedResultCallback;
-          try {
-            retainedResultCallback = retainCallback<StreamWakeDeliveryResult>(resultCallback);
-          } catch (error) {
-            // Processing a batch that can never report its result would strand
-            // the source's pending attempt. Leave the processor checkpoint
-            // untouched so the source watchdog can wake it again.
-            console.error("stream wake delivery result callback could not be retained", {
-              error,
-            });
-            return;
-          }
-          reportResult = retainedResultCallback;
-          disposeResultCallback = () => retainedResultCallback[Symbol.dispose]();
+        // `settlementId` may still be present on a frame emitted by the
+        // immediately preceding rollout. Its fresh Stream-handle report was
+        // not reliably dispatched before the ignored RPC result was disposed,
+        // so all hosts deliberately use the retained callback during the
+        // transition. `settleDelivery` is the still-older callback name.
+        const resultCallback =
+          typeof reportDeliveryResult === "function" ? reportDeliveryResult : settleDelivery;
+        if (typeof resultCallback !== "function") {
+          console.error("stream wake delivery result callback is missing");
+          return;
+        }
+        let retainedResultCallback;
+        try {
+          retainedResultCallback = retainCallback<StreamWakeDeliveryResult>(resultCallback);
+        } catch (error) {
+          // Processing a batch that can never report its result would strand
+          // the source's pending attempt. Leave the processor checkpoint
+          // untouched so the source watchdog can wake it again.
+          console.error("stream wake delivery result callback could not be retained", {
+            error,
+          });
+          return;
         }
 
         let attempt: Promise<void>;
@@ -724,34 +709,26 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
         }
         const report = attempt.then(
           () =>
-            reportWakeDeliveryResult(reportResult, {
+            reportWakeDeliveryResult(retainedResultCallback, {
               outcome: "ok",
             }),
           (error: unknown) =>
-            reportWakeDeliveryResult(reportResult, {
+            reportWakeDeliveryResult(retainedResultCallback, {
               outcome: "error",
               error: serializeWakeDeliveryError(error),
             }),
         );
-
-        if (disposeResultCallback === undefined) {
-          // The runner owns the attempt's keepalive. Attaching this report to
-          // the inbound invocation would recreate the session dependency the
-          // direct route exists to break.
-          void report;
-        } else {
-          ctx.waitUntil(
-            report.finally(() => {
-              try {
-                disposeResultCallback();
-              } catch (error) {
-                console.warn("stream wake delivery result callback disposal failed", {
-                  error,
-                });
-              }
-            }),
-          );
-        }
+        ctx.waitUntil(
+          report.finally(() => {
+            try {
+              retainedResultCallback[Symbol.dispose]();
+            } catch (error) {
+              console.warn("stream wake delivery result callback disposal failed", {
+                error,
+              });
+            }
+          }),
+        );
       };
       // The capability assembles runtime state from its two honest sources:
       // the SNAPSHOT from the runner (the cursor owner) and the runtime bag +

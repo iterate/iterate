@@ -276,7 +276,7 @@ type StreamEventSenderHooks = {
   now(): number;
   /** Injected randomness (backoff jitter); [0, 1) like Math.random. */
   random(): number;
-  /** Injected UUID source for session-independent wake settlement IDs. */
+  /** Injected UUID source retained while the retired direct-settlement receiver rolls out. */
   randomUUID(): string;
   /** Arm the Durable Object alarm for the earliest pending retry. */
   armAlarm(atMs: number): void;
@@ -1640,10 +1640,7 @@ export class StreamConnections {
     return this.#connections.get(connectionKey)?.kind;
   }
 
-  /**
-   * Settle the current hosted batch through the processor host's own Stream
-   * handle. The opaque ID makes duplicate and late reports harmless.
-   */
+  /** Transitional receiver for a direct report emitted by the preceding rollout. */
   settleWakeDelivery(report: StreamWakeDeliverySettlementReport): void {
     this.#connections
       .get(report.subscriptionKey)
@@ -2044,10 +2041,10 @@ export class StreamConnections {
               settleHostedBatch(settlementId, deliveryResult);
             (processEventBatch as unknown as RetainedProcessEventBatch<StreamWakeEventBatch>)({
               ...batch,
-              settlementId,
               reportDeliveryResult,
-              // The immediately preceding rollout used this name. Sending the
-              // alias lets an older processor settle a newer stream.
+              // The immediately preceding callback rollout used this name.
+              // Sending the alias keeps an older processor compatible while
+              // deliberately omitting the retired direct-settlement ID.
               settleDelivery: reportDeliveryResult,
             } satisfies StreamWakeEventBatch);
           } else {

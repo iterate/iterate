@@ -2659,9 +2659,9 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "StreamWakeEventBatch",
     kind: "typeAlias",
     sourceText:
-      "/**\n * Internal hosted-processor frame: an ordinary batch plus rollout-compatible\n * acknowledgement coordinates.\n */\nexport type StreamWakeEventBatch = StreamEventBatch & {\n  /**\n   * Opaque per-attempt nonce for session-independent settlement. Absent when\n   * an older stream incarnation delivered the frame.\n   */\n  settlementId?: string;\n  /** Current compatibility door when direct settlement is unavailable. */\n  reportDeliveryResult: ReportStreamWakeDeliveryResult;\n  /**\n   * Compatibility alias emitted for the immediately preceding rollout,\n   * whose processor host called this field `settleDelivery`.\n   */\n  settleDelivery?: ReportStreamWakeDeliveryResult;\n};",
+      "/**\n * Internal hosted-processor frame: an ordinary batch plus its one-shot\n * acknowledgement callback and rollout-compatible fields.\n */\nexport type StreamWakeEventBatch = StreamEventBatch & {\n  /**\n   * Retired direct-settlement coordinate accepted only from the immediately\n   * preceding rollout. Current stream incarnations omit it.\n   */\n  settlementId?: string;\n  /** Current one-shot result callback. */\n  reportDeliveryResult: ReportStreamWakeDeliveryResult;\n  /**\n   * Compatibility alias emitted for the immediately preceding rollout,\n   * whose processor host called this field `settleDelivery`.\n   */\n  settleDelivery?: ReportStreamWakeDeliveryResult;\n};",
     summary:
-      "Internal hosted-processor frame: an ordinary batch plus rollout-compatible acknowledgement coordinates.",
+      "Internal hosted-processor frame: an ordinary batch plus its one-shot acknowledgement callback and rollout-compatible fields.",
     memberSummaries: {},
     referencedTypeNames: ["StreamEventBatch", "ReportStreamWakeDeliveryResult"],
   },
@@ -2687,7 +2687,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "ReportStreamWakeDeliveryResult",
     kind: "typeAlias",
     sourceText:
-      "/**\n * One-shot acknowledgement capability owned by a single durable wake batch.\n *\n * Rollout compatibility only: current processors report through\n * `ProcessorStream.settleWakeDelivery`, because a callback carried by the\n * stream→processor callback remains part of that RPC session and can be trapped\n * behind the very actor-drain cycle it is meant to release. Older stream or\n * processor incarnations still use this callback during a mixed-version\n * rollout.\n */\nexport type ReportStreamWakeDeliveryResult = (result: StreamWakeDeliveryResult) => unknown;",
+      "/**\n * One-shot acknowledgement capability owned by a single durable wake batch.\n *\n * Current hosted processors retain this callback until the durable frame\n * attempt completes, invoke it exactly once, and do not await its result.\n */\nexport type ReportStreamWakeDeliveryResult = (result: StreamWakeDeliveryResult) => unknown;",
     summary: "One-shot acknowledgement capability owned by a single durable wake batch.",
     memberSummaries: {},
     referencedTypeNames: ["StreamWakeDeliveryResult"],
@@ -2742,7 +2742,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "StreamWakeDeliveryError",
     kind: "typeAlias",
     sourceText:
-      "/**\n * Serializable failure reported after a durable wake delivery finishes.\n *\n * The result crosses an independent one-way RPC hop, so preserve the\n * lifecycle flags the stream uses to distinguish a dead Durable Object from\n * an application failure. Error prototypes and arbitrary properties do not\n * survive that hop reliably.\n */\nexport type StreamWakeDeliveryError = {\n  name: string;\n  message: string;\n  durableObjectReset?: true;\n  overloaded?: true;\n  retryable?: true;\n};",
+      "/**\n * Serializable failure reported after a durable wake delivery finishes.\n *\n * The result crosses a one-shot RPC callback, so preserve the lifecycle flags\n * the stream uses to distinguish a dead Durable Object from an application\n * failure. Error prototypes and arbitrary properties do not survive that hop\n * reliably.\n */\nexport type StreamWakeDeliveryError = {\n  name: string;\n  message: string;\n  durableObjectReset?: true;\n  overloaded?: true;\n  retryable?: true;\n};",
     summary: "Serializable failure reported after a durable wake delivery finishes.",
     memberSummaries: {},
     referencedTypeNames: [],
