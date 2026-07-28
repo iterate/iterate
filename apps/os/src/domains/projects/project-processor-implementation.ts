@@ -10,6 +10,7 @@ import { schedulerCreationEvents } from "../scheduler/scheduler-defaults.ts";
 import { SCHEDULER_PRIMARY_PATH } from "../scheduler/utils.ts";
 import { emailRouterCreationEvents } from "../email/email-defaults.ts";
 import { EMAIL_INTEGRATION_STREAM_PATH } from "../email/utils.ts";
+import { isWorkerBuildFailedError } from "../workers/artifact-store.ts";
 import { WORKER_BUILDING_HEADER } from "../workers/worker-fetch-dispatch.ts";
 import { isStreamDeliveryRejectedError } from "../streams/stream-unavailable.ts";
 import type { ProjectCustomDomainDeps } from "./custom-domains.ts";
@@ -57,11 +58,10 @@ const SIBLING_BIRTH_BARRIER_TIMEOUT_MS = 75_000;
  * temporary feed with the ordinary all-events feed and appends the terminal
  * `project/created` certificate that create() callers await.
  *
- * A config-repo failure or a durable rejection of that exact delivery policy
- * closes the saga with `project/create-failed`. Worker-build and availability
- * errors, an in-progress build, and wait timeouts leave the reaction open for
- * durable redelivery: the bundler does not yet classify source failures apart
- * from infrastructure failures, so neither is terminal here.
+ * A config-repo failure, a deterministic worker source-build failure, or a
+ * durable rejection of that exact delivery policy closes the saga with
+ * `project/create-failed`. Transient worker availability errors, an in-progress
+ * build, and wait timeouts leave the reaction open for durable redelivery.
  *
  * CATALOGS. `reduce` projects cross-posted domain facts into list state:
  * physical streams (`stream/created`, `stream/child-stream-created`),
@@ -168,11 +168,10 @@ export class ProjectProcessor extends StreamProcessor<
           }
 
           const timing = { projectId: this.deps.itx.projectId };
-          await timedStep("create-timing", timing, "worker-probe", () =>
-            this.#waitForDefaultProjectWorker(),
-          );
-
           try {
+            await timedStep("create-timing", timing, "worker-probe", () =>
+              this.#waitForDefaultProjectWorker(),
+            );
             const [configured] = await timedStep(
               "create-timing",
               timing,
@@ -209,7 +208,9 @@ export class ProjectProcessor extends StreamProcessor<
               }),
             );
           } catch (error) {
-            if (!isStreamDeliveryRejectedError(error)) throw error;
+            if (!isStreamDeliveryRejectedError(error) && !isWorkerBuildFailedError(error)) {
+              throw error;
+            }
             await append(
               {
                 type: "events.iterate.com/stream/subscription-removed",

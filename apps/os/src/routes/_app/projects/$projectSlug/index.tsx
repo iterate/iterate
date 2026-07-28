@@ -67,7 +67,7 @@ function ProjectHomePage() {
       const session = await connectIterateSession();
       await session.projects
         .get(project.slug)
-        .create({ projectId: project.id }, { waitUntilReady: false });
+        .create({ projectId: project.id }, { waitUntilCreated: false });
     })().catch((error: unknown) => {
       console.error("project welcome: browser birth recovery failed", {
         projectId: project.id,

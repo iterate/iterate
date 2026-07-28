@@ -251,21 +251,34 @@ describe("ProjectProcessor bootstrap", () => {
     ]);
   });
 
-  it("leaves an unclassified worker build failure open for durable redelivery", async () => {
+  it("terminalizes a deterministic worker source-build failure", async () => {
     const h = makeProjectHarness({
-      workerOutcomes: [new WorkerBuildFailedError("Expected ; but found is")],
+      workerOutcomes: [
+        new WorkerBuildFailedError({ kind: "source", message: "Expected ; but found is" }),
+      ],
       workerRetrySleep: async () => undefined,
     });
     await h.stream.append(PROJECT_CREATE_REQUESTED, CONFIG_REPO_CREATED);
 
-    await expect(h.settle()).rejects.toThrow("Expected ; but found is");
+    await h.settle();
     expect(h.workerFetchCalls()).toBe(1);
     expect(h.events("events.iterate.com/project/created")).toEqual([]);
-    expect(h.events("events.iterate.com/project/create-failed")).toEqual([]);
-
-    await h.settle();
-    expect(h.workerFetchCalls()).toBe(2);
-    expect(h.events("events.iterate.com/project/created")).toHaveLength(1);
+    expect(h.events("events.iterate.com/stream/subscription-removed")).toMatchObject([
+      {
+        idempotencyKey: "platform:project-worker-subscription-removed:prj_test",
+        payload: { subscriptionKey: "project-worker" },
+      },
+    ]);
+    expect(h.events("events.iterate.com/project/create-failed")).toMatchObject([
+      {
+        idempotencyKey: "platform:project/create-failed",
+        payload: {
+          createRequestedAtOffset: 1,
+          error: "Default project worker bootstrap failed: Expected ; but found is",
+          request: PROJECT_CREATE_REQUESTED.payload,
+        },
+      },
+    ]);
   });
 
   it("leaves a transient worker dispatch failure open for durable redelivery", async () => {
