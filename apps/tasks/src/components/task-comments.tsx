@@ -176,23 +176,25 @@ function ThreadBlock({
             Reply
           </button>
         ) : null}
-        <button
-          type="button"
-          onClick={() =>
-            apply((doc) => setThreadStatus(doc, thread.id, resolved ? "open" : "resolved"))
-          }
-          className="flex items-center gap-1 text-xs text-muted-foreground underline-offset-2 hover:underline"
-        >
-          {resolved ? (
-            <>
-              <Undo2Icon aria-hidden className="size-3" /> Reopen
-            </>
-          ) : (
-            <>
-              <CheckCircle2Icon aria-hidden className="size-3" /> Resolve
-            </>
-          )}
-        </button>
+        {identity !== null ? (
+          <button
+            type="button"
+            onClick={() =>
+              apply((doc) => setThreadStatus(doc, thread.id, resolved ? "open" : "resolved"))
+            }
+            className="flex items-center gap-1 text-xs text-muted-foreground underline-offset-2 hover:underline"
+          >
+            {resolved ? (
+              <>
+                <Undo2Icon aria-hidden className="size-3" /> Reopen
+              </>
+            ) : (
+              <>
+                <CheckCircle2Icon aria-hidden className="size-3" /> Resolve
+              </>
+            )}
+          </button>
+        ) : null}
       </div>
       {replyOpen && identity !== null ? (
         <div className="pt-1.5 pl-8">

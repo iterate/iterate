@@ -390,7 +390,11 @@ export function deleteComment(doc: StructuredDocument, commentId: string): EditR
   const hasReplies = thread.comments.some((c) => c.inReplyTo === commentId);
 
   if (!hasReplies) {
-    if (thread.comments.length === 1) return removeThread(doc, thread.id);
+    // Deleting the last non-deleted comment clears the whole thread — a
+    // thread holding only tombstones has no live content left, and leaving
+    // it would strand tombstones nothing can ever delete.
+    const liveAfter = thread.comments.filter((c) => !c.deleted && c.id !== commentId).length;
+    if (liveAfter === 0) return removeThread(doc, thread.id);
     return finish(doc, [{ range: withTrailingBlankLine(doc.raw, comment.range), insert: "" }]);
   }
 

@@ -130,7 +130,8 @@ content uses the file's dominant line ending.
 - `editComment(doc, commentId, body)`
 - `deleteComment(doc, commentId)` — removes the block; when replies still
   reference it, writes a tombstone (`deleted=true`, body `*Deleted.*`)
-  instead; removing a thread's last comment removes the thread.
+  instead. Removing a thread's last non-deleted comment removes the whole
+  thread, tombstones included — orphaned tombstones never strand.
 - `removeThread(doc, threadId)` — also removes inline markers, and the store
   itself when nothing but scaffolding remains.
 - `setThreadAnchor(doc, threadId, selector | null)`

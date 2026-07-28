@@ -419,6 +419,35 @@ describe("deleteComment", () => {
     });
   });
 
+  test("deleting the last live comment sweeps a tombstone-only thread", () => {
+    const tombstoned = deleteComment(structured(THREADED), "cm_a");
+    const result = deleteComment(tombstoned.doc, "cm_b");
+    expect(result.raw).toBe("# T\n");
+    expect(result.doc.discussion).toBeNull();
+  });
+
+  test("a tombstone survives while a live sibling keeps the thread alive", () => {
+    const tombstoned = deleteComment(structured(THREADED), "cm_a");
+    const withThird = addComment(tombstoned.doc, {
+      ...WHO,
+      threadId: "th_a",
+      body: "Still discussing.",
+      commentId: "cm_c",
+    });
+    const afterReplyGone = deleteComment(withThird.doc, "cm_b");
+    expect(
+      afterReplyGone.doc.discussion?.threads[0]?.comments.map((c) => ({
+        id: c.id,
+        deleted: c.deleted,
+      })),
+    ).toEqual([
+      { id: "cm_a", deleted: true },
+      { id: "cm_c", deleted: false },
+    ]);
+    const cleared = deleteComment(afterReplyGone.doc, "cm_c");
+    expect(cleared.doc.discussion).toBeNull();
+  });
+
   test("deleting the only comment removes thread, marker, and empty store", () => {
     const original = md("Alpha beta gamma.", "");
     const added = addThread(structured(original), {
