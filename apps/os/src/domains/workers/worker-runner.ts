@@ -219,17 +219,20 @@ export class DynamicWorkerRunner {
         return withWorkerCommit(await entrypoint.fetch(currentRequest), resolved.commitOid);
       };
 
-      const retryable =
+      const retryRequest =
         ref.type === "stateless" &&
         !isWebSocketUpgradeRequest(request) &&
-        (request.method === "GET" || request.method === "HEAD");
-      const retryRequest = retryable ? (request.clone() as Request) : undefined;
+        (request.method === "GET" || request.method === "HEAD")
+          ? // Cloudflare's clone() widens the Request metadata generics even
+            // though the runtime value remains the same Fetch API request.
+            (request.clone() as typeof request)
+          : undefined;
       let response: Response;
       try {
         response = await dispatch(request);
       } catch (error) {
         if (
-          !retryable ||
+          retryRequest === undefined ||
           !(error instanceof Error) ||
           !error.message.includes(WORKERS_RPC_CLONE_VERSION_ERROR)
         ) {
@@ -241,7 +244,7 @@ export class DynamicWorkerRunner {
           rayId: request.headers.get("cf-ray") ?? undefined,
           traceRole,
         });
-        response = await dispatch(retryRequest!, crypto.randomUUID());
+        response = await dispatch(retryRequest, crypto.randomUUID());
       }
       span.setAttribute("http.response.status_code", response.status);
       return response;
