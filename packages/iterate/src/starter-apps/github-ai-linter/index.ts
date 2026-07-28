@@ -41,7 +41,14 @@ export const GithubAiLinter = {
 };
 
 async function retireHostedReviewBot(itx: Project, connection: string): Promise<void> {
-  await itx.streams.get(`/integrations/github/${connection}`).append({
+  const stream = itx.streams.get(`/integrations/github/${connection}`);
+  const state = await stream.runtimeState();
+  if (
+    state.coreProcessorState.subscriptions.outbound.byKey["app-review-bot#review-bot"] === undefined
+  ) {
+    return;
+  }
+  await stream.append({
     type: "events.iterate.com/stream/subscription-removed",
     idempotencyKey: "github-ai-linter:retire-hosted-review-bot:v1",
     payload: {

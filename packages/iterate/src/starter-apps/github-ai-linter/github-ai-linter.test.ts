@@ -5,9 +5,16 @@ import { GithubAiLinter } from "./index.ts";
 test("the project worker handles verified GitHub webhooks directly", async () => {
   const dispose = vi.fn();
   const append = vi.fn(async () => []);
+  const runtimeState = vi.fn(async () => ({
+    coreProcessorState: {
+      subscriptions: {
+        outbound: { byKey: { "app-review-bot#review-bot": {} } },
+      },
+    },
+  }));
   const get = vi.fn(async () => ({
     [Symbol.dispose]: dispose,
-    streams: { get: vi.fn(() => ({ append })) },
+    streams: { get: vi.fn(() => ({ append, runtimeState })) },
   }));
   const app = GithubAiLinter.create({ ITX: { get } } as never, {
     policyVersion: "2",
@@ -50,6 +57,33 @@ test("the project worker handles verified GitHub webhooks directly", async () =>
   await app.processEvent(event("events.iterate.com/github/webhook-received"));
   expect(get).toHaveBeenCalledTimes(2);
   expect(dispose).toHaveBeenCalledTimes(2);
+});
+
+test("a project without the retired hosted subscription links normally", async () => {
+  const append = vi.fn(async () => []);
+  const get = vi.fn(async () => ({
+    [Symbol.dispose]: vi.fn(),
+    streams: {
+      get: vi.fn(() => ({
+        append,
+        runtimeState: vi.fn(async () => ({
+          coreProcessorState: { subscriptions: { outbound: { byKey: {} } } },
+        })),
+      })),
+    },
+  }));
+  const app = GithubAiLinter.create({ ITX: { get } } as never, {
+    policyVersion: "2",
+    rules: { glob: "rules/**/*.md", repoPath: "/repos/iterate" },
+  });
+
+  await expect(
+    app.processEvent({
+      ...event("events.iterate.com/repo/github-link-configured"),
+      payload: { connection: "install-42" },
+    }),
+  ).resolves.toBeUndefined();
+  expect(append).not.toHaveBeenCalled();
 });
 
 function event(type: string): StreamEvent {
