@@ -1422,14 +1422,13 @@ export class RepoDurableObject extends DurableObject<Env> {
     });
 
     // The adopted head is recorded for read-your-write, then the head cache
-    // is invalidated and rebuilt through getHead's own cold-miss path (a
-    // shallow depth-1 clone — head-snapshot-sized even for big repos).
-    // Ordering matters: with the pushed head recorded first, getHead's
-    // lags-the-push guard keeps any concurrently in-flight pre-sync checkout
-    // from repopulating the cache with the old head.
+    // is invalidated. Do not synchronously warm it: the successful push can
+    // precede Artifacts replica convergence, and that must not turn a
+    // completed transfer into a failed sync. The first real consumer rebuilds
+    // the cache; getHead's lags-the-push guard keeps it unavailable until the
+    // adopted head is authoritative.
     this.#recordPushedHead({ branch, commitOid: headOid });
     this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
-    await this.getHead({ branch });
 
     await this.#stream.append({
       type: "events.iterate.com/repo/github-synced",
@@ -1503,9 +1502,11 @@ export class RepoDurableObject extends DurableObject<Env> {
       repo: await this.gitAccess(),
     });
 
+    // Leave the cache cold for the same reason as syncFromGithub: replacement
+    // succeeded even if an immediate clone still reaches a lagging replica.
+    // The next getHead call waits for the adopted head before serving it.
     this.#recordPushedHead({ branch, commitOid: headOid });
     this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
-    await this.getHead({ branch });
 
     await this.#stream.append({
       type: "events.iterate.com/repo/github-synced",
