@@ -30,8 +30,10 @@ const HandoffComplete = z.object({
 
 type PendingHandoff = {
   completion: Promise<HandoffCompleteResponse>;
+  completionEvent: HandoffCompleteResponse | undefined;
   handoffId: string | undefined;
   listener: (event: unknown) => void;
+  protocolAnomaly: CfBrowserHandoffResult["protocolAnomaly"];
   reject: (error: Error) => void;
   settled: boolean;
   timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -141,6 +143,7 @@ export class BrowserHandoffSession {
       void completion.catch(() => undefined);
       const pending: PendingHandoff = {
         completion,
+        completionEvent: undefined,
         handoffId: undefined,
         listener: (event) => {
           if (pending.settled) return;
@@ -148,6 +151,7 @@ export class BrowserHandoffSession {
           clearTimeout(pending.timeoutId);
           const result = HandoffComplete.safeParse(event);
           if (result.success) {
+            pending.completionEvent = result.data;
             resolveCompletion(result.data);
           } else {
             rejectCompletion(
@@ -155,6 +159,7 @@ export class BrowserHandoffSession {
             );
           }
         },
+        protocolAnomaly: undefined,
         reject: rejectCompletion,
         settled: false,
         timeoutId: undefined,
@@ -184,6 +189,22 @@ export class BrowserHandoffSession {
           liveViewUrl: liveView.devtoolsFrontendUrl,
         };
       } catch (error) {
+        if (pending.completionEvent !== undefined) {
+          // The explicit completion is the stronger fact, but a rejected
+          // start acknowledgement is still a protocol anomaly agents and
+          // operators must be able to classify.
+          pending.handoffId = pending.completionEvent.handoffId ?? crypto.randomUUID();
+          pending.protocolAnomaly = "start-command-rejected-after-completion";
+          console.error("Browser Run handoff command rejected after completion", {
+            error,
+            handoffId: pending.handoffId,
+          });
+          return {
+            expiresAt: Date.now() + timeoutMs,
+            handoffId: pending.handoffId,
+            liveViewUrl: liveView.devtoolsFrontendUrl,
+          };
+        }
         this.#failPendingHandoff(
           error instanceof Error ? error : new Error("Browser Run handoff failed to start."),
         );
@@ -214,6 +235,7 @@ export class BrowserHandoffSession {
       return {
         handoffId,
         page: await this.#pageInfoIfConnected(),
+        protocolAnomaly: pending.protocolAnomaly,
         reason: result.reason,
         sessionActive: !this.#closed,
         success: result.success,

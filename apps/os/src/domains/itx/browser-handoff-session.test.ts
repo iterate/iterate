@@ -11,6 +11,7 @@ import { BrowserHandoffSession } from "./browser-handoff-session.ts";
 class FakeCdp {
   active = false;
   completeDuringHandoff: HandoffCompleteResponse | undefined;
+  handoffError: Error | undefined;
   handoffListener: ((event: HandoffCompleteResponse) => void) | undefined;
   listenerWasInstalledBeforeHandoff = false;
 
@@ -31,6 +32,7 @@ class FakeCdp {
       if (this.completeDuringHandoff !== undefined) {
         this.complete(this.completeDuringHandoff);
       }
+      if (this.handoffError !== undefined) throw this.handoffError;
       return { handoffId: "handoff-1", targetId: "target-1" };
     }
     throw new Error(`Unexpected CDP command ${command}`);
@@ -148,11 +150,35 @@ describe("BrowserHandoffSession", () => {
         title: "Dashboard",
         url: "https://example.test/dashboard",
       },
+      protocolAnomaly: undefined,
       reason: undefined,
       sessionActive: true,
       success: true,
       targetId: "target-1",
     });
+  });
+
+  it("preserves completion when its in-flight handoff command rejects", async () => {
+    const { cdp, session } = createSession();
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    cdp.completeDuringHandoff = {
+      success: true,
+      targetId: "target-1",
+    };
+    cdp.handoffError = new Error("start acknowledgement was lost");
+
+    const handoff = await session.startHandoff({ instructions: "Complete the challenge." });
+
+    await expect(session.waitForHandoff(handoff.handoffId)).resolves.toMatchObject({
+      handoffId: handoff.handoffId,
+      protocolAnomaly: "start-command-rejected-after-completion",
+      success: true,
+    });
+    expect(errorLog).toHaveBeenCalledWith(
+      "Browser Run handoff command rejected after completion",
+      expect.objectContaining({ handoffId: handoff.handoffId }),
+    );
+    errorLog.mockRestore();
   });
 
   it("refuses both remote and locally pending concurrent handoffs", async () => {
@@ -200,6 +226,7 @@ describe("BrowserHandoffSession", () => {
     await expect(session.waitForHandoff(handoff.handoffId)).resolves.toEqual({
       handoffId: handoff.handoffId,
       page: undefined,
+      protocolAnomaly: undefined,
       reason: undefined,
       sessionActive: false,
       success: true,

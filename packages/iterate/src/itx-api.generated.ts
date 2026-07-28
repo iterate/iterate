@@ -3657,6 +3657,8 @@ export type CfBrowserHandoffResult = {
   targetId: string;
   success: boolean;
   reason?: string;
+  /** A valid completion arrived even though its start command rejected. */
+  protocolAnomaly?: "start-command-rejected-after-completion";
   sessionActive: boolean;
   page?: CfBrowserPageInfo;
 };

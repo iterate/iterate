@@ -1582,6 +1582,12 @@ try {
   );
 
   const result = await browser.waitForHandoff(handoff.handoffId);
+  if (result.protocolAnomaly) {
+    await itx.chat.sendMessage(
+      "Browser Run completed the handoff but reported a protocol anomaly: " +
+        result.protocolAnomaly,
+    );
+  }
   if (!result.success) {
     const reason = result.reason ? ": " + result.reason : ".";
     await itx.chat.sendMessage("The browser handoff ended as Failed" + reason);
