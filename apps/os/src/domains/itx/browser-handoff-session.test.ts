@@ -76,6 +76,10 @@ class FakeBrowser {
   async close(): Promise<void> {
     this.closed = true;
   }
+
+  disconnect(): void {
+    this.disconnectedListener?.();
+  }
 }
 
 class FakePage {
@@ -145,6 +149,7 @@ describe("BrowserHandoffSession", () => {
         url: "https://example.test/dashboard",
       },
       reason: undefined,
+      sessionActive: true,
       success: true,
       targetId: "target-1",
     });
@@ -177,7 +182,28 @@ describe("BrowserHandoffSession", () => {
 
     await expect(session.waitForHandoff(handoff.handoffId)).resolves.toMatchObject({
       reason: "The amount is incorrect.",
+      sessionActive: true,
       success: false,
+    });
+  });
+
+  it("preserves a settled human result if Browser Run disconnects before consumption", async () => {
+    const { browser, cdp, session } = createSession();
+    const handoff = await session.startHandoff({ instructions: "Complete the challenge." });
+    cdp.complete({
+      handoffId: handoff.handoffId,
+      success: true,
+      targetId: "target-1",
+    });
+    browser.disconnect();
+
+    await expect(session.waitForHandoff(handoff.handoffId)).resolves.toEqual({
+      handoffId: handoff.handoffId,
+      page: undefined,
+      reason: undefined,
+      sessionActive: false,
+      success: true,
+      targetId: "target-1",
     });
   });
 

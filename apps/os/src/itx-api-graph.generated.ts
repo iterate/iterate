@@ -2040,7 +2040,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "CfBrowserHandoffResult",
     kind: "typeAlias",
     sourceText:
-      "/** The human's explicit completion result plus the page automation resumes on. */\nexport type CfBrowserHandoffResult = {\n  handoffId: string;\n  targetId: string;\n  success: boolean;\n  reason?: string;\n  page: CfBrowserPageInfo;\n};",
+      "/** The human's explicit completion result plus the page automation resumes on.\n * The human outcome is preserved even if Browser Run disconnects immediately\n * after completion; in that case `sessionActive` is false and `page` is absent. */\nexport type CfBrowserHandoffResult = {\n  handoffId: string;\n  targetId: string;\n  success: boolean;\n  reason?: string;\n  sessionActive: boolean;\n  page?: CfBrowserPageInfo;\n};",
     summary: "The human's explicit completion result plus the page automation resumes on.",
     memberSummaries: {},
     referencedTypeNames: ["CfBrowserPageInfo"],

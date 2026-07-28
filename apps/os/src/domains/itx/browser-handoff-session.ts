@@ -196,7 +196,6 @@ export class BrowserHandoffSession {
   }
 
   async waitForHandoff(handoffId: string): Promise<CfBrowserHandoffResult> {
-    this.#assertOpen();
     const pending = this.#pendingHandoff;
     if (pending?.handoffId !== handoffId) {
       throw new Error(`Browser session has no handoff awaiting result for ${handoffId}.`);
@@ -214,8 +213,9 @@ export class BrowserHandoffSession {
       }
       return {
         handoffId,
-        page: await this.pageInfo(),
+        page: await this.#pageInfoIfConnected(),
         reason: result.reason,
+        sessionActive: !this.#closed,
         success: result.success,
         targetId: result.targetId,
       };
@@ -235,6 +235,21 @@ export class BrowserHandoffSession {
 
   #assertOpen(): void {
     if (this.#closed) throw new Error("Browser session is closed.");
+  }
+
+  async #pageInfoIfConnected(): Promise<CfBrowserPageInfo | undefined> {
+    if (this.#closed) return undefined;
+    try {
+      return {
+        title: await this.#page.title(),
+        url: this.#page.url(),
+      };
+    } catch (error) {
+      // Preserve the already-explicit human result when a disconnect races
+      // page inspection. Other page errors remain infrastructure failures.
+      if (this.#closed) return undefined;
+      throw error;
+    }
   }
 
   #failPendingHandoff(error: Error): void {

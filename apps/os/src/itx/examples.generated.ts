@@ -1587,6 +1587,12 @@ try {
     await itx.chat.sendMessage("The browser handoff ended as Failed" + reason);
     return result;
   }
+  if (!result.sessionActive) {
+    await itx.chat.sendMessage(
+      "The handoff finished, but Browser Run disconnected before I could resume.",
+    );
+    return result;
+  }
 
   // Automation resumes in the exact page the human changed.
   const visibleText = await browser.text({ maxCharacters: 2_000 });

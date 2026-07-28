@@ -126,13 +126,16 @@ export type CfBrowserHandoffStarted = {
   expiresAt: number;
 };
 
-/** The human's explicit completion result plus the page automation resumes on. */
+/** The human's explicit completion result plus the page automation resumes on.
+ * The human outcome is preserved even if Browser Run disconnects immediately
+ * after completion; in that case `sessionActive` is false and `page` is absent. */
 export type CfBrowserHandoffResult = {
   handoffId: string;
   targetId: string;
   success: boolean;
   reason?: string;
-  page: CfBrowserPageInfo;
+  sessionActive: boolean;
+  page?: CfBrowserPageInfo;
 };
 
 /** Bounds extraction from the current Browser Run page. */
