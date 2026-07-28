@@ -267,9 +267,9 @@ export class ProjectProcessor extends StreamProcessor<
           });
           if (existingOutcome !== undefined) {
             if (
-              (existingOutcome.type !== "events.iterate.com/project/worker-updated" &&
-                existingOutcome.type !== "events.iterate.com/project/worker-update-failed") ||
-              existingOutcome.payload?.commitOid !== event.payload.commitOid
+              existingOutcome.type !== "events.iterate.com/project/worker-updated" &&
+              (existingOutcome.type !== "events.iterate.com/project/worker-update-failed" ||
+                existingOutcome.payload?.commitOid !== event.payload.commitOid)
             ) {
               throw new Error(
                 `idempotency key "${outcomeIdempotencyKey}" is not this config commit's worker update outcome`,
@@ -293,10 +293,13 @@ export class ProjectProcessor extends StreamProcessor<
             });
             return;
           }
-          const servedOutcomeIdempotencyKey = `project/worker-update:${servedCommitOid}`;
           await append({
             type: "events.iterate.com/project/worker-updated",
-            idempotencyKey: servedOutcomeIdempotencyKey,
+            // The trigger owns the outcome key even when the readiness probe
+            // observes a newer HEAD. A lost checkpoint therefore finds this
+            // committed result instead of probing the now-current worker
+            // again and possibly contradicting the prior success.
+            idempotencyKey: outcomeIdempotencyKey,
             payload: { commitOid: servedCommitOid },
           });
         });

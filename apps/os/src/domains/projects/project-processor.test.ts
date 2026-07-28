@@ -79,10 +79,43 @@ describe("ProjectProcessor worker lifecycle", () => {
 
     expect(h.events("events.iterate.com/project/worker-updated")).toMatchObject([
       {
-        idempotencyKey: `project/worker-update:${servedCommitOid}`,
+        idempotencyKey: `project/worker-update:${CONFIG_REPO_COMMIT_COMPLETED.payload.commitOid}`,
         payload: { commitOid: servedCommitOid },
       },
     ]);
+  });
+
+  it("does not reprobe a coalesced config trigger after losing its checkpoint", async () => {
+    const servedCommitOid = "c".repeat(40);
+    const h = makeProjectHarness({ workerCommitOids: [servedCommitOid] });
+    await h.play([
+      "append",
+      PROJECT_CREATE_REQUESTED,
+      PROJECT_CREATED,
+      CONFIG_REPO_COMMIT_COMPLETED,
+    ]);
+    expect(h.workerFetchCalls()).toBe(1);
+
+    const replay = makeProjectHarness({
+      substrate: {
+        clock: h.clock,
+        stream: h.stream,
+        progress: makeMemoryProgressStore(ProjectProcessorContract),
+      },
+      workerOutcomes: [
+        new WorkerBuildFailedError({ kind: "source", message: "new HEAD is broken" }),
+      ],
+    });
+    await replay.settle();
+
+    expect(replay.workerFetchCalls()).toBe(0);
+    expect(replay.events("events.iterate.com/project/worker-updated")).toMatchObject([
+      {
+        idempotencyKey: `project/worker-update:${CONFIG_REPO_COMMIT_COMPLETED.payload.commitOid}`,
+        payload: { commitOid: servedCommitOid },
+      },
+    ]);
+    expect(replay.events("events.iterate.com/project/worker-update-failed")).toEqual([]);
   });
 
   it("does not probe again when a committed worker update is redelivered", async () => {
