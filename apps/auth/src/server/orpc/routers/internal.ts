@@ -3,14 +3,16 @@ import { resolveUniqueSlug } from "@iterate-com/shared/slug";
 import { os, protectedMiddleware, serviceMiddleware } from "../orpc.ts";
 import { auth, createProjectIngressToken as createSignedProjectIngressToken } from "../../auth.ts";
 import { config } from "../../env.ts";
-import { parseStringArray } from "../../db/helpers.ts";
+import { parseProjectMetadata, parseStringArray, parseTimestampMs } from "../../db/helpers.ts";
 import {
   disableOAuthClientById,
   getOAuthClientByClientId,
   getOAuthClientByReferenceId,
   getOrganizationBySlug,
+  getProjectWithOrganizationBySlug,
   getUserByEmail,
   getUserById,
+  grantPlatformAdminByUserId,
   insertMembership,
   insertOrganization,
   insertUser,
@@ -23,6 +25,7 @@ import {
 import { BOOTSTRAP_ADMIN_EMAIL } from "../../bootstrap-admin.ts";
 import { generateId } from "../../id.ts";
 import { hashOAuthStoredValue } from "../../oauth-storage.ts";
+import { ensureOrganizationForProjectSeed } from "../../organization-seed.ts";
 import { toMembershipRole, toOrganizationRecord, toUserRecord } from "./_shared.ts";
 
 function extractCookieHeader(setCookieHeader: string | null): string | null {
@@ -60,22 +63,33 @@ const upsertVerifiedEmail = os.internal.user.upsertVerifiedEmail
     const existing = await getUserByEmail(context.db, { email: normalizedEmail });
 
     if (existing) {
+      const updatedAt = Date.now();
       await updateVerifiedUserById(
         context.db,
         {
           name: input.name,
           image: input.image ?? existing.image ?? null,
-          updatedAt: Date.now(),
+          updatedAt,
         },
         {
           id: existing.id,
         },
       );
+      if (input.platformAdmin === true && existing.role !== "admin") {
+        await grantPlatformAdminByUserId(
+          context.db,
+          { updatedAt },
+          {
+            id: existing.id,
+          },
+        );
+      }
 
       return toUserRecord({
         ...existing,
         name: input.name,
         image: input.image ?? existing.image ?? null,
+        role: input.platformAdmin === true ? "admin" : existing.role,
       });
     }
 
@@ -87,7 +101,7 @@ const upsertVerifiedEmail = os.internal.user.upsertVerifiedEmail
       email: normalizedEmail,
       emailVerified: 1,
       image: input.image ?? null,
-      role: "user",
+      role: input.platformAdmin === true ? "admin" : "user",
       createdAt: now,
       updatedAt: now,
     });
@@ -97,7 +111,7 @@ const upsertVerifiedEmail = os.internal.user.upsertVerifiedEmail
       name: input.name,
       email: normalizedEmail,
       image: input.image ?? null,
-      role: "user",
+      role: input.platformAdmin === true ? "admin" : "user",
     });
   });
 
@@ -144,6 +158,12 @@ const createForUser = os.internal.organization.createForUser
     });
   });
 
+const ensureOrganization = os.internal.organization.ensure
+  .use(serviceMiddleware)
+  .handler(async ({ context, input }) => {
+    return await ensureOrganizationForProjectSeed(context.db, input);
+  });
+
 const members = os.internal.organization.members
   .use(serviceMiddleware)
   .handler(async ({ context, input }) => {
@@ -170,6 +190,48 @@ const members = os.internal.organization.members
         role: member.userRole ?? null,
       }),
     }));
+  });
+
+const projectSeedSnapshot = os.internal.project.seedSnapshot
+  .use(serviceMiddleware)
+  .handler(async ({ context, input }) => {
+    const project = await getProjectWithOrganizationBySlug(context.db, {
+      slug: input.projectSlug,
+    });
+    if (!project) {
+      throw new ORPCError("NOT_FOUND", { message: "Project not found" });
+    }
+    const members = await listMembersByOrganizationId(context.db, {
+      organizationId: project.organizationId,
+    });
+
+    return {
+      project: {
+        id: project.id,
+        organizationId: project.organizationId,
+        name: project.name,
+        slug: project.slug,
+        metadata: parseProjectMetadata(project.metadata),
+        archivedAt: parseTimestampMs(project.archivedAt)?.toISOString() ?? null,
+      },
+      organization: {
+        id: project.organizationRecordId,
+        name: project.organizationName,
+        slug: project.organizationSlug,
+      },
+      members: members.map((member) => ({
+        id: member.id,
+        userId: member.userId,
+        role: toMembershipRole(member.role),
+        user: toUserRecord({
+          id: member.userId,
+          name: member.userName,
+          email: member.userEmail,
+          image: member.userImage ?? null,
+          role: member.userRole ?? null,
+        }),
+      })),
+    };
   });
 
 const ensureOAuthClient = os.internal.oauth.ensureClient
@@ -465,8 +527,12 @@ export const internal = os.internal.router({
     upsertVerifiedEmail,
   },
   organization: {
+    ensure: ensureOrganization,
     createForUser,
     members,
+  },
+  project: {
+    seedSnapshot: projectSeedSnapshot,
   },
   session: {
     createProjectIngressToken,

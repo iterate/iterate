@@ -71,6 +71,13 @@ export const ProjectRecord = z.object({
 });
 export type ProjectRecord = z.infer<typeof ProjectRecord>;
 
+export const InternalProjectSeedSnapshot = z.object({
+  project: ProjectRecord,
+  organization: OrganizationRecord,
+  members: z.array(OrganizationMemberRecord),
+});
+export type InternalProjectSeedSnapshot = z.infer<typeof InternalProjectSeedSnapshot>;
+
 const CallerManagedProjectId = z
   .string()
   .trim()
@@ -105,6 +112,11 @@ export const InternalVerifiedUserInput = z.object({
   email: z.string().email(),
   name: z.string().min(1),
   image: z.string().nullable().optional(),
+  /**
+   * Minimum privilege required by a project seed. `true` grants the platform
+   * admin role; `false` never demotes an existing admin.
+   */
+  platformAdmin: z.boolean().optional(),
 });
 export type InternalVerifiedUserInput = z.infer<typeof InternalVerifiedUserInput>;
 
@@ -116,6 +128,41 @@ export const InternalCreateOrganizationForUserInput = z.object({
 export type InternalCreateOrganizationForUserInput = z.infer<
   typeof InternalCreateOrganizationForUserInput
 >;
+
+export const InternalEnsureOrganizationInput = z
+  .object({
+    name: z.string().min(1).max(100),
+    slug: z.string().min(1).max(50),
+    members: z
+      .array(
+        z.object({
+          userId: z.string().min(1),
+          role: OrganizationRole,
+        }),
+      )
+      .min(1),
+  })
+  .superRefine((input, context) => {
+    if (!input.members.some((member) => member.role === "owner")) {
+      context.addIssue({
+        code: "custom",
+        message: "At least one organization member must be an owner",
+        path: ["members"],
+      });
+    }
+    const seen = new Set<string>();
+    for (const [index, member] of input.members.entries()) {
+      if (seen.has(member.userId)) {
+        context.addIssue({
+          code: "custom",
+          message: "Organization members must have unique user IDs",
+          path: ["members", index, "userId"],
+        });
+      }
+      seen.add(member.userId);
+    }
+  });
+export type InternalEnsureOrganizationInput = z.infer<typeof InternalEnsureOrganizationInput>;
 
 export const InternalCreateProjectForOrganizationInput = z.object({
   id: CallerManagedProjectId.optional(),
@@ -461,13 +508,23 @@ export const authContract = oc.router({
         .route({
           method: "POST",
           path: "/internal/user/upsert-verified-email",
-          summary: "Create or update a verified user for internal service flows",
+          summary:
+            "Create or update a verified user and optionally ensure platform-admin privilege for internal service flows",
           tags: ["internal", "user"],
         })
         .input(InternalVerifiedUserInput)
         .output(UserRecord),
     },
     organization: {
+      ensure: oc
+        .route({
+          method: "POST",
+          path: "/internal/organization/ensure",
+          summary: "Idempotently ensure an organization and its declared minimum member roles",
+          tags: ["internal", "organization"],
+        })
+        .input(InternalEnsureOrganizationInput)
+        .output(OrganizationRecord),
       createForUser: oc
         .route({
           method: "POST",
@@ -486,6 +543,18 @@ export const authContract = oc.router({
         })
         .input(OrgInput)
         .output(z.array(OrganizationMemberRecord)),
+    },
+    project: {
+      seedSnapshot: oc
+        .route({
+          method: "GET",
+          path: "/internal/project/seed-snapshot",
+          summary:
+            "Read one project's Auth identity, organization, and members for a local recovery archive",
+          tags: ["internal", "project", "organization"],
+        })
+        .input(ProjectInput)
+        .output(InternalProjectSeedSnapshot),
     },
     session: {
       createProjectIngressToken: oc

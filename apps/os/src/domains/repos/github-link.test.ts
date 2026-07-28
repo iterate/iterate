@@ -278,6 +278,17 @@ describe("linkRepoToGithub", () => {
     expect(result.created).toBe(true);
   });
 
+  test("can require an existing authority without creating a missing repository", async () => {
+    seedConnectedFact();
+    network.state.githubRepoExists = false;
+
+    await expect(
+      linkRepoToGithub(linkInput(), { createIfMissing: false, skipInitialPush: true }),
+    ).rejects.toThrow(/must already exist and be accessible/);
+    expect(network.state.githubRepoExists).toBe(false);
+    expect(network.repoCalls).toEqual([]);
+  });
+
   test("surfaces an actionable error when the repo is missing and cannot be created", async () => {
     seedConnectedFact();
     network.state.githubRepoExists = false;

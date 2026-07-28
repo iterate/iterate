@@ -1962,6 +1962,39 @@ describe("StreamConnections hosted delivery watchdog", () => {
     expect(h.durableDeliveryWakes).toHaveBeenCalledOnce();
   });
 
+  it("classifies a broken hosted callback capability as lifecycle unavailability", () => {
+    const h = connectionsHarness();
+    const warnLog = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    let reportBroken: ((error: unknown) => void) | undefined;
+    const processEventBatch = recordingProcessEventBatch([], () => undefined);
+    processEventBatch.onRpcBroken = (handler) => {
+      reportBroken = handler;
+    };
+    h.connections.openHosted({
+      connectionKey: "processor",
+      expectedHostedDelivery: h.expectedDelivery,
+      processEventBatch,
+      replayAfterOffset: 0,
+    });
+
+    reportBroken!(new Error("transport closed"));
+
+    expect(h.connections.has("processor")).toBe(false);
+    expect(h.deliveryFailures).toHaveBeenCalledOnce();
+    expect(warnLog).toHaveBeenCalledWith(
+      "stream durable callback unavailable; backing off before waking it again",
+      {
+        connectionKey: "processor",
+        errorMessage: "transport closed",
+        source: "rpc-broken",
+      },
+    );
+    expect(errorLog).not.toHaveBeenCalled();
+    warnLog.mockRestore();
+    errorLog.mockRestore();
+  });
+
   it("closes and records a session connection whose event condition throws", async () => {
     const appended: unknown[] = [];
     const h = connectionsHarness({
