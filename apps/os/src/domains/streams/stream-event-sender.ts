@@ -357,7 +357,7 @@ export class StreamEventSender {
   /**
    * Ask every live callback to send queued events and start each durable send
    * that is due: wake lagging hosted processors without a callback and send
-   * pending copy, ITX-call, or webhook events. Never throws; never blocks the append.
+   * pending copy or ITX-call events. Never throws; never blocks the append.
    *
    * `justCommittedEvents` is the new-event fast path: append passes what it just
    * committed (already sized by the log write) so caught-up callbacks skip the
@@ -414,7 +414,7 @@ export class StreamEventSender {
   }
 
   // ===========================================================================
-  // Durable sending: hosted-processor wake, copy/ITX/webhook sends, retries,
+  // Durable sending: hosted-processor wake, copy/ITX sends, retries,
   // and halting.
   // ===========================================================================
 
@@ -511,7 +511,7 @@ export class StreamEventSender {
    * then send events after that checkpoint. The entire
    * wake response is this single call — the stream initiated it and owns the
    * returned callback, so there is no second callback-registration race. If wake resolves
-   * after its subscription was replaced (or switched to copy, ITX-call, or webhook),
+   * after its subscription was replaced (or switched to copy or ITX-call),
    * drop that callback rather than open a dead connection or acknowledge the new cursor.
    */
   #wakeStreamProcessor(
@@ -843,9 +843,10 @@ export class StreamEventSender {
             // and must not back off, halt, or skip work for the new one.
             if (!this.#deliveryStillMatches(subscriptionKey, expectedDelivery)) continue;
             // "continue" = the failure handler already moved the goalposts
-            // (halved the bisect window or stepped over confirmed failing event) and
-            // the loop should try again NOW; anything else backs off or halts
-            // and the alarm/resume owns the future.
+            // (dropped the next read straight to batch size 1 or stepped over
+            // a confirmed failing event) and the loop should try again NOW;
+            // anything else backs off or halts and the alarm/resume owns the
+            // future.
             if (
               this.#onSourceOwnedFailure({ subscriptionKey, config, matched, error }) === "continue"
             ) {

@@ -256,7 +256,7 @@ export class StreamEventLog {
 
 /**
  * One stored subscription's delivery cursor row. `acknowledgedOffset` is exclusive
- * (delivery resumes at +1). For copy, ITX-call, and webhook subscriptions
+ * (delivery resumes at +1). For copy and ITX-call subscriptions
  * it is the authoritative cursor: it advances only when the awaited call resolves. For
  * hosted processors it is the checkpoint reported by the processor on its
  * hosted processor reported on the last successful wake, used only to decide

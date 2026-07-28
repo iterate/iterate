@@ -8,9 +8,10 @@
 // retains (`ProcessorRuntimeState.runtime.metrics`). No new reporting
 // channel, and hosts that predate this simply report nothing.
 //
-// Pure and clock-free like delivery-math.ts: every method takes timestamps
-// as arguments, so the whole thing unit-tests in plain node and runs
-// unchanged in a browser (performance-now deltas) or a worker (Date.now).
+// Pure and clock-free like the delivery math atop stream-event-sender.ts:
+// every method takes timestamps as arguments, so the whole thing unit-tests
+// in plain node and runs unchanged in a browser (performance-now deltas) or a
+// worker (Date.now).
 
 import { LatencyRing, type LatencyStats } from "./stream-runtime-metrics.ts";
 

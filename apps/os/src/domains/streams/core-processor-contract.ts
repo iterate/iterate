@@ -44,9 +44,11 @@ import { EventFilter } from "./event-filter.ts";
 // source-local key. Complete copy-list delivery work is separate because
 // an empty list is still work the source must deliver.
 // Version 28 deletes the copy-list handshake: inbound records are passive,
-// derived from the `source.copiedFrom` stamps on committed copied events, and
-// exist only to fence stale source lifetimes/config generations and feed the
-// debug card.
+// derived from the `source.copiedFrom` stamps on committed copied events,
+// capped at MAX_INBOUND_SOURCE_RECORDS, and exist only to fence stale source
+// lifetimes/config generations and feed the debug card. The same version also
+// removed the version-26 `endWhen` automatic-removal conditions, transform
+// receivers, and webhook receivers.
 export const CORE_STATE_VERSION = 28;
 
 // Restored from the old built-in circuit-breaker processor. These defaults are
@@ -133,7 +135,15 @@ export const SubscriptionReceiver = z.discriminatedUnion("action", [
 
 export type SubscriptionReceiver = z.infer<typeof SubscriptionReceiver>;
 
-const SubscriptionKey = z.string().trim().min(1);
+/**
+ * Bounded because every key is retained in reduced state on both sides of a
+ * delivery — outbound configuration here, and one passive inbound record per
+ * (source path, key) on each receiver. 500 covers the longest legitimate
+ * platform generator, the default processor-wake key
+ * `${durableObjectName}#${processorSlug}` over a ≤256-byte Durable Object
+ * name, with room to spare; generated keys are `subscription:<offset>`.
+ */
+const SubscriptionKey = z.string().trim().min(1).max(500);
 
 export const SubscriptionConfiguredPayload = z.strictObject({
   /**
@@ -515,7 +525,7 @@ export const CoreProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/stream/subscription-cursor-set": {
       description:
-        "Changes the next source offset read by one copy, ITX-call, or webhook subscription (exclusive afterOffset semantics). It rejects offsets beyond the current stream head. A receiver call already in progress may still finish, but cannot advance this new position. Hosted processors reject this event because the processor stores its own checkpoint.",
+        "Changes the next source offset read by one copy or ITX-call subscription (exclusive afterOffset semantics). It rejects offsets beyond the current stream head. A receiver call already in progress may still finish, but cannot advance this new position. Hosted processors reject this event because the processor stores its own checkpoint.",
       payloadSchema: z.strictObject({
         subscriptionKey: z.string().trim().min(1),
         afterOffset: z.number().int().min(0),

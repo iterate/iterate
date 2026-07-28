@@ -281,6 +281,28 @@ describe("SqliteSubscriptionCursorStore hosted delivery watchdog", () => {
     });
   });
 
+  it("rejects a stale acknowledgement whose cursor-changing event moved, leaving the row untouched", () => {
+    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
+    store.ensure("processor", 4, 12);
+    store.nack("processor", { attempt: 3, nextAttemptAt: 19_000, error: "receiver failed" });
+    const before = store.get("processor")!;
+
+    // The SQL-level dual of the sender's in-memory delivery-still-matches
+    // guard: an acknowledgement naming a superseded configuration/cursor-set
+    // event must not advance the cursor or clear failure state.
+    store.ack("processor", 9, { cursorChangedAtOffset: 11 });
+    expect(store.get("processor")).toEqual(before);
+
+    // The same acknowledgement naming the live cursor generation lands.
+    store.ack("processor", 9, { cursorChangedAtOffset: 12 });
+    expect(store.get("processor")).toMatchObject({
+      acknowledgedOffset: 9,
+      attempt: 0,
+      nextAttemptAt: null,
+      lastError: null,
+    });
+  });
+
   it("turns a failed dispatch into ordinary retry state and clears its watchdog", () => {
     const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
     store.ensure("processor", 4, 12);

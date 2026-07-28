@@ -1,7 +1,7 @@
 // Pure runtime-metrics primitives for a stream and the callbacks it invokes.
 //
 // Everything here is clock-free and transport-free (timestamps are
-// parameters, like delivery-math.ts), so the rings and buckets are
+// parameters, like the delivery math atop stream-event-sender.ts), so the rings and buckets are
 // table-testable in plain node and shared verbatim by the Durable Object,
 // the server processor host, and the browser store. All of it is in-memory
 // observability — reset on eviction/reload by design; `measuredSince` tells

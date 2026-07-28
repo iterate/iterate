@@ -325,8 +325,8 @@ const PROJECT_WORKER_SUBSCRIPTION_KEY = "project-worker";
  *    from one-shot event hooks.
  * 3. Its checkpoint — reduced state in DO KV, rebuilt from the SQL event log
  *    (`stream-storage.ts`) when missing or version-skewed.
- * 4. Delivery — session callbacks, hosted processors, copies, ITX calls,
- *    and webhooks live in `stream-event-sender.ts`, calling receivers through
+ * 4. Delivery — session callbacks, hosted processors, copies, and ITX
+ *    calls live in `stream-event-sender.ts`, calling receivers through
  *    `createSubscriptionReceiverCalls` above; this class only decides policy
  *    (who may connect, what a subscription event means, which events to append).
  *

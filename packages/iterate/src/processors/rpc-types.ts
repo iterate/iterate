@@ -269,7 +269,9 @@ export type CopyReceipt = {
    * present under the same source-coordinate idempotency key, or dropped
    * because their stream-copy path cannot safely continue (cycle/hop limit —
    * audited by an `error-occurred` event on the receiving stream). The sender
-   * advances its cursor past every event in an acked batch.
+   * advances its cursor past every event in an acked batch. The count itself
+   * is observability-only wire decoration: the sender never reads it — the
+   * awaited call resolving is the whole acknowledgement.
    */
   acknowledged: number;
 };

@@ -11,6 +11,7 @@ import {
   assertCoreProcessorCheckpointGrowthFits,
   compareSourceStamp,
   MAX_CORE_PROCESSOR_STATE_BYTES,
+  MAX_INBOUND_SOURCE_RECORDS,
   StreamCoreProcessor,
 } from "./core-processor.ts";
 import { internalStreamId } from "./stream-delivery-utils.ts";
@@ -70,6 +71,7 @@ function copiedEvent(
     cursorChangedAtSourceOffset?: number;
     subscriptionKey?: string;
     sourceOffset?: number;
+    path?: string;
   } = {},
 ): StreamEvent {
   return committed(
@@ -87,7 +89,7 @@ function copiedEvent(
             cursorChangedAtSourceOffset: stamp.cursorChangedAtSourceOffset ?? 2,
             createdAt: "2026-07-21T11:30:00.000Z",
             offset: stamp.sourceOffset ?? offset,
-            path: SOURCE_PATH,
+            path: stamp.path ?? SOURCE_PATH,
             projectId: PROJECT_ID,
             type: "example.com/issue-created",
           },
@@ -278,6 +280,36 @@ describe("StreamCoreProcessor state size", () => {
     expect(() =>
       assertCoreProcessorCheckpointGrowthFits({ before: state, events: [event], next }),
     ).toThrow(/core processor state.*checkpoint safety limit/i);
+  });
+
+  test("a copied event creating a first-contact inbound record runs the growth scan", () => {
+    const { processor, state } = harness();
+    const oversized = reduce(
+      processor,
+      state,
+      committed(
+        1,
+        "events.iterate.com/stream/subscription-configured",
+        streamSubscription({ description: "x".repeat(MAX_CORE_PROCESSOR_STATE_BYTES) }),
+      ),
+    );
+    const firstContact = copiedEvent(2);
+    const next = reduce(processor, oversized, firstContact);
+
+    expect(() =>
+      assertCoreProcessorCheckpointGrowthFits({ before: oversized, events: [firstContact], next }),
+    ).toThrow(/core processor state.*checkpoint safety limit/i);
+
+    // A copied event that only counts into the existing record stays
+    // scan-free even when the state is already beyond the limit.
+    const repeat = copiedEvent(3, { sourceOffset: 43 });
+    expect(() =>
+      assertCoreProcessorCheckpointGrowthFits({
+        before: next,
+        events: [repeat],
+        next: reduce(processor, next, repeat),
+      }),
+    ).not.toThrow();
   });
 
   test("does not make fixed-shape lifecycle events scan or reject an already-large state", () => {
@@ -710,6 +742,110 @@ describe("passive inbound records", () => {
   });
 });
 
+describe("passive inbound record cap", () => {
+  /**
+   * A registry already holding MAX_INBOUND_SOURCE_RECORDS records, one per
+   * filler source path. Filler 0 and 1 share the oldest receipt time so the
+   * (source path, subscription key) tie-break is exercised; every filler is
+   * older than the `committed()` fixture timestamps.
+   */
+  function fullState(): CoreProcessorState {
+    return CoreProcessorContract.stateSchema.parse({
+      ...coreState(),
+      subscriptions: {
+        inbound: {
+          bySourcePath: Object.fromEntries(
+            Array.from({ length: MAX_INBOUND_SOURCE_RECORDS }, (_, index) => [
+              `/sources/filler-${String(index).padStart(4, "0")}`,
+              {
+                issues: {
+                  streamId: SOURCE_STREAM_ID,
+                  streamCreatedAt: SOURCE_CREATED_AT,
+                  cursorChangedAtSourceOffset: 2,
+                  numEventsReceived: 1,
+                  lastEventReceivedAt: new Date(
+                    Date.UTC(2026, 5, 1) + Math.max(0, index - 1) * 60_000,
+                  ).toISOString(),
+                },
+              },
+            ]),
+          ),
+        },
+        outbound: { byKey: {} },
+      },
+    });
+  }
+
+  function recordCount(state: CoreProcessorState): number {
+    return Object.values(state.subscriptions.inbound.bySourcePath).reduce(
+      (sum, byKey) => sum + Object.keys(byKey).length,
+      0,
+    );
+  }
+
+  test("a first-contact record past the cap evicts the oldest record and never exceeds the cap", () => {
+    const { processor } = harness();
+    const state = reduce(processor, fullState(), copiedEvent(2, { sourceOffset: 41 }));
+
+    expect(recordCount(state)).toBe(MAX_INBOUND_SOURCE_RECORDS);
+    expect(state.subscriptions.inbound.bySourcePath[SOURCE_PATH]?.issues).toMatchObject({
+      numEventsReceived: 1,
+    });
+    // Fillers 0 and 1 share the oldest receipt time; the (source path,
+    // subscription key) tie-break evicts filler-0000, and deleting its last
+    // record deletes the source path entry itself.
+    expect(state.subscriptions.inbound.bySourcePath["/sources/filler-0000"]).toBeUndefined();
+    expect(state.subscriptions.inbound.bySourcePath["/sources/filler-0001"]?.issues).toBeDefined();
+  });
+
+  test("eviction is deterministic under replay", () => {
+    const { processor } = harness();
+    const overflowing = [
+      copiedEvent(2, { path: "/sources/new-a", sourceOffset: 41 }),
+      copiedEvent(3, { path: "/sources/new-b", subscriptionKey: "other", sourceOffset: 7 }),
+      copiedEvent(4, { path: "/sources/new-a", subscriptionKey: "other", sourceOffset: 9 }),
+      copiedEvent(5, { path: "/sources/new-c", sourceOffset: 12 }),
+    ];
+    const first = overflowing.reduce(
+      (state, event) => reduce(processor, state, event),
+      fullState(),
+    );
+    const second = overflowing.reduce(
+      (state, event) => reduce(processor, state, event),
+      fullState(),
+    );
+
+    expect(recordCount(first)).toBe(MAX_INBOUND_SOURCE_RECORDS);
+    expect(first).toEqual(second);
+  });
+
+  test("an evicted source's next copied event is accepted as first contact, even with an older stamp", () => {
+    const { processor } = harness();
+    const evictedPath = "/sources/filler-0000";
+    let state = reduce(processor, fullState(), copiedEvent(2, { sourceOffset: 41 }));
+    expect(state.subscriptions.inbound.bySourcePath[evictedPath]).toBeUndefined();
+
+    // Strictly older than the coordinates the evicted record used to hold —
+    // the fold would have skipped this stamp had the record survived. With the
+    // record gone the source counts as never seen: graceful first-contact
+    // degradation, not an error.
+    state = reduce(
+      processor,
+      state,
+      copiedEvent(3, { path: evictedPath, cursorChangedAtSourceOffset: 1, sourceOffset: 40 }),
+    );
+
+    expect(state.subscriptions.inbound.bySourcePath[evictedPath]?.issues).toEqual({
+      streamId: SOURCE_STREAM_ID,
+      streamCreatedAt: SOURCE_CREATED_AT,
+      cursorChangedAtSourceOffset: 1,
+      numEventsReceived: 1,
+      lastEventReceivedAt: "2026-07-21T12:00:03.000Z",
+    });
+    expect(recordCount(state)).toBe(MAX_INBOUND_SOURCE_RECORDS);
+  });
+});
+
 describe("StreamCoreProcessor validation and dispatch", () => {
   test.each([
     "copy",
@@ -756,6 +892,20 @@ describe("StreamCoreProcessor validation and dispatch", () => {
       "copy source information is platform-authored",
     );
     expect(() => processor.validate({ event: copied, state, authority: "copy" })).not.toThrow();
+  });
+
+  test("rejects a subscription key longer than the contract bound", () => {
+    const { processor } = harness(SOURCE_PATH);
+    expect(() =>
+      processor.validate({
+        event: {
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: streamSubscription({ subscriptionKey: "k".repeat(501) }),
+        },
+        state: coreState(SOURCE_PATH),
+        authority: "public",
+      }),
+    ).toThrow(/500/);
   });
 
   test("rejects a stream subscribing to itself", () => {

@@ -21,12 +21,27 @@ export const STREAM_PAUSED_ERROR_PREFIX = "stream paused: ";
  * Keep retained configuration/list growth near half of Cloudflare's documented
  * 2 MB combined key/value limit so structured-clone encoding, growing counters,
  * and small schema additions cannot turn an already-committed event into an
- * unwriteable checkpoint. Mutations that skip the full scan only add bounded
- * cursor/timestamp/counter fields to entries whose substantially larger
- * configuration already passed this limit, so the remaining 1 MiB is also the
- * headroom for that fixed-shape drift.
+ * unwriteable checkpoint. Mutations that skip the full scan either add bounded
+ * cursor/timestamp/counter fields to entries that already passed this limit,
+ * or are copied events updating an EXISTING inbound record's fixed-shape
+ * fields; a copied event whose stamp names a new (source path, subscription
+ * key) pair creates a fresh entry with strings no limit has seen, so it runs
+ * the scan, and {@link MAX_INBOUND_SOURCE_RECORDS} bounds how many such
+ * entries can accumulate at all. The remaining 1 MiB is the headroom for the
+ * fixed-shape drift.
  */
 export const MAX_CORE_PROCESSOR_STATE_BYTES = 1024 * 1024;
+
+/**
+ * Hard cap on passive inbound records, counted across every source path. A
+ * copied event's stamp may name a never-before-seen (source path,
+ * subscription key) pair, so without a cap ever-new sources would grow this
+ * single-KV-value checkpoint until it could never be flushed — and a staged
+ * rebuild of it would throw during boot — forever. Evicting is SAFE by
+ * design: an evicted record merely degrades the fence to first-contact-accept
+ * for that source, exactly as if its first copy had not arrived yet.
+ */
+export const MAX_INBOUND_SOURCE_RECORDS = 1_000;
 
 const textEncoder = new TextEncoder();
 
@@ -39,7 +54,9 @@ function coreProcessorStateByteLength(state: CoreProcessorState): number {
  * to core state. Ordinary product events and fixed-shape lifecycle facts only
  * advance bounded bookkeeping, so they must not pay an O(state) JSON scan or
  * fail merely because a counter gained a digit. `subscription-removed` is not a
- * growth event: it can only delete an outbound entry.
+ * growth event: it can only delete an outbound entry. Copied events are gated
+ * separately below: only one creating a first-contact inbound record grows
+ * retained state.
  */
 const CHECKPOINT_GROWTH_EVENT_TYPES = new Set<string>([
   "events.iterate.com/stream/created",
@@ -60,12 +77,18 @@ export function assertCoreProcessorCheckpointGrowthFits(args: {
   events: readonly StreamEvent[];
   next: CoreProcessorState;
 }): void {
-  if (
-    !args.events.some(
-      (event) =>
-        event.source?.copiedFrom === undefined && CHECKPOINT_GROWTH_EVENT_TYPES.has(event.type),
-    )
-  ) {
+  const batchGrowsRetainedState = args.events.some((event) => {
+    const hop = event.source?.copiedFrom?.at(-1);
+    if (hop === undefined) return CHECKPOINT_GROWTH_EVENT_TYPES.has(event.type);
+    // A copied event's only reducer mutation is its passive inbound record.
+    // Updating an existing record touches bounded fields; creating one
+    // retains the stamp's path and subscription-key strings, which no other
+    // limit has measured yet.
+    return (
+      args.before.subscriptions.inbound.bySourcePath[hop.path]?.[hop.subscriptionKey] === undefined
+    );
+  });
+  if (!batchGrowsRetainedState) {
     return;
   }
 
@@ -325,25 +348,28 @@ export class StreamCoreProcessor {
       // Append-time validation rejects strictly-older stamps, so a replayed
       // log never regresses a record; skip defensively if one somehow would.
       if (recorded === undefined || compareSourceStamp(hop, recorded) >= 0) {
+        const bySourcePath = {
+          ...next.subscriptions.inbound.bySourcePath,
+          [hop.path]: {
+            ...byKey,
+            [hop.subscriptionKey]: {
+              streamId: hop.streamId,
+              streamCreatedAt: hop.streamCreatedAt,
+              cursorChangedAtSourceOffset: hop.cursorChangedAtSourceOffset,
+              numEventsReceived: sameLifetime ? recorded.numEventsReceived + 1 : 1,
+              lastEventReceivedAt: args.event.createdAt,
+            },
+          },
+        };
         next = {
           ...next,
           subscriptions: {
             ...next.subscriptions,
             inbound: {
               ...next.subscriptions.inbound,
-              bySourcePath: {
-                ...next.subscriptions.inbound.bySourcePath,
-                [hop.path]: {
-                  ...byKey,
-                  [hop.subscriptionKey]: {
-                    streamId: hop.streamId,
-                    streamCreatedAt: hop.streamCreatedAt,
-                    cursorChangedAtSourceOffset: hop.cursorChangedAtSourceOffset,
-                    numEventsReceived: sameLifetime ? recorded.numEventsReceived + 1 : 1,
-                    lastEventReceivedAt: args.event.createdAt,
-                  },
-                },
-              },
+              // Only a NEW record can push the registry over its cap.
+              bySourcePath:
+                recorded === undefined ? evictInboundRecordsOverCap(bySourcePath) : bySourcePath,
             },
           },
         };
@@ -608,6 +634,53 @@ function resetCircuitBreaker(
     lastRefillAtMs: Number.isFinite(createdAtMs) ? createdAtMs : circuitBreaker.lastRefillAtMs,
     trippedAtOffset: null,
   };
+}
+
+/**
+ * Enforce {@link MAX_INBOUND_SOURCE_RECORDS} after a new inbound record lands.
+ * Eviction runs inside the fold, so its order must be a pure function of
+ * committed-event-derived data for replay/rebuild to produce identical state:
+ * oldest `lastEventReceivedAt` first (every value is a committed event's
+ * `createdAt`, so plain string order is time order), ties broken by (source
+ * path, subscription key) — always via this explicit sort, never object-key
+ * enumeration order. Evicting is SAFE by design: the fence merely degrades to
+ * first-contact-accept for that source. Deleting a source path's last record
+ * deletes the source path entry.
+ */
+function evictInboundRecordsOverCap(
+  bySourcePath: CoreProcessorState["subscriptions"]["inbound"]["bySourcePath"],
+): CoreProcessorState["subscriptions"]["inbound"]["bySourcePath"] {
+  const records: [sourcePath: string, subscriptionKey: string, lastEventReceivedAt: string][] = [];
+  for (const [sourcePath, byKey] of Object.entries(bySourcePath)) {
+    for (const [subscriptionKey, record] of Object.entries(byKey)) {
+      records.push([sourcePath, subscriptionKey, record.lastEventReceivedAt ?? ""]);
+    }
+  }
+  if (records.length <= MAX_INBOUND_SOURCE_RECORDS) return bySourcePath;
+  records.sort(
+    ([leftPath, leftKey, leftReceivedAt], [rightPath, rightKey, rightReceivedAt]) =>
+      compareStrings(leftReceivedAt, rightReceivedAt) ||
+      compareStrings(leftPath, rightPath) ||
+      compareStrings(leftKey, rightKey),
+  );
+  let remaining = bySourcePath;
+  for (const [sourcePath, subscriptionKey] of records.slice(
+    0,
+    records.length - MAX_INBOUND_SOURCE_RECORDS,
+  )) {
+    const { [subscriptionKey]: _evicted, ...keptRecords } = remaining[sourcePath]!;
+    if (Object.keys(keptRecords).length === 0) {
+      const { [sourcePath]: _emptied, ...keptSourcePaths } = remaining;
+      remaining = keptSourcePaths;
+    } else {
+      remaining = { ...remaining, [sourcePath]: keptRecords };
+    }
+  }
+  return remaining;
+}
+
+function compareStrings(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function immediateChildPath(parentPath: string, announcedPath: string): string | null {

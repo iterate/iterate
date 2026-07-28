@@ -3,6 +3,7 @@ import {
   StreamReceiverUnavailableError,
   type StreamEvent,
   type StreamEventBatch,
+  type StreamEventInput,
   type StreamWakeEventBatch,
 } from "iterate/processors";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -95,6 +96,8 @@ function harness(args: {
   appendDeliveryEvent?: ConstructorParameters<
     typeof StreamEventSender
   >[0]["hooks"]["appendDeliveryEvent"];
+  /** Share durable cursor rows with an earlier sender: the post-eviction rebuild. */
+  store?: SqliteSubscriptionCursorStore;
 }) {
   let now = 10_000;
   const configuration = args.configuration ?? hostedConfig(args.filter);
@@ -116,7 +119,8 @@ function harness(args: {
       },
     },
   }) satisfies CoreProcessorState;
-  const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
+  const store =
+    args.store ?? new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
   store.ensure(PROCESSOR_KEY, 0, 1);
   const alarms: number[] = [];
   const kept: Promise<unknown>[] = [];
@@ -417,6 +421,72 @@ describe("StreamEventSender hosted processor delivery", () => {
     await h.settle();
     expect(h.wakeCalls).toHaveLength(2);
     expect(h.eventSender.connections.has(PROCESSOR_KEY)).toBe(true);
+  });
+
+  it("re-arms a persisted in-flight watchdog after eviction and expires it into the retry ladder", async () => {
+    const events = [event(2, "b", { keep: true })];
+    const evicted = harness({
+      events,
+      wakeProcessor: async () => ({
+        streamId: SOURCE_STREAM_ID,
+        checkpointOffset: 0,
+        // Receives its batch but never reports a result; this sender is then
+        // simply abandoned, the way an evicted isolate abandons its memory.
+        processEventBatch: retainedProcessEventBatch(() => undefined),
+      }),
+    });
+    evicted.eventSender.sendDue();
+    await evicted.settle();
+    expect(evicted.store.get(PROCESSOR_KEY)).toMatchObject({
+      inFlightDeadlineAt: 10_000 + DEFAULT_DELIVERY_TIMEOUT_MS,
+      inFlightConnectionGeneration: 1,
+    });
+
+    // A fresh sender over the SAME durable rows: the post-eviction rebuild.
+    const rebuilt = harness({
+      events,
+      store: evicted.store,
+      wakeProcessor: async () => ({
+        streamId: SOURCE_STREAM_ID,
+        checkpointOffset: 2,
+        processEventBatch: retainedProcessEventBatch((batch) => {
+          batch.reportDeliveryResult({ outcome: "ok" });
+        }),
+      }),
+    });
+
+    // Boot re-arm: the inherited deadline drives the alarm, and no second
+    // wake starts while the persisted batch could still acknowledge.
+    rebuilt.eventSender.sendDue();
+    await rebuilt.settle();
+    expect(rebuilt.wakeCalls).toHaveLength(0);
+    expect(rebuilt.alarms).toContain(10_000 + DEFAULT_DELIVERY_TIMEOUT_MS);
+
+    // Past the deadline the orphaned attempt fails into the bounded ladder
+    // and the in-flight row clears.
+    rebuilt.setNow(10_000 + DEFAULT_DELIVERY_TIMEOUT_MS);
+    rebuilt.eventSender.onAlarm();
+    await rebuilt.settle();
+    expect(rebuilt.wakeCalls).toHaveLength(0);
+    expect(rebuilt.store.get(PROCESSOR_KEY)).toMatchObject({
+      attempt: 1,
+      inFlightDeadlineAt: null,
+      inFlightConnectionGeneration: null,
+      nextAttemptAt: 10_000 + DEFAULT_DELIVERY_TIMEOUT_MS + 1_000,
+      lastError: expect.stringContaining("timed out"),
+    });
+
+    // The scheduled retry wakes the processor again and recovery clears the ladder.
+    rebuilt.setNow(10_000 + DEFAULT_DELIVERY_TIMEOUT_MS + 1_000);
+    rebuilt.eventSender.onAlarm();
+    await rebuilt.settle();
+    expect(rebuilt.wakeCalls).toHaveLength(1);
+    expect(rebuilt.store.get(PROCESSOR_KEY)).toMatchObject({
+      acknowledgedOffset: 2,
+      attempt: 0,
+      nextAttemptAt: null,
+      inFlightDeadlineAt: null,
+    });
   });
 
   it("closes a hosted callback whose durable configuration was replaced", async () => {
@@ -923,6 +993,176 @@ describe("StreamEventSender stream delivery", () => {
     });
     expect(copyToStream).toHaveBeenCalledTimes(2);
     expect(copyToStream.mock.calls[1]![1].cursorChangedAtSourceOffset).toBe(3);
+  });
+
+  it("discards a superseded delivery's failure so it cannot touch the replacement's ladder", async () => {
+    const appended: StreamEventInput[] = [];
+    const rejection = Promise.withResolvers<{ acknowledged: number }>();
+    // Only the first (pre-replacement) call settles — by rejecting after the
+    // replacement landed; the replacement's own delivery stays open.
+    const copyToStream = vi.fn<SubscriptionReceiverCalls["copyToStream"]>((_path, batch) =>
+      batch.cursorChangedAtSourceOffset === 1 ? rejection.promise : new Promise(() => {}),
+    );
+    const configuration: SubscriptionConfiguredPayload = {
+      subscriptionKey: PROCESSOR_KEY,
+      receiver: {
+        action: "copy-to-stream",
+        receivingStreamPath: "/agents/b",
+        delivery: {
+          start: "beginning",
+          onFailingEvent: "halt",
+        },
+      },
+    };
+    const h = harness({
+      events: [
+        event(2, "example.com/issue-created", { issue: 1 }),
+        event(3, "example.com/issue-created", { issue: 2 }),
+      ],
+      configuration,
+      copyToStream,
+      appendDeliveryEvent: (input) => {
+        appended.push(input);
+        return true;
+      },
+      wakeProcessor: async () => {
+        throw new Error("a copy must not wake a hosted processor");
+      },
+    });
+
+    h.eventSender.sendDue();
+    expect(copyToStream).toHaveBeenCalledOnce();
+
+    h.state.maxOffset = 4;
+    h.state.subscriptions.outbound.byKey[PROCESSOR_KEY] = {
+      configuration: {
+        ...configuration,
+        subscriptionKey: PROCESSOR_KEY,
+        receiver: {
+          action: "copy-to-stream",
+          receivingStreamPath: "/agents/c",
+          delivery: {
+            start: "beginning",
+            onFailingEvent: "halt",
+          },
+        },
+      },
+      configuredAtOffset: 4,
+      configuredAt: new Date(4).toISOString(),
+    };
+    h.eventSender.sendDue();
+    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
+      configuredAtOffset: 4,
+      acknowledgedOffset: 0,
+      attempt: 0,
+    });
+
+    rejection.reject(new Error("receiver of the superseded configuration failed"));
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // The stale failure was discarded: no backoff, no halt, no failing-event
+    // isolation on the replacement's fresh cursor row.
+    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
+      configuredAtOffset: 4,
+      attempt: 0,
+      nextAttemptAt: null,
+      lastError: null,
+      failingEventOffset: null,
+      failingEventAttempt: 0,
+    });
+    expect(
+      appended.filter(
+        (input) => input.type === "events.iterate.com/stream/subscription-delivery-halted",
+      ),
+    ).toEqual([]);
+    // The replacement re-sent in its own cursor epoch with a full first
+    // attempt — no batch-size-1 poison pinning inherited from the old failure.
+    expect(copyToStream).toHaveBeenCalledTimes(2);
+    expect(copyToStream.mock.calls[1]![1]).toMatchObject({
+      cursorChangedAtSourceOffset: 4,
+      attempt: 1,
+    });
+    expect(copyToStream.mock.calls[1]![1].events.map(({ offset }) => offset)).toEqual([2, 3]);
+  });
+
+  it("halts when consecutive confirmed failing-event skips trip the mass-skip fuse", async () => {
+    const appended: StreamEventInput[] = [];
+    const deliverToItx = vi.fn<SubscriptionReceiverCalls["deliverToItx"]>(async () => {
+      throw new Error("receiver rejects every event");
+    });
+    const h = harness({
+      events: [
+        event(2, "example.com/issue-created", { issue: 1 }),
+        event(3, "example.com/issue-created", { issue: 2 }),
+        event(4, "example.com/issue-created", { issue: 3 }),
+      ],
+      configuration: {
+        subscriptionKey: PROCESSOR_KEY,
+        receiver: {
+          action: "itx-call",
+          expression: ["worker", "processEventBatch"],
+          delivery: {
+            start: "beginning",
+            onFailingEvent: "skip",
+          },
+        },
+      },
+      deliverToItx,
+      appendDeliveryEvent: (input) => {
+        appended.push(input);
+        return true;
+      },
+      wakeProcessor: async () => {
+        throw new Error("an ITX receiver must not wake a hosted processor");
+      },
+    });
+
+    h.eventSender.sendDue();
+    await h.settle();
+    // Each isolated event needs three confirming failures before its skip;
+    // the third confirmed failure in a row (offset 4) must trip the fuse
+    // instead of skipping.
+    let nowMs = 10_000;
+    for (let alarmRound = 0; alarmRound < 6; alarmRound += 1) {
+      nowMs += 2_000_000; // beyond the 30-minute backoff cap
+      h.setNow(nowMs);
+      h.eventSender.onAlarm();
+      await h.settle();
+    }
+
+    const skipAudits = appended.filter(
+      (input) => input.type === "events.iterate.com/stream/error-occurred",
+    );
+    expect(skipAudits.map((input) => input.payload)).toEqual([
+      expect.objectContaining({
+        message: expect.stringContaining("skipped failing event at offset 2"),
+      }),
+      expect.objectContaining({
+        message: expect.stringContaining("skipped failing event at offset 3"),
+      }),
+    ]);
+    expect(
+      appended.filter(
+        (input) => input.type === "events.iterate.com/stream/subscription-delivery-halted",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          subscriptionKey: PROCESSOR_KEY,
+          reason: "delivery-failed",
+          afterOffset: 3,
+          attempts: 3,
+        }),
+      }),
+    ]);
+    // Durably halted: the failed row keeps its cursor but stops arming alarms.
+    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
+      acknowledgedOffset: 3,
+      attempt: 0,
+      nextAttemptAt: null,
+    });
   });
 });
 
