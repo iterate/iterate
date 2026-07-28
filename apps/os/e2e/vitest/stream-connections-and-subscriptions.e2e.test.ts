@@ -3724,11 +3724,18 @@ test("an ITX-expression receiver bisects a batch, skips one repeatedly failing e
     { type: MATCHING_EVENT_TYPE, payload: { marker, sequence: 3 } },
   );
 
+  // Isolating the poisoned event takes the whole ladder: the batch failure,
+  // the bisect round, and FAILING_EVENT_CONFIRM_ATTEMPTS single-event
+  // confirmations — each behind its own exponential backoff (~15s of pure
+  // backoff nominally, more with jitter and slow preview invocations).
   await waitForCondition(
     async () =>
       (runtimeState(await source.runtimeState()).runtime.subscriptions[subscriptionKey]
         ?.acknowledgedOffset ?? 0) >= appended.at(-1)!.offset,
-    { description: "the ITX receiver to isolate the failing event and acknowledge later events" },
+    {
+      description: "the ITX receiver to isolate the failing event and acknowledge later events",
+      timeoutMs: 60_000,
+    },
   );
 
   const attempts = await output.getEvents({ afterOffset: 0, eventTypes: [attemptType] });
