@@ -147,7 +147,7 @@ export const SubscriptionReceiver = z.discriminatedUnion("action", [
      * configure time; an evaluation failure at send time is an ordinary
      * delivery failure.
      */
-    transform: z.string().trim().min(1).optional(),
+    jsonataTransform: z.string().trim().min(1).optional(),
     delivery: DeliveryPolicy,
   }),
 ]);
@@ -487,7 +487,7 @@ export const CoreProcessorContract = defineProcessorContract({
               "Delivers GitHub webhooks for acme/widgets to this repo's stream so the repo processor can react to them.",
             filter: {
               eventTypes: ["events.iterate.com/github/webhook-received"],
-              condition: 'payload.body.repository.full_name = "acme/widgets"',
+              jsonataCondition: 'payload.body.repository.full_name = "acme/widgets"',
             },
             receiver: {
               action: "copy-to-stream",

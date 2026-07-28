@@ -1033,7 +1033,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       /** Source stream path in this project. */
       sourceStreamPath: string;
       description?: string;
-      /** Selects source events by type and/or an exact-true JSONata condition. */
+      /** Selects source events by type (`eventTypes`) and/or an exact-true JSONata condition (`jsonataCondition`). */
       filter?: EventFilter;
       /** Initial cursor stored by the source stream. Defaults to events configured from now onward. */
       start?: "beginning" | "now";

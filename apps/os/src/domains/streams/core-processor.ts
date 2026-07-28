@@ -233,9 +233,9 @@ export class StreamCoreProcessor {
       compileEventFilter(event.payload.filter);
       if (
         event.payload.receiver.action === "webhook-post" &&
-        event.payload.receiver.transform !== undefined
+        event.payload.receiver.jsonataTransform !== undefined
       ) {
-        compileJsonataExpression(event.payload.receiver.transform);
+        compileJsonataExpression(event.payload.receiver.jsonataTransform);
       }
       if (event.payload.receiver.action === "copy-to-stream") {
         const receivingStreamPath = event.payload.receiver.receivingStreamPath;

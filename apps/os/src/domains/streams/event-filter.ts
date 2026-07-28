@@ -28,7 +28,7 @@ export const EventFilter = z.strictObject({
    */
   eventTypes: z.array(z.string().trim().min(1)).min(1).optional(),
   /**
-   * Optional JSONata expression evaluated against the committed event
+   * Optional JSONata condition evaluated against the committed event
    * (`{ type, payload, metadata, source, offset, createdAt, path }`). The
    * event matches only when the expression evaluates to exactly `true` — e.g.
    * `payload.body.repository.full_name = "acme/widgets"` narrows a GitHub
@@ -36,7 +36,7 @@ export const EventFilter = z.strictObject({
    * rejected at configure time (`compileEventFilter` throws); an expression
    * that throws at match time is the CALLER's decision to record and skip.
    */
-  condition: z.string().trim().min(1).optional(),
+  jsonataCondition: z.string().trim().min(1).optional(),
 });
 
 /** A declarative event filter; an absent filter or empty object matches every event. */
@@ -66,7 +66,7 @@ const MAX_COMPILED_EXPRESSIONS = 200;
 
 /**
  * Parse a JSONata expression, throwing on invalid input. Used for filter
- * `condition`s (must evaluate to exactly `true` to match) — one
+ * `jsonataCondition`s (must evaluate to exactly `true` to match) — one
  * compiler, one cache, one language for everything expression-shaped that
  * evaluates against a committed event.
  */
@@ -108,7 +108,7 @@ export function compileJsonataExpression(expression: string): jsonata.Expression
 }
 
 /**
- * Compiles a filter to a predicate. Throws on an unparseable `condition`,
+ * Compiles a filter to a predicate. Throws on an unparseable `jsonataCondition`,
  * which makes this double as the configure-time validation gate: an
  * unparseable expression must be rejected before it becomes durable desired
  * state, not discovered as a per-event error forever after.
@@ -119,7 +119,9 @@ export function compileEventFilter(filter: EventFilter | undefined): CompiledEve
       ? undefined
       : new Set(filter.eventTypes);
   const condition =
-    filter?.condition === undefined ? undefined : compileJsonataExpression(filter.condition);
+    filter?.jsonataCondition === undefined
+      ? undefined
+      : compileJsonataExpression(filter.jsonataCondition);
 
   return {
     matches(event) {

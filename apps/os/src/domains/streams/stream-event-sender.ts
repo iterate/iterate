@@ -876,7 +876,11 @@ export class StreamEventSender {
                   streamId,
                   streamCreatedAt,
                   // Exactly one: webhook delivery pins the read limit to one.
-                  event: applyWebhookTransform(subscriptionKey, receiver.transform, matched[0]!),
+                  event: applyWebhookTransform(
+                    subscriptionKey,
+                    receiver.jsonataTransform,
+                    matched[0]!,
+                  ),
                   subscriptionKey,
                   cursorChangedAtSourceOffset: row.cursorChangedAtOffset,
                   deliveryId: deliveryId(

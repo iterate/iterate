@@ -124,7 +124,7 @@ export function CorePrettyState({
                 ? filter.eventTypes.filter((t): t is string => typeof t === "string")
                 : [];
               const condition =
-                typeof filter?.condition === "string" ? filter.condition : undefined;
+                typeof filter?.jsonataCondition === "string" ? filter.jsonataCondition : undefined;
               const deliveryHint =
                 kind === "copy-to-stream" && typeof receiver?.receivingStreamPath === "string"
                   ? `copy → ${receiver.receivingStreamPath}`

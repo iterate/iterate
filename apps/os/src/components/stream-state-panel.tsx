@@ -130,9 +130,9 @@ type SubscriptionDetails = {
   /** Filter event types; absent means every type. */
   eventTypes?: string[];
   /** Optional JSONata filter over the whole event. */
-  condition?: string;
+  jsonataCondition?: string;
   /** Optional JSONata constructor for a webhook's POSTed event body. */
-  transform?: string;
+  jsonataTransform?: string;
   start?: "beginning" | "now";
   onFailingEvent?: "halt" | "skip";
   webhookUrl?: string;
@@ -1067,15 +1067,15 @@ function readSubscriptionDetails(entry: unknown): SubscriptionDetails | null {
       : undefined;
   const filter = readRuntimeRecord(payload?.filter);
   const eventTypes = readStringArray(filter?.eventTypes);
-  const condition =
-    typeof filter?.condition === "string" && filter.condition.trim() !== ""
-      ? filter.condition
+  const jsonataCondition =
+    typeof filter?.jsonataCondition === "string" && filter.jsonataCondition.trim() !== ""
+      ? filter.jsonataCondition
       : undefined;
-  const transform =
+  const jsonataTransform =
     subscriptionAction === "webhook-post" &&
-    typeof receiver?.transform === "string" &&
-    receiver.transform.trim() !== ""
-      ? receiver.transform
+    typeof receiver?.jsonataTransform === "string" &&
+    receiver.jsonataTransform.trim() !== ""
+      ? receiver.jsonataTransform
       : undefined;
   const start =
     delivery?.start === "beginning" || delivery?.start === "now" ? delivery.start : undefined;
@@ -1100,8 +1100,8 @@ function readSubscriptionDetails(entry: unknown): SubscriptionDetails | null {
     ...(destinationStream === undefined ? {} : { destinationStream }),
     ...(note === undefined ? {} : { note }),
     ...(eventTypes === undefined ? {} : { eventTypes }),
-    ...(condition === undefined ? {} : { condition }),
-    ...(transform === undefined ? {} : { transform }),
+    ...(jsonataCondition === undefined ? {} : { jsonataCondition }),
+    ...(jsonataTransform === undefined ? {} : { jsonataTransform }),
     ...(start === undefined ? {} : { start }),
     ...(onFailingEvent === undefined ? {} : { onFailingEvent }),
     ...(webhookUrl === undefined ? {} : { webhookUrl }),
@@ -1161,13 +1161,13 @@ function ConfiguredFilterSummary({ config }: { config: SubscriptionDetails | und
     config.note !== undefined ||
     config.destinationStream !== undefined ||
     hasEventFilter ||
-    config.condition !== undefined;
+    config.jsonataCondition !== undefined;
   if (!hasExtra) return null;
 
   const eventTypes = hasEventFilter
     ? config.eventTypes!
     : config.destinationStream !== undefined ||
-        config.condition !== undefined ||
+        config.jsonataCondition !== undefined ||
         config.note !== undefined
       ? null // "all event types" shown as text, not chips
       : undefined;
@@ -1201,10 +1201,12 @@ function ConfiguredFilterSummary({ config }: { config: SubscriptionDetails | und
           </span>
         </ConfiguredFilterLine>
       )}
-      {config.condition == null ? null : (
+      {config.jsonataCondition == null ? null : (
         <ConfiguredFilterLine label="when">
           <span className="break-all font-mono text-foreground/80">
-            {config.condition.length > 80 ? `${config.condition.slice(0, 77)}…` : config.condition}
+            {config.jsonataCondition.length > 80
+              ? `${config.jsonataCondition.slice(0, 77)}…`
+              : config.jsonataCondition}
           </span>
         </ConfiguredFilterLine>
       )}
@@ -1535,7 +1537,7 @@ function SubscriptionDetail({ config }: { config: SubscriptionDetails }) {
         {eventTypes == null ? (
           <span className="text-xs text-muted-foreground">
             All event types
-            {config.condition == null ? "" : " matching the condition below"}
+            {config.jsonataCondition == null ? "" : " matching the condition below"}
           </span>
         ) : (
           <div className="flex flex-wrap gap-1.5">
@@ -1552,11 +1554,11 @@ function SubscriptionDetail({ config }: { config: SubscriptionDetails }) {
         )}
       </div>
 
-      {config.condition == null ? null : (
+      {config.jsonataCondition == null ? null : (
         <div>
           <SectionHeading>Condition</SectionHeading>
           <div className="rounded-xl bg-muted/40 px-3 py-2 font-mono text-xs leading-relaxed text-foreground/80 break-all whitespace-pre-wrap">
-            {config.condition}
+            {config.jsonataCondition}
           </div>
           <p className="mt-1 text-[11px] text-muted-foreground">
             JSONata over the whole event — must evaluate to exactly true.
@@ -1564,11 +1566,11 @@ function SubscriptionDetail({ config }: { config: SubscriptionDetails }) {
         </div>
       )}
 
-      {config.transform == null ? null : (
+      {config.jsonataTransform == null ? null : (
         <div>
           <SectionHeading>Transform</SectionHeading>
           <div className="rounded-xl bg-muted/40 px-3 py-2 font-mono text-xs leading-relaxed text-foreground/80 break-all whitespace-pre-wrap">
-            {config.transform}
+            {config.jsonataTransform}
           </div>
           <p className="mt-1 text-[11px] text-muted-foreground">
             JSONata constructor for the POSTed event body. Omitted fields copy verbatim; the

@@ -40,7 +40,7 @@ test("github pushes about a linked repository reach the repo stream", async () =
       subscriptionKey: `github-repo:${repoPath}`,
       filter: {
         eventTypes: [GITHUB_WEBHOOK_RECEIVED_EVENT_TYPE],
-        condition: 'payload.delivery.name = "push" and payload.body.repository.id = 101',
+        jsonataCondition: 'payload.delivery.name = "push" and payload.body.repository.id = 101',
       },
       receiver: {
         action: "copy-to-stream",

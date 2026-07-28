@@ -41,7 +41,7 @@ type SubscriptionConfigured = {
     description?: string;
     filter?: {
       eventTypes?: string[];
-      condition?: string;
+      jsonataCondition?: string;
     };
     receiver:
       | {
@@ -68,7 +68,7 @@ type SubscriptionConfigured = {
       | {
           action: "webhook-post";
           url: string;
-          transform?: string;
+          jsonataTransform?: string;
           delivery: {
             start: "beginning" | "now";
             onFailingEvent: "halt" | "skip";
@@ -82,7 +82,7 @@ This is the sole event that enables delivery. The `action` union prevents
 invalid combinations: a hosted processor cannot carry a start position stored
 by the source stream, an ordered copy cannot skip a permanently
 failing event, and only a webhook — the receiver with no processor behind it —
-may carry a JSONata `transform` for its POSTed event body. Durable
+may carry a JSONata `jsonataTransform` for its POSTed event body. Durable
 subscriptions never deliver ephemeral rows. Webhook delivery is
 at-least-once; a remote processor must deduplicate by
 `(streamId, event.offset)`.

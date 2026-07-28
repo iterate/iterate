@@ -271,7 +271,7 @@ describe("StreamEventSender hosted processor delivery", () => {
         event(4, "b", { keep: true }),
         event(5, "c", { keep: true }),
       ],
-      filter: { eventTypes: ["a", "b"], condition: "payload.keep = true" },
+      filter: { eventTypes: ["a", "b"], jsonataCondition: "payload.keep = true" },
       wakeProcessor: async () => ({
         streamId: SOURCE_STREAM_ID,
         checkpointOffset: 1,
@@ -1494,7 +1494,7 @@ describe("StreamEventSender webhook delivery", () => {
     const h = harness({
       events: [event(2, "example.com/issue-created", { issue: 21, internal: "drop-me" })],
       configuration: webhookConfig({
-        transform:
+        jsonataTransform:
           '{ "type": "example.com/issue-summary", "payload": { "issue": payload.issue, "doubled": payload.issue * 2 } }',
       }),
       deliverToWebhook,
@@ -1537,7 +1537,7 @@ describe("StreamEventSender webhook delivery", () => {
         event(4, "example.com/issue-created", { issue: 3 }),
       ],
       configuration: webhookConfig({
-        transform: 'payload.poison ? $error("poison event") : { "payload": payload }',
+        jsonataTransform: 'payload.poison ? $error("poison event") : { "payload": payload }',
         delivery: { start: "beginning", onFailingEvent: "skip" },
       }),
       deliverToWebhook,
@@ -1854,7 +1854,7 @@ describe("StreamConnections hosted delivery watchdog", () => {
       connectionKey: "session",
       processEventBatch: recordingProcessEventBatch(calls, disposed),
       replayAfterOffset: 0,
-      filter: compileEventFilter({ condition: '$error("session filter exploded")' }),
+      filter: compileEventFilter({ jsonataCondition: '$error("session filter exploded")' }),
     });
 
     await flushMicrotasks();

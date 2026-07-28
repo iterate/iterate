@@ -279,7 +279,7 @@ export async function handleGithubPullRequestWebhook(
     description: `Verified GitHub webhooks for ${repository.owner}/${repository.repo}#${number}`,
     filter: {
       eventTypes: ["events.iterate.com/github/webhook-received"],
-      condition: `payload.associations.repository.id = ${repository.id} and payload.associations.pullRequest.number = ${number}`,
+      jsonataCondition: `payload.associations.repository.id = ${repository.id} and payload.associations.pullRequest.number = ${number}`,
     },
     start: "beginning",
   });

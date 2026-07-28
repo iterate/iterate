@@ -79,7 +79,7 @@ test("replaying earlier events, receiving new appends, filters, state callbacks,
     maxReplayOffsetGap: 100,
     filter: {
       eventTypes: [MATCHING_EVENT_TYPE],
-      condition: "payload.selected = true",
+      jsonataCondition: "payload.selected = true",
     },
     processEventBatch: (batch) => selected.push(...batch.events),
   });
@@ -166,7 +166,7 @@ test("a live filter failure closes the callback and records the concrete error",
   using _handle = await stream.openConnection({
     connectionKey,
     filter: {
-      condition: '($assert(false, "live filter rejected event"); true)',
+      jsonataCondition: '($assert(false, "live filter rejected event"); true)',
     },
     processEventBatch: (batch) => batches.push(batch),
   });
@@ -1402,7 +1402,7 @@ test("a copy filters, records its source, and deduplicates a retried delivery", 
     subscriptionKey,
     filter: {
       eventTypes: [MATCHING_EVENT_TYPE],
-      condition: "payload.selected = true",
+      jsonataCondition: "payload.selected = true",
     },
   });
   const [, selected] = await source.append(
@@ -1553,7 +1553,7 @@ test("replacing a subscription starts a new copy run and keeps configuration out
     subscriptionKey,
     filter: {
       eventTypes: [MATCHING_EVENT_TYPE],
-      condition: "payload.selected = true",
+      jsonataCondition: "payload.selected = true",
     },
   });
   const [selected] = await source.append({
@@ -1573,7 +1573,7 @@ test("replacing a subscription starts a new copy run and keeps configuration out
     subscriptionKey,
     filter: {
       eventTypes: [MATCHING_EVENT_TYPE],
-      condition: "payload.selected = true",
+      jsonataCondition: "payload.selected = true",
     },
     description: "Replacement run",
     start: "beginning",
@@ -1665,7 +1665,7 @@ test("a filter failure retries in order and never advances past later events", a
     subscriptionKey,
     filter: {
       eventTypes: [MATCHING_EVENT_TYPE],
-      condition: '($assert(payload.allowed, "filter rejected event"); true)',
+      jsonataCondition: '($assert(payload.allowed, "filter rejected event"); true)',
     },
   });
   const [failed, later] = await source.append(
@@ -2768,7 +2768,7 @@ test("invalid receiver-specific combinations and expressions never commit", asyn
           receiver: {
             action: "webhook-post",
             url: `https://example.com/${marker}`,
-            transform: "payload.(((",
+            jsonataTransform: "payload.(((",
             delivery: deliveryPolicy("now"),
           },
         },
@@ -2794,7 +2794,7 @@ test("invalid receiver-specific combinations and expressions never commit", asyn
       message: /invalid JSONata expression.*Expected .*before end of expression/i,
       event: subscriptionConfigured({
         subscriptionKey: `condition-${marker}`,
-        filter: { condition: "payload.(((" },
+        filter: { jsonataCondition: "payload.(((" },
         receiver: {
           action: "copy-to-stream",
           receivingStreamPath: `/e2e/subscriptions/validation/receiver/${marker}`,
@@ -3013,7 +3013,7 @@ type DeliveryPolicy = {
 function subscriptionConfigured(input: {
   subscriptionKey: string;
   description?: string;
-  filter?: { eventTypes?: string[]; condition?: string };
+  filter?: { eventTypes?: string[]; jsonataCondition?: string };
   receiver: Record<string, unknown>;
 }): StreamEventInput {
   return {

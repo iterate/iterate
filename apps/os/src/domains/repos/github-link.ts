@@ -59,7 +59,7 @@ function githubRepoSubscription(input: {
     description: `Copies GitHub webhooks for ${input.owner}/${input.repo} onto this repo's stream so default-branch pushes can be imported.`,
     filter: {
       eventTypes: ["events.iterate.com/github/webhook-received"],
-      condition: `payload.delivery.name = "push" and payload.body.repository.id = ${input.repositoryId}`,
+      jsonataCondition: `payload.delivery.name = "push" and payload.body.repository.id = ${input.repositoryId}`,
     },
     receiver: {
       action: "copy-to-stream",

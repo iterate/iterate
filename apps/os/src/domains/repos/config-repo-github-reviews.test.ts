@@ -276,7 +276,7 @@ describe("userspace GitHub pull-request routing", () => {
       description: "Verified GitHub webhooks for acme/widgets#7",
       filter: {
         eventTypes: ["events.iterate.com/github/webhook-received"],
-        condition:
+        jsonataCondition:
           "payload.associations.repository.id = 101 and payload.associations.pullRequest.number = 7",
       },
       start: "beginning",

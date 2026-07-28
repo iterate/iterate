@@ -21,13 +21,17 @@ describe("EventFilter schema", () => {
     { name: "empty object (matches everything)", input: {}, ok: true },
     { name: "eventTypes list", input: { eventTypes: ["a"] }, ok: true },
     { name: "wildcard entry", input: { eventTypes: ["*"] }, ok: true },
-    { name: "condition expression", input: { condition: "payload.x = 1" }, ok: true },
-    { name: "both fields", input: { eventTypes: ["a"], condition: "payload.x = 1" }, ok: true },
+    { name: "condition expression", input: { jsonataCondition: "payload.x = 1" }, ok: true },
+    {
+      name: "both fields",
+      input: { eventTypes: ["a"], jsonataCondition: "payload.x = 1" },
+      ok: true,
+    },
     // A subscription that can never match anything is a configure-time mistake.
     { name: "empty eventTypes list", input: { eventTypes: [] }, ok: false },
     { name: "blank event type", input: { eventTypes: ["   "] }, ok: false },
-    { name: "blank condition", input: { condition: "   " }, ok: false },
-    { name: "empty condition", input: { condition: "" }, ok: false },
+    { name: "blank condition", input: { jsonataCondition: "   " }, ok: false },
+    { name: "empty condition", input: { jsonataCondition: "" }, ok: false },
   ])("$name -> valid: $ok", ({ input, ok }) => {
     expect(EventFilter.safeParse(input).success).toBe(ok);
   });
@@ -59,16 +63,16 @@ describe("compileEventFilter", () => {
   });
 
   it("a condition must evaluate to exactly `true` — truthy is not enough", () => {
-    const truthy = compileEventFilter({ condition: "payload.count" });
+    const truthy = compileEventFilter({ jsonataCondition: "payload.count" });
     expect(truthy.matches(evt("a", { count: 1 }))).toBe(false); // 1 is truthy, not `true`
     expect(truthy.matches(evt("a", { count: "yes" }))).toBe(false);
 
-    const boolean = compileEventFilter({ condition: "payload.enabled" });
+    const boolean = compileEventFilter({ jsonataCondition: "payload.enabled" });
     expect(boolean.matches(evt("a", { enabled: true }))).toBe(true);
     expect(boolean.matches(evt("a", { enabled: false }))).toBe(false);
     expect(boolean.matches(evt("a", {}))).toBe(false); // absent field -> undefined
 
-    const comparison = compileEventFilter({ condition: 'payload.repo = "acme/widgets"' });
+    const comparison = compileEventFilter({ jsonataCondition: 'payload.repo = "acme/widgets"' });
     expect(comparison.matches(evt("a", { repo: "acme/widgets" }))).toBe(true);
     expect(comparison.matches(evt("a", { repo: "acme/other" }))).toBe(false);
   });
@@ -76,7 +80,7 @@ describe("compileEventFilter", () => {
   it("condition and eventTypes intersect: both must pass", () => {
     const filter = compileEventFilter({
       eventTypes: ["a"],
-      condition: "payload.flag = true",
+      jsonataCondition: "payload.flag = true",
     });
     expect(filter.matches(evt("a", { flag: true }))).toBe(true);
     expect(filter.matches(evt("b", { flag: true }))).toBe(false); // wrong type
@@ -85,8 +89,8 @@ describe("compileEventFilter", () => {
   });
 
   it("throws on an unparseable condition — the configure-time validation gate", () => {
-    expect(() => compileEventFilter({ condition: "(((" })).toThrow();
-    expect(() => compileEventFilter({ condition: "payload.x =" })).toThrow();
+    expect(() => compileEventFilter({ jsonataCondition: "(((" })).toThrow();
+    expect(() => compileEventFilter({ jsonataCondition: "payload.x =" })).toThrow();
   });
 });
 

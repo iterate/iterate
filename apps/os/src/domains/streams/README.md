@@ -24,7 +24,7 @@ await agentStream.subscribeToEventsFrom({
   subscriptionKey: "github-for-reviewer",
   filter: {
     eventTypes: ["events.iterate.com/github/webhook-received"],
-    condition: 'payload.body.repository.full_name = "acme/widgets"',
+    jsonataCondition: 'payload.body.repository.full_name = "acme/widgets"',
   },
 });
 ```
@@ -131,7 +131,7 @@ using connection = await stream.openConnection({
   replayAfterOffset,
   filter: {
     eventTypes: ["events.example/message"],
-    condition: "payload.visible = true",
+    jsonataCondition: "payload.visible = true",
   },
   processEventBatch,
 });
@@ -217,8 +217,8 @@ The source POSTs one event at a time through the project's attributed egress.
 A 2xx response accepts that event. This is the lane for remotely-hosted
 processors driven by webhooks; webhook delivery is at-least-once, so a remote
 processor must deduplicate by `(streamId, offset)`. An optional JSONata
-`transform` (webhook-only) reshapes the POSTed event body while the envelope
-keeps the real source coordinates.
+`jsonataTransform` (webhook-only) reshapes the POSTed event body while the
+envelope keeps the real source coordinates.
 
 ## Events marked ephemeral
 

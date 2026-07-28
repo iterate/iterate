@@ -1001,12 +1001,12 @@ describe("StreamCoreProcessor validation and dispatch", () => {
 
   test("parse-validates a webhook transform at configure time", () => {
     const { processor, state } = harness(SOURCE_PATH);
-    const webhookPayload = (transform: string) => ({
+    const webhookPayload = (jsonataTransform: string) => ({
       subscriptionKey: "ops-webhook",
       receiver: {
         action: "webhook-post",
         url: "https://hooks.example.com/iterate",
-        transform,
+        jsonataTransform,
         delivery: { start: "now", onFailingEvent: "halt" },
       },
     });

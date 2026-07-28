@@ -50,7 +50,7 @@ const VERSION_28_COMMITTED_EVENTS: StreamEvent[] = [
     description: "Copy issue events to the reviewer",
     filter: {
       eventTypes: ["example.com/issue-created"],
-      condition: "payload.issue != null",
+      jsonataCondition: "payload.issue != null",
     },
     receiver: {
       action: "copy-to-stream",
@@ -104,7 +104,7 @@ const VERSION_28_COMMITTED_EVENTS: StreamEvent[] = [
     description: "Wake the reviewer agent",
     filter: {
       eventTypes: ["*"],
-      condition: "payload.ready = true",
+      jsonataCondition: "payload.ready = true",
     },
     receiver: {
       action: "processor-wake",
@@ -223,7 +223,7 @@ describe("core processor version 28 committed-event replay", () => {
               description: "Wake the reviewer agent",
               filter: {
                 eventTypes: ["*"],
-                condition: "payload.ready = true",
+                jsonataCondition: "payload.ready = true",
               },
               receiver: {
                 action: "processor-wake",

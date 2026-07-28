@@ -1302,7 +1302,7 @@ export interface Stream {
       /** Source stream path in this project. */
       sourceStreamPath: string;
       description?: string;
-      /** Selects source events by type and/or an exact-true JSONata condition. */
+      /** Selects source events by type (`eventTypes`) and/or an exact-true JSONata condition (`jsonataCondition`). */
       filter?: EventFilter;
       /** Initial cursor stored by the source stream. Defaults to events configured from now onward. */
       start?: "beginning" | "now";
@@ -3164,7 +3164,7 @@ export type SubscriptionConfigurationForDelivery = {
     description?: string;
     filter?: {
       eventTypes?: string[];
-      condition?: string;
+      jsonataCondition?: string;
     };
     receiver:
       | {
@@ -3191,7 +3191,7 @@ export type SubscriptionConfigurationForDelivery = {
       | {
           action: "webhook-post";
           url: string;
-          transform?: string;
+          jsonataTransform?: string;
           delivery: {
             start: "beginning" | "now";
             onFailingEvent: "halt" | "skip";
@@ -3295,7 +3295,10 @@ export type StreamRuntimeDebugState = {
 export type ProcessEventBatch = (batch: StreamEventBatch) => unknown;
 
 /** A declarative event filter; an absent filter or empty object matches every event. */
-export type EventFilter = { eventTypes?: string[] | undefined; condition?: string | undefined };
+export type EventFilter = {
+  eventTypes?: string[] | undefined;
+  jsonataCondition?: string | undefined;
+};
 
 /**
  * Optional runtime-state callback exposed by a hosted processor.
@@ -3410,7 +3413,9 @@ export type CommittedSubscriptionConfiguredEvent = Omit<
     payload: {
       subscriptionKey?: string | undefined;
       description?: string | undefined;
-      filter?: { eventTypes?: string[] | undefined; condition?: string | undefined } | undefined;
+      filter?:
+        | { eventTypes?: string[] | undefined; jsonataCondition?: string | undefined }
+        | undefined;
       receiver:
         | {
             action: "processor-wake";
@@ -3430,7 +3435,7 @@ export type CommittedSubscriptionConfiguredEvent = Omit<
         | {
             action: "webhook-post";
             url: string;
-            transform?: string | undefined;
+            jsonataTransform?: string | undefined;
             delivery: { start: "beginning" | "now"; onFailingEvent: "halt" | "skip" };
           };
     };
@@ -3438,7 +3443,9 @@ export type CommittedSubscriptionConfiguredEvent = Omit<
     payload: {
       subscriptionKey?: string | undefined;
       description?: string | undefined;
-      filter?: { eventTypes?: string[] | undefined; condition?: string | undefined } | undefined;
+      filter?:
+        | { eventTypes?: string[] | undefined; jsonataCondition?: string | undefined }
+        | undefined;
       receiver:
         | {
             action: "processor-wake";
@@ -3458,7 +3465,7 @@ export type CommittedSubscriptionConfiguredEvent = Omit<
         | {
             action: "webhook-post";
             url: string;
-            transform?: string | undefined;
+            jsonataTransform?: string | undefined;
             delivery: { start: "beginning" | "now"; onFailingEvent: "halt" | "skip" };
           };
     };
@@ -3975,7 +3982,7 @@ export type CoreProcessorState = {
           configuration: {
             description?: string | undefined;
             filter?:
-              | { eventTypes?: string[] | undefined; condition?: string | undefined }
+              | { eventTypes?: string[] | undefined; jsonataCondition?: string | undefined }
               | undefined;
             receiver:
               | {
@@ -3996,7 +4003,7 @@ export type CoreProcessorState = {
               | {
                   action: "webhook-post";
                   url: string;
-                  transform?: string | undefined;
+                  jsonataTransform?: string | undefined;
                   delivery: { start: "beginning" | "now"; onFailingEvent: "halt" | "skip" };
                 };
             subscriptionKey: string;

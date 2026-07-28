@@ -189,7 +189,7 @@ export type SubscriptionConfigurationForDelivery = {
     description?: string;
     filter?: {
       eventTypes?: string[];
-      condition?: string;
+      jsonataCondition?: string;
     };
     receiver:
       | {
@@ -216,7 +216,7 @@ export type SubscriptionConfigurationForDelivery = {
       | {
           action: "webhook-post";
           url: string;
-          transform?: string;
+          jsonataTransform?: string;
           delivery: {
             start: "beginning" | "now";
             onFailingEvent: "halt" | "skip";
@@ -388,7 +388,7 @@ export type StreamWebhookDelivery = {
   /** Creation time of this source stream; orders recreated streams whose offsets restarted. */
   streamCreatedAt: string;
   /**
-   * The committed event. When the subscription configures a `transform`, its
+   * The committed event. When the subscription configures a `jsonataTransform`, its
    * `type`/`payload`/`metadata` are the transform's output while the
    * coordinates (`offset`, `createdAt`, `path`) keep naming the source row.
    */

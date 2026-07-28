@@ -75,7 +75,7 @@ using connection = await stream.openConnection({
   replayAfterOffset: lastSeenOffset,
   filter: {
     eventTypes: ["events.example/message-created"],
-    condition: "payload.channel = 'support'",
+    jsonataCondition: "payload.channel = 'support'",
   },
   processEventBatch,
 });
@@ -143,7 +143,7 @@ await source.append({
     subscriptionKey: "orders-for-warehouse",
     filter: {
       eventTypes: ["events.example/order-created"],
-      condition: "payload.region = 'eu'",
+      jsonataCondition: "payload.region = 'eu'",
     },
     receiver: {
       // exactly one action
@@ -178,7 +178,7 @@ const configured = await receiver.subscribeToEventsFrom({
   description: "Copy pull-request webhooks to the reviewer agent.",
   filter: {
     eventTypes: ["events.iterate.com/github/webhook-received"],
-    condition:
+    jsonataCondition:
       'payload.delivery.name = "pull_request" and payload.body.repository.full_name = "acme/widgets"',
   },
   start: "now",
@@ -348,7 +348,7 @@ processor reshapes for itself.
 receiver: {
   action: "webhook-post",
   url: "https://hooks.example.com/iterate",
-  transform: '{ "type": "example.com/issue-summary", "payload": { "issue": payload.issue } }',
+  jsonataTransform: '{ "type": "example.com/issue-summary", "payload": { "issue": payload.issue } }',
   delivery: { start: "now", onFailingEvent: "skip" },
 }
 ```
@@ -398,11 +398,11 @@ These are independent properties of a durable subscription.
 ```ts
 filter: {
   eventTypes: ["events.example/order-created"],
-  condition: "payload.total > 100",
+  jsonataCondition: "payload.total > 100",
 }
 ```
 
-Omitting `filter` selects every type. `eventTypes` narrows by type. `condition`
+Omitting `filter` selects every type. `eventTypes` narrows by type. `jsonataCondition`
 is JSONata over the complete event and must evaluate to exactly `true`.
 
 ### Start position
