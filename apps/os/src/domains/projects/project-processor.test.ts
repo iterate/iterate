@@ -208,6 +208,32 @@ describe("ProjectProcessor bootstrap", () => {
     ]);
   });
 
+  it("does not re-probe after a failed terminal committed but its checkpoint was lost", async () => {
+    const h = makeProjectHarness({
+      workerOutcomes: [
+        new WorkerBuildFailedError({ kind: "source", message: "Expected ; but found is" }),
+      ],
+    });
+    await h.stream.append(PROJECT_CREATE_REQUESTED, CONFIG_REPO_CREATED);
+    await h.settle();
+
+    // A fresh progress store replays from before the config-repo certificate,
+    // while the failed terminal remains durable later in the same stream.
+    // The default worker would now answer successfully if the reaction
+    // incorrectly ran it again.
+    const replay = makeProjectHarness({
+      substrate: { clock: h.clock, stream: h.stream, progress: makeMemoryProgressStore() },
+    });
+    await replay.settle();
+
+    expect(replay.workerFetchCalls()).toBe(0);
+    expect(replay.events("events.iterate.com/project/created")).toEqual([]);
+    expect(replay.events("events.iterate.com/project/create-failed")).toHaveLength(1);
+    expect(replay.state().createFailure).toMatchObject({
+      error: "Default project worker bootstrap failed: Expected ; but found is",
+    });
+  });
+
   it("leaves a transient worker dispatch failure open for durable redelivery", async () => {
     const h = makeProjectHarness({
       workerOutcomes: [new Error("temporary worker dispatch outage")],

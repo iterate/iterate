@@ -127,25 +127,16 @@ export class ProjectProcessor extends StreamProcessor<
         }
         const createRequest = state.createRequest;
         const createRequestedAtOffset = state.createRequestedAtOffset;
-        if (event.type === "events.iterate.com/repos/create-failed") {
-          blockProcessorWhile(() =>
-            append({
-              type: "events.iterate.com/project/create-failed",
-              idempotencyKey: "project/create-failed",
-              payload: {
-                createRequestedAtOffset,
-                error: `Config repo creation failed: ${event.payload.error}`,
-                request: createRequest,
-              },
-            }),
-          );
-          break;
-        }
         blockProcessorWhile(async () => {
           const projectCreatedIdempotencyKey = `project-created:${this.deps.itx.projectId}`;
-          const existingProjectCreated = await this.stream.getEvent({
-            idempotencyKey: projectCreatedIdempotencyKey,
-          });
+          const projectCreateFailedIdempotencyKey = "project/create-failed";
+          const [existingProjectCreated, existingProjectCreateFailed] = await Promise.all([
+            this.stream.getEvent({ idempotencyKey: projectCreatedIdempotencyKey }),
+            this.stream.getEvent({ idempotencyKey: projectCreateFailedIdempotencyKey }),
+          ]);
+          if (existingProjectCreated !== undefined && existingProjectCreateFailed !== undefined) {
+            throw new Error("Project creation has both a success and failure terminal.");
+          }
           if (existingProjectCreated !== undefined) {
             const terminal = parseProjectCreationTerminal({
               event: existingProjectCreated,
@@ -163,6 +154,36 @@ export class ProjectProcessor extends StreamProcessor<
             // this is the lost-ack retry path.
             return;
           }
+          if (existingProjectCreateFailed !== undefined) {
+            const terminal = parseProjectCreationTerminal({
+              event: existingProjectCreateFailed,
+              projectId: this.deps.itx.projectId,
+              request: createRequest,
+              requestOffset: createRequestedAtOffset,
+            });
+            if (terminal?.type !== "events.iterate.com/project/create-failed") {
+              throw new Error(
+                `idempotency key "${projectCreateFailedIdempotencyKey}" is not this creation request's failure`,
+              );
+            }
+            // The failure append committed but the processor checkpoint did
+            // not. Do not probe again: its result could differ or even
+            // succeed, creating contradictory creation terminals.
+            return;
+          }
+
+          if (event.type === "events.iterate.com/repos/create-failed") {
+            await append({
+              type: "events.iterate.com/project/create-failed",
+              idempotencyKey: projectCreateFailedIdempotencyKey,
+              payload: {
+                createRequestedAtOffset,
+                error: `Config repo creation failed: ${event.payload.error}`,
+                request: createRequest,
+              },
+            });
+            return;
+          }
 
           const timing = { projectId: this.deps.itx.projectId };
           try {
@@ -173,7 +194,7 @@ export class ProjectProcessor extends StreamProcessor<
             if (!isWorkerBuildFailedError(error)) throw error;
             await append({
               type: "events.iterate.com/project/create-failed",
-              idempotencyKey: "project/create-failed",
+              idempotencyKey: projectCreateFailedIdempotencyKey,
               payload: {
                 createRequestedAtOffset,
                 error: `Default project worker bootstrap failed: ${errorMessage(error)}`,
