@@ -36,12 +36,13 @@ doppler run --project os --config prd -- \
 
 `apply` restores Auth users, minimum organization membership, the exact project
 ID, hostnames, inbound-email senders, generic secrets, supported integrations,
-and repositories. It is convergent and proves GitHub/local repository state and
-the served config commit before returning.
+and the config repository. It is convergent and proves its GitHub/local state
+and the served config commit before returning.
 
 GitHub is authoritative. Restore links an existing remote without an initial
-push and imports its current default branch. Local-only repositories come from
-the archived file tree.
+push and imports its current default branch. A local-only config repository
+comes from the archived file tree. Other project repositories are deliberately
+outside the recovery seed.
 
 ## Boundaries
 
