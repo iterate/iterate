@@ -45,7 +45,7 @@ export class ProjectEgressEntrypoint extends WorkerEntrypoint<
     const projectId = this.ctx.props.projectId;
     return await fetchFromDeploymentReadyProject({
       expectedVersion: workerDeploymentVersion(this.env),
-      project: projectStub(this.env.PROJECT, projectId),
+      getProject: () => projectStub(this.env.PROJECT, projectId),
       projectId,
       request: withStreamContext(request, this.ctx.props.streamContext),
     });

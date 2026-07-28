@@ -6401,7 +6401,7 @@ class ProjectEgressRpcTarget extends IterateRpcTarget<"ProjectEgress"> {
   async fetch(request: Request): Promise<EgressResponse> {
     return await fetchFromDeploymentReadyProject({
       expectedVersion: workerDeploymentVersion(env),
-      project: projectStub(env.PROJECT, this.props.projectId),
+      getProject: () => projectStub(env.PROJECT, this.props.projectId),
       projectId: this.props.projectId,
       request: withStreamContext(request, this.props.streamContext),
     });

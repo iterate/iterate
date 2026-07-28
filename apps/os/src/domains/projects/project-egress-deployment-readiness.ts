@@ -18,7 +18,7 @@ type ProjectDeploymentTarget = {
 
 type FetchFromDeploymentReadyProjectInput = {
   expectedVersion: WorkerDeploymentVersionLike;
-  project: ProjectDeploymentTarget;
+  getProject: () => ProjectDeploymentTarget;
   projectId: string;
   request: Request;
 };
@@ -47,12 +47,20 @@ export async function fetchFromDeploymentReadyProject(
   input: FetchFromDeploymentReadyProjectInput,
   readinessOptions: DeploymentVersionReadinessOptions = {},
 ): Promise<Response> {
+  let readyProject: ProjectDeploymentTarget | undefined;
   const readiness = await waitForDurableObjectDeploymentVersion({
     ...readinessOptions,
     expectedVersion: input.expectedVersion,
     notReadyError: (detail, cause) => requestNotForwardedError(input, detail, cause),
-    readVersion: () =>
-      Promise.resolve(input.project.deploymentVersion(WORKER_DEPLOYMENT_VERSION_METADATA_FORMAT)),
+    readVersion: () => {
+      // Never poll a stub that may still be attached to the incarnation which
+      // just reset. The eventual fetch uses the same freshly acquired stub
+      // whose deployment probe established readiness.
+      readyProject = input.getProject();
+      return Promise.resolve(
+        readyProject.deploymentVersion(WORKER_DEPLOYMENT_VERSION_METADATA_FORMAT),
+      );
+    },
   });
   if (readiness.probes > 1 || readiness.targetNewer) {
     console.info("project deployment version converged before outbound egress", {
@@ -67,5 +75,8 @@ export async function fetchFromDeploymentReadyProject(
       waitedMs: readiness.waitedMs,
     });
   }
-  return await input.project.fetch(input.request);
+  if (readyProject === undefined) {
+    throw requestNotForwardedError(input, "the version probe returned no target");
+  }
+  return await readyProject.fetch(input.request);
 }

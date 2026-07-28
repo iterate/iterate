@@ -18,10 +18,10 @@ type SecretDeploymentTarget = {
 
 type FetchFromDeploymentReadySecretInput = {
   expectedVersion: WorkerDeploymentVersionLike;
+  getSecret: () => SecretDeploymentTarget;
   path: string;
   projectId: string;
   request: Request;
-  secret: SecretDeploymentTarget;
 };
 
 function requestNotForwardedError(
@@ -49,12 +49,20 @@ export async function fetchFromDeploymentReadySecret(
   input: FetchFromDeploymentReadySecretInput,
   readinessOptions: DeploymentVersionReadinessOptions = {},
 ): Promise<Response> {
+  let readySecret: SecretDeploymentTarget | undefined;
   const readiness = await waitForDurableObjectDeploymentVersion({
     ...readinessOptions,
     expectedVersion: input.expectedVersion,
     notReadyError: (detail, cause) => requestNotForwardedError(input, detail, cause),
-    readVersion: () =>
-      Promise.resolve(input.secret.deploymentVersion(WORKER_DEPLOYMENT_VERSION_METADATA_FORMAT)),
+    readVersion: () => {
+      // A Durable Object stub can remain tied to the lifecycle failure that
+      // rejected it. Re-acquire before every read-only probe, then forward on
+      // the exact stub whose probe crossed the safe boundary.
+      readySecret = input.getSecret();
+      return Promise.resolve(
+        readySecret.deploymentVersion(WORKER_DEPLOYMENT_VERSION_METADATA_FORMAT),
+      );
+    },
   });
   if (readiness.probes > 1 || readiness.targetNewer) {
     console.info("secret deployment version converged before credential-bearing egress", {
@@ -70,5 +78,8 @@ export async function fetchFromDeploymentReadySecret(
       waitedMs: readiness.waitedMs,
     });
   }
-  return await input.secret.fetch(input.request);
+  if (readySecret === undefined) {
+    throw requestNotForwardedError(input, "the version probe returned no target");
+  }
+  return await readySecret.fetch(input.request);
 }

@@ -716,18 +716,18 @@ export class ProjectDurableObject extends DurableObject<Env> {
     if (secretPaths.length > 1) return secretErrorResponse("secret_reference_foreign");
     if (secretPaths.length === 1) {
       const secretPath = secretPaths[0]!;
-      const secret = this.env.SECRET.getByName(
-        DurableObjectNameCodec.stringify({
-          projectId: this.#name.projectId,
-          path: secretPath,
-        }),
-      );
       const response = await fetchFromDeploymentReadySecret({
         expectedVersion: workerDeploymentVersion(this.env),
+        getSecret: () =>
+          this.env.SECRET.getByName(
+            DurableObjectNameCodec.stringify({
+              projectId: this.#name.projectId,
+              path: secretPath,
+            }),
+          ),
         path: secretPath,
         projectId: this.#name.projectId,
         request,
-        secret,
       });
       return withWebSocketHandshakeHeaders(request, response);
     }

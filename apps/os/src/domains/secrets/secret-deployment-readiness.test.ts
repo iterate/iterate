@@ -23,10 +23,10 @@ describe("fetchFromDeploymentReadySecret", () => {
       fetchFromDeploymentReadySecret(
         {
           expectedVersion: "version-new",
+          getSecret: () => ({ deploymentVersion, fetch }),
           path: "/integrations/petshop/alice",
           projectId: "prj_test",
           request: new Request("https://petshop.example/api/me"),
-          secret: { deploymentVersion, fetch },
         },
         {
           now: () => time,
@@ -68,13 +68,13 @@ describe("fetchFromDeploymentReadySecret", () => {
       fetchFromDeploymentReadySecret(
         {
           expectedVersion: "version-new",
+          getSecret: () => ({
+            deploymentVersion: async () => "version-old",
+            fetch,
+          }),
           path: "/integrations/petshop/alice",
           projectId: "prj_test",
           request: new Request("https://petshop.example/api/me"),
-          secret: {
-            deploymentVersion: async () => "version-old",
-            fetch,
-          },
         },
         {
           now: () => time,
@@ -92,5 +92,49 @@ describe("fetchFromDeploymentReadySecret", () => {
         "was not forwarded and no credential refresh ran.",
     );
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("re-acquires the Secret after a lifecycle reset and forwards on the ready stub", async () => {
+    const reset = Object.assign(new Error("code updated"), { durableObjectReset: true });
+    const staleFetch = vi.fn(async () => new Response("unexpected"));
+    const readyResponse = new Response("ok");
+    const readyFetch = vi.fn(async () => readyResponse);
+    const getSecret = vi
+      .fn()
+      .mockReturnValueOnce({
+        deploymentVersion: async () => {
+          throw reset;
+        },
+        fetch: staleFetch,
+      })
+      .mockReturnValueOnce({
+        deploymentVersion: async () => "version-new",
+        fetch: readyFetch,
+      });
+    let time = 0;
+
+    await expect(
+      fetchFromDeploymentReadySecret(
+        {
+          expectedVersion: "version-new",
+          getSecret,
+          path: "/integrations/petshop/alice",
+          projectId: "prj_test",
+          request: new Request("https://petshop.example/api/me"),
+        },
+        {
+          now: () => time,
+          pollIntervalMs: 100,
+          sleep: async (durationMs) => {
+            time += durationMs;
+          },
+          timeoutMs: 1_000,
+        },
+      ),
+    ).resolves.toBe(readyResponse);
+
+    expect(getSecret).toHaveBeenCalledTimes(2);
+    expect(staleFetch).not.toHaveBeenCalled();
+    expect(readyFetch).toHaveBeenCalledOnce();
   });
 });

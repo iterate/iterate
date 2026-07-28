@@ -34,6 +34,7 @@ fi
 
 command -v depot >/dev/null || { echo "depot CLI is required" >&2; exit 69; }
 command -v node >/dev/null || { echo "node is required" >&2; exit 69; }
+command -v unzip >/dev/null || { echo "unzip is required" >&2; exit 69; }
 
 if [ -z "${LOG_DIR:-}" ]; then
   LOG_DIR=$(mktemp -d /tmp/preview-e2e-marathon.XXXXXX)
@@ -72,8 +73,49 @@ json_run_field() {
   ' "$1" "$2"
 }
 
+json_artifact_id() {
+  node -e '
+    const fs = require("node:fs");
+    const artifacts = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).artifacts ?? [];
+    const artifact = artifacts.find(
+      (item) =>
+        item.attempt_id === process.argv[2] && item.name === "preview-os-test-artifacts",
+    );
+    if (!artifact?.artifact_id) process.exit(1);
+    process.stdout.write(artifact.artifact_id);
+  ' "$1" "$2"
+}
+
+artifact_retry_count() {
+  local artifact=$1 entry count total=0
+  # Failed preview commands can skip preview.ts's GitHub retry annotation, but
+  # the always-run finalizer still packages every runner's canonical telemetry.
+  # Sum the raw, non-aggregated test records so a terminal workflow cannot look
+  # retry-free merely because its failing lane's buffered log was never replayed.
+  while IFS= read -r entry; do
+    count=$(
+      unzip -p "$artifact" "$entry" |
+        node -e '
+          let json = "";
+          process.stdin.setEncoding("utf8");
+          process.stdin.on("data", (chunk) => (json += chunk));
+          process.stdin.on("end", () => {
+            const artifact = JSON.parse(json);
+            const retries = (artifact.tests ?? []).reduce(
+              (total, test) => total + (Number.isInteger(test.retryCount) ? test.retryCount : 0),
+              0,
+            );
+            process.stdout.write(String(retries));
+          });
+        '
+    )
+    total=$((total + count))
+  done < <(unzip -Z1 "$artifact" | grep -E '^ci-telemetry/raw/[^/]+[.]json$')
+  echo "$total"
+}
+
 retry_count() {
-  local log=$1 annotations onboarding transport
+  local log=$1 artifact=${2:-} annotations onboarding runner transport
   # Depot's finite log export renders GitHub workflow commands as
   # `##[notice]`/`##[warning]`. Keep the raw command fallback for older CLI
   # exports, but never sum both representations of the same annotations.
@@ -92,7 +134,17 @@ retry_count() {
   # replaying any RPC work, but the strict proof still rejects the recovery.
   # The same marker is emitted by the CLI and Playwright admin helpers.
   transport=$(grep -cF '[itx-initial-connection-retry] ' "$log" || true)
-  echo $((annotations + onboarding + transport))
+  if [ -n "$artifact" ]; then
+    runner=$(artifact_retry_count "$artifact")
+    # A successful run also announces these same runner retries. Use the
+    # larger observation, never their sum, to avoid counting each test twice.
+    if [ "$annotations" -gt "$runner" ]; then runner=$annotations; fi
+  else
+    # Last-resort fallback for a run that failed before its required artifact
+    # was finalized.
+    runner=$((annotations + onboarding))
+  fi
+  echo $((runner + transport))
 }
 
 record_result() {
@@ -108,6 +160,8 @@ for run in $(seq 1 "$RUNS"); do
   status_file="$LOG_DIR/run-$run_label-status.json"
   metadata_file="$LOG_DIR/run-$run_label-metadata.json"
   log_file="$LOG_DIR/run-$run_label.log"
+  artifact_metadata_file="$LOG_DIR/run-$run_label-artifacts.json"
+  artifact_file="$LOG_DIR/run-$run_label-artifacts.zip"
   observed_started_epoch=$(date +%s)
 
   echo "run $run/$RUNS: dispatching canonical cloudflare-previews.yml at $REF"
@@ -159,7 +213,17 @@ for run in $(seq 1 "$RUNS"); do
   duration=$(
     node -e 'const [start,end]=process.argv.slice(1).map(Date.parse); process.stdout.write(String(Math.ceil((end-start)/1000)))' "$created_at" "$finished_at"
   )
-  retries=$(retry_count "$log_file")
+  artifact_id=""
+  depot ci artifacts list "$run_id" --org "$DEPOT_ORG" --output json >"$artifact_metadata_file"
+  artifact_id=$(json_artifact_id "$artifact_metadata_file" "$attempt_id" || true)
+  if [ -n "$artifact_id" ]; then
+    depot ci artifacts download "$artifact_id" \
+      --org "$DEPOT_ORG" \
+      --output-file "$artifact_file"
+  fi
+  artifact_retry_file=""
+  if [ -f "$artifact_file" ]; then artifact_retry_file=$artifact_file; fi
+  retries=$(retry_count "$log_file" "$artifact_retry_file")
 
   if [ -z "$expected_head_sha" ]; then
     expected_head_sha="$head_sha"
@@ -172,6 +236,12 @@ for run in $(seq 1 "$RUNS"); do
   if [ "$status" != finished ]; then
     record_result "$run" WORKFLOW_FAIL "$duration" "$retries" "$head_sha" "$run_id" "$attempt_id" "$created_at" "$started_at" "$finished_at" "$log_file" "$metadata_file"
     echo "run $run: WORKFLOW_FAIL (${duration}s, retries=$retries) — Depot run $run_id; $log_file" >&2
+    exit 1
+  fi
+
+  if [ ! -f "$artifact_file" ]; then
+    record_result "$run" OBSERVATION_FAIL "$duration" "$retries" "$head_sha" "$run_id" "$attempt_id" "$created_at" "$started_at" "$finished_at" "$log_file" "$artifact_metadata_file"
+    echo "run $run: OBSERVATION_FAIL — required preview telemetry artifact missing from Depot run $run_id" >&2
     exit 1
   fi
 

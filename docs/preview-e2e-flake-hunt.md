@@ -25,9 +25,12 @@ GitHub timing, and PostHog telemetry—not a second implementation hidden inside
 one long-running job. It fails fast on the first functional failure, moved
 head, absorbed retry, or run at or above seven minutes, and writes a
 machine-readable ledger containing the immutable head plus Depot run/attempt
-IDs, whole-run duration, and retry count. Every failure, retry, or tail gets a
-root-cause diagnosis and the smallest reliable fix; any of them resets the
-consecutive-clean counter.
+IDs, whole-run duration, and retry count. It reads retry counts from the
+always-retained canonical telemetry artifact as well as the successful-run log
+annotation, because a failing test command can prevent the annotation from
+being emitted even though the finalizer retained the raw runner evidence.
+Every failure, retry, or tail gets a root-cause diagnosis and the smallest
+reliable fix; any of them resets the consecutive-clean counter.
 
 This zero-retry acceptance rule applies to new proof runs from 2026-07-22
 onward. Historical ledgers below retain the semantics and retry counts they
@@ -251,6 +254,42 @@ the extra argument and returns its string, while an old caller still invokes a
 new target with no argument and receives the string it expects. This repairs
 the protocol rather than classifying rollout retries as harmless. The strict
 proof remains 0/25 pending a clean immutable-head preflight.
+
+The automatic preflight for that compatible protocol (`e1ea06027`, Depot run
+`lm3zvldk49`, attempt `5fgl9pd0k7`) finished green in 4 minutes 3 seconds, but
+was rejected with 12 retries from callers already executing across the
+one-time protocol transition. Its ten sources finalized into 6,981 PostHog
+events. The first manual strict iteration on the same immutable head
+(`2qnhnzh7st`, attempt `96q1hwt5v5`) failed after 5 minutes 36 seconds. The
+retained raw artifacts prove four Vitest retries plus one Playwright retry;
+the old ledger initially reported zero because the failing OS command never
+reached the successful-run retry annotation. A time-bounded PostHog query for
+that exact workflow run ID found all 6,969 finalized events under the same head
+SHA and Depot attempt URL; its `ci test finished` records independently sum to
+the same five retries.
+
+That run exposed a real rollout defect in the new read-only guard. Its Secret
+version probe retried on the same Durable Object stub after a classified
+lifecycle reset, so one stale connection could reject twice and manufacture
+the terminal “reset more than once” outcome. Project and Secret guards now
+acquire a fresh named stub for every probe and forward the eventual
+side-effecting request on exactly the stub whose read-only probe established
+readiness. Regression tests prove the failed stub is never used for the
+request and that the replacement is acquired once. The GitHub integration
+fixture also allocates its project, Secret, App identity, and keypair inside
+each Vitest attempt: the previous retry overwrote Petshop's public key while
+reusing the first attempt's durable write-only private key, turning the
+diagnostic retry into a deterministic 401.
+
+Cloudflare observability showed this was a genuinely unhealthy run rather than
+five benign test artifacts: alongside the Secret boundary failure, the slot
+recorded code-update resets, repeated `Network connection lost` outcomes,
+Durable Object storage timeouts, objects moving machines, and one internal
+storage reset. The other passed-after-retry tests overlapped that event burst
+and are not being normalized into longer waits or whole-test retries. The
+strict streak remains 0/25; the next immutable head must establish whether
+fresh-stub recovery removes the app-owned defect while preserving those
+platform failures as explicit rejected evidence.
 
 ## Round 15 (2026-07-23, post-#2284)
 

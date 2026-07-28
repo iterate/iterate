@@ -23,9 +23,9 @@ describe("fetchFromDeploymentReadyProject", () => {
       fetchFromDeploymentReadyProject(
         {
           expectedVersion: "version-new",
+          getProject: () => ({ deploymentVersion, fetch }),
           projectId: "prj_test",
           request: new Request("https://petshop.example/api/me"),
-          project: { deploymentVersion, fetch },
         },
         {
           now: () => time,
@@ -66,12 +66,12 @@ describe("fetchFromDeploymentReadyProject", () => {
       fetchFromDeploymentReadyProject(
         {
           expectedVersion: "version-new",
-          projectId: "prj_test",
-          request: new Request("https://petshop.example/api/me"),
-          project: {
+          getProject: () => ({
             deploymentVersion: async () => "version-old",
             fetch,
-          },
+          }),
+          projectId: "prj_test",
+          request: new Request("https://petshop.example/api/me"),
         },
         {
           now: () => time,
@@ -88,5 +88,48 @@ describe("fetchFromDeploymentReadyProject", () => {
         'was "version-old". The request was not forwarded and no external side effect ran.',
     );
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("re-acquires the Project after a lifecycle reset and forwards on the ready stub", async () => {
+    const reset = Object.assign(new Error("code updated"), { durableObjectReset: true });
+    const staleFetch = vi.fn(async () => new Response("unexpected"));
+    const readyResponse = new Response("ok");
+    const readyFetch = vi.fn(async () => readyResponse);
+    const getProject = vi
+      .fn()
+      .mockReturnValueOnce({
+        deploymentVersion: async () => {
+          throw reset;
+        },
+        fetch: staleFetch,
+      })
+      .mockReturnValueOnce({
+        deploymentVersion: async () => "version-new",
+        fetch: readyFetch,
+      });
+    let time = 0;
+
+    await expect(
+      fetchFromDeploymentReadyProject(
+        {
+          expectedVersion: "version-new",
+          getProject,
+          projectId: "prj_test",
+          request: new Request("https://petshop.example/api/me"),
+        },
+        {
+          now: () => time,
+          pollIntervalMs: 100,
+          sleep: async (durationMs) => {
+            time += durationMs;
+          },
+          timeoutMs: 1_000,
+        },
+      ),
+    ).resolves.toBe(readyResponse);
+
+    expect(getProject).toHaveBeenCalledTimes(2);
+    expect(staleFetch).not.toHaveBeenCalled();
+    expect(readyFetch).toHaveBeenCalledOnce();
   });
 });
