@@ -868,4 +868,38 @@ describe("StreamDurableObject copy subscription commands", () => {
       context.close();
     }
   });
+
+  it("level-triggers an identical configuration even while delivery is halted", async () => {
+    const context = durableObjectContext(streamName(SOURCE_PATH));
+    const env = { STREAM: { getByName: vi.fn() } } as unknown as Env;
+    const source = new StreamDurableObject(context.ctx, env);
+    await context.settle();
+
+    try {
+      const first = source.setCopySubscription({ configuration: subscriptionConfiguration() });
+      source.appendCoreEvent({
+        type: "events.iterate.com/stream/subscription-delivery-halted",
+        payload: {
+          subscriptionKey: SUBSCRIPTION_KEY,
+          reason: "delivery-failed",
+          afterOffset: 0,
+          attempts: 15,
+          error: "receiver timed out",
+        },
+      });
+
+      // The durable instruction is already correct; the halt is delivery
+      // state with its own repair verbs and must not fail a retried ensure.
+      const again = source.setCopySubscription({ configuration: subscriptionConfiguration() });
+      expect(again.subscriptionConfiguredEvent.offset).toBe(
+        first.subscriptionConfiguredEvent.offset,
+      );
+      expect(
+        source.runtimeState().coreProcessorState.subscriptions.outbound.byKey[SUBSCRIPTION_KEY]
+          ?.deliveryHalted,
+      ).toMatchObject({ reason: "delivery-failed" });
+    } finally {
+      context.close();
+    }
+  });
 });

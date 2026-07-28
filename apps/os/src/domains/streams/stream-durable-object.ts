@@ -677,11 +677,10 @@ export class StreamDurableObject extends DurableObject<Env> {
           `subscription "${explicitSubscriptionKey}" points to a missing configuration event at offset ${existing.configuredAtOffset}`,
         );
       }
-      if (existing.deliveryHalted !== undefined) {
-        throw new Error(
-          `subscription "${explicitSubscriptionKey}" is halted (${existing.deliveryHalted.reason}); call resumeSubscription({ subscriptionKey: "${explicitSubscriptionKey}" })`,
-        );
-      }
+      // A halted subscription still satisfies an identical ensure: the durable
+      // instruction is already correct, and the halt is delivery state with
+      // its own repair verbs. Throwing here would fail automated retries
+      // (linkGithub, birth replays) that only need the existing event back.
       configuredEvent = event;
     } else {
       configuredEvent = this.#append({ authority: "public" }, [
