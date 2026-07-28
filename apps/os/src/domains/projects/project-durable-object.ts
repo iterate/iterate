@@ -445,6 +445,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     if (rule.debounceMs === null || executionId === null) {
       void this.#flushHoldBatch({
         entries: [entry],
+        flushAtMs: Date.now(),
         opensAtMs: Date.now(),
         rule,
         streamContext: input.streamContext,
@@ -462,6 +463,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     if (batch === undefined) {
       batch = {
         entries: [],
+        flushAtMs: 0,
         opensAtMs: Date.now(),
         rule,
         streamContext: input.streamContext,
@@ -470,12 +472,17 @@ export class ProjectDurableObject extends DurableObject<Env> {
       this.#pendingHoldBatches.set(batchKey, batch);
     }
     batch.entries.push(entry);
-    if (batch.timer !== null) clearTimeout(batch.timer);
-    const committed = batch;
     const flushAt = Math.min(
       Date.now() + rule.debounceMs,
       batch.opensAtMs + rule.debounceMs * HOLD_DEBOUNCE_CAP_FACTOR,
     );
+    // A capped arrival cannot advance the fire time, so the armed timer
+    // stands — without this, a sub-tick drip could keep replacing an
+    // already-due timer and starve the flush.
+    if (batch.timer !== null && flushAt <= batch.flushAtMs) return response;
+    if (batch.timer !== null) clearTimeout(batch.timer);
+    batch.flushAtMs = flushAt;
+    const committed = batch;
     batch.timer = setTimeout(
       () => {
         this.#pendingHoldBatches.delete(batchKey);
@@ -915,6 +922,10 @@ type PendingHoldEntry = {
  * `human-approval-requested` event. */
 type PendingHoldBatch = {
   entries: PendingHoldEntry[];
+  /** When the armed timer will fire. An arrival only reschedules by ADVANCING
+   * this; once the cap is the fire time, the armed timer stands untouched, so
+   * the cap holds structurally rather than by event-loop ordering. */
+  flushAtMs: number;
   opensAtMs: number;
   rule: EgressRule;
   streamContext: StreamContext;

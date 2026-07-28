@@ -1,5 +1,5 @@
 ---
-status: implemented (v2)
+status: done
 size: large
 ---
 
@@ -7,7 +7,7 @@ size: large
 
 ## Status summary
 
-v1 (computed Approval Groups over per-request events) was implemented and confirmed on-device, then Misha redirected during PR review: make the batch the ONLY shape — an approval request carries a `requests` array, a singular approval is an array of length 1, and the group concept disappears entirely. Non-backwards-compatible by design ("no real users right now", no legacy parsing). v2 is now IMPLEMENTED on this same branch/PR (#2309): typecheck/lint/knip/unit tests green across the repo, egress e2e passing against a live local dev server (burst → ONE batch event → ONE push → ONE decision releases all; mixed verdicts; signed decisions; only the WebSocket-egress lane fails locally, the KNOWN pre-existing laptop-env issue), mobile approver e2e 5/5 live. Remaining: fresh on-device phone trial of the v2 UI (JS-only change — metro reload suffices). The v1 sections below are kept as history.
+v1 (computed Approval Groups over per-request events) was implemented and confirmed on-device, then Misha redirected during PR review: make the batch the ONLY shape — an approval request carries a `requests` array, a singular approval is an array of length 1, and the group concept disappears entirely. Non-backwards-compatible by design ("no real users right now", no legacy parsing). v2 is now IMPLEMENTED on this same branch/PR (#2309): typecheck/lint/knip/unit tests green across the repo, egress e2e passing against a live local dev server (burst → ONE batch event → ONE push → ONE decision releases all; mixed verdicts; signed decisions; only the WebSocket-egress lane fails locally, the KNOWN pre-existing laptop-env issue), mobile approver e2e 5/5 live. On-device phone trial of the v2 UI CONFIRMED by Misha (2026-07-28, over tailscale from abroad): batch card, Approve all, one Face ID, releases — worked well. The v1 sections below are kept as history.
 
 ## v2 design (approved by Misha, 2026-07-26)
 
