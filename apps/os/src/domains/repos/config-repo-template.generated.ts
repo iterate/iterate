@@ -17,7 +17,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "\n" +
       "## Project lifecycle hooks\n" +
       "\n" +
-      "The `processEvent` switch in `worker.ts` exposes the raw lifecycle events. Each\n" +
+      "The `processEvent` switch in `worker.ts` exposes the lifecycle events. Each\n" +
       "case is ordinary userspace TypeScript: get `itx` there and write whatever calls\n" +
       "the project needs. There is no configuration-reconciliation framework around\n" +
       "them.\n" +
@@ -27,15 +27,12 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  periodic itx calls directly in this case.\n" +
       "- root `stream/woken` is available for work that should run when the project\n" +
       "  stream wakes after hibernation or an OS deployment.\n" +
-      "- `repo/commit-completed`, with exact `/repos/config` cross-post provenance, is\n" +
-      "  the config-application hook. The event is the durable source-change fact;\n" +
-      "  each delivery attempt requires an authoritative current HEAD, builds or\n" +
-      "  loads that worker, and acknowledges only after its handler returns. A\n" +
-      "  lagging Artifacts replica or in-progress build is temporary receiver\n" +
-      "  unavailability, so the stream keeps its cursor behind and retries. If\n" +
-      "  several commits land quickly, a later HEAD may reconcile earlier commit\n" +
-      "  facts too. This is deliberately a reconcile-current-config hook, not an\n" +
-      "  exact per-commit activation callback. The seeded example calls\n" +
+      "- `project/worker-updated` is the config-application hook. The platform\n" +
+      "  translates a config repo commit into this root event only after the current\n" +
+      "  default worker has built, loaded, and answered a readiness probe. If several\n" +
+      "  commits land quickly, a later HEAD may reconcile earlier commit facts too.\n" +
+      "  This is deliberately a reconcile-current-config hook, not an exact\n" +
+      "  per-commit activation callback. The seeded example calls\n" +
       "  `itx.scheduler.set(...)` here to install one 15-minute heartbeat.\n" +
       "\n" +
       "`project/create-requested` and `project/created` belong to the platform's\n" +
@@ -106,7 +103,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "\n" +
       "## Project lifecycle hooks\n" +
       "\n" +
-      "The `processEvent` switch in `worker.ts` exposes the raw lifecycle events. Each\n" +
+      "The `processEvent` switch in `worker.ts` exposes the lifecycle events. Each\n" +
       "case is ordinary userspace TypeScript: get `itx` there and write whatever calls\n" +
       "the project needs. There is no configuration-reconciliation framework around\n" +
       "them.\n" +
@@ -116,15 +113,12 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  periodic itx calls directly in this case.\n" +
       "- root `stream/woken` is available for work that should run when the project\n" +
       "  stream wakes after hibernation or an OS deployment.\n" +
-      "- `repo/commit-completed`, with exact `/repos/config` cross-post provenance, is\n" +
-      "  the config-application hook. The event is the durable source-change fact;\n" +
-      "  each delivery attempt requires an authoritative current HEAD, builds or\n" +
-      "  loads that worker, and acknowledges only after its handler returns. A\n" +
-      "  lagging Artifacts replica or in-progress build is temporary receiver\n" +
-      "  unavailability, so the stream keeps its cursor behind and retries. If\n" +
-      "  several commits land quickly, a later HEAD may reconcile earlier commit\n" +
-      "  facts too. This is deliberately a reconcile-current-config hook, not an\n" +
-      "  exact per-commit activation callback. The seeded example calls\n" +
+      "- `project/worker-updated` is the config-application hook. The platform\n" +
+      "  translates a config repo commit into this root event only after the current\n" +
+      "  default worker has built, loaded, and answered a readiness probe. If several\n" +
+      "  commits land quickly, a later HEAD may reconcile earlier commit facts too.\n" +
+      "  This is deliberately a reconcile-current-config hook, not an exact\n" +
+      "  per-commit activation callback. The seeded example calls\n" +
       "  `itx.scheduler.set(...)` here to install one 15-minute heartbeat.\n" +
       "\n" +
       "`project/create-requested` and `project/created` belong to the platform's\n" +
@@ -317,22 +311,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        // using itx = await this.env.ITX.get();\n" +
       "        break;\n" +
       "      }\n" +
-      "      case \"events.iterate.com/repo/commit-completed\": {\n" +
-      "        const origin = event.source?.crossPostedFrom?.at(-1);\n" +
-      "        if (\n" +
-      "          event.path !== \"/\" ||\n" +
-      "          origin?.path !== \"/repos/config\" ||\n" +
-      "          origin.projectId === null ||\n" +
-      "          origin.subscriptionKey !== \"cross-post:/\" ||\n" +
-      "          origin.type !== event.type\n" +
-      "        ) {\n" +
-      "          break;\n" +
-      "        }\n" +
-      "        // This is the durable source-change hook. Delivery cannot acknowledge\n" +
-      "        // this event through an old or still-building config worker: each\n" +
-      "        // attempt first resolves an authoritative current HEAD, then loads it.\n" +
-      "        // A later HEAD may therefore process earlier commit facts: reconcile\n" +
-      "        // current configuration, not an exact per-commit activation.\n" +
+      "      case \"events.iterate.com/project/worker-updated\": {\n" +
+      "        if (event.path !== \"/\") break;\n" +
+      "        // The platform appends this only after the current config worker has\n" +
+      "        // built, loaded, and answered. Put arbitrary idempotent ITX calls\n" +
+      "        // directly in this case.\n" +
       "        using itx = await this.env.ITX.get();\n" +
       "        await itx.scheduler.set({\n" +
       "          key: \"iterate/config/heartbeat/every-15-minutes\",\n" +

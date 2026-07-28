@@ -4,6 +4,7 @@ import { WorkerBuildFailedError } from "../workers/artifact-store.ts";
 import { workerBuildingResponse } from "../workers/worker-fetch-dispatch.ts";
 import { projectCreationEvents } from "./project-defaults.ts";
 import {
+  CONFIG_REPO_COMMIT_COMPLETED,
   CONFIG_REPO_CREATED,
   CONFIG_REPO_CREATE_FAILED,
   PROJECT,
@@ -14,6 +15,136 @@ import {
   type ProjectEventInput,
 } from "./project-processor-test-harness.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
+
+// =============================================================================
+// Project worker lifecycle
+// =============================================================================
+
+describe("ProjectProcessor worker lifecycle", () => {
+  it("publishes project/worker-updated only after the changed config worker answers", async () => {
+    const h = makeProjectHarness({
+      workerOutcomes: [
+        workerBuildingResponse(),
+        Response.json({ app: "hello", projectId: "prj_test" }),
+      ],
+    });
+    await h.play([
+      "append",
+      PROJECT_CREATE_REQUESTED,
+      PROJECT_CREATED,
+      CONFIG_REPO_COMMIT_COMPLETED,
+    ]);
+
+    expect(h.workerFetchCalls()).toBe(2);
+    expect(h.events("events.iterate.com/project/worker-updated")).toMatchObject([
+      {
+        idempotencyKey: `project/worker-update:${"b".repeat(40)}`,
+        payload: { commitOid: "b".repeat(40) },
+      },
+    ]);
+  });
+
+  it("does not probe again when a committed worker update is redelivered", async () => {
+    const h = makeProjectHarness();
+    await h.play([
+      "append",
+      PROJECT_CREATE_REQUESTED,
+      PROJECT_CREATED,
+      CONFIG_REPO_COMMIT_COMPLETED,
+    ]);
+    expect(h.workerFetchCalls()).toBe(1);
+
+    const replay = makeProjectHarness({
+      substrate: { clock: h.clock, stream: h.stream, progress: makeMemoryProgressStore() },
+    });
+    await replay.settle();
+
+    expect(replay.workerFetchCalls()).toBe(0);
+    expect(replay.events("events.iterate.com/project/worker-updated")).toHaveLength(1);
+  });
+
+  it("does not translate a commit from another repo", async () => {
+    const h = makeProjectHarness();
+    await h.play([
+      "append",
+      PROJECT_CREATE_REQUESTED,
+      PROJECT_CREATED,
+      {
+        ...CONFIG_REPO_COMMIT_COMPLETED,
+        source: {
+          crossPostedFrom: [
+            {
+              ...CONFIG_REPO_COMMIT_COMPLETED.source.crossPostedFrom[0],
+              path: "/repos/application",
+            },
+          ],
+        },
+      },
+    ]);
+
+    expect(h.workerFetchCalls()).toBe(0);
+    expect(h.events("events.iterate.com/project/worker-updated")).toEqual([]);
+  });
+
+  it("records a deterministic update failure without blocking a later fixed commit", async () => {
+    const fixedCommit = {
+      ...CONFIG_REPO_COMMIT_COMPLETED,
+      payload: {
+        ...CONFIG_REPO_COMMIT_COMPLETED.payload,
+        beforeCommitOid: CONFIG_REPO_COMMIT_COMPLETED.payload.commitOid,
+        commitOid: "c".repeat(40),
+      },
+      source: {
+        crossPostedFrom: [
+          {
+            ...CONFIG_REPO_COMMIT_COMPLETED.source.crossPostedFrom[0],
+            offset: 6,
+          },
+        ],
+      },
+    } satisfies ProjectEventInput;
+    const h = makeProjectHarness({
+      workerOutcomes: [
+        new WorkerBuildFailedError({ kind: "source", message: "Expected ; but found is" }),
+        Response.json({ app: "fixed" }),
+      ],
+    });
+    await h.play(
+      ["append", PROJECT_CREATE_REQUESTED, PROJECT_CREATED, CONFIG_REPO_COMMIT_COMPLETED],
+      ["append", fixedCommit],
+    );
+
+    expect(h.events("events.iterate.com/project/worker-update-failed")).toMatchObject([
+      {
+        idempotencyKey: `project/worker-update:${"b".repeat(40)}`,
+        payload: {
+          commitOid: "b".repeat(40),
+          error: "Expected ; but found is",
+        },
+      },
+    ]);
+    expect(h.events("events.iterate.com/project/worker-updated")).toMatchObject([
+      {
+        idempotencyKey: `project/worker-update:${"c".repeat(40)}`,
+        payload: { commitOid: "c".repeat(40) },
+      },
+    ]);
+  });
+
+  it("leaves a transient update probe failure open for durable redelivery", async () => {
+    const h = makeProjectHarness({
+      workerOutcomes: [new Error("temporary worker dispatch outage")],
+    });
+    await h.stream.append(PROJECT_CREATE_REQUESTED, PROJECT_CREATED, CONFIG_REPO_COMMIT_COMPLETED);
+
+    await expect(h.settle()).rejects.toThrow("temporary worker dispatch outage");
+    expect(h.events("events.iterate.com/project/worker-updated")).toEqual([]);
+    expect(h.events("events.iterate.com/project/worker-update-failed")).toEqual([]);
+
+    await h.settle();
+    expect(h.events("events.iterate.com/project/worker-updated")).toHaveLength(1);
+  });
+});
 
 // =============================================================================
 // Bootstrap

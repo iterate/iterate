@@ -41,22 +41,11 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         // using itx = await this.env.ITX.get();
         break;
       }
-      case "events.iterate.com/repo/commit-completed": {
-        const origin = event.source?.crossPostedFrom?.at(-1);
-        if (
-          event.path !== "/" ||
-          origin?.path !== "/repos/config" ||
-          origin.projectId === null ||
-          origin.subscriptionKey !== "cross-post:/" ||
-          origin.type !== event.type
-        ) {
-          break;
-        }
-        // This is the durable source-change hook. Delivery cannot acknowledge
-        // this event through an old or still-building config worker: each
-        // attempt first resolves an authoritative current HEAD, then loads it.
-        // A later HEAD may therefore process earlier commit facts: reconcile
-        // current configuration, not an exact per-commit activation.
+      case "events.iterate.com/project/worker-updated": {
+        if (event.path !== "/") break;
+        // The platform appends this only after the current config worker has
+        // built, loaded, and answered. Put arbitrary idempotent ITX calls
+        // directly in this case.
         using itx = await this.env.ITX.get();
         await itx.scheduler.set({
           key: "iterate/config/heartbeat/every-15-minutes",

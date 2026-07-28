@@ -225,20 +225,24 @@ carries a `cross-post:/` subscription from birth, so every config-repo event
 project stream `/` with provenance. Streams are the coordination layer for all
 of this — bootstrap is events and processors, not a setup RPC.
 
-The seeded worker's literal switch exposes `project/heartbeat-triggered`, root
-`stream/woken`, and the exact `/repos/config` `repo/commit-completed`
-cross-post. Each case is ordinary userspace TypeScript: get `itx` and make
-whatever calls belong to that lifecycle event. There is no reconciliation
-framework or shared hook. `project/create-requested` and `project/created`
-remain platform saga facts and are not userspace hooks.
+The Project processor recognizes the exact `/repos/config`
+`repo/commit-completed` cross-post, waits for the authoritative current default
+worker to build, load, and answer, then appends root
+`project/worker-updated`. A deterministic source-build failure instead appends
+`project/worker-update-failed`; head convergence, in-progress builds, and
+transient availability leave the processor cursor behind for redelivery. A
+later HEAD may satisfy an earlier commit fact, so this certifies that current
+configuration is runnable rather than activating one exact artifact.
 
-The config-commit case is the durable source-change hook. Each delivery attempt
-requires an authoritative current HEAD, builds or loads that worker, and
-acknowledges only after its handler returns. Head convergence and in-progress
-builds leave the cursor behind for retry. A later HEAD may process earlier
-commit facts, so this is a reconcile-current-config hook rather than an exact
-per-commit activation callback. The seeded case calls `scheduler.set(...)` for
-one 15-minute heartbeat whose script appends
+The seeded worker's literal switch exposes `project/worker-updated`,
+`project/heartbeat-triggered`, and root `stream/woken`. Each case is ordinary
+userspace TypeScript: get `itx` and make whatever calls belong to that
+lifecycle event. There is no reconciliation framework or shared hook.
+`project/create-requested` and `project/created` remain platform saga facts and
+are not userspace hooks.
+
+The seeded `project/worker-updated` case calls `scheduler.set(...)` for one
+15-minute heartbeat whose script appends
 `project/heartbeat-triggered` with `{ scheduleKey }`. An unchanged canonical
 definition preserves the schedule's clock, run count, and defining event. Copy
 the call for multiple schedules, change it to test-speed `{ every: 1 }`, or

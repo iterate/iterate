@@ -91,6 +91,28 @@ export const CONFIG_REPO_CREATE_FAILED = {
   },
 } satisfies ProjectEventInput;
 
+/** A default-branch config repo commit copied onto the project root. */
+export const CONFIG_REPO_COMMIT_COMPLETED = {
+  type: "events.iterate.com/repo/commit-completed",
+  payload: {
+    beforeCommitOid: "a".repeat(40),
+    branch: "main",
+    commitOid: "b".repeat(40),
+  },
+  source: {
+    crossPostedFrom: [
+      {
+        subscriptionKey: "cross-post:/",
+        createdAt: new Date(3).toISOString(),
+        offset: 5,
+        path: "/repos/config",
+        projectId: "prj_test",
+        type: "events.iterate.com/repo/commit-completed",
+      },
+    ],
+  },
+} satisfies ProjectEventInput;
+
 export const PROJECT: ProjectDirectoryRecord = {
   id: "prj_garple",
   name: "Garple",

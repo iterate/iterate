@@ -97,17 +97,18 @@ framework: each case can get `itx` and run arbitrary project code directly.
   script and carries only `{ scheduleKey }`.
 - `stream/woken` on `/` exposes project-stream wakes, including after an OS
   deployment.
-- a config-repo `repo/commit-completed` cross-posted to `/` is the durable
-  source-change hook. Each delivery attempt requires an authoritative current
-  HEAD, builds or loads that worker, and acknowledges only after its handler
-  returns. Head convergence and in-progress builds are receiver unavailability:
-  the cursor stays behind and delivery retries. A later HEAD may process earlier
-  commit facts, so this is a reconcile-current-config hook, not an exact
-  per-artifact deployment callback.
+- `project/worker-updated` on `/` is the config-application hook. The platform
+  Project processor translates the config repo's cross-posted
+  `repo/commit-completed` only after the authoritative current worker has
+  built, loaded, and answered. Head convergence and in-progress builds keep
+  the platform processor cursor behind for retry; deterministic source failure
+  becomes `project/worker-update-failed`. A later HEAD may satisfy an earlier
+  commit fact, so this certifies runnable current configuration rather than
+  activating one exact artifact.
 
 `project/create-requested` and `project/created` belong to the platform's
 creation saga; the userspace worker does not handle them. The seeded
-config-commit case directly calls `scheduler.set(...)` for one 15-minute
+worker-update case directly calls `scheduler.set(...)` for one 15-minute
 heartbeat. This is ordinary itx code, not declarative desired state. Copy the
 call for multiple schedules, use `{ every: 1 }` for a fast test, or remove it
 for no heartbeat. Changing an existing project's schedules is explicit too:

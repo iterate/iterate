@@ -7,7 +7,7 @@ lives under `apps/`, and the packaged linter reads editable policy from `rules/`
 
 ## Project lifecycle hooks
 
-The `processEvent` switch in `worker.ts` exposes the raw lifecycle events. Each
+The `processEvent` switch in `worker.ts` exposes the lifecycle events. Each
 case is ordinary userspace TypeScript: get `itx` there and write whatever calls
 the project needs. There is no configuration-reconciliation framework around
 them.
@@ -17,15 +17,12 @@ them.
   periodic itx calls directly in this case.
 - root `stream/woken` is available for work that should run when the project
   stream wakes after hibernation or an OS deployment.
-- `repo/commit-completed`, with exact `/repos/config` cross-post provenance, is
-  the config-application hook. The event is the durable source-change fact;
-  each delivery attempt requires an authoritative current HEAD, builds or
-  loads that worker, and acknowledges only after its handler returns. A
-  lagging Artifacts replica or in-progress build is temporary receiver
-  unavailability, so the stream keeps its cursor behind and retries. If
-  several commits land quickly, a later HEAD may reconcile earlier commit
-  facts too. This is deliberately a reconcile-current-config hook, not an
-  exact per-commit activation callback. The seeded example calls
+- `project/worker-updated` is the config-application hook. The platform
+  translates a config repo commit into this root event only after the current
+  default worker has built, loaded, and answered a readiness probe. If several
+  commits land quickly, a later HEAD may reconcile earlier commit facts too.
+  This is deliberately a reconcile-current-config hook, not an exact
+  per-commit activation callback. The seeded example calls
   `itx.scheduler.set(...)` here to install one 15-minute heartbeat.
 
 `project/create-requested` and `project/created` belong to the platform's

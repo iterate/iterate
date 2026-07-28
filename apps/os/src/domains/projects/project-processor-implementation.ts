@@ -60,6 +60,13 @@ const SIBLING_BIRTH_BARRIER_TIMEOUT_MS = 75_000;
  * the saga with `project/create-failed`. Transient worker availability errors
  * and an in-progress build leave the reaction open for durable redelivery.
  *
+ * WORKER LIFECYCLE. Every later config-repo `repo/commit-completed` fact is
+ * copied onto `/` by that same cross-post rule. Once the current default
+ * worker answers its readiness probe, this processor translates the raw repo
+ * fact into `project/worker-updated`; deterministic source-build failures
+ * become `project/worker-update-failed`, while transient availability remains
+ * open for durable redelivery.
+ *
  * CATALOGS. `reduce` projects cross-posted domain facts into list state:
  * physical streams (`stream/created`, `stream/child-stream-created`),
  * devices, repos and secrets (their `created` facts, keyed by the source
@@ -224,6 +231,56 @@ export class ProjectProcessor extends StreamProcessor<
               },
             ),
           );
+        });
+        break;
+      }
+      case "events.iterate.com/repo/commit-completed": {
+        const origin = event.source?.crossPostedFrom?.at(-1);
+        if (
+          origin?.projectId !== this.deps.itx.projectId ||
+          origin.path !== CONFIG_REPO_PATH ||
+          origin.subscriptionKey !== "cross-post:/" ||
+          origin.type !== event.type
+        ) {
+          break;
+        }
+        blockProcessorWhile(async () => {
+          const outcomeIdempotencyKey = `project/worker-update:${event.payload.commitOid}`;
+          const existingOutcome = await this.stream.getEvent({
+            idempotencyKey: outcomeIdempotencyKey,
+          });
+          if (existingOutcome !== undefined) {
+            if (
+              (existingOutcome.type !== "events.iterate.com/project/worker-updated" &&
+                existingOutcome.type !== "events.iterate.com/project/worker-update-failed") ||
+              existingOutcome.payload?.commitOid !== event.payload.commitOid
+            ) {
+              throw new Error(
+                `idempotency key "${outcomeIdempotencyKey}" is not this config commit's worker update outcome`,
+              );
+            }
+            return;
+          }
+
+          try {
+            await this.#waitForDefaultProjectWorker();
+          } catch (error) {
+            if (!isWorkerBuildFailedError(error)) throw error;
+            await append({
+              type: "events.iterate.com/project/worker-update-failed",
+              idempotencyKey: outcomeIdempotencyKey,
+              payload: {
+                commitOid: event.payload.commitOid,
+                error: errorMessage(error),
+              },
+            });
+            return;
+          }
+          await append({
+            type: "events.iterate.com/project/worker-updated",
+            idempotencyKey: outcomeIdempotencyKey,
+            payload: { commitOid: event.payload.commitOid },
+          });
         });
         break;
       }

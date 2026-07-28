@@ -31,7 +31,7 @@ import { StreamContext } from "./stream-context.ts";
 
 export const ProjectProcessorContract = defineProcessorContract({
   slug: "project",
-  version: "0.3.0",
+  version: "0.4.0",
   description:
     "Project root: runs the project/create-requested → project/created bootstrap saga, births " +
     "the sibling processors every project gets (root capability host, primary scheduler, config " +
@@ -203,6 +203,29 @@ export const ProjectProcessorContract = defineProcessorContract({
         "the project created. Transient availability and timeout failures remain open for durable " +
         "redelivery. Fail-closed: nothing else reacts on the failed project stream.",
       payloadSchema: projectCreationFailureSchema(),
+    },
+    "events.iterate.com/project/worker-updated": {
+      description:
+        "The config repo advanced and the platform successfully built, loaded, and probed the " +
+        "current default project worker. This is the userspace configuration lifecycle hook.",
+      payloadSchema: z.object({
+        commitOid: z.string().trim().min(1).meta({
+          description: "The config-repo commit that triggered the readiness check.",
+        }),
+      }),
+    },
+    "events.iterate.com/project/worker-update-failed": {
+      description:
+        "A config repo commit deterministically failed to build as the default project worker. " +
+        "A later config commit can repair it; transient availability remains open for redelivery.",
+      payloadSchema: z.object({
+        commitOid: z.string().trim().min(1).meta({
+          description: "The config-repo commit that triggered the failed readiness check.",
+        }),
+        error: z.string().trim().min(1).meta({
+          description: "The deterministic worker build failure.",
+        }),
+      }),
     },
     "events.iterate.com/project/heartbeat-triggered": {
       description:
@@ -422,8 +445,11 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/project/create-requested",
     "events.iterate.com/project/created",
     "events.iterate.com/project/create-failed",
+    "events.iterate.com/project/worker-updated",
+    "events.iterate.com/project/worker-update-failed",
     "events.iterate.com/project/heartbeat-triggered",
     "events.iterate.com/device/created",
+    "events.iterate.com/repo/commit-completed",
     "events.iterate.com/repos/created",
     "events.iterate.com/repos/create-failed",
     "events.iterate.com/secret/created",
@@ -453,6 +479,8 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/project/custom-domain-removed",
     "events.iterate.com/project/created",
     "events.iterate.com/project/create-failed",
+    "events.iterate.com/project/worker-updated",
+    "events.iterate.com/project/worker-update-failed",
     "events.iterate.com/repos/create-requested",
     "events.iterate.com/stream/subscription-configured",
     "events.iterate.com/stream/subscription-removed",

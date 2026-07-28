@@ -83,20 +83,9 @@ test("project lifecycle cases directly install and handle the default heartbeat"
   );
 
   await deliver(worker, {
-    type: "events.iterate.com/repo/commit-completed",
+    type: "events.iterate.com/project/worker-updated",
     path: "/",
-    source: {
-      crossPostedFrom: [
-        {
-          subscriptionKey: "cross-post:/",
-          createdAt: new Date(1).toISOString(),
-          offset: 1,
-          path: "/repos/config",
-          projectId: "prj_test",
-          type: "events.iterate.com/repo/commit-completed",
-        },
-      ],
-    },
+    payload: { commitOid: "b".repeat(40) },
   });
 
   expect(set).toHaveBeenCalledOnce();
@@ -129,7 +118,7 @@ test("project lifecycle cases directly install and handle the default heartbeat"
     path: "/",
   });
   // Heartbeat and wake cases are independent literal hooks; neither silently
-  // re-runs the config-commit case's Scheduler call.
+  // re-runs the worker-update case's Scheduler call.
   expect(set).toHaveBeenCalledOnce();
 
   const ignored = [
@@ -150,40 +139,8 @@ test("project lifecycle cases directly install and handle the default heartbeat"
       path: "/agents/not-the-project-root",
     },
     {
-      type: "events.iterate.com/repo/commit-completed",
-      path: "/",
-    },
-    {
-      type: "events.iterate.com/repo/commit-completed",
-      path: "/",
-      source: {
-        crossPostedFrom: [
-          {
-            subscriptionKey: "wrong-rule",
-            createdAt: new Date(1).toISOString(),
-            offset: 1,
-            path: "/repos/config",
-            projectId: "prj_test",
-            type: "events.iterate.com/repo/commit-completed",
-          },
-        ],
-      },
-    },
-    {
-      type: "events.iterate.com/repo/commit-completed",
-      path: "/",
-      source: {
-        crossPostedFrom: [
-          {
-            subscriptionKey: "cross-post:/",
-            createdAt: new Date(1).toISOString(),
-            offset: 1,
-            path: "/repos/config",
-            projectId: "prj_test",
-            type: "events.iterate.com/repo/different",
-          },
-        ],
-      },
+      type: "events.iterate.com/project/worker-updated",
+      path: "/agents/not-the-project-root",
     },
   ];
   for (const event of ignored) await deliver(worker, event);
