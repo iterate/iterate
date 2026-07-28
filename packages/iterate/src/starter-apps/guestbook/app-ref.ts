@@ -37,7 +37,7 @@ export function guestbookCreationEvents(): StreamEventInput[] {
     },
     {
       type: "events.iterate.com/stream/subscription-removed",
-      payload: { subscriptionKey: "app-guestbook#guestbook" },
+      payload: { subscriptionKey: "app-guestbook#guestbook", reason: "requested" },
       idempotencyKey: "guestbook/subscription-removed:v2",
     },
   ];

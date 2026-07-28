@@ -53,7 +53,7 @@ test("the public Stream API excludes raw and test-only Durable Object controls",
     "testRunIdleTeardownNow",
     "testReset",
     "testAppendCoreEvents",
-    "testReceiveStreamEvents",
+    "testReceiveCrossPostedEvents",
   ]) {
     expect(generated).not.toContain(forbidden);
   }

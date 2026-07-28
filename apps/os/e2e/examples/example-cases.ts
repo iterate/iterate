@@ -106,16 +106,15 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
       source: `/examples/receive-events/source-${marker}`,
       target: `/examples/receive-events/target-${marker}`,
     }),
-    assert: (result, ctx, expect) => {
+    assert: (result, _ctx, expect) => {
       const shaped = result as {
         copied: { importance: string; text: string };
-        provenance: Array<{ subscriptionKey: string }>;
+        crossPostedFrom: Array<{ subscriptionKey: string }>;
       };
       expect(shaped.copied).toMatchObject({ importance: "high", text: "copied" });
-      expect(shaped.provenance).toHaveLength(1);
-      // receiveCrossPostsFrom without an explicit key uses the receiving path.
-      expect(shaped.provenance[0]).toMatchObject({
-        subscriptionKey: `stream:/examples/receive-events/target-${ctx.marker}`,
+      expect(shaped.crossPostedFrom).toHaveLength(1);
+      expect(shaped.crossPostedFrom[0]).toMatchObject({
+        subscriptionKey: "example/high-importance-notes",
       });
     },
   },

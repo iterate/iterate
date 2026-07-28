@@ -272,8 +272,11 @@ function BrowserDatabaseProjectStreamView({
 
   // A reader uses another tab's database writer but still owns a usable RPC
   // transport for appends. A writer is fully ready once its event callback is open.
-  const streamTransportReady =
-    snapshot.connectionStatus === "connected" || snapshot.connectionStatus === "receiving-events";
+  // Election starts only after createStreamClient resolves, so every non-idle
+  // role has a usable transport — including readers, which never open the
+  // stream's live connection themselves but still append over their own itx
+  // socket.
+  const streamTransportReady = snapshot.databaseRole !== "idle";
   // Cached rows can paint immediately. With an empty local database, the writer
   // stays pending until reconciliation and the event callback have finished;
   // a reader can paint the database already owned by another tab.

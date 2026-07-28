@@ -1589,10 +1589,12 @@ test.skipIf(deployedBaseUrl() === null)(
       subscriptionKey
     ]!;
     expect(runtime).toMatchObject({
-      acknowledgedOffset: event!.offset,
       attempt: 0,
       lastError: null,
     });
+    // The revived incarnation appends its own woken fact, and the cursor may
+    // acknowledge past that non-matching trailing event before this read.
+    expect(runtime.acknowledgedOffset).toBeGreaterThanOrEqual(event!.offset);
   },
 );
 
@@ -2870,7 +2872,7 @@ test("cross-post, ITX-call, and webhook-post subscriptions stop at exact count a
               fetch() { return new Response("finite subscription matrix probe"); }
 
               async processEventBatch(batch) {
-                if (!batch.subscriptionKey.startsWith(SUBSCRIPTION_PREFIX + "itx-expression-")) return;
+                if (!batch.subscriptionKey.startsWith(SUBSCRIPTION_PREFIX + "itx-call-")) return;
                 const itx = await this.env.ITX.get();
                 await itx.streams.get(OUTPUT_PATH).append({
                   type: OUTPUT_TYPE,
@@ -4309,7 +4311,7 @@ test("public callers cannot forge copied events or platform-authored stream fact
         ],
       },
     }),
-  ).rejects.toThrow(/source\.crossPostedFrom is platform-authored/);
+  ).rejects.toThrow(/cross-post source information is platform-authored/);
 
   const forgedCoreFacts: StreamEventInput[] = [
     {

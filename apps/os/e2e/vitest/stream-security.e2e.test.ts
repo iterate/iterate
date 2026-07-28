@@ -47,7 +47,7 @@ test("project users cannot reach stream test controls or the raw Durable Object"
       "testAppendCoreEvents",
       [[{ type: "events.iterate.com/stream/cross-post-list-resend-requested", payload: {} }]],
     ],
-    ["testReceiveStreamEvents", [{}]],
+    ["testReceiveCrossPostedEvents", [{}]],
   ];
   for (const [method, args] of attempts) {
     await expect(async () => {

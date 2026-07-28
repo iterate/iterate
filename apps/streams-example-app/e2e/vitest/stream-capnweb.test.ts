@@ -399,6 +399,7 @@ describe("stream capnweb protocol", () => {
           payload: {
             projectId: coreProcessorState.projectId,
             path,
+            streamId: expect.any(String),
           },
         }),
         expect.objectContaining({
