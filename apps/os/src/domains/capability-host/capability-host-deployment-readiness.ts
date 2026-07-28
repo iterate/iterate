@@ -5,13 +5,6 @@ const CAPABILITY_HOST_DEPLOYMENT_WAIT_TIMEOUT_MS = 30_000;
 const CAPABILITY_HOST_DEPLOYMENT_PROBE_TIMEOUT_MS = 2_000;
 const CAPABILITY_HOST_DEPLOYMENT_POLL_INTERVAL_MS = 250;
 
-export type CapabilityHostDeploymentReadiness = {
-  lifecycleFailures: number;
-  mismatches: number;
-  probes: number;
-  waitedMs: number;
-};
-
 type WaitForCapabilityHostDeploymentVersionInput = {
   executionId: string;
   expectedVersion: string;
@@ -48,7 +41,12 @@ function notStartedError(
  */
 export async function waitForCapabilityHostDeploymentVersion(
   input: WaitForCapabilityHostDeploymentVersionInput,
-): Promise<CapabilityHostDeploymentReadiness> {
+): Promise<{
+  lifecycleFailures: number;
+  mismatches: number;
+  probes: number;
+  waitedMs: number;
+}> {
   const now = input.now ?? Date.now;
   const wait =
     input.sleep ??
