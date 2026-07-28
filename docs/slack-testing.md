@@ -202,20 +202,11 @@ order; the seed path additionally requires the token's team ID to equal the
 archived team ID before writing.
 
 Do not use `APP_CONFIG_INTEGRATIONS__SLACK.botToken` as restoration material.
-Before sending any smoke message, prove the project token and directory claim
-with the recreation verifier (run without `--context` so it can read the global
-directory):
-
-```bash
-# from apps/os
-doppler run --config prd -- pnpm cli itx run \
-  --file ../../.agents/skills/recreate-production/scripts/verify-slack-connection.itx.js \
-  --vars '{"projectId":"<iterate-project-id>","connection":"t0675psn873","expectedTeamId":"T0675PSN873"}'
-```
-
-Require `ok: true`, the expected team ID, a bot user ID, and a directory claim
-offset. If `auth.test` reports `invalid_auth`, OAuth has not established a live
-connection—do not append claims around it.
+Project-seed restore calls Slack `auth.test`, requires the exact archived team
+ID, and verifies the deployment-wide directory claim before returning. For an
+interactive OAuth connection, require connected status, the expected external
+team ID, and a successful `auth.test`. If any of those fail, reconnect through
+the owning flow; never inspect or append the directory stream to repair it.
 
 Only after that barrier, send a **new** real-human or CI-actor `@iterate`
 mention and retain its permalink. Slack webhooks received before the directory
