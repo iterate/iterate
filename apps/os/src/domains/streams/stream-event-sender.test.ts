@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import {
   StreamReceiverUnavailableError,
+  type StreamDeliveryBatch,
   type StreamEvent,
   type StreamEventBatch,
   type StreamEventInput,
@@ -631,6 +632,125 @@ describe("StreamEventSender stream delivery", () => {
       nextAttemptAt: 11_000,
       failingEventOffset: null,
       failingEventAttempt: 0,
+    });
+  });
+
+  it("an ITX transform shapes each delivered event while the batch keeps the source coordinates", async () => {
+    const batches: StreamDeliveryBatch[] = [];
+    const deliverToItx = vi.fn<SubscriptionReceiverCalls["deliverToItx"]>(
+      async (_expression, batch) => {
+        batches.push(batch);
+      },
+    );
+    const h = harness({
+      events: [
+        event(2, "example.com/issue-created", { issue: 21, internal: "drop-me" }),
+        event(3, "example.com/issue-created", { issue: 40 }),
+      ],
+      configuration: {
+        subscriptionKey: PROCESSOR_KEY,
+        receiver: {
+          action: "itx-call",
+          expression: ["worker", "processEventBatch"],
+          jsonataTransform:
+            '{ "type": "example.com/issue-summary", "payload": { "issue": payload.issue, "doubled": payload.issue * 2 } }',
+          delivery: { start: "beginning", onFailingEvent: "halt" },
+        },
+      },
+      deliverToItx,
+      wakeProcessor: async () => {
+        throw new Error("an ITX receiver must not wake a hosted processor");
+      },
+    });
+
+    h.eventSender.sendDue();
+    await h.settle();
+
+    expect(batches).toHaveLength(1);
+    expect(batches[0]!.events).toMatchObject([
+      {
+        type: "example.com/issue-summary",
+        payload: { issue: 21, doubled: 42 },
+        // The coordinates keep naming the source rows under a reshaped body.
+        offset: 2,
+        path: "/source",
+      },
+      {
+        type: "example.com/issue-summary",
+        payload: { issue: 40, doubled: 80 },
+        offset: 3,
+        path: "/source",
+      },
+    ]);
+    expect(batches[0]!.events[0]!.payload).not.toHaveProperty("internal");
+    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
+      acknowledgedOffset: 3,
+      attempt: 0,
+      nextAttemptAt: null,
+    });
+  });
+
+  it("an ITX transform evaluation failure is a delivery failure that skip policy isolates and steps over", async () => {
+    const appended: StreamEventInput[] = [];
+    const deliveredOffsets: number[][] = [];
+    const deliverToItx = vi.fn<SubscriptionReceiverCalls["deliverToItx"]>(
+      async (_expression, batch) => {
+        deliveredOffsets.push(batch.events.map(({ offset }) => offset));
+      },
+    );
+    const h = harness({
+      events: [
+        event(2, "example.com/issue-created", { issue: 1 }),
+        event(3, "example.com/issue-created", { poison: true }),
+        event(4, "example.com/issue-created", { issue: 3 }),
+      ],
+      configuration: {
+        subscriptionKey: PROCESSOR_KEY,
+        receiver: {
+          action: "itx-call",
+          expression: ["worker", "processEventBatch"],
+          jsonataTransform: 'payload.poison ? $error("poison event") : { "payload": payload }',
+          delivery: { start: "beginning", onFailingEvent: "skip" },
+        },
+      },
+      deliverToItx,
+      appendDeliveryEvent: (input) => {
+        appended.push(input);
+        return true;
+      },
+      wakeProcessor: async () => {
+        throw new Error("an ITX receiver must not wake a hosted processor");
+      },
+    });
+
+    h.eventSender.sendDue();
+    await h.settle();
+    let nowMs = 10_000;
+    for (let alarmRound = 0; alarmRound < 3; alarmRound += 1) {
+      nowMs += 2_000_000; // beyond the 30-minute backoff cap
+      h.setNow(nowMs);
+      h.eventSender.onAlarm();
+      await h.settle();
+    }
+
+    // The poison event never reached the wire — its transform failed while
+    // the batch was built — and the ladder still isolated the healthy prefix,
+    // confirmed the failing event, and stepped over it.
+    expect(deliveredOffsets).toEqual([[2], [4]]);
+    const skipAudits = appended.filter(
+      (input) => input.type === "events.iterate.com/stream/error-occurred",
+    );
+    expect(skipAudits).toHaveLength(1);
+    expect(skipAudits[0]!.payload).toMatchObject({
+      message: expect.stringContaining("skipped failing event at offset 3"),
+    });
+    expect(String(skipAudits[0]!.payload!.message)).toContain(
+      `itx transform for subscription "${PROCESSOR_KEY}" failed on /source@3`,
+    );
+    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
+      acknowledgedOffset: 4,
+      attempt: 0,
+      nextAttemptAt: null,
     });
   });
 

@@ -22,7 +22,18 @@
 // - transport-retry deduplication: keys use the source project, path, stream
 //   lifetime ID, subscription, cursor-changing event, and event offset. A retry
 //   within one send run appends nothing; a recreated source, deliberate seek,
-//   or same-key replacement may append the same source offset again.
+//   or same-key replacement may append the same source offset again;
+// - transforms: the subscription's optional `jsonataTransform` is a JSONata
+//   expression CONSTRUCTING the received event's body from the original. It is
+//   applied here, BEFORE the platform stamps `source.copiedFrom` and the
+//   source-coordinate idempotency key — a transform can reshape the body but
+//   can never forge or drop the chain, and its output cannot affect
+//   deduplication. A transform that throws or returns a non-object rejects the
+//   batch; copies always use the halt-on-failure policy because advancing
+//   would create a gap in the receiving stream. A transformed
+//   `events.iterate.com/stream/*` type stays inert data like any copied
+//   control event: the stamped provenance is what the core processor's
+//   canonicalize/validate/reduce guards key on.
 
 import { z } from "zod";
 import { MAX_COPIED_FROM_HOPS, StreamEvent as StreamEventSchema } from "iterate/processors";
@@ -38,6 +49,7 @@ import {
   subscriptionKeyForConfiguredEvent,
 } from "./core-processor-contract.ts";
 import { compareSourceStamp } from "./core-processor.ts";
+import { applyJsonataTransform } from "./event-filter.ts";
 import { internalStreamId } from "./stream-delivery-utils.ts";
 
 type CopiedFromChain = NonNullable<NonNullable<StreamEvent["source"]>["copiedFrom"]>;
@@ -118,17 +130,32 @@ export function buildCopyAppends({
       continue;
     }
 
+    // The transform runs after the drop checks (a dropped event's transform
+    // never evaluates, and the hop above recorded the ORIGINAL type) and
+    // before the platform-owned fields below, so it can only shape
+    // type/payload/metadata. A throw here rejects the whole batch into the
+    // sender's ladder — copies halt on a repeatedly failing event.
+    const shaped = applyJsonataTransform(
+      "copy",
+      batch.subscriptionKey,
+      receiver.jsonataTransform,
+      event,
+    );
+
     // A received event is a new event: `ephemeral` deliberately does not
     // propagate. Source offsets are descriptive, never dereferenced, so
     // source-row eviction leaves no dangling reads.
     inputs.push({
-      type: event.type,
-      ...(event.payload === undefined ? {} : { payload: event.payload }),
-      ...(event.metadata === undefined ? {} : { metadata: event.metadata }),
+      type: shaped.type,
+      ...(shaped.payload === undefined ? {} : { payload: shaped.payload }),
+      ...(shaped.metadata === undefined ? {} : { metadata: shaped.metadata }),
+      // Provenance is stamped AFTER the transform, from the platform's own
+      // hop record — a transform can never forge or drop the chain.
       source: { ...event.source, copiedFrom },
       // At-least-once transport retries collapse within one cursor epoch.
       // A deliberate seek or same-key replacement changes the epoch and may
-      // replay this same source coordinate as a new copied event.
+      // replay this same source coordinate as a new copied event. Keyed by
+      // source coordinates only: transform output cannot affect dedupe.
       idempotencyKey: internalStreamId(
         "copy",
         batch.subscriptionKey,

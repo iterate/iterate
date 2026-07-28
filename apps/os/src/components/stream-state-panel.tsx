@@ -131,7 +131,7 @@ type SubscriptionDetails = {
   eventTypes?: string[];
   /** Optional JSONata filter over the whole event. */
   jsonataCondition?: string;
-  /** Optional JSONata constructor for a webhook's POSTed event body. */
+  /** Optional JSONata constructor shaping the delivered event body (copy, ITX call, webhook). */
   jsonataTransform?: string;
   start?: "beginning" | "now";
   onFailingEvent?: "halt" | "skip";
@@ -1072,9 +1072,7 @@ function readSubscriptionDetails(entry: unknown): SubscriptionDetails | null {
       ? filter.jsonataCondition
       : undefined;
   const jsonataTransform =
-    subscriptionAction === "webhook-post" &&
-    typeof receiver?.jsonataTransform === "string" &&
-    receiver.jsonataTransform.trim() !== ""
+    typeof receiver?.jsonataTransform === "string" && receiver.jsonataTransform.trim() !== ""
       ? receiver.jsonataTransform
       : undefined;
   const start =
@@ -1573,8 +1571,8 @@ function SubscriptionDetail({ config }: { config: SubscriptionDetails }) {
             {config.jsonataTransform}
           </div>
           <p className="mt-1 text-[11px] text-muted-foreground">
-            JSONata constructor for the POSTed event body. Omitted fields copy verbatim; the
-            envelope keeps the real source offset for deduplication.
+            JSONata constructor shaping the delivered event body. Omitted fields copy verbatim;
+            delivery keeps the real source coordinates for provenance and deduplication.
           </p>
         </div>
       )}

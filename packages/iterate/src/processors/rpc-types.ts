@@ -200,6 +200,7 @@ export type SubscriptionConfigurationForDelivery = {
       | {
           action: "copy-to-stream";
           receivingStreamPath: string;
+          jsonataTransform?: string;
           delivery: {
             start: "beginning" | "now";
             onFailingEvent: "halt";
@@ -208,6 +209,7 @@ export type SubscriptionConfigurationForDelivery = {
       | {
           action: "itx-call";
           expression: Array<string | [method: string, ...args: unknown[]]>;
+          jsonataTransform?: string;
           delivery: {
             start: "beginning" | "now";
             onFailingEvent: "halt" | "skip";
@@ -244,6 +246,13 @@ export type StreamDeliveryBatch = {
   streamId: string;
   /** Creation time of this source stream; orders recreated streams whose offsets restarted. */
   streamCreatedAt: string;
+  /**
+   * For an ITX-call subscription with a `jsonataTransform`, each event's
+   * `type`/`payload`/`metadata` are the transform's output while the
+   * coordinates keep naming the source rows. Copy batches always carry the
+   * untransformed source events: the receiving stream applies its transform
+   * before committing.
+   */
   events: StreamEvent[];
   streamMaxOffset: number;
   subscriptionKey: SubscriptionKey;

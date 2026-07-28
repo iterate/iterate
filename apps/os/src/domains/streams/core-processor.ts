@@ -231,8 +231,11 @@ export class StreamCoreProcessor {
         throw new Error("a stream cannot receive events from itself");
       }
       compileEventFilter(event.payload.filter);
+      // Every push receiver may carry a jsonataTransform; processor-wake never
+      // does (its schema has no such field — wake delivery must feed the
+      // processor its committed log verbatim).
       if (
-        event.payload.receiver.action === "webhook-post" &&
+        event.payload.receiver.action !== "processor-wake" &&
         event.payload.receiver.jsonataTransform !== undefined
       ) {
         compileJsonataExpression(event.payload.receiver.jsonataTransform);

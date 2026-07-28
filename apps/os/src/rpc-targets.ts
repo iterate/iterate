@@ -1035,6 +1035,13 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       description?: string;
       /** Selects source events by type (`eventTypes`) and/or an exact-true JSONata condition (`jsonataCondition`). */
       filter?: EventFilter;
+      /**
+       * Optional JSONata constructor shaping what this receiving stream
+       * commits (`{ type?, payload?, metadata? }`; omitted fields copy
+       * verbatim). Provenance (`source.copiedFrom`) and deduplication stay
+       * keyed to the source event.
+       */
+      jsonataTransform?: string;
       /** Initial cursor stored by the source stream. Defaults to events configured from now onward. */
       start?: "beginning" | "now";
     } & (
@@ -1078,6 +1085,9 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
           receiver: {
             action: "copy-to-stream",
             receivingStreamPath,
+            ...(args.jsonataTransform === undefined
+              ? {}
+              : { jsonataTransform: args.jsonataTransform }),
             delivery: {
               start,
               onFailingEvent: "halt",

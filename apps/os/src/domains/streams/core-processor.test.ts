@@ -999,22 +999,45 @@ describe("StreamCoreProcessor validation and dispatch", () => {
     ).toThrow("webhook subscriptions require a project-scoped stream");
   });
 
-  test("parse-validates a webhook transform at configure time", () => {
-    const { processor, state } = harness(SOURCE_PATH);
-    const webhookPayload = (jsonataTransform: string) => ({
-      subscriptionKey: "ops-webhook",
-      receiver: {
+  test.each([
+    [
+      "copy-to-stream",
+      (jsonataTransform: string) => ({
+        action: "copy-to-stream",
+        receivingStreamPath: "/receivers/summaries",
+        jsonataTransform,
+        delivery: { start: "now", onFailingEvent: "halt" },
+      }),
+    ],
+    [
+      "itx-call",
+      (jsonataTransform: string) => ({
+        action: "itx-call",
+        expression: ["worker", "processEventBatch"],
+        jsonataTransform,
+        delivery: { start: "now", onFailingEvent: "halt" },
+      }),
+    ],
+    [
+      "webhook-post",
+      (jsonataTransform: string) => ({
         action: "webhook-post",
         url: "https://hooks.example.com/iterate",
         jsonataTransform,
         delivery: { start: "now", onFailingEvent: "halt" },
-      },
+      }),
+    ],
+  ] as const)("parse-validates a %s jsonataTransform at configure time", (_action, receiver) => {
+    const { processor, state } = harness(SOURCE_PATH);
+    const payload = (jsonataTransform: string) => ({
+      subscriptionKey: "transformed",
+      receiver: receiver(jsonataTransform),
     });
     expect(() =>
       processor.validate({
         event: {
           type: "events.iterate.com/stream/subscription-configured",
-          payload: webhookPayload("payload.((("),
+          payload: payload("payload.((("),
         },
         state,
         authority: "public",
@@ -1024,11 +1047,39 @@ describe("StreamCoreProcessor validation and dispatch", () => {
       processor.validate({
         event: {
           type: "events.iterate.com/stream/subscription-configured",
-          payload: webhookPayload('{ "payload": { "issue": payload.issue } }'),
+          payload: payload('{ "payload": { "issue": payload.issue } }'),
         },
         state,
         authority: "public",
       }),
     ).not.toThrow();
+  });
+
+  test("a processor-wake receiver rejects a jsonataTransform outright", () => {
+    // Wake delivery must feed the processor its committed log verbatim, or the
+    // reduced state stops equaling a fold of the stream's events.
+    const { processor, state } = harness(SOURCE_PATH);
+    expect(() =>
+      processor.validate({
+        event: {
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: {
+            subscriptionKey: "wake-transformed",
+            receiver: {
+              action: "processor-wake",
+              expression: [
+                "agents",
+                ["get", "/agents/reviewer"],
+                "processor",
+                "wakeStreamProcessor",
+              ],
+              jsonataTransform: '{ "payload": payload }',
+            },
+          },
+        },
+        state,
+        authority: "public",
+      }),
+    ).toThrow(/unrecognized/i);
   });
 });

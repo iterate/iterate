@@ -52,6 +52,7 @@ type SubscriptionConfigured = {
       | {
           action: "copy-to-stream";
           receivingStreamPath: string;
+          jsonataTransform?: string;
           delivery: {
             start: "beginning" | "now";
             onFailingEvent: "halt";
@@ -60,6 +61,7 @@ type SubscriptionConfigured = {
       | {
           action: "itx-call";
           expression: ItxExpression;
+          jsonataTransform?: string;
           delivery: {
             start: "beginning" | "now";
             onFailingEvent: "halt" | "skip";
@@ -80,10 +82,15 @@ type SubscriptionConfigured = {
 
 This is the sole event that enables delivery. The `action` union prevents
 invalid combinations: a hosted processor cannot carry a start position stored
-by the source stream, an ordered copy cannot skip a permanently
-failing event, and only a webhook — the receiver with no processor behind it —
-may carry a JSONata `jsonataTransform` for its POSTed event body. Durable
-subscriptions never deliver ephemeral rows. Webhook delivery is
+by the source stream, and an ordered copy cannot skip a permanently
+failing event. Every push receiver — copy, ITX call, webhook — may carry a
+JSONata `jsonataTransform` shaping the delivered
+`{ type?, payload?, metadata? }` (omitted fields copy verbatim; coordinates,
+provenance, and deduplication stay keyed to the source event).
+`processor-wake` never does: a hosted processor's reduced state must equal
+folding its stream's committed events, and wake delivery feeds the processor
+its own log, so transforming it would break replay/rebuild determinism.
+Durable subscriptions never deliver ephemeral rows. Webhook delivery is
 at-least-once; a remote processor must deduplicate by
 `(streamId, event.offset)`.
 

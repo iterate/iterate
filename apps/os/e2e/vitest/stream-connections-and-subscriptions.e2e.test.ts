@@ -1469,6 +1469,89 @@ test("a copy filters, records its source, and deduplicates a retried delivery", 
   ).toMatchObject({ numEventsReceived: 1 });
 });
 
+test("a copy transform shapes the committed copy, keeps provenance, and dedupes a retried delivery", async () => {
+  const marker = crypto.randomUUID();
+  const sourcePath = `/e2e/subscriptions/copy-transform/source/${marker}`;
+  const receivingStreamPath = `/e2e/subscriptions/copy-transform/receiver/${marker}`;
+  const subscriptionKey = `copy-transform-${marker}`;
+  const summaryType = "events.iterate.test/subscriptions/summary";
+
+  using testProject = await openTestProject(marker);
+  const { project } = testProject;
+  const { projectId } = await project.__describe();
+  using source = project.streams.get(sourcePath);
+  using receiver = project.streams.get(receivingStreamPath);
+
+  const configured = await receiver.subscribeToEventsFrom({
+    sourceStreamPath: sourcePath,
+    subscriptionKey,
+    filter: {
+      eventTypes: [MATCHING_EVENT_TYPE],
+      jsonataCondition: "payload.selected = true",
+    },
+    jsonataTransform: `{ "type": "${summaryType}", "payload": { "value": payload.value } }`,
+  });
+  const [, selected] = await source.append(
+    { type: MATCHING_EVENT_TYPE, payload: { selected: false, value: "ignored" } },
+    { type: MATCHING_EVENT_TYPE, payload: { selected: true, value: marker } },
+  );
+
+  const copied = await receiver.waitForEvent({
+    afterOffset: 0,
+    eventTypes: [summaryType],
+    timeoutMs: 30_000,
+  });
+  expect(copied).toMatchObject({
+    payload: { value: marker },
+    source: {
+      copiedFrom: [
+        {
+          subscriptionKey,
+          cursorChangedAtSourceOffset: configured.subscriptionConfiguredEvent.offset,
+          createdAt: selected!.createdAt,
+          offset: selected!.offset,
+          path: sourcePath,
+          projectId,
+          // The hop records the ORIGINAL source type; only the committed
+          // body is reshaped.
+          type: MATCHING_EVENT_TYPE,
+        },
+      ],
+    },
+  });
+
+  // Replaying the exact same transport batch is not a new delivery run: the
+  // dedupe identity is the source coordinate, which the transform cannot
+  // touch, so the receiver accepts it idempotently without another append.
+  const sourceStateAfterCopy = coreState(await source.runtimeState());
+  const duplicateReceipt = await deliverTrustedStreamBatch(receiver, {
+    projectId,
+    path: sourcePath,
+    streamId: sourceStateAfterCopy.streamId!,
+    streamCreatedAt: sourceStateAfterCopy.createdAt!,
+    events: [selected!],
+    streamMaxOffset: sourceStateAfterCopy.maxOffset,
+    subscriptionKey,
+    cursorChangedAtSourceOffset: configured.subscriptionConfiguredEvent.offset,
+    deliveryId: streamDeliveryId(
+      sourceStateAfterCopy.streamId!,
+      subscriptionKey,
+      configured.subscriptionConfiguredEvent.offset,
+      selected!.offset,
+      selected!.offset,
+    ),
+    attempt: 2,
+    configuredEvent: subscriptionConfigurationForDelivery(configured.subscriptionConfiguredEvent),
+  });
+  expect(duplicateReceipt).toMatchObject({ acknowledged: 1 });
+  expect(
+    await receiver.getEvents({
+      afterOffset: 0,
+      eventTypes: [summaryType],
+    }),
+  ).toHaveLength(1);
+});
+
 test("changing a subscription cursor deliberately copies the same source coordinate again", async () => {
   const marker = crypto.randomUUID();
   const sourcePath = `/e2e/subscriptions/copy-after-seek/source/${marker}`;
@@ -2773,6 +2856,46 @@ test("invalid receiver-specific combinations and expressions never commit", asyn
           },
         },
       },
+    },
+    {
+      key: `copy-transform-${marker}`,
+      message: /invalid JSONata expression/i,
+      event: subscriptionConfigured({
+        subscriptionKey: `copy-transform-${marker}`,
+        receiver: {
+          action: "copy-to-stream",
+          receivingStreamPath: `/e2e/subscriptions/validation/receiver/${marker}`,
+          jsonataTransform: "payload.(((",
+          delivery: { ...deliveryPolicy("now"), onFailingEvent: "halt" as const },
+        },
+      }),
+    },
+    {
+      key: `itx-transform-${marker}`,
+      message: /invalid JSONata expression/i,
+      event: subscriptionConfigured({
+        subscriptionKey: `itx-transform-${marker}`,
+        receiver: {
+          action: "itx-call",
+          expression: ["worker", "processEventBatch"],
+          jsonataTransform: "payload.(((",
+          delivery: deliveryPolicy("now"),
+        },
+      }),
+    },
+    {
+      // Wake delivery must feed the processor its committed log verbatim, so
+      // the processor-wake receiver has no jsonataTransform field at all.
+      key: `wake-transform-${marker}`,
+      message: /unrecognized/i,
+      event: subscriptionConfigured({
+        subscriptionKey: `wake-transform-${marker}`,
+        receiver: {
+          action: "processor-wake",
+          expression: ["agents", ["get", `/agents/${marker}`], "processor", "wakeStreamProcessor"],
+          jsonataTransform: "payload",
+        },
+      }),
     },
     {
       key: `stream-skip-${marker}`,

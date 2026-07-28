@@ -39,7 +39,6 @@
 // the public seam in stream-connections-and-subscriptions.e2e.test.ts; the only streams code
 // that knows RPC exists is the receiver-call wiring in stream-durable-object.ts.
 
-import { z } from "zod";
 import type { StreamEvent, StreamEventInput } from "iterate/processors";
 import type {
   GetProcessorRuntimeState,
@@ -73,8 +72,8 @@ import {
   subscriptionConfiguredPayloadFromReducedState,
 } from "./core-processor-contract.ts";
 import {
+  applyJsonataTransform,
   compileEventFilter,
-  compileJsonataExpression,
   EventFilterEvaluationError,
   type CompiledEventFilter,
 } from "./event-filter.ts";
@@ -174,51 +173,6 @@ function initialCursorFor(config: SubscriptionConfiguredPayload, configOffset: n
   return config.receiver.action === "processor-wake"
     ? 0
     : initialCursor(config.receiver.delivery.start, configOffset);
-}
-
-/**
- * What a webhook transform may construct. Strict, so a typo'd key
- * rejects delivery instead of silently vanishing.
- */
-const WebhookTransformResult = z.strictObject({
-  type: z.string().trim().min(1).optional(),
-  payload: z.record(z.string(), z.unknown()).optional(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
-});
-
-/**
- * Apply a webhook subscription's optional JSONata transform to one event,
- * producing the event body POSTed to the URL. The constructed
- * `{ type?, payload?, metadata? }` replaces those fields on the delivered
- * event (omitted fields copy verbatim) while the coordinates (`offset`,
- * `createdAt`, `path`) keep naming the source row — the remote processor
- * deduplicates by (streamId, offset), so the envelope must survive the
- * reshape. The expression was parse-validated at configure time; an
- * evaluation failure here throws into the ordinary delivery-failure ladder
- * and respects `onFailingEvent`.
- */
-function applyWebhookTransform(
-  subscriptionKey: string,
-  transformSource: string | undefined,
-  event: StreamEvent,
-): StreamEvent {
-  if (transformSource === undefined) return event;
-  try {
-    const produced = WebhookTransformResult.parse(
-      compileJsonataExpression(transformSource).evaluate(event),
-    );
-    return {
-      ...event,
-      type: produced.type ?? event.type,
-      ...(produced.payload === undefined ? {} : { payload: produced.payload }),
-      ...(produced.metadata === undefined ? {} : { metadata: produced.metadata }),
-    };
-  } catch (error) {
-    throw new Error(
-      `webhook transform for subscription "${subscriptionKey}" failed on ${event.path}@${event.offset}: ${errorMessage(error)}`,
-      { cause: error },
-    );
-  }
 }
 
 /**
@@ -876,7 +830,8 @@ export class StreamEventSender {
                   streamId,
                   streamCreatedAt,
                   // Exactly one: webhook delivery pins the read limit to one.
-                  event: applyWebhookTransform(
+                  event: applyJsonataTransform(
+                    "webhook",
                     subscriptionKey,
                     receiver.jsonataTransform,
                     matched[0]!,
@@ -901,7 +856,24 @@ export class StreamEventSender {
                 path: state.path,
                 streamId,
                 streamCreatedAt,
-                events: matched,
+                // An ITX transform is applied here, per delivered event; a
+                // copy batch always carries the untransformed source events
+                // because the RECEIVING stream applies its transform before
+                // committing (provenance is stamped after it). A transform
+                // evaluation failure throws into the catch below — the
+                // ordinary delivery-failure ladder, respecting onFailingEvent
+                // and the straight-to-1 isolation.
+                events:
+                  receiver.action === "itx-call" && receiver.jsonataTransform !== undefined
+                    ? matched.map((event) =>
+                        applyJsonataTransform(
+                          "itx",
+                          subscriptionKey,
+                          receiver.jsonataTransform,
+                          event,
+                        ),
+                      )
+                    : matched,
                 streamMaxOffset: state.maxOffset,
                 subscriptionKey,
                 cursorChangedAtSourceOffset: row.cursorChangedAtOffset,

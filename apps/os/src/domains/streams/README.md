@@ -145,6 +145,16 @@ disposing it, or disconnecting closes it. No subscription is appended.
 Every durable subscription begins with
 `subscription-configured` on its source.
 
+Copy, ITX-call, and webhook receivers accept an optional `jsonataTransform`: a
+JSONata constructor evaluated per event that shapes the delivered
+`{ type?, payload?, metadata? }` (omitted fields copy verbatim) while
+coordinates, provenance, and deduplication stay keyed to the source event. An
+unparseable transform is rejected at configure time; an evaluation failure is
+an ordinary delivery failure that respects `onFailingEvent`. `processor-wake`
+never gets one: a hosted processor's reduced state must equal folding its
+stream's committed events, and wake delivery feeds the processor its own log,
+so transforming it would break replay/rebuild determinism.
+
 ### Hosted processor
 
 ```ts
@@ -216,9 +226,9 @@ receiver: {
 The source POSTs one event at a time through the project's attributed egress.
 A 2xx response accepts that event. This is the lane for remotely-hosted
 processors driven by webhooks; webhook delivery is at-least-once, so a remote
-processor must deduplicate by `(streamId, offset)`. An optional JSONata
-`jsonataTransform` (webhook-only) reshapes the POSTed event body while the
-envelope keeps the real source coordinates.
+processor must deduplicate by `(streamId, offset)`. A `jsonataTransform`
+reshapes the POSTed event body while the envelope keeps the real source
+coordinates.
 
 ## Events marked ephemeral
 

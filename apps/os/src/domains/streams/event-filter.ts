@@ -9,6 +9,11 @@
 // output shaping belongs to receivers (see the streams README doctrine). The
 // filter is skip-not-defer everywhere — a cursor advances past non-matching
 // events; they are skipped, not deferred.
+//
+// The receiver-side shaping lives here too: `applyJsonataTransform` is the one
+// applier behind every push receiver's optional `jsonataTransform`, colocated
+// with the filter machinery because both share the single JSONata compiler and
+// cache below.
 
 import jsonata from "@mmkal/jsonata/sync";
 import { z } from "zod";
@@ -105,6 +110,54 @@ export function compileJsonataExpression(expression: string): jsonata.Expression
   if (compiledExpressions.size >= MAX_COMPILED_EXPRESSIONS) compiledExpressions.clear();
   compiledExpressions.set(expression, compiled);
   return compiled;
+}
+
+/**
+ * What a `jsonataTransform` may construct. Strict, so a typo'd key
+ * rejects delivery instead of silently vanishing.
+ */
+const JsonataTransformResult = z.strictObject({
+  type: z.string().trim().min(1).optional(),
+  payload: z.record(z.string(), z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+});
+
+/**
+ * Apply a subscription's optional `jsonataTransform` to one event — the ONE
+ * applier behind every push receiver (webhook shapes the POSTed envelope's
+ * event, copy shapes what the receiving stream commits, ITX-call shapes each
+ * event in the delivered batch). The constructed `{ type?, payload?, metadata? }`
+ * replaces those fields on the returned event (omitted fields copy verbatim)
+ * while everything else — `offset`, `createdAt`, `path`, `source` — keeps
+ * naming the source row, so deduplication and provenance survive the reshape.
+ * The expression was parse-validated at configure time; an evaluation failure
+ * here throws into the ordinary delivery-failure ladder and respects
+ * `onFailingEvent`. `receiverWord` names the receiver in that error
+ * ("webhook", "copy", "itx").
+ */
+export function applyJsonataTransform(
+  receiverWord: string,
+  subscriptionKey: string,
+  transformSource: string | undefined,
+  event: StreamEvent,
+): StreamEvent {
+  if (transformSource === undefined) return event;
+  try {
+    const produced = JsonataTransformResult.parse(
+      compileJsonataExpression(transformSource).evaluate(event),
+    );
+    return {
+      ...event,
+      type: produced.type ?? event.type,
+      ...(produced.payload === undefined ? {} : { payload: produced.payload }),
+      ...(produced.metadata === undefined ? {} : { metadata: produced.metadata }),
+    };
+  } catch (error) {
+    throw new Error(
+      `${receiverWord} transform for subscription "${subscriptionKey}" failed on ${event.path}@${event.offset}: ${errorMessage(error)}`,
+      { cause: error },
+    );
+  }
 }
 
 /**

@@ -47,7 +47,7 @@ type InboundRecords = NonNullable<BuildArgs["inbound"]>;
 function batch(
   streamId = FIRST_STREAM_ID,
   streamCreatedAt = SOURCE_CREATED_AT,
-  configured = configuration,
+  configured: SubscriptionConfiguredPayload & { subscriptionKey: string } = configuration,
 ): StreamDeliveryBatch {
   return {
     projectId: PROJECT_ID,
@@ -326,6 +326,94 @@ describe("copy event construction", () => {
       offset: sourceEvent.offset,
       subscriptionKey: configuration.subscriptionKey,
     });
+  });
+
+  test("a transform shapes the committed copy while provenance and dedupe stay keyed to the source event", () => {
+    const transformed = {
+      ...configuration,
+      receiver: {
+        ...configuration.receiver,
+        jsonataTransform:
+          '{ "type": "example.com/issue-summary", "payload": { "issue": payload.issue, "doubled": payload.issue * 2 } }',
+      },
+    } satisfies SubscriptionConfiguredPayload;
+
+    const plain = buildCopyAppends(validArgs());
+    const first = buildCopyAppends(
+      validArgs(batch(FIRST_STREAM_ID, SOURCE_CREATED_AT, transformed)),
+    );
+    const redelivered = buildCopyAppends(
+      validArgs(batch(FIRST_STREAM_ID, SOURCE_CREATED_AT, transformed)),
+    );
+
+    expect(first.receipt).toEqual({ acknowledged: 1 });
+    expect(first.inputs[0]).toMatchObject({
+      type: "example.com/issue-summary",
+      payload: { issue: 42, doubled: 84 },
+      source: {
+        copiedFrom: [
+          {
+            projectId: PROJECT_ID,
+            path: SOURCE_PATH,
+            streamId: FIRST_STREAM_ID,
+            offset: sourceEvent.offset,
+            subscriptionKey: configuration.subscriptionKey,
+            // The hop records the ORIGINAL source type; only the committed
+            // body is reshaped.
+            type: sourceEvent.type,
+          },
+        ],
+      },
+    });
+    // Dedupe identity is the source coordinate: stable across a transport
+    // redelivery and identical to an untransformed copy of the same
+    // coordinate — transform output cannot affect it.
+    expect(first.inputs[0]?.idempotencyKey).toBe(redelivered.inputs[0]?.idempotencyKey);
+    expect(first.inputs[0]?.idempotencyKey).toBe(plain.inputs[0]?.idempotencyKey);
+  });
+
+  test("a transform evaluation failure rejects the whole batch into the sender's ladder", () => {
+    const failing = {
+      ...configuration,
+      receiver: {
+        ...configuration.receiver,
+        jsonataTransform: '$error("no summary for this event")',
+      },
+    } satisfies SubscriptionConfiguredPayload;
+
+    const error = caught(() =>
+      buildCopyAppends(validArgs(batch(FIRST_STREAM_ID, SOURCE_CREATED_AT, failing))),
+    );
+    expect(error).toMatchObject({
+      message: expect.stringContaining(
+        `copy transform for subscription "issues" failed on ${SOURCE_PATH}@${sourceEvent.offset}`,
+      ),
+    });
+  });
+
+  test("a transform emitting a platform stream type keeps the provenance stamp that makes it inert", () => {
+    const forging = {
+      ...configuration,
+      receiver: {
+        ...configuration.receiver,
+        jsonataTransform:
+          '{ "type": "events.iterate.com/stream/paused", "payload": { "reason": "forged" } }',
+      },
+    } satisfies SubscriptionConfiguredPayload;
+
+    const result = buildCopyAppends(validArgs(batch(FIRST_STREAM_ID, SOURCE_CREATED_AT, forging)));
+
+    // The committed copy carries platform-stamped source.copiedFrom, which is
+    // exactly what the core processor's canonicalize/validate/reduce guards
+    // key on to store a copied stream control event verbatim as inert data
+    // (reduce-level proof: "a copied stream control event is inert" in
+    // core-processor.test.ts).
+    expect(result.receipt).toEqual({ acknowledged: 1 });
+    expect(result.inputs[0]).toMatchObject({
+      type: "events.iterate.com/stream/paused",
+      payload: { reason: "forged" },
+    });
+    expect(result.inputs[0]?.source?.copiedFrom).toHaveLength(1);
   });
 
   test("never propagates ephemeral onto the received copy", () => {

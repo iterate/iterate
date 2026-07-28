@@ -337,12 +337,10 @@ plus `path`, `streamId`, `streamCreatedAt`, `subscriptionKey`,
 `cursorChangedAtSourceOffset`, `deliveryId`, `attempt`, and the committed
 `configuredEvent`; it never carries reduced core state.
 
-### Transform
+## Transforms
 
-A webhook receiver may reshape the POSTed event body with a JSONata
-constructor. This option is webhook-only: a remote webhook host has no
-receiving processor to reshape events with, while a copy's receiving
-processor reshapes for itself.
+Every push receiver — copy, ITX call, and webhook — may reshape delivered
+events with a JSONata constructor:
 
 ```ts
 receiver: {
@@ -354,10 +352,27 @@ receiver: {
 ```
 
 The expression evaluates against the whole committed event and may construct
-`type`, `payload`, and `metadata`; omitted fields copy verbatim, and the
-envelope keeps the real source coordinates for deduplication. An unparseable
-transform is rejected at configure time; an evaluation failure at send time is
-an ordinary delivery failure that retries and respects `onFailingEvent`.
+`type`, `payload`, and `metadata`; omitted fields copy verbatim, and delivery
+keeps the real source coordinates for provenance and deduplication. Per
+receiver:
+
+- **copy**: the receiving stream applies the transform to what it commits;
+  the platform stamps `source.copiedFrom` and the source-coordinate
+  idempotency key after it, so a transform can reshape the body but can never
+  forge provenance or affect deduplication. A transformed
+  `events.iterate.com/stream/*` type is stored as inert data like any other
+  copied control event.
+- **ITX call**: each event in the delivered batch is the transform's output
+  while the batch coordinates keep naming the source rows.
+- **webhook**: the POSTed event body is the transform's output while the
+  envelope keeps the real source coordinates.
+
+An unparseable transform is rejected at configure time; an evaluation failure
+at delivery time is an ordinary delivery failure that retries and respects
+`onFailingEvent`. `processor-wake` never accepts a transform: a hosted
+processor's reduced state must equal folding its stream's committed events,
+and wake delivery feeds the processor its own log, so transforming it would
+break replay/rebuild determinism.
 
 ## Wake a hosted processor
 

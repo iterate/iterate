@@ -50,9 +50,11 @@ import { EventFilter } from "./event-filter.ts";
 // removed the version-26 `endWhen` automatic-removal conditions and the
 // copy-to-stream transform option. Still within version 28 (one undeployed
 // flag day), the webhook-post receiver returned as the lane for
-// remotely-hosted processors driven by webhooks, now carrying the optional
-// JSONata transform (webhook-only: a remote host has no receiving processor
-// to reshape events with).
+// remotely-hosted processors driven by webhooks, the JSONata fields took
+// language-naming names (`jsonataCondition`, `jsonataTransform`), and the
+// optional `jsonataTransform` became available on every push receiver (copy,
+// ITX call, webhook) — never on processor-wake, whose delivery must feed the
+// processor its committed log verbatim.
 export const CORE_STATE_VERSION = 28;
 
 // Restored from the old built-in circuit-breaker processor. These defaults are
@@ -122,6 +124,10 @@ const StreamReceiverDeliveryPolicy = DeliveryPolicy.extend({
  */
 export const SubscriptionReceiver = z.discriminatedUnion("action", [
   z.strictObject({
+    // No jsonataTransform here, ever: a hosted processor's reduced state must
+    // equal folding its stream's committed events. Wake delivery feeds the
+    // processor its own log, so transforming it would break replay/rebuild
+    // determinism.
     action: z.literal("processor-wake"),
     expression: DeliveryExpression,
     processorSlug: z.string().trim().min(1).optional(),
@@ -129,11 +135,29 @@ export const SubscriptionReceiver = z.discriminatedUnion("action", [
   z.strictObject({
     action: z.literal("copy-to-stream"),
     receivingStreamPath: StreamPath,
+    /**
+     * Optional JSONata constructor evaluated per event to shape what the
+     * receiving stream commits (`{ type?, payload?, metadata? }`; omitted
+     * fields copy verbatim). The receiver applies it, then the platform
+     * stamps `source.copiedFrom` and the source-coordinate idempotency key —
+     * a transform can reshape the body but can never forge provenance or
+     * affect deduplication. Parse-validated at configure time; an evaluation
+     * failure at delivery time is an ordinary delivery failure.
+     */
+    jsonataTransform: z.string().trim().min(1).optional(),
     delivery: StreamReceiverDeliveryPolicy,
   }),
   z.strictObject({
     action: z.literal("itx-call"),
     expression: DeliveryExpression,
+    /**
+     * Optional JSONata constructor evaluated per event to shape each event in
+     * the delivered batch (`{ type?, payload?, metadata? }`; omitted fields
+     * copy verbatim) while the coordinates keep naming the source rows.
+     * Parse-validated at configure time; an evaluation failure at send time
+     * is an ordinary delivery failure.
+     */
+    jsonataTransform: z.string().trim().min(1).optional(),
     delivery: DeliveryPolicy,
   }),
   z.strictObject({
@@ -142,10 +166,9 @@ export const SubscriptionReceiver = z.discriminatedUnion("action", [
     /**
      * Optional JSONata constructor evaluated per event to shape the POSTed
      * event body (`{ type?, payload?, metadata? }`; omitted fields copy
-     * verbatim). Webhook-only: a remote host has no receiving processor to
-     * reshape events with, so the sender does it. Parse-validated at
-     * configure time; an evaluation failure at send time is an ordinary
-     * delivery failure.
+     * verbatim) while the envelope keeps the real source coordinates.
+     * Parse-validated at configure time; an evaluation failure at send time
+     * is an ordinary delivery failure.
      */
     jsonataTransform: z.string().trim().min(1).optional(),
     delivery: DeliveryPolicy,
