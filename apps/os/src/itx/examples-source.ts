@@ -1665,6 +1665,50 @@ export default class ProjectWorker extends WorkerEntrypoint {
       return markdown.slice(0, 4_000);
     },
   }),
+  agentExample({
+    id: "cf-browser-human-handoff",
+    e2eProven: false,
+    title: "Hand a live browser to the human, then keep going",
+    description:
+      "A complete Cloudflare Browser Run Human in the Loop flow inside one agent script: open a stateful page, pause it with concrete instructions, send the expiring Live View to the user, wait for their explicit Done/Failed result, and resume automation on the same page. The session is always closed. Requires a human and paid/remote Browser Run infrastructure — interactive-only.",
+    runtimes: LIVE_SESSION_RUNTIMES,
+    fn: async (itx, vars: { url?: string; instructions?: string; timeoutMs?: number }) => {
+      const browser = await itx.browser.open({
+        url: vars.url ?? "https://dash.cloudflare.com/login",
+      });
+      try {
+        const handoff = await browser.startHandoff({
+          instructions:
+            vars.instructions ??
+            "Sign in and complete any verification challenge. When the dashboard is visible, click Done.",
+          timeoutMs: vars.timeoutMs ?? 5 * 60_000,
+        });
+
+        await itx.chat.sendMessage(
+          "I need you to take over the browser briefly. " +
+            "[Open the secure Live View](" +
+            handoff.liveViewUrl +
+            "), follow the instructions there, then click Done or Failed. " +
+            "This link expires at " +
+            new Date(handoff.expiresAt).toISOString() +
+            "; I'll continue here automatically.",
+        );
+
+        const result = await browser.waitForHandoff(handoff.handoffId);
+        if (!result.success) {
+          const reason = result.reason ? ": " + result.reason : ".";
+          await itx.chat.sendMessage("The browser handoff ended as Failed" + reason);
+          return result;
+        }
+
+        // Automation resumes in the exact page the human changed.
+        const visibleText = await browser.text({ maxCharacters: 2_000 });
+        return { result, visibleText };
+      } finally {
+        await browser.close();
+      }
+    },
+  }),
   projectExample<{
     // The binding accepts a body stream; the generated input type is stricter
     // (non-null) than the fetch body the entry pipes in.

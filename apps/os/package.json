@@ -32,6 +32,7 @@
   },
   "dependencies": {
     "@cloudflare/containers": "0.3.7",
+    "@cloudflare/puppeteer": "1.2.0",
     "@cloudflare/sandbox": "0.12.3",
     "@cloudflare/shell": "^0.3.4",
     "@cloudflare/worker-bundler": "0.2.1",

@@ -92,6 +92,55 @@ export type CfBrowserQuickAction =
 export type CfBrowserQuickActionOptions = Record<string, unknown> &
   ({ url: string } | { html: string });
 
+/** Input for a stateful Browser Run session. The session keeps the page alive
+ * across an agent-to-human handoff until it is explicitly closed/disposed. */
+export type CfBrowserOpenInput = {
+  url: string;
+  /** Record the Browser Run session for later debugging. */
+  recording?: boolean;
+};
+
+/** The current page identity in a stateful Browser Run session. */
+export type CfBrowserPageInfo = {
+  url: string;
+  title: string;
+};
+
+/** Result of navigating the stateful Browser Run session. */
+export type CfBrowserNavigationResult = CfBrowserPageInfo & {
+  status: number | null;
+};
+
+/** Input for pausing Browser Run automation for a human. */
+export type CfBrowserHandoffInput = {
+  /** The concrete task the human should complete in the Live View. */
+  instructions: string;
+  /** Bounded wait for the human. Defaults to five minutes; maximum ten minutes. */
+  timeoutMs?: number;
+};
+
+/** An active human handoff. `liveViewUrl` is an expiring, sensitive URL. */
+export type CfBrowserHandoffStarted = {
+  handoffId: string;
+  liveViewUrl: string;
+  expiresAt: number;
+};
+
+/** The human's explicit completion result plus the page automation resumes on. */
+export type CfBrowserHandoffResult = {
+  handoffId: string;
+  targetId: string;
+  success: boolean;
+  reason?: string;
+  page: CfBrowserPageInfo;
+};
+
+/** Bounds extraction from the current Browser Run page. */
+export type CfBrowserTextInput = {
+  /** Maximum returned characters. Defaults to 20,000; maximum 100,000. */
+  maxCharacters?: number;
+};
+
 /** One Cloudflare Images transform step (width, height, fit, rotate, …),
  * passed through to the Images binding verbatim. */
 export type CfImageTransformOptions = Record<string, unknown>;

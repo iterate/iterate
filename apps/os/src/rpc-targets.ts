@@ -280,10 +280,21 @@ import {
   type DeadlineOutcome,
 } from "./domains/capability-host/execution-deadline.ts";
 import type { ScheduleView, SetScheduleInput } from "./domains/scheduler/types.ts";
+import {
+  BrowserHandoffSession,
+  openBrowserHandoffSession,
+} from "./domains/itx/browser-handoff-session.ts";
 import { unwrapBrowserRunQuickAction } from "./domains/itx/cf-capabilities.ts";
 import type {
+  CfBrowserHandoffInput,
+  CfBrowserHandoffResult,
+  CfBrowserHandoffStarted,
+  CfBrowserNavigationResult,
+  CfBrowserOpenInput,
+  CfBrowserPageInfo,
   CfBrowserQuickAction,
   CfBrowserQuickActionOptions,
+  CfBrowserTextInput,
   CfImageTransformInput,
   CfAiRunOptions,
   CfMarkdownConversionArgs,
@@ -2878,14 +2889,92 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
   }
 }
 
-/** Cloudflare Browser Run binding exposed through itx. */
-class CfBrowserCapabilityRpcTarget extends IterateRpcTarget<"CfBrowserCapability"> {
+/** One stateful Browser Run page that can pause for a human and then resume. */
+class CfBrowserSessionRpcTarget extends IterateRpcTarget<"CfBrowserSession"> {
+  readonly #ctx: Pick<CfExecutionContext, "waitUntil">;
+  readonly #session: BrowserHandoffSession;
+
+  constructor(args: {
+    ctx: Pick<CfExecutionContext, "waitUntil">;
+    session: BrowserHandoffSession;
+  }) {
+    super();
+    this.#ctx = args.ctx;
+    this.#session = args.session;
+  }
+
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        'Cloudflare Browser Run binding. Use quickAction(action, options) for simple browser tasks: content, screenshot, pdf, markdown, snapshot, scrape, json, links, crawl. It returns the RESULT directly — const markdown = await itx.browser.quickAction("markdown", { url }) is a string; screenshot/pdf return bytes (Uint8Array) ready to attach to a chat message. Raw fetch(input, init) exposes the binding for CDP/library integrations. First-party docs: Browser Run https://developers.cloudflare.com/browser-run/ ; Quick Actions https://developers.cloudflare.com/browser-run/quick-actions/ ; Workers binding quickAction https://developers.cloudflare.com/changelog/post/2026-05-28-use-browser-run-quick-actions-directly-from-workers/ .',
+        "A scoped Browser Run page for agent automation with explicit human intervention. Call startHandoff({ instructions, timeoutMs? }), send the returned expiring liveViewUrl to the human, then waitForHandoff(handoffId) to resume on the same page. Always close() the session (or use `using`). Failed human completion is returned as success:false with its reason; infrastructure failures throw.",
+      children: {
+        close: "Close the Browser Run session; safe to call more than once.",
+        goto: "Navigate the current page to an absolute http(s) URL.",
+        pageInfo: "Read the current page URL and title.",
+        screenshot: "Capture the current page as PNG bytes.",
+        startHandoff:
+          "Pause automation and create an expiring human Live View (default 5 minutes, maximum 10).",
+        text: "Extract bounded visible body text from the current page.",
+        waitForHandoff:
+          "Wait for the human's explicit Done/Failed result, then continue on the same page.",
+      },
+      parent: "returned by itx.browser.open()",
+    });
+  }
+
+  pageInfo(): Promise<CfBrowserPageInfo> {
+    return this.#session.pageInfo();
+  }
+
+  goto(url: string): Promise<CfBrowserNavigationResult> {
+    return this.#session.goto(url);
+  }
+
+  text(input?: CfBrowserTextInput): Promise<string> {
+    return this.#session.text(input);
+  }
+
+  screenshot(): Promise<Uint8Array> {
+    return this.#session.screenshot();
+  }
+
+  startHandoff(input: CfBrowserHandoffInput): Promise<CfBrowserHandoffStarted> {
+    return this.#session.startHandoff(input);
+  }
+
+  waitForHandoff(handoffId: string): Promise<CfBrowserHandoffResult> {
+    return this.#session.waitForHandoff(handoffId);
+  }
+
+  /** Close the Browser Run session; safe to call more than once. */
+  async close(): Promise<void> {
+    await this.#session.close();
+  }
+
+  [Symbol.dispose](): void {
+    const work = this.#session.close().catch((error: unknown) => {
+      console.error("Browser Run session dispose failed", { error });
+    });
+    this.#ctx.waitUntil(work);
+  }
+}
+
+/** Cloudflare Browser Run binding exposed through itx. */
+class CfBrowserCapabilityRpcTarget extends IterateRpcTarget<"CfBrowserCapability"> {
+  readonly #ctx: Pick<CfExecutionContext, "waitUntil">;
+
+  constructor(args: { ctx: Pick<CfExecutionContext, "waitUntil"> }) {
+    super();
+    this.#ctx = args.ctx;
+  }
+
+  async __describe(): Promise<Description> {
+    return describeNode({
+      instructions:
+        'Cloudflare Browser Run binding. Use open({ url }) for a stateful page that can pause for structured human intervention and resume in the same agent script. Use quickAction(action, options) for one-shot content, screenshot, pdf, markdown, snapshot, scrape, json, links, or crawl tasks. It returns the RESULT directly — const markdown = await itx.browser.quickAction("markdown", { url }) is a string; screenshot/pdf return bytes. Raw fetch(input, init) exposes the binding for CDP/library integrations. First-party docs: Browser Run https://developers.cloudflare.com/browser-run/ ; Human in the Loop https://developers.cloudflare.com/browser-run/features/human-in-the-loop/ .',
       children: {
         fetch: "Raw Browser Run binding fetch for CDP/library use.",
+        open: "Open a stateful page for automation → human handoff → automation.",
         quickAction:
           'Run a Browser Run quick action and get its result directly: quickAction("markdown", { url }) returns the markdown string; quickAction("screenshot", { url, screenshotOptions }) returns image bytes.',
       },
@@ -2896,6 +2985,12 @@ class CfBrowserCapabilityRpcTarget extends IterateRpcTarget<"CfBrowserCapability
   /** Raw Browser Run fetch, primarily for libraries that connect over CDP. */
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
     return env.BROWSER.fetch(input, init);
+  }
+
+  /** Open a stateful page that can pause for a bounded human handoff. */
+  async open(input: CfBrowserOpenInput): Promise<CfBrowserSessionRpcTarget> {
+    const session = await openBrowserHandoffSession(env.BROWSER, input);
+    return new CfBrowserSessionRpcTarget({ ctx: this.#ctx, session });
   }
 
   /**
@@ -2987,13 +3082,20 @@ class CfVideosCapabilityRpcTarget extends IterateRpcTarget<"CfVideosCapability">
 
 /** Grouped first-party Cloudflare platform bindings under integrations.cf. */
 class CloudflareIntegrationsRpcTarget extends IterateRpcTarget<"CloudflareIntegrations"> {
+  readonly #ctx: Pick<CfExecutionContext, "waitUntil">;
+
+  constructor(args: { ctx: Pick<CfExecutionContext, "waitUntil"> }) {
+    super();
+    this.#ctx = args.ctx;
+  }
+
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
         "Cloudflare first-party platform bindings grouped for agents: ai, browser, images, videos. These wrap env.AI, env.BROWSER, env.IMAGES, and env.MEDIA with project-scoped itx discovery. Each child __describe() links to the relevant Cloudflare docs.",
       children: {
         ai: "Workers AI: run(), models(), toMarkdown().",
-        browser: "Browser Run: quickAction() and raw fetch().",
+        browser: "Browser Run: stateful open(), quickAction(), and raw fetch().",
         images: "Images binding: info(), transform().",
         videos: "Media Transformations binding: transform().",
       },
@@ -3006,9 +3108,9 @@ class CloudflareIntegrationsRpcTarget extends IterateRpcTarget<"CloudflareIntegr
     return new AiRpcTarget();
   }
 
-  /** Browser Run: quickAction() and raw fetch(). */
+  /** Browser Run: stateful open(), quickAction(), and raw fetch(). */
   get browser(): CfBrowserCapabilityRpcTarget {
-    return new CfBrowserCapabilityRpcTarget();
+    return new CfBrowserCapabilityRpcTarget({ ctx: this.#ctx });
   }
 
   /** Images binding: info(), transform(). */
@@ -3254,7 +3356,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
    * Transformations. Like `parallel`, these ride the deployment's own
    * Cloudflare account — not a per-project connection. */
   get cf(): CloudflareIntegrationsRpcTarget {
-    return new CloudflareIntegrationsRpcTarget();
+    return new CloudflareIntegrationsRpcTarget({ ctx: this.props.ctx });
   }
 
   /** Dynamic provided-integration dispatch. The only selector is
@@ -5293,7 +5395,8 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   agents: "Agent catalog: get(path), list().",
   ai: "Workers AI: run(model, body), models(), toMarkdown({ name, blob }).",
   auth: "Project web auth: get(policy).fetch(request), or .authenticate(request, credentials) to construct an app RPC session.",
-  browser: "Cloudflare Browser Run: quickAction(action, options), fetch().",
+  browser:
+    "Cloudflare Browser Run: open({ url }) for stateful human handoff, quickAction(action, options), fetch().",
   capabilityHost:
     "This scope's own capability host: provideCapability({ path, ... }) mounts a dynamic capability here (itx.provideCapability is a shortcut), revokeCapability removes one, __describe() lists everything reachable, runScript runs a script in this scope.",
   capabilityHosts:
@@ -5823,9 +5926,9 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     });
   }
 
-  /** Cloudflare Browser Run: quickAction() and raw fetch(). */
+  /** Cloudflare Browser Run: stateful open(), quickAction(), and raw fetch(). */
   get browser(): CfBrowserCapabilityRpcTarget {
-    return new CfBrowserCapabilityRpcTarget();
+    return new CfBrowserCapabilityRpcTarget({ ctx: this.#existingProps.ctx });
   }
 
   // `agent` and `chat` are address-context conveniences for itx scopes under

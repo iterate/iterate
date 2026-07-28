@@ -137,7 +137,7 @@ export interface Project {
   ai: Ai;
   /** Browser auth for project-host web apps. */
   auth: ProjectAuth;
-  /** Cloudflare Browser Run: quickAction() and raw fetch(). */
+  /** Cloudflare Browser Run: stateful open(), quickAction(), and raw fetch(). */
   browser: CfBrowserCapability;
   /** This scope's agent control handle, when its address is under `/agents/`. */
   agent?: Agent;
@@ -361,6 +361,8 @@ export interface CfBrowserCapability {
   __describe(): Promise<Description>;
   /** Raw Browser Run fetch, primarily for libraries that connect over CDP. */
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
+  /** Open a stateful page that can pause for a bounded human handoff. */
+  open(input: CfBrowserOpenInput): Promise<CfBrowserSession>;
   /**
    * Browser Run Quick Actions: content, screenshot, pdf, markdown, snapshot,
    * scrape, json, links, crawl. Returns the action's RESULT directly —
@@ -1343,6 +1345,20 @@ export interface Stream {
   >;
 }
 
+/** One stateful Browser Run page that can pause for a human and then resume. */
+export interface CfBrowserSession {
+  __describe(): Promise<Description>;
+  pageInfo(): Promise<CfBrowserPageInfo>;
+  goto(url: string): Promise<CfBrowserNavigationResult>;
+  text(input?: CfBrowserTextInput): Promise<string>;
+  screenshot(): Promise<Uint8Array>;
+  startHandoff(input: CfBrowserHandoffInput): Promise<CfBrowserHandoffStarted>;
+  waitForHandoff(handoffId: string): Promise<CfBrowserHandoffResult>;
+  /** Close the Browser Run session; safe to call more than once. */
+  close(): Promise<void>;
+  [Symbol.dispose](): void;
+}
+
 /** Disposable handle for one live project egress interception. */
 export interface ProjectEgressIntercept extends Disposable {
   release(): Promise<void>;
@@ -1383,7 +1399,7 @@ export interface CloudflareIntegrations {
   __describe(): Promise<Description>;
   /** Workers AI: run(), models(), toMarkdown(). */
   ai: Ai;
-  /** Browser Run: quickAction() and raw fetch(). */
+  /** Browser Run: stateful open(), quickAction(), and raw fetch(). */
   browser: CfBrowserCapability;
   /** Images binding: info(), transform(). */
   images: CfImagesCapability;
@@ -2201,6 +2217,14 @@ export type ProjectAuthCredentials = { type: "from-server-cookie" };
 
 /** Identity proven by the app-origin session, safe for app-defined authorization. */
 export type ProjectAuthActor = { userId: string };
+
+/** Input for a stateful Browser Run session. The session keeps the page alive
+ * across an agent-to-human handoff until it is explicitly closed/disposed. */
+export type CfBrowserOpenInput = {
+  url: string;
+  /** Record the Browser Run session for later debugging. */
+  recording?: boolean;
+};
 
 /** A Browser Run quick-action name (`browser.quickAction`'s first argument):
  * what to extract from the rendered page — page content, screenshot, PDF,
@@ -3592,6 +3616,47 @@ export type ProjectDeploymentStatus = "ready" | "missing" | "unknown";
 export type LiveStatePatch =
   | { set: unknown }
   | { fields?: Record<string, LiveStatePatch>; drop?: string[] };
+
+/** The current page identity in a stateful Browser Run session. */
+export type CfBrowserPageInfo = {
+  url: string;
+  title: string;
+};
+
+/** Result of navigating the stateful Browser Run session. */
+export type CfBrowserNavigationResult = CfBrowserPageInfo & {
+  status: number | null;
+};
+
+/** Bounds extraction from the current Browser Run page. */
+export type CfBrowserTextInput = {
+  /** Maximum returned characters. Defaults to 20,000; maximum 100,000. */
+  maxCharacters?: number;
+};
+
+/** Input for pausing Browser Run automation for a human. */
+export type CfBrowserHandoffInput = {
+  /** The concrete task the human should complete in the Live View. */
+  instructions: string;
+  /** Bounded wait for the human. Defaults to five minutes; maximum ten minutes. */
+  timeoutMs?: number;
+};
+
+/** An active human handoff. `liveViewUrl` is an expiring, sensitive URL. */
+export type CfBrowserHandoffStarted = {
+  handoffId: string;
+  liveViewUrl: string;
+  expiresAt: number;
+};
+
+/** The human's explicit completion result plus the page automation resumes on. */
+export type CfBrowserHandoffResult = {
+  handoffId: string;
+  targetId: string;
+  success: boolean;
+  reason?: string;
+  page: CfBrowserPageInfo;
+};
 
 /**
  * A durable processor input. Wake processors never receive ephemeral rows, so

@@ -38,7 +38,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "Project",
     kind: "interface",
     sourceText:
-      "/**\n * An itx: the project capability surface, scoped to one path (the project\n * root \"/\", an agent path, ...). Built-ins (streams, repo, agents, files,\n * integrations, sandboxes, scheduler, docs, ...) are project-global and\n * identical at every scope; what differs by scope is the capability host\n * chain (which mounts resolve) and the agent-scope extras (`agent`, `chat`).\n * Unknown dotted members dispatch dynamically against the scope's capability\n * host, chaining up to the project root.\n */\nexport interface Project {\n  /** The project this itx is scoped into. */\n  projectId: string;\n  /**\n   * Register (for a prospective slug) and append the complete root birth\n   * batch. By default this resolves once the bootstrap saga has committed\n   * `project/ready` — the right shape for scripts that use the project\n   * immediately. `waitUntilReady: false` resolves as soon as the project\n   * EXISTS (identity registered, directory primed, birth events appended):\n   * the caller renders bootstrap progress itself, so nobody is left waiting.\n   * The durable-delivery subscriptions committed in the birth batch are what\n   * guarantee the saga runs; create also nudges both root processors AFTER\n   * this response, and a failed nudge is telemetry, not a create failure —\n   * the checklist's stall detector covers the rest. Either lane returns this\n   * same handle, and addressing an unknown slug is side-effect free.\n   */\n  create(\n    args: { organizationSlug?: string; projectId?: string },\n    options?: { waitUntilReady?: boolean },\n  ): Promise<Project>;\n  /**\n   * Canonical identity from the project directory: id, slug (the auth\n   * worker's normalized form — what URLs and ingress hostnames use),\n   * organization, and display name. A directory read only — no project DO\n   * dial — so it is safe pre-birth and cheap to pipeline through\n   * `projects.get(slug).create()`.\n   */\n  identity(): Promise<ProjectIdentity>;\n  /**\n   * Resolve once the bootstrap saga has committed `project/ready`. Replays\n   * stream history first, so an already-ready project resolves immediately,\n   * and dialing the processor here heals a lost birth wake rather than just\n   * observing. `create()` waits here by default; this remains useful after a\n   * non-blocking create or when a caller receives an existing handle while a\n   * bootstrap is in flight.\n   */\n  waitUntilReady(args?: { timeoutMs?: number }): Promise<void>;\n  /**\n   * Identity + full capability inventory: `projectId`/`name`, every reachable\n   * capability (built-ins + dynamic mounts), the children map, and the\n   * `Project` declaration in `types` (the full surface is one\n   * `itx.docs.get({ name })` per declaration away).\n   */\n  __describe(): Promise<ProjectDescription>;\n  /** Formatted dashboard/debug info for this itx scope, suitable for Slack messages. */\n  debug(): Promise<string>;\n  /** Restart the project's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  /** The project stream processor (snapshot/state; `state.ready` flips when bootstrap lands). */\n  processor: StreamProcessorRpc<ProjectProcessorState>;\n  /** The project's live state — reduced processor state plus non-folded slices. See {@link LiveStateRpc}. */\n  liveState: LiveStateRpc<ProjectLiveState>;\n  /** Demo capability for the live-state playground — `ticker` (stateless) + `increment()` (a durable server-side counter). */\n  liveDemo: LiveDemo;\n  /** Small durable project key-value store: get/set/delete/list. */\n  kv: Kv;\n  /** Workers AI: run(model, body), models(). */\n  ai: Ai;\n  /** Browser auth for project-host web apps. */\n  auth: ProjectAuth;\n  /** Cloudflare Browser Run: quickAction() and raw fetch(). */\n  browser: CfBrowserCapability;\n  /** This scope's agent control handle, when its address is under `/agents/`. */\n  agent?: Agent;\n  /** THIS agent's web-chat door — present only on an agent-scoped itx. */\n  chat?: AgentChat;\n  /**\n   * This scope's own capability host: the durable capability table behind\n   * this itx (`provideCapability`, `revokeCapability`, `runScript`,\n   * `__describe`). Dynamic dotted calls (`itx.foo.bar(...)`) fall back to it.\n   */\n  capabilityHost: CapabilityHost;\n  /**\n   * Capability hosts of OTHER scopes, by path. `capabilityHosts.get(\"/\")` is\n   * the project root — providing there makes a capability visible to every\n   * scope in the project (child scopes inherit ancestors' mounts).\n   */\n  capabilityHosts: CapabilityHostCollection;\n  /** Shortcut for `capabilityHost.provideCapability` (mounts on THIS scope). */\n  provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;\n  /** Shortcut for `capabilityHost.revokeCapability`. */\n  revokeCapability(input: RevokeCapabilityInput): Promise<void>;\n  /** Project stream catalog: get(path), list(). */\n  streams: ProjectStreamCollection;\n  /** Agent catalog: get(path), list(). */\n  agents: AgentCollection;\n  /** Project-attributed outbound fetch (+ intercept). */\n  egress: ProjectEgress;\n  /** Project email: send(...) and the connection-scoped inbound address. */\n  email: EmailCapability;\n  /** The docs door: `search({ q })` finds e2e-tested example scripts, type\n   * declarations, and this scope's mounted capabilities; `get({ name })`\n   * fetches one. Pass search MANY related words — matching is dumb word\n   * overlap. */\n  docs: Docs;\n  /** Project file storage (R2-backed): `files.get(path)` → put/bytes/url/delete. */\n  files: Files;\n  /** The integrations collection: built-in connection families selected with\n   * `.get()` (first connected) or `.get(\"slug\")` (exact), provided\n   * integrations through the capability table, management verbs, `list()`. */\n  integrations: ProjectIntegrations;\n  /** Ad-hoc MCP clients: connect(url); `itx.mcp.exa` is the built-in Exa web search. */\n  mcp: McpClientCollection;\n  /** Ad-hoc OpenAPI clients: connect(spec). */\n  openapi: OpenApiCollection;\n  /** Parallel API, preconfigured with iterate's platform API key. */\n  parallel: OpenApiRpc;\n  /** Repo catalog by path. */\n  repos: ProjectRepoCollection;\n  /** Enrolled phone installations and their durable notification journals. */\n  devices: DeviceCollection;\n  /** The project's sandboxes — explicitly created, sized Linux containers\n   * (`itx.sandboxes.get(path).create(input)` / `list`) — see {@link SandboxCollection}. */\n  sandboxes: SandboxCollection;\n  /** The default project Scheduler — shorthand for `schedulers.get(\"/scheduler/primary\")`. */\n  scheduler: Scheduler;\n  /** Path-addressed Schedulers; the default at `/scheduler/primary` covers almost every use. */\n  schedulers: SchedulerCollection;\n  /** Secret catalog by path. */\n  secrets: SecretCollection;\n  /** The project's config repo at /repos/config — shorthand for `repos.get(\"/repos/config\")`. */\n  repo: Repo;\n  /** Dynamic worker refs: get(ref). */\n  workers: DynamicWorkerCollection;\n  /** Path-addressed, event-sourced, mount-routed workspaces (`itx.workspaces.get(path)`). */\n  workspaces: WorkspaceCollection;\n  /**\n   * Platform dispatch point: streams deliver committed event batches here\n   * for the project worker. Scripts should not call this — open an event\n   * connection or configure a subscription instead.\n   */\n  processEventBatch(batch: StreamDeliveryBatch): Promise<void>;\n  /**\n   * The default repo-backed project worker — a convenience alias; the general\n   * API is `workers.get(ref)`. Flattened: the seeded worker implements\n   * invokeCapability in userspace, so a dotted call onto any getter the\n   * worker adds (`itx.worker.<getter>.<method>(...)`) is one RPC end to end.\n   */\n  worker: DynamicWorkerCapability<ProjectWorker>;\n}",
+      "/**\n * An itx: the project capability surface, scoped to one path (the project\n * root \"/\", an agent path, ...). Built-ins (streams, repo, agents, files,\n * integrations, sandboxes, scheduler, docs, ...) are project-global and\n * identical at every scope; what differs by scope is the capability host\n * chain (which mounts resolve) and the agent-scope extras (`agent`, `chat`).\n * Unknown dotted members dispatch dynamically against the scope's capability\n * host, chaining up to the project root.\n */\nexport interface Project {\n  /** The project this itx is scoped into. */\n  projectId: string;\n  /**\n   * Register (for a prospective slug) and append the complete root birth\n   * batch. By default this resolves once the bootstrap saga has committed\n   * `project/ready` — the right shape for scripts that use the project\n   * immediately. `waitUntilReady: false` resolves as soon as the project\n   * EXISTS (identity registered, directory primed, birth events appended):\n   * the caller renders bootstrap progress itself, so nobody is left waiting.\n   * The durable-delivery subscriptions committed in the birth batch are what\n   * guarantee the saga runs; create also nudges both root processors AFTER\n   * this response, and a failed nudge is telemetry, not a create failure —\n   * the checklist's stall detector covers the rest. Either lane returns this\n   * same handle, and addressing an unknown slug is side-effect free.\n   */\n  create(\n    args: { organizationSlug?: string; projectId?: string },\n    options?: { waitUntilReady?: boolean },\n  ): Promise<Project>;\n  /**\n   * Canonical identity from the project directory: id, slug (the auth\n   * worker's normalized form — what URLs and ingress hostnames use),\n   * organization, and display name. A directory read only — no project DO\n   * dial — so it is safe pre-birth and cheap to pipeline through\n   * `projects.get(slug).create()`.\n   */\n  identity(): Promise<ProjectIdentity>;\n  /**\n   * Resolve once the bootstrap saga has committed `project/ready`. Replays\n   * stream history first, so an already-ready project resolves immediately,\n   * and dialing the processor here heals a lost birth wake rather than just\n   * observing. `create()` waits here by default; this remains useful after a\n   * non-blocking create or when a caller receives an existing handle while a\n   * bootstrap is in flight.\n   */\n  waitUntilReady(args?: { timeoutMs?: number }): Promise<void>;\n  /**\n   * Identity + full capability inventory: `projectId`/`name`, every reachable\n   * capability (built-ins + dynamic mounts), the children map, and the\n   * `Project` declaration in `types` (the full surface is one\n   * `itx.docs.get({ name })` per declaration away).\n   */\n  __describe(): Promise<ProjectDescription>;\n  /** Formatted dashboard/debug info for this itx scope, suitable for Slack messages. */\n  debug(): Promise<string>;\n  /** Restart the project's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  /** The project stream processor (snapshot/state; `state.ready` flips when bootstrap lands). */\n  processor: StreamProcessorRpc<ProjectProcessorState>;\n  /** The project's live state — reduced processor state plus non-folded slices. See {@link LiveStateRpc}. */\n  liveState: LiveStateRpc<ProjectLiveState>;\n  /** Demo capability for the live-state playground — `ticker` (stateless) + `increment()` (a durable server-side counter). */\n  liveDemo: LiveDemo;\n  /** Small durable project key-value store: get/set/delete/list. */\n  kv: Kv;\n  /** Workers AI: run(model, body), models(). */\n  ai: Ai;\n  /** Browser auth for project-host web apps. */\n  auth: ProjectAuth;\n  /** Cloudflare Browser Run: stateful open(), quickAction(), and raw fetch(). */\n  browser: CfBrowserCapability;\n  /** This scope's agent control handle, when its address is under `/agents/`. */\n  agent?: Agent;\n  /** THIS agent's web-chat door — present only on an agent-scoped itx. */\n  chat?: AgentChat;\n  /**\n   * This scope's own capability host: the durable capability table behind\n   * this itx (`provideCapability`, `revokeCapability`, `runScript`,\n   * `__describe`). Dynamic dotted calls (`itx.foo.bar(...)`) fall back to it.\n   */\n  capabilityHost: CapabilityHost;\n  /**\n   * Capability hosts of OTHER scopes, by path. `capabilityHosts.get(\"/\")` is\n   * the project root — providing there makes a capability visible to every\n   * scope in the project (child scopes inherit ancestors' mounts).\n   */\n  capabilityHosts: CapabilityHostCollection;\n  /** Shortcut for `capabilityHost.provideCapability` (mounts on THIS scope). */\n  provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;\n  /** Shortcut for `capabilityHost.revokeCapability`. */\n  revokeCapability(input: RevokeCapabilityInput): Promise<void>;\n  /** Project stream catalog: get(path), list(). */\n  streams: ProjectStreamCollection;\n  /** Agent catalog: get(path), list(). */\n  agents: AgentCollection;\n  /** Project-attributed outbound fetch (+ intercept). */\n  egress: ProjectEgress;\n  /** Project email: send(...) and the connection-scoped inbound address. */\n  email: EmailCapability;\n  /** The docs door: `search({ q })` finds e2e-tested example scripts, type\n   * declarations, and this scope's mounted capabilities; `get({ name })`\n   * fetches one. Pass search MANY related words — matching is dumb word\n   * overlap. */\n  docs: Docs;\n  /** Project file storage (R2-backed): `files.get(path)` → put/bytes/url/delete. */\n  files: Files;\n  /** The integrations collection: built-in connection families selected with\n   * `.get()` (first connected) or `.get(\"slug\")` (exact), provided\n   * integrations through the capability table, management verbs, `list()`. */\n  integrations: ProjectIntegrations;\n  /** Ad-hoc MCP clients: connect(url); `itx.mcp.exa` is the built-in Exa web search. */\n  mcp: McpClientCollection;\n  /** Ad-hoc OpenAPI clients: connect(spec). */\n  openapi: OpenApiCollection;\n  /** Parallel API, preconfigured with iterate's platform API key. */\n  parallel: OpenApiRpc;\n  /** Repo catalog by path. */\n  repos: ProjectRepoCollection;\n  /** Enrolled phone installations and their durable notification journals. */\n  devices: DeviceCollection;\n  /** The project's sandboxes — explicitly created, sized Linux containers\n   * (`itx.sandboxes.get(path).create(input)` / `list`) — see {@link SandboxCollection}. */\n  sandboxes: SandboxCollection;\n  /** The default project Scheduler — shorthand for `schedulers.get(\"/scheduler/primary\")`. */\n  scheduler: Scheduler;\n  /** Path-addressed Schedulers; the default at `/scheduler/primary` covers almost every use. */\n  schedulers: SchedulerCollection;\n  /** Secret catalog by path. */\n  secrets: SecretCollection;\n  /** The project's config repo at /repos/config — shorthand for `repos.get(\"/repos/config\")`. */\n  repo: Repo;\n  /** Dynamic worker refs: get(ref). */\n  workers: DynamicWorkerCollection;\n  /** Path-addressed, event-sourced, mount-routed workspaces (`itx.workspaces.get(path)`). */\n  workspaces: WorkspaceCollection;\n  /**\n   * Platform dispatch point: streams deliver committed event batches here\n   * for the project worker. Scripts should not call this — open an event\n   * connection or configure a subscription instead.\n   */\n  processEventBatch(batch: StreamDeliveryBatch): Promise<void>;\n  /**\n   * The default repo-backed project worker — a convenience alias; the general\n   * API is `workers.get(ref)`. Flattened: the seeded worker implements\n   * invokeCapability in userspace, so a dotted call onto any getter the\n   * worker adds (`itx.worker.<getter>.<method>(...)`) is one RPC end to end.\n   */\n  worker: DynamicWorkerCapability<ProjectWorker>;\n}",
     summary:
       'An itx: the project capability surface, scoped to one path (the project root "/", an agent path, ...).',
     memberSummaries: {
@@ -59,7 +59,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       kv: "Small durable project key-value store: get/set/delete/list.",
       ai: "Workers AI: run(model, body), models().",
       auth: "Browser auth for project-host web apps.",
-      browser: "Cloudflare Browser Run: quickAction() and raw fetch().",
+      browser: "Cloudflare Browser Run: stateful open(), quickAction(), and raw fetch().",
       agent: "This scope's agent control handle, when its address is under `/agents/`.",
       chat: "THIS agent's web-chat door — present only on an agent-scoped itx.",
       capabilityHost:
@@ -257,14 +257,21 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "CfBrowserCapability",
     kind: "interface",
     sourceText:
-      "/** Cloudflare Browser Run binding exposed through itx. */\nexport interface CfBrowserCapability {\n  __describe(): Promise<Description>;\n  /** Raw Browser Run fetch, primarily for libraries that connect over CDP. */\n  fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;\n  /**\n   * Browser Run Quick Actions: content, screenshot, pdf, markdown, snapshot,\n   * scrape, json, links, crawl. Returns the action's RESULT directly —\n   * `quickAction(\"markdown\", { url })` is the markdown string, structured\n   * actions (links, json, scrape, …) are their parsed value, and binary\n   * actions (screenshot, pdf) are bytes — instead of the binding's raw\n   * Response, whose `{ success, result }` JSON envelope every caller was\n   * unwrapping by hand (and the agent prompt's one-call recipe promised not\n   * to need). A failed action throws with the envelope's error.\n   */\n  quickAction(\n    action: CfBrowserQuickAction,\n    options: CfBrowserQuickActionOptions,\n  ): Promise<string | Uint8Array | unknown>;\n}",
+      "/** Cloudflare Browser Run binding exposed through itx. */\nexport interface CfBrowserCapability {\n  __describe(): Promise<Description>;\n  /** Raw Browser Run fetch, primarily for libraries that connect over CDP. */\n  fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;\n  /** Open a stateful page that can pause for a bounded human handoff. */\n  open(input: CfBrowserOpenInput): Promise<CfBrowserSession>;\n  /**\n   * Browser Run Quick Actions: content, screenshot, pdf, markdown, snapshot,\n   * scrape, json, links, crawl. Returns the action's RESULT directly —\n   * `quickAction(\"markdown\", { url })` is the markdown string, structured\n   * actions (links, json, scrape, …) are their parsed value, and binary\n   * actions (screenshot, pdf) are bytes — instead of the binding's raw\n   * Response, whose `{ success, result }` JSON envelope every caller was\n   * unwrapping by hand (and the agent prompt's one-call recipe promised not\n   * to need). A failed action throws with the envelope's error.\n   */\n  quickAction(\n    action: CfBrowserQuickAction,\n    options: CfBrowserQuickActionOptions,\n  ): Promise<string | Uint8Array | unknown>;\n}",
     summary: "Cloudflare Browser Run binding exposed through itx.",
     memberSummaries: {
       fetch: "Raw Browser Run fetch, primarily for libraries that connect over CDP.",
+      open: "Open a stateful page that can pause for a bounded human handoff.",
       quickAction:
         "Browser Run Quick Actions: content, screenshot, pdf, markdown, snapshot, scrape, json, links, crawl.",
     },
-    referencedTypeNames: ["Description", "CfBrowserQuickAction", "CfBrowserQuickActionOptions"],
+    referencedTypeNames: [
+      "Description",
+      "CfBrowserOpenInput",
+      "CfBrowserSession",
+      "CfBrowserQuickAction",
+      "CfBrowserQuickActionOptions",
+    ],
   },
   {
     name: "Agent",
@@ -772,6 +779,25 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     ],
   },
   {
+    name: "CfBrowserSession",
+    kind: "interface",
+    sourceText:
+      "/** One stateful Browser Run page that can pause for a human and then resume. */\nexport interface CfBrowserSession {\n  __describe(): Promise<Description>;\n  pageInfo(): Promise<CfBrowserPageInfo>;\n  goto(url: string): Promise<CfBrowserNavigationResult>;\n  text(input?: CfBrowserTextInput): Promise<string>;\n  screenshot(): Promise<Uint8Array>;\n  startHandoff(input: CfBrowserHandoffInput): Promise<CfBrowserHandoffStarted>;\n  waitForHandoff(handoffId: string): Promise<CfBrowserHandoffResult>;\n  /** Close the Browser Run session; safe to call more than once. */\n  close(): Promise<void>;\n  [Symbol.dispose](): void;\n}",
+    summary: "One stateful Browser Run page that can pause for a human and then resume.",
+    memberSummaries: {
+      close: "Close the Browser Run session; safe to call more than once.",
+    },
+    referencedTypeNames: [
+      "Description",
+      "CfBrowserPageInfo",
+      "CfBrowserNavigationResult",
+      "CfBrowserTextInput",
+      "CfBrowserHandoffInput",
+      "CfBrowserHandoffStarted",
+      "CfBrowserHandoffResult",
+    ],
+  },
+  {
     name: "ProjectEgressIntercept",
     kind: "interface",
     sourceText:
@@ -811,11 +837,11 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "CloudflareIntegrations",
     kind: "interface",
     sourceText:
-      "/** Grouped first-party Cloudflare platform bindings under integrations.cf. */\nexport interface CloudflareIntegrations {\n  __describe(): Promise<Description>;\n  /** Workers AI: run(), models(), toMarkdown(). */\n  ai: Ai;\n  /** Browser Run: quickAction() and raw fetch(). */\n  browser: CfBrowserCapability;\n  /** Images binding: info(), transform(). */\n  images: CfImagesCapability;\n  /** Media Transformations binding: transform(). */\n  videos: CfVideosCapability;\n}",
+      "/** Grouped first-party Cloudflare platform bindings under integrations.cf. */\nexport interface CloudflareIntegrations {\n  __describe(): Promise<Description>;\n  /** Workers AI: run(), models(), toMarkdown(). */\n  ai: Ai;\n  /** Browser Run: stateful open(), quickAction(), and raw fetch(). */\n  browser: CfBrowserCapability;\n  /** Images binding: info(), transform(). */\n  images: CfImagesCapability;\n  /** Media Transformations binding: transform(). */\n  videos: CfVideosCapability;\n}",
     summary: "Grouped first-party Cloudflare platform bindings under integrations.cf.",
     memberSummaries: {
       ai: "Workers AI: run(), models(), toMarkdown().",
-      browser: "Browser Run: quickAction() and raw fetch().",
+      browser: "Browser Run: stateful open(), quickAction(), and raw fetch().",
       images: "Images binding: info(), transform().",
       videos: "Media Transformations binding: transform().",
     },
@@ -1304,6 +1330,15 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     sourceText:
       "/** Identity proven by the app-origin session, safe for app-defined authorization. */\nexport type ProjectAuthActor = { userId: string };",
     summary: "Identity proven by the app-origin session, safe for app-defined authorization.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "CfBrowserOpenInput",
+    kind: "typeAlias",
+    sourceText:
+      "/** Input for a stateful Browser Run session. The session keeps the page alive\n * across an agent-to-human handoff until it is explicitly closed/disposed. */\nexport type CfBrowserOpenInput = {\n  url: string;\n  /** Record the Browser Run session for later debugging. */\n  recording?: boolean;\n};",
+    summary: "Input for a stateful Browser Run session.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -1955,6 +1990,60 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     summary: "A structural patch turning a previous JSON value into the next one.",
     memberSummaries: {},
     referencedTypeNames: [],
+  },
+  {
+    name: "CfBrowserPageInfo",
+    kind: "typeAlias",
+    sourceText:
+      "/** The current page identity in a stateful Browser Run session. */\nexport type CfBrowserPageInfo = {\n  url: string;\n  title: string;\n};",
+    summary: "The current page identity in a stateful Browser Run session.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "CfBrowserNavigationResult",
+    kind: "typeAlias",
+    sourceText:
+      "/** Result of navigating the stateful Browser Run session. */\nexport type CfBrowserNavigationResult = CfBrowserPageInfo & {\n  status: number | null;\n};",
+    summary: "Result of navigating the stateful Browser Run session.",
+    memberSummaries: {},
+    referencedTypeNames: ["CfBrowserPageInfo"],
+  },
+  {
+    name: "CfBrowserTextInput",
+    kind: "typeAlias",
+    sourceText:
+      "/** Bounds extraction from the current Browser Run page. */\nexport type CfBrowserTextInput = {\n  /** Maximum returned characters. Defaults to 20,000; maximum 100,000. */\n  maxCharacters?: number;\n};",
+    summary: "Bounds extraction from the current Browser Run page.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "CfBrowserHandoffInput",
+    kind: "typeAlias",
+    sourceText:
+      "/** Input for pausing Browser Run automation for a human. */\nexport type CfBrowserHandoffInput = {\n  /** The concrete task the human should complete in the Live View. */\n  instructions: string;\n  /** Bounded wait for the human. Defaults to five minutes; maximum ten minutes. */\n  timeoutMs?: number;\n};",
+    summary: "Input for pausing Browser Run automation for a human.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "CfBrowserHandoffStarted",
+    kind: "typeAlias",
+    sourceText:
+      "/** An active human handoff. `liveViewUrl` is an expiring, sensitive URL. */\nexport type CfBrowserHandoffStarted = {\n  handoffId: string;\n  liveViewUrl: string;\n  expiresAt: number;\n};",
+    summary: "An active human handoff.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "CfBrowserHandoffResult",
+    kind: "typeAlias",
+    sourceText:
+      "/** The human's explicit completion result plus the page automation resumes on. */\nexport type CfBrowserHandoffResult = {\n  handoffId: string;\n  targetId: string;\n  success: boolean;\n  reason?: string;\n  page: CfBrowserPageInfo;\n};",
+    summary: "The human's explicit completion result plus the page automation resumes on.",
+    memberSummaries: {},
+    referencedTypeNames: ["CfBrowserPageInfo"],
   },
   {
     name: "TypedConsumedEventInput",
