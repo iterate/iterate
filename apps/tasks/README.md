@@ -62,41 +62,27 @@ like any other task edit.
 
 ## Using it
 
-Add a `tasks` app branch to the project's config `worker.ts` that gates on
-project membership and reverse-proxies this vessel:
+Install `@iterate-com/tasks`, configure its project-side connector, and route
+the `tasks` app branch to it:
 
 ```ts
-// tasks app — reverse-proxy the vessel at tasks.iterate.workers.dev
-export class TasksApp extends IterateWorkerEntrypoint {
-  async fetch(req: Request): Promise<Response> {
-    using itx = await this.env.ITX.get();
+import { TasksApp } from "@iterate-com/tasks";
 
-    // (a) project-member auth gate — return its response when non-null
-    const auth = await itx.auth.get({ policy: "project-member" }).fetch(req);
-    if (auth) return auth;
+const tasksApp = TasksApp.create(this.env, {
+  auth: { policy: "project-member" },
+  proxy: {
+    origin: "https://tasks.iterate.workers.dev",
+    originOverrideKvKey: "tasks-app-origin",
+  },
+});
 
-    // (b) transparent proxy: pages, assets, and WebSocket upgrades.
-    // The kv knob points the proxy at a dev tunnel instead of the deployed
-    // vessel (see "Developing against a live project" in
-    // apps/tasks/README.md); absent knob means production behavior.
-    const description = await itx.__describe();
-    const url = new URL(req.url);
-    url.protocol = "https:";
-    url.host = (await itx.kv.get("tasks-app-origin")) ?? "tasks.iterate.workers.dev";
-    const headers = new Headers(req.headers);
-    headers.set("x-itx-project-id", description.projectId);
-    return fetch(new Request(url, {
-      method: req.method,
-      headers,
-      body: req.body,
-      redirect: "manual",
-    }));
-  }
+if (app === "tasks") {
+  return tasksApp.fetch(req);
 }
 ```
 
-Wire that class into the project's app router the same way as the seeded
-`HelloApp` / `InternalApp` examples. Then open
+The connector applies the member gate and transparently proxies HTTP,
+redirects, request bodies, and WebSocket upgrades. Then open
 `https://tasks--<slug>.iterate.app/` — sign-in is the platform's project-
 member gate; the board UI is this app at `/`.
 
@@ -151,7 +137,7 @@ pnpm dev
 
 # 2. point the project at your tunnel (from apps/os):
 doppler run --config prd -- pnpm cli itx run --context <project-id> \
-  -e 'await itx.kv.set("tasks-app-origin", "me-tasks.tunnels.iterate.com")'
+  -e 'await itx.kv.set("tasks-app-origin", "https://me-tasks.tunnels.iterate.com")'
 ```
 
 Then open `https://tasks--<slug>.iterate.app` in a normal browser. Flip back

@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { LiveStateRpcTarget } from "iterate/sdk/capnweb";
 import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
-import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
+import type { StreamProcessorWakeRequest, StreamProcessorWakeResponse } from "iterate/processors";
 import type { StreamEvent } from "iterate/processors";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { parseConfig } from "../../config.ts";
@@ -39,6 +39,7 @@ import { readProjectById } from "../../project-directory.ts";
 import { EmailProcessor } from "../email/email-processor-implementation.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
 import { NotificationProcessor } from "../notifications/notification-processor-implementation.ts";
+import { isRetryableDurableObjectAvailabilityError } from "../streams/stream-unavailable.ts";
 import type { ProjectEgressIntercept, ProjectEgressInterceptor } from "./egress.ts";
 import {
   buildApprovalMessage,
@@ -114,7 +115,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
   // overrides `reconcile`, so no post-eviction pass would have work to settle.
   // Their consequential side effects all run under `blockProcessorWhile`,
   // which holds the frame — a death mid-work leaves the cursor behind and the
-  // subscription spine redelivers. Their `runInBackground` work (the Slack 👀
+  // source stream calls their batch callback again. Their `runInBackground` work (the Slack 👀
   // ack) is best-effort telemetry-grade
   // today and stays that way (see the registry module doc's recovery rule).
   readonly #projectProcessor = this.#registry.register(
@@ -235,8 +236,8 @@ export class ProjectDurableObject extends DurableObject<Env> {
   );
   readonly #emailReads = this.#registry.reads(this.#emailProcessor);
 
-  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
-    return this.#registry.wakeStreamSubscriber(args);
+  wakeStreamProcessor(args: StreamProcessorWakeRequest): Promise<StreamProcessorWakeResponse> {
+    return this.#registry.wakeStreamProcessor(args);
   }
 
   /** The registry's shared DO alarm (runner keepalives) — see stream-processor-registry.ts. */
@@ -316,7 +317,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
 
   /**
    * Update the live projections from one committed delivery before that
-   * delivery is acknowledged. Both reducers are idempotent, so spine retries
+   * batch call returns. Both reducers are idempotent, so repeated calls
    * are harmless; a storage/RPC failure rejects the batch instead of silently
    * leaving live state stale.
    */
@@ -516,6 +517,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     let cursor = input.approvalRequestEventOffset;
 
     // Live phase: chunked one-shot waits until the wall-clock deadline.
+    let availabilityBackoffMs = 200;
     while (Date.now() < input.deadline) {
       let event;
       try {
@@ -526,15 +528,30 @@ export class ProjectDurableObject extends DurableObject<Env> {
         });
       } catch (error) {
         // waitForEvent is a one-shot, not a durable waiter: chunk timeouts
-        // (and transient stream restarts) just re-arm from the same cursor.
+        // just re-arm from the same cursor.
         if (
           error instanceof Error &&
           error.message.includes("Timed out waiting for stream event")
         ) {
           continue;
         }
+        // A hold spans minutes of human latency, so the stream DO behind the
+        // wait WILL sometimes restart mid-chunk (connection recycle, eviction,
+        // deploy reset, explicit kill). By the stream-unavailable contract
+        // those rejections are retryable — the incarnation reboots on the next
+        // call and durable resolutions replay from the cursor — so re-arm
+        // instead of failing the parked fetch (which killed whole script runs:
+        // tasks/script-runs-survive-parked-egress-holds.md). Backoff keeps a
+        // hard-down stream from hot-looping; the deadline still bounds the
+        // hold, and expiry remains the safe direction.
+        if (isRetryableDurableObjectAvailabilityError(error)) {
+          await this.#sleep(Math.min(availabilityBackoffMs, input.deadline - Date.now()));
+          availabilityBackoffMs = Math.min(availabilityBackoffMs * 2, 5_000);
+          continue;
+        }
         throw error;
       }
+      availabilityBackoffMs = 200;
       cursor = event.offset;
       const verdict = await this.#judgeResolution(event, input);
       if (verdict !== null) return verdict;

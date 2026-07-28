@@ -1,5 +1,5 @@
-// The stream-processor RUNNER: the delivery driver that owns everything a
-// processor author should not — cursors, checkpoint cadence, retry, recovery —
+// The stream-processor runner owns everything a processor author should not —
+// cursors, checkpoint cadence, retry, and recovery —
 // so the processor itself can stay pure-ish hooks (reduce / processEvent —
 // fold-derived side effects ride processEvent under `delivery.caughtUp`, not
 // a separate hook). Design:
@@ -15,15 +15,16 @@
 // anything durable arrives through the optional `durability` adapter, and
 // anything incarnation-shaped through the optional `keepAlive` hook.
 //
-// Delivery: `openDelivery()` answers the wake handshake — a resume cursor plus
-// a frame-attempt `sink`. A host transport may wrap that sink (production
-// wake RPC does so to return one-way and report settlement independently),
-// but transport batching stays entirely inside it.
+// Event batches: `openEventBatchCallback()` returns the committed processing
+// offset plus the `processEventBatch` callback a stream can retain and call.
+// Hosted wake wraps its promise with an independent one-way settlement
+// capability; a browser's local event database calls the same runtime-neutral
+// API directly.
 // The runner reduces/processes ONE EVENT AT A TIME, so batch division is
 // invisible to processor semantics (the harness pins this: one batch,
 // singletons, or random partitions of the same journal must produce identical
 // outcomes). `blockProcessorWhile` is therefore a strict per-event barrier,
-// never a per-frame one — and registrations within one event run in strict
+// never a per-batch one — and registrations within one event run in strict
 // FIFO order (each blocker starts after the previous settles), so authors
 // order fold-derived work after per-event work simply by registering it
 // later.
@@ -31,15 +32,12 @@
 // The load-bearing orderings in here are transplanted from the legacy
 // `StreamProcessor.#ingest` (deleted with the host) — the most
 // incident-scarred loop in the system — and each is marked at its new home:
-//   - failed frame settles already-started blockers, cursor untouched
+//   - failed batch settles already-started blockers, cursor untouched
 //   - persist BEFORE advancing the in-memory cursor
 //   - malformed consumed events advance the cursor, diagnostics append AFTER
 //     the commit, in the background
 //
-// This file is the Phase-1 `SubscriberRunner`. The Phase-2 `InlineRunner`
-// (the Stream DO's own synchronous commit-path driver, where a pre-commit
-// gate could reject appends) shares the types below but is gated on a
-// commit-path benchmark.
+// This runner owns processor reduction, processing, progress, and callback batching.
 
 import type { z } from "zod";
 import type { ProcessorStream } from "./stream-handle.ts";
@@ -51,7 +49,7 @@ import {
   StreamProcessor,
   type MaybePromise,
   type StreamProcessorContract,
-  type StreamProcessorDriver,
+  type StreamProcessorRunnerHooks,
 } from "./stream-processor.ts";
 
 /**
@@ -99,13 +97,15 @@ export type ProcessingProgress = {
  * reduction only, no processing cursor — same structure, same reduce-only refold.
  */
 export type ProcessorProgress<State> = {
+  /** Random identity of the stream lifetime whose offsets and fold this record describes. */
+  streamId: string;
   reduction: ReductionProgress<State>;
   processing: ProcessingProgress;
 };
 
 /**
  * Durable progress store, CAS-fenced by `cursorRevision`. The runner reads
- * once at open, then commits once per delivered frame; `commit` rejects
+ * once at open, then commits once per delivered batch; `commit` rejects
  * (throws) if `expectedCursorRevision` no longer matches the persisted
  * revision — the fence that stops a stale incarnation (or a continuation
  * outliving a cursor rewind) from clobbering the rewound cursor.
@@ -117,7 +117,16 @@ export type ProcessorProgressStore<State> = {
   read(): MaybePromise<ProcessorProgress<State> | undefined>;
   commit(
     progress: ProcessorProgress<State>,
-    opts: { expectedCursorRevision: number },
+    opts: { expectedCursorRevision: number; expectedStreamId: string | undefined },
+  ): MaybePromise<void>;
+  /**
+   * Atomically replace progress after the stream at this path is recreated.
+   * Backends with related durable projections must reset those in the same
+   * transaction; omitting this method makes recreation fail closed.
+   */
+  replaceForStream?(
+    progress: ProcessorProgress<State>,
+    opts: { expectedCursorRevision: number; expectedStreamId: string },
   ): MaybePromise<void>;
 };
 
@@ -125,26 +134,23 @@ export type ProcessorProgressStore<State> = {
  * Optional recovery capability. Present only for durable processors that own
  * background obligations (`runInBackground` work whose OUTCOME matters).
  *
- * - `keepAliveWhile` parks a durable alarm ahead of in-flight work, so an
+ * - `keepAliveWhile` schedules a durable alarm ahead of in-flight work, so an
  *   incarnation that dies owing work is revived by the alarm's fire. The
  *   production adapter is `(work) => keepalive.track(work())` over ONE
  *   ProcessorKeepalive (stream-processor-keepalive.ts) — the runner REUSES
  *   that machinery wholesale, it never reinvents mark/backoff/quiet-clean.
- * - `appendRevived` appends the core `stream/processor-revived` fact (the
- *   payload's `processorSlug` names the revived processor) — stream evidence
- *   that guarantees at least one delivery turn even at zero lag. Consuming the
- *   fact is OPTIONAL: do it only when the processor reacts to the fact itself.
- *   When unconsumed, its head-reaching frame gets the runner's eventless
- *   `processEvent({ event: null, delivery: { caughtUp: true } })` pass, so open
- *   obligations still recover. The adapter's own revival pass (the
- *   keepalive's `revive` hook), not the runner core, calls it.
+ * - The adapter's private revival pass appends the core
+ *   `stream/processor-revived` fact (the payload's `processorSlug` names the
+ *   revived processor), guaranteeing at least one delivery turn even at zero
+ *   lag. Consuming the fact is OPTIONAL: an unconsumed head-reaching frame
+ *   still gets the runner's eventless
+ *   `processEvent({ event: null, delivery: { caughtUp: true } })` pass.
  * - `handleAlarm` services the durable timer (`ProcessorKeepalive.onAlarm`);
  *   the host DO multiplexes its single alarm across runners and routes fires
  *   to {@link StreamProcessorRunner.handleAlarm}, which delegates here.
  */
 export type ProcessorRecovery = {
   keepAliveWhile(work: () => Promise<unknown>): void;
-  appendRevived(): MaybePromise<void>;
   handleAlarm(info?: unknown): MaybePromise<void>;
 };
 
@@ -181,11 +187,11 @@ export type DeliveryContext = {
  * omit ephemeral or selector-filtered rows, including an entirely empty
  * interval, while still proving that every raw offset in the interval was
  * examined. Advancing through that proof is what prevents filtered rows from
- * wedging a processor cursor below head.
+ * leaving a processor cursor below the scanned-through offset.
  */
-export type StreamProcessorDeliveryFrame = Pick<
+export type StreamProcessorEventBatch = Pick<
   StreamEventBatch,
-  "events" | "scannedAfterOffset" | "scannedThroughOffset" | "streamMaxOffset"
+  "events" | "scannedAfterOffset" | "scannedThroughOffset" | "streamId" | "streamMaxOffset"
 >;
 
 /** A consumed-type event whose payload failed the contract parse, awaiting its post-commit diagnostic. */
@@ -204,11 +210,11 @@ type EventWaiter =
   | (EventWaiterBase & { kind: "predicate"; predicate: (event: StreamEvent) => boolean })
   | (EventWaiterBase & { kind: "offset"; offset: number });
 
-/** The in-flight fold/cursor context of one frame, committed at frame end. */
-type FrameContext<State> = {
-  /** The revision every commit in this frame asserts (fixed at frame start). */
+/** The in-flight fold/cursor context of one batch, committed at batch end. */
+type BatchContext<State> = {
+  /** The revision every commit in this batch asserts (fixed at batch start). */
   revision: number;
-  /** When this frame's drive began — feeds the per-commit consumption metrics
+  /** When processing this batch began — feeds the per-commit consumption metrics
    * (the legacy `#ingest` timed the whole batch the same way). */
   ingestStartedAtMs: number;
   state: State;
@@ -222,15 +228,15 @@ type FrameContext<State> = {
 };
 
 /**
- * The delivery driver for one processor on one stream. Runtime-neutral by
- * construction: the browser, the Durable Object registry, and the in-memory
+ * Processes event batches for one processor on one stream. Runtime-neutral:
+ * the browser, the Durable Object registry, and the in-memory
  * test harness all instantiate exactly this class and differ only in the
  * `durability` / `keepAlive` adapters they pass. One runner per processor —
  * the "host" of old survives only as a thin registry that builds adapters and
  * routes wakes/alarms to the right runner.
  *
- * Serialization: frames and self-pulls share ONE in-memory chain, so a
- * catch-up never interleaves with a half-processed frame. Cross-incarnation
+ * Serialization: batches and self-pulls share ONE in-memory chain, so a
+ * catch-up never interleaves with a half-processed batch. Cross-incarnation
  * races (a stale runner outliving progress made elsewhere) are fenced durably
  * instead, by the progress store's `cursorRevision` CAS + monotonic fence.
  */
@@ -239,27 +245,28 @@ export class StreamProcessorRunner<
   Deps extends object = object,
 > {
   private readonly processor: StreamProcessor<Contract, Deps>;
-  private readonly driver: StreamProcessorDriver<Contract>;
+  private readonly hooks: StreamProcessorRunnerHooks<Contract>;
   private readonly stream: ProcessorStream;
   private readonly durability: ProcessorDurability<ProcessorState<Contract>> | undefined;
   private readonly keepAlive: ((work: () => Promise<unknown>) => void) | undefined;
   private readonly now: () => number;
   private readonly readPageSize: number;
 
-  /** Memoized load; cleared on failure so the next call retries (legacy #loadState). */
+  /** Memoized load for one stream lifetime; cleared on failure or recreation. */
   #loaded: Promise<void> | undefined;
+  #loadingStreamId: string | undefined;
   /** True once progress reflects a real load (fresh default over an empty
    * store counts; a pending/failed load does not) — the gate that keeps
    * default or partially-refolded state from ever escaping (the legacy
    * `isLoaded` invariant). `snapshot()` additionally
    * awaits the load, so partial state cannot escape through it either. */
   #hasLoaded = false;
-  /** The COMMITTED progress — what snapshot()/openDelivery() publish. Frame
+  /** The COMMITTED progress — what snapshot()/openEventBatchCallback() publish. Batch
    * folds accumulate in locals and land here only after the durable commit. */
   #progress: ProcessorProgress<ProcessorState<Contract>> | undefined;
-  /** Highest stream offset observed across all frames this incarnation. */
-  #observedHeadOffset = 0;
-  /** Serializes frames + self-pulls; failures are contained per entry. */
+  /** Highest stream offset observed across all batches this incarnation. */
+  #highestObservedOffset = 0;
+  /** Serializes batches + self-pulls; failures are contained per entry. */
   #chain: Promise<void> = Promise.resolve();
   #disposed = false;
   readonly #eventWaiters = new Set<EventWaiter>();
@@ -270,13 +277,13 @@ export class StreamProcessorRunner<
   #defaultState: ProcessorState<Contract> | undefined;
 
   constructor(args: {
-    /** The processor under drive — passed IN; the runner never constructs one. */
+    /** The processor to run — passed in; the runner never constructs one. */
     processor: StreamProcessor<Contract, Deps>;
     /** The processor's home stream (replay reads, revival appends). */
     stream: ProcessorStream;
     /** Durable progress + optional recovery; omit for in-memory (tests, ephemeral views). */
     durability?: ProcessorDurability<ProcessorState<Contract>>;
-    /** Incarnation keep-alive for in-flight async work (a DO's `waitUntil` lane). */
+    /** Keeps in-flight work alive with the hosting DO's `waitUntil`. */
     keepAlive?: (work: () => Promise<unknown>) => void;
     /** Injected clock for the test harness; production uses Date.now. */
     now?: () => number;
@@ -284,7 +291,7 @@ export class StreamProcessorRunner<
     readPageSize?: number;
   }) {
     this.processor = args.processor;
-    this.driver = StreamProcessor.runnerDriver(args.processor);
+    this.hooks = StreamProcessor.runnerHooks(args.processor);
     this.stream = args.stream;
     this.durability = args.durability;
     this.keepAlive = args.keepAlive;
@@ -293,54 +300,59 @@ export class StreamProcessorRunner<
   }
 
   /**
-   * The subscriber half of the wake handshake: answers the resume cursor plus
-   * the live `sink` the stream retains and invokes per delivered frame.
+   * Opens the processor's event-batch callback and returns its committed
+   * processing offset. A hosted processor wake returns this pair to a source
+   * stream; the browser database writer calls the same method directly.
    *
    * `checkpointOffset` is the PROCESSING cursor (`acknowledgedThroughOffset`),
-   * never the reduction offset: the stream persists this handshake value as
-   * its delivery watermark, and resuming from a reduction-pinned snapshot
+   * never the reduction offset: the caller resumes after this value, and
+   * resuming from a reduction-pinned snapshot
    * offset could skip events whose effects were never acknowledged.
    *
-   * The sink is the internal frame-attempt callback — the ONLY place
-   * transport batching exists; inside it the runner reduces and processes
-   * one event at a time. A hosting transport may adapt how its promise is
-   * observed, but must not duplicate these semantics.
+   * `processEventBatch` is the only place transport batching enters the
+   * runner; inside it the runner reduces and processes one event at a time. A
+   * hosting transport may adapt how the promise is observed, but must not
+   * duplicate these semantics.
    */
-  async openDelivery(): Promise<{
+  async openEventBatchCallback(expectedStreamId?: string): Promise<{
     checkpointOffset: number;
-    sink: (batch: StreamProcessorDeliveryFrame) => Promise<void>;
+    processEventBatch: (batch: StreamProcessorEventBatch) => Promise<void>;
   }> {
     this.#assertNotDisposed();
-    await this.#load();
+    const checkpointOffset = await this.#enqueue(async () => {
+      const streamId = await this.#readCurrentStreamId(expectedStreamId);
+      await this.#load(streamId);
+      return this.#requireProgress().processing.acknowledgedThroughOffset;
+    });
     return {
-      checkpointOffset: this.#requireProgress().processing.acknowledgedThroughOffset,
-      sink: (batch: StreamProcessorDeliveryFrame) => {
-        const attempt = this.#enqueue(() => this.#processFrame(batch));
-        // Zero-lag recovery must cover the WHOLE frame attempt, not merely
+      checkpointOffset,
+      processEventBatch: (batch: StreamProcessorEventBatch) => {
+        const attempt = this.#enqueue(() => this.#processBatch(batch));
+        // Zero-lag recovery must cover the WHOLE batch attempt, not merely
         // the work registered inside it (the June-10/July-7 incident class):
-        // an eviction mid-frame on a stream that also died still gets this
-        // processor revived by the keepalive alarm parked ahead of `attempt`.
+        // an eviction mid-batch on a stream that also died still gets this
+        // processor revived by the keepalive alarm scheduled ahead of `attempt`.
         // A failed attempt reads as failure to the keepalive (routing the
         // next fire to revival); the transport observes the same rejection
         // through the returned promise and owns the redelivery.
         this.durability?.recovery?.keepAliveWhile(() => attempt);
-        // The production wake lane is consumes-FILTERED but stamped with the
-        // RAW stream head, so a successful
-        // frame can leave the acknowledged cursor behind `streamMaxOffset`
-        // with an unconsumed DURABLE tail nothing else will ever deliver —
-        // the cursor parks below head, the last consumed event's
-        // `delivery.caughtUp` never becomes true, and the obligation the frame
-        // opened wedges. Every behind frame therefore gets a trailing
-        // type-UNFILTERED self-pull that folds the tail up to head. Its final
-        // page either marks the last consumed event caught up or supplies the
-        // eventless at-head pass when the tail contains no consumed event. It
-        // rides the runner's chain — serialized
-        // with frames, reading the freshest cursor — and the keepalive lane,
-        // NOT the promise returned to the transport: a failed trailing pull
+        // Hosted-processor batches contain only consumed event types but carry the
+        // stream's maximum offset, so a successful
+        // batch can leave the acknowledged cursor behind `streamMaxOffset`
+        // with remaining unconsumed durable events nothing else will ever send —
+        // the cursor remains below that maximum offset, the last consumed event's
+        // `delivery.caughtUp` never becomes true, and the obligation the batch
+        // opened gets stuck. Every such batch therefore gets a type-unfiltered
+        // read that folds the remaining events through `streamMaxOffset`. Its final
+        // page either marks the last consumed event caught up or makes an
+        // eventless caught-up call when those events contain no consumed event. It
+        // runs on the runner's chain — serialized
+        // with batches, reading the freshest cursor — and is kept alive,
+        // NOT the promise returned to the transport: a failed follow-up read
         // reads as FAILURE to the keepalive, blocking the quiet-clean disarm
         // and routing the next alarm fire to revival, whose unfiltered
         // catch-up is this pull's retry. A failed main attempt takes the
-        // transport's redelivery lane instead; no trailing pull follows it.
+        // stream's ordinary redelivery instead; no trailing pull follows it.
         this.#runInBackground(() =>
           attempt.then(
             () =>
@@ -358,7 +370,7 @@ export class StreamProcessorRunner<
     };
   }
 
-  /** Service a durable alarm fire routed here by the hosting registry (recovery lane). */
+  /** Handle a durable recovery alarm routed here by the hosting registry. */
   async handleAlarm(info?: unknown): Promise<void> {
     const recovery = this.durability?.recovery;
     if (recovery === undefined) return;
@@ -367,12 +379,15 @@ export class StreamProcessorRunner<
 
   /** One consistent read of the fold, pinned to `reducedThroughOffset`. */
   async snapshot(): Promise<{ offset: number; state: ProcessorState<Contract> }> {
-    await this.#load();
-    const progress = this.#requireProgress();
-    return {
-      offset: progress.reduction.reducedThroughOffset,
-      state: progress.reduction.state,
-    };
+    return this.#enqueue(async () => {
+      const streamId = await this.#readCurrentStreamId();
+      await this.#load(streamId);
+      const progress = this.#requireProgress();
+      return {
+        offset: progress.reduction.reducedThroughOffset,
+        state: progress.reduction.state,
+      };
+    });
   }
 
   /**
@@ -391,21 +406,21 @@ export class StreamProcessorRunner<
    * kept so a hosting registry can assemble its
    * live state without an async hop. Gate on {@link isLoaded} first: a cold
    * runner reports the default, and publishing that anywhere live would wipe
-   * real facts for subscribers.
+   * real facts for state observers.
    */
   get currentState(): ProcessorState<Contract> {
     if (this.#progress !== undefined) return this.#progress.reduction.state;
-    this.#defaultState ??= this.driver.initialState();
+    this.#defaultState ??= this.hooks.initialState();
     return this.#defaultState;
   }
 
   /**
    * Observe committed reduced-state changes IN-PROCESS: the observer is a
    * local function (the hosting registry wires it to reassemble its
-   * live-state engine), never a retained RPC stub. It fires after a frame
+   * live-state engine), never a retained RPC stub. It fires after a batch
    * commit lands durably AND the committed state changed identity — the
    * runner's home for the legacy `StreamProcessor.observeStateChanges` +
-   * post-persist notify. Returns an unsubscribe.
+   * post-persist notify. Returns a function that stops observing.
    */
   observeStateChanges(
     observer: (snapshot: { offset: number; state: ProcessorState<Contract> }) => void,
@@ -415,17 +430,18 @@ export class StreamProcessorRunner<
   }
 
   /**
-   * Pull-page the journal from the ACKNOWLEDGED cursor and drive ordinary
-   * frames until caught up — the public door for read-your-writes pulls and a
+   * Read journal pages after the acknowledged cursor and process them until
+   * caught up — the public method for read-your-writes and a
    * hosting registry's cold-load healing (the legacy host's `catchUpInternal`
-   * shape). One page of lookahead, so every non-final frame carries a
-   * `streamMaxOffset` past its own tail and only the genuinely final page is
-   * at-head. Serialized with delivered frames on the runner's chain; failures
+   * shape). One page of lookahead, so every non-final batch carries a
+   * `streamMaxOffset` past its own last event and only the genuinely final page is
+   * marked caught up. Serialized with delivered batches on the runner's chain; failures
    * RETHROW — the caller owns any swallow-and-log policy.
    */
   catchUp(): Promise<void> {
     return this.#enqueue(async () => {
-      await this.#load();
+      const streamId = await this.#readCurrentStreamId();
+      await this.#load(streamId);
       await this.#selfCatchUp();
     });
   }
@@ -433,16 +449,16 @@ export class StreamProcessorRunner<
   /**
    * Resolve once the ACKNOWLEDGED cursor reaches `offset` — the single
    * wait-for-progress door (read-your-writes: append, then wait on the offset
-   * the append returned). The offset form never depends on push delivery to
+   * the append returned). The offset form never depends on stream delivery to
    * reach an event that ALREADY EXISTS on the stream: when the cursor is
-   * behind, it kicks a chain-serialized self-pull ({@link catchUp}) that
-   * drives the journal tail itself; the parked waiter covers only a genuinely
+   * behind, it starts a chain-serialized journal read ({@link catchUp}); the
+   * waiting promise covers only a genuinely
    * FUTURE offset the pull cannot reach yet. The predicate form observes
    * FUTURE deliveries only — an event not yet appended (e.g. runScript's
    * completion, appended later by `runInBackground` work; that work runs OFF
-   * the runner chain and outside the awaiting handler, so the parked waiter
+   * the runner chain and outside the awaiting handler, so the halted waiter
    * never gates the append or the delivery that resolves it) — and resolves
-   * after the frame that delivered the matching event has durably committed,
+   * after the batch that delivered the matching event has durably committed,
    * so state already reflects it.
    */
   waitUntilEvent(args: {
@@ -461,19 +477,23 @@ export class StreamProcessorRunner<
       if (!Number.isSafeInteger(args.offset) || args.offset < 0) {
         throw new Error("waitUntilEvent offset must be a non-negative safe integer");
       }
-      await this.#load();
+      const streamId = await this.#readCurrentStreamId();
+      await this.#load(streamId);
       if (this.#requireProgress().processing.acknowledgedThroughOffset >= args.offset) return;
       const { offset, signal, timeoutMs } = args;
       // No await between the check above and registering the waiter below
-      // (the helper below registers synchronously), so a frame cannot
+      // (the helper below registers synchronously), so a batch cannot
       // advance the cursor past `offset` in the gap and be missed.
-      const reached = this.#parkEventWaiter({ kind: "offset", offset }, { signal, timeoutMs });
-      // Self-pull, not park-and-hope: this form's contract is read-your-writes
-      // over an append that already committed, and a parked waiter alone would
-      // hold the wait hostage to the push lane's health (a wedged
-      // subscription, a lost wake dial — the orphaned-announcement incident
-      // class). The catch-up rides the runner chain, serialized with delivered
-      // frames — no double-drive against a concurrent live frame, because
+      const reached = this.#waitForEventCondition(
+        { kind: "offset", offset },
+        { signal, timeoutMs },
+      );
+      // Self-pull, not wait-and-hope: this form's contract is read-your-writes
+      // over an append that already committed. A waiting caller must not depend
+      // only on an open callback that may stop responding or on a wake call
+      // that may have been lost (the orphaned-announcement incident). The
+      // catch-up runs on the runner chain, serialized with delivered
+      // batches — no concurrent processing against a live batch, because
       // redelivered offsets dedupe against the acknowledged cursor — and
       // resolves the waiter through the ordinary frame commit. A genuinely
       // future offset stays parked for delivery after a successful pull. A
@@ -486,10 +506,10 @@ export class StreamProcessorRunner<
       return await reached.promise;
     }
     const { predicate, signal, timeoutMs } = args;
-    await this.#parkEventWaiter({ kind: "predicate", predicate }, { signal, timeoutMs }).promise;
+    await this.#waitForEventCondition({ kind: "predicate", predicate }, { signal, timeoutMs });
   }
 
-  /** Release delivery resources. Idempotent; a disposed runner rejects new work. */
+  /** Release processor resources. Idempotent; a disposed runner rejects new work. */
   dispose(): void {
     this.#disposed = true;
     for (const waiter of this.#eventWaiters) {
@@ -502,70 +522,73 @@ export class StreamProcessorRunner<
   // The per-event loop.
   // ---------------------------------------------------------------------------
 
-  async #processFrame(frame: StreamProcessorDeliveryFrame): Promise<void> {
+  async #processBatch(batch: StreamProcessorEventBatch): Promise<void> {
     const ingestStartedAtMs = this.now();
-    assertDeliveryFrame(frame);
-    await this.#load();
+    assertProcessorEventBatch(batch);
     const committed = this.#requireProgress();
-    const committedThroughOffset = committed.processing.acknowledgedThroughOffset;
-    if (frame.scannedAfterOffset > committedThroughOffset) {
+    if (batch.streamId !== committed.streamId) {
       throw new Error(
-        `delivery frame starts after the committed scan cursor: ${frame.scannedAfterOffset} > ${committedThroughOffset}`,
+        `stream processor "${this.hooks.contract.slug}" received batch for stream ID ` +
+          `${batch.streamId}; current progress belongs to ${committed.streamId}`,
       );
     }
-    const frameScannedThroughOffset = Math.max(committedThroughOffset, frame.scannedThroughOffset);
+    const committedThroughOffset = committed.processing.acknowledgedThroughOffset;
+    if (batch.scannedAfterOffset > committedThroughOffset) {
+      throw new Error(
+        `delivery batch starts after the committed scan cursor: ${batch.scannedAfterOffset} > ${committedThroughOffset}`,
+      );
+    }
+    const batchScannedThroughOffset = Math.max(committedThroughOffset, batch.scannedThroughOffset);
 
-    // Offset-dedupe against the acknowledged cursor (and within the frame):
+    // Offset-dedupe against the acknowledged cursor (and within the batch):
     // redelivered events are silent skips, exactly like legacy ingest.
     const pending: StreamEvent[] = [];
     let scan = committedThroughOffset;
-    for (const event of frame.events) {
+    for (const event of batch.events) {
       if (event.offset <= scan) continue;
       scan = event.offset;
       pending.push(event);
     }
 
-    // observedHead = max(streamMaxOffset, last event offset), monotonic across
-    // frames: "the highest offset the runner has OBSERVED" never regresses on
-    // a stale redelivery, so a behind frame can always SEE it is behind.
-    this.#observedHeadOffset = Math.max(
-      this.#observedHeadOffset,
-      frame.streamMaxOffset,
-      frameScannedThroughOffset,
+    // Highest observed offset = max(streamMaxOffset, last scanned offset), monotonic across
+    // batches: "the highest offset the runner has OBSERVED" never regresses on
+    // a stale redelivery, so an older batch can still see that more rows exist.
+    this.#highestObservedOffset = Math.max(
+      this.#highestObservedOffset,
+      batch.streamMaxOffset,
+      batchScannedThroughOffset,
     );
-    if (pending.length === 0 && frameScannedThroughOffset === committedThroughOffset) return;
-    const observedHeadOffset = this.#observedHeadOffset;
+    if (pending.length === 0 && batchScannedThroughOffset === committedThroughOffset) return;
+    const highestObservedOffset = this.#highestObservedOffset;
 
-    // AT-HEAD is a BATCH property, not a per-event-offset one. If this batch
-    // folds through the observed head (its tail is at head — no filtered
-    // durable events beyond it), then by the end of it the processor has seen
-    // EVERYTHING the stream has, so its LAST consumed event is delivered with
+    // `caughtUp` is a batch property, not a per-event-offset one. If this batch
+    // scans through the highest offset observed so far, then by the end of it
+    // the processor has seen EVERYTHING the stream has reported, so its LAST consumed event gets
     // `caughtUp: true` even though that event's own offset may sit far below
-    // head (a batch of 100 where only the first is consumed still leaves the
-    // processor at head). `caughtUp` is the at-head reconcile signal — see
-    // DeliveryContext.
-    const batchReachesHead = frameScannedThroughOffset >= observedHeadOffset;
+    // the maximum (a batch of 100 where only the first is consumed still leaves
+    // the processor caught up).
+    const batchCaughtUp = batchScannedThroughOffset >= highestObservedOffset;
     // The offset of the LAST event this batch will actually deliver to
     // `processEvent` — a consumed type that PARSES. `isDeliverable` folds in
     // the wildcard (`"*"` consumes every type) AND excludes malformed consumed
-    // events: without the parse check a malformed event at head would be
+    // events: without the parse check a malformed final event would be
     // selected as "last consumed", steal the `caughtUp` flag from the real
     // last-good event (which never gets it), and strand its obligation.
     let lastDeliveredOffset: number | null = null;
     for (const event of pending) {
-      if (this.driver.isDeliverable(event)) lastDeliveredOffset = event.offset;
+      if (this.hooks.isDeliverable(event)) lastDeliveredOffset = event.offset;
     }
-    // Whether a CONSUMED event carried `caughtUp` this frame. If the batch
-    // reached head but nothing it delivered did (all its head-reaching tail is
+    // Whether a CONSUMED event carried `caughtUp` this batch. If the scan
+    // reached the highest observed offset but none of its events did (all remaining events are
     // unconsumed — a self-pull that folded only foreign events, or a filtered
-    // wake batch whose durable head is an unconsumed presence fact), the runner
-    // still owes the processor an at-head reconcile: it fires an EVENT-LESS
-    // pass after the loop (below). Without it a reconcile obligation strands
-    // whenever an unconsumed event (e.g. stream/subscriber-disconnected) sits
-    // at head — the late-agent preview regression.
+    // wake batch whose final durable row is an unconsumed presence fact), the runner
+    // still owes the processor one caught-up call: it calls `processEvent` with
+    // `event: null` after the loop. Without it pending work strands
+    // whenever an unconsumed event (e.g. stream/connection-closed) sits
+    // at the latest offset — the late-agent preview regression.
     let firedCaughtUp = false;
 
-    const ctx: FrameContext<ProcessorState<Contract>> = {
+    const ctx: BatchContext<ProcessorState<Contract>> = {
       revision: committed.processing.cursorRevision,
       ingestStartedAtMs,
       state: committed.reduction.state,
@@ -575,22 +598,22 @@ export class StreamProcessorRunner<
       uncommittedEvents: [],
       uncommittedParseFailures: [],
     };
-    /** Every blocker started anywhere in this frame, for failure settlement. */
+    /** Every blocker started anywhere in this batch, for failure settlement. */
     const startedBlockers: Promise<unknown>[] = [];
 
     try {
       for (const event of pending) {
-        const reduction = this.driver.reduceRawEvent({ event, state: ctx.state });
+        const reduction = this.hooks.reduceRawEvent({ event, state: ctx.state });
         if (reduction !== undefined && "parseError" in reduction) {
           // A malformed consumed event is a fact of the log, not an
           // exception: collect it, keep advancing (the cursor must never
           // wedge on it), and record it AFTER its commit lands (below).
           ctx.uncommittedParseFailures.push({ event, error: reduction.parseError });
         } else if (reduction !== undefined) {
-          // `caughtUp` on the LAST delivered event of a batch that reached head
-          // (not `offset >= head` — that never fires for a subset-consuming
-          // processor whose head is a later unconsumed event).
-          const caughtUp = batchReachesHead && event.offset === lastDeliveredOffset;
+          // `caughtUp` on the LAST delivered event of a batch that scanned through
+          // the highest observed offset (not a comparison of this event alone — that
+          // fails when a later unconsumed event is the batch's final row).
+          const caughtUp = batchCaughtUp && event.offset === lastDeliveredOffset;
           if (caughtUp) firedCaughtUp = true;
           const delivery: DeliveryContext = {
             caughtUp,
@@ -602,10 +625,10 @@ export class StreamProcessorRunner<
           // (registered in the per-event switch) must precede a fold-derived
           // re-fire registered after it, or the re-fire wins the fold and the
           // cancel no-ops. Registration order replaces the deleted deferred
-          // `blockProcessorWhileCaughtUp` lane.
+          // `blockProcessorWhileCaughtUp` mechanism.
           let eventChain: Promise<unknown> = Promise.resolve();
           const whileProcessing = reduction.event;
-          this.driver.processEvent({
+          this.hooks.processEvent({
             event: reduction.event,
             previousState: reduction.previousState,
             state: reduction.state,
@@ -614,7 +637,7 @@ export class StreamProcessorRunner<
               const attempt = eventChain.then(() =>
                 this.#keepAliveBackedWork(work).catch((error: unknown) => {
                   console.error(
-                    `stream processor blocked work failed (${this.driver.contract.slug})`,
+                    `stream processor blocked work failed (${this.hooks.contract.slug})`,
                     error,
                   );
                   throw error;
@@ -624,8 +647,10 @@ export class StreamProcessorRunner<
               startedBlockers.push(attempt);
             },
             runInBackground: (work) => this.#runInBackground(work),
-            append: (...input) => this.driver.append({ whileProcessing }, input),
-            appendTo: (path, ...input) => this.driver.appendTo(path, { whileProcessing }, input),
+            append: (...input) =>
+              this.hooks.append({ streamId: batch.streamId, whileProcessing }, input),
+            appendTo: (path, ...input) =>
+              this.hooks.appendTo(path, { streamId: batch.streamId, whileProcessing }, input),
           });
           // STRICT PER-EVENT ORDERING: THIS event's blocking work completes
           // before the next event's processEvent starts. Background work was
@@ -635,98 +660,101 @@ export class StreamProcessorRunner<
           ctx.state = reduction.state;
         }
         // Non-consumed and malformed events advance both cursors too —
-        // mirroring what a filtered delivery's cursor does today.
+        // matching what a filtered delivery's cursor does today.
         ctx.reducedThroughOffset = event.offset;
         ctx.completedThroughOffset = event.offset;
         ctx.eventsSinceCommit += 1;
         ctx.uncommittedEvents.push(event);
       }
-      // EVENT-LESS at-head reconcile. Normally the reconcile rides the last
-      // consumed event of a head-reaching batch (`delivery.caughtUp`). But a
-      // batch can reach head with NO consumed event carrying that flag — a
-      // self-pull that folded only an unconsumed tail, or a filtered wake batch
-      // whose durable head is an unconsumed presence fact (e.g.
-      // stream/subscriber-disconnected). Deferring the reconcile to "the next
+      // Eventless caught-up call. Normally `delivery.caughtUp` rides the last
+      // consumed event in the final batch. But a batch can scan through the
+      // highest observed offset with NO consumed event carrying that flag — a
+      // SQLite read that folded only unconsumed remaining events, or a filtered wake batch
+      // whose final durable row is an unconsumed presence fact (e.g.
+      // stream/connection-closed). Deferring the reconcile to "the next
       // consumed event" strands the obligation when the stream then goes quiet
       // (the late-agent preview regression). So the
-      // runner drives the reconcile itself over the final fold: `event` is null
+      // runner calls the processor over the final fold: `event` is null
       // (the processor skips its per-event switch), appends are unstamped, and
       // obligation keys are offset-free (`this.idempotencyKey`), stable across
-      // passes. Its blockers are awaited before the deferred frame-end commit.
-      if (batchReachesHead && !firedCaughtUp) {
+      // passes. Its blockers are awaited before the deferred batch-end commit.
+      if (batchCaughtUp && !firedCaughtUp) {
         const delivery: DeliveryContext = {
           caughtUp: true,
         };
         // Same FIFO blocker chain as the per-event dispatch; its work is
-        // awaited before the deferred frame-end commit.
-        let passChain: Promise<unknown> = Promise.resolve();
-        this.driver.processEvent({
+        // awaited before the deferred batch-end commit.
+        let caughtUpChain: Promise<unknown> = Promise.resolve();
+        this.hooks.processEvent({
           event: null,
           previousState: ctx.state,
           state: ctx.state,
           delivery,
           blockProcessorWhile: (work) => {
-            const attempt = passChain.then(() =>
+            const attempt = caughtUpChain.then(() =>
               this.#keepAliveBackedWork(work).catch((error: unknown) => {
                 console.error(
-                  `stream processor blocked work failed (${this.driver.contract.slug})`,
+                  `stream processor blocked work failed (${this.hooks.contract.slug})`,
                   error,
                 );
                 throw error;
               }),
             );
-            passChain = attempt;
+            caughtUpChain = attempt;
             startedBlockers.push(attempt);
           },
           runInBackground: (work) => this.#runInBackground(work),
-          append: (...input) => this.driver.append({}, input),
-          appendTo: (path, ...input) => this.driver.appendTo(path, {}, input),
+          append: (...input) => this.hooks.append({ streamId: batch.streamId }, input),
+          appendTo: (path, ...input) =>
+            this.hooks.appendTo(path, { streamId: batch.streamId }, input),
         });
-        await passChain;
+        await caughtUpChain;
       }
-      // The frame's scan proof covers omitted rows too. They are deliberate
+      // The batch's scan proof covers omitted rows too. They are deliberate
       // no-ops for this processor, but both cursors must advance across them
       // atomically with the durable events above — including an empty scan.
-      ctx.reducedThroughOffset = frameScannedThroughOffset;
-      ctx.completedThroughOffset = frameScannedThroughOffset;
+      ctx.reducedThroughOffset = batchScannedThroughOffset;
+      ctx.completedThroughOffset = batchScannedThroughOffset;
     } catch (error) {
-      // A failed frame must still settle work it already registered so
+      // A failed batch must still settle work it already registered so
       // nothing rejects unobserved. Whatever was not yet durably committed is
-      // not committed now — the frame stays retryable and the transport
+      // not committed now — the batch stays retryable and the transport
       // replays it from the last acknowledged cursor.
       // (The legacy #ingest's failure settlement, verbatim.)
       await Promise.allSettled(startedBlockers);
       throw error;
     }
 
-    // FIXED CADENCE: one durable commit per delivered frame, after EVERY
-    // event's blocking work — the at-head reconcile's included — has settled
+    // FIXED CADENCE: one durable commit per delivered batch, after EVERY
+    // event's blocking work — including the caught-up call — has settled
     // (the legacy batch checkpoint window exactly). The gap between the
     // in-memory cursor and the last persisted acknowledgement is the
     // deliberate at-least-once replay window (appends stay
-    // idempotency-keyed). Committing only at frame end is also what keeps a
-    // failed at-head reconcile retryable: a mid-frame commit of the head
-    // event would strand its at-head pass with the cursor already at head
+    // idempotency-keyed). Committing only at batch end is also what keeps a
+    // failed caught-up call retryable: a mid-batch commit of the final
+    // event would strand that call with the cursor already at the maximum offset
     // and redelivery empty.
-    if (ctx.eventsSinceCommit > 0 || frameScannedThroughOffset > committedThroughOffset) {
-      await this.#commitFrameContext(ctx);
+    if (ctx.eventsSinceCommit > 0 || batchScannedThroughOffset > committedThroughOffset) {
+      await this.#commitBatchContext(ctx);
     }
   }
 
   /**
-   * Persist the frame context, THEN advance the published cursor, resolve
+   * Persist the batch context, THEN advance the published cursor, resolve
    * waiters, and flush parse-failure diagnostics for the covered events.
    *
    * Persist-before-advance is load-bearing (the legacy #ingest's ordering):
-   * if the durable write fails, the frame must stay retryable — the redelivered
-   * frame re-reduces from the OLD published state and retries the write.
+   * if the durable write fails, the batch must stay retryable — the redelivered
+   * batch re-reduces from the OLD published state and retries the write.
    * Advancing in-memory first would make the retry a silent no-op (every
-   * event filtered out, nothing re-saved), losing the frame durably.
+   * event filtered out, nothing re-saved), losing the batch durably.
    */
-  async #commitFrameContext(ctx: FrameContext<ProcessorState<Contract>>): Promise<void> {
+  async #commitBatchContext(ctx: BatchContext<ProcessorState<Contract>>): Promise<void> {
+    const streamId = this.#requireProgress().streamId;
     const next: ProcessorProgress<ProcessorState<Contract>> = {
+      streamId,
       reduction: {
-        reducerVersion: this.driver.contract.version,
+        reducerVersion: this.hooks.contract.version,
         reducedThroughOffset: ctx.reducedThroughOffset,
         state: ctx.state,
       },
@@ -736,19 +764,22 @@ export class StreamProcessorRunner<
       },
     };
     const previousCommittedState = this.#progress?.reduction.state;
-    await this.#commit(next, ctx.revision);
+    await this.#commit(next, {
+      expectedCursorRevision: ctx.revision,
+      expectedStreamId: streamId,
+    });
     this.#progress = next;
     ctx.eventsSinceCommit = 0;
     const committedEvents = ctx.uncommittedEvents.splice(0);
     const committedFailures = ctx.uncommittedParseFailures.splice(0);
     // The commit is durable and the published cursor advanced — the events
-    // are genuinely CONSUMED, which is the moment self-measured subscriber
+    // are genuinely CONSUMED, which is the moment self-measured event-consumption
     // metrics report (the legacy #ingest's noteBatchIngested placement).
-    // Fed through the driver so the wake
-    // capability's consumption-lag samples stay live under runner drive.
+    // Fed through the processor hooks so the wake capability's
+    // consumption-lag samples stay current.
     if (committedEvents.length > 0) {
       const newestEventCreatedAtMs = Date.parse(committedEvents.at(-1)!.createdAt);
-      this.driver.noteBatchIngested({
+      this.hooks.noteBatchIngested({
         ingestedThroughOffset: next.processing.acknowledgedThroughOffset,
         ...(Number.isFinite(newestEventCreatedAtMs) ? { newestEventCreatedAtMs } : {}),
         eventCount: committedEvents.length,
@@ -758,7 +789,7 @@ export class StreamProcessorRunner<
     }
     // Observers before waiters, both after the durable commit — the legacy
     // ingest ordering: by the time either
-    // fires, published state already reflects the committed frame.
+    // fires, published state already reflects the committed batch.
     if (!Object.is(previousCommittedState, next.reduction.state)) {
       this.#notifyStateChange({
         offset: next.reduction.reducedThroughOffset,
@@ -769,26 +800,32 @@ export class StreamProcessorRunner<
     // Record skipped unparseable events AFTER the commit, in the background:
     // the raw event in the log is the authoritative record and the
     // idempotency key dedupes redelivery, so a failing record append can
-    // never re-poison the frame it just rescued.
-    // (The legacy #ingest's parse-failure lane, verbatim.)
+    // never fail the batch it just rescued again.
+    // (This preserves the legacy #ingest parse-failure behavior.)
     for (const { event, error } of committedFailures) {
       const message =
-        `stream processor "${this.driver.contract.slug}" skipped event at offset ` +
+        `stream processor "${this.hooks.contract.slug}" skipped event at offset ` +
         `${event.offset} ("${event.type}"): it fails the contract's schema`;
       console.error(message, error);
-      // Raw `stream.append`, not the emitted lane: `stream/error-occurred` is
-      // core-owned and deliberately absent from subclass `emits` — this is
-      // the runtime speaking, not the processor author. Full provenance stamp
-      // (which processor skipped which event) preserved.
+      // A guarded raw append, not a processor-declared emitted event:
+      // `stream/error-occurred` is core-owned and deliberately absent from
+      // subclass `emits` — this is the runtime speaking, not the processor
+      // author. The guard stops a delayed diagnostic for lifetime A from
+      // landing after this path has been recreated as lifetime B.
       this.#runInBackground(() =>
-        this.stream.append({
-          type: "events.iterate.com/stream/error-occurred",
-          idempotencyKey: this.driver.idempotencyKey("event-parse-failed", event),
-          source: { processor: this.driver.processorStamp(event) },
-          payload: {
-            message,
-            error: { name: error.name, message: error.message },
-          },
+        this.stream.appendIfStreamId({
+          streamId,
+          events: [
+            {
+              type: "events.iterate.com/stream/error-occurred",
+              idempotencyKey: this.hooks.idempotencyKey("event-parse-failed", event),
+              source: { processor: this.hooks.processorStamp(streamId, event) },
+              payload: {
+                message,
+                error: { name: error.name, message: error.message },
+              },
+            },
+          ],
         }),
       );
     }
@@ -798,42 +835,89 @@ export class StreamProcessorRunner<
   // Progress load / refold / commit.
   // ---------------------------------------------------------------------------
 
-  #load(): Promise<void> {
-    this.#loaded ??= this.#loadOnce().catch((error: unknown) => {
+  #load(streamId: string): Promise<void> {
+    if (this.#hasLoaded && this.#progress?.streamId === streamId) return Promise.resolve();
+    if (this.#hasLoaded) {
+      this.#hasLoaded = false;
+      this.#loaded = undefined;
+      this.#loadingStreamId = undefined;
+    }
+    if (this.#loaded !== undefined) {
+      if (this.#loadingStreamId === streamId) return this.#loaded;
+      return this.#loaded.then(() => this.#load(streamId));
+    }
+    this.#loadingStreamId = streamId;
+    this.#loaded = this.#loadOnce(streamId).catch((error: unknown) => {
       // Clear the memoized load so a later call retries instead of replaying
       // this rejection forever.
       this.#loaded = undefined;
+      this.#loadingStreamId = undefined;
       throw error;
     });
     return this.#loaded;
   }
 
-  async #loadOnce(): Promise<void> {
+  #freshProgress(
+    streamId: string,
+    cursorRevision: number,
+  ): ProcessorProgress<ProcessorState<Contract>> {
+    return {
+      streamId,
+      reduction: {
+        reducerVersion: this.hooks.contract.version,
+        reducedThroughOffset: 0,
+        state: this.hooks.initialState(),
+      },
+      processing: { acknowledgedThroughOffset: 0, cursorRevision },
+    };
+  }
+
+  async #loadOnce(streamId: string): Promise<void> {
     const persisted = await this.durability?.progress.read();
     if (persisted === undefined) {
       // Fresh processor: nothing observed yet, so the schema default IS the
-      // fold of the (empty) acknowledged prefix.
-      this.#progress = {
-        reduction: {
-          reducerVersion: this.driver.contract.version,
-          reducedThroughOffset: 0,
-          state: this.driver.initialState(),
-        },
-        processing: { acknowledgedThroughOffset: 0, cursorRevision: 0 },
-      };
+      // fold of the (empty) acknowledged prefix. Persist the stream ID before
+      // a checkpoint can escape, so no later wake can adopt unrelated
+      // pre-existing progress.
+      const fresh = this.#freshProgress(streamId, 0);
+      await this.#commit(fresh, {
+        expectedCursorRevision: 0,
+        expectedStreamId: undefined,
+      });
+      this.#progress = fresh;
       this.#hasLoaded = true;
       return;
     }
 
+    if (persisted.streamId !== streamId) {
+      const replaceForStream = this.durability?.progress.replaceForStream;
+      if (replaceForStream === undefined) {
+        throw new Error(
+          `stream processor "${this.hooks.contract.slug}" progress belongs to stream ID ` +
+            `${persisted.streamId}, but the current stream ID is ${streamId}; ` +
+            `this durability backend must reset its related projections before reopening`,
+        );
+      }
+      const fresh = this.#freshProgress(streamId, persisted.processing.cursorRevision + 1);
+      await replaceForStream(fresh, {
+        expectedCursorRevision: persisted.processing.cursorRevision,
+        expectedStreamId: persisted.streamId,
+      });
+      this.#progress = fresh;
+      this.#hasLoaded = true;
+      this.#notifyStateChange({ offset: 0, state: fresh.reduction.state });
+      return;
+    }
+
     const acknowledged = persisted.processing.acknowledgedThroughOffset;
-    const parsed = this.driver.parseState(persisted.reduction.state);
+    const parsed = this.hooks.parseState(persisted.reduction.state);
     // A persisted reduction AHEAD of the acknowledgement violates the record
     // invariant (see ProcessorProgress): publishing it would show state
     // derived from events whose effects are not acknowledged. Treat it as a
     // cache miss — discard the fold, refold reduce-only through ack (below).
     const reducedAheadOfAck = persisted.reduction.reducedThroughOffset > acknowledged;
     if (
-      persisted.reduction.reducerVersion === this.driver.contract.version &&
+      persisted.reduction.reducerVersion === this.hooks.contract.version &&
       parsed.success &&
       !reducedAheadOfAck
     ) {
@@ -846,23 +930,27 @@ export class StreamProcessorRunner<
         // may persist them apart) — but publishing the lagging fold as-is
         // would reduce the NEXT delivery onto state missing the events in
         // (reducedThrough, acknowledged] and then stamp it as reduced through
-        // head: those events' contributions silently vanish. Catch the fold
+        // the acknowledged offset: those events' contributions silently vanish. Catch the fold
         // up REDUCE-ONLY (their effects are acknowledged; processEvent never
         // re-runs) and persist the healed cache before publishing.
-        reduction = await this.#rebuildReduction(acknowledged, {
+        reduction = await this.#rebuildReduction(streamId, acknowledged, {
           state: reduction.state,
           reducedThroughOffset: reduction.reducedThroughOffset,
         });
         const progress: ProcessorProgress<ProcessorState<Contract>> = {
+          streamId,
           reduction,
           processing: persisted.processing,
         };
-        await this.#commit(progress, persisted.processing.cursorRevision);
+        await this.#commit(progress, {
+          expectedCursorRevision: persisted.processing.cursorRevision,
+          expectedStreamId: streamId,
+        });
         this.#progress = progress;
         this.#hasLoaded = true;
         return;
       }
-      this.#progress = { reduction, processing: persisted.processing };
+      this.#progress = { streamId, reduction, processing: persisted.processing };
       this.#hasLoaded = true;
       return;
     }
@@ -877,22 +965,26 @@ export class StreamProcessorRunner<
     // awaits this load).
     console.warn(
       reducedAheadOfAck
-        ? `stream processor "${this.driver.contract.slug}" persisted reduction cursor ` +
+        ? `stream processor "${this.hooks.contract.slug}" persisted reduction cursor ` +
             `(${persisted.reduction.reducedThroughOffset}) is AHEAD of the acknowledged cursor ` +
             `(${acknowledged}) — an invalid record; discarding the fold and refolding ` +
             `reduce-only through the acknowledgement`
-        : `stream processor "${this.driver.contract.slug}" reduction cache is stale ` +
+        : `stream processor "${this.hooks.contract.slug}" reduction cache is stale ` +
             `(persisted reducerVersion "${persisted.reduction.reducerVersion}", ` +
-            `current "${this.driver.contract.version}", state ${parsed.success ? "valid" : "invalid"}); ` +
+            `current "${this.hooks.contract.version}", state ${parsed.success ? "valid" : "invalid"}); ` +
             `refolding reduce-only through acknowledged offset ` +
             `${acknowledged}`,
     );
-    const reduction = await this.#rebuildReduction(acknowledged);
+    const reduction = await this.#rebuildReduction(streamId, acknowledged);
     const progress: ProcessorProgress<ProcessorState<Contract>> = {
+      streamId,
       reduction,
       processing: persisted.processing,
     };
-    await this.#commit(progress, persisted.processing.cursorRevision);
+    await this.#commit(progress, {
+      expectedCursorRevision: persisted.processing.cursorRevision,
+      expectedStreamId: streamId,
+    });
     this.#progress = progress;
     this.#hasLoaded = true;
   }
@@ -901,33 +993,35 @@ export class StreamProcessorRunner<
    * offset 0 by default, or extending `from` (a valid persisted fold that
    * LAGS the target, so only the gap's events are read). */
   async #rebuildReduction(
+    streamId: string,
     throughOffset: number,
     from?: { state: ProcessorState<Contract>; reducedThroughOffset: number },
   ): Promise<ReductionProgress<ProcessorState<Contract>>> {
-    let state = from?.state ?? this.driver.initialState();
-    const afterOffset = from?.reducedThroughOffset ?? 0;
+    let state = from?.state ?? this.hooks.initialState();
+    let afterOffset = from?.reducedThroughOffset ?? 0;
     if (throughOffset > afterOffset) {
-      using pager = this.stream.readEvents({
-        afterOffset,
-        beforeOffset: throughOffset + 1,
-        limit: this.readPageSize,
-      });
-      let page = await pager.next();
-      while (page.length > 0) {
-        for (const event of page) {
+      for (;;) {
+        const page = await this.stream.getEventPage({
+          afterOffset,
+          beforeOffset: throughOffset + 1,
+          limit: this.readPageSize,
+        });
+        this.#assertReadStreamId(page.streamId, streamId);
+        if (page.events.length === 0) break;
+        for (const event of page.events) {
           if (event.offset > throughOffset) continue;
-          const reduction = this.driver.reduceRawEvent({ event, state });
+          const reduction = this.hooks.reduceRawEvent({ event, state });
           // Parse failures were recorded when first processed (idempotent);
           // a refold silently folds past them, exactly like live delivery.
           if (reduction !== undefined && !("parseError" in reduction)) {
             state = reduction.state;
           }
         }
-        page = await pager.next();
+        afterOffset = page.events.at(-1)!.offset;
       }
     }
     return {
-      reducerVersion: this.driver.contract.version,
+      reducerVersion: this.hooks.contract.version,
       reducedThroughOffset: throughOffset,
       state,
     };
@@ -935,44 +1029,68 @@ export class StreamProcessorRunner<
 
   async #commit(
     progress: ProcessorProgress<ProcessorState<Contract>>,
-    expectedCursorRevision: number,
+    opts: { expectedCursorRevision: number; expectedStreamId: string | undefined },
   ): Promise<void> {
     if (this.durability === undefined) return;
-    await this.durability.progress.commit(progress, { expectedCursorRevision });
+    await this.durability.progress.commit(progress, opts);
   }
 
   /**
    * Re-run `reduce` + `processEvent` from the acknowledged cursor by
-   * self-pulling the journal — a catch-up cannot rely on the transport
-   * pump, whose cursor was fixed at wake handshake. One page of lookahead so
-   * every non-final frame carries a streamMaxOffset PAST its own tail (the
-   * at-head pulse fires only on the genuinely final page), mirroring the
+   * reading the journal itself — catch-up cannot rely on a callback whose
+   * starting offset was fixed when it opened. One page of lookahead means
+   * every non-final batch carries a streamMaxOffset past its own last event (the
+   * `caughtUp` flag appears only on the genuinely final page), matching the
    * host's catch-up.
    */
   async #selfCatchUp(): Promise<void> {
+    const streamId = this.#requireProgress().streamId;
     let scannedAfterOffset = this.#requireProgress().processing.acknowledgedThroughOffset;
-    using pager = this.stream.readEvents({
-      afterOffset: scannedAfterOffset,
-      limit: this.readPageSize,
-    });
-    let events = await pager.next();
-    while (events.length > 0) {
-      const lookahead = await pager.next();
-      const scannedThroughOffset = events.at(-1)!.offset;
-      await this.#processFrame({
-        events,
+    for (;;) {
+      const page = await this.stream.getEventPage({
+        afterOffset: scannedAfterOffset,
+        limit: this.readPageSize,
+      });
+      this.#assertReadStreamId(page.streamId, streamId);
+      const isFinalPage = page.events.length < this.readPageSize;
+      const scannedThroughOffset = isFinalPage ? page.streamMaxOffset : page.events.at(-1)!.offset;
+      if (scannedThroughOffset <= scannedAfterOffset) return;
+      await this.#processBatch({
+        streamId,
+        events: page.events,
         scannedAfterOffset,
         scannedThroughOffset,
-        streamMaxOffset: (lookahead.at(-1) ?? events.at(-1))!.offset,
+        streamMaxOffset: page.streamMaxOffset,
       });
       scannedAfterOffset = scannedThroughOffset;
-      events = lookahead;
+      if (isFinalPage) return;
     }
   }
 
   // ---------------------------------------------------------------------------
   // Small shared machinery.
   // ---------------------------------------------------------------------------
+
+  async #readCurrentStreamId(expectedStreamId?: string): Promise<string> {
+    // Identity-only read: the page envelope carries the lifetime and head, so
+    // do not transfer the stream's first retained event on every processor read.
+    const page = await this.stream.getEventPage({ afterOffset: Number.MAX_SAFE_INTEGER, limit: 1 });
+    if (expectedStreamId !== undefined && page.streamId !== expectedStreamId) {
+      throw new Error(
+        `stream processor "${this.hooks.contract.slug}" was opened for stream ID ` +
+          `${expectedStreamId}, but the stream at this path is ${page.streamId}`,
+      );
+    }
+    return page.streamId;
+  }
+
+  #assertReadStreamId(actualStreamId: string, expectedStreamId: string): void {
+    if (actualStreamId === expectedStreamId) return;
+    throw new Error(
+      `stream processor "${this.hooks.contract.slug}" stream ID changed during a read ` +
+        `(${expectedStreamId} -> ${actualStreamId})`,
+    );
+  }
 
   /** Fire-and-forget async work backed by the keepalive, with failures logged. */
   #runInBackground(work: () => Promise<unknown>): void {
@@ -992,8 +1110,8 @@ export class StreamProcessorRunner<
     return await awaitKeepAliveBacked(keepAliveWhile, work);
   }
 
-  /** Serialize frames + self-pulls; the chain swallows each entry's
-   * failure so one failed frame never wedges the entries behind it. */
+  /** Serialize batches + self-pulls; the chain swallows each entry's
+   * failure so one failed batch never wedges the entries behind it. */
   #enqueue<T>(work: () => Promise<T>): Promise<T> {
     const next = this.#chain.then(() => {
       this.#assertNotDisposed();
@@ -1009,7 +1127,7 @@ export class StreamProcessorRunner<
   #assertNotDisposed(): void {
     if (this.#disposed) {
       throw new Error(
-        `StreamProcessorRunner for "${this.driver.contract.slug}" is disposed; it accepts no new work`,
+        `StreamProcessorRunner for "${this.hooks.contract.slug}" is disposed; it accepts no new work`,
       );
     }
   }
@@ -1021,7 +1139,7 @@ export class StreamProcessorRunner<
     return this.#progress;
   }
 
-  // A throwing observer is ITS bug, never the frame's: the commit already
+  // A throwing observer is ITS bug, never the batch's: the commit already
   // landed, so failures are logged and the loop continues (the legacy
   // #notifyStateChange, verbatim).
   #notifyStateChange(snapshot: { offset: number; state: ProcessorState<Contract> }): void {
@@ -1034,7 +1152,7 @@ export class StreamProcessorRunner<
     }
   }
 
-  #parkEventWaiter(
+  #waitForEventCondition(
     match:
       | { kind: "predicate"; predicate: (event: StreamEvent) => boolean }
       | { kind: "offset"; offset: number },
@@ -1057,7 +1175,7 @@ export class StreamProcessorRunner<
         };
         opts.signal.addEventListener("abort", waiter.abortListener, { once: true });
         // The caller may abort between the public preflight check and listener
-        // registration. Re-check after registration so that edge cannot park.
+        // registration. Re-check after registration so that edge cannot halt.
         if (opts.signal.aborted) waiter.abortListener();
       }
     });
@@ -1082,8 +1200,8 @@ export class StreamProcessorRunner<
 
   // Settle waiters after the durable commit + published-cursor advance.
   // Predicate waits match actual delivered events; offset waits match the
-  // acknowledged SCAN watermark, so an empty/filtered interval cannot leave a
-  // read-your-writes waiter parked below a cursor the runner already proved.
+  // acknowledged scan offset, so an empty/filtered interval cannot leave a
+  // read-your-writes waiter halted below a cursor the runner already proved.
   #resolveEventWaiters(events: readonly StreamEvent[], acknowledgedThroughOffset: number): void {
     for (const waiter of this.#eventWaiters) {
       let matched = false;
@@ -1103,37 +1221,37 @@ export class StreamProcessorRunner<
   }
 }
 
-function assertDeliveryFrame(frame: StreamProcessorDeliveryFrame): void {
+function assertProcessorEventBatch(batch: StreamProcessorEventBatch): void {
   const coordinates = [
-    ["scannedAfterOffset", frame.scannedAfterOffset],
-    ["scannedThroughOffset", frame.scannedThroughOffset],
-    ["streamMaxOffset", frame.streamMaxOffset],
+    ["scannedAfterOffset", batch.scannedAfterOffset],
+    ["scannedThroughOffset", batch.scannedThroughOffset],
+    ["streamMaxOffset", batch.streamMaxOffset],
   ] as const;
   for (const [name, value] of coordinates) {
     if (!Number.isSafeInteger(value) || value < 0) {
-      throw new Error(`stream processor delivery ${name} must be a non-negative safe integer`);
+      throw new Error(`stream processor event batch ${name} must be a non-negative safe integer`);
     }
   }
-  if (frame.scannedThroughOffset < frame.scannedAfterOffset) {
+  if (batch.scannedThroughOffset < batch.scannedAfterOffset) {
     throw new Error(
-      `stream processor delivery scan regressed: ${frame.scannedAfterOffset} -> ${frame.scannedThroughOffset}`,
+      `stream processor event batch scan regressed: ${batch.scannedAfterOffset} -> ${batch.scannedThroughOffset}`,
     );
   }
-  if (frame.streamMaxOffset < frame.scannedThroughOffset) {
+  if (batch.streamMaxOffset < batch.scannedThroughOffset) {
     throw new Error(
-      `stream processor delivery scan ${frame.scannedThroughOffset} is ahead of stream head ${frame.streamMaxOffset}`,
+      `stream processor event batch scan ${batch.scannedThroughOffset} is ahead of stream maximum offset ${batch.streamMaxOffset}`,
     );
   }
-  let previousOffset = frame.scannedAfterOffset;
-  for (const event of frame.events) {
+  let previousOffset = batch.scannedAfterOffset;
+  for (const event of batch.events) {
     if (!Number.isSafeInteger(event.offset) || event.offset <= previousOffset) {
       throw new Error(
-        `stream processor delivery events must increase strictly after scan cursor ${previousOffset}; found ${event.offset}`,
+        `stream processor event batch events must increase strictly after scan cursor ${previousOffset}; found ${event.offset}`,
       );
     }
-    if (event.offset > frame.scannedThroughOffset) {
+    if (event.offset > batch.scannedThroughOffset) {
       throw new Error(
-        `stream processor delivery event ${event.offset} is beyond scanned-through offset ${frame.scannedThroughOffset}`,
+        `stream processor event batch event ${event.offset} is beyond scanned-through offset ${batch.scannedThroughOffset}`,
       );
     }
     previousOffset = event.offset;

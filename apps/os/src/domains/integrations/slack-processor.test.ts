@@ -16,7 +16,7 @@ import {
 } from "iterate/processors/testing";
 import { slackAgentSystemPrompt } from "../agents/agent-defaults.ts";
 import { SlackProcessor } from "./slack-processor-implementation.ts";
-import type { SlackProcessorContract } from "./slack-processor-contract.ts";
+import { SlackProcessorContract } from "./slack-processor-contract.ts";
 
 const TEAM_ID = "T0TEAM";
 const CONNECTION = "nustom";
@@ -80,7 +80,11 @@ function makeRouterHarness(substrate?: HarnessSubstrate & { network: MemoryStrea
           acked.push(payload);
         },
       }),
-    substrate: { clock, stream, progress: substrate?.progress ?? makeMemoryProgressStore() },
+    substrate: {
+      clock,
+      stream,
+      progress: substrate?.progress ?? makeMemoryProgressStore(SlackProcessorContract),
+    },
   });
   return { ...harness, acked, network };
 }
@@ -289,7 +293,7 @@ describe("SlackProcessor (webhook router)", () => {
     const replay = makeRouterHarness({
       clock: h.clock,
       network: h.network,
-      progress: makeMemoryProgressStore(),
+      progress: makeMemoryProgressStore(SlackProcessorContract),
       stream: h.stream,
     });
     await replay.settle();

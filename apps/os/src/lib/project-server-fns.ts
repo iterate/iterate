@@ -68,8 +68,10 @@ type ProjectWithIngressUrl = Project & { ingressUrl: string };
  * Single-project users then enter the project home's welcome flow, which
  * renders the remaining bootstrap progress from live state before onboarding.
  *
- * Failures degrade to `/projects`, where the client-side recovery button and
- * auto-recovery still render the real list.
+ * If the deployment-status probe or server-side birth fails, the decision
+ * carries an explicit `ensureBirth` handoff. The authenticated welcome page
+ * makes the same idempotent create once, so recovery preserves the intended
+ * onboarding destination instead of succeeding silently on `/projects`.
  */
 export const getRootProjectRedirectServerFn: (input?: {
   data?: { preferredProjectSlug: string | null };
@@ -100,7 +102,7 @@ export const getRootProjectRedirectServerFn: (input?: {
       if (
         decision.kind === "project" &&
         decision.welcome &&
-        decision.project.deploymentStatus === "missing"
+        (decision.project.deploymentStatus === "missing" || decision.ensureBirth)
       ) {
         try {
           const project = await projects.get(decision.project.slug);
@@ -108,13 +110,14 @@ export const getRootProjectRedirectServerFn: (input?: {
             projectId: decision.project.id,
             ...organizationSlugForProject(context, decision.project),
           });
+          return { ...decision, ensureBirth: false };
         } catch (error) {
           console.error("root redirect: missing project bootstrap failed", {
             projectId: decision.project.id,
             slug: decision.project.slug,
             message: error instanceof Error ? error.message : String(error),
           });
-          return { kind: "projects" };
+          return { ...decision, ensureBirth: true };
         }
       }
 

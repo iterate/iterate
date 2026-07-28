@@ -225,7 +225,7 @@ describe("script execution typecheck gate", () => {
     const inherited: CapabilityDescription = {
       path: ["tools", "weather"],
       scope: "/",
-      type: "itx-expression",
+      type: "itx-call",
       types: "export type Forecast = { forecast(): Promise<string> };",
     };
     const harness = makeProcessor({

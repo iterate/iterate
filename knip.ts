@@ -31,10 +31,6 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       // Seeded as a standalone worker entry outside apps/os/src. Tests import
       // parts of it, but the deployed config-repo worker uses the whole file.
       "config-repo-template/worker.ts",
-      // Used by apps/streams-example-app through its `~` alias into apps/os
-      // src; knip does not resolve that cross-workspace alias.
-      "src/domains/streams/client-libraries/processors/browser-event-feed/contract.ts",
-      "src/domains/streams/client-libraries/processors/browser-event-feed/implementation.ts",
     ],
     ignoreDependencies: [
       ...(base.ignoreDependencies ?? []),
@@ -162,11 +158,16 @@ function makeIterateCliWorkspace(): WorkspaceConfig {
       "src/worker.ts",
       "src/cli.ts",
       "bin/iterate.js",
+      "scripts/*.ts",
+      "tsdown.app-clients.config.ts",
       "tsdown.config.ts",
       "vitest.config.ts",
+      // tsdown reads these entrypoint paths as data; Knip cannot follow them
+      // from the config object into the two standalone browser programs.
+      "src/starter-apps/{guestbook,todo}/client.tsx",
       "src/**/*.test.{ts,tsx}",
     ],
-    project: ["src/**/*.{ts,tsx}", "bin/**/*.js"],
+    project: ["src/**/*.{ts,tsx}", "bin/**/*.js", "scripts/**/*.ts", "tsdown*.ts"],
     // `cloudflare:workers` (typed by src/cloudflare-workers.d.ts) parses as
     // the "cloudflare" package — same posture as the app workspaces.
     ignoreDependencies: ["cloudflare"],

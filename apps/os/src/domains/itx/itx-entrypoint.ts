@@ -26,7 +26,9 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxEntrypointProps> {
   async get() {
     const { path, projectId, purpose, streamContext } = scopeFromItxEntrypointProps(this.ctx.props);
     const auth =
-      purpose === "stream-delivery" ? streamDeliveryAuthContext() : trustedInternalAuthContext();
+      purpose === "stream-delivery"
+        ? streamDeliveryAuthContext(projectId)
+        : trustedInternalAuthContext();
     if (projectId === null) {
       // The deployment-global scope: what a GLOBAL (projectId: null) stream's
       // delivery dial evaluates expressions against. It is the same root a

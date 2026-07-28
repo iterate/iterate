@@ -21,7 +21,7 @@
 import type { z } from "zod";
 import type { StreamEventInput } from "iterate/processors";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
+import { buildHostedProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { SecretProcessorContract } from "./secret-processor-contract.ts";
 
 /** The `secret/created` payload — the secret's birth certificate (material already encrypted by the DO). */
@@ -56,7 +56,7 @@ export function secretCreationEvents(input: {
       }),
       ...(offset === undefined ? {} : { offset }),
     } as StreamEventInput,
-    buildDurableObjectProcessorSubscriptionConfiguredEvent({
+    buildHostedProcessorSubscriptionConfiguredEvent({
       durableObjectName,
       idempotencyKey: `stream/subscription-configured:${durableObjectName}#${SecretProcessorContract.slug}`,
       processor: ["secrets", ["get", path], "processor"],

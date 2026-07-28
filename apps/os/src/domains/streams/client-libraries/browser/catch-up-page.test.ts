@@ -6,6 +6,9 @@ import {
   readCatchUpPage,
 } from "./catch-up-page.ts";
 
+const TEST_STREAM_ID = "11111111-1111-4111-8111-111111111111";
+const RECREATED_STREAM_ID = "22222222-2222-4222-8222-222222222222";
+
 describe("readCatchUpPage", () => {
   it("halves an oversized RPC page until it fits", async () => {
     const read = vi.fn(async (limit: number) => {
@@ -14,11 +17,12 @@ describe("readCatchUpPage", () => {
           "Serialized RPC arguments or return values are limited to 32 MiB, but the size of this value was: 35669548 bytes.",
         );
       }
-      return [{ offset: 1 }];
+      return { streamId: TEST_STREAM_ID, events: [{ offset: 1 }] };
     });
 
     await expect(readCatchUpPage(500, read)).resolves.toEqual({
       limit: 125,
+      streamId: TEST_STREAM_ID,
       page: [{ offset: 1 }],
     });
     expect(read.mock.calls.map(([limit]) => limit)).toEqual([500, 250, 125]);
@@ -47,7 +51,7 @@ describe("readCatchUpPage", () => {
 });
 
 describe("catchUpDurableHistory", () => {
-  it("skips pre-existing ephemeral rows and subscribes after the captured head", async () => {
+  it("skips pre-existing ephemeral rows and opens after the captured maximum offset", async () => {
     const event = (offset: number, ephemeral = false): StreamEvent => ({
       type: ephemeral ? "events.iterate.com/test/chunk" : "events.iterate.com/test/durable",
       offset,
@@ -64,16 +68,20 @@ describe("catchUpDurableHistory", () => {
       afterOffset: 0,
       throughOffset: 4,
       pageLimit: 2,
+      expectedStreamId: TEST_STREAM_ID,
       read: async (input) => {
         reads.push(input);
-        return serverEvents
-          .filter(
-            (item) =>
-              item.ephemeral !== true &&
-              item.offset > input.afterOffset &&
-              item.offset < input.beforeOffset,
-          )
-          .slice(0, input.limit);
+        return {
+          streamId: TEST_STREAM_ID,
+          events: serverEvents
+            .filter(
+              (item) =>
+                item.ephemeral !== true &&
+                item.offset > input.afterOffset &&
+                item.offset < input.beforeOffset,
+            )
+            .slice(0, input.limit),
+        };
       },
       ingest: async (page) => {
         ingested.push(...page.events);
@@ -91,7 +99,7 @@ describe("catchUpDurableHistory", () => {
       [3, 4],
     ]);
     // Offsets 2 and 4 were scanned historical ephemerals. Starting the live
-    // subscription after the captured head prevents either from replaying.
+    // opening after the captured maximum offset prevents either from replaying.
     expect(result).toEqual({ pageLimit: 2, replayAfterOffset: 4 });
   });
 
@@ -101,7 +109,8 @@ describe("catchUpDurableHistory", () => {
       afterOffset: 5,
       throughOffset: 9,
       pageLimit: 500,
-      read: async () => [],
+      expectedStreamId: TEST_STREAM_ID,
+      read: async () => ({ streamId: TEST_STREAM_ID, events: [] }),
       ingest: async (page) => {
         scans.push({ events: page.events, through: page.scannedThroughOffset });
       },
@@ -110,14 +119,41 @@ describe("catchUpDurableHistory", () => {
     expect(scans).toEqual([{ events: [], through: 9 }]);
     expect(result).toEqual({ pageLimit: 500, replayAfterOffset: 9 });
   });
+
+  it("rejects a recreated stream before ingesting the first page from its new lifetime", async () => {
+    const ingestedOffsets: number[] = [];
+    let reads = 0;
+
+    await expect(
+      catchUpDurableHistory({
+        afterOffset: 0,
+        throughOffset: 2,
+        pageLimit: 1,
+        expectedStreamId: TEST_STREAM_ID,
+        read: async () => {
+          reads += 1;
+          return {
+            streamId: reads === 1 ? TEST_STREAM_ID : RECREATED_STREAM_ID,
+            events: [{ offset: reads }],
+          };
+        },
+        ingest: async (page) => {
+          ingestedOffsets.push(...page.events.map((event) => event.offset));
+        },
+      }),
+    ).rejects.toThrow(
+      `stream ID changed during catch-up page read (${TEST_STREAM_ID} -> ${RECREATED_STREAM_ID})`,
+    );
+    expect(ingestedOffsets).toEqual([1]);
+  });
 });
 
 describe("catchUpToLiveReplayBoundary", () => {
-  it("re-reads a moving head until the admitted live replay is bounded", async () => {
+  it("re-reads a moving maximum offset until the admitted replay is bounded", async () => {
     const ranges: Array<[number, number]> = [];
-    const heads = [
-      { createdAt: "incarnation-a", maxOffset: 5_000 },
-      { createdAt: "incarnation-a", maxOffset: 5_100 },
+    const offsetSnapshots = [
+      { streamId: TEST_STREAM_ID, maxOffset: 5_000 },
+      { streamId: TEST_STREAM_ID, maxOffset: 5_100 },
     ];
 
     const result = await catchUpToLiveReplayBoundary({
@@ -125,12 +161,12 @@ describe("catchUpToLiveReplayBoundary", () => {
       throughOffset: 100,
       pageLimit: 500,
       maxReplayOffsetGap: 2_000,
-      expectedIncarnation: "incarnation-a",
+      expectedStreamId: TEST_STREAM_ID,
       catchUp: async (input) => {
         ranges.push([input.afterOffset, input.throughOffset]);
         return { pageLimit: input.pageLimit, replayAfterOffset: input.throughOffset };
       },
-      readHead: async () => heads.shift()!,
+      readLatestOffset: async () => offsetSnapshots.shift()!,
     });
 
     expect(ranges).toEqual([
@@ -147,15 +183,18 @@ describe("catchUpToLiveReplayBoundary", () => {
         throughOffset: 10,
         pageLimit: 500,
         maxReplayOffsetGap: 2_000,
-        expectedIncarnation: "incarnation-a",
+        expectedStreamId: TEST_STREAM_ID,
         catchUp: async (input) => ({
           pageLimit: input.pageLimit,
           replayAfterOffset: input.throughOffset,
         }),
-        readHead: async () => ({ createdAt: "incarnation-b", maxOffset: 10 }),
+        readLatestOffset: async () => ({
+          streamId: RECREATED_STREAM_ID,
+          maxOffset: 10,
+        }),
       }),
     ).rejects.toThrow(
-      "stream incarnation changed during catch-up (incarnation-a -> incarnation-b)",
+      `stream ID changed during catch-up (${TEST_STREAM_ID} -> ${RECREATED_STREAM_ID})`,
     );
   });
 });

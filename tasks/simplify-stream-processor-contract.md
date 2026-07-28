@@ -59,7 +59,7 @@ clean tests. See the last section.
 4. **Retire the "future high-throughput batches" justification.** Zero code,
    comments, or tasks reference the PCM/voice case. If it ever comes, that
    traffic is ephemeral, and ephemeral events never reach durable processor
-   delivery in either lane (`stream-subscribers.ts:605-609`, `1086-1096`;
+   delivery in either lane (`stream-event-sender.ts:605-609`, `1086-1096`;
    storage default excludes them). Batches need no defense as a semantic
    concept because they aren't one: they are a catch-up paging unit (1000
    events / 1MB) and an append-coalescing unit. Say exactly that, once, in the
@@ -70,7 +70,7 @@ clean tests. See the last section.
 5. **Decide the fate of the event-less pass** (`processEvent` with
    `event: null`, `stream-processor-runner.ts:696-738`). Not batch-caused — a
    singleton frame whose head event is an unconsumed type (e.g.
-   `stream/subscriber-disconnected`) triggers it too. Options:
+   `stream/connection-closed`) triggers it too. Options:
    (a) make it opt-in (contract flag, or consuming a core head-advance event
    type) so the majority of processors never see `event: null` and never
    write the guard; (b) keep, but documented in one sentence as "your view of
@@ -263,7 +263,7 @@ Design decisions already made in the jam (2026-07-20):
   observability we can add later (settle `{ kind: "cancelled", reason:
   "incarnation-died" }` + a started event + an attempts-per-desire poison cap)
   without changing the shape. Also NOT consumed: `stream/woken` and
-  `stream/subscriber-connected` — prod consumes them as extra "re-check at
+  `stream/connection-opened` — prod consumes them as extra "re-check at
   head" signals to paper over exactly the stranded-head problem note 5's
   head-turn guarantee solves in the framework; with that guarantee they are
   redundant here.
@@ -416,7 +416,7 @@ the gap is bridge machinery. Event dispositions:
 - DELETE `llm-request-started` + `llm-request-cancelled`: adopt-recovery
   needs neither; requested-phase cancel = settled{cancelled}; scheduled-phase
   cancel has no event to cancel anymore (late intent folds to nothing).
-- DELETE from consumes: `stream/woken`, `stream/subscriber-connected`
+- DELETE from consumes: `stream/woken`, `stream/connection-opened`
   (re-check workarounds; framework head-turn guarantee covers).
 - COLLAPSE candidates (decide): `web-message-sent` (sender appends
   context-added itself); `token-usage-reported` (usage already in

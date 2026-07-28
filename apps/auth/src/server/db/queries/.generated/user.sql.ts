@@ -143,6 +143,41 @@ export namespace updateVerifiedUserById {
   };
 }
 
+const grantPlatformAdminByUserIdSql = `
+UPDATE user
+SET role = 'admin',
+  updatedAt = ?
+WHERE id = ?;
+`.trim();
+const grantPlatformAdminByUserIdQuery = (
+  data: grantPlatformAdminByUserId.Data,
+  params: grantPlatformAdminByUserId.Params,
+) => ({
+  name: "grantPlatformAdminByUserId",
+  sql: grantPlatformAdminByUserIdSql,
+  args: [data.updatedAt, params.id],
+});
+
+export const grantPlatformAdminByUserId = Object.assign(
+  async function grantPlatformAdminByUserId(
+    client: Client,
+    data: grantPlatformAdminByUserId.Data,
+    params: grantPlatformAdminByUserId.Params,
+  ) {
+    return client.run(grantPlatformAdminByUserIdQuery(data, params));
+  },
+  { sql: grantPlatformAdminByUserIdSql, query: grantPlatformAdminByUserIdQuery },
+);
+
+export namespace grantPlatformAdminByUserId {
+  export type Data = {
+    updatedAt: number;
+  };
+  export type Params = {
+    id: string;
+  };
+}
+
 const insertUserSql = `
 INSERT INTO user (
   id,

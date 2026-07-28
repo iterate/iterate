@@ -172,6 +172,14 @@ describe("isRetryableArtifactsInfrastructureError", () => {
     ).toBe(true);
   });
 
+  test.each([
+    new Error("HTTP Error: 503 Service Unavailable"),
+    Object.assign(new Error("Artifacts request failed"), { status: 503 }),
+    Object.assign(new Error("Artifacts request failed"), { statusCode: 429 }),
+  ])("matches transient Artifacts HTTP failures after client metadata loss", (error) => {
+    expect(isRetryableArtifactsInfrastructureError(error)).toBe(true);
+  });
+
   test("rejects domain errors and lookalike codes", () => {
     expect(
       isRetryableArtifactsInfrastructureError(
@@ -186,6 +194,9 @@ describe("isRetryableArtifactsInfrastructureError", () => {
         Object.assign(new Error("different service"), { code: "INTERNAL_ERROR" }),
       ),
     ).toBe(false);
+    expect(isRetryableArtifactsInfrastructureError(new Error("HTTP Error: 404 Not Found"))).toBe(
+      false,
+    );
   });
 });
 

@@ -205,7 +205,7 @@ Sessions use the platform stream, not a bespoke websocket:
 
 ## 5. Mounts × sessions (the previously under-thought dimension)
 
-- **Base motion is never silent.** `configure` installs a cross-post from each mounted
+- **Base motion is never silent.** `configure` installs a copy from each mounted
   repo's stream (`repo/commit-completed` → `workspace/head-moved`). Live sessions react:
   clean doc (never flushed, state vector == seed) → **auto-rebase, loudly** (durable
   `base-moved {resolution: "rebased-clean"}`); dirty doc → flag `conflicted`, wait for
@@ -296,7 +296,7 @@ Sessions use the platform stream, not a bespoke websocket:
 | `repo/commit-completed` incl. external pushes (head-move source) | repo stream | EXISTS |
 | `repo.listTree({oid, path})` one-level listing | repo DO | **NEW** (tree objects never deserialized anywhere today) |
 | `repo.readFileAt({oid, path})` pinned-oid read (rebase three-way base) | repo DO | **NEW** (head-tree cache is HEAD-only) |
-| Cross-post repo→workspace stream (`head-moved` glue at configure time) | workspaces | NEW (crossPostTo itself EXISTS) |
+| Copy repo→workspace stream (`head-moved` glue at configure time) | workspaces | NEW (copyTo itself EXISTS) |
 | Ephemeral events, subscribe lane, presence roster | streams | EXISTS |
 | Ephemeral eviction sweep | streams | PARTIAL (licensed, unbuilt; session streams make it needed) |
 | `WORKSPACE_SESSION` DO + processor contract + session registry + barrier plumbing | workspaces (new sub-domain) | NEW |

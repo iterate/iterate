@@ -196,7 +196,7 @@ _execution_ has silently forked into three regimes:
    **2026-06-10 prd incident** (deploy evicted a SlackAgent DO mid-run; the turn
    never replayed) rebuilt into the new architecture with new names.
 3. **At-most-once-ever (worst, and load-bearing):** the stream core's own
-   `#runInBackground` ancestor announcements and cross-posts fire once with no
+   `#runInBackground` ancestor announcements and copies fire once with no
    journal evidence at all — a crash between append and announcement loses them
    permanently. Announcements are load-bearing: `agents.list` is folded from them.
 
@@ -291,7 +291,7 @@ Two loose ends in the same substrate:
   spam because `getEvents` lacks the `eventTypes` filter that `subscribe` already
   has. Default the limit; add the filter (~10 lines).
 - **Producer-less surface** (~100 lines): the pause door, `metadata-updated` (zero
-  producers), cross-post rules exercised only by e2e. Delete until a producer
+  producers), copy rules exercised only by e2e. Delete until a producer
   exists; the journal keeps the history if it comes back.
 
 ### 3.5 Fold-from-zero on hot paths — the doctrine's own primitives, unused
@@ -412,7 +412,7 @@ entry is gone.
 | Manual QA page               | `src/routes/**/reactivity.tsx`                               |   ~450 | Hand-driven reactivity playground on a product route.                                                                                                                                                                                                                                                                                                                                                                       |
 | Dead interrupt lane          | agents domain                                                |    ~45 | Zero emitters of `interrupt-current-request`; the UI appends `llm-request-cancelled` directly (`routes/**/agents/streams/$.tsx:52-62`).                                                                                                                                                                                                                                                                                     |
 | Twin retention wrappers      | `stream-connections.ts:363` / `stream-processor.ts:637`      |    ~40 | Same helper, written twice (§3.4).                                                                                                                                                                                                                                                                                                                                                                                          |
-| Producer-less stream surface | streams domain                                               |   ~100 | Pause door, `metadata-updated`, cross-post rules with no non-test producers (§3.4).                                                                                                                                                                                                                                                                                                                                         |
+| Producer-less stream surface | streams domain                                               |   ~100 | Pause door, `metadata-updated`, copy rules with no non-test producers (§3.4).                                                                                                                                                                                                                                                                                                                                               |
 | Dead integration metadata UI | `routes/**/integrations.tsx`                                 |    ~25 | Renders fields no flow writes.                                                                                                                                                                                                                                                                                                                                                                                              |
 | Dead config surface          | config module                                                |    ~30 | `typeIdPrefix`, `pickAppConfigEnv`, double zod parse, 4 consumer-less `OPTIONAL_SECRETS`.                                                                                                                                                                                                                                                                                                                                   |
 

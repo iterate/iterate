@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   projectEgressFetcher: vi.fn(() => ({})),
   resolveWorkerSource: vi.fn(),
   statefulFetch: vi.fn(),
+  statefulInvokeCapability: vi.fn(),
   workerGetByName: vi.fn(),
 }));
 
@@ -82,7 +83,13 @@ beforeEach(() => {
     .mockReset()
     .mockRejectedValue(new Error("stop after entering the trace span"));
   h.statefulFetch.mockReset().mockRejectedValue(new Error("stop at stateful fetch"));
-  h.workerGetByName.mockReset().mockReturnValue({ fetch: h.statefulFetch });
+  h.statefulInvokeCapability
+    .mockReset()
+    .mockRejectedValue(new Error("stop at stateful invocation"));
+  h.workerGetByName.mockReset().mockReturnValue({
+    fetch: h.statefulFetch,
+    invokeCapability: h.statefulInvokeCapability,
+  });
 });
 
 it("gives bare fetch and scoped ITX the same host-minted invocation source", () => {
@@ -175,14 +182,17 @@ describe("dynamic worker spans", () => {
 describe("createApp asset dispatch", () => {
   it("serves a stateful app asset before waking its Durable Object", async () => {
     h.resolveWorkerSource.mockResolvedValue({
-      assetConfig: undefined,
-      assetManifest: { "/client.js": { etag: "asset-etag" } },
-      assets: { "client.js": "console.log('client')" },
-      cacheKey: "build-key",
-      commitOid: "commit-1",
-      mainModule: "server.js",
-      modules: {},
-      wranglerConfig: undefined,
+      ok: true,
+      source: {
+        assetConfig: undefined,
+        assetManifest: { "/client.js": { etag: "asset-etag" } },
+        assets: { "client.js": "console.log('client')" },
+        cacheKey: "build-key",
+        commitOid: "commit-1",
+        mainModule: "server.js",
+        modules: {},
+        wranglerConfig: undefined,
+      },
     });
     h.handleAssetRequest.mockResolvedValue(
       new Response("console.log('client')", {
@@ -227,4 +237,86 @@ describe("createApp asset dispatch", () => {
     expect(h.handleAssetRequest).not.toHaveBeenCalled();
     expect(h.workerGetByName).toHaveBeenCalledOnce();
   });
+});
+
+it("turns a stateful source-build result into a local terminal delivery error", async () => {
+  h.statefulInvokeCapability.mockImplementation(
+    async ({ buildFailureNonce }: { buildFailureNonce: string }) => [
+      buildFailureNonce,
+      { kind: "source", message: 'No such module "yaml".' },
+    ],
+  );
+  const runner = new DynamicWorkerRunner({
+    streamContext: { kind: "scope", scopePath: statefulRef.path },
+    exports: {} as ExecutionContext["exports"],
+    projectId: "prj_private",
+    scopePath: statefulRef.path,
+  });
+
+  const invocation = runner.invokeCapability({
+    path: ["processor", "wakeStreamProcessor"],
+    ref: statefulRef,
+  });
+
+  await expect(invocation).rejects.toMatchObject({
+    message: 'No such module "yaml".',
+    name: "WorkerBuildFailedError",
+    retryable: false,
+  });
+});
+
+it("returns a stateful worker's successful value without wrapping its live stubs", async () => {
+  const liveStub = {
+    [Symbol.dispose]: vi.fn(),
+    dup: vi.fn(),
+    poke: vi.fn(),
+  };
+  const returned = {
+    checkpointOffset: 12,
+    sink: liveStub,
+    workerBuildFailure: {
+      failure: { kind: "source", message: "customer data" },
+      nonce: "customer-controlled",
+    },
+  };
+  h.statefulInvokeCapability.mockResolvedValue(returned);
+  const runner = new DynamicWorkerRunner({
+    streamContext: { kind: "scope", scopePath: statefulRef.path },
+    exports: {} as ExecutionContext["exports"],
+    projectId: "prj_private",
+    scopePath: statefulRef.path,
+  });
+
+  await expect(
+    runner.invokeCapability({
+      path: ["processor", "wakeStreamProcessor"],
+      ref: statefulRef,
+    }),
+  ).resolves.toBe(returned);
+});
+
+it("returns a bare stateful RPC stub without probing it for a build failure", async () => {
+  const returned = new Proxy(
+    {},
+    {
+      get(target, property, receiver) {
+        if (property === "workerBuildFailure") throw new Error("bare RPC stub was probed");
+        return Reflect.get(target, property, receiver);
+      },
+    },
+  );
+  h.statefulInvokeCapability.mockResolvedValue(returned);
+  const runner = new DynamicWorkerRunner({
+    streamContext: { kind: "scope", scopePath: statefulRef.path },
+    exports: {} as ExecutionContext["exports"],
+    projectId: "prj_private",
+    scopePath: statefulRef.path,
+  });
+
+  await expect(
+    runner.invokeCapability({
+      path: ["processor", "wakeStreamProcessor"],
+      ref: statefulRef,
+    }),
+  ).resolves.toBe(returned);
 });

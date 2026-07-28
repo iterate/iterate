@@ -1,7 +1,7 @@
 // The device processor's executable spec, on the generic step harness from
 // iterate/processors/testing: the REAL StreamProcessorRunner over a
 // MemoryStreamNetwork (the device stream plus the project root stream the
-// cross-posts land on), virtual time, and eviction-faithful crash(). The only
+// copies land on), virtual time, and eviction-faithful crash(). The only
 // device-specific fakes are the Expo gateway (send/getReceipt/clearPushToken,
 // swappable per test through a mutable box) and the recorded receipt-alarm
 // repoints.
@@ -97,7 +97,11 @@ function makeDeviceHarness(substrate?: HarnessSubstrate) {
     (() => {
       const clock = { now: Date.parse("2026-07-18T08:00:00Z") };
       const network = new MemoryStreamNetwork(() => clock.now);
-      return { clock, stream: network.get("/devices/phone"), progress: makeMemoryProgressStore() };
+      return {
+        clock,
+        stream: network.get("/devices/phone"),
+        progress: makeMemoryProgressStore(DeviceProcessorContract),
+      };
     })();
   const harness = makeProcessorHarness<DeviceProcessorContract, DeviceProcessor>({
     createProcessor: (deps) =>
@@ -131,11 +135,11 @@ function makeDeviceHarness(substrate?: HarnessSubstrate) {
 }
 
 // =============================================================================
-// Birth and the project-root cross-posts
+// Birth and the project-root copies
 // =============================================================================
 
 describe("DeviceProcessor enrollment", () => {
-  it("created cross-posts the catalog fact and arms the notification-intent subscription on the root stream", async () => {
+  it("created records the catalog fact and arms the notification-intent subscription on the root stream", async () => {
     const h = makeDeviceHarness();
     await h.play(["append", DEVICE_CREATED]);
 
@@ -154,12 +158,15 @@ describe("DeviceProcessor enrollment", () => {
         type: "events.iterate.com/stream/subscription-configured",
         payload: {
           subscriptionKey: "notification-intent:/devices/phone",
-          selector: { eventTypes: ["events.iterate.com/notification/requested"] },
-          delivery: {
-            mode: "push",
-            expression: ["streams", ["get", "/devices/phone"], "acceptCrossPost"],
+          filter: { eventTypes: ["events.iterate.com/notification/requested"] },
+          receiver: {
+            action: "copy-to-stream",
+            receivingStreamPath: "/devices/phone",
+            delivery: {
+              start: "now",
+              onFailingEvent: "halt",
+            },
           },
-          deliver: "new",
         },
       },
     ]);
@@ -203,7 +210,7 @@ describe("DeviceProcessor enrollment", () => {
       tokenUpdatedOffset: 3,
     });
     // The revocation removed the intent subscription; the token update
-    // re-armed it (a fresh event — the cross-post key carries the offset).
+    // re-armed it (a fresh event whose idempotency key carries the offset).
     expect(h.rootEvents().map((event) => event.type)).toEqual([
       "events.iterate.com/device/created",
       "events.iterate.com/stream/subscription-configured",
@@ -260,7 +267,7 @@ describe("DeviceProcessor push attempts", () => {
     );
   });
 
-  it("a cross-posted project notification intent becomes this device's push obligation", async () => {
+  it("a copied project notification intent becomes this device's push obligation", async () => {
     const h = makeDeviceHarness();
     h.gateway.send = async () => ({ status: "ok", ticketId: "ticket-intent" });
     await h.play([
@@ -644,7 +651,7 @@ describe("DeviceProcessor receipts", () => {
 describe("DeviceProcessor replay", () => {
   it("a full replay (fresh cursor over the same stream) re-dials no vendor and appends nothing", async () => {
     // The harshest at-least-once redelivery: a fresh progress store replays
-    // every event, so every per-event cross-post re-appends (and must dedupe
+    // every event, so every per-event copy re-appends (and must dedupe
     // byte-identically) and the at-head pass re-derives over settled state
     // (and must find nothing to do).
     const h = makeDeviceHarness();
@@ -664,7 +671,7 @@ describe("DeviceProcessor replay", () => {
     const replay = makeDeviceHarness({
       clock: h.clock,
       stream: h.stream,
-      progress: makeMemoryProgressStore(),
+      progress: makeMemoryProgressStore(DeviceProcessorContract),
     });
     replay.gateway.send = async () => {
       throw new Error("a replay must not dial Expo");

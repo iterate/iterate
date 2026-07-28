@@ -1,6 +1,7 @@
+import { parseIterateRepoPkgSpec, pinIterateRepoPkgRef } from "../../pkg-pr-new.ts";
 import {
   buildFailureMessageFromError,
-  WorkerBuildFailedError,
+  type WorkerBuildFailure,
   type WorkerBuildModule,
   type WorkerBuildAssetMetadata,
   type WorkerBuildWranglerConfig,
@@ -15,18 +16,100 @@ export const WORKER_BUNDLER_VERSION = "0.2.1";
 export const WORKER_COMPATIBILITY_DATE = "2026-05-01";
 export const WORKER_COMPATIBILITY_FLAGS = ["nodejs_compat"];
 
-// worker-bundler currently reports dependency-install failures as warnings
-// and can still return an esbuild output containing unresolved bare imports.
-// Such output is not a usable artifact: Worker Loader rejects it only when
-// the first request tries to instantiate the module graph. Keep ordinary
+// worker-bundler reports dependency-install failures as warnings, and (via
+// our patch — see patches/@cloudflare__worker-bundler@0.2.1.patch) warns when
+// its resolver keeps an unresolvable import external. Either way the output
+// is not a usable artifact: Worker Loader rejects it only when the first
+// request tries to instantiate the module graph, which surfaces as a cryptic
+// `No such module` delivery failure instead of a build error. Keep ordinary
 // compiler warnings, but fail the build boundary on every install-warning
-// shape emitted by worker-bundler's installer.
+// shape emitted by worker-bundler's installer and on unresolved imports
+// (below).
 const DEPENDENCY_INSTALL_FAILURE_WARNING_PATTERNS = [
   /^Failed to parse package\.json\b/,
   /^Could not resolve version for\b/,
   /^Version .+ not found for\b/,
   /^Failed to install\b/,
 ] as const;
+
+/**
+ * Bare node builtins nodejs_compat provides at runtime (WORKER_COMPATIBILITY_FLAGS
+ * above): imports of these legitimately stay external, everything else external
+ * is a startup failure. Base names only — subpath imports like `stream/web` or
+ * `fs/promises` share their base's entry.
+ */
+const NODE_BUILTIN_BASE_NAMES = new Set([
+  "assert",
+  "async_hooks",
+  "buffer",
+  "child_process",
+  "cluster",
+  "console",
+  "constants",
+  "crypto",
+  "dgram",
+  "diagnostics_channel",
+  "dns",
+  "domain",
+  "events",
+  "fs",
+  "http",
+  "http2",
+  "https",
+  "inspector",
+  "module",
+  "net",
+  "os",
+  "path",
+  "perf_hooks",
+  "process",
+  "punycode",
+  "querystring",
+  "readline",
+  "repl",
+  "stream",
+  "string_decoder",
+  "sys",
+  "timers",
+  "tls",
+  "trace_events",
+  "tty",
+  "url",
+  "util",
+  "v8",
+  "vm",
+  "wasi",
+  "worker_threads",
+  "zlib",
+]);
+
+/**
+ * The warnings that mean the artifact cannot instantiate: unresolved imports
+ * kept external (`Failed to resolve '<specifier>' from <importer>` — emitted
+ * by our worker-bundler patch in the esbuild lane and by the stock transform
+ * lane) and files the transform lane could not read at all. Scheme'd
+ * specifiers (`node:*`, `cloudflare:*`) and bare node builtins are exempt —
+ * the runtime provides those.
+ */
+function unresolvedImportFailures(warnings: readonly string[]): string[] {
+  const failures: string[] = [];
+  for (const warning of warnings) {
+    if (warning.startsWith("File not found: ")) {
+      failures.push(warning);
+      continue;
+    }
+    const match = /^Failed to resolve '([^']+)' from /.exec(warning);
+    if (match === null) continue;
+    const specifier = match[1]!;
+    if (/^[a-zA-Z][\w+.-]*:/.test(specifier)) continue;
+    const base = specifier.startsWith("@")
+      ? specifier.split("/").slice(0, 2).join("/")
+      : specifier.split("/")[0]!;
+    if (NODE_BUILTIN_BASE_NAMES.has(base)) continue;
+    failures.push(warning);
+  }
+  return failures;
+}
 
 const PACKAGE_DEPENDENCY_FIELDS = [
   "dependencies",
@@ -38,13 +121,19 @@ const PACKAGE_DEPENDENCY_FIELDS = [
 type PackageManifest = Record<string, unknown> &
   Partial<Record<(typeof PACKAGE_DEPENDENCY_FIELDS)[number], Record<string, unknown>>>;
 
-/** Prepare declared `iterate` specs for worker-bundler. A deployment preview
- * pin replaces every declaration; the root declaration is always promoted to
- * a runtime dependency because worker-bundler deliberately ignores
+/** Prepare this repo's pkg.pr.new dependency specs for worker-bundler
+ * (src/pkg-pr-new.ts has the URL grammar and the uniform-usage assumption).
+ * A deployment ref pin swaps the `@<ref>` of every matching spec; spec
+ * overrides (local dev's SDK tarball) replace named specs wholesale. Every
+ * matched package's root declaration is promoted to a runtime dependency —
+ * even with no knobs set — because worker-bundler deliberately ignores
  * devDependencies. The rewrite is build-local and never changes the repo. */
-function applyIteratePackageSpecOverride(
+function applyIterateRepoPkgOverrides(
   files: Record<string, string>,
-  iteratePackageSpec: string | undefined,
+  overrides: {
+    ref: string | undefined;
+    specOverrides: Record<string, string> | undefined;
+  },
 ): Record<string, string> {
   const content = files["package.json"];
   if (content === undefined) return files;
@@ -59,34 +148,43 @@ function applyIteratePackageSpecOverride(
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return files;
   // Safe after the object guard; dependency fields get their own shape checks below.
   const manifest = parsed as PackageManifest;
+  const specOverrides = overrides.specOverrides || {};
 
-  let declaredPackageSpec: unknown;
+  // Matched packages' effective specs, first declaration wins (field order).
+  const runtimeSpecs = new Map<string, string>();
   let changed = false;
   for (const field of PACKAGE_DEPENDENCY_FIELDS) {
     const dependencies = manifest[field];
-    if (
-      dependencies === null ||
-      typeof dependencies !== "object" ||
-      Array.isArray(dependencies) ||
-      !Object.hasOwn(dependencies, "iterate")
-    ) {
+    if (dependencies === null || typeof dependencies !== "object" || Array.isArray(dependencies)) {
       continue;
     }
-    declaredPackageSpec ??= dependencies.iterate;
-    if (iteratePackageSpec !== undefined && dependencies.iterate !== iteratePackageSpec) {
-      dependencies.iterate = iteratePackageSpec;
-      changed = true;
+    for (const [name, declared] of Object.entries(dependencies)) {
+      if (typeof declared !== "string") continue;
+      let next = declared;
+      let matched = parseIterateRepoPkgSpec(declared) !== null;
+      if (matched && overrides.ref !== undefined) {
+        next = pinIterateRepoPkgRef(declared, overrides.ref)!;
+      }
+      if (specOverrides[name] !== undefined) {
+        next = specOverrides[name];
+        matched = true;
+      }
+      if (matched && !runtimeSpecs.has(name)) runtimeSpecs.set(name, next);
+      if (next !== declared) {
+        dependencies[name] = next;
+        changed = true;
+      }
     }
   }
-  if (declaredPackageSpec === undefined) return files;
 
-  const runtimeSpec = iteratePackageSpec ?? declaredPackageSpec;
-  if (manifest.dependencies?.iterate !== runtimeSpec) {
-    manifest.dependencies = {
-      ...manifest.dependencies,
-      iterate: runtimeSpec,
-    };
-    changed = true;
+  for (const [name, spec] of runtimeSpecs) {
+    if (manifest.dependencies?.[name] !== spec) {
+      manifest.dependencies = {
+        ...manifest.dependencies,
+        [name]: spec,
+      };
+      changed = true;
+    }
   }
   if (!changed) return files;
 
@@ -95,12 +193,7 @@ function applyIteratePackageSpecOverride(
 
 /** Resolve `files`, then make one direct createWorker/createApp call in the
  * isolated compiler sidecar. */
-export async function executeWorkerBuild(input: {
-  files: Record<string, string>;
-  iteratePackageSpec?: string;
-  source: DynamicWorkerSource;
-  workerBundler: Pick<import("../../worker-bundler.ts").default, "createApp" | "createWorker">;
-}): Promise<{
+type WorkerBuildOutput = {
   assetConfig?: WorkerBundlerAssetConfig;
   assetManifest: Record<string, WorkerBuildAssetMetadata>;
   assets: Record<string, string>;
@@ -108,11 +201,26 @@ export async function executeWorkerBuild(input: {
   modules: Record<string, WorkerBuildModule>;
   warnings: string[];
   wranglerConfig?: WorkerBuildWranglerConfig;
-}> {
-  const files = applyIteratePackageSpecOverride(input.files, input.iteratePackageSpec);
+};
+
+type WorkerBuildBackendResult =
+  | { ok: true; output: WorkerBuildOutput }
+  | { failure: WorkerBuildFailure; ok: false };
+
+export async function executeWorkerBuild(input: {
+  files: Record<string, string>;
+  iterateRepoPkgRef?: string;
+  iterateRepoPkgSpecOverrides?: Record<string, string>;
+  source: DynamicWorkerSource;
+  workerBundler: Pick<import("../../worker-bundler.ts").default, "createApp" | "createWorker">;
+}): Promise<WorkerBuildBackendResult> {
+  const files = applyIterateRepoPkgOverrides(input.files, {
+    ref: input.iterateRepoPkgRef,
+    specOverrides: input.iterateRepoPkgSpecOverrides,
+  });
   if ("createApp" in input.source) {
     const { files: _files, ...options } = input.source.createApp;
-    return unwrapBuildResult(
+    return classifyBuildResult(
       await input.workerBundler.createApp({
         ...options,
         files,
@@ -121,18 +229,25 @@ export async function executeWorkerBuild(input: {
   }
 
   const { files: _files, ...options } = input.source.createWorker;
-  const built = unwrapBuildResult(
+  const built = classifyBuildResult(
     await input.workerBundler.createWorker({
       ...options,
       files,
     }),
   );
-  return { assetManifest: {}, assets: {}, ...built };
+  return built.ok
+    ? {
+        ok: true,
+        output: { assetManifest: {}, assets: {}, ...built.output },
+      }
+    : built;
 }
 
-function unwrapBuildResult<T>(result: { error: string } | { result: T }): T {
+function classifyBuildResult<T>(
+  result: { error: string } | { result: T },
+): { ok: true; output: T } | { failure: WorkerBuildFailure; ok: false } {
   if ("error" in result) {
-    throw new WorkerBuildFailedError(buildFailureMessageFromError(result.error));
+    return sourceFailure(result.error);
   }
   const built = result.result;
   if (
@@ -141,16 +256,32 @@ function unwrapBuildResult<T>(result: { error: string } | { result: T }): T {
     "warnings" in built &&
     Array.isArray(built.warnings)
   ) {
-    const dependencyInstallFailures = built.warnings.filter(
-      (warning): warning is string =>
-        typeof warning === "string" &&
-        DEPENDENCY_INSTALL_FAILURE_WARNING_PATTERNS.some((pattern) => pattern.test(warning)),
+    const warnings = built.warnings.filter(
+      (warning): warning is string => typeof warning === "string",
+    );
+    const dependencyInstallFailures = warnings.filter((warning) =>
+      DEPENDENCY_INSTALL_FAILURE_WARNING_PATTERNS.some((pattern) => pattern.test(warning)),
     );
     if (dependencyInstallFailures.length > 0) {
-      throw new WorkerBuildFailedError(
-        buildFailureMessageFromError(dependencyInstallFailures.join("\n")),
+      return sourceFailure(dependencyInstallFailures.join("\n"));
+    }
+    const unresolvedImports = unresolvedImportFailures(warnings);
+    if (unresolvedImports.length > 0) {
+      return sourceFailure(
+        [
+          "The built worker would fail at startup with `No such module` — it contains imports that do not resolve:",
+          ...unresolvedImports.map((warning) => `  ${warning}`),
+          "Declare the missing dependency in package.json, or update the import if the installed package no longer provides that entry. Node builtins can be imported with the `node:` prefix.",
+        ].join("\n"),
       );
     }
   }
-  return built;
+  return { ok: true, output: built };
+}
+
+function sourceFailure(error: unknown): { failure: WorkerBuildFailure; ok: false } {
+  return {
+    failure: { kind: "source", message: buildFailureMessageFromError(error) },
+    ok: false,
+  };
 }

@@ -101,7 +101,7 @@ remaining work is _completing_ the model, not undoing a parallel one.
 ### Considered and kept as-is
 
 - **`useReconnectableItxEffect` stays a separate private hook.** Both reviews
-  floated folding it into `useItxSubscription` (its only caller). We evaluated
+  floated folding it into `useStreamConnection` (its only caller). We evaluated
   and kept it split — then NARROWED it in the second thermo round (renamed from
   `useItxEffect`, Promise-only setup, a shared `ItxEffectSignal` cancellation
   contract, the unused `itx:` opt cut): it isn't exported, so it's not public
@@ -109,7 +109,7 @@ remaining work is _completing_ the model, not undoing a parallel one.
   effect_ (await the itx inside the effect so mounting never suspends; re-run on
   the session generation so a reconnect recovers — that dep is also the whole
   dial-retry story; run late async cleanup even if superseded mid-await; route
-  connection errors out). `useItxSubscription` layers a different concern on top
+  connection errors out). `useStreamConnection` layers a different concern on top
   (the connecting/live/error machine + the liveness watchdog + transport-only
   retry). Inlining would merge two single-responsibility pieces into one dense
   function mixing five concerns — harder to explain, not easier — and it's the
@@ -155,7 +155,7 @@ repos.get(p)/agents.get(id).liveState`. Root `ProjectLiveState` stays a small
 - **Replace the browser stream mirror** with bounded server live views + cursor-
   paged history, then retire the browser-hosted stream database/processor host.
   Fully designed (phases, deletions, honest losses) in
-  [stream-mirror-collapse.md](stream-mirror-collapse.md).
+  [replace-browser-stream-database.md](replace-browser-stream-database.md).
 
 ## Ordered roadmap
 
@@ -169,7 +169,7 @@ repos.get(p)/agents.get(id).liveState`. Root `ProjectLiveState` stays a small
    secrets, current repo state. Immutable commit/history reads stay finite reads.
 6. **Remove the project server-function lookup** — slug scope + live identity.
 7. **The stream migration** — server live views + paged history; retire the
-   browser mirror ([design](stream-mirror-collapse.md)).
+   browser mirror ([design](replace-browser-stream-database.md)).
 8. **Delete the transitional surface** — manual invalidations and historical
    active docs.
 

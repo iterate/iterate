@@ -1,6 +1,94 @@
+import { readFileSync } from "node:fs";
 import { defineConfig } from "tsdown";
 
+const guestbookClientSource = readFileSync(
+  new URL("./dist/starter-apps/guestbook/client.mjs", import.meta.url),
+  "utf8",
+);
+const todoClientSource = readFileSync(
+  new URL("./dist/starter-apps/todo/client.mjs", import.meta.url),
+  "utf8",
+);
+
+const appClientSourcePlugin = {
+  name: "app-client-sources",
+  resolveId(source: string) {
+    if (source === "iterate:guestbook-client-source") {
+      return "\0iterate:guestbook-client-source";
+    }
+    if (source === "iterate:todo-client-source") return "\0iterate:todo-client-source";
+  },
+  load(id: string) {
+    if (id === "\0iterate:guestbook-client-source") {
+      return `export default ${JSON.stringify(guestbookClientSource)};`;
+    }
+    if (id !== "\0iterate:todo-client-source") return;
+    return `export default ${JSON.stringify(todoClientSource)};`;
+  },
+};
+
 export default defineConfig([
+  {
+    // These physical app workers carry their Durable Objects, persistence,
+    // Cap'n Web servers, and separately prebuilt browser clients. Config
+    // supplies only package.json so worker-bundler can resolve these files.
+    entry: {
+      "starter-apps/guestbook/configured-worker": "src/starter-apps/guestbook/configured-worker.ts",
+      "starter-apps/todo/configured-worker": "src/starter-apps/todo/configured-worker.ts",
+    },
+    format: "esm",
+    fixedExtension: true,
+    platform: "neutral",
+    target: "es2022",
+    plugins: [appClientSourcePlugin],
+    inputOptions: {
+      resolve: {
+        conditionNames: ["workerd", "worker", "import", "default"],
+      },
+    },
+    deps: {
+      alwaysBundle: ["@iterate-com/capnweb", "sqlfu", "zod"],
+      neverBundle: ["cloudflare:workers"],
+    },
+    dts: false,
+    sourcemap: true,
+    clean: false,
+  },
+  {
+    // This is installed as the dynamic worker's PHYSICAL entry point. The
+    // worker-bundler host installs the root config repo's dependencies, not
+    // transitive dependencies declared inside an installed tarball, so this
+    // artifact must carry its complete runtime graph. The only imports left
+    // for workerd to resolve are its built-in API and the per-install config
+    // virtual supplied by GithubAiLinter.create().
+    entry: {
+      "starter-apps/github-ai-linter/configured-worker":
+        "src/starter-apps/github-ai-linter/configured-worker.ts",
+    },
+    format: "esm",
+    fixedExtension: true,
+    platform: "neutral",
+    inputOptions: {
+      resolve: {
+        conditionNames: ["workerd", "worker", "import", "default"],
+      },
+    },
+    deps: {
+      alwaysBundle: ["@iterate-com/capnweb", "minimatch", "yaml", "zod"],
+      neverBundle: ["cloudflare:workers", "iterate:github-ai-linter-config"],
+      onlyBundle: [
+        "@iterate-com/capnweb",
+        "balanced-match",
+        "brace-expansion",
+        "minimatch",
+        "yaml",
+        "zod",
+      ],
+    },
+    dts: false,
+    sourcemap: true,
+    clean: false,
+  },
   {
     entry: ["src/index.ts", "src/stream-tui/agent-chat-terminal.tsx"],
     format: "esm",
@@ -17,6 +105,7 @@ export default defineConfig([
       resolver: "tsc",
     },
     sourcemap: true,
+    clean: false,
     // The native half of `iterate approve` ships as Swift source, compiled
     // on the user's Mac on first use (see approval-keys.ts).
     copy: [{ from: "src/enclave-approver.swift", to: "dist" }],
@@ -49,11 +138,17 @@ export default defineConfig([
     // in the build script instead.
     entry: {
       sdk: "src/sdk.ts",
+      "starter-apps/guestbook/index": "src/starter-apps/guestbook/index.ts",
+      "starter-apps/guestbook/worker": "src/starter-apps/guestbook/worker.ts",
+      "starter-apps/github-ai-linter/index": "src/starter-apps/github-ai-linter/index.ts",
+      "starter-apps/github-ai-linter/worker": "src/starter-apps/github-ai-linter/worker.ts",
+      "starter-apps/todo/index": "src/starter-apps/todo/index.ts",
       processors: "src/processors/index.ts",
       "processors-cloudflare": "src/processors/cloudflare.ts",
       "processors-testing": "src/processors/testing.ts",
     },
     format: "esm",
+    plugins: [appClientSourcePlugin],
     deps: {
       neverBundle: ["cloudflare:workers"],
     },

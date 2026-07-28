@@ -2,7 +2,7 @@
 // This browser-only processor consumes every stream event and projects it
 // into the per-stream OPFS SQLite `feed_items` table — the single rendered-
 // feed projection behind Pretty, Pretty+raw, and Raw — plus reduced state for
-// the live in-flight agent tail.
+// ephemeral agent events received on the current connection.
 
 import { z } from "zod";
 import { defineProcessorContract } from "iterate/processors";
@@ -11,6 +11,8 @@ import {
   isCurrentBrowserFeedState,
   type BrowserFeedState,
 } from "./projector.ts";
+
+const Empty = z.strictObject({});
 
 export const BrowserFeedContract = defineProcessorContract({
   slug: "browser-feed",
@@ -23,13 +25,7 @@ export const BrowserFeedContract = defineProcessorContract({
   // and rebuilt rather than adapted.
   stateSchema: z
     .preprocess(
-      (value) =>
-        value !== null &&
-        typeof value === "object" &&
-        !Array.isArray(value) &&
-        Object.keys(value).length === 0
-          ? initialBrowserFeedState()
-          : value,
+      (value) => (Empty.safeParse(value).success ? initialBrowserFeedState() : value),
       z.custom<BrowserFeedState>(isCurrentBrowserFeedState, {
         message: "browser-feed state is not from the current schema",
       }),

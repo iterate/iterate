@@ -13,6 +13,13 @@ export type RootProjectRedirectDecision =
       kind: "project";
       project: RootRedirectProject;
       welcome: boolean;
+      /**
+       * The server could not prove or commit this project's birth before the
+       * redirect. The welcome page must issue the same idempotent create once
+       * from its authenticated browser session instead of stranding the user
+       * on the projects list.
+       */
+      ensureBirth: boolean;
     }
   | {
       kind: "projects";
@@ -32,15 +39,29 @@ export function chooseRootProjectRedirect(input: {
       kind: "project",
       project: preferredReadyProject,
       welcome: false,
+      ensureBirth: false,
     };
   }
 
   if (readyProjects.length === 1) {
-    return { kind: "project", project: readyProjects[0]!, welcome: false };
+    return {
+      kind: "project",
+      project: readyProjects[0]!,
+      welcome: false,
+      ensureBirth: false,
+    };
   }
 
-  if (input.projects.length === 1 && input.projects[0]!.deploymentStatus === "missing") {
-    return { kind: "project", project: input.projects[0]!, welcome: true };
+  if (input.projects.length === 1 && input.projects[0]!.deploymentStatus !== "ready") {
+    return {
+      kind: "project",
+      project: input.projects[0]!,
+      welcome: true,
+      // "unknown" means the deployment-status probe itself failed. Treat it
+      // as uncertainty to heal, not evidence that a single-project user
+      // belongs on a dead-end list page.
+      ensureBirth: input.projects[0]!.deploymentStatus === "unknown",
+    };
   }
 
   return { kind: "projects" };

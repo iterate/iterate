@@ -7,9 +7,9 @@
 // host capabilities name only that project, agents reach their project through
 // an explicit host-owned member, and public durable addresses are only dynamic
 // worker/facet descriptions. So authority lives in the ItxAuthContext every
-// authenticated RPC target carries. The one non-product lane is a private
-// brand on auth contexts minted by the stream-delivery spine: it makes
-// transport receivers unreachable from project code without changing project
+// authenticated RPC target carries. The one non-product exception is a private
+// brand on auth contexts minted while a source stream calls a receiver: it makes
+// receiver-only methods unreachable from project code without changing project
 // authorization or trusting a caller-controlled principal string.
 //
 // Credential lanes (see resolveItxAuth):
@@ -140,7 +140,7 @@ class ItxAuthContext implements ItxAuth {
     this.#directory = input.directory;
     this.#isAdmin = input.isAdmin;
     this.#principal = input.principal;
-    this.#projectIds = new Set(input.projectIds ?? []);
+    this.#projectIds = new Set(input.projectIds || []);
     this.#userPrincipal = input.userPrincipal;
   }
 
@@ -206,9 +206,16 @@ export function trustedInternalAuthContext(): ItxAuthContext {
 
 const streamDeliveryAuthContexts = new WeakSet<ItxAuthContext>();
 
-/** Authority minted only while the stream spine evaluates a delivery expression. */
-export function streamDeliveryAuthContext(): ItxAuthContext {
-  const auth = trustedInternalAuthContext();
+/** Authority minted only while one source stream resolves and calls a receiver.
+ * Project streams can reach exactly their own project; only a deployment-global
+ * stream receives deployment-global authority. The private brand grants access
+ * to receiver-only methods without widening the ordinary project boundary. */
+export function streamDeliveryAuthContext(projectId: string | null): ItxAuthContext {
+  const auth = new ItxAuthContext({
+    isAdmin: projectId === null,
+    principal: "trusted-internal",
+    ...(projectId === null ? {} : { projectIds: [projectId] }),
+  });
   streamDeliveryAuthContexts.add(auth);
   return auth;
 }

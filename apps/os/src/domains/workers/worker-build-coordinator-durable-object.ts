@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { workerVersion, type Env } from "../../env.ts";
-import { isWorkerBuildFailedError, type WorkerBuildArtifact } from "./artifact-store.ts";
+import { type WorkerBuildFailure, type WorkerBuildResult } from "./artifact-store.ts";
 import {
   WorkerBuildCoordinator,
   type WorkerBuildCoordinatorEvent,
@@ -11,11 +11,16 @@ import {
 } from "./worker-build-capability.ts";
 
 const QUEUED_BUILD_STORAGE_KEY = "worker-build:queued-request";
+const TERMINAL_BUILD_FAILURE_STORAGE_KEY = "worker-build:terminal-failure";
 
 /** One globally addressed coordinator per immutable worker build key. */
 export class WorkerBuildCoordinatorDurableObject extends DurableObject<Env> {
   readonly #coordinator = new WorkerBuildCoordinator(
-    (request) => executeCoordinatedWorkerBuild(request, this.env),
+    async (request) => {
+      const result = await executeCoordinatedWorkerBuild(request, this.env);
+      if (!result.ok) this.#rememberTerminalFailure(result.failure);
+      return result;
+    },
     { observe: observeCoordinatorEvent },
   );
 
@@ -24,25 +29,33 @@ export class WorkerBuildCoordinatorDurableObject extends DurableObject<Env> {
     return workerVersion(this.env);
   }
 
-  async build(request: WorkerBuildRequest, buildBudgetMs?: number): Promise<WorkerBuildArtifact> {
+  async build(request: WorkerBuildRequest, buildBudgetMs?: number): Promise<WorkerBuildResult> {
     this.#assertRequest(request);
     if (buildBudgetMs !== undefined && (!Number.isFinite(buildBudgetMs) || buildBudgetMs < 0)) {
       throw new TypeError("worker build budget must be a non-negative finite number");
     }
+    const terminalFailure = this.#takeTerminalFailure();
+    if (terminalFailure !== undefined) return { failure: terminalFailure, ok: false };
 
     const operation = this.#coordinator.build(request);
-    if (buildBudgetMs === undefined) return await operation;
-
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      return await Promise.race([
-        operation,
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(() => {
-            this.enqueue(request).then(() => reject(workerBuildInProgressError()), reject);
-          }, buildBudgetMs);
-        }),
-      ]);
+      const result =
+        buildBudgetMs === undefined
+          ? await operation
+          : await Promise.race([
+              operation,
+              new Promise<never>((_, reject) => {
+                timer = setTimeout(() => {
+                  this.enqueue(request).then(() => reject(workerBuildInProgressError()), reject);
+                }, buildBudgetMs);
+              }),
+            ]);
+      // The foreground caller received this exact terminal result, so there is
+      // no later caller to inform. Receipts remain only when timeout/alarm
+      // ownership outlives the caller that started the operation.
+      if (!result.ok) this.ctx.storage.kv.delete(TERMINAL_BUILD_FAILURE_STORAGE_KEY);
+      return result;
     } finally {
       clearTimeout(timer);
     }
@@ -60,15 +73,32 @@ export class WorkerBuildCoordinatorDurableObject extends DurableObject<Env> {
     const request = this.ctx.storage.kv.get<WorkerBuildRequest>(QUEUED_BUILD_STORAGE_KEY);
     if (request === undefined) return;
     this.#assertRequest(request);
-    try {
-      await this.#coordinator.build(request);
+    if (this.#hasTerminalFailure()) {
       this.ctx.storage.kv.delete(QUEUED_BUILD_STORAGE_KEY);
-    } catch (error) {
-      if (!isWorkerBuildFailedError(error)) throw error;
-      // Immutable source failure is a modeled terminal result, not an alarm
-      // retry. A later foreground call still receives the exact build error.
-      this.ctx.storage.kv.delete(QUEUED_BUILD_STORAGE_KEY);
+      return;
     }
+    await this.#coordinator.build(request);
+    // A source failure is a modeled terminal result, not an alarm retry. The
+    // coordinator execution stored it for a foreground caller, including one
+    // in a later actor incarnation. Infrastructure failures still throw above,
+    // leaving the queue intact for the platform's native alarm retry.
+    this.ctx.storage.kv.delete(QUEUED_BUILD_STORAGE_KEY);
+  }
+
+  #rememberTerminalFailure(failure: WorkerBuildFailure): void {
+    this.ctx.storage.kv.put(TERMINAL_BUILD_FAILURE_STORAGE_KEY, failure);
+  }
+
+  #hasTerminalFailure(): boolean {
+    return (
+      this.ctx.storage.kv.get<WorkerBuildFailure>(TERMINAL_BUILD_FAILURE_STORAGE_KEY) !== undefined
+    );
+  }
+
+  #takeTerminalFailure(): WorkerBuildFailure | undefined {
+    const failure = this.ctx.storage.kv.get<WorkerBuildFailure>(TERMINAL_BUILD_FAILURE_STORAGE_KEY);
+    if (failure !== undefined) this.ctx.storage.kv.delete(TERMINAL_BUILD_FAILURE_STORAGE_KEY);
+    return failure;
   }
 
   #assertRequest(request: WorkerBuildRequest): void {
@@ -88,8 +118,8 @@ function workerBuildInProgressError(): Error {
 }
 
 function observeCoordinatorEvent(event: WorkerBuildCoordinatorEvent) {
-  // Source rejection is an expected build outcome; infrastructure failure is
-  // rethrown into the operation-wide exception signal. This record is neutral
+  // Source failure is an expected build result; infrastructure failure is
+  // thrown into the operation-wide exception signal. This record is neutral
   // coordination telemetry for both, never a second error counter.
   console.log("dynamic worker build coordinator", {
     event: `worker-build.${event.kind}`,

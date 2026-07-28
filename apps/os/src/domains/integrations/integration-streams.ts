@@ -134,7 +134,7 @@ type RouteIntegrationWebhookResult =
  * Route one validly-signed webhook to the project + connection that claimed its
  * `(slug, externalId)`, by appending a provider-shaped event to that
  * connection's stream. This function deliberately appends ONLY the ingress
- * fact: connection setup owns any router birth and subscription. `ignored` (no
+ * fact: connection setup appends any router-created event and subscription. `ignored` (no
  * live claim) lets the door ACK-and-drop. This is the generic core of the
  * webhook door (D4): per-provider code does only the signature verify,
  * external-id extract, and event shaping; routing is one function for every

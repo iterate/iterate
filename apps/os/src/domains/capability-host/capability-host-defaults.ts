@@ -6,7 +6,7 @@
 
 import type { z } from "zod";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
+import { buildHostedProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import {
   CapabilityHostProcessorContract,
   capabilityFallbackForScope,
@@ -46,7 +46,7 @@ export function capabilityHostCreationEvents(input: {
       // fallback straight to it.
       payload: input.payload ?? { config: {}, fallback: capabilityFallbackForScope(path) },
     }),
-    buildDurableObjectProcessorSubscriptionConfiguredEvent({
+    buildHostedProcessorSubscriptionConfiguredEvent({
       durableObjectName,
       idempotencyKey: `stream/subscription-configured:${durableObjectName}#${CapabilityHostProcessorContract.slug}`,
       processor: ["capabilityHosts", ["get", path], "processor"],

@@ -4,7 +4,7 @@
 // and virtual clock — the same harness style as stream-processor-keepalive.test.ts.
 //
 // The invariants under test:
-//  1. batch-division invariance (one frame / singletons / random partitions)
+//  1. batch-division invariance (one batch / singletons / random partitions)
 //  2. strict per-event blockProcessorWhile ordering
 //  3. runInBackground overtaking
 //  4. crash() at every boundary → at-least-once, never lost work
@@ -41,6 +41,10 @@ const REVIVED = STREAM_PROCESSOR_REVIVED_EVENT_TYPE;
 const NOISE = "events.iterate.com/other/noise";
 const HOME = "/tests/runner";
 const SIBLING = "/tests/runner-sibling";
+const TEST_STREAM_ID = "11111111-1111-4111-8111-111111111111";
+const RECREATED_STREAM_ID = "22222222-2222-4222-8222-222222222222";
+const siblingKey = (semanticKey: string, streamId = TEST_STREAM_ID) =>
+  `${semanticKey}@source-stream:${streamId}`;
 
 // -----------------------------------------------------------------------------
 // The processor under drive: an obligation-style task tracker. `requested`
@@ -85,16 +89,16 @@ abstract class HookArgTypes extends StreamProcessor<TaskContract> {
 }
 type ProcessArgs = HookArgTypes["processArgs"];
 /** processEvent args narrowed to a real consumed event — `onProcess` fires only
- * for those (never the event-less at-head pass). */
+ * for those (never the event-less caught-up call). */
 type ConsumedProcessArgs = ProcessArgs & { event: NonNullable<ProcessArgs["event"]> };
 type TaskHooks = {
   /** `eventKey` is `this.idempotencyKey(key, event)` — the per-event effect
    * key a real processor mints for deterministic-consequence appends, so a
-   * redelivered frame dedupes instead of double-appending. */
+   * redelivered batch dedupes instead of double-appending. */
   onProcess?: (args: ConsumedProcessArgs, eventKey: (key: string) => string) => void;
-  /** The at-head reconcile: `processEvent` under `delivery.caughtUp`. `args.event`
-   * is the last consumed event of a head-reaching batch, or `null` for the
-   * event-less at-head pass. `stableKey` is `this.idempotencyKey` (binds NO
+  /** The caught-up processing: `processEvent` under `delivery.caughtUp`. `args.event`
+   * is the last consumed event of a caught-up batch, or `null` for the
+   * event-less caught-up call. `stableKey` is `this.idempotencyKey` (binds NO
    * offset) — obligation keys that survive redelivery/revival unchanged. */
   onHead?: (args: ProcessArgs, stableKey: (key: string) => string) => void | Promise<void>;
 };
@@ -125,10 +129,10 @@ class TaskProcessor extends StreamProcessor<
       const consumed = args as ConsumedProcessArgs;
       this.deps.hooks.onProcess?.(consumed, (key) => this.idempotencyKey(key, consumed.event));
     }
-    // The at-head reconcile: fires for the last consumed event of a
-    // head-reaching batch OR the runner's event-less at-head pass (args.event
+    // The caught-up processing: fires for the last consumed event of a
+    // caught-up batch OR the runner's event-less caught-up call (args.event
     // null). onHead registers its blocking work synchronously (the runner
-    // awaits it before the frame-end commit).
+    // awaits it before the batch-end commit).
     if (args.delivery.caughtUp) {
       void this.deps.hooks.onHead?.(args, (key) => this.idempotencyKey(key));
     }
@@ -151,6 +155,10 @@ function makeJournal(homePath = HOME) {
   let failNextRead: Error | undefined;
   let hangNextRead = false;
   let createdAtClock = 0;
+  let streamId = TEST_STREAM_ID;
+  let eventPageReads = 0;
+  let guardedAppendGate: ReturnType<typeof deferred> | undefined;
+  let recreateAfterEventPage: { readNumber: number; nextStreamId: string } | undefined;
 
   const rowsFor = (path: string): StreamEvent[] => {
     let rows = rowsByPath.get(path);
@@ -193,7 +201,41 @@ function makeJournal(homePath = HOME) {
     ({
       append: (...events: StreamEventInput[]) =>
         Promise.resolve(events.map((event) => commit(path, event))),
+      appendIfStreamId: async (args: { streamId: string; events: StreamEventInput[] }) => {
+        await guardedAppendGate?.promise;
+        if (args.streamId !== streamId) {
+          throw new Error(`stream ID changed (${args.streamId} -> ${streamId}); append rejected`);
+        }
+        return args.events.map((event) => commit(path, event));
+      },
       at: (child: string) => streamAt(child),
+      getEventPage: (args?: {
+        afterOffset?: number;
+        beforeOffset?: number | null;
+        limit?: number;
+      }) => {
+        if (failNextRead !== undefined) {
+          const error = failNextRead;
+          failNextRead = undefined;
+          return Promise.reject(error);
+        }
+        const afterOffset = args?.afterOffset ?? 0;
+        const beforeOffset = args?.beforeOffset ?? Number.MAX_SAFE_INTEGER;
+        const page = {
+          streamId,
+          streamMaxOffset: rowsFor(path).at(-1)?.offset ?? 0,
+          events: rowsFor(path)
+            .filter((row) => row.offset > afterOffset && row.offset < beforeOffset)
+            .slice(0, args?.limit ?? 500),
+        };
+        eventPageReads += 1;
+        if (recreateAfterEventPage?.readNumber === eventPageReads) {
+          rowsByPath.set(homePath, []);
+          streamId = recreateAfterEventPage.nextStreamId;
+          recreateAfterEventPage = undefined;
+        }
+        return Promise.resolve(page);
+      },
       readEvents: (args?: {
         afterOffset?: number;
         beforeOffset?: number | null;
@@ -254,6 +296,23 @@ function makeJournal(homePath = HOME) {
     hangNextRead() {
       hangNextRead = true;
     },
+    pauseGuardedAppends() {
+      if (guardedAppendGate !== undefined) throw new Error("guarded appends are already paused");
+      guardedAppendGate = deferred();
+      return () => {
+        const gate = guardedAppendGate;
+        guardedAppendGate = undefined;
+        gate?.resolve(undefined);
+      };
+    },
+    /** Delete and recreate the home stream: its offsets and identity restart. */
+    recreate(nextStreamId = RECREATED_STREAM_ID) {
+      rowsByPath.set(homePath, []);
+      streamId = nextStreamId;
+    },
+    recreateAfterPage(readNumber: number, nextStreamId = RECREATED_STREAM_ID) {
+      recreateAfterEventPage = { readNumber, nextStreamId };
+    },
   };
 }
 
@@ -275,6 +334,12 @@ function makeProgressStore() {
         failNextCommit = undefined;
         throw error;
       }
+      if (opts.expectedStreamId !== record?.streamId) {
+        throw new Error(
+          `progress commit fenced: expected streamId ${String(opts.expectedStreamId)}, ` +
+            `persisted ${String(record?.streamId)}`,
+        );
+      }
       const persistedRevision = record?.processing.cursorRevision ?? 0;
       if (opts.expectedCursorRevision !== persistedRevision) {
         throw new Error(
@@ -282,7 +347,7 @@ function makeProgressStore() {
             `persisted ${persistedRevision}`,
         );
       }
-      // MONOTONIC fence (mirrors durableObjectProgressStore): a same-revision
+      // MONOTONIC fence (same rule as durableObjectProgressStore): a same-revision
       // backward acknowledgement is a stale incarnation rolling the cursor
       // back; only a revision-bumping rewind may move it backward.
       if (
@@ -301,6 +366,16 @@ function makeProgressStore() {
         throw new Error(
           "progress invariant violated: reducedThroughOffset > acknowledgedThroughOffset",
         );
+      }
+      record = structuredClone(progress);
+      commits.push(structuredClone(progress));
+    },
+    replaceForStream: (progress, opts) => {
+      if (
+        record?.streamId !== opts.expectedStreamId ||
+        record.processing.cursorRevision !== opts.expectedCursorRevision
+      ) {
+        throw new Error("stream replacement fenced");
       }
       record = structuredClone(progress);
       commits.push(structuredClone(progress));
@@ -338,14 +413,30 @@ type HarnessArgs = {
   now?: () => number;
 };
 
-function deliveryFrame(events: StreamEvent[], streamMaxOffset: number) {
+function eventBatch(events: StreamEvent[], streamMaxOffset: number, streamId = TEST_STREAM_ID) {
   const scannedAfterOffset =
     events[0]?.offset === undefined ? streamMaxOffset : events[0].offset - 1;
   return {
+    streamId,
     events,
     scannedAfterOffset,
     scannedThroughOffset: events.at(-1)?.offset ?? scannedAfterOffset,
     streamMaxOffset,
+  };
+}
+
+function initialProgress(
+  streamId = TEST_STREAM_ID,
+  cursorRevision = 0,
+): ProcessorProgress<TaskState> {
+  return {
+    streamId,
+    reduction: {
+      reducerVersion: "0.0.1",
+      reducedThroughOffset: 0,
+      state: { count: 0, open: [] },
+    },
+    processing: { acknowledgedThroughOffset: 0, cursorRevision },
   };
 }
 
@@ -377,35 +468,35 @@ function makeHarness(args: HarnessArgs = {}) {
     store,
     processor,
     runner,
-    /** Deliver explicit frames through one opened sink. */
-    async deliverFrames(frames: StreamEvent[][], streamMaxOffset?: number) {
-      const { sink } = await runner.openDelivery();
+    /** Deliver explicit batches through one opened processEventBatch. */
+    async deliverBatches(batches: StreamEvent[][], streamMaxOffset?: number) {
+      const { processEventBatch } = await runner.openEventBatchCallback();
       const head = streamMaxOffset ?? journal.head();
-      for (const events of frames) {
-        await sink(deliveryFrame(events, head));
+      for (const events of batches) {
+        await processEventBatch(eventBatch(events, head));
       }
     },
-    /** Open delivery and push everything past the persisted cursor as ONE frame. */
+    /** Open delivery and push everything past the persisted cursor as ONE batch. */
     async deliverPending() {
-      const opened = await runner.openDelivery();
+      const opened = await runner.openEventBatchCallback();
       const events = journal.rows().filter((row) => row.offset > opened.checkpointOffset);
       if (events.length > 0) {
-        await opened.sink(deliveryFrame(events, journal.head()));
+        await opened.processEventBatch(eventBatch(events, journal.head()));
       }
       return opened.checkpointOffset;
     },
-    /** The PRODUCTION wake lane's exact shape (stream-processor-host.ts:522):
-     * only CONSUMED types are delivered, but the frame is stamped with the
-     * RAW journal head — an unconsumed durable tail leaves the frame behind
+    /** The production hosted-processor batch's exact shape:
+     * only CONSUMED types are delivered, but the batch is stamped with the
+     * RAW journal maximum offset — an unconsumed durable tail leaves the batch behind
      * `streamMaxOffset` with nothing else ever delivering the difference. */
     async deliverConsumesFilteredPending() {
-      const opened = await runner.openDelivery();
+      const opened = await runner.openEventBatchCallback();
       const consumed = new Set<string>(contract.consumes);
       const events = journal
         .rows()
         .filter((row) => row.offset > opened.checkpointOffset && consumed.has(row.type));
       if (events.length > 0) {
-        await opened.sink(deliveryFrame(events, journal.head()));
+        await opened.processEventBatch(eventBatch(events, journal.head()));
       }
       return opened.checkpointOffset;
     },
@@ -471,7 +562,7 @@ describe("StreamProcessorRunner batch-division invariance", () => {
     journal.seed({ type: COMPLETED, payload: { id: "b" } }); // 8
   }
 
-  /** Effect-per-event + obligation-drive-at-head hooks (all onto the sibling). */
+  /** Effect-per-event + obligation-drive-caught-up hooks (all onto the sibling). */
   const effectHooks: TaskHooks = {
     onProcess: (args, eventKey) => {
       args.blockProcessorWhile(() =>
@@ -501,7 +592,7 @@ describe("StreamProcessorRunner batch-division invariance", () => {
       const journal = makeJournal();
       seedFixture(journal);
       const harness = makeHarness({ journal, hooks: effectHooks });
-      await harness.deliverFrames(split(journal.rows().slice()));
+      await harness.deliverBatches(split(journal.rows().slice()));
       // The parse-failure diagnostic is a post-commit background append.
       await vi.waitFor(() =>
         expect(
@@ -522,43 +613,64 @@ describe("StreamProcessorRunner batch-division invariance", () => {
     }
   }
 
-  it("one frame, singletons, and random partitions yield identical state AND appends", async () => {
-    const oneFrame = await runWithPartition((rows) => [rows]);
+  it("one batch, singletons, and random partitions yield identical state AND appends", async () => {
+    const oneBatch = await runWithPartition((rows) => [rows]);
 
-    expect(oneFrame.snapshot).toEqual({
+    expect(oneBatch.snapshot).toEqual({
       offset: 8,
       state: { count: 5, open: ["c"] },
     });
-    expect(oneFrame.acknowledged).toBe(8);
+    expect(oneBatch.acknowledged).toBe(8);
     // 5 parsed consumed events echo; the open obligation is driven at head.
-    expect(oneFrame.sibling).toEqual([
-      { type: ECHOED, idempotencyKey: "test-task/echo@/tests/runner:1", payload: { id: "a" } },
-      { type: ECHOED, idempotencyKey: "test-task/echo@/tests/runner:2", payload: { id: "b" } },
-      { type: ECHOED, idempotencyKey: "test-task/echo@/tests/runner:4", payload: { id: "a" } },
-      { type: ECHOED, idempotencyKey: "test-task/echo@/tests/runner:6", payload: { id: "c" } },
-      { type: ECHOED, idempotencyKey: "test-task/echo@/tests/runner:8", payload: { id: "b" } },
-      { type: DRIVEN, idempotencyKey: "test-task/drive:c", payload: { id: "c" } },
+    expect(oneBatch.sibling).toEqual([
+      {
+        type: ECHOED,
+        idempotencyKey: siblingKey("test-task/echo@/tests/runner:1"),
+        payload: { id: "a" },
+      },
+      {
+        type: ECHOED,
+        idempotencyKey: siblingKey("test-task/echo@/tests/runner:2"),
+        payload: { id: "b" },
+      },
+      {
+        type: ECHOED,
+        idempotencyKey: siblingKey("test-task/echo@/tests/runner:4"),
+        payload: { id: "a" },
+      },
+      {
+        type: ECHOED,
+        idempotencyKey: siblingKey("test-task/echo@/tests/runner:6"),
+        payload: { id: "c" },
+      },
+      {
+        type: ECHOED,
+        idempotencyKey: siblingKey("test-task/echo@/tests/runner:8"),
+        payload: { id: "b" },
+      },
+      { type: DRIVEN, idempotencyKey: siblingKey("test-task/drive:c"), payload: { id: "c" } },
     ]);
 
     const singletons = await runWithPartition((rows) => rows.map((row) => [row]));
-    expect(singletons).toEqual(oneFrame);
+    expect(singletons).toEqual(oneBatch);
 
     for (const seed of [1, 7, 42]) {
       const partitioned = await runWithPartition((rows) => randomPartition(rows, seed));
-      expect(partitioned).toEqual(oneFrame);
+      expect(partitioned).toEqual(oneBatch);
     }
   });
 });
 
 describe("StreamProcessorRunner delivery coordinates", () => {
-  it("rejects a frame whose scan starts beyond the committed cursor", async () => {
+  it("rejects a batch whose scan starts beyond the committed cursor", async () => {
     const harness = makeHarness();
     harness.journal.seed({ type: REQUESTED, payload: { id: "a" } });
     harness.journal.seed({ type: REQUESTED, payload: { id: "b" } });
-    const opened = await harness.runner.openDelivery();
+    const opened = await harness.runner.openEventBatchCallback();
 
     await expect(
-      opened.sink({
+      opened.processEventBatch({
+        streamId: TEST_STREAM_ID,
         events: [harness.journal.rows()[1]!],
         scannedAfterOffset: 1,
         scannedThroughOffset: 2,
@@ -566,6 +678,145 @@ describe("StreamProcessorRunner delivery coordinates", () => {
       }),
     ).rejects.toThrow(/starts after the committed scan cursor: 1 > 0/);
     expect(harness.store.record?.processing.acknowledgedThroughOffset ?? 0).toBe(0);
+  });
+
+  it("resets progress when the same path is recreated and rejects the old lifetime callback", async () => {
+    const journal = makeJournal();
+    journal.seed({ type: REQUESTED, payload: { id: "from-a" } });
+    const harness = makeHarness({ journal });
+    await harness.deliverPending();
+    expect(harness.store.record).toEqual({
+      streamId: TEST_STREAM_ID,
+      reduction: {
+        reducerVersion: "0.0.1",
+        reducedThroughOffset: 1,
+        state: { count: 1, open: ["from-a"] },
+      },
+      processing: { acknowledgedThroughOffset: 1, cursorRevision: 0 },
+    });
+
+    // Keep a callback opened against lifetime A, then delete/recreate the
+    // stream at the same path. Offsets restart at 1 under a new stream ID.
+    const oldCallback = await harness.runner.openEventBatchCallback(TEST_STREAM_ID);
+    const oldEvent = journal.rows()[0]!;
+    journal.recreate();
+    journal.seed({ type: REQUESTED, payload: { id: "from-b" } });
+
+    const currentCallback = await harness.runner.openEventBatchCallback(RECREATED_STREAM_ID);
+    expect(currentCallback.checkpointOffset).toBe(0);
+    expect(harness.store.record).toEqual(initialProgress(RECREATED_STREAM_ID, 1));
+
+    // A callback retained from lifetime A cannot feed its offset-1 event into
+    // lifetime B after the reset. It is rejected before reduction or effects.
+    await expect(
+      oldCallback.processEventBatch(eventBatch([oldEvent], 1, TEST_STREAM_ID)),
+    ).rejects.toThrow(
+      `received batch for stream ID ${TEST_STREAM_ID}; current progress belongs to ${RECREATED_STREAM_ID}`,
+    );
+    expect(harness.store.record).toEqual(initialProgress(RECREATED_STREAM_ID, 1));
+
+    await currentCallback.processEventBatch(
+      eventBatch(journal.rows().slice(), 1, RECREATED_STREAM_ID),
+    );
+    await expect(harness.runner.snapshot()).resolves.toEqual({
+      offset: 1,
+      state: { count: 1, open: ["from-b"] },
+    });
+    expect(harness.store.record?.processing).toEqual({
+      acknowledgedThroughOffset: 1,
+      cursorRevision: 1,
+    });
+  });
+
+  it("rejects a delayed lifetime-A home append after the path is recreated as B", async () => {
+    const blockerStarted = deferred();
+    const releaseBlocker = deferred();
+    const hooks: TaskHooks = {
+      onProcess: (args, eventKey) => {
+        if (args.event.payload.id !== "from-a") return;
+        args.blockProcessorWhile(async () => {
+          blockerStarted.resolve();
+          await releaseBlocker.promise;
+          await args.append({
+            type: ECHOED,
+            idempotencyKey: eventKey("echo"),
+            payload: { id: args.event.payload.id },
+          });
+        });
+      },
+    };
+    const journal = makeJournal();
+    journal.seed({ type: REQUESTED, payload: { id: "from-a" } });
+    const harness = makeHarness({ journal, hooks });
+
+    const lifetimeADelivery = harness.deliverPending();
+    await blockerStarted.promise;
+    journal.recreate();
+    journal.seed({ type: REQUESTED, payload: { id: "from-b" } });
+    releaseBlocker.resolve();
+
+    await expect(lifetimeADelivery).rejects.toThrow(
+      `stream ID changed (${TEST_STREAM_ID} -> ${RECREATED_STREAM_ID}); append rejected`,
+    );
+    expect(journal.rows().map((event) => [event.type, event.payload])).toEqual([
+      [REQUESTED, { id: "from-b" }],
+    ]);
+
+    const lifetimeBCallback = await harness.runner.openEventBatchCallback(RECREATED_STREAM_ID);
+    expect(lifetimeBCallback.checkpointOffset).toBe(0);
+    await lifetimeBCallback.processEventBatch(
+      eventBatch(journal.rows().slice(), 1, RECREATED_STREAM_ID),
+    );
+    await expect(harness.runner.snapshot()).resolves.toEqual({
+      offset: 1,
+      state: { count: 1, open: ["from-b"] },
+    });
+  });
+
+  it("keeps recreated source lifetimes distinct when both append offset 1 to a sibling", async () => {
+    const hooks: TaskHooks = {
+      onProcess: (args, eventKey) => {
+        args.blockProcessorWhile(() =>
+          args.appendTo(SIBLING, {
+            type: ECHOED,
+            idempotencyKey: eventKey("echo"),
+            payload: { id: args.event.payload.id },
+          }),
+        );
+      },
+    };
+    const journal = makeJournal();
+    journal.seed({ type: REQUESTED, payload: { id: "from-a" } });
+    const harness = makeHarness({ journal, hooks });
+    await harness.deliverPending();
+
+    journal.recreate();
+    journal.seed({ type: REQUESTED, payload: { id: "from-b" } });
+    const lifetimeBCallback = await harness.runner.openEventBatchCallback(RECREATED_STREAM_ID);
+    await lifetimeBCallback.processEventBatch(
+      eventBatch(journal.rows().slice(), 1, RECREATED_STREAM_ID),
+    );
+
+    const siblingRows = journal.rows(SIBLING);
+    expect(siblingRows.map((event) => event.idempotencyKey)).toEqual([
+      siblingKey(`test-task/echo@${HOME}:1`),
+      siblingKey(`test-task/echo@${HOME}:1`, RECREATED_STREAM_ID),
+    ]);
+    expect(
+      siblingRows.map((event) => ({
+        id: event.payload?.id,
+        sourceStream: event.source?.processor?.stream,
+      })),
+    ).toEqual([
+      {
+        id: "from-a",
+        sourceStream: { path: HOME, projectId: null, streamId: TEST_STREAM_ID },
+      },
+      {
+        id: "from-b",
+        sourceStream: { path: HOME, projectId: null, streamId: RECREATED_STREAM_ID },
+      },
+    ]);
   });
 });
 
@@ -590,7 +841,7 @@ describe("StreamProcessorRunner side-effect ordering", () => {
     const harness = makeHarness({ hooks });
     for (const id of ["a", "b", "c"]) harness.journal.seed({ type: REQUESTED, payload: { id } });
 
-    await harness.deliverFrames([harness.journal.rows().slice()]);
+    await harness.deliverBatches([harness.journal.rows().slice()]);
 
     expect(log).toEqual([
       "process:1",
@@ -605,7 +856,7 @@ describe("StreamProcessorRunner side-effect ordering", () => {
     ]);
   });
 
-  it("runInBackground does NOT block the next event or the frame commit", async () => {
+  it("runInBackground does NOT block the next event or the batch commit", async () => {
     const log: string[] = [];
     const gate = deferred();
     const hooks: TaskHooks = {
@@ -624,8 +875,8 @@ describe("StreamProcessorRunner side-effect ordering", () => {
     harness.journal.seed({ type: REQUESTED, payload: { id: "a" } });
     harness.journal.seed({ type: REQUESTED, payload: { id: "b" } });
 
-    // The frame settles (and commits durably) while the background work hangs.
-    await harness.deliverFrames([harness.journal.rows().slice()]);
+    // The batch settles (and commits durably) while the background work hangs.
+    await harness.deliverBatches([harness.journal.rows().slice()]);
     expect(log).toEqual(["process:1", "process:2"]);
     expect(harness.store.record?.processing.acknowledgedThroughOffset).toBe(2);
 
@@ -666,14 +917,15 @@ describe("StreamProcessorRunner crash/redelivery", () => {
     const harness = makeHarness({ hooks: gatedEchoHooks(gateState) });
     for (const id of ["a", "b", "c"]) harness.journal.seed({ type: REQUESTED, payload: { id } });
 
-    const { sink } = await harness.runner.openDelivery();
-    // Deliberately un-awaited: the frame wedges on event 2's blocker and the
+    const { processEventBatch } = await harness.runner.openEventBatchCallback();
+    // Deliberately un-awaited: the batch wedges on event 2's blocker and the
     // incarnation is dropped underneath it, like an eviction.
-    void sink(deliveryFrame(harness.journal.rows().slice(), 3));
+    void processEventBatch(eventBatch(harness.journal.rows().slice(), 3));
     await tick();
 
-    // Nothing durable happened: per-frame cadence, frame never completed.
-    expect(harness.store.record).toBeUndefined();
+    // The stream-lifetime binding is durable, but no event progress landed:
+    // per-batch cadence kept the wedged batch entirely retryable.
+    expect(harness.store.record).toEqual(initialProgress());
 
     // New incarnation, gate removed (the transient hang does not recur).
     gateState.gateOffset = undefined;
@@ -690,35 +942,37 @@ describe("StreamProcessorRunner crash/redelivery", () => {
     // idempotency key collapsed the duplicate; events 2/3 ran once.
     const committed = comparableRows(revived.journal.rows(SIBLING));
     expect(committed.map((row) => row.idempotencyKey)).toEqual([
-      "test-task/echo@/tests/runner:1",
-      "test-task/echo@/tests/runner:2",
-      "test-task/echo@/tests/runner:3",
+      siblingKey("test-task/echo@/tests/runner:1"),
+      siblingKey("test-task/echo@/tests/runner:2"),
+      siblingKey("test-task/echo@/tests/runner:3"),
     ]);
     const echoAttempts = revived.journal.attempts.filter(({ path }) => path === SIBLING);
     expect(echoAttempts).toHaveLength(4);
     expect(echoAttempts.filter(({ deduped }) => deduped)).toHaveLength(1);
   });
 
-  it("persist failure: cursor and in-memory state untouched, frame retryable", async () => {
+  it("persist failure: cursor and in-memory state untouched, batch retryable", async () => {
     const harness = makeHarness({ hooks: gatedEchoHooks({}) });
     harness.journal.seed({ type: REQUESTED, payload: { id: "a" } });
     harness.journal.seed({ type: REQUESTED, payload: { id: "b" } });
 
+    const { processEventBatch } = await harness.runner.openEventBatchCallback();
+    // Opening first durably binds this progress row to the stream lifetime;
+    // fail the EVENT-BATCH commit rather than that initial identity write.
     harness.store.failCommitOnce(new Error("KV write lost"));
-    const { sink } = await harness.runner.openDelivery();
-    const frame = deliveryFrame(harness.journal.rows().slice(), 2);
+    const batch = eventBatch(harness.journal.rows().slice(), 2);
 
-    await expect(sink(frame)).rejects.toThrow("KV write lost");
+    await expect(processEventBatch(batch)).rejects.toThrow("KV write lost");
     // PERSIST-BEFORE-ADVANCE: the failed durable write left the published
-    // fold at its pre-frame value, so the redelivered frame re-reduces from
+    // fold at its pre-batch value, so the redelivered batch re-reduces from
     // the old state instead of silently no-oping.
-    expect(harness.store.record).toBeUndefined();
+    expect(harness.store.record).toEqual(initialProgress());
     await expect(harness.runner.snapshot()).resolves.toEqual({
       offset: 0,
       state: { count: 0, open: [] },
     });
 
-    await sink(frame); // the transport's retry
+    await processEventBatch(batch); // the transport's retry
     expect(harness.store.record?.processing.acknowledgedThroughOffset).toBe(2);
     await expect(harness.runner.snapshot()).resolves.toEqual({
       offset: 2,
@@ -726,23 +980,23 @@ describe("StreamProcessorRunner crash/redelivery", () => {
     });
     // Effects ran in both attempts; keys collapsed them to exactly-once visible.
     expect(comparableRows(harness.journal.rows(SIBLING)).map((row) => row.idempotencyKey)).toEqual([
-      "test-task/echo@/tests/runner:1",
-      "test-task/echo@/tests/runner:2",
+      siblingKey("test-task/echo@/tests/runner:1"),
+      siblingKey("test-task/echo@/tests/runner:2"),
     ]);
   });
 
   it("crash after persist: redelivery is a silent no-op (no duplicate effects)", async () => {
     const harness = makeHarness({ hooks: gatedEchoHooks({}) });
     for (const id of ["a", "b"]) harness.journal.seed({ type: REQUESTED, payload: { id } });
-    await harness.deliverFrames([harness.journal.rows().slice()]);
+    await harness.deliverBatches([harness.journal.rows().slice()]);
     expect(harness.store.record?.processing.acknowledgedThroughOffset).toBe(2);
     const attemptsBefore = harness.journal.attempts.length;
 
     const revived = harness.crash();
-    const opened = await revived.runner.openDelivery();
+    const opened = await revived.runner.openEventBatchCallback();
     expect(opened.checkpointOffset).toBe(2);
-    // The transport redelivers the same frame anyway (at-least-once).
-    await opened.sink(deliveryFrame(revived.journal.rows().slice(), 2));
+    // The transport redelivers the same batch anyway (at-least-once).
+    await opened.processEventBatch(eventBatch(revived.journal.rows().slice(), 2));
 
     expect(revived.journal.attempts.length).toBe(attemptsBefore); // zero re-runs
     expect(revived.store.record?.processing.acknowledgedThroughOffset).toBe(2);
@@ -774,7 +1028,7 @@ describe("StreamProcessorRunner reduce-only refold", () => {
       },
     };
     const harness = makeHarness({ journal, hooks });
-    await harness.deliverFrames([journal.rows().slice()]);
+    await harness.deliverBatches([journal.rows().slice()]);
     expect(effectCalls).toBe(4);
     expect(harness.store.record?.processing.acknowledgedThroughOffset).toBe(5);
     const appendsBefore = journal.attempts.length;
@@ -784,7 +1038,7 @@ describe("StreamProcessorRunner reduce-only refold", () => {
     try {
       effectCalls = 0;
       const redeployed = harness.crash({ contract: taskContract("0.0.2"), readPageSize: 2 });
-      const opened = await redeployed.runner.openDelivery();
+      const opened = await redeployed.runner.openEventBatchCallback();
 
       // The PROCESSING cursor survived the cache discard...
       expect(opened.checkpointOffset).toBe(5);
@@ -813,6 +1067,46 @@ describe("StreamProcessorRunner reduce-only refold", () => {
 // =============================================================================
 
 describe("StreamProcessorRunner load-time reduction catch-up", () => {
+  it("rejects a recreation between refold pages without committing a mixed-lifetime fold", async () => {
+    const journal = makeJournal();
+    journal.seed({ type: REQUESTED, payload: { id: "a" } });
+    journal.seed({ type: REQUESTED, payload: { id: "b" } });
+    const store = makeProgressStore();
+    const persisted: ProcessorProgress<TaskState> = {
+      streamId: TEST_STREAM_ID,
+      reduction: {
+        reducerVersion: "0.0.1",
+        reducedThroughOffset: 0,
+        state: { count: 0, open: [] },
+      },
+      processing: { acknowledgedThroughOffset: 2, cursorRevision: 0 },
+    };
+    store.plant(persisted);
+
+    // Read 1 identifies lifetime A. Read 2 returns A's first refold page and
+    // recreates the path before read 3. The second page therefore belongs to
+    // B and must be rejected before any staged state is published or stored.
+    journal.recreateAfterPage(2);
+    const harness = makeHarness({ journal, store, readPageSize: 1 });
+    await expect(harness.runner.openEventBatchCallback(TEST_STREAM_ID)).rejects.toThrow(
+      `stream ID changed during a read (${TEST_STREAM_ID} -> ${RECREATED_STREAM_ID})`,
+    );
+    expect(store.record).toEqual(persisted);
+    expect(store.commits).toEqual([]);
+
+    // A later open observes B, atomically replaces A's progress, and starts
+    // from offset zero. Only B's prefix contributes to the new fold.
+    journal.seed({ type: REQUESTED, payload: { id: "from-b" } });
+    const reopened = await harness.runner.openEventBatchCallback(RECREATED_STREAM_ID);
+    expect(reopened.checkpointOffset).toBe(0);
+    expect(store.record).toEqual(initialProgress(RECREATED_STREAM_ID, 1));
+    await reopened.processEventBatch(eventBatch(journal.rows().slice(), 1, RECREATED_STREAM_ID));
+    await expect(harness.runner.snapshot()).resolves.toEqual({
+      offset: 1,
+      state: { count: 1, open: ["from-b"] },
+    });
+  });
+
   it("a persisted fold LAGGING the acknowledgement is caught up reduce-only before publishing", async () => {
     const journal = makeJournal();
     journal.seed({ type: REQUESTED, payload: { id: "a" } }); // 1
@@ -824,6 +1118,7 @@ describe("StreamProcessorRunner load-time reduction catch-up", () => {
     // next delivery onto state missing events 2..3 and stamp it as current —
     // their contributions silently dropped forever).
     store.plant({
+      streamId: TEST_STREAM_ID,
       reduction: {
         reducerVersion: "0.0.1",
         reducedThroughOffset: 1,
@@ -849,6 +1144,7 @@ describe("StreamProcessorRunner load-time reduction catch-up", () => {
     expect(processEventCalls).toBe(0);
     // ...and the healed cache is persisted under the same revision.
     expect(store.record).toEqual({
+      streamId: TEST_STREAM_ID,
       reduction: {
         reducerVersion: "0.0.1",
         reducedThroughOffset: 3,
@@ -869,6 +1165,7 @@ describe("StreamProcessorRunner load-time reduction catch-up", () => {
       // acknowledged — publishing it would show state an operator rewind is
       // entitled to re-run. The load must discard it, never publish it.
       store.plant({
+        streamId: TEST_STREAM_ID,
         reduction: {
           reducerVersion: "0.0.1",
           reducedThroughOffset: 9,
@@ -910,6 +1207,7 @@ describe("StreamProcessorRunner load-time reduction catch-up", () => {
 
 describe("StreamProcessorRunner monotonic progress fence", () => {
   const progressAt = (ack: number, cursorRevision = 0): ProcessorProgress<TaskState> => ({
+    streamId: TEST_STREAM_ID,
     reduction: {
       reducerVersion: "0.0.1",
       reducedThroughOffset: ack,
@@ -920,17 +1218,26 @@ describe("StreamProcessorRunner monotonic progress fence", () => {
 
   it("store-level: a same-revision backward commit throws; a revision-bump rewind is allowed", () => {
     const store = makeProgressStore();
-    store.store.commit(progressAt(10), { expectedCursorRevision: 0 });
+    store.store.commit(progressAt(10), {
+      expectedCursorRevision: 0,
+      expectedStreamId: undefined,
+    });
 
     // Same revision, acked moving backward: a stale incarnation — fenced.
-    expect(() => store.store.commit(progressAt(4), { expectedCursorRevision: 0 })).toThrow(
-      /backward.*without a cursorRevision bump/,
-    );
+    expect(() =>
+      store.store.commit(progressAt(4), {
+        expectedCursorRevision: 0,
+        expectedStreamId: TEST_STREAM_ID,
+      }),
+    ).toThrow(/backward.*without a cursorRevision bump/);
     expect(store.record).toEqual(progressAt(10)); // the fenced commit wrote nothing
 
     // A rewind lands under the OLD revision and writes the bumped one (the
     // browser projection reset's shape) — the ONLY sanctioned backward move.
-    store.store.commit(progressAt(4, 1), { expectedCursorRevision: 0 });
+    store.store.commit(progressAt(4, 1), {
+      expectedCursorRevision: 0,
+      expectedStreamId: TEST_STREAM_ID,
+    });
     expect(store.record).toEqual(progressAt(4, 1));
   });
 
@@ -939,7 +1246,7 @@ describe("StreamProcessorRunner monotonic progress fence", () => {
     for (const id of ["a", "b"]) journal.seed({ type: REQUESTED, payload: { id } });
 
     // Incarnation A: wedges on event 1's blocker BEFORE any durable commit,
-    // holding a single-event frame whose frame-end commit will later try to
+    // holding a single-event batch whose batch-end commit will later try to
     // land acked=1.
     const gate = deferred();
     const a = makeHarness({
@@ -950,10 +1257,10 @@ describe("StreamProcessorRunner monotonic progress fence", () => {
         },
       },
     });
-    const { sink } = await a.runner.openDelivery();
-    const frameA = sink(deliveryFrame(journal.rows().slice(0, 1), 2));
+    const { processEventBatch } = await a.runner.openEventBatchCallback();
+    const batchA = processEventBatch(eventBatch(journal.rows().slice(0, 1), 2));
     await tick();
-    expect(a.store.record).toBeUndefined();
+    expect(a.store.record).toEqual(initialProgress());
 
     // Incarnation B processes through offset 2 at the SAME revision.
     const b = a.crash({ hooks: {} });
@@ -964,19 +1271,19 @@ describe("StreamProcessorRunner monotonic progress fence", () => {
     // so the revision CAS alone would ACCEPT it and roll durable
     // acknowledgement and state backward — the monotonic fence rejects it.
     gate.resolve();
-    await expect(frameA).rejects.toThrow(/backward/);
+    await expect(batchA).rejects.toThrow(/backward/);
     expect(b.store.record?.processing).toEqual({ acknowledgedThroughOffset: 2, cursorRevision: 0 });
   });
 });
 
 // =============================================================================
-// 7. At-head reconcile (`delivery.caughtUp`) — fires on the LAST CONSUMED event
-//    of a frame whose scan reaches the observed stream head. If that frame
+// 7. Caught-up processing (`delivery.caughtUp`) — fires on the LAST CONSUMED event
+//    of a batch whose scan reaches the observed stream maximum offset. If that batch
 //    consumes nothing, one eventless pass reconciles the same final fold.
 // =============================================================================
 
-describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
-  it("fires on the last consumed event of a head-reaching batch; an unconsumed tail at head fires the event-less pass", async () => {
+describe("StreamProcessorRunner caught-up processing (delivery.caughtUp)", () => {
+  it("fires on the last consumed event of a caught-up batch; an unconsumed tail at head fires the event-less pass", async () => {
     const journal = makeJournal();
     journal.seed({ type: REQUESTED, payload: { id: "a" } }); // 1: opens the obligation
     journal.seed({ type: NOISE, payload: {} }); // 2: unconsumed, reaches head
@@ -997,21 +1304,22 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
       },
     };
     const harness = makeHarness({ journal, hooks });
-    const { sink } = await harness.runner.openDelivery();
+    const { processEventBatch } = await harness.runner.openEventBatchCallback();
     const [requestedEvent] = journal.rows();
 
-    // Frame 1: the requested event, delivered mid-catch-up (head is at 2). It
+    // Batch 1: the requested event, delivered mid-catch-up (head is at 2). It
     // is behind head, so NOT caughtUp — nothing may act on a partial fold.
-    await sink(deliveryFrame([requestedEvent!], 2));
+    await processEventBatch(eventBatch([requestedEvent!], 2));
     expect(headCalls).toEqual([]);
     expect(journal.rows(SIBLING)).toHaveLength(0);
 
-    // Frame 2 proves the selector scanned offset 2 but omits its unconsumed
-    // event. The frame reaches head but no consumed event carries `caughtUp`.
-    // The runner fires the EVENT-LESS at-head pass (event=null), and the
+    // Batch 2 proves the filter scanned offset 2 but omits its unconsumed
+    // event. The batch reaches head but no consumed event carries `caughtUp`.
+    // The runner fires the EVENT-LESS caught-up call (event=null), and the
     // obligation opened by event 1 drives instead of stranding on a quiet
     // stream.
-    await sink({
+    await processEventBatch({
+      streamId: TEST_STREAM_ID,
       events: [],
       scannedAfterOffset: 1,
       scannedThroughOffset: 2,
@@ -1019,20 +1327,20 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
     });
     expect(headCalls).toEqual([{ open: ["a"], event: null }]); // event-less pass drove it
     expect(comparableRows(journal.rows(SIBLING))).toEqual([
-      { type: DRIVEN, idempotencyKey: "test-task/drive:a", payload: { id: "a" } },
+      { type: DRIVEN, idempotencyKey: siblingKey("test-task/drive:a"), payload: { id: "a" } },
     ]);
 
     // A later CONSUMED event reaches head: the reconcile runs again over the
     // final fold; drive:a dedupes on its stable key, drive:b is new.
     journal.seed({ type: REQUESTED, payload: { id: "b" } }); // 3: consumed, at head
-    await sink(deliveryFrame([journal.rows()[2]!], 3));
+    await processEventBatch(eventBatch([journal.rows()[2]!], 3));
     expect(headCalls).toEqual([
       { open: ["a"], event: null },
       { open: ["a", "b"], event: 3 },
     ]);
     expect(comparableRows(journal.rows(SIBLING))).toEqual([
-      { type: DRIVEN, idempotencyKey: "test-task/drive:a", payload: { id: "a" } },
-      { type: DRIVEN, idempotencyKey: "test-task/drive:b", payload: { id: "b" } },
+      { type: DRIVEN, idempotencyKey: siblingKey("test-task/drive:a"), payload: { id: "a" } },
+      { type: DRIVEN, idempotencyKey: siblingKey("test-task/drive:b"), payload: { id: "b" } },
     ]);
   });
 
@@ -1048,15 +1356,15 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
       },
     };
     // A `*` contract reduces every type; the head event (NOISE) is one it
-    // consumes, so it is the last consumed event of a head-reaching batch and
+    // consumes, so it is the last consumed event of a caught-up batch and
     // MUST carry caughtUp. Before the wildcard fix, `consumes.has("NOISE")`
     // was false and caughtUp never fired for `*` processors.
     const harness = makeHarness({ journal, hooks, contract: taskContract("0.0.1", ["*"]) });
-    await harness.deliverFrames([journal.rows().slice()]);
+    await harness.deliverBatches([journal.rows().slice()]);
     expect(headCalls).toEqual([["a"]]);
   });
 
-  it("commits only after onCaughtUp's blocking work: a failing at-head blocker leaves the frame UNcommitted and retried (codex bug #2)", async () => {
+  it("commits only after onCaughtUp's blocking work: a failing caught-up blocker leaves the batch UNcommitted and retried (codex bug #2)", async () => {
     const journal = makeJournal();
     journal.seed({ type: REQUESTED, payload: { id: "a" } }); // 1
     journal.seed({ type: REQUESTED, payload: { id: "b" } }); // 2 — the head event
@@ -1068,9 +1376,9 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
       onHead: (args, stableKey) => {
         headAttempts += 1;
         if (headAttempts === 1) {
-          // The at-head pass's own blocking work fails (or the incarnation
+          // The caught-up call's own blocking work fails (or the incarnation
           // dies mid-blocker — same durable outcome).
-          args.blockProcessorWhile(() => Promise.reject(new Error("at-head work failed")));
+          args.blockProcessorWhile(() => Promise.reject(new Error("caught-up work failed")));
           return;
         }
         args.blockProcessorWhile(() =>
@@ -1083,43 +1391,44 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
       },
     };
     // The bug this pins out: if the head event's acknowledgement could land
-    // BEFORE onCaughtUp's blocking work settled, a failed at-head blocker
-    // would leave redelivery with zero pending events and the at-head work
-    // lost forever. The frame-end-only commit runs after EVERY event's
-    // blocking work — the at-head reconcile's included — so the failed pass
-    // leaves the whole frame uncommitted and retryable.
+    // BEFORE onCaughtUp's blocking work settled, a failed caught-up blocker
+    // would leave redelivery with zero pending events and the caught-up work
+    // lost forever. The batch-end-only commit runs after EVERY event's
+    // blocking work — the caught-up processing's included — so the failed pass
+    // leaves the whole batch uncommitted and retryable.
     const harness = makeHarness({ journal, hooks });
 
-    const { sink } = await harness.runner.openDelivery();
-    const frame = deliveryFrame(journal.rows().slice(), 2);
-    await expect(sink(frame)).rejects.toThrow("at-head work failed");
+    const { processEventBatch } = await harness.runner.openEventBatchCallback();
+    const batch = eventBatch(journal.rows().slice(), 2);
+    await expect(processEventBatch(batch)).rejects.toThrow("caught-up work failed");
 
-    // NOTHING committed — the head event (and its at-head pass) stays retryable.
-    expect(harness.store.record).toBeUndefined();
+    // Only the stream-lifetime binding is committed; the head event and its
+    // caught-up call both stay retryable.
+    expect(harness.store.record).toEqual(initialProgress());
     await expect(harness.runner.snapshot()).resolves.toEqual({
       offset: 0,
       state: { count: 0, open: [] },
     });
 
-    // The transport's redelivery re-runs the frame AND the at-head pass.
-    await sink(frame);
-    expect(processedOffsets).toEqual([1, 2, 1, 2]); // at-least-once on the uncommitted frame
+    // The transport's redelivery re-runs the batch AND the caught-up call.
+    await processEventBatch(batch);
+    expect(processedOffsets).toEqual([1, 2, 1, 2]); // at-least-once on the uncommitted batch
     expect(headAttempts).toBe(2);
     expect(harness.store.record?.processing.acknowledgedThroughOffset).toBe(2);
     expect(comparableRows(journal.rows(SIBLING))).toEqual([
-      { type: DRIVEN, idempotencyKey: "test-task/drive:a", payload: { id: "a" } },
+      { type: DRIVEN, idempotencyKey: siblingKey("test-task/drive:a"), payload: { id: "a" } },
     ]);
   });
 
-  it("fires the reconcile via the EVENT-LESS at-head pass when the head is an unconsumed tail (self-pull)", async () => {
+  it("fires the reconcile via the EVENT-LESS caught-up call when the head is an unconsumed tail (self-pull)", async () => {
     const journal = makeJournal();
     journal.seed({ type: REQUESTED, payload: { id: "a" } }); // 1 — consumed, opens the obligation
-    journal.seed({ type: NOISE, payload: {} }); // 2 — unconsumed durable tail at raw head
+    journal.seed({ type: NOISE, payload: {} }); // 2 — unconsumed durable tail at maximum raw offset
 
     const headCalls: { open: string[]; event: number | null }[] = [];
     const hooks: TaskHooks = {
       onHead: (args, stableKey) => {
-        // args.event is NULL here — this is the event-less at-head pass.
+        // args.event is NULL here — this is the event-less caught-up call.
         headCalls.push({ open: [...args.state.open], event: args.event?.offset ?? null });
         for (const id of args.state.open) {
           args.blockProcessorWhile(() =>
@@ -1134,11 +1443,11 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
     };
     const harness = makeHarness({ journal, hooks });
 
-    // The production wake lane's exact shape: ONLY the consumed event 1 is
-    // delivered, stamped with the RAW head 2. The trailing type-unfiltered
+    // The production hosted-processor batch's exact shape: ONLY the consumed event 1 is
+    // delivered, stamped with the maximum raw offset 2. The trailing type-unfiltered
     // self-pull folds the unconsumed tail so the cursor reaches head — and the
     // batch reaches head with NO consumed event, so the runner fires the
-    // EVENT-LESS at-head pass and the obligation drives. This is the exact
+    // EVENT-LESS caught-up call and the obligation drives. This is the exact
     // late-agent preview failure: the requested script stayed open forever
     // after unrelated presence facts occupied the raw tail.
     await harness.deliverConsumesFilteredPending();
@@ -1147,7 +1456,7 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
       expect(headCalls).toEqual([{ open: ["a"], event: null }]);
     });
     expect(comparableRows(journal.rows(SIBLING))).toEqual([
-      { type: DRIVEN, idempotencyKey: "test-task/drive:a", payload: { id: "a" } },
+      { type: DRIVEN, idempotencyKey: siblingKey("test-task/drive:a"), payload: { id: "a" } },
     ]);
     await expect(harness.runner.snapshot()).resolves.toEqual({
       offset: 2,
@@ -1160,7 +1469,7 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
     // per-event append first, a fold-derived append second. Registration
     // order MUST be journal order — the guarantee that lets e.g. an
     // interrupt cancel fold before a fold-derived re-fire. This ordering
-    // used to need a separate deferred lane (`blockProcessorWhileCaughtUp`,
+    // used to need a separate deferred callback (`blockProcessorWhileCaughtUp`,
     // deleted); FIFO chaining makes it structural.
     const journal = makeJournal();
     journal.seed({ type: REQUESTED, payload: { id: "a" } }); // 1 — consumed, at head
@@ -1179,16 +1488,16 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
         args.blockProcessorWhile(() =>
           args.appendTo(SIBLING, {
             type: DRIVEN,
-            idempotencyKey: "test-task/at-head",
-            payload: { id: "at-head" },
+            idempotencyKey: "test-task/caught-up",
+            payload: { id: "caught-up" },
           }),
         );
       },
     };
     const harness = makeHarness({ journal, hooks });
-    await harness.deliverFrames([journal.rows().slice()]);
+    await harness.deliverBatches([journal.rows().slice()]);
 
-    // Journal order proves the sequencing: per-event FIRST, at-head SECOND.
+    // Journal order proves the sequencing: per-event FIRST, caught-up SECOND.
     expect(journal.rows(SIBLING).map((row) => row.type)).toEqual([ECHOED, DRIVEN]);
   });
 });
@@ -1197,7 +1506,7 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
 // Malformed consumed events (stream-processor.ts:592-616 semantics, exactly)
 // =============================================================================
 
-describe("StreamProcessorRunner parse-failure lane", () => {
+describe("StreamProcessorRunner parse-failure handling", () => {
   it("advances past a malformed consumed event, records it AFTER the commit, in the background", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
@@ -1207,7 +1516,7 @@ describe("StreamProcessorRunner parse-failure lane", () => {
       journal.seed({ type: REQUESTED, payload: { id: "c" } }); // 3
 
       const harness = makeHarness({ journal });
-      await harness.deliverFrames([journal.rows().slice()]);
+      await harness.deliverBatches([journal.rows().slice()]);
 
       // The cursor never wedges on the malformed fact; the fold skips it.
       expect(harness.store.record?.processing.acknowledgedThroughOffset).toBe(3);
@@ -1233,7 +1542,7 @@ describe("StreamProcessorRunner parse-failure lane", () => {
     }
   });
 
-  it("a failing diagnostic append is logged, never re-poisons the committed frame", async () => {
+  it("a failing diagnostic append is logged and never fails the committed batch again", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const journal = makeJournal();
@@ -1241,7 +1550,7 @@ describe("StreamProcessorRunner parse-failure lane", () => {
 
       const harness = makeHarness({ journal });
       journal.failNextAppendTo(HOME, new Error("append transport down"));
-      await harness.deliverFrames([journal.rows().slice()]);
+      await harness.deliverBatches([journal.rows().slice()]);
       await tick();
 
       // The skip committed even though recording it failed.
@@ -1258,12 +1567,38 @@ describe("StreamProcessorRunner parse-failure lane", () => {
     }
   });
 
+  it("a delayed lifetime-A diagnostic is rejected after the stream is recreated as B", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const journal = makeJournal();
+      journal.seed({ type: REQUESTED, payload: { id: 42 } });
+      const releaseAppend = journal.pauseGuardedAppends();
+      const harness = makeHarness({ journal });
+
+      await harness.deliverBatches([journal.rows().slice()]);
+      expect(harness.store.record?.processing.acknowledgedThroughOffset).toBe(1);
+
+      journal.recreate();
+      releaseAppend();
+      await vi.waitFor(() => {
+        expect(consoleError).toHaveBeenCalledWith(
+          "stream processor runner background work failed",
+          expect.objectContaining({ message: expect.stringContaining("append rejected") }),
+        );
+      });
+      expect(journal.rows()).toEqual([]);
+      expect(journal.attempts).toEqual([]);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   it("a malformed consumed event at head does NOT steal caughtUp from the last good event", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const journal = makeJournal();
       journal.seed({ type: REQUESTED, payload: { id: "a" } }); // 1 — good, opens obligation
-      journal.seed({ type: REQUESTED, payload: { id: 42 } }); // 2 — malformed, at raw head
+      journal.seed({ type: REQUESTED, payload: { id: 42 } }); // 2 — malformed, at maximum raw offset
 
       const headCalls: string[][] = [];
       const hooks: TaskHooks = {
@@ -1284,12 +1619,12 @@ describe("StreamProcessorRunner parse-failure lane", () => {
       // Head is offset 2 (the malformed event). The last DELIVERED event is
       // offset 1 (the good one) — it must carry caughtUp so the obligation
       // drives, rather than being stranded because offset 2 stole the flag.
-      await harness.deliverFrames([journal.rows().slice()]);
+      await harness.deliverBatches([journal.rows().slice()]);
       await tick();
 
       expect(headCalls).toEqual([["a"]]);
       expect(comparableRows(journal.rows(SIBLING))).toEqual([
-        { type: DRIVEN, idempotencyKey: "test-task/drive:a", payload: { id: "a" } },
+        { type: DRIVEN, idempotencyKey: siblingKey("test-task/drive:a"), payload: { id: "a" } },
       ]);
       // Both offsets committed (the malformed one skipped-not-wedged).
       expect(harness.store.record?.processing.acknowledgedThroughOffset).toBe(2);
@@ -1312,7 +1647,7 @@ describe("StreamProcessorRunner.waitUntilEvent", () => {
     const pendingPredicate = harness.runner.waitUntilEvent({
       predicate: (event) => event.type === REQUESTED,
     });
-    await harness.deliverFrames([harness.journal.rows().slice()]);
+    await harness.deliverBatches([harness.journal.rows().slice()]);
     await expect(pendingOffset).resolves.toBeUndefined();
     await expect(pendingPredicate).resolves.toBeUndefined();
 
@@ -1327,8 +1662,8 @@ describe("StreamProcessorRunner.waitUntilEvent", () => {
   it("offset form reaches an already-appended event by SELF-PULL — read-your-writes never depends on push delivery", async () => {
     const harness = makeHarness();
     // Read-your-writes: the event is already on the stream, but NO delivery is
-    // scheduled — the harness never opens a sink, so nothing pushes a frame.
-    // The wait must reach the event by pulling the journal itself; parking for
+    // scheduled — the harness never opens a processEventBatch, so nothing pushes a batch.
+    // The wait must reach the event by pulling the journal itself; waiting for
     // a push that never comes hangs until the bounded timeout (the pre-fix
     // behavior this test pins out).
     const committed = harness.journal.seed({ type: REQUESTED, payload: { id: "ryw" } });
@@ -1403,10 +1738,10 @@ describe("StreamProcessorRunner recovery wiring", () => {
     // registry does with DO KV.
     const kv: { record: KeepaliveRecord | undefined } = { record: undefined };
     const revivals: KeepaliveRecord[] = [];
+    const appendRevived = () => void journal.seed({ type: REVIVED, payload: {} });
     const build = (): ProcessorRecovery => {
       const recovery: ProcessorRecovery = {
         keepAliveWhile: (work) => keepalive.track(work()),
-        appendRevived: () => void journal.seed({ type: REVIVED, payload: {} }),
         handleAlarm: async () => {
           await keepalive.onAlarm();
         },
@@ -1423,19 +1758,20 @@ describe("StreamProcessorRunner recovery wiring", () => {
         },
         revive: async (record) => {
           revivals.push(record);
-          await recovery.appendRevived();
+          appendRevived();
         },
         appendFact: () => {},
         version: "v1",
       });
       return recovery;
     };
-    return { clock, kv, revivals, build };
+    return { clock, kv, revivals, appendRevived, build };
   }
 
   it("recovery needs no revived consumption: construction succeeds and the fact gives an eventless at-head turn", async () => {
     const streamFixture = makeJournal();
-    const recovery = makeRecoveryFixture(streamFixture).build();
+    const recoveryFixture = makeRecoveryFixture(streamFixture);
+    const recovery = recoveryFixture.build();
     const noRevivedContract = defineProcessorContract({
       slug: "test-no-revived",
       version: "0.0.1",
@@ -1476,7 +1812,7 @@ describe("StreamProcessorRunner recovery wiring", () => {
 
     streamFixture.seed({ type: REQUESTED, payload: { id: "open" } });
     await runner.catchUp();
-    await recovery.appendRevived();
+    recoveryFixture.appendRevived();
     await runner.catchUp();
 
     expect(headTurns).toEqual([
@@ -1485,7 +1821,7 @@ describe("StreamProcessorRunner recovery wiring", () => {
     ]);
   });
 
-  it("blocking, background, AND whole-frame work ride the keepalive; a quiet-clean alarm disarms", async () => {
+  it("blocking, background, AND whole-batch work ride the keepalive; a quiet-clean alarm disarms", async () => {
     const journal = makeJournal();
     journal.seed({ type: REQUESTED, payload: { id: "a" } });
     const fixture = makeRecoveryFixture(journal);
@@ -1498,9 +1834,9 @@ describe("StreamProcessorRunner recovery wiring", () => {
       },
     };
     const harness = makeHarness({ journal, hooks, recovery: fixture.build() });
-    await harness.deliverFrames([journal.rows().slice()]);
+    await harness.deliverBatches([journal.rows().slice()]);
 
-    // The frame is done but background work is still owed: the durable alarm
+    // The batch is done but background work is still owed: the durable alarm
     // stays armed — "died owing work" must equal "alarm armed".
     expect(fixture.kv.record?.armedAtMs).not.toBeNull();
     fixture.clock.now = fixture.kv.record!.armedAtMs! + 1;
@@ -1527,7 +1863,7 @@ describe("StreamProcessorRunner recovery wiring", () => {
       },
     };
     const harness = makeHarness({ journal, hooks, recovery: fixture.build() });
-    await harness.deliverFrames([journal.rows().slice()]);
+    await harness.deliverBatches([journal.rows().slice()]);
     expect(fixture.kv.record?.armedAtMs).not.toBeNull();
 
     // The incarnation dies owing the background attempt. A fresh one boots
@@ -1545,7 +1881,7 @@ describe("StreamProcessorRunner recovery wiring", () => {
     expect(fixture.revivals).toHaveLength(1);
     const revivedEvent = journal.rows().find((row) => row.type === REVIVED);
     expect(revivedEvent).toBeDefined();
-    // ...whose ordinary delivery turn gives the processor its at-head pass —
+    // ...whose ordinary delivery turn gives the processor its caught-up call —
     // where an obligation processor would settle what the dead incarnation
     // left behind. (The registry that auto-pulls after revival is a later
     // slice; here the transport's redelivery plays that part.)

@@ -3,8 +3,8 @@ import { LiveStateRpcTarget } from "iterate/sdk/capnweb";
 import {
   type ProcessorState,
   type StreamEventInput,
-  type StreamSubscriberWakeRequest,
-  type StreamSubscriberWakeResponse,
+  type StreamProcessorWakeRequest,
+  type StreamProcessorWakeResponse,
 } from "iterate/processors";
 import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
 import { workerVersion, type Env } from "../../env.ts";
@@ -79,8 +79,8 @@ export class DeviceDurableObject extends DurableObject<Env> {
   readonly #reads = this.#registry.reads(this.#deviceProcessor);
   #credentialUpdates: Promise<void> = Promise.resolve();
 
-  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
-    return this.#registry.wakeStreamSubscriber(args);
+  wakeStreamProcessor(args: StreamProcessorWakeRequest): Promise<StreamProcessorWakeResponse> {
+    return this.#registry.wakeStreamProcessor(args);
   }
 
   async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {

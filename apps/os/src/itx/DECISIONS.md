@@ -416,8 +416,9 @@ One PR (deliberately breaking; prd gets redeployed), five moves:
   already did on theirs); child contexts live at the `extend` path or the
   generated `/itx/<id>` path.
 - **The generic host derives nothing; creation is an event by the CREATOR.**
-  `createContext` appends `subscription-configured` (pointing the stream at
-  the node's `itx` processor) + `context-created { name, parent }` — both
+  `createContext` appends `subscription-configured` (pointing the
+  stream at the node's hosted `itx` processor) +
+  `context-created { name, parent }` — both
   idempotent by key, so creation is get-or-create (the fold takes the first
   birth certificate). Parentage comes strictly from the event; the platform
   defaults parent is the one loopback (code) address.

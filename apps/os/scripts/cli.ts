@@ -8,6 +8,7 @@ import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 export * as configRepo from "./reset-config-repo.ts";
 export * as dev from "./dev.ts";
 export * as itx from "./itx.ts";
+export * as projectSeed from "./project-seed.ts";
 export * as session from "./session.ts";
 
 const DEFAULT_MCP_BASE_URL = "https://mcp.iterate.com";
@@ -65,6 +66,9 @@ if (isMainModule(import.meta.url)) {
 
   /**
    * `pnpm cli` should mean "run the OS CLI for the current Doppler environment".
+   * Project-seed capture is the deliberate exception: a direct invocation
+   * defaults to production, because its whole purpose is taking the stable
+   * pre-erase archive. `--environment` selects another exact OS config.
    *
    * If the caller is already inside `doppler run`, preserve that exact config:
    *
@@ -72,6 +76,20 @@ if (isMainModule(import.meta.url)) {
    * the user's local `doppler setup` for `apps/os`, normally `dev_<user>`.
    */
   if (!process.env.DOPPLER_CONFIG) {
+    const captureEnvironment = projectSeedCaptureEnvironment(args);
+    if (captureEnvironment !== null) {
+      spawnAndExit("doppler", [
+        "run",
+        "--project",
+        "os",
+        "--config",
+        captureEnvironment,
+        "--",
+        "tsx",
+        fileURLToPath(import.meta.url),
+        ...args,
+      ]);
+    }
     spawnAndExit("doppler", ["run", "--", "tsx", fileURLToPath(import.meta.url), ...args]);
   }
 
@@ -84,6 +102,17 @@ if (isMainModule(import.meta.url)) {
     logger: yamlTableConsoleLogger,
     prompts: isAgent() ? undefined : createBuiltInPrompts(),
   });
+}
+
+function projectSeedCaptureEnvironment(args: readonly string[]): string | null {
+  if (args[0] !== "project-seed" || args[1] !== "capture") return null;
+  const equalsArgument = args.find((argument) => argument.startsWith("--environment="));
+  if (equalsArgument !== undefined) {
+    return equalsArgument.slice("--environment=".length).trim() || "prd";
+  }
+  const flagIndex = args.indexOf("--environment");
+  if (flagIndex !== -1) return args[flagIndex + 1]?.trim() || "prd";
+  return "prd";
 }
 
 function spawnAndExit(command: string, args: string[]): never {

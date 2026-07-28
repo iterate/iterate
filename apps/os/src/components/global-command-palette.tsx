@@ -108,12 +108,12 @@ export function GlobalCommandPalette() {
       // authority and stays within the admin explorer routes.
       return {
         remoteTreeSource: (path) => ({
-          async subscribe(args) {
+          async openConnection(args) {
             const stream =
               adminStream.adminProjectId === NULL_DURABLE_OBJECT_PROJECT_ID
                 ? (await connectIterateSession()).streams.get(path)
                 : (await connectItx(adminStream.adminProjectId)).streams.get(path);
-            return stream.subscribe(args);
+            return stream.openConnection(args);
           },
         }),
         onOpenPath(path) {

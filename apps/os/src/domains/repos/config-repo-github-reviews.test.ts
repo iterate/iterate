@@ -6,11 +6,43 @@ import {
   type HarnessSubstrate,
 } from "iterate/processors/testing";
 import {
-  handleGithubPullRequestWebhook,
+  handleGithubPullRequestWebhook as handleGithubPullRequestWebhookWithPolicy,
   ReviewBotProcessor,
   ReviewBotProcessorContract,
   reviewBotFreshnessHorizonMs,
-} from "../../../config-repo-template/apps/review-bot/src/review-bot.ts";
+} from "iterate/starter-apps/github-ai-linter/worker";
+
+const testAndSpecFileGlobs = [
+  "!**/*.{test,spec}.{js,jsx,mjs,cjs,ts,tsx,mts,cts}",
+  "!**/{__tests__,test,tests,spec,specs}/**",
+];
+const rules = {
+  "structure/no-small-single-use-helper": {
+    files: ["**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}", ...testAndSpecFileGlobs],
+    invariant:
+      "Do not introduce a small helper used only once when keeping the logic at its call site would be clearer.",
+  },
+  "typescript/no-inferable-type-annotation": {
+    files: ["**/*.{ts,tsx,mts,cts}", ...testAndSpecFileGlobs],
+    invariant: "Do not declare a type annotation that TypeScript can infer from the value.",
+  },
+  "typescript/explain-type-cast": {
+    files: ["**/*.{ts,tsx,mts,cts}", ...testAndSpecFileGlobs],
+    invariant:
+      "Every type cast must have a nearby explanation of why it is safe and cannot reasonably be avoided.",
+  },
+};
+const policy = { loadRules: async () => rules, policyVersion: "2" };
+const ruleFiles = Object.fromEntries(
+  Object.entries(rules).map(([id, rule]) => [
+    `rules/${id}.md`,
+    ["---", `id: ${id}`, `files: ${JSON.stringify(rule.files)}`, "---", rule.invariant].join("\n"),
+  ]),
+);
+
+function handleGithubPullRequestWebhook(itx: Project, event: StreamEvent) {
+  return handleGithubPullRequestWebhookWithPolicy(itx, event, policy);
+}
 
 const route = {
   connection: "install-789",
@@ -93,6 +125,7 @@ function webhook(input?: {
 
 function harness(input?: {
   agentExists?: boolean;
+  ruleFiles?: Record<string, string>;
   route?: GithubRepoLink | null;
   routes?: Record<string, GithubRepoLink | null>;
 }) {
@@ -131,19 +164,30 @@ function harness(input?: {
     const birth = births.get(path);
     return birth === undefined ? [] : [birth];
   });
+  const subscribeToEventsFrom = vi.fn(async (_path: string, _args: unknown) => ({
+    inbound: {},
+    outbound: {},
+  }));
   const agentGet = vi.fn((path: string) => ({
     append: (...events: StreamEventInput[]) => agentAppend(path, ...events),
     create: () => create(path),
     stream: {
       append: (...events: StreamEventInput[]) => append(path, ...events),
       getEvents: () => getEvents(path),
+      subscribeToEventsFrom: (args: unknown) => subscribeToEventsFrom(path, args),
     },
   }));
   const routes = input?.routes ?? {
     "/repos/config": input?.route === undefined ? route : input.route,
   };
+  const availableRuleFiles = input?.ruleFiles || ruleFiles;
   const repoList = vi.fn(async () => Object.keys(routes).map((path) => ({ path })));
   const repoGet = vi.fn((path: string) => ({
+    listFiles: async () => ({ commitOid: "rules-abc", paths: Object.keys(availableRuleFiles) }),
+    readFile: async ({ path: filePath }: { path: string }) => {
+      const content = availableRuleFiles[filePath];
+      return content === undefined ? null : { commitOid: "rules-abc", content, path: filePath };
+    },
     processor: {
       snapshot: async () => ({ offset: 1, state: { github: routes[path] ?? null } }),
     },
@@ -169,6 +213,7 @@ function harness(input?: {
     itx,
     repoGet,
     repoList,
+    subscribeToEventsFrom,
   };
 }
 
@@ -212,7 +257,7 @@ describe("userspace GitHub pull-request routing", () => {
     );
     expect(test.appendBatches).toHaveLength(1);
     expect(test.appendBatches[0]?.path).toBe(agentPath);
-    expect(test.appendBatches[0]?.events).toHaveLength(3);
+    expect(test.appendBatches[0]?.events).toHaveLength(2);
     expect(test.appendBatches[0]?.events[0]).toEqual({
       type: "events.iterate.com/agent/binding-set",
       idempotencyKey: "github-pr/binding",
@@ -225,21 +270,18 @@ describe("userspace GitHub pull-request routing", () => {
         number: 7,
       },
     });
-    expect(test.appendBatches[0]?.events[1]).toMatchObject({
-      idempotencyKey: "github-pr/webhook:/integrations/github/install-789:12",
-      payload: event.payload,
-      source: {
-        crossPostedFrom: [
-          expect.objectContaining({
-            offset: 12,
-            path: "/integrations/github/install-789",
-            projectId: "prj_1",
-            subscriptionKey: "userspace:github-pr:/repos/config",
-          }),
-        ],
+    expect(test.subscribeToEventsFrom).toHaveBeenCalledWith(agentPath, {
+      sourceStreamPath: "/integrations/github/install-789",
+      subscriptionKey: "userspace:github-pr:/repos/config",
+      description: "Verified GitHub webhooks for acme/widgets#7",
+      filter: {
+        eventTypes: ["events.iterate.com/github/webhook-received"],
+        jsonataCondition:
+          "payload.associations.repository.id = 101 and payload.associations.pullRequest.number = 7",
       },
+      start: "beginning",
     });
-    expect(test.appendBatches[0]?.events[2]).toMatchObject({
+    expect(test.appendBatches[0]?.events[1]).toMatchObject({
       idempotencyKey: "github-pr/review:install-789:101:acme/widgets:iterate:2:head-abc",
       payload: {
         key: "github/review-task",
@@ -248,7 +290,7 @@ describe("userspace GitHub pull-request routing", () => {
       },
       type: "events.iterate.com/agents/context-added",
     });
-    const task = JSON.stringify(test.appendBatches[0]?.events[2]);
+    const task = JSON.stringify(test.appendBatches[0]?.events[1]);
     expect(task).toContain("complete changed-file list");
     expect(task).toContain("octokit.paginate");
     expect(task).toContain("GET /repos/{owner}/{repo}/pulls/{pull_number}/files");
@@ -277,11 +319,10 @@ describe("userspace GitHub pull-request routing", () => {
     expect(test.agentGet).toHaveBeenCalledWith(iterateAgentPath);
     expect(test.create).toHaveBeenCalledWith(iterateAgentPath);
     expect(test.appendBatches[0]?.path).toBe(iterateAgentPath);
-    expect(test.appendBatches[0]?.events[1]).toMatchObject({
-      source: {
-        crossPostedFrom: [{ subscriptionKey: "userspace:github-pr:/repos/iterate" }],
-      },
-    });
+    expect(test.subscribeToEventsFrom).toHaveBeenCalledWith(
+      iterateAgentPath,
+      expect.objectContaining({ subscriptionKey: "userspace:github-pr:/repos/iterate" }),
+    );
   });
 
   it("does not create from an unmentioned later delivery", async () => {
@@ -307,7 +348,6 @@ describe("userspace GitHub pull-request routing", () => {
     expect(test.appendBatches).toHaveLength(2);
     expect(test.appendBatches[1]?.events.map((item) => item.idempotencyKey)).toEqual([
       "github-pr/binding",
-      "github-pr/webhook:/integrations/github/install-789:12",
       "github-pr/review:install-789:101:acme/widgets:iterate:2:head-abc",
     ]);
   });
@@ -329,7 +369,7 @@ describe("userspace GitHub pull-request routing", () => {
     );
 
     expect(test.create).not.toHaveBeenCalled();
-    const reviews = test.appendBatches.map((batch) => batch.events[2]);
+    const reviews = test.appendBatches.map((batch) => batch.events[1]);
     expect(reviews.map((review) => review?.idempotencyKey)).toEqual([
       "github-pr/review:install-789:101:acme/widgets:iterate:2:head-one",
       "github-pr/review:install-789:101:acme/widgets:iterate:2:head-two",
@@ -381,10 +421,10 @@ describe("userspace GitHub pull-request routing", () => {
         number: 7,
       },
     });
-    expect(JSON.stringify(test.appendBatches[0]?.events[2])).toContain(
+    expect(JSON.stringify(test.appendBatches[0]?.events[1])).toContain(
       "renamed/widgets-next pull request #7",
     );
-    expect(test.appendBatches[0]?.events[2]?.idempotencyKey).toBe(
+    expect(test.appendBatches[0]?.events[1]?.idempotencyKey).toBe(
       "github-pr/review:install-789:101:renamed/widgets-next:iterate:2:head-abc",
     );
   });
@@ -396,16 +436,16 @@ describe("userspace GitHub pull-request routing", () => {
       webhook({ action: "created", mentionedUsers: ["iterate"], name: "issue_comment" }),
     );
 
-    expect(test.appendBatches[0]?.events).toHaveLength(4);
-    expect(test.appendBatches[0]?.events[2]).toMatchObject({
+    expect(test.appendBatches[0]?.events).toHaveLength(3);
+    expect(test.appendBatches[0]?.events[1]).toMatchObject({
       idempotencyKey: "github-pr/mention-instructions:/integrations/github/install-789:12",
       payload: {
         llmRequestPolicy: { behaviour: "dont-trigger-request" },
         role: "developer",
       },
     });
-    expect(test.appendBatches[0]?.events[2]?.payload).not.toHaveProperty("actor");
-    expect(test.appendBatches[0]?.events[3]).toMatchObject({
+    expect(test.appendBatches[0]?.events[1]?.payload).not.toHaveProperty("actor");
+    expect(test.appendBatches[0]?.events[2]).toMatchObject({
       idempotencyKey: "github-pr/mention:/integrations/github/install-789:12",
       payload: {
         actor: { login: "jonas", senderType: "User", type: "github" },
@@ -420,11 +460,11 @@ describe("userspace GitHub pull-request routing", () => {
         ],
       },
     });
-    const instructions = JSON.stringify(test.appendBatches[0]?.events[2]);
+    const instructions = JSON.stringify(test.appendBatches[0]?.events[1]);
     expect(instructions).toContain("GitHub's signed webhook identifies @jonas as MEMBER");
     expect(instructions).toContain("issues.createComment");
     expect(instructions).not.toContain("@iterate please review");
-    const request = JSON.stringify(test.appendBatches[0]?.events[3]);
+    const request = JSON.stringify(test.appendBatches[0]?.events[2]);
     expect(request).toContain("@iterate please review");
     expect(request).toContain("https://github.com/acme/widgets/pull/7#issuecomment-991");
     expect(JSON.stringify(test.appendBatches[0]?.events)).not.toContain("checkCollaborator");
@@ -439,7 +479,7 @@ describe("userspace GitHub pull-request routing", () => {
         name: "issue_comment",
       }),
     );
-    expect(ignored.appendBatches[0]?.events).toHaveLength(2);
+    expect(ignored.appendBatches[0]?.events).toHaveLength(1);
   });
 
   it("takes submitted review text from the committed webhook without rereading its ref", async () => {
@@ -455,10 +495,10 @@ describe("userspace GitHub pull-request routing", () => {
       }),
     );
 
-    expect(JSON.stringify(test.appendBatches[0]?.events[3])).toContain(
+    expect(JSON.stringify(test.appendBatches[0]?.events[2])).toContain(
       "@iterate answer this review",
     );
-    expect(JSON.stringify(test.appendBatches[0]?.events[3])).not.toContain("wrong field");
+    expect(JSON.stringify(test.appendBatches[0]?.events[2])).not.toContain("wrong field");
   });
 
   it("does not wake from normalized mention metadata when the native message body is absent", async () => {
@@ -473,7 +513,7 @@ describe("userspace GitHub pull-request routing", () => {
       }),
     );
 
-    expect(test.appendBatches[0]?.events).toHaveLength(2);
+    expect(test.appendBatches[0]?.events).toHaveLength(1);
   });
 
   it("creates the pull-request agent from a trusted mention", async () => {
@@ -484,8 +524,8 @@ describe("userspace GitHub pull-request routing", () => {
     );
 
     expect(test.create).toHaveBeenCalledOnce();
-    expect(test.appendBatches[0]?.events).toHaveLength(4);
-    expect(test.appendBatches[0]?.events[3]).toMatchObject({
+    expect(test.appendBatches[0]?.events).toHaveLength(3);
+    expect(test.appendBatches[0]?.events[2]).toMatchObject({
       payload: {
         actor: { login: "jonas", senderType: "User", type: "github" },
         llmRequestPolicy: { behaviour: "after-current-request" },
@@ -494,11 +534,28 @@ describe("userspace GitHub pull-request routing", () => {
     });
   });
 
+  it("routes a trusted mention without loading structural review rules", async () => {
+    const test = harness();
+    const loadRules = vi.fn(async () => {
+      throw new Error("rules are unavailable");
+    });
+
+    await handleGithubPullRequestWebhookWithPolicy(
+      test.itx,
+      webhook({ action: "created", mentionedUsers: ["iterate"], name: "issue_comment" }),
+      { loadRules, policyVersion: "2" },
+    );
+
+    expect(loadRules).not.toHaveBeenCalled();
+    expect(test.create).toHaveBeenCalledOnce();
+    expect(test.appendBatches[0]?.events).toHaveLength(3);
+  });
+
   it("creates draft history without waking a review", async () => {
     const test = harness();
     await handleGithubPullRequestWebhook(test.itx, webhook({ draft: true }));
     expect(test.create).toHaveBeenCalledOnce();
-    expect(test.appendBatches[0]?.events).toHaveLength(2);
+    expect(test.appendBatches[0]?.events).toHaveLength(1);
   });
 
   it("copies native thread resolution without waking the agent", async () => {
@@ -507,15 +564,14 @@ describe("userspace GitHub pull-request routing", () => {
       test.itx,
       webhook({ action: "resolved", name: "pull_request_review_thread" }),
     );
-    expect(test.appendBatches[0]?.events).toHaveLength(2);
-    expect(test.appendBatches[0]?.events[1]).toMatchObject({
-      payload: { body: { action: "resolved" }, delivery: { name: "pull_request_review_thread" } },
-      type: "events.iterate.com/github/webhook-received",
+    expect(test.appendBatches[0]?.events).toHaveLength(1);
+    expect(test.appendBatches[0]?.events[0]).toMatchObject({
+      type: "events.iterate.com/agent/binding-set",
     });
   });
 });
 
-// The processor half (config-repo-template/apps/review-bot — review-bot.ts)
+// The processor half (`iterate/starter-apps/github-ai-linter/worker`)
 // driven by the REAL runner over an in-memory journal via the shared
 // `iterate/processors/testing` harness. The router itself is covered above;
 // these prove the delivery skin around it: which events reach it at all, and
@@ -533,6 +589,10 @@ describe("userspace review-bot stream processor", () => {
           path,
           projectId,
           now,
+          config: {
+            policyVersion: policy.policyVersion,
+            rules: { glob: "rules/**/*.md", repoPath: "/repos/iterate" },
+          },
           // The DO host passes `() => env.ITX.get()`; the fake adds the
           // disposal the handler's `using` expects. Structural cast as in
           // harness().
@@ -561,21 +621,46 @@ describe("userspace review-bot stream processor", () => {
     // is redelivered").
     const replay = reviewBotHarness({
       fake,
-      substrate: { clock: bot.clock, stream: bot.stream, progress: makeMemoryProgressStore() },
+      substrate: {
+        clock: bot.clock,
+        stream: bot.stream,
+        progress: makeMemoryProgressStore(ReviewBotProcessorContract),
+      },
     });
     await replay.bot.settle();
     expect(fake.appendBatches).toHaveLength(2);
   });
 
-  it("skips cross-posted copies", async () => {
+  it("routes a trusted mention when structural review rules are unavailable", async () => {
+    const fake = harness({ ruleFiles: {} });
+    const { bot } = reviewBotHarness({ fake });
+
+    await bot.append({
+      type: "events.iterate.com/github/webhook-received",
+      payload:
+        webhook({
+          action: "created",
+          mentionedUsers: ["iterate"],
+          name: "issue_comment",
+        }).payload || {},
+    });
+
+    expect(fake.create).toHaveBeenCalledOnce();
+    expect(fake.appendBatches[0]?.events).toHaveLength(3);
+  });
+
+  it("skips events copied from another stream", async () => {
     const { bot, fake } = reviewBotHarness();
     await bot.append({
       type: "events.iterate.com/github/webhook-received",
       payload: webhook().payload ?? {},
       source: {
-        crossPostedFrom: [
+        copiedFrom: [
           {
             subscriptionKey: "userspace:github-pr:/repos/config",
+            streamId: "11111111-1111-4111-8111-111111111111",
+            streamCreatedAt: "2026-07-17T11:00:00.000Z",
+            cursorChangedAtSourceOffset: 1,
             createdAt: "2026-07-17T12:00:00.000Z",
             offset: 12,
             path: "/integrations/github/install-789",

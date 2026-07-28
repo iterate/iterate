@@ -98,7 +98,7 @@ test("a project mounts ocado into the collection; connections + secret confineme
     // …and ONE durable capability mount makes it part of the collection.
     using _provision = await project.provideCapability({
       path: ["integrations", "ocado"],
-      type: "itx-expression",
+      type: "itx-call",
       flattenNestedPaths: true,
       instructions:
         'Ocado grocery integration. Select a connection with get("<connection>"): itx.integrations.ocado.get("family").searchProducts(term) / .basket.add(itemId).',

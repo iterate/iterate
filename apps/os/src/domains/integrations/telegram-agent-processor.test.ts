@@ -21,7 +21,7 @@ import {
   TELEGRAM_NEW_SESSION_ACK_TEXT,
   TelegramAgentProcessor,
 } from "./telegram-agent-processor-implementation.ts";
-import type { TelegramAgentProcessorContract } from "./telegram-agent-processor-contract.ts";
+import { TelegramAgentProcessorContract } from "./telegram-agent-processor-contract.ts";
 
 type AgentEventInput = ConsumedInput<TelegramAgentProcessorContract>;
 
@@ -130,7 +130,11 @@ function makeAgentHarness(
           return { messageId: 9000 + sentMessages.length };
         },
       }),
-    substrate: { clock, stream, progress: input.progress ?? makeMemoryProgressStore() },
+    substrate: {
+      clock,
+      stream,
+      progress: input.progress ?? makeMemoryProgressStore(TelegramAgentProcessorContract),
+    },
   });
   return { ...harness, calls, network, sendFailures, sentMessages, telegramCalls };
 }
@@ -338,7 +342,11 @@ describe("TelegramAgentProcessor", () => {
     // stream byte-identical: the transcription dedupes on its key and the
     // marked send is never re-sent.
     const journalledOffsets = h.events().map((row) => row.offset);
-    const replay = makeAgentHarness({ clock, network, progress: makeMemoryProgressStore() });
+    const replay = makeAgentHarness({
+      clock,
+      network,
+      progress: makeMemoryProgressStore(TelegramAgentProcessorContract),
+    });
     await replay.settle();
     expect(replay.events().map((row) => row.offset)).toEqual(journalledOffsets);
     expect(replay.sentMessages).toEqual([]);
@@ -464,7 +472,7 @@ describe("TelegramAgentProcessor", () => {
     const replay = makeAgentHarness({
       clock: h.clock,
       network: h.network,
-      progress: makeMemoryProgressStore(),
+      progress: makeMemoryProgressStore(TelegramAgentProcessorContract),
     });
     await replay.settle();
     expect(replay.sentMessages).toHaveLength(0);
@@ -585,7 +593,7 @@ describe("TelegramAgentProcessor", () => {
       agentPath,
       clock: h.clock,
       network: h.network,
-      progress: makeMemoryProgressStore(),
+      progress: makeMemoryProgressStore(TelegramAgentProcessorContract),
     });
     await replay.settle(); // a wedge would throw here
     expect(replay.events("events.iterate.com/capability-host/script-run-requested")).toHaveLength(
@@ -610,7 +618,7 @@ describe("TelegramAgentProcessor", () => {
     const content = inputs[0]!.payload.content;
     expect(content).toContain(`REPLIES to a message from a different thread: ${oldSession}`);
     // The taught read is FILTERED to the conversation event types — an
-    // unfiltered getEvents returns the oldest raw events (subscriber/llm
+    // unfiltered getEvents returns the oldest raw events (connection/llm
     // plumbing), which is how a live agent failed to recover the history.
     expect(content).toContain(
       `await itx.streams.get("${oldSession}").getEvents({ eventTypes: ["events.iterate.com/telegram/webhook-received", "events.iterate.com/telegram/send-requested"] })`,
@@ -630,7 +638,10 @@ describe("TelegramAgentProcessor", () => {
     const network = new MemoryStreamNetwork();
     const oldSession = network.get(`${CHAT_PATH}/session-1000`);
     await oldSession.append(
-      { type: "events.iterate.com/stream/subscriber-connected", payload: {} },
+      {
+        type: "events.iterate.com/stream/connection-opened",
+        payload: { connectionKey: "old-session-reader", kind: "session" },
+      },
       webhook(humanMessageWebhookPayload({ text: "what's the wifi password?" })),
       {
         type: "events.iterate.com/agents/context-added",

@@ -54,7 +54,7 @@ export const StreamViewSearch = z.object({
   panel: z.boolean().optional().catch(undefined),
   /** Whether the events sheet is open (full-panel layouts only). */
   events: z.boolean().optional().catch(undefined),
-  /** Subscription key of the processor focused in the sheet. */
+  /** Connection or subscription key focused in the processor sheet. */
   processor: z.string().optional().catch(undefined),
   /** Whether the agent details sheet is open (agent streams only). */
   agent: z.boolean().optional().catch(undefined),
