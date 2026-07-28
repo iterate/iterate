@@ -287,11 +287,11 @@ export async function capture(options: CaptureOptions) {
         slug: identity.slug,
         organization: authSnapshot.organization.slug,
         directHostnames: projectSnapshot.state.customDomains
-          .filter((domain) => domain.kind === "direct" && domain.status === "active")
+          .filter((domain) => domain.kind === "direct")
           .map((domain) => domain.hostname)
           .sort(),
         cloudflareHostnames: projectSnapshot.state.customDomains
-          .filter((domain) => domain.kind === "cloudflare" && domain.status === "active")
+          .filter((domain) => domain.kind === "cloudflare")
           .map((domain) => domain.hostname)
           .sort(),
         email: { allowedSenders: [...emailSnapshot.state.allowedSenders].sort() },
