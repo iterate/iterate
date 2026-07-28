@@ -76,6 +76,32 @@ export function normalizePath(path: string): string {
   return path === "" ? "/" : path.startsWith("/") ? path : `/${path}`;
 }
 
+/**
+ * Canonical path identity for persisted stream coordinates.
+ *
+ * Durable Object names are URL-shaped, so their parser resolves dot segments
+ * and percent-encodes whitespace. Persisting the caller's pre-URL spelling
+ * would let two different strings address the same object (and could bypass a
+ * self-edge check). Stored stream references therefore use the exact pathname the
+ * Durable Object name codec will later parse. Query/hash delimiters and
+ * backslashes are not stream-path syntax and are rejected instead of being
+ * silently reinterpreted.
+ */
+export function canonicalizeStreamPath(path: string): string {
+  const trimmed = path.trim();
+  if (/[?#\\]/.test(trimmed)) {
+    throw new Error(
+      `Stream path must not contain query, hash, or backslash delimiters: "${path}".`,
+    );
+  }
+  const normalized = normalizePath(trimmed);
+  try {
+    return normalizePath(new URL(normalized, "https://stream.iterate.invalid").pathname);
+  } catch {
+    throw new Error(`Stream path must be URL-path shaped, got "${path}".`);
+  }
+}
+
 function assertLegalDurableObjectName(name: string): void {
   if (name.length === 0) {
     throw new Error("Durable Object name must be non-empty.");

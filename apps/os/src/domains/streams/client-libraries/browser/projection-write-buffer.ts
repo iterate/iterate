@@ -5,33 +5,33 @@
 // the two-cursor progress record. That one-transaction commit is the whole
 // point of the browser runner cutover — the legacy path committed projection
 // rows and the checkpoint separately, so a crash between the two left the
-// mirror and the resume cursor disagreeing.
+// projection tables and the resume cursor disagreeing.
 //
 // Buffer model (all invariants enforced here, so both processors stay dumb):
 //
 //   - Writes are keyed by the SOURCE EVENT OFFSET and arrive in ascending
 //     offset order (the runner drives one event at a time from the committed
 //     cursor). Appending offset K evicts every buffered write at offset >= K:
-//     a redelivered frame re-derives its writes from the committed state, so
+//     a redelivered batch re-derives its writes from the committed state, so
 //     whatever a failed earlier attempt left buffered for those offsets is
 //     superseded, never replayed alongside.
 //   - `drainThrough(ack)` removes and materializes exactly the writes covered
 //     by the acknowledgement being committed. If the transaction then fails,
 //     the drained writes are GONE — deliberately: the runner never advances
-//     its cursor past a failed commit, so the redelivered frame regenerates
+//     its cursor past a failed commit, so the redelivered batch regenerates
 //     them (see the eviction rule above). Nothing is ever half-applied; the
 //     transaction's rollback is the atomicity story.
 //   - `coalesceKey` collapses repeated writes to the same projection row into
 //     ONE statement per commit (the browser feed's open raw-group row grows
 //     with every event; serializing its cumulative data per event would be
-//     O(n^2) bytes on the exact deep-catch-up path the mirror's flow control
+//     O(n^2) bytes on the exact deep-catch-up path the browser database's flow control
 //     protects). A pending same-key write is replaced in place; statements
 //     are built lazily at drain time so the replaced ones cost nothing.
 //   - `coveredOffset` is the highest offset known applied-or-buffered,
 //     hydrated from the acknowledged cursor at load. The raw-events processor
 //     reads it for its lost-delivery gap check — under the transactional
-//     commit the mirror head and the cursor move together, so the cursor IS
-//     the mirror head and no per-event SQL read is needed.
+//     commit the local-copy maximum offset and the cursor move together, so the cursor IS
+//     the local-copy maximum offset and no per-event SQL read is needed.
 
 import type { SqlValue } from "./stream-browser-db.ts";
 
@@ -68,7 +68,7 @@ export class BrowserProjectionWriteBuffer {
   /**
    * Re-baseline from the durable acknowledged cursor (the progress store calls
    * this on every read). Clears any pending writes: a fresh load means no
-   * in-flight frame owns them, and a discarded mirror's rewound cursor must
+   * in-flight batch owns them, and a cleared database's rewound cursor must
    * not inherit writes derived against the pre-discard state.
    */
   hydrate(acknowledgedThroughOffset: number): void {
@@ -107,8 +107,8 @@ export class BrowserProjectionWriteBuffer {
   /**
    * Remove and materialize every write at or below `offset` (the
    * acknowledgement the enclosing commit is about to persist), in append
-   * order. Writes past `offset` stay buffered — with the runner's per-frame
-   * commit cadence there never are any; this keeps a future mid-frame cadence
+   * order. Writes past `offset` stay buffered — with the runner's per-batch
+   * commit cadence there never are any; this keeps a future mid-batch cadence
    * from silently committing writes ahead of their acknowledgement.
    */
   drainThrough(offset: number): BufferedProjectionStatement[] {

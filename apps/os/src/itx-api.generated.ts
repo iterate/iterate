@@ -126,7 +126,7 @@ export interface Project {
   /** Restart the project's server-side object; the next request boots it fresh. */
   kill(): Promise<void>;
   /** The project stream processor (snapshot/state; `state.ready` flips when bootstrap lands). */
-  processor: WakeableStreamProcessorRpc<ProjectProcessorState>;
+  processor: StreamProcessorRpc<ProjectProcessorState>;
   /** The project's live state — reduced processor state plus non-folded slices. See {@link LiveStateRpc}. */
   liveState: LiveStateRpc<ProjectLiveState>;
   /** Demo capability for the live-state playground — `ticker` (stateless) + `increment()` (a durable server-side counter). */
@@ -205,10 +205,10 @@ export interface Project {
   workspaces: WorkspaceCollection;
   /**
    * Platform dispatch point: streams deliver committed event batches here
-   * for the project worker. Scripts should not call this — subscribe to a
-   * stream (or configure a subscription) instead.
+   * for the project worker. Scripts should not call this — open an event
+   * connection or configure a subscription instead.
    */
-  processEventBatch(batch: StreamPushEventBatch): Promise<void>;
+  processEventBatch(batch: StreamDeliveryBatch): Promise<void>;
   /**
    * The default repo-backed project worker — a convenience alias; the general
    * API is `workers.get(ref)`. Flattened: the seeded worker implements
@@ -256,6 +256,18 @@ export interface ProjectCollection {
    * and is the default for non-user admin principals, which have no claims.
    */
   list(input?: { scope?: "mine" | "deployment" }): Promise<ProjectListEntry[]>;
+}
+
+/**
+ * The read-side RPC surface every stream processor node exposes: inspect
+ * runtime state (snapshot plus a processor-specific runtime bag), take an
+ * offset-pinned `snapshot()` of the folded state, and `waitUntilProcessed` to
+ * block until the processor has durably folded through a given offset.
+ */
+export interface StreamProcessorRpc<State = unknown> {
+  getRuntimeState(): Promise<ProcessorRuntimeState<State>>;
+  snapshot(): Promise<ProcessorSnapshot<State>>;
+  waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<void>;
 }
 
 /** Read-only live value exposed across a Cap'n Web capability boundary. */
@@ -390,7 +402,7 @@ export interface Agent {
   /** Shortcut for `capabilityHost.revokeCapability`. */
   revokeCapability(input: RevokeCapabilityInput): Promise<void>;
   /** The agent stream processor (snapshot/state). */
-  processor: WakeableStreamProcessorRpc<AgentProcessorState>;
+  processor: StreamProcessorRpc<AgentProcessorState>;
   /** The agent's transient runtime as a push-driven live-state surface. */
   liveState: LiveStateRpc<AgentLiveState>;
   /** The agent's own event stream. */
@@ -519,7 +531,7 @@ export interface CapabilityHost {
   path: string;
   /** This scope's capability-host stream processor (snapshot/state). A real
    * member, so it also claims the name: mounts cannot shadow `processor`. */
-  processor: WakeableStreamProcessorRpc;
+  processor: StreamProcessorRpc;
   /**
    * Create this capability host: append the atomic birth batch (created +
    * processor subscription; the payload defaults to `{}` config with the
@@ -590,10 +602,8 @@ export interface ProjectStreamCollection extends StreamCollection {
 /** Agent catalog within one project. */
 export interface AgentCollection {
   __describe(): Promise<Description>;
-  processor: WakeableStreamProcessorRpc<AgentCollectionProcessorState>;
+  processor: StreamProcessorRpc<AgentCollectionProcessorState>;
   liveState: LiveStateRpc<AgentCollectionProcessorState>;
-  /** Stateless push sink: forwarding and authorization are its entire job. */
-  processEvent(batch: StreamPushEventBatch): Promise<void>;
   /**
    * The agent control surface at a path (`"/agents/<name>"`, or relative to
    * the calling scope — `".."` climbs). The returned handle is a plain,
@@ -639,9 +649,9 @@ export interface EmailCapability {
   __describe(): Promise<Description>;
   /** The email router's stream processor: the project-class host Durable
    * Object at /integrations/email, whose EmailProcessor routes inbound mail.
-   * Wake subscriptions for it persist `["email", "processor",
-   * "wakeStreamSubscriber"]`. */
-  processor: WakeableStreamProcessorRpc;
+   * Subscriptions that wake it persist `["email", "processor",
+   * "wakeStreamProcessor"]`. */
+  processor: StreamProcessorRpc;
   /**
    * Send one email from the project's own address (`<slug>@<hostname base>`).
    * From ANY agent scope, send binds the conversation to the calling agent:
@@ -949,7 +959,7 @@ export interface SandboxCollection {
 export interface Scheduler {
   __describe(): Promise<Description>;
   /** The scheduler stream processor (snapshot/state). */
-  processor: WakeableStreamProcessorRpc<SchedulerProcessorState>;
+  processor: StreamProcessorRpc<SchedulerProcessorState>;
   /** Create this Scheduler and return only after it has processed the complete birth batch. */
   create(_input: Record<string, never>): Promise<Scheduler>;
   /** Upsert by key; returns after the Scheduler has ingested the set (read-your-writes, alarm armed). */
@@ -1002,8 +1012,8 @@ export interface Repo {
    * GitHub pull at depth one, or a public import performed by Cloudflare
    * Artifacts outside the Worker isolate (full history unless `depth` is
    * provided). Appends the atomic request batch (`repos/create-requested` +
-   * the repo processor subscription, plus the catalog cross-post rule that
-   * copies the terminal certificate onto `/`), then waits for
+   * the repo processor subscription, plus the catalog subscription that copies the
+   * terminal certificate onto `/`), then waits for
    * `repos/created` and resolves with this same handle, so create chains —
    * or throws the saga's recorded error when creation fails. An
    * identical-payload retry dedupes on the request idempotency keys and
@@ -1053,13 +1063,13 @@ export interface Repo {
    * GitHub best-effort (failures journal on the repo stream and self-heal on
    * the next commit), fast-forward default-branch pushes made on GitHub are
    * imported through the Cloudflare Artifacts queue, and every GitHub webhook
-   * about that repository is cross-posted onto this repo's stream. If the
+   * about that repository is delivered to this repo's stream. If the
    * GitHub repository does not exist and the installation can create org
    * repositories, it is created private. Re-linking replaces the previous
    * link.
    */
   linkGithub(input: { connection: string; owner: string; repo: string }): Promise<LinkGithubResult>;
-  /** Remove the GitHub link and its webhook cross-post rule. */
+  /** Remove the GitHub link and the subscription that copies its webhooks here. */
   unlinkGithub(): Promise<{ unlinked: boolean }>;
   /**
    * Push the default branch head to the linked GitHub repository now — the
@@ -1088,7 +1098,7 @@ export interface Repo {
    */
   resetFromGithub(input: { depth?: number }): Promise<GithubResetResult>;
   /** The repo stream processor (snapshot/state). */
-  processor: WakeableStreamProcessorRpc<RepoProcessorState>;
+  processor: StreamProcessorRpc<RepoProcessorState>;
   /** The repo's live state — its reduced processor state. See {@link LiveStateRpc}. */
   liveState: LiveStateRpc<RepoProcessorState>;
 }
@@ -1151,7 +1161,7 @@ export interface ProjectWorker {
    * (`ephemeral: true` appends — e.g. `agent/llm-response-chunk`) are never
    * delivered to this feed; their durable truth arrives as its own event.
    */
-  processEventBatch(batch: StreamPushEventBatch): Promise<void>;
+  processEventBatch(batch: StreamDeliveryBatch): Promise<void>;
 }
 
 /**
@@ -1165,6 +1175,8 @@ export interface Stream {
   __describe(): Promise<Description>;
   /** Commit events; resolves with the same events carrying offsets and timestamps. */
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
+  /** Commit only if this path still names the supplied stream lifetime. */
+  appendIfStreamId(args: { streamId: string; events: StreamEventInput[] }): Promise<StreamEvent[]>;
   /** The stream at a sub-path, resolved relative to this stream's path. */
   at(path: string): Stream;
   /** One event by offset or idempotencyKey; undefined when it does not exist.
@@ -1181,6 +1193,11 @@ export interface Stream {
    * shows you the beginning, not the head.
    */
   getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]>;
+  /**
+   * Read one page together with the stream identity and raw-log head observed
+   * in the same Durable Object turn. Use this whenever offsets are persisted.
+   */
+  getEventPage(args?: StreamEventReadInput): Promise<StreamEventPage>;
   /**
    * A stateful pager over a read window: repeated `next()` calls walk forward
    * through pages, `[]` means "caught up for now". Dispose it when finished
@@ -1206,8 +1223,8 @@ export interface Stream {
   }): Promise<ProcessorRuntimeState | null>;
   /**
    * Live debug view of the stream Durable Object: core processor state, open
-   * connections with real delivery metrics (lag, bytes, commit→settled
-   * latency, mutual-ping RTT), per-subscription delivery cursors/lag, and the
+   * connections with real callback metrics (lag, bytes, append→callback
+   * latency, mutual-ping RTT), each subscription's cursor/lag, and the
    * stream's own throughput windows. All runtime metrics are in-memory and
    * reset on eviction (`metrics.measuredSince` says how long the window has
    * been collecting); latency stats fields are absent until a real sample
@@ -1221,97 +1238,109 @@ export interface Stream {
   /** Abort the current Durable Object incarnation; the next request boots it again. */
   kill(): Promise<void>;
   /**
-   * Session-scoped live event delivery (the "ephemeral" subscription lane):
+   * Open one session-owned callback connection to this stream.
+   *
    * `processEventBatch` first receives durable history after
-   * `replayAfterOffset`, then new commits. Ephemeral events are delivered only
-   * when appended after this exact subscription opens and are never replayed.
-   * Returns an unsubscribe handle.
-   * Forgotten on disconnect — durable delivery is configured as data instead,
-   * by appending a `subscription-configured` event (wake or push mode) to the
+   * `replayAfterOffset`, then new commits. Transient events are delivered only
+   * when appended after this exact connection opens and are never replayed.
+   * The stream forgets the connection when the session disconnects. Durable
+   * event sending is configured separately by appending events to the source
    * stream.
    */
-  subscribe(args: {
-    subscriptionKey?: string;
+  openConnection(args: {
+    connectionKey?: string;
     processEventBatch: ProcessEventBatch;
     replayAfterOffset?: number;
     /**
      * Atomically bind this open to the stream identity observed during
      * catch-up. `null` means the caller observed a stream with no committed
-     * creation fact yet. A mismatch rejects before replacing any connection.
+     * creation event yet. A mismatch rejects before replacing any connection.
      */
-    expectedIncarnation?: string | null;
+    expectedStreamId?: string | null;
     /**
      * Atomically reject instead of opening when the current raw-log head is
      * more than this many offsets beyond `replayAfterOffset`.
      */
     maxReplayOffsetGap?: number;
-    /** Sugar for `selector.eventTypes` — one filter shape across every lane. */
+    /** Sugar for `filter.eventTypes` — one filter shape for every receiver. */
     eventTypes?: readonly string[];
-    selector?: { eventTypes?: string[]; condition?: string };
+    filter?: EventFilter;
     events?: boolean;
-    subscriber?: unknown;
-    /** Optional live debug hook, retained for the subscription's lifetime. */
+    openedBy?: unknown;
+    /** Optional live debug hook, retained for the connection's lifetime. */
     getRuntimeState?: GetProcessorRuntimeState;
     /**
      * Optional mutual-ping responder (see `StreamPingInput`/`StreamPingReply`
-     * in rpc-types.ts), retained for the subscription's lifetime. The stream
+     * in rpc-types.ts), retained for the connection's lifetime. The stream
      * pings it — throttled, and only while someone is watching runtimeState —
-     * to measure real transport RTT to this subscriber.
+     * to measure real transport RTT to this callback owner.
      */
-    ping?: StreamSubscriberPing;
-  }): Promise<StreamSubscriptionHandle>;
-  /**
-   * Cross-post receiving end: an ordinary push SINK (`(batch) => void`) that
-   * appends the batch's events into THIS stream with provenance stamping,
-   * structural loop protection, and source-derived idempotency keys. A source
-   * stream cross-posts here by configuring
-   * `{ delivery: { mode: "push", expression: ["streams", ["get", path], "acceptCrossPost"] } }`.
-   */
-  acceptCrossPost(batch: StreamPushEventBatch): Promise<void>;
-  /**
-   * "When events matching this land HERE, post them onto stream `path`" — the
-   * cross-post verb. Pure sugar over appending a `subscription-configured`
-   * push subscription targeting the destination's `acceptCrossPost` sink; the appended
-   * event (returned) is the real interface and shows in the log like any
-   * other config. Same-`key` calls replace the previous cross-post; remove
-   * with `removeCrossPost`. Copies carry the full provenance chain
-   * (`source.crossPostedFrom`), multi-hop legal, loop-protected. `transform`
-   * is an optional JSONata expression CONSTRUCTING the copied event's body
-   * from the original (e.g. `{ "type": "myapp/pr", "payload": { "repo":
-   * payload.body.repository.full_name } }`); omitted fields copy verbatim.
-   */
-  crossPostTo(args: {
-    /** Destination stream path (this project). */
-    path: string;
-    /** Subscription identity; defaults to `cross-post:<destination path>`. */
-    key?: string;
-    /**
-     * Human-readable note for operators and the stream state panel (why this
-     * cross-post exists). Optional on the API; platform call sites always set it.
-     */
-    description?: string;
-    eventTypes?: string[];
-    /** JSONata filter; the event is copied only when it evaluates to exactly `true`. */
-    condition?: string;
-    /** JSONata constructor for the copied event's `{type?, payload?, metadata?}`. */
-    transform?: string;
-    /** Where to start: "new" (default, from now), "all" (full history), or an offset. */
-    deliver?: "all" | "new" | { afterOffset: number };
+    ping?: StreamConnectionPing;
+  }): Promise<StreamConnectionHandle>;
+  /** Change where one subscription whose cursor this stream stores reads next. An already-started receiver call may finish. */
+  setSubscriptionCursor(args: {
+    subscriptionKey: string;
+    afterOffset: number;
   }): Promise<StreamEvent>;
-  /** Remove a cross-post configured by `crossPostTo` (by destination path or explicit key). */
-  removeCrossPost(args: { path?: string; key?: string }): Promise<StreamEvent>;
-}
-
-/**
- * The read-side RPC surface every stream processor node exposes: inspect
- * runtime state (snapshot plus a processor-specific runtime bag), take an
- * offset-pinned `snapshot()` of the folded state, and `waitUntilProcessed` to
- * block until the processor has durably folded through a given offset.
- */
-export interface StreamProcessorRpc<State = unknown> {
-  getRuntimeState(): Promise<ProcessorRuntimeState<State>>;
-  snapshot(): Promise<ProcessorSnapshot<State>>;
-  waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<void>;
+  /** Un-halt one subscription without changing its cursor. */
+  resumeSubscription(args: { subscriptionKey: string }): Promise<StreamEvent>;
+  /** Change where one subscription reads next and resume it. An already-started receiver call may finish. */
+  setSubscriptionCursorAndResume(args: {
+    subscriptionKey: string;
+    afterOffset: number;
+  }): Promise<{ cursorSet: StreamEvent; resumed: StreamEvent }>;
+  /**
+   * Configure this stream to durably receive matching events from `source`.
+   * The source owns the matching-event read position. It appends a
+   * `subscription-configured` event and returns the effective key and that
+   * committed event; the receiver learns about the subscription when its
+   * first copy arrives, and a broken receiver surfaces later as a durable
+   * delivery halt.
+   */
+  subscribeToEventsFrom(
+    args: {
+      /** Source stream path in this project. */
+      sourceStreamPath: string;
+      description?: string;
+      /** Selects source events by type (`eventTypes`) and/or an exact-true JSONata condition (`jsonataCondition`). */
+      filter?: EventFilter;
+      /**
+       * Optional JSONata constructor shaping what this receiving stream
+       * commits (`{ type?, payload?, metadata? }`; omitted fields copy
+       * verbatim). Provenance (`source.copiedFrom`) and deduplication stay
+       * keyed to the source event.
+       */
+      jsonataTransform?: string;
+      /** Initial cursor stored by the source stream. Defaults to events configured from now onward. */
+      start?: "beginning" | "now";
+    } & (
+      | {
+          /** Source-local identity: ensure or replace this named subscription. */
+          subscriptionKey: string;
+          idempotencyKey?: string;
+        }
+      | {
+          /**
+           * Omit the source-local identity to generate `subscription:<offset>`
+           * from the committed configuration event.
+           */
+          subscriptionKey?: never;
+          /** Required so a retry cannot create a duplicate configuration event. */
+          idempotencyKey: string;
+        }
+    ),
+  ): Promise<{
+    subscriptionKey: string;
+    subscriptionConfiguredEvent: CommittedSubscriptionConfiguredEvent;
+  }>;
+  /** Stop receiving from `source`: the source appends the removal event. */
+  unsubscribeFromEvents(args: {
+    sourceStreamPath: string;
+    subscriptionKey: string;
+  }): Promise<
+    | { status: "removed"; subscriptionRemovedEvent: CommittedSubscriptionRemovedEvent }
+    | { status: "already-absent" }
+  >;
 }
 
 /** Disposable handle for one live project egress interception. */
@@ -1377,7 +1406,7 @@ export interface Device {
   /** Idempotently disable push; null means this installation was never enrolled. */
   revoke(reason: "disabled" | "permission-denied" | "sign-out"): Promise<StreamEvent | null>;
   kill(): Promise<void>;
-  processor: WakeableStreamProcessorRpc<DeviceDescription>;
+  processor: StreamProcessorRpc<DeviceDescription>;
   liveState: LiveStateRpc<DeviceDescription>;
 }
 
@@ -1460,7 +1489,7 @@ export interface Secret {
    * update. Every update without replacement material clears stored material. */
   update(input: SecretUpdateInput): Promise<StreamEvent>;
   /** The secret stream processor; its public state IS the SecretDescription. */
-  processor: WakeableStreamProcessorRpc<SecretDescription>;
+  processor: StreamProcessorRpc<SecretDescription>;
   /** The secret's live state — its public SecretDescription (never the ciphertext). See {@link LiveStateRpc}. */
   liveState: LiveStateRpc<SecretDescription>;
 }
@@ -1482,7 +1511,7 @@ export interface Workspace {
   /** Restart the workspace's server-side object; the next request boots it fresh. */
   kill(): Promise<void>;
   /** The workspace stream processor (snapshot/state). */
-  processor: WakeableStreamProcessorRpc<WorkspaceProcessorState>;
+  processor: StreamProcessorRpc<WorkspaceProcessorState>;
   /** The folded configuration (birth certificate + configured patches). */
   getConfig(): Promise<WorkspaceConfig>;
   /** Patch configuration — deep-merged per mount point; null removes a mount (appends workspace/configured). */
@@ -1525,7 +1554,7 @@ export interface Workspace {
  * A tiny object-capability cursor: it holds only the caller's read window and
  * the last offset it returned, so there is no server-side snapshot or lease to
  * maintain (events still come from the Stream DO on every page). This is not a
- * live subscription; `[]` means "caught up for now". Dispose it when finished
+ * live connection; `[]` means "caught up for now". Dispose it when finished
  * (`using pager = stream.readEvents(...)`).
  */
 export interface StreamEventPager {
@@ -1814,27 +1843,6 @@ export type ProjectDescription = Description & {
 };
 
 /**
- * A processor node that is also its HOST's wake-mode delivery door. This is
- * what the domain surfaces expose (`itx.agents.get(path).processor`,
- * `itx.repos.get(path).processor`, `itx.processor`, …) and what wake-mode
- * stream subscriptions persist as their delivery expression:
- * `["agents", ["get", path], "processor", "wakeStreamSubscriber"]`.
- *
- * `wakeStreamSubscriber` is dialed by stream delivery spines only
- * (trusted-internal): the handshake's sink drives the host's durable
- * checkpoint, so an ordinary session poking it could feed fabricated batches
- * and fast-forward the checkpoint past real events. Multi-processor hosts (an
- * agent Durable Object hosts agent + slack-agent + more) resolve WHICH
- * processor wakes from the request's `processorSlug`. Each public domain
- * surface selects that same named processor for inspection, so
- * `agent.processor`, `agent.slack.processor`, and other siblings expose their
- * own snapshots and checkpoints.
- */
-export type WakeableStreamProcessorRpc<State = unknown> = StreamProcessorRpc<State> & {
-  wakeStreamSubscriber(request: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse>;
-};
-
-/**
  * The project processor's reduced state, inferred from the contract's
  * `stateSchema` — the one definition of the shape. `ready` flips when the
  * bootstrap saga lands; the list fields are what the collection `list()`
@@ -1953,7 +1961,7 @@ export type ProvideCapabilityInput =
       flattenNestedPaths?: boolean;
       instructions?: string;
       path: string[];
-      type: "itx-expression";
+      type: "itx-call";
       types?: string;
     };
 
@@ -1971,24 +1979,43 @@ export type RevokeCapabilityInput = {
 export type OpenApiRpc = object;
 
 /**
- * The batch a PUSH subscription's receiver is invoked with: the delivery
- * coordinates and events, plus the fields an at-least-once stateless receiver
- * needs to dedupe and self-configure. Deliberately NOT the live lanes'
- * {@link StreamEventBatch}: push receivers include userspace project workers
- * and sibling streams, and the folded core state — other subscriptions'
- * delivery expressions, park errors, the presence roster — is internal to the
- * deployment (the webhook envelope strips it for the same reason). Live sinks
- * (ephemeral subscribers, wake-mode processors) still get state-carrying
- * batches: they are the lanes that paint from state.
+ * The batch sent to a durable receiver for a subscription whose cursor the
+ * source stream stores: delivery coordinates and events plus the fields an
+ * at-least-once receiver needs to deduplicate and self-configure. Deliberately
+ * not the state-carrying callback batch
+ * {@link StreamEventBatch}: ITX calls and copy destinations do not get
+ * folded core state, because other subscriptions' configuration, halt errors,
+ * and the presence roster are deployment-internal. Webhooks use a narrower
+ * per-event envelope for the same reason. Session callbacks and hosted
+ * processors still get state-carrying batches because they paint or reduce
+ * from stream state.
  */
-export type StreamPushEventBatch = {
+export type StreamDeliveryBatch = {
   projectId: string | null;
   path: string;
+  /** Random identity assigned when this source stream's storage was created. */
+  streamId: string;
+  /** Creation time of this source stream; orders recreated streams whose offsets restarted. */
+  streamCreatedAt: string;
+  /**
+   * For an ITX-call subscription with a `jsonataTransform`, each event's
+   * `type`/`payload`/`metadata` are the transform's output while the
+   * coordinates keep naming the source rows. Copy batches always carry the
+   * untransformed source events: the receiving stream applies its transform
+   * before committing.
+   */
   events: StreamEvent[];
   streamMaxOffset: number;
   subscriptionKey: SubscriptionKey;
   /**
-   * Stable across retries of the same batch (`${subscriptionKey}:${firstOffset}-${lastOffset}`),
+   * Offset of the configure or cursor-set event that started this delivery run.
+   * It stays stable across network retries, but changes after an explicit seek
+   * or same-key reconfiguration so those deliberate replays are not deduped as
+   * old transport attempts.
+   */
+  cursorChangedAtSourceOffset: number;
+  /**
+   * Stable across retries of the same batch and cursor-control event,
    * so receivers can dedupe redeliveries even without per-event bookkeeping.
    * (`${event.path}@${event.offset}` remains the per-event idempotency idiom.)
    */
@@ -1998,11 +2025,11 @@ export type StreamPushEventBatch = {
   /**
    * The committed `subscription-configured` event this delivery serves — so a
    * receiver can configure itself from committed stream state without a
-   * side-channel registry (which stream, which selector, whose params).
+   * side-channel registry for the source stream, filter, and receiver settings.
    * Narrowed to the fields the fold stores; an honest shape instead of a
    * `StreamEvent` cast that pretends metadata/source survived.
    */
-  configuredEvent: Pick<StreamEvent, "type" | "offset" | "createdAt" | "path" | "payload">;
+  configuredEvent: SubscriptionConfigurationForDelivery;
 };
 
 /**
@@ -2056,51 +2083,21 @@ export type CapabilityDescription = {
    * built-ins (they exist at every scope).
    */
   scope?: string;
-  type: "builtin" | "live" | "itx-expression";
+  type: "builtin" | "live" | "itx-call";
   types?: string;
 };
 
-/**
- * What the stream sends when poking a durable wake-mode subscriber
- * (`wakeStreamSubscriber`): serializable coordinates only.
- */
-export type StreamSubscriberWakeRequest = {
-  stream: {
-    projectId: string | null;
-    path: string;
-    streamMaxOffset: number;
-  };
-  subscriptionKey: SubscriptionKey;
-  /** Which hosted processor the poke is for (multi-processor hosts resolve on it). */
-  processorSlug?: string;
+/** Serializable snapshot plus optional live runtime debug state for a processor. */
+export type ProcessorRuntimeState<State = unknown> = {
+  snapshot: { offset: number; state: State };
+  runtime?: Record<string, unknown>;
 };
 
-/**
- * What the poked subscriber hands back — the entire handshake in one return
- * value. The stream retains `sink` (ownership of a returned stub transfers to
- * the caller) and streams one-way batches into it from `checkpointOffset + 1`;
- * there is no subscribe-back call and therefore no handshake race to fence.
- */
-export type StreamSubscriberWakeResponse = {
-  /** The processor's durable checkpoint offset — replay resumes after it. */
-  checkpointOffset: number;
-  /**
-   * The live delivery callback the stream retains and invokes per batch.
-   * Calls are one-way; each batch reports completion through its independent
-   * `settleDelivery` capability.
-   */
-  sink: ProcessStreamWakeEventBatch;
-  /**
-   * Serializable subscriber identity (validated against
-   * `StreamSubscriberDescriptor` by the stream) appended as the
-   * subscriber-connected presence fact; carries the processor's contract
-   * announcement for the stream's `processorsBySlug` registry.
-   */
-  subscriber?: unknown;
-  /** Live runtime-state capability, retained for the connection lifetime. */
-  getRuntimeState?: GetProcessorRuntimeState;
-  /** Optional ping capability, retained for the connection lifetime (see {@link StreamSubscriberPing}). */
-  ping?: StreamSubscriberPing;
+/** One consistent read of a processor (what `snapshot()` returns): the folded
+ * state pinned to the offset of the last event folded into it. */
+export type ProcessorSnapshot<State> = {
+  offset: number;
+  state: State;
 };
 
 /**
@@ -2515,7 +2512,7 @@ export type AgentEventInput =
     >;
 
 /** One committed event on a durable stream: type, JSON payload, offset,
- * idempotency key, and provenance (processor stamp / cross-post chain), plus
+ * idempotency key, and provenance (processor stamp / source-stream chain), plus
  * the commit-time `createdAt` and stream `path`. `ephemeral: true` marks a
  * second-class row (see `StreamEventInput`). */
 export type StreamEvent = {
@@ -2528,13 +2525,16 @@ export type StreamEvent = {
           | {
               slug: string;
               version: string;
-              stream: { path: string; projectId: string | null };
+              stream: { path: string; projectId: string | null; streamId: string };
               whileProcessing?: { offset: number; type: string } | undefined;
             }
           | undefined;
-        crossPostedFrom?:
+        copiedFrom?:
           | {
               subscriptionKey: string;
+              streamId: string;
+              streamCreatedAt: string;
+              cursorChangedAtSourceOffset: number;
               createdAt: string;
               offset: number;
               path: string;
@@ -2663,7 +2663,7 @@ export type IntegrationFamily<Connection> = {
 /** A Slack WebClient connection. Web API namespaces and methods are dynamic;
  * `processor` is the connection's durable webhook router. */
 export type SlackConnection = Record<string, any> & {
-  processor: WakeableStreamProcessorRpc;
+  processor: StreamProcessorRpc;
 };
 
 /** The Gmail REST API connection exposed by a connected Google account.
@@ -2690,7 +2690,7 @@ export type GithubConnection = { octokit: import("octokit").Octokit };
  * script types useful without maintaining a second copy of Telegram's API. */
 export type TelegramConnection = {
   getMe(params?: Record<string, unknown>): Promise<Record<string, unknown>>;
-  processor: WakeableStreamProcessorRpc;
+  processor: StreamProcessorRpc;
   sendChatAction(params: Record<string, unknown>): Promise<Record<string, unknown>>;
   sendMessage(
     params: { chat_id: number | string; text: string } & Record<string, unknown>,
@@ -3158,14 +3158,69 @@ export type DynamicWorkerDispatchOptions = {
   flattenNestedPaths?: boolean;
 };
 
-/** Stable identity for one stream subscription connection. */
+/** Source-local identity for one durable subscription that sends matching stream events. */
 export type SubscriptionKey = string;
+
+/**
+ * The committed subscription fields carried with a delivery whose cursor the
+ * source stream stores. This deliberately omits metadata, provenance, and
+ * idempotency bookkeeping that the core reducer does not retain. A receiver
+ * uses the included event coordinates and payload to verify the delivery
+ * against the subscription it recorded.
+ */
+export type SubscriptionConfigurationForDelivery = {
+  type: "events.iterate.com/stream/subscription-configured";
+  offset: number;
+  createdAt: string;
+  path: string;
+  payload: {
+    subscriptionKey?: string;
+    description?: string;
+    filter?: {
+      eventTypes?: string[];
+      jsonataCondition?: string;
+    };
+    receiver:
+      | {
+          action: "processor-wake";
+          expression: Array<string | [method: string, ...args: unknown[]]>;
+          processorSlug?: string;
+        }
+      | {
+          action: "copy-to-stream";
+          receivingStreamPath: string;
+          jsonataTransform?: string;
+          delivery: {
+            start: "beginning" | "now";
+            onFailingEvent: "halt";
+          };
+        }
+      | {
+          action: "itx-call";
+          expression: Array<string | [method: string, ...args: unknown[]]>;
+          jsonataTransform?: string;
+          delivery: {
+            start: "beginning" | "now";
+            onFailingEvent: "halt" | "skip";
+          };
+        }
+      | {
+          action: "webhook-post";
+          url: string;
+          jsonataTransform?: string;
+          delivery: {
+            start: "beginning" | "now";
+            onFailingEvent: "halt" | "skip";
+          };
+        };
+  };
+};
 
 /** Append input for `Stream.append`: event type, JSON payload, optional
  * metadata, provenance source, and idempotency key — everything before the
  * stream assigns offset and timestamp at commit. `ephemeral: true` commits a
  * second-class row: excluded from range reads unless `includeEphemeral`,
- * excluded from durable delivery unless a push/webhook explicitly opts in, and evictable —
+ * never delivered by durable subscriptions, and evictable —
  * for transient signals (LLM streaming chunks) whose durable truth lands as
  * its own event. */
 export type StreamEventInput = {
@@ -3178,13 +3233,16 @@ export type StreamEventInput = {
           | {
               slug: string;
               version: string;
-              stream: { path: string; projectId: string | null };
+              stream: { path: string; projectId: string | null; streamId: string };
               whileProcessing?: { offset: number; type: string } | undefined;
             }
           | undefined;
-        crossPostedFrom?:
+        copiedFrom?:
           | {
               subscriptionKey: string;
+              streamId: string;
+              streamCreatedAt: string;
+              cursorChangedAtSourceOffset: number;
               createdAt: string;
               offset: number;
               path: string;
@@ -3202,7 +3260,7 @@ export type StreamEventInput = {
 export type StreamEventReadInput = {
   /** Exclusive lower bound. Defaults to 0. */
   afterOffset?: number;
-  /** Exclusive upper bound. Omit/null to read through the current tail. */
+  /** Exclusive upper bound. Omit/null to read through the latest offset. */
   beforeOffset?: number | null;
   /** Event types to include. Omit or include "*" for all; [] matches none. */
   eventTypes?: readonly string[];
@@ -3216,32 +3274,47 @@ export type StreamEventReadInput = {
   includeEphemeral?: boolean;
 };
 
-/** Serializable snapshot plus optional live runtime debug state for a processor. */
-export type ProcessorRuntimeState<State = unknown> = {
-  snapshot: { offset: number; state: State };
-  runtime?: Record<string, unknown>;
+/**
+ * One atomic stream read: the matching events plus the identity and raw-log
+ * head they were read from. Consumers that persist offsets must use this
+ * envelope instead of pairing `getEvents()` with a separate state read — a
+ * reset between those calls would make equal offsets name a different log.
+ */
+export type StreamEventPage = {
+  /** Random identity of the event log that served this page. */
+  streamId: string;
+  /** Highest assigned raw-log offset when this page was read. */
+  streamMaxOffset: number;
+  events: StreamEvent[];
 };
 
 /** Serializable stream-core and delivery-runtime state exposed through `Stream.liveState`. */
 export type StreamRuntimeDebugState = {
-  /** Kept opaque at the public stream boundary; consumers may inspect known fields defensively. */
-  coreProcessorState: unknown;
+  /** Durable stream events reduced by the core processor. */
+  coreProcessorState: CoreProcessorState;
   runtime: {
     connections: Record<string, ConnectionRuntimeState>;
+    /** Stored subscription progress, keyed by subscription key. */
     subscriptions: Record<string, SubscriptionRuntimeState>;
     metrics: StreamThroughputMetrics;
-    /** SQLite database size in bytes (event log + spine rows + chunks). */
+    /** SQLite database size in bytes (event log + delivery rows + chunks). */
     storageSizeBytes: number;
   };
 };
 
 /**
- * Callback invoked by the stream pump for each delivered batch.
+ * Callback invoked by the stream send loop for each delivered batch.
  *
  * It stays as a named type because Workers RPC callback lifecycle helpers need
  * to duplicate, retain, and dispose exactly this callback shape.
  */
 export type ProcessEventBatch = (batch: StreamEventBatch) => unknown;
+
+/** A declarative event filter; an absent filter or empty object matches every event. */
+export type EventFilter = {
+  eventTypes?: string[] | undefined;
+  jsonataCondition?: string | undefined;
+};
 
 /**
  * Optional runtime-state callback exposed by a hosted processor.
@@ -3252,32 +3325,249 @@ export type ProcessEventBatch = (batch: StreamEventBatch) => unknown;
 export type GetProcessorRuntimeState = () => ProcessorRuntimeState | Promise<ProcessorRuntimeState>;
 
 /**
- * Optional ping capability a subscriber hands the stream (ephemeral
- * `subscribe()` argument or wake-handshake field). Absent on older
- * subscribers — the stream then simply has no RTT samples for them.
+ * Optional ping capability a connection owner hands the stream (session
+ * `openConnection()` argument or processor wake-response field).
  */
-export type StreamSubscriberPing = (
+export type StreamConnectionPing = (
   input: StreamPingInput,
 ) => StreamPingReply | Promise<StreamPingReply>;
 
 /**
- * Live subscription handle returned by `Stream.subscribe`.
+ * Live handle returned by `Stream.openConnection`.
  *
  * `ping()` reports liveness: `true` while
  * the connection is still open on the live stream, `false` after it closed
- * (replaced, delivery failure, unsubscribe); it rejects when the stream's
+ * (replaced, delivery failure, or explicit close); it rejects when the stream's
  * Durable Object incarnation is gone. Either non-`true` outcome means the
- * subscriber should re-subscribe.
+ * owner should open another connection.
  */
-export type StreamSubscriptionHandle = Disposable & {
-  /** Stable identity of this subscription connection. */
-  subscriptionKey: SubscriptionKey;
-  /** The stream's max offset at subscribe time (durable replay starts behind it). */
+export type StreamConnectionHandle = Disposable & {
+  /** Stable identity of this live connection. */
+  connectionKey: ConnectionKey;
+  /** The stream's max offset when the connection opened. */
   streamMaxOffset: number;
   ping(): boolean | Promise<boolean>;
   /** Close this connection; safe to call more than once. */
-  unsubscribe(): void;
+  close(): void;
 };
+
+/** One committed event that created or replaced a subscription on its source stream. */
+export type CommittedSubscriptionConfiguredEvent = Omit<
+  {
+    type: string;
+    payload?: Record<string, unknown> | undefined;
+    metadata?: Record<string, unknown> | undefined;
+    source?:
+      | {
+          processor?:
+            | {
+                slug: string;
+                version: string;
+                stream: { path: string; projectId: string | null; streamId: string };
+                whileProcessing?: { offset: number; type: string } | undefined;
+              }
+            | undefined;
+          copiedFrom?:
+            | {
+                subscriptionKey: string;
+                streamId: string;
+                streamCreatedAt: string;
+                cursorChangedAtSourceOffset: number;
+                createdAt: string;
+                offset: number;
+                path: string;
+                projectId: string | null;
+                type: string;
+              }[]
+            | undefined;
+        }
+      | undefined;
+    idempotencyKey?: string | undefined;
+    ephemeral?: true | undefined;
+    offset: number;
+    createdAt: string;
+    path: string;
+  },
+  "payload" | "type"
+> &
+  Omit<
+    {
+      type: string;
+      payload?: Record<string, unknown> | undefined;
+      metadata?: Record<string, unknown> | undefined;
+      source?:
+        | {
+            processor?:
+              | {
+                  slug: string;
+                  version: string;
+                  stream: { path: string; projectId: string | null; streamId: string };
+                  whileProcessing?: { offset: number; type: string } | undefined;
+                }
+              | undefined;
+            copiedFrom?:
+              | {
+                  subscriptionKey: string;
+                  streamId: string;
+                  streamCreatedAt: string;
+                  cursorChangedAtSourceOffset: number;
+                  createdAt: string;
+                  offset: number;
+                  path: string;
+                  projectId: string | null;
+                  type: string;
+                }[]
+              | undefined;
+          }
+        | undefined;
+      idempotencyKey?: string | undefined;
+      ephemeral?: true | undefined;
+    },
+    "payload" | "type"
+  > & {
+    type: "events.iterate.com/stream/subscription-configured";
+    payload: {
+      subscriptionKey?: string | undefined;
+      description?: string | undefined;
+      filter?:
+        | { eventTypes?: string[] | undefined; jsonataCondition?: string | undefined }
+        | undefined;
+      receiver:
+        | {
+            action: "processor-wake";
+            expression: ItxExpression;
+            processorSlug?: string | undefined;
+          }
+        | {
+            action: "copy-to-stream";
+            receivingStreamPath: string;
+            jsonataTransform?: string | undefined;
+            delivery: { start: "beginning" | "now"; onFailingEvent: "halt" };
+          }
+        | {
+            action: "itx-call";
+            expression: ItxExpression;
+            jsonataTransform?: string | undefined;
+            delivery: { start: "beginning" | "now"; onFailingEvent: "halt" | "skip" };
+          }
+        | {
+            action: "webhook-post";
+            url: string;
+            jsonataTransform?: string | undefined;
+            delivery: { start: "beginning" | "now"; onFailingEvent: "halt" | "skip" };
+          };
+    };
+  } & {
+    payload: {
+      subscriptionKey?: string | undefined;
+      description?: string | undefined;
+      filter?:
+        | { eventTypes?: string[] | undefined; jsonataCondition?: string | undefined }
+        | undefined;
+      receiver:
+        | {
+            action: "processor-wake";
+            expression: ItxExpression;
+            processorSlug?: string | undefined;
+          }
+        | {
+            action: "copy-to-stream";
+            receivingStreamPath: string;
+            jsonataTransform?: string | undefined;
+            delivery: { start: "beginning" | "now"; onFailingEvent: "halt" };
+          }
+        | {
+            action: "itx-call";
+            expression: ItxExpression;
+            jsonataTransform?: string | undefined;
+            delivery: { start: "beginning" | "now"; onFailingEvent: "halt" | "skip" };
+          }
+        | {
+            action: "webhook-post";
+            url: string;
+            jsonataTransform?: string | undefined;
+            delivery: { start: "beginning" | "now"; onFailingEvent: "halt" | "skip" };
+          };
+    };
+  };
+
+/** One committed event that removed a subscription from its source stream. */
+export type CommittedSubscriptionRemovedEvent = Omit<
+  {
+    type: string;
+    payload?: Record<string, unknown> | undefined;
+    metadata?: Record<string, unknown> | undefined;
+    source?:
+      | {
+          processor?:
+            | {
+                slug: string;
+                version: string;
+                stream: { path: string; projectId: string | null; streamId: string };
+                whileProcessing?: { offset: number; type: string } | undefined;
+              }
+            | undefined;
+          copiedFrom?:
+            | {
+                subscriptionKey: string;
+                streamId: string;
+                streamCreatedAt: string;
+                cursorChangedAtSourceOffset: number;
+                createdAt: string;
+                offset: number;
+                path: string;
+                projectId: string | null;
+                type: string;
+              }[]
+            | undefined;
+        }
+      | undefined;
+    idempotencyKey?: string | undefined;
+    ephemeral?: true | undefined;
+    offset: number;
+    createdAt: string;
+    path: string;
+  },
+  "payload" | "type"
+> &
+  Omit<
+    {
+      type: string;
+      payload?: Record<string, unknown> | undefined;
+      metadata?: Record<string, unknown> | undefined;
+      source?:
+        | {
+            processor?:
+              | {
+                  slug: string;
+                  version: string;
+                  stream: { path: string; projectId: string | null; streamId: string };
+                  whileProcessing?: { offset: number; type: string } | undefined;
+                }
+              | undefined;
+            copiedFrom?:
+              | {
+                  subscriptionKey: string;
+                  streamId: string;
+                  streamCreatedAt: string;
+                  cursorChangedAtSourceOffset: number;
+                  createdAt: string;
+                  offset: number;
+                  path: string;
+                  projectId: string | null;
+                  type: string;
+                }[]
+              | undefined;
+          }
+        | undefined;
+      idempotencyKey?: string | undefined;
+      ephemeral?: true | undefined;
+    },
+    "payload" | "type"
+  > & {
+    type: "events.iterate.com/stream/subscription-removed";
+    payload: { subscriptionKey: string; reason: "requested" };
+  } & { payload: { subscriptionKey: string; reason: "requested" } };
 
 /**
  * Whether a project the directory knows about actually exists in THIS
@@ -3288,16 +3578,6 @@ export type StreamSubscriptionHandle = Disposable & {
  * - `unknown` — the probe failed (engine hiccup); don't block the list on it.
  */
 export type ProjectDeploymentStatus = "ready" | "missing" | "unknown";
-
-/** One consistent read of a processor (what `snapshot()` returns): the folded
- * state pinned to the offset of the last event folded into it. */
-export type ProcessorSnapshot<State> = {
-  offset: number;
-  state: State;
-};
-
-/** Durable wake-mode sink. Its call result is always disposed unpulled. */
-export type ProcessStreamWakeEventBatch = (batch: StreamWakeEventBatch) => unknown;
 
 /**
  * A structural patch turning a previous JSON value into the next one. Two
@@ -3413,6 +3693,28 @@ export type SandboxCreateInput = {
    * `getSecret(path)` placeholders or non-secret literals, NEVER raw
    * secret material. */
   env?: Record<string, string>;
+};
+
+/**
+ * The internal extension used when stream delivery calls a hosted processor.
+ * Public processor properties expose only {@link StreamProcessorRpc}; a stored
+ * subscription persists an ITX expression that continues one
+ * step past that public property to this trusted-only method:
+ * `["agents", ["get", path], "processor", "wakeStreamProcessor"]`.
+ *
+ * `wakeStreamProcessor` is called by trusted stream delivery only
+ * (trusted-internal): its processEventBatch callback drives the host's durable
+ * checkpoint, so an ordinary session poking it could feed fabricated batches
+ * and fast-forward the checkpoint past real events. Multi-processor hosts (an
+ * agent Durable Object hosts agent + slack-agent + more) resolve WHICH
+ * processor wakes from the request's `processorSlug`. Each public domain
+ * surface selects that same named processor for inspection, while deliberately
+ * omitting this method from its public TypeScript contract, so
+ * `agent.processor`, `agent.slack.processor`, and other siblings expose their
+ * own snapshots and checkpoints.
+ */
+export type WakeableStreamProcessorRpc<State = unknown> = StreamProcessorRpc<State> & {
+  wakeStreamProcessor(request: StreamProcessorWakeRequest): Promise<StreamProcessorWakeResponse>;
 };
 
 /** The sandbox processor's reduced lifecycle projection. */
@@ -3658,60 +3960,120 @@ export type EditWorkspaceFileResult = {
   path: string;
 };
 
-/** Serializable debug view of one live connection, for `runtimeState()`. */
-export type ConnectionRuntimeState = {
-  subscriptionType: StreamSubscriptionType;
-  startedAt: string;
-  cursor: number;
-  /** `maxOffset - cursor` — real offset lag for EVERY connection kind, ephemeral included. */
-  lag: number;
-  batchesSent: number;
-  eventsSent: number;
-  /** Serialized payload bytes delivered into this connection's sink (cumulative). */
-  bytesSent: number;
-  lastDeliveredAt?: string;
-  /**
-   * Commit-to-settled latency, stream clock only: `createdAt` of the newest
-   * event in a batch → the subscriber's explicit settlement callback.
-   * Durable (wake) lane only — ephemeral results are disposed unpulled, so
-   * ephemeral consumption is self-reported by the host through
-   * `getRuntimeState` instead. Absent until a sample exists.
-   */
-  settleLatencyMs?: LatencyStats;
-  /** Mutual-ping transport RTT to this subscriber (observer-driven sampling). Absent until pinged. */
-  pingRttMs?: LatencyStats;
-  /**
-   * The connect-time identity descriptor. The runtime table is the ONLY home
-   * for ephemeral identity — ephemeral connections don't fold into the
-   * reduced `connectionsByKey` roster (core state v14) — so debug surfaces
-   * read who's connected from here.
-   */
-  subscriber?: StreamSubscriberDescriptor;
-  /**
-   * True while any batch handed to this connection's sink is unsettled —
-   * exactly the signal idle teardown consults to classify a sink as wedged.
-   */
-  hasPendingDelivery: boolean;
+/** Durable state reduced from the events in one stream. */
+export type CoreProcessorState = {
+  projectId?: string | null | undefined;
+  path?: string | undefined;
+  streamId?: string | undefined;
+  createdAt?: string | undefined;
+  incarnationId?: string | undefined;
+  eventCount: number;
+  maxOffset: number;
+  childPaths: string[];
+  paused: boolean;
+  pauseReason: string | null;
+  circuitBreaker: {
+    availableTokens: number;
+    lastRefillAtMs: number | null;
+    burstCapacity: number;
+    refillRatePerMinute: number;
+    trippedAtOffset: number | null;
+  };
+  subscriptions: {
+    inbound: {
+      bySourcePath: Record<
+        string,
+        Record<
+          string,
+          {
+            streamId: string;
+            streamCreatedAt: string;
+            cursorChangedAtSourceOffset: number;
+            numEventsReceived: number;
+            lastEventReceivedAt?: string | undefined;
+          }
+        >
+      >;
+    };
+    outbound: {
+      byKey: Record<
+        string,
+        {
+          configuration: {
+            description?: string | undefined;
+            filter?:
+              | { eventTypes?: string[] | undefined; jsonataCondition?: string | undefined }
+              | undefined;
+            receiver:
+              | {
+                  action: "processor-wake";
+                  expression: ItxExpression;
+                  processorSlug?: string | undefined;
+                }
+              | {
+                  action: "copy-to-stream";
+                  receivingStreamPath: string;
+                  jsonataTransform?: string | undefined;
+                  delivery: { start: "beginning" | "now"; onFailingEvent: "halt" };
+                }
+              | {
+                  action: "itx-call";
+                  expression: ItxExpression;
+                  jsonataTransform?: string | undefined;
+                  delivery: { start: "beginning" | "now"; onFailingEvent: "halt" | "skip" };
+                }
+              | {
+                  action: "webhook-post";
+                  url: string;
+                  jsonataTransform?: string | undefined;
+                  delivery: { start: "beginning" | "now"; onFailingEvent: "halt" | "skip" };
+                };
+            subscriptionKey: string;
+          };
+          configuredAtOffset: number;
+          configuredAt: string;
+          subscriptionKeyWasGenerated?: true | undefined;
+          cursorSet?: { afterOffset: number; setAtSourceOffset: number } | undefined;
+          deliveryHalted?:
+            | {
+                reason: "delivery-failed";
+                afterOffset: number;
+                attempts: number;
+                error?: string | undefined;
+              }
+            | undefined;
+        }
+      >;
+    };
+  };
 };
 
-/** Serializable debug view of one durable subscription's spine row, for `runtimeState()`. */
+/** Serializable debug view of one live callback connection. */
+export type ConnectionRuntimeState = ConnectionRuntimeDetails &
+  (
+    | { kind: "session" }
+    | {
+        kind: "hosted";
+        /** The durable subscription whose processor callback this connection serves. */
+        subscriptionKey: string;
+      }
+  );
+
+/** Serializable debug view of one stored subscription's cursor row, for `runtimeState()`. */
 export type SubscriptionRuntimeState = {
-  mode: SubscriptionDelivery["mode"];
-  /** Exclusive. Authoritative cursor (push) or observational watermark (wake). */
-  ackedOffset: number;
-  /** `maxOffset - ackedOffset` — the Kafka lag number, per subscriber. */
+  /** Exclusive. Source-owned acknowledged offset or hosted processor's last reported checkpoint. */
+  acknowledgedOffset: number;
+  /** `maxOffset - acknowledgedOffset`, per subscription. */
   lag: number;
   attempt: number;
   nextAttemptAt: number | null;
+  inFlightDeadlineAt: number | null;
   lastError: string | null;
-  parkedAtOffset: number | null;
-  /** Whether a live delivery connection currently exists (wake mode). */
-  connected: boolean;
-  /** Serialized payload bytes delivered (push/webhook lanes; cumulative). */
+  /** Serialized payload bytes delivered by copy, ITX-call, and webhook subscriptions. */
   bytesSent?: number;
   /** Commit-to-acked latency (stream clock): newest event `createdAt` → awaited delivery resolved. */
-  settleLatencyMs?: LatencyStats;
-  /** Duration of the awaited delivery call itself — the push/webhook lane's transport latency. */
+  completionLatencyMs?: LatencyStats;
+  /** Duration of the awaited copy, ITX, or webhook call itself. */
   deliveryDurationMs?: LatencyStats;
 };
 
@@ -3723,12 +4085,12 @@ export type StreamThroughputMetrics = {
   reportedAt: string;
   /** Appends committed (all producers). */
   ingress: ThroughputReport;
-  /** Deliveries dispatched (all lanes, all subscribers). */
+  /** Event batches sent to all receiving streams and open callbacks. */
   egress: ThroughputReport;
 };
 
 /**
- * Batch delivered to stream processors and live subscribers.
+ * Batch delivered to stream processors and live connections.
  *
  * Kept named because callback retention, processor hosts, and tests all depend
  * on the same cross-RPC batch envelope.
@@ -3736,6 +4098,8 @@ export type StreamThroughputMetrics = {
 export type StreamEventBatch = {
   projectId: string | null;
   path: string;
+  /** Random identity of this event log; changes when the stream is recreated. */
+  streamId: string;
   events: StreamEvent[];
   /** Exclusive raw-log cursor from which this delivery scan began. */
   scannedAfterOffset: number;
@@ -3747,7 +4111,7 @@ export type StreamEventBatch = {
 
 /**
  * The mutual ping's request half (NTP-style, for real latency measurement
- * between a stream and its subscribers): the requester stamps `t0` on its own
+ * between a stream and its callback owners): the requester stamps `t0` on its own
  * clock and observes `t3` when the reply lands.
  */
 export type StreamPingInput = { t0: number };
@@ -3762,10 +4126,8 @@ export type StreamPingInput = { t0: number };
  */
 export type StreamPingReply = { t0: number; t1: number; t2: number };
 
-/** Internal wake-mode frame: an ordinary batch plus its one-shot settlement door. */
-export type StreamWakeEventBatch = StreamEventBatch & {
-  settleDelivery: SettleStreamWakeDelivery;
-};
+/** Stable identity for one live connection to a processEventBatch callback. */
+export type ConnectionKey = string;
 
 /** `StreamEventInput` with `type`/`payload` narrowed to one event definition. */
 type TypedStreamEventInput<Type extends string = string, Payload = Record<string, unknown>> = Omit<
@@ -3809,6 +4171,53 @@ export type SandboxInstanceType =
   | "standard-2"
   | "standard-3"
   | "standard-4";
+
+/**
+ * What the stream sends when waking a hosted processor through
+ * `wakeStreamProcessor`: serializable coordinates only.
+ */
+export type StreamProcessorWakeRequest = {
+  stream: {
+    projectId: string | null;
+    path: string;
+    /** Random identity of this event log; fences persisted processor checkpoints. */
+    streamId: string;
+    streamMaxOffset: number;
+  };
+  subscriptionKey: SubscriptionKey;
+  /** Which hosted processor to wake (multi-processor hosts resolve on it). */
+  processorSlug?: string;
+};
+
+/**
+ * What the woken processor hands back in one response. The stream retains
+ * `processEventBatch` (ownership of a returned stub transfers to
+ * the caller) and streams one-way batches into it from `checkpointOffset + 1`;
+ * there is no callback registration call in the other direction.
+ */
+export type StreamProcessorWakeResponse = {
+  /** Stream identity to which `checkpointOffset` and the returned callback are bound. */
+  streamId: string;
+  /** The processor's durable checkpoint offset — replay resumes after it. */
+  checkpointOffset: number;
+  /**
+   * The live delivery callback the stream retains and invokes per batch.
+   * Calls are one-way; each batch reports completion through its independent
+   * `reportDeliveryResult` callback.
+   */
+  processEventBatch: ProcessStreamWakeEventBatch;
+  /**
+   * Serializable callback-owner identity (validated against
+   * `ConnectionOpenerDescriptor` by the stream) appended as the
+   * connection-opened presence fact; carries the processor's contract
+   * announcement for the stream's `processorsBySlug` registry.
+   */
+  openedBy?: unknown;
+  /** Live runtime-state capability, retained for the connection lifetime. */
+  getRuntimeState?: GetProcessorRuntimeState;
+  /** Optional ping capability, retained for the connection lifetime (see {@link StreamConnectionPing}). */
+  ping?: StreamConnectionPing;
+};
 
 /** How a secret's material may leave the secret system. Extendable — e.g. a
  * future "reveal-once". */
@@ -3927,8 +4336,22 @@ export type WorkspaceGitLogEntry = {
   timestamp: number;
 };
 
-/** How a subscriber is attached: `configured` = durable desired state; `ephemeral` = session-scoped live socket. */
-export type StreamSubscriptionType = "configured" | "ephemeral";
+/** Delivery progress and retry details shared by every live callback connection. */
+type ConnectionRuntimeDetails = {
+  startedAt: string;
+  deliveredThroughOffset: number;
+  lag: number;
+  batchesSent: number;
+  eventsSent: number;
+  bytesSent: number;
+  lastDeliveredAt?: string;
+  completionLatencyMs?: LatencyStats;
+  pingRttMs?: LatencyStats;
+  openedBy?: ConnectionOpenerDescriptor;
+  hasPendingDelivery: boolean;
+  pendingDeliveryStartedAt?: string;
+  pendingDeliveryDeadlineAt?: string;
+};
 
 /** Serializable summary of a {@link LatencyRing}; `null` until a sample exists. */
 export type LatencyStats = {
@@ -3942,37 +4365,6 @@ export type LatencyStats = {
   lastAt: number;
 };
 
-/** Serializable subscriber identity carried on presence facts and the runtime connection table. */
-export type StreamSubscriberDescriptor = {
-  description?: string | undefined;
-  user?:
-    | {
-        id?: string | undefined;
-        email: string;
-        name?: string | undefined;
-        picture?: string | undefined;
-      }
-    | undefined;
-  processor?:
-    | {
-        announcement: {
-          slug: string;
-          version: string;
-          description: string;
-          consumes: string[];
-          emits: string[];
-          ownedEvents: { type: string; description?: string | undefined }[];
-        };
-      }
-    | undefined;
-};
-
-/** A durable subscription's delivery lane: wake (hosted processor poke), push (per-batch call), or webhook (per-event POST). */
-export type SubscriptionDelivery =
-  | { mode: "wake"; expression: ItxExpression; processorSlug?: string | undefined }
-  | { mode: "push"; expression: ItxExpression }
-  | { mode: "webhook"; url: string };
-
 /**
  * One direction's throughput report: a responsive trailing-5s rate (the
  * number UIs show), the full-minute totals, and the raw 1s series for graphs.
@@ -3985,15 +4377,6 @@ export type ThroughputReport = {
   lastMinute: MinuteWindow;
   series: ThroughputSeries;
 };
-
-/**
- * One-shot acknowledgement capability owned by a single durable wake batch.
- *
- * It is deliberately independent of the sink call's return value. A
- * processor may append back to the stream that delivered the batch; making
- * the stream pull that sink result creates a cyclic actor-drain dependency.
- */
-export type SettleStreamWakeDelivery = (settlement: StreamWakeDeliverySettlement) => unknown;
 
 /** One Cloudflare Images transform step (width, height, fit, rotate, …),
  * passed through to the Images binding verbatim. */
@@ -4017,6 +4400,9 @@ export type CfVideoTransformOptions = { [x: string]: unknown };
 export type CfVideoOutputOptions = {
   mode: "video" | "spritesheet" | "frame" | "audio";
 } & Record<string, unknown>;
+
+/** Hosted processor callback. Its call result is always disposed without being awaited. */
+export type ProcessStreamWakeEventBatch = (batch: StreamWakeEventBatch) => unknown;
 
 /**
  * A reference to a deployment-owned platform credential, resolved from typed
@@ -4046,6 +4432,31 @@ export type WorkspaceChange = {
   path: string;
 };
 
+/** Serializable identity of the caller that opened a connection. */
+export type ConnectionOpenerDescriptor = {
+  description?: string | undefined;
+  user?:
+    | {
+        id?: string | undefined;
+        email: string;
+        name?: string | undefined;
+        picture?: string | undefined;
+      }
+    | undefined;
+  processor?:
+    | {
+        announcement: {
+          slug: string;
+          version: string;
+          description: string;
+          consumes: string[];
+          emits: string[];
+          ownedEvents: { type: string; description?: string | undefined }[];
+        };
+      }
+    | undefined;
+};
+
 /** One rolling-minute throughput window. */
 export type MinuteWindow = {
   /** Events in the last 60 seconds. */
@@ -4062,10 +4473,10 @@ export type ThroughputSeries = {
   bytes: number[];
 };
 
-/** The subscriber's terminal verdict for one durable wake delivery. */
-export type StreamWakeDeliverySettlement =
-  | { outcome: "ok" }
-  | { outcome: "error"; error: StreamWakeDeliveryError };
+/** Internal hosted-processor frame: an ordinary batch plus its one-shot completion callback. */
+export type StreamWakeEventBatch = StreamEventBatch & {
+  reportDeliveryResult: ReportStreamWakeDeliveryResult;
+};
 
 /** Serializable `createApp` input. The generated browser bundles and explicit
  * text assets are retained in the host and served by worker-bundler's own
@@ -4090,20 +4501,14 @@ export type WorkerBundlerCreateWorkerOptions = WorkerBundlerOptions & {
 };
 
 /**
- * Serializable failure reported after a durable wake delivery finishes.
+ * One-shot acknowledgement capability owned by a single durable wake batch.
  *
- * The settlement crosses an independent one-way RPC hop, so preserve the
- * lifecycle flags the stream uses to distinguish a dead Durable Object from
- * an application failure. Error prototypes and arbitrary properties do not
- * survive that hop reliably.
+ * It is deliberately independent of the callback call's return value. A
+ * processor may append back to the stream that delivered the batch; making
+ * the stream await that return value can make two Durable Objects wait for
+ * each other forever.
  */
-export type StreamWakeDeliveryError = {
-  name: string;
-  message: string;
-  durableObjectReset?: true;
-  overloaded?: true;
-  retryable?: true;
-};
+export type ReportStreamWakeDeliveryResult = (result: StreamWakeDeliveryResult) => unknown;
 
 /**
  * The serializable `@cloudflare/worker-bundler` options shared by
@@ -4166,6 +4571,11 @@ export type WorkerFileSource =
       exclude?: string[];
     };
 
+/** The hosted processor's final result for one durable wake delivery. */
+export type StreamWakeDeliveryResult =
+  | { outcome: "ok" }
+  | { outcome: "error"; error: StreamWakeDeliveryError };
+
 /** Portable loader names accepted by `@cloudflare/worker-bundler`. */
 export type WorkerBundlerLoader =
   | "js"
@@ -4178,3 +4588,19 @@ export type WorkerBundlerLoader =
   | "binary"
   | "base64"
   | "dataurl";
+
+/**
+ * Serializable failure reported after a durable wake delivery finishes.
+ *
+ * The result crosses an independent one-way RPC hop, so preserve the
+ * lifecycle flags the stream uses to distinguish a dead Durable Object from
+ * an application failure. Error prototypes and arbitrary properties do not
+ * survive that hop reliably.
+ */
+export type StreamWakeDeliveryError = {
+  name: string;
+  message: string;
+  durableObjectReset?: true;
+  overloaded?: true;
+  retryable?: true;
+};

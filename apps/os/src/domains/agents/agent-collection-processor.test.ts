@@ -1,7 +1,7 @@
 // The agent collection's executable spec on the generic step harness from
 // iterate/processors/testing: the REAL StreamProcessorRunner over the shared
 // MemoryStream. The collection is a pure projector, so scenarios are appends
-// of cross-posted agent facts plus assertions on the reduced catalog —
+// of received agent facts plus assertions on the reduced catalog —
 // no side-effect lanes, no crash steps, and the stream never grows beyond
 // what the tests append.
 
@@ -32,7 +32,7 @@ const COLLECTION_CREATED = {
 
 // -----------------------------------------------------------------------------
 // Event builders (data, not append wrappers): copies of agent-stream facts as
-// the collection receives them — the payload plus the cross-post hop naming
+// the collection receives them — the payload plus source-stream coordinates naming
 // the SOURCE stream and the fact's original coordinates. The source commit
 // time derives from the source offset (10:00:0<offset> on 2026-07-18), while
 // the copy's own commit time comes from the harness's 1970-epoch virtual
@@ -40,11 +40,14 @@ const COLLECTION_CREATED = {
 // catalog preserves source chronology, not ingest delay.
 // -----------------------------------------------------------------------------
 
-function crossPostHop(type: string, path: string, sourceOffset: number) {
+function copiedFromSource(type: string, path: string, sourceOffset: number) {
   return {
-    crossPostedFrom: [
+    copiedFrom: [
       {
         subscriptionKey: "agent-collection",
+        streamId: "11111111-1111-4111-8111-111111111111",
+        streamCreatedAt: "2026-07-18T09:00:00.000Z",
+        cursorChangedAtSourceOffset: 1,
         createdAt: new Date(
           Date.parse("2026-07-18T10:00:00.000Z") + sourceOffset * 1_000,
         ).toISOString(),
@@ -62,7 +65,7 @@ function agentCreatedCopy(args: { sourceOffset: number; path?: string }): Collec
   return {
     type: "events.iterate.com/agent/created",
     payload: {},
-    source: crossPostHop("events.iterate.com/agent/created", path, args.sourceOffset),
+    source: copiedFromSource("events.iterate.com/agent/created", path, args.sourceOffset),
   };
 }
 
@@ -77,7 +80,7 @@ function summaryUpdatedCopy(
   return {
     type: "events.iterate.com/agent/summary-updated",
     payload: update,
-    source: crossPostHop("events.iterate.com/agent/summary-updated", path, args.sourceOffset),
+    source: copiedFromSource("events.iterate.com/agent/summary-updated", path, args.sourceOffset),
   };
 }
 
@@ -149,7 +152,7 @@ describe("AgentCollectionStreamProcessor", () => {
     const replay = makeCollectionHarness({
       clock: h.clock,
       stream: h.stream,
-      progress: makeMemoryProgressStore(),
+      progress: makeMemoryProgressStore(AgentCollectionProcessorContract),
     });
     await replay.settle(); // replays the whole stream from offset zero
 
@@ -168,7 +171,7 @@ describe("AgentCollectionStreamProcessor", () => {
       await h.play(["append", { type: "events.iterate.com/agent/created", payload: {} }]);
       expect(h.state()).toEqual(beforeMalformedCopy);
       expect(consoleError).toHaveBeenCalledWith(
-        "agent collection skipped events.iterate.com/agent/created: missing cross-post provenance",
+        "agent collection skipped events.iterate.com/agent/created: missing source-stream coordinates",
       );
 
       await h.play([

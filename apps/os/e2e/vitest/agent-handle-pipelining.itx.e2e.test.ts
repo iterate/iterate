@@ -73,7 +73,7 @@ test(
         expression: ["streams", ["get", PROOF_STREAM], "append"],
         instructions: "e2e proof: appends its argument to the proof stream.",
         path: ["proofAppend"],
-        type: "itx-expression",
+        type: "itx-call",
       }),
     );
 

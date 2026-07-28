@@ -1,5 +1,5 @@
 // Paced sustained load: <ratePerSec> events/sec in batches of <batchSize> for <seconds>,
-// with a 1s server-head sampler so a subscriber's lag can be computed against the
+// with a 1s server-head sampler so the open callback's lag can be computed against the
 // printed timeline. Usage:
 //   pnpm exec tsx scripts/bench/sustained-load.mts <wsBase> <path> [ratePerSec] [batchSize] [seconds]
 import { withStreamConnectionFromNode } from "../../src/lib/node-stream-connection.ts";

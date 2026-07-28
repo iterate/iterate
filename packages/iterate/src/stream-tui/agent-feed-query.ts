@@ -18,7 +18,7 @@ export async function ensureAgentFeedReady(agent: AgentReadinessHandle): Promise
 
 /**
  * Read the durable history that seeds the terminal feed's TanStack query.
- * All live events arrive through the ordered subscription opened after this
+ * All live events arrive through the ordered event connection opened after this
  * read; its replay cursor closes the durable race between the two operations.
  */
 export async function readAgentFeedHistory(

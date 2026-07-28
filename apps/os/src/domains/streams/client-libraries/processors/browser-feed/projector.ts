@@ -10,7 +10,7 @@
 //   1. The AGENT lens (packages/ui agent-ui-reducer) may settle zero or more
 //      chat items — user/assistant bubbles, archived activities, wake/pause
 //      dividers — each written as a `agent.<kind>` row. In-flight work stays
-//      in reduced state (the live tail renders straight from it).
+//      in reduced state (the UI renders the latest state directly from it).
 //   2. The RAW lens groups the event into `raw.*` rows: types with a specific
 //      renderer become their own `raw.<component>` singleton row; everything
 //      else joins the current open `raw.group` row while the type

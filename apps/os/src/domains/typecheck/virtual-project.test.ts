@@ -122,7 +122,7 @@ async function fakeRegistryFetch(url: string): Promise<Response> {
 
 const WEATHER_MOUNT: CapabilityDescription = {
   path: ["tools", "weather"],
-  type: "itx-expression",
+  type: "itx-call",
   instructions: "Three-day forecasts.",
   types: "export type Forecast = { forecast(input: { city: string }): Promise<string> };",
 };
@@ -254,7 +254,7 @@ test("npm-backed mount types acquire real .d.ts and typecheck against them", asy
   const capabilities: CapabilityDescription[] = [
     {
       path: ["pets"],
-      type: "itx-expression",
+      type: "itx-call",
       types: 'export type Pets = import("fake-pets").PetsClient;',
     },
   ];
@@ -420,7 +420,7 @@ test("the checker enforces the runtime's block shape and size cap up front", asy
 test("npm acquisition failures surface as notes alongside the module error", async () => {
   const problems = await checkItxScript({
     capabilities: [
-      { path: ["gone"], type: "itx-expression", types: 'export type G = import("fake-gone").X;' },
+      { path: ["gone"], type: "itx-call", types: 'export type G = import("fake-gone").X;' },
     ],
     code: "async (itx) => itx.gone",
     typechecker, // fake registry 404s anything but fake-pets
@@ -433,7 +433,7 @@ test("openapi: references materialize at check time — schemas never ride the j
   expect(reference.length).toBeLessThan(300); // what the journal carries
 
   const capabilities: CapabilityDescription[] = [
-    { path: ["store"], type: "itx-expression", types: reference },
+    { path: ["store"], type: "itx-call", types: reference },
   ];
   const ok = await checkItxScript({
     capabilities,
@@ -455,7 +455,7 @@ test("openapi: references materialize at check time — schemas never ride the j
     capabilities: [
       {
         path: ["gone"],
-        type: "itx-expression",
+        type: "itx-call",
         types: openApiCapabilityTypeReference("https://specs.example.com/missing.json"),
       },
     ],
@@ -533,7 +533,7 @@ const GATE_ROWS: Array<{
     name: "provide-then-use in one script stays green",
     code: `async (itx) => {
       await itx.capabilityHost.provideCapability({
-        type: "itx-expression",
+        type: "itx-call",
         path: ["demoStream"],
         expression: ["streams", ["get", "/"]],
       });
@@ -560,7 +560,7 @@ const GATE_ROWS: Array<{
     name: "unresolved modules never block",
     code: 'async (itx) => { const m = await import("fake-gone"); return m; }',
     capabilities: [
-      { path: ["gone"], type: "itx-expression", types: 'export type G = import("fake-gone").X;' },
+      { path: ["gone"], type: "itx-call", types: 'export type G = import("fake-gone").X;' },
     ],
     expected: "clean",
   },
@@ -695,7 +695,7 @@ const GATE_ROWS: Array<{
     // root is runtime-extensible, so this must run.
     name: "regression: a provided root mount near-missing a real member runs",
     code: `async (itx) => {
-    await itx.capabilityHost.provideCapability({ type: "itx-expression", path: ["agentz"], expression: ["streams", ["get", "/"]] });
+    await itx.capabilityHost.provideCapability({ type: "itx-call", path: ["agentz"], expression: ["streams", ["get", "/"]] });
     return typeof itx.agentz;
   }`,
     expected: "clean",

@@ -1,13 +1,13 @@
 import { RpcTarget } from "@iterate-com/capnweb";
 import type { z } from "zod";
-import type { ProcessorStream } from "./stream-handle.ts";
+import { resolveStreamPath, type ProcessorStream } from "./stream-handle.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import type { ProcessorRuntimeState, ProcessorSnapshot } from "./rpc-types.ts";
 // Type-only by necessity, not just hygiene: the runner imports this module's
-// VALUE (the class, for `runnerDriver`), so a value import back would be a
+// VALUE (the class, for `runnerHooks`), so a value import back would be a
 // runtime cycle. Types erase; the cycle doesn't exist at runtime.
 import type { DeliveryContext } from "./stream-processor-runner.ts";
-import { SubscriberMetrics } from "./subscriber-metrics.ts";
+import { EventConsumptionMetrics } from "./event-consumption-metrics.ts";
 import {
   assertObjectProcessorState,
   cachedEventSchema,
@@ -116,7 +116,7 @@ export type ReduceArgs<Contract> = {
  * primitives, two guarantees — every side effect must pick one deliberately:
  *
  * - `blockProcessorWhile` — SHORT work the next event must not overtake.
- *   At-least-once: the cursor is held, a crash redelivers the frame, and
+ *   At-least-once: the cursor is held, a crash resends the event batch, and
  *   append idempotency keys collapse the re-run. Long work does NOT belong
  *   here: it head-of-line-blocks every later event (including cancellations).
  *
@@ -154,19 +154,18 @@ type SideEffectHelpers = {
 export type ProcessEventArgs<Contract> = Omit<ReducedEvent<Contract>, "event"> &
   SideEffectHelpers & {
     /**
-     * The consumed event being processed — or `null` for the EVENT-LESS at-head
-     * pass (`delivery.caughtUp` is then true). The runner fires that pass when a
-     * batch reaches head but no consumed event carried `caughtUp` (an unconsumed
-     * event sits at head — e.g. stream/subscriber-disconnected — or a self-pull
-     * folded only foreign events): the reconcile still has to run over the head
-     * fold, or the obligation strands. A per-event switch MUST guard on
-     * `event !== null`; the at-head reconcile reads `state` and needs no event.
+     * The consumed event being processed — or `null` for an eventless call where
+     * `delivery.caughtUp` is true. The runner makes that call when a batch scans
+     * through the highest observed offset but no consumed event carried `caughtUp`
+     * (for example, the final row is stream/connection-closed). The processor
+     * still needs a chance to act on the complete observed fold. A per-event switch MUST guard on
+     * `event !== null`; the caught-up processing reads `state` and needs no event.
      */
     event: ReducedEvent<Contract>["event"] | null;
     /**
      * Append one or more events listed in `contract.emits` to this stream,
      * stamped with `source.processor` provenance pointing at THIS event as
-     * `whileProcessing` (unstamped on the event-less at-head pass). The binding
+     * `whileProcessing` (unstamped on the event-less caught-up call). The binding
      * is a closure, so appends made later from
      * `blockProcessorWhile`/`runInBackground` work scheduled here still stamp
      * the event that was being processed.
@@ -175,7 +174,7 @@ export type ProcessEventArgs<Contract> = Omit<ReducedEvent<Contract>, "event"> &
     /** Like `append`, onto a sibling stream (resolved via `stream.at(path)`). */
     appendTo: (path: string, ...input: EmittedInput<Contract>[]) => Promise<StreamEvent[]>;
     /**
-     * Honest event-time context (delivery phase, observed head, cursor
+     * Honest event-time context (delivery phase, highest observed offset, cursor
      * revision) supplied by the StreamProcessorRunner, the only driver.
      */
     delivery: DeliveryContext;
@@ -186,8 +185,8 @@ export type ProcessEventArgs<Contract> = Omit<ReducedEvent<Contract>, "event"> &
  * the operational `runtime` bag only — subclass debug data, never cursor
  * state. The SNAPSHOT half is supplied by the StreamProcessorRunner (the
  * cursor owner) when a host assembles the full runtime state
- * (stream-processor-registry.ts `reads`/`wakeStreamSubscriber`, the browser
- * host's capabilities), and the self-measured subscriber metrics are merged
+ * (stream-processor-registry.ts `reads`/`wakeStreamProcessor`, the browser
+ * host's capabilities), and self-measured event-consumption metrics are merged
  * in host-side so an override cannot accidentally drop them.
  */
 export type ProcessorRuntimeContribution = { runtime?: Record<string, unknown> };
@@ -219,16 +218,16 @@ export type StreamProcessorConstructorArgs<Deps extends object = object> = Strea
 type ProcessorSourceStamp = NonNullable<NonNullable<StreamEvent["source"]>["processor"]>;
 
 /**
- * @internal The narrow drive surface {@link StreamProcessor.runnerDriver}
+ * @internal The narrow drive surface {@link StreamProcessor.runnerHooks}
  * hands the StreamProcessorRunner (stream-processor-runner.ts): exactly the
- * protected hooks and append lanes the delivery loop needs, nothing an author
+ * protected hooks and append methods the event-processing loop needs, nothing an author
  * or operator could reach for. This is how the runner invokes protected
  * members without widening the author-facing surface — authors still only
  * implement `reduce`/`processEvent` (fold-derived side effects ride
  * `processEvent` under `delivery.caughtUp`), and the runner never sees
  * processor-internal state (it owns its own two-cursor progress).
  */
-export type StreamProcessorDriver<Contract extends StreamProcessorContract> = {
+export type StreamProcessorRunnerHooks<Contract extends StreamProcessorContract> = {
   readonly contract: Contract;
   /** The schema default — the fold of the empty journal prefix. */
   initialState(): ProcessorState<Contract>;
@@ -244,14 +243,14 @@ export type StreamProcessorDriver<Contract extends StreamProcessorContract> = {
   /** Whether this event will reach `processEvent` — a consumed type whose
    * payload parses. Stateless (no fold), so the runner can find the last
    * DELIVERED offset of a batch (for `caughtUp`) without pre-folding, and
-   * without letting a malformed consumed event at head steal the flag. */
+   * without letting a malformed final event steal the flag. */
   isDeliverable(event: StreamEvent): boolean;
   /** The synchronous per-event side-effect hook (virtual — subclass overrides
-   * dispatch). The at-head reconcile rides it under `delivery.caughtUp`. */
+   * dispatch). The caught-up processing rides it under `delivery.caughtUp`. */
   processEvent(args: ProcessEventArgs<Contract>): undefined;
   /**
    * Feed the processor's self-measured consumption metrics
-   * (`subscriberMetrics.noteBatchIngested`) after a durably committed frame.
+   * (`eventConsumptionMetrics.noteBatchIngested`) after a durably committed batch.
    * Without it the wake capability's consumption-lag samples
    * (`runtime.metrics`) go empty under runner drive: appends alone only feed
    * the other half of the consume-your-own-appends loop.
@@ -263,19 +262,22 @@ export type StreamProcessorDriver<Contract extends StreamProcessorContract> = {
     ingestStartedAtMs: number;
     atMs: number;
   }): void;
-  /** The key derivation — `<slug>/<key>[@<path>:<offset>]` — byte-preserved from the legacy engine. */
+  /** The processor's semantic key — `<slug>/<key>[@<path>:<offset>]`. */
   idempotencyKey(key: string, whileProcessing?: Pick<StreamEvent, "offset" | "path">): string;
   /** The `source.processor` provenance stamp for runner-authored raw appends. */
-  processorStamp(whileProcessing?: Pick<StreamEvent, "offset" | "type">): ProcessorSourceStamp;
+  processorStamp(
+    streamId: string,
+    whileProcessing?: Pick<StreamEvent, "offset" | "type">,
+  ): ProcessorSourceStamp;
   /** Emits-checked, provenance-stamped append to the processor's home stream. */
   append(
-    opts: { whileProcessing?: ConsumedEvent<Contract> },
+    opts: { streamId: string; whileProcessing?: ConsumedEvent<Contract> },
     input: EmittedInput<Contract>[],
   ): Promise<StreamEvent[]>;
   /** Like `append`, onto a sibling stream (resolved via `stream.at(path)`). */
   appendTo(
     path: string,
-    opts: { whileProcessing?: ConsumedEvent<Contract> },
+    opts: { streamId: string; whileProcessing?: ConsumedEvent<Contract> },
     input: EmittedInput<Contract>[],
   ): Promise<StreamEvent[]>;
 };
@@ -295,12 +297,12 @@ export type StreamProcessorDriver<Contract extends StreamProcessorContract> = {
  * - `processEvent` — synchronous per-event side effects; what most processors
  *   implement. Side effects derived from the whole fold (rather than the
  *   delivered event) belong here too, guarded by `args.delivery.caughtUp`.
- *   `args.event` is `null` only when a head-reaching scan contained no
+ *   `args.event` is `null` only when a caught-up scan contained no
  *   consumed event; authors skip their per-event switch but can still act on
  *   the fold.
  *
  * Every hook runs inside the runner's serialized delivery chain: a later
- * frame never starts until the previous one has completed or failed, and the
+ * batch never starts until the previous one has completed or failed, and the
  * cursor is only committed after the hooks (plus any `blockProcessorWhile`
  * work) succeed.
  */
@@ -317,16 +319,16 @@ export abstract class StreamProcessor<
   protected readonly deps: Deps;
 
   /**
-   * Self-measured consumption metrics (see subscriber-metrics.ts): every
-   * home-stream append and every committed delivery frame feeds it (the
+   * Self-measured consumption metrics (see event-consumption-metrics.ts): every
+   * home-stream append and every committed event batch feeds it (the
    * latter through the driver's `noteBatchIngested`), closing the
    * consume-your-own-appends loop on the processor's own clock. HOSTS merge
-   * `subscriberMetrics.report()` into the `getRuntimeState` answer they give
+   * `eventConsumptionMetrics.report()` into the `getRuntimeState` answer they give
    * the stream (`runtime.metrics`) — merged host-side so a subclass
    * overriding `getRuntimeState` with its own `runtime` bag cannot
    * accidentally drop it. In-memory; resets with the isolate.
    */
-  readonly subscriberMetrics = new SubscriberMetrics(Date.now());
+  readonly eventConsumptionMetrics = new EventConsumptionMetrics(Date.now());
 
   readonly #keepAliveWhile: ((work: () => Promise<unknown>) => void) | undefined;
 
@@ -342,15 +344,15 @@ export abstract class StreamProcessor<
   }
 
   /**
-   * @internal Hands the StreamProcessorRunner its {@link StreamProcessorDriver}.
+   * @internal Hands the StreamProcessorRunner its {@link StreamProcessorRunnerHooks}.
    * A STATIC accessor on purpose: statics may reach protected/private members
    * of instances of their own class, so the runner gets the hooks without any
    * new public instance member (nothing for subclasses to see, shadow, or
    * call). Authors never touch this; the runner is its only caller.
    */
-  static runnerDriver<Contract extends StreamProcessorContract, Deps extends object>(
+  static runnerHooks<Contract extends StreamProcessorContract, Deps extends object>(
     processor: StreamProcessor<Contract, Deps>,
-  ): StreamProcessorDriver<Contract> {
+  ): StreamProcessorRunnerHooks<Contract> {
     return {
       contract: processor.contract,
       initialState: () => processor.contract.stateSchema.parse({}) as ProcessorState<Contract>,
@@ -363,17 +365,27 @@ export abstract class StreamProcessor<
       reduceRawEvent: (args) => processor.#reduceRawEvent(args),
       isDeliverable: (event) => processor.#isDeliverable(event),
       processEvent: (args) => processor.processEvent(args),
-      noteBatchIngested: (args) => processor.subscriberMetrics.noteBatchIngested(args),
+      noteBatchIngested: (args) => processor.eventConsumptionMetrics.noteBatchIngested(args),
       idempotencyKey: (key, whileProcessing) => processor.idempotencyKey(key, whileProcessing),
-      processorStamp: (whileProcessing) => processor.#processorStamp(whileProcessing),
+      processorStamp: (streamId, whileProcessing) =>
+        processor.#processorStamp(streamId, whileProcessing),
       append: (opts, input) =>
         processor.#appendStamped(
-          { target: processor.stream, whileProcessing: opts.whileProcessing },
+          {
+            target: processor.stream,
+            targetPath: processor.path,
+            sourceStreamId: opts.streamId,
+            whileProcessing: opts.whileProcessing,
+          },
           input,
         ),
       appendTo: (path, opts, input) =>
         processor.#appendStamped(
-          { target: processor.stream.at(path), whileProcessing: opts.whileProcessing },
+          {
+            ...processor.#appendTarget(path),
+            sourceStreamId: opts.streamId,
+            whileProcessing: opts.whileProcessing,
+          },
           input,
         ),
     };
@@ -383,7 +395,7 @@ export abstract class StreamProcessor<
    * The processor-contributed slice of the published runtime state: the
    * operational `runtime` bag only (see {@link ProcessorRuntimeContribution}).
    * Subclasses override to expose debug data; the base contributes nothing.
-   * The snapshot half comes from the runner, and the subscriber metrics are
+   * The snapshot half comes from the runner, and event-consumption metrics are
    * merged in host-side — never read cursor state here.
    */
   async getRuntimeState(): Promise<ProcessorRuntimeContribution> {
@@ -421,8 +433,8 @@ export abstract class StreamProcessor<
 
   /**
    * Synchronous side-effect hook, called by the runner once per consumed event
-   * and, when necessary, once more with `event: null` for a head-reaching scan
-   * that consumed nothing. It is ALSO the at-head reconcile: when
+   * and, when necessary, once more with `event: null` for a caught-up scan
+   * that consumed nothing. It is ALSO the caught-up processing: when
    * `args.delivery.caughtUp` is true (`args.state` is the whole observed fold),
    * an obligation processor
    * drives its undriven obligations and settles dead ones — scheduling that
@@ -430,7 +442,7 @@ export abstract class StreamProcessor<
    * (`this.idempotencyKey(<obligation>)` with the deciding state folded into
    * the key and NO event bound, so a redelivery/revival does not rotate the
    * key and re-run the effect).
-   * The runner never sets `caughtUp` behind the observed head — no override
+   * The runner never sets `caughtUp` below its highest observed offset — no override
    * needs its own mid-catch-up gate. Simple processors ignore the flag.
    */
   protected processEvent(_args: ProcessEventArgs<Contract>): undefined {}
@@ -501,23 +513,34 @@ export abstract class StreamProcessor<
   /**
    * Append events listed in `contract.emits` to this processor's own stream,
    * stamped with `source.processor` provenance (no `whileProcessing`: this
-   * lane is for appends outside any delivery — alarm handlers, DO methods —
+   * overload is for appends outside any event batch — alarm handlers, DO methods —
    * and for decisions derived from the whole fold). Inside `processEvent`,
    * prefer the event-bound `args.append`.
    */
   protected append(...input: EmittedInput<Contract>[]): Promise<StreamEvent[]> {
-    return this.#appendStamped({ target: this.stream }, input);
+    return this.#appendStamped({ target: this.stream, targetPath: this.path }, input);
   }
 
   /** Like {@link append}, onto a sibling stream (resolved via `stream.at(path)`). */
   protected appendTo(path: string, ...input: EmittedInput<Contract>[]): Promise<StreamEvent[]> {
-    return this.#appendStamped({ target: this.stream.at(path) }, input);
+    return this.#appendStamped(this.#appendTarget(path), input);
+  }
+
+  #appendTarget(path: string): { target: ProcessorStream; targetPath: string } {
+    const targetPath = resolveStreamPath(this.path, path);
+    return {
+      // `StreamRpcTarget.at()` returns a new object even when `path` resolves
+      // back to the home stream. Select by resolved address so production and
+      // in-memory hosts both retain the guarded-home append semantics.
+      target: targetPath === this.path ? this.stream : this.stream.at(path),
+      targetPath,
+    };
   }
 
   /**
    * Processor-scoped idempotency key: `<slug>/<key>`, plus `@<path>:<offset>`
    * when the append is a deterministic consequence of processing one event —
-   * a redelivered frame then dedupes instead of double-appending. The path
+   * a resent event batch then dedupes instead of double-appending. The path
    * makes fan-in safe: two same-slug processors on different streams
    * forwarding into one target can never collide. Omit `whileProcessing` for
    * state-derived appends and fold the deciding state into `key` instead
@@ -533,16 +556,16 @@ export abstract class StreamProcessor<
   }
 
   /**
-   * The provenance stamp for one append lane. Always overwrites any
+   * The provenance stamp for one append. Always overwrites any
    * caller-supplied `source.processor`: the stamp describes THIS append, and
-   * ancestry stays walkable through `whileProcessing` (and `crossPostedFrom`
-   * for cross-post copies, which preserve the original stamp).
+   * ancestry stays walkable through `whileProcessing` (and `copiedFrom`
+   * for subscription copies, which preserve the original stamp).
    */
-  #processorStamp(whileProcessing?: Pick<StreamEvent, "offset" | "type">) {
+  #processorStamp(streamId: string, whileProcessing?: Pick<StreamEvent, "offset" | "type">) {
     return {
       slug: this.contract.slug,
       version: this.contract.version,
-      stream: { path: this.path, projectId: this.projectId },
+      stream: { path: this.path, projectId: this.projectId, streamId },
       ...(whileProcessing === undefined
         ? {}
         : { whileProcessing: { offset: whileProcessing.offset, type: whileProcessing.type } }),
@@ -550,24 +573,72 @@ export abstract class StreamProcessor<
   }
 
   #appendStamped(
-    args: { target: ProcessorStream; whileProcessing?: Pick<StreamEvent, "offset" | "type"> },
+    args: {
+      target: ProcessorStream;
+      targetPath: string;
+      sourceStreamId?: string;
+      whileProcessing?: Pick<StreamEvent, "offset" | "type">;
+    },
     input: EmittedInput<Contract>[],
   ): Promise<StreamEvent[]> {
-    const processor = this.#processorStamp(args.whileProcessing);
-    const events = input.map((event) => {
-      const built = this.#buildEmittedEvent(event) as StreamEventInput;
-      return { ...built, source: { ...built.source, processor } };
-    });
+    // Validate emitted types synchronously, preserving the author-facing
+    // method's immediate failure behavior even when an out-of-batch append
+    // must first read the current stream ID.
+    const builtEvents = input.map((event) => this.#buildEmittedEvent(event) as StreamEventInput);
+    return this.#appendBuiltEvents(args, builtEvents);
+  }
+
+  async #appendBuiltEvents(
+    args: {
+      target: ProcessorStream;
+      targetPath: string;
+      sourceStreamId?: string;
+      whileProcessing?: Pick<StreamEvent, "offset" | "type">;
+    },
+    builtEvents: StreamEventInput[],
+  ): Promise<StreamEvent[]> {
+    // Batch-bound appends receive the exact ID from the delivery envelope.
+    // Alarm/DO-method appends bind themselves by reading the home stream now.
+    const sourceStreamId =
+      args.sourceStreamId ??
+      (
+        await this.stream.getEventPage({
+          afterOffset: Number.MAX_SAFE_INTEGER,
+          limit: 1,
+        })
+      ).streamId;
+    const processor = this.#processorStamp(sourceStreamId, args.whileProcessing);
+    let events = builtEvents.map((built) => ({
+      ...built,
+      source: { ...built.source, processor },
+    }));
     // Home-stream appends feed the consume-own-append loop: the committed
     // offsets come back through this processor's own subscription, and
     // noteBatchIngested closes the sample. Sibling-stream appends (appendTo)
-    // never loop back here, so they are not timed.
-    if (args.target !== this.stream) return args.target.append(...events);
+    // never loop back here, so they are not timed. A sibling retains rows
+    // across deletion/recreation of the source path, so its committed key
+    // includes the source lifetime; offset 1 from A and offset 1 from B are
+    // different causes and must both be able to land.
+    if (args.targetPath !== this.path) {
+      events = events.map((event) =>
+        event.idempotencyKey === undefined
+          ? event
+          : {
+              ...event,
+              idempotencyKey: `${event.idempotencyKey}@source-stream:${sourceStreamId}`,
+            },
+      );
+      return args.target.append(...events);
+    }
     const t0 = Date.now();
-    return Promise.resolve(this.stream.append(...events)).then((committed) => {
+    return this.stream.appendIfStreamId({ streamId: sourceStreamId, events }).then((committed) => {
       const maxCommittedOffset = committed.reduce((max, event) => Math.max(max, event.offset), 0);
       if (maxCommittedOffset > 0) {
-        this.subscriberMetrics.noteAppendCommitted({ maxCommittedOffset, t0, atMs: Date.now() });
+        this.eventConsumptionMetrics.noteAppendCommitted({
+          maxCommittedOffset,
+          t0,
+          atMs: Date.now(),
+        });
       }
       return committed;
     });

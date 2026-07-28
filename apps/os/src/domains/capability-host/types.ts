@@ -7,7 +7,7 @@
 
 /**
  * Durable expression over the project itx surface. Defined at the itx leaf
- * (`src/itx/expression.ts`) because stream push subscriptions persist the same
+ * (`src/itx/expression.ts`) because ITX-expression stream receivers persist the same
  * shape; re-exported here so capability-host modules keep one import root.
  */
 import type { ItxExpression } from "../../itx/expression.ts";
@@ -65,7 +65,7 @@ export type ProvideCapabilityInput =
       flattenNestedPaths?: boolean;
       instructions?: string;
       path: string[];
-      type: "itx-expression";
+      type: "itx-call";
       types?: string;
     };
 
@@ -83,7 +83,7 @@ export type CapabilityProvidedPayload =
       flattenNestedPaths?: boolean;
       instructions?: string;
       path: string[];
-      type: "itx-expression";
+      type: "itx-call";
       types?: string;
     };
 

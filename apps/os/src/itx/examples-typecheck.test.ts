@@ -174,5 +174,5 @@ const SURFACE_GAPS: Record<string, string> = {
 };
 
 function mount(path: string[], types: string): CapabilityDescription {
-  return { path, type: "itx-expression", types };
+  return { path, type: "itx-call", types };
 }

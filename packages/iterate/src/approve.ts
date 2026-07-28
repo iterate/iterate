@@ -201,7 +201,7 @@ export async function runApprovalCli(input: {
   };
 
   // Answer requests already held before we connected (oldest first), THEN live-
-  // tail new ones. Without this backlog pass a hold parked before the command
+  // tail new ones. Without this backlog pass a hold halted before the command
   // started would never surface — its caller's fetch left hanging until expiry.
   // The --json front-end reconciles through the same shared function.
   const { open, cursor: from } = await reconcileBacklog(stream);

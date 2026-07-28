@@ -209,7 +209,7 @@ describe("capability fallback resolution", () => {
     await provideDelivered(harness, {
       expression: ["streams"],
       path: ["tools"],
-      type: "itx-expression",
+      type: "itx-call",
     });
 
     const described = await harness.processor.describeCapabilities();
@@ -231,7 +231,7 @@ describe("provide-time types validation", () => {
       processor.provideCapability({
         expression: ["streams"],
         path: ["broken"],
-        type: "itx-expression",
+        type: "itx-call",
         types: "export type Broken = Streem;",
       }),
     ).rejects.toThrow(/does not compile[\s\S]*Streem/);
@@ -244,7 +244,7 @@ describe("provide-time types validation", () => {
     await provideDelivered(harness, {
       expression: ["streams"],
       path: ["root"],
-      type: "itx-expression",
+      type: "itx-call",
       types: "export type Root = Stream;",
     });
     const provided = stream.events.find((event) => event.type === PROVIDED);
@@ -257,7 +257,7 @@ describe("provide-time types validation", () => {
     await provideDelivered(harness, {
       expression: ["streams"],
       path: ["unchecked"],
-      type: "itx-expression",
+      type: "itx-call",
       types: "utter garbage (",
     });
     expect(stream.events.find((event) => event.type === PROVIDED)).toBeDefined();
@@ -277,7 +277,7 @@ describe("connect-time auto-typing", () => {
     await provideDelivered(harness, {
       expression: ["weather"],
       path: ["forecasts"],
-      type: "itx-expression",
+      type: "itx-call",
     });
     const provided = stream.events.find((event) => event.type === PROVIDED);
     expect(provided?.payload).toMatchObject({ types: SELF_DESCRIBED });
@@ -293,7 +293,7 @@ describe("connect-time auto-typing", () => {
     await provideDelivered(harness, {
       expression: ["weather"],
       path: ["forecasts"],
-      type: "itx-expression",
+      type: "itx-call",
     });
     const provided = stream.events.find((event) => event.type === PROVIDED);
     expect((provided!.payload as { types?: string }).types).toBeUndefined();
@@ -314,7 +314,7 @@ describe("connect-time auto-typing", () => {
     await provideDelivered(harness, {
       expression: ["weather"],
       path: ["forecasts"],
-      type: "itx-expression",
+      type: "itx-call",
     });
     const provided = stream.events.find((event) => event.type === PROVIDED);
     expect(provided).toBeDefined();

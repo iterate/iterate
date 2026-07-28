@@ -12,7 +12,7 @@
 // Artifacts event queue (`repo/cloudflare-artifact-event-received` →
 // `repo/commit-completed`), and the optional GitHub mirror: link lifecycle,
 // mirror-push outcomes, and the durable default-branch import obligation
-// (`github-import-requested/started/completed/failed`) opened by cross-posted
+// (`github-import-requested/started/completed/failed`) opened by received
 // GitHub push webhooks.
 
 import { z } from "zod";
@@ -279,7 +279,7 @@ export const RepoProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/github/webhook-received": {
       description:
-        "One GitHub push delivery, captured as decoded JSON on the connection stream and cross-posted here by the repo's linkGithub subscription. The trusted envelope is structural while the vendor body stays loose.",
+        "One GitHub push delivery, captured as decoded JSON on the connection stream and copied here by the repo's linkGithub subscription. The trusted envelope is structural while the vendor body stays loose.",
       payloadSchema: z
         .object({
           body: z

@@ -56,7 +56,7 @@ function state(eventCount: number): AgentUiState {
 }
 
 describe("LiveAgentStateChannel", () => {
-  it("relays only the writer's current volatile state to a follower", () => {
+  it("relays only the writer's current volatile state to a reader", () => {
     const bus = new MemoryBroadcastBus();
     const received: Array<AgentUiState | null> = [];
     const writer = new LiveAgentStateChannel({
@@ -69,16 +69,16 @@ describe("LiveAgentStateChannel", () => {
 
     writer.claim(state(1));
     writer.publish(state(2));
-    const follower = new LiveAgentStateChannel({
+    const reader = new LiveAgentStateChannel({
       name: "stream",
       createPort: bus.createPort,
       onState: (value) => received.push(value),
     });
-    follower.request();
+    reader.request();
     expect(received).toEqual([null, expect.objectContaining({ eventCount: 2 })]);
 
     writer[Symbol.dispose]();
-    follower[Symbol.dispose]();
+    reader[Symbol.dispose]();
   });
 
   it("fences late state from a superseded writer session", () => {
@@ -98,7 +98,7 @@ describe("LiveAgentStateChannel", () => {
       now: () => 200,
       onState: () => {},
     });
-    const follower = new LiveAgentStateChannel({
+    const reader = new LiveAgentStateChannel({
       name: "stream",
       createPort: bus.createPort,
       onState: (value) => received.push(value),
@@ -114,7 +114,7 @@ describe("LiveAgentStateChannel", () => {
 
     newWriter[Symbol.dispose]();
     expect(received.at(-1)).toBeNull();
-    follower[Symbol.dispose]();
+    reader[Symbol.dispose]();
   });
 
   it("namespaces the relay by stream and strict processor version vector", () => {
@@ -122,7 +122,7 @@ describe("LiveAgentStateChannel", () => {
       liveAgentStateChannelName({
         projectId: "project:one",
         streamPath: "/agents/web one",
-        versionVector: "browser-feed@4|raw-events@7",
+        processorSchemaVersionKey: "browser-feed@4|raw-events@7",
       }),
     ).toBe(
       "stream-live-agent:project%3Aone:%2Fagents%2Fweb%20one:browser-feed%404%7Craw-events%407",

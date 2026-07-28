@@ -442,7 +442,7 @@ describe("CapabilityHostProcessor recovery", () => {
         {
           type: "events.iterate.com/capability-host/capability-provided",
           payload: {
-            type: "itx-expression",
+            type: "itx-call",
             path: ["pets"],
             expression: ["openapi", ["connect", { specUrl: "https://pets.example/openapi.json" }]],
           },
@@ -460,7 +460,11 @@ describe("CapabilityHostProcessor recovery", () => {
     // settled fact has already deleted the obligation. The stream must come
     // out byte-for-byte unchanged and the reduced state identical.
     const replay = makeHostHarness({
-      substrate: { clock: h.clock, stream: h.stream, progress: makeMemoryProgressStore() },
+      substrate: {
+        clock: h.clock,
+        stream: h.stream,
+        progress: makeMemoryProgressStore(CapabilityHostProcessorContract),
+      },
     });
     await replay.settle();
 
@@ -488,7 +492,7 @@ describe("CapabilityHostProcessor capability table", () => {
       {
         type: "events.iterate.com/capability-host/capability-provided",
         payload: {
-          type: "itx-expression",
+          type: "itx-call",
           path: ["pets"],
           expression: ["openapi", ["connect", { specUrl: "https://pets.example/openapi.json" }]],
           instructions: "v1",
@@ -510,7 +514,7 @@ describe("CapabilityHostProcessor capability table", () => {
       {
         type: "events.iterate.com/capability-host/capability-provided",
         payload: {
-          type: "itx-expression",
+          type: "itx-call",
           path: ["pets"],
           expression: ["openapi", ["connect", { specUrl: "https://pets.example/openapi.json" }]],
           instructions: "v2",

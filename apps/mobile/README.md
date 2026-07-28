@@ -99,7 +99,7 @@ mints `/agents/mobile/<timestamp>` and the first `message()` call creates it
 (same lazy-seeding contract as the dashboard). The chat list is the unfiltered
 `/agents` catalogue, so web/Slack-started chats open and continue here too.
 The thread screen renders only visible messages plus a "working…" row derived
-from in-flight activity (`src/lib/chat.ts`); `useItxSubscription` pushes live
+from in-flight activity (`src/lib/chat.ts`); `useStreamConnection` pushes live
 events into the same TanStack Query cache as the initial read
 (`src/lib/use-live-events.ts`). Assistant messages are rendered as selectable
 Markdown; user messages remain literal text.
@@ -148,13 +148,13 @@ testable from the phone alone. The runner shipped in PR #2059.
 
 ## Verification
 
-| Lane                                                          | What it proves                                                                                                                                                                                                    |
-| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pnpm --dir apps/mobile test`                                 | Pure logic: chat reducer, merge, path conventions (runs in root CI)                                                                                                                                               |
-| `pnpm spec --project=mobile`                                  | Real Expo Router + React Native Web behavior at a phone-sized viewport and one visible interaction; no Xcode/native build                                                                                         |
-| `doppler run --config dev -- pnpm --dir apps/mobile test:e2e` | Live round-trip through `iterate/node`: bearer auth → new mobile chat → real agent reply → live subscription. Point it at a preview by switching the Doppler config. Needs `pnpm dev` running for the dev config. |
-| `npx expo export` / `npx expo prebuild`                       | The bundle builds; app config is sane                                                                                                                                                                             |
-| Iterate development build on a phone                          | Native integration: the in-app browser OAuth hop, Keychain/Face ID, APNs enrollment, and device-specific behavior                                                                                                 |
+| Lane                                                          | What it proves                                                                                                                                                                                                  |
+| ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm --dir apps/mobile test`                                 | Pure logic: chat reducer, merge, path conventions (runs in root CI)                                                                                                                                             |
+| `pnpm spec --project=mobile`                                  | Real Expo Router + React Native Web behavior at a phone-sized viewport and one visible interaction; no Xcode/native build                                                                                       |
+| `doppler run --config dev -- pnpm --dir apps/mobile test:e2e` | Live round-trip through `iterate/node`: bearer auth → new mobile chat → real agent reply → live connection. Point it at a preview by switching the Doppler config. Needs `pnpm dev` running for the dev config. |
+| `npx expo export` / `npx expo prebuild`                       | The bundle builds; app config is sane                                                                                                                                                                           |
+| Iterate development build on a phone                          | Native integration: the in-app browser OAuth hop, Keychain/Face ID, APNs enrollment, and device-specific behavior                                                                                               |
 
 ## Layout
 

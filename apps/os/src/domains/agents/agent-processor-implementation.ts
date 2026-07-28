@@ -50,7 +50,7 @@ import {
  * idempotency key derives from an offset.
  *
  * The requested event comes back through the processor's own subscription;
- * the reduce opens `state.openRequest`, and the at-head pass finds an open
+ * the reducer opens `state.openRequest`, and the at-head pass finds an open
  * request this incarnation is not executing and starts the LLM call — the
  * ONE place work ever starts. The prompt is a pure reduction of committed
  * history up to the request's offset (`buildAgentLlmRequestBody`), so every
@@ -359,7 +359,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       }
       case "events.iterate.com/stream/error-occurred": {
         // EVERY error on the stream — this processor's own LLM failures, the
-        // runner's poison skips, anything else — is transcribed into
+        // sender's repeatedly failing events that were skipped, anything else — is transcribed into
         // model-visible context, without itself triggering a turn (retries
         // are the reduce's job). The integration actor demotes the error text
         // to user role at prompt time: error strings are data, not

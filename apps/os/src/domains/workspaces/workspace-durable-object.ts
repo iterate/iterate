@@ -2,15 +2,19 @@ import { DurableObject } from "cloudflare:workers";
 import { Workspace } from "@cloudflare/shell";
 import type {
   StreamEventInput,
-  StreamSubscriberWakeRequest,
-  StreamSubscriberWakeResponse,
+  StreamProcessorWakeRequest,
+  StreamProcessorWakeResponse,
 } from "iterate/processors";
 import { isStreamOffsetConflictError } from "iterate/processors";
 import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
 import { minimatch } from "minimatch";
 import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
-import { StreamProcessorRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
+import {
+  STREAM_DURABLE_OBJECT_STUB,
+  StreamProcessorRpcTarget,
+  StreamRpcTarget,
+} from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type {
   EditWorkspaceFileInput,
@@ -174,7 +178,7 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
       // silently; the exact-offset append turns any raw/durable skew into a
       // plain conflict retry.
       const { maxDurableOffset, maxOffset: rawHead } =
-        await this.#stream.durableObjectStub.getHeadOffsets();
+        await this.#stream[STREAM_DURABLE_OBJECT_STUB].getMaxOffsets();
       await this.#reads.waitUntilEvent({
         offset: maxDurableOffset,
         timeoutMs: INGEST_WAIT_TIMEOUT_MS,
@@ -578,8 +582,8 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
 
   // -- processor host plumbing -----------------------------------------------------
 
-  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
-    return this.#registry.wakeStreamSubscriber(args);
+  wakeStreamProcessor(args: StreamProcessorWakeRequest): Promise<StreamProcessorWakeResponse> {
+    return this.#registry.wakeStreamProcessor(args);
   }
 
   /** The registry's shared DO alarm (runner keepalives) — see stream-processor-registry.ts. */

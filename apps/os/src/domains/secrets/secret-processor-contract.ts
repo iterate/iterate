@@ -107,7 +107,7 @@ export const SecretProcessorContract = defineProcessorContract({
     "events.iterate.com/secret/created": {
       description:
         "Creates a secret processor on this stream. The payload is the immutable birth " +
-        "certificate; the DO cross-posts this event to the project root stream, where the " +
+        "certificate; the DO copies this event to the project root stream, where the " +
         "project processor catalogs the secret.",
       payloadSchema: secretBirthCertificateSchema(),
     },
@@ -161,7 +161,7 @@ export const SecretProcessorContract = defineProcessorContract({
     "events.iterate.com/secret/updated",
     "events.iterate.com/secret/used",
   ],
-  // The catalog cross-post: secret/created is re-appended onto the project
+  // The catalog copy: secret/created is re-appended onto the project
   // root stream so the project processor can list this secret.
   emits: ["events.iterate.com/secret/created"],
 });

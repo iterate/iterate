@@ -1,26 +1,27 @@
-// Self-measured subscriber metrics, shared by every processor host.
+// Self-measured event-consumption metrics, shared by every processor host.
 //
-// The stream can only observe dispatch; whether (and how fast) a subscriber
-// actually CONSUMED a batch is knowledge the subscriber alone has. So each
+// The stream can only observe dispatch; whether (and how fast) a processor
+// actually CONSUMED a batch is knowledge the processor host alone has. So each
 // host — the server-side processor host and the browser store, which runs
-// the same stream processors — owns one of these per subscription runtime
+// the same stream processors — owns one of these per running processor
 // and reports it through the `getRuntimeState` capability the stream already
 // retains (`ProcessorRuntimeState.runtime.metrics`). No new reporting
 // channel, and hosts that predate this simply report nothing.
 //
-// Pure and clock-free like subscriber-math.ts: every method takes timestamps
-// as arguments, so the whole thing unit-tests in plain node and runs
-// unchanged in a browser (performance-now deltas) or a worker (Date.now).
+// Pure and clock-free like the delivery math atop stream-event-sender.ts:
+// every method takes timestamps as arguments, so the whole thing unit-tests
+// in plain node and runs unchanged in a browser (performance-now deltas) or a
+// worker (Date.now).
 
 import { LatencyRing, type LatencyStats } from "./stream-runtime-metrics.ts";
 
 /** The `runtime.metrics` slice a host reports through `getRuntimeState()`. */
-export type SubscriberMetricsReport = {
+export type EventConsumptionMetricsReport = {
   /** ISO timestamp when this host runtime started measuring (in-memory; resets on reload). */
   measuredSince: string;
   /**
    * The full consume-your-own-appends loop, one clock: this host called
-   * `append()` at t0, and its OWN subscription later delivered (and the host
+   * `append()` at t0, and its OWN event connection later delivered (and the host
    * fully ingested) the committed offset. Samples only exist when the host
    * appends — `null` is "no appends observed", never a fabricated number.
    */
@@ -45,7 +46,7 @@ export type SubscriberMetricsReport = {
 /** In-flight own-append correlation entries beyond this are dropped oldest-first. */
 const MAX_PENDING_OWN_APPENDS = 16;
 
-export class SubscriberMetrics {
+export class EventConsumptionMetrics {
   readonly #measuredSinceMs: number;
   readonly #consumeOwnAppend = new LatencyRing();
   readonly #appendRoundTrip = new LatencyRing();
@@ -67,12 +68,12 @@ export class SubscriberMetrics {
    * An `append()` this host issued resolved: `t0` is when the host called it,
    * `atMs` is when the commit came back, `maxCommittedOffset` is the highest
    * offset the stream assigned. The loop closes in {@link noteBatchIngested}
-   * when the host's own subscription catches up past that offset.
+   * when the host receives and processes through that offset.
    */
   noteAppendCommitted(args: { maxCommittedOffset: number; t0: number; atMs: number }): void {
     this.#appendRoundTrip.record(args.atMs - args.t0, args.atMs);
     // The stream fans out BEFORE the append call returns, so our own
-    // subscription may have ingested the offset already — in that case the
+    // event callback may have ingested the offset already — in that case the
     // loop closed the moment both halves were done, which is now. Only a
     // still-unseen offset goes on the pending list.
     if (args.maxCommittedOffset <= this.#ingestedThroughOffset) {
@@ -127,12 +128,12 @@ export class SubscriberMetrics {
     this.#clockOffsetMs = args.t1 - args.t0 - (args.oneWayEstimateMs ?? 0);
   }
 
-  /** The host's subscription reconnected: in-flight own-append correlations are void. */
+  /** The host's event connection reopened: in-flight own-append correlations are void. */
   clearPendingAppends(): void {
     this.#pendingOwnAppends = [];
   }
 
-  report(): SubscriberMetricsReport {
+  report(): EventConsumptionMetricsReport {
     return {
       measuredSince: new Date(this.#measuredSinceMs).toISOString(),
       consumeOwnAppendMs: this.#consumeOwnAppend.stats(),

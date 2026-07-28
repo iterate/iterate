@@ -294,7 +294,7 @@ export function generateItxApi(): string {
     path.resolve(projectDir, "../../packages/iterate/src/processors/processor-contracts.ts"),
     path.resolve(projectDir, "../../packages/iterate/src/processors/rpc-types.ts"),
     path.resolve(projectDir, "../../packages/iterate/src/processors/stream-runtime-metrics.ts"),
-    path.resolve(projectDir, "../../packages/iterate/src/processors/subscriber-metrics.ts"),
+    path.resolve(projectDir, "../../packages/iterate/src/processors/event-consumption-metrics.ts"),
   ]) {
     const sourceFile = project.program.getSourceFile(fileName);
     if (!sourceFile) {

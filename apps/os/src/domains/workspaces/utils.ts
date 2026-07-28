@@ -1,6 +1,6 @@
 import { DurableObjectNameCodec, normalizePath } from "../durable-object-names.ts";
 import { CONFIG_REPO_PATH } from "../repos/paths.ts";
-import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
+import { buildHostedProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { resolveAbsolutePath } from "./paths.ts";
 import { WorkspaceProcessorContract, type WorkspaceMount } from "./workspace-processor-contract.ts";
 
@@ -132,7 +132,7 @@ export function workspaceCreationEvents(input: {
             payload: { config: { mounts: desiredMounts } },
           }),
         ]),
-    buildDurableObjectProcessorSubscriptionConfiguredEvent({
+    buildHostedProcessorSubscriptionConfiguredEvent({
       durableObjectName: DurableObjectNameCodec.stringify({
         path: input.path,
         projectId: input.projectId,

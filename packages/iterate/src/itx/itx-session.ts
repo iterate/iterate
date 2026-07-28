@@ -1,6 +1,6 @@
 /**
  * itx-session — the framework-free half of the itx client: ONE WebSocket per
- * process (browser tab, TUI, phone), dialed to an OS deployment's `/api`,
+ * process (browser tab, TUI, phone), connected to an OS deployment's `/api`,
  * `authenticate()`d into a **Session** (the catalog that vends project itxs via
  * `session.projects.get(slug)`), and kept alive through transport gaps.
  *
@@ -11,7 +11,7 @@
  * gets the same one-socket semantics by importing `iterate/client`.
  *
  * WHERE THE CONNECTION TARGET COMES FROM
- *   • In a browser, nothing to configure: the keeper dials
+ *   • In a browser, nothing to configure: the keeper connects
  *     `window.location`'s `/api` and authenticates with the session cookie
  *     riding the WebSocket handshake.
  *   • Anywhere else (the chat TUI, tests, scripts that want the KEEPER rather
@@ -27,12 +27,12 @@
  * ───────────────────────────────────────────────────────────────────────────
  *
  *  • ONE WebSocket for the whole process, kept in module state (so in a
- *    browser it persists across client-side navigation). A dial attempt is a
+ *    browser it persists across client-side navigation). One connection attempt is a
  *    GENERATION ({@link Generation}): its WebSocket and its connecting
  *    promise. The session is the AWAITED `authenticate()` result — one settled
  *    stub identity shared by the snapshot, imperative awaiters, and the
  *    project-stub cache (resolving with the raw pipelined RpcPromise would
- *    fork identities: native promises assimilate thenables). The dial timeout
+ *    fork identities: native promises assimilate thenables). The connection timeout
  *    spans the whole handshake (TCP/TLS/upgrade AND authenticate), and a REAL
  *    auth rejection over a working socket is terminal — it surfaces from the
  *    connecting promise instead of looping.
@@ -40,11 +40,11 @@
  *  • RECONNECT IS INVISIBLE. Readers see an immutable {@link Snapshot};
  *    `snapshot.session` holds the LAST live session and is kept across a
  *    transport gap. Before the FIRST session, awaiters share the STABLE
- *    {@link firstConnect} promise, which survives failed dial attempts (paced
- *    re-dials happen behind it; a per-dial rejection never reaches a suspended
+ *    {@link firstConnect} promise, which survives failed connection attempts (paced
+ *    reconnects happen behind it; an individual attempt's rejection never reaches a suspended
  *    React tree) and rejects only on a TERMINAL failure. Kept-across-the-gap
- *    applies to TRANSPORT gaps only: a terminal auth rejection on a redial is
- *    an AUTHORITY loss — the parked snapshot drops the (already dead) session
+ *    applies to TRANSPORT gaps only: a terminal auth rejection on a reconnect is
+ *    an AUTHORITY loss — the halted snapshot drops the (already dead) session
  *    so the real error surfaces instead of zombie stubs.
  *
  *  • PROJECT STUBS ARE SESSION-OWNED. `session.projects.get` allocates a
@@ -113,7 +113,7 @@ let explicitConfig: IterateSessionConfig | undefined;
  * Point the keeper at a deployment explicitly — the non-browser entry into the
  * one-socket model (the chat TUI, React Native, keeper-based scripts). Repeating
  * the same target updates its credential source without disturbing the live
- * socket. A different target retires the old deployment immediately and dials
+ * socket. A different target retires the old deployment immediately and connects
  * the new one, so authority can never cross deployments. In a browser this is
  * optional (the default is `window.location`'s `/api` with cookie auth).
  */
@@ -130,32 +130,32 @@ export function configureIterateSession(config: IterateSessionConfig): void {
   const retiredSession = snapshot?.session;
   snapshot = undefined;
   if (retiredSession !== undefined) disposeSession(retiredSession);
-  consecutiveDialFailures = 0;
-  // Dial now so mounted hooks see one coherent target transition rather than
+  consecutiveConnectionFailures = 0;
+  // Connect now so mounted hooks see one coherent target transition rather than
   // retaining the previous deployment until their next read.
   if (firstConnect === undefined) {
     firstConnect = Promise.withResolvers<SessionStub>();
     void firstConnect.promise.catch(() => {});
   }
-  dial();
+  startConnectionAttempt();
 }
 
-function dialTarget(): {
+function resolveConnectionTarget(): {
   url: URL;
   credentials: NonNullable<IterateSessionConfig["credentials"]>;
 } {
   const base =
     explicitConfig?.baseUrl ??
-    (typeof window === "undefined" ? noDialTarget() : window.location.href);
+    (typeof window === "undefined" ? missingConnectionTarget() : window.location.href);
   return {
     url: apiWebSocketUrl(base),
     credentials: explicitConfig?.credentials || { type: "from-server-cookie" },
   };
 }
 
-function noDialTarget(): never {
+function missingConnectionTarget(): never {
   throw new Error(
-    "itx has no connection target: in a browser the session dials the page's /api " +
+    "itx has no connection target: in a browser the session connects to the page's /api " +
       "(never during SSR — render itx consumers under an `ssr: false` route or <ClientOnly>); " +
       "anywhere else call configureIterateSession({ baseUrl, credentials }) before connecting.",
   );
@@ -165,24 +165,24 @@ function noDialTarget(): never {
 // The one socket: a single live WebSocket per process, in module state.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const DIAL_TIMEOUT_MS = 15_000;
-// Pacing for re-dials after a dial that closed before opening. Without it, a
+const CONNECTION_TIMEOUT_MS = 15_000;
+// Pace reconnects after a WebSocket closes before authentication. Without it, a
 // fast-REFUSING endpoint (offline after mobile resume, dev-server restart)
-// loops dial → instant close → re-dial with zero delay, unbounded. The wait
+// loops connect → instant close → reconnect with zero delay, unbounded. The wait
 // lives inside the connecting promise, so `use()` semantics are unchanged.
-const REDIAL_BACKOFF_MIN_MS = 250;
-const REDIAL_BACKOFF_MAX_MS = 10_000;
+const RECONNECT_BACKOFF_MIN_MS = 250;
+const RECONNECT_BACKOFF_MAX_MS = 10_000;
 /**
  * How often a live transport (the socket verifier) and a mounted subscription
  * (the watchdog) prove they are not silently dead. ONE shared cadence: the two
- * lanes are deliberately coordinated, so a change here moves both.
+ * checks deliberately use the same value, so a change here moves both.
  */
 const LIVENESS_INTERVAL_MS = 45_000;
 /** A probe slower than this counts as a strike (two strikes ⇒ half-open). */
 const LIVENESS_TIMEOUT_MS = 10_000;
 
 /**
- * One dial attempt = one WebSocket lifetime. OBJECT IDENTITY is the
+ * One connection attempt = one WebSocket lifetime. OBJECT IDENTITY is the
  * compare-and-swap token that makes every reconnect verdict identity-safe
  * (`current === generation` — only the CURRENT generation may be retired or
  * published). `connecting` settles with the session once `authenticate()`
@@ -206,11 +206,11 @@ type Generation = {
   /** Single-flight latch for {@link verifyTransport}, per generation. */
   verifying: boolean;
   /**
-   * PARKED after a terminal auth rejection: the generation keeps owning the
-   * slot (so a render can never trigger a fresh dial — every re-render of an
-   * always-mounted hook reads {@link currentSnapshot}, which dials when the
+   * HALTED after a terminal auth rejection: the generation keeps owning the
+   * slot (so a render can never trigger another connection attempt — every re-render of an
+   * always-mounted hook reads {@link currentSnapshot}, which connects when the
    * slot is empty, and the failure's own setState re-renders: an unbounded
-   * socket storm otherwise) and its close handler must not redial. Only an
+   * socket storm otherwise) and its close handler must not reconnect. Only an
    * explicit {@link reconnectIterateSession} (or a page load) revives.
    */
   failed: boolean;
@@ -224,7 +224,7 @@ type Generation = {
  * invisible. `generation` is a monotonic number whose only job is being the
  * reconnect dep for the React layer's reconnect-aware effect (the CAS is
  * generation object identity, not this number). `connecting` is what
- * first-load consumers await/suspend on: before the FIRST session it is the
+ * first-load callers await/suspend on: before the FIRST session it is the
  * stable {@link firstConnect} promise (survives closed-before-open retries
  * without rejecting a suspended tree); afterwards `session` is always defined.
  */
@@ -237,15 +237,15 @@ type Snapshot = {
 let current: Generation | undefined;
 let snapshot: Snapshot | undefined;
 let generationCounter = 0;
-/** Consecutive dials that died before establishing a session — the backoff input. */
-let consecutiveDialFailures = 0;
+/** Consecutive connects that died before establishing a session — the backoff input. */
+let consecutiveConnectionFailures = 0;
 /**
- * The promise first-load consumers share until the FIRST session exists. One
- * stable promise across dial retries: a dial that closes before opening rejects
- * its own per-dial `connecting` (imperative awaiters fail fast) but must NOT
+ * The promise first-load callers share until the FIRST session exists. One
+ * stable promise across connection attempt retries: a connection attempt that closes before opening rejects
+ * its own `connecting` promise (imperative awaiters fail fast) but must NOT
  * reject a suspended React tree — React replays a suspended (never-committed)
  * component against the thenable it first used, so a rejected first promise
- * would surface in the error boundary even though a paced re-dial is already
+ * would surface in the error boundary even though a paced reconnect is already
  * underway. It rejects only on a TERMINAL failure (authenticate answered with
  * a real application error over a working socket).
  */
@@ -259,7 +259,7 @@ export const subscribeSession = (onChange: () => void) => {
 
 /**
  * One real project stub per (session, slug), cached in module state so a
- * consumer's lifecycle (React renders that may be discarded, repeated
+ * caller's lifecycle (React renders that may be discarded, repeated
  * imperative calls) can't leak undisposed capnweb import entries (see module
  * header). Keyed by the session stub identity, so it is implicitly scoped to a
  * generation and torn down with it. `slug` may be a slug or a `prj_…` id —
@@ -281,28 +281,28 @@ export function projectStubFor(session: SessionStub, slug: string): ProjectStub 
   return stub;
 }
 
-/** getSnapshot for useSyncExternalStore: stable between transitions; dials when idle. */
+/** getSnapshot for useSyncExternalStore: stable between transitions; connects when idle. */
 export function currentSnapshot(): Snapshot {
-  // `dial()` sets `current` synchronously, so this fires at most once per idle
-  // window (first load, or after a retry exhausted its own re-dial) — never a
+  // `startConnectionAttempt()` sets `current` synchronously, so this fires at most once per idle
+  // window (first load, or after a retry exhausted its own reconnect) — never a
   // per-render loop.
-  if (current === undefined) dial();
+  if (current === undefined) startConnectionAttempt();
   return snapshot!;
 }
 
-export const serverSnapshot = (): never => noDialTarget();
+export const serverSnapshot = (): never => missingConnectionTarget();
 
 /**
  * Ensure a live-or-connecting session and return its connecting promise. The
  * imperative sibling of the React `useIterateSession()`: for handlers,
  * `mutationFn`s, scripts, and lazy closures. Same one socket the hooks use.
  * After a TERMINAL auth rejection this keeps returning that failure (the
- * parked generation — see Generation.failed) until {@link reconnectIterateSession}.
+ * halted generation — see Generation.failed) until {@link reconnectIterateSession}.
  */
 export function connectIterateSession(): Promise<SessionStub> {
-  // No runtime guard here: `dial()` resolves its target first thing, so an
+  // No runtime guard here: `startConnectionAttempt()` resolves its target first thing, so an
   // unconfigured non-browser call throws the no-target error synchronously.
-  return (current ?? dial()).connecting;
+  return (current ?? startConnectionAttempt()).connecting;
 }
 
 /**
@@ -314,12 +314,12 @@ export function connectItx(slug: string): Promise<ProjectStub> {
   return connectIterateSession().then((session) => projectStubFor(session, slug));
 }
 
-function dial(): Generation {
-  const target = dialTarget();
+function startConnectionAttempt(): Generation {
+  const target = resolveConnectionTarget();
 
   const id = ++generationCounter;
   const { promise, resolve, reject } = Promise.withResolvers<SessionStub>();
-  // Keep an internal handler so a dial that rejects with no live awaiter never
+  // Keep an internal handler so a connection attempt that rejects with no live awaiter never
   // surfaces as an unhandledrejection — real `connectIterateSession()` awaiters still observe it.
   void promise.catch(() => {});
   const generation: Generation = {
@@ -333,9 +333,9 @@ function dial(): Generation {
     failed: false,
   };
   current = generation;
-  // Keep showing the last session while the new generation dials (invisible
+  // Keep showing the last session while the new generation connects (invisible
   // reconnect). Before the FIRST session, awaiters must share the stable
-  // first-connect promise (see {@link firstConnect}) — never a per-dial promise
+  // first-connect promise (see {@link firstConnect}) — never one attempt's promise
   // whose closed-before-open rejection React would replay into an error boundary.
   const priorSession = snapshot?.session;
   if (priorSession === undefined && firstConnect === undefined) {
@@ -348,9 +348,9 @@ function dial(): Generation {
     connecting: firstConnect?.promise ?? promise,
   });
 
-  /** The dial established a session: publish it and retire the predecessor. */
+  /** Authentication established a session: publish it and retire the predecessor. */
   const publish = (root: SessionStub, ping: () => Promise<void>) => {
-    consecutiveDialFailures = 0;
+    consecutiveConnectionFailures = 0;
     generation.ping = ping;
     generation.liveness = setInterval(() => {
       if (current === generation) void verifyTransport(generation);
@@ -362,7 +362,7 @@ function dial(): Generation {
     //
     // Safe even though this runs the same turn as setSnapshot (before React
     // commits the re-render whose subscription cleanups unsubscribe): a
-    // successor only dials after `current` was cleared, and every path clears
+    // successor only connects after `current` was cleared, and every path clears
     // it AFTER closing the prior socket (the close handler, reconnectIfCurrent,
     // reconnectIterateSession). So the prior transport is ALWAYS already closed
     // here — its subscriptions are already dead (capnweb rejects on close) and
@@ -376,9 +376,9 @@ function dial(): Generation {
     if (retiring !== undefined) disposeSession(retiring);
   };
 
-  const beginDial = () => {
+  const beginWebSocketConnection = () => {
     // Superseded while waiting out the backoff: this attempt no longer owns the
-    // slot — settle and let the owner dial.
+    // slot — settle and let the current attempt continue.
     if (current !== generation) {
       reject(new Error("itx WebSocket closed before connecting"));
       return;
@@ -386,24 +386,24 @@ function dial(): Generation {
     const ws = new WebSocket(target.url.href);
     generation.ws = ws;
     let established = false;
-    // The timeout spans the WHOLE dial — TCP/TLS/upgrade AND the authenticate
+    // The timeout spans TCP/TLS/upgrade AND the authenticate
     // round trip — so a server that accepts the socket but never answers
-    // authenticate is a failed dial (close → paced re-dial), not a wedge.
+    // authenticate call, so an unanswered authenticate becomes a paced reconnect.
     const timeout = setTimeout(() => {
       // Do not delegate progress to `close`: a half-open socket can accept the
       // close request without ever firing a close event. Settle this attempt,
-      // abort its RPC session, and transfer ownership to a fresh dial here.
+      // abort its RPC session, and start a new connection attempt here.
       if (current !== generation || established) return;
       current = undefined;
-      consecutiveDialFailures += 1;
+      consecutiveConnectionFailures += 1;
       reject(new Error("itx WebSocket closed before connecting"));
       retireGeneration(generation);
-      dial();
-    }, DIAL_TIMEOUT_MS);
+      startConnectionAttempt();
+    }, CONNECTION_TIMEOUT_MS);
 
     ws.addEventListener("open", () => {
       // Generation CAS: a superseded generation's late `open` (its successor was
-      // already dialed) must never publish over the live one. Close and bail.
+      // already connected) must never publish over the live one. Close and bail.
       if (current !== generation) {
         clearTimeout(timeout);
         ws.close();
@@ -458,18 +458,18 @@ function dial(): Generation {
             return;
           }
           // The server ANSWERED with a real application error (bad principal,
-          // rejected handshake): this dial is terminally failed. Surface it to
+          // rejected handshake): this connection attempt is terminally failed. Surface it to
           // imperative awaiters AND the suspended tree — retrying would loop.
-          // Reject BEFORE closing: the close handler's generic dial-close
-          // rejection must never mask the real error. Then PARK: the failed
+          // Reject BEFORE closing: the close handler's generic connection-closed
+          // rejection must never mask the real error. Then HALT: the failed
           // generation keeps owning the slot (see Generation.failed) so a
-          // render can't storm fresh dials; publish the parked snapshot so
+          // render can't storm fresh connects; publish the halted snapshot so
           // effects observe one final generation and settle in "error".
           //
-          // The parked snapshot carries NO session. Keeping the last session is
+          // The halted snapshot carries NO session. Keeping the last session is
           // the invisible-reconnect move for TRANSPORT gaps — but this is an
           // AUTHORITY loss (claims revoked / signed out elsewhere): the prior
-          // session's socket is already closed and no redial will revive it, so
+          // session's socket is already closed and no reconnect will revive it, so
           // handing it out would wedge hooks on zombie stubs whose calls fail
           // with transport-shaped errors while the real auth error never
           // surfaces. Dropping it makes useIterateSession() re-throw the
@@ -506,24 +506,24 @@ function dial(): Generation {
 
     ws.addEventListener("close", () => {
       clearTimeout(timeout);
-      // A PARKED generation stays the owner: its socket closing must not
-      // redial (that would restart the terminal-auth loop it exists to stop).
+      // A HALTED generation stays the owner: its socket closing must not
+      // reconnect (that would restart the terminal-auth loop it exists to stop).
       const wasCurrent = current === generation && !generation.failed;
       // The socket is already closed — release resources WITHOUT re-closing it
       // (that would re-enter this handler); disposeGeneration is idempotent.
       disposeGeneration(generation);
       if (wasCurrent) {
-        // A dial that never established a session counts toward backoff; a
+        // A connection attempt that never established a session counts toward backoff; a
         // post-establish death is a transient to recover from immediately.
-        if (!established) consecutiveDialFailures += 1;
+        if (!established) consecutiveConnectionFailures += 1;
         current = undefined;
-        // Re-dial: with a live session in hand this is the INVISIBLE reconnect
+        // With a live session in hand this is the INVISIBLE reconnect
         // (the snapshot keeps showing it); with none it keeps first-load
-        // consumers on the stable first-connect promise — a paced retry, never
+        // callers on the stable first-connect promise — a paced retry, never
         // a wedge or an error boundary.
-        dial();
+        startConnectionAttempt();
       }
-      // Once a dial has resolved this is a no-op; a dial that closed BEFORE
+      // Once a connection attempt has resolved this is a no-op; a connection attempt that closed BEFORE
       // establishing rejects so imperative `connectIterateSession()` awaiters fail fast.
       reject(new Error("itx WebSocket closed before connecting"));
     });
@@ -532,14 +532,14 @@ function dial(): Generation {
   // The FIRST retry is immediate (a one-off blip should recover instantly);
   // pacing kicks in from the second consecutive failure — that's the storm.
   const delay =
-    consecutiveDialFailures <= 1
+    consecutiveConnectionFailures <= 1
       ? 0
       : Math.min(
-          REDIAL_BACKOFF_MAX_MS,
-          REDIAL_BACKOFF_MIN_MS * 2 ** Math.min(consecutiveDialFailures - 2, 6),
+          RECONNECT_BACKOFF_MAX_MS,
+          RECONNECT_BACKOFF_MIN_MS * 2 ** Math.min(consecutiveConnectionFailures - 2, 6),
         );
-  if (delay === 0) beginDial();
-  else setTimeout(beginDial, delay);
+  if (delay === 0) beginWebSocketConnection();
+  else setTimeout(beginWebSocketConnection, delay);
   return generation;
 }
 
@@ -575,7 +575,7 @@ function disposeSession(session: SessionStub): void {
  * Disposing the bootstrap synchronously rejects every pending and future call;
  * relying on WebSocket.close() alone is insufficient because a half-open socket
  * may never finish its close handshake or fire `close`. Callers set
- * `current = undefined` FIRST, so any close event won't auto-redial (re-dialing
+ * `current = undefined` FIRST, so any close event won't auto-reconnect (reconnecting
  * is the caller's job).
  */
 function retireGeneration(generation: Generation): void {
@@ -595,7 +595,7 @@ function retireGeneration(generation: Generation): void {
  */
 export function reportTransportSuspicion(): void {
   const generation = current;
-  // A generation still mid-dial owns its own dial timeout; nothing to verify.
+  // An attempt still awaiting authentication owns its connection timeout; nothing to verify.
   if (generation?.ping === undefined) return;
   void verifyTransport(generation);
 }
@@ -632,19 +632,19 @@ async function verifyTransport(generation: Generation): Promise<void> {
 }
 
 /**
- * Retire + re-dial the transport, but ONLY if `generation` still owns the slot —
+ * Retire + reconnect the transport, but ONLY if `generation` still owns the slot —
  * the compare-and-swap that stops a late verdict (a probe that timed out on a
- * corpse) from closing the healthy successor another path already dialed.
+ * corpse) from closing the healthy successor another path already connected.
  */
 function reconnectIfCurrent(generation: Generation): void {
   if (current !== generation) return;
-  current = undefined; // FIRST: the close retireGeneration triggers must not auto-redial
+  current = undefined; // FIRST: the close retireGeneration triggers must not auto-reconnect
   retireGeneration(generation);
-  dial();
+  startConnectionAttempt();
 }
 
 /**
- * The SEMANTIC reset (not a transport reconnect): drop the live socket and dial
+ * The SEMANTIC reset (not a transport reconnect): drop the live socket and connection attempt
  * a fresh one so the next reads run under the caller's CURRENT claims. Call
  * after creating a project or unlocking admin — the live socket carries the
  * connect-time principal. React callers that need already-cached data refreshed
@@ -653,14 +653,14 @@ function reconnectIfCurrent(generation: Generation): void {
 export function reconnectIterateSession(): void {
   const generation = current;
   if (generation !== undefined) {
-    current = undefined; // FIRST: the close retireGeneration triggers must not auto-redial
+    current = undefined; // FIRST: the close retireGeneration triggers must not auto-reconnect
     retireGeneration(generation);
   }
-  // A deliberate reset dials NOW: clear any backoff inherited from earlier
+  // A deliberate reset connects NOW: clear any backoff inherited from earlier
   // closed-before-open failures so the new-claims socket doesn't wait out a
   // transient storm that's already irrelevant.
-  consecutiveDialFailures = 0;
-  dial();
+  consecutiveConnectionFailures = 0;
+  startConnectionAttempt();
 }
 
 /**
@@ -688,12 +688,12 @@ export function disconnectIterateSession(): void {
   if (retiredSession !== undefined) disposeSession(retiredSession);
   firstConnect?.reject(new Error("itx session disconnected"));
   firstConnect = undefined;
-  consecutiveDialFailures = 0;
+  consecutiveConnectionFailures = 0;
 }
 
 /**
  * The four — and only four — transport-close rejections a caller may treat as
- * "the socket died, retry on a fresh one": our own dial-close reject, capnweb's
+ * "the socket died, retry on a fresh one": our own connection-closed rejection, capnweb's
  * two WebSocket aborts (`Peer closed WebSocket: <code> <reason>` and
  * `WebSocket connection failed.`), and capnweb's exact local-shutdown error
  * from our forced bootstrap disposal. Deliberately NARROW: an
@@ -713,7 +713,7 @@ export function isItxTransportError(error: unknown): boolean {
 
 // Baseline half-open recovery for the whole browser tab: on the moments
 // transports die (waking a tab, coming back online), verify the current socket.
-// Consumer-owned watchdogs (subscriptions) recover their lanes faster; this
+// Connection watchdogs recover their own callbacks faster; this
 // covers a query-only page whose socket nobody else probes. Non-browser
 // runtimes have no equivalent signal — their timers carry the whole story.
 if (typeof document !== "undefined") {
@@ -727,40 +727,41 @@ if (typeof document !== "undefined") {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Subscription liveness: the handle shape + the watchdog that polls it.
+// Push-connection liveness: the handle shape + the watchdog that polls it.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const PING_TIMED_OUT = Symbol("itx-ping-timed-out");
 
 /**
- * The live handle shape every itx subscription API returns — `Stream.subscribe`
- * and `LiveStateRpc.subscribe` both hand back `ping()` + `unsubscribe()`. The
- * real handles are capnweb stubs and therefore Disposable: `unsubscribe()`
- * closes the SERVER side, `[Symbol.dispose]` releases the caller-owned stub —
+ * The common lifecycle used by reconnecting stream and live-state clients.
+ * Concrete APIs adapt their own handle (`StreamConnectionHandle.close()` or
+ * `LiveStateSubscriptionHandle.unsubscribe()`) to `close()`. Real handles are
+ * capnweb stubs and therefore Disposable: `close()` closes the server-side
+ * resource, while `[Symbol.dispose]` releases the caller-owned stub —
  * on the process-long shared socket, skipping the dispose leaks one
  * import-table entry per subscribe cycle, so holders always do both.
  */
-export type ItxLiveSubscriptionHandle = {
+export type ItxRecoverableConnectionHandle = {
   ping(): boolean | Promise<boolean>;
-  unsubscribe(): unknown;
+  close(): unknown;
   [Symbol.dispose]?(): void;
 };
 
 /**
- * Release a live subscription handle completely: `unsubscribe()` closes the
- * server side (already-dead is fine — the rejection is swallowed), then
+ * Release a push connection completely: `close()` closes the server side
+ * (already-dead is fine — the rejection is swallowed), then
  * `[Symbol.dispose]` frees the caller-owned stub. One helper because
- * forgetting either half leaks (see {@link ItxLiveSubscriptionHandle}).
+ * forgetting either half leaks (see {@link ItxRecoverableConnectionHandle}).
  */
-export function releaseItxSubscription(handle: ItxLiveSubscriptionHandle): void {
+export function releaseItxConnection(handle: ItxRecoverableConnectionHandle): void {
   void Promise.resolve()
-    .then(() => handle.unsubscribe())
+    .then(() => handle.close())
     .catch(() => {})
     .finally(() => handle[Symbol.dispose]?.());
 }
 
 /**
- * Poll a subscription handle's `ping()` until it stops answering `true`, then
+ * Poll a push connection's `ping()` until it stops answering `true`, then
  * recover. Server pushes fail SILENTLY: a dead Durable Object or half-open TCP
  * stops delivering with no client-visible signal, so a consumer can show
  * "live" forever while stale. The watchdog checks on an interval and — because
@@ -768,15 +769,15 @@ export function releaseItxSubscription(handle: ItxLiveSubscriptionHandle): void 
  * comes online (in runtimes without those signals, the interval carries it).
  *
  *   `dead`      → ping answered `false` or REJECTED: the socket works but the
- *                 server-side subscription is gone (DO restart / dropped
- *                 callback). Recovery is a re-subscribe on the same socket.
+ *                 server-side connection is gone (DO restart / dropped
+ *                 callback). Recovery opens it again on the same socket.
  *   `timed-out` → ping never answered: the shared WebSocket is half-open. The
  *                 watchdog REPORTS the suspicion to the socket-owned verifier
  *                 ({@link reportTransportSuspicion}) — it never closes the socket
- *                 itself — and the holder re-subscribes once the generation
- *                 re-dials.
+ *                 itself — and the holder opens again once the generation
+ *                 reconnects.
  */
-export function watchItxSubscription(
+export function watchItxConnection(
   ping: () => boolean | Promise<boolean>,
   onDead: () => void,
 ): () => void {
@@ -784,7 +785,7 @@ export function watchItxSubscription(
   let checking = false;
 
   // The reason stays internal: on "timed-out" the watchdog itself reports the
-  // transport suspicion; either way the caller's only move is a re-subscribe.
+  // transport suspicion; either way the caller's only move is to open again.
   const report = (reason: "dead" | "timed-out") => {
     if (stopped) return;
     stop();

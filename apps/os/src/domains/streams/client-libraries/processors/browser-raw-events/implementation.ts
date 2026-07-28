@@ -9,13 +9,13 @@ import type { SqlClient, SqlValue } from "../../browser/stream-browser-db.ts";
 import { BrowserRawEventsContract } from "./contract.ts";
 export { BrowserRawEventsContract } from "./contract.ts";
 
-// v7 clears mirrors that may contain replayed historical ephemeral rows. The
+// v7 clears local event tables that may contain replayed historical ephemeral rows. The
 // durable-only replay contract cannot leave those old rows visible after the
 // live-only ephemeral cutover.
 export const BROWSER_RAW_EVENTS_SCHEMA_VERSION = 7;
 
 /**
- * Tables this processor owns. Views pass this to the runtime so a mirror
+ * Tables this processor owns. Views pass this to the runtime so a database
  * discard clears the projection AND its derived counts together — clearing
  * `events` alone would leave stale totals behind (rows are append-only, so
  * the counts trigger has no delete arm to bring the totals back down).
@@ -25,13 +25,13 @@ export const BROWSER_RAW_EVENTS_TABLES = ["events", "event_type_counts"];
 export type BrowserRawEventsState = Record<string, never>;
 
 /**
- * Mirrors raw stream events into the browser's `events` SQLite table.
+ * Stores raw stream events in the browser's `events` SQLite table.
  * Stateless apart from the resume cursor: the table itself is the projection.
  *
  * Driven by the StreamProcessorRunner: `processEvent` buffers one INSERT per
  * event into {@link projectionBuffer}, and the browser progress store
  * (processor-state-storage.ts) flushes the buffered inserts and the two-cursor
- * progress record in ONE SQLite transaction per delivered frame — the mirror
+ * progress record in ONE SQLite transaction per delivered batch — the event
  * rows and the resume cursor can no longer disagree (the legacy path committed
  * them separately). Schema creation and version resets, which the retired
  * `prepare()` hook used to run, now land in {@link ensureProjectionSchema} —
@@ -58,7 +58,7 @@ export class BrowserRawEventsProcessor extends StreamProcessor<
     args: Parameters<StreamProcessor<BrowserRawEventsContract>["processEvent"]>[0],
   ): undefined {
     const event = args.event;
-    // Event-less at-head pass: this projection has no at-head work.
+    // Event-less caught-up call: this projection has no caught-up work.
     if (event === null) return;
     // Sparse offsets are expected: historical ephemerals are intentionally
     // absent. The runner validates the enclosing scan envelope before this
@@ -85,8 +85,8 @@ const ensureBrowserRawEventsSchema = createSchemaEnsurer({
       // cursorRevision bump, staling any in-flight commit from an old-schema
       // writer), the legacy checkpoint delete, the table drops, and the
       // user_version stamp. All-or-nothing — no crash window can separate the
-      // dropped mirror from the rewound resume cursor (a stale checkpoint over
-      // an empty mirror would skip historical replay and silently rebuild
+      // dropped event tables from the rewound resume cursor (a stale checkpoint over
+      // an empty table would skip historical replay and silently rebuild
       // without the skipped prefix; the gap-tolerant trigger accepts the hole).
       await sql.batch(
         [
@@ -105,7 +105,7 @@ const ensureBrowserRawEventsSchema = createSchemaEnsurer({
       [
         {
           sql: `
-            -- Browser-owned append log mirror. raw_jsonb is the source of truth:
+            -- Browser-owned copy of the append log. raw_jsonb is the source of truth:
             -- SQLite derives the queryable event fields from it, so future JSON-field
             -- indexes can use the same payload without duplicating text JSON.
             --
@@ -137,14 +137,14 @@ const ensureBrowserRawEventsSchema = createSchemaEnsurer({
             -- Incrementally-maintained per-type row counts. The UI's reactive
             -- count queries (total, per-type, filter dropdown) re-run after
             -- every delivered batch; COUNT(*) over the events table rescans
-            -- the whole mirror, and because reads and ingest writes share the
-            -- one OPFS connection, those rescans throttle live-tail apply on
-            -- deep mirrors (measured: 1M rows → ~12s tail lag at 5k events/s
+            -- the whole events table, and because reads and ingest writes share the
+            -- one OPFS connection, those rescans delay applying new events on
+            -- deep local copies (measured: 1M rows → ~12s lag at 5k events/s
             -- with the counts as full scans). Reading this table is O(#types).
             --
             -- Kept correct by events_count_after_insert below. There is no
-            -- delete arm on purpose: mirror rows are append-only, and the only
-            -- delete is the whole-mirror clear, which clears this table in the
+            -- delete arm on purpose: event rows are append-only, and the only
+            -- delete is a full local-database clear, which clears this table in the
             -- same discard (see BROWSER_RAW_EVENTS_TABLES).
             CREATE TABLE IF NOT EXISTS event_type_counts (
               type TEXT PRIMARY KEY,
@@ -189,9 +189,9 @@ const ensureBrowserRawEventsSchema = createSchemaEnsurer({
                   SELECT 1
                   FROM events
                   WHERE offset = NEW.offset
-                ) THEN RAISE(ABORT, 'stream browser mirror replay changed an existing offset')
+                ) THEN RAISE(ABORT, 'browser event replay changed an existing stream offset')
                 WHEN NEW.offset <= COALESCE((SELECT MAX(offset) FROM events), 0)
-                  THEN RAISE(ABORT, 'stream browser mirror offsets must increase')
+                  THEN RAISE(ABORT, 'browser event offsets must increase')
               END;
             END
           `,

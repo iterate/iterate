@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { StreamPushEventBatch } from "iterate/processors";
+import type { StreamDeliveryBatch } from "iterate/processors";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { normalizePath } from "../durable-object-names.ts";
 
@@ -243,7 +243,7 @@ export interface ProjectWorker {
    * (`ephemeral: true` appends — e.g. `agent/llm-response-chunk`) are never
    * delivered to this feed; their durable truth arrives as its own event.
    */
-  processEventBatch(batch: StreamPushEventBatch): Promise<void>;
+  processEventBatch(batch: StreamDeliveryBatch): Promise<void>;
 }
 
 const WorkerFileSource = z.discriminatedUnion("type", [

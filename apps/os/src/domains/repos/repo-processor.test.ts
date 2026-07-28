@@ -56,7 +56,7 @@ const GITHUB_LINK_CONFIGURED = {
   },
 } satisfies RepoEventInput;
 
-/** A GitHub push delivery as the connection stream cross-posts it. Event
+/** A GitHub push delivery as the connection stream copies it. Event
  * BUILDER (data), not an append wrapper — the overrides produce the
  * wrong-provenance variants. */
 function githubPush(input?: {
@@ -83,9 +83,12 @@ function githubPush(input?: {
       ? {}
       : {
           source: {
-            crossPostedFrom: [
+            copiedFrom: [
               {
                 subscriptionKey: input?.subscriptionKey ?? `github-repo:${REPO_PATH}`,
+                streamId: "11111111-1111-4111-8111-111111111111",
+                streamCreatedAt: "2026-07-17T11:00:00.000Z",
+                cursorChangedAtSourceOffset: 1,
                 createdAt: "2026-07-17T12:00:00.000Z",
                 offset: 12,
                 path: `/integrations/github/${connection}`,
@@ -657,7 +660,7 @@ describe("RepoProcessor full replay", () => {
     const replay = makeRepoHarness({
       clock: h.clock,
       stream: h.stream,
-      progress: makeMemoryProgressStore(),
+      progress: makeMemoryProgressStore(RepoProcessorContract),
     });
     replay.createEmpty.impl = () => {
       throw new Error("replay must not re-create an existing repo");
