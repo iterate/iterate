@@ -1,22 +1,11 @@
 import { expect, test } from "vitest";
 import { loadGithubAiLinterRules } from "./rules.ts";
 
-test("the linter filters one production-shaped repository snapshot into configured Markdown rules", async () => {
+test("the linter reads only configured rule files from one repository commit", async () => {
   const calls: Array<{ method: string; value: string }> = [];
   const repo = {
-    listFiles: async () => {
-      calls.push({ method: "listFiles", value: "/repos/iterate" });
-      return {
-        commitOid: "abc123",
-        paths: [
-          "README.md",
-          "rules/typescript/no-inferable-type-annotation.md",
-          "rules/typescript/not-markdown.txt",
-        ],
-      };
-    },
-    readFile: async ({ commitOid, path }: { commitOid: string; path: string }) => {
-      calls.push({ method: "readFile", value: `${commitOid}:${path}` });
+    readFile: async ({ commitOid, path }: { commitOid?: string; path: string }) => {
+      calls.push({ method: "readFile", value: `${commitOid ?? "HEAD"}:${path}` });
       return {
         commitOid: "abc123",
         path,
@@ -39,15 +28,14 @@ test("the linter filters one production-shaped repository snapshot into configur
   const itx = { repos: { get: (path: string) => (path === "/repos/iterate" ? repo : null) } };
 
   const rules = await loadGithubAiLinterRules(itx as any, {
-    glob: "rules/**/*.md",
+    paths: ["rules/typescript/no-inferable-type-annotation.md"],
     repoPath: "/repos/iterate",
   });
 
   expect(calls).toEqual([
-    { method: "listFiles", value: "/repos/iterate" },
     {
       method: "readFile",
-      value: "abc123:rules/typescript/no-inferable-type-annotation.md",
+      value: "HEAD:rules/typescript/no-inferable-type-annotation.md",
     },
   ]);
   expect(rules).toEqual({

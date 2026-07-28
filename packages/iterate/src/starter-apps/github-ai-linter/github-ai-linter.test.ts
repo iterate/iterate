@@ -18,7 +18,10 @@ test("the project worker handles verified GitHub webhooks directly", async () =>
   }));
   const app = GithubAiLinter.create({ ITX: { get } } as never, {
     policyVersion: "2",
-    rules: { glob: "rules/**/*.md", repoPath: "/repos/iterate" },
+    rules: {
+      paths: ["rules/typescript/no-inferable-type-annotation.md"],
+      repoPath: "/repos/iterate",
+    },
   });
 
   await app.processEvent({
@@ -91,7 +94,10 @@ test("a project without the retired hosted subscription links normally", async (
   }));
   const app = GithubAiLinter.create({ ITX: { get } } as never, {
     policyVersion: "2",
-    rules: { glob: "rules/**/*.md", repoPath: "/repos/iterate" },
+    rules: {
+      paths: ["rules/typescript/no-inferable-type-annotation.md"],
+      repoPath: "/repos/iterate",
+    },
   });
 
   await expect(
