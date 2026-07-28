@@ -2,7 +2,7 @@
 // worker already receives every verified connection event through its normal
 // stream subscription, so this router turns each relevant webhook directly
 // into durable PR-agent facts. Stable idempotency keys collapse redeliveries.
-import type { Project, StreamEvent, StreamEventInput } from "../../sdk.ts";
+import type { GithubRepoLink, Project, StreamEvent, StreamEventInput } from "../../sdk.ts";
 import type { GithubAiLinterRules } from "./rules.ts";
 
 const pullRequestAgentPolicyVersion = "2";
@@ -23,6 +23,7 @@ export async function handleGithubPullRequestWebhook(
   itx: Project,
   event: StreamEvent,
   githubPullRequests: {
+    loadLinkedRepos?: () => Promise<LinkedGithubRepo[]>;
     loadRules: () => Promise<GithubAiLinterRules>;
     policyVersion: string;
   },
@@ -54,23 +55,6 @@ export async function handleGithubPullRequestWebhook(
     return;
   }
 
-  const repos = await itx.repos.list();
-  const linkedRepos = await Promise.all(
-    repos.map(async ({ path }) => ({
-      path,
-      route: (await itx.repos.get(path).processor.snapshot()).state.github,
-    })),
-  );
-  const linkedRepo = linkedRepos.find(
-    ({ route }) =>
-      route !== null &&
-      event.path === `/integrations/github/${route.connection}` &&
-      webhook.installationId === route.installationId &&
-      repository.id === route.repositoryId,
-  );
-  if (linkedRepo === undefined || linkedRepo.route === null) return;
-  const { path: repoPath, route } = linkedRepo;
-
   const action = webhook.body.action;
   const appSlug = webhook.appSlug;
   const author = webhook.associations.author;
@@ -99,6 +83,27 @@ export async function handleGithubPullRequestWebhook(
     ((webhook.delivery.name === "issue_comment" && action === "created") ||
       (webhook.delivery.name === "pull_request_review" && action === "submitted") ||
       (webhook.delivery.name === "pull_request_review_comment" && action === "created"));
+  const reviewLifecycleEvent =
+    webhook.delivery.name === "pull_request" &&
+    (action === "opened" || action === "ready_for_review" || action === "synchronize");
+
+  // The durable agent subscription copies all later PR history. This router
+  // only needs to act when a delivery can create or wake the agent; skipping
+  // status, edit, and thread bookkeeping here keeps a webhook burst bounded.
+  if (!reviewLifecycleEvent && !mention) return;
+
+  const linkedRepos =
+    (await githubPullRequests.loadLinkedRepos?.()) ?? (await loadLinkedGithubRepos(itx));
+  const linkedRepo = linkedRepos.find(
+    ({ route }) =>
+      route !== null &&
+      event.path === `/integrations/github/${route.connection}` &&
+      webhook.installationId === route.installationId &&
+      repository.id === route.repositoryId,
+  );
+  if (linkedRepo === undefined || linkedRepo.route === null) return;
+  const { path: repoPath, route } = linkedRepo;
+
   const agentPath = `/agents${repoPath}/pr/${number}`;
   const agent = itx.agents.get(agentPath);
   const exists =
@@ -266,3 +271,18 @@ type GithubWebhookPayload = {
   delivery: { id: string; name: string };
   installationId: string;
 };
+
+export type LinkedGithubRepo = {
+  path: string;
+  route: GithubRepoLink | null;
+};
+
+export async function loadLinkedGithubRepos(itx: Project): Promise<LinkedGithubRepo[]> {
+  const repos = await itx.repos.list();
+  return await Promise.all(
+    repos.map(async ({ path }) => ({
+      path,
+      route: (await itx.repos.get(path).processor.snapshot()).state.github,
+    })),
+  );
+}
