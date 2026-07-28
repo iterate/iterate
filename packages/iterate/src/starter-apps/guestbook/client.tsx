@@ -65,6 +65,11 @@ export function GuestbookClient() {
           Sign guestbook
         </button>
       </form>
+      {signing && (
+        <p aria-live="polite" data-spinner="true" role="status">
+          Signing…
+        </p>
+      )}
       {error !== undefined && <p role="alert">{error}</p>}
       {state === undefined ? (
         <p>Loading…</p>

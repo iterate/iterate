@@ -79,9 +79,26 @@ cannot amplify a saturated object. Preview retry annotations also distinguish
 passed-after-retry from still-failed records instead of claiming every retry
 passed.
 
-The new immutable-head proof starts at 0/25 after the draft PR's preview has
-passed. As in every current round, each counted iteration is a separate
-canonical Depot run with ordinary artifacts and PostHog telemetry.
+The draft PR's first two preview checks correctly left the proof at 0/25. The
+first caught that the initial replay boundary also swallowed the explicit
+public stream `kill()` test; the retry predicate now keeps that deliberate
+lifecycle error observable while still replaying deploy/eviction resets. The
+second passed in 3 minutes 31 seconds but absorbed a Playwright retry in the
+seeded Guestbook after its signing RPC took longer than the test's silent-UI
+budget.
+
+That retry was not isolated noise. A UUID-deduplicated 14-day PostHog query
+found 265 Guestbook browser executions, nine that retried or still failed
+after retry, and seven with the same `Timeout 1ms exceeded` signature while
+waiting for the newly signed note. The form disabled its submit button while
+the RPC was pending but exposed no progress state, so middlewright correctly
+refused to hide the delay behind a long wait. The packaged Guestbook now
+renders an accessible `Signing…` status with `data-spinner="true"` for the
+whole action, matching the sibling Todo app's mutation-progress contract.
+
+The new immutable-head proof remains at 0/25 until the next exact-head preview
+passes with zero retries. As in every current round, each counted iteration is
+a separate canonical Depot run with ordinary artifacts and PostHog telemetry.
 
 ## Round 15 (2026-07-23, post-#2284)
 
