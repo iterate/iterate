@@ -296,7 +296,10 @@ export function initialAgentUiTokenUsage(): AgentUiTokenUsage {
 export type AgentUiState = {
   /** The running activity (streaming thinking/code), or null when no work is active. */
   live: AgentUiActivity | null;
-  /** Assistant bubbles held until the grouped activity closes. */
+  /**
+   * Assistant bubbles held for durable ordering until the grouped activity
+   * closes. Runtime projection exposes them immediately as transient items.
+   */
   deferredAssistantMessages: AgentUiMessageItem[];
   /** User messages that landed while the current request was already running. */
   queuedUserMessages: AgentUiMessageItem[];
@@ -516,7 +519,7 @@ export function reduceAgentUiRuntime(
         ...start,
         live: ensureLive(start, transition.sinceOffset, boundaryAtMs),
       },
-      items: [],
+      items: start.deferredAssistantMessages,
     };
   }
 

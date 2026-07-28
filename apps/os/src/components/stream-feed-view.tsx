@@ -111,11 +111,12 @@ export function StreamFeedView({
   // second disclosure state.
   const [toggledIds, setToggledIds] = useState<ReadonlySet<string>>(new Set());
 
-  // The live in-flight activity is the list's trailing item so it's inside
+  // The live in-flight activity is part of the list so it's inside
   // the virtualizer's size model: its growth shows up in getTotalSize()/the
   // sizer's height, which is what the stick's ResizeObserver follows and what
-  // anchorTo's mid-history compensation measures. Rendering it outside the
-  // list would hide its height from both.
+  // anchorTo's mid-history compensation measures. Transient assistant
+  // messages follow it, preserving the same activity → message order they
+  // receive when the activity settles into durable feed rows.
   const transientCount = transientItems.length;
   const liveCount = live == null ? 0 : 1;
   const totalCount = itemCount + transientCount + liveCount;
@@ -128,10 +129,11 @@ export function StreamFeedView({
   const getItemKey = useCallback(
     (index: number) => {
       if (index < itemCount) return index;
-      const transient = transientItems[index - itemCount];
-      return transient == null ? "live" : `transient:${transient.id}`;
+      if (live != null && index === itemCount) return "live";
+      const transient = transientItems[index - itemCount - liveCount];
+      return transient == null ? `transient-missing:${index}` : `transient:${transient.id}`;
     },
-    [itemCount, transientItems],
+    [itemCount, live, liveCount, transientItems],
   );
 
   const virtualizer = useVirtualizer({
@@ -261,8 +263,8 @@ export function StreamFeedView({
         >
           {virtualItems.map((virtualItem) => {
             const index = virtualItem.index;
-            const transientItem = transientItems[index - itemCount];
-            const isLiveItem = live != null && index === itemCount + transientCount;
+            const isLiveItem = live != null && index === itemCount;
+            const transientItem = transientItems[index - itemCount - liveCount];
             const row = index < itemCount ? rowsByIndex.get(index)?.row : undefined;
             return (
               <div

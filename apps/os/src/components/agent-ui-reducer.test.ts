@@ -414,6 +414,21 @@ describe("agent-ui reducer", () => {
       status: "running",
     });
 
+    const activeProjection = reduceAgentUiRuntime(running, {
+      runtime: { ...ZERO_AGENT_RUNTIME, runningScripts: 1 },
+      sinceOffset: 19,
+      since: "2026-06-11T00:00:19.000Z",
+    });
+    expect(activeProjection.items).toMatchObject([{ kind: "assistant", text: "20" }]);
+    expect(activeProjection.endState.deferredAssistantMessages).toMatchObject([
+      { kind: "assistant", text: "20" },
+    ]);
+    expect(activeProjection.endState.live?.steps.at(-1)).toMatchObject({
+      kind: "code",
+      executionId: "agent-output:11",
+      status: "running",
+    });
+
     const completed = projectRuntime(
       reduceAll([
         ...countdownEvents,
