@@ -541,7 +541,6 @@ export function agentCreationForPath<
           // The subscription is configured in the same birth batch as created.
           start: "beginning",
           onFailingEvent: "halt",
-          includeEphemeral: false,
         },
       },
     },

@@ -467,8 +467,8 @@ test("invalid replay coordinates and durable-key collisions leave a live callbac
       subscriptionConfigured({
         subscriptionKey: connectionKey,
         receiver: {
-          action: "webhook-post",
-          url: "https://example.com/unused",
+          action: "itx-call",
+          expression: ["worker", "processEventBatch"],
           delivery: deliveryPolicy("now"),
         },
       }),
@@ -687,7 +687,7 @@ test("warm live delivery remains bounded across repeated appends", async () => {
   await handle.close();
 });
 // Stream receivers: configure, record, replace, and recover.
-test("a receiver configures one subscription visible on both streams before delivery", async () => {
+test("configuring a subscription commits on the source alone; the receiver learns on first copy", async () => {
   const marker = crypto.randomUUID();
   const sourcePath = `/e2e/subscriptions/source/${marker}`;
   const receivingStreamPath = `/e2e/subscriptions/receiver/${marker}`;
@@ -712,43 +712,39 @@ test("a receiver configures one subscription visible on both streams before deli
       receiver: { action: "copy-to-stream", receivingStreamPath: receivingStreamPath },
     },
   });
-  expect(configured.copyListRecordedEvent).toMatchObject({
-    type: "events.iterate.com/stream/copy-list-recorded",
-    payload: {
-      source: { path: sourcePath },
-      sourceOffset: configured.subscriptionConfiguredEvent.offset,
-      subscriptionsByKey: { [subscriptionKey]: expect.any(Object) },
-    },
-  });
 
   const sourceState = coreState(await source.runtimeState());
   expect(sourceState.subscriptions.outbound.byKey[subscriptionKey]).toMatchObject({
     configuration: configured.subscriptionConfiguredEvent.payload,
   });
 
-  const receiverState = coreState(await receiver.runtimeState());
+  // No handshake: before the first copy arrives the receiver records nothing.
   expect(
-    receiverState.subscriptions.inbound.bySourcePath[sourcePath]?.byKey[subscriptionKey],
-  ).toMatchObject({
-    configuration: incomingSubscriptionConfiguration(
-      configured.copyListRecordedEvent,
-      subscriptionKey,
-    ),
-    numEventsReceived: 0,
-    numEventsDropped: 0,
-  });
+    coreState(await receiver.runtimeState()).subscriptions.inbound.bySourcePath[sourcePath],
+  ).toBeUndefined();
 
   const [sourceProductEvent] = await source.append({
     type: MATCHING_EVENT_TYPE,
     payload: { marker },
   });
   const copied = await receiver.waitForEvent({
-    afterOffset: configured.copyListRecordedEvent.offset,
+    afterOffset: 0,
     eventTypes: [MATCHING_EVENT_TYPE],
     timeoutMs: 15_000,
   });
-  expect(copied.offset).toBeGreaterThan(configured.copyListRecordedEvent.offset);
   expect(copied.source?.copiedFrom?.at(-1)?.offset).toBe(sourceProductEvent!.offset);
+
+  // The committed copy's stamp is what creates the passive inbound record.
+  expect(
+    coreState(await receiver.runtimeState()).subscriptions.inbound.bySourcePath[sourcePath]?.[
+      subscriptionKey
+    ],
+  ).toMatchObject({
+    streamId: sourceState.streamId,
+    streamCreatedAt: sourceState.createdAt,
+    cursorChangedAtSourceOffset: configured.subscriptionConfiguredEvent.offset,
+    numEventsReceived: 1,
+  });
 });
 
 test("an agent-scoped script can make any project stream receive from another", async () => {
@@ -778,22 +774,16 @@ test("an agent-scoped script can make any project stream receive from another", 
       type: "events.iterate.com/stream/subscription-configured",
       payload: { subscriptionKey },
     },
-    copyListRecordedEvent: {
-      type: "events.iterate.com/stream/copy-list-recorded",
-      payload: { source: { path: sourcePath } },
-    },
   });
 
   using source = project.streams.get(sourcePath);
   using receiver = project.streams.get(receivingStreamPath);
-  const receivingStreamEvent = (execution.result as { copyListRecordedEvent: StreamEvent })
-    .copyListRecordedEvent;
   const [sent] = await source.append({
     type: MATCHING_EVENT_TYPE,
     payload: { marker, configuredBy: agentPath },
   });
   const copied = await receiver.waitForEvent({
-    afterOffset: receivingStreamEvent.offset,
+    afterOffset: 0,
     eventTypes: [MATCHING_EVENT_TYPE],
     timeoutMs: 15_000,
   });
@@ -834,26 +824,18 @@ test("bare subscribeToEventsFrom generates an offset key, starts now, and copies
       receiver: {
         action: "copy-to-stream",
         receivingStreamPath: receivingStreamPath,
-        delivery: { start: "now", includeEphemeral: false, onFailingEvent: "halt" },
+        delivery: { start: "now", onFailingEvent: "halt" },
       },
     },
   });
   expect(configured.subscriptionConfiguredEvent.payload).not.toHaveProperty("subscriptionKey");
-
-  const confirmation = (
-    await source.getEvents({
-      afterOffset: configured.subscriptionConfiguredEvent.offset,
-      eventTypes: ["events.iterate.com/stream/copy-list-confirmed"],
-    })
-  ).find((event) => event.payload?.receivingStreamPath === receivingStreamPath);
-  expect(confirmation).toBeDefined();
 
   const [liveControl] = await source.append({
     type: "events.iterate.com/stream/configured",
     payload: { config: {} },
   });
   const copiedControl = await receiver.waitForEvent({
-    afterOffset: configured.copyListRecordedEvent.offset,
+    afterOffset: 0,
     eventTypes: ["events.iterate.com/stream/configured"],
     timeoutMs: 15_000,
   });
@@ -867,7 +849,6 @@ test("bare subscribeToEventsFrom generates an offset key, starts now, and copies
     (event) => event.source?.copiedFrom?.map((hop) => hop.offset) ?? [],
   );
   expect(copiedSourceOffsets).not.toContain(historical!.offset);
-  expect(copiedSourceOffsets).not.toContain(confirmation!.offset);
 });
 
 // Cloudflare documents ctx.abort() as unavailable in local Wrangler
@@ -943,13 +924,13 @@ test.skipIf(deployedBaseUrl() === null)(
     });
 
     expect(
-      coreState(await receiver.runtimeState()).subscriptions.inbound.bySourcePath[sourcePath],
+      coreState(await receiver.runtimeState()).subscriptions.inbound.bySourcePath[sourcePath]?.[
+        subscriptionKey
+      ],
     ).toMatchObject({
-      source: {
-        streamId: secondSourceState.streamId,
-        streamCreatedAt: secondSourceState.createdAt,
-      },
-      byKey: { [subscriptionKey]: { numEventsReceived: 1, numEventsDropped: 0 } },
+      streamId: secondSourceState.streamId,
+      streamCreatedAt: secondSourceState.createdAt,
+      numEventsReceived: 1,
     });
   },
 );
@@ -987,10 +968,25 @@ test("a receiver rejects a delayed batch after the same source key is reconfigur
     subscriptionKey,
     filter: { eventTypes: [MATCHING_EVENT_TYPE] },
     description: "Replacement configuration",
+    start: "beginning",
   });
   expect(replacement.subscriptionConfiguredEvent.offset).toBeGreaterThan(
     first.subscriptionConfiguredEvent.offset,
   );
+  // A copy delivered under the replacement generation stamps the receiver's
+  // fence with the newer configure offset.
+  const [afterReplacement] = await source.append({
+    type: MATCHING_EVENT_TYPE,
+    payload: { marker, phase: "after-replacement" },
+  });
+  await receiver.waitForEvent({
+    afterOffset: 0,
+    eventTypes: [MATCHING_EVENT_TYPE],
+    predicate: (event) => event.payload?.phase === "after-replacement",
+    timeoutMs: 15_000,
+  });
+  expect(afterReplacement).toBeDefined();
+
   const sourceState = coreState(await source.runtimeState());
   const receiverOffsetBeforeStaleBatch = coreState(await receiver.runtimeState()).maxOffset;
   const staleBatch: StreamDeliveryBatch = {
@@ -1008,216 +1004,16 @@ test("a receiver rejects a delayed batch after the same source key is reconfigur
   };
 
   await expect(deliverTrustedStreamBatch(receiver, staleBatch)).rejects.toThrow(
-    /has no current subscription/,
+    /already accepted a newer delivery/,
   );
   expect(coreState(await receiver.runtimeState())).toMatchObject({
     maxOffset: receiverOffsetBeforeStaleBatch,
   });
   expect(
-    coreState(await receiver.runtimeState()).subscriptions.inbound.bySourcePath[sourcePath]?.byKey[
+    coreState(await receiver.runtimeState()).subscriptions.inbound.bySourcePath[sourcePath]?.[
       subscriptionKey
     ],
-  ).toMatchObject({ configuredAtSourceOffset: replacement.subscriptionConfiguredEvent.offset });
-});
-
-test("a blocked subscription list resumes only after an explicit resend request", async () => {
-  const marker = crypto.randomUUID();
-  const sourcePath = `/e2e/subscriptions/list-resend/source/${marker}`;
-  const receivingStreamPath = `/e2e/subscriptions/list-resend/receiver/${marker}`;
-  const subscriptionKey = `list-resend-${marker}`;
-
-  using testProject = await openTestProject(marker);
-  const { project } = testProject;
-  using source = project.streams.get(sourcePath);
-  using receiver = project.streams.get(receivingStreamPath);
-
-  await receiver.subscribeToEventsFrom({ sourceStreamPath: sourcePath, subscriptionKey });
-
-  // The direct Durable Object recovery test exhausts all 15 real failures.
-  // Here one atomic test-only append commits the same platform-authored
-  // terminal state before reconciliation can win the race. The recovery path
-  // itself remains the public resend command and real two-stream acknowledgement.
-  const blockedDescription = "synthetic blocked copy-list generation";
-  const blockedOffset = coreState(await source.runtimeState()).maxOffset + 1;
-  const [replacement] = await appendTrustedCoreEvents(source, [
-    subscriptionConfigured({
-      subscriptionKey,
-      description: blockedDescription,
-      receiver: {
-        action: "copy-to-stream",
-        receivingStreamPath: receivingStreamPath,
-        delivery: deliveryPolicy("now"),
-      },
-    }),
-    {
-      type: "events.iterate.com/stream/copy-list-delivery-blocked",
-      payload: {
-        receivingStreamPath,
-        sourceOffset: blockedOffset,
-        attempts: 15,
-        error: "synthetic terminal receiver failure for live resend coverage",
-      },
-    },
-  ]);
-  expect(replacement).toMatchObject({ offset: blockedOffset });
-  expect(
-    coreState(await source.runtimeState()).copyListDeliveriesByReceivingStream[receivingStreamPath],
-  ).toMatchObject({ sourceOffset: blockedOffset, status: "blocked", attempts: 15 });
-  await expect(
-    receiver.subscribeToEventsFrom({
-      sourceStreamPath: sourcePath,
-      subscriptionKey,
-      description: blockedDescription,
-    }),
-  ).rejects.toThrow(/blocked after 15 attempts.*resendCopyList/s);
-
-  const resend = await source.resendCopyList({ receivingStreamPath });
-  await waitForCondition(
-    async () =>
-      coreState(await source.runtimeState()).copyListDeliveriesByReceivingStream[
-        receivingStreamPath
-      ]?.status === "confirmed",
-    { description: "the explicit resend request to be acknowledged by the receiving stream" },
-  );
-  expect(
-    coreState(await source.runtimeState()).copyListDeliveriesByReceivingStream[receivingStreamPath],
-  ).toMatchObject({ sourceOffset: resend.offset, status: "confirmed" });
-  expect(
-    coreState(await receiver.runtimeState()).subscriptions.inbound.bySourcePath[sourcePath]?.byKey[
-      subscriptionKey
-    ],
-  ).toBeDefined();
-});
-
-test("each source change replaces that source's complete subscription list on the receiver", async () => {
-  const marker = crypto.randomUUID();
-  const sourcePath = `/e2e/subscriptions/complete-list/source/${marker}`;
-  const receivingStreamPath = `/e2e/subscriptions/complete-list/receiver/${marker}`;
-  const alpha = `alpha-${marker}`;
-  const beta = `beta-${marker}`;
-
-  using testProject = await openTestProject(marker);
-  const { project } = testProject;
-  using source = project.streams.get(sourcePath);
-  using receiver = project.streams.get(receivingStreamPath);
-
-  const configuredAlpha = await receiver.subscribeToEventsFrom({
-    sourceStreamPath: sourcePath,
-    subscriptionKey: alpha,
-    filter: { eventTypes: [MATCHING_EVENT_TYPE] },
-  });
-  const configuredBeta = await receiver.subscribeToEventsFrom({
-    sourceStreamPath: sourcePath,
-    subscriptionKey: beta,
-    filter: { eventTypes: [OTHER_EVENT_TYPE] },
-  });
-  expect(Object.keys(subscriptionsFromSource(configuredAlpha.copyListRecordedEvent))).toEqual([
-    alpha,
-  ]);
-  expect(Object.keys(subscriptionsFromSource(configuredBeta.copyListRecordedEvent)).sort()).toEqual(
-    [alpha, beta].sort(),
-  );
-
-  let receiverSource = coreState(await receiver.runtimeState()).subscriptions.inbound.bySourcePath[
-    sourcePath
-  ]!;
-  expect(receiverSource).toMatchObject({
-    sourceOffset: configuredBeta.subscriptionConfiguredEvent.offset,
-  });
-  expect(Object.keys(receiverSource.byKey).sort()).toEqual([alpha, beta].sort());
-  expect(receiverSource.byKey).toMatchObject({
-    [alpha]: { configuredAtSourceOffset: configuredAlpha.subscriptionConfiguredEvent.offset },
-    [beta]: { configuredAtSourceOffset: configuredBeta.subscriptionConfiguredEvent.offset },
-  });
-
-  const removedAlpha = await receiver.unsubscribeFromEvents({
-    sourceStreamPath: sourcePath,
-    subscriptionKey: alpha,
-  });
-  expect(removedAlpha).toMatchObject({ status: "removed" });
-  if (removedAlpha.status !== "removed") throw new Error("alpha removal did not commit");
-  expect(Object.keys(subscriptionsFromSource(removedAlpha.copyListRecordedEvent))).toEqual([beta]);
-  receiverSource = coreState(await receiver.runtimeState()).subscriptions.inbound.bySourcePath[
-    sourcePath
-  ]!;
-  expect(receiverSource).toMatchObject({
-    sourceOffset: removedAlpha.subscriptionRemovedEvent.offset,
-  });
-  expect(Object.keys(receiverSource.byKey)).toEqual([beta]);
-
-  const removedBeta = await receiver.unsubscribeFromEvents({
-    sourceStreamPath: sourcePath,
-    subscriptionKey: beta,
-  });
-  expect(removedBeta).toMatchObject({ status: "removed" });
-  if (removedBeta.status !== "removed") throw new Error("beta removal did not commit");
-  expect(subscriptionsFromSource(removedBeta.copyListRecordedEvent)).toEqual({});
-  expect(
-    coreState(await receiver.runtimeState()).subscriptions.inbound.bySourcePath[sourcePath],
-  ).toBeUndefined();
-  expect(
-    coreState(await source.runtimeState()).copyListDeliveriesByReceivingStream[receivingStreamPath],
-  ).toBeUndefined();
-});
-
-test("concurrent receive commands share one send and follow the newest complete list", async () => {
-  const marker = crypto.randomUUID();
-  const sourcePath = `/e2e/subscriptions/concurrent/source/${marker}`;
-  const receivingStreamPath = `/e2e/subscriptions/concurrent/receiver/${marker}`;
-  const alpha = `concurrent-alpha-${marker}`;
-  const beta = `concurrent-beta-${marker}`;
-
-  using testProject = await openTestProject(marker);
-  const { project } = testProject;
-  using receiver = project.streams.get(receivingStreamPath);
-
-  const [configuredAlpha, configuredBeta] = await Promise.all([
-    receiver.subscribeToEventsFrom({
-      sourceStreamPath: sourcePath,
-      subscriptionKey: alpha,
-      filter: { eventTypes: [MATCHING_EVENT_TYPE] },
-    }),
-    receiver.subscribeToEventsFrom({
-      sourceStreamPath: sourcePath,
-      subscriptionKey: beta,
-      filter: { eventTypes: [OTHER_EVENT_TYPE] },
-    }),
-  ]);
-
-  expect(subscriptionsFromSource(configuredAlpha.copyListRecordedEvent)[alpha]).toBeDefined();
-  expect(subscriptionsFromSource(configuredBeta.copyListRecordedEvent)[beta]).toBeDefined();
-  expect(
-    Math.max(
-      Object.keys(subscriptionsFromSource(configuredAlpha.copyListRecordedEvent)).length,
-      Object.keys(subscriptionsFromSource(configuredBeta.copyListRecordedEvent)).length,
-    ),
-  ).toBe(2);
-  const receiverState = coreState(await receiver.runtimeState());
-  expect(
-    Object.keys(receiverState.subscriptions.inbound.bySourcePath[sourcePath]!.byKey).sort(),
-  ).toEqual([alpha, beta].sort());
-
-  const [repeatOne, repeatTwo] = await Promise.all([
-    receiver.subscribeToEventsFrom({
-      sourceStreamPath: sourcePath,
-      subscriptionKey: alpha,
-      filter: { eventTypes: [MATCHING_EVENT_TYPE] },
-    }),
-    receiver.subscribeToEventsFrom({
-      sourceStreamPath: sourcePath,
-      subscriptionKey: alpha,
-      filter: { eventTypes: [MATCHING_EVENT_TYPE] },
-    }),
-  ]);
-  expect(repeatOne.subscriptionConfiguredEvent).toMatchObject({
-    offset: configuredAlpha.subscriptionConfiguredEvent.offset,
-  });
-  expect(repeatTwo.subscriptionConfiguredEvent).toMatchObject({
-    offset: configuredAlpha.subscriptionConfiguredEvent.offset,
-  });
-  expect(repeatOne.copyListRecordedEvent).toMatchObject({
-    offset: repeatTwo.copyListRecordedEvent.offset,
-  });
+  ).toMatchObject({ cursorChangedAtSourceOffset: replacement.subscriptionConfiguredEvent.offset });
 });
 
 test("repeating a receive command reuses its original now cursor", async () => {
@@ -1257,9 +1053,7 @@ test("repeating a receive command reuses its original now cursor", async () => {
   const retried = await receiver.subscribeToEventsFrom(desired);
 
   expect(retried.subscriptionConfiguredEvent).toMatchObject({ offset: firstConfiguration!.offset });
-  expect(retried.copyListRecordedEvent).toMatchObject({
-    offset: first.copyListRecordedEvent.offset,
-  });
+  expect(retried).toMatchObject({ subscriptionKey: first.subscriptionKey });
   const configurations = (
     await source.getEvents({
       afterOffset: 0,
@@ -1277,397 +1071,16 @@ test("repeating a receive command reuses its original now cursor", async () => {
   expect(delivered.source?.copiedFrom?.at(-1)?.offset).toBe(betweenAttempts!.offset);
 });
 
-test("reusing a source key moves the subscription without leaving it on the old receiver", async () => {
-  const marker = crypto.randomUUID();
-  const sourcePath = `/e2e/subscriptions/replacement/source/${marker}`;
-  const oldReceiverPath = `/e2e/subscriptions/replacement/old/${marker}`;
-  const newReceiverPath = `/e2e/subscriptions/replacement/new/${marker}`;
-  const subscriptionKey = `replace-${marker}`;
-
-  using testProject = await openTestProject(marker);
-  const { project } = testProject;
-  using source = project.streams.get(sourcePath);
-  using oldReceiver = project.streams.get(oldReceiverPath);
-  using newReceiver = project.streams.get(newReceiverPath);
-
-  await oldReceiver.subscribeToEventsFrom({
-    sourceStreamPath: sourcePath,
-    subscriptionKey,
-    filter: { eventTypes: [MATCHING_EVENT_TYPE] },
-  });
-  const [historical] = await source.append({
-    type: MATCHING_EVENT_TYPE,
-    payload: { marker, phase: "before-replacement" },
-  });
-  await oldReceiver.waitForEvent({
-    afterOffset: 0,
-    eventTypes: [MATCHING_EVENT_TYPE],
-    timeoutMs: 15_000,
-  });
-  await expect(
-    newReceiver.unsubscribeFromEvents({ sourceStreamPath: sourcePath, subscriptionKey }),
-  ).resolves.toEqual({ status: "already-absent" });
-  const replacement = await newReceiver.subscribeToEventsFrom({
-    sourceStreamPath: sourcePath,
-    subscriptionKey,
-    filter: { eventTypes: [MATCHING_EVENT_TYPE] },
-    start: "beginning",
-  });
-
-  expect(
-    coreState(await oldReceiver.runtimeState()).subscriptions.inbound.bySourcePath[sourcePath]
-      ?.byKey[subscriptionKey],
-  ).toBeUndefined();
-  expect(
-    coreState(await newReceiver.runtimeState()).subscriptions.inbound.bySourcePath[sourcePath]
-      ?.byKey[subscriptionKey],
-  ).toMatchObject({
-    configuration: incomingSubscriptionConfiguration(
-      replacement.copyListRecordedEvent,
-      subscriptionKey,
-    ),
-  });
-  expect(
-    coreState(await source.runtimeState()).subscriptions.outbound.byKey[subscriptionKey],
-  ).toMatchObject({
-    configuration: replacement.subscriptionConfiguredEvent.payload,
-  });
-  await expect(
-    oldReceiver.unsubscribeFromEvents({ sourceStreamPath: sourcePath, subscriptionKey }),
-  ).resolves.toEqual({ status: "already-absent" });
-
-  const replayed = await newReceiver.waitForEvent({
-    afterOffset: 0,
-    eventTypes: [MATCHING_EVENT_TYPE],
-    timeoutMs: 15_000,
-  });
-  expect(replayed.source?.copiedFrom?.at(-1)?.offset).toBe(historical!.offset);
-
-  await source.append({
-    type: MATCHING_EVENT_TYPE,
-    payload: { marker, phase: "after-replacement" },
-  });
-  await newReceiver.waitForEvent({
-    afterOffset: replayed.offset,
-    eventTypes: [MATCHING_EVENT_TYPE],
-    timeoutMs: 15_000,
-  });
-  expect(
-    (await oldReceiver.getEvents({ afterOffset: 0, eventTypes: [MATCHING_EVENT_TYPE] })).map(
-      (event) => event.payload?.phase,
-    ),
-  ).toEqual(["before-replacement"]);
-});
-
-test("a stream-to-webhook replacement waits for the old stream to record removal", async () => {
-  const marker = crypto.randomUUID();
-  const sourcePath = `/e2e/subscriptions/cross-kind-cutover/source/${marker}`;
-  const oldReceiverPath = `/e2e/subscriptions/cross-kind-cutover/old/${marker}`;
-  const subscriptionKey = `cross-kind-cutover-${marker}`;
-  const sentinelKey = `cross-kind-sentinel-${marker}`;
-  const deliveries: Array<{ event: StreamEvent; subscriptionKey: string }> = [];
-
-  using testProject = await openTestProject(marker);
-  const { project } = testProject;
-  using _intercept = await project.egress.intercept(async (request) => {
-    deliveries.push((await request.json()) as { event: StreamEvent; subscriptionKey: string });
-    return new Response(null, { status: 204 });
-  });
-  using source = project.streams.get(sourcePath);
-  using oldReceiver = project.streams.get(oldReceiverPath);
-
-  await source.append(
-    subscriptionConfigured({
-      subscriptionKey: sentinelKey,
-      filter: { eventTypes: [MATCHING_EVENT_TYPE] },
-      receiver: {
-        action: "webhook-post",
-        url: `https://cross-kind-sentinel.example/${marker}`,
-        delivery: deliveryPolicy("now"),
-      },
-    }),
-  );
-  await oldReceiver.subscribeToEventsFrom({
-    sourceStreamPath: sourcePath,
-    subscriptionKey,
-    filter: { eventTypes: [MATCHING_EVENT_TYPE] },
-  });
-
-  // Atomically replace the copy destination and inject the final outcome of
-  // its removal-list retry ladder. The real resend and cutover below still run
-  // through public commands and the live receiver/webhook seams.
-  const replacementOffset = coreState(await source.runtimeState()).maxOffset + 1;
-  const [replacement] = await appendTrustedCoreEvents(source, [
-    subscriptionConfigured({
-      subscriptionKey,
-      filter: { eventTypes: [MATCHING_EVENT_TYPE] },
-      receiver: {
-        action: "webhook-post",
-        url: `https://cross-kind-target.example/${marker}`,
-        delivery: deliveryPolicy("now"),
-      },
-    }),
-    {
-      type: "events.iterate.com/stream/copy-list-delivery-blocked",
-      payload: {
-        receivingStreamPath: oldReceiverPath,
-        sourceOffset: replacementOffset,
-        attempts: 15,
-        error: "synthetic old-stream removal failure",
-      },
-    },
-  ]);
-  expect(replacement).toMatchObject({ offset: replacementOffset });
-  expect(
-    coreState(await source.runtimeState()).copyListDeliveriesByReceivingStream[oldReceiverPath],
-  ).toMatchObject({
-    sourceOffset: replacementOffset,
-    status: "blocked",
-    subscriptionKeysRecordedByReceiver: [subscriptionKey],
-  });
-
-  const [held] = await source.append({
-    type: MATCHING_EVENT_TYPE,
-    payload: { marker },
-  });
-  await waitForCondition(
-    () =>
-      deliveries.some(
-        (delivery) =>
-          delivery.subscriptionKey === sentinelKey && delivery.event.offset === held!.offset,
-      ),
-    { description: "the ungated webhook to prove the source send loop reached this event" },
-  );
-  expect(deliveries.filter((delivery) => delivery.subscriptionKey === subscriptionKey)).toEqual([]);
-
-  await source.resendCopyList({ receivingStreamPath: oldReceiverPath });
-  await waitForCondition(
-    () =>
-      deliveries.some(
-        (delivery) =>
-          delivery.subscriptionKey === subscriptionKey && delivery.event.offset === held!.offset,
-      ),
-    { description: "the replacement webhook to start only after the old stream records removal" },
-  );
-  expect(
-    coreState(await oldReceiver.runtimeState()).subscriptions.inbound.bySourcePath[sourcePath],
-  ).toBeUndefined();
-  expect(
-    coreState(await source.runtimeState()).copyListDeliveriesByReceivingStream[oldReceiverPath],
-  ).toBeUndefined();
-});
-
-test("an old in-flight failure cannot delay or fail a same-key replacement", async () => {
-  const marker = crypto.randomUUID();
-  const sourcePath = `/e2e/subscriptions/replacement/in-flight/${marker}`;
-  const subscriptionKey = `in-flight-${marker}`;
-  const oldDeliveryStarted = Promise.withResolvers<void>();
-  const releaseOldDelivery = Promise.withResolvers<void>();
-  const deliveries: Array<{ attempt: number; event: StreamEvent; url: string }> = [];
-
-  using testProject = await openTestProject(marker);
-  const { project } = testProject;
-  using _intercept = await project.egress.intercept(async (request) => {
-    const delivery = (await request.json()) as { attempt: number; event: StreamEvent };
-    deliveries.push({ ...delivery, url: request.url });
-    if (request.url.includes("old-receiver")) {
-      oldDeliveryStarted.resolve();
-      await releaseOldDelivery.promise;
-      return new Response(null, { status: 503 });
-    }
-    return new Response(null, { status: 204 });
-  });
-  using source = project.streams.get(sourcePath);
-
-  await source.append(
-    subscriptionConfigured({
-      subscriptionKey,
-      filter: { eventTypes: [MATCHING_EVENT_TYPE] },
-      receiver: {
-        action: "webhook-post",
-        url: `https://old-receiver.example/${marker}`,
-        delivery: deliveryPolicy("now"),
-      },
-    }),
-  );
-  const [event] = await source.append({
-    type: MATCHING_EVENT_TYPE,
-    payload: { marker },
-  });
-  await oldDeliveryStarted.promise;
-
-  await source.append(
-    subscriptionConfigured({
-      subscriptionKey,
-      filter: { eventTypes: [MATCHING_EVENT_TYPE] },
-      receiver: {
-        action: "webhook-post",
-        url: `https://new-receiver.example/${marker}`,
-        delivery: deliveryPolicy("beginning"),
-      },
-    }),
-  );
-  releaseOldDelivery.resolve();
-
-  await waitForCondition(
-    () => deliveries.some((delivery) => delivery.url.includes("new-receiver")),
-    { description: "the replacement receiver to acknowledge the held event" },
-  );
-  expect(deliveries.filter((delivery) => delivery.url.includes("old-receiver"))).toMatchObject([
-    { attempt: 1, event: { offset: event!.offset } },
-  ]);
-  expect(deliveries.filter((delivery) => delivery.url.includes("new-receiver"))).toMatchObject([
-    { attempt: 1, event: { offset: event!.offset } },
-  ]);
-  const runtime = runtimeState(await source.runtimeState()).runtime.subscriptions[subscriptionKey]!;
-  expect(runtime).toMatchObject({ attempt: 0, lastError: null });
-  expect(runtime.acknowledgedOffset).toBeGreaterThanOrEqual(event!.offset);
-});
-
-// Cloudflare documents ctx.abort() as unavailable in local Wrangler
-// development. The emulator rejects the call but does not preserve the alarm
-// as a real runtime eviction does, so this lifecycle proof belongs on preview.
-test.skipIf(deployedBaseUrl() === null)(
-  "an in-flight source delivery keeps a durable watchdog across source eviction",
-  { timeout: 45_000 },
-  async () => {
-    const marker = crypto.randomUUID();
-    const sourcePath = `/e2e/subscriptions/in-flight-eviction/${marker}`;
-    const subscriptionKey = `in-flight-eviction-${marker}`;
-    const firstDeliveryStarted = Promise.withResolvers<void>();
-    const releaseFirstDelivery = Promise.withResolvers<void>();
-    const deliveries: Array<{ attempt: number; event: StreamEvent }> = [];
-
-    using testProject = await openTestProject(marker);
-    const { project } = testProject;
-    using _intercept = await project.egress.intercept(async (request) => {
-      const delivery = (await request.json()) as { attempt: number; event: StreamEvent };
-      deliveries.push(delivery);
-      if (deliveries.length === 1) {
-        firstDeliveryStarted.resolve();
-        await releaseFirstDelivery.promise;
-      }
-      return new Response(null, { status: 204 });
-    });
-    using source = project.streams.get(sourcePath);
-
-    await source.append(
-      subscriptionConfigured({
-        subscriptionKey,
-        filter: { eventTypes: [MATCHING_EVENT_TYPE] },
-        receiver: {
-          action: "webhook-post",
-          url: `https://in-flight-eviction.example/${marker}`,
-          delivery: deliveryPolicy("now"),
-        },
-      }),
-    );
-    const [event] = await source.append({
-      type: MATCHING_EVENT_TYPE,
-      payload: { marker },
-    });
-    await firstDeliveryStarted.promise;
-
-    // The alarm that launched the first attempt has already fired. Killing the
-    // source here destroys every in-memory drain reservation; only the watchdog
-    // persisted while that attempt was in flight can wake a quiet replacement
-    // incarnation. Do not poll the source until the second request arrives,
-    // because any such request would mask a missing alarm.
-    await source.kill().catch(() => undefined);
-    releaseFirstDelivery.resolve();
-
-    await waitForCondition(() => deliveries.length >= 2, {
-      description: "the durable in-flight watchdog to redeliver after source eviction",
-      timeoutMs: 30_000,
-    });
-    expect(deliveries.slice(0, 2)).toMatchObject([
-      { attempt: 1, event: { offset: event!.offset } },
-      { attempt: 1, event: { offset: event!.offset } },
-    ]);
-    const runtime = runtimeState(await source.runtimeState()).runtime.subscriptions[
-      subscriptionKey
-    ]!;
-    expect(runtime).toMatchObject({
-      attempt: 0,
-      lastError: null,
-    });
-    // The revived incarnation appends its own woken fact, and the cursor may
-    // acknowledge past that non-matching trailing event before this read.
-    expect(runtime.acknowledgedOffset).toBeGreaterThanOrEqual(event!.offset);
-  },
-);
-
-test("an old in-flight success cannot overwrite a newer cursor seek", async () => {
-  const marker = crypto.randomUUID();
-  const sourcePath = `/e2e/subscriptions/seek/in-flight/${marker}`;
-  const subscriptionKey = `seek-in-flight-${marker}`;
-  const firstDeliveryStarted = Promise.withResolvers<void>();
-  const releaseFirstDelivery = Promise.withResolvers<void>();
-  const deliveries: Array<{ event: StreamEvent; attempt: number }> = [];
-
-  using testProject = await openTestProject(marker);
-  const { project } = testProject;
-  using _intercept = await project.egress.intercept(async (request) => {
-    const delivery = (await request.json()) as { event: StreamEvent; attempt: number };
-    deliveries.push(delivery);
-    if (deliveries.length === 1) {
-      firstDeliveryStarted.resolve();
-      await releaseFirstDelivery.promise;
-    }
-    return new Response(null, { status: 204 });
-  });
-  using source = project.streams.get(sourcePath);
-
-  await source.append(
-    subscriptionConfigured({
-      subscriptionKey,
-      filter: { eventTypes: [MATCHING_EVENT_TYPE] },
-      receiver: {
-        action: "webhook-post",
-        url: `https://cursor-change.example/${marker}`,
-        delivery: deliveryPolicy("now"),
-      },
-    }),
-  );
-  const [event] = await source.append({
-    type: MATCHING_EVENT_TYPE,
-    payload: { marker },
-  });
-  await firstDeliveryStarted.promise;
-
-  // Rewind while the first awaited call is unresolved. Its eventual 2xx owns
-  // the older cursor-setting event and must not advance over the explicit seek.
-  await source.setSubscriptionCursor({ subscriptionKey, afterOffset: 0 });
-  releaseFirstDelivery.resolve();
-
-  await waitForCondition(
-    async () => {
-      const acked =
-        runtimeState(await source.runtimeState()).runtime.subscriptions[subscriptionKey]
-          ?.acknowledgedOffset ?? 0;
-      return deliveries.length >= 2 && acked >= event!.offset;
-    },
-    { description: "the post-seek cursor to redeliver and acknowledge the held event" },
-  );
-  expect(deliveries.slice(0, 2)).toMatchObject([
-    { attempt: 1, event: { offset: event!.offset } },
-    { attempt: 1, event: { offset: event!.offset } },
-  ]);
-});
-
 test("resumeSubscription restarts a halted rule at its existing cursor", async () => {
   const marker = crypto.randomUUID();
   const sourcePath = `/e2e/subscriptions/resume/source/${marker}`;
+  const receivingStreamPath = `/e2e/subscriptions/resume/receiver/${marker}`;
   const subscriptionKey = `resume-${marker}`;
-  const deliveries: StreamEvent[] = [];
 
   using testProject = await openTestProject(marker);
   const { project } = testProject;
-  using _intercept = await project.egress.intercept(async (request) => {
-    deliveries.push(((await request.json()) as { event: StreamEvent }).event);
-    return new Response(null, { status: 204 });
-  });
   using source = project.streams.get(sourcePath);
+  using receiver = project.streams.get(receivingStreamPath);
 
   const configuredOffset = coreState(await source.runtimeState()).maxOffset + 1;
   await appendTrustedCoreEvents(source, [
@@ -1675,8 +1088,8 @@ test("resumeSubscription restarts a halted rule at its existing cursor", async (
       subscriptionKey,
       filter: { eventTypes: [MATCHING_EVENT_TYPE] },
       receiver: {
-        action: "webhook-post",
-        url: `https://resume.example/${marker}`,
+        action: "copy-to-stream",
+        receivingStreamPath,
         delivery: deliveryPolicy("now"),
       },
     }),
@@ -1710,9 +1123,13 @@ test("resumeSubscription restarts a halted rule at its existing cursor", async (
     type: "events.iterate.com/stream/subscription-delivery-resumed",
     payload: { subscriptionKey },
   });
-  await waitForCondition(() => deliveries.some((event) => event.offset === held!.offset), {
-    description: "the resumed rule to send the first unacknowledged event",
+  const delivered = await receiver.waitForEvent({
+    afterOffset: 0,
+    eventTypes: [MATCHING_EVENT_TYPE],
+    predicate: (event) => event.payload?.marker === marker,
+    timeoutMs: 15_000,
   });
+  expect(delivered.source?.copiedFrom?.at(-1)?.offset).toBe(held!.offset);
   expect(
     coreState(await source.runtimeState()).subscriptions.outbound.byKey[subscriptionKey],
   ).not.toHaveProperty("deliveryHalted");
@@ -1774,28 +1191,16 @@ test("chains longer than five copies retain provenance, cycles terminate, and re
   expect(chained.source?.copiedFrom?.map((hop) => hop.subscriptionKey)).toEqual(forwardRuleKeys);
 
   // G→A would complete a cycle. A acknowledges the source coordinate without
-  // appending a duplicate product event, and records that decision as an event.
+  // appending a duplicate product event, and records that decision as one
+  // idempotent error event.
   const dropped = await streamA.waitForEvent({
     afterOffset: original!.offset,
-    eventTypes: ["events.iterate.com/stream/copied-events-dropped"],
-    predicate: (event) => event.payload?.subscriptionKey === gToA,
+    eventTypes: ["events.iterate.com/stream/error-occurred"],
+    predicate: (event) => String(event.payload?.message).includes(gToA),
     timeoutMs: 15_000,
   });
-  expect(dropped).toMatchObject({
-    payload: {
-      source: { path: pathG },
-      subscriptionKey: gToA,
-      reason: "cycle",
-      count: 1,
-      firstOffset: chained.offset,
-      lastOffset: chained.offset,
-    },
-  });
-  expect(
-    coreState(await streamA.runtimeState()).subscriptions.inbound.bySourcePath[pathG]?.byKey[gToA],
-  ).toMatchObject({ numEventsReceived: 0, numEventsDropped: 1 });
+  expect(String(dropped.payload?.message)).toContain(`dropped 1 copied event(s) from "${pathG}"`);
   const cycleCursor = runtimeState(await streamG.runtimeState()).runtime.subscriptions[gToA]!;
-  expect(cycleCursor).toMatchObject({ acknowledgedEvents: 1 });
   expect(cycleCursor.acknowledgedOffset).toBeGreaterThanOrEqual(chained.offset);
   expect(
     (
@@ -1813,18 +1218,9 @@ test("chains longer than five copies retain provenance, cycles terminate, and re
   expect(removed).toMatchObject({
     status: "removed",
     subscriptionRemovedEvent: { type: "events.iterate.com/stream/subscription-removed" },
-    copyListRecordedEvent: {
-      type: "events.iterate.com/stream/copy-list-recorded",
-      payload: { subscriptionsByKey: {} },
-    },
   });
   expect(
     coreState(await streamA.runtimeState()).subscriptions.outbound.byKey[forwardRuleKeys[0]!],
-  ).toBeUndefined();
-  expect(
-    coreState(await streamB.runtimeState()).subscriptions.inbound.bySourcePath[pathA]?.byKey[
-      forwardRuleKeys[0]!
-    ],
   ).toBeUndefined();
 
   const removalObserverPath = `/e2e/subscriptions/cycle/removal-observer/${marker}`;
@@ -1884,7 +1280,7 @@ test("the stream-copy limit is an acknowledged durable drop whose audit event is
     sourceStreamPath: receiverPath,
     subscriptionKey: `observe-hop-limit-${marker}`,
     filter: {
-      eventTypes: [MATCHING_EVENT_TYPE, "events.iterate.com/stream/copied-events-dropped"],
+      eventTypes: [MATCHING_EVENT_TYPE, "events.iterate.com/stream/error-occurred"],
     },
   });
 
@@ -1924,31 +1320,20 @@ test("the stream-copy limit is an acknowledged durable drop whose audit event is
     attempt: 1,
     configuredEvent: subscriptionConfigurationForDelivery(configured.subscriptionConfiguredEvent),
   });
-  expect(receipt).toEqual({
-    accepted: 0,
-    dropped: [{ offset: historical!.offset, reason: "hop-limit" }],
-  });
+  expect(receipt).toEqual({ acknowledged: 1 });
 
   const dropped = await receiver.waitForEvent({
-    afterOffset: configured.copyListRecordedEvent.offset,
-    eventTypes: ["events.iterate.com/stream/copied-events-dropped"],
+    afterOffset: 0,
+    eventTypes: ["events.iterate.com/stream/error-occurred"],
+    predicate: (event) => String(event.payload?.message).includes(subscriptionKey),
     timeoutMs: 15_000,
   });
-  expect(dropped).toMatchObject({
-    payload: {
-      source: { path: sourcePath },
-      subscriptionKey,
-      reason: "hop-limit",
-      count: 1,
-      firstOffset: historical!.offset,
-      lastOffset: historical!.offset,
-    },
-  });
-  expect(
-    coreState(await receiver.runtimeState()).subscriptions.inbound.bySourcePath[sourcePath]?.byKey[
-      subscriptionKey
-    ],
-  ).toMatchObject({ numEventsReceived: 0, numEventsDropped: 1 });
+  expect(String(dropped.payload?.message)).toContain(
+    `dropped 1 copied event(s) from "${sourcePath}"`,
+  );
+  expect(String(dropped.payload?.message)).toContain(
+    `offsets ${historical!.offset}-${historical!.offset}`,
+  );
 
   const [sentinel] = await receiver.append({
     type: MATCHING_EVENT_TYPE,
@@ -1964,7 +1349,7 @@ test("the stream-copy limit is an acknowledged durable drop whose audit event is
   expect(
     await observer.getEvents({
       afterOffset: 0,
-      eventTypes: ["events.iterate.com/stream/copied-events-dropped"],
+      eventTypes: ["events.iterate.com/stream/error-occurred"],
     }),
   ).toEqual([]);
 });
@@ -2000,260 +1385,7 @@ test("a global subscription stays in the global namespace", async () => {
   ).toEqual([]);
 });
 
-test("a time condition is an independent OR boundary and removes the subscription from both streams", async () => {
-  const marker = crypto.randomUUID();
-  const sourcePath = `/e2e/subscriptions/deadline/source/${marker}`;
-  const receivingStreamPath = `/e2e/subscriptions/deadline/receiver/${marker}`;
-  const subscriptionKey = `deadline-${marker}`;
-
-  using testProject = await openTestProject(marker);
-  const { project } = testProject;
-  using source = project.streams.get(sourcePath);
-  using receiver = project.streams.get(receivingStreamPath);
-
-  await receiver.subscribeToEventsFrom({
-    sourceStreamPath: sourcePath,
-    subscriptionKey,
-    filter: { eventTypes: [MATCHING_EVENT_TYPE] },
-  });
-
-  // Wait for both streams to record the subscription before starting the clock.
-  // The replacement then proves that a time boundary is independent of cursor
-  // progress without racing the initial source-to-receiver send.
-  await source.append(
-    subscriptionConfigured({
-      subscriptionKey,
-      filter: { eventTypes: [MATCHING_EVENT_TYPE] },
-      endWhen: {
-        any: [
-          { kind: "acknowledged-events", count: 100 },
-          { kind: "time", at: new Date(Date.now() + 2_000).toISOString() },
-        ],
-      },
-      receiver: {
-        action: "copy-to-stream",
-        receivingStreamPath: receivingStreamPath,
-        delivery: deliveryPolicy("now"),
-      },
-    }),
-  );
-  await waitForCondition(
-    async () =>
-      coreState(await source.runtimeState()).subscriptions.outbound.byKey[subscriptionKey] ===
-        undefined &&
-      coreState(await receiver.runtimeState()).subscriptions.inbound.bySourcePath[sourcePath]
-        ?.byKey[subscriptionKey] === undefined,
-    { description: "the deadline to remove the subscription from both streams", timeoutMs: 30_000 },
-  );
-  expect(
-    (await source.getEvents({ afterOffset: 0 })).find(
-      (event) =>
-        event.type === "events.iterate.com/stream/subscription-removed" &&
-        event.payload?.subscriptionKey === subscriptionKey,
-    ),
-  ).toMatchObject({ payload: { reason: "expired" } });
-});
-
-test("a paused receiver records subscription changes immediately and receives product events after resuming", async () => {
-  const marker = crypto.randomUUID();
-  const sourcePath = `/e2e/subscriptions/paused-product-delivery/source/${marker}`;
-  const receivingStreamPath = `/e2e/subscriptions/paused-product-delivery/receiver/${marker}`;
-  const subscriptionKey = `paused-product-delivery-${marker}`;
-
-  using testProject = await openTestProject(marker);
-  const { project } = testProject;
-  using source = project.streams.get(sourcePath);
-  using receiver = project.streams.get(receivingStreamPath);
-
-  await receiver.append({
-    type: "events.iterate.com/stream/paused",
-    payload: { reason: "separate subscription configuration from product delivery" },
-  });
-  const configured = await receiver.subscribeToEventsFrom({
-    sourceStreamPath: sourcePath,
-    subscriptionKey,
-  });
-
-  expect(
-    coreState(await receiver.runtimeState()).subscriptions.inbound.bySourcePath[sourcePath]?.byKey[
-      subscriptionKey
-    ],
-  ).toMatchObject({ configuredAtSourceOffset: configured.subscriptionConfiguredEvent.offset });
-  expect(copyListRetry(await source.runtimeState(), receivingStreamPath)).toBeUndefined();
-
-  const [held] = await source.append({
-    type: MATCHING_EVENT_TYPE,
-    payload: { marker, phase: "held-while-paused" },
-  });
-
-  await waitForCondition(
-    async () => {
-      const delivery = runtimeState(await source.runtimeState()).runtime.subscriptions[
-        subscriptionKey
-      ];
-      return delivery !== undefined && delivery.attempt >= 1;
-    },
-    { description: "paused product delivery to acquire a durable retry schedule" },
-  );
-  const failed = runtimeState(await source.runtimeState());
-  expect(failed.coreProcessorState.subscriptions.outbound.byKey[subscriptionKey]).toMatchObject({
-    configuration: {
-      subscriptionKey,
-      receiver: { action: "copy-to-stream", receivingStreamPath: receivingStreamPath },
-    },
-  });
-  expect(failed.runtime.subscriptions[subscriptionKey]).toMatchObject({
-    attempt: expect.any(Number),
-    lastError: expect.stringContaining("stream paused"),
-  });
-
-  await receiver.append({ type: "events.iterate.com/stream/resumed", payload: {} });
-  const delivered = await receiver.waitForEvent({
-    afterOffset: 0,
-    eventTypes: [MATCHING_EVENT_TYPE],
-    predicate: (event) => event.payload?.marker === marker,
-    timeoutMs: 15_000,
-  });
-  expect(delivered.source?.copiedFrom?.at(-1)?.offset).toBe(held!.offset);
-  await waitForCondition(
-    async () =>
-      runtimeState(await source.runtimeState()).runtime.subscriptions[subscriptionKey]?.attempt ===
-      0,
-    { description: "the resumed receiver to acknowledge the held product event" },
-  );
-  const recovered = runtimeState(await source.runtimeState());
-  expect(copyListRetry(recovered, receivingStreamPath)).toBeUndefined();
-  expect(
-    recovered.coreProcessorState.copyListDeliveriesByReceivingStream[receivingStreamPath],
-  ).toMatchObject({
-    sourceOffset: configured.subscriptionConfiguredEvent.offset,
-    status: "confirmed",
-  });
-});
-
-test("a time boundary removes the subscription from both streams while product delivery is paused", async () => {
-  const marker = crypto.randomUUID();
-  const sourcePath = `/e2e/subscriptions/paused-expiry/source/${marker}`;
-  const receivingStreamPath = `/e2e/subscriptions/paused-expiry/receiver/${marker}`;
-  const subscriptionKey = `paused-expiry-${marker}`;
-
-  using testProject = await openTestProject(marker);
-  const { project } = testProject;
-  using source = project.streams.get(sourcePath);
-  using receiver = project.streams.get(receivingStreamPath);
-
-  await receiver.append({
-    type: "events.iterate.com/stream/paused",
-    payload: { reason: "subscription updates remain available while product events stop" },
-  });
-  await receiver.subscribeToEventsFrom({
-    sourceStreamPath: sourcePath,
-    subscriptionKey,
-    endWhen: {
-      any: [{ kind: "time", at: new Date(Date.now() + 1_000).toISOString() }],
-    },
-  });
-
-  await waitForCondition(
-    async () => {
-      const sourceState = coreState(await source.runtimeState());
-      const receiverState = coreState(await receiver.runtimeState());
-      return (
-        sourceState.subscriptions.outbound.byKey[subscriptionKey] === undefined &&
-        receiverState.subscriptions.inbound.bySourcePath[sourcePath] === undefined
-      );
-    },
-    {
-      description: "the configured deadline to remove the subscription from both streams",
-      timeoutMs: 15_000,
-    },
-  );
-  const removed = (await source.getEvents({ afterOffset: 0 })).find(
-    (event) =>
-      event.type === "events.iterate.com/stream/subscription-removed" &&
-      event.payload?.subscriptionKey === subscriptionKey,
-  );
-  expect(removed).toMatchObject({ payload: { reason: "expired" } });
-
-  expect(
-    coreState(await receiver.runtimeState()).subscriptions.inbound.bySourcePath[sourcePath]?.byKey[
-      subscriptionKey
-    ],
-  ).toBeUndefined();
-});
-
-test("a paused source still removes requested and expired subscriptions across eviction", async () => {
-  const marker = crypto.randomUUID();
-  const sourcePath = `/e2e/subscriptions/paused-revocation/source/${marker}`;
-  const receivingStreamPath = `/e2e/subscriptions/paused-revocation/receiver/${marker}`;
-  const requestedKey = `paused-requested-${marker}`;
-  const expiringKey = `paused-expiring-${marker}`;
-
-  using testProject = await openTestProject(marker);
-  const { project } = testProject;
-  using source = project.streams.get(sourcePath);
-  using receiver = project.streams.get(receivingStreamPath);
-
-  await receiver.subscribeToEventsFrom({
-    sourceStreamPath: sourcePath,
-    subscriptionKey: requestedKey,
-  });
-  await source.append({
-    type: "events.iterate.com/stream/paused",
-    payload: { reason: "revocation must remain available while ordinary appends are closed" },
-  });
-  const removed = await receiver.unsubscribeFromEvents({
-    sourceStreamPath: sourcePath,
-    subscriptionKey: requestedKey,
-  });
-  expect(removed).toMatchObject({
-    status: "removed",
-    subscriptionRemovedEvent: { type: "events.iterate.com/stream/subscription-removed" },
-    copyListRecordedEvent: {
-      type: "events.iterate.com/stream/copy-list-recorded",
-      payload: { subscriptionsByKey: {} },
-    },
-  });
-  await expect(
-    receiver.unsubscribeFromEvents({
-      sourceStreamPath: sourcePath,
-      subscriptionKey: requestedKey,
-    }),
-  ).resolves.toEqual({ status: "already-absent" });
-
-  await source.append({ type: "events.iterate.com/stream/resumed", payload: {} });
-  await receiver.subscribeToEventsFrom({
-    sourceStreamPath: sourcePath,
-    subscriptionKey: expiringKey,
-    endWhen: { any: [{ kind: "time", at: new Date(Date.now() + 1_000).toISOString() }] },
-  });
-  await source.append({
-    type: "events.iterate.com/stream/paused",
-    payload: { reason: "expire after this incarnation is evicted" },
-  });
-  await source.kill().catch(() => undefined);
-
-  await waitForCondition(
-    async () =>
-      coreState(await source.runtimeState()).subscriptions.outbound.byKey[expiringKey] ===
-        undefined &&
-      coreState(await receiver.runtimeState()).subscriptions.inbound.bySourcePath[sourcePath]
-        ?.byKey[expiringKey] === undefined,
-    {
-      description: "the paused source to expire and project removal after eviction",
-      timeoutMs: 30_000,
-    },
-  );
-  expect(
-    (await source.getEvents({ afterOffset: 0 })).find(
-      (event) =>
-        event.type === "events.iterate.com/stream/subscription-removed" &&
-        event.payload?.subscriptionKey === expiringKey,
-    ),
-  ).toMatchObject({ payload: { reason: "expired" } });
-});
-
-test("a copy filters, transforms, records its source, and deduplicates a retried delivery", async () => {
+test("a copy filters, records its source, and deduplicates a retried delivery", async () => {
   const marker = crypto.randomUUID();
   const sourcePath = `/e2e/subscriptions/copy/source/${marker}`;
   const receivingStreamPath = `/e2e/subscriptions/copy/receiver/${marker}`;
@@ -2272,8 +1404,6 @@ test("a copy filters, transforms, records its source, and deduplicates a retried
       eventTypes: [MATCHING_EVENT_TYPE],
       condition: "payload.selected = true",
     },
-    transform:
-      '{ "type": "events.iterate.test/subscriptions/summary", "payload": { "value": payload.value } }',
   });
   const [, selected] = await source.append(
     { type: MATCHING_EVENT_TYPE, payload: { selected: false, value: "ignored" } },
@@ -2282,11 +1412,11 @@ test("a copy filters, transforms, records its source, and deduplicates a retried
 
   const copied = await receiver.waitForEvent({
     afterOffset: 0,
-    eventTypes: ["events.iterate.test/subscriptions/summary"],
+    eventTypes: [MATCHING_EVENT_TYPE],
     timeoutMs: 15_000,
   });
   expect(copied).toMatchObject({
-    payload: { value: marker },
+    payload: { selected: true, value: marker },
     source: {
       copiedFrom: [
         {
@@ -2325,18 +1455,18 @@ test("a copy filters, transforms, records its source, and deduplicates a retried
     attempt: 2,
     configuredEvent: subscriptionConfigurationForDelivery(configured.subscriptionConfiguredEvent),
   });
-  expect(duplicateReceipt).toMatchObject({ accepted: 1, dropped: [] });
+  expect(duplicateReceipt).toMatchObject({ acknowledged: 1 });
   expect(
     await receiver.getEvents({
       afterOffset: 0,
-      eventTypes: ["events.iterate.test/subscriptions/summary"],
+      eventTypes: [MATCHING_EVENT_TYPE],
     }),
   ).toHaveLength(1);
   expect(
-    coreState(await receiver.runtimeState()).subscriptions.inbound.bySourcePath[sourcePath]?.byKey[
+    coreState(await receiver.runtimeState()).subscriptions.inbound.bySourcePath[sourcePath]?.[
       subscriptionKey
     ],
-  ).toMatchObject({ numEventsReceived: 1, numEventsDropped: 0 });
+  ).toMatchObject({ numEventsReceived: 1 });
 });
 
 test("changing a subscription cursor deliberately copies the same source coordinate again", async () => {
@@ -2354,8 +1484,6 @@ test("changing a subscription cursor deliberately copies the same source coordin
     sourceStreamPath: sourcePath,
     subscriptionKey,
     filter: { eventTypes: [MATCHING_EVENT_TYPE] },
-    transform:
-      '{ "type": "events.iterate.test/subscriptions/summary", "payload": { "value": payload.value } }',
   });
   const [selected] = await source.append({
     type: MATCHING_EVENT_TYPE,
@@ -2363,7 +1491,7 @@ test("changing a subscription cursor deliberately copies the same source coordin
   });
   const firstCopy = await receiver.waitForEvent({
     afterOffset: 0,
-    eventTypes: ["events.iterate.test/subscriptions/summary"],
+    eventTypes: [MATCHING_EVENT_TYPE],
     timeoutMs: 15_000,
   });
 
@@ -2381,7 +1509,7 @@ test("changing a subscription cursor deliberately copies the same source coordin
   );
   const copiesAfterSeek = await receiver.getEvents({
     afterOffset: 0,
-    eventTypes: ["events.iterate.test/subscriptions/summary"],
+    eventTypes: [MATCHING_EVENT_TYPE],
   });
   expect(copiesAfterSeek).toHaveLength(2);
   const copiedAfterSeek = copiesAfterSeek[1]!;
@@ -2399,15 +1527,13 @@ test("changing a subscription cursor deliberately copies the same source coordin
 
   const receiverState = coreState(await receiver.runtimeState());
   expect(
-    receiverState.subscriptions.inbound.bySourcePath[sourcePath]?.byKey[subscriptionKey],
+    receiverState.subscriptions.inbound.bySourcePath[sourcePath]?.[subscriptionKey],
   ).toMatchObject({
-    configuration: incomingSubscriptionConfiguration(
-      configured.copyListRecordedEvent,
-      subscriptionKey,
-    ),
+    cursorChangedAtSourceOffset: cursorSet.offset,
     numEventsReceived: 2,
     lastEventReceivedAt: copiedAfterSeek.createdAt,
   });
+  expect(configured).toMatchObject({ subscriptionKey });
   expect(firstCopy.offset).toBeLessThan(copiedAfterSeek.offset);
 });
 
@@ -2429,21 +1555,19 @@ test("replacing a subscription starts a new copy run and keeps configuration out
       eventTypes: [MATCHING_EVENT_TYPE],
       condition: "payload.selected = true",
     },
-    transform:
-      '{ "type": "events.iterate.test/subscriptions/summary", "payload": { "value": payload.value } }',
   });
   const [selected] = await source.append({
     type: MATCHING_EVENT_TYPE,
     payload: { selected: true, value: marker },
   });
-  await receiver.waitForEvent({
+  const firstCopy = await receiver.waitForEvent({
     afterOffset: 0,
-    eventTypes: ["events.iterate.test/subscriptions/summary"],
+    eventTypes: [MATCHING_EVENT_TYPE],
     timeoutMs: 15_000,
   });
 
   // A same-key replacement is another deliberate delivery run. Its own
-  // configure-event offset distinguishes the replay from both old copies.
+  // configure-event offset distinguishes the replay from the old copy.
   const replacement = await receiver.subscribeToEventsFrom({
     sourceStreamPath: sourcePath,
     subscriptionKey,
@@ -2451,15 +1575,14 @@ test("replacing a subscription starts a new copy run and keeps configuration out
       eventTypes: [MATCHING_EVENT_TYPE],
       condition: "payload.selected = true",
     },
-    transform:
-      '{ "type": "events.iterate.test/subscriptions/summary-v2", "payload": { "changed": payload.value } }',
+    description: "Replacement run",
     start: "beginning",
   });
   await waitForCondition(
     async () =>
       (runtimeState(await source.runtimeState()).runtime.subscriptions[subscriptionKey]
         ?.acknowledgedOffset ?? 0) >= selected!.offset,
-    { description: "the replacement transform to replay the existing source coordinate" },
+    { description: "the replacement run to replay the existing source coordinate" },
   );
   expect(
     coreState(await source.runtimeState()).subscriptions.outbound.byKey[subscriptionKey],
@@ -2467,22 +1590,18 @@ test("replacing a subscription starts a new copy run and keeps configuration out
     configuration: replacement.subscriptionConfiguredEvent.payload,
   });
   expect(
-    coreState(await source.runtimeState()).copyListDeliveriesByReceivingStream[receivingStreamPath],
-  ).toMatchObject({
-    sourceOffset: replacement.subscriptionConfiguredEvent.offset,
-    status: "confirmed",
-  });
-  expect(
     coreState(await source.runtimeState()).subscriptions.outbound.byKey[subscriptionKey],
   ).not.toHaveProperty("deliveryHalted");
-  const replacementCopies = await receiver.getEvents({
-    afterOffset: 0,
-    eventTypes: ["events.iterate.test/subscriptions/summary-v2"],
+  const copiedByReplacementReplay = await receiver.waitForEvent({
+    afterOffset: firstCopy.offset,
+    eventTypes: [MATCHING_EVENT_TYPE],
+    predicate: (event) =>
+      event.source?.copiedFrom?.at(-1)?.cursorChangedAtSourceOffset ===
+      replacement.subscriptionConfiguredEvent.offset,
+    timeoutMs: 15_000,
   });
-  expect(replacementCopies).toHaveLength(1);
-  const copiedByReplacementReplay = replacementCopies[0]!;
   expect(copiedByReplacementReplay).toMatchObject({
-    payload: { changed: marker },
+    payload: { selected: true, value: marker },
     source: {
       copiedFrom: [
         expect.objectContaining({
@@ -2500,11 +1619,12 @@ test("replacing a subscription starts a new copy run and keeps configuration out
   );
   const copiedUnderReplacement = await receiver.waitForEvent({
     afterOffset: copiedByReplacementReplay.offset,
-    eventTypes: ["events.iterate.test/subscriptions/summary-v2"],
+    eventTypes: [MATCHING_EVENT_TYPE],
+    predicate: (event) => event.payload?.value === `${marker}-v2`,
     timeoutMs: 15_000,
   });
   expect(copiedUnderReplacement).toMatchObject({
-    payload: { changed: `${marker}-v2` },
+    payload: { selected: true, value: `${marker}-v2` },
     source: {
       copiedFrom: [
         expect.objectContaining({
@@ -2527,58 +1647,6 @@ test("replacing a subscription starts a new copy run and keeps configuration out
   expect(sourceState.runtime.subscriptions[subscriptionKey]).not.toHaveProperty("configuration");
   expect(sourceState.runtime.subscriptions[subscriptionKey]).not.toHaveProperty("receiver");
   expect(sourceState.runtime.subscriptions[subscriptionKey]).not.toHaveProperty("mode");
-});
-
-test("a stream transform failure preserves the healthy batch prefix without creating a destination gap", async () => {
-  const marker = crypto.randomUUID();
-  const sourcePath = `/e2e/subscriptions/transform-failure/source/${marker}`;
-  const receivingStreamPath = `/e2e/subscriptions/transform-failure/receiver/${marker}`;
-  const subscriptionKey = `transform-failure-${marker}`;
-
-  using testProject = await openTestProject(marker);
-  const { project } = testProject;
-  using source = project.streams.get(sourcePath);
-  using receiver = project.streams.get(receivingStreamPath);
-
-  await receiver.subscribeToEventsFrom({
-    sourceStreamPath: sourcePath,
-    subscriptionKey,
-    filter: { eventTypes: [MATCHING_EVENT_TYPE] },
-    // Valid JSONata, but this event evaluates to a string instead of the
-    // receiver's required `{ type?, payload?, metadata? }` object.
-    transform: "payload.value",
-  });
-  const [healthy, failed] = await source.append(
-    {
-      type: MATCHING_EVENT_TYPE,
-      payload: { value: { payload: { marker, phase: "healthy-prefix" } } },
-    },
-    { type: MATCHING_EVENT_TYPE, payload: { value: marker } },
-  );
-
-  const copiedHealthy = await receiver.waitForEvent({
-    afterOffset: 0,
-    eventTypes: [MATCHING_EVENT_TYPE],
-    predicate: (event) => event.payload?.marker === marker,
-    timeoutMs: 15_000,
-  });
-  expect(copiedHealthy.source?.copiedFrom?.at(-1)?.offset).toBe(healthy!.offset);
-
-  await waitForCondition(
-    async () =>
-      (runtimeState(await source.runtimeState()).runtime.subscriptions[subscriptionKey]?.attempt ??
-        0) >= 1,
-    { description: "the source to record the rejected stream delivery" },
-  );
-  const runtime = runtimeState(await source.runtimeState()).runtime.subscriptions[subscriptionKey]!;
-  expect(runtime).toMatchObject({ acknowledgedOffset: healthy!.offset });
-  expect(runtime.acknowledgedOffset).toBeLessThan(failed!.offset);
-  expect(runtime.lastError).toContain("copy transform");
-  expect(
-    (await receiver.getEvents({ afterOffset: 0, eventTypes: [MATCHING_EVENT_TYPE] })).map(
-      (event) => event.offset,
-    ),
-  ).toEqual([copiedHealthy.offset]);
 });
 
 test("a filter failure retries in order and never advances past later events", async () => {
@@ -2621,400 +1689,6 @@ test("a filter failure retries in order and never advances past later events", a
   );
 });
 
-// Hosted processors are separate: they report their own checkpoint, have no
-// configurable start/ephemeral policy, and cannot use count or source-offset
-// ending conditions. Their wake/checkpoint behavior has dedicated stories below.
-test("copy, ITX-call, and webhook-post subscriptions share start positions and ephemeral-event inclusion", async () => {
-  const marker = crypto.randomUUID();
-  const sourcePath = `/e2e/subscriptions/start/source/${marker}`;
-  const itxOutputPath = `/e2e/subscriptions/start/itx-output/${marker}`;
-  const itxOutputType = "events.iterate.test/subscriptions/start-itx-received";
-  const subscriptionPrefix = `start-${marker}-`;
-  const webhookDeliveries: Array<{ subscriptionKey: string; sequence: number }> = [];
-
-  using testProject = await openTestProject(marker);
-  const { project } = testProject;
-  await project.repo.commitFiles({
-    message: "Add start-position matrix probe worker",
-    changes: [
-      {
-        path: "worker.ts",
-        content: `
-            import { WorkerEntrypoint } from "cloudflare:workers";
-
-            const SUBSCRIPTION_PREFIX = ${JSON.stringify(subscriptionPrefix)};
-            const OUTPUT_PATH = ${JSON.stringify(itxOutputPath)};
-            const OUTPUT_TYPE = ${JSON.stringify(itxOutputType)};
-
-            export default class ProjectWorker extends WorkerEntrypoint {
-              fetch() { return new Response("start-position matrix probe"); }
-
-              async processEventBatch(batch) {
-                if (!batch.subscriptionKey.startsWith(SUBSCRIPTION_PREFIX + "itx-")) return;
-                const itx = await this.env.ITX.get();
-                await itx.streams.get(OUTPUT_PATH).append({
-                  type: OUTPUT_TYPE,
-                  idempotencyKey: batch.deliveryId,
-                  payload: {
-                    subscriptionKey: batch.subscriptionKey,
-                    sequences: batch.events.map((event) => event.payload.sequence),
-                  },
-                });
-              }
-            }
-          `,
-      },
-    ],
-  });
-  const workerProbe = await project.worker.fetch(
-    new Request(`https://start-position-probe.invalid/ready/${marker}`),
-  );
-  expect(await workerProbe.text()).toBe("start-position matrix probe");
-  using _intercept = await project.egress.intercept(async (request) => {
-    const delivery = (await request.json()) as {
-      subscriptionKey: string;
-      event: { payload: { sequence: number } };
-    };
-    webhookDeliveries.push({
-      subscriptionKey: delivery.subscriptionKey,
-      sequence: delivery.event.payload.sequence,
-    });
-    return new Response(null, { status: 204 });
-  });
-  using source = project.streams.get(sourcePath);
-  using itxOutput = project.streams.get(itxOutputPath);
-
-  const [durableBefore, transientBefore] = await source.append(
-    { type: MATCHING_EVENT_TYPE, payload: { marker, sequence: 1 } },
-    { type: MATCHING_EVENT_TYPE, ephemeral: true, payload: { marker, sequence: 2 } },
-  );
-  const cases = [
-    {
-      name: "beginning durable only",
-      slug: "beginning-durable",
-      start: "beginning" as const,
-      includeEphemeral: false,
-      expected: [1, 3],
-    },
-    {
-      name: "beginning including transient rows",
-      slug: "beginning-all",
-      start: "beginning" as const,
-      includeEphemeral: true,
-      expected: [1, 2, 3, 4],
-    },
-    {
-      name: "live from now",
-      slug: "now",
-      start: "now" as const,
-      includeEphemeral: false,
-      expected: [3],
-    },
-    {
-      name: "live from now including transient rows",
-      slug: "now-all",
-      start: "now" as const,
-      includeEphemeral: true,
-      expected: [3, 4],
-    },
-    {
-      name: "after an explicit offset, durable only",
-      slug: "after-durable",
-      start: { afterOffset: durableBefore!.offset },
-      includeEphemeral: false,
-      expected: [3],
-    },
-    {
-      name: "after an explicit offset, including transient rows",
-      slug: "after-all",
-      start: { afterOffset: durableBefore!.offset },
-      includeEphemeral: true,
-      expected: [2, 3, 4],
-    },
-  ];
-  const receivingStreams = cases.map((entry) =>
-    project.streams.get(`/e2e/subscriptions/start/${entry.slug}/${marker}`),
-  );
-  try {
-    for (const [index, entry] of cases.entries()) {
-      await receivingStreams[index]!.subscribeToEventsFrom({
-        sourceStreamPath: sourcePath,
-        subscriptionKey: `${subscriptionPrefix}stream-${index}`,
-        filter: { eventTypes: [MATCHING_EVENT_TYPE] },
-        start: entry.start,
-        includeEphemeral: entry.includeEphemeral,
-      });
-      await source.append(
-        subscriptionConfigured({
-          subscriptionKey: `${subscriptionPrefix}itx-${index}`,
-          filter: { eventTypes: [MATCHING_EVENT_TYPE] },
-          receiver: {
-            action: "itx-call",
-            expression: ["worker", "processEventBatch"],
-            delivery: deliveryPolicy(entry.start, {
-              includeEphemeral: entry.includeEphemeral,
-              onFailingEvent: "skip",
-            }),
-          },
-        }),
-        subscriptionConfigured({
-          subscriptionKey: `${subscriptionPrefix}webhook-${index}`,
-          filter: { eventTypes: [MATCHING_EVENT_TYPE] },
-          receiver: {
-            action: "webhook-post",
-            url: `https://start-position-${index}.example/${marker}`,
-            delivery: deliveryPolicy(entry.start, {
-              includeEphemeral: entry.includeEphemeral,
-            }),
-          },
-        }),
-      );
-    }
-
-    await source.append(
-      { type: MATCHING_EVENT_TYPE, payload: { marker, sequence: 3 } },
-      { type: MATCHING_EVENT_TYPE, ephemeral: true, payload: { marker, sequence: 4 } },
-    );
-
-    for (const [index, entry] of cases.entries()) {
-      const itxSubscriptionKey = `${subscriptionPrefix}itx-${index}`;
-      const webhookSubscriptionKey = `${subscriptionPrefix}webhook-${index}`;
-      await waitForCondition(
-        async () => {
-          const streamEvents = await receivingStreams[index]!.getEvents({
-            afterOffset: 0,
-            eventTypes: [MATCHING_EVENT_TYPE],
-          });
-          const itxSequences = (
-            await itxOutput.getEvents({ afterOffset: 0, eventTypes: [itxOutputType] })
-          )
-            .filter((event) => event.payload?.subscriptionKey === itxSubscriptionKey)
-            .flatMap((event) => event.payload?.sequences ?? []);
-          const webhookSequences = webhookDeliveries.filter(
-            (delivery) => delivery.subscriptionKey === webhookSubscriptionKey,
-          );
-          return (
-            streamEvents.length >= entry.expected.length &&
-            itxSequences.length >= entry.expected.length &&
-            webhookSequences.length >= entry.expected.length
-          );
-        },
-        {
-          description: `${entry.name} deliveries through copy, ITX-call, and webhook-post subscriptions`,
-          timeoutMs: 30_000,
-        },
-      );
-      const streamSequences = (
-        await receivingStreams[index]!.getEvents({
-          afterOffset: 0,
-          eventTypes: [MATCHING_EVENT_TYPE],
-        })
-      ).map((event) => (event.payload as { sequence: number }).sequence);
-      const itxSequences = (
-        await itxOutput.getEvents({ afterOffset: 0, eventTypes: [itxOutputType] })
-      )
-        .filter((event) => event.payload?.subscriptionKey === itxSubscriptionKey)
-        .flatMap((event) => event.payload?.sequences ?? []);
-      const webhookSequences = webhookDeliveries
-        .filter((delivery) => delivery.subscriptionKey === webhookSubscriptionKey)
-        .map((delivery) => delivery.sequence);
-      expect(
-        { stream: streamSequences, expression: itxSequences, webhook: webhookSequences },
-        entry.name,
-      ).toEqual({
-        stream: entry.expected,
-        expression: entry.expected,
-        webhook: entry.expected,
-      });
-    }
-  } finally {
-    for (const receivingStream of receivingStreams) receivingStream[Symbol.dispose]();
-  }
-
-  expect(transientBefore).toMatchObject({ ephemeral: true });
-});
-
-test("copy, ITX-call, and webhook-post subscriptions stop at exact count and source-offset boundaries", async () => {
-  const marker = crypto.randomUUID();
-  const subscriptionPrefix = `finite-${marker}-`;
-  const itxOutputPath = `/e2e/subscriptions/finite/itx-output/${marker}`;
-  const itxOutputType = "events.iterate.test/subscriptions/finite-itx-received";
-  const webhookDeliveries: Array<{ subscriptionKey: string; index: number }> = [];
-  const cases = (["copy-to-stream", "itx-call", "webhook-post"] as const).flatMap(
-    (subscriptionAction) =>
-      (["acknowledged-events", "source-offset-acknowledged"] as const).map((endKind) => ({
-        subscriptionAction,
-        endKind,
-        slug: `${subscriptionAction}-${endKind}`,
-      })),
-  );
-
-  using testProject = await openTestProject(marker);
-  const { project } = testProject;
-  await project.repo.commitFiles({
-    message: "Add finite subscription matrix probe worker",
-    changes: [
-      {
-        path: "worker.ts",
-        content: `
-            import { WorkerEntrypoint } from "cloudflare:workers";
-
-            const SUBSCRIPTION_PREFIX = ${JSON.stringify(subscriptionPrefix)};
-            const OUTPUT_PATH = ${JSON.stringify(itxOutputPath)};
-            const OUTPUT_TYPE = ${JSON.stringify(itxOutputType)};
-
-            export default class ProjectWorker extends WorkerEntrypoint {
-              fetch() { return new Response("finite subscription matrix probe"); }
-
-              async processEventBatch(batch) {
-                if (!batch.subscriptionKey.startsWith(SUBSCRIPTION_PREFIX + "itx-call-")) return;
-                const itx = await this.env.ITX.get();
-                await itx.streams.get(OUTPUT_PATH).append({
-                  type: OUTPUT_TYPE,
-                  idempotencyKey: batch.deliveryId,
-                  payload: {
-                    subscriptionKey: batch.subscriptionKey,
-                    indexes: batch.events.map((event) => event.payload.index),
-                  },
-                });
-              }
-            }
-          `,
-      },
-    ],
-  });
-  const workerProbe = await project.worker.fetch(
-    new Request(`https://finite-subscription-probe.invalid/ready/${marker}`),
-  );
-  expect(await workerProbe.text()).toBe("finite subscription matrix probe");
-  using _intercept = await project.egress.intercept(async (request) => {
-    const delivery = (await request.json()) as {
-      subscriptionKey: string;
-      event: { payload: { index: number } };
-    };
-    webhookDeliveries.push({
-      subscriptionKey: delivery.subscriptionKey,
-      index: delivery.event.payload.index,
-    });
-    return new Response(null, { status: 204 });
-  });
-  using itxOutput = project.streams.get(itxOutputPath);
-  const sources = cases.map((entry) =>
-    project.streams.get(`/e2e/subscriptions/finite/source/${entry.slug}/${marker}`),
-  );
-  const receivingStreams = cases.map((entry) =>
-    entry.subscriptionAction === "copy-to-stream"
-      ? project.streams.get(`/e2e/subscriptions/finite/receiver/${entry.slug}/${marker}`)
-      : undefined,
-  );
-
-  try {
-    for (const [index, entry] of cases.entries()) {
-      const source = sources[index]!;
-      const sourcePath = `/e2e/subscriptions/finite/source/${entry.slug}/${marker}`;
-      const subscriptionKey = `${subscriptionPrefix}${entry.slug}`;
-      const appended = await source.append(
-        ...Array.from({ length: 4 }, (_, eventIndex) => ({
-          type: MATCHING_EVENT_TYPE,
-          payload: { case: entry.slug, index: eventIndex, marker },
-        })),
-      );
-      const endWhen =
-        entry.endKind === "acknowledged-events"
-          ? { any: [{ kind: "acknowledged-events" as const, count: 2 }] }
-          : {
-              any: [
-                {
-                  kind: "source-offset-acknowledged" as const,
-                  offset: appended[1]!.offset,
-                },
-              ],
-            };
-
-      if (entry.subscriptionAction === "copy-to-stream") {
-        await receivingStreams[index]!.subscribeToEventsFrom({
-          sourceStreamPath: sourcePath,
-          subscriptionKey,
-          filter: { eventTypes: [MATCHING_EVENT_TYPE] },
-          start: "beginning",
-          endWhen,
-        });
-      } else {
-        await source.append(
-          subscriptionConfigured({
-            subscriptionKey,
-            filter: { eventTypes: [MATCHING_EVENT_TYPE] },
-            endWhen,
-            receiver:
-              entry.subscriptionAction === "itx-call"
-                ? {
-                    action: "itx-call",
-                    expression: ["worker", "processEventBatch"],
-                    delivery: deliveryPolicy("beginning", { onFailingEvent: "skip" }),
-                  }
-                : {
-                    action: "webhook-post",
-                    url: `https://finite-${entry.endKind}.example/${marker}`,
-                    delivery: deliveryPolicy("beginning"),
-                  },
-          }),
-        );
-      }
-    }
-
-    for (const [index, entry] of cases.entries()) {
-      const source = sources[index]!;
-      const sourcePath = `/e2e/subscriptions/finite/source/${entry.slug}/${marker}`;
-      const subscriptionKey = `${subscriptionPrefix}${entry.slug}`;
-      await waitForCondition(
-        async () => {
-          const sourceRemoved =
-            coreState(await source.runtimeState()).subscriptions.outbound.byKey[subscriptionKey] ===
-            undefined;
-          if (!sourceRemoved) return false;
-          if (entry.subscriptionAction !== "copy-to-stream") return true;
-          return (
-            coreState(await receivingStreams[index]!.runtimeState()).subscriptions.inbound
-              .bySourcePath[sourcePath]?.byKey[subscriptionKey] === undefined
-          );
-        },
-        {
-          description: `${entry.subscriptionAction} subscription to stop at its ${entry.endKind} boundary`,
-          timeoutMs: 30_000,
-        },
-      );
-
-      const indexes =
-        entry.subscriptionAction === "copy-to-stream"
-          ? (
-              await receivingStreams[index]!.getEvents({
-                afterOffset: 0,
-                eventTypes: [MATCHING_EVENT_TYPE],
-              })
-            ).map((event) => event.payload?.index)
-          : entry.subscriptionAction === "itx-call"
-            ? (await itxOutput.getEvents({ afterOffset: 0, eventTypes: [itxOutputType] }))
-                .filter((event) => event.payload?.subscriptionKey === subscriptionKey)
-                .flatMap((event) => event.payload?.indexes ?? [])
-            : webhookDeliveries
-                .filter((delivery) => delivery.subscriptionKey === subscriptionKey)
-                .map((delivery) => delivery.index);
-      expect(indexes, `${entry.subscriptionAction} / ${entry.endKind}`).toEqual([0, 1]);
-      expect(
-        (await source.getEvents({ afterOffset: 0 })).find(
-          (event) =>
-            event.type === "events.iterate.com/stream/subscription-removed" &&
-            event.payload?.subscriptionKey === subscriptionKey,
-        ),
-      ).toMatchObject({ payload: { reason: "completed" } });
-    }
-  } finally {
-    for (const source of sources) source[Symbol.dispose]();
-    for (const receivingStream of receivingStreams) receivingStream?.[Symbol.dispose]();
-  }
-});
-
-// Hosted processor, ITX call, and webhook receivers.
 test("every project stream is born with ordinary project-worker and PostHog ITX receivers", async () => {
   const marker = crypto.randomUUID();
   const streamPath = `/e2e/subscriptions/platform-defaults/${marker}`;
@@ -3032,7 +1706,6 @@ test("every project stream is born with ordinary project-worker and PostHog ITX 
       expression: ["processEventBatch"],
       delivery: {
         start: "beginning",
-        includeEphemeral: false,
         onFailingEvent: "skip",
       },
     },
@@ -3046,7 +1719,6 @@ test("every project stream is born with ordinary project-worker and PostHog ITX 
       expression: ["integrations", "posthog", "processEventBatch"],
       delivery: {
         start: "beginning",
-        includeEphemeral: false,
         onFailingEvent: "halt",
       },
     },
@@ -3735,9 +2407,10 @@ test("an ITX-expression receiver bisects a batch, skips one repeatedly failing e
     { type: MATCHING_EVENT_TYPE, payload: { marker, sequence: 3 } },
   );
 
-  // Isolating the poisoned event takes the whole ladder: the batch failure,
-  // the bisect round, and FAILING_EVENT_CONFIRM_ATTEMPTS single-event
-  // confirmations — each behind its own exponential backoff (~15s of pure
+  // Isolating the poisoned event takes the whole ladder: the batch failure
+  // pins the next read to one event, healthy prefixes commit one at a time,
+  // and FAILING_EVENT_CONFIRM_ATTEMPTS single-event confirmations follow —
+  // each behind its own exponential backoff (~8s of pure
   // backoff nominally, more with jitter and slow preview invocations).
   await waitForCondition(
     async () =>
@@ -3777,232 +2450,58 @@ test("an ITX-expression receiver bisects a batch, skips one repeatedly failing e
   ).toBe(true);
 });
 
-test("a webhook receives one ordered lean envelope per event", async () => {
-  const marker = crypto.randomUUID();
-  const sourcePath = `/e2e/subscriptions/webhook/source/${marker}`;
-  const subscriptionKey = `webhook-${marker}`;
-  const deliveries: Array<Record<string, unknown>> = [];
-
-  using testProject = await openTestProject(marker);
-  const { project } = testProject;
-  using _intercept = await project.egress.intercept(async (request) => {
-    deliveries.push((await request.json()) as Record<string, unknown>);
-    return new Response(null, { status: 204 });
-  });
-  using source = project.streams.get(sourcePath);
-
-  await source.append(
-    subscriptionConfigured({
-      subscriptionKey,
-      filter: { eventTypes: [MATCHING_EVENT_TYPE] },
-      receiver: {
-        action: "webhook-post",
-        url: `https://webhook.example/${marker}`,
-        delivery: deliveryPolicy("now"),
-      },
-    }),
-  );
-  const appended = await source.append(
-    ...Array.from({ length: 3 }, (_, index) => ({
-      type: MATCHING_EVENT_TYPE,
-      payload: { marker, sequence: index + 1 },
-    })),
-  );
-  await waitForCondition(() => deliveries.length === 3, {
-    description: "three ordered webhook deliveries",
-  });
-  expect(
-    deliveries.map(
-      (delivery) => ((delivery.event as StreamEvent).payload as { sequence: number }).sequence,
-    ),
-  ).toEqual([1, 2, 3]);
-  for (const [index, delivery] of deliveries.entries()) {
-    expect(delivery).toMatchObject({
-      attempt: 1,
-      event: { offset: appended[index]!.offset },
-      path: sourcePath,
-      subscriptionKey,
-      configuredEvent: {
-        type: "events.iterate.com/stream/subscription-configured",
-      },
-    });
-    expect(delivery).not.toHaveProperty("state");
-  }
-
-  const state = runtimeState(await source.runtimeState());
-  expect(state.runtime.subscriptions[subscriptionKey]).toMatchObject({
-    acknowledgedEvents: 3,
-    attempt: 0,
-  });
-  expect(state.coreProcessorState.subscriptions.outbound.byKey[subscriptionKey]).not.toHaveProperty(
-    "deliveryHalted",
-  );
-});
-
-test("a webhook time boundary removes the rule and prevents later delivery", async () => {
-  const marker = crypto.randomUUID();
-  const sourcePath = `/e2e/subscriptions/webhook-deadline/source/${marker}`;
-  const expiringKey = `webhook-deadline-${marker}`;
-  const sentinelKey = `webhook-deadline-sentinel-${marker}`;
-  const deliveries: Array<{ subscriptionKey: string; event: StreamEvent }> = [];
-
-  using testProject = await openTestProject(marker);
-  const { project } = testProject;
-  using _intercept = await project.egress.intercept(async (request) => {
-    deliveries.push((await request.json()) as { subscriptionKey: string; event: StreamEvent });
-    return new Response(null, { status: 204 });
-  });
-  using source = project.streams.get(sourcePath);
-
-  await source.append(
-    subscriptionConfigured({
-      subscriptionKey: sentinelKey,
-      filter: { eventTypes: [MATCHING_EVENT_TYPE] },
-      receiver: {
-        action: "webhook-post",
-        url: `https://webhook-deadline-sentinel.example/${marker}`,
-        delivery: deliveryPolicy("now"),
-      },
-    }),
-    subscriptionConfigured({
-      subscriptionKey: expiringKey,
-      filter: { eventTypes: [MATCHING_EVENT_TYPE] },
-      endWhen: {
-        any: [{ kind: "time", at: new Date(Date.now() + 3_000).toISOString() }],
-      },
-      receiver: {
-        action: "webhook-post",
-        url: `https://webhook-deadline.example/${marker}`,
-        delivery: deliveryPolicy("now"),
-      },
-    }),
-  );
-  const [beforeExpiry] = await source.append({
-    type: MATCHING_EVENT_TYPE,
-    payload: { marker, phase: "before-expiry" },
-  });
-  await waitForCondition(
-    () =>
-      [sentinelKey, expiringKey].every((key) =>
-        deliveries.some(
-          (delivery) =>
-            delivery.subscriptionKey === key && delivery.event.offset === beforeExpiry!.offset,
-        ),
-      ),
-    { description: "both webhooks to receive the event before the deadline" },
-  );
-
-  await waitForCondition(
-    async () =>
-      coreState(await source.runtimeState()).subscriptions.outbound.byKey[expiringKey] ===
-      undefined,
-    { description: "the webhook deadline to remove its subscription", timeoutMs: 30_000 },
-  );
-  expect(
-    (await source.getEvents({ afterOffset: beforeExpiry!.offset })).find(
-      (event) =>
-        event.type === "events.iterate.com/stream/subscription-removed" &&
-        event.payload?.subscriptionKey === expiringKey,
-    ),
-  ).toMatchObject({ payload: { reason: "expired" } });
-
-  const [afterExpiry] = await source.append({
-    type: MATCHING_EVENT_TYPE,
-    payload: { marker, phase: "after-expiry" },
-  });
-  await waitForCondition(
-    () =>
-      deliveries.some(
-        (delivery) =>
-          delivery.subscriptionKey === sentinelKey && delivery.event.offset === afterExpiry!.offset,
-      ),
-    { description: "the durable sentinel webhook to advance beyond the expired rule" },
-  );
-  expect(
-    deliveries
-      .filter((delivery) => delivery.subscriptionKey === expiringKey)
-      .map((delivery) => delivery.event.offset),
-  ).toEqual([beforeExpiry!.offset]);
-});
-
-test("skip policy confirms one repeatedly failing webhook event, skips it, and continues", async () => {
-  const marker = crypto.randomUUID();
-  const sourcePath = `/e2e/subscriptions/webhook-failing-event/source/${marker}`;
-  const subscriptionKey = `webhook-failing-event-${marker}`;
-  const attempts: Array<{ attempt: number; shouldFail: boolean }> = [];
-
-  using testProject = await openTestProject(marker);
-  const { project } = testProject;
-  using _intercept = await project.egress.intercept(async (request) => {
-    const delivery = (await request.json()) as {
-      attempt: number;
-      event: { payload: { shouldFail?: boolean } };
-    };
-    const shouldFail = delivery.event.payload.shouldFail === true;
-    attempts.push({ attempt: delivery.attempt, shouldFail });
-    return new Response(null, { status: shouldFail ? 422 : 204 });
-  });
-  using source = project.streams.get(sourcePath);
-
-  await source.append(
-    subscriptionConfigured({
-      subscriptionKey,
-      filter: { eventTypes: [MATCHING_EVENT_TYPE] },
-      receiver: {
-        action: "webhook-post",
-        url: `https://webhook-failing-event.example/${marker}`,
-        delivery: deliveryPolicy("now", { onFailingEvent: "skip" }),
-      },
-    }),
-  );
-  const [failingEvent, healthyEvent] = await source.append(
-    { type: MATCHING_EVENT_TYPE, payload: { marker, shouldFail: true } },
-    { type: MATCHING_EVENT_TYPE, payload: { marker, shouldFail: false } },
-  );
-  await waitForCondition(
-    async () =>
-      (runtimeState(await source.runtimeState()).runtime.subscriptions[subscriptionKey]
-        ?.acknowledgedOffset ?? 0) >= healthyEvent!.offset,
-    {
-      description: "the repeatedly failing event to be skipped and the next event acknowledged",
-      timeoutMs: 15_000,
-    },
-  );
-  expect(attempts.filter((entry) => entry.shouldFail).map((entry) => entry.attempt)).toEqual([
-    1, 2, 3,
-  ]);
-  expect(attempts.filter((entry) => !entry.shouldFail)).toEqual([
-    { attempt: 1, shouldFail: false },
-  ]);
-  expect(
-    (await source.getEvents({ afterOffset: failingEvent!.offset })).find(
-      (event) =>
-        event.type === "events.iterate.com/stream/error-occurred" &&
-        String(event.payload?.message).includes(`offset ${failingEvent!.offset}`),
-    ),
-  ).toBeDefined();
-});
-
 test("the consecutive-failure limit survives stream eviction and halts before mass-skipping", async () => {
   const marker = crypto.randomUUID();
-  const sourcePath = `/e2e/subscriptions/webhook-failing-event/eviction/${marker}`;
-  const subscriptionKey = `webhook-failing-event-eviction-${marker}`;
+  const sourcePath = `/e2e/subscriptions/itx-failing-event/eviction/${marker}`;
+  const subscriptionKey = `itx-failing-event-eviction-${marker}`;
+  const releasePath = `/e2e/subscriptions/itx-failing-event/release/${marker}`;
+  const releaseType = "events.iterate.test/subscriptions/fuse-released";
 
   using testProject = await openTestProject(marker);
   const { project } = testProject;
-  let rejecting = true;
-  using _intercept = await project.egress.intercept(() =>
-    Promise.resolve(new Response(null, { status: rejecting ? 422 : 204 })),
+  await project.repo.commitFiles({
+    message: "Add consecutive-failure probe worker",
+    changes: [
+      {
+        path: "worker.ts",
+        content: `
+            import { WorkerEntrypoint } from "cloudflare:workers";
+
+            const SUBSCRIPTION_KEY = ${JSON.stringify(subscriptionKey)};
+            const RELEASE_PATH = ${JSON.stringify(releasePath)};
+            const RELEASE_TYPE = ${JSON.stringify(releaseType)};
+
+            export default class ProjectWorker extends WorkerEntrypoint {
+              fetch() { return new Response("fuse probe"); }
+
+              async processEventBatch(batch) {
+                if (batch.subscriptionKey !== SUBSCRIPTION_KEY) return;
+                const itx = await this.env.ITX.get();
+                const released = await itx.streams.get(RELEASE_PATH).getEvents({
+                  eventTypes: [RELEASE_TYPE],
+                  limit: 1,
+                });
+                if (released.length === 0) throw new Error("deliberate consecutive failure");
+              }
+            }
+          `,
+      },
+    ],
+  });
+  const workerProbe = await project.worker.fetch(
+    new Request(`https://fuse-probe.invalid/ready/${marker}`),
   );
+  expect(await workerProbe.text()).toBe("fuse probe");
   using source = project.streams.get(sourcePath);
+  using release = project.streams.get(releasePath);
 
   await source.append(
     subscriptionConfigured({
       subscriptionKey,
       filter: { eventTypes: [MATCHING_EVENT_TYPE] },
       receiver: {
-        action: "webhook-post",
-        url: `https://webhook-failing-event-eviction.example/${marker}`,
+        action: "itx-call",
+        expression: ["worker", "processEventBatch"],
         delivery: deliveryPolicy("now", { onFailingEvent: "skip" }),
       },
     }),
@@ -4049,7 +2548,7 @@ test("the consecutive-failure limit survives stream eviction and halts before ma
     ),
   ).toBe(false);
 
-  rejecting = false;
+  await release.append({ type: releaseType, payload: { marker } });
   const seekAndResume = await source.setSubscriptionCursorAndResume({
     subscriptionKey,
     afterOffset: thirdFailingEvent!.offset - 1,
@@ -4103,21 +2602,6 @@ test("invalid receiver-specific combinations and expressions never commit", asyn
       }),
     })),
     {
-      key: `webhook-url-${marker}`,
-      message: /url|invalid/i,
-      event: {
-        type: "events.iterate.com/stream/subscription-configured",
-        payload: {
-          subscriptionKey: `webhook-url-${marker}`,
-          receiver: {
-            action: "webhook-post",
-            url: `ftp://example.com/${marker}`,
-            delivery: deliveryPolicy("now"),
-          },
-        },
-      },
-    },
-    {
       key: `stream-skip-${marker}`,
       message: /onFailingEvent|halt|literal/i,
       event: {
@@ -4161,43 +2645,6 @@ test("invalid receiver-specific combinations and expressions never commit", asyn
         },
       },
     },
-    {
-      key: `transform-${marker}`,
-      message: /invalid JSONata expression.*Expected .*before end of expression/i,
-      event: subscriptionConfigured({
-        subscriptionKey: `transform-${marker}`,
-        receiver: {
-          action: "copy-to-stream",
-          receivingStreamPath: `/e2e/subscriptions/validation/receiver/${marker}`,
-          transform: "{ ((( ",
-          delivery: { ...deliveryPolicy("now"), onFailingEvent: "halt" as const },
-        },
-      }),
-    },
-    {
-      key: `hosted-end-${marker}`,
-      message: /checkpoint|only time/i,
-      event: subscriptionConfigured({
-        subscriptionKey: `hosted-end-${marker}`,
-        endWhen: { any: [{ kind: "acknowledged-events", count: 1 }] },
-        receiver: {
-          action: "processor-wake",
-          expression: ["agents", ["get", "/agents/validator"], "processor", "wakeStreamProcessor"],
-        },
-      }),
-    },
-    {
-      key: `hosted-offset-end-${marker}`,
-      message: /checkpoint|only time/i,
-      event: subscriptionConfigured({
-        subscriptionKey: `hosted-offset-end-${marker}`,
-        endWhen: { any: [{ kind: "source-offset-acknowledged", offset: 1 }] },
-        receiver: {
-          action: "processor-wake",
-          expression: ["agents", ["get", "/agents/validator"], "processor", "wakeStreamProcessor"],
-        },
-      }),
-    },
   ] as const;
 
   for (const entry of invalid) {
@@ -4224,18 +2671,6 @@ test("invalid receiver-specific combinations and expressions never commit", asyn
       }),
     ),
   ).rejects.toThrow(/cannot receive events from itself/);
-
-  using futureStartReceiver = project.streams.get(
-    `/e2e/subscriptions/validation/future-start/${marker}`,
-  );
-  const sourceHeadBeforeFutureStart = coreState(await source.runtimeState()).maxOffset;
-  await expect(
-    futureStartReceiver.subscribeToEventsFrom({
-      sourceStreamPath: sourcePath,
-      subscriptionKey: `future-start-${marker}`,
-      start: { afterOffset: sourceHeadBeforeFutureStart + 1_000_000 },
-    }),
-  ).rejects.toThrow(/beyond this stream's current maximum offset/);
 
   const canonicalReceiverPath = `/e2e/subscriptions/validation/canonical/${marker}`;
   const canonicalSubscriptionKey = `canonical-${marker}`;
@@ -4272,28 +2707,12 @@ test("invalid receiver-specific combinations and expressions never commit", asyn
 test("public callers cannot forge copied events or platform-authored stream facts", async () => {
   const marker = crypto.randomUUID();
   const sourcePath = `/e2e/subscriptions/validation/forgery/${marker}`;
-  const canonicalReceiverPath = `/e2e/subscriptions/validation/forgery-receiver/${marker}`;
 
   using testProject = await openTestProject(marker);
   const { project } = testProject;
   const { projectId } = await project.__describe();
   using source = project.streams.get(sourcePath);
 
-  await expect(
-    source.append({
-      type: "events.iterate.com/stream/copy-list-recorded",
-      payload: {
-        source: {
-          projectId,
-          path: "/forged",
-          streamId: crypto.randomUUID(),
-          streamCreatedAt: new Date().toISOString(),
-        },
-        sourceOffset: 1,
-        subscriptionsByKey: {},
-      },
-    }),
-  ).rejects.toThrow(/platform-authored/);
   await expect(
     source.append({
       type: MATCHING_EVENT_TYPE,
@@ -4317,44 +2736,12 @@ test("public callers cannot forge copied events or platform-authored stream fact
 
   const forgedCoreFacts: StreamEventInput[] = [
     {
-      type: "events.iterate.com/stream/copy-list-confirmed",
-      payload: {
-        receivingStreamPath: canonicalReceiverPath,
-        sourceOffset: 1,
-        receivingStreamEvent: {
-          type: "events.iterate.com/stream/copy-list-recorded",
-          payload: {
-            source: {
-              projectId: "forged-project",
-              path: sourcePath,
-              streamId: crypto.randomUUID(),
-              streamCreatedAt: new Date().toISOString(),
-            },
-            sourceOffset: 1,
-            subscriptionsByKey: {},
-          },
-          offset: 1,
-          createdAt: new Date().toISOString(),
-          path: canonicalReceiverPath,
-        },
-      },
-    },
-    {
       type: "events.iterate.com/stream/subscription-delivery-halted",
       payload: {
         subscriptionKey: `forged-halted-${marker}`,
         reason: "delivery-failed",
         afterOffset: 0,
         attempts: 1,
-        error: "forged",
-      },
-    },
-    {
-      type: "events.iterate.com/stream/copy-list-delivery-blocked",
-      payload: {
-        receivingStreamPath: canonicalReceiverPath,
-        sourceOffset: 1,
-        attempts: 8,
         error: "forged",
       },
     },
@@ -4412,33 +2799,6 @@ test("commands on a missing subscription key fail without appending state", asyn
   );
 });
 
-test("a global stream rejects webhook egress before commit", async () => {
-  const marker = crypto.randomUUID();
-  const subscriptionKey = `global-webhook-${marker}`;
-
-  using session = withItxSession();
-  using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using stream = itx.streams.get(`/e2e/subscriptions/validation/global/${marker}`);
-
-  await expect(
-    stream.append(
-      subscriptionConfigured({
-        subscriptionKey,
-        receiver: {
-          action: "webhook-post",
-          url: `https://example.com/${marker}`,
-          delivery: deliveryPolicy("now"),
-        },
-      }),
-    ),
-  ).rejects.toThrow(/project-scoped/);
-  expect(
-    (await stream.getEvents({ afterOffset: 0 })).some(
-      (event) => event.payload?.subscriptionKey === subscriptionKey,
-    ),
-  ).toBe(false);
-});
-
 async function openTestProject(marker: string) {
   const resources = new DisposableStack();
   const session = resources.adopt(withItxSession(), disposeRpc);
@@ -4472,37 +2832,13 @@ function runtimeState(value: unknown): StreamRuntimeDebugState {
   return value as StreamRuntimeDebugState;
 }
 
-function copyListRetry(value: unknown, receivingStreamPath: string) {
-  return runtimeState(value).runtime.copyListRetries[receivingStreamPath];
-}
-
-function incomingSubscriptionConfiguration(event: StreamEvent, subscriptionKey: string): unknown {
-  return subscriptionsFromSource(event)[subscriptionKey]?.configuration;
-}
-
-function subscriptionsFromSource(
-  event: StreamEvent,
-): Record<string, { configuredAtSourceOffset?: number; configuration?: unknown }> {
-  const payload = event.payload as
-    | {
-        subscriptionsByKey?: Record<
-          string,
-          { configuredAtSourceOffset?: number; configuration?: unknown }
-        >;
-      }
-    | undefined;
-  return payload?.subscriptionsByKey ?? {};
-}
-
 type DeliveryPolicy = {
-  start: "beginning" | "now" | { afterOffset: number };
-  includeEphemeral: boolean;
+  start: "beginning" | "now";
   onFailingEvent: "halt" | "skip";
 };
 
 function subscriptionConfigured(input: {
   subscriptionKey: string;
-  endWhen?: Record<string, unknown>;
   description?: string;
   filter?: { eventTypes?: string[]; condition?: string };
   receiver: Record<string, unknown>;
@@ -4514,12 +2850,11 @@ function subscriptionConfigured(input: {
 }
 
 function deliveryPolicy(
-  start: "beginning" | "now" | { afterOffset: number },
-  options: Partial<Pick<DeliveryPolicy, "includeEphemeral" | "onFailingEvent">> = {},
+  start: "beginning" | "now",
+  options: Partial<Pick<DeliveryPolicy, "onFailingEvent">> = {},
 ): DeliveryPolicy {
   return {
     start,
-    includeEphemeral: options.includeEphemeral ?? false,
     onFailingEvent: options.onFailingEvent ?? "halt",
   };
 }

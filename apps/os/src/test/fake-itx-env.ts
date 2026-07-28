@@ -142,147 +142,6 @@ export function createFakeItxEnv(options?: {
     return active;
   }
 
-  function latestSubscriptionRemoval(
-    name: string,
-    subscriptionKey: string,
-  ): {
-    event: FakeStreamEvent;
-    receivingStreamPath: string;
-  } | null {
-    let activeReceiverPath: string | null = null;
-    let latest: { event: FakeStreamEvent; receivingStreamPath: string } | null = null;
-    for (const event of streamEvents(name)) {
-      const payload = event.payload as Record<string, unknown>;
-      if (payload.subscriptionKey !== subscriptionKey) continue;
-      if (event.type === "events.iterate.com/stream/subscription-configured") {
-        const receiver = payload.receiver as FakeCopyReceiver | undefined;
-        activeReceiverPath =
-          receiver?.action === "copy-to-stream" && typeof receiver.receivingStreamPath === "string"
-            ? receiver.receivingStreamPath
-            : null;
-      } else if (
-        event.type === "events.iterate.com/stream/subscription-removed" &&
-        activeReceiverPath !== null
-      ) {
-        latest = { event, receivingStreamPath: activeReceiverPath };
-        activeReceiverPath = null;
-      }
-    }
-    return latest;
-  }
-
-  function receiverStreamName(sourceName: string, receivingStreamPath: string): string {
-    const source = DurableObjectNameCodec.parse(sourceName, { allowNullProjectId: true });
-    return DurableObjectNameCodec.stringify(
-      { projectId: source.projectId, path: receivingStreamPath },
-      { allowNullProjectId: true },
-    );
-  }
-
-  function activeSubscriptionsForReceiver(
-    sourceName: string,
-    receivingStreamPath: string,
-  ): Array<{
-    event: FakeStreamEvent;
-    payload: Record<string, unknown>;
-    subscriptionKey: string;
-  }> {
-    const active = new Map<
-      string,
-      { event: FakeStreamEvent; payload: Record<string, unknown>; subscriptionKey: string }
-    >();
-    for (const event of streamEvents(sourceName)) {
-      const payload = event.payload as Record<string, unknown>;
-      if (event.type === "events.iterate.com/stream/subscription-configured") {
-        const subscriptionKey =
-          typeof payload.subscriptionKey === "string"
-            ? payload.subscriptionKey
-            : `subscription:${event.offset}`;
-        active.set(subscriptionKey, { event, payload, subscriptionKey });
-      } else if (
-        event.type === "events.iterate.com/stream/subscription-removed" &&
-        typeof payload.subscriptionKey === "string"
-      ) {
-        active.delete(payload.subscriptionKey);
-      }
-    }
-    return [...active.values()].filter(({ payload }) => {
-      const receiver = payload.receiver as FakeCopyReceiver | undefined;
-      return (
-        receiver?.action === "copy-to-stream" &&
-        receiver.receivingStreamPath === receivingStreamPath
-      );
-    });
-  }
-
-  function appendCopyList(
-    sourceName: string,
-    receivingStreamPath: string,
-    sourceOffset: number,
-  ): FakeStreamEvent {
-    const source = DurableObjectNameCodec.parse(sourceName, { allowNullProjectId: true });
-    const sourceStreamId = streamIds.get(sourceName);
-    const sourceStreamCreatedAt = streamCreatedAts.get(sourceName);
-    if (sourceStreamId === undefined || sourceStreamCreatedAt === undefined) {
-      throw new Error(`fake source stream ${sourceName} has no lifetime identity`);
-    }
-    const subscriptionsByKey = Object.fromEntries(
-      activeSubscriptionsForReceiver(sourceName, receivingStreamPath).map(
-        ({ event, payload, subscriptionKey }) => {
-          const receiver = payload.receiver as {
-            delivery: unknown;
-            action: "copy-to-stream";
-            transform?: unknown;
-          };
-          return [
-            subscriptionKey,
-            {
-              configuredAtSourceOffset: event.offset,
-              configuration: {
-                ...(payload.endWhen === undefined ? {} : { endWhen: payload.endWhen }),
-                delivery: receiver.delivery,
-                ...(payload.description === undefined ? {} : { description: payload.description }),
-                ...(payload.filter === undefined ? {} : { filter: payload.filter }),
-                ...(receiver.transform === undefined ? {} : { transform: receiver.transform }),
-              },
-            },
-          ];
-        },
-      ),
-    );
-    return appendStored(receiverStreamName(sourceName, receivingStreamPath), [
-      {
-        type: "events.iterate.com/stream/copy-list-recorded",
-        idempotencyKey: `fake-copy-list:${sourceName}:${sourceStreamId}:${receivingStreamPath}:${sourceOffset}`,
-        payload: {
-          source: {
-            projectId: source.projectId,
-            path: source.path,
-            streamId: sourceStreamId,
-            streamCreatedAt: sourceStreamCreatedAt,
-          },
-          sourceOffset,
-          subscriptionsByKey,
-        },
-      },
-    ])[0]!;
-  }
-
-  function appendCopyListConfirmed(
-    sourceName: string,
-    receivingStreamPath: string,
-    sourceOffset: number,
-    receivingStreamEvent: FakeStreamEvent,
-  ): FakeStreamEvent {
-    return appendStored(sourceName, [
-      {
-        type: "events.iterate.com/stream/copy-list-confirmed",
-        idempotencyKey: `fake-copy-list-confirmed:${receivingStreamPath}:${sourceOffset}`,
-        payload: { receivingStreamPath, sourceOffset, receivingStreamEvent },
-      },
-    ])[0]!;
-  }
-
   return {
     SECRET: {
       getByName(name: string) {
@@ -341,7 +200,6 @@ export function createFakeItxEnv(options?: {
             }
             const existing =
               typeof requestedKey === "string" ? activeSubscription(name, requestedKey) : null;
-            const previousReceiver = existing?.payload.receiver as FakeCopyReceiver | undefined;
             const subscriptionConfiguredEvent =
               existing !== null &&
               JSON.stringify(existing.payload) === JSON.stringify(configuration)
@@ -363,76 +221,20 @@ export function createFakeItxEnv(options?: {
               typeof storedConfiguration.subscriptionKey === "string"
                 ? storedConfiguration.subscriptionKey
                 : `subscription:${subscriptionConfiguredEvent.offset}`;
-            if (
-              previousReceiver?.action === "copy-to-stream" &&
-              typeof previousReceiver.receivingStreamPath === "string" &&
-              previousReceiver.receivingStreamPath !== receiver.receivingStreamPath
-            ) {
-              const removed = appendCopyList(
-                name,
-                previousReceiver.receivingStreamPath,
-                subscriptionConfiguredEvent.offset,
-              );
-              appendCopyListConfirmed(
-                name,
-                previousReceiver.receivingStreamPath,
-                subscriptionConfiguredEvent.offset,
-                removed,
-              );
-            }
-            const copyListRecordedEvent = appendCopyList(
-              name,
-              receiver.receivingStreamPath,
-              subscriptionConfiguredEvent.offset,
-            );
-            const copyListConfirmedEvent = appendCopyListConfirmed(
-              name,
-              receiver.receivingStreamPath,
-              subscriptionConfiguredEvent.offset,
-              copyListRecordedEvent,
-            );
-            return {
-              status: "configured" as const,
-              subscriptionKey,
-              subscriptionConfiguredEvent,
-              copyListRecordedEvent,
-              copyListConfirmedEvent,
-            };
+            return { subscriptionKey, subscriptionConfiguredEvent };
           },
           async removeCopySubscription(input: {
             expectedReceiverPath: string;
             subscriptionKey: string;
           }) {
             const active = activeSubscription(name, input.subscriptionKey);
-            if (active === null) {
-              const prior = latestSubscriptionRemoval(name, input.subscriptionKey);
-              if (prior === null) return { status: "already-absent" as const };
-              const copyListRecordedEvent = appendCopyList(
-                name,
-                prior.receivingStreamPath,
-                prior.event.offset,
-              );
-              const copyListConfirmedEvent = appendCopyListConfirmed(
-                name,
-                prior.receivingStreamPath,
-                prior.event.offset,
-                copyListRecordedEvent,
-              );
-              return {
-                status: "removed" as const,
-                subscriptionRemovedEvent: prior.event,
-                copyListRecordedEvent,
-                copyListConfirmedEvent,
-              };
-            }
+            if (active === null) return { status: "already-absent" as const };
             const receiver = active.payload.receiver as FakeCopyReceiver;
             if (
               receiver.action !== "copy-to-stream" ||
               receiver.receivingStreamPath !== input.expectedReceiverPath
             ) {
-              throw new Error(
-                `subscription "${input.subscriptionKey}" is not owned by receiver "${input.expectedReceiverPath}"`,
-              );
+              return { status: "already-absent" as const };
             }
             const subscriptionRemovedEvent = appendStored(name, [
               {
@@ -440,23 +242,7 @@ export function createFakeItxEnv(options?: {
                 payload: { subscriptionKey: input.subscriptionKey, reason: "requested" },
               },
             ])[0]!;
-            const copyListRecordedEvent = appendCopyList(
-              name,
-              input.expectedReceiverPath,
-              subscriptionRemovedEvent.offset,
-            );
-            const copyListConfirmedEvent = appendCopyListConfirmed(
-              name,
-              input.expectedReceiverPath,
-              subscriptionRemovedEvent.offset,
-              copyListRecordedEvent,
-            );
-            return {
-              status: "removed" as const,
-              subscriptionRemovedEvent,
-              copyListRecordedEvent,
-              copyListConfirmedEvent,
-            };
+            return { status: "removed" as const, subscriptionRemovedEvent };
           },
           async getEvents(
             input: {

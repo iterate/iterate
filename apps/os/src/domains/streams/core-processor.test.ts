@@ -3,15 +3,13 @@ import { describe, expect, test } from "vitest";
 import { isStreamReceiverUnavailableError } from "iterate/processors";
 import {
   CoreProcessorContract,
-  MAX_SOURCE_STREAMS_PER_RECEIVING_STREAM,
   MAX_SUBSCRIPTIONS_PER_RECEIVING_STREAM,
   type CoreProcessorState,
-  type CopyListRecordedPayload,
   type SubscriptionConfiguredPayload,
 } from "./core-processor-contract.ts";
 import {
   assertCoreProcessorCheckpointGrowthFits,
-  compareSourceListPosition,
+  compareSourceStamp,
   MAX_CORE_PROCESSOR_STATE_BYTES,
   StreamCoreProcessor,
 } from "./core-processor.ts";
@@ -37,41 +35,9 @@ function streamSubscription(
       delivery: {
         start: "now",
         onFailingEvent: "halt",
-        includeEphemeral: false,
       },
     },
     ...overrides,
-  };
-}
-
-function subscriptionsFromSource(
-  sourceOffset: number,
-  subscriptionsByKey: CopyListRecordedPayload["subscriptionsByKey"] = {
-    issues: {
-      configuredAtSourceOffset: sourceOffset,
-      configuration: {
-        description: "Receive issue events",
-        filter: { eventTypes: ["example.com/issue-created"] },
-        delivery: {
-          start: "now",
-          onFailingEvent: "halt",
-          includeEphemeral: false,
-        },
-      },
-    },
-  },
-  streamCreatedAt = SOURCE_CREATED_AT,
-  streamId = SOURCE_STREAM_ID,
-): CopyListRecordedPayload {
-  return {
-    source: {
-      projectId: PROJECT_ID,
-      path: SOURCE_PATH,
-      streamId,
-      streamCreatedAt,
-    },
-    sourceOffset,
-    subscriptionsByKey,
   };
 }
 
@@ -93,6 +59,42 @@ function committed(
     path: options.path,
     ...(options.source === undefined ? {} : { source: options.source }),
   };
+}
+
+/** A committed event copied from the fixture source with the given stamp. */
+function copiedEvent(
+  offset: number,
+  stamp: {
+    streamId?: string;
+    streamCreatedAt?: string;
+    cursorChangedAtSourceOffset?: number;
+    subscriptionKey?: string;
+    sourceOffset?: number;
+  } = {},
+): StreamEvent {
+  return committed(
+    offset,
+    "example.com/issue-created",
+    { issue: offset },
+    {
+      path: RECEIVER_PATH,
+      source: {
+        copiedFrom: [
+          {
+            subscriptionKey: stamp.subscriptionKey ?? "issues",
+            streamId: stamp.streamId ?? SOURCE_STREAM_ID,
+            streamCreatedAt: stamp.streamCreatedAt ?? SOURCE_CREATED_AT,
+            cursorChangedAtSourceOffset: stamp.cursorChangedAtSourceOffset ?? 2,
+            createdAt: "2026-07-21T11:30:00.000Z",
+            offset: stamp.sourceOffset ?? offset,
+            path: SOURCE_PATH,
+            projectId: PROJECT_ID,
+            type: "example.com/issue-created",
+          },
+        ],
+      },
+    },
+  );
 }
 
 function harness(path = RECEIVER_PATH) {
@@ -301,55 +303,54 @@ describe("StreamCoreProcessor state size", () => {
   });
 });
 
-describe("source stream lifetime ordering", () => {
+describe("source stamp ordering", () => {
   const recorded = {
-    source: {
-      streamId: SOURCE_STREAM_ID,
-      streamCreatedAt: SOURCE_CREATED_AT,
-    },
-    sourceOffset: 10,
+    streamId: SOURCE_STREAM_ID,
+    streamCreatedAt: SOURCE_CREATED_AT,
+    cursorChangedAtSourceOffset: 10,
   };
 
-  test("orders by creation time, then random stream ID, then source offset", () => {
+  test("orders by creation time, then random stream ID, then config generation", () => {
     expect(
-      compareSourceListPosition(
+      compareSourceStamp(
         {
           streamId: SECOND_SOURCE_STREAM_ID,
           streamCreatedAt: "2026-07-21T12:00:00.000Z",
-          sourceOffset: 1,
+          cursorChangedAtSourceOffset: 1,
         },
         recorded,
       ),
     ).toBeGreaterThan(0);
     expect(
-      compareSourceListPosition(
+      compareSourceStamp(
         {
           streamId: SECOND_SOURCE_STREAM_ID,
           streamCreatedAt: SOURCE_CREATED_AT,
-          sourceOffset: 1,
+          cursorChangedAtSourceOffset: 1,
         },
         recorded,
       ),
     ).toBeGreaterThan(0);
     expect(
-      compareSourceListPosition(
+      compareSourceStamp(
         {
           streamId: SOURCE_STREAM_ID,
           streamCreatedAt: SOURCE_CREATED_AT,
-          sourceOffset: 11,
+          cursorChangedAtSourceOffset: 11,
         },
         recorded,
       ),
     ).toBeGreaterThan(0);
+    expect(compareSourceStamp(recorded, recorded)).toBe(0);
   });
 
-  test("rejects a source lifetime whose clock moved backwards", () => {
+  test("orders a source lifetime whose clock moved backwards as stale", () => {
     expect(
-      compareSourceListPosition(
+      compareSourceStamp(
         {
           streamId: SECOND_SOURCE_STREAM_ID,
           streamCreatedAt: "2026-07-21T10:59:59.999Z",
-          sourceOffset: 100,
+          cursorChangedAtSourceOffset: 100,
         },
         recorded,
       ),
@@ -358,7 +359,7 @@ describe("source stream lifetime ordering", () => {
 });
 
 describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
-  test("keeps requested removals public and automatic removals platform-authored", () => {
+  test("requested removals must come from a public command", () => {
     const { processor } = harness(SOURCE_PATH);
     const state = reduce(
       processor,
@@ -367,61 +368,20 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
         path: SOURCE_PATH,
       }),
     );
-    const removal = (reason: "requested" | "completed" | "expired"): StreamEventInput => ({
+    const removal: StreamEventInput = {
       type: "events.iterate.com/stream/subscription-removed",
-      payload: { subscriptionKey: "issues", reason },
-    });
+      payload: { subscriptionKey: "issues", reason: "requested" },
+    };
 
-    expect(() =>
-      processor.validate({ event: removal("requested"), state, authority: "public" }),
-    ).not.toThrow();
-    expect(() =>
-      processor.validate({ event: removal("requested"), state, authority: "core-event" }),
-    ).toThrow(/public command/);
-
-    for (const reason of ["completed", "expired"] as const) {
-      expect(() =>
-        processor.validate({ event: removal(reason), state, authority: "public" }),
-      ).toThrow(/platform-authored/);
-      expect(() =>
-        processor.validate({ event: removal(reason), state, authority: "core-event" }),
-      ).not.toThrow();
-    }
+    expect(() => processor.validate({ event: removal, state, authority: "public" })).not.toThrow();
+    expect(() => processor.validate({ event: removal, state, authority: "core-event" })).toThrow(
+      /public command/,
+    );
   });
 
-  test("a paused receiver still records source subscription changes", () => {
-    const { processor } = harness();
-    const configured = reduce(
-      processor,
-      coreState(),
-      committed(2, "events.iterate.com/stream/copy-list-recorded", subscriptionsFromSource(5)),
-    );
-    const paused = { ...configured, paused: true, pauseReason: "operator boundary" };
-
-    expect(() =>
-      processor.validate({
-        event: {
-          type: "events.iterate.com/stream/copy-list-recorded",
-          payload: subscriptionsFromSource(6, {}),
-        },
-        state: paused,
-        authority: "copy-list",
-      }),
-    ).not.toThrow();
-
-    expect(() =>
-      processor.validate({
-        event: {
-          type: "events.iterate.com/stream/copy-list-recorded",
-          payload: subscriptionsFromSource(6, {
-            ...subscriptionsFromSource(5).subscriptionsByKey,
-            newKey: subscriptionsFromSource(6).subscriptionsByKey.issues!,
-          }),
-        },
-        state: paused,
-        authority: "copy-list",
-      }),
-    ).not.toThrow();
+  test("a paused receiver rejects copied product appends as unavailable", () => {
+    const { processor, state } = harness();
+    const paused = { ...state, paused: true, pauseReason: "operator boundary" };
 
     let productAppendError: unknown;
     try {
@@ -434,87 +394,6 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
       productAppendError = error;
     }
     expect(isStreamReceiverUnavailableError(productAppendError)).toBe(true);
-  });
-
-  test("a blocked list is durable by receiving-stream path and only an explicit resend makes a new pending generation", () => {
-    const { processor } = harness(SOURCE_PATH);
-    let state = reduce(
-      processor,
-      coreState(SOURCE_PATH),
-      committed(2, "events.iterate.com/stream/subscription-configured", streamSubscription(), {
-        path: SOURCE_PATH,
-      }),
-    );
-    expect(() =>
-      processor.validate({
-        event: {
-          type: "events.iterate.com/stream/copy-list-resend-requested",
-          payload: { receivingStreamPath: RECEIVER_PATH },
-        },
-        state,
-        authority: "public",
-      }),
-    ).toThrow(/no blocked copy list/);
-    state = reduce(
-      processor,
-      state,
-      committed(3, "events.iterate.com/stream/copy-list-delivery-blocked", {
-        receivingStreamPath: RECEIVER_PATH,
-        sourceOffset: 2,
-        attempts: 8,
-        error: "receiver unavailable",
-      }),
-    );
-
-    expect(state.subscriptions.outbound.byKey.issues?.deliveryHalted).toBeUndefined();
-    expect(state.copyListDeliveriesByReceivingStream[RECEIVER_PATH]).toEqual({
-      sourceOffset: 2,
-      status: "blocked",
-      attempts: 8,
-      error: "receiver unavailable",
-      blockedAt: "2026-07-21T12:00:03.000Z",
-      subscriptionKeysRecordedByReceiver: [],
-    });
-
-    expect(() =>
-      processor.validate({
-        event: {
-          type: "events.iterate.com/stream/subscription-delivery-resumed",
-          payload: { subscriptionKey: "issues" },
-        },
-        state,
-        authority: "public",
-      }),
-    ).toThrow(/not halted/);
-
-    const retryRequest = committed(
-      4,
-      "events.iterate.com/stream/copy-list-resend-requested",
-      { receivingStreamPath: RECEIVER_PATH },
-      { path: SOURCE_PATH },
-    );
-    processor.validate({
-      event: { type: retryRequest.type, payload: retryRequest.payload },
-      state,
-      authority: "public",
-    });
-    state = reduce(processor, state, retryRequest);
-    expect(state.subscriptions.outbound.byKey.issues?.deliveryHalted).toBeUndefined();
-    expect(state.copyListDeliveriesByReceivingStream[RECEIVER_PATH]).toEqual({
-      sourceOffset: retryRequest.offset,
-      status: "pending",
-      subscriptionKeysRecordedByReceiver: [],
-    });
-    expect(() =>
-      processor.validate({
-        event: {
-          type: "events.iterate.com/stream/copy-list-resend-requested",
-          payload: { receivingStreamPath: RECEIVER_PATH },
-        },
-        state,
-        authority: "public",
-      }),
-    ).toThrow(/no blocked copy list/);
   });
 
   test("keeps the latest explicit read position in reduced state and clears it on replacement", () => {
@@ -623,846 +502,14 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
     });
   });
 
-  test("reduces source configuration and receiver copy into one bounded hierarchy", () => {
-    const { processor } = harness(SOURCE_PATH);
-    let sourceState = reduce(
-      processor,
-      coreState(SOURCE_PATH),
-      committed(2, "events.iterate.com/stream/subscription-configured", streamSubscription(), {
-        path: SOURCE_PATH,
-      }),
-    );
-    expect(sourceState.subscriptions.outbound.byKey.issues).toMatchObject({
-      configuredAtOffset: 2,
-      configuration: streamSubscription(),
-    });
-    expect(sourceState.copyListDeliveriesByReceivingStream).toEqual({
-      [RECEIVER_PATH]: {
-        sourceOffset: 2,
-        status: "pending",
-        subscriptionKeysRecordedByReceiver: [],
-      },
-    });
-
-    sourceState = reduce(
-      processor,
-      sourceState,
-      committed(3, "events.iterate.com/stream/copy-list-confirmed", {
-        receivingStreamPath: RECEIVER_PATH,
-        sourceOffset: 2,
-        receivingStreamEvent: committed(
-          2,
-          "events.iterate.com/stream/copy-list-recorded",
-          subscriptionsFromSource(2),
-        ),
-      }),
-    );
-    expect(sourceState.copyListDeliveriesByReceivingStream[RECEIVER_PATH]).toEqual({
-      sourceOffset: 2,
-      status: "confirmed",
-      subscriptionKeysRecordedByReceiver: ["issues"],
-    });
-    expect(() =>
-      processor.validate({
-        event: {
-          type: "events.iterate.com/stream/copy-list-resend-requested",
-          payload: { receivingStreamPath: RECEIVER_PATH },
-        },
-        state: sourceState,
-        authority: "public",
-      }),
-    ).toThrow(/no blocked copy list/);
-
-    const receiverState = reduce(
-      processor,
-      coreState(),
-      committed(2, "events.iterate.com/stream/copy-list-recorded", subscriptionsFromSource(2)),
-    );
-    expect(receiverState.subscriptions.inbound.bySourcePath[SOURCE_PATH]).toEqual({
-      source: {
-        projectId: PROJECT_ID,
-        path: SOURCE_PATH,
-        streamId: SOURCE_STREAM_ID,
-        streamCreatedAt: SOURCE_CREATED_AT,
-      },
-      sourceOffset: 2,
-      byKey: {
-        issues: {
-          ...subscriptionsFromSource(2).subscriptionsByKey.issues,
-          numEventsReceived: 0,
-          numEventsDropped: 0,
-        },
-      },
-    });
-  });
-
-  test("a complete replacement rejects delayed older lists, carries same-offset counters, and removes an empty source from reduced state", () => {
-    const { processor } = harness();
-    let state = reduce(
-      processor,
-      coreState(),
-      committed(2, "events.iterate.com/stream/copy-list-recorded", subscriptionsFromSource(10)),
-    );
-    const copiedSource = {
-      copiedFrom: [
-        {
-          subscriptionKey: "issues",
-          streamId: SOURCE_STREAM_ID,
-          streamCreatedAt: SOURCE_CREATED_AT,
-          cursorChangedAtSourceOffset: 3,
-          projectId: PROJECT_ID,
-          path: SOURCE_PATH,
-          offset: 11,
-          type: "example.com/issue-created",
-          createdAt: "2026-07-21T11:59:00.000Z",
-        },
-      ],
-    };
-    state = reduce(
-      processor,
-      state,
-      committed(
-        3,
-        "example.com/issue-created",
-        { issue: 42 },
-        { path: RECEIVER_PATH, source: copiedSource },
-      ),
-    );
-    state = reduce(
-      processor,
-      state,
-      committed(4, "events.iterate.com/stream/copied-events-dropped", {
-        source: {
-          projectId: PROJECT_ID,
-          path: SOURCE_PATH,
-          streamId: SOURCE_STREAM_ID,
-          streamCreatedAt: SOURCE_CREATED_AT,
-        },
-        subscriptionKey: "issues",
-        reason: "cycle",
-        count: 2,
-        firstOffset: 12,
-        lastOffset: 13,
-      }),
-    );
-
-    state = reduce(
-      processor,
-      state,
-      committed(
-        5,
-        "events.iterate.com/stream/copy-list-recorded",
-        subscriptionsFromSource(12, {
-          issues: {
-            ...subscriptionsFromSource(10).subscriptionsByKey.issues!,
-            configuredAtSourceOffset: 10,
-          },
-        }),
-      ),
-    );
-    expect(state.subscriptions.inbound.bySourcePath[SOURCE_PATH]?.byKey.issues).toMatchObject({
-      configuredAtSourceOffset: 10,
-      numEventsReceived: 1,
-      numEventsDropped: 2,
-    });
-
-    state = reduce(
-      processor,
-      state,
-      committed(6, "events.iterate.com/stream/copy-list-recorded", subscriptionsFromSource(11, {})),
-    );
-    expect(state.subscriptions.inbound.bySourcePath[SOURCE_PATH]?.sourceOffset).toBe(12);
-
-    state = reduce(
-      processor,
-      state,
-      committed(7, "events.iterate.com/stream/copy-list-recorded", subscriptionsFromSource(13)),
-    );
-    expect(state.subscriptions.inbound.bySourcePath[SOURCE_PATH]?.byKey.issues).toMatchObject({
-      configuredAtSourceOffset: 13,
-      numEventsReceived: 0,
-      numEventsDropped: 0,
-    });
-
-    state = reduce(
-      processor,
-      state,
-      committed(8, "events.iterate.com/stream/copy-list-recorded", subscriptionsFromSource(14, {})),
-    );
-    expect(state.subscriptions.inbound.bySourcePath[SOURCE_PATH]).toBeUndefined();
-  });
-
-  test("a recreated source can restart its offsets, while delayed lists and copied events from the old source stay stale", () => {
-    const { processor } = harness();
-    const firstCreation = "2026-07-21T11:00:00.000Z";
-    const secondCreation = "2026-07-21T12:00:00.000Z";
-    let state = reduce(
-      processor,
-      coreState(),
-      committed(
-        2,
-        "events.iterate.com/stream/copy-list-recorded",
-        subscriptionsFromSource(40, undefined, firstCreation),
-      ),
-    );
-    state = reduce(
-      processor,
-      state,
-      committed(
-        3,
-        "example.com/issue-created",
-        {},
-        {
-          path: RECEIVER_PATH,
-          source: {
-            copiedFrom: [
-              {
-                subscriptionKey: "issues",
-                streamId: SOURCE_STREAM_ID,
-                streamCreatedAt: firstCreation,
-                cursorChangedAtSourceOffset: 3,
-                projectId: PROJECT_ID,
-                path: SOURCE_PATH,
-                offset: 41,
-                type: "example.com/issue-created",
-                createdAt: "2026-07-21T11:30:00.000Z",
-              },
-            ],
-          },
-        },
-      ),
-    );
-    expect(
-      state.subscriptions.inbound.bySourcePath[SOURCE_PATH]?.byKey.issues?.numEventsReceived,
-    ).toBe(1);
-
-    state = reduce(
-      processor,
-      state,
-      committed(
-        4,
-        "events.iterate.com/stream/copy-list-recorded",
-        subscriptionsFromSource(2, undefined, secondCreation, SECOND_SOURCE_STREAM_ID),
-      ),
-    );
-    expect(state.subscriptions.inbound.bySourcePath[SOURCE_PATH]).toMatchObject({
-      source: {
-        streamId: SECOND_SOURCE_STREAM_ID,
-        streamCreatedAt: secondCreation,
-      },
-      sourceOffset: 2,
-      byKey: { issues: { numEventsReceived: 0, numEventsDropped: 0 } },
-    });
-
-    state = reduce(
-      processor,
-      state,
-      committed(
-        5,
-        "events.iterate.com/stream/copy-list-recorded",
-        subscriptionsFromSource(50, undefined, firstCreation),
-      ),
-    );
-    state = reduce(
-      processor,
-      state,
-      committed(
-        6,
-        "example.com/issue-created",
-        {},
-        {
-          path: RECEIVER_PATH,
-          source: {
-            copiedFrom: [
-              {
-                subscriptionKey: "issues",
-                streamId: SOURCE_STREAM_ID,
-                streamCreatedAt: firstCreation,
-                cursorChangedAtSourceOffset: 3,
-                projectId: PROJECT_ID,
-                path: SOURCE_PATH,
-                offset: 42,
-                type: "example.com/issue-created",
-                createdAt: "2026-07-21T11:45:00.000Z",
-              },
-            ],
-          },
-        },
-      ),
-    );
-    expect(state.subscriptions.inbound.bySourcePath[SOURCE_PATH]).toMatchObject({
-      source: {
-        streamId: SECOND_SOURCE_STREAM_ID,
-        streamCreatedAt: secondCreation,
-      },
-      sourceOffset: 2,
-      byKey: { issues: { numEventsReceived: 0 } },
-    });
-
-    state = reduce(
-      processor,
-      state,
-      committed(
-        7,
-        "example.com/issue-created",
-        {},
-        {
-          path: RECEIVER_PATH,
-          source: {
-            copiedFrom: [
-              {
-                subscriptionKey: "issues",
-                streamId: SECOND_SOURCE_STREAM_ID,
-                streamCreatedAt: secondCreation,
-                cursorChangedAtSourceOffset: 2,
-                projectId: PROJECT_ID,
-                path: SOURCE_PATH,
-                offset: 3,
-                type: "example.com/issue-created",
-                createdAt: "2026-07-21T12:01:00.000Z",
-              },
-            ],
-          },
-        },
-      ),
-    );
-    expect(
-      state.subscriptions.inbound.bySourcePath[SOURCE_PATH]?.byKey.issues?.numEventsReceived,
-    ).toBe(1);
-  });
-
-  test("A→B→C replacement keeps only the latest list to send to each receiver, then drops empty sends", () => {
-    const { processor } = harness(SOURCE_PATH);
-    const at = (path: string) =>
-      streamSubscription({
-        receiver: {
-          action: "copy-to-stream",
-          receivingStreamPath: path,
-          delivery: {
-            start: "now",
-            onFailingEvent: "halt",
-            includeEphemeral: false,
-          },
-        },
-      });
-    let state = coreState(SOURCE_PATH);
-    for (const [offset, path] of [
-      [2, "/agents/a"],
-      [3, "/agents/b"],
-      [4, "/agents/c"],
-    ] as const) {
-      state = reduce(
-        processor,
-        state,
-        committed(offset, "events.iterate.com/stream/subscription-configured", at(path), {
-          path: SOURCE_PATH,
-        }),
-      );
-    }
-    expect(state.copyListDeliveriesByReceivingStream).toEqual({
-      "/agents/a": { sourceOffset: 3, status: "pending", subscriptionKeysRecordedByReceiver: [] },
-      "/agents/b": { sourceOffset: 4, status: "pending", subscriptionKeysRecordedByReceiver: [] },
-      "/agents/c": { sourceOffset: 4, status: "pending", subscriptionKeysRecordedByReceiver: [] },
-    });
-
-    for (const [offset, receivingStreamPath, sourceOffset] of [
-      [5, "/agents/a", 3],
-      [6, "/agents/b", 4],
-      [7, "/agents/c", 4],
-    ] as const) {
-      state = reduce(
-        processor,
-        state,
-        committed(offset, "events.iterate.com/stream/copy-list-confirmed", {
-          receivingStreamPath,
-          sourceOffset,
-          receivingStreamEvent: committed(
-            offset,
-            "events.iterate.com/stream/copy-list-recorded",
-            subscriptionsFromSource(
-              sourceOffset,
-              receivingStreamPath === "/agents/c"
-                ? subscriptionsFromSource(sourceOffset).subscriptionsByKey
-                : {},
-            ),
-            { path: receivingStreamPath },
-          ),
-        }),
-      );
-    }
-    expect(state.copyListDeliveriesByReceivingStream).toEqual({
-      "/agents/c": {
-        sourceOffset: 4,
-        status: "confirmed",
-        subscriptionKeysRecordedByReceiver: ["issues"],
-      },
-    });
-  });
-
-  test("moving a recorded subscription waits durably for the old receiver and recovers after an explicit resend", () => {
-    const { processor } = harness(SOURCE_PATH);
-    const at = (path: string) =>
-      streamSubscription({
-        receiver: {
-          action: "copy-to-stream",
-          receivingStreamPath: path,
-          delivery: {
-            start: "now",
-            onFailingEvent: "halt",
-            includeEphemeral: false,
-          },
-        },
-      });
-    const recorded = (
-      offset: number,
-      receivingStreamPath: string,
-      sourceOffset: number,
-      subscriptionsByKey: CopyListRecordedPayload["subscriptionsByKey"],
-    ) =>
-      committed(
-        offset,
-        "events.iterate.com/stream/copy-list-confirmed",
-        {
-          receivingStreamPath,
-          sourceOffset,
-          receivingStreamEvent: committed(
-            offset,
-            "events.iterate.com/stream/copy-list-recorded",
-            subscriptionsFromSource(sourceOffset, subscriptionsByKey),
-            { path: receivingStreamPath },
-          ),
-        },
-        { path: SOURCE_PATH },
-      );
-
-    let state = reduce(
-      processor,
-      coreState(SOURCE_PATH),
-      committed(2, "events.iterate.com/stream/subscription-configured", at("/agents/a"), {
-        path: SOURCE_PATH,
-      }),
-    );
-    state = reduce(
-      processor,
-      state,
-      recorded(3, "/agents/a", 2, subscriptionsFromSource(2).subscriptionsByKey),
-    );
-    expect(state.copyListDeliveriesByReceivingStream["/agents/a"]).toEqual({
-      sourceOffset: 2,
-      status: "confirmed",
-      subscriptionKeysRecordedByReceiver: ["issues"],
-    });
-
-    state = reduce(
-      processor,
-      state,
-      committed(4, "events.iterate.com/stream/subscription-configured", at("/agents/b"), {
-        path: SOURCE_PATH,
-      }),
-    );
-    expect(state.copyListDeliveriesByReceivingStream).toEqual({
-      "/agents/a": {
-        sourceOffset: 4,
-        status: "pending",
-        subscriptionKeysRecordedByReceiver: ["issues"],
-      },
-      "/agents/b": { sourceOffset: 4, status: "pending", subscriptionKeysRecordedByReceiver: [] },
-    });
-
-    state = reduce(
-      processor,
-      state,
-      committed(
-        5,
-        "events.iterate.com/stream/copy-list-delivery-blocked",
-        {
-          receivingStreamPath: "/agents/a",
-          sourceOffset: 4,
-          attempts: 8,
-          error: "old receiver unavailable",
-        },
-        { path: SOURCE_PATH },
-      ),
-    );
-    expect(state.copyListDeliveriesByReceivingStream["/agents/a"]).toEqual({
-      sourceOffset: 4,
-      status: "blocked",
-      attempts: 8,
-      error: "old receiver unavailable",
-      blockedAt: "2026-07-21T12:00:05.000Z",
-      subscriptionKeysRecordedByReceiver: ["issues"],
-    });
-
-    const beforeStaleBlock = state;
-    state = reduce(
-      processor,
-      state,
-      committed(
-        6,
-        "events.iterate.com/stream/copy-list-delivery-blocked",
-        {
-          receivingStreamPath: "/agents/a",
-          sourceOffset: 3,
-          attempts: 8,
-          error: "late failure for an older generation",
-        },
-        { path: SOURCE_PATH },
-      ),
-    );
-    expect(state.copyListDeliveriesByReceivingStream).toEqual(
-      beforeStaleBlock.copyListDeliveriesByReceivingStream,
-    );
-
-    const resend = committed(
-      7,
-      "events.iterate.com/stream/copy-list-resend-requested",
-      { receivingStreamPath: "/agents/a" },
-      { path: SOURCE_PATH },
-    );
-    processor.validate({
-      event: { type: resend.type, payload: resend.payload },
-      state,
-      authority: "public",
-    });
-    state = reduce(processor, state, resend);
-    expect(state.copyListDeliveriesByReceivingStream["/agents/a"]).toEqual({
-      sourceOffset: 7,
-      status: "pending",
-      subscriptionKeysRecordedByReceiver: ["issues"],
-    });
-
-    state = reduce(
-      processor,
-      state,
-      committed(
-        8,
-        "events.iterate.com/stream/copy-list-delivery-blocked",
-        {
-          receivingStreamPath: "/agents/a",
-          sourceOffset: 4,
-          attempts: 8,
-          error: "late failure after resend",
-        },
-        { path: SOURCE_PATH },
-      ),
-    );
-    expect(state.copyListDeliveriesByReceivingStream["/agents/a"]).toEqual({
-      sourceOffset: 7,
-      status: "pending",
-      subscriptionKeysRecordedByReceiver: ["issues"],
-    });
-
-    state = reduce(processor, state, recorded(9, "/agents/a", 7, {}));
-    expect(state.copyListDeliveriesByReceivingStream["/agents/a"]).toBeUndefined();
-    expect(state.copyListDeliveriesByReceivingStream["/agents/b"]).toEqual({
-      sourceOffset: 4,
-      status: "pending",
-      subscriptionKeysRecordedByReceiver: [],
-    });
-
-    state = reduce(
-      processor,
-      state,
-      recorded(10, "/agents/b", 4, subscriptionsFromSource(4).subscriptionsByKey),
-    );
-    expect(state.copyListDeliveriesByReceivingStream).toEqual({
-      "/agents/b": {
-        sourceOffset: 4,
-        status: "confirmed",
-        subscriptionKeysRecordedByReceiver: ["issues"],
-      },
-    });
-  });
-
-  test("refreshes every stream whose last recorded list contains a removed or recreated key", () => {
-    const { processor } = harness(SOURCE_PATH);
-    const at = (path: string) =>
-      streamSubscription({
-        receiver: {
-          action: "copy-to-stream",
-          receivingStreamPath: path,
-          delivery: {
-            start: "now",
-            onFailingEvent: "halt",
-            includeEphemeral: false,
-          },
-        },
-      });
-    const recorded = (
-      offset: number,
-      receivingStreamPath: string,
-      sourceOffset: number,
-      subscriptionsByKey: CopyListRecordedPayload["subscriptionsByKey"],
-    ) =>
-      committed(
-        offset,
-        "events.iterate.com/stream/copy-list-confirmed",
-        {
-          receivingStreamPath,
-          sourceOffset,
-          receivingStreamEvent: committed(
-            offset,
-            "events.iterate.com/stream/copy-list-recorded",
-            subscriptionsFromSource(sourceOffset, subscriptionsByKey),
-            { path: receivingStreamPath },
-          ),
-        },
-        { path: SOURCE_PATH },
-      );
-
-    let state = reduce(
-      processor,
-      coreState(SOURCE_PATH),
-      committed(2, "events.iterate.com/stream/subscription-configured", at("/agents/a"), {
-        path: SOURCE_PATH,
-      }),
-    );
-    state = reduce(
-      processor,
-      state,
-      recorded(3, "/agents/a", 2, subscriptionsFromSource(2).subscriptionsByKey),
-    );
-    state = reduce(
-      processor,
-      state,
-      committed(4, "events.iterate.com/stream/subscription-configured", at("/agents/b"), {
-        path: SOURCE_PATH,
-      }),
-    );
-    state = reduce(
-      processor,
-      state,
-      recorded(5, "/agents/b", 4, subscriptionsFromSource(4).subscriptionsByKey),
-    );
-    state = reduce(
-      processor,
-      state,
-      committed(
-        6,
-        "events.iterate.com/stream/copy-list-delivery-blocked",
-        {
-          receivingStreamPath: "/agents/a",
-          sourceOffset: 4,
-          attempts: 8,
-          error: "old receiver unavailable",
-        },
-        { path: SOURCE_PATH },
-      ),
-    );
-
-    state = reduce(
-      processor,
-      state,
-      committed(
-        7,
-        "events.iterate.com/stream/subscription-removed",
-        { subscriptionKey: "issues", reason: "requested" },
-        { path: SOURCE_PATH },
-      ),
-    );
-    expect(state.copyListDeliveriesByReceivingStream).toEqual({
-      "/agents/a": {
-        sourceOffset: 7,
-        status: "pending",
-        subscriptionKeysRecordedByReceiver: ["issues"],
-      },
-      "/agents/b": {
-        sourceOffset: 7,
-        status: "pending",
-        subscriptionKeysRecordedByReceiver: ["issues"],
-      },
-    });
-
-    state = reduce(
-      processor,
-      state,
-      committed(
-        8,
-        "events.iterate.com/stream/copy-list-delivery-blocked",
-        {
-          receivingStreamPath: "/agents/a",
-          sourceOffset: 7,
-          attempts: 8,
-          error: "old receiver still unavailable",
-        },
-        { path: SOURCE_PATH },
-      ),
-    );
-    state = reduce(processor, state, recorded(9, "/agents/b", 7, {}));
-    expect(state.subscriptions.outbound.byKey.issues).toBeUndefined();
-    expect(state.copyListDeliveriesByReceivingStream["/agents/a"]).toMatchObject({
-      sourceOffset: 7,
-      status: "blocked",
-      subscriptionKeysRecordedByReceiver: ["issues"],
-    });
-
-    state = reduce(
-      processor,
-      state,
-      committed(10, "events.iterate.com/stream/subscription-configured", at("/agents/c"), {
-        path: SOURCE_PATH,
-      }),
-    );
-    expect(state.copyListDeliveriesByReceivingStream).toEqual({
-      "/agents/a": {
-        sourceOffset: 10,
-        status: "pending",
-        subscriptionKeysRecordedByReceiver: ["issues"],
-      },
-      "/agents/c": {
-        sourceOffset: 10,
-        status: "pending",
-        subscriptionKeysRecordedByReceiver: [],
-      },
-    });
-
-    state = reduce(
-      processor,
-      state,
-      recorded(11, "/agents/c", 10, subscriptionsFromSource(10).subscriptionsByKey),
-    );
-    expect(state.copyListDeliveriesByReceivingStream["/agents/c"]).toEqual({
-      sourceOffset: 10,
-      status: "confirmed",
-      subscriptionKeysRecordedByReceiver: ["issues"],
-    });
-    state = reduce(processor, state, recorded(12, "/agents/a", 10, {}));
-    expect(state.copyListDeliveriesByReceivingStream).toEqual({
-      "/agents/c": {
-        sourceOffset: 10,
-        status: "confirmed",
-        subscriptionKeysRecordedByReceiver: ["issues"],
-      },
-    });
-  });
-
-  test("bounds nonempty source lists while always allowing an empty cleanup list", () => {
-    const { processor } = harness();
-    const tooManyRecords = Object.fromEntries(
-      Array.from({ length: MAX_SUBSCRIPTIONS_PER_RECEIVING_STREAM + 1 }, (_, index) => [
-        `key-${index}`,
-        subscriptionsFromSource(5).subscriptionsByKey.issues,
-      ]),
-    );
-    expect(() =>
-      processor.validate({
-        event: {
-          type: "events.iterate.com/stream/copy-list-recorded",
-          payload: subscriptionsFromSource(5, tooManyRecords),
-        },
-        state: coreState(),
-        authority: "copy-list",
-      }),
-    ).toThrow(`at most ${MAX_SUBSCRIPTIONS_PER_RECEIVING_STREAM}`);
-
-    const receiving = Object.fromEntries(
-      Array.from({ length: MAX_SOURCE_STREAMS_PER_RECEIVING_STREAM }, (_, index) => [
-        `/source-${index}`,
-        {
-          source: {
-            projectId: PROJECT_ID,
-            path: `/source-${index}`,
-            streamId: SOURCE_STREAM_ID,
-            streamCreatedAt: SOURCE_CREATED_AT,
-          },
-          sourceOffset: 1,
-          byKey: {},
-        },
-      ]),
-    );
-    const full = CoreProcessorContract.stateSchema.parse({
-      projectId: PROJECT_ID,
-      path: RECEIVER_PATH,
-      subscriptions: {
-        inbound: { bySourcePath: receiving },
-        outbound: { byKey: {} },
-      },
-    });
-    expect(() =>
-      processor.validate({
-        event: {
-          type: "events.iterate.com/stream/copy-list-recorded",
-          payload: {
-            source: {
-              projectId: PROJECT_ID,
-              path: "/one-too-many",
-              streamId: SOURCE_STREAM_ID,
-              streamCreatedAt: SOURCE_CREATED_AT,
-            },
-            sourceOffset: 2,
-            subscriptionsByKey: {},
-          },
-        },
-        state: full,
-        authority: "copy-list",
-      }),
-    ).not.toThrow();
-
-    expect(() =>
-      processor.validate({
-        event: {
-          type: "events.iterate.com/stream/copy-list-recorded",
-          payload: {
-            source: {
-              projectId: PROJECT_ID,
-              path: "/one-too-many",
-              streamId: SOURCE_STREAM_ID,
-              streamCreatedAt: SOURCE_CREATED_AT,
-            },
-            sourceOffset: 2,
-            subscriptionsByKey: subscriptionsFromSource(2).subscriptionsByKey,
-          },
-        },
-        state: full,
-        authority: "copy-list",
-      }),
-    ).toThrow(`at most ${MAX_SOURCE_STREAMS_PER_RECEIVING_STREAM}`);
-  });
-
   test("rejects explicit source read positions beyond the current stream head", () => {
     const { processor } = harness(SOURCE_PATH);
-    const initialState = coreState(SOURCE_PATH);
-    const futureStart = streamSubscription({
-      receiver: {
-        action: "copy-to-stream",
-        receivingStreamPath: RECEIVER_PATH,
-        delivery: {
-          start: { afterOffset: initialState.maxOffset + 1 },
-          onFailingEvent: "halt",
-          includeEphemeral: false,
-        },
-      },
-    });
-    expect(() =>
-      processor.validate({
-        event: {
-          type: "events.iterate.com/stream/subscription-configured",
-          payload: futureStart,
-        },
-        state: initialState,
-        authority: "public",
-      }),
-    ).toThrow(/beyond this stream's current maximum offset/);
-
     const configured = reduce(
       processor,
-      initialState,
-      committed(
-        1,
-        "events.iterate.com/stream/subscription-configured",
-        streamSubscription({
-          receiver: {
-            action: "copy-to-stream",
-            receivingStreamPath: RECEIVER_PATH,
-            delivery: {
-              start: "beginning",
-              onFailingEvent: "halt",
-              includeEphemeral: false,
-            },
-          },
-        }),
-        { path: SOURCE_PATH },
-      ),
+      coreState(SOURCE_PATH),
+      committed(1, "events.iterate.com/stream/subscription-configured", streamSubscription(), {
+        path: SOURCE_PATH,
+      }),
     );
     expect(() =>
       processor.validate({
@@ -1476,7 +523,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
     ).toThrow(/beyond this stream's current maximum offset/);
   });
 
-  test("rejects a 65th subscription before it can invalidate the receiver's stored set", () => {
+  test("rejects a 65th subscription for one receiving stream", () => {
     const { processor } = harness(SOURCE_PATH);
     const receiver = streamSubscription().receiver;
     if (receiver.action !== "copy-to-stream") throw new Error("test fixture must target a stream");
@@ -1526,17 +573,151 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
   });
 });
 
+describe("passive inbound records", () => {
+  test("the first copied event creates the record; later ones with the same stamp count into it", () => {
+    const { processor } = harness();
+    let state = reduce(processor, coreState(), copiedEvent(2, { sourceOffset: 41 }));
+    expect(state.subscriptions.inbound.bySourcePath[SOURCE_PATH]?.issues).toEqual({
+      streamId: SOURCE_STREAM_ID,
+      streamCreatedAt: SOURCE_CREATED_AT,
+      cursorChangedAtSourceOffset: 2,
+      numEventsReceived: 1,
+      lastEventReceivedAt: "2026-07-21T12:00:02.000Z",
+    });
+
+    state = reduce(processor, state, copiedEvent(3, { sourceOffset: 42 }));
+    expect(state.subscriptions.inbound.bySourcePath[SOURCE_PATH]?.issues).toMatchObject({
+      numEventsReceived: 2,
+      lastEventReceivedAt: "2026-07-21T12:00:03.000Z",
+    });
+  });
+
+  test("a newer config generation of the same lifetime updates the fence and keeps counting", () => {
+    const { processor } = harness();
+    let state = reduce(processor, coreState(), copiedEvent(2, { sourceOffset: 41 }));
+    state = reduce(
+      processor,
+      state,
+      copiedEvent(3, { cursorChangedAtSourceOffset: 9, sourceOffset: 12 }),
+    );
+
+    expect(state.subscriptions.inbound.bySourcePath[SOURCE_PATH]?.issues).toEqual({
+      streamId: SOURCE_STREAM_ID,
+      streamCreatedAt: SOURCE_CREATED_AT,
+      cursorChangedAtSourceOffset: 9,
+      numEventsReceived: 2,
+      lastEventReceivedAt: "2026-07-21T12:00:03.000Z",
+    });
+  });
+
+  test("a newer source lifetime replaces the record and restarts its counters", () => {
+    const { processor } = harness();
+    let state = reduce(processor, coreState(), copiedEvent(2, { sourceOffset: 41 }));
+    state = reduce(processor, state, copiedEvent(3, { sourceOffset: 42 }));
+    state = reduce(
+      processor,
+      state,
+      copiedEvent(4, {
+        streamId: SECOND_SOURCE_STREAM_ID,
+        streamCreatedAt: "2026-07-21T12:00:00.000Z",
+        cursorChangedAtSourceOffset: 2,
+        sourceOffset: 3,
+      }),
+    );
+
+    expect(state.subscriptions.inbound.bySourcePath[SOURCE_PATH]?.issues).toEqual({
+      streamId: SECOND_SOURCE_STREAM_ID,
+      streamCreatedAt: "2026-07-21T12:00:00.000Z",
+      cursorChangedAtSourceOffset: 2,
+      numEventsReceived: 1,
+      lastEventReceivedAt: "2026-07-21T12:00:04.000Z",
+    });
+  });
+
+  test("an older stamp on a replayed row never regresses the record", () => {
+    const { processor } = harness();
+    let state = reduce(
+      processor,
+      coreState(),
+      copiedEvent(2, {
+        streamId: SECOND_SOURCE_STREAM_ID,
+        streamCreatedAt: "2026-07-21T12:00:00.000Z",
+        sourceOffset: 3,
+      }),
+    );
+    const record = state.subscriptions.inbound.bySourcePath[SOURCE_PATH]?.issues;
+    state = reduce(
+      processor,
+      state,
+      copiedEvent(3, {
+        streamId: SOURCE_STREAM_ID,
+        streamCreatedAt: SOURCE_CREATED_AT,
+        sourceOffset: 44,
+      }),
+    );
+
+    expect(state.subscriptions.inbound.bySourcePath[SOURCE_PATH]?.issues).toEqual(record);
+  });
+
+  test("keys from the same source path keep independent records", () => {
+    const { processor } = harness();
+    let state = reduce(processor, coreState(), copiedEvent(2, { sourceOffset: 41 }));
+    state = reduce(
+      processor,
+      state,
+      copiedEvent(3, {
+        subscriptionKey: "other",
+        cursorChangedAtSourceOffset: 7,
+        sourceOffset: 41,
+      }),
+    );
+
+    expect(state.subscriptions.inbound.bySourcePath[SOURCE_PATH]?.issues).toMatchObject({
+      cursorChangedAtSourceOffset: 2,
+      numEventsReceived: 1,
+    });
+    expect(state.subscriptions.inbound.bySourcePath[SOURCE_PATH]?.other).toMatchObject({
+      cursorChangedAtSourceOffset: 7,
+      numEventsReceived: 1,
+    });
+  });
+
+  test("a copied stream control event is inert but still counts into the record", () => {
+    const { processor } = harness();
+    const state = reduce(processor, coreState(), {
+      ...committed(2, "events.iterate.com/stream/paused", { reason: "untrusted source" }),
+      source: {
+        copiedFrom: [
+          {
+            subscriptionKey: "issues",
+            streamId: SOURCE_STREAM_ID,
+            streamCreatedAt: SOURCE_CREATED_AT,
+            cursorChangedAtSourceOffset: 2,
+            createdAt: "2026-07-21T11:30:00.000Z",
+            offset: 41,
+            path: SOURCE_PATH,
+            projectId: PROJECT_ID,
+            type: "events.iterate.com/stream/paused",
+          },
+        ],
+      },
+    });
+
+    expect(state.paused).toBe(false);
+    expect(state.subscriptions.inbound.bySourcePath[SOURCE_PATH]?.issues?.numEventsReceived).toBe(
+      1,
+    );
+  });
+});
+
 describe("StreamCoreProcessor validation and dispatch", () => {
   test.each([
     "copy",
+    "copy-drop",
     "stream-paused",
     "child-stream-created",
-    "copy-list-recorded",
-    "copy-list-confirmed",
-    "copy-event-dropped",
     "filter-condition-failed",
     "subscription-failing-event-skipped",
-    "subscription-ended",
   ])("public appends cannot use the platform-only %s idempotency-key family", (family) => {
     const { processor, state } = harness();
     expect(() =>
@@ -1551,75 +732,8 @@ describe("StreamCoreProcessor validation and dispatch", () => {
     ).toThrow("iterate-internal idempotency keys are platform-authored");
   });
 
-  test("only the platform can append copy lists, dropped-event records, or source.copiedFrom", () => {
+  test("only the platform can append source.copiedFrom", () => {
     const { processor, state } = harness();
-    const replacement: StreamEventInput = {
-      type: "events.iterate.com/stream/copy-list-recorded",
-      payload: subscriptionsFromSource(4),
-    };
-    expect(() => processor.validate({ event: replacement, state, authority: "public" })).toThrow(
-      "copy lists from source streams are platform-authored",
-    );
-    expect(() =>
-      processor.validate({ event: replacement, state, authority: "copy-list" }),
-    ).not.toThrow();
-
-    const stateWithRecordedSubscription = reduce(
-      processor,
-      state,
-      committed(2, "events.iterate.com/stream/copy-list-recorded", subscriptionsFromSource(4)),
-    );
-    const dropping: StreamEventInput = {
-      type: "events.iterate.com/stream/copied-events-dropped",
-      payload: {
-        source: {
-          projectId: PROJECT_ID,
-          path: SOURCE_PATH,
-          streamId: SOURCE_STREAM_ID,
-          streamCreatedAt: SOURCE_CREATED_AT,
-        },
-        subscriptionKey: "issues",
-        reason: "cycle",
-        count: 1,
-        firstOffset: 4,
-        lastOffset: 4,
-      },
-    };
-    expect(() => processor.validate({ event: dropping, state, authority: "public" })).toThrow(
-      "copy drop records are platform-authored",
-    );
-    expect(() =>
-      processor.validate({
-        event: dropping,
-        state: stateWithRecordedSubscription,
-        authority: "copy",
-      }),
-    ).not.toThrow();
-    expect(() =>
-      processor.validate({
-        event: {
-          type: "events.iterate.com/stream/copied-events-dropped",
-          payload: {
-            source: {
-              projectId: PROJECT_ID,
-              path: SOURCE_PATH,
-              streamId: SECOND_SOURCE_STREAM_ID,
-              streamCreatedAt: SOURCE_CREATED_AT,
-            },
-            subscriptionKey: "issues",
-            reason: "cycle",
-            count: 1,
-            firstOffset: 4,
-            lastOffset: 4,
-          },
-        },
-        state: stateWithRecordedSubscription,
-        authority: "copy",
-      }),
-    ).toThrow(
-      'dropped events do not match the current subscription "issues" from "/sources/issues"',
-    );
-
     const copied: StreamEventInput = {
       type: "example.com/issue-created",
       source: {
@@ -1641,61 +755,7 @@ describe("StreamCoreProcessor validation and dispatch", () => {
     expect(() => processor.validate({ event: copied, state, authority: "public" })).toThrow(
       "copy source information is platform-authored",
     );
-  });
-
-  test("received events must match the receiver's current recorded source and subscription", () => {
-    const { processor, state: initialState } = harness();
-    const state = reduce(
-      processor,
-      initialState,
-      committed(2, "events.iterate.com/stream/copy-list-recorded", subscriptionsFromSource(4)),
-    );
-    const copied: StreamEventInput = {
-      type: "example.com/issue-created",
-      source: {
-        copiedFrom: [
-          {
-            subscriptionKey: "issues",
-            streamId: SOURCE_STREAM_ID,
-            streamCreatedAt: SOURCE_CREATED_AT,
-            cursorChangedAtSourceOffset: 4,
-            createdAt: "2026-07-21T12:00:00.000Z",
-            offset: 5,
-            path: SOURCE_PATH,
-            projectId: PROJECT_ID,
-            type: "example.com/issue-created",
-          },
-        ],
-      },
-    };
-
     expect(() => processor.validate({ event: copied, state, authority: "copy" })).not.toThrow();
-    expect(() =>
-      processor.validate({
-        event: {
-          ...copied,
-          source: {
-            copiedFrom: [
-              {
-                ...copied.source!.copiedFrom![0]!,
-                streamId: SECOND_SOURCE_STREAM_ID,
-              },
-            ],
-          },
-        },
-        state,
-        authority: "copy",
-      }),
-    ).toThrow(
-      'received event does not match the current subscription "issues" from "/sources/issues"',
-    );
-    expect(() =>
-      processor.validate({
-        event: { ...copied, source: { copiedFrom: [] } },
-        state,
-        authority: "copy",
-      }),
-    ).toThrow("received event has no source hop");
   });
 
   test("rejects a stream subscribing to itself", () => {
@@ -1710,110 +770,5 @@ describe("StreamCoreProcessor validation and dispatch", () => {
         authority: "public",
       }),
     ).toThrow("a stream cannot receive events from itself");
-  });
-
-  test("hosted processors own their checkpoints and only allow time-based source completion", () => {
-    const { processor, state } = harness(SOURCE_PATH);
-    const hosted = streamSubscription({
-      receiver: {
-        action: "processor-wake",
-        expression: ["agents", ["get", "/agent"], "processor", "wakeStreamProcessor"],
-      },
-      endWhen: { any: [{ kind: "time", at: "2026-07-22T00:00:00.000Z" }] },
-    });
-    expect(() =>
-      processor.validate({
-        event: {
-          type: "events.iterate.com/stream/subscription-configured",
-          payload: hosted,
-        },
-        state,
-        authority: "public",
-      }),
-    ).not.toThrow();
-
-    expect(() =>
-      processor.validate({
-        event: {
-          type: "events.iterate.com/stream/subscription-configured",
-          payload: {
-            ...hosted,
-            endWhen: { any: [{ kind: "acknowledged-events", count: 1 }] },
-          },
-        },
-        state,
-        authority: "public",
-      }),
-    ).toThrow("hosted processors own their checkpoint");
-  });
-
-  test("records every receiver list changed by configure/replace and retries by path", () => {
-    const { processor } = harness(SOURCE_PATH);
-    const at = (path: string) =>
-      streamSubscription({
-        receiver: {
-          action: "copy-to-stream",
-          receivingStreamPath: path,
-          delivery: {
-            start: "now",
-            onFailingEvent: "halt",
-            includeEphemeral: false,
-          },
-        },
-      });
-    let state = coreState(SOURCE_PATH);
-    const first = committed(2, "events.iterate.com/stream/subscription-configured", at("/a"), {
-      path: SOURCE_PATH,
-    });
-    state = reduce(processor, state, first);
-    expect(state.copyListDeliveriesByReceivingStream).toMatchObject({
-      "/a": { sourceOffset: 2, status: "pending", subscriptionKeysRecordedByReceiver: [] },
-    });
-
-    const replacement = committed(
-      3,
-      "events.iterate.com/stream/subscription-configured",
-      at("/b"),
-      {
-        path: SOURCE_PATH,
-      },
-    );
-    state = reduce(processor, state, replacement);
-    expect(state.copyListDeliveriesByReceivingStream).toMatchObject({
-      "/a": { sourceOffset: 3, status: "pending", subscriptionKeysRecordedByReceiver: [] },
-      "/b": { sourceOffset: 3, status: "pending", subscriptionKeysRecordedByReceiver: [] },
-    });
-
-    state = reduce(
-      processor,
-      state,
-      committed(
-        4,
-        "events.iterate.com/stream/copy-list-delivery-blocked",
-        {
-          receivingStreamPath: "/b",
-          sourceOffset: 3,
-          attempts: 8,
-          error: "receiver unavailable",
-        },
-        { path: SOURCE_PATH },
-      ),
-    );
-    const retryRequest = committed(
-      5,
-      "events.iterate.com/stream/copy-list-resend-requested",
-      { receivingStreamPath: "/b" },
-      { path: SOURCE_PATH },
-    );
-    processor.validate({
-      event: { type: retryRequest.type, payload: retryRequest.payload },
-      state,
-      authority: "public",
-    });
-    state = reduce(processor, state, retryRequest);
-    expect(state.copyListDeliveriesByReceivingStream).toMatchObject({
-      "/a": { sourceOffset: 3, status: "pending", subscriptionKeysRecordedByReceiver: [] },
-      "/b": { sourceOffset: 5, status: "pending", subscriptionKeysRecordedByReceiver: [] },
-    });
   });
 });

@@ -13,6 +13,7 @@ import {
   type SubscriptionConfiguredPayload,
 } from "./core-processor-contract.ts";
 import type { RetainedProcessEventBatch } from "./retained-event-callbacks.ts";
+import { internalStreamId } from "./stream-delivery-utils.ts";
 import { StreamEventSender, type SubscriptionReceiverCalls } from "./stream-event-sender.ts";
 import { SqliteSubscriptionCursorStore } from "./stream-storage.ts";
 
@@ -86,7 +87,6 @@ function harness(args: {
   wakeProcessor: SubscriptionReceiverCalls["wakeStreamProcessor"];
   deliverToItx?: SubscriptionReceiverCalls["deliverToItx"];
   copyToStream?: SubscriptionReceiverCalls["copyToStream"];
-  deliverToWebhook?: SubscriptionReceiverCalls["deliverToWebhook"];
   appendDeliveryEvent?: ConstructorParameters<
     typeof StreamEventSender
   >[0]["hooks"]["appendDeliveryEvent"];
@@ -122,8 +122,7 @@ function harness(args: {
       return args.wakeProcessor(...wakeArgs);
     },
     deliverToItx: args.deliverToItx ?? (async () => undefined),
-    copyToStream: args.copyToStream ?? (async () => ({ accepted: 0, dropped: [] })),
-    deliverToWebhook: args.deliverToWebhook ?? (async () => undefined),
+    copyToStream: args.copyToStream ?? (async () => ({ acknowledged: 0 })),
   };
   const eventSender = new StreamEventSender({
     idleTeardownMs: 60_000,
@@ -214,18 +213,12 @@ describe("StreamEventSender hosted processor delivery", () => {
           delivery: {
             start: "beginning",
             onFailingEvent: "halt",
-            includeEphemeral: false,
           },
         },
       },
       configuredAtOffset: 1,
       configuredAt: new Date(1).toISOString(),
       cursorSet: { afterOffset: 2, setAtSourceOffset: 4 },
-    };
-    h.state.copyListDeliveriesByReceivingStream["/receiver"] = {
-      sourceOffset: 1,
-      status: "pending",
-      subscriptionKeysRecordedByReceiver: [],
     };
     h.store.nack(PROCESSOR_KEY, {
       attempt: 3,
@@ -459,14 +452,14 @@ describe("StreamEventSender hosted processor delivery", () => {
 });
 
 describe("StreamEventSender stream delivery", () => {
-  it("bisects a transformed stream batch so a poison event cannot strand its healthy prefix", async () => {
+  it("pins the next read to one event after a batch failure so a poison event cannot strand its healthy prefix", async () => {
     const attemptedOffsets: number[][] = [];
     const copyToStream = vi.fn<SubscriptionReceiverCalls["copyToStream"]>(async (_path, batch) => {
       attemptedOffsets.push(batch.events.map(({ offset }) => offset));
       if (batch.events.some(({ offset }) => offset === 3)) {
-        throw new Error("copy transform failed at offset 3");
+        throw new Error("receiver rejected offset 3");
       }
-      return { accepted: batch.events.length, dropped: [] };
+      return { acknowledged: batch.events.length };
     });
     const h = harness({
       events: [
@@ -479,11 +472,9 @@ describe("StreamEventSender stream delivery", () => {
         receiver: {
           action: "copy-to-stream",
           receivingStreamPath: "/agents/b",
-          transform: '{"payload": payload}',
           delivery: {
             start: "beginning",
             onFailingEvent: "halt",
-            includeEphemeral: false,
           },
         },
       },
@@ -492,21 +483,35 @@ describe("StreamEventSender stream delivery", () => {
         throw new Error("a copy must not wake a hosted processor");
       },
     });
-    h.state.copyListDeliveriesByReceivingStream["/agents/b"] = {
-      sourceOffset: 1,
-      status: "confirmed",
-      subscriptionKeysRecordedByReceiver: [PROCESSOR_KEY],
-    };
 
     h.eventSender.sendDue();
     await h.settle();
+    expect(attemptedOffsets).toEqual([[2, 3, 4]]);
+    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
+      acknowledgedOffset: 0,
+      attempt: 1,
+      nextAttemptAt: 11_000,
+    });
 
+    // The retry reads one event at a time: the healthy prefix commits, then
+    // the poison event fails alone and owns the retry ladder.
+    h.setNow(11_000);
+    h.eventSender.onAlarm();
+    await h.settle();
+    expect(attemptedOffsets).toEqual([[2, 3, 4], [2], [3, 4]]);
+    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
+      acknowledgedOffset: 2,
+      attempt: 1,
+      nextAttemptAt: 12_000,
+    });
+
+    h.setNow(13_000);
+    h.eventSender.onAlarm();
+    await h.settle();
     expect(attemptedOffsets).toEqual([[2, 3, 4], [2], [3, 4], [3]]);
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
       acknowledgedOffset: 2,
-      acknowledgedEvents: 1,
-      attempt: 1,
-      nextAttemptAt: 11_000,
+      attempt: 2,
       failingEventOffset: null,
     });
   });
@@ -529,7 +534,6 @@ describe("StreamEventSender stream delivery", () => {
           delivery: {
             start: "beginning",
             onFailingEvent: "skip",
-            includeEphemeral: false,
           },
         },
       },
@@ -606,16 +610,15 @@ describe("StreamEventSender stream delivery", () => {
         configuration: {
           subscriptionKey: PROCESSOR_KEY,
           receiver: {
-            action: "webhook-post",
-            url: "https://receiver.example/events",
+            action: "itx-call",
+            expression: ["worker", "processEventBatch"],
             delivery: {
               start: "beginning",
               onFailingEvent: "halt",
-              includeEphemeral: false,
             },
           },
         },
-        deliverToWebhook: async () => {
+        deliverToItx: async () => {
           throw new Error(message);
         },
         appendDeliveryEvent: (input) => {
@@ -629,7 +632,7 @@ describe("StreamEventSender stream delivery", () => {
           return true;
         },
         wakeProcessor: async () => {
-          throw new Error("a webhook receiver must not wake a hosted processor");
+          throw new Error("an ITX receiver must not wake a hosted processor");
         },
       });
       h.store.nack(PROCESSOR_KEY, {
@@ -659,23 +662,20 @@ describe("StreamEventSender stream delivery", () => {
     },
   );
 
-  it("rearms the earliest stored retry before a later finite-lifetime deadline", async () => {
+  it("respects a stored backoff and rearms its retry time", async () => {
     const copyToStream = vi.fn<SubscriptionReceiverCalls["copyToStream"]>(async (_path, batch) => ({
-      accepted: batch.events.length,
-      dropped: [],
+      acknowledged: batch.events.length,
     }));
     const h = harness({
       events: [event(2, "example.com/issue-created", { issue: 42 })],
       configuration: {
         subscriptionKey: PROCESSOR_KEY,
-        endWhen: { any: [{ kind: "time", at: new Date(1_000_000).toISOString() }] },
         receiver: {
           action: "copy-to-stream",
           receivingStreamPath: "/agents/b",
           delivery: {
             start: "beginning",
             onFailingEvent: "halt",
-            includeEphemeral: false,
           },
         },
       },
@@ -684,11 +684,6 @@ describe("StreamEventSender stream delivery", () => {
         throw new Error("a copy must not wake a hosted processor");
       },
     });
-    h.state.copyListDeliveriesByReceivingStream["/agents/b"] = {
-      sourceOffset: 1,
-      status: "confirmed",
-      subscriptionKeysRecordedByReceiver: [PROCESSOR_KEY],
-    };
     h.store.nack(PROCESSOR_KEY, {
       attempt: 1,
       nextAttemptAt: 11_000,
@@ -704,8 +699,7 @@ describe("StreamEventSender stream delivery", () => {
 
   it("redelivers after the receiver accepts but committing the source cursor fails", async () => {
     const copyToStream = vi.fn<SubscriptionReceiverCalls["copyToStream"]>(async (_path, batch) => ({
-      accepted: batch.events.length,
-      dropped: [],
+      acknowledged: batch.events.length,
     }));
     const h = harness({
       events: [event(2, "example.com/issue-created", { issue: 42 })],
@@ -717,7 +711,6 @@ describe("StreamEventSender stream delivery", () => {
           delivery: {
             start: "beginning",
             onFailingEvent: "halt",
-            includeEphemeral: false,
           },
         },
       },
@@ -726,11 +719,6 @@ describe("StreamEventSender stream delivery", () => {
         throw new Error("a copy must not wake a hosted processor");
       },
     });
-    h.state.copyListDeliveriesByReceivingStream["/agents/b"] = {
-      sourceOffset: 1,
-      status: "confirmed",
-      subscriptionKeysRecordedByReceiver: [PROCESSOR_KEY],
-    };
     const commitAcknowledgement = h.store.ack.bind(h.store);
     vi.spyOn(h.store, "ack")
       .mockImplementationOnce(() => {
@@ -758,27 +746,28 @@ describe("StreamEventSender stream delivery", () => {
     expect(copyToStream).toHaveBeenCalledTimes(2);
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
       acknowledgedOffset: 2,
-      acknowledgedEvents: 1,
       attempt: 0,
       nextAttemptAt: null,
       lastError: null,
     });
   });
 
-  it("withholds receiver drop audits from stream copies and acknowledges a hop-limit verdict", async () => {
+  it("withholds the receiver's own drop audits from stream copies and acknowledges a drop verdict", async () => {
     const delivered: StreamEvent[][] = [];
     const copyToStream = vi.fn<SubscriptionReceiverCalls["copyToStream"]>(async (_path, batch) => {
       delivered.push(batch.events);
-      return {
-        accepted: 0,
-        dropped: batch.events.map(({ offset }) => ({ offset, reason: "hop-limit" as const })),
-      };
+      // The receiver drops every delivered event (cycle/hop limit) but the
+      // acknowledgement is terminal either way.
+      return { acknowledged: batch.events.length };
     });
     const h = harness({
       events: [
-        event(2, "events.iterate.com/stream/copied-events-dropped", {
-          reason: "cycle",
-        }),
+        {
+          ...event(2, "events.iterate.com/stream/error-occurred", {
+            message: "dropped 1 copied event(s)",
+          }),
+          idempotencyKey: internalStreamId("copy-drop", "project", "/upstream", 1, 2),
+        },
         event(3, "example.com/issue-created", { issue: 42 }),
       ],
       configuration: {
@@ -789,7 +778,6 @@ describe("StreamEventSender stream delivery", () => {
           delivery: {
             start: "beginning",
             onFailingEvent: "halt",
-            includeEphemeral: false,
           },
         },
       },
@@ -798,11 +786,6 @@ describe("StreamEventSender stream delivery", () => {
         throw new Error("a copy must not wake a hosted processor");
       },
     });
-    h.state.copyListDeliveriesByReceivingStream["/agents/b"] = {
-      sourceOffset: 1,
-      status: "confirmed",
-      subscriptionKeysRecordedByReceiver: [PROCESSOR_KEY],
-    };
 
     h.eventSender.sendDue();
     await h.settle();
@@ -810,111 +793,9 @@ describe("StreamEventSender stream delivery", () => {
     expect(delivered.map((batch) => batch.map(({ offset }) => offset))).toEqual([[3]]);
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
       acknowledgedOffset: 3,
-      acknowledgedEvents: 1,
       attempt: 0,
       nextAttemptAt: null,
       lastError: null,
-    });
-  });
-
-  it("completes an event-count subscription when the receiving stream terminally drops the event", async () => {
-    const appendDeliveryEvent = vi.fn(() => true);
-    const copyToStream = vi.fn<SubscriptionReceiverCalls["copyToStream"]>(async (_path, batch) => ({
-      accepted: 0,
-      dropped: batch.events.map(({ offset }) => ({ offset, reason: "cycle" as const })),
-    }));
-    const h = harness({
-      events: [event(2, "example.com/issue-created", { issue: 42 })],
-      configuration: {
-        subscriptionKey: PROCESSOR_KEY,
-        endWhen: { any: [{ kind: "acknowledged-events", count: 1 }] },
-        receiver: {
-          action: "copy-to-stream",
-          receivingStreamPath: "/agents/b",
-          delivery: {
-            start: "beginning",
-            onFailingEvent: "halt",
-            includeEphemeral: false,
-          },
-        },
-      },
-      appendDeliveryEvent,
-      copyToStream,
-      wakeProcessor: async () => {
-        throw new Error("a copy must not wake a hosted processor");
-      },
-    });
-    h.state.copyListDeliveriesByReceivingStream["/agents/b"] = {
-      sourceOffset: 1,
-      status: "confirmed",
-      subscriptionKeysRecordedByReceiver: [PROCESSOR_KEY],
-    };
-
-    h.eventSender.sendDue();
-    await h.settle();
-
-    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
-      acknowledgedOffset: 2,
-      acknowledgedEvents: 1,
-    });
-    expect(appendDeliveryEvent).toHaveBeenCalledWith({
-      type: "events.iterate.com/stream/subscription-removed",
-      idempotencyKey: expect.any(String),
-      payload: { subscriptionKey: PROCESSOR_KEY, reason: "completed" },
-    });
-  });
-
-  it("counts a mixed accepted and multi-drop receipt as one acknowledgement per event", async () => {
-    const appendDeliveryEvent = vi.fn(() => true);
-    const copyToStream = vi.fn<SubscriptionReceiverCalls["copyToStream"]>(async () => ({
-      accepted: 1,
-      dropped: [
-        { offset: 3, reason: "cycle" },
-        { offset: 4, reason: "hop-limit" },
-      ],
-    }));
-    const h = harness({
-      events: [
-        event(2, "example.com/issue-created", { issue: 1 }),
-        event(3, "example.com/issue-created", { issue: 2 }),
-        event(4, "example.com/issue-created", { issue: 3 }),
-      ],
-      configuration: {
-        subscriptionKey: PROCESSOR_KEY,
-        endWhen: { any: [{ kind: "acknowledged-events", count: 3 }] },
-        receiver: {
-          action: "copy-to-stream",
-          receivingStreamPath: "/agents/b",
-          delivery: {
-            start: "beginning",
-            onFailingEvent: "halt",
-            includeEphemeral: false,
-          },
-        },
-      },
-      appendDeliveryEvent,
-      copyToStream,
-      wakeProcessor: async () => {
-        throw new Error("a copy must not wake a hosted processor");
-      },
-    });
-    h.state.copyListDeliveriesByReceivingStream["/agents/b"] = {
-      sourceOffset: 1,
-      status: "confirmed",
-      subscriptionKeysRecordedByReceiver: [PROCESSOR_KEY],
-    };
-
-    h.eventSender.sendDue();
-    await h.settle();
-
-    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
-      acknowledgedOffset: 4,
-      acknowledgedEvents: 3,
-    });
-    expect(appendDeliveryEvent).toHaveBeenCalledWith({
-      type: "events.iterate.com/stream/subscription-removed",
-      idempotencyKey: expect.any(String),
-      payload: { subscriptionKey: PROCESSOR_KEY, reason: "completed" },
     });
   });
 
@@ -933,7 +814,6 @@ describe("StreamEventSender stream delivery", () => {
           delivery: {
             start: "beginning",
             onFailingEvent: "halt",
-            includeEphemeral: false,
           },
         },
       },
@@ -943,11 +823,6 @@ describe("StreamEventSender stream delivery", () => {
         throw new Error("a copy must not wake a hosted processor");
       },
     });
-    h.state.copyListDeliveriesByReceivingStream["/agents/b"] = {
-      sourceOffset: 1,
-      status: "confirmed",
-      subscriptionKeysRecordedByReceiver: [PROCESSOR_KEY],
-    };
     h.store.nack(PROCESSOR_KEY, {
       attempt: 14,
       nextAttemptAt: 10_000,
@@ -977,72 +852,13 @@ describe("StreamEventSender stream delivery", () => {
     });
   });
 
-  it.each([
-    ["non-integer accepted count", { accepted: 0.5, dropped: [] }],
-    ["negative accepted count", { accepted: -1, dropped: [] }],
-    ["non-array dropped list", { accepted: 1, dropped: "not-an-array" }],
-    [
-      "duplicate dropped offsets",
-      {
-        accepted: 0,
-        dropped: [
-          { offset: 2, reason: "cycle" },
-          { offset: 2, reason: "cycle" },
-        ],
-      },
-    ],
-    ["unknown drop reason", { accepted: 0, dropped: [{ offset: 2, reason: "receiver-filter" }] }],
-    ["out-of-batch dropped offset", { accepted: 0, dropped: [{ offset: 3, reason: "cycle" }] }],
-    ["unaccounted delivered event", { accepted: 0, dropped: [] }],
-  ])("rejects an invalid receiver receipt: %s", async (_description, receipt) => {
-    const copyToStream = vi.fn<SubscriptionReceiverCalls["copyToStream"]>(async () =>
-      Promise.resolve(receipt as Awaited<ReturnType<SubscriptionReceiverCalls["copyToStream"]>>),
+  it("discards a late acknowledgement after the same key was replaced", async () => {
+    const receipt = Promise.withResolvers<{ acknowledged: number }>();
+    // Only the first (pre-replacement) call resolves; the replacement run's
+    // own delivery stays open so the stale acknowledgement is the only ack.
+    const copyToStream = vi.fn<SubscriptionReceiverCalls["copyToStream"]>((_path, batch) =>
+      batch.cursorChangedAtSourceOffset === 1 ? receipt.promise : new Promise(() => {}),
     );
-    const h = harness({
-      events: [event(2, "example.com/issue-created", { issue: 42 })],
-      configuration: {
-        subscriptionKey: PROCESSOR_KEY,
-        receiver: {
-          action: "copy-to-stream",
-          receivingStreamPath: "/agents/b",
-          delivery: {
-            start: "beginning",
-            onFailingEvent: "halt",
-            includeEphemeral: false,
-          },
-        },
-      },
-      copyToStream,
-      wakeProcessor: async () => {
-        throw new Error("a copy must not wake a hosted processor");
-      },
-    });
-    h.state.copyListDeliveriesByReceivingStream["/agents/b"] = {
-      sourceOffset: 1,
-      status: "confirmed",
-      subscriptionKeysRecordedByReceiver: [PROCESSOR_KEY],
-    };
-    vi.spyOn(console, "error").mockImplementation(() => undefined);
-
-    h.eventSender.sendDue();
-    await h.settle();
-
-    expect(copyToStream).toHaveBeenCalledOnce();
-    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
-      acknowledgedOffset: 0,
-      acknowledgedEvents: 0,
-      attempt: 1,
-      nextAttemptAt: 11_000,
-      lastError: "copy receiver returned an invalid receipt for 1 delivered events",
-    });
-    expect(h.alarms).toContain(11_000);
-  });
-
-  it("does not send a moved key until no old receiver list still contains it", async () => {
-    const copyToStream = vi.fn<SubscriptionReceiverCalls["copyToStream"]>(async (_path, batch) => ({
-      accepted: batch.events.length,
-      dropped: [],
-    }));
     const configuration: SubscriptionConfiguredPayload = {
       subscriptionKey: PROCESSOR_KEY,
       receiver: {
@@ -1051,7 +867,6 @@ describe("StreamEventSender stream delivery", () => {
         delivery: {
           start: "beginning",
           onFailingEvent: "halt",
-          includeEphemeral: false,
         },
       },
     };
@@ -1063,68 +878,6 @@ describe("StreamEventSender stream delivery", () => {
         throw new Error("a copy must not wake a hosted processor");
       },
     });
-    h.state.copyListDeliveriesByReceivingStream["/agents/a"] = {
-      sourceOffset: 1,
-      status: "blocked",
-      attempts: 8,
-      error: "old receiver unavailable",
-      blockedAt: "2026-07-21T12:00:00.000Z",
-      subscriptionKeysRecordedByReceiver: [PROCESSOR_KEY],
-    };
-    h.state.copyListDeliveriesByReceivingStream["/agents/b"] = {
-      sourceOffset: 1,
-      status: "confirmed",
-      subscriptionKeysRecordedByReceiver: [PROCESSOR_KEY],
-    };
-
-    h.eventSender.sendDue();
-    await h.settle();
-    expect(copyToStream).not.toHaveBeenCalled();
-    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({ acknowledgedOffset: 0 });
-
-    delete h.state.copyListDeliveriesByReceivingStream["/agents/a"];
-    h.eventSender.sendDue();
-    await h.settle();
-
-    expect(copyToStream).toHaveBeenCalledOnce();
-    expect(copyToStream).toHaveBeenCalledWith(
-      "/agents/b",
-      expect.objectContaining({
-        subscriptionKey: PROCESSOR_KEY,
-        events: [expect.objectContaining({ offset: 2 })],
-      }),
-    );
-    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({ acknowledgedOffset: 2 });
-  });
-
-  it("discards a late acknowledgement after the same key moves to a new receiver", async () => {
-    const receipt = Promise.withResolvers<{ accepted: number; dropped: [] }>();
-    const copyToStream = vi.fn<SubscriptionReceiverCalls["copyToStream"]>(() => receipt.promise);
-    const configuration: SubscriptionConfiguredPayload = {
-      subscriptionKey: PROCESSOR_KEY,
-      receiver: {
-        action: "copy-to-stream",
-        receivingStreamPath: "/agents/b",
-        delivery: {
-          start: "beginning",
-          onFailingEvent: "halt",
-          includeEphemeral: false,
-        },
-      },
-    };
-    const h = harness({
-      events: [event(2, "example.com/issue-created", { issue: 42 })],
-      configuration,
-      copyToStream,
-      wakeProcessor: async () => {
-        throw new Error("a copy must not wake a hosted processor");
-      },
-    });
-    h.state.copyListDeliveriesByReceivingStream["/agents/b"] = {
-      sourceOffset: 1,
-      status: "confirmed",
-      subscriptionKeysRecordedByReceiver: [PROCESSOR_KEY],
-    };
 
     h.eventSender.sendDue();
     expect(copyToStream).toHaveBeenCalledOnce();
@@ -1140,221 +893,30 @@ describe("StreamEventSender stream delivery", () => {
           delivery: {
             start: "beginning",
             onFailingEvent: "halt",
-            includeEphemeral: false,
           },
         },
       },
       configuredAtOffset: 3,
       configuredAt: new Date(3).toISOString(),
     };
-    h.state.copyListDeliveriesByReceivingStream["/agents/b"] = {
-      sourceOffset: 3,
-      status: "confirmed",
-      subscriptionKeysRecordedByReceiver: [],
-    };
-    h.state.copyListDeliveriesByReceivingStream["/agents/c"] = {
-      sourceOffset: 3,
-      status: "pending",
-      subscriptionKeysRecordedByReceiver: [],
-    };
     h.eventSender.sendDue();
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
       configuredAtOffset: 3,
       acknowledgedOffset: 0,
     });
 
-    receipt.resolve({ accepted: 1, dropped: [] });
-    await h.settle();
+    receipt.resolve({ acknowledged: 1 });
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
 
-    expect(copyToStream).toHaveBeenCalledOnce();
+    // The stale acknowledgement was discarded; the replacement run re-sends
+    // from its own cursor and its still-open delivery owns future progress.
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
       configuredAtOffset: 3,
       acknowledgedOffset: 0,
-      acknowledgedEvents: 0,
     });
-  });
-
-  it("keeps an expired removal owed while its own receiving-stream list is pending", async () => {
-    const appendDeliveryEvent = vi
-      .fn<NonNullable<Parameters<typeof harness>[0]["appendDeliveryEvent"]>>()
-      .mockReturnValueOnce(false)
-      .mockReturnValue(true);
-    const copyToStream = vi.fn<SubscriptionReceiverCalls["copyToStream"]>(async (_path, batch) => ({
-      accepted: batch.events.length,
-      dropped: [],
-    }));
-    const h = harness({
-      events: [event(2, "example.com/issue-created", { issue: 42 })],
-      configuration: {
-        subscriptionKey: PROCESSOR_KEY,
-        endWhen: { any: [{ kind: "time", at: new Date(5_000).toISOString() }] },
-        receiver: {
-          action: "copy-to-stream",
-          receivingStreamPath: "/agents/b",
-          delivery: {
-            start: "beginning",
-            onFailingEvent: "halt",
-            includeEphemeral: false,
-          },
-        },
-      },
-      appendDeliveryEvent,
-      copyToStream,
-      wakeProcessor: async () => {
-        throw new Error("a copy must not wake a hosted processor");
-      },
-    });
-    h.state.copyListDeliveriesByReceivingStream["/agents/b"] = {
-      sourceOffset: 1,
-      status: "pending",
-      subscriptionKeysRecordedByReceiver: [],
-    };
-
-    h.eventSender.sendDue();
-    await h.settle();
-    expect(copyToStream).not.toHaveBeenCalled();
-    expect(appendDeliveryEvent).toHaveBeenCalledOnce();
-    expect(h.alarms).toContain(11_000);
-
-    h.eventSender.sendDue();
-    await h.settle();
-    expect(appendDeliveryEvent).toHaveBeenCalledTimes(2);
-    expect(appendDeliveryEvent).toHaveBeenLastCalledWith({
-      type: "events.iterate.com/stream/subscription-removed",
-      idempotencyKey: expect.any(String),
-      payload: { subscriptionKey: PROCESSOR_KEY, reason: "expired" },
-    });
-  });
-});
-
-describe("StreamEventSender receiver changes", () => {
-  function recordOldStream(h: ReturnType<typeof harness>) {
-    h.state.copyListDeliveriesByReceivingStream["/agents/a"] = {
-      sourceOffset: 1,
-      status: "blocked",
-      attempts: 8,
-      error: "old receiver unavailable",
-      blockedAt: "2026-07-21T12:00:00.000Z",
-      subscriptionKeysRecordedByReceiver: [PROCESSOR_KEY],
-    };
-  }
-
-  it("does not POST to a replacement webhook until the old stream records removal", async () => {
-    const deliverToWebhook = vi.fn<SubscriptionReceiverCalls["deliverToWebhook"]>(
-      async () => undefined,
-    );
-    const h = harness({
-      events: [event(2, "example.com/issue-created", { issue: 42 })],
-      configuration: {
-        subscriptionKey: PROCESSOR_KEY,
-        receiver: {
-          action: "webhook-post",
-          url: "https://receiver.example/events",
-          delivery: { start: "beginning", onFailingEvent: "halt", includeEphemeral: false },
-        },
-      },
-      deliverToWebhook,
-      wakeProcessor: async () => {
-        throw new Error("a webhook receiver must not wake a hosted processor");
-      },
-    });
-    recordOldStream(h);
-
-    h.eventSender.sendDue();
-    await h.settle();
-    expect(deliverToWebhook).not.toHaveBeenCalled();
-
-    delete h.state.copyListDeliveriesByReceivingStream["/agents/a"];
-    h.eventSender.sendDue();
-    await h.settle();
-    expect(deliverToWebhook).toHaveBeenCalledOnce();
-  });
-
-  it("does not call a replacement ITX receiver until the old stream records removal", async () => {
-    const deliverToItx = vi.fn<SubscriptionReceiverCalls["deliverToItx"]>(async () => undefined);
-    const h = harness({
-      events: [event(2, "example.com/issue-created", { issue: 42 })],
-      configuration: {
-        subscriptionKey: PROCESSOR_KEY,
-        receiver: {
-          action: "itx-call",
-          expression: ["agents", ["get", "/receiver"], "handleEvents"],
-          delivery: { start: "beginning", onFailingEvent: "halt", includeEphemeral: false },
-        },
-      },
-      deliverToItx,
-      wakeProcessor: async () => {
-        throw new Error("an ITX receiver must not wake a hosted processor");
-      },
-    });
-    recordOldStream(h);
-
-    h.eventSender.sendDue();
-    await h.settle();
-    expect(deliverToItx).not.toHaveBeenCalled();
-
-    delete h.state.copyListDeliveriesByReceivingStream["/agents/a"];
-    h.eventSender.sendDue();
-    await h.settle();
-    expect(deliverToItx).toHaveBeenCalledOnce();
-  });
-
-  it("does not wake a replacement hosted processor until the old stream records removal", async () => {
-    const h = harness({
-      events: [event(2, "example.com/issue-created", { issue: 42 })],
-      wakeProcessor: async () => ({
-        streamId: SOURCE_STREAM_ID,
-        checkpointOffset: 2,
-        processEventBatch: retainedProcessEventBatch(() => undefined),
-      }),
-    });
-    recordOldStream(h);
-
-    h.eventSender.sendDue();
-    await h.settle();
-    expect(h.wakeCalls).toHaveLength(0);
-
-    delete h.state.copyListDeliveriesByReceivingStream["/agents/a"];
-    h.eventSender.sendDue();
-    await h.settle();
-    expect(h.wakeCalls).toHaveLength(1);
-  });
-
-  it("expires a finite subscription while an old stream still gates its replacement", async () => {
-    const appendDeliveryEvent = vi.fn<
-      NonNullable<Parameters<typeof harness>[0]["appendDeliveryEvent"]>
-    >(() => true);
-    const deliverToWebhook = vi.fn<SubscriptionReceiverCalls["deliverToWebhook"]>(
-      async () => undefined,
-    );
-    const h = harness({
-      events: [event(2, "example.com/issue-created", { issue: 42 })],
-      configuration: {
-        subscriptionKey: PROCESSOR_KEY,
-        endWhen: { any: [{ kind: "time", at: new Date(5_000).toISOString() }] },
-        receiver: {
-          action: "webhook-post",
-          url: "https://receiver.example/events",
-          delivery: { start: "beginning", onFailingEvent: "halt", includeEphemeral: false },
-        },
-      },
-      appendDeliveryEvent,
-      deliverToWebhook,
-      wakeProcessor: async () => {
-        throw new Error("a webhook receiver must not wake a hosted processor");
-      },
-    });
-    recordOldStream(h);
-
-    h.eventSender.sendDue();
-    await h.settle();
-
-    expect(deliverToWebhook).not.toHaveBeenCalled();
-    expect(appendDeliveryEvent).toHaveBeenCalledOnce();
-    expect(appendDeliveryEvent).toHaveBeenCalledWith({
-      type: "events.iterate.com/stream/subscription-removed",
-      idempotencyKey: expect.any(String),
-      payload: { subscriptionKey: PROCESSOR_KEY, reason: "expired" },
-    });
+    expect(copyToStream).toHaveBeenCalledTimes(2);
+    expect(copyToStream.mock.calls[1]![1].cursorChangedAtSourceOffset).toBe(3);
   });
 });

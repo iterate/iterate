@@ -29,10 +29,8 @@ import {
 import { canonicalizeStreamPath, DurableObjectNameCodec } from "../durable-object-names.ts";
 import { posthogSubscriptionEvent } from "../integrations/posthog.ts";
 import { buildCopyAppends } from "./copy-appends.ts";
-import { CopyListRetryStore } from "./copy-list-retry-store.ts";
 import {
   assertCoreProcessorCheckpointGrowthFits,
-  compareSourceListPosition,
   STREAM_PAUSED_ERROR_PREFIX,
   StreamCoreProcessor,
 } from "./core-processor.ts";
@@ -50,14 +48,6 @@ import {
   StreamEventLog,
 } from "./stream-storage.ts";
 import { StreamEventSender } from "./stream-event-sender.ts";
-import {
-  blockedCopyListResult,
-  isCopyListBackoffError,
-  isCopyListBlockedError,
-  copyListBlockedError,
-  CopyListSender,
-  type BlockedCopyListResult,
-} from "./copy-list-sender.ts";
 import type { StreamRuntimeDebugState } from "./stream-runtime-state.ts";
 import { createSubscriptionReceiverCalls } from "./subscription-receiver-calls.ts";
 import {
@@ -70,8 +60,6 @@ import {
   ConnectionOpenerDescriptor as ConnectionOpenerDescriptorSchema,
   parseCommittedCoreEvent,
   subscriptionKeyForConfiguredEvent,
-  type CommittedCopyListConfirmedEvent,
-  type CommittedCopyListRecordedEvent,
   type CommittedSubscriptionConfiguredEvent,
   type CommittedSubscriptionRemovedEvent,
   type CoreProcessorState,
@@ -106,18 +94,6 @@ export async function settleStreamCoreBackgroundWork(work: () => Promise<unknown
   try {
     await work();
   } catch (error) {
-    if (isCopyListBlockedError(error)) {
-      console.info("stream core background work is waiting for an explicitly blocked copy list", {
-        message: error.message,
-      });
-      return;
-    }
-    if (isCopyListBackoffError(error)) {
-      console.info("stream core background work reached a scheduled copy-list backoff", {
-        message: error.message,
-      });
-      return;
-    }
     if (isStreamPausedError(error)) {
       console.info("stream core background work reached a paused stream", {
         message: error.message,
@@ -281,9 +257,6 @@ export class StreamDurableObject extends DurableObject<Env> {
   readonly #subscriptionCursorStore = new SqliteSubscriptionCursorStore(this.ctx.storage.sql, {
     onMutation: () => this.#refreshLiveState(),
   });
-  readonly #copyListRetryStore = new CopyListRetryStore(this.ctx.storage.sql, {
-    onMutation: () => this.#refreshLiveState(),
-  });
   /** In-memory throughput accounting (events/s, bytes in/out); resets with the incarnation. */
   readonly #metrics = new StreamRuntimeMetrics(Date.now());
   readonly #alarmArmer = new StreamAlarmArmer(this.ctx.storage);
@@ -291,24 +264,6 @@ export class StreamDurableObject extends DurableObject<Env> {
     armAlarm: (atMs) => this.#alarmArmer.armNoLaterThan(atMs),
     now: () => Date.now(),
     waitUntil: (work) => this.ctx.waitUntil(work),
-  });
-  readonly #copyListSender = new CopyListSender({
-    projectId: this.name.projectId,
-    path: this.name.path,
-    coreState: () => this.#coreProcessorState,
-    retryStore: this.#copyListRetryStore,
-    appendCore: (event) => this.#append({ authority: "core-event" }, [event])[0]!,
-    getEvent: (args) => this.getEvent(args),
-    latestCopyListRecordedByReceiver: (receivingStreamPath) =>
-      this.#log.getLatestCopyListConfirmationForReceivingStream(receivingStreamPath),
-    recordCopyListOnReceivingStream: (path, event) =>
-      path === this.name.path
-        ? Promise.resolve(this.recordCopyListFromSource(event))
-        : this.#streamStub(path).recordCopyListFromSource(event),
-    scheduleDurable: (work) => this.#deliveryAlarmBoundary.scheduleOrRun(work),
-    armAlarm: (atMs) => this.#alarmArmer.armNoLaterThan(atMs),
-    now: () => Date.now(),
-    random: () => Math.random(),
   });
   readonly #eventSender = new StreamEventSender({
     idleTeardownMs: idleTeardownMs(this.env),
@@ -322,16 +277,13 @@ export class StreamDurableObject extends DurableObject<Env> {
           beforeOffset: args.beforeOffset,
           limit: args.limit,
           // RAW, ephemeral included: durable cursors advance over every
-          // offset (skip-not-defer, like filter-excluded events), and the
-          // session callbacks may receive them; subscriptions exclude them from
-          // delivery unless that subscription explicitly opts in.
+          // offset (skip-not-defer, like filter-excluded events); durable
+          // subscriptions never deliver them.
           includeEphemeral: true,
         }),
       coreState: () => this.#coreProcessorState,
       store: this.#subscriptionCursorStore,
       receiverCalls: createSubscriptionReceiverCalls({
-        projectId: this.name.projectId,
-        exports: this.ctx.exports,
         createAuthorityRoot: () => this.#createEventDeliveryAuthorityRoot(),
         copyToStream: (path, batch) => this.#streamStub(path).receiveCopiedEvents(batch),
         onHostedDeliveryError: (subscriptionKey, error, expectedDelivery) =>
@@ -452,7 +404,6 @@ export class StreamDurableObject extends DurableObject<Env> {
                 start: "beginning",
                 // One failing event must not silence a project's entire feed.
                 onFailingEvent: "skip",
-                includeEphemeral: false,
               },
             },
           } satisfies SubscriptionConfiguredPayload,
@@ -544,21 +495,24 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * Commit one copy subscription on this source stream.
+   * Commit one copy subscription on this source stream and return the
+   * committed configuration event. No probe call, no confirmation wait: the
+   * receiver learns about the subscription when its first copy arrives, and
+   * a broken receiver surfaces later as a durable halt.
    *
    * A caller-supplied key means "ensure/replace this source-local
-   * subscription". An omitted key always means "create another subscription";
-   * its effective key is derived from the committed event offset. A keyless
-   * command must supply an event idempotency key so a retry cannot create a
-   * duplicate after the source commits but the receiver handshake fails.
+   * subscription" — an identical configuration is level-triggered and returns
+   * the existing committed event without moving the cursor. An omitted key
+   * always means "create another subscription"; its effective key is derived
+   * from the committed event offset, so a keyless command must supply an
+   * event idempotency key to make a retry unable to create a duplicate.
    */
-  #ensureCopySubscription(args: {
+  setCopySubscription(args: {
     configuration: SubscriptionConfiguredPayload;
     idempotencyKey?: string;
   }): {
-    event: CommittedSubscriptionConfiguredEvent;
-    configuration: SubscriptionConfiguredPayload & { subscriptionKey: string };
-    previousReceivingStreamPath?: string;
+    subscriptionKey: string;
+    subscriptionConfiguredEvent: CommittedSubscriptionConfiguredEvent;
   } {
     const canonical = CoreProcessorContract.parseEventInput({
       type: "events.iterate.com/stream/subscription-configured",
@@ -578,10 +532,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       explicitSubscriptionKey === undefined
         ? undefined
         : this.#coreProcessorState.subscriptions.outbound.byKey[explicitSubscriptionKey];
-    const previousReceivingStreamPath =
-      existing?.configuration.receiver.action === "copy-to-stream"
-        ? existing.configuration.receiver.receivingStreamPath
-        : undefined;
 
     let configuredEvent: StreamEvent;
     if (existing !== undefined && jsonValuesEqual(existing.configuration, canonical)) {
@@ -607,169 +557,14 @@ export class StreamDurableObject extends DurableObject<Env> {
       ])[0]!;
     }
 
-    const parsedConfiguredEvent = parseCommittedCoreEvent(
+    const subscriptionConfiguredEvent = parseCommittedCoreEvent(
       configuredEvent,
       "events.iterate.com/stream/subscription-configured",
     );
-    const subscriptionKey = subscriptionKeyForConfiguredEvent(parsedConfiguredEvent);
-    const current = this.#coreProcessorState.subscriptions.outbound.byKey[subscriptionKey];
-    if (
-      current?.configuredAtOffset !== configuredEvent.offset ||
-      current.configuration.receiver.action !== "copy-to-stream"
-    ) {
-      throw new Error(
-        `subscription "${subscriptionKey}" does not point to its committed copy configuration`,
-      );
-    }
-    const receivingStreamPath = current.configuration.receiver.receivingStreamPath;
-    const receiverList =
-      this.#coreProcessorState.copyListDeliveriesByReceivingStream[receivingStreamPath];
-    if (receiverList?.status === "blocked") {
-      throw copyListBlockedError({
-        receivingStreamPath,
-        attempts: receiverList.attempts,
-        lastError: receiverList.error,
-      });
-    }
     return {
-      event: parsedConfiguredEvent,
-      configuration: current.configuration,
-      previousReceivingStreamPath,
-    };
-  }
-
-  /**
-   * Configure the source, send every changed complete list, and resolve only
-   * after every affected receiving stream and this source have recorded the
-   * change. The returned list events are the named receiver's durable pair.
-   */
-  async setCopySubscription(args: {
-    configuration: SubscriptionConfiguredPayload;
-    idempotencyKey?: string;
-  }): Promise<
-    | {
-        status: "configured";
-        subscriptionKey: string;
-        subscriptionConfiguredEvent: CommittedSubscriptionConfiguredEvent;
-        copyListRecordedEvent: CommittedCopyListRecordedEvent;
-        copyListConfirmedEvent: CommittedCopyListConfirmedEvent;
-      }
-    | BlockedCopyListResult
-  > {
-    try {
-      const result = await this.#setCopySubscription(args);
-      return { status: "configured", ...result };
-    } catch (error) {
-      if (isCopyListBlockedError(error)) return blockedCopyListResult(error);
-      throw error;
-    }
-  }
-
-  async #setCopySubscription(args: {
-    configuration: SubscriptionConfiguredPayload;
-    idempotencyKey?: string;
-  }): Promise<{
-    subscriptionKey: string;
-    subscriptionConfiguredEvent: CommittedSubscriptionConfiguredEvent;
-    copyListRecordedEvent: CommittedCopyListRecordedEvent;
-    copyListConfirmedEvent: CommittedCopyListConfirmedEvent;
-  }> {
-    const {
-      event: subscriptionConfiguredEvent,
-      configuration,
-      previousReceivingStreamPath,
-    } = this.#ensureCopySubscription(args);
-    const subscriptionKey = configuration.subscriptionKey;
-    if (configuration.receiver.action !== "copy-to-stream") {
-      throw new Error("setCopySubscription requires a copy action");
-    }
-    const receivingStreamPath = configuration.receiver.receivingStreamPath;
-    const receivingStreamPathsToWaitFor = new Set<string>();
-    for (const [path, list] of Object.entries(
-      this.#coreProcessorState.copyListDeliveriesByReceivingStream,
-    )) {
-      if (
-        list.sourceOffset === subscriptionConfiguredEvent.offset ||
-        list.subscriptionKeysRecordedByReceiver.includes(subscriptionKey)
-      ) {
-        receivingStreamPathsToWaitFor.add(path);
-      }
-    }
-    if (previousReceivingStreamPath !== undefined) {
-      receivingStreamPathsToWaitFor.add(previousReceivingStreamPath);
-    }
-    receivingStreamPathsToWaitFor.add(receivingStreamPath);
-
-    // A move from receiver A to receiver B changes two complete lists. Wait
-    // for the old receiver first so this command cannot report success while
-    // both streams still record the same subscription key.
-    for (const changedReceiverPath of receivingStreamPathsToWaitFor) {
-      if (changedReceiverPath === receivingStreamPath) continue;
-      await this.#copyListSender.waitUntilConfirmed(changedReceiverPath);
-      this.#assertSubscriptionUnchanged({
-        subscriptionKey,
-        configuredAtOffset: subscriptionConfiguredEvent.offset,
-        receivingStreamPath,
-      });
-    }
-    const copyListRecordedEvent =
-      await this.#copyListSender.waitUntilConfirmed(receivingStreamPath);
-    this.#assertSubscriptionUnchanged({
-      subscriptionKey,
-      configuredAtOffset: subscriptionConfiguredEvent.offset,
-      receivingStreamPath,
-    });
-    const copyListConfirmedEvent = this.#copyListConfirmedEvent(
-      receivingStreamPath,
-      copyListRecordedEvent,
-    );
-    return {
-      subscriptionKey,
+      subscriptionKey: subscriptionKeyForConfiguredEvent(subscriptionConfiguredEvent),
       subscriptionConfiguredEvent,
-      copyListRecordedEvent,
-      copyListConfirmedEvent,
     };
-  }
-
-  #copyListConfirmedEvent(
-    receivingStreamPath: string,
-    copyListRecordedEvent: StreamEvent,
-  ): CommittedCopyListConfirmedEvent {
-    const recorded = parseCommittedCoreEvent(
-      copyListRecordedEvent,
-      "events.iterate.com/stream/copy-list-recorded",
-    );
-    const confirmed = this.getEvent({
-      idempotencyKey: internalStreamId(
-        "copy-list-confirmed",
-        receivingStreamPath,
-        recorded.payload.source.streamId,
-        recorded.payload.sourceOffset,
-      ),
-    });
-    if (confirmed === undefined) {
-      throw new Error(
-        `receiving stream "${receivingStreamPath}" recorded source offset ${recorded.payload.sourceOffset}, but the source has no matching confirmation event`,
-      );
-    }
-    return parseCommittedCoreEvent(confirmed, "events.iterate.com/stream/copy-list-confirmed");
-  }
-
-  #assertSubscriptionUnchanged(args: {
-    subscriptionKey: string;
-    configuredAtOffset: number;
-    receivingStreamPath: string;
-  }): void {
-    const current = this.#coreProcessorState.subscriptions.outbound.byKey[args.subscriptionKey];
-    if (
-      current?.configuredAtOffset !== args.configuredAtOffset ||
-      current.configuration.receiver.action !== "copy-to-stream" ||
-      current.configuration.receiver.receivingStreamPath !== args.receivingStreamPath
-    ) {
-      throw new Error(
-        `subscription "${args.subscriptionKey}" changed while its receiving streams were recording the update`,
-      );
-    }
   }
 
   /** Internal platform-event append used only by sibling Stream Durable Objects. */
@@ -783,184 +578,49 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * Await-free source-side removal commit. The caller supplies the receiver
-   * coordinate it expects to own; validation and append share one DO turn, so
-   * a same-key replacement cannot be removed through a stale ownership read.
+   * Source-side removal command for a copy. Await-free: validation and append
+   * share one DO turn, so a same-key replacement cannot be removed through a
+   * stale ownership read. Repeated calls are level-triggered, and a
+   * replacement owned by a different receiver is protected by
+   * `expectedReceiverPath`.
    */
-  #ensureSubscriptionRemoved(args: {
+  removeCopySubscription(args: {
     subscriptionKey: string;
     expectedReceiverPath: string;
-  }): CommittedSubscriptionRemovedEvent | null {
-    const expectedReceiverPath = canonicalizeStreamPath(args.expectedReceiverPath);
-    const configured = this.#coreProcessorState.subscriptions.outbound.byKey[args.subscriptionKey];
-    if (configured === undefined) {
-      const pending =
-        this.#coreProcessorState.copyListDeliveriesByReceivingStream[expectedReceiverPath];
-      if (pending !== undefined && pending.status !== "confirmed") {
-        const existing = this.getEvent({ offset: pending.sourceOffset });
-        if (
-          existing?.type === "events.iterate.com/stream/subscription-removed" &&
-          (existing.payload as { subscriptionKey?: unknown }).subscriptionKey ===
-            args.subscriptionKey
-        ) {
-          return parseCommittedCoreEvent(
-            existing,
-            "events.iterate.com/stream/subscription-removed",
-          );
-        }
-        if (existing !== undefined) return null;
-        throw new Error(
-          `subscription "${args.subscriptionKey}" has a pending removal but its source event is missing`,
-        );
-      }
-      return null;
-    }
-    if (
-      configured.configuration.receiver.action !== "copy-to-stream" ||
-      configured.configuration.receiver.receivingStreamPath !== expectedReceiverPath
-    ) {
-      return null;
-    }
-    return parseCommittedCoreEvent(
-      this.#append({ authority: "public" }, [
-        {
-          type: "events.iterate.com/stream/subscription-removed",
-          payload: { subscriptionKey: args.subscriptionKey, reason: "requested" },
-        },
-      ])[0]!,
-      "events.iterate.com/stream/subscription-removed",
-    );
-  }
-
-  /**
-   * Source-side removal command for a copy. Repeated calls are
-   * level-triggered: each call enforces that this key is absent from the
-   * expected receiving stream. That includes a same-key/same-receiver
-   * recreation made after an earlier ambiguous call. A replacement owned by
-   * a different receiver is protected by `expectedReceiverPath`.
-   */
-  async removeCopySubscription(args: {
-    subscriptionKey: string;
-    expectedReceiverPath: string;
-  }): Promise<
-    | {
-        status: "removed";
-        subscriptionRemovedEvent: CommittedSubscriptionRemovedEvent;
-        copyListRecordedEvent: CommittedCopyListRecordedEvent;
-        copyListConfirmedEvent: CommittedCopyListConfirmedEvent;
-      }
-    | { status: "already-absent" }
-    | BlockedCopyListResult
-  > {
-    try {
-      return await this.#removeCopySubscription(args);
-    } catch (error) {
-      if (isCopyListBlockedError(error)) return blockedCopyListResult(error);
-      throw error;
-    }
-  }
-
-  async #removeCopySubscription(args: {
-    subscriptionKey: string;
-    expectedReceiverPath: string;
-  }): Promise<
-    | {
-        status: "removed";
-        subscriptionRemovedEvent: CommittedSubscriptionRemovedEvent;
-        copyListRecordedEvent: CommittedCopyListRecordedEvent;
-        copyListConfirmedEvent: CommittedCopyListConfirmedEvent;
-      }
-    | { status: "already-absent" }
-  > {
+  }):
+    | { status: "removed"; subscriptionRemovedEvent: CommittedSubscriptionRemovedEvent }
+    | { status: "already-absent" } {
     const removal = CoreProcessorContract.parseEventInput({
       type: "events.iterate.com/stream/subscription-removed",
       payload: { subscriptionKey: args.subscriptionKey, reason: "requested" },
     }).payload;
     const subscriptionKey = removal.subscriptionKey;
     const expectedReceiverPath = canonicalizeStreamPath(args.expectedReceiverPath);
-    const subscriptionRemovedEvent = this.#ensureSubscriptionRemoved({
-      subscriptionKey,
-      expectedReceiverPath,
-    });
-    if (subscriptionRemovedEvent !== null) {
-      const copyListRecordedEvent =
-        await this.#copyListSender.waitUntilConfirmed(expectedReceiverPath);
-      if (this.#coreProcessorState.subscriptions.outbound.byKey[subscriptionKey] !== undefined) {
-        throw new Error(
-          `subscription "${subscriptionKey}" was configured again while the receiving stream was recording its removal`,
-        );
-      }
-      return {
-        status: "removed",
-        subscriptionRemovedEvent,
-        copyListRecordedEvent,
-        copyListConfirmedEvent: this.#copyListConfirmedEvent(
-          expectedReceiverPath,
-          copyListRecordedEvent,
-        ),
-      };
+    const configured = this.#coreProcessorState.subscriptions.outbound.byKey[subscriptionKey];
+    if (
+      configured === undefined ||
+      configured.configuration.receiver.action !== "copy-to-stream" ||
+      configured.configuration.receiver.receivingStreamPath !== expectedReceiverPath
+    ) {
+      return { status: "already-absent" };
     }
-
-    // A replacement configuration may already have removed this key from the
-    // receiver's list even though this call appended no removal event. Ensure
-    // the receiver has recorded that newest list before reporting absence.
-    const pending =
-      this.#coreProcessorState.copyListDeliveriesByReceivingStream[expectedReceiverPath];
-    if (pending !== undefined && pending.status !== "confirmed") {
-      await this.#copyListSender.waitUntilConfirmed(expectedReceiverPath);
-    }
-    return { status: "already-absent" };
-  }
-
-  /**
-   * Trusted source-to-receiver list replacement. This method is deliberately
-   * absent from the public Stream capability: only another Stream Durable
-   * Object can replace the subscriptions a receiver records for a source.
-   */
-  recordCopyListFromSource(eventInput: StreamEventInput): StreamEvent {
-    if (eventInput.type !== "events.iterate.com/stream/copy-list-recorded") {
-      throw new Error("recordCopyListFromSource requires a copy-list-recorded event");
-    }
-    const copyList = CoreProcessorContract.parseEventInput(
-      eventInput as StreamEventInput & {
-        type: "events.iterate.com/stream/copy-list-recorded";
-      },
-    );
-    // The reducer can compare against reduced state while a source has at
-    // least one recorded subscription. An empty list deliberately removes that state,
-    // so this journal lookup is the authoritative lifetime/order check for
-    // both non-empty and empty lists.
-    const latest = this.#log.getLatestCopyListFromSource(copyList.payload.source.path);
-    if (latest !== undefined) {
-      const recorded = parseCommittedCoreEvent(
-        latest,
-        "events.iterate.com/stream/copy-list-recorded",
-      );
-      if (
-        compareSourceListPosition(
+    return {
+      status: "removed",
+      subscriptionRemovedEvent: parseCommittedCoreEvent(
+        this.#append({ authority: "public" }, [
           {
-            streamId: copyList.payload.source.streamId,
-            streamCreatedAt: copyList.payload.source.streamCreatedAt,
-            sourceOffset: copyList.payload.sourceOffset,
+            type: "events.iterate.com/stream/subscription-removed",
+            payload: { subscriptionKey, reason: "requested" },
           },
-          {
-            source: {
-              streamId: recorded.payload.source.streamId,
-              streamCreatedAt: recorded.payload.source.streamCreatedAt,
-            },
-            sourceOffset: recorded.payload.sourceOffset,
-          },
-        ) <= 0
-      ) {
-        return recorded;
-      }
-    }
-    return this.#append({ authority: "copy-list" }, [eventInput])[0]!;
+        ])[0]!,
+        "events.iterate.com/stream/subscription-removed",
+      ),
+    };
   }
 
   #append(
     options: {
-      authority: "public" | "core-event" | "copy-list" | "copy";
+      authority: "public" | "core-event" | "copy";
     },
     eventInputs: readonly StreamEventInput[],
   ): StreamEvent[] {
@@ -998,9 +658,9 @@ export class StreamDurableObject extends DurableObject<Env> {
           }
           if (options.authority === "copy") {
             // Copied product-event copies are identified by their final
-            // source hop because a transform may change their body between
-            // retries. Copy drop records have no hop; their
-            // deterministic body and internal key are the complete identity.
+            // source hop. The receiver's own drop-audit records have no hop;
+            // their deterministic body and internal key are the complete
+            // identity.
             const isSameCopyAppend =
               body.source?.copiedFrom?.at(-1) === undefined
                 ? sameIdempotentEvent(existing, body)
@@ -1221,7 +881,6 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     attempt("append circuit-breaker pause", () => this.#appendOwedCircuitBreakerPause());
     attempt("announce stream to ancestors", () => this.#announceToAncestors());
-    attempt("send pending copy lists", () => this.#copyListSender.reconcile());
     attempt("send pending events", () =>
       args.alarmTurn === true
         ? this.#eventSender.onAlarm()
@@ -1302,16 +961,16 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * Receive events from another stream. Adding `source.copiedFrom`, preventing
-   * repeated-stream cycles, applying idempotency keys,
-   * and the optional JSONata transform live in `copy-appends.ts`; this method
+   * Receive events from another stream. Adding `source.copiedFrom`, the
+   * inbound stamp fence, cycle prevention, and idempotency keys live in
+   * `copy-appends.ts`; this method
    * only appends the built inputs in its own synchronous turn.
    */
   receiveCopiedEvents(batch: StreamDeliveryBatch): CopyReceipt {
     const { inputs, receipt } = buildCopyAppends({
       batch,
       self: { projectId: this.name.projectId, path: this.name.path },
-      source: this.#coreProcessorState.subscriptions.inbound.bySourcePath[batch.path],
+      inbound: this.#coreProcessorState.subscriptions.inbound.bySourcePath[batch.path],
     });
     if (inputs.length > 0) {
       this.#append({ authority: "copy" }, inputs);
@@ -1804,14 +1463,11 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   #readRuntimeState(): StreamRuntimeDebugState {
-    const subscriptions = this.#eventSender.subscriptionRuntimeState();
-    const copyListRetries = this.#copyListSender.runtimeState();
     return {
       coreProcessorState: this.#coreProcessorState,
       runtime: {
         connections: this.#eventSender.connectionRuntimeState(),
-        subscriptions,
-        copyListRetries,
+        subscriptions: this.#eventSender.subscriptionRuntimeState(),
         metrics: this.#metrics.report(Date.now()),
         storageSizeBytes: this.ctx.storage.sql.databaseSize,
       },

@@ -1,14 +1,12 @@
 import {
   MAX_COPIED_FROM_HOPS,
-  StreamReceiverUnavailableError,
   type StreamDeliveryBatch,
   type StreamEvent,
 } from "iterate/processors";
 import { describe, expect, test } from "vitest";
-import {
-  recordedSubscriptionForCopy,
-  type CoreProcessorState,
-  type SubscriptionConfiguredPayload,
+import type {
+  CoreProcessorState,
+  SubscriptionConfiguredPayload,
 } from "./core-processor-contract.ts";
 import { deliveryId } from "./delivery-math.ts";
 import { buildCopyAppends } from "./copy-appends.ts";
@@ -30,7 +28,6 @@ const configuration = {
     receivingStreamPath: RECEIVER_PATH,
     delivery: {
       start: "beginning",
-      includeEphemeral: false,
       onFailingEvent: "halt",
     },
   },
@@ -45,6 +42,7 @@ const sourceEvent = {
 } satisfies StreamEvent;
 
 type BuildArgs = Parameters<typeof buildCopyAppends>[0];
+type InboundRecords = NonNullable<BuildArgs["inbound"]>;
 
 function batch(
   streamId = FIRST_STREAM_ID,
@@ -78,41 +76,26 @@ function batch(
   };
 }
 
-function recordedSource(
+function recordedInbound(
   args: {
     streamId?: string;
     streamCreatedAt?: string;
-    configured?: SubscriptionConfiguredPayload;
+    cursorChangedAtSourceOffset?: number;
   } = {},
-): CoreProcessorState["subscriptions"]["inbound"]["bySourcePath"][string] {
-  const configured = args.configured ?? configuration;
+): InboundRecords {
   return {
-    source: {
-      projectId: PROJECT_ID,
-      path: SOURCE_PATH,
+    [configuration.subscriptionKey]: {
       streamId: args.streamId ?? FIRST_STREAM_ID,
       streamCreatedAt: args.streamCreatedAt ?? SOURCE_CREATED_AT,
+      cursorChangedAtSourceOffset: args.cursorChangedAtSourceOffset ?? 2,
+      numEventsReceived: 3,
+      lastEventReceivedAt: "2026-07-21T12:04:00.000Z",
     },
-    sourceOffset: 2,
-    byKey: {
-      [configured.subscriptionKey!]: {
-        configuration: recordedSubscriptionForCopy(configured),
-        configuredAtSourceOffset: 2,
-        numEventsReceived: 0,
-        numEventsDropped: 0,
-      },
-    },
-  };
+  } satisfies CoreProcessorState["subscriptions"]["inbound"]["bySourcePath"][string];
 }
 
-function validArgs(
-  delivery = batch(),
-  source = recordedSource({
-    streamId: delivery.streamId,
-    streamCreatedAt: delivery.streamCreatedAt,
-  }),
-): BuildArgs {
-  return { batch: delivery, self: SELF, source };
+function validArgs(delivery = batch(), inbound?: InboundRecords): BuildArgs {
+  return { batch: delivery, self: SELF, inbound };
 }
 
 function caught(action: () => unknown): unknown {
@@ -125,10 +108,10 @@ function caught(action: () => unknown): unknown {
 }
 
 describe("copy input boundary", () => {
-  test("builds accepted appends and a receipt from the receiver's recorded subscription", () => {
+  test("builds appends and a receipt with no prior inbound record (first contact)", () => {
     const result = buildCopyAppends(validArgs());
 
-    expect(result.receipt).toEqual({ accepted: 1, dropped: [] });
+    expect(result.receipt).toEqual({ acknowledged: 1 });
     expect(result.inputs).toHaveLength(1);
     expect(result.inputs[0]).toMatchObject({
       type: sourceEvent.type,
@@ -208,25 +191,15 @@ describe("copy input boundary", () => {
   test.each(malformedCases)("rejects malformed batches: %s", (_name, mutate, message) => {
     const error = caught(() => buildCopyAppends(validArgs(mutate(batch()))));
     expect(error).toBeInstanceOf(Error);
-    expect(error).not.toBeInstanceOf(StreamReceiverUnavailableError);
     expect(error).toMatchObject({ message: expect.stringMatching(message) });
   });
 
-  const unavailableCases: Array<[name: string, build: () => BuildArgs]> = [
-    ["the source has no recorded subscriptions", () => ({ ...validArgs(), source: undefined })],
+  const misaddressedCases: Array<[name: string, build: () => BuildArgs]> = [
     [
       "the configured event names another source path",
       () => {
         const args = validArgs();
         args.batch.configuredEvent = { ...args.batch.configuredEvent, path: "/another/source" };
-        return args;
-      },
-    ],
-    [
-      "the configured event offset does not match the recorded subscription",
-      () => {
-        const args = validArgs();
-        args.batch.configuredEvent = { ...args.batch.configuredEvent, offset: 3 };
         return args;
       },
     ],
@@ -237,28 +210,6 @@ describe("copy input boundary", () => {
         args.batch.configuredEvent = {
           ...args.batch.configuredEvent,
           payload: { ...configuration, subscriptionKey: "another-subscription" },
-        };
-        return args;
-      },
-    ],
-    [
-      "the committed subscription does not copy to a stream",
-      () => {
-        const args = validArgs();
-        args.batch.configuredEvent = {
-          ...args.batch.configuredEvent,
-          payload: {
-            ...configuration,
-            receiver: {
-              action: "webhook-post",
-              url: "https://example.com/events",
-              delivery: {
-                start: "beginning",
-                includeEphemeral: false,
-                onFailingEvent: "halt",
-              },
-            },
-          },
         };
         return args;
       },
@@ -281,39 +232,6 @@ describe("copy input boundary", () => {
       },
     ],
     [
-      "the source project changed",
-      () => ({
-        ...validArgs(),
-        source: {
-          ...recordedSource(),
-          source: { ...recordedSource().source, projectId: "prj_other" },
-        },
-      }),
-    ],
-    [
-      "the source stream ID changed",
-      () => ({
-        ...validArgs(),
-        source: {
-          ...recordedSource(),
-          source: { ...recordedSource().source, streamId: SECOND_STREAM_ID },
-        },
-      }),
-    ],
-    [
-      "the source stream creation time changed",
-      () => ({
-        ...validArgs(),
-        source: {
-          ...recordedSource(),
-          source: {
-            ...recordedSource().source,
-            streamCreatedAt: "2026-07-21T12:00:01.000Z",
-          },
-        },
-      }),
-    ],
-    [
       "the cursor predates the configured event",
       () => {
         const args = validArgs();
@@ -321,22 +239,71 @@ describe("copy input boundary", () => {
         return args;
       },
     ],
-    [
-      "the source replaced the subscription under the same key",
-      () => {
-        const args = validArgs();
-        if (args.source === undefined) throw new Error("test setup requires a source");
-        const recorded = args.source.byKey[configuration.subscriptionKey!];
-        if (recorded === undefined) throw new Error("test setup requires a subscription");
-        recorded.configuration = { ...recorded.configuration, description: "Replacement" };
-        return args;
-      },
-    ],
   ];
 
-  test.each(unavailableCases)("reports receiver unavailability when %s", (_name, build) => {
+  test.each(misaddressedCases)("rejects a batch when %s", (_name, build) => {
     const error = caught(() => buildCopyAppends(build()));
-    expect(error).toBeInstanceOf(StreamReceiverUnavailableError);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({ message: expect.stringMatching(/does not address receiver/) });
+  });
+});
+
+describe("the inbound stamp fence", () => {
+  test("rejects a batch from an older source lifetime than the recorded one", () => {
+    const stale = batch(FIRST_STREAM_ID, SOURCE_CREATED_AT);
+    const inbound = recordedInbound({
+      streamId: SECOND_STREAM_ID,
+      streamCreatedAt: "2026-07-21T12:30:00.000Z",
+    });
+
+    const error = caught(() => buildCopyAppends(validArgs(stale, inbound)));
+    expect(error).toMatchObject({
+      message: expect.stringMatching(/already accepted a newer delivery/),
+    });
+  });
+
+  test("rejects a same-createdAt lifetime whose random stream ID lost the tie", () => {
+    const stale = batch(FIRST_STREAM_ID, SOURCE_CREATED_AT);
+    const inbound = recordedInbound({ streamId: SECOND_STREAM_ID });
+
+    const error = caught(() => buildCopyAppends(validArgs(stale, inbound)));
+    expect(error).toMatchObject({
+      message: expect.stringMatching(/already accepted a newer delivery/),
+    });
+  });
+
+  test("rejects an older config generation of the same lifetime", () => {
+    const delivery = batch();
+    delivery.cursorChangedAtSourceOffset = 3;
+    delivery.configuredEvent = { ...delivery.configuredEvent, offset: 3 };
+    const inbound = recordedInbound({ cursorChangedAtSourceOffset: 5 });
+
+    const error = caught(() => buildCopyAppends(validArgs(delivery, inbound)));
+    expect(error).toMatchObject({
+      message: expect.stringMatching(/already accepted a newer delivery/),
+    });
+  });
+
+  test("accepts an equal stamp (transport redelivery) and a strictly newer one", () => {
+    const equal = buildCopyAppends(validArgs(batch(), recordedInbound()));
+    expect(equal.receipt).toEqual({ acknowledged: 1 });
+
+    const newerLifetime = buildCopyAppends(
+      validArgs(batch(SECOND_STREAM_ID, "2026-07-21T13:00:00.000Z"), recordedInbound()),
+    );
+    expect(newerLifetime.receipt).toEqual({ acknowledged: 1 });
+    expect(newerLifetime.inputs[0]?.source?.copiedFrom?.at(-1)).toMatchObject({
+      streamId: SECOND_STREAM_ID,
+      streamCreatedAt: "2026-07-21T13:00:00.000Z",
+    });
+
+    const newerGeneration = batch();
+    newerGeneration.cursorChangedAtSourceOffset = 6;
+    expect(
+      buildCopyAppends(
+        validArgs(newerGeneration, recordedInbound({ cursorChangedAtSourceOffset: 5 })),
+      ).receipt,
+    ).toEqual({ acknowledged: 1 });
   });
 });
 
@@ -361,7 +328,17 @@ describe("copy event construction", () => {
     });
   });
 
-  test("commits accepted events before deterministic cycle-suppression events", () => {
+  test("never propagates ephemeral onto the received copy", () => {
+    const delivery = batch();
+    delivery.events = [{ ...sourceEvent, ephemeral: true }];
+
+    const result = buildCopyAppends(validArgs(delivery));
+
+    expect(result.inputs[0]).toMatchObject({ type: sourceEvent.type });
+    expect(result.inputs[0]).not.toHaveProperty("ephemeral");
+  });
+
+  test("a cycle drop acknowledges the whole batch and appends one idempotent error event", () => {
     const copiedFrom = {
       subscriptionKey: "prior-subscription",
       streamId: SECOND_STREAM_ID,
@@ -384,24 +361,21 @@ describe("copy event construction", () => {
     const first = buildCopyAppends(validArgs(delivery));
     const retry = buildCopyAppends(validArgs(delivery));
 
-    expect(first.receipt).toEqual({ accepted: 1, dropped: [{ offset: 7, reason: "cycle" }] });
+    // Both events are terminally acknowledged: the accepted copy and the
+    // dropped cycle. The sender advances its cursor past the whole batch.
+    expect(first.receipt).toEqual({ acknowledged: 2 });
     expect(first.inputs).toHaveLength(2);
     expect(first.inputs[0]?.type).toBe(sourceEvent.type);
     expect(first.inputs[1]).toMatchObject({
-      type: "events.iterate.com/stream/copied-events-dropped",
+      type: "events.iterate.com/stream/error-occurred",
       payload: {
-        source: {
-          projectId: PROJECT_ID,
-          path: SOURCE_PATH,
-          streamId: FIRST_STREAM_ID,
-          streamCreatedAt: SOURCE_CREATED_AT,
-        },
-        subscriptionKey: configuration.subscriptionKey,
-        reason: "cycle",
-        count: 1,
-        firstOffset: 7,
-        lastOffset: 7,
+        message: expect.stringContaining(
+          `dropped 1 copied event(s) from "${SOURCE_PATH}" subscription "${configuration.subscriptionKey}"`,
+        ),
       },
+    });
+    expect(first.inputs[1]?.payload).toMatchObject({
+      message: expect.stringContaining("offsets 7-7"),
     });
     expect(first.inputs[1]?.idempotencyKey).toBe(retry.inputs[1]?.idempotencyKey);
   });
@@ -425,87 +399,13 @@ describe("copy event construction", () => {
 
     const result = buildCopyAppends(validArgs(delivery));
 
-    expect(result.receipt).toEqual({
-      accepted: 0,
-      dropped: [{ offset: sourceEvent.offset, reason: "hop-limit" }],
-    });
+    expect(result.receipt).toEqual({ acknowledged: 1 });
     expect(result.inputs).toHaveLength(1);
     expect(result.inputs[0]).toMatchObject({
-      type: "events.iterate.com/stream/copied-events-dropped",
+      type: "events.iterate.com/stream/error-occurred",
       payload: {
-        subscriptionKey: configuration.subscriptionKey,
-        reason: "hop-limit",
-        count: 1,
-        firstOffset: sourceEvent.offset,
-        lastOffset: sourceEvent.offset,
+        message: expect.stringContaining(`reached ${MAX_COPIED_FROM_HOPS} hops`),
       },
     });
-  });
-
-  test("applies the recorded transform and never propagates ephemeral", () => {
-    const transformed = {
-      ...configuration,
-      receiver: {
-        ...configuration.receiver,
-        transform:
-          '{"type":"example.com/transformed","payload":{"issue":payload.issue + 1},"metadata":{"via":"receiver"}}',
-      },
-    } satisfies SubscriptionConfiguredPayload;
-    const delivery = batch(FIRST_STREAM_ID, SOURCE_CREATED_AT, transformed);
-    delivery.events = [{ ...sourceEvent, ephemeral: true }];
-    const source = recordedSource({ configured: transformed });
-
-    const result = buildCopyAppends(validArgs(delivery, source));
-
-    expect(result.inputs[0]).toMatchObject({
-      type: "example.com/transformed",
-      payload: { issue: 43 },
-      metadata: { via: "receiver" },
-    });
-    expect(result.inputs[0]).not.toHaveProperty("ephemeral");
-  });
-
-  test("an omitted transform field keeps the original event field", () => {
-    const transformed = {
-      ...configuration,
-      receiver: {
-        ...configuration.receiver,
-        transform: '{"payload":{"issue":payload.issue + 1}}',
-      },
-    } satisfies SubscriptionConfiguredPayload;
-    const result = buildCopyAppends(
-      validArgs(
-        batch(FIRST_STREAM_ID, SOURCE_CREATED_AT, transformed),
-        recordedSource({ configured: transformed }),
-      ),
-    );
-
-    expect(result.inputs[0]).toMatchObject({
-      type: sourceEvent.type,
-      payload: { issue: 43 },
-    });
-  });
-
-  test.each([
-    ["returns an unknown field", '{"unexpected":true}', /unrecognized key/i],
-    [
-      "throws while evaluating",
-      '$error("synthetic transform failure")',
-      /synthetic transform failure/,
-    ],
-  ])("rejects a transform that %s", (_name, transform, expectedError) => {
-    const transformed = {
-      ...configuration,
-      receiver: { ...configuration.receiver, transform },
-    } satisfies SubscriptionConfiguredPayload;
-
-    expect(() =>
-      buildCopyAppends(
-        validArgs(
-          batch(FIRST_STREAM_ID, SOURCE_CREATED_AT, transformed),
-          recordedSource({ configured: transformed }),
-        ),
-      ),
-    ).toThrow(expectedError);
   });
 });

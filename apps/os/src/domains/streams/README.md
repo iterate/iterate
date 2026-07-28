@@ -29,26 +29,16 @@ await agentStream.subscribeToEventsFrom({
 });
 ```
 
-The source stores the subscription and product-event cursor. The receiver stores
-the complete copy list copied from that source.
+The source stores the subscription and product-event cursor. The receiver
+stores nothing at configure time: it keeps one passive record per
+`(source path, subscription key)`, reduced from the stamps on its own
+committed copies, and uses it to fence batches from a stale source lifetime
+or a superseded config generation.
 Every copied event is a normal append with its immediate source
 path, stream lifetime ID, creation time, offset, type, timestamp, and subscription
 key in `source.copiedFrom`.
 That record proves the event travelled through that configured stream
 delivery; it is not proof of who originally appended the source event.
-
-An optional JSONata transform constructs the copied event before the
-platform adds that source information:
-
-```ts
-await agentStream.subscribeToEventsFrom({
-  sourceStreamPath: "/integrations/github/main",
-  idempotencyKey: "reviewer/github-transform/v1",
-  filter: { eventTypes: ["events.iterate.com/github/webhook-received"] },
-  transform:
-    '{ "type": "events.example/pull-request-opened", "payload": { "repo": payload.body.repository.full_name } }',
-});
-```
 
 An idempotency key based on the source stream's random lifetime ID, path,
 subscription key, source offset, and the configure-or-cursor-change event makes
@@ -102,16 +92,12 @@ subscriptions: {
   inbound: {
     bySourcePath: {
       [sourcePath]: {
-        source: { projectId, path, streamId, streamCreatedAt },
-        sourceOffset,
-        byKey: {
-          [subscriptionKey]: {
-            configuration,
-            configuredAtSourceOffset,
-            numEventsReceived,
-            numEventsDropped,
-            lastEventReceivedAt?,
-          },
+        [subscriptionKey]: {
+          streamId,
+          streamCreatedAt,
+          cursorChangedAtSourceOffset,
+          numEventsReceived,
+          lastEventReceivedAt?,
         },
       },
     },
@@ -127,26 +113,11 @@ subscriptions: {
       },
     },
   },
-},
-copyListDeliveriesByReceivingStream: {
-  [receivingStreamPath]:
-    | { sourceOffset, status: "pending", subscriptionKeysRecordedByReceiver }
-    | { sourceOffset, status: "confirmed", subscriptionKeysRecordedByReceiver }
-    | {
-        sourceOffset,
-        status: "blocked",
-        attempts,
-        error,
-        blockedAt,
-        subscriptionKeysRecordedByReceiver,
-      },
 }
 ```
 
 Acknowledged offsets, retry times, live callbacks, and measurements live in runtime
-state. They do not repeat durable configuration. Complete copy-list work
-is separate because sending an empty list is how the source removes its final
-subscription from a receiving stream.
+state. They do not repeat durable configuration.
 
 ## Session callback connections
 
@@ -203,11 +174,9 @@ checkpoint with its reduced state.
 receiver: {
   action: "copy-to-stream",
   receivingStreamPath: "/agents/reviewer",
-  transform?,
   delivery: {
     start: "now",
     onFailingEvent: "halt",
-    includeEphemeral: false,
   },
 }
 ```
@@ -224,29 +193,12 @@ receiver: {
   delivery: {
     start: "beginning",
     onFailingEvent: "skip",
-    includeEphemeral: false,
   },
 }
 ```
 
 The source evaluates the expression with authority derived from its own scope,
 awaits the final method call, and advances its cursor only after success.
-
-### Webhook
-
-```ts
-receiver: {
-  action: "webhook-post",
-  url: "https://example.com/hook",
-  delivery: {
-    start: "now",
-    onFailingEvent: "halt",
-    includeEphemeral: false,
-  },
-}
-```
-
-The source POSTs one event at a time. A successful response accepts that event.
 
 ## Events marked ephemeral
 
@@ -257,9 +209,7 @@ be deleted. Never derive durable product truth from it.
 - Point reads may return it while the row still exists.
 - A session callback sees it only when it is appended after that callback
   opens; it is never replayed during session catch-up.
-- Hosted processors always exclude it.
-- A copy, ITX-call, or webhook subscription includes it only when its
-  delivery policy opts in.
+- Durable subscriptions never deliver it.
 - Stream control events cannot be ephemeral.
 
 Emit a separate durable result after transient progress:
@@ -289,14 +239,16 @@ sends a bounded batch, and advances the cursor only after the receiver call retu
 Guarantees:
 
 - Cursor advances are SQLite rows, not an event per batch.
-- Halt, resume, seek, completion, and removal are appended events.
+- Halt, resume, seek, and removal are appended events.
 - Non-matching events still advance the subscription cursor stored on the
   source stream.
-- ITX calls, stream appends, and webhook responses are awaited.
+- ITX calls and stream appends are awaited.
 - A send remembers the offset of the configuration or cursor-set event that
   chose its cursor, so its late acknowledgement cannot overwrite an operator's
   newer cursor change.
 - Retries are bounded and visible; the final failure halts the subscription.
+  After any batch failure the next read uses batch size 1, so a poison event
+  cannot strand its healthy prefix.
 - A Durable Object alarm starts due retries even when the source is quiet.
 
 Operator commands are literal:
@@ -307,57 +259,31 @@ await source.resumeSubscription({ subscriptionKey });
 await source.setSubscriptionCursorAndResume({ subscriptionKey, afterOffset });
 ```
 
-## Recording the current copy list on a receiving stream
+## The receiver's passive fence
 
-`subscribeToEventsFrom()` causes this append sequence:
+Every delivered batch — and every committed copy's last `source.copiedFrom`
+hop — carries the source lifetime (`streamId`, `streamCreatedAt`) and the
+config generation (`cursorChangedAtSourceOffset`) of the delivery run that
+produced it. The receiver keeps one record per `(source path, key)`, reduced
+from those stamps, and rejects a batch whose stamp is strictly older: a
+destructively-recreated stale source, or an in-flight batch from a superseded
+configuration. Equal stamps are ordinary at-least-once redeliveries and
+collapse on the per-event idempotency key.
 
-```text
-source stream                               receiving stream
+There is no configure-time handshake, no receiver-side registry, and no
+receiver confirmation: matching events start flowing as soon as the source
+commits `subscription-configured`, and a broken receiver surfaces later as a
+durable delivery halt.
 
-subscription-configured
-       |
-       +---- complete current list ------> copy-list-recorded
-       |
-copy-list-confirmed
-```
+If a copy would complete a cycle (the receiving stream already appears in
+`source.copiedFrom`) or the chain has reached its hop bound, the receiver
+acknowledges the event as dropped, the cursor advances past it, and the
+receiver appends one idempotent `stream/error-occurred` line describing the
+drop. That audit line is withheld from onward copy delivery so a reciprocal
+wildcard pair cannot manufacture audit events forever.
 
-The receiver event contains every current subscription from that source to that
-receiver. Removal sends a new list without the key; an empty list
-deletes that source from receiver reduced state.
-
-The list carries the source event offset that produced it. A receiver ignores
-an older offset, so delayed calls cannot restore removed keys or erase newer
-ones. If a key moves from receiver A to B, the command waits until A records a
-list without it and B records a list with it.
-
-Product events do not start until
-`copyListDeliveriesByReceivingStream[receivingStreamPath].status` is
-`"confirmed"`. The source's reduced state records whether each complete list is pending, confirmed, or
-blocked. The SQLite retry row only schedules attempts and does not move the
-product-event cursor. After a key moves from A to B, delivery to B also waits
-until no other receiver's last acknowledged key list still contains it. The
-complete-list copies themselves remain independent, so unrelated removals do
-not block one another.
-
-That old-stream gate also covers a replacement webhook, ITX expression, or
-hosted processor: no call reaches the new receiver while an old stream still
-records the key. Reconfiguring or removing a key refreshes every old stream
-whose last acknowledged list still contains it, even if that path was blocked
-during an earlier move. A blocked old path deliberately stops the cutover until
-an explicit resend succeeds.
-
-```ts
-await source.resendCopyList({ receivingStreamPath });
-```
-
-After bounded failures, the source appends `copy-list-delivery-blocked` for that
-receiving-stream path. The subscription itself is not halted: product delivery simply
-cannot start until the receiver records the list. This command appends
-`copy-list-resend-requested`, creates a new pending generation, and retries
-the newest complete list.
-
-Public `append()` cannot author either copy-list record, dropped-event
-records, or `source.copiedFrom`. Only trusted Stream Durable Object calls can.
+Public `append()` cannot author `source.copiedFrom`. Only trusted Stream
+Durable Object calls can.
 
 ## Received control events are data, not commands
 
@@ -411,22 +337,20 @@ alarm/watchdog behavior, or receiver batch construction.
 
 ## File map
 
-| File                                                         | What it does                                                                       |
-| ------------------------------------------------------------ | ---------------------------------------------------------------------------------- |
-| `stream-durable-object.ts`                                   | Appends events, exposes stream methods, and starts post-commit reconciliation      |
-| `core-processor-contract.ts`                                 | Declares stream control events and reduced state                                   |
-| `core-processor.ts`                                          | Validates and reduces core events without making calls                             |
-| `stream-storage.ts`                                          | Stores the event log, delivery cursors, and list-send retries                      |
-| `stream-connections.ts`                                      | Opens live callbacks, replays history, and sends newly appended events             |
-| `copy-list-sender.ts`                                        | Sends complete copy lists to streams and owns bounded list-send retries            |
-| `copy-list-retry-store.ts`                                   | Reads and updates one list-send retry row per receiver path                        |
-| `stream-event-sender.ts`                                     | Sends events for durable subscriptions and owns their cursors, retries, and expiry |
-| `subscription-receiver-calls.ts`                             | Calls hosted processors, ITX methods, receiving streams, and webhooks              |
-| `retained-event-callbacks.ts`                                | Retains and releases session and hosted-processor callback capabilities            |
-| `copy-appends.ts`                                            | Builds copied events, source information, idempotency keys, and cycle suppressions |
-| `event-filter.ts`                                            | Compiles and evaluates event-type and JSONata filters                              |
-| `packages/iterate/src/processors/stream-processor.ts`        | Defines the processor class and its event-handling helpers                         |
-| `packages/iterate/src/processors/stream-processor-runner.ts` | Folds hosted processor events and stores checkpoints                               |
+| File                                                         | What it does                                                                  |
+| ------------------------------------------------------------ | ----------------------------------------------------------------------------- |
+| `stream-durable-object.ts`                                   | Appends events, exposes stream methods, and starts post-commit reconciliation |
+| `core-processor-contract.ts`                                 | Declares stream control events and reduced state                              |
+| `core-processor.ts`                                          | Validates and reduces core events without making calls                        |
+| `stream-storage.ts`                                          | Stores the event log and delivery cursors                                     |
+| `stream-connections.ts`                                      | Opens live callbacks, replays history, and sends newly appended events        |
+| `stream-event-sender.ts`                                     | Sends events for durable subscriptions and owns their cursors and retries     |
+| `subscription-receiver-calls.ts`                             | Calls hosted processors, ITX methods, and receiving streams                   |
+| `retained-event-callbacks.ts`                                | Retains and releases session and hosted-processor callback capabilities       |
+| `copy-appends.ts`                                            | Builds copied events, enforces the inbound stamp fence, and suppresses cycles |
+| `event-filter.ts`                                            | Compiles and evaluates event-type and JSONata filters                         |
+| `packages/iterate/src/processors/stream-processor.ts`        | Defines the processor class and its event-handling helpers                    |
+| `packages/iterate/src/processors/stream-processor-runner.ts` | Folds hosted processor events and stores checkpoints                          |
 
 The public stream surface is written in `src/rpc-targets.ts` and generated into
 `src/itx-api.generated.ts` and `packages/iterate/src/itx-api.generated.ts`.

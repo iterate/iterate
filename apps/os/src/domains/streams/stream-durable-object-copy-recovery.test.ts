@@ -10,14 +10,10 @@ import type { Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
   CORE_STATE_VERSION,
-  recordedSubscriptionForCopy,
   subscriptionConfigurationForDelivery,
   type SubscriptionConfiguredPayload,
 } from "./core-processor-contract.ts";
 import { MAX_CORE_PROCESSOR_STATE_BYTES } from "./core-processor.ts";
-import { computeBackoffMs } from "./delivery-math.ts";
-import { MAX_COPY_LIST_ATTEMPTS } from "./copy-list-retry-store.ts";
-import { internalStreamId } from "./stream-delivery-utils.ts";
 import { StreamDurableObject } from "./stream-durable-object.ts";
 
 const PROJECT_ID = "prj_copy_recovery";
@@ -30,7 +26,6 @@ const SOURCE_STREAM_CREATED_AT = "2026-07-21T12:00:00.000Z";
 
 type StreamStub = {
   appendCoreEvent(event: StreamEventInput): Promise<StreamEvent>;
-  recordCopyListFromSource(event: StreamEventInput): Promise<StreamEvent>;
   receiveCopiedEvents(batch: StreamDeliveryBatch): Promise<CopyReceipt>;
 };
 
@@ -176,13 +171,12 @@ function subscriptionConfiguration(): SubscriptionConfiguredPayload {
       delivery: {
         start: "beginning",
         onFailingEvent: "halt",
-        includeEphemeral: false,
       },
     },
   };
 }
 
-async function receiverWithRecordedSubscription() {
+async function receiverStream() {
   const context = durableObjectContext(streamName(RECEIVING_STREAM_PATH));
   const env = {
     STREAM: {
@@ -211,31 +205,6 @@ async function receiverWithRecordedSubscription() {
     createdAt: SOURCE_STREAM_CREATED_AT,
     payload: configuration,
   };
-  receiver.recordCopyListFromSource({
-    type: "events.iterate.com/stream/copy-list-recorded",
-    payload: {
-      source: {
-        projectId: PROJECT_ID,
-        path: SOURCE_PATH,
-        streamId: SOURCE_STREAM_ID,
-        streamCreatedAt: SOURCE_STREAM_CREATED_AT,
-      },
-      sourceOffset: 5,
-      subscriptionsByKey: {
-        [SUBSCRIPTION_KEY]: {
-          configuredAtSourceOffset: configuredEvent.offset,
-          configuration: {
-            filter: configuration.filter,
-            ...(configuration.endWhen === undefined ? {} : { endWhen: configuration.endWhen }),
-            delivery:
-              configuration.receiver.action === "copy-to-stream"
-                ? configuration.receiver.delivery
-                : undefined,
-          },
-        },
-      },
-    },
-  });
 
   const batch = {
     projectId: PROJECT_ID,
@@ -380,32 +349,48 @@ describe("StreamDurableObject circuit-breaker consequences", () => {
 });
 
 describe("StreamDurableObject receiving retries", () => {
-  it("keeps the newer recorded source incarnation when an older call arrives", async () => {
-    const { context, receiver } = await receiverWithRecordedSubscription();
+  it("fences a stale source lifetime after a newer one delivered", async () => {
+    const { batch, context, receiver } = await receiverStream();
+    const newerLifetime = {
+      ...batch,
+      streamId: "33333333-3333-4333-8333-333333333333",
+      streamCreatedAt: "2026-07-21T13:00:00.000Z",
+      events: [
+        {
+          type: MATCHING_EVENT_TYPE,
+          path: SOURCE_PATH,
+          offset: 6,
+          createdAt: "2026-07-21T13:00:01.000Z",
+          payload: { issue: 1 },
+        },
+      ],
+    } satisfies StreamDeliveryBatch;
+    const staleLifetime = {
+      ...batch,
+      events: [
+        {
+          type: MATCHING_EVENT_TYPE,
+          path: SOURCE_PATH,
+          offset: 6,
+          createdAt: "2026-07-21T12:00:01.000Z",
+          payload: { issue: 2 },
+        },
+      ],
+    } satisfies StreamDeliveryBatch;
 
     try {
+      expect(receiver.receiveCopiedEvents(newerLifetime)).toEqual({ acknowledged: 1 });
+      expect(() => receiver.receiveCopiedEvents(staleLifetime)).toThrow(
+        /already accepted a newer delivery/,
+      );
       expect(
-        receiver.recordCopyListFromSource({
-          type: "events.iterate.com/stream/copy-list-recorded",
-          payload: {
-            source: {
-              projectId: PROJECT_ID,
-              path: SOURCE_PATH,
-              streamId: "00000000-0000-4000-8000-000000000000",
-              streamCreatedAt: "2026-07-21T11:59:59.000Z",
-            },
-            sourceOffset: 100,
-            subscriptionsByKey: {},
-          },
-        }),
+        receiver.runtimeState().coreProcessorState.subscriptions.inbound.bySourcePath[
+          SOURCE_PATH
+        ]?.[SUBSCRIPTION_KEY],
       ).toMatchObject({
-        payload: {
-          source: {
-            streamId: SOURCE_STREAM_ID,
-            streamCreatedAt: SOURCE_STREAM_CREATED_AT,
-          },
-          sourceOffset: 5,
-        },
+        streamId: newerLifetime.streamId,
+        streamCreatedAt: newerLifetime.streamCreatedAt,
+        numEventsReceived: 1,
       });
     } finally {
       context.close();
@@ -413,7 +398,7 @@ describe("StreamDurableObject receiving retries", () => {
   });
 
   it("stores a copied stream control event as inert data without interpreting its payload", async () => {
-    const { batch, context, receiver } = await receiverWithRecordedSubscription();
+    const { batch, context, receiver } = await receiverStream();
     const copiedControl: StreamEvent = {
       type: "events.iterate.com/stream/configured",
       path: SOURCE_PATH,
@@ -424,8 +409,7 @@ describe("StreamDurableObject receiving retries", () => {
 
     try {
       expect(receiver.receiveCopiedEvents({ ...batch, events: [copiedControl] })).toEqual({
-        accepted: 1,
-        dropped: [],
+        acknowledged: 1,
       });
       expect(receiver.getEvent({ offset: receiver.getEventPage().streamMaxOffset })).toMatchObject({
         type: copiedControl.type,
@@ -438,8 +422,8 @@ describe("StreamDurableObject receiving retries", () => {
     }
   });
 
-  it("acknowledges the same cycle drop when a committed batch is retried", async () => {
-    const { batch, context, receiver } = await receiverWithRecordedSubscription();
+  it("acknowledges the same cycle drop when a committed batch is retried, appending one audit event", async () => {
+    const { batch, context, receiver } = await receiverStream();
     const cycle: StreamEvent = {
       type: MATCHING_EVENT_TYPE,
       path: SOURCE_PATH,
@@ -465,18 +449,14 @@ describe("StreamDurableObject receiving retries", () => {
     const delivered = { ...batch, events: [cycle] };
 
     try {
-      expect(receiver.receiveCopiedEvents(delivered)).toEqual({
-        accepted: 0,
-        dropped: [{ offset: 6, reason: "cycle" }],
-      });
-      expect(receiver.receiveCopiedEvents(delivered)).toEqual({
-        accepted: 0,
-        dropped: [{ offset: 6, reason: "cycle" }],
-      });
+      expect(receiver.receiveCopiedEvents(delivered)).toEqual({ acknowledged: 1 });
+      expect(receiver.receiveCopiedEvents(delivered)).toEqual({ acknowledged: 1 });
       expect(
-        receiver.getEvents({
-          eventTypes: ["events.iterate.com/stream/copied-events-dropped"],
-        }),
+        receiver
+          .getEvents({ eventTypes: ["events.iterate.com/stream/error-occurred"] })
+          .filter((event) =>
+            String((event.payload as { message?: unknown }).message).includes("dropped 1 copied"),
+          ),
       ).toHaveLength(1);
     } finally {
       context.close();
@@ -548,9 +528,6 @@ describe("StreamDurableObject reconciliation recovery", () => {
           async appendCoreEvent(event) {
             return target.appendCoreEvent(event);
           },
-          async recordCopyListFromSource(event) {
-            return target.recordCopyListFromSource(event);
-          },
           async receiveCopiedEvents(batch) {
             receivedBatches.push(structuredClone(batch));
             return target.receiveCopiedEvents(batch);
@@ -566,11 +543,9 @@ describe("StreamDurableObject reconciliation recovery", () => {
     await Promise.all([sourceContext.settle(), receiverContext.settle()]);
 
     try {
-      await expect(
+      expect(
         source.setCopySubscription({ configuration: subscriptionConfiguration() }),
-      ).resolves.toMatchObject({
-        status: "configured",
-      });
+      ).toMatchObject({ subscriptionKey: SUBSCRIPTION_KEY });
       const [productEvent] = source.append({
         type: MATCHING_EVENT_TYPE,
         payload: { issue: "survive-eviction" },
@@ -591,13 +566,13 @@ describe("StreamDurableObject reconciliation recovery", () => {
       });
       expect(source.runtimeState().runtime.subscriptions[SUBSCRIPTION_KEY]).toMatchObject({
         acknowledgedOffset: expect.any(Number),
-        acknowledgedEvents: 1,
         attempt: 0,
         lastError: null,
       });
       expect(
-        receiver.runtimeState().coreProcessorState.subscriptions.inbound.bySourcePath[SOURCE_PATH]
-          ?.byKey[SUBSCRIPTION_KEY],
+        receiver.runtimeState().coreProcessorState.subscriptions.inbound.bySourcePath[
+          SOURCE_PATH
+        ]?.[SUBSCRIPTION_KEY],
       ).toMatchObject({ numEventsReceived: 1 });
 
       sourceContext.setKv("stateVersion", -1);
@@ -611,17 +586,8 @@ describe("StreamDurableObject reconciliation recovery", () => {
           byKey: { [SUBSCRIPTION_KEY]: expect.any(Object) },
         },
       });
-      expect(
-        source.runtimeState().coreProcessorState.copyListDeliveriesByReceivingStream,
-      ).toMatchObject({
-        [RECEIVING_STREAM_PATH]: {
-          status: "confirmed",
-          subscriptionKeysRecordedByReceiver: [SUBSCRIPTION_KEY],
-        },
-      });
       expect(source.runtimeState().runtime.subscriptions[SUBSCRIPTION_KEY]).toMatchObject({
         acknowledgedOffset: expect.any(Number),
-        acknowledgedEvents: 1,
         attempt: 0,
         lastError: null,
       });
@@ -641,7 +607,6 @@ describe("StreamDurableObject reconciliation recovery", () => {
         source.runtimeState().coreProcessorState.subscriptions.outbound.byKey[SUBSCRIPTION_KEY],
       ).toEqual(expect.any(Object));
       expect(source.runtimeState().runtime.subscriptions[SUBSCRIPTION_KEY]).toMatchObject({
-        acknowledgedEvents: 1,
         attempt: 0,
       });
       expect(loggedError).toHaveBeenCalledWith(
@@ -827,507 +792,80 @@ describe("StreamDurableObject reconciliation recovery", () => {
   });
 });
 
-describe("StreamDurableObject copy list recovery", () => {
-  it("requires retry identity for a keyless subscription and reuses its committed key after a failed handshake", async () => {
-    let now = 1_000_000;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
-    vi.spyOn(Math, "random").mockReturnValue(0.5);
-    vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const sourceContext = durableObjectContext(streamName(SOURCE_PATH));
-    const receiverContext = durableObjectContext(streamName(RECEIVING_STREAM_PATH));
-    const streams = new Map<string, StreamDurableObject>();
-    const receivedBatches: StreamDeliveryBatch[] = [];
-    let receiverListFailuresRemaining = 1;
-    const streamNamespace = {
-      getByName(name: string): StreamStub {
-        const target = streams.get(name);
-        if (target === undefined) throw new Error(`test stream ${name} does not exist`);
-        return {
-          async appendCoreEvent(event) {
-            return target.appendCoreEvent(event);
-          },
-          async recordCopyListFromSource(event) {
-            if (name === streamName(RECEIVING_STREAM_PATH) && receiverListFailuresRemaining > 0) {
-              receiverListFailuresRemaining -= 1;
-              throw new Error("synthetic first copy-list failure");
-            }
-            return target.recordCopyListFromSource(event);
-          },
-          async receiveCopiedEvents(batch) {
-            receivedBatches.push(structuredClone(batch));
-            return target.receiveCopiedEvents(batch);
-          },
-        };
-      },
-    };
-    const env = { STREAM: streamNamespace } as unknown as Env;
-    const source = new StreamDurableObject(sourceContext.ctx, env);
-    streams.set(streamName(SOURCE_PATH), source);
-    const receiver = new StreamDurableObject(receiverContext.ctx, env);
-    streams.set(streamName(RECEIVING_STREAM_PATH), receiver);
-    await Promise.all([sourceContext.settle(), receiverContext.settle()]);
-    const { subscriptionKey: _omitted, ...keylessConfiguration } = subscriptionConfiguration();
+describe("StreamDurableObject copy subscription commands", () => {
+  it("requires retry identity for a keyless subscription and returns the committed key", async () => {
+    const context = durableObjectContext(streamName(SOURCE_PATH));
+    const env = { STREAM: { getByName: vi.fn() } } as unknown as Env;
+    const source = new StreamDurableObject(context.ctx, env);
+    await context.settle();
 
     try {
+      const { subscriptionKey: _omitted, ...keylessConfiguration } = subscriptionConfiguration();
       const offsetBeforeRejectedSetup = source.runtimeState().coreProcessorState.maxOffset;
-      await expect(
-        source.setCopySubscription({ configuration: keylessConfiguration }),
-      ).rejects.toThrow(
+      expect(() => source.setCopySubscription({ configuration: keylessConfiguration })).toThrow(
         "a keyless copy subscription requires idempotencyKey so setup is safe to retry",
       );
       expect(source.runtimeState().coreProcessorState.maxOffset).toBe(offsetBeforeRejectedSetup);
 
-      const firstAttempt = source.setCopySubscription({
+      const first = source.setCopySubscription({
         configuration: keylessConfiguration,
         idempotencyKey: "configure-review-feed-once",
       });
-      await expect(firstAttempt).rejects.toThrow("synthetic first copy-list failure");
-      await sourceContext.settle();
-      const retryState = source.runtimeState().runtime.copyListRetries[RECEIVING_STREAM_PATH];
-      expect(retryState).toMatchObject({ attempt: 1, sourceOffset: expect.any(Number) });
-      now = retryState!.nextAttemptAt!;
-
-      const first = await source.setCopySubscription({
+      const retry = source.setCopySubscription({
         configuration: keylessConfiguration,
         idempotencyKey: "configure-review-feed-once",
       });
-      const retry = await source.setCopySubscription({
-        configuration: keylessConfiguration,
-        idempotencyKey: "configure-review-feed-once",
-      });
-      if (first.status !== "configured" || retry.status !== "configured") {
-        throw new Error("test setup unexpectedly blocked copy-list delivery");
-      }
+      expect(first.subscriptionKey).toBe(
+        `subscription:${first.subscriptionConfiguredEvent.offset}`,
+      );
       expect(retry.subscriptionKey).toBe(first.subscriptionKey);
       expect(retry.subscriptionConfiguredEvent.offset).toBe(
         first.subscriptionConfiguredEvent.offset,
       );
-      expect(first.subscriptionKey).toBe(
-        `subscription:${first.subscriptionConfiguredEvent.offset}`,
-      );
-
-      const [copiedEvent] = source.append({
-        type: MATCHING_EVENT_TYPE,
-        payload: { issue: "generated-key-delivery" },
-      });
-      source.alarm();
-      await Promise.all([sourceContext.settle(), receiverContext.settle()]);
-
-      expect(receivedBatches).toHaveLength(1);
-      expect(receivedBatches[0]).toMatchObject({
-        subscriptionKey: first.subscriptionKey,
-        configuredEvent: {
-          offset: first.subscriptionConfiguredEvent.offset,
-          payload: keylessConfiguration,
-        },
-        events: [{ offset: copiedEvent!.offset, type: MATCHING_EVENT_TYPE }],
-      });
-      expect(
-        receiver.runtimeState().coreProcessorState.subscriptions.inbound.bySourcePath[SOURCE_PATH]
-          ?.byKey[first.subscriptionKey],
-      ).toMatchObject({ numEventsReceived: 1, lastEventReceivedAt: expect.any(String) });
-
-      const second = await source.setCopySubscription({
-        configuration: keylessConfiguration,
-        idempotencyKey: "configure-review-feed-twice",
-      });
-      const third = await source.setCopySubscription({
-        configuration: keylessConfiguration,
-        idempotencyKey: "configure-review-feed-three-times",
-      });
-      if (second.status !== "configured" || third.status !== "configured") {
-        throw new Error("test setup unexpectedly blocked copy-list delivery");
-      }
-      expect(
-        new Set([first.subscriptionKey, second.subscriptionKey, third.subscriptionKey]).size,
-      ).toBe(3);
-      expect(
-        Object.keys(source.runtimeState().coreProcessorState.subscriptions.outbound.byKey),
-      ).toEqual([first.subscriptionKey, second.subscriptionKey, third.subscriptionKey]);
-
-      const offsetBeforeOpen = source.runtimeState().coreProcessorState.maxOffset;
-      const collidingGeneratedKey = `subscription:${offsetBeforeOpen + 2}`;
-      const connection = source.openConnection({
-        connectionKey: collidingGeneratedKey,
-        processEventBatch: () => undefined,
-      });
-      try {
-        expect(source.runtimeState().coreProcessorState.maxOffset).toBe(offsetBeforeOpen + 1);
-        await expect(
-          source.setCopySubscription({
-            configuration: keylessConfiguration,
-            idempotencyKey: "configure-review-feed-with-colliding-generated-key",
-          }),
-        ).rejects.toThrow(
-          `subscriptionKey "${collidingGeneratedKey}" is already used by a live session connection`,
-        );
-      } finally {
-        connection.close();
-      }
     } finally {
-      receiverContext.close();
-      sourceContext.close();
+      context.close();
     }
   });
 
-  it("does not acknowledge an identical receiver move while an older receiver still records the key", async () => {
-    vi.spyOn(Math, "random").mockReturnValue(0.5);
-    vi.spyOn(console, "warn").mockImplementation(() => undefined);
-
-    const oldReceiverPath = "/old-reviewer";
-    const newReceiverPath = "/new-reviewer";
-    const sourceContext = durableObjectContext(streamName(SOURCE_PATH));
-    const oldReceiverContext = durableObjectContext(streamName(oldReceiverPath));
-    const newReceiverContext = durableObjectContext(streamName(newReceiverPath));
-    const streams = new Map<string, StreamDurableObject>();
-    let oldReceiverListCalls = 0;
-
-    const streamNamespace = {
-      getByName(name: string): StreamStub {
-        const target = streams.get(name);
-        if (target === undefined) throw new Error(`test stream ${name} does not exist`);
-        return {
-          async appendCoreEvent(event) {
-            return target.appendCoreEvent(event);
-          },
-          async recordCopyListFromSource(event) {
-            if (name === streamName(oldReceiverPath)) {
-              oldReceiverListCalls += 1;
-              if (oldReceiverListCalls > 1) {
-                throw new Error("synthetic old-receiver outage");
-              }
-            }
-            return target.recordCopyListFromSource(event);
-          },
-          async receiveCopiedEvents(batch) {
-            return target.receiveCopiedEvents(batch);
-          },
-        };
-      },
-    };
-    const env = { STREAM: streamNamespace } as unknown as Env;
-    const source = new StreamDurableObject(sourceContext.ctx, env);
-    streams.set(streamName(SOURCE_PATH), source);
-    const oldReceiver = new StreamDurableObject(oldReceiverContext.ctx, env);
-    streams.set(streamName(oldReceiverPath), oldReceiver);
-    const newReceiver = new StreamDurableObject(newReceiverContext.ctx, env);
-    streams.set(streamName(newReceiverPath), newReceiver);
-    await Promise.all([
-      sourceContext.settle(),
-      oldReceiverContext.settle(),
-      newReceiverContext.settle(),
-    ]);
-
-    const configurationFor = (path: string): SubscriptionConfiguredPayload => ({
-      ...subscriptionConfiguration(),
-      receiver: {
-        action: "copy-to-stream",
-        receivingStreamPath: path,
-        delivery: {
-          start: "beginning",
-          onFailingEvent: "halt",
-          includeEphemeral: false,
-        },
-      },
-    });
+  it("level-triggers an identical keyed configuration and appends a removal exactly once", async () => {
+    const context = durableObjectContext(streamName(SOURCE_PATH));
+    const env = { STREAM: { getByName: vi.fn() } } as unknown as Env;
+    const source = new StreamDurableObject(context.ctx, env);
+    await context.settle();
 
     try {
-      await expect(
-        source.setCopySubscription({ configuration: configurationFor(oldReceiverPath) }),
-      ).resolves.toMatchObject({
-        status: "configured",
-      });
-
-      const newConfiguration = configurationFor(newReceiverPath);
-      const [move] = source.append({
-        type: "events.iterate.com/stream/subscription-configured",
-        payload: newConfiguration,
-      });
-      const sourceState = source.runtimeState().coreProcessorState;
-      const receivingStreamEvent = newReceiver.recordCopyListFromSource({
-        type: "events.iterate.com/stream/copy-list-recorded",
-        payload: {
-          source: {
-            projectId: PROJECT_ID,
-            path: SOURCE_PATH,
-            streamId: sourceState.streamId!,
-            streamCreatedAt: sourceState.createdAt!,
-          },
-          sourceOffset: move!.offset,
-          subscriptionsByKey: {
-            [SUBSCRIPTION_KEY]: {
-              configuredAtSourceOffset: move!.offset,
-              configuration: recordedSubscriptionForCopy(newConfiguration),
-            },
-          },
-        },
-      });
-      source.appendCoreEvent({
-        type: "events.iterate.com/stream/copy-list-confirmed",
-        idempotencyKey: internalStreamId(
-          "copy-list-confirmed",
-          newReceiverPath,
-          sourceState.streamId!,
-          move!.offset,
-        ),
-        payload: {
-          receivingStreamPath: newReceiverPath,
-          sourceOffset: move!.offset,
-          receivingStreamEvent,
-        },
-      });
-      await Promise.all([
-        sourceContext.settle(),
-        oldReceiverContext.settle(),
-        newReceiverContext.settle(),
-      ]);
-
-      expect(
-        source.runtimeState().coreProcessorState.copyListDeliveriesByReceivingStream[
-          oldReceiverPath
-        ],
-      ).toMatchObject({
-        sourceOffset: move!.offset,
-        status: "pending",
-        subscriptionKeysRecordedByReceiver: [SUBSCRIPTION_KEY],
-      });
-      expect(
-        source.runtimeState().coreProcessorState.copyListDeliveriesByReceivingStream[
-          newReceiverPath
-        ],
-      ).toMatchObject({
-        sourceOffset: move!.offset,
-        status: "confirmed",
-        subscriptionKeysRecordedByReceiver: [SUBSCRIPTION_KEY],
-      });
-
-      source.appendCoreEvent({
-        type: "events.iterate.com/stream/copy-list-delivery-blocked",
-        payload: {
-          receivingStreamPath: oldReceiverPath,
-          sourceOffset: move!.offset,
-          attempts: MAX_COPY_LIST_ATTEMPTS,
-          error: "synthetic old-receiver outage",
-        },
-      });
-      const [resend] = source.append({
-        type: "events.iterate.com/stream/copy-list-resend-requested",
-        payload: { receivingStreamPath: oldReceiverPath },
-      });
-
-      expect(
-        source.runtimeState().coreProcessorState.copyListDeliveriesByReceivingStream[
-          oldReceiverPath
-        ],
-      ).toMatchObject({
-        sourceOffset: resend!.offset,
-        status: "pending",
-        subscriptionKeysRecordedByReceiver: [SUBSCRIPTION_KEY],
-      });
-      await expect(
-        source.setCopySubscription({ configuration: configurationFor(newReceiverPath) }),
-      ).rejects.toThrow(
-        /sending copy list to "\/old-reviewer" failed: synthetic old-receiver outage|backing off/,
+      const first = source.setCopySubscription({ configuration: subscriptionConfiguration() });
+      const again = source.setCopySubscription({ configuration: subscriptionConfiguration() });
+      expect(again.subscriptionConfiguredEvent.offset).toBe(
+        first.subscriptionConfiguredEvent.offset,
       );
-    } finally {
-      newReceiverContext.close();
-      oldReceiverContext.close();
-      sourceContext.close();
-    }
-  });
 
-  it("keeps one retry budget across eviction, blocks, resends, records the receiver ack, and resumes event delivery", async () => {
-    let now = 1_000_000;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
-    vi.spyOn(Math, "random").mockReturnValue(0.5);
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
-
-    const sourceContext = durableObjectContext(streamName(SOURCE_PATH));
-    const receiverContext = durableObjectContext(streamName(RECEIVING_STREAM_PATH));
-    const streams = new Map<string, StreamDurableObject>();
-    let receiverFailuresRemaining = MAX_COPY_LIST_ATTEMPTS;
-    const receivedBatches: StreamDeliveryBatch[] = [];
-
-    const streamNamespace = {
-      getByName(name: string): StreamStub {
-        const target = streams.get(name);
-        if (target === undefined) throw new Error(`test stream ${name} does not exist`);
-        return {
-          async appendCoreEvent(event) {
-            return target.appendCoreEvent(event);
-          },
-          async recordCopyListFromSource(event) {
-            if (name === streamName(RECEIVING_STREAM_PATH) && receiverFailuresRemaining > 0) {
-              receiverFailuresRemaining -= 1;
-              throw new Error("synthetic receiving-stream outage");
-            }
-            return target.recordCopyListFromSource(event);
-          },
-          async receiveCopiedEvents(batch) {
-            receivedBatches.push(structuredClone(batch));
-            return target.receiveCopiedEvents(batch);
-          },
-        };
-      },
-    };
-    const env = { STREAM: streamNamespace } as unknown as Env;
-    let source = new StreamDurableObject(sourceContext.ctx, env);
-    streams.set(streamName(SOURCE_PATH), source);
-    const receiver = new StreamDurableObject(receiverContext.ctx, env);
-    streams.set(streamName(RECEIVING_STREAM_PATH), receiver);
-    await Promise.all([sourceContext.settle(), receiverContext.settle()]);
-
-    try {
-      const configuration = subscriptionConfiguration();
-      let configuredAtSourceOffset: number | undefined;
-      for (let attempt = 1; attempt <= MAX_COPY_LIST_ATTEMPTS; attempt += 1) {
-        await expect(source.setCopySubscription({ configuration })).rejects.toThrow(
-          "synthetic receiving-stream outage",
-        );
-        const runtime = source.runtimeState();
-        const retry = runtime.runtime.copyListRetries[RECEIVING_STREAM_PATH];
-        configuredAtSourceOffset ??= retry?.sourceOffset;
-        if (attempt < MAX_COPY_LIST_ATTEMPTS) {
-          expect(retry).toMatchObject({ attempt, sourceOffset: configuredAtSourceOffset });
-          expect(retry?.nextAttemptAt).toBe(now + computeBackoffMs(attempt, 0.5));
-          expect(sourceContext.alarms.some((alarmAt) => alarmAt <= retry!.nextAttemptAt!)).toBe(
-            true,
-          );
-
-          if (attempt === 5) {
-            await sourceContext.settle();
-            const alarmsBeforeEviction = sourceContext.alarms.length;
-            source = new StreamDurableObject(sourceContext.ctx, env);
-            streams.set(streamName(SOURCE_PATH), source);
-            await sourceContext.settle();
-
-            expect(
-              source.runtimeState().runtime.copyListRetries[RECEIVING_STREAM_PATH],
-            ).toMatchObject({
-              attempt,
-              sourceOffset: configuredAtSourceOffset,
-              nextAttemptAt: retry!.nextAttemptAt,
-            });
-            expect(sourceContext.alarms.slice(alarmsBeforeEviction)).toContain(
-              retry!.nextAttemptAt,
-            );
-          }
-
-          now = retry!.nextAttemptAt!;
-        } else {
-          expect(retry).toBeUndefined();
-        }
-      }
-
-      const blockedRuntime = source.runtimeState();
       expect(
-        blockedRuntime.coreProcessorState.copyListDeliveriesByReceivingStream[
-          RECEIVING_STREAM_PATH
-        ],
-      ).toMatchObject({
-        sourceOffset: configuredAtSourceOffset,
-        status: "blocked",
-        attempts: MAX_COPY_LIST_ATTEMPTS,
-        subscriptionKeysRecordedByReceiver: [],
-      });
-      expect(blockedRuntime.runtime.copyListRetries[RECEIVING_STREAM_PATH]).toBeUndefined();
-      expect(
-        source.getEvents({
-          eventTypes: ["events.iterate.com/stream/copy-list-delivery-blocked"],
+        source.removeCopySubscription({
+          subscriptionKey: SUBSCRIPTION_KEY,
+          expectedReceiverPath: "/somewhere-else",
         }),
-      ).toHaveLength(1);
-      await expect(source.setCopySubscription({ configuration })).resolves.toMatchObject({
-        status: "blocked",
-        receivingStreamPath: RECEIVING_STREAM_PATH,
-        attempts: MAX_COPY_LIST_ATTEMPTS,
-        message: expect.stringMatching(/blocked after .* attempts/),
-      });
-
-      receiverFailuresRemaining = 0;
-      const [resend] = source.append({
-        type: "events.iterate.com/stream/copy-list-resend-requested",
-        payload: { receivingStreamPath: RECEIVING_STREAM_PATH },
-      });
-      expect(resend).toMatchObject({
-        type: "events.iterate.com/stream/copy-list-resend-requested",
-      });
+      ).toEqual({ status: "already-absent" });
       expect(
-        source.runtimeState().coreProcessorState.copyListDeliveriesByReceivingStream[
-          RECEIVING_STREAM_PATH
-        ],
-      ).toEqual({
-        sourceOffset: resend!.offset,
-        status: "pending",
-        subscriptionKeysRecordedByReceiver: [],
-      });
+        source.runtimeState().coreProcessorState.subscriptions.outbound.byKey[SUBSCRIPTION_KEY],
+      ).toBeDefined();
 
-      source.alarm();
-      await Promise.all([sourceContext.settle(), receiverContext.settle()]);
-      expect(
-        source.runtimeState().coreProcessorState.copyListDeliveriesByReceivingStream[
-          RECEIVING_STREAM_PATH
-        ],
-      ).toEqual({
-        sourceOffset: resend!.offset,
-        status: "confirmed",
-        subscriptionKeysRecordedByReceiver: [SUBSCRIPTION_KEY],
-      });
-      expect(
-        receiver.runtimeState().coreProcessorState.subscriptions.inbound.bySourcePath[SOURCE_PATH]
-          ?.byKey[SUBSCRIPTION_KEY],
-      ).toMatchObject({ configuredAtSourceOffset, numEventsReceived: 0 });
-      expect(source.runtimeState().runtime.copyListRetries[RECEIVING_STREAM_PATH]).toBeUndefined();
-
-      const [productEvent] = source.append({
-        type: MATCHING_EVENT_TYPE,
-        payload: { issue: 42 },
-      });
-      source.alarm();
-      await Promise.all([sourceContext.settle(), receiverContext.settle()]);
-
-      expect(receivedBatches).toHaveLength(1);
-      expect(receivedBatches[0]).toMatchObject({
-        path: SOURCE_PATH,
+      const removed = source.removeCopySubscription({
         subscriptionKey: SUBSCRIPTION_KEY,
-        events: [{ offset: productEvent!.offset, type: MATCHING_EVENT_TYPE }],
+        expectedReceiverPath: RECEIVING_STREAM_PATH,
       });
+      expect(removed).toMatchObject({ status: "removed" });
       expect(
-        receiver.runtimeState().coreProcessorState.subscriptions.inbound.bySourcePath[SOURCE_PATH]
-          ?.byKey[SUBSCRIPTION_KEY],
-      ).toMatchObject({ numEventsReceived: 1, lastEventReceivedAt: expect.any(String) });
-      expect(source.runtimeState().runtime.subscriptions[SUBSCRIPTION_KEY]).toMatchObject({
-        acknowledgedOffset: productEvent!.offset,
-        attempt: 0,
-        lastError: null,
-      });
-
-      const oldConfigurationBatch = structuredClone(receivedBatches[0]!);
-      await expect(
         source.removeCopySubscription({
           subscriptionKey: SUBSCRIPTION_KEY,
           expectedReceiverPath: RECEIVING_STREAM_PATH,
         }),
-      ).resolves.toMatchObject({ status: "removed" });
+      ).toEqual({ status: "already-absent" });
       expect(
-        receiver.runtimeState().coreProcessorState.subscriptions.inbound.bySourcePath[SOURCE_PATH],
-      ).toBeUndefined();
-      expect(() => receiver.receiveCopiedEvents(oldConfigurationBatch)).toThrow(
-        /has no current subscription/,
-      );
-
-      expect(warn).toHaveBeenCalledTimes(MAX_COPY_LIST_ATTEMPTS - 1);
-      expect(error).toHaveBeenCalledTimes(1);
-      expect(error).toHaveBeenCalledWith(
-        "sending copy list to receiving stream is blocked",
-        expect.objectContaining({
-          receivingStreamPath: RECEIVING_STREAM_PATH,
-          attempt: MAX_COPY_LIST_ATTEMPTS,
-        }),
-      );
+        source.getEvents({ eventTypes: ["events.iterate.com/stream/subscription-removed"] }),
+      ).toHaveLength(1);
     } finally {
-      receiverContext.close();
-      sourceContext.close();
+      context.close();
     }
   });
 });

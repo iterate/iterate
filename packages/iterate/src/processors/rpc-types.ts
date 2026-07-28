@@ -191,13 +191,6 @@ export type SubscriptionConfigurationForDelivery = {
       eventTypes?: string[];
       condition?: string;
     };
-    endWhen?: {
-      any: Array<
-        | { kind: "acknowledged-events"; count: number }
-        | { kind: "source-offset-acknowledged"; offset: number }
-        | { kind: "time"; at: string }
-      >;
-    };
     receiver:
       | {
           action: "processor-wake";
@@ -207,29 +200,17 @@ export type SubscriptionConfigurationForDelivery = {
       | {
           action: "copy-to-stream";
           receivingStreamPath: string;
-          transform?: string;
           delivery: {
-            start: "beginning" | "now" | { afterOffset: number };
+            start: "beginning" | "now";
             onFailingEvent: "halt";
-            includeEphemeral: boolean;
           };
         }
       | {
           action: "itx-call";
           expression: Array<string | [method: string, ...args: unknown[]]>;
           delivery: {
-            start: "beginning" | "now" | { afterOffset: number };
+            start: "beginning" | "now";
             onFailingEvent: "halt" | "skip";
-            includeEphemeral: boolean;
-          };
-        }
-      | {
-          action: "webhook-post";
-          url: string;
-          delivery: {
-            start: "beginning" | "now" | { afterOffset: number };
-            onFailingEvent: "halt" | "skip";
-            includeEphemeral: boolean;
           };
         };
   };
@@ -242,8 +223,7 @@ export type SubscriptionConfigurationForDelivery = {
  * not the state-carrying callback batch
  * {@link StreamEventBatch}: ITX calls and copy destinations do not get
  * folded core state, because other subscriptions' configuration, halt errors,
- * and the presence roster are deployment-internal. Webhooks use a narrower
- * per-event envelope for the same reason. Session callbacks and hosted
+ * and the presence roster are deployment-internal. Session callbacks and hosted
  * processors still get state-carrying batches because they paint or reduce
  * from stream state.
  */
@@ -284,10 +264,14 @@ export type StreamDeliveryBatch = {
 
 /** What a receiving stream durably did with one delivered source batch. */
 export type CopyReceipt = {
-  /** Events appended now or already present under the same source-coordinate idempotency key. */
-  accepted: number;
-  /** Events deliberately not appended because their stream-copy path cannot safely continue. */
-  dropped: Array<{ offset: number; reason: "cycle" | "hop-limit" }>;
+  /**
+   * Events the receiver terminally acknowledged: appended now, already
+   * present under the same source-coordinate idempotency key, or dropped
+   * because their stream-copy path cannot safely continue (cycle/hop limit —
+   * audited by an `error-occurred` event on the receiving stream). The sender
+   * advances its cursor past every event in an acked batch.
+   */
+  acknowledged: number;
 };
 
 /**
@@ -372,33 +356,6 @@ export function isStreamOffsetConflictError(error: unknown): boolean {
 export function isStreamReceiverUnavailableError(error: unknown): boolean {
   return (error as { name?: string } | null)?.name === StreamReceiverUnavailableError.NAME;
 }
-
-/**
- * One webhook delivery: a single committed event POSTed as JSON to the
- * subscription's URL. Deliberately per-EVENT (external webhook consumers
- * expect individual events, and per-event acking gives mid-batch
- * resumability) and deliberately WITHOUT the `state` batch callbacks receive — core
- * reduced state is internal and has no business leaving the deployment.
- */
-export type StreamWebhookDelivery = {
-  /** Never null: webhooks require a project-scoped stream (egress attribution). */
-  projectId: string;
-  path: string;
-  /** Random identity assigned when this source stream's storage was created. */
-  streamId: string;
-  /** Creation time of this source stream; orders recreated streams whose offsets restarted. */
-  streamCreatedAt: string;
-  event: StreamEvent;
-  subscriptionKey: SubscriptionKey;
-  /** See {@link StreamDeliveryBatch.cursorChangedAtSourceOffset}. */
-  cursorChangedAtSourceOffset: number;
-  /** Stable across retries of this event within one delivery run. */
-  deliveryId: string;
-  /** 1-based consecutive attempt count for this event. */
-  attempt: number;
-  /** The committed subscription event this delivery serves (see {@link StreamDeliveryBatch}). */
-  configuredEvent: SubscriptionConfigurationForDelivery;
-};
 
 /**
  * What the stream sends when waking a hosted processor through

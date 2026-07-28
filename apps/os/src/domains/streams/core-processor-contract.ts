@@ -16,7 +16,6 @@ import {
   ProcessorContractAnnouncement,
   type SubscriptionConfigurationForDelivery,
   type StreamEvent,
-  StreamEvent as StreamEventSchema,
   STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
 } from "iterate/processors";
 import { ItxExpression } from "../../itx/expression.ts";
@@ -44,7 +43,11 @@ import { EventFilter } from "./event-filter.ts";
 // grouped by source path and outbound subscriptions are keyed by their
 // source-local key. Complete copy-list delivery work is separate because
 // an empty list is still work the source must deliver.
-export const CORE_STATE_VERSION = 27;
+// Version 28 deletes the copy-list handshake: inbound records are passive,
+// derived from the `source.copiedFrom` stamps on committed copied events, and
+// exist only to fence stale source lifetimes/config generations and feed the
+// debug card.
+export const CORE_STATE_VERSION = 28;
 
 // Restored from the old built-in circuit-breaker processor. These defaults are
 // intentionally high for normal browser/load tests; the breaker exists to stop
@@ -73,24 +76,19 @@ export const StreamConnectionKind = z.enum(["session", "hosted"]);
 /** Who owns a live event-batch callback: the current session or a hosted processor. */
 export type StreamConnectionKind = z.infer<typeof StreamConnectionKind>;
 
-/** Where a copy, ITX-call, or webhook subscription starts reading the source stream. */
-export const SubscriptionStart = z.union([
-  z.literal("beginning"),
-  z.literal("now"),
-  z.strictObject({ afterOffset: z.number().int().nonnegative() }),
-]);
+/** Where a copy or ITX-call subscription starts reading the source stream. */
+export const SubscriptionStart = z.enum(["beginning", "now"]);
 
 export type SubscriptionStart = z.infer<typeof SubscriptionStart>;
 
 /**
- * What a copy, ITX-call, or webhook subscription does when one specific batch keeps failing
+ * What a copy or ITX-call subscription does when one specific event keeps failing
  * while the receiver is otherwise alive: `halt` (default) stops delivery and
  * appends a `subscription-delivery-halted` event — ordered receivers like stream
  * must never skip (a skip is a silent gap in the target stream); `skip`
- * bisects the batch to isolate the failing event (webhook batches are already
- * single events), records an idempotent `error-occurred`, and steps over it —
- * right for feeds where one bad event must not silence everything after it
- * (the project worker feed).
+ * retries the failing event alone, records an idempotent `error-occurred`, and
+ * steps over it — right for feeds where one bad event must not silence
+ * everything after it (the project worker feed).
  */
 const OnFailingEventPolicy = z.enum(["halt", "skip"]);
 
@@ -101,38 +99,12 @@ const SubscriptionHaltReason = z.literal("delivery-failed");
 const DeliveryPolicy = z.strictObject({
   start: SubscriptionStart,
   onFailingEvent: OnFailingEventPolicy,
-  includeEphemeral: z.boolean(),
 });
 
 /** Ordered stream copies may retry or halt, but can never skip a missing event. */
 const StreamReceiverDeliveryPolicy = DeliveryPolicy.extend({
   onFailingEvent: z.literal("halt"),
 });
-
-/** A durable subscription ends when the first configured condition becomes true. */
-export const SubscriptionEndCondition = z.strictObject({
-  any: z
-    .array(
-      z.discriminatedUnion("kind", [
-        z.strictObject({
-          kind: z.literal("acknowledged-events"),
-          count: z.number().int().positive(),
-        }),
-        z.strictObject({
-          kind: z.literal("source-offset-acknowledged"),
-          offset: z.number().int().nonnegative(),
-        }),
-        z.strictObject({
-          kind: z.literal("time"),
-          at: z.iso.datetime({ offset: true }),
-        }),
-      ]),
-    )
-    .min(1),
-});
-
-/** One or more source-observed completion conditions; the first match removes the subscription. */
-export type SubscriptionEndCondition = z.infer<typeof SubscriptionEndCondition>;
 
 /**
  * What one subscription does with matching source events. The action makes
@@ -150,17 +122,11 @@ export const SubscriptionReceiver = z.discriminatedUnion("action", [
   z.strictObject({
     action: z.literal("copy-to-stream"),
     receivingStreamPath: StreamPath,
-    transform: z.string().trim().min(1).optional(),
     delivery: StreamReceiverDeliveryPolicy,
   }),
   z.strictObject({
     action: z.literal("itx-call"),
     expression: DeliveryExpression,
-    delivery: DeliveryPolicy,
-  }),
-  z.strictObject({
-    action: z.literal("webhook-post"),
-    url: z.url({ protocol: /^https?$/ }),
     delivery: DeliveryPolicy,
   }),
 ]);
@@ -169,31 +135,17 @@ export type SubscriptionReceiver = z.infer<typeof SubscriptionReceiver>;
 
 const SubscriptionKey = z.string().trim().min(1);
 
-export const SubscriptionConfiguredPayload = z
-  .strictObject({
-    /**
-     * A caller-selected source-local identity. Omitting it creates a new
-     * subscription whose effective key is derived from this event's committed
-     * offset (`subscription:<offset>`).
-     */
-    subscriptionKey: SubscriptionKey.optional(),
-    description: z.string().trim().min(1).optional(),
-    filter: EventFilter.optional(),
-    endWhen: SubscriptionEndCondition.optional(),
-    receiver: SubscriptionReceiver,
-  })
-  .superRefine((payload, context) => {
-    if (payload.receiver.action !== "processor-wake") return;
-    for (const [index, condition] of (payload.endWhen?.any ?? []).entries()) {
-      if (condition.kind === "time") continue;
-      context.addIssue({
-        code: "custom",
-        path: ["endWhen", "any", index],
-        message:
-          "hosted processors own their checkpoint; only time can end them from the source stream",
-      });
-    }
-  }) satisfies z.ZodType<SubscriptionConfigurationForDelivery["payload"]>;
+export const SubscriptionConfiguredPayload = z.strictObject({
+  /**
+   * A caller-selected source-local identity. Omitting it creates a new
+   * subscription whose effective key is derived from this event's committed
+   * offset (`subscription:<offset>`).
+   */
+  subscriptionKey: SubscriptionKey.optional(),
+  description: z.string().trim().min(1).optional(),
+  filter: EventFilter.optional(),
+  receiver: SubscriptionReceiver,
+}) satisfies z.ZodType<SubscriptionConfigurationForDelivery["payload"]>;
 
 export type SubscriptionConfiguredPayload = z.infer<typeof SubscriptionConfiguredPayload>;
 
@@ -224,82 +176,8 @@ const EffectiveSubscriptionConfiguration = SubscriptionConfiguredPayload.safeExt
   subscriptionKey: SubscriptionKey,
 });
 
-const StreamCoordinate = z.strictObject({
-  projectId: z.string().trim().min(1).nullable(),
-  path: StreamPath,
-  /** Random identity assigned when this source stream's storage was created. */
-  streamId: z.uuid(),
-  /** Creation time of the source stream; orders lifetimes whose offsets restart. */
-  streamCreatedAt: z.iso.datetime({ offset: true }),
-});
-
-/** Hard bounds on what one receiving stream records from source streams. */
-export const MAX_SOURCE_STREAMS_PER_RECEIVING_STREAM = 1_000;
+/** Hard bound on how many subscriptions one source may point at one receiving stream. */
 export const MAX_SUBSCRIPTIONS_PER_RECEIVING_STREAM = 64;
-
-/** The fields a receiving stream needs to explain and validate one source subscription. */
-const RecordedSubscriptionConfiguration = z.strictObject({
-  description: z.string().trim().min(1).optional(),
-  filter: EventFilter.optional(),
-  endWhen: SubscriptionEndCondition.optional(),
-  delivery: StreamReceiverDeliveryPolicy,
-  transform: z.string().trim().min(1).optional(),
-});
-
-/**
- * The complete current list of subscriptions one receiving stream records from
- * one source stream. A missing key removes that subscription; `sourceOffset` prevents
- * a delayed older call from replacing a newer list.
- */
-export const CopyListRecordedPayload = z
-  .strictObject({
-    source: StreamCoordinate,
-    sourceOffset: z.number().int().positive(),
-    subscriptionsByKey: z.record(
-      z.string().trim().min(1),
-      z.strictObject({
-        configuration: RecordedSubscriptionConfiguration,
-        /** Offset of this key's own source-side configure event. */
-        configuredAtSourceOffset: z.number().int().positive(),
-      }),
-    ),
-  })
-  .superRefine((payload, context) => {
-    const count = Object.keys(payload.subscriptionsByKey).length;
-    if (count > MAX_SUBSCRIPTIONS_PER_RECEIVING_STREAM) {
-      context.addIssue({
-        code: "custom",
-        path: ["subscriptionsByKey"],
-        message: `a source may copy through at most ${MAX_SUBSCRIPTIONS_PER_RECEIVING_STREAM} subscriptions to one receiving stream (received ${count})`,
-      });
-    }
-  });
-
-export type CopyListRecordedPayload = z.infer<typeof CopyListRecordedPayload>;
-
-/** The exact committed receiver event embedded in the source's confirmation. */
-const CopyListRecordedEvent = StreamEventSchema.extend({
-  type: z.literal("events.iterate.com/stream/copy-list-recorded"),
-  payload: CopyListRecordedPayload,
-});
-
-/** The exact subset of a source subscription that a receiving stream records. */
-export function recordedSubscriptionForCopy(
-  configuration: SubscriptionConfiguredPayload,
-): CopyListRecordedPayload["subscriptionsByKey"][string]["configuration"] {
-  if (configuration.receiver.action !== "copy-to-stream") {
-    throw new Error("only a copy action has a receiving-stream subscription record");
-  }
-  return {
-    delivery: configuration.receiver.delivery,
-    ...(configuration.endWhen === undefined ? {} : { endWhen: configuration.endWhen }),
-    ...(configuration.description === undefined ? {} : { description: configuration.description }),
-    ...(configuration.filter === undefined ? {} : { filter: configuration.filter }),
-    ...(configuration.receiver.transform === undefined
-      ? {}
-      : { transform: configuration.receiver.transform }),
-  };
-}
 
 /** The effective source-local key for one committed configuration event. */
 export function subscriptionKeyForConfiguredEvent(event: {
@@ -347,7 +225,7 @@ const StreamConfiguredPayload = z.object({
   }),
 });
 
-const SubscriptionRemovalReason = z.enum(["requested", "completed", "expired"]);
+const SubscriptionRemovalReason = z.literal("requested");
 
 /**
  * Identity the caller passes when it opens a connection. All fields are
@@ -447,27 +325,32 @@ export const CoreProcessorContract = defineProcessorContract({
       }),
     subscriptions: z
       .object({
-        /** Subscriptions on source streams that copy into this stream. */
+        /**
+         * Passive per-(source path, subscription key) records derived from the
+         * `source.copiedFrom` stamps on committed copied events — never from a
+         * configure-time handshake. They fence stale deliveries (an older
+         * source lifetime, or an older config generation of the same
+         * lifetime) and feed the debug card; the receiver learns about a
+         * subscription only when its first copy arrives.
+         */
         inbound: z
           .object({
             bySourcePath: z
               .record(
                 z.string(),
-                z.object({
-                  source: StreamCoordinate,
-                  /** Source event offset that produced this complete list. */
-                  sourceOffset: z.number().int().positive(),
-                  byKey: z.record(
-                    z.string(),
-                    z.object({
-                      configuration: RecordedSubscriptionConfiguration,
-                      configuredAtSourceOffset: z.number().int().positive(),
-                      numEventsReceived: z.number().int().nonnegative(),
-                      numEventsDropped: z.number().int().nonnegative(),
-                      lastEventReceivedAt: z.string().optional(),
-                    }),
-                  ),
-                }),
+                z.record(
+                  z.string(),
+                  z.object({
+                    /** Random identity of the source stream lifetime last accepted. */
+                    streamId: z.uuid(),
+                    /** Creation time of that lifetime; orders destructive recreations. */
+                    streamCreatedAt: z.string().trim().min(1),
+                    /** Configure/cursor-set offset of the config generation last accepted. */
+                    cursorChangedAtSourceOffset: z.number().int().positive(),
+                    numEventsReceived: z.number().int().nonnegative(),
+                    lastEventReceivedAt: z.string().optional(),
+                  }),
+                ),
               )
               .default({}),
           })
@@ -518,37 +401,6 @@ export const CoreProcessorContract = defineProcessorContract({
         inbound: { bySourcePath: {} },
         outbound: { byKey: {} },
       }),
-    /**
-     * Delivery status for this source's complete copy list per receiving
-     * stream. This is work tracking, not a second subscription collection:
-     * sending an empty list is how the source removes its final copy.
-     */
-    copyListDeliveriesByReceivingStream: z
-      .record(
-        z.string(),
-        z.discriminatedUnion("status", [
-          z.strictObject({
-            sourceOffset: z.number().int().positive(),
-            status: z.literal("pending"),
-            /** Keys in the last complete list this receiver confirmed. */
-            subscriptionKeysRecordedByReceiver: z.array(z.string().trim().min(1)),
-          }),
-          z.strictObject({
-            sourceOffset: z.number().int().positive(),
-            status: z.literal("confirmed"),
-            subscriptionKeysRecordedByReceiver: z.array(z.string().trim().min(1)),
-          }),
-          z.strictObject({
-            sourceOffset: z.number().int().positive(),
-            status: z.literal("blocked"),
-            attempts: z.number().int().positive(),
-            error: z.string().trim().min(1),
-            blockedAt: z.iso.datetime({ offset: true }),
-            subscriptionKeysRecordedByReceiver: z.array(z.string().trim().min(1)),
-          }),
-        ]),
-      )
-      .default({}),
   }),
   events: {
     "events.iterate.com/stream/created": {
@@ -614,7 +466,6 @@ export const CoreProcessorContract = defineProcessorContract({
               delivery: {
                 start: "now",
                 onFailingEvent: "halt",
-                includeEphemeral: false,
               },
             },
           },
@@ -631,57 +482,6 @@ export const CoreProcessorContract = defineProcessorContract({
               delivery: {
                 start: "beginning",
                 onFailingEvent: "halt",
-                includeEphemeral: false,
-              },
-            },
-          },
-        },
-        {
-          description:
-            "Webhook delivery: one HTTP POST per event to an external receiver, stepping over a repeatedly failing event instead of halting all later sends.",
-          payload: {
-            subscriptionKey: "ops-webhook",
-            receiver: {
-              action: "webhook-post",
-              url: "https://hooks.example.com/iterate/stream-events",
-              delivery: {
-                start: "now",
-                onFailingEvent: "skip",
-                includeEphemeral: false,
-              },
-            },
-          },
-        },
-      ],
-    },
-    "events.iterate.com/stream/copy-list-recorded": {
-      description:
-        "Records the complete current list of subscriptions from one source stream, replacing the previous list from that source. Platform-authored; the source still sends matching source events.",
-      payloadSchema: CopyListRecordedPayload,
-      examples: [
-        {
-          description:
-            "The receiving repository stream records the complete current set copied by its integration source.",
-          payload: {
-            source: {
-              projectId: "prj_01jzp3v9qkfxeb2m4n8r7wd5ha",
-              path: "/integrations/github/acme",
-              streamId: "019bffd8-2550-7a42-8b8f-90e71d19bcbc",
-              streamCreatedAt: "2026-07-21T11:59:00.000Z",
-            },
-            sourceOffset: 42,
-            subscriptionsByKey: {
-              "github-repo:/repos/root": {
-                configuredAtSourceOffset: 42,
-                configuration: {
-                  description: "Copies matching GitHub webhooks onto the repository stream.",
-                  filter: { eventTypes: ["events.iterate.com/github/webhook-received"] },
-                  delivery: {
-                    start: "now",
-                    onFailingEvent: "halt",
-                    includeEphemeral: false,
-                  },
-                },
               },
             },
           },
@@ -689,8 +489,7 @@ export const CoreProcessorContract = defineProcessorContract({
       ],
     },
     "events.iterate.com/stream/subscription-removed": {
-      description:
-        "Removes one durable subscription. If its receiver is a stream, the source sends that stream a replacement set without this key.",
+      description: "Removes one durable subscription.",
       payloadSchema: z.strictObject({
         subscriptionKey: z.string().trim().min(1),
         reason: SubscriptionRemovalReason,
@@ -699,123 +498,6 @@ export const CoreProcessorContract = defineProcessorContract({
         {
           description: "An agent explicitly stops receiving repository events.",
           payload: { subscriptionKey: "github-repo:/repos/root", reason: "requested" },
-        },
-      ],
-    },
-    "events.iterate.com/stream/copy-list-confirmed": {
-      description:
-        "Records on the source that one receiving stream durably stored its latest copy list.",
-      payloadSchema: z.strictObject({
-        receivingStreamPath: StreamPath,
-        sourceOffset: z.number().int().positive(),
-        receivingStreamEvent: CopyListRecordedEvent,
-      }),
-      examples: [
-        {
-          description:
-            "The source records that its latest complete set is visible on the receiving stream.",
-          payload: {
-            receivingStreamPath: "/repos/root",
-            sourceOffset: 42,
-            receivingStreamEvent: {
-              type: "events.iterate.com/stream/copy-list-recorded",
-              payload: {
-                source: {
-                  projectId: "prj_01jzp3v9qkfxeb2m4n8r7wd5ha",
-                  path: "/integrations/github/acme",
-                  streamId: "019bffd8-2550-7a42-8b8f-90e71d19bcbc",
-                  streamCreatedAt: "2026-07-21T11:59:00.000Z",
-                },
-                sourceOffset: 42,
-                subscriptionsByKey: {},
-              },
-              offset: 8,
-              createdAt: "2026-07-21T12:00:00.000Z",
-              path: "/repos/root",
-            },
-          },
-        },
-      ],
-    },
-    "events.iterate.com/stream/copy-list-delivery-blocked": {
-      description:
-        "Records that one receiving stream did not durably store this source's current copy list within the bounded retry budget.",
-      payloadSchema: z.strictObject({
-        receivingStreamPath: StreamPath,
-        sourceOffset: z.number().int().positive(),
-        attempts: z.number().int().positive(),
-        error: z.string().trim().min(1).max(4_096),
-      }),
-      examples: [
-        {
-          description:
-            "The receiving stream stayed unavailable through the bounded copy-list retry ladder.",
-          payload: {
-            receivingStreamPath: "/repos/root",
-            sourceOffset: 42,
-            attempts: 8,
-            error: 'sending subscriptions to "/repos/root" failed: receiver unavailable',
-          },
-        },
-      ],
-    },
-    "events.iterate.com/stream/copy-list-resend-requested": {
-      description:
-        "Audits an operator-requested retry after a receiving stream failed to record its latest copy list. The matching-event read position is unchanged.",
-      payloadSchema: z.strictObject({
-        receivingStreamPath: StreamPath,
-      }),
-      examples: [
-        {
-          description: "Retries sending the current list after its receiving stream recovered.",
-          payload: { receivingStreamPath: "/repos/root" },
-        },
-      ],
-    },
-    "events.iterate.com/stream/copied-events-dropped": {
-      description:
-        "Records source events that a receiving stream deliberately did not append because their stream-copy path contains this stream or reached the supported length.",
-      payloadSchema: z.strictObject({
-        source: StreamCoordinate,
-        subscriptionKey: z.string().trim().min(1),
-        reason: z.enum(["cycle", "hop-limit"]),
-        count: z.number().int().positive(),
-        firstOffset: z.number().int().nonnegative(),
-        lastOffset: z.number().int().nonnegative(),
-      }),
-      examples: [
-        {
-          description: "A reciprocal stream link dropped an event instead of echoing it forever.",
-          payload: {
-            source: {
-              projectId: "prj_01jzp3v9qkfxeb2m4n8r7wd5ha",
-              path: "/agents/a",
-              streamId: "019bffd8-2550-7a42-8b8f-90e71d19bcbc",
-              streamCreatedAt: "2026-07-21T11:59:00.000Z",
-            },
-            subscriptionKey: "a-to-b",
-            reason: "cycle",
-            count: 1,
-            firstOffset: 23,
-            lastOffset: 23,
-          },
-        },
-        {
-          description:
-            "A long acyclic stream-copy path reached its finite provenance bound and was acknowledged as dropped rather than retried.",
-          payload: {
-            source: {
-              projectId: "prj_01jzp3v9qkfxeb2m4n8r7wd5ha",
-              path: "/pipeline/stage-32",
-              streamId: "019bffd8-2550-7a42-8b8f-90e71d19bcbc",
-              streamCreatedAt: "2026-07-21T11:59:00.000Z",
-            },
-            subscriptionKey: "stage-32-to-33",
-            reason: "hop-limit",
-            count: 1,
-            firstOffset: 81,
-            lastOffset: 81,
-          },
         },
       ],
     },
@@ -1026,17 +708,12 @@ export const CoreProcessorContract = defineProcessorContract({
     "events.iterate.com/stream/configured",
     "events.iterate.com/stream/child-stream-created",
     "events.iterate.com/stream/subscription-configured",
-    "events.iterate.com/stream/copy-list-recorded",
     "events.iterate.com/stream/subscription-removed",
-    "events.iterate.com/stream/copy-list-confirmed",
-    "events.iterate.com/stream/copy-list-delivery-blocked",
-    "events.iterate.com/stream/copy-list-resend-requested",
     "events.iterate.com/stream/subscription-delivery-halted",
     "events.iterate.com/stream/subscription-delivery-resumed",
     "events.iterate.com/stream/subscription-cursor-set",
     "events.iterate.com/stream/connection-opened",
     "events.iterate.com/stream/connection-closed",
-    "events.iterate.com/stream/copied-events-dropped",
     "events.iterate.com/stream/error-occurred",
     "events.iterate.com/stream/paused",
     "events.iterate.com/stream/resumed",
@@ -1044,10 +721,6 @@ export const CoreProcessorContract = defineProcessorContract({
   emits: [
     "events.iterate.com/stream/connection-opened",
     "events.iterate.com/stream/connection-closed",
-    "events.iterate.com/stream/copy-list-recorded",
-    "events.iterate.com/stream/copy-list-confirmed",
-    "events.iterate.com/stream/copy-list-delivery-blocked",
-    "events.iterate.com/stream/copied-events-dropped",
     "events.iterate.com/stream/subscription-delivery-halted",
     "events.iterate.com/stream/child-stream-created",
   ],
@@ -1077,12 +750,6 @@ export type CommittedSubscriptionConfiguredEvent =
 /** One committed event that removed a subscription from its source stream. */
 export type CommittedSubscriptionRemovedEvent =
   CommittedCoreEvent<"events.iterate.com/stream/subscription-removed">;
-/** One committed receiver event recording a source stream's complete copy list. */
-export type CommittedCopyListRecordedEvent =
-  CommittedCoreEvent<"events.iterate.com/stream/copy-list-recorded">;
-/** One committed source event confirming the receiver recorded its copy list. */
-export type CommittedCopyListConfirmedEvent =
-  CommittedCoreEvent<"events.iterate.com/stream/copy-list-confirmed">;
 
 /** Parse a committed event returned by an index or another Stream Durable Object. */
 export function parseCommittedCoreEvent<const Type extends ParsedCoreEvent["type"]>(

@@ -88,11 +88,8 @@ import {
   normalizePath,
 } from "./domains/durable-object-names.ts";
 import type {
-  CommittedCopyListConfirmedEvent,
-  CommittedCopyListRecordedEvent,
   CommittedSubscriptionConfiguredEvent,
   CommittedSubscriptionRemovedEvent,
-  SubscriptionEndCondition,
 } from "./domains/streams/core-processor-contract.ts";
 import type { EventFilter } from "./domains/streams/event-filter.ts";
 import { parseAgentPath, resolveAgentPath } from "./domains/agents/utils.ts";
@@ -537,7 +534,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
 
   async __describe(): Promise<Description> {
     return describeNode({
-      instructions: `A durable event stream at path "${this.props.path}": append(events), readEvents(), getEvents(), waitForEvent(), openConnection(), subscribeToEventsFrom(), unsubscribeFromEvents(), kill(). Processors and agents communicate by appending and reducing events. A processor on stream A can react only to events appended to A; call subscribeToEventsFrom({ sourceStreamPath, subscriptionKey }) on the receiving stream to make the named source append matching copies here. Omit subscriptionKey only when supplying idempotencyKey for retry-safe generated-key setup. Each copy records the source stream and offset in source.copiedFrom. The source stores each durable subscription and its cursor under a source-local subscriptionKey. append({ ..., ephemeral: true }) commits a transient event: connections opened before the append receive it, while default reads and durable subscriptions exclude it unless explicitly configured with includeEphemeral. The row may be deleted later, so append durable product truth separately.`,
+      instructions: `A durable event stream at path "${this.props.path}": append(events), readEvents(), getEvents(), waitForEvent(), openConnection(), subscribeToEventsFrom(), unsubscribeFromEvents(), kill(). Processors and agents communicate by appending and reducing events. A processor on stream A can react only to events appended to A; call subscribeToEventsFrom({ sourceStreamPath, subscriptionKey }) on the receiving stream to make the named source append matching copies here. Omit subscriptionKey only when supplying idempotencyKey for retry-safe generated-key setup. Each copy records the source stream and offset in source.copiedFrom. The source stores each durable subscription and its cursor under a source-local subscriptionKey. append({ ..., ephemeral: true }) commits a transient event: connections opened before the append receive it, while default reads and durable subscriptions always exclude it. The row may be deleted later, so append durable product truth separately.`,
       children: {
         append: "Commit events; returns them with offsets.",
         at: "The stream at a sub-path.",
@@ -549,8 +546,6 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
           "Open a callback for newly appended events, with optional replay, until this RPC session closes it.",
         setSubscriptionCursorAndResume:
           "On this source stream, change where a subscription reads next and resume it in one append; an already-started receiver call may finish.",
-        resendCopyList:
-          "On this source stream, retry sending its current copy list to one receiving stream without changing any event cursor.",
         subscribeToEventsFrom:
           "On this receiving stream, tell the explicitly named source stream to append matching event copies here.",
         resumeSubscription:
@@ -1025,27 +1020,13 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     return { cursorSet, resumed };
   }
 
-  /** Retry sending this source's current list to one receiving stream. */
-  async resendCopyList(args: { receivingStreamPath: string }): Promise<StreamEvent> {
-    const [event] = await this.append({
-      type: "events.iterate.com/stream/copy-list-resend-requested",
-      payload: args,
-    });
-    if (event === undefined) {
-      throw new Error("stream did not commit the copy-list retry request");
-    }
-    return event;
-  }
-
   /**
    * Configure this stream to durably receive matching events from `source`.
-   * The source owns the matching-event read position. It appends an
-   * `subscription-configured` event, sends its complete list for this
-   * receiver, waits for the receiver to append `copy-list-recorded`,
-   * waits for the source to append `copy-list-confirmed`, then returns
-   * the effective key and that receiver's three committed events. Moving an
-   * existing key also waits for the old receiver's replacement list and
-   * source confirmation.
+   * The source owns the matching-event read position. It appends a
+   * `subscription-configured` event and returns the effective key and that
+   * committed event; the receiver learns about the subscription when its
+   * first copy arrives, and a broken receiver surfaces later as a durable
+   * delivery halt.
    */
   async subscribeToEventsFrom(
     args: {
@@ -1054,13 +1035,8 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       description?: string;
       /** Selects source events by type and/or an exact-true JSONata condition. */
       filter?: EventFilter;
-      /** JSONata constructor for the copied event's `{type?, payload?, metadata?}`. */
-      transform?: string;
       /** Initial cursor stored by the source stream. Defaults to events configured from now onward. */
-      start?: "beginning" | "now" | { afterOffset: number };
-      /** Remove the subscription when the first condition becomes true. */
-      endWhen?: SubscriptionEndCondition;
-      includeEphemeral?: boolean;
+      start?: "beginning" | "now";
     } & (
       | {
           /** Source-local identity: ensure or replace this named subscription. */
@@ -1073,15 +1049,13 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
            * from the committed configuration event.
            */
           subscriptionKey?: never;
-          /** Required so a retry cannot create a duplicate after a partial handshake. */
+          /** Required so a retry cannot create a duplicate configuration event. */
           idempotencyKey: string;
         }
     ),
   ): Promise<{
     subscriptionKey: string;
     subscriptionConfiguredEvent: CommittedSubscriptionConfiguredEvent;
-    copyListRecordedEvent: CommittedCopyListRecordedEvent;
-    copyListConfirmedEvent: CommittedCopyListConfirmedEvent;
   }> {
     const sourcePath = canonicalizeStreamPath(args.sourceStreamPath);
     const receivingStreamPath = canonicalizeStreamPath(this.props.path);
@@ -1099,35 +1073,28 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
         ...(args.idempotencyKey === undefined ? {} : { idempotencyKey: args.idempotencyKey }),
         configuration: {
           ...(args.subscriptionKey === undefined ? {} : { subscriptionKey: args.subscriptionKey }),
-          ...(args.endWhen === undefined ? {} : { endWhen: args.endWhen }),
           ...(args.description?.trim() ? { description: args.description.trim() } : {}),
           ...(args.filter === undefined ? {} : { filter: args.filter }),
           receiver: {
             action: "copy-to-stream",
             receivingStreamPath,
-            ...(args.transform === undefined ? {} : { transform: args.transform }),
             delivery: {
               start,
               onFailingEvent: "halt",
-              includeEphemeral: args.includeEphemeral ?? false,
             },
           },
         },
       })
       .catch(rethrowStreamUnavailable);
-    const detached = detachPlainRpcResult(result);
-    if (detached.status === "blocked") throw new Error(detached.message);
-    return detached;
+    return detachPlainRpcResult(result);
   }
 
-  /** Stop receiving from `source`, waiting for both streams to record the change. */
-  async unsubscribeFromEvents(args: { sourceStreamPath: string; subscriptionKey: string }): Promise<
-    | {
-        status: "removed";
-        subscriptionRemovedEvent: CommittedSubscriptionRemovedEvent;
-        copyListRecordedEvent: CommittedCopyListRecordedEvent;
-        copyListConfirmedEvent: CommittedCopyListConfirmedEvent;
-      }
+  /** Stop receiving from `source`: the source appends the removal event. */
+  async unsubscribeFromEvents(args: {
+    sourceStreamPath: string;
+    subscriptionKey: string;
+  }): Promise<
+    | { status: "removed"; subscriptionRemovedEvent: CommittedSubscriptionRemovedEvent }
     | { status: "already-absent" }
   > {
     const sourcePath = canonicalizeStreamPath(args.sourceStreamPath);
@@ -1137,7 +1104,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       projectId: this.props.projectId,
       path: sourcePath,
     });
-    const result = detachPlainRpcResult(
+    return detachPlainRpcResult(
       await source[STREAM_DURABLE_OBJECT_STUB]
         .removeCopySubscription({
           subscriptionKey: args.subscriptionKey,
@@ -1145,8 +1112,6 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
         })
         .catch(rethrowStreamUnavailable),
     );
-    if (result.status === "blocked") throw new Error(result.message);
-    return result;
   }
 }
 
@@ -1431,7 +1396,6 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
               delivery: {
                 start: "now",
                 onFailingEvent: "halt",
-                includeEphemeral: false,
               },
             },
           },

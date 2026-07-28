@@ -7,8 +7,7 @@
 //      installation has permission and it does not;
 //   2. adds a durable subscription to the connection stream, so
 //      each push webhook about that repository is copied onto the repo's own
-//      stream at least once; the command waits until both streams have appended
-//      their record of the rule;
+//      stream at least once;
 //   3. records the link on the Repo Durable Object (KV for the mirror-push hot
 //      path + a `repo/github-link-configured` fact on the repo stream).
 //
@@ -68,7 +67,6 @@ function githubRepoSubscription(input: {
       delivery: {
         start: "now",
         onFailingEvent: "halt",
-        includeEphemeral: false,
       },
     },
   };
@@ -80,27 +78,19 @@ async function configureGithubWebhookSubscription(
   stream: GithubConnectionStream,
   subscription: SubscriptionConfiguredPayload,
 ): Promise<void> {
-  const result = await stream.setCopySubscription({ configuration: subscription });
-  try {
-    if (result.status === "blocked") throw new Error(result.message);
-  } finally {
-    disposeIgnoredRpcResult(result);
-  }
+  disposeIgnoredRpcResult(await stream.setCopySubscription({ configuration: subscription }));
 }
 
 async function removeGithubWebhookSubscription(
   stream: GithubConnectionStream,
   input: { repoPath: string; subscriptionKey: string },
 ): Promise<void> {
-  const result = await stream.removeCopySubscription({
-    subscriptionKey: input.subscriptionKey,
-    expectedReceiverPath: input.repoPath,
-  });
-  try {
-    if (result.status === "blocked") throw new Error(result.message);
-  } finally {
-    disposeIgnoredRpcResult(result);
-  }
+  disposeIgnoredRpcResult(
+    await stream.removeCopySubscription({
+      subscriptionKey: input.subscriptionKey,
+      expectedReceiverPath: input.repoPath,
+    }),
+  );
 }
 
 type LinkRepoToGithubOptions = {

@@ -1289,17 +1289,13 @@ export interface Stream {
     subscriptionKey: string;
     afterOffset: number;
   }): Promise<{ cursorSet: StreamEvent; resumed: StreamEvent }>;
-  /** Retry sending this source's current list to one receiving stream. */
-  resendCopyList(args: { receivingStreamPath: string }): Promise<StreamEvent>;
   /**
    * Configure this stream to durably receive matching events from `source`.
-   * The source owns the matching-event read position. It appends an
-   * `subscription-configured` event, sends its complete list for this
-   * receiver, waits for the receiver to append `copy-list-recorded`,
-   * waits for the source to append `copy-list-confirmed`, then returns
-   * the effective key and that receiver's three committed events. Moving an
-   * existing key also waits for the old receiver's replacement list and
-   * source confirmation.
+   * The source owns the matching-event read position. It appends a
+   * `subscription-configured` event and returns the effective key and that
+   * committed event; the receiver learns about the subscription when its
+   * first copy arrives, and a broken receiver surfaces later as a durable
+   * delivery halt.
    */
   subscribeToEventsFrom(
     args: {
@@ -1308,13 +1304,8 @@ export interface Stream {
       description?: string;
       /** Selects source events by type and/or an exact-true JSONata condition. */
       filter?: EventFilter;
-      /** JSONata constructor for the copied event's `{type?, payload?, metadata?}`. */
-      transform?: string;
       /** Initial cursor stored by the source stream. Defaults to events configured from now onward. */
-      start?: "beginning" | "now" | { afterOffset: number };
-      /** Remove the subscription when the first condition becomes true. */
-      endWhen?: SubscriptionEndCondition;
-      includeEphemeral?: boolean;
+      start?: "beginning" | "now";
     } & (
       | {
           /** Source-local identity: ensure or replace this named subscription. */
@@ -1327,24 +1318,20 @@ export interface Stream {
            * from the committed configuration event.
            */
           subscriptionKey?: never;
-          /** Required so a retry cannot create a duplicate after a partial handshake. */
+          /** Required so a retry cannot create a duplicate configuration event. */
           idempotencyKey: string;
         }
     ),
   ): Promise<{
     subscriptionKey: string;
     subscriptionConfiguredEvent: CommittedSubscriptionConfiguredEvent;
-    copyListRecordedEvent: CommittedCopyListRecordedEvent;
-    copyListConfirmedEvent: CommittedCopyListConfirmedEvent;
   }>;
-  /** Stop receiving from `source`, waiting for both streams to record the change. */
-  unsubscribeFromEvents(args: { sourceStreamPath: string; subscriptionKey: string }): Promise<
-    | {
-        status: "removed";
-        subscriptionRemovedEvent: CommittedSubscriptionRemovedEvent;
-        copyListRecordedEvent: CommittedCopyListRecordedEvent;
-        copyListConfirmedEvent: CommittedCopyListConfirmedEvent;
-      }
+  /** Stop receiving from `source`: the source appends the removal event. */
+  unsubscribeFromEvents(args: {
+    sourceStreamPath: string;
+    subscriptionKey: string;
+  }): Promise<
+    | { status: "removed"; subscriptionRemovedEvent: CommittedSubscriptionRemovedEvent }
     | { status: "already-absent" }
   >;
 }
@@ -1991,8 +1978,7 @@ export type OpenApiRpc = object;
  * not the state-carrying callback batch
  * {@link StreamEventBatch}: ITX calls and copy destinations do not get
  * folded core state, because other subscriptions' configuration, halt errors,
- * and the presence roster are deployment-internal. Webhooks use a narrower
- * per-event envelope for the same reason. Session callbacks and hosted
+ * and the presence roster are deployment-internal. Session callbacks and hosted
  * processors still get state-carrying batches because they paint or reduce
  * from stream state.
  */
@@ -3179,13 +3165,6 @@ export type SubscriptionConfigurationForDelivery = {
       eventTypes?: string[];
       condition?: string;
     };
-    endWhen?: {
-      any: Array<
-        | { kind: "acknowledged-events"; count: number }
-        | { kind: "source-offset-acknowledged"; offset: number }
-        | { kind: "time"; at: string }
-      >;
-    };
     receiver:
       | {
           action: "processor-wake";
@@ -3195,29 +3174,17 @@ export type SubscriptionConfigurationForDelivery = {
       | {
           action: "copy-to-stream";
           receivingStreamPath: string;
-          transform?: string;
           delivery: {
-            start: "beginning" | "now" | { afterOffset: number };
+            start: "beginning" | "now";
             onFailingEvent: "halt";
-            includeEphemeral: boolean;
           };
         }
       | {
           action: "itx-call";
           expression: Array<string | [method: string, ...args: unknown[]]>;
           delivery: {
-            start: "beginning" | "now" | { afterOffset: number };
+            start: "beginning" | "now";
             onFailingEvent: "halt" | "skip";
-            includeEphemeral: boolean;
-          };
-        }
-      | {
-          action: "webhook-post";
-          url: string;
-          delivery: {
-            start: "beginning" | "now" | { afterOffset: number };
-            onFailingEvent: "halt" | "skip";
-            includeEphemeral: boolean;
           };
         };
   };
@@ -3227,7 +3194,7 @@ export type SubscriptionConfigurationForDelivery = {
  * metadata, provenance source, and idempotency key — everything before the
  * stream assigns offset and timestamp at commit. `ephemeral: true` commits a
  * second-class row: excluded from range reads unless `includeEphemeral`,
- * excluded from durable delivery unless a copy, ITX-call, or webhook subscription opts in, and evictable —
+ * never delivered by durable subscriptions, and evictable —
  * for transient signals (LLM streaming chunks) whose durable truth lands as
  * its own event. */
 export type StreamEventInput = {
@@ -3303,8 +3270,6 @@ export type StreamRuntimeDebugState = {
     connections: Record<string, ConnectionRuntimeState>;
     /** Stored subscription progress, keyed by subscription key. */
     subscriptions: Record<string, SubscriptionRuntimeState>;
-    /** Retry progress keyed by receiving stream path. */
-    copyListRetries: Record<string, CopyListRetryRow>;
     metrics: StreamThroughputMetrics;
     /** SQLite database size in bytes (event log + delivery rows + chunks). */
     storageSizeBytes: number;
@@ -3355,15 +3320,6 @@ export type StreamConnectionHandle = Disposable & {
   ping(): boolean | Promise<boolean>;
   /** Close this connection; safe to call more than once. */
   close(): void;
-};
-
-/** One or more source-observed completion conditions; the first match removes the subscription. */
-export type SubscriptionEndCondition = {
-  any: (
-    | { kind: "acknowledged-events"; count: number }
-    | { kind: "source-offset-acknowledged"; offset: number }
-    | { kind: "time"; at: string }
-  )[];
 };
 
 /** One committed event that created or replaced a subscription on its source stream. */
@@ -3445,15 +3401,6 @@ export type CommittedSubscriptionConfiguredEvent = Omit<
       subscriptionKey?: string | undefined;
       description?: string | undefined;
       filter?: { eventTypes?: string[] | undefined; condition?: string | undefined } | undefined;
-      endWhen?:
-        | {
-            any: (
-              | { kind: "acknowledged-events"; count: number }
-              | { kind: "source-offset-acknowledged"; offset: number }
-              | { kind: "time"; at: string }
-            )[];
-          }
-        | undefined;
       receiver:
         | {
             action: "processor-wake";
@@ -3463,30 +3410,12 @@ export type CommittedSubscriptionConfiguredEvent = Omit<
         | {
             action: "copy-to-stream";
             receivingStreamPath: string;
-            transform?: string | undefined;
-            delivery: {
-              start: "beginning" | "now" | { afterOffset: number };
-              includeEphemeral: boolean;
-              onFailingEvent: "halt";
-            };
+            delivery: { start: "beginning" | "now"; onFailingEvent: "halt" };
           }
         | {
             action: "itx-call";
             expression: ItxExpression;
-            delivery: {
-              start: "beginning" | "now" | { afterOffset: number };
-              onFailingEvent: "halt" | "skip";
-              includeEphemeral: boolean;
-            };
-          }
-        | {
-            action: "webhook-post";
-            url: string;
-            delivery: {
-              start: "beginning" | "now" | { afterOffset: number };
-              onFailingEvent: "halt" | "skip";
-              includeEphemeral: boolean;
-            };
+            delivery: { start: "beginning" | "now"; onFailingEvent: "halt" | "skip" };
           };
     };
   } & {
@@ -3494,15 +3423,6 @@ export type CommittedSubscriptionConfiguredEvent = Omit<
       subscriptionKey?: string | undefined;
       description?: string | undefined;
       filter?: { eventTypes?: string[] | undefined; condition?: string | undefined } | undefined;
-      endWhen?:
-        | {
-            any: (
-              | { kind: "acknowledged-events"; count: number }
-              | { kind: "source-offset-acknowledged"; offset: number }
-              | { kind: "time"; at: string }
-            )[];
-          }
-        | undefined;
       receiver:
         | {
             action: "processor-wake";
@@ -3512,397 +3432,13 @@ export type CommittedSubscriptionConfiguredEvent = Omit<
         | {
             action: "copy-to-stream";
             receivingStreamPath: string;
-            transform?: string | undefined;
-            delivery: {
-              start: "beginning" | "now" | { afterOffset: number };
-              includeEphemeral: boolean;
-              onFailingEvent: "halt";
-            };
+            delivery: { start: "beginning" | "now"; onFailingEvent: "halt" };
           }
         | {
             action: "itx-call";
             expression: ItxExpression;
-            delivery: {
-              start: "beginning" | "now" | { afterOffset: number };
-              onFailingEvent: "halt" | "skip";
-              includeEphemeral: boolean;
-            };
-          }
-        | {
-            action: "webhook-post";
-            url: string;
-            delivery: {
-              start: "beginning" | "now" | { afterOffset: number };
-              onFailingEvent: "halt" | "skip";
-              includeEphemeral: boolean;
-            };
+            delivery: { start: "beginning" | "now"; onFailingEvent: "halt" | "skip" };
           };
-    };
-  };
-
-/** One committed receiver event recording a source stream's complete copy list. */
-export type CommittedCopyListRecordedEvent = Omit<
-  {
-    type: string;
-    payload?: Record<string, unknown> | undefined;
-    metadata?: Record<string, unknown> | undefined;
-    source?:
-      | {
-          processor?:
-            | {
-                slug: string;
-                version: string;
-                stream: { path: string; projectId: string | null; streamId: string };
-                whileProcessing?: { offset: number; type: string } | undefined;
-              }
-            | undefined;
-          copiedFrom?:
-            | {
-                subscriptionKey: string;
-                streamId: string;
-                streamCreatedAt: string;
-                cursorChangedAtSourceOffset: number;
-                createdAt: string;
-                offset: number;
-                path: string;
-                projectId: string | null;
-                type: string;
-              }[]
-            | undefined;
-        }
-      | undefined;
-    idempotencyKey?: string | undefined;
-    ephemeral?: true | undefined;
-    offset: number;
-    createdAt: string;
-    path: string;
-  },
-  "payload" | "type"
-> &
-  Omit<
-    {
-      type: string;
-      payload?: Record<string, unknown> | undefined;
-      metadata?: Record<string, unknown> | undefined;
-      source?:
-        | {
-            processor?:
-              | {
-                  slug: string;
-                  version: string;
-                  stream: { path: string; projectId: string | null; streamId: string };
-                  whileProcessing?: { offset: number; type: string } | undefined;
-                }
-              | undefined;
-            copiedFrom?:
-              | {
-                  subscriptionKey: string;
-                  streamId: string;
-                  streamCreatedAt: string;
-                  cursorChangedAtSourceOffset: number;
-                  createdAt: string;
-                  offset: number;
-                  path: string;
-                  projectId: string | null;
-                  type: string;
-                }[]
-              | undefined;
-          }
-        | undefined;
-      idempotencyKey?: string | undefined;
-      ephemeral?: true | undefined;
-    },
-    "payload" | "type"
-  > & {
-    type: "events.iterate.com/stream/copy-list-recorded";
-    payload: {
-      source: { projectId: string | null; path: string; streamId: string; streamCreatedAt: string };
-      sourceOffset: number;
-      subscriptionsByKey: Record<
-        string,
-        {
-          configuration: {
-            description?: string | undefined;
-            filter?:
-              | { eventTypes?: string[] | undefined; condition?: string | undefined }
-              | undefined;
-            endWhen?:
-              | {
-                  any: (
-                    | { kind: "acknowledged-events"; count: number }
-                    | { kind: "source-offset-acknowledged"; offset: number }
-                    | { kind: "time"; at: string }
-                  )[];
-                }
-              | undefined;
-            delivery: {
-              start: "beginning" | "now" | { afterOffset: number };
-              includeEphemeral: boolean;
-              onFailingEvent: "halt";
-            };
-            transform?: string | undefined;
-          };
-          configuredAtSourceOffset: number;
-        }
-      >;
-    };
-  } & {
-    payload: {
-      source: { projectId: string | null; path: string; streamId: string; streamCreatedAt: string };
-      sourceOffset: number;
-      subscriptionsByKey: Record<
-        string,
-        {
-          configuration: {
-            description?: string | undefined;
-            filter?:
-              | { eventTypes?: string[] | undefined; condition?: string | undefined }
-              | undefined;
-            endWhen?:
-              | {
-                  any: (
-                    | { kind: "acknowledged-events"; count: number }
-                    | { kind: "source-offset-acknowledged"; offset: number }
-                    | { kind: "time"; at: string }
-                  )[];
-                }
-              | undefined;
-            delivery: {
-              start: "beginning" | "now" | { afterOffset: number };
-              includeEphemeral: boolean;
-              onFailingEvent: "halt";
-            };
-            transform?: string | undefined;
-          };
-          configuredAtSourceOffset: number;
-        }
-      >;
-    };
-  };
-
-/** One committed source event confirming the receiver recorded its copy list. */
-export type CommittedCopyListConfirmedEvent = Omit<
-  {
-    type: string;
-    payload?: Record<string, unknown> | undefined;
-    metadata?: Record<string, unknown> | undefined;
-    source?:
-      | {
-          processor?:
-            | {
-                slug: string;
-                version: string;
-                stream: { path: string; projectId: string | null; streamId: string };
-                whileProcessing?: { offset: number; type: string } | undefined;
-              }
-            | undefined;
-          copiedFrom?:
-            | {
-                subscriptionKey: string;
-                streamId: string;
-                streamCreatedAt: string;
-                cursorChangedAtSourceOffset: number;
-                createdAt: string;
-                offset: number;
-                path: string;
-                projectId: string | null;
-                type: string;
-              }[]
-            | undefined;
-        }
-      | undefined;
-    idempotencyKey?: string | undefined;
-    ephemeral?: true | undefined;
-    offset: number;
-    createdAt: string;
-    path: string;
-  },
-  "payload" | "type"
-> &
-  Omit<
-    {
-      type: string;
-      payload?: Record<string, unknown> | undefined;
-      metadata?: Record<string, unknown> | undefined;
-      source?:
-        | {
-            processor?:
-              | {
-                  slug: string;
-                  version: string;
-                  stream: { path: string; projectId: string | null; streamId: string };
-                  whileProcessing?: { offset: number; type: string } | undefined;
-                }
-              | undefined;
-            copiedFrom?:
-              | {
-                  subscriptionKey: string;
-                  streamId: string;
-                  streamCreatedAt: string;
-                  cursorChangedAtSourceOffset: number;
-                  createdAt: string;
-                  offset: number;
-                  path: string;
-                  projectId: string | null;
-                  type: string;
-                }[]
-              | undefined;
-          }
-        | undefined;
-      idempotencyKey?: string | undefined;
-      ephemeral?: true | undefined;
-    },
-    "payload" | "type"
-  > & {
-    type: "events.iterate.com/stream/copy-list-confirmed";
-    payload: {
-      receivingStreamPath: string;
-      sourceOffset: number;
-      receivingStreamEvent: {
-        metadata?: Record<string, unknown> | undefined;
-        source?:
-          | {
-              processor?:
-                | {
-                    slug: string;
-                    version: string;
-                    stream: { path: string; projectId: string | null; streamId: string };
-                    whileProcessing?: { offset: number; type: string } | undefined;
-                  }
-                | undefined;
-              copiedFrom?:
-                | {
-                    subscriptionKey: string;
-                    streamId: string;
-                    streamCreatedAt: string;
-                    cursorChangedAtSourceOffset: number;
-                    createdAt: string;
-                    offset: number;
-                    path: string;
-                    projectId: string | null;
-                    type: string;
-                  }[]
-                | undefined;
-            }
-          | undefined;
-        idempotencyKey?: string | undefined;
-        ephemeral?: true | undefined;
-        offset: number;
-        createdAt: string;
-        path: string;
-        type: "events.iterate.com/stream/copy-list-recorded";
-        payload: {
-          source: {
-            projectId: string | null;
-            path: string;
-            streamId: string;
-            streamCreatedAt: string;
-          };
-          sourceOffset: number;
-          subscriptionsByKey: Record<
-            string,
-            {
-              configuration: {
-                description?: string | undefined;
-                filter?:
-                  | { eventTypes?: string[] | undefined; condition?: string | undefined }
-                  | undefined;
-                endWhen?:
-                  | {
-                      any: (
-                        | { kind: "acknowledged-events"; count: number }
-                        | { kind: "source-offset-acknowledged"; offset: number }
-                        | { kind: "time"; at: string }
-                      )[];
-                    }
-                  | undefined;
-                delivery: {
-                  start: "beginning" | "now" | { afterOffset: number };
-                  includeEphemeral: boolean;
-                  onFailingEvent: "halt";
-                };
-                transform?: string | undefined;
-              };
-              configuredAtSourceOffset: number;
-            }
-          >;
-        };
-      };
-    };
-  } & {
-    payload: {
-      receivingStreamPath: string;
-      sourceOffset: number;
-      receivingStreamEvent: {
-        metadata?: Record<string, unknown> | undefined;
-        source?:
-          | {
-              processor?:
-                | {
-                    slug: string;
-                    version: string;
-                    stream: { path: string; projectId: string | null; streamId: string };
-                    whileProcessing?: { offset: number; type: string } | undefined;
-                  }
-                | undefined;
-              copiedFrom?:
-                | {
-                    subscriptionKey: string;
-                    streamId: string;
-                    streamCreatedAt: string;
-                    cursorChangedAtSourceOffset: number;
-                    createdAt: string;
-                    offset: number;
-                    path: string;
-                    projectId: string | null;
-                    type: string;
-                  }[]
-                | undefined;
-            }
-          | undefined;
-        idempotencyKey?: string | undefined;
-        ephemeral?: true | undefined;
-        offset: number;
-        createdAt: string;
-        path: string;
-        type: "events.iterate.com/stream/copy-list-recorded";
-        payload: {
-          source: {
-            projectId: string | null;
-            path: string;
-            streamId: string;
-            streamCreatedAt: string;
-          };
-          sourceOffset: number;
-          subscriptionsByKey: Record<
-            string,
-            {
-              configuration: {
-                description?: string | undefined;
-                filter?:
-                  | { eventTypes?: string[] | undefined; condition?: string | undefined }
-                  | undefined;
-                endWhen?:
-                  | {
-                      any: (
-                        | { kind: "acknowledged-events"; count: number }
-                        | { kind: "source-offset-acknowledged"; offset: number }
-                        | { kind: "time"; at: string }
-                      )[];
-                    }
-                  | undefined;
-                delivery: {
-                  start: "beginning" | "now" | { afterOffset: number };
-                  includeEphemeral: boolean;
-                  onFailingEvent: "halt";
-                };
-                transform?: string | undefined;
-              };
-              configuredAtSourceOffset: number;
-            }
-          >;
-        };
-      };
     };
   };
 
@@ -3981,8 +3517,8 @@ export type CommittedSubscriptionRemovedEvent = Omit<
     "payload" | "type"
   > & {
     type: "events.iterate.com/stream/subscription-removed";
-    payload: { subscriptionKey: string; reason: "completed" | "expired" | "requested" };
-  } & { payload: { subscriptionKey: string; reason: "completed" | "expired" | "requested" } };
+    payload: { subscriptionKey: string; reason: "requested" };
+  } & { payload: { subscriptionKey: string; reason: "requested" } };
 
 /**
  * Whether a project the directory knows about actually exists in THIS
@@ -4398,45 +3934,16 @@ export type CoreProcessorState = {
     inbound: {
       bySourcePath: Record<
         string,
-        {
-          source: {
-            projectId: string | null;
-            path: string;
+        Record<
+          string,
+          {
             streamId: string;
             streamCreatedAt: string;
-          };
-          sourceOffset: number;
-          byKey: Record<
-            string,
-            {
-              configuration: {
-                description?: string | undefined;
-                filter?:
-                  | { eventTypes?: string[] | undefined; condition?: string | undefined }
-                  | undefined;
-                endWhen?:
-                  | {
-                      any: (
-                        | { kind: "acknowledged-events"; count: number }
-                        | { kind: "source-offset-acknowledged"; offset: number }
-                        | { kind: "time"; at: string }
-                      )[];
-                    }
-                  | undefined;
-                delivery: {
-                  start: "beginning" | "now" | { afterOffset: number };
-                  includeEphemeral: boolean;
-                  onFailingEvent: "halt";
-                };
-                transform?: string | undefined;
-              };
-              configuredAtSourceOffset: number;
-              numEventsReceived: number;
-              numEventsDropped: number;
-              lastEventReceivedAt?: string | undefined;
-            }
-          >;
-        }
+            cursorChangedAtSourceOffset: number;
+            numEventsReceived: number;
+            lastEventReceivedAt?: string | undefined;
+          }
+        >
       >;
     };
     outbound: {
@@ -4448,15 +3955,6 @@ export type CoreProcessorState = {
             filter?:
               | { eventTypes?: string[] | undefined; condition?: string | undefined }
               | undefined;
-            endWhen?:
-              | {
-                  any: (
-                    | { kind: "acknowledged-events"; count: number }
-                    | { kind: "source-offset-acknowledged"; offset: number }
-                    | { kind: "time"; at: string }
-                  )[];
-                }
-              | undefined;
             receiver:
               | {
                   action: "processor-wake";
@@ -4466,30 +3964,12 @@ export type CoreProcessorState = {
               | {
                   action: "copy-to-stream";
                   receivingStreamPath: string;
-                  transform?: string | undefined;
-                  delivery: {
-                    start: "beginning" | "now" | { afterOffset: number };
-                    includeEphemeral: boolean;
-                    onFailingEvent: "halt";
-                  };
+                  delivery: { start: "beginning" | "now"; onFailingEvent: "halt" };
                 }
               | {
                   action: "itx-call";
                   expression: ItxExpression;
-                  delivery: {
-                    start: "beginning" | "now" | { afterOffset: number };
-                    onFailingEvent: "halt" | "skip";
-                    includeEphemeral: boolean;
-                  };
-                }
-              | {
-                  action: "webhook-post";
-                  url: string;
-                  delivery: {
-                    start: "beginning" | "now" | { afterOffset: number };
-                    onFailingEvent: "halt" | "skip";
-                    includeEphemeral: boolean;
-                  };
+                  delivery: { start: "beginning" | "now"; onFailingEvent: "halt" | "skip" };
                 };
             subscriptionKey: string;
           };
@@ -4509,19 +3989,6 @@ export type CoreProcessorState = {
       >;
     };
   };
-  copyListDeliveriesByReceivingStream: Record<
-    string,
-    | { sourceOffset: number; status: "pending"; subscriptionKeysRecordedByReceiver: string[] }
-    | { sourceOffset: number; status: "confirmed"; subscriptionKeysRecordedByReceiver: string[] }
-    | {
-        sourceOffset: number;
-        status: "blocked";
-        attempts: number;
-        error: string;
-        blockedAt: string;
-        subscriptionKeysRecordedByReceiver: string[];
-      }
-  >;
 };
 
 /** Serializable debug view of one live callback connection. */
@@ -4539,29 +4006,18 @@ export type ConnectionRuntimeState = ConnectionRuntimeDetails &
 export type SubscriptionRuntimeState = {
   /** Exclusive. Source-owned acknowledged offset or hosted processor's last reported checkpoint. */
   acknowledgedOffset: number;
-  /** Selected source events acknowledged since the current configuration event. */
-  acknowledgedEvents: number;
   /** `maxOffset - acknowledgedOffset`, per subscription. */
   lag: number;
   attempt: number;
   nextAttemptAt: number | null;
   inFlightDeadlineAt: number | null;
   lastError: string | null;
-  /** Serialized payload bytes delivered by copy, ITX-call, and webhook subscriptions. */
+  /** Serialized payload bytes delivered by copy and ITX-call subscriptions. */
   bytesSent?: number;
   /** Commit-to-acked latency (stream clock): newest event `createdAt` → awaited delivery resolved. */
   completionLatencyMs?: LatencyStats;
-  /** Duration of the awaited copy, ITX, or webhook call itself. */
+  /** Duration of the awaited copy or ITX call itself. */
   deliveryDurationMs?: LatencyStats;
-};
-
-/** Durable retry progress for sending one source's current copy list to a receiving stream. */
-export type CopyListRetryRow = {
-  receivingStreamPath: string;
-  sourceOffset: number;
-  attempt: number;
-  nextAttemptAt: number | null;
-  lastError: string | null;
 };
 
 /** What a stream runtime snapshot reports for the stream's own throughput. */

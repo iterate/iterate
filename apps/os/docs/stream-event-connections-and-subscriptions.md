@@ -25,29 +25,25 @@ subscription, and a durable subscription is not represented by an open callback.
 The independent choices are:
 
 - which source events match (`filter`);
-- whether rows appended with `ephemeral: true` are eligible;
 - where reading begins;
 - what receives the events;
 - who stores the completed source offset;
-- what happens when the receiver repeatedly fails;
-- and whether the subscription removes itself after a condition is met.
+- and what happens when the receiver repeatedly fails.
 
 ## Supported uses
 
-| Use                            | Stored on source | Completed offset stored by | Start position            | Receives ephemeral events |
-| ------------------------------ | ---------------- | -------------------------- | ------------------------- | ------------------------- |
-| New browser events             | no               | browser/client             | when callback opens       | yes, while open           |
-| Replay then new browser events | no               | browser/client             | explicit offset           | new ephemeral events only |
-| State-only live view           | no               | browser/client             | when callback opens       | not applicable            |
-| `waitForEvent()`               | no               | caller                     | now or explicit offset    | new ephemeral events only |
-| Hosted processor               | yes              | hosted processor           | its checkpoint            | no                        |
-| Copy to another stream         | yes              | source stream              | beginning, now, or offset | opt-in                    |
-| Call an ITX method             | yes              | source stream              | beginning, now, or offset | opt-in                    |
-| POST a webhook                 | yes              | source stream              | beginning, now, or offset | opt-in                    |
+| Use                            | Stored on source | Completed offset stored by | Start position         | Receives ephemeral events |
+| ------------------------------ | ---------------- | -------------------------- | ---------------------- | ------------------------- |
+| New browser events             | no               | browser/client             | when callback opens    | yes, while open           |
+| Replay then new browser events | no               | browser/client             | explicit offset        | new ephemeral events only |
+| State-only live view           | no               | browser/client             | when callback opens    | not applicable            |
+| `waitForEvent()`               | no               | caller                     | now or explicit offset | new ephemeral events only |
+| Hosted processor               | yes              | hosted processor           | its checkpoint         | no                        |
+| Copy to another stream         | yes              | source stream              | beginning or now       | no                        |
+| Call an ITX method             | yes              | source stream              | beginning or now       | no                        |
 
-Only `copy-to-stream` copies subscription information to another stream. An ITX
-method, webhook, and hosted processor have no receiving stream on which to
-record an inbound subscription.
+Durable subscriptions never deliver ephemeral rows. Only `copy-to-stream` has
+a receiving stream; an ITX method and a hosted processor do not.
 
 ## Live callbacks
 
@@ -155,11 +151,10 @@ await source.append({
 });
 ```
 
-The four actions are deliberately concrete:
+The three actions are deliberately concrete:
 
 - `copy-to-stream`: append copies to another stream;
 - `itx-call`: call an ITX method with event batches;
-- `webhook-post`: make an HTTP POST;
 - `processor-wake`: ask a hosted processor for its checkpoint and callback.
 
 There is no `subscribeTo()` API with an implicit direction. Copy setup is
@@ -185,7 +180,6 @@ const configured = await receiver.subscribeToEventsFrom({
       'payload.delivery.name = "pull_request" and payload.body.repository.full_name = "acme/widgets"',
   },
   start: "now",
-  includeEphemeral: false,
 });
 ```
 
@@ -198,21 +192,18 @@ The source and receiver must be in the same project. An agent can call this
 itself through its project stream catalog and may name any two streams that its
 project authority can access.
 
-The result exposes the three committed facts for the named receiver:
+The result exposes the committed source fact:
 
 ```ts
 configured.subscriptionKey;
 configured.subscriptionConfiguredEvent; // source stream
-configured.copyListRecordedEvent; // receiving stream
-configured.copyListConfirmedEvent; // source stream
 ```
 
-The method does not report success after only changing the source. It waits
-until the receiving stream has stored the source's complete current copy
-list and the source has committed the confirmation. Replacing a key that
-previously sent to another stream also records and confirms that old stream's
-replacement list before returning; those additional audit events remain in the
-two event logs rather than being duplicated in this result.
+That committed event is the whole configure step: there is no receiver-side
+handshake or confirmation. The receiver learns about the subscription when
+its first copy arrives, and every delivery carries the stamp (source
+lifetime + config generation) the receiver uses to fence stale batches. A
+receiver that cannot accept copies surfaces later as a durable delivery halt.
 
 ### Default behavior
 
@@ -229,9 +220,6 @@ The defaults are:
 
 - all event types;
 - `start: "now"`;
-- `includeEphemeral: false`;
-- no transform;
-- no automatic removal;
 - halt after bounded failures, because a copy may not silently leave a
   hole in the receiving stream.
 
@@ -256,7 +244,7 @@ For example, a configuration committed at source offset 42 is
   only after the configuration event has committed.
 - A generated key may not collide with a live callback key.
 - A generated-key setup requires `idempotencyKey`, because the source commit
-  may succeed before the receiver handshake or its RPC response fails.
+  may succeed before its RPC response reaches the caller.
 - The returned generated key can be passed back as `subscriptionKey` to
   replace or move that same subscription. It cannot name a different or
   already-removed subscription.
@@ -275,23 +263,6 @@ generated subscription key, including when the first call failed after the
 source commit. Omitting both is rejected before anything is appended. Two
 different idempotency keys create two different generated subscriptions.
 
-### Transform the copied event
-
-```ts
-await receiver.subscribeToEventsFrom({
-  sourceStreamPath: "/raw-readings",
-  idempotencyKey: "normalized-readings/v1",
-  filter: { eventTypes: ["events.example/raw-reading"] },
-  transform: `{
-    "type": "events.example/reading",
-    "payload": { "value": payload.celsius }
-  }`,
-});
-```
-
-The JSONata expression constructs `{ type?, payload?, metadata? }`. The
-platform adds `source.copiedFrom` afterwards.
-
 ### Stop receiving
 
 ```ts
@@ -301,10 +272,8 @@ const result = await receiver.unsubscribeFromEvents({
 });
 ```
 
-The source appends `subscription-removed`, sends a complete replacement list,
-the receiver appends `copy-list-recorded`, and the source appends
-`copy-list-confirmed`. A repeated call returns
-`{ status: "already-absent" }` only when no further receiver update is owed.
+The source appends `subscription-removed` and stops sending. A repeated call
+returns `{ status: "already-absent" }`.
 
 ## Call an ITX method
 
@@ -321,7 +290,6 @@ await source.append({
       expression: ["workers", ["get", workerRef], "processEventBatch"],
       delivery: {
         start: "beginning",
-        includeEphemeral: false,
         onFailingEvent: "halt",
       },
     },
@@ -336,30 +304,6 @@ call accepts the batch.
 `onFailingEvent: "skip"` is available for feeds where one permanently bad event
 must not stop later events. It isolates the failing event, records the failure,
 and advances past it. Use `"halt"` when skipping would lose required work.
-
-## POST a webhook
-
-```ts
-await source.append({
-  type: "events.iterate.com/stream/subscription-configured",
-  payload: {
-    subscriptionKey: "ops-webhook",
-    receiver: {
-      action: "webhook-post",
-      url: "https://hooks.example.com/iterate",
-      delivery: {
-        start: "now",
-        includeEphemeral: false,
-        onFailingEvent: "halt",
-      },
-    },
-  },
-});
-```
-
-The source POSTs one matching event at a time and advances only after a
-successful response. Webhook subscriptions require a project-scoped source
-stream.
 
 ## Wake a hosted processor
 
@@ -387,11 +331,11 @@ connection:
    state.
 
 Because the hosted processor stores the checkpoint, its subscription has no
-`delivery.start` on the source stream and never includes ephemeral rows. The source
+`delivery.start` on the source stream. The source
 stream's random `streamId` fences the checkpoint against a deleted and
 recreated stream at the same path.
 
-## Filters, start positions, ephemeral rows, and automatic removal
+## Filters and start positions
 
 These are independent properties of a durable subscription.
 
@@ -409,14 +353,11 @@ is JSONata over the complete event and must evaluate to exactly `true`.
 
 ### Start position
 
-Copy, ITX-call, and webhook actions use one of:
+Copy and ITX-call actions use one of:
 
 ```ts
 start: "beginning"; // after offset 0
 start: "now"; // after the configuration event
-start: {
-  afterOffset: 42;
-} // exclusive
 ```
 
 Changing a cursor stored on the source stream later is explicit:
@@ -427,28 +368,8 @@ await source.resumeSubscription({ subscriptionKey });
 await source.setSubscriptionCursorAndResume({ subscriptionKey, afterOffset: 42 });
 ```
 
-### Ephemeral rows
-
-`includeEphemeral` controls whether a copy, ITX-call, or webhook action
-may read currently retained ephemeral rows. It does not make those rows durable. A hosted
-processor always excludes them. A live callback can see only ephemeral events
-appended while that exact callback is open.
-
-### Automatic removal
-
-```ts
-endWhen: {
-  any: [
-    { kind: "acknowledged-events", count: 100 },
-    { kind: "source-offset-acknowledged", offset: 50_000 },
-    { kind: "time", at: "2026-07-22T09:00:00.000Z" },
-  ],
-}
-```
-
-The first satisfied condition appends `subscription-removed`. Event-count and
-source-offset conditions are valid only when the source owns the cursor.
-Hosted processors may use only a time condition.
+Ephemeral rows are never delivered by durable subscriptions. A live callback
+can see only ephemeral events appended while that exact callback is open.
 
 ## Copy provenance and loop prevention
 
@@ -472,21 +393,18 @@ This proves which source event the platform copied through which subscription.
 It does not authenticate who originally authored the source event.
 
 If a reciprocal copy would send an event back through a stream already in
-that array, the receiver acknowledges it as dropped with reason `cycle`.
-Copy chains are also bounded; the next copy is acknowledged as dropped
-with reason `hop-limit`. Both outcomes append
-`copied-events-dropped` instead of retrying forever.
+that array, or the chain has reached its hop bound, the receiver acknowledges
+the event as dropped, the cursor advances past it, and the receiver appends
+one idempotent `stream/error-occurred` line describing the drop instead of
+retrying forever.
 
 ## Failure boundaries
 
-- Invalid filters, transforms, URLs, expressions, cursor positions, and
+- Invalid filters, expressions, cursor positions, and
   unsupported receiver combinations reject before configuration commits.
 - Receiver calls and retries happen after the configuration event commits.
 - Selected-event retries are bounded. Exhaustion appends
-  `subscription-delivery-halted`.
-- Copy-list retries are separate from matching-event retries. Exhaustion
-  appends `copy-list-delivery-blocked`.
-- After fixing a blocked receiving stream, call
-  `source.resendCopyList({ receivingStreamPath })`.
+  `subscription-delivery-halted`; after any batch failure the next read uses
+  batch size 1 so a poison event cannot strand its healthy prefix.
 - No error is swallowed, retried forever, or represented only by a volatile
   scheduler row.

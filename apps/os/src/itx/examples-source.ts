@@ -181,7 +181,7 @@ return await itx.projects.get(pid).__describe();
     id: "ephemeral-events",
     title: "Ephemeral events: transient signals whose durable truth lands separately",
     description:
-      "append({ ephemeral: true }) commits a transient event: callbacks already opened with openConnection() see it, getEvents() skips it unless includeEphemeral is true, and subscriptions exclude it unless receiver.delivery.includeEphemeral is true. Iterate's ordinary PostHog feed does not include transient events. Use them for high-volume signals such as LLM chunks and progress ticks, then append the durable fact as its own ordinary event.",
+      "append({ ephemeral: true }) commits a transient event: callbacks already opened with openConnection() see it, getEvents() skips it unless includeEphemeral is true, and durable subscriptions never deliver it. Use them for high-volume signals such as LLM chunks and progress ticks, then append the durable fact as its own ordinary event.",
     runtimes: ALL_RUNTIMES,
     fn: async (itx, vars: { path?: string }) => {
       // Transient signal: callbacks already open see it; product state never will.

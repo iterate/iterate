@@ -55,8 +55,8 @@ export class EventFilterEvaluationError extends Error {
   }
 }
 
-// Compiled-expression cache: filter conditions (and copy transforms,
-// which share this compiler) re-evaluate on every matching append, and a
+// Compiled-expression cache: filter conditions
+// re-evaluate on every matching append, and a
 // stream's expression set is small and stable, so compile-once is the
 // sensible steady state. Bounded so pathological churn of expressions cannot
 // grow the map without limit (clearing wholesale is fine — recompiling is
@@ -66,8 +66,7 @@ const MAX_COMPILED_EXPRESSIONS = 200;
 
 /**
  * Parse a JSONata expression, throwing on invalid input. Used for filter
- * `condition`s (must evaluate to exactly `true` to match) and for
- * copy transforms (construct the copied event body) — one
+ * `condition`s (must evaluate to exactly `true` to match) — one
  * compiler, one cache, one language for everything expression-shaped that
  * evaluates against a committed event.
  */

@@ -46,13 +46,9 @@ export function CorePrettyState({
   const inboundBySourcePath = readRuntimeRecord(inbound?.bySourcePath) ?? {};
   const inboundSubscriptions = Object.entries(inboundBySourcePath).flatMap(
     ([sourcePath, sourceValue]) => {
-      const sourceEntry = readRuntimeRecord(sourceValue);
-      const source = readRuntimeRecord(sourceEntry?.source);
-      const byKey = readRuntimeRecord(sourceEntry?.byKey) ?? {};
+      const byKey = readRuntimeRecord(sourceValue) ?? {};
       return Object.entries(byKey).map(([subscriptionKey, value]) => ({
         sourcePath,
-        sourceProjectId: source?.projectId,
-        sourceOffset: readNumber(sourceEntry, "sourceOffset"),
         subscriptionKey,
         value,
       }));
@@ -130,11 +126,9 @@ export function CorePrettyState({
               const condition =
                 typeof filter?.condition === "string" ? filter.condition : undefined;
               const deliveryHint =
-                kind === "copy" && typeof receiver?.receivingStreamPath === "string"
+                kind === "copy-to-stream" && typeof receiver?.receivingStreamPath === "string"
                   ? `copy → ${receiver.receivingStreamPath}`
-                  : kind === "webhook-post" && typeof receiver?.url === "string"
-                    ? `POST ${receiver.url}`
-                    : formatItxExpressionHint(receiver?.expression);
+                  : formatItxExpressionHint(receiver?.expression);
               return (
                 <div key={key} className="rounded-xl bg-muted/40 px-3 py-2">
                   <div className="flex items-baseline justify-between gap-2">
@@ -179,36 +173,31 @@ export function CorePrettyState({
         <div>
           <SectionHeading>Inbound copy subscriptions</SectionHeading>
           <div className="flex flex-col gap-1.5">
-            {inboundSubscriptions.map(
-              ({ sourcePath, sourceProjectId, sourceOffset, subscriptionKey, value }) => {
-                const entry = readRuntimeRecord(value);
-                const numEventsReceived = readNumber(entry, "numEventsReceived") ?? 0;
-                return (
-                  <div
-                    key={`${String(sourceProjectId ?? "global")}:${sourcePath}:${subscriptionKey}`}
-                    className="rounded-xl bg-muted/40 px-3 py-2"
-                  >
-                    <div className="flex items-baseline justify-between gap-2">
-                      <div className="min-w-0 break-all font-mono text-xs">
-                        {String(sourceProjectId ?? "global")} {sourcePath}
-                      </div>
-                      <div className="shrink-0 font-mono text-[10px] text-muted-foreground">
-                        {numEventsReceived} received
-                      </div>
+            {inboundSubscriptions.map(({ sourcePath, subscriptionKey, value }) => {
+              const entry = readRuntimeRecord(value);
+              const numEventsReceived = readNumber(entry, "numEventsReceived") ?? 0;
+              return (
+                <div
+                  key={`${sourcePath}:${subscriptionKey}`}
+                  className="rounded-xl bg-muted/40 px-3 py-2"
+                >
+                  <div className="flex items-baseline justify-between gap-2">
+                    <div className="min-w-0 break-all font-mono text-xs">{sourcePath}</div>
+                    <div className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                      {numEventsReceived} received
                     </div>
-                    <div className="mt-1 break-all font-mono text-[11px] text-foreground/70">
-                      {subscriptionKey}
-                      {sourceOffset == null ? "" : ` · list from source offset #${sourceOffset}`}
-                    </div>
-                    {typeof entry?.lastEventReceivedAt !== "string" ? null : (
-                      <div className="mt-1 text-[11px] text-muted-foreground">
-                        last event {entry.lastEventReceivedAt}
-                      </div>
-                    )}
                   </div>
-                );
-              },
-            )}
+                  <div className="mt-1 break-all font-mono text-[11px] text-foreground/70">
+                    {subscriptionKey}
+                  </div>
+                  {typeof entry?.lastEventReceivedAt !== "string" ? null : (
+                    <div className="mt-1 text-[11px] text-muted-foreground">
+                      last event {entry.lastEventReceivedAt}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}

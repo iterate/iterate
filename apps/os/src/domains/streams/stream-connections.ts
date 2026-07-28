@@ -542,11 +542,7 @@ export class StreamConnections {
               deliveredThroughOffset = lastOffset;
               const visible =
                 kind === "hosted"
-                  ? readEvents.filter(
-                      (entry) =>
-                        entry.event.ephemeral !== true &&
-                        entry.event.type !== "events.iterate.com/stream/copy-list-confirmed",
-                    )
+                  ? readEvents.filter((entry) => entry.event.ephemeral !== true)
                   : readEvents.filter(
                       (entry) =>
                         entry.event.ephemeral !== true || entry.event.offset > openedAtOffset,

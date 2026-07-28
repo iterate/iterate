@@ -21,7 +21,7 @@ export const MAX_DELIVERY_ATTEMPTS = 15;
 /**
  * Confirmations required before an `onFailingEvent: "skip"` subscription declares a
  * single event is consistently failing and steps over it: the same event must fail this many
- * consecutive deliveries after bisection isolated it.
+ * consecutive deliveries after the batch-size-1 read isolated it.
  */
 export const FAILING_EVENT_CONFIRM_ATTEMPTS = 3;
 
@@ -34,9 +34,8 @@ export const FAILING_EVENT_CONFIRM_ATTEMPTS = 3;
 export const MAX_FAILING_EVENT_SKIPS_SINCE_LAST_SUCCESS = 3;
 
 /**
- * Events per delivery batch (also the bisect ceiling). The byte cap below is
- * the real batch guard; this count cap exists so isolating one failing event has a
- * finite ladder and one send pass stays a bounded read. 1000 small
+ * Events per delivery batch. The byte cap below is the real batch guard; this
+ * count cap keeps one send pass a bounded read. 1000 small
  * events ≈ 300KB — measured about 10× fewer callback calls and 4× faster browser
  * SQLite ingest than the previous 100 on catch-up-heavy workloads.
  */
@@ -61,26 +60,16 @@ export function computeBackoffMs(attempt: number, random: number): number {
   return Math.round(base * jitter);
 }
 
-/**
- * The initial exclusive cursor for a copy, ITX-call, or webhook subscription.
- */
+/** The initial exclusive cursor for a copy or ITX-call subscription. */
 function initialCursor(start: SubscriptionStart, configuredEventOffset: number): number {
-  if (start === "now") return configuredEventOffset;
-  if (start === "beginning") return 0;
-  return start.afterOffset;
+  return start === "now" ? configuredEventOffset : 0;
 }
-
-/**
- * Stable delivery id for one exact batch window in one cursor epoch. Retrying
- * that window keeps the id; bisecting it or widening it to a newer tail event
- * produces a different id.
- */
 
 /**
  * The one place receiver-specific initial cursor policy is spelled out:
  * hosted-processor rows start at 0 (the stored value means "the processor reported
  * a checkpoint through N", and a processor that has never been woken has observed nothing);
- * copy, ITX-call, and webhook rows start where their delivery policy says.
+ * copy and ITX-call rows start where their delivery policy says.
  */
 export function initialCursorFor(
   config: SubscriptionConfiguredPayload,
@@ -91,6 +80,11 @@ export function initialCursorFor(
     : initialCursor(config.receiver.delivery.start, configOffset);
 }
 
+/**
+ * Stable delivery id for one exact batch window in one cursor epoch. Retrying
+ * that window keeps the id; narrowing it or widening it to a newer tail event
+ * produces a different id.
+ */
 export function deliveryId(
   streamId: string,
   subscriptionKey: string,
@@ -106,9 +100,4 @@ export function deliveryId(
     firstOffset,
     lastOffset,
   );
-}
-
-/** Next bisect step: halve toward 1, never below. */
-export function halveBatchLimit(current: number): number {
-  return Math.max(1, Math.floor(current / 2));
 }

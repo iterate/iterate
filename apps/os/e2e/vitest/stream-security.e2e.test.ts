@@ -43,10 +43,7 @@ test("project users cannot reach stream test controls or the raw Durable Object"
   const attempts: Array<[string, unknown[]]> = [
     ["testRunIdleTeardownNow", []],
     ["testReset", []],
-    [
-      "testAppendCoreEvents",
-      [[{ type: "events.iterate.com/stream/copy-list-resend-requested", payload: {} }]],
-    ],
+    ["testAppendCoreEvents", [[{ type: "events.iterate.com/stream/paused", payload: {} }]]],
     ["testReceiveCopiedEvents", [{}]],
   ];
   for (const [method, args] of attempts) {
@@ -143,7 +140,6 @@ test("append accepts an offset assertion on a subscription configuration event",
         receivingStreamPath: `/e2e/security/offset-assert-target/${marker}`,
         delivery: {
           start: "now",
-          includeEphemeral: false,
           onFailingEvent: "halt",
         },
       },

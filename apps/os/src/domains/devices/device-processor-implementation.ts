@@ -597,7 +597,6 @@ function notificationIntentSubscriptionEvent(input: { idempotencyKey: string; pa
         delivery: {
           start: "now" as const,
           onFailingEvent: "halt" as const,
-          includeEphemeral: false,
         },
       },
     },

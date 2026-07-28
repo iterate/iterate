@@ -7,10 +7,8 @@ import type {
   StreamDeliveryBatch,
   StreamProcessorWakeRequest,
   CopyReceipt,
-  StreamWebhookDelivery,
 } from "iterate/processors";
 import { evaluateItxExpression, type ItxExpression } from "../../itx/expression.ts";
-import { projectEgressFetcher } from "../projects/utils.ts";
 import type { ExpectedHostedDeliveryState } from "./stream-connections.ts";
 import type { SubscriptionReceiverCalls } from "./stream-event-sender.ts";
 import { retainProcessorWakeResponse } from "./retained-event-callbacks.ts";
@@ -37,10 +35,8 @@ function rethrowItxDeliveryError(error: unknown): never {
   throw error;
 }
 
-/** Build the four concrete calls used by the receiver union. */
+/** Build the three concrete calls used by the receiver union. */
 export function createSubscriptionReceiverCalls(deps: {
-  projectId: string | null;
-  exports: unknown;
   createAuthorityRoot(): unknown;
   copyToStream(path: string, batch: StreamDeliveryBatch): Promise<CopyReceipt>;
   onHostedDeliveryError(
@@ -49,8 +45,6 @@ export function createSubscriptionReceiverCalls(deps: {
     expectedDelivery: ExpectedHostedDeliveryState,
   ): void;
 }): SubscriptionReceiverCalls {
-  let webhookEgress: ReturnType<typeof projectEgressFetcher> | undefined;
-
   const evaluateItxDelivery = async (expression: ItxExpression, batch: StreamDeliveryBatch) => {
     let value: unknown;
     try {
@@ -93,33 +87,6 @@ export function createSubscriptionReceiverCalls(deps: {
 
     async copyToStream(path: string, batch: StreamDeliveryBatch) {
       return deps.copyToStream(path, batch);
-    },
-
-    async deliverToWebhook(url: string, delivery: StreamWebhookDelivery) {
-      if (deps.projectId === null) {
-        throw new Error("webhook subscriptions require a project-scoped stream");
-      }
-      webhookEgress ??= projectEgressFetcher(
-        deps.exports as ExecutionContext["exports"],
-        deps.projectId,
-        { kind: "scope", scopePath: "/" },
-      );
-      const egress = webhookEgress;
-      try {
-        const response = await egress.fetch(url, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(delivery),
-        });
-        await response.body?.cancel();
-        if (!response.ok) {
-          throw new Error(`webhook responded ${response.status} ${response.statusText}`);
-        }
-      } catch (error) {
-        if (webhookEgress === egress) webhookEgress = undefined;
-        (egress as Partial<Disposable>)[Symbol.dispose]?.();
-        throw error;
-      }
     },
   };
 }

@@ -119,8 +119,7 @@ export function boundedErrorMessage(error: unknown): string | undefined {
 
 /**
  * Whether two copy appends materialize the same source coordinate.
- * A receiver transform may legitimately change between redeliveries; the
- * source hop, not the derived body, is the exactly-once identity.
+ * The source hop, not the event body, is the exactly-once identity.
  */
 export function sameCopiedEventIdentity(
   existing: StreamEvent,

@@ -16,16 +16,17 @@ subscriptions. For examples organized by use case, see
 - **cursor**: the exclusive completed source offset stored by the source;
 - **checkpoint**: the completed source offset stored with a hosted processor's
   reduced state;
-- **copy list**: the complete current set of one source's subscriptions
-  that target one receiving stream;
+- **stamp**: the source lifetime (`streamId`, `streamCreatedAt`) and config
+  generation (`cursorChangedAtSourceOffset`) carried on every delivery and on
+  every committed copy's `source.copiedFrom` hop;
 - **connection**: one currently retained event-batch callback;
 - **delivery**: one awaited receiver call for matching events;
 - **wake**: a call that asks a hosted processor for its checkpoint and callback.
 
-There is no separate “outbound subscription event” and “inbound subscription
-event” for one key. `subscription-configured` is the source-side fact that
-enables sending. A receiving stream gets the source's complete copy list,
-not a second independently managed subscription.
+The subscription lives entirely on the source. `subscription-configured` is
+the source-side fact that enables sending; there is no receiver-side
+registration, handshake, or confirmation. A receiving stream learns about a
+subscription when its first copy arrives.
 
 ## The configuration event
 
@@ -42,13 +43,6 @@ type SubscriptionConfigured = {
       eventTypes?: string[];
       condition?: string;
     };
-    endWhen?: {
-      any: Array<
-        | { kind: "acknowledged-events"; count: number }
-        | { kind: "source-offset-acknowledged"; offset: number }
-        | { kind: "time"; at: string }
-      >;
-    };
     receiver:
       | {
           action: "processor-wake";
@@ -58,10 +52,8 @@ type SubscriptionConfigured = {
       | {
           action: "copy-to-stream";
           receivingStreamPath: string;
-          transform?: string;
           delivery: {
-            start: "beginning" | "now" | { afterOffset: number };
-            includeEphemeral: boolean;
+            start: "beginning" | "now";
             onFailingEvent: "halt";
           };
         }
@@ -69,17 +61,7 @@ type SubscriptionConfigured = {
           action: "itx-call";
           expression: ItxExpression;
           delivery: {
-            start: "beginning" | "now" | { afterOffset: number };
-            includeEphemeral: boolean;
-            onFailingEvent: "halt" | "skip";
-          };
-        }
-      | {
-          action: "webhook-post";
-          url: string;
-          delivery: {
-            start: "beginning" | "now" | { afterOffset: number };
-            includeEphemeral: boolean;
+            start: "beginning" | "now";
             onFailingEvent: "halt" | "skip";
           };
         };
@@ -90,7 +72,7 @@ type SubscriptionConfigured = {
 This is the sole event that enables delivery. The `action` union prevents
 invalid combinations: a hosted processor cannot carry a start position stored
 by the source stream, and an ordered copy cannot skip a permanently
-failing event.
+failing event. Durable subscriptions never deliver ephemeral rows.
 
 ## How subscription keys behave
 
@@ -115,8 +97,7 @@ Consequences:
 - a keyless append with an `idempotencyKey` can be retried and returns the same
   committed event and generated key;
 - `subscribeToEventsFrom()` requires that idempotency key when it generates the
-  subscription key, because its source commit can precede a failed receiver
-  handshake;
+  subscription key, so a retried call cannot create a duplicate;
 - a fresh caller may not claim the reserved `subscription:` prefix;
 - the returned generated key may replace or move that existing subscription,
   and reduced state remembers that the key was generated;
@@ -126,119 +107,58 @@ Consequences:
 The original keyless event remains keyless. Reduced outbound state stores the
 effective key inside its normalized configuration.
 
-## Copy append order
+## Stamps and the passive inbound fence
 
-`subscribeToEventsFrom()` is called on the receiving stream, but the first event
-is appended to the source:
+`subscribeToEventsFrom()` is called on the receiving stream, but the only
+control event it appends is the source's `subscription-configured`. It
+returns:
+
+```ts
+{
+  subscriptionKey,
+  subscriptionConfiguredEvent,
+}
+```
+
+Matching event copies then flow directly:
 
 ```text
 source stream                              receiving stream
 
 subscription-configured
       |
-      +---- complete copy list ----> copy-list-recorded
-      |
-copy-list-confirmed
-      |
       +---- matching event copies -------> ordinary appended events
 ```
 
-For a new subscription or a same-receiver replacement, the method resolves
-after these three control events have committed. It returns:
+Every delivered batch — and every committed copy's last `source.copiedFrom`
+hop — carries the stamp of the delivery run that produced it: the source
+lifetime (`streamId`, random per storage creation, plus `streamCreatedAt`,
+which orders destructive recreations) and the config generation
+(`cursorChangedAtSourceOffset`, the offset of the configure or cursor-set
+event that started the run).
 
-```ts
-{
-  subscriptionKey,
-  subscriptionConfiguredEvent,
-  copyListRecordedEvent,
-  copyListConfirmedEvent,
-}
-```
+The receiver keeps one passive record per `(source path, subscription key)`,
+reduced from those stamps on its own committed copies. Before committing a
+batch it compares the batch stamp to the record and rejects a stamp that is
+strictly older:
 
-Matching event delivery starts only after the source has reduced the matching
-`copy-list-confirmed`.
+- an older source lifetime (a batch from a destructively-recreated stale
+  source Durable Object);
+- an older config generation of the same lifetime (an in-flight batch from a
+  superseded configuration landing after the replacement started delivering).
 
-Moving an existing key from receiver A to receiver B also appends and confirms
-A's replacement list without the key. The method waits for that pair before
-B's pair, while the returned `copyListRecordedEvent` and
-`copyListConfirmedEvent` are B's events.
+Equal stamps are accepted — that is the ordinary at-least-once redelivery,
+which the per-event idempotency key then collapses. Newer stamps are accepted
+and the reducer updates the record from the committed events, so a rebuild or
+replay reconstructs the fence identically.
 
-### `copy-list-recorded`
+Because configure is no longer confirmed end-to-end, a broken receiver
+surfaces later as a durable delivery halt (which has a UI lane) instead of a
+configure-time error, and an in-flight batch can land on a receiver shortly
+after the source removed or moved the subscription (bounded by the delivery
+timeout).
 
-This platform-authored event is appended to the receiving stream:
-
-```ts
-type CopyListRecorded = {
-  type: "events.iterate.com/stream/copy-list-recorded";
-  payload: {
-    source: {
-      projectId: string | null;
-      path: string;
-      streamId: string;
-      streamCreatedAt: string;
-    };
-    sourceOffset: number;
-    subscriptionsByKey: {
-      [subscriptionKey: string]: {
-        configuredAtSourceOffset: number;
-        configuration: {
-          description?: string;
-          filter?: {
-            eventTypes?: string[];
-            condition?: string;
-          };
-          endWhen?: SubscriptionEndCondition;
-          transform?: string;
-          delivery: {
-            start: "beginning" | "now" | { afterOffset: number };
-            includeEphemeral: boolean;
-            onFailingEvent: "halt";
-          };
-        };
-      };
-    };
-  };
-};
-
-type CommittedCopyListRecorded = CopyListRecorded & {
-  idempotencyKey: string;
-  offset: number;
-  createdAt: string;
-  path: string;
-};
-```
-
-The payload is a complete replacement for this source, not a patch. Omitting a
-key removes it. Sending `{ subscriptionsByKey: {} }` removes the final
-subscription from that source.
-
-The receiving copy contains only fields needed to explain and validate
-copies. It does not repeat the source-only receiver address or mutable
-cursor state.
-
-`sourceOffset` orders list replacements. A delayed older call cannot restore a
-removed key. `streamCreatedAt` and `streamId` order and distinguish deleted and
-recreated source streams whose offsets restart.
-
-### `copy-list-confirmed`
-
-After the receiver returns its committed event, the source appends:
-
-```ts
-type CopyListConfirmed = {
-  type: "events.iterate.com/stream/copy-list-confirmed";
-  payload: {
-    receivingStreamPath: string;
-    sourceOffset: number;
-    receivingStreamEvent: CommittedCopyListRecorded;
-  };
-};
-```
-
-Embedding the exact committed `copy-list-recorded` event gives the source
-an immutable audit record of the other stream's append.
-
-## Removal and moves
+## Removal
 
 Removing one subscription appends on the source:
 
@@ -247,30 +167,15 @@ type SubscriptionRemoved = {
   type: "events.iterate.com/stream/subscription-removed";
   payload: {
     subscriptionKey: string;
-    reason: "requested" | "completed" | "expired";
+    reason: "requested";
   };
 };
 ```
 
-For `copy-to-stream`, the source then sends a complete list without that key. There
-is no separate per-key receiver removal event.
-
-A public command may append only `reason: "requested"`. The source stream's
-delivery code appends `completed` after a count/offset end condition is met and
-`expired` after a time end condition is met. Validation rejects callers that
-try to claim either automatic outcome.
-
-Moving key `K` from receiving stream A to B changes two complete lists:
-
-1. source appends the replacement `subscription-configured`;
-2. A records a list without `K`;
-3. B records a list with `K`;
-4. source confirms both records.
-
-The public configure call waits for A first and B second. Even if B happens to
-record its list early, matching events do not go to B while another receiving
-stream's last confirmed list still contains `K`. This makes a move observable
-and prevents the same subscription from sending to both streams.
+There is no receiver-side removal: the receiver's passive record simply stops
+being updated. Reusing the same key for a different receiving stream is a new
+delivery run with a newer config generation; the old receiver's record stays
+behind as inert history.
 
 ## Core reduced state
 
@@ -281,21 +186,12 @@ subscriptions: {
   inbound: {
     bySourcePath: {
       [sourcePath: string]: {
-        source: {
-          projectId: string | null;
-          path: string;
+        [subscriptionKey: string]: {
           streamId: string;
           streamCreatedAt: string;
-        };
-        sourceOffset: number;
-        byKey: {
-          [subscriptionKey: string]: {
-            configuration: RecordedSubscriptionConfiguration;
-            configuredAtSourceOffset: number;
-            numEventsReceived: number;
-            numEventsDropped: number;
-            lastEventReceivedAt?: string;
-          };
+          cursorChangedAtSourceOffset: number;
+          numEventsReceived: number;
+          lastEventReceivedAt?: string;
         };
       };
     };
@@ -323,59 +219,14 @@ subscriptions: {
 };
 ```
 
-On a receiving stream, `inbound.bySourcePath` answers “which source streams
-copy here?” and `byKey` gives every subscription from each source.
+On a receiving stream, `inbound.bySourcePath` holds the passive fence records:
+the last accepted stamp per `(source path, key)` plus two counters that exist
+only for the debug card (`numEventsReceived`, `lastEventReceivedAt`). They are
+derived entirely from committed copied events; the receiver stores no
+configuration for a source subscription.
 
 On a source stream, `outbound.byKey` contains every durable subscription,
-regardless of action. The subscription key is the common identifier on both
-sides; inbound state first groups by source path because keys are only unique
-within a source.
-
-Received counters are properties of the inbound subscription:
-
-- `numEventsReceived` counts copied events appended here;
-- `numEventsDropped` counts source events acknowledged without appending
-  because of a cycle or hop limit;
-- `lastEventReceivedAt` records the most recent copied event's commit time.
-
-## Copy-list work is separate
-
-Sending a complete list is work even when that list is empty, so it is not
-hidden inside `subscriptions.outbound.byKey`:
-
-```ts
-copyListDeliveriesByReceivingStream: {
-  [receivingStreamPath: string]:
-    | {
-        sourceOffset: number;
-        status: "pending";
-        subscriptionKeysRecordedByReceiver: string[];
-      }
-    | {
-        sourceOffset: number;
-        status: "confirmed";
-        subscriptionKeysRecordedByReceiver: string[];
-      }
-    | {
-        sourceOffset: number;
-        status: "blocked";
-        attempts: number;
-        error: string;
-        blockedAt: string;
-        subscriptionKeysRecordedByReceiver: string[];
-      };
-};
-```
-
-`subscriptionKeysRecordedByReceiver` is the key set from the last confirmed
-list. It remains available while a newer list is pending or blocked, which is
-what lets the source prevent delivery during a move.
-
-This map is not a redundant outbound-subscription index:
-
-- `subscriptions.outbound.byKey` answers what should receive matching events;
-- `copyListDeliveriesByReceivingStream` answers which complete receiver
-  updates are still owed.
+regardless of action.
 
 ## Runtime state
 
@@ -386,7 +237,6 @@ runtime: {
   subscriptions: {
     [subscriptionKey: string]: {
       acknowledgedOffset: number;
-      acknowledgedEvents: number;
       lag: number;
       attempt: number;
       nextAttemptAt: number | null;
@@ -399,15 +249,6 @@ runtime: {
   };
   connections: {
     [connectionKey: string]: ConnectionRuntimeState;
-  };
-  copyListRetries: {
-    [receivingStreamPath: string]: {
-      receivingStreamPath: string;
-      sourceOffset: number;
-      attempt: number;
-      nextAttemptAt: number | null;
-      lastError: string | null;
-    };
   };
 };
 ```
@@ -455,46 +296,10 @@ head. A receiver call that already started may finish, but its stale result
 cannot advance the newer cursor.
 
 Retries are bounded. Exhaustion appends `subscription-delivery-halted`; it is
-not represented only by a log line or volatile retry row.
-
-## Copy-list failure and repair events
-
-List delivery has its own retry budget and events because it changes what the
-receiving stream believes is configured:
-
-```ts
-type CopyListDeliveryBlocked = {
-  type: "events.iterate.com/stream/copy-list-delivery-blocked";
-  payload: {
-    receivingStreamPath: string;
-    sourceOffset: number;
-    attempts: number;
-    error: string;
-  };
-};
-
-type CopyListResendRequested = {
-  type: "events.iterate.com/stream/copy-list-resend-requested";
-  payload: {
-    receivingStreamPath: string;
-  };
-};
-```
-
-When retries exhaust, the source reduces the first event into a durable
-`blocked` entry. Repeating the original configure call does not erase that
-failure. After fixing the receiver, an operator calls:
-
-```ts
-await source.resendCopyList({ receivingStreamPath });
-```
-
-The resend event creates a new pending generation without changing any
-matching-event cursor.
-
-Only a bounded number of list sends run concurrently. Each call has a timeout,
-retry delay, and watchdog alarm. Final failure remains visible until an
-explicit resend succeeds.
+not represented only by a log line or volatile retry row. After any batch
+failure the next read uses batch size 1 (isolate-or-progress): healthy
+prefixes commit one event at a time until the failing event retries alone,
+resetting to the full batch limit on success.
 
 ## Copied event validation
 
@@ -517,57 +322,31 @@ source: {
 }
 ```
 
-The receiver accepts a batch only if its current inbound entry contains the
-same source `streamId`, subscription key, and configuration offset. A stale
-sender cannot continue after replacement or removal.
+The receiver's validation is: copy authority (only trusted stream delivery
+may append `source.copiedFrom`), the stamp fence described above, the
+cycle/hop guard, and per-event idempotency identity.
 
 Network retries in one send run use the same receiving-stream append identity.
 Recreating the source, replacing the same key, or explicitly setting its cursor
 starts a new run and may intentionally append an old source offset again.
 
-If the hop array already contains the receiving stream, the receiving stream
-appends:
-
-```ts
-type CopiedEventsDropped = {
-  type: "events.iterate.com/stream/copied-events-dropped";
-  idempotencyKey: string;
-  payload: {
-    source: {
-      projectId: string | null;
-      path: string;
-      streamId: string;
-      streamCreatedAt: string;
-    };
-    subscriptionKey: string;
-    reason: "cycle" | "hop-limit";
-    count: number;
-    firstOffset: number;
-    lastOffset: number;
-  };
-};
-```
-
-The current implementation writes one event per dropped source event, so
-`count` is `1` and `firstOffset` equals `lastOffset`. A cycle uses reason
-`cycle`; reaching the hop bound uses `hop-limit`. In both cases the source
-cursor advances exactly once instead of retrying an event that must never be
-appended.
+If the hop array already contains the receiving stream, or the chain has
+reached the hop bound, the receiver drops the event instead of appending it:
+the drop is a terminal acknowledgement (retrying immutable provenance can
+never make the event deliverable), the source cursor advances past it, and
+the receiver appends one idempotent `stream/error-occurred` line describing
+the drop (source path, key, count, offsets). That audit line is excluded from
+onward copy delivery so a reciprocal wildcard pair cannot manufacture audit
+events forever.
 
 ## Authority boundaries
 
-Public callers may append `subscription-configured`, requested
-`subscription-removed`, cursor, resume, and resend requests subject to contract
-validation.
+Public callers may append `subscription-configured`, `subscription-removed`,
+cursor, and resume requests subject to contract validation.
 
 Only trusted stream internals may append:
 
-- `copy-list-recorded`;
-- `copy-list-confirmed`;
-- `copy-list-delivery-blocked`;
 - `subscription-delivery-halted`;
-- completed or expired `subscription-removed`;
-- `copied-events-dropped`;
 - an event carrying `source.copiedFrom`.
 
 A copied `events.iterate.com/stream/*` event is data on the receiving stream. It
@@ -577,13 +356,11 @@ does not execute source-stream control behavior there.
 
 The reducer rejects configuration that would exceed:
 
-- 1,000 distinct source streams recorded by one receiving stream;
 - 64 subscriptions from one source to one receiving stream;
 - the retained core-state byte limit;
 - the maximum `source.copiedFrom` hop count.
 
-These checks run before committing the event or receiver list that would exceed
-the bound.
+These checks run before committing the event that would exceed the bound.
 
 ## No compatibility layer
 
@@ -593,6 +370,4 @@ tables are not read through aliases or migrated in place. Deploying this change
 requires erasing and recreating every Stream Durable Object in the target
 environment through normal APIs before the new worker serves traffic. That
 includes project streams and deployment-wide streams whose `projectId` is
-`null`. Startup detects an old `events` table and fails with an explicit
-recreation instruction; replaying core state cannot add the required SQLite
-columns.
+`null`.

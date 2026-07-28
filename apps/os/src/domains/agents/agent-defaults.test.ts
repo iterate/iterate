@@ -191,7 +191,6 @@ describe("agentCreationForPath", () => {
         receivingStreamPath: "/agents",
         delivery: {
           start: "beginning",
-          includeEphemeral: false,
           onFailingEvent: "halt",
         },
       },

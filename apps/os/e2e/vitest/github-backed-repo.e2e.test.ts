@@ -48,7 +48,6 @@ test("github pushes about a linked repository reach the repo stream", async () =
         delivery: {
           start: "now",
           onFailingEvent: "halt",
-          includeEphemeral: false,
         },
       },
     },

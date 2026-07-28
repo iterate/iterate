@@ -7,9 +7,8 @@
 // chunking would still require binding the oversized value first, so event
 // JSON is chunked in JS.
 //
-// A third table, `subscription_cursors`, holds delivery cursors. A fourth records
-// retries when a source cannot send its current copy list to a
-// receiving stream. They live in the same SQLite as the log on purpose:
+// A third table, `subscription_cursors`, holds delivery cursors. It lives in
+// the same SQLite as the log on purpose:
 // a cursor advance and the events it acknowledges commit under the same
 // output gate, so the cursor can never disagree with the log it points into.
 // Cursor rows are mutable STORAGE — per-batch acknowledgements must not double
@@ -25,14 +24,6 @@ import { StreamEvent as StreamEventSchema } from "iterate/processors";
 
 const EVENT_CHUNK_SIZE = 512 * 1024;
 const textEncoder = new TextEncoder();
-const REQUIRED_EVENT_COLUMNS = [
-  "copy_list_source_path",
-  "copy_list_source_created_at_ms",
-  "copy_list_source_stream_id",
-  "copy_list_source_offset",
-  "copy_list_confirmed_receiving_stream_path",
-  "copy_list_confirmed_source_offset",
-] as const;
 
 /**
  * A committed event paired with its serialized byte length (the exact bytes
@@ -58,51 +49,8 @@ export class StreamEventLog {
         type text not null,
         created_at text not null,
         idempotency_key text unique,
-        ephemeral integer not null default 0,
-        copy_list_source_path text,
-        copy_list_source_created_at_ms integer,
-        copy_list_source_stream_id text,
-        copy_list_source_offset integer,
-        copy_list_confirmed_receiving_stream_path text,
-        copy_list_confirmed_source_offset integer
+        ephemeral integer not null default 0
       )
-    `);
-    const eventColumns = new Set(
-      this.sql
-        .exec<{ name: string }>("pragma table_info(events)")
-        .toArray()
-        .map(({ name }) => name),
-    );
-    const missingEventColumns = REQUIRED_EVENT_COLUMNS.filter(
-      (column) => !eventColumns.has(column),
-    );
-    if (missingEventColumns.length > 0) {
-      throw new Error(
-        `stream storage at "${this.path}" predates the copy subscription schema (missing events columns: ${missingEventColumns.join(", ")}); erase and recreate this stream before deploying this version`,
-      );
-    }
-    this.sql.exec(`
-      -- Empty source lists disappear from reduced state. These metadata fields
-      -- retain the source lifetime and offset on the immutable event row,
-      -- allowing a delayed RPC from either an older offset or a destroyed
-      -- source lifetime to be rejected without retaining an empty copy list.
-      create index if not exists events_copy_list_source_position
-      on events (
-        copy_list_source_path,
-        copy_list_source_created_at_ms desc,
-        copy_list_source_stream_id desc,
-        copy_list_source_offset desc,
-        offset desc
-      )
-      where copy_list_source_path is not null
-    `);
-    this.sql.exec(`
-      -- Source-side records retain the receiver event that stored each
-      -- complete list. This index makes an already-completed command a
-      -- local read even after an empty list removed its reduced-state tracker.
-      create index if not exists events_copy_list_confirmed_source_offset
-      on events (copy_list_confirmed_receiving_stream_path, copy_list_confirmed_source_offset desc)
-      where copy_list_confirmed_receiving_stream_path is not null
     `);
     this.sql.exec(`
       -- Full committed event JSON split into ordered byte chunks. The WITHOUT ROWID
@@ -162,42 +110,14 @@ export class StreamEventLog {
   insert(events: readonly StreamEvent[]): number[] {
     const byteLengths: number[] = [];
     for (const event of events) {
-      const copyListRecordedEvent =
-        event.type === "events.iterate.com/stream/copy-list-recorded" &&
-        event.source?.copiedFrom === undefined
-          ? (event.payload as {
-              source: { path: string; streamId: string; streamCreatedAt: string };
-              sourceOffset: number;
-            })
-          : undefined;
-      const copyListConfirmedEvent =
-        event.type === "events.iterate.com/stream/copy-list-confirmed" &&
-        event.source?.copiedFrom === undefined
-          ? (event.payload as {
-              receivingStreamPath: string;
-              sourceOffset: number;
-            })
-          : undefined;
       this.sql.exec(
-        `insert into events (
-           offset, type, created_at, idempotency_key, ephemeral,
-           copy_list_source_path, copy_list_source_created_at_ms,
-           copy_list_source_stream_id, copy_list_source_offset,
-           copy_list_confirmed_receiving_stream_path, copy_list_confirmed_source_offset
-         ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `insert into events (offset, type, created_at, idempotency_key, ephemeral)
+         values (?, ?, ?, ?, ?)`,
         event.offset,
         event.type,
         event.createdAt,
         event.idempotencyKey ?? null,
         event.ephemeral === true ? 1 : 0,
-        copyListRecordedEvent?.source.path ?? null,
-        copyListRecordedEvent === undefined
-          ? null
-          : Date.parse(copyListRecordedEvent.source.streamCreatedAt),
-        copyListRecordedEvent?.source.streamId ?? null,
-        copyListRecordedEvent?.sourceOffset ?? null,
-        copyListConfirmedEvent?.receivingStreamPath ?? null,
-        copyListConfirmedEvent?.sourceOffset ?? null,
       );
       const rawJsonBytes = textEncoder.encode(JSON.stringify(event));
       byteLengths.push(rawJsonBytes.byteLength);
@@ -211,42 +131,6 @@ export class StreamEventLog {
       }
     }
     return byteLengths;
-  }
-
-  /** Latest complete list of subscriptions recorded from one source stream. */
-  getLatestCopyListFromSource(sourcePath: string): StreamEvent | undefined {
-    const row = this.sql
-      .exec<{ offset: number }>(
-        `select offset
-         from events
-         where copy_list_source_path = ?
-         order by
-           copy_list_source_created_at_ms desc,
-           copy_list_source_stream_id desc,
-           copy_list_source_offset desc,
-           offset desc
-         limit 1`,
-        sourcePath,
-      )
-      .toArray()[0];
-    return row === undefined ? undefined : this.#readEventFromChunks(row.offset);
-  }
-
-  /** Latest source-side event recording that one receiving stream stored its copy list. */
-  getLatestCopyListConfirmationForReceivingStream(
-    receivingStreamPath: string,
-  ): StreamEvent | undefined {
-    const row = this.sql
-      .exec<{ offset: number }>(
-        `select offset
-         from events
-         where copy_list_confirmed_receiving_stream_path = ?
-         order by copy_list_confirmed_source_offset desc
-         limit 1`,
-        receivingStreamPath,
-      )
-      .toArray()[0];
-    return row === undefined ? undefined : this.#readEventFromChunks(row.offset);
   }
 
   getByOffset(offset: number): StreamEvent | undefined {
@@ -384,10 +268,8 @@ export class StreamEventLog {
 export type SubscriptionCursorRow = {
   subscriptionKey: string;
   acknowledgedOffset: number;
-  /** Offset of the source configuration this row and its acknowledgement count belong to. */
+  /** Offset of the source configuration this row belongs to. */
   configuredAtOffset: number;
-  /** Product events acknowledged since this source configuration was appended. */
-  acknowledgedEvents: number;
   /** Consecutive delivery or hosted-processor wake failures since the last success. */
   attempt: number;
   /** Source offset whose receiver-specific failure is being confirmed. */
@@ -441,7 +323,6 @@ export type SubscriptionCursorStore = {
     acknowledgedOffset: number,
     options?: {
       cursorChangedAtOffset?: number;
-      acknowledgedEvents?: number;
       preserveFailingEventSkips?: boolean;
     },
   ): void;
@@ -515,7 +396,6 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         failing_event_skips_since_last_success integer not null default 0,
         cursor_changed_at_offset integer not null,
         configured_at_offset integer not null,
-        acknowledged_events integer not null default 0,
         updated_at text not null
       );
     `,
@@ -536,7 +416,6 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
             failing_event_skips_since_last_success integer not null default 0,
             cursor_changed_at_offset integer not null,
             configured_at_offset integer not null,
-            acknowledged_events integer not null default 0,
             updated_at text not null
           );
         `,
@@ -547,7 +426,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         parameters: { subscriptionKey: string };
         result: SubscriptionCursorRowRecord;
       }>`
-        select subscription_key, acknowledged_offset, configured_at_offset, acknowledged_events,
+        select subscription_key, acknowledged_offset, configured_at_offset,
                attempt, next_attempt_at, in_flight_deadline_at,
                in_flight_connection_generation, last_error,
                failing_event_offset, failing_event_attempt,
@@ -556,7 +435,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         where subscription_key = :subscriptionKey
       `,
       list: sql.many<{ result: SubscriptionCursorRowRecord }>`
-        select subscription_key, acknowledged_offset, configured_at_offset, acknowledged_events,
+        select subscription_key, acknowledged_offset, configured_at_offset,
                attempt, next_attempt_at, in_flight_deadline_at,
                in_flight_connection_generation, last_error,
                failing_event_offset, failing_event_attempt,
@@ -582,7 +461,6 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         on conflict (subscription_key) do update set
           acknowledged_offset = excluded.acknowledged_offset,
           configured_at_offset = excluded.configured_at_offset,
-          acknowledged_events = 0,
           attempt = 0,
           next_attempt_at = null,
           in_flight_deadline_at = null,
@@ -599,15 +477,12 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         parameters: {
           subscriptionKey: string;
           acknowledgedOffset: number;
-          acknowledgedEvents: number;
           preserveFailingEventSkips: number;
           updatedAt: string;
         };
       }>`
         update subscription_cursors
-        set acknowledged_events = acknowledged_events +
-              case when :acknowledgedOffset > acknowledged_offset then :acknowledgedEvents else 0 end,
-            acknowledged_offset = max(acknowledged_offset, :acknowledgedOffset),
+        set acknowledged_offset = max(acknowledged_offset, :acknowledgedOffset),
             attempt = 0, next_attempt_at = null, in_flight_deadline_at = null,
             in_flight_connection_generation = null,
             last_error = null,
@@ -621,16 +496,13 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         parameters: {
           subscriptionKey: string;
           acknowledgedOffset: number;
-          acknowledgedEvents: number;
           preserveFailingEventSkips: number;
           cursorChangedAtOffset: number;
           updatedAt: string;
         };
       }>`
         update subscription_cursors
-        set acknowledged_events = acknowledged_events +
-              case when :acknowledgedOffset > acknowledged_offset then :acknowledgedEvents else 0 end,
-            acknowledged_offset = max(acknowledged_offset, :acknowledgedOffset),
+        set acknowledged_offset = max(acknowledged_offset, :acknowledgedOffset),
             attempt = 0, next_attempt_at = null, in_flight_deadline_at = null,
             in_flight_connection_generation = null,
             last_error = null,
@@ -787,14 +659,12 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     acknowledgedOffset: number,
     options: {
       cursorChangedAtOffset?: number;
-      acknowledgedEvents?: number;
       preserveFailingEventSkips?: boolean;
     } = {},
   ): void {
     const params = {
       subscriptionKey,
       acknowledgedOffset,
-      acknowledgedEvents: options.acknowledgedEvents ?? 0,
       preserveFailingEventSkips: options.preserveFailingEventSkips === true ? 1 : 0,
       updatedAt: new Date().toISOString(),
     };
@@ -954,7 +824,6 @@ type SubscriptionCursorRowRecord = {
   subscription_key: string;
   acknowledged_offset: number;
   configured_at_offset: number;
-  acknowledged_events: number;
   attempt: number;
   next_attempt_at: number | null;
   in_flight_deadline_at: number | null;
@@ -971,7 +840,6 @@ function rowFromRecord(record: SubscriptionCursorRowRecord): SubscriptionCursorR
     subscriptionKey: record.subscription_key,
     acknowledgedOffset: record.acknowledged_offset,
     configuredAtOffset: record.configured_at_offset,
-    acknowledgedEvents: record.acknowledged_events,
     attempt: record.attempt,
     nextAttemptAt: record.next_attempt_at,
     inFlightDeadlineAt: record.in_flight_deadline_at,

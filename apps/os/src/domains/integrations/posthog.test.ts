@@ -107,7 +107,6 @@ describe("first-party PostHog stream integration", () => {
           expression: ["integrations", "posthog", "processEventBatch"],
           delivery: {
             start: "beginning",
-            includeEphemeral: false,
             onFailingEvent: "halt",
           },
         },

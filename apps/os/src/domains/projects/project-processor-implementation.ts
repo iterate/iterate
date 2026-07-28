@@ -274,7 +274,6 @@ export class ProjectProcessor extends StreamProcessor<
                 delivery: {
                   start: "now",
                   onFailingEvent: "halt",
-                  includeEphemeral: false,
                 },
               },
             },

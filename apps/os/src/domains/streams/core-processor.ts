@@ -6,13 +6,12 @@ import {
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
   CoreProcessorContract,
-  MAX_SOURCE_STREAMS_PER_RECEIVING_STREAM,
   MAX_SUBSCRIPTIONS_PER_RECEIVING_STREAM,
   parseCommittedCoreEvent as parseCoreEvent,
   subscriptionKeyForConfiguredEvent,
   type CoreProcessorState,
 } from "./core-processor-contract.ts";
-import { compileEventFilter, compileJsonataExpression } from "./event-filter.ts";
+import { compileEventFilter } from "./event-filter.ts";
 import { isInternalStreamIdempotencyKey } from "./stream-delivery-utils.ts";
 
 export const STREAM_PAUSED_ERROR_PREFIX = "stream paused: ";
@@ -40,18 +39,12 @@ function coreProcessorStateByteLength(state: CoreProcessorState): number {
  * to core state. Ordinary product events and fixed-shape lifecycle facts only
  * advance bounded bookkeeping, so they must not pay an O(state) JSON scan or
  * fail merely because a counter gained a digit. `subscription-removed` is not a
- * growth event: configuring a copy subscription always creates its copy-list
- * entry, and an empty-list acknowledgement can delete that entry only after no
- * configured subscription points at the receiver, so removal can refresh but not add a
- * receiver path.
+ * growth event: it can only delete an outbound entry.
  */
 const CHECKPOINT_GROWTH_EVENT_TYPES = new Set<string>([
   "events.iterate.com/stream/created",
   "events.iterate.com/stream/child-stream-created",
   "events.iterate.com/stream/subscription-configured",
-  "events.iterate.com/stream/copy-list-recorded",
-  "events.iterate.com/stream/copy-list-confirmed",
-  "events.iterate.com/stream/copy-list-delivery-blocked",
   "events.iterate.com/stream/subscription-delivery-halted",
   "events.iterate.com/stream/paused",
 ]);
@@ -88,8 +81,6 @@ const CORE_AUTHORED_EVENT_TYPES = new Set<string>([
   "events.iterate.com/stream/created",
   "events.iterate.com/stream/woken",
   "events.iterate.com/stream/child-stream-created",
-  "events.iterate.com/stream/copy-list-confirmed",
-  "events.iterate.com/stream/copy-list-delivery-blocked",
   "events.iterate.com/stream/subscription-delivery-halted",
   "events.iterate.com/stream/connection-opened",
   "events.iterate.com/stream/connection-closed",
@@ -116,93 +107,26 @@ function parseCoreEventInput<const Type extends ParsedCoreEventInput["type"]>(
   ) as Extract<ParsedCoreEventInput, { type: Type }>;
 }
 
-function currentInboundSubscription(
-  state: CoreProcessorState,
-  coordinate: {
-    projectId: string | null;
-    path: string;
-    streamId: string;
-    streamCreatedAt: string;
-    subscriptionKey: string;
-  },
-) {
-  const source = state.subscriptions.inbound.bySourcePath[coordinate.path];
-  const subscription = source?.byKey[coordinate.subscriptionKey];
-  if (
-    subscription === undefined ||
-    source.source.projectId !== coordinate.projectId ||
-    source.source.streamId !== coordinate.streamId ||
-    source.source.streamCreatedAt !== coordinate.streamCreatedAt
-  ) {
-    return undefined;
-  }
-  return { subscription, source };
-}
-
-function currentInboundSubscriptionForHop(
-  state: CoreProcessorState,
-  hop: NonNullable<NonNullable<StreamEvent["source"]>["copiedFrom"]>[number] | undefined,
-) {
-  return hop === undefined ? undefined : currentInboundSubscription(state, hop);
-}
-
 /**
- * A change to one key must refresh every stream that still says it has that
- * key, including an older blocked receiver that is no longer named by the
- * current configuration. Otherwise removing and later recreating the key can
- * leave matching-event sending permanently held by a stale acknowledged list.
+ * Order two source delivery stamps for one (source path, subscription key):
+ * creation time orders stream lifetimes, the random stream ID makes a
+ * same-millisecond tie deterministic, and the configure/cursor-set offset
+ * orders config generations within one lifetime. The receiver's inbound fence
+ * rejects a stamp strictly older than its recorded coordinate, so a batch
+ * from a destroyed source lifetime or a superseded config generation cannot
+ * land after its replacement started delivering.
  */
-function markCopyListsPending(args: {
-  directlyChangedPaths: Iterable<string>;
-  lists: CoreProcessorState["copyListDeliveriesByReceivingStream"];
-  subscriptionKey: string;
-  sourceOffset: number;
-}): CoreProcessorState["copyListDeliveriesByReceivingStream"] {
-  const pathsToRefresh = new Set(args.directlyChangedPaths);
-  for (const [receivingStreamPath, list] of Object.entries(args.lists)) {
-    if (list.subscriptionKeysRecordedByReceiver.includes(args.subscriptionKey)) {
-      pathsToRefresh.add(receivingStreamPath);
-    }
-  }
-
-  const lists = { ...args.lists };
-  for (const receivingStreamPath of pathsToRefresh) {
-    lists[receivingStreamPath] = {
-      sourceOffset: args.sourceOffset,
-      status: "pending",
-      subscriptionKeysRecordedByReceiver:
-        lists[receivingStreamPath]?.subscriptionKeysRecordedByReceiver ?? [],
-    };
-  }
-  return lists;
-}
-
-/**
- * Compare complete lists from one source path across destructive stream
- * recreation. Creation time orders lifetimes, the random stream ID makes a
- * same-millisecond tie deterministic, and offsets order lists within one
- * lifetime. If a clock moves backwards (or the new random ID loses a timestamp
- * tie), the receiver keeps the existing list and the source fails loudly when
- * it cannot confirm its new list instead of silently mixing lifetimes.
- */
-export function compareSourceListPosition(
-  incoming: { streamId: string; streamCreatedAt: string; sourceOffset: number },
-  recorded: {
-    source: { streamId: string; streamCreatedAt: string };
-    sourceOffset: number;
-  },
+export function compareSourceStamp(
+  incoming: { streamId: string; streamCreatedAt: string; cursorChangedAtSourceOffset: number },
+  recorded: { streamId: string; streamCreatedAt: string; cursorChangedAtSourceOffset: number },
 ): number {
   const creationTimeDifference =
-    Date.parse(incoming.streamCreatedAt) - Date.parse(recorded.source.streamCreatedAt);
+    Date.parse(incoming.streamCreatedAt) - Date.parse(recorded.streamCreatedAt);
   if (creationTimeDifference !== 0) return creationTimeDifference;
-  const streamIdDifference =
-    incoming.streamId < recorded.source.streamId
-      ? -1
-      : incoming.streamId > recorded.source.streamId
-        ? 1
-        : 0;
-  if (streamIdDifference !== 0) return streamIdDifference;
-  return incoming.sourceOffset - recorded.sourceOffset;
+  if (incoming.streamId !== recorded.streamId) {
+    return incoming.streamId < recorded.streamId ? -1 : 1;
+  }
+  return incoming.cursorChangedAtSourceOffset - recorded.cursorChangedAtSourceOffset;
 }
 
 /**
@@ -237,7 +161,7 @@ export class StreamCoreProcessor {
   validate(args: {
     event: StreamEventInput;
     state: CoreProcessorState;
-    authority: "public" | "core-event" | "copy-list" | "copy";
+    authority: "public" | "core-event" | "copy";
   }): void {
     if (args.event.ephemeral && args.event.type.startsWith("events.iterate.com/stream/")) {
       throw new Error("stream control events cannot be ephemeral");
@@ -250,84 +174,6 @@ export class StreamCoreProcessor {
     const isFirstHand = args.event.source?.copiedFrom === undefined;
     if (!isFirstHand && args.authority !== "copy") {
       throw new Error("copy source information is platform-authored");
-    }
-    if (
-      !isFirstHand &&
-      currentInboundSubscriptionForHop(args.state, args.event.source?.copiedFrom?.at(-1)) ===
-        undefined
-    ) {
-      const hop = args.event.source?.copiedFrom?.at(-1);
-      throw new Error(
-        hop === undefined
-          ? "received event has no source hop"
-          : `received event does not match the current subscription "${hop.subscriptionKey}" from "${hop.path}"`,
-      );
-    }
-    if (
-      isFirstHand &&
-      args.event.type === "events.iterate.com/stream/copy-list-recorded" &&
-      args.authority !== "copy-list"
-    ) {
-      throw new Error("copy lists from source streams are platform-authored");
-    }
-    if (
-      isFirstHand &&
-      args.event.type === "events.iterate.com/stream/copied-events-dropped" &&
-      args.authority !== "copy"
-    ) {
-      throw new Error("copy drop records are platform-authored");
-    }
-    if (
-      isFirstHand &&
-      args.event.type === "events.iterate.com/stream/copied-events-dropped" &&
-      args.authority === "copy"
-    ) {
-      const event = parseCoreEventInput(
-        args.event,
-        "events.iterate.com/stream/copied-events-dropped",
-      );
-      if (
-        currentInboundSubscription(args.state, {
-          ...event.payload.source,
-          subscriptionKey: event.payload.subscriptionKey,
-        }) === undefined
-      ) {
-        throw new Error(
-          `dropped events do not match the current subscription "${event.payload.subscriptionKey}" from "${event.payload.source.path}"`,
-        );
-      }
-    }
-
-    if (isFirstHand && args.event.type === "events.iterate.com/stream/copy-list-recorded") {
-      const event = parseCoreEventInput(args.event, "events.iterate.com/stream/copy-list-recorded");
-      const existing = args.state.subscriptions.inbound.bySourcePath[event.payload.source.path];
-      if (
-        existing === undefined &&
-        Object.keys(event.payload.subscriptionsByKey).length > 0 &&
-        Object.keys(args.state.subscriptions.inbound.bySourcePath).length >=
-          MAX_SOURCE_STREAMS_PER_RECEIVING_STREAM
-      ) {
-        throw new Error(
-          `a receiving stream may record subscriptions from at most ${MAX_SOURCE_STREAMS_PER_RECEIVING_STREAM} source streams`,
-        );
-      }
-      if (event.payload.source.projectId !== this.#projectId) {
-        throw new Error("a receiving stream can only record subscriptions from its own project");
-      }
-      if (event.payload.source.path === args.state.path) {
-        throw new Error("a stream cannot record itself as a subscription source");
-      }
-      for (const [subscriptionKey, record] of Object.entries(event.payload.subscriptionsByKey)) {
-        if (record.configuredAtSourceOffset > event.payload.sourceOffset) {
-          throw new Error(
-            `subscription "${subscriptionKey}" was configured after this copy list's source offset`,
-          );
-        }
-        compileEventFilter(record.configuration.filter);
-        if (record.configuration.transform !== undefined) {
-          compileJsonataExpression(record.configuration.transform);
-        }
-      }
     }
     if (
       isFirstHand &&
@@ -352,18 +198,6 @@ export class StreamCoreProcessor {
           `subscription key "${requestedSubscriptionKey}" uses the generated-key namespace but does not name an existing generated subscription`,
         );
       }
-      if (event.payload.receiver.action === "webhook-post" && this.#projectId === null) {
-        throw new Error("webhook subscriptions require a project-scoped stream");
-      }
-      if (
-        event.payload.receiver.action !== "processor-wake" &&
-        typeof event.payload.receiver.delivery.start === "object" &&
-        event.payload.receiver.delivery.start.afterOffset > args.state.maxOffset
-      ) {
-        throw new Error(
-          `subscription afterOffset ${event.payload.receiver.delivery.start.afterOffset} is beyond this stream's current maximum offset ${args.state.maxOffset}`,
-        );
-      }
       if (
         event.payload.receiver.action === "copy-to-stream" &&
         event.payload.receiver.receivingStreamPath === args.state.path
@@ -371,12 +205,6 @@ export class StreamCoreProcessor {
         throw new Error("a stream cannot receive events from itself");
       }
       compileEventFilter(event.payload.filter);
-      if (
-        event.payload.receiver.action === "copy-to-stream" &&
-        event.payload.receiver.transform !== undefined
-      ) {
-        compileJsonataExpression(event.payload.receiver.transform);
-      }
       if (event.payload.receiver.action === "copy-to-stream") {
         const receivingStreamPath = event.payload.receiver.receivingStreamPath;
         const existingSubscriptionsForReceiver = Object.entries(
@@ -443,31 +271,11 @@ export class StreamCoreProcessor {
         args.event,
         "events.iterate.com/stream/subscription-removed",
       );
-      const expectedAuthority =
-        event.payload.reason === "requested" ? "public" : ("core-event" as const);
-      if (args.authority !== expectedAuthority) {
-        throw new Error(
-          event.payload.reason === "requested"
-            ? "requested subscription removals must come from a public command"
-            : `${event.payload.reason} subscription removals are platform-authored after the configured end condition is reached`,
-        );
+      if (args.authority !== "public") {
+        throw new Error("requested subscription removals must come from a public command");
       }
       if (args.state.subscriptions.outbound.byKey[event.payload.subscriptionKey] === undefined) {
         throw new Error(`subscription "${event.payload.subscriptionKey}" does not exist`);
-      }
-    }
-
-    if (isFirstHand && args.event.type === "events.iterate.com/stream/copy-list-resend-requested") {
-      const event = parseCoreEventInput(
-        args.event,
-        "events.iterate.com/stream/copy-list-resend-requested",
-      );
-      const receiver =
-        args.state.copyListDeliveriesByReceivingStream[event.payload.receivingStreamPath];
-      if (receiver?.status !== "blocked") {
-        throw new Error(
-          `receiving stream "${event.payload.receivingStreamPath}" has no blocked copy list to resend`,
-        );
       }
     }
 
@@ -478,13 +286,8 @@ export class StreamCoreProcessor {
       case "events.iterate.com/stream/woken":
       case "events.iterate.com/stream/connection-opened":
       case "events.iterate.com/stream/connection-closed":
-      case "events.iterate.com/stream/copy-list-recorded":
       case "events.iterate.com/stream/subscription-removed":
       case "events.iterate.com/stream/subscription-delivery-halted":
-      case "events.iterate.com/stream/copy-list-delivery-blocked":
-      case "events.iterate.com/stream/copy-list-confirmed":
-      case "events.iterate.com/stream/copy-list-resend-requested":
-      case "events.iterate.com/stream/copied-events-dropped":
         return;
       default:
         throw new StreamReceiverUnavailableError(
@@ -508,33 +311,43 @@ export class StreamCoreProcessor {
       maxOffset: args.event.offset,
     };
 
-    const copiedFrom = args.event.source?.copiedFrom?.at(-1);
-    const receivedSubscription = currentInboundSubscriptionForHop(next, copiedFrom);
-    if (copiedFrom !== undefined && receivedSubscription !== undefined) {
-      const { subscription, source } = receivedSubscription;
-      next = {
-        ...next,
-        subscriptions: {
-          ...next.subscriptions,
-          inbound: {
-            ...next.subscriptions.inbound,
-            bySourcePath: {
-              ...next.subscriptions.inbound.bySourcePath,
-              [copiedFrom.path]: {
-                ...source,
-                byKey: {
-                  ...source.byKey,
-                  [copiedFrom.subscriptionKey]: {
-                    ...subscription,
-                    numEventsReceived: subscription.numEventsReceived + 1,
+    // Passive inbound records: every committed copied event carries its
+    // delivery stamp on the last `source.copiedFrom` hop, so replaying the
+    // log reconstructs the fence coordinates and counters identically.
+    const hop = args.event.source?.copiedFrom?.at(-1);
+    if (hop !== undefined) {
+      const byKey = next.subscriptions.inbound.bySourcePath[hop.path] ?? {};
+      const recorded = byKey[hop.subscriptionKey];
+      const sameLifetime =
+        recorded !== undefined &&
+        recorded.streamId === hop.streamId &&
+        recorded.streamCreatedAt === hop.streamCreatedAt;
+      // Append-time validation rejects strictly-older stamps, so a replayed
+      // log never regresses a record; skip defensively if one somehow would.
+      if (recorded === undefined || compareSourceStamp(hop, recorded) >= 0) {
+        next = {
+          ...next,
+          subscriptions: {
+            ...next.subscriptions,
+            inbound: {
+              ...next.subscriptions.inbound,
+              bySourcePath: {
+                ...next.subscriptions.inbound.bySourcePath,
+                [hop.path]: {
+                  ...byKey,
+                  [hop.subscriptionKey]: {
+                    streamId: hop.streamId,
+                    streamCreatedAt: hop.streamCreatedAt,
+                    cursorChangedAtSourceOffset: hop.cursorChangedAtSourceOffset,
+                    numEventsReceived: sameLifetime ? recorded.numEventsReceived + 1 : 1,
                     lastEventReceivedAt: args.event.createdAt,
                   },
                 },
               },
             },
           },
-        },
-      };
+        };
+      }
     }
 
     if (
@@ -616,19 +429,6 @@ export class StreamCoreProcessor {
         const subscriptionKeyWasGenerated =
           event.payload.subscriptionKey === undefined ||
           existing?.subscriptionKeyWasGenerated === true;
-        const changedPaths = new Set<string>();
-        if (existing?.configuration.receiver.action === "copy-to-stream") {
-          changedPaths.add(existing.configuration.receiver.receivingStreamPath);
-        }
-        if (event.payload.receiver.action === "copy-to-stream") {
-          changedPaths.add(event.payload.receiver.receivingStreamPath);
-        }
-        const copyListDeliveriesByReceivingStream = markCopyListsPending({
-          lists: next.copyListDeliveriesByReceivingStream,
-          subscriptionKey,
-          sourceOffset: event.offset,
-          directlyChangedPaths: changedPaths,
-        });
         return {
           ...next,
           subscriptions: {
@@ -646,88 +446,12 @@ export class StreamCoreProcessor {
               },
             },
           },
-          copyListDeliveriesByReceivingStream,
-        };
-      }
-      case "events.iterate.com/stream/copy-list-recorded": {
-        const event = parseCoreEvent(args.event, "events.iterate.com/stream/copy-list-recorded");
-        const sourcePath = event.payload.source.path;
-        const existing = next.subscriptions.inbound.bySourcePath[sourcePath];
-        // This state check orders lists while a non-empty record exists.
-        // Recording an empty list removes that record, so
-        // recordCopyListFromSource also compares against the latest matching
-        // journal event before appending. That log check is authoritative
-        // across an empty-list removal.
-        if (
-          existing !== undefined &&
-          compareSourceListPosition(
-            {
-              streamId: event.payload.source.streamId,
-              streamCreatedAt: event.payload.source.streamCreatedAt,
-              sourceOffset: event.payload.sourceOffset,
-            },
-            existing,
-          ) <= 0
-        ) {
-          return next;
-        }
-        const subscriptionsByKey = Object.fromEntries(
-          Object.entries(event.payload.subscriptionsByKey).map(([subscriptionKey, received]) => {
-            const previous = existing?.byKey[subscriptionKey];
-            const keepCounts =
-              previous !== undefined &&
-              existing?.source.streamId === event.payload.source.streamId &&
-              existing?.source.streamCreatedAt === event.payload.source.streamCreatedAt &&
-              previous.configuredAtSourceOffset === received.configuredAtSourceOffset;
-            return [
-              subscriptionKey,
-              {
-                ...received,
-                numEventsReceived: keepCounts ? previous.numEventsReceived : 0,
-                numEventsDropped: keepCounts ? previous.numEventsDropped : 0,
-                ...(keepCounts && previous.lastEventReceivedAt !== undefined
-                  ? { lastEventReceivedAt: previous.lastEventReceivedAt }
-                  : {}),
-              },
-            ];
-          }),
-        );
-        const bySourcePath = { ...next.subscriptions.inbound.bySourcePath };
-        if (Object.keys(subscriptionsByKey).length === 0) {
-          delete bySourcePath[sourcePath];
-        } else {
-          bySourcePath[sourcePath] = {
-            source: event.payload.source,
-            sourceOffset: event.payload.sourceOffset,
-            byKey: subscriptionsByKey,
-          };
-        }
-        return {
-          ...next,
-          subscriptions: {
-            ...next.subscriptions,
-            inbound: {
-              ...next.subscriptions.inbound,
-              bySourcePath,
-            },
-          },
         };
       }
       case "events.iterate.com/stream/subscription-removed": {
         const event = parseCoreEvent(args.event, "events.iterate.com/stream/subscription-removed");
-        const existing = next.subscriptions.outbound.byKey[event.payload.subscriptionKey];
         const { [event.payload.subscriptionKey]: _removed, ...byKey } =
           next.subscriptions.outbound.byKey;
-        const changedPaths = new Set<string>();
-        if (existing?.configuration.receiver.action === "copy-to-stream") {
-          changedPaths.add(existing.configuration.receiver.receivingStreamPath);
-        }
-        const copyListDeliveriesByReceivingStream = markCopyListsPending({
-          lists: next.copyListDeliveriesByReceivingStream,
-          subscriptionKey: event.payload.subscriptionKey,
-          sourceOffset: event.offset,
-          directlyChangedPaths: changedPaths,
-        });
         return {
           ...next,
           subscriptions: {
@@ -735,97 +459,6 @@ export class StreamCoreProcessor {
             outbound: {
               ...next.subscriptions.outbound,
               byKey,
-            },
-          },
-          copyListDeliveriesByReceivingStream,
-        };
-      }
-      case "events.iterate.com/stream/copy-list-confirmed": {
-        const event = parseCoreEvent(args.event, "events.iterate.com/stream/copy-list-confirmed");
-        const current = next.copyListDeliveriesByReceivingStream[event.payload.receivingStreamPath];
-        if (current?.sourceOffset !== event.payload.sourceOffset) {
-          return next;
-        }
-        // The receiver event is the acknowledged complete list. The source DO
-        // verifies it byte-for-byte before authoring this event, so reduce the
-        // recorded keys from that durable receipt instead of relying on the
-        // separate invariant that every intervening key change bumps the path.
-        const receivingStreamEvent = parseCoreEvent(
-          event.payload.receivingStreamEvent,
-          "events.iterate.com/stream/copy-list-recorded",
-        );
-        const currentSubscriptionKeys = Object.keys(
-          receivingStreamEvent.payload.subscriptionsByKey,
-        ).sort();
-        const hasCurrentSubscriptions = currentSubscriptionKeys.length > 0;
-        const copyListDeliveriesByReceivingStream = {
-          ...next.copyListDeliveriesByReceivingStream,
-        };
-        if (hasCurrentSubscriptions) {
-          copyListDeliveriesByReceivingStream[event.payload.receivingStreamPath] = {
-            sourceOffset: current.sourceOffset,
-            status: "confirmed",
-            subscriptionKeysRecordedByReceiver: currentSubscriptionKeys,
-          };
-        } else {
-          delete copyListDeliveriesByReceivingStream[event.payload.receivingStreamPath];
-        }
-        return {
-          ...next,
-          copyListDeliveriesByReceivingStream,
-        };
-      }
-      case "events.iterate.com/stream/copy-list-delivery-blocked": {
-        const event = parseCoreEvent(
-          args.event,
-          "events.iterate.com/stream/copy-list-delivery-blocked",
-        );
-        const current = next.copyListDeliveriesByReceivingStream[event.payload.receivingStreamPath];
-        if (current?.sourceOffset !== event.payload.sourceOffset || current.status !== "pending") {
-          return next;
-        }
-        return {
-          ...next,
-          copyListDeliveriesByReceivingStream: {
-            ...next.copyListDeliveriesByReceivingStream,
-            [event.payload.receivingStreamPath]: {
-              sourceOffset: event.payload.sourceOffset,
-              status: "blocked",
-              attempts: event.payload.attempts,
-              error: event.payload.error,
-              blockedAt: event.createdAt,
-              subscriptionKeysRecordedByReceiver: current.subscriptionKeysRecordedByReceiver,
-            },
-          },
-        };
-      }
-      case "events.iterate.com/stream/copied-events-dropped": {
-        const event = parseCoreEvent(args.event, "events.iterate.com/stream/copied-events-dropped");
-        const current = currentInboundSubscription(next, {
-          ...event.payload.source,
-          subscriptionKey: event.payload.subscriptionKey,
-        });
-        if (current === undefined) return next;
-        const { subscription, source } = current;
-        return {
-          ...next,
-          subscriptions: {
-            ...next.subscriptions,
-            inbound: {
-              ...next.subscriptions.inbound,
-              bySourcePath: {
-                ...next.subscriptions.inbound.bySourcePath,
-                [event.payload.source.path]: {
-                  ...source,
-                  byKey: {
-                    ...source.byKey,
-                    [event.payload.subscriptionKey]: {
-                      ...subscription,
-                      numEventsDropped: subscription.numEventsDropped + event.payload.count,
-                    },
-                  },
-                },
-              },
             },
           },
         };
@@ -912,27 +545,6 @@ export class StreamCoreProcessor {
               },
             },
           },
-        };
-      }
-      case "events.iterate.com/stream/copy-list-resend-requested": {
-        const event = parseCoreEvent(
-          args.event,
-          "events.iterate.com/stream/copy-list-resend-requested",
-        );
-        const current = next.copyListDeliveriesByReceivingStream[event.payload.receivingStreamPath];
-        return {
-          ...next,
-          copyListDeliveriesByReceivingStream:
-            current === undefined
-              ? next.copyListDeliveriesByReceivingStream
-              : {
-                  ...next.copyListDeliveriesByReceivingStream,
-                  [event.payload.receivingStreamPath]: {
-                    sourceOffset: event.offset,
-                    status: "pending",
-                    subscriptionKeysRecordedByReceiver: current.subscriptionKeysRecordedByReceiver,
-                  },
-                },
         };
       }
       case "events.iterate.com/stream/child-stream-created": {

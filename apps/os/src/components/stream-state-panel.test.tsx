@@ -202,128 +202,9 @@ test("a pushed runtime update does not reload or blank a focused processor snaps
   expect(host.querySelector("[data-testid=serialized-state]")?.textContent).toBe('{"stable":true}');
 });
 
-test("a blocked subscription removal remains visible after its configured row is gone", async () => {
-  const subscriptionKey = "stream:/receiver";
-  const state = streamRuntimeState(8);
-  state.coreProcessorState = CoreProcessorContract.stateSchema.parse({
-    maxOffset: 8,
-    copyListDeliveriesByReceivingStream: {
-      "/receiver": {
-        sourceOffset: 7,
-        status: "blocked",
-        attempts: 6,
-        error: "receiver journal unavailable",
-        blockedAt: "2026-07-18T00:01:00.000Z",
-        subscriptionKeysRecordedByReceiver: [subscriptionKey],
-      },
-    },
-  });
-  liveStateMocks.project.mockReturnValue({
-    value: state,
-    status: "live" as const,
-    error: undefined,
-    refresh: vi.fn(),
-  });
-  liveStateMocks.session.mockReturnValue({
-    value: undefined,
-    status: "connecting",
-    error: undefined,
-    refresh: vi.fn(),
-  });
-
-  const { host, root } = mountPanel();
-  await act(async () => {
-    root.render(
-      <StreamStatePanel
-        {...panelProps({
-          focusedKey: subscriptionKey,
-        })}
-      />,
-    );
-  });
-
-  await vi.waitFor(() => {
-    expect(host.textContent).toContain("Pending subscription removal from /receiver");
-  });
-  expect(host.textContent).toContain("subscription list blocked (attempt 6)");
-  expect(host.textContent).toContain("copy-list source offset#7");
-  expect(host.textContent).toContain("receiver journal unavailable");
-});
-
-test("a moved subscription shows that its new receiver is waiting for the blocked old receiver", async () => {
-  const subscriptionKey = "issues-for-reviewer";
-  const state = streamRuntimeState(9);
-  state.coreProcessorState = CoreProcessorContract.stateSchema.parse({
-    maxOffset: 9,
-    subscriptions: {
-      outbound: {
-        byKey: {
-          [subscriptionKey]: {
-            configuredAtOffset: 8,
-            configuredAt: "2026-07-21T12:00:08.000Z",
-            configuration: {
-              subscriptionKey,
-              receiver: {
-                action: "copy-to-stream",
-                receivingStreamPath: "/agents/b",
-                delivery: {
-                  start: "now",
-                  onFailingEvent: "halt",
-                  includeEphemeral: false,
-                },
-              },
-            },
-          },
-        },
-      },
-    },
-    copyListDeliveriesByReceivingStream: {
-      "/agents/a": {
-        sourceOffset: 8,
-        status: "blocked",
-        attempts: 8,
-        error: "old receiver unavailable",
-        blockedAt: "2026-07-21T12:01:00.000Z",
-        subscriptionKeysRecordedByReceiver: [subscriptionKey],
-      },
-      "/agents/b": {
-        sourceOffset: 8,
-        status: "pending",
-        subscriptionKeysRecordedByReceiver: [],
-      },
-    },
-  });
-  liveStateMocks.project.mockReturnValue({
-    value: state,
-    status: "live" as const,
-    error: undefined,
-    refresh: vi.fn(),
-  });
-  liveStateMocks.session.mockReturnValue({
-    value: undefined,
-    status: "connecting",
-    error: undefined,
-    refresh: vi.fn(),
-  });
-
-  const { host, root } = mountPanel();
-  await act(async () => {
-    root.render(<StreamStatePanel {...panelProps({ focusedKey: subscriptionKey })} />);
-  });
-
-  await vi.waitFor(() => {
-    expect(host.textContent).toContain("waiting for blocked subscription removal from /agents/a");
-  });
-  expect(host.textContent).toContain(
-    "Waiting for these streams to confirm removal of this subscription: /agents/a (blocked at #8)",
-  );
-  expect(host.textContent).toContain("durable list statepending");
-});
-
 test.each([
   ["beginning", "beginning (all history)"],
   ["now", "now (from configure time)"],
-  [{ afterOffset: 4 }, "after offset #4"],
 ] as const)("a durable receiver renders the stored %j start position", async (start, label) => {
   const subscriptionKey = "copy-from-offset";
   const state = streamRuntimeState(8);
@@ -343,7 +224,6 @@ test.each([
                 delivery: {
                   start,
                   onFailingEvent: "halt",
-                  includeEphemeral: false,
                 },
               },
             },
@@ -354,7 +234,6 @@ test.each([
   });
   state.runtime.subscriptions[subscriptionKey] = {
     acknowledgedOffset: 4,
-    acknowledgedEvents: 0,
     lag: 4,
     attempt: 0,
     nextAttemptAt: null,
@@ -382,7 +261,7 @@ test.each([
   await vi.waitFor(() => expect(host.textContent).toContain(label));
 });
 
-test("core state renders subscriptions inside each source-stream record", async () => {
+test("core state renders the passive inbound record for each source subscription", async () => {
   const { host, root } = mountPanel();
   await act(async () => {
     root.render(
@@ -395,16 +274,12 @@ test("core state renders subscriptions inside each source-stream record", async 
             inbound: {
               bySourcePath: {
                 "/source": {
-                  source: { projectId: "prj_source", path: "/source" },
-                  sourceOffset: 11,
-                  byKey: {
-                    "copy-to-receiver": {
-                      configuration: {},
-                      configuredAtSourceOffset: 7,
-                      numEventsReceived: 3,
-                      numEventsDropped: 1,
-                      lastEventReceivedAt: "2026-07-21T12:00:00.000Z",
-                    },
+                  "copy-to-receiver": {
+                    streamId: "11111111-1111-4111-8111-111111111111",
+                    streamCreatedAt: "2026-07-21T11:00:00.000Z",
+                    cursorChangedAtSourceOffset: 7,
+                    numEventsReceived: 3,
+                    lastEventReceivedAt: "2026-07-21T12:00:00.000Z",
                   },
                 },
               },
@@ -415,8 +290,8 @@ test("core state renders subscriptions inside each source-stream record", async 
     );
   });
 
-  expect(host.textContent).toContain("prj_source /source");
-  expect(host.textContent).toContain("copy-to-receiver · list from source offset #11");
+  expect(host.textContent).toContain("/source");
+  expect(host.textContent).toContain("copy-to-receiver");
   expect(host.textContent).toContain("3 received");
   expect(host.textContent).toContain("last event 2026-07-21T12:00:00.000Z");
 });
@@ -506,7 +381,6 @@ function streamRuntimeState(maxOffset: number): StreamRuntimeDebugState {
         },
       },
       subscriptions: {},
-      copyListRetries: {},
       metrics: {
         measuredSince: "2026-07-18T00:00:00.000Z",
         reportedAt: "2026-07-18T00:00:00.000Z",

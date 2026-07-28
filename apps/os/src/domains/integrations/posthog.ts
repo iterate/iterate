@@ -32,7 +32,6 @@ export function posthogSubscriptionEvent() {
         expression: ["integrations", "posthog", "processEventBatch"],
         delivery: {
           start: "beginning",
-          includeEphemeral: false,
           onFailingEvent: "halt",
         },
       },
@@ -160,9 +159,8 @@ function posthogEvents(args: {
     projectId,
   ])}`;
   const groups = { project: projectId };
-  // Capture-side filtering is deliberate defense in depth: subscriptions appended
-  // before includeEphemeral flipped to false may still deliver ephemeral rows.
-  // Never index those in PostHog.
+  // Capture-side filtering is deliberate defense in depth: durable lanes
+  // never deliver ephemeral rows, but never index one in PostHog either way.
   const durableEvents = batch.events.filter((event) => event.ephemeral !== true);
   const occurrences = durableEvents.map((event) => {
     const createdAt = normalizeEventTimestamp(event.createdAt);

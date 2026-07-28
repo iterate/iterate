@@ -210,12 +210,11 @@ new project stream
 ```
 
 The conventional subscription key is `iterate-platform-posthog`. It delivers
-from offset zero, explicitly excludes ephemeral rows, parks rather than
-poison-skipping, and uses the fixed expression
+from offset zero (durable subscriptions never deliver ephemeral rows), parks
+rather than poison-skipping, and uses the fixed expression
 `["integrations", "posthog", "processEventBatch"]`. This is normal stream
 configuration: its key is not protected, and the subscription may be replaced
-or removed through the normal lifecycle. `includeEphemeral` is a generic
-push/webhook option rather than a private platform power.
+or removed through the normal lifecycle.
 `itx.integrations.posthog` is a fixed first-party receiver with deployment
 credentials; projects do not configure their own PostHog connection.
 The subscription itself remains ordinary. The host does, however, mint a

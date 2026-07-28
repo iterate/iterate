@@ -401,29 +401,6 @@ describe("StreamConnections hosted delivery watchdog", () => {
     expect(disposed).not.toHaveBeenCalled();
   });
 
-  it("withholds source-private copy-list confirmations from hosted processors", async () => {
-    const h = harness({
-      events: [streamEvent(1, "events.iterate.com/stream/copy-list-confirmed"), streamEvent(2)],
-    });
-    const calls: DeliveryCall[] = [];
-    const connection = h.connections.openHosted({
-      connectionKey: "processor",
-      expectedHostedDelivery: h.expectedDelivery,
-      processEventBatch: retainedProcessEventBatch(calls, () => undefined),
-      replayAfterOffset: 0,
-    });
-
-    connection.sendQueued();
-    expect(calls).toHaveLength(1);
-    expect(calls[0]!.batch.events).toEqual([]);
-    expect(calls[0]!.batch.scannedThroughOffset).toBe(1);
-
-    calls[0]!.report("ok");
-    await flushMicrotasks();
-    expect(calls).toHaveLength(2);
-    expect(calls[1]!.batch.events.map((event) => event.offset)).toEqual([2]);
-  });
-
   it("turns a live callback timeout into a counted failure and ignores its late result", async () => {
     const h = harness();
     const calls: DeliveryCall[] = [];

@@ -109,7 +109,7 @@ export function PresenceAvatar({
  */
 /** Stored instruction for sending matching events to one receiver. */
 type SubscriptionDetails = {
-  subscriptionAction: "processor-wake" | "copy-to-stream" | "itx-call" | "webhook-post";
+  subscriptionAction: "processor-wake" | "copy-to-stream" | "itx-call";
   configuredAtOffset?: number;
   halted?: {
     reason: "delivery-failed";
@@ -117,7 +117,7 @@ type SubscriptionDetails = {
     attempts: number;
     error?: string;
   };
-  /** The delivery target as the itx call (or webhook POST) it actually is. */
+  /** The delivery target as the itx call it actually is. */
   deliveryLabel?: string;
   /** Destination path for a copy. */
   destinationStream?: string;
@@ -131,28 +131,9 @@ type SubscriptionDetails = {
   eventTypes?: string[];
   /** Optional JSONata filter over the whole event. */
   condition?: string;
-  /** Optional JSONata constructor for a copy. */
-  transform?: string;
-  start?: "beginning" | "now" | { afterOffset: number };
-  includeEphemeral?: boolean;
+  start?: "beginning" | "now";
   onFailingEvent?: "halt" | "skip";
-  webhookUrl?: string;
 };
-
-type ReceivingStreamCopyListState =
-  | {
-      sourceOffset: number;
-      status: "pending" | "confirmed";
-      subscriptionKeysRecordedByReceiver: string[];
-    }
-  | {
-      sourceOffset: number;
-      status: "blocked";
-      attempts: number;
-      error: string;
-      blockedAt: string;
-      subscriptionKeysRecordedByReceiver: string[];
-    };
 
 type ProcessorPanelEntry = {
   key: string;
@@ -168,13 +149,7 @@ type ProcessorPanelEntry = {
   config?: SubscriptionDetails;
   subscriptionProgress?: StreamRuntimeDebugState["runtime"]["subscriptions"][string];
   runtimeConnection?: StreamRuntimeDebugState["runtime"]["connections"][string];
-  copyListRetry?: StreamRuntimeDebugState["runtime"]["copyListRetries"][string];
   receivingStreamPath?: string;
-  copyListState?: ReceivingStreamCopyListState;
-  waitingForSubscriptionRemovalFrom?: Array<{
-    receivingStreamPath: string;
-    state: ReceivingStreamCopyListState;
-  }>;
 };
 
 const CORE_PROCESSOR_KEY = "__stream-core__";
@@ -188,8 +163,6 @@ const CORE_PROCESSOR_ANNOUNCEMENT: AgentUiProcessorAnnouncement = {
     "events.iterate.com/stream/connection-opened",
     "events.iterate.com/stream/connection-closed",
     "events.iterate.com/stream/subscription-configured",
-    "events.iterate.com/stream/copy-list-recorded",
-    "events.iterate.com/stream/copy-list-delivery-blocked",
     "events.iterate.com/stream/subscription-delivery-halted",
     "events.iterate.com/stream/subscription-delivery-resumed",
   ],
@@ -198,12 +171,7 @@ const CORE_PROCESSOR_ANNOUNCEMENT: AgentUiProcessorAnnouncement = {
     { type: "events.iterate.com/stream/woken" },
     { type: "events.iterate.com/stream/configured" },
     { type: "events.iterate.com/stream/subscription-configured" },
-    { type: "events.iterate.com/stream/copy-list-recorded" },
     { type: "events.iterate.com/stream/subscription-removed" },
-    { type: "events.iterate.com/stream/copy-list-confirmed" },
-    { type: "events.iterate.com/stream/copy-list-delivery-blocked" },
-    { type: "events.iterate.com/stream/copy-list-resend-requested" },
-    { type: "events.iterate.com/stream/copied-events-dropped" },
     { type: "events.iterate.com/stream/connection-opened" },
     { type: "events.iterate.com/stream/connection-closed" },
     { type: "events.iterate.com/stream/paused" },
@@ -818,7 +786,6 @@ function buildProcessorPanelEntries(
 ): ProcessorPanelEntry[] {
   const entries = new Map<string, ProcessorPanelEntry>();
   const configured = readConfiguredSubscriptions(streamRuntime?.coreProcessorState);
-  const copyLists = readCopyListsByReceivingStream(streamRuntime?.coreProcessorState);
 
   entries.set(CORE_PROCESSOR_KEY, {
     key: CORE_PROCESSOR_KEY,
@@ -859,7 +826,6 @@ function buildProcessorPanelEntries(
             config,
           }),
       subscriptionProgress: streamRuntime?.runtime.subscriptions[key],
-      copyListRetry: readCopyListRetry(streamRuntime, config?.destinationStream),
     });
   }
 
@@ -895,7 +861,6 @@ function buildProcessorPanelEntries(
             config,
           }),
       subscriptionProgress: streamRuntime?.runtime.subscriptions[entryKey],
-      copyListRetry: readCopyListRetry(streamRuntime, config?.destinationStream),
     });
   }
 
@@ -915,8 +880,10 @@ function buildProcessorPanelEntries(
         // Prefer the receiver label over a generic presence description.
         description: config.deliveryLabel ?? current.description,
         subscriptionProgress,
-        copyListRetry: readCopyListRetry(streamRuntime, config.destinationStream),
         connected: runtimeConnection !== undefined,
+        ...(config.destinationStream === undefined
+          ? {}
+          : { receivingStreamPath: config.destinationStream }),
       });
       continue;
     }
@@ -933,71 +900,12 @@ function buildProcessorPanelEntries(
       configuredAtOffset: config.configuredAtOffset,
       config,
       subscriptionProgress,
-      copyListRetry: readCopyListRetry(streamRuntime, config.destinationStream),
+      ...(config.destinationStream === undefined
+        ? {}
+        : { receivingStreamPath: config.destinationStream }),
       ...(runtimeConnection === undefined
         ? {}
         : { runtimeConnection, connectionKind: runtimeConnection.kind }),
-    });
-  }
-
-  // Add durable copy-list state after merging configuration and live
-  // callbacks. A moved key can be waiting for one or more old receivers to
-  // acknowledge its removal; the last acknowledged key list makes that wait
-  // explicit without consulting SQLite retry rows or rereading the event log.
-  for (const [key, entry] of entries) {
-    const destinationStream = entry.config?.destinationStream;
-    if (destinationStream === undefined) continue;
-    const waitingForSubscriptionRemovalFrom = Object.entries(copyLists).flatMap(
-      ([receivingStreamPath, state]) =>
-        receivingStreamPath !== destinationStream &&
-        state.status !== "confirmed" &&
-        state.subscriptionKeysRecordedByReceiver.includes(key)
-          ? [{ receivingStreamPath, state }]
-          : [],
-    );
-    entries.set(key, {
-      ...entry,
-      receivingStreamPath: destinationStream,
-      copyListState: copyLists[destinationStream],
-      ...(waitingForSubscriptionRemovalFrom.length === 0
-        ? {}
-        : { waitingForSubscriptionRemovalFrom }),
-    });
-  }
-
-  // A pending empty list remains a durable fact after its final subscription has
-  // gone. Keep the receiving stream visible even if the retry scheduler row is
-  // temporarily missing or being repaired.
-  for (const [receivingStreamPath, listState] of Object.entries(copyLists)) {
-    if (listState.status === "confirmed") continue;
-    const matchingEntry = [...entries.values()].some(
-      (entry) => entry.receivingStreamPath === receivingStreamPath,
-    );
-    if (matchingEntry) continue;
-    const entryKey = `stream:${receivingStreamPath}`;
-    entries.set(entryKey, {
-      key: entryKey,
-      rowKind: "durable-subscription",
-      connected: false,
-      description: `Pending subscription removal from ${receivingStreamPath}`,
-      receivingStreamPath,
-      copyListState: listState,
-      copyListRetry: readCopyListRetry(streamRuntime, receivingStreamPath),
-    });
-  }
-
-  // A retry row with no corresponding reduced-state entry is a repairable
-  // scheduler anomaly, not proof that a list is owed. Surface it explicitly.
-  for (const listRetry of Object.values(streamRuntime?.runtime.copyListRetries ?? {})) {
-    if (copyLists[listRetry.receivingStreamPath] !== undefined) continue;
-    const entryKey = `orphaned-copy-list-retry:${listRetry.receivingStreamPath}`;
-    entries.set(entryKey, {
-      key: entryKey,
-      rowKind: "durable-subscription",
-      connected: false,
-      description: `Retry row without durable copy-list state for ${listRetry.receivingStreamPath}`,
-      receivingStreamPath: listRetry.receivingStreamPath,
-      copyListRetry: listRetry,
     });
   }
 
@@ -1027,7 +935,7 @@ function processorEntrySections(entries: readonly ProcessorPanelEntry[]): Array<
     },
     {
       title: "Durable subscriptions",
-      emptyLabel: "No copy, ITX-call, or webhook-post subscriptions are configured.",
+      emptyLabel: "No copy or ITX-call subscriptions are configured.",
       entries: entries.filter((entry) => entry.rowKind === "durable-subscription"),
     },
     {
@@ -1054,7 +962,7 @@ function compareProcessorEntries(a: ProcessorPanelEntry, b: ProcessorPanelEntry)
 
 /**
  * A missing live connection is normal: hosted processors are woken when their
- * checkpoint lags; copy, ITX-call, and webhook subscriptions are caught
+ * checkpoint lags; copy and ITX-call subscriptions are caught
  * up, sending, waiting to retry, or halted.
  */
 function processorEntryStatus(entry: ProcessorPanelEntry, busy: boolean): string {
@@ -1062,23 +970,6 @@ function processorEntryStatus(entry: ProcessorPanelEntry, busy: boolean): string
   if (entry.connected) {
     if (busy && isLlmish(entry)) return "processing";
     return entry.connectionKind === "hosted" ? "hosted callback open" : "session callback open";
-  }
-  const listRetry = entry.copyListRetry;
-  const removalWaits = entry.waitingForSubscriptionRemovalFrom ?? [];
-  if (removalWaits.length > 0) {
-    const blocked = removalWaits.filter(({ state }) => state.status === "blocked");
-    const paths = (blocked.length > 0 ? blocked : removalWaits)
-      .map(({ receivingStreamPath }) => receivingStreamPath)
-      .join(", ");
-    return blocked.length > 0
-      ? `waiting for blocked subscription removal from ${paths}`
-      : `waiting for subscription removal from ${paths}`;
-  }
-  if (entry.copyListState?.status === "blocked") {
-    return `subscription list blocked (attempt ${entry.copyListState.attempts})`;
-  }
-  if (listRetry?.nextAttemptAt != null) {
-    return `subscription list retry (attempt ${listRetry.attempt})`;
   }
   const subscriptionProgress = entry.subscriptionProgress;
   if (entry.config?.halted != null) {
@@ -1103,14 +994,6 @@ function processorEntryStatus(entry: ProcessorPanelEntry, busy: boolean): string
   return "disconnected";
 }
 
-function readCopyListRetry(
-  streamRuntime: StreamRuntimeDebugState | undefined,
-  receivingStreamPath: string | undefined,
-): StreamRuntimeDebugState["runtime"]["copyListRetries"][string] | undefined {
-  if (receivingStreamPath === undefined) return undefined;
-  return streamRuntime?.runtime.copyListRetries[receivingStreamPath];
-}
-
 function readHostedConnectionForSubscription(
   streamRuntime: StreamRuntimeDebugState | undefined,
   subscriptionKey: string,
@@ -1118,48 +1001,6 @@ function readHostedConnectionForSubscription(
   return Object.values(streamRuntime?.runtime.connections ?? {}).find(
     (connection) => connection.kind === "hosted" && connection.subscriptionKey === subscriptionKey,
   );
-}
-
-function readCopyListsByReceivingStream(
-  value: unknown,
-): Record<string, ReceivingStreamCopyListState> {
-  const state = readRuntimeRecord(value);
-  const copyLists = readRuntimeRecord(state?.copyListDeliveriesByReceivingStream);
-  if (copyLists == null) return {};
-  return Object.fromEntries(
-    Object.entries(copyLists).flatMap(([receivingStreamPath, candidate]) => {
-      const parsed = readReceivingStreamCopyListState(candidate);
-      return parsed === null ? [] : [[receivingStreamPath, parsed]];
-    }),
-  );
-}
-
-function readReceivingStreamCopyListState(value: unknown): ReceivingStreamCopyListState | null {
-  const state = readRuntimeRecord(value);
-  if (state === undefined) return null;
-  const sourceOffset = readNumber(state, "sourceOffset");
-  const status = state.status;
-  if (
-    sourceOffset == null ||
-    (status !== "pending" && status !== "confirmed" && status !== "blocked")
-  ) {
-    return null;
-  }
-  const subscriptionKeysRecordedByReceiver =
-    readStringArray(state.subscriptionKeysRecordedByReceiver) ?? [];
-  if (status !== "blocked") return { sourceOffset, status, subscriptionKeysRecordedByReceiver };
-  const attempts = readNumber(state, "attempts");
-  if (attempts == null || typeof state.error !== "string" || typeof state.blockedAt !== "string") {
-    return null;
-  }
-  return {
-    sourceOffset,
-    status,
-    attempts,
-    error: state.error,
-    blockedAt: state.blockedAt,
-    subscriptionKeysRecordedByReceiver,
-  };
 }
 
 function readConfiguredSubscriptions(value: unknown): Record<string, SubscriptionDetails> {
@@ -1184,8 +1025,7 @@ function readSubscriptionDetails(entry: unknown): SubscriptionDetails | null {
   if (
     subscriptionAction !== "processor-wake" &&
     subscriptionAction !== "copy-to-stream" &&
-    subscriptionAction !== "itx-call" &&
-    subscriptionAction !== "webhook-post"
+    subscriptionAction !== "itx-call"
   ) {
     return null;
   }
@@ -1208,15 +1048,11 @@ function readSubscriptionDetails(entry: unknown): SubscriptionDetails | null {
       : undefined;
   const delivery = readRuntimeRecord(receiver?.delivery);
   const deliveryLabel =
-    subscriptionAction === "webhook-post"
-      ? typeof receiver?.url === "string"
-        ? `POST ${receiver.url}`
+    subscriptionAction === "copy-to-stream"
+      ? typeof receiver?.receivingStreamPath === "string"
+        ? `copy to ${receiver.receivingStreamPath}`
         : undefined
-      : subscriptionAction === "copy-to-stream"
-        ? typeof receiver?.receivingStreamPath === "string"
-          ? `copy to ${receiver.receivingStreamPath}`
-          : undefined
-        : formatItxExpression(receiver?.expression);
+      : formatItxExpression(receiver?.expression);
   const destinationStream =
     subscriptionAction === "copy-to-stream" && typeof receiver?.receivingStreamPath === "string"
       ? receiver.receivingStreamPath
@@ -1227,22 +1063,11 @@ function readSubscriptionDetails(entry: unknown): SubscriptionDetails | null {
     typeof filter?.condition === "string" && filter.condition.trim() !== ""
       ? filter.condition
       : undefined;
-  const transform =
-    subscriptionAction === "copy-to-stream" &&
-    typeof receiver?.transform === "string" &&
-    receiver.transform.trim() !== ""
-      ? receiver.transform
-      : undefined;
-  const start = readSubscriptionStart(delivery?.start);
+  const start =
+    delivery?.start === "beginning" || delivery?.start === "now" ? delivery.start : undefined;
   const onFailingEvent =
     delivery?.onFailingEvent === "halt" || delivery?.onFailingEvent === "skip"
       ? delivery.onFailingEvent
-      : undefined;
-  const includeEphemeral =
-    typeof delivery?.includeEphemeral === "boolean" ? delivery.includeEphemeral : undefined;
-  const webhookUrl =
-    subscriptionAction === "webhook-post" && typeof receiver?.url === "string"
-      ? receiver.url
       : undefined;
   const note =
     typeof payload?.description === "string" && payload.description.trim() !== ""
@@ -1258,11 +1083,8 @@ function readSubscriptionDetails(entry: unknown): SubscriptionDetails | null {
     ...(note === undefined ? {} : { note }),
     ...(eventTypes === undefined ? {} : { eventTypes }),
     ...(condition === undefined ? {} : { condition }),
-    ...(transform === undefined ? {} : { transform }),
     ...(start === undefined ? {} : { start }),
-    ...(includeEphemeral === undefined ? {} : { includeEphemeral }),
     ...(onFailingEvent === undefined ? {} : { onFailingEvent }),
-    ...(webhookUrl === undefined ? {} : { webhookUrl }),
   };
 }
 
@@ -1305,16 +1127,6 @@ function readStringArray(value: unknown): string[] | undefined {
   return items.length === 0 ? undefined : items;
 }
 
-function readSubscriptionStart(
-  value: unknown,
-): "beginning" | "now" | { afterOffset: number } | undefined {
-  if (value === "beginning" || value === "now") return value;
-  const record = readRuntimeRecord(value);
-  if (record == null) return undefined;
-  const afterOffset = readNumber(record, "afterOffset");
-  return afterOffset == null ? undefined : { afterOffset };
-}
-
 /**
  * Labeled multi-line overview under a durable subscription row: destination,
  * event types, condition, transform. Plain "a · b · c" made event types look
@@ -1329,15 +1141,13 @@ function ConfiguredFilterSummary({ config }: { config: SubscriptionDetails | und
     config.note !== undefined ||
     config.destinationStream !== undefined ||
     hasEventFilter ||
-    config.condition !== undefined ||
-    config.transform !== undefined;
+    config.condition !== undefined;
   if (!hasExtra) return null;
 
   const eventTypes = hasEventFilter
     ? config.eventTypes!
     : config.destinationStream !== undefined ||
         config.condition !== undefined ||
-        config.transform !== undefined ||
         config.note !== undefined
       ? null // "all event types" shown as text, not chips
       : undefined;
@@ -1376,11 +1186,6 @@ function ConfiguredFilterSummary({ config }: { config: SubscriptionDetails | und
           <span className="break-all font-mono text-foreground/80">
             {config.condition.length > 80 ? `${config.condition.slice(0, 77)}…` : config.condition}
           </span>
-        </ConfiguredFilterLine>
-      )}
-      {config.transform == null ? null : (
-        <ConfiguredFilterLine label="transform">
-          <span className="text-foreground/70">JSONata (see detail)</span>
         </ConfiguredFilterLine>
       )}
     </span>
@@ -1651,11 +1456,9 @@ function SubscriptionDetail({ config }: { config: SubscriptionDetails }) {
   const heading =
     config.subscriptionAction === "copy-to-stream"
       ? "Copy destination"
-      : config.subscriptionAction === "webhook-post"
-        ? "Webhook POST"
-        : config.subscriptionAction === "itx-call"
-          ? "ITX-expression receiver"
-          : "Hosted processor";
+      : config.subscriptionAction === "itx-call"
+        ? "ITX-expression receiver"
+        : "Hosted processor";
   const eventTypes =
     config.eventTypes == null || config.eventTypes.includes("*") ? null : config.eventTypes;
   const startLabel =
@@ -1663,17 +1466,13 @@ function SubscriptionDetail({ config }: { config: SubscriptionDetails }) {
       ? null
       : config.start === "beginning"
         ? "beginning (all history)"
-        : config.start === "now"
-          ? "now (from configure time)"
-          : `after offset #${config.start.afterOffset}`;
+        : "now (from configure time)";
   const genericBlurb =
     config.subscriptionAction === "copy-to-stream"
       ? "Matching events are appended to the destination stream in order with source provenance."
-      : config.subscriptionAction === "webhook-post"
-        ? "Each matching event is POSTed as JSON to the configured URL."
-        : config.subscriptionAction === "itx-call"
-          ? "Matching events are delivered in awaited batches to the configured ITX expression."
-          : "The hosted processor stores its checkpoint. When events are waiting, the source calls it and sends batches through the returned callback.";
+      : config.subscriptionAction === "itx-call"
+        ? "Matching events are delivered in awaited batches to the configured ITX expression."
+        : "The hosted processor stores its checkpoint. When events are waiting, the source calls it and sends batches through the returned callback.";
 
   return (
     <div className="flex flex-col gap-3">
@@ -1696,17 +1495,7 @@ function SubscriptionDetail({ config }: { config: SubscriptionDetails }) {
             {config.destinationStream}
           </DetailField>
         )}
-        {config.webhookUrl == null || config.deliveryLabel != null ? null : (
-          <DetailField label="url" mono>
-            {config.webhookUrl}
-          </DetailField>
-        )}
         {startLabel == null ? null : <DetailField label="starts from">{startLabel}</DetailField>}
-        {config.includeEphemeral == null ? null : (
-          <DetailField label="ephemeral events">
-            {config.includeEphemeral ? "included" : "excluded"}
-          </DetailField>
-        )}
         {config.onFailingEvent == null ? null : (
           <DetailField label="on failing event">{config.onFailingEvent}</DetailField>
         )}
@@ -1742,19 +1531,6 @@ function SubscriptionDetail({ config }: { config: SubscriptionDetails }) {
           </div>
           <p className="mt-1 text-[11px] text-muted-foreground">
             JSONata over the whole event — must evaluate to exactly true.
-          </p>
-        </div>
-      )}
-
-      {config.transform == null ? null : (
-        <div>
-          <SectionHeading>Transform</SectionHeading>
-          <div className="rounded-xl bg-muted/40 px-3 py-2 font-mono text-xs leading-relaxed text-foreground/80 break-all whitespace-pre-wrap">
-            {config.transform}
-          </div>
-          <p className="mt-1 text-[11px] text-muted-foreground">
-            JSONata constructor for the received event body. Omitted fields copy verbatim;
-            provenance is stamped after the transform.
           </p>
         </div>
       )}
@@ -1872,18 +1648,12 @@ function EventDeliverySummary({ entry }: { entry: ProcessorPanelEntry }) {
     entry.connectionKind == null &&
     entry.subscriptionAction == null &&
     entry.subscriptionProgress == null &&
-    entry.copyListRetry == null &&
-    entry.copyListState == null &&
-    entry.waitingForSubscriptionRemovalFrom == null &&
     entry.configuredAtOffset == null
   ) {
     return null;
   }
   const runtime = entry.subscriptionProgress;
   const connection = entry.runtimeConnection;
-  const listRetry = entry.copyListRetry;
-  const listState = entry.copyListState;
-  const removalWaits = entry.waitingForSubscriptionRemovalFrom ?? [];
   const hasLatency =
     connection != null ||
     runtime?.completionLatencyMs != null ||
@@ -1947,7 +1717,7 @@ function EventDeliverySummary({ entry }: { entry: ProcessorPanelEntry }) {
           />
           <RuntimeStateStat
             label="delivered"
-            // Live connections report events; copy, ITX-call, and webhook
+            // Live connections report events; copy and ITX-call
             // subscriptions report bytes this incarnation (the durable sending row
             // does not count events).
             value={
@@ -1960,49 +1730,10 @@ function EventDeliverySummary({ entry }: { entry: ProcessorPanelEntry }) {
           />
         </div>
       ) : null}
-      {listState == null && listRetry == null ? null : (
-        <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
-          <RuntimeStateStat
-            label="copy-list source offset"
-            value={`#${listState?.sourceOffset ?? listRetry?.sourceOffset ?? 0}`}
-          />
-          <RuntimeStateStat
-            label="send attempt"
-            value={String(
-              listState?.status === "blocked" ? listState.attempts : (listRetry?.attempt ?? 0),
-            )}
-          />
-          <RuntimeStateStat
-            label="durable list state"
-            value={listState?.status ?? "orphaned retry row"}
-          />
-          <RuntimeStateStat
-            label="next send"
-            value={
-              listRetry?.nextAttemptAt == null
-                ? "—"
-                : new Date(listRetry.nextAttemptAt).toLocaleString()
-            }
-          />
-        </div>
-      )}
-      {removalWaits.length === 0 ? null : (
-        <div className="mt-2 rounded-xl bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
-          Waiting for these streams to confirm removal of this subscription:{" "}
-          {removalWaits
-            .map(
-              ({ receivingStreamPath, state }) =>
-                `${receivingStreamPath} (${state.status} at #${state.sourceOffset})`,
-            )
-            .join(", ")}
-        </div>
-      )}
       {entry.configuredAtOffset == null &&
       runtime?.lastError == null &&
       entry.config?.halted == null &&
-      runtime?.nextAttemptAt == null &&
-      listRetry == null &&
-      listState?.status !== "blocked" ? null : (
+      runtime?.nextAttemptAt == null ? null : (
         <div className="mt-2 rounded-xl bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
           {entry.configuredAtOffset == null ? null : (
             <div>configured at #{entry.configuredAtOffset}</div>
@@ -2018,18 +1749,6 @@ function EventDeliverySummary({ entry }: { entry: ProcessorPanelEntry }) {
           )}
           {runtime?.lastError == null ? null : (
             <div className="mt-1 text-destructive">{runtime.lastError}</div>
-          )}
-          {listState?.status !== "blocked" ? null : (
-            <div>
-              subscription list durably blocked {new Date(listState.blockedAt).toLocaleString()}{" "}
-              after {listState.attempts} attempts
-            </div>
-          )}
-          {listState?.status !== "blocked" ? null : (
-            <div className="mt-1 text-destructive">{listState.error}</div>
-          )}
-          {listRetry?.lastError == null ? null : (
-            <div className="mt-1 text-destructive">{listRetry.lastError}</div>
           )}
           {connection == null &&
           runtime?.bytesSent == null &&

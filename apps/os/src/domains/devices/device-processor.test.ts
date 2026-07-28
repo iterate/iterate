@@ -165,7 +165,6 @@ describe("DeviceProcessor enrollment", () => {
             delivery: {
               start: "now",
               onFailingEvent: "halt",
-              includeEphemeral: false,
             },
           },
         },

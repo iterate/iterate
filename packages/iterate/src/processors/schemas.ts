@@ -66,9 +66,8 @@ export const StreamEventInput = z.strictObject({
    * Ephemeral events are second-class rows: committed and offset-ordered like
    * any event, but EXCLUDED from range reads unless explicitly requested
    * (`includeEphemeral: true`; point reads by offset or idempotency key
-   * always return them). Durable subscriptions exclude them by default;
-   * copy, ITX-call, and webhook subscriptions may explicitly set
-   * `includeEphemeral: true`, while hosted processors can never opt in. Session connections (`openConnection()`)
+   * always return them). Durable subscriptions NEVER deliver them.
+   * Session connections (`openConnection()`)
    * receive them only when appended after that exact connection opens;
    * historical ephemeral rows are never replayed. The stream may EVICT their
    * rows in the future (memory pressure, DO startup sweeps), so nothing
@@ -108,7 +107,7 @@ export const StreamListItem = z.object({
  * metadata, provenance source, and idempotency key — everything before the
  * stream assigns offset and timestamp at commit. `ephemeral: true` commits a
  * second-class row: excluded from range reads unless `includeEphemeral`,
- * excluded from durable delivery unless a copy, ITX-call, or webhook subscription opts in, and evictable —
+ * never delivered by durable subscriptions, and evictable —
  * for transient signals (LLM streaming chunks) whose durable truth lands as
  * its own event. */
 export type StreamEventInput = z.infer<typeof StreamEventInput>;

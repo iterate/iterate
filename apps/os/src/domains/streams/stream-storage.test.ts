@@ -2,7 +2,6 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import type { StreamEvent } from "iterate/processors";
 import { SqliteSubscriptionCursorStore, StreamEventLog } from "./stream-storage.ts";
-import { CopyListRetryStore } from "./copy-list-retry-store.ts";
 
 function wrapSqlStorage(db: DatabaseSync): SqlStorage {
   return {
@@ -52,34 +51,6 @@ function read(
 function offsets(events: readonly StreamEvent[]) {
   return events.map((readEvent) => readEvent.offset);
 }
-
-describe("StreamEventLog schema", () => {
-  it("rejects old stream storage with an explicit recreation instruction", () => {
-    const db = new DatabaseSync(":memory:");
-    db.exec(`
-      create table events (
-        offset integer primary key autoincrement,
-        type text not null,
-        created_at text not null,
-        idempotency_key text unique,
-        ephemeral integer not null default 0
-      )
-    `);
-
-    try {
-      expect(() => new StreamEventLog(wrapSqlStorage(db), "/legacy-stream")).toThrow(
-        'stream storage at "/legacy-stream" predates the copy subscription schema' +
-          " (missing events columns: copy_list_source_path, " +
-          "copy_list_source_created_at_ms, copy_list_source_stream_id, " +
-          "copy_list_source_offset, copy_list_confirmed_receiving_stream_path, " +
-          "copy_list_confirmed_source_offset); erase and recreate this stream before " +
-          "deploying this version",
-      );
-    } finally {
-      db.close();
-    }
-  });
-});
 
 describe("StreamEventLog.getRange", () => {
   it("pages by offset and limit", () => {
@@ -197,83 +168,6 @@ describe("StreamEventLog.getRange", () => {
     db.prepare("delete from events where offset = 2").run();
     expect(log.highestOffset()).toBe(1);
     expect(log.highestAssignedOffset()).toBe(2);
-  });
-
-  it("indexes the latest copy list by creation time, stream ID, and then source offset", () => {
-    const log = new StreamEventLog(wrapSqlStorage(new DatabaseSync(":memory:")), "/receiver");
-    const received = (
-      offset: number,
-      sourceOffset: number,
-      streamCreatedAt = "2026-07-21T10:00:00.000Z",
-      streamId = "11111111-1111-4111-8111-111111111111",
-    ): StreamEvent => ({
-      type: "events.iterate.com/stream/copy-list-recorded",
-      payload: {
-        source: { projectId: "project", path: "/source", streamId, streamCreatedAt },
-        sourceOffset,
-        subscriptionsByKey: {},
-      },
-      createdAt: new Date(offset).toISOString(),
-      offset,
-      path: "/receiver",
-    });
-    log.insert([
-      received(1, 10),
-      received(2, 12),
-      received(3, 11),
-      received(4, 1, "2026-07-22T10:00:00.000Z"),
-      received(5, 100, "2026-07-21T10:00:00.000Z"),
-      received(6, 1, "2026-07-22T10:00:00.000Z", "22222222-2222-4222-8222-222222222222"),
-    ]);
-
-    expect(log.getLatestCopyListFromSource("/source")).toMatchObject({
-      offset: 6,
-      payload: {
-        source: {
-          streamId: "22222222-2222-4222-8222-222222222222",
-          streamCreatedAt: "2026-07-22T10:00:00.000Z",
-        },
-        sourceOffset: 1,
-      },
-    });
-    expect(log.getLatestCopyListFromSource("/other")).toBeUndefined();
-  });
-
-  it("indexes the latest receiver-recorded list by source offset, not source-event order", () => {
-    const log = new StreamEventLog(wrapSqlStorage(new DatabaseSync(":memory:")), "/source");
-    const recorded = (offset: number, sourceOffset: number): StreamEvent => ({
-      type: "events.iterate.com/stream/copy-list-confirmed",
-      payload: {
-        receivingStreamPath: "/receiver",
-        sourceOffset,
-        receivingStreamEvent: {
-          type: "events.iterate.com/stream/copy-list-recorded",
-          payload: {
-            source: {
-              projectId: "project",
-              path: "/source",
-              streamId: "11111111-1111-4111-8111-111111111111",
-              streamCreatedAt: "2026-07-21T10:00:00.000Z",
-            },
-            sourceOffset,
-            subscriptionsByKey: {},
-          },
-          createdAt: new Date(sourceOffset).toISOString(),
-          offset: sourceOffset,
-          path: "/receiver",
-        },
-      },
-      createdAt: new Date(offset).toISOString(),
-      offset,
-      path: "/source",
-    });
-    log.insert([recorded(1, 10), recorded(2, 12), recorded(3, 11)]);
-
-    expect(log.getLatestCopyListConfirmationForReceivingStream("/receiver")).toMatchObject({
-      offset: 2,
-      payload: { sourceOffset: 12 },
-    });
-    expect(log.getLatestCopyListConfirmationForReceivingStream("/other")).toBeUndefined();
   });
 });
 
@@ -410,85 +304,6 @@ describe("SqliteSubscriptionCursorStore hosted delivery watchdog", () => {
       inFlightDeadlineAt: null,
       inFlightConnectionGeneration: null,
     });
-  });
-});
-
-describe("CopyListRetryStore latest-list retry", () => {
-  function createStore() {
-    const sql = wrapSqlStorage(new DatabaseSync(":memory:"));
-    return new CopyListRetryStore(sql);
-  }
-
-  it("keeps the newest source offset per receiving stream and resets its retry ladder", () => {
-    const store = createStore();
-    store.ensure("/receivers/a", 5);
-    store.fail("/receivers/a", {
-      sourceOffset: 5,
-      attempt: 3,
-      nextAttemptAt: 9_000,
-      error: "receiver unavailable",
-    });
-
-    expect(store.ensure("/receivers/a", 4)).toMatchObject({
-      sourceOffset: 5,
-      attempt: 3,
-      nextAttemptAt: 9_000,
-    });
-    expect(store.ensure("/receivers/a", 6)).toMatchObject({
-      sourceOffset: 6,
-      attempt: 0,
-      nextAttemptAt: null,
-      lastError: null,
-    });
-    expect(store.list()).toHaveLength(1);
-  });
-
-  it("ignores stale failures and deletes after a newer source offset replaces them", () => {
-    const store = createStore();
-    store.ensure("/receivers/a", 10);
-    store.ensure("/receivers/a", 11);
-
-    store.fail("/receivers/a", {
-      sourceOffset: 10,
-      attempt: 8,
-      nextAttemptAt: 12_000,
-      error: "late failure",
-    });
-    store.delete("/receivers/a", 10);
-    expect(store.get("/receivers/a")).toMatchObject({
-      sourceOffset: 11,
-      attempt: 0,
-    });
-
-    store.delete("/receivers/a", 11);
-    expect(store.get("/receivers/a")).toBeUndefined();
-  });
-
-  it("prunes receiver paths that no longer have source-side records", () => {
-    const store = createStore();
-    store.ensure("/receivers/a", 1);
-    store.ensure("/receivers/b", 2);
-
-    store.prune(new Set(["/receivers/b"]));
-
-    expect(store.list()).toEqual([
-      expect.objectContaining({ receivingStreamPath: "/receivers/b", sourceOffset: 2 }),
-    ]);
-  });
-
-  it("does not report or rewrite an unchanged pending row", () => {
-    const sql = wrapSqlStorage(new DatabaseSync(":memory:"));
-    let mutations = 0;
-    const store = new CopyListRetryStore(sql, {
-      onMutation: () => {
-        mutations += 1;
-      },
-    });
-
-    store.ensure("/receivers/a", 4);
-    expect(mutations).toBe(1);
-    store.ensure("/receivers/a", 4);
-    expect(mutations).toBe(1);
   });
 });
 
