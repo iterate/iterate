@@ -20,6 +20,7 @@ import { secretCreationEvents } from "./secret-defaults.ts";
 import type {
   SecretCreateInput,
   SecretDescription,
+  SecretProjectSeedExport,
   SecretRefresh,
   SecretUpdateInput,
 } from "./types.ts";
@@ -378,6 +379,27 @@ export class SecretDurableObject extends DurableObject<Env> {
     // read-your-writes even when the configured subscription's wake is slow
     // or was dropped.
     return describeSecretState(await this.#snapshot());
+  }
+
+  /**
+   * Operator-only recovery input. The public Secret RPC checks admin authority
+   * before calling this method. It returns the current encrypted cell, not
+   * plaintext and not stream history.
+   */
+  async exportForProjectSeed(): Promise<SecretProjectSeedExport> {
+    const state = await this.#snapshot();
+    assertSecretCreated(state, this.#name.path);
+    if (state.encryptedMaterial === null) {
+      throw new Error(`secret has no material: ${this.#name.path}`);
+    }
+    const { offset, ...encrypted } = state.encryptedMaterial;
+    return {
+      egressUrls: state.egress.urls,
+      encrypted,
+      offset,
+      refresh: state.refresh,
+      visibility: state.birthCertificate!.config.visibility,
+    };
   }
 
   /**

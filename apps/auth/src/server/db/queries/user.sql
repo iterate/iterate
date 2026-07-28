@@ -38,6 +38,12 @@ SET name = :name,
   updatedAt = :updatedAt
 WHERE id = :id;
 
+/** @name grantPlatformAdminByUserId */
+UPDATE user
+SET role = 'admin',
+  updatedAt = :updatedAt
+WHERE id = :id;
+
 /** @name insertUser */
 INSERT INTO user (
   id,
