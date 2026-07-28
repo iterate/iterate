@@ -39,9 +39,9 @@
 //   3. building each runner's `durability` adapters from `ctx`
 //      (durable-object-processor-durability.ts);
 //   4. the DO transport boundary — wake sink calls return immediately and
-//      their eventual runner outcome crosses an independent one-way
-//      settlement capability. This must remain transport adaptation only;
-//      frame semantics stay in the runner.
+//      their eventual runner outcome crosses a fresh one-way call through the
+//      processor's own Stream handle. This must remain transport adaptation
+//      only; frame semantics stay in the runner.
 //
 // plus the two responsibilities that live ABOVE any single runner and so
 // cannot move into one: the node's LIVE-STATE assembly and the catch-up door.
@@ -641,13 +641,17 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
       // whole-attempt keepalive, and the trailing unfiltered catch-up. The
       // registry adds only the transport boundary: the stream's sink call
       // returns immediately, while this DO reports the eventual attempt
-      // outcome through the batch's independent one-shot capability.
+      // outcome through a fresh call on this host's own Stream handle.
       //
       // That separation is load-bearing. Processor blockers routinely append
       // back to the same stream that delivered them. Returning `attempt` from
       // this RPC makes the stream pull a result that cannot settle until the
       // nested append reaches the stream again — a cyclic actor-drain tree
-      // that workerd can retain until idle teardown.
+      // that workerd can retain until idle teardown. Reporting through the
+      // per-frame callback has the same hidden coupling: that callback belongs
+      // to the stream→subscriber sink RPC session. A fresh Stream-handle call
+      // is one-way and does not retain that session. The callback remains only
+      // as a mixed-version rollout fallback.
       const opened = await entry.runner.openDelivery();
       // The capability assembles runtime state from its two honest sources:
       // the SNAPSHOT from the runner (the cursor owner) and the runtime bag +
@@ -664,21 +668,42 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
         // effects were never acknowledged (codex review §2).
         checkpointOffset: opened.checkpointOffset,
         sink: (batch) => {
-          const { settleDelivery, ...frame } = batch;
-          let retainedSettlement;
-          try {
-            // This callback parameter must outlive the one-way sink call. One
-            // retained duplicate is owned by exactly this frame and released
-            // immediately after its terminal report.
-            retainedSettlement = retainCallback<StreamWakeDeliverySettlement>(settleDelivery);
-          } catch (error) {
-            // Do not process a frame whose result can never be reported. The
-            // stream keeps it pending and its bounded idle recovery re-pokes
-            // from the processor's unchanged durable checkpoint.
-            console.error("stream wake delivery settlement capability could not be retained", {
-              error,
-            });
-            return;
+          const { settleDelivery, settlementId, ...frame } = batch;
+          let reportSettlement: (settlement: StreamWakeDeliverySettlement) => unknown;
+          let disposeSettlement: (() => void) | undefined;
+
+          if (
+            settlementId !== undefined &&
+            typeof options.stream.settleWakeDelivery === "function"
+          ) {
+            // New↔new path: do not retain the callback parameter at all. The
+            // direct Stream call is dispatched after the runner attempt and
+            // its result is never pulled, so neither the report nor this host
+            // waitUntil keeps the inbound sink session alive.
+            reportSettlement = (settlement) =>
+              options.stream.settleWakeDelivery!({
+                subscriptionKey: args.subscriptionKey,
+                settlementId,
+                settlement,
+              });
+          } else {
+            // Mixed-version path: an old stream omitted settlementId, or a
+            // non-platform host has no direct settlement method. Retain the
+            // callback exactly as the previous protocol did.
+            let retainedSettlement;
+            try {
+              retainedSettlement = retainCallback<StreamWakeDeliverySettlement>(settleDelivery);
+            } catch (error) {
+              // Do not process a frame whose result can never be reported. The
+              // stream keeps it pending and its bounded recovery re-pokes from
+              // the processor's unchanged durable checkpoint.
+              console.error("stream wake delivery settlement capability could not be retained", {
+                error,
+              });
+              return;
+            }
+            reportSettlement = retainedSettlement;
+            disposeSettlement = () => retainedSettlement[Symbol.dispose]();
           }
 
           let attempt: Promise<void>;
@@ -689,33 +714,40 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
           }
           const report = attempt.then(
             () =>
-              reportWakeDeliverySettlement(retainedSettlement, {
+              reportWakeDeliverySettlement(reportSettlement, {
                 outcome: "ok",
               }),
             (error: unknown) =>
-              reportWakeDeliverySettlement(retainedSettlement, {
+              reportWakeDeliverySettlement(reportSettlement, {
                 outcome: "error",
                 error: serializeWakeDeliveryError(error),
               }),
           );
-          // The sink response is already complete, but the subscriber
-          // incarnation must survive long enough to send its independent
-          // terminal report. The runner separately tracks the actual attempt
-          // and its crash-recovery alarm.
-          ctx.waitUntil(
-            report.finally(() => {
-              try {
-                retainedSettlement[Symbol.dispose]();
-              } catch (error) {
-                // The terminal report was already dispatched. A cleanup
-                // failure is observable, but cannot rewrite its verdict or
-                // reject the hosting waitUntil continuation.
-                console.warn("stream wake delivery settlement capability disposal failed", {
-                  error,
-                });
-              }
-            }),
-          );
+
+          if (disposeSettlement === undefined) {
+            // The runner's frame keepalive already owns `attempt`. Its terminal
+            // microtask dispatches the direct report synchronously; adding
+            // this report promise to ctx.waitUntil would unnecessarily retain
+            // the inbound sink invocation and recreate the session cycle.
+            void report;
+          } else {
+            // Compatibility callback parameters must remain retained until
+            // their terminal call has been dispatched.
+            ctx.waitUntil(
+              report.finally(() => {
+                try {
+                  disposeSettlement();
+                } catch (error) {
+                  // The terminal report was already dispatched. A cleanup
+                  // failure is observable, but cannot rewrite its verdict or
+                  // reject the hosting waitUntil continuation.
+                  console.warn("stream wake delivery settlement capability disposal failed", {
+                    error,
+                  });
+                }
+              }),
+            );
+          }
         },
         subscriber: {
           processor: { announcement: announceContract(entry.processor.contract) },

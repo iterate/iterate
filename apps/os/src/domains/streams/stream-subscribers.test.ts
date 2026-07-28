@@ -261,6 +261,7 @@ function makeHarness(
       },
       now: () => now,
       random: () => 0.5,
+      randomUUID: () => "test-connection",
       armAlarm: (atMs) => armedAlarms.push(atMs),
       runDurable: options.runDurable ?? ((work) => kept.push(work())),
       keepAlive: (promise) => kept.push(promise),
@@ -2010,31 +2011,37 @@ describe("StreamSubscribers runtime metrics", () => {
     expect(h.egress).toEqual([{ count: 3, bytes: subscription.bytesSent }]);
   });
 
-  it("wake-lane settle latency: the independent settlement records commit→consumed", async () => {
+  it("wake-lane direct settlement records commit→consumed and fences duplicate IDs", async () => {
     const h = makeHarness();
     h.append(evt(1, "a"), evt(2, "b")); // createdAt = epoch 1..2ms
     h.advanceTo(500);
     h.configure(wakePayload(), 0);
 
-    let settleBatch: (() => void) | undefined;
+    let deliveredBatch: StreamWakeEventBatch | undefined;
     h.dialImpl.poke = async () => ({
       checkpointOffset: 0,
-      // Retained exactly like the real dial does: the sink result stays
-      // unpulled and the processor reports completion out of band.
       sink: retainProcessEventBatch((batch: StreamWakeEventBatch) => {
-        settleBatch = () => batch.settleDelivery({ outcome: "ok" });
+        deliveredBatch = batch;
       }),
     });
 
     h.subscribers.wake();
     await h.settle();
-    expect(settleBatch).toBeDefined();
+    expect(deliveredBatch?.settlementId).toBe("test-connection:1");
     expect(h.subscribers.connectionRuntimeState()["k"]!.settleLatencyMs).toBeUndefined();
     expect(h.pendingDeliveryStates().slice(-2)).toEqual([false, true]);
     const runtimeChangesBeforeSettle = h.runtimeChanges();
 
     h.advanceTo(600);
-    settleBatch!();
+    const report = {
+      subscriptionKey: "k",
+      settlementId: deliveredBatch!.settlementId!,
+      settlement: { outcome: "ok" as const },
+    };
+    h.subscribers.settleWakeDelivery(report);
+    // The same report arriving twice cannot create a second sample or mutate
+    // the already-settled connection.
+    h.subscribers.settleWakeDelivery(report);
     await h.settle();
     // Settled at 600 − newest event createdAt (2) — both on the stream clock.
     expect(h.subscribers.connectionRuntimeState()["k"]!.settleLatencyMs).toMatchObject({

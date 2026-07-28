@@ -103,6 +103,7 @@ export async function provideCapabilityOnDeploymentReadyHost(
       mountPath: input.input.path,
       observedDeploymentVersion: readiness.observedVersion,
       path: input.path,
+      platformFailures: readiness.platformFailures,
       probeTimeouts: readiness.probeTimeouts,
       probes: readiness.probes,
       projectId: input.projectId,

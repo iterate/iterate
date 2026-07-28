@@ -178,11 +178,14 @@ async wakeStreamSubscriber(request: StreamSubscriberWakeRequest): Promise<{
 
 The stream retains the returned sink (ownership transfers with the return value — no dup dance)
 and streams batches from `checkpointOffset + 1` without pulling their results. Each batch carries
-an independent one-shot settlement capability; the processor reports success or a serialized
-failure after its durable attempt. On failure: dispose sink → spine sees watermark lag → poke with
-backoff. A missing settlement remains pending, so bounded idle teardown treats the sink as wedged
-and re-pokes from the processor's unchanged durable checkpoint. Sink replacement is unambiguous —
-the stream initiated the poke and owns both incarnations — so
+an opaque settlement ID; after its durable attempt, the processor reports success or a serialized
+failure through a fresh one-way call on its own Stream handle. That report is independent of the
+stream→subscriber sink session, so nested appends cannot trap it in the same actor-drain tree.
+The callback-shaped settlement field remains only for mixed-version rollout compatibility. On
+failure: dispose sink → spine sees watermark lag → poke with backoff. A missing settlement remains
+pending, so the native 20-second settlement alarm treats the sink as wedged and re-pokes from the
+processor's durable checkpoint. Sink replacement is unambiguous — the stream initiated the poke
+and owns both incarnations — so
 `supersedeConnection`, generation fencing, and the trusted-internal `subscribe({configured: true})`
 RPC entry (`rpc-targets.ts:290-298`) are all deleted. Durable connections stop being externally
 openable; only the spine creates them. Idle teardown stays (retained stubs still pin DOs while

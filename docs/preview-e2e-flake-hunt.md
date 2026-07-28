@@ -424,6 +424,52 @@ Terminal application errors therefore fail immediately, while one supported
 rollout recovery can complete without asking Playwright to rerun the test.
 The strict streak remains 0/25 pending a fresh immutable-head preflight.
 
+The next exact-head preflight (`687b63177`, Depot aggregate `ng2bqtn110`,
+canonical workflow `hr05mwcm50`, job `8nc258wk01`, attempt `qlwwnlhjnv`) was
+finally green in 4 minutes 1 second but correctly rejected with seven
+framework retries. Its finalizer retained all ten expected sources and
+normalized 7,192 events; the ordinary PostHog upload path completed. Four
+Vitest cases retried (two rollout readiness probes, one Repo lifecycle reset,
+and the 20-script concurrency proof), as did two reactivity Playwright cases
+and the SVG preview case.
+
+The 20-script failure localized the remaining systemic defect. All scripts
+started together and all became orphaned together about 21 seconds later.
+Exact-version Cloudflare traces showed the Capability Host's wake RPC retained
+for 20.924 seconds and then failed at the Stream's settlement deadline, even
+though the script attempt had already moved its consequential work onto the
+runner's independent keepalive. This disproved the settlement callback's
+claimed independence: because the callback arrived inside the
+stream→subscriber sink call, retaining it also retained that RPC session and
+allowed the nested append tree to trap its own acknowledgement.
+
+Current processors now receive an opaque per-delivery settlement ID and send
+their terminal verdict through a fresh, one-way call on the processor's own
+Stream handle. The callback remains only as a mixed-version fallback: new
+Stream→old host, old Stream→new host, and non-platform hosts remain compatible.
+The Stream accepts the ID only on the exact live connection, fences duplicates
+and late predecessor reports, and retains its native 20-second alarm for a
+genuinely missing report. The direct report is not attached to the inbound
+sink turn; the runner's existing frame/background keepalives remain the sole
+owners of processing work.
+
+The two readiness retries both had the exact Cloudflare-generated shape
+`internal error; reference = <24 lowercase alphanumeric characters>` at the
+read-only version probe. That boundary now tolerates and counts one exact
+platform-reference failure before retrying on a fresh target. A second such
+failure, every near-match, and every application error remains terminal; the
+successful convergence logs include the platform-failure count. This
+classifier is local to deployment readiness and does not broaden the shared
+Durable Object availability predicate.
+
+Local validation is green across all 17 tested workspaces. OS has 2,408 passing
+tests, six expected failures, and one skip across 245 files; the focused
+transport/readiness set has 130 passes and one expected failure. Monorepo
+typecheck, lint with zero warnings, formatting, Knip, generated API checks, and
+`git diff --check` all pass. The SVG timeout and any independent lifecycle
+failure remain proof targets rather than accepted noise. The strict streak is
+still 0/25 until the new immutable head completes a clean preflight.
+
 ## Round 15 (2026-07-23, post-#2284)
 
 This round starts from merged `origin/main` at

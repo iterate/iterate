@@ -50,6 +50,7 @@ describe("fetchFromDeploymentReadySecret", () => {
         mismatches: 1,
         observedDeploymentVersion: { id: "version-new" },
         path: "/integrations/petshop/alice",
+        platformFailures: 0,
         probeTimeouts: 0,
         probes: 2,
         projectId: "prj_test",

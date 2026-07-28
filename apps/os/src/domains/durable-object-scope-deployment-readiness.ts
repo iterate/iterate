@@ -68,6 +68,7 @@ export async function waitForCreatedScopeDeploymentVersion(
         lifecycleFailures: readiness.lifecycleFailures,
         mismatches: readiness.mismatches,
         observedDeploymentVersion: readiness.observedVersion,
+        platformFailures: readiness.platformFailures,
         probeTimeouts: readiness.probeTimeouts,
         probes: readiness.probes,
         targetNewer: readiness.targetNewer,

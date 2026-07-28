@@ -4,6 +4,7 @@ import type {
   ProcessorRuntimeState,
   StreamPushEventBatch,
   StreamSubscriptionHandle,
+  StreamWakeDeliverySettlementReport,
 } from "iterate/processors";
 import { idempotencyConflictMessage, sameIdempotentEvent } from "iterate/processors";
 import { StreamOffsetConflictError, streamOffsetConflictMessage } from "iterate/processors";
@@ -300,6 +301,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       runtimeChanged: () => this.#refreshLiveState(),
       now: () => Date.now(),
       random: () => Math.random(),
+      randomUUID: () => crypto.randomUUID(),
       armAlarm: (atMs) => this.#alarmArmer.armNoLaterThan(atMs),
       runDurable: (work) => this.#deliveryAlarmBoundary.scheduleOrRun(work),
       keepAlive: (promise) => this.#runInBackground(() => promise),
@@ -1052,6 +1054,15 @@ export class StreamDurableObject extends DurableObject<Env> {
       path: this.name.path,
     });
     if (inputs.length > 0) this.append(...inputs);
+  }
+
+  /**
+   * Trusted-internal, session-independent acknowledgement for a configured
+   * wake delivery. The opaque settlement ID fences duplicates and reports
+   * from replaced subscriber connections inside StreamSubscribers.
+   */
+  settleWakeDelivery(report: StreamWakeDeliverySettlementReport): void {
+    this.#subscribers.settleWakeDelivery(report);
   }
 
   #appendToStreamCoordinate(

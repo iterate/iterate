@@ -42,6 +42,7 @@ import type {
   StreamSubscriberWakeRequest,
   StreamSubscriberWakeResponse,
   StreamSubscriptionHandle,
+  StreamWakeDeliverySettlementReport,
   WakeableStreamProcessorRpc,
 } from "iterate/processors";
 import { jsonValuesEqual, StreamReceiverUnavailableError } from "iterate/processors";
@@ -891,6 +892,19 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       ...args,
       processEventBatch: (batch) => void forward(batch),
     });
+  }
+
+  /**
+   * @internal Report one configured wake delivery through a fresh, one-way
+   * Stream RPC. New processor hosts use this instead of retaining the
+   * per-frame callback carried inside the stream→subscriber sink session.
+   */
+  settleWakeDelivery(report: StreamWakeDeliverySettlementReport): void {
+    if (this.props.auth.principal !== "trusted-internal") {
+      throw new Error("wake delivery settlement is reported by processor hosts, not sessions");
+    }
+    const result = this.durableObjectStub.settleWakeDelivery(report);
+    disposeIgnoredRpcResult(result);
   }
 
   /**
@@ -1745,6 +1759,7 @@ class SandboxRpcTarget extends IterateRpcTarget<"Sandbox"> {
         mismatches: readiness.mismatches,
         observedDeploymentVersion: readiness.observedVersion,
         path: this.props.path,
+        platformFailures: readiness.platformFailures,
         probeTimeouts: readiness.probeTimeouts,
         probes: readiness.probes,
         projectId: this.props.projectId,
@@ -5154,6 +5169,7 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
         mismatches: readiness.mismatches,
         observedDeploymentVersion: readiness.observedVersion,
         path: this.#props.path,
+        platformFailures: readiness.platformFailures,
         probeTimeouts: readiness.probeTimeouts,
         probes: readiness.probes,
         projectId: this.#props.projectId,

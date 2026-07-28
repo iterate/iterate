@@ -159,6 +159,7 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
       runtimeChanged: () => undefined,
       now: () => Date.now(),
       random: () => 0.5,
+      randomUUID: () => "test-connection",
       armAlarm: () => undefined,
       runDurable: (work) => void kept.push(work()),
       keepAlive: (promise) => void kept.push(promise),

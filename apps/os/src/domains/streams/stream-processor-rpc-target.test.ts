@@ -9,6 +9,46 @@ import {
 import { STREAM_KILL_REASON, STREAM_UNAVAILABLE_MESSAGE_PREFIX } from "./stream-unavailable.ts";
 
 describe("StreamRpcTarget", () => {
+  it("dispatches direct wake settlement only from a trusted processor host", () => {
+    const dispose = vi.fn();
+    const settleWakeDelivery = vi.fn(() => ({ [Symbol.dispose]: dispose }));
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get durableObjectStub() {
+        return { settleWakeDelivery } as never;
+      }
+    }
+    const report = {
+      subscriptionKey: "processor",
+      settlementId: "incarnation:1",
+      settlement: { outcome: "ok" as const },
+    };
+    const trusted = new TestStreamRpcTarget({
+      auth: {
+        assertCanAccessProject: vi.fn(),
+        principal: "trusted-internal",
+      } as never,
+      path: "/events",
+      projectId: "prj_test",
+    });
+
+    expect(trusted.settleWakeDelivery(report)).toBeUndefined();
+    expect(settleWakeDelivery).toHaveBeenCalledWith(report);
+    expect(dispose).toHaveBeenCalledOnce();
+
+    const session = new TestStreamRpcTarget({
+      auth: {
+        assertCanAccessProject: vi.fn(),
+        principal: "usr_test",
+      } as never,
+      path: "/events",
+      projectId: "prj_test",
+    });
+    expect(() => session.settleWakeDelivery(report)).toThrow(
+      "wake delivery settlement is reported by processor hosts, not sessions",
+    );
+    expect(settleWakeDelivery).toHaveBeenCalledOnce();
+  });
+
   it("relays the stream runtime LiveState property without polling runtimeState", async () => {
     const runtimeState = {
       coreProcessorState: { maxOffset: 4 },

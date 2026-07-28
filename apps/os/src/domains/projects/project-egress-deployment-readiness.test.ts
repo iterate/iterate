@@ -48,6 +48,7 @@ describe("fetchFromDeploymentReadyProject", () => {
         lifecycleFailures: 0,
         mismatches: 1,
         observedDeploymentVersion: { id: "version-new" },
+        platformFailures: 0,
         probeTimeouts: 0,
         probes: 2,
         projectId: "prj_test",

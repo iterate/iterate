@@ -135,16 +135,42 @@ export type StreamWakeDeliverySettlement =
   | { outcome: "error"; error: StreamWakeDeliveryError };
 
 /**
+ * A terminal wake-delivery report sent through the processor's own stream
+ * handle, independently of the stream→subscriber sink RPC session.
+ *
+ * `settlementId` is an opaque, per-attempt nonce. The stream accepts it only
+ * for the currently open connection under `subscriptionKey`, so late reports
+ * from a replaced subscriber incarnation are harmless.
+ */
+export type StreamWakeDeliverySettlementReport = {
+  subscriptionKey: SubscriptionKey;
+  settlementId: string;
+  settlement: StreamWakeDeliverySettlement;
+};
+
+/**
  * One-shot acknowledgement capability owned by a single durable wake batch.
  *
- * It is deliberately independent of the sink call's return value. A
- * processor may append back to the stream that delivered the batch; making
- * the stream pull that sink result creates a cyclic actor-drain dependency.
+ * Rollout compatibility only: current processors report through
+ * `ProcessorStream.settleWakeDelivery`, because a callback carried by the
+ * stream→subscriber sink remains part of that RPC session and can be trapped
+ * behind the very actor-drain cycle it is meant to release. Older stream or
+ * processor incarnations still use this callback during a mixed-version
+ * rollout.
  */
 export type SettleStreamWakeDelivery = (settlement: StreamWakeDeliverySettlement) => unknown;
 
-/** Internal wake-mode frame: an ordinary batch plus its one-shot settlement door. */
+/**
+ * Internal wake-mode frame: an ordinary batch plus two rollout-compatible
+ * acknowledgement coordinates.
+ */
 export type StreamWakeEventBatch = StreamEventBatch & {
+  /**
+   * Opaque per-attempt nonce for session-independent settlement. Absent when
+   * an older stream incarnation delivered the frame.
+   */
+  settlementId?: string;
+  /** Compatibility door used only when `settlementId` or the direct stream report method is absent. */
   settleDelivery: SettleStreamWakeDelivery;
 };
 
@@ -287,8 +313,9 @@ export type StreamSubscriberWakeResponse = {
   checkpointOffset: number;
   /**
    * The live delivery callback the stream retains and invokes per batch.
-   * Calls are one-way; each batch reports completion through its independent
-   * `settleDelivery` capability.
+   * Calls are one-way; each current processor reports completion through a
+   * fresh call on its own Stream handle. `settleDelivery` remains in the batch
+   * only for mixed-version rollout compatibility.
    */
   sink: ProcessStreamWakeEventBatch;
   /**

@@ -28,6 +28,7 @@ import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "iterate/processors";
 import type {
   StreamSubscriberWakeResponse,
   StreamWakeDeliverySettlement,
+  StreamWakeDeliverySettlementReport,
 } from "iterate/processors";
 
 const HOME = "/tests/registry";
@@ -99,7 +100,12 @@ class RecorderProcessor extends StreamProcessor<
 
 function makeHarness(opts: { betaRecovery?: boolean } = {}) {
   const clock = { now: Date.parse("2026-07-14T12:00:00Z") };
-  const stream = new MemoryStream(HOME);
+  const directSettlements: StreamWakeDeliverySettlementReport[] = [];
+  const stream = Object.assign(new MemoryStream(HOME), {
+    settleWakeDelivery(report: StreamWakeDeliverySettlementReport) {
+      directSettlements.push(report);
+    },
+  });
   stream.now = () => clock.now;
 
   const kv = new Map<string, unknown>();
@@ -170,6 +176,7 @@ function makeHarness(opts: { betaRecovery?: boolean } = {}) {
     kv,
     alarm,
     hooks,
+    directSettlements,
     settle,
     head,
     get registry() {
@@ -510,6 +517,54 @@ describe("wakeStreamSubscriber", () => {
     await expect(woken.getRuntimeState!()).resolves.toMatchObject({
       snapshot: { offset: 1 },
     });
+  });
+
+  it("settles through a fresh Stream call without retaining the legacy callback or background work", async () => {
+    const h = makeHarness();
+    let releaseBackground!: () => void;
+    const background = new Promise<void>((resolve) => {
+      releaseBackground = resolve;
+    });
+    h.hooks.alpha.onProcess = (args) => {
+      if (args.event?.type === REQUESTED) {
+        args.runInBackground(() => background);
+      }
+    };
+    await h.stream.append({ type: REQUESTED, payload: { id: "background" } });
+    const woken = await h.wake("alpha-proc");
+    const duplicateLegacyCallback = vi.fn(() => vi.fn());
+    const legacySettlement = Object.assign(vi.fn(), {
+      dup: duplicateLegacyCallback,
+    });
+
+    const returned = woken.sink({
+      projectId: null,
+      path: HOME,
+      events: h.stream.events.slice(),
+      scannedAfterOffset: 0,
+      scannedThroughOffset: h.head(),
+      streamMaxOffset: h.head(),
+      state: null,
+      settlementId: "stream-incarnation:1",
+      settleDelivery: legacySettlement,
+    });
+
+    expect(returned).toBeUndefined();
+    await expect
+      .poll(() => h.directSettlements)
+      .toEqual([
+        {
+          subscriptionKey: "wake:alpha-proc",
+          settlementId: "stream-incarnation:1",
+          settlement: { outcome: "ok" },
+        },
+      ]);
+    expect(legacySettlement).not.toHaveBeenCalled();
+    expect(duplicateLegacyCallback).not.toHaveBeenCalled();
+
+    // The frame acknowledgement is deliberately independent of consequential
+    // background work, whose own keepalive/revival lane remains responsible.
+    releaseBackground();
   });
 
   it("reports processor failures with lifecycle classification intact", async () => {

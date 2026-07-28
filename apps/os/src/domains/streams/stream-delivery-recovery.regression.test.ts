@@ -157,6 +157,7 @@ test.fails("DESIRED: a post-delivery cursor failure schedules durable redelivery
     recordEgress: () => {},
     now: () => now,
     random: () => 0.5,
+    randomUUID: () => "test-connection",
     armAlarm: (atMs) => armedAlarms.push(atMs),
     runDurable: (work) => kept.push(work()),
     keepAlive: (promise) => kept.push(promise),

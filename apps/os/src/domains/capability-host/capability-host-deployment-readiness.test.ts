@@ -47,6 +47,7 @@ describe("waitForCapabilityHostDeploymentVersion", () => {
       lifecycleFailures: 0,
       mismatches: 0,
       observedVersion: { id: "version-new" },
+      platformFailures: 0,
       probeTimeouts: 0,
       probes: 1,
       targetNewer: false,
@@ -78,6 +79,7 @@ describe("waitForCapabilityHostDeploymentVersion", () => {
       lifecycleFailures: 0,
       mismatches: 1,
       observedVersion: NEW_DEPLOYMENT,
+      platformFailures: 0,
       probeTimeouts: 0,
       probes: 2,
       targetNewer: false,
@@ -137,6 +139,7 @@ describe("waitForCapabilityHostDeploymentVersion", () => {
       lifecycleFailures: 1,
       mismatches: 0,
       observedVersion: { id: "version-new" },
+      platformFailures: 0,
       probeTimeouts: 0,
       probes: 2,
       targetNewer: false,
@@ -165,6 +168,7 @@ describe("waitForCapabilityHostDeploymentVersion", () => {
         lifecycleFailures: 0,
         mismatches: 0,
         observedVersion: { id: "version-new" },
+        platformFailures: 0,
         probeTimeouts: 1,
         probes: 2,
         targetNewer: false,
@@ -196,6 +200,74 @@ describe("waitForCapabilityHostDeploymentVersion", () => {
       }),
     ).rejects.toThrow(
       "the version probe was reset more than once. The script was not requested and did not run.",
+    );
+  });
+
+  it("retries one exact transient platform failure before journaling", async () => {
+    let time = 0;
+    const readVersion = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(new Error("internal error; reference = s6apsm9qv3sm4n3kgq3c0uk1"))
+      .mockResolvedValueOnce("version-new");
+
+    await expect(
+      waitForCapabilityHostDeploymentVersion({
+        ...BASE_INPUT,
+        now: () => time,
+        pollIntervalMs: 100,
+        readVersion,
+        sleep: async (durationMs) => {
+          time += durationMs;
+        },
+        timeoutMs: 1_000,
+      }),
+    ).resolves.toEqual({
+      lifecycleFailures: 0,
+      mismatches: 0,
+      observedVersion: { id: "version-new" },
+      platformFailures: 1,
+      probeTimeouts: 0,
+      probes: 2,
+      targetNewer: false,
+      waitedMs: 100,
+    });
+  });
+
+  it("keeps a repeated transient platform failure terminal before journaling", async () => {
+    const failure = new Error("internal error; reference = s6apsm9qv3sm4n3kgq3c0uk1");
+    let time = 0;
+
+    await expect(
+      waitForCapabilityHostDeploymentVersion({
+        ...BASE_INPUT,
+        now: () => time,
+        pollIntervalMs: 100,
+        readVersion: async () => {
+          throw failure;
+        },
+        sleep: async (durationMs) => {
+          time += durationMs;
+        },
+        timeoutMs: 1_000,
+      }),
+    ).rejects.toThrow(
+      "the version probe returned repeated transient platform failures; latest: " +
+        '"internal error; reference = s6apsm9qv3sm4n3kgq3c0uk1". ' +
+        "The script was not requested and did not run.",
+    );
+  });
+
+  it("does not broaden the transient classifier to similar application errors", async () => {
+    await expect(
+      waitForCapabilityHostDeploymentVersion({
+        ...BASE_INPUT,
+        readVersion: async () => {
+          throw new Error("upstream returned internal error; reference = s6apsm9qv3sm4n3kgq3c0uk1");
+        },
+      }),
+    ).rejects.toThrow(
+      'the version probe failed with "upstream returned internal error; reference = ' +
+        's6apsm9qv3sm4n3kgq3c0uk1". The script was not requested and did not run.',
     );
   });
 

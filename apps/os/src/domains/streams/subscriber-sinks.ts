@@ -21,10 +21,10 @@
 //
 // Delivery is fire-and-forget by design (the pump never awaits a batch).
 // Every live sink result is disposed unpulled. Durable wake subscribers report
-// success/failure through the batch's independent settlement capability; this
-// keeps the sink call genuinely one-way even when the processor appends back
-// to the delivering stream. See `retainProcessEventBatch` below and the wire
-// tests in stream-wire.e2e.test.ts.
+// success/failure through a fresh call on their own Stream handle; this keeps
+// the sink call genuinely one-way even when the processor appends back to the
+// delivering stream. See `retainProcessEventBatch` below and the wire tests in
+// stream-wire.e2e.test.ts.
 
 import { disposeIgnoredRpcResult, isThenable, retainCallback } from "iterate/sdk/capnweb";
 import { StreamReceiverUnavailableError } from "iterate/processors";
@@ -91,11 +91,11 @@ export type RetainedProcessEventBatch<Batch extends StreamEventBatch = StreamEve
  *
  * The batch result is disposed WITHOUT ever being pulled, so the remote never
  * ships a resolution and frames flow in one direction only. Durable wake
- * subscribers carry a separate per-batch settlement capability; pulling the
- * sink result itself would create an actor-drain cycle whenever processing
- * appends back to this same stream. `onDeliveryError` therefore covers only a
- * synchronous dead-stub throw; `onRpcBroken` remains the prompt best-effort
- * transport hint.
+ * subscribers carry a per-batch settlement ID and report through a fresh
+ * Stream call; pulling the sink result itself would create an actor-drain cycle
+ * whenever processing appends back to this same stream. `onDeliveryError`
+ * therefore covers only a synchronous dead-stub throw; `onRpcBroken` remains
+ * the prompt best-effort transport hint.
  */
 export function retainProcessEventBatch<Batch extends StreamEventBatch>(
   processEventBatch: (batch: Batch) => unknown,
@@ -311,9 +311,10 @@ export function createSubscriberDial(deps: {
      * (returned-stub semantics:
      * https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/).
      * The sink is retained with best-effort broken-transport detection; each
-     * delivered batch carries its own explicit settlement capability. The
-     * local root owns no remote lifetime; the returned handshake value still
-     * transfers its own RPC disposal group.
+     * delivered batch carries its own explicit settlement ID (plus a callback
+     * only for mixed-version rollout compatibility). The local root owns no
+     * remote lifetime; the returned handshake value still transfers its own
+     * RPC disposal group.
      */
     async poke(expression: ItxExpression, request: StreamSubscriberWakeRequest) {
       const { value } = await evaluateItxExpression(

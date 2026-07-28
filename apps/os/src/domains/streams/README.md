@@ -185,11 +185,13 @@ rides this). Both batch-call results are disposed **unpulled**, so neither
 lane emits a result frame (a `ReadableStream` could never do this: its
 per-chunk acks ARE its flow control — see the `FlowController` in
 [capnweb](https://github.com/cloudflare/capnweb)). Wake batches instead carry
-a one-shot settlement capability. The subscriber sends one explicit,
-non-gating success/failure message after its durable processor attempt and
-disposes that call's result unpulled too. Keeping the settlement out of the
-batch call's result is load-bearing: processors routinely append back to the
-delivering stream, and a pulled result would make that nested append part of a
+an opaque settlement ID. The subscriber sends one explicit, non-gating
+success/failure report through a fresh call on its own Stream handle after its
+durable processor attempt, and disposes that call's result unpulled too. The
+callback-shaped field is only a mixed-version rollout fallback. Keeping both
+the settlement and its RPC session out of the batch call's result is
+load-bearing: processors routinely append back to the delivering stream, and
+a pulled or session-coupled result would make that nested append part of a
 cyclic actor-drain tree. `onRpcBroken` remains the prompt best-effort transport
 hint ([stub lifecycle rules](https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/)).
 

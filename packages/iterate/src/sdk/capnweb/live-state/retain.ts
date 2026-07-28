@@ -19,7 +19,7 @@ export type RetainedCallback<Arg> = ((arg: Arg) => unknown) &
  * can fabricate a pipelined method that rejects at call time, so we wire whatever
  * the stub claims and swallow registration failures. `onRpcBroken` is only a
  * prompt hint; callers that need a terminal verdict must model one explicitly
- * (for example, the durable wake lane's independent settlement capability).
+ * (for example, the durable wake lane's explicit settlement report).
  */
 export function retainCallback<Arg>(callback: (arg: Arg) => unknown): RetainedCallback<Arg> {
   const retainable = callback as ((arg: Arg) => unknown) &

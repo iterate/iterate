@@ -7,7 +7,7 @@
 // page reads processors make from their hooks), and at (sibling-stream
 // appendTo) — instead of faking the whole public stream API.
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
-import type { StreamEventReadInput } from "./rpc-types.ts";
+import type { StreamEventReadInput, StreamWakeDeliverySettlementReport } from "./rpc-types.ts";
 
 /** One open journal read — page with `next()`, dispose when done
  * (`using pager = stream.readEvents(...)`). */
@@ -26,4 +26,10 @@ export interface ProcessorStream {
   ): Promise<StreamEvent | undefined>;
   getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]>;
   at(path: string): ProcessorStream;
+  /**
+   * Trusted platform hosts report wake delivery through a fresh stream RPC
+   * instead of the sink session's callback. Optional so browser/in-memory
+   * hosts and an older platform stream remain wire-compatible.
+   */
+  settleWakeDelivery?(report: StreamWakeDeliverySettlementReport): void;
 }

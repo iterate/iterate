@@ -59,6 +59,7 @@ export function coordinateWorkerBuild(
         lifecycleFailures: readiness.lifecycleFailures,
         mismatches: readiness.mismatches,
         observedDeploymentVersion: readiness.observedVersion,
+        platformFailures: readiness.platformFailures,
         probeTimeouts: readiness.probeTimeouts,
         probes: readiness.probes,
         projectId: request.projectId,

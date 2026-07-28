@@ -387,6 +387,7 @@ export class DynamicWorkerRunner {
             mismatches: result.mismatches,
             observedDeploymentVersion: result.observedVersion,
             path: ref.path,
+            platformFailures: result.platformFailures,
             probeTimeouts: result.probeTimeouts,
             probes: result.probes,
             projectId: this.#projectId,

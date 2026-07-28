@@ -2086,8 +2086,9 @@ export type StreamSubscriberWakeResponse = {
   checkpointOffset: number;
   /**
    * The live delivery callback the stream retains and invokes per batch.
-   * Calls are one-way; each batch reports completion through its independent
-   * `settleDelivery` capability.
+   * Calls are one-way; each current processor reports completion through a
+   * fresh call on its own Stream handle. `settleDelivery` remains in the batch
+   * only for mixed-version rollout compatibility.
    */
   sink: ProcessStreamWakeEventBatch;
   /**
@@ -3672,7 +3673,7 @@ export type ConnectionRuntimeState = {
   lastDeliveredAt?: string;
   /**
    * Commit-to-settled latency, stream clock only: `createdAt` of the newest
-   * event in a batch → the subscriber's explicit settlement callback.
+   * event in a batch → the subscriber's explicit settlement report.
    * Durable (wake) lane only — ephemeral results are disposed unpulled, so
    * ephemeral consumption is self-reported by the host through
    * `getRuntimeState` instead. Absent until a sample exists.
@@ -3762,8 +3763,17 @@ export type StreamPingInput = { t0: number };
  */
 export type StreamPingReply = { t0: number; t1: number; t2: number };
 
-/** Internal wake-mode frame: an ordinary batch plus its one-shot settlement door. */
+/**
+ * Internal wake-mode frame: an ordinary batch plus two rollout-compatible
+ * acknowledgement coordinates.
+ */
 export type StreamWakeEventBatch = StreamEventBatch & {
+  /**
+   * Opaque per-attempt nonce for session-independent settlement. Absent when
+   * an older stream incarnation delivered the frame.
+   */
+  settlementId?: string;
+  /** Compatibility door used only when `settlementId` or the direct stream report method is absent. */
   settleDelivery: SettleStreamWakeDelivery;
 };
 
@@ -3989,9 +3999,12 @@ export type ThroughputReport = {
 /**
  * One-shot acknowledgement capability owned by a single durable wake batch.
  *
- * It is deliberately independent of the sink call's return value. A
- * processor may append back to the stream that delivered the batch; making
- * the stream pull that sink result creates a cyclic actor-drain dependency.
+ * Rollout compatibility only: current processors report through
+ * `ProcessorStream.settleWakeDelivery`, because a callback carried by the
+ * stream→subscriber sink remains part of that RPC session and can be trapped
+ * behind the very actor-drain cycle it is meant to release. Older stream or
+ * processor incarnations still use this callback during a mixed-version
+ * rollout.
  */
 export type SettleStreamWakeDelivery = (settlement: StreamWakeDeliverySettlement) => unknown;
 

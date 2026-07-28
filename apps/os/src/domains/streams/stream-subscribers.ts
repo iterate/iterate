@@ -9,7 +9,7 @@
 // | lane       | sink arrives as                       | call result            |
 // |------------|---------------------------------------|------------------------|
 // | ephemeral  | `subscribe()` parameter               | disposed unpulled — zero return frames |
-// | wake       | returned from the expression-named poke| disposed unpulled; independent per-batch settlement |
+// | wake       | returned from the expression-named poke| disposed unpulled; explicit per-batch settlement |
 // | push       | named by a persisted itx expression   | awaited — the ack that advances the cursor |
 // | webhook    | the configured URL (per-event POST)   | awaited 2xx — the ack that advances the cursor |
 //
@@ -24,7 +24,7 @@
 //
 // Runtime metrics: every connection carries real counters (events/bytes
 // delivered, lag from cursor), the durable lanes record commit→settled
-// latency on the stream's own clock (wake: the settlement callback; push/
+// latency on the stream's own clock (wake: the settlement report; push/
 // webhook: the awaited ack), and subscribers that hand over a ping capability
 // get NTP-style RTT sampled when runtime observation begins, throttled, and
 // purely observational (a failed ping drops the sample, nothing else).
@@ -50,6 +50,7 @@ import type {
   StreamSubscriberWakeRequest,
   StreamWakeDeliveryError,
   StreamWakeDeliverySettlement,
+  StreamWakeDeliverySettlementReport,
   StreamWakeEventBatch,
   StreamWebhookDelivery,
 } from "iterate/processors";
@@ -104,7 +105,7 @@ export type ConnectionRuntimeState = {
   lastDeliveredAt?: string;
   /**
    * Commit-to-settled latency, stream clock only: `createdAt` of the newest
-   * event in a batch → the subscriber's explicit settlement callback.
+   * event in a batch → the subscriber's explicit settlement report.
    * Durable (wake) lane only — ephemeral results are disposed unpulled, so
    * ephemeral consumption is self-reported by the host through
    * `getRuntimeState` instead. Absent until a sample exists.
@@ -178,6 +179,8 @@ type Connection = {
   hasPendingDelivery(): boolean;
   /** Earliest deadline for an unsettled wake delivery, or null when caught up. */
   nextSettlementDeadlineAt(): number | null;
+  /** Apply one direct settlement when its nonce belongs to this exact connection. */
+  settleWakeDelivery(settlementId: string, settlement: StreamWakeDeliverySettlement): boolean;
   /** Stop the pump, dispose the sink, append the disconnect fact, drop from the table. */
   close(reason: StreamSubscriberDisconnectReason): void;
 };
@@ -269,6 +272,8 @@ type StreamSubscribersHooks = {
   now(): number;
   /** Injected randomness (backoff jitter); [0, 1) like Math.random. */
   random(): number;
+  /** Injected opaque nonce source for direct wake-delivery settlement IDs. */
+  randomUUID(): string;
   /** Arm the Durable Object alarm for the earliest pending retry. */
   armAlarm(atMs: number): void;
   /**
@@ -1084,8 +1089,44 @@ export class StreamSubscribers {
     let initialBatchPending = true;
     let draining = false;
     let open = true;
-    const pendingDeliveries = new Map<symbol, number>();
+    const settlementNonce =
+      subscriptionType === "configured" ? this.#hooks.randomUUID() : "ephemeral";
+    let settlementSequence = 0;
+    const pendingDeliveries = new Map<
+      string,
+      { deadlineAt: number; newestCreatedAtMs: number | undefined }
+    >();
     let connection!: Connection;
+
+    const settleWakeDelivery = (
+      settlementId: string,
+      settlement: StreamWakeDeliverySettlement,
+    ): boolean => {
+      const pending = pendingDeliveries.get(settlementId);
+      if (pending === undefined) return false;
+      pendingDeliveries.delete(settlementId);
+      if (open && this.#connections.get(subscriptionKey) === connection) {
+        const parsed = parseWakeDeliverySettlement(settlement);
+        if (parsed.outcome === "ok") {
+          if (
+            pending.newestCreatedAtMs !== undefined &&
+            Number.isFinite(pending.newestCreatedAtMs)
+          ) {
+            const settledAtMs = this.#hooks.now();
+            connection.settleLatency.record(settledAtMs - pending.newestCreatedAtMs, settledAtMs);
+          }
+        } else {
+          // Fence on the exact connection above: a late failure from a
+          // replaced sink must never close its successor.
+          this.onDurableDeliveryError(subscriptionKey, parsed.error);
+        }
+      }
+      // Includes empty/state-only, rejected, stale, and duplicate-fenced
+      // deliveries: pending state changed for the first terminal report even
+      // when no latency sample was recorded.
+      this.#hooks.runtimeChanged();
+      return true;
+    };
 
     const pump = async () => {
       if (draining) return;
@@ -1166,9 +1207,13 @@ export class StreamSubscribers {
             state: currentState,
           } satisfies StreamEventBatch;
           if (args.subscriptionType === "configured") {
-            const delivery = Symbol("stream wake delivery");
+            settlementSequence += 1;
+            const settlementId = `${settlementNonce}:${settlementSequence}`;
             const settlementDeadlineAt = this.#hooks.now() + DELIVERY_TIMEOUT_MS;
-            pendingDeliveries.set(delivery, settlementDeadlineAt);
+            pendingDeliveries.set(settlementId, {
+              deadlineAt: settlementDeadlineAt,
+              newestCreatedAtMs,
+            });
             this.#hooks.armAlarm(settlementDeadlineAt);
             // Publish the pending state BEFORE dispatch. A local sink can
             // settle synchronously, and debug state must still observe the
@@ -1176,27 +1221,12 @@ export class StreamSubscribers {
             this.#hooks.runtimeChanged();
             args.sink({
               ...batch,
+              settlementId,
               settleDelivery: (settlement) => {
-                // One callback capability belongs to one batch. Duplicates
-                // and late reports after close/replacement are harmless.
-                if (!pendingDeliveries.delete(delivery)) return;
-                if (open && this.#connections.get(subscriptionKey) === connection) {
-                  const parsed = parseWakeDeliverySettlement(settlement);
-                  if (parsed.outcome === "ok") {
-                    if (newestCreatedAtMs !== undefined && Number.isFinite(newestCreatedAtMs)) {
-                      const settledAtMs = this.#hooks.now();
-                      connection.settleLatency.record(settledAtMs - newestCreatedAtMs, settledAtMs);
-                    }
-                  } else {
-                    // Fence on the exact connection above: a late failure
-                    // from a replaced sink must never close its successor.
-                    this.onDurableDeliveryError(subscriptionKey, parsed.error);
-                  }
-                }
-                // Includes empty/state-only, rejected, stale, and duplicate-
-                // fenced deliveries: pending state changed for the first
-                // terminal report even when no latency sample was recorded.
-                this.#hooks.runtimeChanged();
+                // Mixed-version fallback. New processors use settlementId
+                // through their own Stream handle and never retain this
+                // callback's RPC session.
+                settleWakeDelivery(settlementId, settlement);
               },
             } satisfies StreamWakeEventBatch);
           } else {
@@ -1228,11 +1258,12 @@ export class StreamSubscribers {
       hasPendingDelivery: () => pendingDeliveries.size > 0,
       nextSettlementDeadlineAt: () => {
         let next: number | null = null;
-        for (const deadlineAt of pendingDeliveries.values()) {
+        for (const { deadlineAt } of pendingDeliveries.values()) {
           if (next === null || deadlineAt < next) next = deadlineAt;
         }
         return next;
       },
+      settleWakeDelivery,
       close: (reason) => {
         if (!open) return;
         open = false;
@@ -1303,12 +1334,37 @@ export class StreamSubscribers {
   }
 
   /**
+   * Apply a wake-delivery verdict sent through the processor's own Stream
+   * handle. This invocation is independent of the retained sink RPC session,
+   * so a processor that appends back into this stream cannot trap its own
+   * acknowledgement behind the stream→subscriber call tree.
+   *
+   * The opaque ID is scoped to the exact live connection. A duplicate, late
+   * report after replacement, or report that reaches a freshly booted Stream
+   * incarnation is a harmless no-op; the durable processor checkpoint remains
+   * the redelivery authority.
+   */
+  settleWakeDelivery(report: StreamWakeDeliverySettlementReport): void {
+    if (
+      typeof report?.subscriptionKey !== "string" ||
+      typeof report.settlementId !== "string" ||
+      report.settlementId.length === 0
+    ) {
+      return;
+    }
+    this.#connections
+      .get(report.subscriptionKey)
+      ?.settleWakeDelivery(report.settlementId, report.settlement);
+  }
+
+  /**
    * A wake sink call is deliberately one-way, so its independent settlement
-   * callback is the only acknowledgement. If workerd silently orphans that
-   * callback without reporting onRpcBroken, the connection must not remain
+   * report is the only acknowledgement. If workerd silently orphans that
+   * report without signalling onRpcBroken, the connection must not remain
    * authoritative until the much longer idle teardown. The native DO alarm
-   * owns this deadline: actor timers would retain the append invocation that
-   * dispatched the batch.
+   * owns this deadline: actor timers would retain the invocation that
+   * dispatched the batch. The callback-shaped compatibility path and the
+   * direct Stream-handle path both settle the same pending nonce.
    */
   #expireWakeDeliveryDeadlines(): void {
     const now = this.#hooks.now();
