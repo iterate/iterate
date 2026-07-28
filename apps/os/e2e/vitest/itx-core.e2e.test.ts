@@ -149,28 +149,10 @@ test("Authenticated internal auth itx can create project and append to stream", 
       event.type === "events.iterate.com/stream/subscription-configured" &&
       (event.payload as { subscriptionKey?: string }).subscriptionKey === "project-worker",
   );
-  const creationWorkerConfiguration = workerConfigurations.find(
-    (event) =>
-      event.idempotencyKey ===
-      `platform:project-worker-creation-subscription:${description.projectId}`,
-  );
-  const permanentWorkerConfiguration = workerConfigurations.find(
-    (event) =>
-      event.idempotencyKey === `platform:project-worker-subscription:${description.projectId}`,
-  );
-  expect(creationWorkerConfiguration).toMatchObject({
-    payload: {
-      subscriptionKey: "project-worker",
-      delivery: { mode: "push", expression: ["processEventBatch"] },
-      deliver: { afterOffset: projectCreateRequested!.offset - 1 },
-      selector: {
-        condition: `offset = ${projectCreateRequested!.offset}`,
-        eventTypes: ["events.iterate.com/project/create-requested"],
-      },
-      onPoison: "park",
-    },
-  });
+  expect(workerConfigurations).toHaveLength(1);
+  const permanentWorkerConfiguration = workerConfigurations[0];
   expect(permanentWorkerConfiguration).toMatchObject({
+    idempotencyKey: `project-worker-subscription:${description.projectId}`,
     payload: {
       subscriptionKey: "project-worker",
       delivery: { mode: "push", expression: ["processEventBatch"] },
@@ -179,8 +161,7 @@ test("Authenticated internal auth itx can create project and append to stream", 
     },
   });
   expect(permanentWorkerConfiguration!.payload).not.toHaveProperty("selector");
-  expect(repoCreated!.offset).toBeLessThan(creationWorkerConfiguration!.offset);
-  expect(creationWorkerConfiguration!.offset).toBeLessThan(permanentWorkerConfiguration!.offset);
+  expect(repoCreated!.offset).toBeLessThan(permanentWorkerConfiguration!.offset);
   expect(permanentWorkerConfiguration!.offset + 1).toBe(projectCreated!.offset);
 
   const rootRuntime = await stream.runtimeState();

@@ -93,26 +93,27 @@ The default worker in each project's config repo handles raw lifecycle events
 in its literal `processEvent` switch. There is no userspace configuration
 framework: each case can get `itx` and run arbitrary project code directly.
 
-- `project/create-requested` is the logical creation-only hook. Delivery is at
-  least once, so use stable idempotency keys. Project creation does not commit
-  terminal `project/created` until this delivery returns successfully. The
-  root `project-worker` subscription key is platform-owned; use distinct keys
-  for subscriptions installed by this hook.
 - `project/heartbeat-triggered` is appended to `/` by a project-owned Scheduler
   script and carries only `{ scheduleKey }`.
 - `stream/woken` on `/` exposes project-stream wakes, including after an OS
   deployment.
-- a config-repo `repo/commit-completed` cross-posted to `/` exposes the config
-  source-change / new-worker-build boundary.
+- a config-repo `repo/commit-completed` cross-posted to `/` is the durable
+  source-change hook. Each delivery attempt requires an authoritative current
+  HEAD, builds or loads that worker, and acknowledges only after its handler
+  returns. Head convergence and in-progress builds are receiver unavailability:
+  the cursor stays behind and delivery retries. A later HEAD may process earlier
+  commit facts, so this is a reconcile-current-config hook, not an exact
+  per-artifact deployment callback.
 
-The seeded creation case directly calls `scheduler.ensure(...)` for one
-15-minute heartbeat. This is ordinary itx code, not declarative desired state.
-Copy the call for multiple schedules, use `{ every: 1 }` for a fast test, or
-remove it for no heartbeat. Changing an existing project's schedules is
-explicit too: call `ensure(...)` or `cancel(...)` from the lifecycle case where
-that action belongs. `ensure(...)` preserves the clock, run count, and defining
-event when the requested definition already matches; `set(...)` deliberately
-re-anchors a recurring clock.
+`project/create-requested` and `project/created` belong to the platform's
+creation saga; the userspace worker does not handle them. The seeded
+config-commit case directly calls `scheduler.set(...)` for one 15-minute
+heartbeat. This is ordinary itx code, not declarative desired state. Copy the
+call for multiple schedules, use `{ every: 1 }` for a fast test, or remove it
+for no heartbeat. Changing an existing project's schedules is explicit too:
+call `set(...)` or `cancel(...)` from the lifecycle case where that action
+belongs. `set(...)` preserves the clock, run count, and defining event when the
+canonical definition already matches.
 
 The heartbeat action appends one durable `project/heartbeat-triggered` event,
 using the Scheduler execution ID for append idempotency. Missed interval

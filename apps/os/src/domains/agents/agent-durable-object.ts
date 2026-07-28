@@ -29,7 +29,6 @@ export class AgentDurableObject extends DurableObject<Env> {
   readonly #stream = new StreamRpcTarget({
     auth: trustedInternalAuthContext(),
     path: this.#name.path,
-    platformProcessorHost: true,
     projectId: this.#name.projectId,
   });
   readonly #registry = createStreamProcessorRegistry<AgentLiveState>(this.ctx, {

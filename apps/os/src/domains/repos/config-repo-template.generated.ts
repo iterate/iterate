@@ -22,36 +22,39 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "the project needs. There is no configuration-reconciliation framework around\n" +
       "them.\n" +
       "\n" +
-      "- `project/create-requested` is the logical creation-only hook. The platform\n" +
-      "  does not commit terminal `project/created` until this case returns\n" +
-      "  successfully. Delivery is at least once, so subscriptions, appends, and\n" +
-      "  other effects still need stable idempotency keys. The seeded example directly\n" +
-      "  calls `itx.scheduler.ensure(...)` here to install one 15-minute heartbeat.\n" +
       "- `project/heartbeat-triggered` is the ordinary event appended by that\n" +
       "  Scheduler script. Its payload is only `{ scheduleKey }`. Put arbitrary\n" +
       "  periodic itx calls directly in this case.\n" +
       "- root `stream/woken` is available for work that should run when the project\n" +
       "  stream wakes after hibernation or an OS deployment.\n" +
       "- `repo/commit-completed`, with exact `/repos/config` cross-post provenance, is\n" +
-      "  available for work that should run after config source changes and the new\n" +
-      "  worker build handles its first event.\n" +
+      "  the config-application hook. The event is the durable source-change fact;\n" +
+      "  each delivery attempt requires an authoritative current HEAD, builds or\n" +
+      "  loads that worker, and acknowledges only after its handler returns. A\n" +
+      "  lagging Artifacts replica or in-progress build is temporary receiver\n" +
+      "  unavailability, so the stream keeps its cursor behind and retries. If\n" +
+      "  several commits land quickly, a later HEAD may reconcile earlier commit\n" +
+      "  facts too. This is deliberately a reconcile-current-config hook, not an\n" +
+      "  exact per-commit activation callback. The seeded example calls\n" +
+      "  `itx.scheduler.set(...)` here to install one 15-minute heartbeat.\n" +
+      "\n" +
+      "`project/create-requested` and `project/created` belong to the platform's\n" +
+      "creation saga. They are not userspace lifecycle hooks and the config worker\n" +
+      "does not handle them.\n" +
       "\n" +
       "The heartbeat uses the Scheduler's native recurrence shape:\n" +
       "`{ every: seconds }`, `{ cron, timezone? }`, or `{ at: ISO timestamp }`. Copy\n" +
-      "the literal `scheduler.ensure(...)` call to add another schedule, use\n" +
+      "the literal `scheduler.set(...)` call to add another schedule, use\n" +
       "`{ every: 1 }` in a fast test project, or delete it when a project needs no\n" +
-      "heartbeat. `ensure(...)` leaves a matching schedule's clock, run count, and\n" +
+      "heartbeat. `set(...)` leaves a matching schedule's clock, run count, and\n" +
       "defining event untouched.\n" +
       "\n" +
       "Nothing interprets the source file as desired state. Changing or deleting an\n" +
-      "existing schedule is explicit code too: call `scheduler.ensure(...)` or\n" +
+      "existing schedule is explicit code too: call `scheduler.set(...)` or\n" +
       "`scheduler.cancel(...)` from whichever lifecycle case should apply the change.\n" +
       "Missed interval occurrences coalesce; the Scheduler does not backfill one event\n" +
       "per missed interval. The scheduler execution ID is the heartbeat append's\n" +
-      "idempotency key.\n" +
-      "\n" +
-      "The root `project-worker` subscription key is platform-owned. Creation hooks\n" +
-      "install any additional subscriptions under their own distinct keys.\n",
+      "idempotency key.\n",
   },
   {
     path: "ONBOARDING.md",
@@ -108,36 +111,39 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "the project needs. There is no configuration-reconciliation framework around\n" +
       "them.\n" +
       "\n" +
-      "- `project/create-requested` is the logical creation-only hook. The platform\n" +
-      "  does not commit terminal `project/created` until this case returns\n" +
-      "  successfully. Delivery is at least once, so subscriptions, appends, and\n" +
-      "  other effects still need stable idempotency keys. The seeded example directly\n" +
-      "  calls `itx.scheduler.ensure(...)` here to install one 15-minute heartbeat.\n" +
       "- `project/heartbeat-triggered` is the ordinary event appended by that\n" +
       "  Scheduler script. Its payload is only `{ scheduleKey }`. Put arbitrary\n" +
       "  periodic itx calls directly in this case.\n" +
       "- root `stream/woken` is available for work that should run when the project\n" +
       "  stream wakes after hibernation or an OS deployment.\n" +
       "- `repo/commit-completed`, with exact `/repos/config` cross-post provenance, is\n" +
-      "  available for work that should run after config source changes and the new\n" +
-      "  worker build handles its first event.\n" +
+      "  the config-application hook. The event is the durable source-change fact;\n" +
+      "  each delivery attempt requires an authoritative current HEAD, builds or\n" +
+      "  loads that worker, and acknowledges only after its handler returns. A\n" +
+      "  lagging Artifacts replica or in-progress build is temporary receiver\n" +
+      "  unavailability, so the stream keeps its cursor behind and retries. If\n" +
+      "  several commits land quickly, a later HEAD may reconcile earlier commit\n" +
+      "  facts too. This is deliberately a reconcile-current-config hook, not an\n" +
+      "  exact per-commit activation callback. The seeded example calls\n" +
+      "  `itx.scheduler.set(...)` here to install one 15-minute heartbeat.\n" +
+      "\n" +
+      "`project/create-requested` and `project/created` belong to the platform's\n" +
+      "creation saga. They are not userspace lifecycle hooks and the config worker\n" +
+      "does not handle them.\n" +
       "\n" +
       "The heartbeat uses the Scheduler's native recurrence shape:\n" +
       "`{ every: seconds }`, `{ cron, timezone? }`, or `{ at: ISO timestamp }`. Copy\n" +
-      "the literal `scheduler.ensure(...)` call to add another schedule, use\n" +
+      "the literal `scheduler.set(...)` call to add another schedule, use\n" +
       "`{ every: 1 }` in a fast test project, or delete it when a project needs no\n" +
-      "heartbeat. `ensure(...)` leaves a matching schedule's clock, run count, and\n" +
+      "heartbeat. `set(...)` leaves a matching schedule's clock, run count, and\n" +
       "defining event untouched.\n" +
       "\n" +
       "Nothing interprets the source file as desired state. Changing or deleting an\n" +
-      "existing schedule is explicit code too: call `scheduler.ensure(...)` or\n" +
+      "existing schedule is explicit code too: call `scheduler.set(...)` or\n" +
       "`scheduler.cancel(...)` from whichever lifecycle case should apply the change.\n" +
       "Missed interval occurrences coalesce; the Scheduler does not backfill one event\n" +
       "per missed interval. The scheduler execution ID is the heartbeat append's\n" +
-      "idempotency key.\n" +
-      "\n" +
-      "The root `project-worker` subscription key is platform-owned. Creation hooks\n" +
-      "install any additional subscriptions under their own distinct keys.\n",
+      "idempotency key.\n",
   },
   {
     path: "apps/guestbook/client.tsx",
@@ -298,25 +304,6 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  // per-stream order.\n" +
       "  protected override async processEvent(event: StreamEvent): Promise<void> {\n" +
       "    switch (event.type) {\n" +
-      "      case \"events.iterate.com/project/create-requested\": {\n" +
-      "        if (event.path !== \"/\") break;\n" +
-      "        // Write arbitrary one-time project setup against itx here. Returning\n" +
-      "        // from this case is the platform's project/created barrier. Delivery\n" +
-      "        // is at least once, so make every effect idempotent.\n" +
-      "        using itx = await this.env.ITX.get();\n" +
-      "        await itx.scheduler.ensure({\n" +
-      "          key: \"iterate/config/heartbeat/every-15-minutes\",\n" +
-      "          recurrence: { every: 15 * 60 },\n" +
-      "          script: `async (itx, schedule, trigger) => {\n" +
-      "            await itx.streams.get(\"/\").append({\n" +
-      "              type: \"events.iterate.com/project/heartbeat-triggered\",\n" +
-      "              idempotencyKey: \"iterate/config/heartbeat:\" + trigger.executionId,\n" +
-      "              payload: { scheduleKey: schedule.key },\n" +
-      "            });\n" +
-      "          }`,\n" +
-      "        });\n" +
-      "        break;\n" +
-      "      }\n" +
       "      case \"events.iterate.com/project/heartbeat-triggered\": {\n" +
       "        if (event.path !== \"/\") break;\n" +
       "        console.log(\"Project heartbeat fired\", { scheduleKey: event.payload?.scheduleKey });\n" +
@@ -341,9 +328,23 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        ) {\n" +
       "          break;\n" +
       "        }\n" +
-      "        // This is the exact /repos/config commit lifecycle hook. Write\n" +
-      "        // arbitrary post-build work against itx here:\n" +
-      "        // using itx = await this.env.ITX.get();\n" +
+      "        // This is the durable source-change hook. Delivery cannot acknowledge\n" +
+      "        // this event through an old or still-building config worker: each\n" +
+      "        // attempt first resolves an authoritative current HEAD, then loads it.\n" +
+      "        // A later HEAD may therefore process earlier commit facts: reconcile\n" +
+      "        // current configuration, not an exact per-commit activation.\n" +
+      "        using itx = await this.env.ITX.get();\n" +
+      "        await itx.scheduler.set({\n" +
+      "          key: \"iterate/config/heartbeat/every-15-minutes\",\n" +
+      "          recurrence: { every: 15 * 60 },\n" +
+      "          script: `async (itx, schedule, trigger) => {\n" +
+      "            await itx.streams.get(\"/\").append({\n" +
+      "              type: \"events.iterate.com/project/heartbeat-triggered\",\n" +
+      "              idempotencyKey: \"iterate/config/heartbeat:\" + trigger.executionId,\n" +
+      "              payload: { scheduleKey: schedule.key },\n" +
+      "            });\n" +
+      "          }`,\n" +
+      "        });\n" +
       "        break;\n" +
       "      }\n" +
       "      default:\n" +

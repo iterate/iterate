@@ -68,12 +68,10 @@ test("template ships packaged apps behind a thin router", () => {
 });
 
 test("project lifecycle cases directly install and handle the default heartbeat", async () => {
-  const ensure = vi.fn(
-    async (input: { key: string; recurrence: unknown; script: string }) => input,
-  );
+  const set = vi.fn(async (input: { key: string; recurrence: unknown; script: string }) => input);
   const dispose = vi.fn();
   const project = {
-    scheduler: { ensure },
+    scheduler: { set },
     [Symbol.dispose]: dispose,
   };
   const worker = new ProjectWorker(
@@ -85,12 +83,24 @@ test("project lifecycle cases directly install and handle the default heartbeat"
   );
 
   await deliver(worker, {
-    type: "events.iterate.com/project/create-requested",
+    type: "events.iterate.com/repo/commit-completed",
     path: "/",
+    source: {
+      crossPostedFrom: [
+        {
+          subscriptionKey: "cross-post:/",
+          createdAt: new Date(1).toISOString(),
+          offset: 1,
+          path: "/repos/config",
+          projectId: "prj_test",
+          type: "events.iterate.com/repo/commit-completed",
+        },
+      ],
+    },
   });
 
-  expect(ensure).toHaveBeenCalledOnce();
-  const configured = ensure.mock.calls[0]![0];
+  expect(set).toHaveBeenCalledOnce();
+  const configured = set.mock.calls[0]![0];
   expect(configured).toMatchObject({
     key: "iterate/config/heartbeat/every-15-minutes",
     recurrence: { every: 900 },
@@ -118,30 +128,18 @@ test("project lifecycle cases directly install and handle the default heartbeat"
     type: "events.iterate.com/stream/woken",
     path: "/",
   });
-  await deliver(worker, {
-    type: "events.iterate.com/repo/commit-completed",
-    path: "/",
-    source: {
-      crossPostedFrom: [
-        {
-          subscriptionKey: "cross-post:/",
-          createdAt: new Date(1).toISOString(),
-          offset: 1,
-          path: "/repos/config",
-          projectId: "prj_test",
-          type: "events.iterate.com/repo/commit-completed",
-        },
-      ],
-    },
-  });
-  // Heartbeat, wake, and config-commit cases are independent literal hooks;
-  // none silently re-runs the creation case's Scheduler call.
-  expect(ensure).toHaveBeenCalledOnce();
+  // Heartbeat and wake cases are independent literal hooks; neither silently
+  // re-runs the config-commit case's Scheduler call.
+  expect(set).toHaveBeenCalledOnce();
 
   const ignored = [
     {
       type: "events.iterate.com/project/create-requested",
-      path: "/agents/not-the-project-root",
+      path: "/",
+    },
+    {
+      type: "events.iterate.com/project/created",
+      path: "/",
     },
     {
       type: "events.iterate.com/project/heartbeat-triggered",
@@ -189,7 +187,7 @@ test("project lifecycle cases directly install and handle the default heartbeat"
     },
   ];
   for (const event of ignored) await deliver(worker, event);
-  expect(ensure).toHaveBeenCalledOnce();
+  expect(set).toHaveBeenCalledOnce();
   expect(log).toHaveBeenCalledOnce();
 });
 

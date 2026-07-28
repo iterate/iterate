@@ -45,7 +45,7 @@ const INGEST_WAIT_TIMEOUT_MS = 15_000;
  * fact to consume; a lost incarnation's in-flight executions are re-launched
  * by the next wake.
  *
- * The command methods (set/ensure/cancel/trigger/list) are the itx write path: they
+ * The command methods (set/cancel/trigger/list) are the itx write path: they
  * append, pull the event through ingestion, and only then return — so a
  * successful set is read-your-writes visible AND provably alarm-armed.
  */
@@ -59,7 +59,6 @@ export class SchedulerDurableObject extends DurableObject<Env> {
   readonly #stream = new StreamRpcTarget({
     auth: trustedInternalAuthContext(),
     path: this.#name.path,
-    platformProcessorHost: true,
     projectId: this.#name.projectId,
   });
   readonly #registry = createStreamProcessorRegistry(this.ctx, {
@@ -145,21 +144,6 @@ export class SchedulerDurableObject extends DurableObject<Env> {
       await this.#registry.catchUp(PROCESSOR_SLUG);
       await this.#schedulerProcessor.assertCreated();
       // Fail loudly at set time; raw appends bypass this and park via reduce.
-      const definition = parseScheduleSetPayload(input);
-      assertValidRecurrence(definition.recurrence);
-      return await this.#commitSchedule(definition);
-    });
-  }
-
-  /**
-   * Make one definition present without resetting a matching Schedule's
-   * clock, run count, or audit provenance. This is the scheduler-owned
-   * idempotent reconciliation verb; callers should not reimplement definition
-   * equality from list() views.
-   */
-  ensureSchedule(input: ScheduleSetPayload): Promise<ScheduleView> {
-    return this.#serializeWrite(async () => {
-      await this.#registry.catchUp(PROCESSOR_SLUG);
       const definition = parseScheduleSetPayload(input);
       assertValidRecurrence(definition.recurrence);
       const current = await this.#schedulerProcessor.getScheduleView(definition.key);

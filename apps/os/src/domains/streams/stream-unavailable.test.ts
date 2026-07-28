@@ -2,12 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import {
   isDurableObjectLifecycleError,
   isRetryableDurableObjectAvailabilityError,
-  isStreamDeliveryRejectedError,
   isStreamWaitTimeoutError,
   isStreamUnavailableError,
   rethrowStreamUnavailable,
   retryIdempotentDurableObjectOperation,
-  STREAM_DELIVERY_REJECTED_MESSAGE_PREFIX,
   STREAM_UNAVAILABLE_MESSAGE_PREFIX,
   STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX,
 } from "./stream-unavailable.ts";
@@ -133,17 +131,5 @@ describe("isStreamWaitTimeoutError", () => {
     ).toBe(true);
     expect(isStreamWaitTimeoutError(new Error("predicate failed"))).toBe(false);
     expect(isStreamWaitTimeoutError("stream-wait-timeout: string rejection")).toBe(false);
-  });
-});
-
-describe("isStreamDeliveryRejectedError", () => {
-  it("classifies only the exact-delivery policy rejection contract", () => {
-    expect(
-      isStreamDeliveryRejectedError(
-        new Error(`${STREAM_DELIVERY_REJECTED_MESSAGE_PREFIX}subscription parked at offset 7`),
-      ),
-    ).toBe(true);
-    expect(isStreamDeliveryRejectedError(new Error("subscription parked at offset 7"))).toBe(false);
-    expect(isStreamDeliveryRejectedError("stream-delivery-rejected: string rejection")).toBe(false);
   });
 });

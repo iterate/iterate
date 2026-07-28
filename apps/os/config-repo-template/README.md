@@ -12,33 +12,36 @@ case is ordinary userspace TypeScript: get `itx` there and write whatever calls
 the project needs. There is no configuration-reconciliation framework around
 them.
 
-- `project/create-requested` is the logical creation-only hook. The platform
-  does not commit terminal `project/created` until this case returns
-  successfully. Delivery is at least once, so subscriptions, appends, and
-  other effects still need stable idempotency keys. The seeded example directly
-  calls `itx.scheduler.ensure(...)` here to install one 15-minute heartbeat.
 - `project/heartbeat-triggered` is the ordinary event appended by that
   Scheduler script. Its payload is only `{ scheduleKey }`. Put arbitrary
   periodic itx calls directly in this case.
 - root `stream/woken` is available for work that should run when the project
   stream wakes after hibernation or an OS deployment.
 - `repo/commit-completed`, with exact `/repos/config` cross-post provenance, is
-  available for work that should run after config source changes and the new
-  worker build handles its first event.
+  the config-application hook. The event is the durable source-change fact;
+  each delivery attempt requires an authoritative current HEAD, builds or
+  loads that worker, and acknowledges only after its handler returns. A
+  lagging Artifacts replica or in-progress build is temporary receiver
+  unavailability, so the stream keeps its cursor behind and retries. If
+  several commits land quickly, a later HEAD may reconcile earlier commit
+  facts too. This is deliberately a reconcile-current-config hook, not an
+  exact per-commit activation callback. The seeded example calls
+  `itx.scheduler.set(...)` here to install one 15-minute heartbeat.
+
+`project/create-requested` and `project/created` belong to the platform's
+creation saga. They are not userspace lifecycle hooks and the config worker
+does not handle them.
 
 The heartbeat uses the Scheduler's native recurrence shape:
 `{ every: seconds }`, `{ cron, timezone? }`, or `{ at: ISO timestamp }`. Copy
-the literal `scheduler.ensure(...)` call to add another schedule, use
+the literal `scheduler.set(...)` call to add another schedule, use
 `{ every: 1 }` in a fast test project, or delete it when a project needs no
-heartbeat. `ensure(...)` leaves a matching schedule's clock, run count, and
+heartbeat. `set(...)` leaves a matching schedule's clock, run count, and
 defining event untouched.
 
 Nothing interprets the source file as desired state. Changing or deleting an
-existing schedule is explicit code too: call `scheduler.ensure(...)` or
+existing schedule is explicit code too: call `scheduler.set(...)` or
 `scheduler.cancel(...)` from whichever lifecycle case should apply the change.
 Missed interval occurrences coalesce; the Scheduler does not backfill one event
 per missed interval. The scheduler execution ID is the heartbeat append's
 idempotency key.
-
-The root `project-worker` subscription key is platform-owned. Creation hooks
-install any additional subscriptions under their own distinct keys.

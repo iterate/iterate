@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { makeMemoryProgressStore } from "iterate/processors/testing";
-import {
-  STREAM_DELIVERY_REJECTED_MESSAGE_PREFIX,
-  STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX,
-} from "../streams/stream-unavailable.ts";
 import { WorkerBuildFailedError } from "../workers/artifact-store.ts";
 import { workerBuildingResponse } from "../workers/worker-fetch-dispatch.ts";
 import { projectCreationEvents } from "./project-defaults.ts";
@@ -160,7 +156,7 @@ describe("ProjectProcessor bootstrap", () => {
     expect(h.network.eventsAt("/repos/config")).toHaveLength(configRepoEventCount);
   });
 
-  it("waits through a cold build and fenced create-requested delivery before appending project/created", async () => {
+  it("waits through a cold build before installing the userspace feed and appending project/created", async () => {
     const h = makeProjectHarness({
       workerOutcomes: [
         workerBuildingResponse(),
@@ -177,78 +173,14 @@ describe("ProjectProcessor bootstrap", () => {
         .filter((event) => event.payload.subscriptionKey === "project-worker"),
     ).toMatchObject([
       {
-        idempotencyKey: "platform:project-worker-creation-subscription:prj_test",
-        payload: {
-          deliver: { afterOffset: 0 },
-          onPoison: "park",
-          selector: {
-            eventTypes: ["events.iterate.com/project/create-requested"],
-            condition: "offset = 1",
-          },
-        },
-      },
-      {
-        idempotencyKey: "platform:project-worker-subscription:prj_test",
+        idempotencyKey: "project-worker-subscription:prj_test",
         payload: {
           deliver: { afterOffset: 1 },
           onPoison: "skip",
         },
       },
     ]);
-    expect(h.subscriptionDeliveryWaits).toEqual([
-      {
-        configuredAtOffset: expect.any(Number),
-        eventType: "events.iterate.com/project/create-requested",
-        expression: ["processEventBatch"],
-        subscriptionKey: "project-worker",
-        targetOffset: 1,
-        timeoutMs: 60_000,
-      },
-    ]);
     expect(h.state().birthCertificate).toEqual(PROJECT_CREATED.payload);
-  });
-
-  it("does not append project/created while the worker delivery fence is open", async () => {
-    const delivery = Promise.withResolvers<void>();
-    const h = makeProjectHarness({ subscriptionDeliveryBarrier: delivery.promise });
-    await h.play(["append", PROJECT_CREATE_REQUESTED]);
-    await h.stream.append(CONFIG_REPO_CREATED);
-    const settling = h.settle();
-
-    await h.subscriptionDeliveryWaitStarted;
-    expect(h.events("events.iterate.com/project/created")).toEqual([]);
-
-    delivery.resolve();
-    await settling;
-    expect(h.events("events.iterate.com/project/created")).toHaveLength(1);
-  });
-
-  it("terminalizes a project-worker delivery failure and removes the unusable subscription", async () => {
-    const h = makeProjectHarness({
-      subscriptionDeliveryErrors: [
-        new Error(`${STREAM_DELIVERY_REJECTED_MESSAGE_PREFIX}subscription parked at offset 1`),
-      ],
-    });
-    await h.play(["append", PROJECT_CREATE_REQUESTED], ["append", CONFIG_REPO_CREATED]);
-
-    expect(h.events("events.iterate.com/project/created")).toEqual([]);
-    expect(h.events("events.iterate.com/stream/subscription-removed")).toMatchObject([
-      {
-        idempotencyKey: "platform:project-worker-subscription-removed:prj_test",
-        payload: { subscriptionKey: "project-worker" },
-      },
-    ]);
-    expect(h.events("events.iterate.com/project/create-failed")).toMatchObject([
-      {
-        idempotencyKey: "platform:project/create-failed",
-        payload: {
-          createRequestedAtOffset: 1,
-          error:
-            "Default project worker bootstrap failed: stream-delivery-rejected: subscription parked at offset 1",
-          request: PROJECT_CREATE_REQUESTED.payload,
-        },
-      },
-    ]);
   });
 
   it("terminalizes a deterministic worker source-build failure", async () => {
@@ -263,15 +195,10 @@ describe("ProjectProcessor bootstrap", () => {
     await h.settle();
     expect(h.workerFetchCalls()).toBe(1);
     expect(h.events("events.iterate.com/project/created")).toEqual([]);
-    expect(h.events("events.iterate.com/stream/subscription-removed")).toMatchObject([
-      {
-        idempotencyKey: "platform:project-worker-subscription-removed:prj_test",
-        payload: { subscriptionKey: "project-worker" },
-      },
-    ]);
+    expect(h.events("events.iterate.com/stream/subscription-removed")).toEqual([]);
     expect(h.events("events.iterate.com/project/create-failed")).toMatchObject([
       {
-        idempotencyKey: "platform:project/create-failed",
+        idempotencyKey: "project/create-failed",
         payload: {
           createRequestedAtOffset: 1,
           error: "Default project worker bootstrap failed: Expected ; but found is",
@@ -292,23 +219,6 @@ describe("ProjectProcessor bootstrap", () => {
     expect(h.state().createFailure).toBeNull();
 
     await h.settle();
-    expect(h.events("events.iterate.com/project/created")).toHaveLength(1);
-  });
-
-  it("leaves a delivery timeout open and completes on durable redelivery", async () => {
-    const h = makeProjectHarness({
-      subscriptionDeliveryErrors: [
-        new Error(`${STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX}temporary delivery timeout`),
-      ],
-    });
-    await h.stream.append(PROJECT_CREATE_REQUESTED, CONFIG_REPO_CREATED);
-
-    await expect(h.settle()).rejects.toThrow("temporary delivery timeout");
-    expect(h.events("events.iterate.com/project/create-failed")).toEqual([]);
-    expect(h.events("events.iterate.com/project/created")).toEqual([]);
-
-    await h.settle();
-    expect(h.subscriptionDeliveryWaits).toHaveLength(2);
     expect(h.events("events.iterate.com/project/created")).toHaveLength(1);
   });
 
@@ -345,7 +255,7 @@ describe("ProjectProcessor bootstrap", () => {
 
     expect(h.events("events.iterate.com/project/create-failed")).toMatchObject([
       {
-        idempotencyKey: "platform:project/create-failed",
+        idempotencyKey: "project/create-failed",
         payload: {
           createRequestedAtOffset: 1,
           error: "Config repo creation failed: The backing repository could not be created.",
@@ -354,7 +264,6 @@ describe("ProjectProcessor bootstrap", () => {
       },
     ]);
     expect(h.workerFetchCalls()).toBe(0);
-    expect(h.subscriptionDeliveryWaits).toEqual([]);
     expect(h.state()).toMatchObject({
       birthCertificate: null,
       createFailure: {
@@ -381,16 +290,16 @@ describe("ProjectProcessor bootstrap", () => {
   it("reduces only a terminal fact that exactly settles the open creation request", async () => {
     const failure = {
       type: "events.iterate.com/project/create-failed",
-      idempotencyKey: "platform:project/create-failed",
+      idempotencyKey: "project/create-failed",
       payload: {
         createRequestedAtOffset: 1,
         error: "not this request",
         request: PROJECT_CREATE_REQUESTED.payload,
       },
     } satisfies ProjectEventInput;
-    const userspaceSource = {
+    const wrongProcessorSource = {
       processor: {
-        slug: ProjectProcessorContract.slug,
+        slug: "not-project",
         version: ProjectProcessorContract.version,
         stream: { path: "/", projectId: "prj_test" },
         whileProcessing: { offset: 2, type: "events.iterate.com/repos/created" },
@@ -412,10 +321,10 @@ describe("ProjectProcessor bootstrap", () => {
 
     for (const counterfeit of [
       { ...PROJECT_CREATED, source: undefined },
-      { ...PROJECT_CREATED, source: userspaceSource },
+      { ...PROJECT_CREATED, source: wrongProcessorSource },
       { ...PROJECT_CREATED, source: crossPostSource },
       failure,
-      { ...failure, source: userspaceSource },
+      { ...failure, source: wrongProcessorSource },
     ] satisfies ProjectEventInput[]) {
       const h = makeProjectHarness();
       await h.play(["append", PROJECT_CREATE_REQUESTED], ["append", counterfeit]);
@@ -462,7 +371,7 @@ describe("ProjectProcessor bootstrap", () => {
     expect(h.state().birthCertificate).toEqual(PROJECT_CREATED.payload);
   });
 
-  it("keeps trusted historical creation terminals valid across contract version bumps", async () => {
+  it("keeps historical creation terminals valid across contract version bumps", async () => {
     const historicalTerminal = {
       ...PROJECT_CREATED,
       source: {

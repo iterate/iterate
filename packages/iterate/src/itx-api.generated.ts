@@ -939,10 +939,10 @@ export interface SandboxCollection {
 
 /**
  * One Scheduler: keyed Schedules on one `/scheduler/**` stream, triggered by
- * a durable alarm. Everything it does is events on that stream — `set`/
- * `ensure`/`cancel` append when desired state changes, `list` reads reduced
- * state, and every Trigger's request and outcome are appended back, so the
- * stream is the complete audit log. Scripts run
+ * a durable alarm. Everything it does is events on that stream —
+ * `set`/`cancel` append when desired state changes, `list` reads reduced state,
+ * and every Trigger's request and outcome are appended back, so the stream is
+ * the complete audit log. Scripts run
  * with project-root itx authority, at least once per Trigger (derive append
  * idempotency keys from `trigger.executionId`).
  *
@@ -956,16 +956,13 @@ export interface Scheduler {
   processor: WakeableStreamProcessorRpc<SchedulerProcessorState>;
   /** Create this Scheduler and return only after it has processed the complete birth batch. */
   create(_input: Record<string, never>): Promise<Scheduler>;
-  /** Upsert by key; returns after the Scheduler has ingested the set (read-your-writes, alarm armed). */
-  set(input: SetScheduleInput): Promise<ScheduleView>;
   /**
-   * Idempotently make a Schedule definition present. Unlike `set`, an exact
-   * match preserves its current clock, run count, and defining event; a
-   * missing or changed definition is set normally. Relative `{ in }` input is
-   * re-resolved against each call's current time, so use canonical `{ at }`
-   * when a one-shot definition itself must reconcile unchanged.
+   * Upsert by key. An unchanged definition preserves its clock and run count;
+   * a missing or changed definition is appended and ingested before return.
+   * Relative `{ in }` input is resolved against each call's current time, so
+   * use canonical `{ at }` when a one-shot definition must compare unchanged.
    */
-  ensure(input: SetScheduleInput): Promise<ScheduleView>;
+  set(input: SetScheduleInput): Promise<ScheduleView>;
   /** Remove a key. Idempotent; an in-flight Trigger completes as `skipped`. */
   cancel(key: string): Promise<void>;
   /** Restart the scheduler's server-side object; the next request boots it fresh. */
@@ -2557,7 +2554,6 @@ export type StreamEvent = {
     | {
         processor?:
           | {
-              authority?: "platform" | undefined;
               slug: string;
               version: string;
               stream: { path: string; projectId: string | null };
@@ -2941,10 +2937,10 @@ export type SchedulerProcessorState = {
 };
 
 /**
- * Input to `scheduler.set(...)` and `scheduler.ensure(...)`: a keyed desired
- * definition. `recurrence` additionally accepts `{ in: seconds }` sugar,
- * converted to a canonical `{ at }` before anything is appended — the event
- * log has exactly one spelling of every schedule.
+ * Input to `scheduler.set(...)`: a keyed desired definition. `recurrence`
+ * additionally accepts `{ in: seconds }` sugar, converted to a canonical
+ * `{ at }` before anything is appended — the event log has exactly one
+ * spelling of every schedule.
  */
 export type SetScheduleInput = {
   key: string;
@@ -3212,7 +3208,6 @@ export type StreamEventInput = {
     | {
         processor?:
           | {
-              authority?: "platform" | undefined;
               slug: string;
               version: string;
               stream: { path: string; projectId: string | null };

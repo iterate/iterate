@@ -42,10 +42,17 @@ export const ProjectProcessorContract = defineProcessorContract({
       description:
         "The durable creation intent, from project/create-requested; null until the saga opens.",
     }),
-    createRequestedAtOffset: z.number().int().positive().nullable().default(null).meta({
-      description:
-        "Offset of project/create-requested, used to fence the default worker's first delivery.",
-    }),
+    createRequestedAtOffset: z
+      .number()
+      .int()
+      .positive()
+      .nullable()
+      .default(null)
+      .meta({
+        description:
+          "Offset of project/create-requested: the causal link for terminal creation facts and " +
+          "the lower bound of the later userspace worker feed.",
+      }),
     createFailure: projectCreationFailureSchema()
       .nullable()
       .default(null)
@@ -59,8 +66,9 @@ export const ProjectProcessorContract = defineProcessorContract({
       .default(null)
       .meta({
         description:
-          "Existence marker: null until terminal project/created reduces after the default " +
-          "worker consumed project/create-requested and completed its userspace creation hook.",
+          "Existence marker: null until terminal project/created reduces after sibling " +
+          "processors exist, the seeded default worker is reachable, and its permanent feed " +
+          "has been committed.",
       }),
     onboardingActive: z
       .boolean()
@@ -178,13 +186,15 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/project/create-requested": {
       description:
         "Requests the project creation saga. The terminal project/created certificate is " +
-        "appended only after sibling processors exist and the default worker has consumed this event.",
+        "appended only after sibling processors exist, the seeded default worker has built and " +
+        "answered its readiness probe, and its permanent root feed has been installed.",
       payloadSchema: projectCreationPayloadSchema(),
     },
     "events.iterate.com/project/created": {
       description:
-        "The project creation saga completed: sibling processors exist and the default project " +
-        "worker consumed project/create-requested, including its userspace creation hook.",
+        "The project creation saga completed: sibling processors exist, the seeded default " +
+        "project worker is reachable, and its permanent root feed is installed. This is a " +
+        "platform certificate, not a userspace lifecycle hook.",
       payloadSchema: projectBirthCertificateSchema(),
     },
     "events.iterate.com/project/create-failed": {
@@ -496,11 +506,10 @@ type ProjectCreationTerminal =
 /**
  * Parse the one terminal fact that can settle a creation request.
  *
- * Payload causality is necessary but not sufficient: the event must also be a
- * platform-authorized append by this Project processor while consuming the
- * config repo's terminal result. Ordinary project code may emit the same event
- * type, but cannot acquire the reserved platform authority stamped by the
- * processor host's Stream RPC boundary.
+ * This is causal validation, not an authorization boundary: processor stamps
+ * and idempotency keys are ordinary event claims. The event must be a direct
+ * append by this Project processor while consuming the config repo's terminal
+ * result, and its payload must settle the exact open request.
  */
 export function parseProjectCreationTerminal(input: {
   event: StreamEvent;
@@ -512,11 +521,11 @@ export function parseProjectCreationTerminal(input: {
   const processor = event.source?.processor;
   // The stamped version describes which Project processor originally emitted
   // the fact; it must not be pinned to today's version or a later refold would
-  // discard an otherwise trusted historical terminal.
+  // discard an otherwise valid historical terminal.
   if (
     event.path !== "/" ||
     event.source?.crossPostedFrom !== undefined ||
-    processor?.authority !== "platform" ||
+    processor === undefined ||
     processor.slug !== ProjectProcessorContract.slug ||
     processor.stream.path !== "/" ||
     processor.stream.projectId !== projectId
@@ -527,7 +536,7 @@ export function parseProjectCreationTerminal(input: {
   switch (event.type) {
     case "events.iterate.com/project/created": {
       if (
-        event.idempotencyKey !== `platform:project-created:${projectId}` ||
+        event.idempotencyKey !== `project-created:${projectId}` ||
         processor.whileProcessing?.type !== "events.iterate.com/repos/created"
       ) {
         return null;
@@ -543,7 +552,7 @@ export function parseProjectCreationTerminal(input: {
     }
     case "events.iterate.com/project/create-failed": {
       if (
-        event.idempotencyKey !== "platform:project/create-failed" ||
+        event.idempotencyKey !== "project/create-failed" ||
         (processor.whileProcessing?.type !== "events.iterate.com/repos/created" &&
           processor.whileProcessing?.type !== "events.iterate.com/repos/create-failed")
       ) {

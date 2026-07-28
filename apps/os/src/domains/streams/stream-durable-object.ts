@@ -181,8 +181,7 @@ export class StreamDeliveryAlarmBoundary {
 /**
  * The subscription key of the worker feed every project-scoped stream uses.
  * Child streams configure it at birth. The project creation saga configures
- * it on `/` only after the default worker has built, then waits for that
- * exact configuration to deliver `project/create-requested`.
+ * it on `/` only after the seeded default worker has built.
  */
 const PROJECT_WORKER_SUBSCRIPTION_KEY = "project-worker";
 
@@ -229,10 +228,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    * the freshly folded config — see #readCoreProcessorState.
    */
   readonly #subscriptionCursorStore = new SqliteSubscriptionCursorStore(this.ctx.storage.sql, {
-    onMutation: () => {
-      this.#refreshLiveState();
-      this.#subscribers.notifyDeliveryStateChanged();
-    },
+    onMutation: () => this.#refreshLiveState(),
   });
   /** In-memory throughput accounting (events/s, bytes in/out); resets with the incarnation. */
   readonly #metrics = new StreamRuntimeMetrics(Date.now());
@@ -328,8 +324,9 @@ export class StreamDurableObject extends DurableObject<Env> {
     // Child project streams are born with their ordinary platform feeds. The
     // root is deliberately different: its project-worker feed is installed by
     // the project creation saga only after the seeded worker has built. That
-    // keeps an unavailable worker from looking broken during its own build and
-    // gives project/created a precise delivery barrier.
+    // keeps an unavailable worker from looking broken during its own build;
+    // project/created means the worker was reachable and its permanent feed
+    // was committed, not that userspace consumed a platform creation event.
     if (this.#coreProcessorState.eventCount === 0) {
       this.append({
         type: "events.iterate.com/stream/created",
@@ -485,7 +482,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       byteLengths.reduce((sum, bytes) => sum + bytes, 0),
     );
     this.#refreshLiveState();
-    this.#subscribers.notifyDeliveryStateChanged();
 
     // 3. Post-commit fan-out. Core side effects are fire-and-forget where
     // async, so nothing here can fail the append. One wake covers every lane:
@@ -881,29 +877,10 @@ export class StreamDurableObject extends DurableObject<Env> {
         });
       }
 
-      case "events.iterate.com/stream/subscription-cursor-set": {
+      case "events.iterate.com/stream/subscription-cursor-set":
         // The seek itself is a side effect on the spine's cursor row (see
-        // #processEvent). Remember the fact on the exact active
-        // configuration as well, so a delivery fence cannot mistake a seek
-        // that happened before its wait began for a receiver acknowledgement.
-        const existing = next.configuredSubscribersByKey[event.payload.subscriptionKey];
-        if (existing === undefined) {
-          return this.#reduceCircuitBreaker({ event: args.event, state: next });
-        }
-        return this.#reduceCircuitBreaker({
-          event: args.event,
-          state: {
-            ...next,
-            configuredSubscribersByKey: {
-              ...next.configuredSubscribersByKey,
-              [event.payload.subscriptionKey]: {
-                ...existing,
-                cursorSetAtOffset: event.offset,
-              },
-            },
-          },
-        });
-      }
+        // #processEvent); the fold only validates and counts the fact.
+        return this.#reduceCircuitBreaker({ event: args.event, state: next });
 
       case "events.iterate.com/stream/child-stream-created": {
         if (next.path === undefined) {
@@ -1416,18 +1393,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       clearTimeout(timer);
       handle.unsubscribe();
     }
-  }
-
-  /** Internal creation-saga fence; delivery proof lives with the subscriber spine. */
-  async waitUntilSubscriptionDelivered(args: {
-    configuredAtOffset: number;
-    eventType: string;
-    expression: ["processEventBatch"];
-    subscriptionKey: string;
-    targetOffset: number;
-    timeoutMs: number;
-  }): Promise<void> {
-    await this.#subscribers.waitUntilDelivered(args);
   }
 
   getProcessorRuntimeState(args: {

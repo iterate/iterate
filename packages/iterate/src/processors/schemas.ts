@@ -16,15 +16,12 @@ export const StreamEventInput = z.object({
       // this event, and — for per-event side effects — while processing which
       // event. `stream` is the processor's home stream (where `whileProcessing`
       // offsets resolve), recorded absolutely so the stamp stays meaningful on
-      // rows appended cross-stream and on cross-posted copies. An unstamped
-      // `authority` is only a provenance claim; `authority: "platform"` is the
-      // authenticated variant reserved for platform-hosted processors. The OS
-      // stream RPC boundary adds it to trusted host appends and rejects it from
-      // ordinary append(). Deliberately not strict (see the envelope comment
-      // above): a retired stamp field must strip on read, not poison the row.
+      // rows appended cross-stream and on cross-posted copies. The stamp is a
+      // claim, not authentication: same trust model as idempotency keys.
+      // Deliberately not strict (see the envelope comment above): a retired
+      // stamp field must strip on read, not poison the row.
       processor: z
         .object({
-          authority: z.literal("platform").optional(),
           slug: z.string(),
           version: z.string(),
           stream: z.object({

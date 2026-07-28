@@ -235,11 +235,10 @@ delivery: {mode: "push", expression: ["processEventBatch"]}}` —
   by #1761) and #1761's derived pump special-case. Worker return = ack; throw = nack. The project
   processor's `child-stream-created` hook keeps appending only the _other_ subscriptions.
   The root `/` stream is the intentional exception. After the config worker
-  builds, project creation temporarily configures the same key with a selector
-  for the exact `project/create-requested`, a cursor immediately before it,
-  and `onPoison: "park"`. Once that receiver call is acknowledged, one atomic
-  append replaces it with the ordinary selector-free, `onPoison: "skip"` feed
-  starting after the request and adds terminal `project/created`.
+  builds and answers a readiness probe, project creation atomically configures
+  the ordinary selector-free, `onPoison: "skip"` feed starting after
+  `project/create-requested` and adds terminal `project/created`. Creation does
+  not wait for a userspace delivery.
 - **Cross-post** — `{subscriptionKey: "cross-post:<id>", selector, onPoison: "park", delivery:
 {mode: "push", expression: ["streams", ["get", targetPath], "acceptCrossPost"]}}`. New first-party
   `Stream.ingest({from, events})` on the receiving stream carries what `#crossPostMatchingRules`
@@ -328,7 +327,7 @@ the re-wake-trigger event-type carve-out (`:218-225`); stringly `#`-parsed subsc
 | Poke in flight     | 1 per subscription; drains serial per subscription, concurrent across                               |
 | Idle teardown      | unchanged (5 min, in-memory timer — correct for retained stubs)                                     |
 | `deliver` default  | `"new"` (non-root feeds set `"all"`; root's permanent feed starts after `project/create-requested`) |
-| `onPoison` default | `"park"` (non-root/permanent root feeds set `"skip"`; only root's exact creation fence parks)       |
+| `onPoison` default | `"park"` (non-root and permanent root worker feeds set `"skip"`)                                    |
 
 ## Rollout
 
@@ -367,9 +366,9 @@ into the spine rather than adding a second mechanism.
 - `event.path` (#1756): `${event.path}@${event.offset}` is the idempotency-key idiom; note the
   cross-post lesson from that PR for `Stream.ingest` — anything re-appending a committed event
   must strip `offset`/`createdAt`/`path` or strict input parsing kills it silently.
-- Replay-from-0 on non-root streams, root's creation delivery of exactly
-  `project/create-requested` followed by all later events, per-stream order, at-least-once,
-  503-worker-building-as-natural-retry semantics;
+- Replay-from-0 on non-root streams, root delivery of all events after
+  `project/create-requested`, per-stream order, at-least-once,
+  worker-building-as-natural-retry semantics;
   `runtime.workerDelivery` observability (grows into per-subscription spine state).
 
 **Upgrade in this PR (the two things #1761 deliberately punted):**
@@ -393,10 +392,9 @@ from birth, and removes the project processor as a single point of failure for f
 AND configured's uniformity (a real `subscription-configured` event: one registry, one spine,
 same-key override). #1761's derived pump special-case is migrated onto the
 spine accordingly. Project creation now reserves one exception for `/`: its
-feed cannot be born before the worker whose creation it must fence, so the
-project saga installs the exact-request configuration after the build, waits,
-then atomically replaces it with the permanent feed alongside terminal
-`project/created`.
+feed cannot be born before the seeded worker has built, so the project saga
+atomically installs the permanent feed after the readiness probe alongside
+terminal `project/created`. No userspace delivery fences the creation saga.
 
 ## Decision log (grilling, 2026-07-08)
 

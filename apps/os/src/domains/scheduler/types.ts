@@ -27,10 +27,10 @@ export type SchedulerAction = {
 };
 
 /**
- * Input to `scheduler.set(...)` and `scheduler.ensure(...)`: a keyed desired
- * definition. `recurrence` additionally accepts `{ in: seconds }` sugar,
- * converted to a canonical `{ at }` before anything is appended — the event
- * log has exactly one spelling of every schedule.
+ * Input to `scheduler.set(...)`: a keyed desired definition. `recurrence`
+ * additionally accepts `{ in: seconds }` sugar, converted to a canonical
+ * `{ at }` before anything is appended — the event log has exactly one
+ * spelling of every schedule.
  */
 export type SetScheduleInput = {
   key: string;
@@ -69,8 +69,8 @@ export type ScheduleView = {
 
 /**
  * Whether two definitions describe the same desired Schedule. Runtime fields
- * (`definedAtOffset`, clock, run count) are intentionally excluded: ensure()
- * must preserve them when configuration already matches.
+ * (`definedAtOffset`, clock, run count) are intentionally excluded: set()
+ * preserves them when configuration already matches.
  */
 export function sameScheduleDefinition(
   left: Pick<ScheduleView, "action" | "key" | "metadata" | "recurrence">,

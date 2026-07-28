@@ -304,15 +304,13 @@ whatever). The worker returns → ack; throws → redelivery with backoff.
 at-least-once redelivery a no-op.
 
 The root `/` stream is the deliberate exception. The project creation saga
-waits for the config repo's worker to build, then appends the same literal
-subscription starting immediately before `project/create-requested`, with
-`onPoison: "park"`. It waits for that exact cursor to acknowledge the creation
-request before appending terminal `project/created`. This both avoids treating
-the worker as broken while it is being built and makes the userspace creation
-hook part of the project's creation boundary. On `/`, every mutation of the
-`project-worker` subscription and every `platform:` idempotency key requires
-provenance stamped by a platform processor host; project code therefore cannot
-replace the temporary feed, move its cursor, or squat the later certificate.
+waits for the trusted config-repo template worker to build, then atomically
+appends the selector-free feed starting after `project/create-requested` and
+terminal `project/created`. Delaying the subscription prevents the stream from
+classifying the worker as unavailable during its initial build. Creation does
+not wait for userspace to consume a platform creation event. Later config
+commits and all other root facts use the ordinary feed; if a later worker build
+is in progress, delivery retries without advancing its cursor.
 
 ## Hosting processors in a Durable Object
 

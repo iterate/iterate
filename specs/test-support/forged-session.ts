@@ -146,10 +146,10 @@ async function createAdminProjectAfterPreviewRollout(input: {
   slug: string;
 }) {
   // create() resolves only after the bootstrap saga commits terminal
-  // project/created (sibling processors born, config repo seeded, and the
-  // project worker's creation hook consumed), so no separate lifecycle poll is
-  // needed. The shared helper retries the initial admin connection while a
-  // preview deployment finishes converging.
+  // project/created (sibling processors born, config repo seeded, the seed
+  // worker reachable, and its permanent feed installed), so no separate
+  // lifecycle poll is needed. The shared helper retries the initial admin
+  // connection while a preview deployment finishes converging.
   using session = await connectPlaywrightAdminItx(input);
   using created = await session.projects.get(input.slug).create({});
   const description = await created.__describe();

@@ -118,11 +118,11 @@ test("manual trigger runs a far-future schedule now; cancel removes it", async (
     script: `async (itx, schedule, trigger) => "manual-" + trigger.runCount`,
     metadata: { purpose: "manual e2e", nested: { a: 1, b: 2 }, negativeZero: -0 },
   } as const;
-  const concurrentlyEnsured = await Promise.all(
-    Array.from({ length: 5 }, () => project.scheduler.ensure(definition)),
+  const concurrentSets = await Promise.all(
+    Array.from({ length: 5 }, () => project.scheduler.set(definition)),
   );
-  const initial = concurrentlyEnsured[0]!;
-  expect(new Set(concurrentlyEnsured.map((schedule) => schedule.definedAtOffset))).toMatchObject({
+  const initial = concurrentSets[0]!;
+  expect(new Set(concurrentSets.map((schedule) => schedule.definedAtOffset))).toMatchObject({
     size: 1,
   });
   using schedulerStream = project.streams.get(SCHEDULER_STREAM_PATH);
@@ -133,7 +133,7 @@ test("manual trigger runs a far-future schedule now; cancel removes it", async (
   );
   expect(setEvents).toHaveLength(1);
 
-  const unchanged = await project.scheduler.ensure({
+  const unchanged = await project.scheduler.set({
     ...definition,
     // Object key order and JSON's persisted -0 → 0 normalization are not
     // configuration changes.
@@ -151,7 +151,7 @@ test("manual trigger runs a far-future schedule now; cancel removes it", async (
     ),
   ).toHaveLength(1);
 
-  const changed = await project.scheduler.ensure({
+  const changed = await project.scheduler.set({
     ...definition,
     recurrence: { cron: "0 4 1 1 *", timezone: "Europe/London" },
   });

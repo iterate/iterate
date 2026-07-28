@@ -211,43 +211,40 @@ shorthand). The config repo is seeded from the template folder at
 apps under `apps/`, and `package.json` — platform types come from its
 `iterate` devDependency's `iterate/sdk` export — `AGENTS.md`, `ONBOARDING.md`;
 codegen keeps the seeded file map in
-`domains/repos/config-repo-template.generated.ts` in sync). Once that repo is
-built, the Project processor installs a temporary root `project-worker`
-subscription selecting only the exact creation request and waits for its cursor
-to prove that the seeded worker processed it. The worker's creation hook
-installs the default heartbeat and can run any other arbitrary itx setup. The
-processor then atomically replaces that temporary subscription with the
-ordinary all-events feed (starting after the creation request) and emits
-terminal `project/created`. A config-repo failure or durable rejection of the
-exact delivery policy instead emits terminal `project/create-failed`. A
-deterministic worker source-build failure is terminal too; transient
-infrastructure availability, in-progress builds, and wait timeouts stay open
-for durable redelivery. The onboarding agent is created separately and
-explicitly when its dashboard chat opens; its path alone never creates it. The
-config repo's stream carries a `cross-post:/` subscription from birth, so every
-config-repo event (including `repos/created`) is copied onto the project stream
-`/` with provenance. Streams are the coordination layer for all of this —
-bootstrap is events and processors, not a setup RPC.
+`domains/repos/config-repo-template.generated.ts` in sync). Once that trusted
+seed worker builds and answers a readiness probe, the Project processor
+atomically installs the ordinary root worker feed (starting after the creation
+request) and emits terminal `project/created`. It does not wait for userspace to
+consume a platform creation event. A config-repo or deterministic worker
+source-build failure emits terminal `project/create-failed`; transient
+infrastructure availability and in-progress builds stay open for durable
+redelivery. The onboarding agent is created separately and explicitly when its
+dashboard chat opens; its path alone never creates it. The config repo's stream
+carries a `cross-post:/` subscription from birth, so every config-repo event
+(including `repos/created` and `repo/commit-completed`) is copied onto the
+project stream `/` with provenance. Streams are the coordination layer for all
+of this — bootstrap is events and processors, not a setup RPC.
 
-The seeded worker exposes project lifecycle events in the config repo. Its
-literal `project/create-requested` switch case is the creation-only hook.
-Delivery is at least once, so subscriptions and appends there still need stable
-idempotency keys. The root `project-worker` key is platform-owned; creation
-hooks add their own literal subscription events under distinct keys. Its
-configuration and the terminal creation facts use the reserved `platform:`
-idempotency namespace, so project code cannot squat a key or alter the
-creation-delivery fence while the worker is building.
-The same literal switch exposes `project/heartbeat-triggered`, root
+The seeded worker's literal switch exposes `project/heartbeat-triggered`, root
 `stream/woken`, and the exact `/repos/config` `repo/commit-completed`
 cross-post. Each case is ordinary userspace TypeScript: get `itx` and make
 whatever calls belong to that lifecycle event. There is no reconciliation
-framework or shared hook. The creation case directly calls
-`scheduler.ensure(...)` for one 15-minute heartbeat whose script appends
-`project/heartbeat-triggered` with `{ scheduleKey }`. Copy the call for
-multiple schedules, change it to test-speed `{ every: 1 }`, or remove it for
-none. Existing schedule changes and cancellation are explicit itx calls too.
-Interval schedules coalesce missed occurrences; they do not backfill one event
-per missed interval.
+framework or shared hook. `project/create-requested` and `project/created`
+remain platform saga facts and are not userspace hooks.
+
+The config-commit case is the durable source-change hook. Each delivery attempt
+requires an authoritative current HEAD, builds or loads that worker, and
+acknowledges only after its handler returns. Head convergence and in-progress
+builds leave the cursor behind for retry. A later HEAD may process earlier
+commit facts, so this is a reconcile-current-config hook rather than an exact
+per-commit activation callback. The seeded case calls `scheduler.set(...)` for
+one 15-minute heartbeat whose script appends
+`project/heartbeat-triggered` with `{ scheduleKey }`. An unchanged canonical
+definition preserves the schedule's clock, run count, and defining event. Copy
+the call for multiple schedules, change it to test-speed `{ every: 1 }`, or
+remove it for none. Existing schedule changes and cancellation are explicit
+itx calls too. Interval schedules coalesce missed occurrences; they do not
+backfill one event per missed interval.
 
 ## Events
 

@@ -47,7 +47,7 @@ echo "vessel:   http://localhost:$TASKS_PORT"
 # 3. Project: create + seed if missing; fetch id.
 PROJECT_ID=$(cd "$OS_DIR" && doppler run -- pnpm cli itx run --base-url "$OS_URL" --eval "
   const project = itx.projects.get('$SLUG').create({});
-  await project.waitUntilReady();
+  await project.waitUntilCreated();
   return await project.projectId;" 2>/dev/null | tail -1 | tr -d '"')
 echo "project:  $PROJECT_ID ($SLUG)"
 

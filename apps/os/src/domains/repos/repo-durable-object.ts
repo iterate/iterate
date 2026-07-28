@@ -118,7 +118,6 @@ export class RepoDurableObject extends DurableObject<Env> {
   readonly #stream = new StreamRpcTarget({
     auth: trustedInternalAuthContext(),
     path: this.#name.path,
-    platformProcessorHost: true,
     projectId: this.#name.projectId,
   });
   readonly #registry = createStreamProcessorRegistry(this.ctx, {
@@ -223,8 +222,10 @@ export class RepoDurableObject extends DurableObject<Env> {
    * Every write to the repo goes through this Durable Object (`commitFiles`
    * and seeding), so the cache is authoritative once written; a cold miss
    * repairs it with one shallow clone. The worker build resolver calls this on
-   * every branch-late-bound worker load, which is what makes a repo commit
-   * visible on the next use without a per-load clone.
+   * every branch-late-bound worker load. If an observed external push has not
+   * converged across Artifacts replicas after the bounded clone retries, this
+   * rejects as temporarily unavailable instead of letting a worker invocation
+   * acknowledge work through stale code.
    *
    * `contentHash` identifies the checkout's file contents (a poor man's git
    * tree oid — the porcelain doesn't expose trees). Build keys prefer it over
@@ -249,13 +250,17 @@ export class RepoDurableObject extends DurableObject<Env> {
     // stale head forever (the cache never self-invalidates).
     const raced = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(branch));
     if (isRepoHeadRecord(raced)) return { branch, ...raced };
-    // Same staleness rule against the branch authority: a checkout that lags
-    // the last own push, or that cannot settle an observed external push
-    // (retries exhausted against a lagging replica), may be SERVED once, but
-    // must never be CACHED — an un-invalidatable cache entry would pin builds
-    // to the pre-push head forever.
+    // Worker source resolution is stricter than ordinary repo content reads:
+    // a checkout that lags the last own push, or that cannot settle an
+    // observed external push, must not be served even once. Otherwise the
+    // root feed could acknowledge repo/commit-completed through the previous
+    // config worker and permanently lose that revision's lifecycle reaction.
     const decision = decideHeadResolution(this.#branchAuthority(branch), head.commitOid);
-    if (!decision.cache) return { branch, ...head };
+    if (!decision.cache) {
+      throw new RepoNotSeededError(
+        `Repo branch "${branch}" is still converging after an observed push (resolved ${head.commitOid}; ${decision.reason}).`,
+      );
+    }
     this.ctx.storage.kv.put(repoHeadStorageKey(branch), head);
     return { branch, ...head };
   }
@@ -931,13 +936,12 @@ export class RepoDurableObject extends DurableObject<Env> {
    * observations NEVER assign cursors. Each observation joins the branch's
    * observed `(before, after)` window; the chain's FRONTIER (afters no
    * observed push builds upon) is the only set of resolutions the clone
-   * lanes may durably cache — anything else (an eventually consistent
-   * replica still serving any pre-push tip, or a push delivered out of
-   * order) is served once, uncached ({@link decideHeadResolution}). A `null`
-   * after records a ref deletion. Redeliveries and provably-superseded late
-   * pushes change nothing and keep the warm cache. The DO's own serialized
-   * write lanes stay on {@link #recordPushedHead} — their pushes really are
-   * ordered.
+   * lanes may durably cache. Ordinary content reads may serve anything else
+   * once, uncached; the worker-source `getHead` boundary rejects it until the
+   * clone converges ({@link decideHeadResolution}). A `null` after records a
+   * ref deletion. Redeliveries and provably-superseded late pushes change
+   * nothing and keep the warm cache. The DO's own serialized write lanes stay
+   * on {@link #recordPushedHead} — their pushes really are ordered.
    */
   #observeExternalPush(branch: string, push: ObservedPush) {
     const transition = observeExternalPushTransition(this.#branchAuthority(branch), push);

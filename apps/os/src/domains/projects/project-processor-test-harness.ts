@@ -3,7 +3,7 @@
 // later root-stream reductions are observable through one durable substrate.
 
 import { vi } from "vitest";
-import type { ConsumedInput, ProcessorStream, StreamEventInput } from "iterate/processors";
+import type { ConsumedInput } from "iterate/processors";
 import {
   makeProcessorHarness,
   MemoryStreamNetwork,
@@ -32,14 +32,13 @@ export const PROJECT_CREATE_REQUESTED = {
 
 export const PROJECT_CREATED = {
   type: "events.iterate.com/project/created",
-  idempotencyKey: "platform:project-created:prj_test",
+  idempotencyKey: "project-created:prj_test",
   payload: {
     ...PROJECT_CREATE_REQUESTED.payload,
     createRequestedAtOffset: 1,
   },
   source: {
     processor: {
-      authority: "platform",
       slug: ProjectProcessorContract.slug,
       version: ProjectProcessorContract.version,
       stream: { path: "/", projectId: "prj_test" },
@@ -119,31 +118,6 @@ export function customDomainSnapshot(
 type SiblingName = "capability-host" | "scheduler" | "repo" | "email";
 const SIBLINGS = ["capability-host", "scheduler", "repo", "email"] as const;
 
-/** Mirror the production Project DO's trusted processor-host append boundary. */
-function platformProcessorStream(stream: ProcessorStream): ProcessorStream {
-  return {
-    append: (...events: StreamEventInput[]) =>
-      stream.append(
-        ...events.map((event) => {
-          const processor = event.source?.processor;
-          return processor === undefined
-            ? event
-            : {
-                ...event,
-                source: {
-                  ...event.source,
-                  processor: { ...processor, authority: "platform" as const },
-                },
-              };
-        }),
-      ),
-    at: (path) => platformProcessorStream(stream.at(path)),
-    getEvent: (input) => stream.getEvent(input),
-    getEvents: (input) => stream.getEvents(input),
-    readEvents: (input) => stream.readEvents(input),
-  };
-}
-
 /** The generic harness plus the Project processor's external dependencies. */
 export function makeProjectHarness(
   options: {
@@ -154,25 +128,12 @@ export function makeProjectHarness(
     siblingWaitBarriers?: Partial<Record<SiblingName, Promise<void>>>;
     /** Advances the virtual clock inside the named sibling's wait. */
     clockAdvanceBySibling?: Partial<Record<SiblingName, number>>;
-    /** Parks the exact project-worker delivery fence until this resolves. */
-    subscriptionDeliveryBarrier?: Promise<void>;
-    /** Errors from successive delivery waits; later waits succeed. */
-    subscriptionDeliveryErrors?: Error[];
     /** Overrides the worker probe's retry pause. */
     workerRetrySleep?: () => Promise<void>;
     processorClass?: typeof ProjectProcessor;
   } = {},
 ) {
   let workerFetchCalls = 0;
-  const subscriptionDeliveryWaits: {
-    configuredAtOffset: number;
-    eventType: string;
-    expression: ["processEventBatch"];
-    subscriptionKey: string;
-    targetOffset: number;
-    timeoutMs: number;
-  }[] = [];
-  const subscriptionDeliveryWaitStarted = Promise.withResolvers<void>();
   const siblingWaits: { processor: SiblingName; offset: number; timeoutMs?: number }[] = [];
   const siblingWaitStarted = {} as Record<SiblingName, Promise<void>>;
   const resolveSiblingWaitStarted = {} as Record<SiblingName, () => void>;
@@ -224,17 +185,10 @@ export function makeProjectHarness(
       new Processor({
         ...deps,
         projectId: "prj_test",
-        stream: platformProcessorStream(deps.stream),
+        stream: deps.stream,
         sleep: options.workerRetrySleep ?? (() => new Promise((resolve) => setTimeout(resolve, 0))),
         itx,
         customDomains,
-        waitUntilSubscriptionDelivered: async (input) => {
-          subscriptionDeliveryWaits.push(input);
-          subscriptionDeliveryWaitStarted.resolve();
-          await options.subscriptionDeliveryBarrier;
-          const error = options.subscriptionDeliveryErrors?.[subscriptionDeliveryWaits.length - 1];
-          if (error !== undefined) throw error;
-        },
       }),
   });
   clockBox.advance = (ms) => {
@@ -249,8 +203,6 @@ export function makeProjectHarness(
     customDomains,
     siblingWaits,
     siblingWaitStarted,
-    subscriptionDeliveryWaitStarted: subscriptionDeliveryWaitStarted.promise,
-    subscriptionDeliveryWaits,
     workerFetchCalls: () => workerFetchCalls,
   };
 }

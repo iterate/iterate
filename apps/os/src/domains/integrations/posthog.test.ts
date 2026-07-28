@@ -214,7 +214,7 @@ describe("first-party PostHog stream integration", () => {
       type: "events.iterate.com/project/created",
       path: "/",
       offset: 4,
-      idempotencyKey: "platform:project-created:prj_123",
+      idempotencyKey: "project-created:prj_123",
       metadata: undefined,
       source: undefined,
       payload: {

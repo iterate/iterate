@@ -338,19 +338,15 @@ been circling:
   ID, then atomically appends `project/create-requested`, Notification's birth,
   and both platform processor subscriptions. The Project processor explicitly
   births the root capability host, scheduler, config repo, and email router.
-  After the config repo builds it installs a temporary root project-worker
-  feed selecting only the exact request and waits for that worker to consume
-  it. The saga then atomically replaces the temporary configuration with the
-  ordinary all-events feed and appends terminal `project/created`. A
-  config-repo failure or durable delivery-policy rejection appends terminal
-  `project/create-failed`; worker-build errors remain unclassified, so they
-  join availability, build-in-progress, and timeout outcomes in staying open
-  for durable redelivery. The root `project-worker` subscription and the
-  creation saga's `platform:` idempotency keys are accepted only with
-  platform-processor provenance, so a caller with newly widened project access
-  cannot mutate the fence or squat a terminal key. Create waits for
-  either terminal fact by default, returning the same handle on success and
-  throwing the recorded failure.
+  After the trusted seeded config worker builds and answers a readiness probe,
+  the saga atomically installs its permanent root feed (starting after the
+  request) and appends terminal `project/created`. Userspace does not consume a
+  creation hook. A config-repo or deterministic worker source-build failure
+  appends terminal `project/create-failed`; availability and build-in-progress
+  outcomes stay open for durable redelivery. The subscription and terminal
+  event keys are ordinary coordination conventions rather than a separate
+  authorization layer. Create waits for either terminal fact by default,
+  returning the same handle on success and throwing the recorded failure.
   Callers that render bootstrap progress themselves pass
   `{ waitUntilCreated: false }` as the second argument to skip only the final
   creation barrier.

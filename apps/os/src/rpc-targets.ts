@@ -549,8 +549,6 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       auth: ItxAuth;
       projectId: string | null;
       path: string;
-      /** @internal Marks provenance from processors hosted by an OS Durable Object. */
-      platformProcessorHost?: true;
     },
   ) {
     super();
@@ -591,58 +589,12 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   // so a read cannot inherit the surrounding wake connection's lifetime.
   /** Commit events; resolves with the same events carrying offsets and timestamps. */
   async append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
-    const prepared = events.map((event) => {
-      const processor = event.source?.processor;
-      let preparedEvent = event;
-      if (this.props.platformProcessorHost === true) {
-        if (processor !== undefined) {
-          preparedEvent = {
-            ...event,
-            source: {
-              ...event.source,
-              processor: { ...processor, authority: "platform" as const },
-            },
-          };
-        }
-      } else if (processor?.authority === "platform") {
-        throw new Error("source.processor.authority is reserved for platform processor hosts");
-      }
-      // Project access is already live while bootstrap waits on the config
-      // worker. Keep its late idempotency keys and root delivery fence outside
-      // that userspace authority.
-      if (preparedEvent.source?.processor?.authority !== "platform") {
-        if (preparedEvent.idempotencyKey?.startsWith("platform:")) {
-          throw new Error("platform: idempotency keys are reserved for platform processor hosts");
-        }
-        if (this.props.projectId !== null && this.props.path === "/") {
-          switch (preparedEvent.type) {
-            case "events.iterate.com/stream/subscription-configured":
-            case "events.iterate.com/stream/subscription-removed":
-            case "events.iterate.com/stream/subscription-parked":
-            case "events.iterate.com/stream/subscription-resumed":
-            case "events.iterate.com/stream/subscription-cursor-set":
-              if (
-                typeof preparedEvent.payload === "object" &&
-                preparedEvent.payload !== null &&
-                !Array.isArray(preparedEvent.payload) &&
-                preparedEvent.payload.subscriptionKey === "project-worker"
-              ) {
-                throw new Error(
-                  'the root "project-worker" subscription is reserved for platform processor hosts',
-                );
-              }
-              break;
-          }
-        }
-      }
-      return preparedEvent;
-    });
-    const isKeyed = prepared.every(
+    const isKeyed = events.every(
       (event) => typeof event.idempotencyKey === "string" && event.idempotencyKey.length > 0,
     );
     const canDeadlineReplay = isKeyed && this.props.path !== "/";
     const append = async () => {
-      const invocation = Promise.resolve(this.durableObjectStub.append(...prepared));
+      const invocation = Promise.resolve(this.durableObjectStub.append(...events));
       if (!canDeadlineReplay) return await invocation;
 
       const outcome = await settleByDeadline(
@@ -680,7 +632,6 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       auth: this.props.auth,
       projectId: this.props.projectId,
       path: resolveStreamPath(this.props.path, path),
-      ...(this.props.platformProcessorHost === true ? { platformProcessorHost: true } : {}),
     });
   }
 
@@ -1064,10 +1015,10 @@ class ProjectStreamCollectionRpcTarget extends StreamCollectionRpcTarget<"Projec
 
 /**
  * One Scheduler: keyed Schedules on one `/scheduler/**` stream, triggered by
- * a durable alarm. Everything it does is events on that stream — `set`/
- * `ensure`/`cancel` append when desired state changes, `list` reads reduced
- * state, and every Trigger's request and outcome are appended back, so the
- * stream is the complete audit log. Scripts run
+ * a durable alarm. Everything it does is events on that stream —
+ * `set`/`cancel` append when desired state changes, `list` reads reduced state,
+ * and every Trigger's request and outcome are appended back, so the stream is
+ * the complete audit log. Scripts run
  * with project-root itx authority, at least once per Trigger (derive append
  * idempotency keys from `trigger.executionId`).
  *
@@ -1088,8 +1039,6 @@ class SchedulerRpcTarget extends IterateRpcTarget<"Scheduler"> {
       children: {
         cancel: "Remove a Schedule by key (idempotent).",
         create: "Create the Scheduler on this stream and wait until it has processed its birth.",
-        ensure:
-          "Make a Schedule definition present; preserve its clock and run count when unchanged.",
         kill: "Restart the scheduler's server-side object; the next request boots it fresh.",
         list: "Every Schedule, reduced from the stream.",
         processor: "The scheduler stream processor (snapshot/state).",
@@ -1147,27 +1096,14 @@ class SchedulerRpcTarget extends IterateRpcTarget<"Scheduler"> {
     return this;
   }
 
-  /** Upsert by key; returns after the Scheduler has ingested the set (read-your-writes, alarm armed). */
+  /**
+   * Upsert by key. An unchanged definition preserves its clock and run count;
+   * a missing or changed definition is appended and ingested before return.
+   * Relative `{ in }` input is resolved against each call's current time, so
+   * use canonical `{ at }` when a one-shot definition must compare unchanged.
+   */
   set(input: SetScheduleInput): Promise<ScheduleView> {
     return this.#durableObjectStub.setSchedule(
-      parseScheduleSetPayload({
-        action: { kind: "itx-script", script: input.script },
-        key: input.key,
-        ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
-        recurrence: canonicalRecurrence(input.recurrence, Date.now()),
-      }),
-    );
-  }
-
-  /**
-   * Idempotently make a Schedule definition present. Unlike `set`, an exact
-   * match preserves its current clock, run count, and defining event; a
-   * missing or changed definition is set normally. Relative `{ in }` input is
-   * re-resolved against each call's current time, so use canonical `{ at }`
-   * when a one-shot definition itself must reconcile unchanged.
-   */
-  ensure(input: SetScheduleInput): Promise<ScheduleView> {
-    return this.#durableObjectStub.ensureSchedule(
       parseScheduleSetPayload({
         action: { kind: "itx-script", script: input.script },
         key: input.key,
@@ -5601,13 +5537,24 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   async waitUntilCreated(args?: { timeoutMs?: number }): Promise<void> {
     const timeoutMs = args?.timeoutMs ?? PROJECT_CREATE_TIMEOUT_MS;
     const deadline = Date.now() + timeoutMs;
+    const timeoutError = () => new Error(`Project creation timed out after ${timeoutMs}ms.`);
     const stream = rootStream({
       auth: this.#props.auth,
       projectId: this.#projectId,
     });
-    const request = await stream.getEvent({
-      idempotencyKey: `project-create-requested:${this.#projectId}`,
-    });
+    // The point read is part of the public wait, too. A half-open Stream DO
+    // invocation must not sit outside the same end-to-end deadline that
+    // bounds the terminal-event and processor waits below.
+    const requestOutcome = await settleByDeadline(
+      stream.getEvent({
+        idempotencyKey: `project-create-requested:${this.#projectId}`,
+      }),
+      deadline,
+      Date.now,
+    );
+    if (requestOutcome.status === "deadline") throw timeoutError();
+    if (requestOutcome.status === "rejected") throw requestOutcome.error;
+    const request = requestOutcome.value;
     if (request?.type !== "events.iterate.com/project/create-requested") {
       throw new Error(`Project ${this.#projectId} has no creation request.`);
     }
@@ -5615,9 +5562,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       "events.iterate.com/project/create-requested"
     ].payloadSchema.parse(request.payload);
     const waitForTerminalMs = deadline - Date.now();
-    if (waitForTerminalMs <= 0) {
-      throw new Error(`Project creation timed out after ${timeoutMs}ms.`);
-    }
+    if (waitForTerminalMs <= 0) throw timeoutError();
 
     // snapshot() pulls the journal through the registry's catch-up, so this
     // wait drives a stalled saga instead of just watching it. Post-response
@@ -5650,9 +5595,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     });
 
     const remainingMs = deadline - Date.now();
-    if (remainingMs <= 0) {
-      throw new Error(`Project creation timed out after ${timeoutMs}ms.`);
-    }
+    if (remainingMs <= 0) throw timeoutError();
     await this.processor.waitUntilProcessed({
       offset: terminal.offset,
       timeoutMs: remainingMs,
@@ -6055,10 +5998,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       // repo unseeded, or its first build still in flight). That is this
       // receiver being unavailable, not the batch being poison — say so in
       // the delivery contract's vocabulary so the spine backs off and
-      // redelivers instead of skip-confirming real events. (A skipped
-      // A skipped first batch loses real userspace reactions; this exact race
+      // redelivers instead of skip-confirming real events. A skipped first
+      // batch loses real userspace reactions; this exact race
       // previously skipped offset 1 of every fresh project's root stream
-      // against the config-repo seed.)
+      // against the config-repo seed.
       if (isRepoNotSeededError(error) || isWorkerBuildInProgressError(error)) {
         throw new StreamReceiverUnavailableError(
           `project worker is not ready yet: ${error instanceof Error ? error.message : String(error)}`,

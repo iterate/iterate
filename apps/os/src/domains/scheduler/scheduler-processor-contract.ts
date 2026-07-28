@@ -150,8 +150,9 @@ export const SchedulerProcessorContract = defineProcessorContract({
     "events.iterate.com/scheduler/schedule-set": {
       description:
         "A Schedule was created or replaced under its key: a keyed upsert of recurrence + " +
-        "Action. Re-setting a key resets its run count and re-anchors its next occurrence; a " +
-        "Trigger already in flight for the old version runs the NEW code (latest-code-wins).",
+        "Action. scheduler.set does not append this event when the canonical definition already " +
+        "matches; an actual replacement resets its run count and re-anchors its next occurrence. " +
+        "A Trigger already in flight for the old version runs the NEW code (latest-code-wins).",
       payloadSchema: z.looseObject({
         action: schedulerActionSchema(),
         key: z.string().trim().min(1).meta({
@@ -272,7 +273,7 @@ export type ScheduleSetPayload = z.output<
 /**
  * Validate and lower a command to the exact JSON shape the stream persists.
  * The round-trip intentionally normalizes JSON edge cases such as `-0` before
- * ensure() compares them with a previously stored definition.
+ * set() compares them with a previously stored definition.
  */
 export function parseScheduleSetPayload(input: unknown): ScheduleSetPayload {
   const parsed =
