@@ -647,7 +647,7 @@ async function restoreRepository(input: {
     repo: githubSeed.repo,
   });
   if (link.created) throw new Error(`${githubSeed.owner}/${githubSeed.repo} did not exist.`);
-  const reset = await repository.resetFromGithub({});
+  const reset = await repository.resetFromGithub({ depth: 1 });
   const after = await readGithubHead(github, githubSeed);
   if (
     before.commitOid !== reset.commitOid ||
