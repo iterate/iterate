@@ -97,8 +97,9 @@ export class DynamicWorkerRunner {
   async #getStatelessEntrypoint<T = unknown>(
     ref: StatelessDynamicWorkerRef,
     buildBudgetMs?: number,
+    freshInstanceNonce?: string,
   ): Promise<{ ok: true; target: T } | { failure: WorkerBuildFailure; ok: false }> {
-    const loaded = await this.#load(ref, buildBudgetMs);
+    const loaded = await this.#load(ref, buildBudgetMs, freshInstanceNonce);
     if (!loaded.ok) return loaded;
     return {
       ok: true,
@@ -284,7 +285,7 @@ export class DynamicWorkerRunner {
       );
     }
 
-    return this.#trace(ref, "call", traceRole, async () => {
+    return this.#trace(ref, "call", traceRole, async (span) => {
       if (ref.type === "stateful") {
         // Method replay must happen inside StatefulWorkerDurableObject. Returning
         // a dynamic facet stub through one DO and then invoking it from another RPC
@@ -316,11 +317,31 @@ export class DynamicWorkerRunner {
         return result;
       }
 
-      const loaded = await this.#getStatelessEntrypoint(ref, buildBudgetMs);
-      if (!loaded.ok) throw new WorkerBuildFailedError(loaded.failure);
-      return flattenNestedPath
-        ? await invokePreferringFlattenedPath({ args, path, target: loaded.target })
-        : await replayPath({ args, path, target: loaded.target });
+      const dispatch = async (freshInstanceNonce?: string) => {
+        const loaded = await this.#getStatelessEntrypoint(ref, buildBudgetMs, freshInstanceNonce);
+        if (!loaded.ok) throw new WorkerBuildFailedError(loaded.failure);
+        return flattenNestedPath
+          ? await invokePreferringFlattenedPath({ args, path, target: loaded.target })
+          : await replayPath({ args, path, target: loaded.target });
+      };
+      try {
+        return await dispatch();
+      } catch (error) {
+        if (
+          path.length !== 1 ||
+          path[0] !== "processEventBatch" ||
+          !(error instanceof Error) ||
+          !error.message.includes(WORKERS_RPC_CLONE_VERSION_ERROR)
+        ) {
+          throw error;
+        }
+        span.setAttribute("iterate.worker.rpc_clone_version_retry", true);
+        console.warn("Workers RPC clone-version skew; retrying stateless event batch once", {
+          projectId: this.#projectId,
+          traceRole,
+        });
+        return await dispatch(crypto.randomUUID());
+      }
     });
   }
 
@@ -342,6 +363,7 @@ export class DynamicWorkerRunner {
   async #load(
     ref: DynamicWorkerRef,
     buildBudgetMs?: number,
+    freshInstanceNonce?: string,
   ): Promise<
     | { ok: true; resolved: ResolvedWorkerSource; worker: WorkerStub }
     | { failure: WorkerBuildFailure; ok: false }
@@ -355,7 +377,7 @@ export class DynamicWorkerRunner {
     return {
       ok: true,
       resolved: result.source,
-      worker: this.#loadResolved(result.source),
+      worker: this.#loadResolved(result.source, freshInstanceNonce),
     };
   }
 

@@ -284,6 +284,50 @@ it("recovers a safe stateless fetch once with a fresh loader after clone-version
   });
 });
 
+it("recovers a stateless event batch once with a fresh loader after clone-version skew", async () => {
+  const processEventBatch = vi
+    .fn()
+    .mockRejectedValueOnce(
+      new Error("Unable to deserialize cloned data due to invalid or unsupported version."),
+    )
+    .mockResolvedValueOnce(undefined);
+  h.resolveWorkerSource.mockResolvedValue({
+    ok: true,
+    source: {
+      assetConfig: undefined,
+      assetManifest: {},
+      assets: {},
+      cacheKey: "build-key",
+      commitOid: "commit-1",
+      mainModule: "worker.js",
+      modules: {},
+      wranglerConfig: undefined,
+    },
+  });
+  h.loadResolvedWorker.mockImplementation(() => ({
+    getEntrypoint: () => ({ processEventBatch }),
+  }));
+  const runner = new DynamicWorkerRunner({
+    streamContext: { kind: "scope", scopePath: inlineRef.path },
+    exports: {} as ExecutionContext["exports"],
+    projectId: "prj_private",
+    scopePath: inlineRef.path,
+  });
+
+  await runner.invokeCapability({
+    args: [{ events: [] }],
+    path: ["processEventBatch"],
+    ref: inlineRef,
+  });
+
+  expect(processEventBatch).toHaveBeenCalledTimes(2);
+  expect(h.loadResolvedWorker.mock.calls[0]?.[0].freshInstanceNonce).toBeUndefined();
+  expect(h.loadResolvedWorker.mock.calls[1]?.[0].freshInstanceNonce).toEqual(expect.any(String));
+  expect(recordedSpans[0]?.attributes).toMatchObject({
+    "iterate.worker.rpc_clone_version_retry": true,
+  });
+});
+
 it("turns a stateful source-build result into a local terminal delivery error", async () => {
   h.statefulInvokeCapability.mockImplementation(
     async ({ buildFailureNonce }: { buildFailureNonce: string }) => [
