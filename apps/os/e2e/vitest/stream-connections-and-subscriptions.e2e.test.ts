@@ -2519,7 +2519,13 @@ test("the consecutive-failure limit survives stream eviction and halts before ma
             event.type === "events.iterate.com/stream/error-occurred" &&
             String(event.payload?.message).includes(`offset ${failingEvent!.offset}`),
         ),
-      { description: `failing event ${sequence} to be retried, confirmed, and skipped` },
+      {
+        description: `failing event ${sequence} to be retried, confirmed, and skipped`,
+        // Confirming the failing event takes FAILING_EVENT_CONFIRM_ATTEMPTS
+        // worker invocations behind exponential backoff — milliseconds each
+        // locally, but seconds each on a cold preview slot.
+        timeoutMs: 60_000,
+      },
     );
     await source.kill().catch(() => undefined);
   }
@@ -2532,7 +2538,10 @@ test("the consecutive-failure limit survives stream eviction and halts before ma
     async () =>
       coreState(await source.runtimeState()).subscriptions.outbound.byKey[subscriptionKey]
         ?.deliveryHalted !== undefined,
-    { description: "the durable consecutive-failure limit to halt event sending" },
+    {
+      description: "the durable consecutive-failure limit to halt event sending",
+      timeoutMs: 60_000,
+    },
   );
   const state = runtimeState(await source.runtimeState());
   expect(state.runtime.subscriptions[subscriptionKey]!.acknowledgedOffset).toBeLessThan(
