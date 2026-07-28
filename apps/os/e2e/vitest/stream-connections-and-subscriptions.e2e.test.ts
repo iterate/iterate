@@ -331,6 +331,17 @@ test("waitForEvent records one open and close pair and cleans up after a timeout
     predicate: (event) => event.payload?.phase === "live-ephemeral",
     timeoutMs: 10_000,
   });
+  // Ephemeral rows are never replayed, so the append must not race the wait's
+  // arming: only an armed wait can observe it. The earlier waits in this test
+  // have already closed their connections, so any waitForEvent connection
+  // present now is this one.
+  await waitForCondition(
+    async () =>
+      Object.values(runtimeState(await stream.runtimeState()).runtime.connections).some(
+        (connection) => connection.openedBy?.description === "waitForEvent",
+      ),
+    { description: "the live-ephemeral wait to arm its stream connection" },
+  );
   const [liveEphemeral] = await stream.append({
     type: MATCHING_EVENT_TYPE,
     ephemeral: true,
