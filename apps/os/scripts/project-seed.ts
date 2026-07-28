@@ -606,34 +606,52 @@ async function restoreConfigRepository(input: {
     throw new Error(`No GitHub connection for installation ${githubSeed.installationId}.`);
   }
   const github = input.project.integrations.github.get(connection).octokit;
-  const before = await readGithubHead(github, githubSeed);
-  const link = await repository.linkGithub({
-    connection,
-    createIfMissing: false,
-    initialPush: false,
-    owner: githubSeed.owner,
-    repo: githubSeed.repo,
-  });
-  if (link.created) throw new Error(`${githubSeed.owner}/${githubSeed.repo} did not exist.`);
-  const reset = await repository.resetFromGithub({ depth: 1 });
+  const [before, local, snapshot] = await Promise.all([
+    readGithubHead(github, githubSeed),
+    repository.listFiles(),
+    repository.processor.snapshot(),
+  ]);
+  const linked = snapshot.state.github;
+  const alreadyCurrent =
+    linked?.connection === connection &&
+    linked.installationId === githubSeed.installationId &&
+    linked.owner === githubSeed.owner &&
+    linked.repo === githubSeed.repo &&
+    local.commitOid === before.commitOid;
+  let restored = before;
+  if (!alreadyCurrent) {
+    const link = await repository.linkGithub({
+      connection,
+      createIfMissing: false,
+      initialPush: false,
+      owner: githubSeed.owner,
+      repo: githubSeed.repo,
+    });
+    if (link.created) throw new Error(`${githubSeed.owner}/${githubSeed.repo} did not exist.`);
+    restored = await repository.resetFromGithub({ depth: 1 });
+  }
   const after = await readGithubHead(github, githubSeed);
   if (
-    before.commitOid !== reset.commitOid ||
-    after.commitOid !== reset.commitOid ||
-    before.branch !== reset.branch
+    before.commitOid !== restored.commitOid ||
+    after.commitOid !== restored.commitOid ||
+    before.branch !== restored.branch ||
+    after.branch !== restored.branch
   ) {
     throw new Error(`${path} changed while it was restored from GitHub.`);
   }
   const served =
-    input.workerUrls === undefined ? null : await proveWorkers(input.workerUrls, reset.commitOid);
+    input.workerUrls === undefined
+      ? null
+      : await proveWorkers(input.workerUrls, restored.commitOid);
   return {
     path,
     source: "github" as const,
     connection,
     owner: githubSeed.owner,
     repo: githubSeed.repo,
-    branch: reset.branch,
-    commitOid: reset.commitOid,
+    branch: restored.branch,
+    commitOid: restored.commitOid,
+    reset: !alreadyCurrent,
     served,
   };
 }
