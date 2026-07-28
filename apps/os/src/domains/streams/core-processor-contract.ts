@@ -47,8 +47,12 @@ import { EventFilter } from "./event-filter.ts";
 // derived from the `source.copiedFrom` stamps on committed copied events,
 // capped at MAX_INBOUND_SOURCE_RECORDS, and exist only to fence stale source
 // lifetimes/config generations and feed the debug card. The same version also
-// removed the version-26 `endWhen` automatic-removal conditions, transform
-// receivers, and webhook receivers.
+// removed the version-26 `endWhen` automatic-removal conditions and the
+// copy-to-stream transform option. Still within version 28 (one undeployed
+// flag day), the webhook-post receiver returned as the lane for
+// remotely-hosted processors driven by webhooks, now carrying the optional
+// JSONata transform (webhook-only: a remote host has no receiving processor
+// to reshape events with).
 export const CORE_STATE_VERSION = 28;
 
 // Restored from the old built-in circuit-breaker processor. These defaults are
@@ -78,17 +82,18 @@ export const StreamConnectionKind = z.enum(["session", "hosted"]);
 /** Who owns a live event-batch callback: the current session or a hosted processor. */
 export type StreamConnectionKind = z.infer<typeof StreamConnectionKind>;
 
-/** Where a copy or ITX-call subscription starts reading the source stream. */
+/** Where a copy, ITX-call, or webhook subscription starts reading the source stream. */
 export const SubscriptionStart = z.enum(["beginning", "now"]);
 
 export type SubscriptionStart = z.infer<typeof SubscriptionStart>;
 
 /**
- * What a copy or ITX-call subscription does when one specific event keeps failing
+ * What a copy, ITX-call, or webhook subscription does when one specific event keeps failing
  * while the receiver is otherwise alive: `halt` (default) stops delivery and
  * appends a `subscription-delivery-halted` event — ordered receivers like stream
  * must never skip (a skip is a silent gap in the target stream); `skip`
- * retries the failing event alone, records an idempotent `error-occurred`, and
+ * retries the failing event alone (webhook deliveries are already single
+ * events), records an idempotent `error-occurred`, and
  * steps over it — right for feeds where one bad event must not silence
  * everything after it (the project worker feed).
  */
@@ -129,6 +134,20 @@ export const SubscriptionReceiver = z.discriminatedUnion("action", [
   z.strictObject({
     action: z.literal("itx-call"),
     expression: DeliveryExpression,
+    delivery: DeliveryPolicy,
+  }),
+  z.strictObject({
+    action: z.literal("webhook-post"),
+    url: z.url({ protocol: /^https?$/ }),
+    /**
+     * Optional JSONata constructor evaluated per event to shape the POSTed
+     * event body (`{ type?, payload?, metadata? }`; omitted fields copy
+     * verbatim). Webhook-only: a remote host has no receiving processor to
+     * reshape events with, so the sender does it. Parse-validated at
+     * configure time; an evaluation failure at send time is an ordinary
+     * delivery failure.
+     */
+    transform: z.string().trim().min(1).optional(),
     delivery: DeliveryPolicy,
   }),
 ]);
@@ -496,6 +515,21 @@ export const CoreProcessorContract = defineProcessorContract({
             },
           },
         },
+        {
+          description:
+            "Webhook delivery: one HTTP POST per event to an external receiver, stepping over a repeatedly failing event instead of halting all later sends.",
+          payload: {
+            subscriptionKey: "ops-webhook",
+            receiver: {
+              action: "webhook-post",
+              url: "https://hooks.example.com/iterate/stream-events",
+              delivery: {
+                start: "now",
+                onFailingEvent: "skip",
+              },
+            },
+          },
+        },
       ],
     },
     "events.iterate.com/stream/subscription-removed": {
@@ -525,7 +559,7 @@ export const CoreProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/stream/subscription-cursor-set": {
       description:
-        "Changes the next source offset read by one copy or ITX-call subscription (exclusive afterOffset semantics). It rejects offsets beyond the current stream head. A receiver call already in progress may still finish, but cannot advance this new position. Hosted processors reject this event because the processor stores its own checkpoint.",
+        "Changes the next source offset read by one copy, ITX-call, or webhook subscription (exclusive afterOffset semantics). It rejects offsets beyond the current stream head. A receiver call already in progress may still finish, but cannot advance this new position. Hosted processors reject this event because the processor stores its own checkpoint.",
       payloadSchema: z.strictObject({
         subscriptionKey: z.string().trim().min(1),
         afterOffset: z.number().int().min(0),

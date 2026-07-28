@@ -4,6 +4,7 @@ import type {
   ProcessorRuntimeState,
   StreamDeliveryBatch,
   StreamProcessorWakeRequest,
+  StreamWebhookDelivery,
   CopyReceipt,
   StreamConnectionHandle,
 } from "iterate/processors";
@@ -31,6 +32,7 @@ import {
 } from "../../rpc-targets.ts";
 import { canonicalizeStreamPath, DurableObjectNameCodec } from "../durable-object-names.ts";
 import { posthogSubscriptionEvent } from "../integrations/posthog.ts";
+import { projectEgressFetcher } from "../projects/utils.ts";
 import { buildCopyAppends } from "./copy-appends.ts";
 import {
   assertCoreProcessorCheckpointGrowthFits,
@@ -239,8 +241,10 @@ function rethrowItxDeliveryError(error: unknown): never {
   throw error;
 }
 
-/** Build the three concrete calls used by the receiver union. */
+/** Build the four concrete calls used by the receiver union. */
 function createSubscriptionReceiverCalls(deps: {
+  projectId: string | null;
+  exports: unknown;
   createAuthorityRoot(): unknown;
   copyToStream(path: string, batch: StreamDeliveryBatch): Promise<CopyReceipt>;
   onHostedDeliveryError(
@@ -249,6 +253,8 @@ function createSubscriptionReceiverCalls(deps: {
     expectedDelivery: ExpectedHostedDeliveryState,
   ): void;
 }): SubscriptionReceiverCalls {
+  let webhookEgress: ReturnType<typeof projectEgressFetcher> | undefined;
+
   const evaluateItxDelivery = async (expression: ItxExpression, batch: StreamDeliveryBatch) => {
     let value: unknown;
     try {
@@ -292,6 +298,33 @@ function createSubscriptionReceiverCalls(deps: {
     async copyToStream(path: string, batch: StreamDeliveryBatch) {
       return deps.copyToStream(path, batch);
     },
+
+    async deliverToWebhook(url: string, delivery: StreamWebhookDelivery) {
+      if (deps.projectId === null) {
+        throw new Error("webhook subscriptions require a project-scoped stream");
+      }
+      webhookEgress ??= projectEgressFetcher(
+        deps.exports as ExecutionContext["exports"],
+        deps.projectId,
+        { kind: "scope", scopePath: "/" },
+      );
+      const egress = webhookEgress;
+      try {
+        const response = await egress.fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(delivery),
+        });
+        await response.body?.cancel();
+        if (!response.ok) {
+          throw new Error(`webhook responded ${response.status} ${response.statusText}`);
+        }
+      } catch (error) {
+        if (webhookEgress === egress) webhookEgress = undefined;
+        (egress as Partial<Disposable>)[Symbol.dispose]?.();
+        throw error;
+      }
+    },
   };
 }
 
@@ -325,8 +358,8 @@ const PROJECT_WORKER_SUBSCRIPTION_KEY = "project-worker";
  *    from one-shot event hooks.
  * 3. Its checkpoint — reduced state in DO KV, rebuilt from the SQL event log
  *    (`stream-storage.ts`) when missing or version-skewed.
- * 4. Delivery — session callbacks, hosted processors, copies, and ITX
- *    calls live in `stream-event-sender.ts`, calling receivers through
+ * 4. Delivery — session callbacks, hosted processors, copies, ITX calls,
+ *    and webhooks live in `stream-event-sender.ts`, calling receivers through
  *    `createSubscriptionReceiverCalls` above; this class only decides policy
  *    (who may connect, what a subscription event means, which events to append).
  *
@@ -381,6 +414,8 @@ export class StreamDurableObject extends DurableObject<Env> {
       coreState: () => this.#coreProcessorState,
       store: this.#subscriptionCursorStore,
       receiverCalls: createSubscriptionReceiverCalls({
+        projectId: this.name.projectId,
+        exports: this.ctx.exports,
         createAuthorityRoot: () => this.#createEventDeliveryAuthorityRoot(),
         copyToStream: (path, batch) => this.#streamStub(path).receiveCopiedEvents(batch),
         onHostedDeliveryError: (subscriptionKey, error, expectedDelivery) =>

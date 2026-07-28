@@ -12,6 +12,7 @@
 // | hosted processor | wake it, retain its returned callback          | processor checkpoint  |
 // | copy       | append copies to another Stream Durable Object | receiving append      |
 // | ITX expression   | evaluate and await the named method             | method result          |
+// | webhook          | send one attributed HTTP POST per event         | 2xx response           |
 //
 // Session connections are forgotten when they close.
 // Stored subscriptions are stored configuration — the directional events
@@ -25,7 +26,7 @@
 // Runtime metrics: every connection carries real counters (events/bytes
 // sent, lag from cursor), durable sends record commit→acknowledgement
 // latency on the stream's own clock (hosted: the processor reports its result;
-// copy/ITX: the receiver call returns), and callback owners that hand over a ping capability
+// copy/ITX/webhook: the receiver call returns), and callback owners that hand over a ping capability
 // get NTP-style RTT sampled when runtime observation begins, throttled, and
 // purely observational (a failed ping drops the sample, nothing else).
 // Session-callback consumption is deliberately NOT measured here: those results stay
@@ -38,6 +39,7 @@
 // the public seam in stream-connections-and-subscriptions.e2e.test.ts; the only streams code
 // that knows RPC exists is the receiver-call wiring in stream-durable-object.ts.
 
+import { z } from "zod";
 import type { StreamEvent, StreamEventInput } from "iterate/processors";
 import type {
   GetProcessorRuntimeState,
@@ -51,6 +53,7 @@ import type {
   StreamWakeDeliveryError,
   StreamWakeDeliveryResult,
   StreamWakeEventBatch,
+  StreamWebhookDelivery,
 } from "iterate/processors";
 import { isStreamReceiverUnavailableError } from "iterate/processors";
 import { LatencyRing, pingRoundTrip, type LatencyStats } from "iterate/processors";
@@ -71,6 +74,7 @@ import {
 } from "./core-processor-contract.ts";
 import {
   compileEventFilter,
+  compileJsonataExpression,
   EventFilterEvaluationError,
   type CompiledEventFilter,
 } from "./event-filter.ts";
@@ -155,7 +159,7 @@ export function computeBackoffMs(attempt: number, random: number): number {
   return Math.round(base * jitter);
 }
 
-/** The initial exclusive cursor for a copy or ITX-call subscription. */
+/** The initial exclusive cursor for a copy, ITX-call, or webhook subscription. */
 function initialCursor(start: SubscriptionStart, configuredEventOffset: number): number {
   return start === "now" ? configuredEventOffset : 0;
 }
@@ -164,12 +168,57 @@ function initialCursor(start: SubscriptionStart, configuredEventOffset: number):
  * The one place receiver-specific initial cursor policy is spelled out:
  * hosted-processor rows start at 0 (the stored value means "the processor reported
  * a checkpoint through N", and a processor that has never been woken has observed nothing);
- * copy and ITX-call rows start where their delivery policy says.
+ * copy, ITX-call, and webhook rows start where their delivery policy says.
  */
 function initialCursorFor(config: SubscriptionConfiguredPayload, configOffset: number): number {
   return config.receiver.action === "processor-wake"
     ? 0
     : initialCursor(config.receiver.delivery.start, configOffset);
+}
+
+/**
+ * What a webhook transform may construct. Strict, so a typo'd key
+ * rejects delivery instead of silently vanishing.
+ */
+const WebhookTransformResult = z.strictObject({
+  type: z.string().trim().min(1).optional(),
+  payload: z.record(z.string(), z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+});
+
+/**
+ * Apply a webhook subscription's optional JSONata transform to one event,
+ * producing the event body POSTed to the URL. The constructed
+ * `{ type?, payload?, metadata? }` replaces those fields on the delivered
+ * event (omitted fields copy verbatim) while the coordinates (`offset`,
+ * `createdAt`, `path`) keep naming the source row — the remote processor
+ * deduplicates by (streamId, offset), so the envelope must survive the
+ * reshape. The expression was parse-validated at configure time; an
+ * evaluation failure here throws into the ordinary delivery-failure ladder
+ * and respects `onFailingEvent`.
+ */
+function applyWebhookTransform(
+  subscriptionKey: string,
+  transformSource: string | undefined,
+  event: StreamEvent,
+): StreamEvent {
+  if (transformSource === undefined) return event;
+  try {
+    const produced = WebhookTransformResult.parse(
+      compileJsonataExpression(transformSource).evaluate(event),
+    );
+    return {
+      ...event,
+      type: produced.type ?? event.type,
+      ...(produced.payload === undefined ? {} : { payload: produced.payload }),
+      ...(produced.metadata === undefined ? {} : { metadata: produced.metadata }),
+    };
+  } catch (error) {
+    throw new Error(
+      `webhook transform for subscription "${subscriptionKey}" failed on ${event.path}@${event.offset}: ${errorMessage(error)}`,
+      { cause: error },
+    );
+  }
 }
 
 /**
@@ -207,11 +256,11 @@ export type SubscriptionRuntimeState = {
   nextAttemptAt: number | null;
   inFlightDeadlineAt: number | null;
   lastError: string | null;
-  /** Serialized payload bytes delivered by copy and ITX-call subscriptions. */
+  /** Serialized payload bytes delivered by copy, ITX-call, and webhook subscriptions. */
   bytesSent?: number;
   /** Commit-to-acked latency (stream clock): newest event `createdAt` → awaited delivery resolved. */
   completionLatencyMs?: LatencyStats;
-  /** Duration of the awaited copy or ITX call itself. */
+  /** Duration of the awaited copy, ITX, or webhook call itself. */
   deliveryDurationMs?: LatencyStats;
 };
 
@@ -231,6 +280,8 @@ export type SubscriptionReceiverCalls = {
   deliverToItx(expression: ItxExpression, batch: StreamDeliveryBatch): Promise<void>;
   /** Deliver a batch to a stream, which appends source.copiedFrom to each event. */
   copyToStream(path: string, batch: StreamDeliveryBatch): Promise<CopyReceipt>;
+  /** POST one event to the webhook URL. Resolve (2xx) = ack; non-2xx rejects. */
+  deliverToWebhook(url: string, delivery: StreamWebhookDelivery): Promise<void>;
 };
 
 /** The policy/storage seams the owning Stream Durable Object provides. */
@@ -311,7 +362,7 @@ export class StreamEventSender {
    */
   readonly #limitNextReadToOne = new Set<string>();
   /**
-   * Per-subscription delivery metrics for copy and ITX-call
+   * Per-subscription delivery metrics for copy, ITX-call, and webhook
    * actions: the awaited call is the acknowledgement, so the stream is the only
    * observer of these callback owners' consumption. In-memory like every other
    * runtime metric; cleaned up with the subscription.
@@ -357,7 +408,7 @@ export class StreamEventSender {
   /**
    * Ask every live callback to send queued events and start each durable send
    * that is due: wake lagging hosted processors without a callback and send
-   * pending copy or ITX-call events. Never throws; never blocks the append.
+   * pending copy, ITX-call, or webhook events. Never throws; never blocks the append.
    *
    * `justCommittedEvents` is the new-event fast path: append passes what it just
    * committed (already sized by the log write) so caught-up callbacks skip the
@@ -414,7 +465,7 @@ export class StreamEventSender {
   }
 
   // ===========================================================================
-  // Durable sending: hosted-processor wake, copy/ITX sends, retries,
+  // Durable sending: hosted-processor wake, copy/ITX/webhook sends, retries,
   // and halting.
   // ===========================================================================
 
@@ -511,7 +562,7 @@ export class StreamEventSender {
    * then send events after that checkpoint. The entire
    * wake response is this single call — the stream initiated it and owns the
    * returned callback, so there is no second callback-registration race. If wake resolves
-   * after its subscription was replaced (or switched to copy or ITX-call),
+   * after its subscription was replaced (or switched to copy, ITX-call, or webhook),
    * drop that callback rather than open a dead connection or acknowledge the new cursor.
    */
   #wakeStreamProcessor(
@@ -653,11 +704,12 @@ export class StreamEventSender {
   }
 
   /**
-   * Send pending events for one copy or ITX-call configuration:
+   * Send pending events for one copy, ITX-call, or webhook configuration:
    * read after the cursor, apply the filter (skip-not-defer — the
    * cursor advances past non-matching events), deliver, and advance the
    * cursor when the awaited call resolves. That resolution IS the
-   * acknowledgement, which is why the stream can own these cursors.
+   * acknowledgement, which is why the stream can own these cursors. Stream
+   * and ITX receivers receive batches; webhooks receive one event at a time.
    */
   #sendPendingSourceOwnedEvents(subscriptionKey: string): void {
     this.#hooks.runDurable(async () => {
@@ -684,7 +736,20 @@ export class StreamEventSender {
           // Poison isolation goes straight to batch size 1 after a failure:
           // healthy prefixes commit one event at a time until the failing
           // event is the only retry left (isolate-or-progress).
-          const limit = this.#limitNextReadToOne.has(subscriptionKey) ? 1 : DELIVERY_BATCH_LIMIT;
+          //
+          // Webhook delivery pins the read limit to 1 always: external
+          // receivers get single-event POSTs, each ack covers exactly one
+          // offset (mid-batch resume for free), the failing-event machinery
+          // always sees the true delivery unit, and the per-iteration
+          // staleness checks above run per EVENT — a removed/replaced webhook
+          // can never keep POSTing a stale batch to the old URL. The
+          // failure pin composes rather than duplicates: for a webhook it is
+          // already the steady state. The cost is one row/config re-read per
+          // event on a backlog, noise against the HTTP POST itself.
+          const limit =
+            receiver.action === "webhook-post" || this.#limitNextReadToOne.has(subscriptionKey)
+              ? 1
+              : DELIVERY_BATCH_LIMIT;
 
           const sized = this.#readBatch(row.acknowledgedOffset, Number.MAX_SAFE_INTEGER, limit);
           const lastOffset = sized.at(-1)?.event.offset;
@@ -802,39 +867,65 @@ export class StreamEventSender {
           // before any remote receiver can observe this attempt.
           this.#armInFlightWatchdog();
           try {
-            const batch: StreamDeliveryBatch = {
-              projectId: state.projectId,
-              path: state.path,
-              streamId,
-              streamCreatedAt,
-              events: matched,
-              streamMaxOffset: state.maxOffset,
-              subscriptionKey,
-              cursorChangedAtSourceOffset: row.cursorChangedAtOffset,
-              deliveryId: deliveryId(
-                streamId,
-                subscriptionKey,
-                row.cursorChangedAtOffset,
-                matched[0]!.offset,
-                deliveredThroughOffset,
-              ),
-              attempt: row.attempt + 1,
-              configuredEvent,
-            };
-            if (receiver.action === "copy-to-stream") {
-              // The awaited resolve is the whole acknowledgement: appended
-              // events, idempotent duplicates, and cycle/hop-limit drops are
-              // all terminal, so the cursor advances past every event in an
-              // acked batch.
+            if (receiver.action === "webhook-post") {
+              if (state.projectId === null) return; // unreachable: rejected at append (egress attribution)
               await withDeliveryTimeout(
-                this.#hooks.receiverCalls.copyToStream(receiver.receivingStreamPath, batch),
-                `stream ${subscriptionKey}`,
+                this.#hooks.receiverCalls.deliverToWebhook(receiver.url, {
+                  projectId: state.projectId,
+                  path: state.path,
+                  streamId,
+                  streamCreatedAt,
+                  // Exactly one: webhook delivery pins the read limit to one.
+                  event: applyWebhookTransform(subscriptionKey, receiver.transform, matched[0]!),
+                  subscriptionKey,
+                  cursorChangedAtSourceOffset: row.cursorChangedAtOffset,
+                  deliveryId: deliveryId(
+                    streamId,
+                    subscriptionKey,
+                    row.cursorChangedAtOffset,
+                    matched[0]!.offset,
+                    deliveredThroughOffset,
+                  ),
+                  attempt: row.attempt + 1,
+                  configuredEvent,
+                }),
+                `webhook ${subscriptionKey}`,
               );
             } else {
-              await withDeliveryTimeout(
-                this.#hooks.receiverCalls.deliverToItx(receiver.expression, batch),
-                `itx expression ${subscriptionKey}`,
-              );
+              const batch: StreamDeliveryBatch = {
+                projectId: state.projectId,
+                path: state.path,
+                streamId,
+                streamCreatedAt,
+                events: matched,
+                streamMaxOffset: state.maxOffset,
+                subscriptionKey,
+                cursorChangedAtSourceOffset: row.cursorChangedAtOffset,
+                deliveryId: deliveryId(
+                  streamId,
+                  subscriptionKey,
+                  row.cursorChangedAtOffset,
+                  matched[0]!.offset,
+                  deliveredThroughOffset,
+                ),
+                attempt: row.attempt + 1,
+                configuredEvent,
+              };
+              if (receiver.action === "copy-to-stream") {
+                // The awaited resolve is the whole acknowledgement: appended
+                // events, idempotent duplicates, and cycle/hop-limit drops are
+                // all terminal, so the cursor advances past every event in an
+                // acked batch.
+                await withDeliveryTimeout(
+                  this.#hooks.receiverCalls.copyToStream(receiver.receivingStreamPath, batch),
+                  `stream ${subscriptionKey}`,
+                );
+              } else {
+                await withDeliveryTimeout(
+                  this.#hooks.receiverCalls.deliverToItx(receiver.expression, batch),
+                  `itx expression ${subscriptionKey}`,
+                );
+              }
             }
           } catch (error) {
             // The receiverCalls yielded to the event loop. A cursor seek, removal, or
@@ -1005,7 +1096,7 @@ export class StreamEventSender {
   }
 
   /**
-   * A copy or ITX-call delivery failed. Any batch failure pins the next read
+   * A copy, ITX-call, or webhook delivery failed. Any batch failure pins the next read
    * to batch size 1 (isolate-or-progress). `halt` policy (and every hosted wake
    * failure) goes through the shared backoff/halt machine. `skip` policy
    * requires FAILING_EVENT_CONFIRM_ATTEMPTS consecutive
@@ -1379,7 +1470,7 @@ export type ConnectionRuntimeState = ConnectionRuntimeDetails &
       }
   );
 
-/** One live event-batch callback. Copy and ITX-call subscriptions do not appear here. */
+/** One live event-batch callback. Copy, ITX-call, and webhook subscriptions do not appear here. */
 type StreamConnection = {
   readonly kind: StreamConnectionKind;
   readonly expectedHostedDelivery?: ExpectedHostedDeliveryState;

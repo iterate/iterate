@@ -5,6 +5,7 @@ import {
   type StreamEventBatch,
   type StreamEventInput,
   type StreamWakeEventBatch,
+  type StreamWebhookDelivery,
 } from "iterate/processors";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WorkerBuildFailedError } from "../workers/artifact-store.ts";
@@ -93,6 +94,7 @@ function harness(args: {
   wakeProcessor: SubscriptionReceiverCalls["wakeStreamProcessor"];
   deliverToItx?: SubscriptionReceiverCalls["deliverToItx"];
   copyToStream?: SubscriptionReceiverCalls["copyToStream"];
+  deliverToWebhook?: SubscriptionReceiverCalls["deliverToWebhook"];
   appendDeliveryEvent?: ConstructorParameters<
     typeof StreamEventSender
   >[0]["hooks"]["appendDeliveryEvent"];
@@ -132,6 +134,7 @@ function harness(args: {
     },
     deliverToItx: args.deliverToItx ?? (async () => undefined),
     copyToStream: args.copyToStream ?? (async () => ({ acknowledged: 0 })),
+    deliverToWebhook: args.deliverToWebhook ?? (async () => undefined),
   };
   const eventSender = new StreamEventSender({
     idleTeardownMs: 60_000,
@@ -1160,6 +1163,418 @@ describe("StreamEventSender stream delivery", () => {
     // Durably halted: the failed row keeps its cursor but stops arming alarms.
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
       acknowledgedOffset: 3,
+      attempt: 0,
+      nextAttemptAt: null,
+    });
+  });
+});
+
+describe("StreamEventSender webhook delivery", () => {
+  function webhookConfig(
+    receiverOverrides: Partial<
+      Extract<SubscriptionConfiguredPayload["receiver"], { action: "webhook-post" }>
+    > = {},
+  ): SubscriptionConfiguredPayload {
+    return {
+      subscriptionKey: PROCESSOR_KEY,
+      receiver: {
+        action: "webhook-post",
+        url: "https://receiver.example/events",
+        delivery: { start: "beginning", onFailingEvent: "halt" },
+        ...receiverOverrides,
+      },
+    };
+  }
+
+  it("POSTs one event at a time and each 2xx acknowledgement advances the cursor", async () => {
+    const deliveries: StreamWebhookDelivery[] = [];
+    const deliverToWebhook = vi.fn<SubscriptionReceiverCalls["deliverToWebhook"]>(
+      async (_url, delivery) => {
+        deliveries.push(delivery);
+      },
+    );
+    const h = harness({
+      events: [
+        event(2, "example.com/issue-created", { issue: 1 }),
+        event(3, "example.com/issue-created", { issue: 2 }),
+        event(4, "example.com/issue-created", { issue: 3 }),
+      ],
+      configuration: webhookConfig(),
+      deliverToWebhook,
+      wakeProcessor: async () => {
+        throw new Error("a webhook receiver must not wake a hosted processor");
+      },
+    });
+
+    h.eventSender.sendDue();
+    await h.settle();
+
+    // The read limit is pinned to 1: three events become three single-event
+    // POSTs, never one batch.
+    expect(deliverToWebhook).toHaveBeenCalledTimes(3);
+    expect(deliverToWebhook.mock.calls.map(([url]) => url)).toEqual([
+      "https://receiver.example/events",
+      "https://receiver.example/events",
+      "https://receiver.example/events",
+    ]);
+    expect(deliveries.map((delivery) => delivery.event.offset)).toEqual([2, 3, 4]);
+    expect(deliveries[0]).toMatchObject({
+      projectId: "project",
+      path: "/source",
+      streamId: SOURCE_STREAM_ID,
+      streamCreatedAt: "2026-07-21T10:00:00.000Z",
+      subscriptionKey: PROCESSOR_KEY,
+      cursorChangedAtSourceOffset: 1,
+      attempt: 1,
+      configuredEvent: { type: "events.iterate.com/stream/subscription-configured" },
+    });
+    // The lean per-event envelope: no batch array and no reduced core state.
+    expect(deliveries[0]).not.toHaveProperty("events");
+    expect(deliveries[0]).not.toHaveProperty("state");
+    expect(new Set(deliveries.map((delivery) => delivery.deliveryId)).size).toBe(3);
+    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
+      acknowledgedOffset: 4,
+      attempt: 0,
+      nextAttemptAt: null,
+      lastError: null,
+    });
+  });
+
+  it("a rejected POST enters the bounded retry ladder and the retry resumes the backlog", async () => {
+    let failOffsetThree = true;
+    const delivered: number[] = [];
+    const deliverToWebhook = vi.fn<SubscriptionReceiverCalls["deliverToWebhook"]>(
+      async (_url, delivery) => {
+        if (failOffsetThree && delivery.event.offset === 3) {
+          throw new Error("webhook responded 503 Service Unavailable");
+        }
+        delivered.push(delivery.event.offset);
+      },
+    );
+    const h = harness({
+      events: [
+        event(2, "example.com/issue-created", { issue: 1 }),
+        event(3, "example.com/issue-created", { issue: 2 }),
+      ],
+      configuration: webhookConfig(),
+      deliverToWebhook,
+      wakeProcessor: async () => {
+        throw new Error("a webhook receiver must not wake a hosted processor");
+      },
+    });
+
+    h.eventSender.sendDue();
+    await h.settle();
+
+    // The healthy prefix committed per event; the failing event owns the ladder.
+    expect(delivered).toEqual([2]);
+    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
+      acknowledgedOffset: 2,
+      attempt: 1,
+      nextAttemptAt: 11_000,
+      lastError: "webhook responded 503 Service Unavailable",
+    });
+    expect(h.alarms).toContain(11_000);
+
+    failOffsetThree = false;
+    h.setNow(11_000);
+    h.eventSender.onAlarm();
+    await h.settle();
+
+    expect(delivered).toEqual([2, 3]);
+    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
+      acknowledgedOffset: 3,
+      attempt: 0,
+      nextAttemptAt: null,
+      lastError: null,
+    });
+  });
+
+  it("halts loudly when the webhook stays down through the whole ladder", async () => {
+    const appended: StreamEventInput[] = [];
+    const deliverToWebhook = vi.fn<SubscriptionReceiverCalls["deliverToWebhook"]>(async () => {
+      throw new Error("webhook responded 503 Service Unavailable");
+    });
+    const h = harness({
+      events: [event(2, "example.com/issue-created", { issue: 42 })],
+      configuration: webhookConfig(),
+      deliverToWebhook,
+      appendDeliveryEvent: (input) => {
+        appended.push(input);
+        return true;
+      },
+      wakeProcessor: async () => {
+        throw new Error("a webhook receiver must not wake a hosted processor");
+      },
+    });
+    h.store.nack(PROCESSOR_KEY, {
+      attempt: 14,
+      nextAttemptAt: 10_000,
+      error: "previous failure",
+    });
+
+    h.eventSender.sendDue();
+    await h.settle();
+
+    expect(deliverToWebhook).toHaveBeenCalledOnce();
+    expect(appended).toEqual([
+      {
+        type: "events.iterate.com/stream/subscription-delivery-halted",
+        payload: {
+          subscriptionKey: PROCESSOR_KEY,
+          reason: "delivery-failed",
+          afterOffset: 0,
+          attempts: 15,
+          error: "webhook responded 503 Service Unavailable",
+        },
+      },
+    ]);
+    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
+      attempt: 0,
+      nextAttemptAt: null,
+    });
+  });
+
+  it("skip policy confirms a repeatedly failing event, audits the skip, and continues", async () => {
+    const appended: StreamEventInput[] = [];
+    const delivered: number[] = [];
+    const poisonAttempts: number[] = [];
+    const deliverToWebhook = vi.fn<SubscriptionReceiverCalls["deliverToWebhook"]>(
+      async (_url, delivery) => {
+        if (delivery.event.payload?.poison === true) {
+          poisonAttempts.push(delivery.attempt);
+          throw new Error("webhook responded 422 Unprocessable Entity");
+        }
+        delivered.push(delivery.event.offset);
+      },
+    );
+    const h = harness({
+      events: [
+        event(2, "example.com/issue-created", { issue: 1 }),
+        event(3, "example.com/issue-created", { poison: true }),
+        event(4, "example.com/issue-created", { issue: 3 }),
+      ],
+      configuration: webhookConfig({
+        delivery: { start: "beginning", onFailingEvent: "skip" },
+      }),
+      deliverToWebhook,
+      appendDeliveryEvent: (input) => {
+        appended.push(input);
+        return true;
+      },
+      wakeProcessor: async () => {
+        throw new Error("a webhook receiver must not wake a hosted processor");
+      },
+    });
+
+    h.eventSender.sendDue();
+    await h.settle();
+    let nowMs = 10_000;
+    for (let alarmRound = 0; alarmRound < 3; alarmRound += 1) {
+      nowMs += 2_000_000; // beyond the 30-minute backoff cap
+      h.setNow(nowMs);
+      h.eventSender.onAlarm();
+      await h.settle();
+    }
+
+    // FAILING_EVENT_CONFIRM_ATTEMPTS single-event confirmations, then the skip.
+    expect(poisonAttempts).toHaveLength(3);
+    expect(delivered).toEqual([2, 4]);
+    expect(
+      appended.filter((input) => input.type === "events.iterate.com/stream/error-occurred"),
+    ).toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          message: expect.stringContaining("skipped failing event at offset 3"),
+        }),
+      }),
+    ]);
+    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
+      acknowledgedOffset: 4,
+      attempt: 0,
+      nextAttemptAt: null,
+    });
+  });
+
+  it("a replaced webhook cannot acknowledge its stale POST or keep the old URL in the loop", async () => {
+    const staleAck = Promise.withResolvers<void>();
+    // Only the pre-replacement POST settles; the replacement's own delivery
+    // stays open so the stale acknowledgement is the only ack.
+    const deliverToWebhook = vi.fn<SubscriptionReceiverCalls["deliverToWebhook"]>((url) =>
+      url === "https://receiver.example/events" ? staleAck.promise : new Promise(() => {}),
+    );
+    const h = harness({
+      events: [event(2, "example.com/issue-created", { issue: 42 })],
+      configuration: webhookConfig(),
+      deliverToWebhook,
+      wakeProcessor: async () => {
+        throw new Error("a webhook receiver must not wake a hosted processor");
+      },
+    });
+
+    h.eventSender.sendDue();
+    expect(deliverToWebhook).toHaveBeenCalledOnce();
+
+    h.state.maxOffset = 3;
+    h.state.subscriptions.outbound.byKey[PROCESSOR_KEY] = {
+      configuration: {
+        ...webhookConfig({ url: "https://replacement.example/events" }),
+        subscriptionKey: PROCESSOR_KEY,
+      },
+      configuredAtOffset: 3,
+      configuredAt: new Date(3).toISOString(),
+    };
+    h.eventSender.sendDue();
+    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
+      configuredAtOffset: 3,
+      acknowledgedOffset: 0,
+    });
+
+    staleAck.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // The stale 2xx was discarded; the same loop re-read the replacement and
+    // POSTs to the new URL in the new cursor epoch — the old URL never sees
+    // another event.
+    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
+      configuredAtOffset: 3,
+      acknowledgedOffset: 0,
+    });
+    expect(deliverToWebhook).toHaveBeenCalledTimes(2);
+    expect(deliverToWebhook.mock.calls.map(([url]) => url)).toEqual([
+      "https://receiver.example/events",
+      "https://replacement.example/events",
+    ]);
+    expect(deliverToWebhook.mock.calls[1]![1]).toMatchObject({
+      cursorChangedAtSourceOffset: 3,
+      attempt: 1,
+      event: { offset: 2 },
+    });
+  });
+
+  it("stops POSTing the moment its subscription is removed", async () => {
+    const firstPostStarted = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const deliverToWebhook = vi.fn<SubscriptionReceiverCalls["deliverToWebhook"]>(() => {
+      firstPostStarted.resolve();
+      return release.promise;
+    });
+    const h = harness({
+      events: [
+        event(2, "example.com/issue-created", { issue: 1 }),
+        event(3, "example.com/issue-created", { issue: 2 }),
+      ],
+      configuration: webhookConfig(),
+      deliverToWebhook,
+      wakeProcessor: async () => {
+        throw new Error("a webhook receiver must not wake a hosted processor");
+      },
+    });
+
+    h.eventSender.sendDue();
+    await firstPostStarted.promise;
+    delete h.state.subscriptions.outbound.byKey[PROCESSOR_KEY];
+    release.resolve();
+    await h.settle();
+
+    // The per-event staleness re-read sees the removal before offset 3 could
+    // POST, and the orphaned acknowledgement moves no cursor.
+    expect(deliverToWebhook).toHaveBeenCalledOnce();
+  });
+
+  it("a webhook transform shapes the POSTed event body and keeps the source coordinates", async () => {
+    const deliveries: StreamWebhookDelivery[] = [];
+    const deliverToWebhook = vi.fn<SubscriptionReceiverCalls["deliverToWebhook"]>(
+      async (_url, delivery) => {
+        deliveries.push(delivery);
+      },
+    );
+    const h = harness({
+      events: [event(2, "example.com/issue-created", { issue: 21, internal: "drop-me" })],
+      configuration: webhookConfig({
+        transform:
+          '{ "type": "example.com/issue-summary", "payload": { "issue": payload.issue, "doubled": payload.issue * 2 } }',
+      }),
+      deliverToWebhook,
+      wakeProcessor: async () => {
+        throw new Error("a webhook receiver must not wake a hosted processor");
+      },
+    });
+
+    h.eventSender.sendDue();
+    await h.settle();
+
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0]!.event).toMatchObject({
+      type: "example.com/issue-summary",
+      payload: { issue: 21, doubled: 42 },
+      // The coordinates keep naming the source row: the remote processor
+      // deduplicates by (streamId, offset) even under a reshaped body.
+      offset: 2,
+      path: "/source",
+    });
+    expect(deliveries[0]!.event.payload).not.toHaveProperty("internal");
+    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
+      acknowledgedOffset: 2,
+      attempt: 0,
+    });
+  });
+
+  it("a transform evaluation failure is a delivery failure that skip policy isolates and steps over", async () => {
+    const appended: StreamEventInput[] = [];
+    const delivered: number[] = [];
+    const deliverToWebhook = vi.fn<SubscriptionReceiverCalls["deliverToWebhook"]>(
+      async (_url, delivery) => {
+        delivered.push(delivery.event.offset);
+      },
+    );
+    const h = harness({
+      events: [
+        event(2, "example.com/issue-created", { issue: 1 }),
+        event(3, "example.com/issue-created", { poison: true }),
+        event(4, "example.com/issue-created", { issue: 3 }),
+      ],
+      configuration: webhookConfig({
+        transform: 'payload.poison ? $error("poison event") : { "payload": payload }',
+        delivery: { start: "beginning", onFailingEvent: "skip" },
+      }),
+      deliverToWebhook,
+      appendDeliveryEvent: (input) => {
+        appended.push(input);
+        return true;
+      },
+      wakeProcessor: async () => {
+        throw new Error("a webhook receiver must not wake a hosted processor");
+      },
+    });
+
+    h.eventSender.sendDue();
+    await h.settle();
+    let nowMs = 10_000;
+    for (let alarmRound = 0; alarmRound < 3; alarmRound += 1) {
+      nowMs += 2_000_000; // beyond the 30-minute backoff cap
+      h.setNow(nowMs);
+      h.eventSender.onAlarm();
+      await h.settle();
+    }
+
+    // The poison event never reached the wire — its transform failed before
+    // the POST — and the ladder still confirmed and stepped over it.
+    expect(delivered).toEqual([2, 4]);
+    const skipAudits = appended.filter(
+      (input) => input.type === "events.iterate.com/stream/error-occurred",
+    );
+    expect(skipAudits).toHaveLength(1);
+    expect(skipAudits[0]!.payload).toMatchObject({
+      message: expect.stringContaining("skipped failing event at offset 3"),
+    });
+    expect(String(skipAudits[0]!.payload!.message)).toContain(
+      `webhook transform for subscription "${PROCESSOR_KEY}" failed on /source@3`,
+    );
+    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
+      acknowledgedOffset: 4,
       attempt: 0,
       nextAttemptAt: null,
     });

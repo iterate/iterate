@@ -358,11 +358,14 @@ describe("guarantees the subscription rewrite deliberately does not give", () =>
   //   acknowledgement, so an acknowledgement lost after the receiver did its
   //   work (isolate death, cancelled RPC) is indistinguishable from a failed
   //   delivery and the same events are redelivered. At-least-once is doctrine:
-  //   itx-call (and processor-wake) receivers must be idempotent. Contrast:
+  //   itx-call and webhook-post (and processor-wake) receivers must be
+  //   idempotent — a webhook-driven remote processor deduplicates by
+  //   (streamId, event.offset). Contrast:
   //   copy-to-stream receivers stay exactly-once at COMMIT because the copy
   //   idempotency identity collapses the redelivered append
   //   (copy-appends.test.ts "transport retries dedupe within one source
-  //   lifetime") — an itx call has no such identity; the call is the work.
+  //   lifetime") — an itx call or webhook POST has no such identity; the call
+  //   is the work.
   // BOUND: redelivery replays from the last acknowledged cursor only, in
   //   order, within one subscription; duplicates are bounded by one batch per
   //   lost acknowledgement.
@@ -417,6 +420,7 @@ describe("guarantees the subscription rewrite deliberately does not give", () =>
         deliveredBatches.push(batch.events.map(({ offset }) => offset));
       },
       copyToStream: async () => ({ acknowledged: 0 }),
+      deliverToWebhook: async () => undefined,
     };
     const eventSender = new StreamEventSender({
       idleTeardownMs: 60_000,

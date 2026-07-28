@@ -41,9 +41,10 @@ The independent choices are:
 | Hosted processor               | yes              | hosted processor           | its checkpoint         | no                        |
 | Copy to another stream         | yes              | source stream              | beginning or now       | no                        |
 | Call an ITX method             | yes              | source stream              | beginning or now       | no                        |
+| POST a webhook                 | yes              | source stream              | beginning or now       | no                        |
 
 Durable subscriptions never deliver ephemeral rows. Only `copy-to-stream` has
-a receiving stream; an ITX method and a hosted processor do not.
+a receiving stream; an ITX method, a webhook, and a hosted processor do not.
 
 ## Live callbacks
 
@@ -151,10 +152,11 @@ await source.append({
 });
 ```
 
-The three actions are deliberately concrete:
+The four actions are deliberately concrete:
 
 - `copy-to-stream`: append copies to another stream;
 - `itx-call`: call an ITX method with event batches;
+- `webhook-post`: make an HTTP POST;
 - `processor-wake`: ask a hosted processor for its checkpoint and callback.
 
 There is no `subscribeTo()` API with an implicit direction. Copy setup is
@@ -305,6 +307,58 @@ call accepts the batch.
 must not stop later events. It isolates the failing event, records the failure,
 and advances past it. Use `"halt"` when skipping would lose required work.
 
+## POST a webhook
+
+```ts
+await source.append({
+  type: "events.iterate.com/stream/subscription-configured",
+  payload: {
+    subscriptionKey: "ops-webhook",
+    receiver: {
+      action: "webhook-post",
+      url: "https://hooks.example.com/iterate",
+      delivery: {
+        start: "now",
+        onFailingEvent: "halt",
+      },
+    },
+  },
+});
+```
+
+The source POSTs one matching event at a time through the project's attributed
+egress and advances only after a 2xx response. Webhook subscriptions require a
+project-scoped source stream.
+
+This is the lane for remotely-hosted processors driven by webhooks. Webhook
+delivery is at-least-once: a remote processor must deduplicate by
+`(streamId, event.offset)`. The POST body is one lean envelope — the event
+plus `path`, `streamId`, `streamCreatedAt`, `subscriptionKey`,
+`cursorChangedAtSourceOffset`, `deliveryId`, `attempt`, and the committed
+`configuredEvent`; it never carries reduced core state.
+
+### Transform
+
+A webhook receiver may reshape the POSTed event body with a JSONata
+constructor. This option is webhook-only: a remote webhook host has no
+receiving processor to reshape events with, while a copy's receiving
+processor reshapes for itself.
+
+```ts
+receiver: {
+  action: "webhook-post",
+  url: "https://hooks.example.com/iterate",
+  transform: '{ "type": "example.com/issue-summary", "payload": { "issue": payload.issue } }',
+  delivery: { start: "now", onFailingEvent: "skip" },
+}
+```
+
+The expression evaluates against the whole committed event and may construct
+`type`, `payload`, and `metadata`; omitted fields copy verbatim, and the
+envelope keeps the real source coordinates for deduplication. An unparseable
+transform is rejected at configure time; an evaluation failure at send time is
+an ordinary delivery failure that retries and respects `onFailingEvent`.
+
 ## Wake a hosted processor
 
 ```ts
@@ -353,7 +407,7 @@ is JSONata over the complete event and must evaluate to exactly `true`.
 
 ### Start position
 
-Copy and ITX-call actions use one of:
+Copy, ITX-call, and webhook actions use one of:
 
 ```ts
 start: "beginning"; // after offset 0

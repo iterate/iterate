@@ -200,6 +200,26 @@ receiver: {
 The source evaluates the expression with authority derived from its own scope,
 awaits the final method call, and advances its cursor only after success.
 
+### Webhook
+
+```ts
+receiver: {
+  action: "webhook-post",
+  url: "https://example.com/hook",
+  delivery: {
+    start: "now",
+    onFailingEvent: "halt",
+  },
+}
+```
+
+The source POSTs one event at a time through the project's attributed egress.
+A 2xx response accepts that event. This is the lane for remotely-hosted
+processors driven by webhooks; webhook delivery is at-least-once, so a remote
+processor must deduplicate by `(streamId, offset)`. An optional JSONata
+`transform` (webhook-only) reshapes the POSTed event body while the envelope
+keeps the real source coordinates.
+
 ## Events marked ephemeral
 
 `append({ ..., ephemeral: true })` writes an offset-ordered row that may later
@@ -242,7 +262,7 @@ Guarantees:
 - Halt, resume, seek, and removal are appended events.
 - Non-matching events still advance the subscription cursor stored on the
   source stream.
-- ITX calls and stream appends are awaited.
+- ITX calls, stream appends, and webhook responses are awaited.
 - A send remembers the offset of the configuration or cursor-set event that
   chose its cursor, so its late acknowledgement cannot overwrite an operator's
   newer cursor change.

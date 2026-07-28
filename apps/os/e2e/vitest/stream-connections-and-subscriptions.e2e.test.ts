@@ -2576,6 +2576,139 @@ test("the consecutive-failure limit survives stream eviction and halts before ma
     coreState(await source.runtimeState()).subscriptions.outbound.byKey[subscriptionKey],
   ).not.toHaveProperty("deliveryHalted");
 });
+
+// Webhook receivers.
+test("a webhook receives one ordered lean envelope per event", async () => {
+  const marker = crypto.randomUUID();
+  const sourcePath = `/e2e/subscriptions/webhook/source/${marker}`;
+  const subscriptionKey = `webhook-${marker}`;
+  const deliveries: Array<Record<string, unknown>> = [];
+
+  using testProject = await openTestProject(marker);
+  const { project } = testProject;
+  using _intercept = await project.egress.intercept(async (request) => {
+    deliveries.push((await request.json()) as Record<string, unknown>);
+    return new Response(null, { status: 204 });
+  });
+  using source = project.streams.get(sourcePath);
+
+  await source.append(
+    subscriptionConfigured({
+      subscriptionKey,
+      filter: { eventTypes: [MATCHING_EVENT_TYPE] },
+      receiver: {
+        action: "webhook-post",
+        url: `https://webhook.example/${marker}`,
+        delivery: deliveryPolicy("now"),
+      },
+    }),
+  );
+  const appended = await source.append(
+    ...Array.from({ length: 3 }, (_, index) => ({
+      type: MATCHING_EVENT_TYPE,
+      payload: { marker, sequence: index + 1 },
+    })),
+  );
+  await waitForCondition(() => deliveries.length === 3, {
+    description: "three ordered webhook deliveries",
+    timeoutMs: 30_000,
+  });
+  expect(
+    deliveries.map(
+      (delivery) => ((delivery.event as StreamEvent).payload as { sequence: number }).sequence,
+    ),
+  ).toEqual([1, 2, 3]);
+  for (const [index, delivery] of deliveries.entries()) {
+    expect(delivery).toMatchObject({
+      attempt: 1,
+      event: { offset: appended[index]!.offset },
+      path: sourcePath,
+      subscriptionKey,
+      configuredEvent: {
+        type: "events.iterate.com/stream/subscription-configured",
+      },
+    });
+    expect(delivery).not.toHaveProperty("state");
+    expect(delivery).not.toHaveProperty("events");
+  }
+
+  await waitForCondition(
+    async () =>
+      (runtimeState(await source.runtimeState()).runtime.subscriptions[subscriptionKey]
+        ?.acknowledgedOffset ?? 0) >= appended.at(-1)!.offset,
+    {
+      description: "the webhook acknowledgements to advance the source cursor",
+      timeoutMs: 30_000,
+    },
+  );
+  const state = runtimeState(await source.runtimeState());
+  expect(state.runtime.subscriptions[subscriptionKey]).toMatchObject({ attempt: 0 });
+  expect(state.coreProcessorState.subscriptions.outbound.byKey[subscriptionKey]).not.toHaveProperty(
+    "deliveryHalted",
+  );
+});
+
+test("skip policy confirms one repeatedly failing webhook event, skips it, and continues", async () => {
+  const marker = crypto.randomUUID();
+  const sourcePath = `/e2e/subscriptions/webhook-failing-event/source/${marker}`;
+  const subscriptionKey = `webhook-failing-event-${marker}`;
+  const attempts: Array<{ attempt: number; shouldFail: boolean }> = [];
+
+  using testProject = await openTestProject(marker);
+  const { project } = testProject;
+  using _intercept = await project.egress.intercept(async (request) => {
+    const delivery = (await request.json()) as {
+      attempt: number;
+      event: { payload: { shouldFail?: boolean } };
+    };
+    const shouldFail = delivery.event.payload.shouldFail === true;
+    attempts.push({ attempt: delivery.attempt, shouldFail });
+    return new Response(null, { status: shouldFail ? 422 : 204 });
+  });
+  using source = project.streams.get(sourcePath);
+
+  await source.append(
+    subscriptionConfigured({
+      subscriptionKey,
+      filter: { eventTypes: [MATCHING_EVENT_TYPE] },
+      receiver: {
+        action: "webhook-post",
+        url: `https://webhook-failing-event.example/${marker}`,
+        delivery: deliveryPolicy("now", { onFailingEvent: "skip" }),
+      },
+    }),
+  );
+  const [failingEvent, healthyEvent] = await source.append(
+    { type: MATCHING_EVENT_TYPE, payload: { marker, shouldFail: true } },
+    { type: MATCHING_EVENT_TYPE, payload: { marker, shouldFail: false } },
+  );
+  // Confirming the failing event takes the ladder: webhook deliveries are
+  // already single events, so FAILING_EVENT_CONFIRM_ATTEMPTS confirmations
+  // run back-to-back, each behind its own exponential backoff.
+  await waitForCondition(
+    async () =>
+      (runtimeState(await source.runtimeState()).runtime.subscriptions[subscriptionKey]
+        ?.acknowledgedOffset ?? 0) >= healthyEvent!.offset,
+    {
+      description: "the repeatedly failing event to be skipped and the next event acknowledged",
+      timeoutMs: 60_000,
+    },
+  );
+  expect(attempts.filter((entry) => entry.shouldFail).map((entry) => entry.attempt)).toEqual([
+    1, 2, 3,
+  ]);
+  expect(attempts.filter((entry) => !entry.shouldFail)).toEqual([
+    { attempt: 1, shouldFail: false },
+  ]);
+  expect(
+    (await source.getEvents({ afterOffset: failingEvent!.offset })).find(
+      (event) =>
+        event.type === "events.iterate.com/stream/error-occurred" &&
+        String(event.payload?.message).includes(`offset ${failingEvent!.offset}`),
+    ),
+  ).toBeDefined();
+});
+
 // Validation before a configuration event is appended.
 test("invalid receiver-specific combinations and expressions never commit", async () => {
   const marker = crypto.randomUUID();
@@ -2610,6 +2743,37 @@ test("invalid receiver-specific combinations and expressions never commit", asyn
         },
       }),
     })),
+    {
+      key: `webhook-url-${marker}`,
+      message: /url|invalid/i,
+      event: {
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: {
+          subscriptionKey: `webhook-url-${marker}`,
+          receiver: {
+            action: "webhook-post",
+            url: `ftp://example.com/${marker}`,
+            delivery: deliveryPolicy("now"),
+          },
+        },
+      },
+    },
+    {
+      key: `webhook-transform-${marker}`,
+      message: /invalid JSONata expression/i,
+      event: {
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: {
+          subscriptionKey: `webhook-transform-${marker}`,
+          receiver: {
+            action: "webhook-post",
+            url: `https://example.com/${marker}`,
+            transform: "payload.(((",
+            delivery: deliveryPolicy("now"),
+          },
+        },
+      },
+    },
     {
       key: `stream-skip-${marker}`,
       message: /onFailingEvent|halt|literal/i,

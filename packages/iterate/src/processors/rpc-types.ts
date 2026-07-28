@@ -212,6 +212,15 @@ export type SubscriptionConfigurationForDelivery = {
             start: "beginning" | "now";
             onFailingEvent: "halt" | "skip";
           };
+        }
+      | {
+          action: "webhook-post";
+          url: string;
+          transform?: string;
+          delivery: {
+            start: "beginning" | "now";
+            onFailingEvent: "halt" | "skip";
+          };
         };
   };
 };
@@ -223,7 +232,8 @@ export type SubscriptionConfigurationForDelivery = {
  * not the state-carrying callback batch
  * {@link StreamEventBatch}: ITX calls and copy destinations do not get
  * folded core state, because other subscriptions' configuration, halt errors,
- * and the presence roster are deployment-internal. Session callbacks and hosted
+ * and the presence roster are deployment-internal. Webhooks use a narrower
+ * per-event envelope for the same reason. Session callbacks and hosted
  * processors still get state-carrying batches because they paint or reduce
  * from stream state.
  */
@@ -358,6 +368,41 @@ export function isStreamOffsetConflictError(error: unknown): boolean {
 export function isStreamReceiverUnavailableError(error: unknown): boolean {
   return (error as { name?: string } | null)?.name === StreamReceiverUnavailableError.NAME;
 }
+
+/**
+ * One webhook delivery: a single committed event POSTed as JSON to the
+ * subscription's URL. Deliberately per-EVENT (external webhook consumers
+ * expect individual events, and per-event acking gives mid-batch
+ * resumability) and deliberately WITHOUT the `state` batch callbacks receive — core
+ * reduced state is internal and has no business leaving the deployment.
+ *
+ * Webhook delivery is at-least-once: a remote processor must deduplicate by
+ * (streamId, event.offset).
+ */
+export type StreamWebhookDelivery = {
+  /** Never null: webhooks require a project-scoped stream (egress attribution). */
+  projectId: string;
+  path: string;
+  /** Random identity assigned when this source stream's storage was created. */
+  streamId: string;
+  /** Creation time of this source stream; orders recreated streams whose offsets restarted. */
+  streamCreatedAt: string;
+  /**
+   * The committed event. When the subscription configures a `transform`, its
+   * `type`/`payload`/`metadata` are the transform's output while the
+   * coordinates (`offset`, `createdAt`, `path`) keep naming the source row.
+   */
+  event: StreamEvent;
+  subscriptionKey: SubscriptionKey;
+  /** See {@link StreamDeliveryBatch.cursorChangedAtSourceOffset}. */
+  cursorChangedAtSourceOffset: number;
+  /** Stable across retries of this event within one delivery run. */
+  deliveryId: string;
+  /** 1-based consecutive attempt count for this event. */
+  attempt: number;
+  /** The committed subscription event this delivery serves (see {@link StreamDeliveryBatch}). */
+  configuredEvent: SubscriptionConfigurationForDelivery;
+};
 
 /**
  * What the stream sends when waking a hosted processor through

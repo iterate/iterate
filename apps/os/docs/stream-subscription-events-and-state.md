@@ -64,6 +64,15 @@ type SubscriptionConfigured = {
             start: "beginning" | "now";
             onFailingEvent: "halt" | "skip";
           };
+        }
+      | {
+          action: "webhook-post";
+          url: string;
+          transform?: string;
+          delivery: {
+            start: "beginning" | "now";
+            onFailingEvent: "halt" | "skip";
+          };
         };
   };
 };
@@ -71,8 +80,12 @@ type SubscriptionConfigured = {
 
 This is the sole event that enables delivery. The `action` union prevents
 invalid combinations: a hosted processor cannot carry a start position stored
-by the source stream, and an ordered copy cannot skip a permanently
-failing event. Durable subscriptions never deliver ephemeral rows.
+by the source stream, an ordered copy cannot skip a permanently
+failing event, and only a webhook — the receiver with no processor behind it —
+may carry a JSONata `transform` for its POSTed event body. Durable
+subscriptions never deliver ephemeral rows. Webhook delivery is
+at-least-once; a remote processor must deduplicate by
+`(streamId, event.offset)`.
 
 ## How subscription keys behave
 
@@ -299,7 +312,8 @@ Retries are bounded. Exhaustion appends `subscription-delivery-halted`; it is
 not represented only by a log line or volatile retry row. After any batch
 failure the next read uses batch size 1 (isolate-or-progress): healthy
 prefixes commit one event at a time until the failing event retries alone,
-resetting to the full batch limit on success.
+resetting to the full batch limit on success. Webhook deliveries are always
+single events, so that pin is their steady state.
 
 ## Copied event validation
 

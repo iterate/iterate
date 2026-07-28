@@ -128,7 +128,9 @@ export function CorePrettyState({
               const deliveryHint =
                 kind === "copy-to-stream" && typeof receiver?.receivingStreamPath === "string"
                   ? `copy → ${receiver.receivingStreamPath}`
-                  : formatItxExpressionHint(receiver?.expression);
+                  : kind === "webhook-post" && typeof receiver?.url === "string"
+                    ? `POST ${receiver.url}`
+                    : formatItxExpressionHint(receiver?.expression);
               return (
                 <div key={key} className="rounded-xl bg-muted/40 px-3 py-2">
                   <div className="flex items-baseline justify-between gap-2">

@@ -11,7 +11,7 @@ import {
   subscriptionKeyForConfiguredEvent,
   type CoreProcessorState,
 } from "./core-processor-contract.ts";
-import { compileEventFilter } from "./event-filter.ts";
+import { compileEventFilter, compileJsonataExpression } from "./event-filter.ts";
 import { isInternalStreamIdempotencyKey } from "./stream-delivery-utils.ts";
 
 export const STREAM_PAUSED_ERROR_PREFIX = "stream paused: ";
@@ -221,6 +221,9 @@ export class StreamCoreProcessor {
           `subscription key "${requestedSubscriptionKey}" uses the generated-key namespace but does not name an existing generated subscription`,
         );
       }
+      if (event.payload.receiver.action === "webhook-post" && this.#projectId === null) {
+        throw new Error("webhook subscriptions require a project-scoped stream");
+      }
       if (
         event.payload.receiver.action === "copy-to-stream" &&
         event.payload.receiver.receivingStreamPath === args.state.path
@@ -228,6 +231,12 @@ export class StreamCoreProcessor {
         throw new Error("a stream cannot receive events from itself");
       }
       compileEventFilter(event.payload.filter);
+      if (
+        event.payload.receiver.action === "webhook-post" &&
+        event.payload.receiver.transform !== undefined
+      ) {
+        compileJsonataExpression(event.payload.receiver.transform);
+      }
       if (event.payload.receiver.action === "copy-to-stream") {
         const receivingStreamPath = event.payload.receiver.receivingStreamPath;
         const existingSubscriptionsForReceiver = Object.entries(

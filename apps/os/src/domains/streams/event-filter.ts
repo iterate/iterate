@@ -1,8 +1,8 @@
 // EventFilter: THE one way to say "which subset of a stream's events".
 //
 // Every event receiver uses it — session callback connections, hosted processors
-// (derived from the processor contract's `consumes`), plus copy and ITX-call
-// subscriptions (persisted in the configuration event). One zod schema,
+// (derived from the processor contract's `consumes`), plus copy, ITX-call,
+// and webhook subscriptions (persisted in the configuration event). One zod schema,
 // one compiled matcher and one JSONata cache.
 //
 // Filters never construct: a filter may reject an event, but

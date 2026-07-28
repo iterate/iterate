@@ -921,4 +921,114 @@ describe("StreamCoreProcessor validation and dispatch", () => {
       }),
     ).toThrow("a stream cannot receive events from itself");
   });
+
+  test("accepts a webhook subscription and folds its configuration", () => {
+    const { processor, state } = harness(SOURCE_PATH);
+    const payload = {
+      subscriptionKey: "ops-webhook",
+      receiver: {
+        action: "webhook-post",
+        url: "https://hooks.example.com/iterate/stream-events",
+        delivery: { start: "now", onFailingEvent: "skip" },
+      },
+    };
+    expect(() =>
+      processor.validate({
+        event: { type: "events.iterate.com/stream/subscription-configured", payload },
+        state,
+        authority: "public",
+      }),
+    ).not.toThrow();
+    const reduced = reduce(
+      processor,
+      state,
+      committed(1, "events.iterate.com/stream/subscription-configured", payload, {
+        path: SOURCE_PATH,
+      }),
+    );
+    expect(reduced.subscriptions.outbound.byKey["ops-webhook"]?.configuration.receiver).toEqual({
+      action: "webhook-post",
+      url: "https://hooks.example.com/iterate/stream-events",
+      delivery: { start: "now", onFailingEvent: "skip" },
+    });
+  });
+
+  test.each([
+    ["not a URL at all", "hooks.example.com/iterate"],
+    ["a non-http(s) protocol", "ftp://hooks.example.com/iterate"],
+  ])("rejects a webhook subscription whose url is %s", (_case, url) => {
+    const { processor, state } = harness(SOURCE_PATH);
+    expect(() =>
+      processor.validate({
+        event: {
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: {
+            subscriptionKey: "ops-webhook",
+            receiver: {
+              action: "webhook-post",
+              url,
+              delivery: { start: "now", onFailingEvent: "halt" },
+            },
+          },
+        },
+        state,
+        authority: "public",
+      }),
+    ).toThrow(/url/i);
+  });
+
+  test("rejects a webhook subscription on a stream without a project", () => {
+    const processor = new StreamCoreProcessor({ projectId: null });
+    const state = CoreProcessorContract.stateSchema.parse({ projectId: null, path: "/global" });
+    expect(() =>
+      processor.validate({
+        event: {
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: {
+            subscriptionKey: "ops-webhook",
+            receiver: {
+              action: "webhook-post",
+              url: "https://hooks.example.com/iterate",
+              delivery: { start: "now", onFailingEvent: "halt" },
+            },
+          },
+        },
+        state,
+        authority: "public",
+      }),
+    ).toThrow("webhook subscriptions require a project-scoped stream");
+  });
+
+  test("parse-validates a webhook transform at configure time", () => {
+    const { processor, state } = harness(SOURCE_PATH);
+    const webhookPayload = (transform: string) => ({
+      subscriptionKey: "ops-webhook",
+      receiver: {
+        action: "webhook-post",
+        url: "https://hooks.example.com/iterate",
+        transform,
+        delivery: { start: "now", onFailingEvent: "halt" },
+      },
+    });
+    expect(() =>
+      processor.validate({
+        event: {
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: webhookPayload("payload.((("),
+        },
+        state,
+        authority: "public",
+      }),
+    ).toThrow(/invalid JSONata expression/);
+    expect(() =>
+      processor.validate({
+        event: {
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: webhookPayload('{ "payload": { "issue": payload.issue } }'),
+        },
+        state,
+        authority: "public",
+      }),
+    ).not.toThrow();
+  });
 });

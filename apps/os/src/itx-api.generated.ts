@@ -1978,7 +1978,8 @@ export type OpenApiRpc = object;
  * not the state-carrying callback batch
  * {@link StreamEventBatch}: ITX calls and copy destinations do not get
  * folded core state, because other subscriptions' configuration, halt errors,
- * and the presence roster are deployment-internal. Session callbacks and hosted
+ * and the presence roster are deployment-internal. Webhooks use a narrower
+ * per-event envelope for the same reason. Session callbacks and hosted
  * processors still get state-carrying batches because they paint or reduce
  * from stream state.
  */
@@ -3186,6 +3187,15 @@ export type SubscriptionConfigurationForDelivery = {
             start: "beginning" | "now";
             onFailingEvent: "halt" | "skip";
           };
+        }
+      | {
+          action: "webhook-post";
+          url: string;
+          transform?: string;
+          delivery: {
+            start: "beginning" | "now";
+            onFailingEvent: "halt" | "skip";
+          };
         };
   };
 };
@@ -3416,6 +3426,12 @@ export type CommittedSubscriptionConfiguredEvent = Omit<
             action: "itx-call";
             expression: ItxExpression;
             delivery: { start: "beginning" | "now"; onFailingEvent: "halt" | "skip" };
+          }
+        | {
+            action: "webhook-post";
+            url: string;
+            transform?: string | undefined;
+            delivery: { start: "beginning" | "now"; onFailingEvent: "halt" | "skip" };
           };
     };
   } & {
@@ -3437,6 +3453,12 @@ export type CommittedSubscriptionConfiguredEvent = Omit<
         | {
             action: "itx-call";
             expression: ItxExpression;
+            delivery: { start: "beginning" | "now"; onFailingEvent: "halt" | "skip" };
+          }
+        | {
+            action: "webhook-post";
+            url: string;
+            transform?: string | undefined;
             delivery: { start: "beginning" | "now"; onFailingEvent: "halt" | "skip" };
           };
     };
@@ -3970,6 +3992,12 @@ export type CoreProcessorState = {
                   action: "itx-call";
                   expression: ItxExpression;
                   delivery: { start: "beginning" | "now"; onFailingEvent: "halt" | "skip" };
+                }
+              | {
+                  action: "webhook-post";
+                  url: string;
+                  transform?: string | undefined;
+                  delivery: { start: "beginning" | "now"; onFailingEvent: "halt" | "skip" };
                 };
             subscriptionKey: string;
           };
@@ -4012,11 +4040,11 @@ export type SubscriptionRuntimeState = {
   nextAttemptAt: number | null;
   inFlightDeadlineAt: number | null;
   lastError: string | null;
-  /** Serialized payload bytes delivered by copy and ITX-call subscriptions. */
+  /** Serialized payload bytes delivered by copy, ITX-call, and webhook subscriptions. */
   bytesSent?: number;
   /** Commit-to-acked latency (stream clock): newest event `createdAt` → awaited delivery resolved. */
   completionLatencyMs?: LatencyStats;
-  /** Duration of the awaited copy or ITX call itself. */
+  /** Duration of the awaited copy, ITX, or webhook call itself. */
   deliveryDurationMs?: LatencyStats;
 };
 

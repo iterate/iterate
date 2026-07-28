@@ -109,7 +109,7 @@ export function PresenceAvatar({
  */
 /** Stored instruction for sending matching events to one receiver. */
 type SubscriptionDetails = {
-  subscriptionAction: "processor-wake" | "copy-to-stream" | "itx-call";
+  subscriptionAction: "processor-wake" | "copy-to-stream" | "itx-call" | "webhook-post";
   configuredAtOffset?: number;
   halted?: {
     reason: "delivery-failed";
@@ -117,7 +117,7 @@ type SubscriptionDetails = {
     attempts: number;
     error?: string;
   };
-  /** The delivery target as the itx call it actually is. */
+  /** The delivery target as the itx call (or webhook POST) it actually is. */
   deliveryLabel?: string;
   /** Destination path for a copy. */
   destinationStream?: string;
@@ -131,8 +131,11 @@ type SubscriptionDetails = {
   eventTypes?: string[];
   /** Optional JSONata filter over the whole event. */
   condition?: string;
+  /** Optional JSONata constructor for a webhook's POSTed event body. */
+  transform?: string;
   start?: "beginning" | "now";
   onFailingEvent?: "halt" | "skip";
+  webhookUrl?: string;
 };
 
 type ProcessorPanelEntry = {
@@ -935,7 +938,7 @@ function processorEntrySections(entries: readonly ProcessorPanelEntry[]): Array<
     },
     {
       title: "Durable subscriptions",
-      emptyLabel: "No copy or ITX-call subscriptions are configured.",
+      emptyLabel: "No copy, ITX-call, or webhook-post subscriptions are configured.",
       entries: entries.filter((entry) => entry.rowKind === "durable-subscription"),
     },
     {
@@ -962,7 +965,7 @@ function compareProcessorEntries(a: ProcessorPanelEntry, b: ProcessorPanelEntry)
 
 /**
  * A missing live connection is normal: hosted processors are woken when their
- * checkpoint lags; copy and ITX-call subscriptions are caught
+ * checkpoint lags; copy, ITX-call, and webhook subscriptions are caught
  * up, sending, waiting to retry, or halted.
  */
 function processorEntryStatus(entry: ProcessorPanelEntry, busy: boolean): string {
@@ -1025,7 +1028,8 @@ function readSubscriptionDetails(entry: unknown): SubscriptionDetails | null {
   if (
     subscriptionAction !== "processor-wake" &&
     subscriptionAction !== "copy-to-stream" &&
-    subscriptionAction !== "itx-call"
+    subscriptionAction !== "itx-call" &&
+    subscriptionAction !== "webhook-post"
   ) {
     return null;
   }
@@ -1048,11 +1052,15 @@ function readSubscriptionDetails(entry: unknown): SubscriptionDetails | null {
       : undefined;
   const delivery = readRuntimeRecord(receiver?.delivery);
   const deliveryLabel =
-    subscriptionAction === "copy-to-stream"
-      ? typeof receiver?.receivingStreamPath === "string"
-        ? `copy to ${receiver.receivingStreamPath}`
+    subscriptionAction === "webhook-post"
+      ? typeof receiver?.url === "string"
+        ? `POST ${receiver.url}`
         : undefined
-      : formatItxExpression(receiver?.expression);
+      : subscriptionAction === "copy-to-stream"
+        ? typeof receiver?.receivingStreamPath === "string"
+          ? `copy to ${receiver.receivingStreamPath}`
+          : undefined
+        : formatItxExpression(receiver?.expression);
   const destinationStream =
     subscriptionAction === "copy-to-stream" && typeof receiver?.receivingStreamPath === "string"
       ? receiver.receivingStreamPath
@@ -1063,11 +1071,21 @@ function readSubscriptionDetails(entry: unknown): SubscriptionDetails | null {
     typeof filter?.condition === "string" && filter.condition.trim() !== ""
       ? filter.condition
       : undefined;
+  const transform =
+    subscriptionAction === "webhook-post" &&
+    typeof receiver?.transform === "string" &&
+    receiver.transform.trim() !== ""
+      ? receiver.transform
+      : undefined;
   const start =
     delivery?.start === "beginning" || delivery?.start === "now" ? delivery.start : undefined;
   const onFailingEvent =
     delivery?.onFailingEvent === "halt" || delivery?.onFailingEvent === "skip"
       ? delivery.onFailingEvent
+      : undefined;
+  const webhookUrl =
+    subscriptionAction === "webhook-post" && typeof receiver?.url === "string"
+      ? receiver.url
       : undefined;
   const note =
     typeof payload?.description === "string" && payload.description.trim() !== ""
@@ -1083,8 +1101,10 @@ function readSubscriptionDetails(entry: unknown): SubscriptionDetails | null {
     ...(note === undefined ? {} : { note }),
     ...(eventTypes === undefined ? {} : { eventTypes }),
     ...(condition === undefined ? {} : { condition }),
+    ...(transform === undefined ? {} : { transform }),
     ...(start === undefined ? {} : { start }),
     ...(onFailingEvent === undefined ? {} : { onFailingEvent }),
+    ...(webhookUrl === undefined ? {} : { webhookUrl }),
   };
 }
 
@@ -1456,9 +1476,11 @@ function SubscriptionDetail({ config }: { config: SubscriptionDetails }) {
   const heading =
     config.subscriptionAction === "copy-to-stream"
       ? "Copy destination"
-      : config.subscriptionAction === "itx-call"
-        ? "ITX-expression receiver"
-        : "Hosted processor";
+      : config.subscriptionAction === "webhook-post"
+        ? "Webhook POST"
+        : config.subscriptionAction === "itx-call"
+          ? "ITX-expression receiver"
+          : "Hosted processor";
   const eventTypes =
     config.eventTypes == null || config.eventTypes.includes("*") ? null : config.eventTypes;
   const startLabel =
@@ -1470,9 +1492,11 @@ function SubscriptionDetail({ config }: { config: SubscriptionDetails }) {
   const genericBlurb =
     config.subscriptionAction === "copy-to-stream"
       ? "Matching events are appended to the destination stream in order with source provenance."
-      : config.subscriptionAction === "itx-call"
-        ? "Matching events are delivered in awaited batches to the configured ITX expression."
-        : "The hosted processor stores its checkpoint. When events are waiting, the source calls it and sends batches through the returned callback.";
+      : config.subscriptionAction === "webhook-post"
+        ? "Each matching event is POSTed as JSON to the configured URL."
+        : config.subscriptionAction === "itx-call"
+          ? "Matching events are delivered in awaited batches to the configured ITX expression."
+          : "The hosted processor stores its checkpoint. When events are waiting, the source calls it and sends batches through the returned callback.";
 
   return (
     <div className="flex flex-col gap-3">
@@ -1493,6 +1517,11 @@ function SubscriptionDetail({ config }: { config: SubscriptionDetails }) {
         {config.destinationStream == null ? null : (
           <DetailField label="destination stream" mono>
             {config.destinationStream}
+          </DetailField>
+        )}
+        {config.webhookUrl == null || config.deliveryLabel != null ? null : (
+          <DetailField label="url" mono>
+            {config.webhookUrl}
           </DetailField>
         )}
         {startLabel == null ? null : <DetailField label="starts from">{startLabel}</DetailField>}
@@ -1531,6 +1560,19 @@ function SubscriptionDetail({ config }: { config: SubscriptionDetails }) {
           </div>
           <p className="mt-1 text-[11px] text-muted-foreground">
             JSONata over the whole event — must evaluate to exactly true.
+          </p>
+        </div>
+      )}
+
+      {config.transform == null ? null : (
+        <div>
+          <SectionHeading>Transform</SectionHeading>
+          <div className="rounded-xl bg-muted/40 px-3 py-2 font-mono text-xs leading-relaxed text-foreground/80 break-all whitespace-pre-wrap">
+            {config.transform}
+          </div>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            JSONata constructor for the POSTed event body. Omitted fields copy verbatim; the
+            envelope keeps the real source offset for deduplication.
           </p>
         </div>
       )}
@@ -1717,7 +1759,7 @@ function EventDeliverySummary({ entry }: { entry: ProcessorPanelEntry }) {
           />
           <RuntimeStateStat
             label="delivered"
-            // Live connections report events; copy and ITX-call
+            // Live connections report events; copy, ITX-call, and webhook
             // subscriptions report bytes this incarnation (the durable sending row
             // does not count events).
             value={
