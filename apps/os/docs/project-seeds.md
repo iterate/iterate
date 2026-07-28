@@ -39,17 +39,17 @@ doppler run --project os --config prd -- \
 - the exact project ID and slug;
 - direct and Cloudflare-managed hostnames plus inbound-email senders;
 - generic secrets and Slack, GitHub, and Google connections;
-- the config repository and any additional repositories.
+- the config repository.
 
 ## Repositories
 
-GitHub repositories are references: installation ID, owner, and repository
-name. GitHub remains authoritative, so restore refuses to create a missing
-remote, performs no starter push, imports the current default branch, and
-checks that the remote head did not move during the operation.
+GitHub config repositories are references: installation ID, owner, and
+repository name. GitHub remains authoritative, so restore refuses to create a
+missing remote, performs no starter push, imports the current default branch,
+and checks that the remote head did not move during the operation.
 
-A repository without a GitHub link is stored as a base64 file tree in the
-archive. After restoring the config repository, the CLI waits for every
+A config repository without a GitHub link is stored as a base64 file tree in
+the archive. After restoring it, the CLI waits for every
 canonical/custom project route to serve that exact config commit via
 `x-iterate-worker-serve`.
 
@@ -81,6 +81,7 @@ routing lookup.
 ## Limits
 
 The archive intentionally omits ordinary streams, agents, tasks, schedules,
-workspaces, sandboxes, files outside restored repositories, historical
-messages, and derived state. Capture fails rather than silently ignoring a
-connected built-in integration other than Slack, GitHub, or Google.
+workspaces, sandboxes, files outside the config repository, historical
+messages, additional repositories, and derived state. Capture fails rather
+than silently ignoring a connected built-in integration other than Slack,
+GitHub, or Google.
