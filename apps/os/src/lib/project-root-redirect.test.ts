@@ -24,6 +24,7 @@ describe("chooseRootProjectRedirect", () => {
       kind: "project",
       project: { slug: "beta" },
       welcome: false,
+      ensureBirth: false,
     });
   });
 
@@ -37,6 +38,7 @@ describe("chooseRootProjectRedirect", () => {
       kind: "project",
       project: { slug: "alpha" },
       welcome: false,
+      ensureBirth: false,
     });
   });
 
@@ -50,6 +52,7 @@ describe("chooseRootProjectRedirect", () => {
       kind: "project",
       project: { slug: "alpha" },
       welcome: true,
+      ensureBirth: false,
     });
   });
 
@@ -63,10 +66,25 @@ describe("chooseRootProjectRedirect", () => {
       kind: "project",
       project: { slug: "alpha" },
       welcome: true,
+      ensureBirth: false,
     });
   });
 
-  test("leaves ambiguous, failed, or unknown project sets on the projects page", () => {
+  test("recovers a single project whose deployment probe failed through its welcome flow", () => {
+    expect(
+      chooseRootProjectRedirect({
+        preferredProjectSlug: null,
+        projects: [project({ id: "prj_a", slug: "alpha", deploymentStatus: "unknown" })],
+      }),
+    ).toMatchObject({
+      kind: "project",
+      project: { slug: "alpha" },
+      welcome: true,
+      ensureBirth: true,
+    });
+  });
+
+  test("leaves ambiguous or failed project sets on the projects page", () => {
     expect(
       chooseRootProjectRedirect({
         preferredProjectSlug: null,
@@ -74,13 +92,6 @@ describe("chooseRootProjectRedirect", () => {
           project({ id: "prj_a", slug: "alpha", deploymentStatus: "missing" }),
           project({ id: "prj_b", slug: "beta", deploymentStatus: "missing" }),
         ],
-      }),
-    ).toEqual({ kind: "projects" });
-
-    expect(
-      chooseRootProjectRedirect({
-        preferredProjectSlug: null,
-        projects: [project({ id: "prj_a", slug: "alpha", deploymentStatus: "unknown" })],
       }),
     ).toEqual({ kind: "projects" });
 

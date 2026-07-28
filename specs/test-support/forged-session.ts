@@ -1,4 +1,4 @@
-import type { Page, TestInfo } from "@playwright/test";
+import { test, type Page, type TestInfo } from "@playwright/test";
 import { z } from "zod/v4";
 import type {
   IterateAuthAccessTokenOrganizationClaim,
@@ -7,7 +7,7 @@ import type {
 import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import { waitForPreviewRolloutBeforeProjectCreation } from "@iterate-com/shared/test-support/preview-rollout-gate";
-import { connectItx } from "iterate/node";
+import { connectItxReady, type ItxInitialConnectionRetry } from "iterate/node";
 import { doppler } from "../../apps/os/scripts/dev.ts";
 import { mintForgedAccessToken, mintForgedIdToken } from "../../scripts/auth/forge-token.ts";
 
@@ -49,6 +49,7 @@ export type MintedIterateSession = {
 };
 
 let configPromise: Promise<OsPlaywrightAuthConfig> | undefined;
+const ITX_INITIAL_CONNECTION_RETRY_PREFIX = "[itx-initial-connection-retry] ";
 
 export async function createProjectFixture(
   slugPrefix: string,
@@ -136,11 +137,7 @@ export async function createProjectFixture(
  */
 export async function connectAdminItx(baseUrl: string) {
   const config = await resolveOsPlaywrightAuthConfig();
-  return connectItx({
-    auth: { type: "admin-secret", secret: config.adminApiSecret },
-    baseUrl,
-    headers: cloudflareWorkerVersionOverrideHeaders(process.env),
-  });
+  return connectPlaywrightAdminItx({ baseUrl, config });
 }
 
 async function createAdminProjectAfterPreviewRollout(input: {
@@ -150,13 +147,10 @@ async function createAdminProjectAfterPreviewRollout(input: {
 }) {
   // create() resolves only after the bootstrap saga commits terminal
   // project/created (sibling processors born, config repo seeded, and the
-  // project worker's creation hook consumed), so no separate lifecycle poll
-  // is needed. Auth is an explicit admin-secret credential on connect.
-  using session = connectItx({
-    auth: { type: "admin-secret", secret: input.config.adminApiSecret },
-    baseUrl: input.baseUrl,
-    headers: cloudflareWorkerVersionOverrideHeaders(process.env),
-  });
+  // project worker's creation hook consumed), so no separate lifecycle poll is
+  // needed. The shared helper retries the initial admin connection while a
+  // preview deployment finishes converging.
+  using session = await connectPlaywrightAdminItx(input);
   using created = await session.projects.get(input.slug).create({});
   const description = await created.__describe();
   const project = { id: description.projectId, slug: input.slug };
@@ -170,6 +164,48 @@ async function createAdminProjectAfterPreviewRollout(input: {
       return Promise.resolve();
     },
   };
+}
+
+async function connectPlaywrightAdminItx(input: {
+  baseUrl: string;
+  config: OsPlaywrightAuthConfig;
+}) {
+  return test.step("connect admin itx", () =>
+    connectItxReady(
+      {
+        auth: { type: "admin-secret", secret: input.config.adminApiSecret },
+        baseUrl: input.baseUrl,
+        headers: cloudflareWorkerVersionOverrideHeaders(process.env),
+      },
+      {
+        retryInitialConnection: {
+          delayMs: 250,
+          onRetry: recordInitialConnectionRetry,
+        },
+      },
+    ));
+}
+
+async function recordInitialConnectionRetry(retry: ItxInitialConnectionRetry) {
+  const code =
+    "code" in retry.error && typeof retry.error.code === "string" ? retry.error.code : undefined;
+  const diagnostic = JSON.stringify({
+    attemptDurationMs: Math.round(retry.attemptDurationMs),
+    delayMs: retry.delayMs,
+    error: retry.error.message,
+    ...(code === undefined ? {} : { errorCode: code }),
+    failedAttempt: retry.failedAttempt,
+    nextAttempt: retry.nextAttempt,
+    startedAt: retry.startedAt,
+  });
+
+  await test.step("itx: initial connection retry", () => {
+    test.info().annotations.push({
+      type: "itx-initial-connection-retry",
+      description: diagnostic,
+    });
+    process.stderr.write(`${ITX_INITIAL_CONNECTION_RETRY_PREFIX}${diagnostic}\n`);
+  });
 }
 
 export async function mintIterateSession(input: {

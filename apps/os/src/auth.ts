@@ -140,7 +140,7 @@ class ItxAuthContext implements ItxAuth {
     this.#directory = input.directory;
     this.#isAdmin = input.isAdmin;
     this.#principal = input.principal;
-    this.#projectIds = new Set(input.projectIds ?? []);
+    this.#projectIds = new Set(input.projectIds || []);
     this.#userPrincipal = input.userPrincipal;
   }
 

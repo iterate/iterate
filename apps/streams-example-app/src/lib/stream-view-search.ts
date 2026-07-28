@@ -13,12 +13,9 @@ export function parseStreamViewSearch(args: { search: Record<string, unknown> })
   });
   const projectIdRaw =
     typeof args.search.projectId === "string" ? args.search.projectId.trim() : "";
-  const projectId = projectIdRaw === "" ? DEFAULT_STREAM_PROJECT_ID : projectIdRaw;
+  const projectId = projectIdRaw || DEFAULT_STREAM_PROJECT_ID;
   const view =
-    typeof args.search.view === "string" &&
-    STREAM_VIEWS.some((entry) => entry.slug === args.search.view)
-      ? args.search.view
-      : "browser-raw-events";
+    STREAM_VIEWS.find((entry) => entry.slug === args.search.view)?.slug || "browser-raw-events";
   return { path, projectId, view };
 }
 
@@ -29,8 +26,7 @@ export function streamViewSearch(args: {
 }): StreamViewSearch {
   const path = normalizeStreamPath({ path: args.path });
   const projectIdRaw = args.projectId?.trim();
-  const projectId =
-    projectIdRaw === undefined || projectIdRaw === "" ? DEFAULT_STREAM_PROJECT_ID : projectIdRaw;
-  const view = args.view ?? "browser-raw-events";
+  const projectId = projectIdRaw || DEFAULT_STREAM_PROJECT_ID;
+  const view = args.view || "browser-raw-events";
   return { path, projectId, view };
 }

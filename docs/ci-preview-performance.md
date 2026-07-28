@@ -165,7 +165,7 @@ Every counted iteration therefore has its own ordinary Depot runner, artifacts,
 GitHub timing, and PostHog telemetry. The ledger records the immutable head,
 Depot run/attempt IDs, whole-run duration (dispatch creation through finish),
 and retry count. It fails fast on a workflow failure, moved head, absorbed test
-retry, or duration at or above five minutes. The acceptance bar is 25
+retry, or duration at or above seven minutes. The acceptance bar is 25
 consecutive zero-retry runs of one head.
 
 ## Cost

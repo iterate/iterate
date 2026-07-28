@@ -1,8 +1,70 @@
+diff --git a/dist/index.js b/dist/index.js
+index ec1f8602518e51ae151a238e5a51fe3c0dbc2e72..f5e2058fbccc0c1f15cc20c08ee6305b2a632261 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -254,26 +254,51 @@ async function bundleWithEsbuild(options) {
+ 						path: args.path,
+ 						external: true
+ 					};
++					// Iterate patch: an import the resolver cannot satisfy used to be
++					// SILENTLY marked external, shipping a bundle that fails at worker
++					// startup with `No such module`. Attach a warning so the build
++					// boundary can refuse the artifact. Scheme'd specifiers
++					// (cloudflare:*, node:*) and dynamic imports stay silent: the
++					// runtime may provide the former, and a guarded `await import()`
++					// is a legitimate pattern for the latter.
++					const warnUnresolved = (reason) => {
++						if (args.kind === "dynamic-import") return [];
++						if (/^[a-zA-Z][\w+.-]*:/.test(args.path)) return [];
++						return [{ text: `Failed to resolve '${args.path}' from ${args.importer || "entry"}: ${reason} (kept as an external import)` }];
++					};
+ 					try {
+ 						const result = resolveModule(args.path, { files });
+ 						if (!result.external) return {
+ 							path: result.path,
+ 							namespace: "virtual"
+ 						};
+-					} catch {}
+-					return {
+-						path: args.path,
+-						external: true
+-					};
++						const packageName = args.path.startsWith("@") ? args.path.split("/").slice(0, 2).join("/") : args.path.split("/")[0];
++						const installed = files.read(`node_modules/${packageName}/package.json`) !== null;
++						return {
++							path: args.path,
++							external: true,
++							warnings: warnUnresolved(installed ? `the installed '${packageName}' package does not provide this entry` : `package '${packageName}' is not installed`)
++						};
++					} catch (error) {
++						return {
++							path: args.path,
++							external: true,
++							warnings: warnUnresolved(error instanceof Error ? error.message : String(error))
++						};
++					}
+ 				}
+ 				const normalizedPath = args.path.startsWith("/") ? args.path.slice(1) : args.path;
+ 				if (files.read(normalizedPath) !== null) return {
+ 					path: normalizedPath,
+ 					namespace: "virtual"
+ 				};
++				// Iterate patch (same rationale as the bare-specifier branch above):
++				// only "./" and "/" paths that failed to resolve reach here, and an
++				// unresolvable relative import always fails at worker startup.
+ 				return {
+ 					path: args.path,
+-					external: true
++					external: true,
++					warnings: args.kind === "dynamic-import" ? [] : [{ text: `Failed to resolve '${args.path}' from ${args.importer || "entry"}: file does not exist (kept as an external import)` }]
+ 				};
+ 			});
+ 			build.onLoad({
 diff --git a/dist/installer-Ns4ivVf5.js b/dist/installer-Ns4ivVf5.js
-index 0220df7c889d58e6a670214eb1b6e1aa10215b2f..47627a3aad06d1de1f732ed48ccdf7e82197805a 100644
+index 0220df7c889d58e6a670214eb1b6e1aa10215b2f..5d7ad46ff85fb9cfeb752e4d440a9c60e03aae54 100644
 --- a/dist/installer-Ns4ivVf5.js
 +++ b/dist/installer-Ns4ivVf5.js
-@@ -75,20 +75,40 @@ async function installPackage(name, versionRange, result, fileSystem, installedP
+@@ -75,22 +75,42 @@ async function installPackage(name, versionRange, result, fileSystem, installedP
  	if (existing) return existing;
  	const installPromise = (async () => {
  		try {
@@ -55,6 +117,8 @@ index 0220df7c889d58e6a670214eb1b6e1aa10215b2f..47627a3aad06d1de1f732ed48ccdf7e8
 +				"zod"
 +			].includes(dependency))) : dependencies;
  			await Promise.all(Object.entries(deps).map(([depName, depVersion]) => installPackage(depName, depVersion, result, fileSystem, installedPackages, inProgress, registry)));
+ 		} catch (error) {
+ 			const message = error instanceof Error ? error.message : String(error);
 @@ -104,6 +124,25 @@ async function installPackage(name, versionRange, result, fileSystem, installedP
  		inProgress.delete(name);
  	}

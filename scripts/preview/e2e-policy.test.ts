@@ -189,6 +189,9 @@ describe("watchdogs the shell can't import stay in sync", () => {
     expect(source).toContain('--input "pull-request-number=$PR_NUMBER"');
     expect(source).toContain('depot ci logs "$attempt_id"');
     expect(source).toContain('depot ci run show "$run_id"');
+    expect(source).toContain(
+      "transport=$(grep -cF '[itx-initial-connection-retry] ' \"$log\" || true)",
+    );
     expect(source).not.toContain("pnpm preview deploy");
     expect(source).not.toContain("pnpm preview test");
     expect(source).not.toContain("warmup-runs");
@@ -214,6 +217,16 @@ describe("watchdogs the shell can't import stay in sync", () => {
     expect(raw.match(/.*title=Preview e2e retries::.*: (\d+) retried:.*/)?.[1]).toBe("2");
     const depotExport = `2026-07-22T07:24:00.175Z ##[warning]os: ${rendered}. The retry passed and does not fail this run.`;
     expect(depotExport.match(/.*##\[(?:notice|warning)\][^:]+: (\d+) retried:.*/)?.[1]).toBe("2");
+  });
+
+  it("keeps Playwright admin dials inside the observable pre-session retry boundary", () => {
+    const helper = readFileSync(resolve(repoRoot, "specs/test-support/forged-session.ts"), "utf8");
+    expect(helper).toContain("connectItxReady(");
+    expect(helper).toContain("retryInitialConnection:");
+    expect(helper).toContain('test.step("itx: initial connection retry"');
+    expect(helper).toContain('type: "itx-initial-connection-retry"');
+    expect(helper).toContain("[itx-initial-connection-retry] ");
+    expect(helper).not.toContain("connectItx({");
   });
 });
 

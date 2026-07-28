@@ -67,10 +67,8 @@ export function sandboxCreateClaimKey(path: string): string {
  *   identity — so reject exactly those, and nothing more.
  */
 export function assertSandboxPath(path: string): string {
-  const name = path.startsWith(`${SANDBOX_PATH_PREFIX}/`)
-    ? path.slice(SANDBOX_PATH_PREFIX.length + 1)
-    : undefined;
-  if (name === undefined || name === "" || name.includes("/")) {
+  const name = path.slice(SANDBOX_PATH_PREFIX.length + 1);
+  if (!path.startsWith(`${SANDBOX_PATH_PREFIX}/`) || !name || name.includes("/")) {
     throw new Error(
       `sandbox paths are exactly ${SANDBOX_PATH_PREFIX}/<name> with a single-segment name ` +
         `(address it with itx.sandboxes.get("/sandboxes/<name>")), got "${path}"`,
@@ -103,7 +101,8 @@ export function assertSandboxPath(path: string): string {
  */
 export function assertValidSleepAfter(value: string | number): void {
   const valid =
-    typeof value === "number" ? Number.isFinite(value) && value > 0 : /^\d+[smh]$/.test(value);
+    (typeof value === "number" && Number.isFinite(value) && value > 0) ||
+    (typeof value === "string" && /^\d+[smh]$/.test(value));
   if (!valid) {
     throw new Error(
       `invalid sleepAfter "${value}": pass a positive number of seconds or "<n>s"/"<n>m"/"<n>h" (e.g. "30s", "5m", "1h")`,
@@ -129,7 +128,7 @@ export function githubTokenEnvForConnections(
     .filter((entry) => entry.integration === "github")
     .map((entry) => entry.connection)
     .sort();
-  return first === undefined ? null : githubAccessTokenPlaceholder(first);
+  return first ? githubAccessTokenPlaceholder(first) : null;
 }
 
 /**

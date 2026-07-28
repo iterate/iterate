@@ -83,13 +83,19 @@ export const OPTIONAL_SECRETS = [
 
 /**
  * Secrets removed from the OS deployment contract. Wrangler preserves omitted
- * secrets, so deploy.ts rejects Workers that still carry these names and the
- * explicit erase/handover path deletes them before a slot changes owners.
+ * secrets, so deploy.ts deletes these from any Worker that still carries them
+ * (verified removed; deploy scripts are the only Worker-secret writers) and
+ * the explicit erase/handover path deletes them before a slot changes owners.
  */
 export const RETIRED_AUTH_SERVICE_TOKEN = "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN";
 export const RETIRED_WORKER_SECRETS = [
   RETIRED_AUTH_SERVICE_TOKEN,
   "APP_CONFIG_GEMINI_API_KEY",
+  // Replaced by APP_CONFIG_ITERATE_REPO_PKG_REF (name-agnostic pkg.pr.new
+  // ref pinning, src/pkg-pr-new.ts). Only preview slots ever carried it, and
+  // every pre-pinning preview deploy actively wrote it, so deploy-side
+  // deletion (not slot-erase alone) is what keeps renewed leases healthy.
+  "APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC",
   "APP_CONFIG_LOGS",
   "APP_CONFIG_SLACK_BOT_TOKEN",
   "APP_CONFIG_X_AI_API_KEY",
@@ -510,10 +516,16 @@ function localDevBindings() {
       APP_CONFIG_CLOUDFLARE_AI_GATEWAY__TRANSPORT: "byok",
       APP_CONFIG_CLOUDFLARE_AI_GATEWAY__RESPONSE_CACHE_TTL_SECONDS: String(7 * 24 * 60 * 60),
       ...(process.env.PORT ? { APP_CONFIG_BASE_URL: `http://localhost:${process.env.PORT}` } : {}),
-      ...(process.env.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC?.trim()
+      ...(process.env.APP_CONFIG_ITERATE_REPO_PKG_REF?.trim()
         ? {
-            APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC:
-              process.env.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC.trim(),
+            APP_CONFIG_ITERATE_REPO_PKG_REF: process.env.APP_CONFIG_ITERATE_REPO_PKG_REF.trim(),
+          }
+        : {}),
+      // Local dev's SDK tarball lockstep (dev.ts + lib/dev-sdk-tarball.ts).
+      ...(process.env.APP_CONFIG_ITERATE_REPO_PKG_SPEC_OVERRIDES?.trim()
+        ? {
+            APP_CONFIG_ITERATE_REPO_PKG_SPEC_OVERRIDES:
+              process.env.APP_CONFIG_ITERATE_REPO_PKG_SPEC_OVERRIDES.trim(),
           }
         : {}),
       // Local dev trusts forge-minted sessions by deriving the public key from

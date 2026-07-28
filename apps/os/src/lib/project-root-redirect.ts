@@ -13,6 +13,13 @@ export type RootProjectRedirectDecision =
       kind: "project";
       project: RootRedirectProject;
       welcome: boolean;
+      /**
+       * The server could not prove or commit this project's birth before the
+       * redirect. The welcome page must issue the same idempotent create once
+       * from its authenticated browser session instead of stranding the user
+       * on the projects list.
+       */
+      ensureBirth: boolean;
     }
   | {
       kind: "projects";
@@ -34,19 +41,39 @@ export function chooseRootProjectRedirect(input: {
       kind: "project",
       project: preferredOpenProject,
       welcome: preferredOpenProject.deploymentStatus === "creating",
+      ensureBirth: false,
     };
   }
 
   const createdProjects = openProjects.filter((project) => project.deploymentStatus === "created");
   if (createdProjects.length === 1) {
-    return { kind: "project", project: createdProjects[0]!, welcome: false };
+    return {
+      kind: "project",
+      project: createdProjects[0]!,
+      welcome: false,
+      ensureBirth: false,
+    };
   }
   if (openProjects.length === 1) {
-    return { kind: "project", project: openProjects[0]!, welcome: true };
+    return {
+      kind: "project",
+      project: openProjects[0]!,
+      welcome: true,
+      ensureBirth: false,
+    };
   }
 
-  if (input.projects.length === 1 && input.projects[0]!.deploymentStatus === "missing") {
-    return { kind: "project", project: input.projects[0]!, welcome: true };
+  const onlyProject = input.projects.length === 1 ? input.projects[0]! : undefined;
+  if (onlyProject?.deploymentStatus === "missing" || onlyProject?.deploymentStatus === "unknown") {
+    return {
+      kind: "project",
+      project: onlyProject,
+      welcome: true,
+      // "unknown" means the deployment-status probe itself failed. Treat it
+      // as uncertainty to heal, not evidence that a single-project user
+      // belongs on a dead-end list page.
+      ensureBirth: onlyProject.deploymentStatus === "unknown",
+    };
   }
 
   return { kind: "projects" };

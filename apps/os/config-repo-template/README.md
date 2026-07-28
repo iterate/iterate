@@ -1,8 +1,9 @@
 # Project configuration
 
 This repository is the project's executable configuration. `worker.ts` is the
-default project worker (`fetch` plus `processEvent`); `apps/` contains the apps
-and stateful processors it hosts.
+default project worker (`fetch` plus `processEvent`). It declares packaged apps
+such as `GithubAiLinter`, `GuestbookApp`, and `TodoApp`; project-owned app source
+lives under `apps/`, and the packaged linter reads editable policy from `rules/`.
 
 ## Creation and reconciliation
 

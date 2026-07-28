@@ -1,7 +1,8 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { z } from "zod";
-import { useLiveState } from "iterate/sdk/itx/react";
+import { toast } from "@iterate-com/ui/components/sonner";
+import { connectIterateSession, useLiveState } from "iterate/sdk/itx/react";
 import { ProjectCreationProgress } from "~/components/project-creation-progress.tsx";
 import { ProjectDashboard } from "~/components/project-dashboard.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
@@ -12,6 +13,9 @@ const HomeSearch = StreamViewSearch.extend({
   /** Set by the create form: play the creation checklist until `created`, then
    * hand over to the onboarding agent. */
   welcome: z.boolean().optional().catch(undefined),
+  /** The root SSR handoff could not prove/commit project birth. The welcome
+   * page retries that idempotent boundary once from the browser session. */
+  ensureBirth: z.boolean().optional().catch(undefined),
 });
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/")({
@@ -30,9 +34,10 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/")({
  */
 function ProjectHomePage() {
   const { project } = Route.useRouteContext();
-  const { welcome } = Route.useSearch();
+  const { ensureBirth, welcome } = Route.useSearch();
   const params = Route.useParams();
   const navigate = useNavigate();
+  const birthRecoveryStarted = useRef(false);
   const lifecycle = useLiveState(
     (itx) => itx.liveState,
     (state) => state.reduced,
@@ -53,6 +58,25 @@ function ProjectHomePage() {
   // up while its navigation is in flight.
   const showChecklist =
     lifecycle.value === undefined ? welcome === true : !created || handOffToOnboarding;
+
+  useEffect(() => {
+    if (ensureBirth !== true || birthRecoveryStarted.current) return;
+    birthRecoveryStarted.current = true;
+
+    void (async () => {
+      const session = await connectIterateSession();
+      await session.projects
+        .get(project.slug)
+        .create({ projectId: project.id }, { waitUntilReady: false });
+    })().catch((error: unknown) => {
+      console.error("project welcome: browser birth recovery failed", {
+        projectId: project.id,
+        slug: project.slug,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      toast.error("Project setup could not be resumed. Reload to try again.");
+    });
+  }, [ensureBirth, project.id, project.slug]);
 
   useEffect(() => {
     if (!handOffToOnboarding) return;

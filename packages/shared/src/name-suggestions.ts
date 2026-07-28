@@ -39,7 +39,7 @@ export function suggestOrganizationName(input: { name?: string | null; email?: s
   if (displayName) {
     return `${displayName}'s Organization`;
   }
-  return suggestOrganizationNameFromEmail(input.email ?? "");
+  return suggestOrganizationNameFromEmail(input.email || "");
 }
 
 /**
@@ -53,10 +53,10 @@ export function suggestOrganizationNameFromEmail(email: string): string {
   if (!rawLocalPart || !rawDomain) return "";
 
   if (!GENERIC_EMAIL_DOMAINS.has(rawDomain)) {
-    return titleCaseWords(rawDomain.split(".")[0] ?? "");
+    return titleCaseWords(rawDomain.split(".")[0] || "");
   }
 
-  return titleCaseWords(rawLocalPart.split("+")[0] ?? "");
+  return titleCaseWords(rawLocalPart.split("+")[0] || "");
 }
 
 function titleCaseWords(value: string): string {

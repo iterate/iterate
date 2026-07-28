@@ -21,9 +21,12 @@ export interface Env {
    * internal error).
    */
   WORKER_SELF: string;
-  /** Preview-only exact pkg.pr.new tarball used for `iterate` dependencies in
+  /** Preview-only pkg.pr.new ref pinned onto iterate/iterate package specs in
    * dynamic builds. Deploy writes this from PREVIEW_PULL_REQUEST_HEAD_SHA. */
-  APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC?: string;
+  APP_CONFIG_ITERATE_REPO_PKG_REF?: string;
+  /** Local-dev-only JSON map of dependency name → replacement spec (the
+   * worktree SDK tarball lockstep — scripts/lib/dev-sdk-tarball.ts). */
+  APP_CONFIG_ITERATE_REPO_PKG_SPEC_OVERRIDES?: string;
   /** Present only in generated deployed env blocks; absent in local dev. */
   DEPLOYMENT_ENV?: string;
   /** Required in deployed config; optional in the local runtime binding shape. */

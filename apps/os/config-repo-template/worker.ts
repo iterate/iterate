@@ -1,9 +1,7 @@
+import { GithubAiLinter } from "iterate/starter-apps/github-ai-linter";
+import { GuestbookApp } from "iterate/starter-apps/guestbook";
 import { IterateWorkerEntrypoint, type SchedulerRecurrence, type StreamEvent } from "iterate/sdk";
-import { guestbookAppRef } from "./apps/guestbook/ref.ts";
-import {
-  githubConnectionStreamPath,
-  reviewBotSubscriptionEvents,
-} from "./apps/review-bot/src/review-bot-ref.ts";
+import { TodoApp } from "iterate/starter-apps/todo";
 
 const HEARTBEAT_SCHEDULE_PREFIX = "iterate/config/heartbeat/";
 const HEARTBEAT_SCRIPT = `async (itx, schedule, trigger) => {
@@ -35,6 +33,16 @@ const heartbeatSchedules: Array<{ key: string; recurrence: SchedulerRecurrence }
 // { fetch, processEvent }
 
 export default class ProjectWorker extends IterateWorkerEntrypoint {
+  #aiLintApp = GithubAiLinter.create(this.env, {
+    policyVersion: "2",
+    rules: {
+      glob: "rules/**/*.md",
+      repoPath: "/repos/config",
+    },
+  });
+  #guestbookApp = GuestbookApp.create(this.env);
+  #todoApp = TodoApp.create(this.env);
+
   // The base class delivers committed events on ANY stream here at least once and in
   // per-stream order.
   protected override async processEvent(event: StreamEvent): Promise<void> {
@@ -72,28 +80,12 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         await this.reconcileProject();
         break;
       }
-      case "events.iterate.com/repo/github-link-configured": {
-        // The pull-request review bot (apps/review-bot) is a stream processor
-        // on each GitHub connection's webhook stream. A repo link is the rare
-        // moment a connection starts mattering to this project, and its fact
-        // carries the connection slug — so this lane offers the bot's durable
-        // WAKE subscription once per (re-)link, not once per webhook. The
-        // append is idempotent, and a freshly configured wake subscription
-        // replays its stream from offset zero, so pull requests opened
-        // shortly before the link (within the bot's freshness horizon) still
-        // get reviewed. From then on the stream spine dials the app
-        // directly, without this worker in the loop.
-        const connection = event.payload?.connection;
-        if (typeof connection !== "string" || connection.length === 0) break;
-        using itx = await this.env.ITX.get();
-        await itx.streams
-          .get(githubConnectionStreamPath(connection))
-          .append(...reviewBotSubscriptionEvents(connection));
-        break;
-      }
       default:
         break;
     }
+
+    await this.#aiLintApp.processEvent(event);
+    await this.#guestbookApp.processEvent(event);
   }
 
   private async reconcileProject(): Promise<void> {
@@ -117,23 +109,10 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       using itx = await this.env.ITX.get();
       const authResponse = await itx.auth.get({ policy: "project-member" }).fetch(req);
       if (authResponse) return authResponse;
-      return this.fetchDynamicWorker(req, {
-        type: "stateful",
-        className: "TodoApp",
-        // "-live" keeps clear of a retired predecessor's durable identity.
-        durableWorkerKey: "app-todo-live",
-        path: "/",
-        source: {
-          createApp: {
-            client: "apps/todo/client.tsx",
-            files: { type: "repo", repoPath: "/repos/config" },
-            server: "apps/todo/server.tsx",
-          },
-        },
-      });
+      return this.#todoApp.fetch(req);
     }
     if (app === "guestbook") {
-      return this.fetchDynamicWorker(req, guestbookAppRef);
+      return this.#guestbookApp.fetch(req);
     }
     if (app === "tasks") {
       // Member-gated reverse proxy (pages, assets, WebSockets) to the hosted

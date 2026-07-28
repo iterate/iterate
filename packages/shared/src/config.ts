@@ -325,6 +325,11 @@ function warnForUnknownConfigOverrideKeys(options: {
   }
 
   const configSchema = unwrapConfigSchema(options.configSchema);
+  // Records accept arbitrary keys by definition — there is no "unknown key"
+  // to warn about, and the final schema parse validates the values.
+  if (configSchema instanceof z.ZodRecord) {
+    return;
+  }
   if (!(configSchema instanceof z.ZodObject)) {
     const configPath = formatConfigPath(path);
     throw new Error(

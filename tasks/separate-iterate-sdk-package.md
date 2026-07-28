@@ -53,8 +53,8 @@ import { StreamProcessor } from "iterate/processors";
 ```
 
 The dependency key may remain `iterate` while resolving to a differently named
-SDK tarball/package. `APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC` should continue to
-select the exact pkg.pr.new artifact for a preview PR head.
+SDK tarball/package. `APP_CONFIG_ITERATE_REPO_PKG_REF` should continue to
+pin the exact pkg.pr.new artifacts for a preview PR head.
 
 ## Proposed package boundary
 
@@ -76,10 +76,10 @@ select the exact pkg.pr.new artifact for a preview PR head.
 ## Publishing and preview requirements
 
 - pkg.pr.new publishes the SDK as its own artifact for every PR head.
-- Preview deployment derives an exact immutable SDK tarball URL from
-  `PREVIEW_PULL_REQUEST_HEAD_SHA` and exposes it through
-  `APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC`.
-- Dynamic build cache identity includes the selected SDK package spec.
+- Preview deployment derives exact immutable pkg.pr.new URLs from
+  `PREVIEW_PULL_REQUEST_HEAD_SHA` and exposes the ref through
+  `APP_CONFIG_ITERATE_REPO_PKG_REF`.
+- Dynamic build cache identity includes the selected pkg.pr.new knobs.
 - Production and non-preview environments have an explicit stable SDK package
   policy; they must not silently fall back to an unrelated moving version.
 - The package must install through conventional npm-compatible semantics. Do

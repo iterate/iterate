@@ -1765,7 +1765,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     const seeded = await timedStep("create-timing", timing, "artifact-seed", () =>
       seedArtifactRepo({
         branch: defaultBranch,
-        files: projectRepoSeedFiles(parseConfig(this.env).iterateSdkPackageSpec),
+        files: projectRepoSeedFiles(parseConfig(this.env)),
         remote,
         token,
       }),

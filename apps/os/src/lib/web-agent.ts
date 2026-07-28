@@ -40,7 +40,7 @@ export async function sendAgentFirstTurn(
   input: { message: string; files?: readonly File[] },
 ) {
   await agent.create();
-  const files = input.files ?? [];
+  const files = input.files || [];
   const trimmed = input.message.trim();
   if (files.length > 0) {
     await agent.addFiles({

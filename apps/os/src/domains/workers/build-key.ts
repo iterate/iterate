@@ -40,7 +40,11 @@ export type WorkerBuildInput = {
   compatibilityDate: string;
   compatibilityFlags: string[];
   files: ResolvedWorkerFileSource;
-  iteratePackageSpec?: string;
+  /** Deployment pkg.pr.new knobs (src/pkg-pr-new.ts). Both participate in the
+   * key: they rewrite manifests pre-build, so a pinned preview build must
+   * never collide with a main build of the same source. */
+  iterateRepoPkgRef?: string;
+  iterateRepoPkgSpecOverrides?: Record<string, string>;
   source: DynamicWorkerSource;
 };
 
@@ -78,7 +82,8 @@ export async function workerBuildKey(input: WorkerBuildInput): Promise<string> {
     compatibilityDate: input.compatibilityDate,
     compatibilityFlags: input.compatibilityFlags,
     files: normalizeResolvedSource(input.files),
-    iteratePackageSpec: input.iteratePackageSpec,
+    iterateRepoPkgRef: input.iterateRepoPkgRef,
+    iterateRepoPkgSpecOverrides: input.iterateRepoPkgSpecOverrides,
     bundlerVersion: WORKER_BUNDLER_VERSION,
     type: "worker-build-key",
   });

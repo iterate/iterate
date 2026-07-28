@@ -141,6 +141,13 @@ pnpm --dir apps/auth dev      # auth app only (when working on auth itself)
 pnpm test && pnpm typecheck && pnpm lint && pnpm format
 ```
 
+## Review rules
+
+Canonical code-review rules live in `rules/**/*.md`. Before changing or
+reviewing code, read the rules whose frontmatter `files` globs match the files
+in scope and honor their exclusions. The hosted GitHub linter reads these same
+files; keep shared review policy here, not in the config repo.
+
 How do I…? — **[Dev environments](docs/dev-environments.md)** answers: run
 local dev (fully local, random port, `localhost` plus project
 `<slug>.localhost` hosts), be any user or an admin (minting), point an isolated

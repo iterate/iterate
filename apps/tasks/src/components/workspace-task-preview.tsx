@@ -14,7 +14,7 @@ export function WorkspaceTaskPreview({ source }: { source: string }) {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto w-full max-w-3xl px-8 py-6 text-sm">
-        {preview.metadata.length === 0 ? null : (
+        {preview.metadata.length > 0 && (
           <div className="mb-6 overflow-hidden rounded-lg border bg-muted/20">
             <Table className="text-xs">
               <TableBody>

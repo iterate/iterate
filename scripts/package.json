@@ -18,6 +18,7 @@
     "zod": "4.3.6"
   },
   "devDependencies": {
+    "@jridgewell/sourcemap-codec": "^1.5.5",
     "@types/node": "^25.0.10",
     "typescript": "^5.9.3",
     "vitest": "^4.1.7"

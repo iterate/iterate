@@ -96,16 +96,12 @@ export function isBinaryRepoPath(path: string): boolean {
  * to an ignored bogus comment), so the same srcdoc lane previews it with the
  * same script-inert sandbox and zero new rendering code. An `<img>` would
  * also neuter scripts, but then script-driven animation and interactivity
- * never run — the opaque-origin sandbox keeps them working AND inert.
- * Module-internal: `isPreviewablePath` is the exported predicate. */
-function isHtmlPreviewPath(path: string): boolean {
-  return /\.(html?|svg)$/i.test(path);
-}
+ * never run — the opaque-origin sandbox keeps them working AND inert. */
 
 /** Files that get the editor pane's Code | Preview toggle: html/svg documents
  * (rendered in a sandboxed iframe) and markdown (rendered to HTML). */
 export function isPreviewablePath(path: string): boolean {
-  if (isHtmlPreviewPath(path)) return true;
+  if (/\.(html?|svg)$/i.test(path)) return true;
   const kind = repoFileKind(path);
   return kind.kind === "text" && kind.language === "markdown";
 }

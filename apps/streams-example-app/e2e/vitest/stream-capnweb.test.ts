@@ -160,12 +160,16 @@ describe("stream capnweb protocol", () => {
     const base = e2eStreamPathLabel("e2e/resolve-child");
     using parent = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path: base }) });
 
-    const [viaBare] = await parent.stream
-      .at("child")
-      .append({ type: "test.stream.resolve", payload: { kind: "bare" } });
-    const [viaDot] = await parent.stream
-      .at("./child")
-      .append({ type: "test.stream.resolve", payload: { kind: "dot" } });
+    const [viaBare] = await parent.stream.at("child").append({
+      type: "test.stream.resolve",
+      idempotencyKey: `${base}:bare`,
+      payload: { kind: "bare" },
+    });
+    const [viaDot] = await parent.stream.at("./child").append({
+      type: "test.stream.resolve",
+      idempotencyKey: `${base}:dot`,
+      payload: { kind: "dot" },
+    });
 
     // Both forms resolve to the same `${base}/child` stream the reader connects to.
     using child = withStreamConnectionFromNode({
@@ -188,9 +192,11 @@ describe("stream capnweb protocol", () => {
     const target = e2eStreamPath(`/e2e/resolve-abs-target-${unique}`);
     using parent = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path: base }) });
 
-    const [appended] = await parent.stream
-      .at(target)
-      .append({ type: "test.stream.resolve", payload: { kind: "absolute" } });
+    const [appended] = await parent.stream.at(target).append({
+      type: "test.stream.resolve",
+      idempotencyKey: `${unique}:absolute`,
+      payload: { kind: "absolute" },
+    });
 
     using targetStream = withStreamConnectionFromNode({
       url: toStreamWebSocketUrl({ path: target }),
@@ -209,9 +215,11 @@ describe("stream capnweb protocol", () => {
     });
 
     // ../parent -> {root}/a/b/parent
-    const [toParent] = await current.stream
-      .at("../parent")
-      .append({ type: "test.stream.resolve", payload: { kind: "parent" } });
+    const [toParent] = await current.stream.at("../parent").append({
+      type: "test.stream.resolve",
+      idempotencyKey: `${root}:parent`,
+      payload: { kind: "parent" },
+    });
     using parentStream = withStreamConnectionFromNode({
       url: toStreamWebSocketUrl({ path: `${root}/a/b/parent` }),
     });
@@ -220,18 +228,22 @@ describe("stream capnweb protocol", () => {
     );
 
     // ../../grandparent -> {root}/a/grandparent
-    const [toGrand] = await current.stream
-      .at("../../grandparent")
-      .append({ type: "test.stream.resolve", payload: { kind: "grandparent" } });
+    const [toGrand] = await current.stream.at("../../grandparent").append({
+      type: "test.stream.resolve",
+      idempotencyKey: `${root}:grandparent`,
+      payload: { kind: "grandparent" },
+    });
     using grandStream = withStreamConnectionFromNode({
       url: toStreamWebSocketUrl({ path: `${root}/a/grandparent` }),
     });
     await expect(grandStream.stream.getEvents({ afterOffset: 0 })).resolves.toContainEqual(toGrand);
 
     // ../../grandparent/.././bla normalizes to {root}/a/bla
-    const [toMixed] = await current.stream
-      .at("../../grandparent/.././bla")
-      .append({ type: "test.stream.resolve", payload: { kind: "mixed" } });
+    const [toMixed] = await current.stream.at("../../grandparent/.././bla").append({
+      type: "test.stream.resolve",
+      idempotencyKey: `${root}:mixed`,
+      payload: { kind: "mixed" },
+    });
     using blaStream = withStreamConnectionFromNode({
       url: toStreamWebSocketUrl({ path: `${root}/a/bla` }),
     });
