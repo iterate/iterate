@@ -504,6 +504,44 @@ cannot settle a successor batch, and background work does not delay the
 acknowledgement. The strict streak remains 0/25 pending a clean exact-head
 preflight.
 
+The callback correction's exact-head preflight
+(`0355d84422f4e4c7ec960a1dfbb25c98485cfe2a`, Depot aggregate
+`zhgzh74wb1`, canonical workflow `j6z93w1t3c`, job `dvqc99bz9d`, attempt
+`5j9f594t58`) confirmed that fix: the matching Cloudflare window contained
+zero `stream durable callback failed` records. The run still failed after 6
+minutes 14 seconds with four framework retries. All ten artifacts finalized
+normally into 7,278 PostHog events. Three cases passed after retry, while the
+20-script concurrency case timed out on both 120-second attempts.
+
+The terminal script failure was deterministic ownership loss, not an
+insufficient test timeout. All 40 script executions entered a loopback
+`WorkerEntrypoint`, returned from `start()`, and left the arbitrary
+Dynamic-Worker invocation under `waitUntil`. Cloudflare cancelled every one
+at roughly 30 seconds and emitted 40 matching
+`waitUntil() tasks did not complete within the allowed time` warnings. Script
+execution now has one named Durable Object per immutable execution id.
+`start()` only persists a fingerprinted queued request and arms an alarm; the
+alarm persists `running` before invoking, owns the full multi-minute call, and
+persists the exact settlement before a keyed append. A recovered `running`
+phase records an explicit possibly-partial orphan instead of replaying
+arbitrary code. A recovered `settling` phase retries only the same keyed
+append, and a compact `settled` tombstone accepts exact duplicate handoffs
+while rejecting execution-id reuse with different input.
+
+The two browser retries were a separate deploy/asset-coherence race. In one
+trace, a document request carrying the new version override still executed the
+previous OS Worker and named old chunks; ten of those chunks returned 404. In
+the other, the document executed the new Worker but its new hashed chunks
+still returned 404 and became available later. The old readiness request did
+not carry the test's version override and accepted the first matching health
+response, so it could prove neither subsequent override routing nor static
+asset availability. OS readiness now sends the exact test override, requires
+the expected health version, checks every non-sourcemap client-build asset
+with bounded parallel `HEAD` requests, and requires the expected health
+version again. Only failed assets are retried. This replaces a timing guess
+with a direct version-and-assets proof; the strict streak remains 0/25 pending
+a clean exact-head preflight of both fixes.
+
 ## Round 15 (2026-07-23, post-#2284)
 
 This round starts from merged `origin/main` at

@@ -1,4 +1,6 @@
 import { readFileSync } from "node:fs";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
@@ -46,6 +48,7 @@ const {
   parseEnvironmentConfigLeaseData,
   previewProvisionedIntegrationSecrets,
   readPreviewAppConfig,
+  readPreviewStaticAssetPaths,
   reconcileEnvironmentConfigLeaseResources,
   releaseLeaseDespiteTeardownFailure,
   announceRetryTelemetry,
@@ -68,6 +71,7 @@ const {
   selectPreviewSlotDataOwners,
   splitRepositoryFullName,
   syncPreviewInventory,
+  waitForPreviewAppReadiness,
   waitForHttpReadiness,
 } = previewInternals;
 
@@ -924,6 +928,10 @@ describe("preview test commands", () => {
   test("guards the parallel OS preview lane with target budgets", () => {
     expect(cloudflarePreviewApps.os).toMatchObject({
       previewDeployBudgetMs: 90_000,
+      previewReadyStaticAssets: {
+        directory: "dist/client/assets",
+        publicPathPrefix: "/assets",
+      },
       previewReadyWorkerVersion: true,
       previewTestBudgetMs: 100_000,
     });
@@ -1008,20 +1016,22 @@ describe("preview readiness URLs", () => {
     expect(parseLastDeployedWorkerVersionId("Uploaded os-preview-8")).toBeNull();
   });
 
-  test("waits for the expected edge worker version without an artificial dwell", async () => {
+  test("pins every readiness request to the expected edge worker version", async () => {
     vi.useFakeTimers();
+    const previousVersion = "11111111-1111-4111-8111-111111111111";
+    const expectedVersion = "22222222-2222-4222-8222-222222222222";
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(
         new Response(null, {
           status: 200,
-          headers: { "x-iterate-worker-version": "previous-version" },
+          headers: { "x-iterate-worker-version": previousVersion },
         }),
       )
       .mockResolvedValue(
         new Response(null, {
           status: 200,
-          headers: { "x-iterate-worker-version": "expected-version" },
+          headers: { "x-iterate-worker-version": expectedVersion },
         }),
       );
 
@@ -1030,15 +1040,107 @@ describe("preview readiness URLs", () => {
         signal: undefined,
         timeoutMs: 10_000,
         url: new URL("https://os.iterate-preview-8.com/api/health"),
-        workerVersion: { expected: "expected-version" },
+        workerVersion: {
+          expected: expectedVersion,
+          workerName: "os-preview-8",
+        },
       });
 
       await vi.advanceTimersByTimeAsync(1_000);
       await expect(readiness).resolves.toEqual({ ok: true });
       expect(fetchMock).toHaveBeenCalledTimes(2);
+      for (const [, init] of fetchMock.mock.calls) {
+        expect(new Headers(init?.headers).get("Cloudflare-Workers-Version-Overrides")).toBe(
+          `os-preview-8="${expectedVersion}"`,
+        );
+      }
     } finally {
       fetchMock.mockRestore();
       vi.useRealTimers();
+    }
+  });
+
+  test("brackets a complete exact-version static-asset proof with health checks", async () => {
+    vi.useFakeTimers();
+    const expectedVersion = "22222222-2222-4222-8222-222222222222";
+    let fontAttempts = 0;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = new URL(input instanceof Request ? input.url : input.toString());
+      if (url.pathname === "/api/health") {
+        return new Response(null, {
+          status: 200,
+          headers: { "x-iterate-worker-version": expectedVersion },
+        });
+      }
+      if (url.pathname === "/assets/app.js") return new Response(null, { status: 200 });
+      if (url.pathname === "/assets/font.woff2") {
+        fontAttempts += 1;
+        return new Response(null, { status: fontAttempts === 1 ? 404 : 200 });
+      }
+      throw new Error(`unexpected readiness request ${url}`);
+    });
+
+    try {
+      const readiness = waitForPreviewAppReadiness({
+        publicUrl: "https://os.iterate-preview-8.com",
+        readyUrlPath: "/api/health",
+        signal: undefined,
+        staticAssetPaths: ["/assets/app.js", "/assets/font.woff2"],
+        timeoutMs: 10_000,
+        workerVersion: {
+          expected: expectedVersion,
+          workerName: "os-preview-8",
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(readiness).resolves.toEqual({ ok: true });
+      expect(fontAttempts).toBe(2);
+      expect(
+        fetchMock.mock.calls.filter(([input]) => {
+          const url = new URL(input instanceof Request ? input.url : input.toString());
+          return url.pathname === "/assets/app.js";
+        }),
+      ).toHaveLength(1);
+      expect(
+        fetchMock.mock.calls.filter(([input]) => {
+          const url = new URL(input instanceof Request ? input.url : input.toString());
+          return url.pathname === "/api/health";
+        }),
+      ).toHaveLength(2);
+      for (const [input, init] of fetchMock.mock.calls) {
+        const url = new URL(input instanceof Request ? input.url : input.toString());
+        expect(new Headers(init?.headers).get("Cloudflare-Workers-Version-Overrides")).toBe(
+          `os-preview-8="${expectedVersion}"`,
+        );
+        expect(init?.method).toBe(url.pathname === "/api/health" ? "GET" : "HEAD");
+      }
+    } finally {
+      fetchMock.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  test("inventories every runtime asset recursively while excluding source maps", async () => {
+    const appDirectory = await mkdtemp(resolve(tmpdir(), "iterate-preview-assets-"));
+    try {
+      const assetDirectory = resolve(appDirectory, "dist/client/assets");
+      await mkdir(resolve(assetDirectory, "fonts"), { recursive: true });
+      await Promise.all([
+        writeFile(resolve(assetDirectory, "app.js"), ""),
+        writeFile(resolve(assetDirectory, "app.js.map"), ""),
+        writeFile(resolve(assetDirectory, "fonts/ui font.woff2"), ""),
+      ]);
+
+      await expect(
+        readPreviewStaticAssetPaths({
+          appDirectory,
+          directory: "dist/client/assets",
+          publicPathPrefix: "/assets",
+        }),
+      ).resolves.toEqual(["/assets/app.js", "/assets/fonts/ui%20font.woff2"]);
+    } finally {
+      await rm(appDirectory, { force: true, recursive: true });
     }
   });
 });

@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { promises as dns } from "node:dns";
-import { mkdir, readFile, rm } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm } from "node:fs/promises";
 import { userInfo } from "node:os";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -33,6 +33,7 @@ import {
   OS_TUI_LANE_TIMEOUT_SECS,
 } from "../../packages/shared/src/test-support/e2e-policy/index.ts";
 import {
+  CLOUDFLARE_WORKERS_VERSION_OVERRIDES_HEADER,
   E2E_CLOUDFLARE_WORKERS_VERSION_OVERRIDES_ENV,
   renderCloudflareWorkerVersionOverrides,
 } from "../../packages/shared/src/test-support/cloudflare-worker-version-overrides.ts";
@@ -1771,6 +1772,15 @@ export type CloudflarePreviewApp = {
    * finite sample of Durable Objects cannot prove the whole fleet.
    */
   previewReadyWorkerVersion?: true;
+  /**
+   * Prove every non-sourcemap file from this build output is reachable through
+   * the exact Worker version before browser tests begin. `directory` is
+   * relative to appPath; `publicPathPrefix` is its URL mount.
+   */
+  previewReadyStaticAssets?: {
+    directory: string;
+    publicPathPrefix: `/${string}`;
+  };
   previewTestBaseUrlEnvVar: string;
   /** Every canonical artifact the app-level test command must produce once. */
   previewTestArtifactSources: readonly TestTelemetryArtifactSource[];
@@ -2123,6 +2133,10 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // preview deploy waits the full 10min readiness timeout on a 404 and fails.
     previewReadyUrlPath: "/api/health",
     previewReadyWorkerVersion: true,
+    previewReadyStaticAssets: {
+      directory: "dist/client/assets",
+      publicPathPrefix: "/assets",
+    },
     paths: [
       "apps/os/**",
       // The root Playwright suite is part of OS preview e2e. A test or
@@ -4203,12 +4217,18 @@ async function deployPreviewApp(input: {
     // (selectRecordedGreenAppsNotServing), e.g. after a slot erase. Skip only
     // when every readiness URL answers right now.
     const reuseProofStartedAt = Date.now();
+    const reusedWorkerVersion = existingEntry.deployedWorkerVersion;
     const reuseProofPassed = (
       await Promise.all(
         resolvePreviewReadinessUrls({
           publicUrl: appConfig.baseUrl,
           readyUrlPath: input.app.previewReadyUrlPath,
-        }).map((url) => probePreviewAppServingOnce(url)),
+        }).map((url) =>
+          probePreviewAppServingOnce(url, {
+            expected: reusedWorkerVersion,
+            workerName: appConfig.workerName,
+          }),
+        ),
       )
     ).every((probe) => probe.ok);
     deployReuseProofDurationMs = Date.now() - reuseProofStartedAt;
@@ -4283,15 +4303,52 @@ async function deployPreviewApp(input: {
   }
 
   const readinessStartedAt = Date.now();
+  let staticAssetPaths: string[] | undefined;
+  try {
+    staticAssetPaths = input.app.previewReadyStaticAssets
+      ? await readPreviewStaticAssetPaths({
+          appDirectory: resolve(input.repositoryRoot, input.app.appPath),
+          ...input.app.previewReadyStaticAssets,
+        })
+      : undefined;
+  } catch (error) {
+    return CloudflarePreviewAppEntry.parse({
+      ...baseEntry,
+      ...sizeFields,
+      deployedAt,
+      deployCommandDurationMs,
+      deployReadinessDurationMs: Date.now() - readinessStartedAt,
+      deployReuseProofDurationMs,
+      message:
+        "Preview deployment succeeded, but its static-asset readiness inventory could not be read: " +
+        formatPreviewErrorMessage(error),
+      status: "deploy-failed",
+    });
+  }
+  const workerVersion =
+    deployedWorkerVersion && input.app.previewReadyWorkerVersion
+      ? { expected: deployedWorkerVersion, workerName: appConfig.workerName }
+      : undefined;
+  if (staticAssetPaths && !workerVersion) {
+    return CloudflarePreviewAppEntry.parse({
+      ...baseEntry,
+      ...sizeFields,
+      deployedAt,
+      deployCommandDurationMs,
+      deployReadinessDurationMs: Date.now() - readinessStartedAt,
+      deployReuseProofDurationMs,
+      message:
+        "Static-asset readiness requires previewReadyWorkerVersion so every probe proves one immutable deployment.",
+      status: "deploy-failed",
+    });
+  }
   const readiness = await waitForPreviewAppReadiness({
     publicUrl: appConfig.baseUrl,
     readyUrlPath: input.app.previewReadyUrlPath,
     signal: input.signal,
+    staticAssetPaths,
     timeoutMs: defaultPreviewReadyTimeoutMs,
-    workerVersion:
-      deployedWorkerVersion && input.app.previewReadyWorkerVersion
-        ? { expected: deployedWorkerVersion }
-        : undefined,
+    workerVersion,
   });
   const deployReadinessDurationMs = Date.now() - readinessStartedAt;
   if (!readiness.ok) {
@@ -5491,13 +5548,25 @@ type PreviewAppServingProbe = (url: URL) => Promise<{ ok: boolean; detail: strin
 const previewServingProbeTimeoutMs = 15_000;
 
 /** The real {@link PreviewAppServingProbe}: a single GET, no polling — this checks a deploy that already passed readiness once. */
-async function probePreviewAppServingOnce(url: URL): Promise<{ ok: boolean; detail: string }> {
+async function probePreviewAppServingOnce(
+  url: URL,
+  workerVersion?: PreviewWorkerVersion,
+): Promise<{ ok: boolean; detail: string }> {
   try {
-    const { status } = await fetchReadinessResponse(url, {
+    const response = await fetchReadinessResponse(url, {
+      headers: workerVersion ? previewWorkerVersionHeaders(workerVersion) : undefined,
       signal: AbortSignal.timeout(previewServingProbeTimeoutMs),
       timeoutMs: previewServingProbeTimeoutMs,
     });
-    return { ok: status >= 200 && status < 300, detail: `HTTP ${status}` };
+    const versionMatches = !workerVersion || response.workerVersion === workerVersion.expected;
+    return {
+      ok: response.status >= 200 && response.status < 300 && versionMatches,
+      detail:
+        `HTTP ${response.status}` +
+        (workerVersion
+          ? `; Worker ${response.workerVersion ?? "<missing>"} (expected ${workerVersion.expected})`
+          : ""),
+    };
   } catch (error) {
     return { ok: false, detail: formatPreviewErrorMessage(error) };
   }
@@ -5759,13 +5828,65 @@ async function mapWithConcurrency<T, Result>(
   return results;
 }
 
+type PreviewWorkerVersion = {
+  expected: string;
+  workerName: string;
+};
+
+async function readPreviewStaticAssetPaths(params: {
+  appDirectory: string;
+  directory: string;
+  publicPathPrefix: `/${string}`;
+}): Promise<string[]> {
+  const assetDirectory = resolve(params.appDirectory, params.directory);
+  const relativePaths = await readStaticAssetRelativePaths(assetDirectory);
+  const publicPathPrefix = params.publicPathPrefix.replace(/\/+$/, "");
+  const paths = relativePaths
+    // Source maps are debugging metadata, not a browser runtime dependency.
+    .filter((path) => !path.endsWith(".map"))
+    .map(
+      (path) =>
+        `${publicPathPrefix}/${path
+          .split("/")
+          .map((segment) => encodeURIComponent(segment))
+          .join("/")}`,
+    );
+  if (paths.length === 0) {
+    throw new Error(`No runtime assets found in ${assetDirectory}`);
+  }
+  return paths;
+}
+
+async function readStaticAssetRelativePaths(
+  directory: string,
+  relativeDirectory = "",
+): Promise<string[]> {
+  const entries = (
+    await readdir(resolve(directory, relativeDirectory), {
+      withFileTypes: true,
+    })
+  ).sort((left, right) => left.name.localeCompare(right.name));
+  const paths: string[] = [];
+  for (const entry of entries) {
+    const relativePath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      paths.push(...(await readStaticAssetRelativePaths(directory, relativePath)));
+    } else if (entry.isFile()) {
+      paths.push(relativePath);
+    }
+  }
+  return paths;
+}
+
 async function waitForPreviewAppReadiness(params: {
   publicUrl: string;
   readyUrlPath?: string;
   signal?: AbortSignal;
+  staticAssetPaths?: readonly string[];
   timeoutMs: number;
-  workerVersion?: { expected: string };
+  workerVersion?: PreviewWorkerVersion;
 }) {
+  const deadline = Date.now() + params.timeoutMs;
   const urls = resolvePreviewReadinessUrls({
     publicUrl: params.publicUrl,
     readyUrlPath: params.readyUrlPath,
@@ -5774,11 +5895,42 @@ async function waitForPreviewAppReadiness(params: {
   for (const url of urls) {
     const readiness = await waitForHttpReadiness({
       signal: params.signal,
-      timeoutMs: params.timeoutMs,
+      timeoutMs: Math.max(0, deadline - Date.now()),
       url,
       workerVersion: params.workerVersion,
     });
     if (!readiness.ok) return readiness;
+  }
+
+  if (params.staticAssetPaths) {
+    if (!params.workerVersion) {
+      return {
+        message:
+          "Static-asset readiness requires an exact Worker version so probes cannot mix deployments.",
+        ok: false as const,
+      };
+    }
+    const assets = await waitForStaticAssetReadiness({
+      assetPaths: params.staticAssetPaths,
+      publicUrl: params.publicUrl,
+      signal: params.signal,
+      timeoutMs: Math.max(0, deadline - Date.now()),
+      workerVersion: params.workerVersion,
+    });
+    if (!assets.ok) return assets;
+
+    // Bracket the complete asset proof with two independently issued health
+    // requests. A version override that has only reached one request path
+    // cannot pass by serving new health once and old HTML immediately after.
+    for (const url of urls) {
+      const readiness = await waitForHttpReadiness({
+        signal: params.signal,
+        timeoutMs: Math.max(0, deadline - Date.now()),
+        url,
+        workerVersion: params.workerVersion,
+      });
+      if (!readiness.ok) return readiness;
+    }
   }
 
   return { ok: true as const };
@@ -5811,14 +5963,18 @@ async function waitForHttpReadiness(params: {
   signal?: AbortSignal;
   timeoutMs: number;
   url: URL;
-  workerVersion?: { expected: string };
+  workerVersion?: PreviewWorkerVersion;
 }) {
   const deadline = Date.now() + params.timeoutMs;
   let lastFailure = "No response received yet.";
+  const headers = params.workerVersion
+    ? previewWorkerVersionHeaders(params.workerVersion)
+    : undefined;
 
   while (Date.now() < deadline) {
     try {
       const response = await fetchReadinessResponse(params.url, {
+        headers,
         signal: params.signal,
         timeoutMs: Math.max(1, Math.min(previewReadinessRequestTimeoutMs, deadline - Date.now())),
       });
@@ -5850,9 +6006,113 @@ async function waitForHttpReadiness(params: {
   };
 }
 
+const previewStaticAssetProbeConcurrency = 32;
+
+async function waitForStaticAssetReadiness(params: {
+  assetPaths: readonly string[];
+  publicUrl: string;
+  signal?: AbortSignal;
+  timeoutMs: number;
+  workerVersion: PreviewWorkerVersion;
+}) {
+  if (params.assetPaths.length === 0) {
+    return {
+      message: "Static-asset readiness received an empty asset inventory.",
+      ok: false as const,
+    };
+  }
+
+  const deadline = Date.now() + params.timeoutMs;
+  const headers = {
+    ...previewWorkerVersionHeaders(params.workerVersion),
+    "cache-control": "no-cache",
+  };
+  let pendingPaths = [...params.assetPaths];
+  let lastFailure = "No asset response received yet.";
+  let round = 0;
+
+  while (Date.now() < deadline) {
+    round += 1;
+    const nonce = `${Date.now()}-${round}`;
+    const results = await mapWithConcurrency(
+      pendingPaths,
+      previewStaticAssetProbeConcurrency,
+      async (assetPath, index) => {
+        const remainingMs = deadline - Date.now();
+        if (remainingMs <= 0) {
+          return {
+            assetPath,
+            detail: "readiness deadline expired",
+            ok: false as const,
+          };
+        }
+
+        const url = new URL(assetPath, params.publicUrl);
+        url.searchParams.set("__iterate_preview_readiness", `${nonce}-${index}`);
+        try {
+          const response = await fetchReadinessResponse(url, {
+            headers,
+            method: "HEAD",
+            signal: params.signal,
+            timeoutMs: Math.max(1, Math.min(previewReadinessRequestTimeoutMs, remainingMs)),
+          });
+          if (response.status >= 200 && response.status < 300) {
+            return { assetPath, detail: `HTTP ${response.status}`, ok: true as const };
+          }
+          return {
+            assetPath,
+            detail: `HTTP ${response.status}${formatReadinessResponseDetail(response)}`,
+            ok: false as const,
+          };
+        } catch (error) {
+          return {
+            assetPath,
+            detail: formatPreviewErrorMessage(error),
+            ok: false as const,
+          };
+        }
+      },
+    );
+    params.signal?.throwIfAborted();
+    const failures = results.flatMap((result) => (result.ok ? [] : [result]));
+    if (failures.length === 0 && Date.now() < deadline) {
+      return { ok: true as const };
+    }
+
+    pendingPaths = failures.map((failure) => failure.assetPath);
+    lastFailure =
+      `${failures.length}/${params.assetPaths.length} runtime assets unavailable. ` +
+      failures
+        .slice(0, 5)
+        .map((failure) => `${failure.assetPath}: ${failure.detail}`)
+        .join("; ");
+    await sleep(Math.min(1_000, Math.max(0, deadline - Date.now())), params.signal);
+  }
+
+  return {
+    message:
+      `Timed out waiting for ${params.assetPaths.length} static assets from exact Worker ` +
+      `${params.workerVersion.expected} at ${params.publicUrl}. ${lastFailure}`,
+    ok: false as const,
+  };
+}
+
+function previewWorkerVersionHeaders(workerVersion: PreviewWorkerVersion): Record<string, string> {
+  return {
+    [CLOUDFLARE_WORKERS_VERSION_OVERRIDES_HEADER]: renderCloudflareWorkerVersionOverrides([
+      {
+        versionId: workerVersion.expected,
+        workerName: workerVersion.workerName,
+      },
+    ]),
+  };
+}
+
 async function fetchReadinessResponse(
   url: URL,
   options: {
+    headers?: Record<string, string>;
+    method?: "GET" | "HEAD";
     signal?: AbortSignal;
     timeoutMs?: number;
   } = {},
@@ -5866,7 +6126,8 @@ async function fetchReadinessResponse(
   try {
     const response = await fetch(url, {
       cache: "no-store",
-      method: "GET",
+      headers: options.headers,
+      method: options.method ?? "GET",
       redirect: "follow",
       signal: requestSignal,
     });
@@ -5880,7 +6141,12 @@ async function fetchReadinessResponse(
       throw error;
     }
 
-    return await requestReadinessWithDnsResolve({ signal: requestSignal, url });
+    return await requestReadinessWithDnsResolve({
+      headers: options.headers,
+      method: options.method,
+      signal: requestSignal,
+      url,
+    });
   }
 }
 
@@ -5936,7 +6202,12 @@ function formatReadinessResponseDetail(response: ReadinessResponse): string {
   return detail ? `: ${detail}` : "";
 }
 
-async function requestReadinessWithDnsResolve(input: { signal?: AbortSignal; url: URL }) {
+async function requestReadinessWithDnsResolve(input: {
+  headers?: Record<string, string>;
+  method?: "GET" | "HEAD";
+  signal?: AbortSignal;
+  url: URL;
+}) {
   const { signal, url } = input;
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error(`Unsupported readiness URL protocol: ${url.protocol}`);
@@ -5953,12 +6224,12 @@ async function requestReadinessWithDnsResolve(input: { signal?: AbortSignal; url
   resolvedUrl.hostname = address;
 
   return await new Promise<ReadinessResponse>((resolve, reject) => {
-    const headers: Record<string, string> = { Host: url.host };
+    const headers: Record<string, string> = { ...input.headers, Host: url.host };
     const req = request(
       resolvedUrl,
       {
         headers,
-        method: "GET",
+        method: input.method ?? "GET",
         servername: url.hostname,
         signal,
       },
@@ -6099,6 +6370,7 @@ export const previewInternals = {
   previewProvisionedIntegrationSecrets,
   readPlaywrightTestTelemetry,
   readPreviewAppConfig,
+  readPreviewStaticAssetPaths,
   readCanonicalTestTelemetry,
   reconcileEnvironmentConfigLeaseResources,
   releaseLeaseDespiteTeardownFailure,
@@ -6123,7 +6395,9 @@ export const previewInternals = {
   selectPreviewSlotDataOwners,
   splitRepositoryFullName,
   syncPreviewInventory,
+  waitForPreviewAppReadiness,
   waitForHttpReadiness,
+  waitForStaticAssetReadiness,
 };
 
 function matchesPreviewPath(filename: string, patterns: readonly string[]) {

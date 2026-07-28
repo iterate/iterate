@@ -73,11 +73,15 @@ serially because they intentionally share one warm container.
 - **Watchdogs fail rather than retry.** The TUI quarantine marker and
   Vitest/Playwright processes retain their own bounded `timeout`s, inside the
   workflow backstop.
-- **Readiness proves the uploaded edge version.** OS and the streams example
-  report `CF_VERSION_METADATA`; the orchestrator requires wrangler's exact
-  final version on the health probe (no multi-second dwell after first match).
-  The probe is a cheap public health request and never wakes synthetic Durable
-  Objects.
+- **Readiness proves one coherent uploaded edge deployment.** OS and the
+  streams example report `CF_VERSION_METADATA`; the orchestrator sends the
+  same exact-version override used by e2e and requires wrangler's final version
+  on the health probe. For OS, that probe brackets parallel `HEAD` checks for
+  every non-sourcemap file in the current client build. Tests cannot start
+  while the override still selects an old Worker or any current hashed asset
+  still returns a 404. This is a proof over the deployed version and its
+  runtime assets, with no deployment-age dwell and no synthetic Durable Object
+  wake-up.
 - **Durable Object rollout is handled at the operation boundary.** Edge
   readiness cannot prove the version a future Durable Object placement will
   receive, so a fixed sleep is neither a convergence barrier nor a recovery

@@ -29,10 +29,10 @@ function makeHarness() {
       new CapabilityHostProcessor({
         ...deps,
         itx: {} as Project,
-        scriptExecutionEntrypoint: {
+        scriptExecutionExecutor: {
           start: async (code, options) => {
             // Production returns from this handoff immediately and lets the
-            // independently-lived entrypoint append its own settlement.
+            // independently-lived alarm executor append its own settlement.
             const work = Promise.resolve()
               .then(() => run.impl(code))
               .then((settlement) =>

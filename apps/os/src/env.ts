@@ -92,6 +92,10 @@ export interface Env {
   CAPABILITY_HOST: DurableObjectNamespace<
     import("./domains/capability-host/capability-host-durable-object.ts").CapabilityHostDurableObject
   >;
+  /** One alarm-owned, at-most-once executor per immutable script execution id. */
+  SCRIPT_EXECUTION: DurableObjectNamespace<
+    import("./domains/capability-host/script-execution-durable-object.ts").ScriptExecutionDurableObject
+  >;
   DEVICE: DurableObjectNamespace<
     import("./domains/devices/device-durable-object.ts").DeviceDurableObject
   >;

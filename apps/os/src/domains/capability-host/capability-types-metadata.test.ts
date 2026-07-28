@@ -68,7 +68,7 @@ async function makeProcessor(options: {
     itx: (options.itx ?? {}) as Project,
     path: options.path ?? "/",
     projectId: null,
-    scriptExecutionEntrypoint: {
+    scriptExecutionExecutor: {
       start: () => {
         throw new Error("must not run in this scenario");
       },

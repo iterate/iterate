@@ -43,6 +43,7 @@ import { STREAM_CONTEXT_HEADER } from "./domains/projects/stream-context.ts";
 export { AgentDurableObject } from "./domains/agents/agent-durable-object.ts";
 export { AgentCollectionDurableObject } from "./domains/agents/agent-collection-durable-object.ts";
 export { CapabilityHostDurableObject } from "./domains/capability-host/capability-host-durable-object.ts";
+export { ScriptExecutionDurableObject } from "./domains/capability-host/script-execution-durable-object.ts";
 export { DeviceDurableObject } from "./domains/devices/device-durable-object.ts";
 // One sandbox container class per instance type — see src/domains/sandboxes/instance-types.ts.
 export {
@@ -63,7 +64,6 @@ export { StreamDurableObject } from "./domains/streams/stream-durable-object.ts"
 export { WorkspaceV2DurableObject } from "./domains/workspaces/workspace-durable-object.ts";
 export { ItxEntrypoint } from "./domains/itx/itx-entrypoint.ts";
 export { ProjectEgressEntrypoint } from "./domains/projects/egress.ts";
-export { ScriptExecutionEntrypoint } from "./domains/capability-host/script-execution-entrypoint.ts";
 // The container-outbound gateway. The container runtime dials it through
 // `ctx.exports.ContainerProxy` to route intercepted sandbox egress; every
 // sandbox container's outbound HTTP(S) reaches it before anything leaves the

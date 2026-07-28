@@ -7,7 +7,7 @@ import {
   sandboxExecTimeout,
   settlementFromScriptInvocation,
   scriptWorkerRef,
-} from "./script-execution-entrypoint.ts";
+} from "./script-execution-durable-object.ts";
 
 describe("sandboxExecTimeout", () => {
   const base = {

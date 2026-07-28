@@ -22,7 +22,7 @@ import {
 import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
 import type { ProvideCapabilityInput } from "./types.ts";
 
-type ScriptExecutionEntrypoint = {
+type ScriptExecutionExecutor = {
   start(
     code: string,
     options: {
@@ -33,15 +33,6 @@ type ScriptExecutionEntrypoint = {
       streamId: string;
     },
   ): Promise<void>;
-};
-
-type ScriptExecutionLoopbackExports = {
-  ScriptExecutionEntrypoint(input: {
-    props: {
-      projectId: string;
-      scopePath: string;
-    };
-  }): ScriptExecutionEntrypoint;
 };
 
 /**
@@ -96,7 +87,7 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
         projectId: this.#name.projectId,
       }),
       reads: this.#processorReads(),
-      scriptExecutionEntrypoint: this.#scriptExecutionEntrypoint(),
+      scriptExecutionExecutor: this.#scriptExecutionExecutor(),
       validateCapabilityTypes: (types) =>
         checkCapabilityTypes({ types, typechecker: this.env.TYPECHECKER }),
       typecheckScript: (input) =>
@@ -120,18 +111,18 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
     };
   }
 
-  #scriptExecutionEntrypoint(): ScriptExecutionEntrypoint {
-    // Scripts execute in THIS scope, but the Dynamic Worker load happens in a
-    // stateless loopback entrypoint instead of this Durable Object. Keep the
-    // type shallow to avoid deep-instantiating the generated `ctx.exports`
-    // WorkerEntrypoint type through the Durable Object's processor field.
-    const exports = this.ctx.exports as unknown as ScriptExecutionLoopbackExports;
-    return exports.ScriptExecutionEntrypoint({
-      props: {
-        scopePath: this.#name.path,
-        projectId: this.#name.projectId,
-      },
-    });
+  #scriptExecutionExecutor(): ScriptExecutionExecutor {
+    // The host records `started`, then hands the immutable execution to its
+    // own alarm-backed Durable Object. Addressing by execution id makes the DO
+    // itself the at-most-once fence across host retries and evictions.
+    return {
+      start: (code, options) =>
+        this.env.SCRIPT_EXECUTION.getByName(options.streamContext.executionId).start(code, {
+          ...options,
+          projectId: this.#name.projectId,
+          scopePath: this.#name.path,
+        }),
+    };
   }
 
   wakeStreamProcessor(args: StreamProcessorWakeRequest): Promise<StreamProcessorWakeResponse> {

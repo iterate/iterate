@@ -97,7 +97,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
   readonly #liveCapabilities = new Map<string, LiveCapability>();
 
   /** Script obligations THIS incarnation is handing off or watching. The
-   * arbitrary body runs independently in ScriptExecutionEntrypoint; this set
+   * arbitrary body runs independently in ScriptExecutionDurableObject; this set
    * only prevents duplicate host-side drivers within one incarnation. */
   readonly #liveExecutions = new Set<string>();
 
@@ -697,9 +697,9 @@ export class CapabilityHostProcessor extends StreamProcessor<
   /**
    * Start one script obligation — background work owned by this host only
    * through the short handoff and durable-settlement watch. The arbitrary body
-   * runs under ScriptExecutionEntrypoint's independent waitUntil and commits
-   * its own keyed terminal fact, so no multi-minute Workers RPC result channel
-   * connects its lifetime to this Durable Object incarnation.
+   * runs under ScriptExecutionDurableObject's alarm and commits its own keyed
+   * terminal fact, so no multi-minute Workers RPC result channel connects its
+   * lifetime to this Durable Object incarnation.
    */
   async #executeScript(input: {
     capabilities: CapabilityRecord[];
@@ -805,7 +805,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
       // body. Both proceed to the durable-settlement watch.
       let startPromise: Promise<unknown>;
       try {
-        startPromise = this.deps.scriptExecutionEntrypoint.start(input.code, {
+        startPromise = this.deps.scriptExecutionExecutor.start(input.code, {
           emittedJs: checked.emittedJs,
           executionExpiresAt,
           settlementExpiresAt: input.expiresAt,
@@ -1040,7 +1040,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
 // Injected dependencies.
 // -----------------------------------------------------------------------------
 
-type ScriptExecutionEntrypoint = {
+type ScriptExecutionExecutor = {
   start(
     code: string,
     options: {
@@ -1088,7 +1088,7 @@ export type CapabilityHostProcessorDeps = {
   /** Runner-backed committed-state reads — see {@link CapabilityHostProcessorReads}. */
   reads: CapabilityHostProcessorReads;
   /** Runs run-script workers in this scope. */
-  scriptExecutionEntrypoint: ScriptExecutionEntrypoint;
+  scriptExecutionExecutor: ScriptExecutionExecutor;
   /** Injected clock (expiry decisions); production defaults to Date.now. */
   now?: () => number;
   /**

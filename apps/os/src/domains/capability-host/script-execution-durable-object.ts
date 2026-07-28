@@ -1,4 +1,4 @@
-import { WorkerEntrypoint } from "cloudflare:workers";
+import { DurableObject } from "cloudflare:workers";
 import {
   isStreamIdMismatchError,
   type StreamEvent,
@@ -14,11 +14,13 @@ import {
 } from "../streams/stream-unavailable.ts";
 import type { JsonValue, StatelessDynamicWorkerRef } from "../workers/schemas.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
+import { stableSha256 } from "../workers/utils.ts";
 import { settleByDeadline } from "../execution-deadline.ts";
 import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
 import { SCRIPT_EXTERNAL_CLEANUP_GRACE_MS } from "./script-execution-budgets.ts";
 import {
   scriptCompletionInput,
+  settlementForUndrivenScript,
   settlementFromScriptCompletionEvent,
   type ScriptExecutionSettlement,
 } from "./script-execution-settlement.ts";
@@ -29,7 +31,7 @@ const DEADLINE_EXCEEDED_ERROR =
   "Script execution exceeded its absolute deadline after it started. Its worker execution context ended, but arbitrary external work cannot be proven terminated. It may have partially executed; it was NOT re-run.";
 const SETTLEMENT_APPEND_ATTEMPT_TIMEOUT_MS = 5_000;
 
-type ScriptExecutionStartOptions = {
+export type ScriptExecutionStartOptions = {
   /**
    * The typecheck gate's emitted JavaScript for this script (its default
    * export is the script function) — check and emit are one compile, so
@@ -44,10 +46,43 @@ type ScriptExecutionStartOptions = {
   executionExpiresAt: number;
   /** Later absolute deadline reserved for committing the durable settlement. */
   settlementExpiresAt: number;
+  /** Project whose scoped capability tree the script receives. */
+  projectId: string;
+  /** Exact capability-host scope in which the script executes. */
+  scopePath: string;
   streamContext: Extract<StreamContext, { kind: "script-execution" }>;
   /** Exact lifetime on which the script-run-started obligation was committed. */
   streamId: string;
 };
+
+type ScriptExecutionRequest = {
+  code: string;
+  options: ScriptExecutionStartOptions;
+};
+
+type ScriptExecutionState =
+  | {
+      fingerprint: string;
+      phase: "queued";
+      request: ScriptExecutionRequest;
+    }
+  | {
+      fingerprint: string;
+      phase: "running";
+      request: ScriptExecutionRequest;
+    }
+  | {
+      fingerprint: string;
+      phase: "settling";
+      request: ScriptExecutionRequest;
+      settlement: ScriptExecutionSettlement;
+    }
+  | {
+      fingerprint: string;
+      phase: "settled";
+    };
+
+const SCRIPT_EXECUTION_STATE_KEY = "script-execution:state";
 
 /**
  * Compute the timeout forwarded to one sandbox command inside a script. This
@@ -76,26 +111,102 @@ export function sandboxExecTimeout(input: {
 }
 
 /**
- * Stateless loopback executor for capability-host runScript.
+ * One alarm-owned executor per immutable script execution id.
  *
- * The capability-host Durable Object journals script lifecycle events, but this
- * entrypoint owns the Dynamic Worker load, invocation, AND durable settlement.
- * `start()` is only a short handoff: it schedules the long execution with this
- * entrypoint's own waitUntil and returns immediately. The host therefore never
- * retains a multi-minute Workers RPC result channel whose cancellation can
- * orphan otherwise healthy work.
+ * `start()` persists and arms only. The alarm owns the full Dynamic Worker
+ * invocation, which gives a script the alarm handler's multi-minute lifetime
+ * instead of the 30-second tail of an already-returned request. The persisted
+ * phase is also the at-most-once fence:
+ *
+ * - queued may invoke once, after first persisting running;
+ * - a recovered running phase is settled orphaned and is never invoked again;
+ * - settling retries only the exact keyed stream append;
+ * - settled is a permanent, compact tombstone for duplicate handoffs.
+ *
+ * This deliberately prefers an explicit possibly-partial failure over replaying
+ * arbitrary user code after an actor reset.
  */
-export class ScriptExecutionEntrypoint extends WorkerEntrypoint<
-  Env,
-  { projectId: string; scopePath: string }
-> {
-  start(code: string, options: ScriptExecutionStartOptions): void {
-    this.ctx.waitUntil(this.#runAndSettle(code, options));
+export class ScriptExecutionDurableObject extends DurableObject<Env> {
+  async start(code: string, options: ScriptExecutionStartOptions): Promise<void> {
+    this.#assertIdentity(options);
+    const request = normalizedScriptExecutionRequest(code, options);
+    const fingerprint = await stableSha256(request);
+
+    await this.ctx.blockConcurrencyWhile(async () => {
+      const state = this.#state();
+      if (state !== undefined) {
+        if (state.fingerprint !== fingerprint) {
+          throw new TypeError(
+            `script execution "${options.streamContext.executionId}" received a mismatched duplicate handoff`,
+          );
+        }
+        // A previous setAlarm acknowledgement may have been lost. Re-arming
+        // the still-queued exact request is idempotent; every later phase
+        // already has an owner or is terminal.
+        if (state.phase === "queued") await this.ctx.storage.setAlarm(Date.now());
+        return;
+      }
+
+      this.#putState({ fingerprint, phase: "queued", request });
+      await this.ctx.storage.setAlarm(Date.now());
+    });
   }
 
-  async #runAndSettle(code: string, options: ScriptExecutionStartOptions): Promise<void> {
-    const projectId = this.ctx.props.projectId;
-    const scopePath = normalizePath(this.ctx.props.scopePath);
+  async alarm(): Promise<void> {
+    const state = this.#state();
+    if (state === undefined || state.phase === "settled") return;
+    if (state.phase === "settling") {
+      await this.#appendAndFinish(state);
+      return;
+    }
+    if (state.phase === "running") {
+      console.warn("[script-execution] recovered interrupted alarm without replaying script", {
+        executionId: state.request.options.streamContext.executionId,
+      });
+      const settling: Extract<ScriptExecutionState, { phase: "settling" }> = {
+        ...state,
+        phase: "settling",
+        settlement: settlementForUndrivenScript("started"),
+      };
+      this.#putState(settling);
+      await this.#appendAndFinish(settling);
+      return;
+    }
+
+    const { request } = state;
+    const { options } = request;
+    let settlement: ScriptExecutionSettlement;
+    if (Date.now() >= options.executionExpiresAt) {
+      settlement = {
+        status: "failed",
+        error:
+          "Script execution reached its absolute deadline after alarm ownership was committed but before the worker was invoked. It never ran.",
+        failureKind: "deadline",
+        phase: "before-execution",
+        executionMayHaveOccurred: false,
+        cancellation: "not-applicable",
+      };
+    } else {
+      // This durable write is the at-most-once boundary. If the alarm dies
+      // anywhere after it, its native retry observes `running`, records an
+      // orphaned outcome, and never invokes the arbitrary body again.
+      this.#putState({ ...state, phase: "running" });
+      settlement = await this.#invoke(request);
+    }
+
+    const settling: Extract<ScriptExecutionState, { phase: "settling" }> = {
+      fingerprint: state.fingerprint,
+      phase: "settling",
+      request,
+      settlement,
+    };
+    this.#putState(settling);
+    await this.#appendAndFinish(settling);
+  }
+
+  async #invoke({ code, options }: ScriptExecutionRequest): Promise<ScriptExecutionSettlement> {
+    const projectId = options.projectId;
+    const scopePath = options.scopePath;
     const dynamicWorkers = new DynamicWorkerRunner({
       streamContext: options.streamContext,
       exports: this.ctx.exports,
@@ -116,26 +227,64 @@ export class ScriptExecutionEntrypoint extends WorkerEntrypoint<
       traceRole: "run_script",
     });
     const settlement = await settlementFromScriptInvocation(invocation, options.executionExpiresAt);
+    return settlement;
+  }
+
+  async #appendAndFinish(
+    state: Extract<ScriptExecutionState, { phase: "settling" }>,
+  ): Promise<void> {
+    const { options } = state.request;
     await appendScriptExecutionSettlement({
       executionId: options.streamContext.executionId,
       getStream: () =>
         this.env.STREAM.getByName(
           DurableObjectNameCodec.stringify({
-            projectId,
-            path: scopePath,
+            projectId: options.projectId,
+            path: options.scopePath,
           }),
         ),
-      projectId,
-      scopePath,
-      settlement,
+      projectId: options.projectId,
+      scopePath: options.scopePath,
+      settlement: state.settlement,
       settlementExpiresAt: options.settlementExpiresAt,
       streamId: options.streamId,
     });
+    this.#putState({ fingerprint: state.fingerprint, phase: "settled" });
+  }
+
+  #assertIdentity(options: ScriptExecutionStartOptions): void {
+    const executionId = options.streamContext.executionId;
+    if (this.ctx.id.name !== executionId) {
+      throw new TypeError(
+        `script execution "${executionId}" does not match executor identity "${this.ctx.id.name}"`,
+      );
+    }
+  }
+
+  #state(): ScriptExecutionState | undefined {
+    return this.ctx.storage.kv.get<ScriptExecutionState>(SCRIPT_EXECUTION_STATE_KEY);
+  }
+
+  #putState(state: ScriptExecutionState): void {
+    this.ctx.storage.kv.put(SCRIPT_EXECUTION_STATE_KEY, state);
   }
 }
 
+function normalizedScriptExecutionRequest(
+  code: string,
+  options: ScriptExecutionStartOptions,
+): ScriptExecutionRequest {
+  return {
+    code,
+    options: {
+      ...options,
+      scopePath: normalizePath(options.scopePath),
+    },
+  };
+}
+
 /** Convert the dynamic worker's raw result into the one JSON settlement that
- * will be journaled. This runs in the independently-lived entrypoint, so every
+ * will be journaled. This runs in the independently-lived executor, so every
  * terminal worker outcome is constructed before the direct stream append. */
 export async function settlementFromScriptInvocation(
   invocation: Promise<unknown>,
@@ -143,11 +292,11 @@ export async function settlementFromScriptInvocation(
 ): Promise<ScriptExecutionSettlement> {
   const outcome = await settleByDeadline(invocation, executionExpiresAt, Date.now);
   if (outcome.status === "deadline") {
-    // This timer lives in the RPC entrypoint that owns the dynamic-worker
-    // call. Its expiry is not a cancellation acknowledgement for arbitrary
-    // work the script may already have started. Sandbox exec has its own
-    // earlier, process-tree terminating deadline; every other external
-    // effect remains explicitly classified as possibly continuing.
+    // This timer lives in the alarm handler that owns the dynamic-worker call.
+    // Its expiry is not a cancellation acknowledgement for arbitrary work the
+    // script may already have started. Sandbox exec has its own earlier,
+    // process-tree terminating deadline; every other external effect remains
+    // explicitly classified as possibly continuing.
     return {
       status: "failed",
       error: DEADLINE_EXCEEDED_ERROR,

@@ -62,7 +62,7 @@ function makeProcessor(options: {
     itx: (options.itx ?? {}) as Project,
     path: options.path ?? "/",
     projectId: null,
-    scriptExecutionEntrypoint: {
+    scriptExecutionExecutor: {
       start: async (code, startOptions) => {
         const result = await (
           options.run ??
