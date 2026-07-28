@@ -548,7 +548,7 @@ describe("userspace GitHub pull-request routing", () => {
 
     expect(loadRules).not.toHaveBeenCalled();
     expect(test.create).toHaveBeenCalledOnce();
-    expect(test.appendBatches[0]?.events).toHaveLength(4);
+    expect(test.appendBatches[0]?.events).toHaveLength(3);
   });
 
   it("creates draft history without waking a review", async () => {
@@ -646,7 +646,7 @@ describe("userspace review-bot stream processor", () => {
     });
 
     expect(fake.create).toHaveBeenCalledOnce();
-    expect(fake.appendBatches[0]?.events).toHaveLength(4);
+    expect(fake.appendBatches[0]?.events).toHaveLength(3);
   });
 
   it("skips cross-posted copies", async () => {

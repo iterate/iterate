@@ -62,7 +62,7 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
     secret: adminSecret(),
   });
   using project = await itx.projects.get(slug).create({});
-  await project.__describe();
+  const { projectId } = await project.__describe();
 
   // The app owns its birth invariant even when called directly, before the
   // userspace root route has had an opportunity to initialize the stream.

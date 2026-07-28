@@ -124,7 +124,7 @@ test("connection slugs with underscores produce distinct runtime-valid durable k
 
   const durableWorkerKeys = appended.map((append) => {
     const subscription: any = append.events[0];
-    return subscription.payload.delivery.expression[1][1].durableWorkerKey;
+    return subscription.payload.receiver.expression[1][1].durableWorkerKey;
   });
   expect(durableWorkerKeys).toEqual([
     "app-review-bot-install--42--a-ub",

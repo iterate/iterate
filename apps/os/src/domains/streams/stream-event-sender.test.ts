@@ -6,6 +6,7 @@ import {
   type StreamWakeEventBatch,
 } from "iterate/processors";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { WorkerBuildFailedError } from "../workers/artifact-store.ts";
 import {
   CoreProcessorContract,
   type CoreProcessorState,
@@ -550,6 +551,48 @@ describe("StreamEventSender stream delivery", () => {
       nextAttemptAt: 11_000,
       failingEventOffset: null,
       failingEventAttempt: 0,
+    });
+  });
+
+  it("halts a terminal wake target failure immediately with the exact error", async () => {
+    const appended: StreamEvent[] = [];
+    const h = harness({
+      events: [event(2, "example.com/issue-created", { issue: 1 })],
+      wakeProcessor: async () => {
+        throw new WorkerBuildFailedError({
+          kind: "source",
+          message: 'Entry point "github-ai-linter-worker.ts" was not found in files.',
+        });
+      },
+      appendDeliveryEvent: (input) => {
+        const parsed = CoreProcessorContract.parseEventInput(input);
+        appended.push({
+          ...parsed,
+          path: "/source",
+          offset: 3,
+          createdAt: new Date(3).toISOString(),
+        } as StreamEvent);
+        return true;
+      },
+    });
+
+    h.eventSender.sendDue();
+    await h.settle();
+
+    expect(h.wakeCalls).toHaveLength(1);
+    expect(appended).toHaveLength(1);
+    expect(appended[0]).toMatchObject({
+      type: "events.iterate.com/stream/subscription-delivery-halted",
+      payload: {
+        subscriptionKey: PROCESSOR_KEY,
+        reason: "delivery-failed",
+        attempts: 1,
+        error: 'Entry point "github-ai-linter-worker.ts" was not found in files.',
+      },
+    });
+    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
+      attempt: 0,
+      nextAttemptAt: null,
     });
   });
 

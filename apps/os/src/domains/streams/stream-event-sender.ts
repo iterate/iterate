@@ -1182,6 +1182,14 @@ export class StreamEventSender {
   #onDeliveryFailure(subscriptionKey: string, error: unknown, previousAttempts?: number): void {
     const attempts = previousAttempts ?? this.#hooks.store.get(subscriptionKey)?.attempt ?? 0;
     const attempt = attempts + 1;
+    // A receiver that reports its failure as deterministic (a worker source
+    // build that cannot compile, `retryable: false`) will fail identically on
+    // every retry; halt now with the exact error instead of burning the
+    // attempt ladder against a foregone conclusion.
+    if ((error as { retryable?: unknown } | null)?.retryable === false) {
+      this.#halt(subscriptionKey, attempt, error);
+      return;
+    }
     if (attempt >= MAX_DELIVERY_ATTEMPTS) {
       this.#halt(subscriptionKey, attempt, error);
       return;

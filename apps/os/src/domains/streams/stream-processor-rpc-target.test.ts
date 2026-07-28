@@ -201,7 +201,7 @@ describe("StreamRpcTarget", () => {
     const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
 
     class TestStreamRpcTarget extends StreamRpcTarget {
-      override get durableObjectStub() {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
         acquisitions += 1;
         return {
           append: () => (acquisitions === 1 ? firstAppend.promise : Promise.resolve(secondResult)),
@@ -261,7 +261,7 @@ describe("StreamRpcTarget", () => {
     let acquisitions = 0;
 
     class TestStreamRpcTarget extends StreamRpcTarget {
-      override get durableObjectStub() {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
         acquisitions += 1;
         return { append: () => firstAppend.promise } as never;
       }
@@ -301,7 +301,7 @@ describe("StreamRpcTarget", () => {
     let acquisitions = 0;
 
     class TestStreamRpcTarget extends StreamRpcTarget {
-      override get durableObjectStub() {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
         acquisitions += 1;
         return { append: () => firstAppend.promise } as never;
       }

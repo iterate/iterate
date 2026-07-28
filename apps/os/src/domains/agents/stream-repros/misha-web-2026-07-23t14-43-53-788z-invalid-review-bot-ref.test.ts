@@ -18,7 +18,7 @@ test("re-linking the packaged linter replaces Misha's rejected subscription with
   await app.processEvent(githubLinkConfigured(fixture.connection));
 
   const subscription: any = appended[0]?.events[0];
-  const ref = subscription.payload.delivery.expression[1][1];
+  const ref = subscription.payload.receiver.expression[1][1];
   expect({
     idempotencyKeyChanged:
       subscription.idempotencyKey !== fixture.existingSubscription.idempotencyKey,
@@ -42,7 +42,7 @@ test("worker-bundler accepts the packaged linter's installed entry point", async
   await app.processEvent(githubLinkConfigured(fixture.connection));
 
   const subscription: any = appended[0]?.events[0];
-  const ref = subscription.payload.delivery.expression[1][1];
+  const ref = subscription.payload.receiver.expression[1][1];
   const createWorkerOptions = ref.source.createWorker;
   const installedEntrypoint =
     "node_modules/iterate/dist/starter-apps/github-ai-linter/configured-worker.mjs";
