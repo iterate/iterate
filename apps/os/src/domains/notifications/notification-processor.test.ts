@@ -198,7 +198,7 @@ function makeNotificationHarness(substrateOverride?: HarnessSubstrate) {
   const substrate: HarnessSubstrate = substrateOverride || {
     clock: { now: T0 },
     stream: new MemoryStream("/"),
-    progress: makeMemoryProgressStore(),
+    progress: makeMemoryProgressStore(NotificationProcessorContract),
   };
   return makeProcessorHarness<NotificationProcessorContract, NotificationProcessor>({
     createProcessor: (deps) => new NotificationProcessor(deps),
