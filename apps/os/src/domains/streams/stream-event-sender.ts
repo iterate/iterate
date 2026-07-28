@@ -1640,6 +1640,7 @@ export class StreamConnections {
     connectionKey: string,
     error: unknown,
     expectedDelivery: ExpectedHostedDeliveryState,
+    source: "delivery" | "rpc-broken" = "delivery",
   ): void {
     const connection = this.#connections.get(connectionKey);
     if (
@@ -1650,10 +1651,10 @@ export class StreamConnections {
     ) {
       return;
     }
-    const details = { connectionKey, error };
+    const details = { connectionKey, errorMessage: connectionError(error), source };
     if (error instanceof EventFilterEvaluationError) {
       console.info("stream hosted callback filter condition failed; backing off", details);
-    } else if (isDurableObjectLifecycleError(error)) {
+    } else if (source === "rpc-broken" || isDurableObjectLifecycleError(error)) {
       console.warn(
         "stream durable callback unavailable; backing off before waking it again",
         details,
@@ -1662,7 +1663,10 @@ export class StreamConnections {
       console.error("stream durable callback failed; backing off before waking it again", details);
     }
     this.#hooks.onHostedDeliveryFailure(connectionKey, error);
-    connection.close("delivery-failed", connectionError(error));
+    connection.close(
+      source === "rpc-broken" ? "rpc-broken" : "delivery-failed",
+      connectionError(error),
+    );
   }
 
   samplePingsSoon(): void {
@@ -2100,7 +2104,7 @@ export class StreamConnections {
     this.#hooks.runtimeChanged();
     processEventBatch.onRpcBroken?.((error) => {
       if (kind === "hosted" && args.expectedHostedDelivery !== undefined) {
-        this.onHostedDeliveryError(connectionKey, error, args.expectedHostedDelivery);
+        this.onHostedDeliveryError(connectionKey, error, args.expectedHostedDelivery, "rpc-broken");
       } else {
         connection.close("rpc-broken", connectionError(error));
       }
