@@ -79,7 +79,7 @@ export default function ProjectsScreen() {
       {open.isError ? <Text style={styles.error}>{String(open.error.message)}</Text> : null}
       {projects.isPending ? (
         <View style={styles.center}>
-          <ActivityIndicator color={colors.textMuted} />
+          <ActivityIndicator accessibilityLabel="Loading" color={colors.textMuted} />
         </View>
       ) : projects.isError ? (
         <View style={styles.center}>

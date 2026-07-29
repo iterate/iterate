@@ -148,6 +148,7 @@ export default function ApprovalsScreen() {
       <Stack.Screen options={{ title: "Approvals" }} />
       {key.data === null ? (
         <Pressable
+          accessibilityRole="button"
           style={styles.enrollBanner}
           onPress={() => enroll.mutate()}
           disabled={enroll.isPending}
@@ -168,7 +169,7 @@ export default function ApprovalsScreen() {
 
       {events.isPending ? (
         <View style={styles.center}>
-          <ActivityIndicator color={colors.textMuted} />
+          <ActivityIndicator accessibilityLabel="Loading" color={colors.textMuted} />
         </View>
       ) : events.isError ? (
         <View style={styles.center}>
@@ -426,7 +427,11 @@ function BatchCard({
               </Pressable>
               {details.data.script ? (
                 script.isPending ? (
-                  <ActivityIndicator color={colors.textMuted} size="small" />
+                  <ActivityIndicator
+                    accessibilityLabel="Loading"
+                    color={colors.textMuted}
+                    size="small"
+                  />
                 ) : script.isError ? (
                   <Text style={styles.error}>{script.error.message}</Text>
                 ) : (
@@ -455,6 +460,7 @@ function BatchCard({
           ) : (
             <View style={styles.actions}>
               <Pressable
+                accessibilityRole="button"
                 style={[styles.button, styles.reject]}
                 disabled={interaction.pending}
                 onPress={() => interaction.onRespond("reject")}
@@ -462,6 +468,7 @@ function BatchCard({
                 <Text style={styles.rejectText}>{single ? "Reject" : "Reject all"}</Text>
               </Pressable>
               <Pressable
+                accessibilityRole="button"
                 style={[
                   styles.button,
                   styles.approve,

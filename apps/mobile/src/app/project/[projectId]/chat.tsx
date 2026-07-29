@@ -199,7 +199,7 @@ export default function ChatScreen() {
       />
       {events.isPending ? (
         <View style={styles.center}>
-          <ActivityIndicator color={colors.textMuted} />
+          <ActivityIndicator accessibilityLabel="Loading" color={colors.textMuted} />
         </View>
       ) : events.isError ? (
         <View style={styles.center}>
@@ -302,7 +302,7 @@ function FeedList({
         // Inverted list: the "header" renders at the visual bottom.
         sendPending || (feed.working && feed.live?.steps.length === 0) ? (
           <View style={styles.workingRow}>
-            <ActivityIndicator size="small" color={colors.working} />
+            <ActivityIndicator accessibilityLabel="Loading" size="small" color={colors.working} />
             <Text style={styles.workingText}>working…</Text>
           </View>
         ) : null

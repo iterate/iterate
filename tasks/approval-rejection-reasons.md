@@ -7,8 +7,16 @@ size: medium
 
 ## Status summary
 
-Fresh off #2309 (approval batches). Three riders in one PR, all approvals-mobile:
-nothing implemented yet — this spec commit comes first.
+All three asks implemented; PR #2337. Rejection reasons flow contract → door
+403 → mobile/CLI prompts → agent-visible body (verified live). Auto-enroll
+runs on project open. The playwright spec passes against a preview slot
+(sign-up → auto-enroll → approve-all via confirm → reject-with-reason
+asserted in the script's 403), with a VIDEO_MODE recording for the PR body.
+Getting there surfaced three real product gaps, fixed here: auth lacked CORS
+for loopback web clients (gated on fixedTestOtpEnabled), the mobile app's
+spinners were invisible to assistive tech and the spinner-waiter
+(ActivityIndicator now labeled "Loading"), and the approve/reject Pressables
+had no button role.
 
 ## Ask (Misha, 2026-07-29)
 
@@ -91,17 +99,17 @@ nothing implemented yet — this spec commit comes first.
 
 ## Checklist
 
-- [ ] Contract: `reason` on `human-approval-decided`; door 403 bodies gain
-      `deniedBy` + `reason`; e2e lane asserting the script sees the reason
-- [ ] Mobile: Reject/Reject-all prompts optional reason; Recent shows it
-- [ ] CLI: terminal reject prompt, `--json` stdin `reason`, settlement readback
-- [ ] Auto-enroll on project open (native + web), banner demoted to fallback
-- [ ] `lib/secure-store.ts` web shim (localStorage + confirm-gated
-      authenticated reads); all SecureStore imports moved over
-- [ ] `specs/mobile/approvals.spec.ts`: approve-all path + reject-with-reason
-      path, driving the web build end to end
-- [ ] Video recorded and embedded in the PR body
-- [ ] `pnpm typecheck && pnpm lint && pnpm knip && pnpm test`; PR hygiene
+- [x] Contract: `reason` on `human-approval-decided`; door 403 bodies gain
+      `deniedBy` + `reason`; e2e lane asserting the script sees the reason _contract + `#flushHoldBatch`/`#judgeDecision`; egress e2e reject lane asserts the verbatim reason, passed live_
+- [x] Mobile: Reject/Reject-all prompts optional reason; Recent shows it _`promptForRejectReason` (Alert.prompt iOS / window.prompt web); "Rejected because: …" on resolved cards_
+- [x] CLI: terminal reject prompt, `--json` stdin `reason`, settlement readback _approve.ts `promptRejectReason`; approve-json stdin + `humanReason` on rejected rows_
+- [x] Auto-enroll on project open (native + web), banner demoted to fallback _`ensureApproverKeyEnrolled` query on the chat-list screen; revoked keys never resurrected_
+- [x] `lib/secure-store.ts` web shim (localStorage + confirm-gated
+      authenticated reads); all SecureStore imports moved over _storage/approver/device-identity now import the wrapper_
+- [x] `specs/mobile/approvals.spec.ts`: approve-all path + reject-with-reason
+      path, driving the web build end to end _passes in ~37s against preview 5; OAuth popup chain is email OTP → onboarding → project-access Continue → consent Allow_
+- [x] Video recorded and embedded in the PR body _VIDEO_MODE run recorded; upload to PR body via the attachment flow_
+- [x] `pnpm typecheck && pnpm lint && pnpm knip && pnpm test`; PR hygiene _all green locally_
 
 ## Out of scope
 
@@ -111,4 +119,20 @@ nothing implemented yet — this spec commit comes first.
 
 ## Implementation log
 
-(append as work proceeds)
+- Rejection reasons: `reason` deliberately outside the approval.v2 signature
+  (rejections are unsigned; append access already suffices to veto).
+- The spec's road bumps, each fixed at the product layer: (1) auth CORS for
+  loopback origins on arbitrary ports, gated on `fixedTestOtpEnabled` — the
+  Expo Web app's browser-side OAuth (discovery/registration/token) was
+  impossible before; (2) RN-web `ActivityIndicator` renders `role=progressbar`
+  with no label, invisible to middlewright's spinner-waiter AND screen
+  readers — every instance now carries `accessibilityLabel="Loading"`;
+  (3) the approve/reject `Pressable`s had no `accessibilityRole="button"`.
+- The OAuth popup chain for the phone client has TWO extra steps the OS web
+  flow doesn't: project-access (Continue; project pre-selected) and consent
+  (Allow access) — because the client requests the `project` scope via
+  dynamic registration.
+- Spec env plumbing: run locally against a preview slot with
+  `APP_CONFIG_BASE_URL=https://os.iterate-preview-N.com DOPPLER_CONFIG=preview_N
+  CAPTUN_TOKEN=… pnpm spec mobile/approvals` (forged-session's doppler
+  fallback reads apps/os scope with DOPPLER_CONFIG honored).

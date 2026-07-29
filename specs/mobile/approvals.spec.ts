@@ -11,6 +11,7 @@
 // screen the way a human following a badge would.
 
 import { expect, type Page } from "@playwright/test";
+import { spinnerWaiter } from "middlewright";
 import { connectItxReady } from "iterate/node";
 import { localOsDevServer } from "../../apps/os/scripts/dev.ts";
 import { withTunnel } from "../../apps/os/e2e/test-support/tunnel.ts";
@@ -39,11 +40,20 @@ test("approve a burst with one confirm; reject with a reason the script reads", 
       projectSlug,
       testInfo,
     });
+    // The phone client requests the `project` scope, so the popup continues
+    // through project selection (the new project arrives pre-selected) and
+    // the OAuth consent screen before redirecting back into the app.
+    await popup.getByRole("button", { name: "Continue" }).click({ timeout: 30_000 });
+    await popup.getByRole("button", { name: "Allow access" }).click({ timeout: 30_000 });
 
     // The popup redirects back into the app and closes itself; the app lands
     // on the project picker. Opening the project auto-enrolls this browser's
-    // approval key — no manual enroll step anywhere below.
-    await page.getByText(projectSlug).click();
+    // approval key — no manual enroll step anywhere below. The first project
+    // list rides a COLD itx WebSocket to the deployment (session dial +
+    // directory read observed at ~20-30s against preview slots), beyond the
+    // spinner-waiter's budget — a product-latency problem worth fixing at the
+    // source, not something more spinner UI can paper over.
+    await page.getByText(projectSlug).click({ timeout: 60_000 });
     await page.getByText("New chat").waitFor();
     const projectId = new URL(page.url()).pathname.split("/")[2]!;
 
@@ -113,7 +123,12 @@ test("approve a burst with one confirm; reject with a reason the script reads", 
     // differently.
     const rejecting = burst("reject-me");
     const reason = "wrong recipient — use the staging address";
-    await page.getByRole("button", { name: "Reject all" }).click({ trial: true });
+    // Nothing on screen hints that a new batch is inbound (the second burst is
+    // still coalescing at the egress door), so the spinner-waiter's
+    // no-spinner fast-fail doesn't apply — wait for the card plainly.
+    await spinnerWaiter.settings.run({ disabled: true }, () =>
+      page.getByRole("button", { name: "Reject all" }).waitFor({ timeout: 30_000 }),
+    );
     answerNextDialog(page, reason);
     await page.getByRole("button", { name: "Reject all" }).click();
     await page.getByText(`Rejected because: ${reason}`).waitFor();

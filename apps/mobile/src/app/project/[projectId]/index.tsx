@@ -82,7 +82,7 @@ export default function ChatListScreen() {
 
       {agents.isPending ? (
         <View style={styles.center}>
-          <ActivityIndicator color={colors.textMuted} />
+          <ActivityIndicator accessibilityLabel="Loading" color={colors.textMuted} />
         </View>
       ) : agents.isError ? (
         <View style={styles.center}>
