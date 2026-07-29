@@ -150,12 +150,11 @@ async function createAdminProjectAfterPreviewRollout(input: {
   config: OsPlaywrightAuthConfig;
   slug: string;
 }) {
-  // itx-v4 cutover: this used to dial the legacy client (`withItx({baseUrl,
-  // token})`) and then poll `project.processor.onStateChange` until the
-  // project reached phase "ready". The itx create resolves only after the
-  // bootstrap saga commits project/ready (sibling processors born, config repo
-  // seeded, project worker probed), so the readiness wait is gone and auth is
-  // an explicit admin-secret credential on connect.
+  // create() resolves only after the bootstrap saga commits terminal
+  // project/created (sibling processors born, config repo seeded, the seed
+  // worker reachable, and its permanent feed installed), so no separate
+  // lifecycle poll is needed. The shared helper retries the initial admin
+  // connection while a preview deployment finishes converging.
   using session = await connectPlaywrightAdminItx(input);
   using created = await session.projects.get(input.slug).create({});
   const description = await created.__describe();

@@ -27,13 +27,17 @@ export type SchedulerAction = {
 };
 
 /**
- * Input to `scheduler.set(...)`: a keyed upsert. `recurrence` additionally
- * accepts `{ in: seconds }` sugar, converted to a canonical `{ at }` before
- * anything is appended — the event log has exactly one spelling of every
- * schedule.
+ * Input to `scheduler.set(...)`: a keyed desired definition. `recurrence`
+ * additionally accepts `{ in: seconds }` sugar, converted to a canonical
+ * `{ at }` before anything is appended — the event log has exactly one
+ * spelling of every schedule.
  */
 export type SetScheduleInput = {
   key: string;
+  /**
+   * Caller-owned JSON annotations. The RPC boundary validates and canonicalizes
+   * this recursively before comparing or committing it.
+   */
   metadata?: Record<string, unknown>;
   recurrence: SchedulerRecurrence | { in: number };
   /**
@@ -62,3 +66,54 @@ export type ScheduleView = {
   /** When this version of the Schedule was set. */
   setAt: string;
 };
+
+/**
+ * Whether two definitions describe the same desired Schedule. Runtime fields
+ * (`definedAtOffset`, clock, run count) are intentionally excluded: set()
+ * preserves them when configuration already matches.
+ */
+export function sameScheduleDefinition(
+  left: Pick<ScheduleView, "action" | "key" | "metadata" | "recurrence">,
+  right: Pick<ScheduleView, "action" | "key" | "metadata" | "recurrence">,
+): boolean {
+  return (
+    left.key === right.key &&
+    left.action.kind === right.action.kind &&
+    left.action.script === right.action.script &&
+    sameRecurrence(left.recurrence, right.recurrence) &&
+    sameJsonValue(left.metadata, right.metadata)
+  );
+}
+
+function sameRecurrence(left: SchedulerRecurrence, right: SchedulerRecurrence): boolean {
+  if ("at" in left || "at" in right) return "at" in left && "at" in right && left.at === right.at;
+  if ("every" in left || "every" in right) {
+    return "every" in left && "every" in right && left.every === right.every;
+  }
+  return left.cron === right.cron && left.timezone === right.timezone;
+}
+
+function sameJsonValue(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((value, index) => sameJsonValue(value, right[index]))
+    );
+  }
+  if (typeof left !== "object" || left === null || typeof right !== "object" || right === null) {
+    return false;
+  }
+  const leftRecord = left as Record<string, unknown>;
+  const rightRecord = right as Record<string, unknown>;
+  const leftKeys = Object.keys(leftRecord).sort();
+  const rightKeys = Object.keys(rightRecord).sort();
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every(
+      (key, index) => key === rightKeys[index] && sameJsonValue(leftRecord[key], rightRecord[key]),
+    )
+  );
+}

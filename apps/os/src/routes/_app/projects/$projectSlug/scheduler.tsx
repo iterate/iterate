@@ -175,7 +175,10 @@ function formatSeconds(seconds: number) {
 }
 
 // Soonest next trigger first; exhausted (null) schedules sink to the bottom.
-function compareByNextTrigger(left: ScheduleView, right: ScheduleView) {
+function compareByNextTrigger(
+  left: Pick<ScheduleView, "key" | "nextTriggerAt">,
+  right: Pick<ScheduleView, "key" | "nextTriggerAt">,
+) {
   if (left.nextTriggerAt === null && right.nextTriggerAt === null)
     return left.key.localeCompare(right.key);
   if (left.nextTriggerAt === null) return 1;

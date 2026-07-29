@@ -335,14 +335,26 @@ been circling:
 - **Project creation is event-sourced and explicitly born.**
   `projects.get(slug)` returns a prospective handle without side effects.
   `handle.create()` registers the slug, adopts the directory-issued project
-  ID, then atomically appends the Project and Notification birth certificates
-  plus both subscriptions. The Project processor explicitly births the root
-  capability host, scheduler, config repo, and email router; `project/ready`
-  records completion. Create always waits both root processors through the
-  batch, then waits for readiness by default and returns the same handle.
+  ID, then atomically appends `project/create-requested`, Notification's birth,
+  and both platform processor subscriptions. The Project processor explicitly
+  births the root capability host, scheduler, config repo, and email router.
+  After the trusted seeded config worker builds and answers a readiness probe,
+  the saga atomically installs its permanent root feed (starting after the
+  request), appends terminal `project/created`, and publishes the first
+  `project/worker-updated` using the OS-stamped seed commit. Userspace does not
+  consume a creation hook, and creation does not wait for it to consume the
+  worker-update. A config-repo or deterministic worker source-build failure
+  appends terminal `project/create-failed`; availability and build-in-progress
+  outcomes stay open for durable redelivery. The subscription and terminal
+  event keys are ordinary coordination conventions rather than a separate
+  authorization layer. Create waits for either terminal fact by default,
+  returning the same handle on success and throwing the recorded failure.
   Callers that render bootstrap progress themselves pass
-  `{ waitUntilReady: false }` as the second argument to skip only the final
-  ready barrier.
+  `{ waitUntilCreated: false }` as the second argument to skip only the final
+  creation barrier.
+  This lifecycle change is an empty-state cutover: production projects are
+  erased and recreated, so there is deliberately no reducer fallback for
+  journals that predate `project/create-requested`.
   The processor is a public RpcTarget getter on the DO, and
   `itx.project` is a path proxy (replayPathCall awaits intermediate
   segments), so deep traversal works in one expression even though workerd
@@ -355,6 +367,18 @@ been circling:
   project's durable state (with a pure `projectFacts()` + D1-slug fallback
   for cold snapshots), and "config worker" is now just **the worker**
   (`durable-objects/worker.ts`, `callWorkerFunction`, `itx.worker`).
+- **Post-creation worker source changes become a platform lifecycle fact.**
+  Creation's successful worker probe publishes the first
+  `project/worker-updated`; the trusted seed commit remains creation input and
+  is not separately translated. Each later config repo
+  `repo/commit-completed` is copied onto `/`; the Project processor
+  recognizes its exact provenance and probes the authoritative current default
+  worker. Success appends the same root `project/worker-updated`, which is the
+  plain userspace switch case for arbitrary direct ITX code. Deterministic
+  source failure appends
+  `project/worker-update-failed`; transient build or availability states keep
+  the processor cursor open. This keeps repo topology out of userspace without
+  inventing a lifecycle framework or reusing the one-shot creation facts.
 
 ## D23: The grand cleanup — §8 and §9 graduate, captun intercept dies, auth mints
 

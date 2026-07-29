@@ -81,11 +81,12 @@ export interface Project {
   /** The project this itx is scoped into. */
   projectId: string;
   /**
-   * Register (for a prospective slug) and append the complete root birth
-   * batch. By default this resolves once the bootstrap saga has committed
-   * `project/ready` — the right shape for scripts that use the project
-   * immediately. `waitUntilReady: false` resolves as soon as the project
-   * EXISTS (identity registered, directory primed, birth events appended):
+   * Register (for a prospective slug) and append the complete root creation
+   * request batch. By default this resolves once the bootstrap saga has
+   * committed terminal `project/created` — the right shape for scripts that
+   * use the project immediately. `waitUntilCreated: false` resolves as soon
+   * as the identity is registered, directory primed, and request events
+   * appended:
    * the caller renders bootstrap progress itself, so nobody is left waiting.
    * The durable-delivery subscriptions committed in the birth batch are what
    * guarantee the saga runs; create also nudges both root processors AFTER
@@ -95,7 +96,7 @@ export interface Project {
    */
   create(
     args: { organizationSlug?: string; projectId?: string },
-    options?: { waitUntilReady?: boolean },
+    options?: { waitUntilCreated?: boolean },
   ): Promise<Project>;
   /**
    * Canonical identity from the project directory: id, slug (the auth
@@ -119,14 +120,15 @@ export interface Project {
    */
   restoreCloudflareHostname(input: { hostname: string }): Promise<{ hostname: string }>;
   /**
-   * Resolve once the bootstrap saga has committed `project/ready`. Replays
-   * stream history first, so an already-ready project resolves immediately,
+   * Resolve once the bootstrap saga has committed terminal `project/created`,
+   * or throw the durable `project/create-failed` explanation.
+   * Replays stream history first, so an already-created project resolves immediately,
    * and dialing the processor here heals a lost birth wake rather than just
    * observing. `create()` waits here by default; this remains useful after a
    * non-blocking create or when a caller receives an existing handle while a
    * bootstrap is in flight.
    */
-  waitUntilReady(args?: { timeoutMs?: number }): Promise<void>;
+  waitUntilCreated(args?: { timeoutMs?: number }): Promise<void>;
   /**
    * Identity + full capability inventory: `projectId`/`name`, every reachable
    * capability (built-ins + dynamic mounts), the children map, and the
@@ -138,8 +140,8 @@ export interface Project {
   debug(): Promise<string>;
   /** Restart the project's server-side object; the next request boots it fresh. */
   kill(): Promise<void>;
-  /** The project stream processor (snapshot/state; `state.ready` flips when bootstrap lands). */
-  processor: StreamProcessorRpc<ProjectProcessorState>;
+  /** The project stream processor (snapshot/state; `birthCertificate` records terminal creation). */
+  processor: WakeableStreamProcessorRpc<ProjectProcessorState>;
   /** The project's live state — reduced processor state plus non-folded slices. See {@link LiveStateRpc}. */
   liveState: LiveStateRpc<ProjectLiveState>;
   /** Demo capability for the live-state playground — `ticker` (stateless) + `increment()` (a durable server-side counter). */
@@ -261,7 +263,8 @@ export interface ProjectCollection {
   /**
    * The session's projects, enriched: identity (id/slug/org) from the auth
    * claims or the project directory, deployment status from a concurrent
-   * engine probe (`state.ready` on each project's processor snapshot). A
+   * engine probe (the terminal birth certificate on each project's processor
+   * snapshot). A
    * probe failure degrades THAT entry to "unknown" — the list always renders.
    * Scope is explicit: "mine" (default for user principals) is the caller's
    * own claims even when admin credentials ride the same socket;
@@ -269,18 +272,6 @@ export interface ProjectCollection {
    * and is the default for non-user admin principals, which have no claims.
    */
   list(input?: { scope?: "mine" | "deployment" }): Promise<ProjectListEntry[]>;
-}
-
-/**
- * The read-side RPC surface every stream processor node exposes: inspect
- * runtime state (snapshot plus a processor-specific runtime bag), take an
- * offset-pinned `snapshot()` of the folded state, and `waitUntilProcessed` to
- * block until the processor has durably folded through a given offset.
- */
-export interface StreamProcessorRpc<State = unknown> {
-  getRuntimeState(): Promise<ProcessorRuntimeState<State>>;
-  snapshot(): Promise<ProcessorSnapshot<State>>;
-  waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<void>;
 }
 
 /** Read-only live value exposed across a Cap'n Web capability boundary. */
@@ -975,9 +966,10 @@ export interface SandboxCollection {
 
 /**
  * One Scheduler: keyed Schedules on one `/scheduler/**` stream, triggered by
- * a durable alarm. Everything it does is events on that stream — `set`/`cancel`
- * append, `list` reads reduced state, and every Trigger's request and outcome
- * are appended back, so the stream is the complete audit log. Scripts run
+ * a durable alarm. Everything it does is events on that stream —
+ * `set`/`cancel` append when desired state changes, `list` reads reduced state,
+ * and every Trigger's request and outcome are appended back, so the stream is
+ * the complete audit log. Scripts run
  * with project-root itx authority, at least once per Trigger (derive append
  * idempotency keys from `trigger.executionId`).
  *
@@ -991,7 +983,12 @@ export interface Scheduler {
   processor: StreamProcessorRpc<SchedulerProcessorState>;
   /** Create this Scheduler and return only after it has processed the complete birth batch. */
   create(_input: Record<string, never>): Promise<Scheduler>;
-  /** Upsert by key; returns after the Scheduler has ingested the set (read-your-writes, alarm armed). */
+  /**
+   * Upsert by key. An unchanged definition preserves its clock and run count;
+   * a missing or changed definition is appended and ingested before return.
+   * Relative `{ in }` input is resolved against each call's current time, so
+   * use canonical `{ at }` when a one-shot definition must compare unchanged.
+   */
   set(input: SetScheduleInput): Promise<ScheduleView>;
   /** Remove a key. Idempotent; an in-flight Trigger completes as `skipped`. */
   cancel(key: string): Promise<void>;
@@ -1380,6 +1377,18 @@ export interface Stream {
     | { status: "removed"; subscriptionRemovedEvent: CommittedSubscriptionRemovedEvent }
     | { status: "already-absent" }
   >;
+}
+
+/**
+ * The read-side RPC surface every stream processor node exposes: inspect
+ * runtime state (snapshot plus a processor-specific runtime bag), take an
+ * offset-pinned `snapshot()` of the folded state, and `waitUntilProcessed` to
+ * block until the processor has durably folded through a given offset.
+ */
+export interface StreamProcessorRpc<State = unknown> {
+  getRuntimeState(): Promise<ProcessorRuntimeState<State>>;
+  snapshot(): Promise<ProcessorSnapshot<State>>;
+  waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<void>;
 }
 
 /** Disposable handle for one live project egress interception. */
@@ -1884,20 +1893,61 @@ export type ProjectDescription = Description & {
 };
 
 /**
+ * The internal extension used when stream delivery calls a hosted processor.
+ * Public processor properties expose only {@link StreamProcessorRpc}; a stored
+ * subscription persists an ITX expression that continues one
+ * step past that public property to this trusted-only method:
+ * `["agents", ["get", path], "processor", "wakeStreamProcessor"]`.
+ *
+ * `wakeStreamProcessor` is called by trusted stream delivery only
+ * (trusted-internal): its processEventBatch callback drives the host's durable
+ * checkpoint, so an ordinary session poking it could feed fabricated batches
+ * and fast-forward the checkpoint past real events. Multi-processor hosts (an
+ * agent Durable Object hosts agent + slack-agent + more) resolve WHICH
+ * processor wakes from the request's `processorSlug`. Each public domain
+ * surface selects that same named processor for inspection, while deliberately
+ * omitting this method from its public TypeScript contract, so
+ * `agent.processor`, `agent.slack.processor`, and other siblings expose their
+ * own snapshots and checkpoints.
+ */
+export type WakeableStreamProcessorRpc<State = unknown> = StreamProcessorRpc<State> & {
+  wakeStreamProcessor(request: StreamProcessorWakeRequest): Promise<StreamProcessorWakeResponse>;
+};
+
+/**
  * The project processor's reduced state, inferred from the contract's
- * `stateSchema` — the one definition of the shape. `ready` flips when the
- * bootstrap saga lands; the list fields are what the collection `list()`
- * methods read.
+ * `stateSchema` — the one definition of the shape. A non-null
+ * `birthCertificate` is the terminal creation marker; the list fields are
+ * what the collection `list()` methods read.
  */
 export type ProjectProcessorState = {
-  birthCertificate: {
+  createRequest: {
     config: {
       slug: string;
       onboardingActive?: boolean | undefined;
       creatorEmail?: string | undefined;
     };
   } | null;
-  ready: boolean;
+  createRequestedAtOffset: number | null;
+  createFailure: {
+    createRequestedAtOffset: number;
+    error: string;
+    request: {
+      config: {
+        slug: string;
+        onboardingActive?: boolean | undefined;
+        creatorEmail?: string | undefined;
+      };
+    };
+  } | null;
+  birthCertificate: {
+    config: {
+      slug: string;
+      onboardingActive?: boolean | undefined;
+      creatorEmail?: string | undefined;
+    };
+    createRequestedAtOffset: number;
+  } | null;
   onboardingActive: boolean;
   onboardingCompletedAt: string | null;
   devices: { createdAt: string; path: string }[];
@@ -2116,17 +2166,51 @@ export type CapabilityDescription = {
   types?: string;
 };
 
-/** Serializable snapshot plus optional live runtime debug state for a processor. */
-export type ProcessorRuntimeState<State = unknown> = {
-  snapshot: { offset: number; state: State };
-  runtime?: Record<string, unknown>;
+/**
+ * What the stream sends when waking a hosted processor through
+ * `wakeStreamProcessor`: serializable coordinates only.
+ */
+export type StreamProcessorWakeRequest = {
+  stream: {
+    projectId: string | null;
+    path: string;
+    /** Random identity of this event log; fences persisted processor checkpoints. */
+    streamId: string;
+    streamMaxOffset: number;
+  };
+  subscriptionKey: SubscriptionKey;
+  /** Which hosted processor to wake (multi-processor hosts resolve on it). */
+  processorSlug?: string;
 };
 
-/** One consistent read of a processor (what `snapshot()` returns): the folded
- * state pinned to the offset of the last event folded into it. */
-export type ProcessorSnapshot<State> = {
-  offset: number;
-  state: State;
+/**
+ * What the woken processor hands back in one response. The stream retains
+ * `processEventBatch` (ownership of a returned stub transfers to
+ * the caller) and streams one-way batches into it from `checkpointOffset + 1`;
+ * there is no callback registration call in the other direction.
+ */
+export type StreamProcessorWakeResponse = {
+  /** Stream identity to which `checkpointOffset` and the returned callback are bound. */
+  streamId: string;
+  /** The processor's durable checkpoint offset — replay resumes after it. */
+  checkpointOffset: number;
+  /**
+   * The live delivery callback the stream retains and invokes per batch.
+   * Calls are one-way; each batch reports completion through its independent
+   * `reportDeliveryResult` callback.
+   */
+  processEventBatch: ProcessStreamWakeEventBatch;
+  /**
+   * Serializable callback-owner identity (validated against
+   * `ConnectionOpenerDescriptor` by the stream) appended as the
+   * connection-opened presence fact; carries the processor's contract
+   * announcement for the stream's `processorsBySlug` registry.
+   */
+  openedBy?: unknown;
+  /** Live runtime-state capability, retained for the connection lifetime. */
+  getRuntimeState?: GetProcessorRuntimeState;
+  /** Optional ping capability, retained for the connection lifetime (see {@link StreamConnectionPing}). */
+  ping?: StreamConnectionPing;
 };
 
 /**
@@ -2966,7 +3050,7 @@ export type SchedulerProcessorState = {
       [x: string]: unknown;
       action: { [x: string]: unknown; kind: "itx-script"; script: string };
       definedAtOffset: number;
-      metadata?: Record<string, unknown> | undefined;
+      metadata?: Record<string, JsonValue> | undefined;
       path: string;
       nextTriggerAt: number | null;
       recurrence:
@@ -2980,13 +3064,17 @@ export type SchedulerProcessorState = {
 };
 
 /**
- * Input to `scheduler.set(...)`: a keyed upsert. `recurrence` additionally
- * accepts `{ in: seconds }` sugar, converted to a canonical `{ at }` before
- * anything is appended — the event log has exactly one spelling of every
- * schedule.
+ * Input to `scheduler.set(...)`: a keyed desired definition. `recurrence`
+ * additionally accepts `{ in: seconds }` sugar, converted to a canonical
+ * `{ at }` before anything is appended — the event log has exactly one
+ * spelling of every schedule.
  */
 export type SetScheduleInput = {
   key: string;
+  /**
+   * Caller-owned JSON annotations. The RPC boundary validates and canonicalizes
+   * this recursively before comparing or committing it.
+   */
   metadata?: Record<string, unknown>;
   recurrence: SchedulerRecurrence | { in: number };
   /**
@@ -3359,6 +3447,12 @@ export type StreamEventPage = {
   events: StreamEvent[];
 };
 
+/** Serializable snapshot plus optional live runtime debug state for a processor. */
+export type ProcessorRuntimeState<State = unknown> = {
+  snapshot: { offset: number; state: State };
+  runtime?: Record<string, unknown>;
+};
+
 /** Serializable stream-core and delivery-runtime state exposed through `Stream.liveState`. */
 export type StreamRuntimeDebugState = {
   /** Durable stream events reduced by the core processor. */
@@ -3643,12 +3737,24 @@ export type CommittedSubscriptionRemovedEvent = Omit<
 /**
  * Whether a project the directory knows about actually exists in THIS
  * deployment's engine:
- * - `ready` — the project stream's bootstrap saga ran (`state.ready`).
+ * - `created` — the project stream's bootstrap saga committed `project/created`.
+ * - `creating` — `project/create-requested` exists but no terminal fact does.
+ * - `failed` — the saga committed terminal `project/create-failed`.
  * - `missing` — the engine has no state for it (e.g. the deployment was reset
  *   while the auth worker kept its rows); it can be set up again.
  * - `unknown` — the probe failed (engine hiccup); don't block the list on it.
  */
-export type ProjectDeploymentStatus = "ready" | "missing" | "unknown";
+export type ProjectDeploymentStatus = "created" | "creating" | "failed" | "missing" | "unknown";
+
+/** One consistent read of a processor (what `snapshot()` returns): the folded
+ * state pinned to the offset of the last event folded into it. */
+export type ProcessorSnapshot<State> = {
+  offset: number;
+  state: State;
+};
+
+/** Hosted processor callback. Its call result is always disposed without being awaited. */
+export type ProcessStreamWakeEventBatch = (batch: StreamWakeEventBatch) => unknown;
 
 /**
  * A structural patch turning a previous JSON value into the next one. Two
@@ -3764,28 +3870,6 @@ export type SandboxCreateInput = {
    * `getSecret(path)` placeholders or non-secret literals, NEVER raw
    * secret material. */
   env?: Record<string, string>;
-};
-
-/**
- * The internal extension used when stream delivery calls a hosted processor.
- * Public processor properties expose only {@link StreamProcessorRpc}; a stored
- * subscription persists an ITX expression that continues one
- * step past that public property to this trusted-only method:
- * `["agents", ["get", path], "processor", "wakeStreamProcessor"]`.
- *
- * `wakeStreamProcessor` is called by trusted stream delivery only
- * (trusted-internal): its processEventBatch callback drives the host's durable
- * checkpoint, so an ordinary session poking it could feed fabricated batches
- * and fast-forward the checkpoint past real events. Multi-processor hosts (an
- * agent Durable Object hosts agent + slack-agent + more) resolve WHICH
- * processor wakes from the request's `processorSlug`. Each public domain
- * surface selects that same named processor for inspection, while deliberately
- * omitting this method from its public TypeScript contract, so
- * `agent.processor`, `agent.slack.processor`, and other siblings expose their
- * own snapshots and checkpoints.
- */
-export type WakeableStreamProcessorRpc<State = unknown> = StreamProcessorRpc<State> & {
-  wakeStreamProcessor(request: StreamProcessorWakeRequest): Promise<StreamProcessorWakeResponse>;
 };
 
 /** The sandbox processor's reduced lifecycle projection. */
@@ -4213,6 +4297,11 @@ export type StreamPingReply = { t0: number; t1: number; t2: number };
 /** Stable identity for one live connection to a processEventBatch callback. */
 export type ConnectionKey = string;
 
+/** Internal hosted-processor frame: an ordinary batch plus its one-shot completion callback. */
+export type StreamWakeEventBatch = StreamEventBatch & {
+  reportDeliveryResult: ReportStreamWakeDeliveryResult;
+};
+
 /** `StreamEventInput` with `type`/`payload` narrowed to one event definition. */
 type TypedStreamEventInput<Type extends string = string, Payload = Record<string, unknown>> = Omit<
   StreamEventInput,
@@ -4255,53 +4344,6 @@ export type SandboxInstanceType =
   | "standard-2"
   | "standard-3"
   | "standard-4";
-
-/**
- * What the stream sends when waking a hosted processor through
- * `wakeStreamProcessor`: serializable coordinates only.
- */
-export type StreamProcessorWakeRequest = {
-  stream: {
-    projectId: string | null;
-    path: string;
-    /** Random identity of this event log; fences persisted processor checkpoints. */
-    streamId: string;
-    streamMaxOffset: number;
-  };
-  subscriptionKey: SubscriptionKey;
-  /** Which hosted processor to wake (multi-processor hosts resolve on it). */
-  processorSlug?: string;
-};
-
-/**
- * What the woken processor hands back in one response. The stream retains
- * `processEventBatch` (ownership of a returned stub transfers to
- * the caller) and streams one-way batches into it from `checkpointOffset + 1`;
- * there is no callback registration call in the other direction.
- */
-export type StreamProcessorWakeResponse = {
-  /** Stream identity to which `checkpointOffset` and the returned callback are bound. */
-  streamId: string;
-  /** The processor's durable checkpoint offset — replay resumes after it. */
-  checkpointOffset: number;
-  /**
-   * The live delivery callback the stream retains and invokes per batch.
-   * Calls are one-way; each batch reports completion through its independent
-   * `reportDeliveryResult` callback.
-   */
-  processEventBatch: ProcessStreamWakeEventBatch;
-  /**
-   * Serializable callback-owner identity (validated against
-   * `ConnectionOpenerDescriptor` by the stream) appended as the
-   * connection-opened presence fact; carries the processor's contract
-   * announcement for the stream's `processorsBySlug` registry.
-   */
-  openedBy?: unknown;
-  /** Live runtime-state capability, retained for the connection lifetime. */
-  getRuntimeState?: GetProcessorRuntimeState;
-  /** Optional ping capability, retained for the connection lifetime (see {@link StreamConnectionPing}). */
-  ping?: StreamConnectionPing;
-};
 
 /** How a secret's material may leave the secret system. Extendable — e.g. a
  * future "reveal-once". */
@@ -4462,6 +4504,16 @@ export type ThroughputReport = {
   series: ThroughputSeries;
 };
 
+/**
+ * One-shot acknowledgement capability owned by a single durable wake batch.
+ *
+ * It is deliberately independent of the callback call's return value. A
+ * processor may append back to the stream that delivered the batch; making
+ * the stream await that return value can make two Durable Objects wait for
+ * each other forever.
+ */
+export type ReportStreamWakeDeliveryResult = (result: StreamWakeDeliveryResult) => unknown;
+
 /** One Cloudflare Images transform step (width, height, fit, rotate, …),
  * passed through to the Images binding verbatim. */
 export type CfImageTransformOptions = { [x: string]: unknown };
@@ -4484,9 +4536,6 @@ export type CfVideoTransformOptions = { [x: string]: unknown };
 export type CfVideoOutputOptions = {
   mode: "video" | "spritesheet" | "frame" | "audio";
 } & Record<string, unknown>;
-
-/** Hosted processor callback. Its call result is always disposed without being awaited. */
-export type ProcessStreamWakeEventBatch = (batch: StreamWakeEventBatch) => unknown;
 
 /**
  * A reference to a deployment-owned platform credential, resolved from typed
@@ -4557,10 +4606,10 @@ export type ThroughputSeries = {
   bytes: number[];
 };
 
-/** Internal hosted-processor frame: an ordinary batch plus its one-shot completion callback. */
-export type StreamWakeEventBatch = StreamEventBatch & {
-  reportDeliveryResult: ReportStreamWakeDeliveryResult;
-};
+/** The hosted processor's final result for one durable wake delivery. */
+export type StreamWakeDeliveryResult =
+  | { outcome: "ok" }
+  | { outcome: "error"; error: StreamWakeDeliveryError };
 
 /** Serializable `createApp` input. The generated browser bundles and explicit
  * text assets are retained in the host and served by worker-bundler's own
@@ -4585,14 +4634,20 @@ export type WorkerBundlerCreateWorkerOptions = WorkerBundlerOptions & {
 };
 
 /**
- * One-shot acknowledgement capability owned by a single durable wake batch.
+ * Serializable failure reported after a durable wake delivery finishes.
  *
- * It is deliberately independent of the callback call's return value. A
- * processor may append back to the stream that delivered the batch; making
- * the stream await that return value can make two Durable Objects wait for
- * each other forever.
+ * The result crosses an independent one-way RPC hop, so preserve the
+ * lifecycle flags the stream uses to distinguish a dead Durable Object from
+ * an application failure. Error prototypes and arbitrary properties do not
+ * survive that hop reliably.
  */
-export type ReportStreamWakeDeliveryResult = (result: StreamWakeDeliveryResult) => unknown;
+export type StreamWakeDeliveryError = {
+  name: string;
+  message: string;
+  durableObjectReset?: true;
+  overloaded?: true;
+  retryable?: true;
+};
 
 /**
  * The serializable `@cloudflare/worker-bundler` options shared by
@@ -4655,11 +4710,6 @@ export type WorkerFileSource =
       exclude?: string[];
     };
 
-/** The hosted processor's final result for one durable wake delivery. */
-export type StreamWakeDeliveryResult =
-  | { outcome: "ok" }
-  | { outcome: "error"; error: StreamWakeDeliveryError };
-
 /** Portable loader names accepted by `@cloudflare/worker-bundler`. */
 export type WorkerBundlerLoader =
   | "js"
@@ -4672,19 +4722,3 @@ export type WorkerBundlerLoader =
   | "binary"
   | "base64"
   | "dataurl";
-
-/**
- * Serializable failure reported after a durable wake delivery finishes.
- *
- * The result crosses an independent one-way RPC hop, so preserve the
- * lifecycle flags the stream uses to distinguish a dead Durable Object from
- * an application failure. Error prototypes and arbitrary properties do not
- * survive that hop reliably.
- */
-export type StreamWakeDeliveryError = {
-  name: string;
-  message: string;
-  durableObjectReset?: true;
-  overloaded?: true;
-  retryable?: true;
-};

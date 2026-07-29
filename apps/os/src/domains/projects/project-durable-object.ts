@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { LiveStateRpcTarget } from "iterate/sdk/capnweb";
+import { disposeIgnoredRpcResult, LiveStateRpcTarget } from "iterate/sdk/capnweb";
 import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
 import type { StreamProcessorWakeRequest, StreamProcessorWakeResponse } from "iterate/processors";
 import type { StreamEvent } from "iterate/processors";
@@ -9,6 +9,7 @@ import { workerVersion, type Env } from "../../env.ts";
 import {
   itxForScope,
   ProjectEgressInterceptRpcTarget,
+  STREAM_DURABLE_OBJECT_STUB,
   StreamProcessorRpcTarget,
   StreamRpcTarget,
 } from "../../rpc-targets.ts";
@@ -40,6 +41,8 @@ import { EmailProcessor } from "../email/email-processor-implementation.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
 import { NotificationProcessor } from "../notifications/notification-processor-implementation.ts";
 import { isRetryableDurableObjectAvailabilityError } from "../streams/stream-unavailable.ts";
+import { defaultProjectWorkerRef } from "../repos/utils.ts";
+import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import type { ProjectEgressIntercept, ProjectEgressInterceptor } from "./egress.ts";
 import {
   buildApprovalMessage,
@@ -135,6 +138,25 @@ export class ProjectDurableObject extends DurableObject<Env> {
         path: "/",
         projectId: this.#name.projectId,
       }),
+      workerFetch: (request) =>
+        new DynamicWorkerRunner({
+          streamContext: { kind: "scope", scopePath: "/" },
+          exports: this.ctx.exports,
+          projectId: this.#name.projectId,
+          scopePath: "/",
+        }).fetch({
+          ref: defaultProjectWorkerRef(),
+          request,
+          traceRole: "project_config",
+        }),
+      appendPlatformEvents: async ({ events, streamId }) => {
+        disposeIgnoredRpcResult(
+          await this.#stream[STREAM_DURABLE_OBJECT_STUB].appendCoreEventsIfStreamId({
+            events,
+            streamId,
+          }),
+        );
+      },
     }),
   );
   readonly #notificationProcessor = this.#registry.register(
