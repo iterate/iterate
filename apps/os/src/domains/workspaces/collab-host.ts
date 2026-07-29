@@ -1,7 +1,7 @@
 import { Text } from "@codemirror/state";
+import { attributedChanges } from "@iterate-com/workspace-documents/attribution";
 import { countOccurrences, replaceLiteralOccurrences } from "../repos/edit-utils.ts";
 import { resolveAbsolutePath } from "./paths.ts";
-import { attributedChanges } from "./collab-changes.ts";
 import type { EditWorkspaceFileInput, EditWorkspaceFileResult } from "./types.ts";
 import {
   CollabEngine,

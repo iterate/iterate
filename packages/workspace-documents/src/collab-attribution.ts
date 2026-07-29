@@ -20,7 +20,7 @@ import { ChangeSet, Text } from "@codemirror/state";
  * the store's business; orchestration (what the base is) is the host's.
  */
 
-type CollabChangeSegment =
+export type CollabChangeSegment =
   | { clientId: string; createdAt?: number; from: number; kind: "inserted"; to: number }
   | { at: number; clientId: string; createdAt?: number; kind: "deleted"; text: string };
 
@@ -126,7 +126,7 @@ export function attributionSegments(state: AttributionState): CollabChangeSegmen
     ...deleted
       .filter((span) => span.text.length > 0)
       .map((span) => ({ ...span, kind: "deleted" as const })),
-  ].sort(
+  ].toSorted(
     // Position order; at a tie (a replace), the deletion renders first —
     // struck-out old text, then the new text, redline convention.
     (left, right) =>
@@ -152,7 +152,7 @@ function subtract(range: [number, number], spans: InsertedSpan[]): [number, numb
 
 /** Merge touching same-author spans (contiguous typing = one segment). */
 function coalesce(spans: InsertedSpan[]): InsertedSpan[] {
-  const sorted = [...spans].sort((left, right) => left.from - right.from);
+  const sorted = spans.toSorted((left, right) => left.from - right.from);
   const merged: InsertedSpan[] = [];
   for (const span of sorted) {
     const last = merged.at(-1);

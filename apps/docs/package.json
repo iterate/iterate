@@ -1,0 +1,71 @@
+{
+  "name": "@iterate-com/docs",
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Direct workspace document review and editing for Iterate",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iterate/iterate",
+    "directory": "apps/docs"
+  },
+  "homepage": "https://github.com/iterate/iterate/tree/main/apps/docs#readme",
+  "bugs": {
+    "url": "https://github.com/iterate/iterate/issues"
+  },
+  "exports": {
+    ".": "./src/config-bridge.ts"
+  },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist-package/config-bridge.d.ts",
+        "import": "./dist-package/config-bridge.js",
+        "default": "./dist-package/config-bridge.js"
+      }
+    }
+  },
+  "files": [
+    "dist-package",
+    "README.md"
+  ],
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build && tsc --noEmit && pnpm build:package",
+    "build:package": "tsc --project tsconfig.package.json",
+    "deploy": "tsx ./scripts/deploy.ts",
+    "destroy": "tsx ./scripts/erase-data.ts",
+    "ensure-resources": "tsx ./scripts/ensure-resources.ts",
+    "erase-data": "tsx ./scripts/erase-data.ts",
+    "gen:wrangler": "tsx ./scripts/generate-wrangler-config.ts",
+    "prepack": "pnpm build:package",
+    "typecheck": "pnpm gen:wrangler && tsc --noEmit",
+    "test": "pnpm build:package && vitest run --reporter=default --reporter=../../packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts"
+  },
+  "devDependencies": {
+    "@iterate-com/ui": "workspace:*",
+    "@iterate-com/workspace-documents": "workspace:*",
+    "@tanstack/react-router": "^1.170.10",
+    "@tanstack/react-start": "^1.168.18",
+    "@cloudflare/vite-plugin": "catalog:cloudflare",
+    "@cloudflare/workers-types": "catalog:cloudflare",
+    "@tailwindcss/vite": "^4.3.2",
+    "@types/node": "^24.12.4",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.2",
+    "capnweb": "npm:@iterate-com/capnweb@^0.10.0",
+    "iterate": "workspace:*",
+    "lucide-react": "^0.553.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "tailwindcss": "^4.3.2",
+    "trpc-cli": "0.15.1",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vite": "^8.0.16",
+    "vitest": "^4.1.10",
+    "wrangler": "catalog:cloudflare"
+  }
+}

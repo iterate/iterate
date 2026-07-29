@@ -8,7 +8,8 @@
  * code; secrets live in Doppler (one config per env per app, named below).
  *
  * Each app has its own map (envs/os, authEnvs, semaphoreEnvs, kitEnvs,
- * tunnelsEnvs, streamsExampleEnvs, dummyPetshopEnvs) because apps deploy to different
+ * tunnelsEnvs, streamsExampleEnvs, dummyPetshopEnvs, docsEnvs) because apps
+ * deploy to different
  * subsets of environments — forcing them into one record would mean optional
  * fields that lie. Hostnames follow conventions (`previewSlot(n)` derives them);
  * resource IDs are Cloudflare-assigned and must be spelled out.
@@ -522,3 +523,50 @@ export const streamsExampleEnvs = {
   },
   ...mapDeployedPreviewEnvs((env) => streamsExamplePreviewSlot(previewEnvironmentSlotNumber(env))),
 } satisfies Record<EnvName, StreamsExampleEnv>;
+
+/**
+ * apps/docs — the stateless workspace-document vessel. Project-facing
+ * traffic arrives through each project's `docs--<slug>` config-worker proxy;
+ * these workers.dev origins are the independently deployed upstreams.
+ *
+ * Docs owns no storage. All document content and annotations remain in the
+ * OS workspace selected by the deep link.
+ */
+export interface DocsEnv {
+  cloudflareAccountId: string;
+  /** Doppler config (project `docs`) supplying deploy credentials. */
+  dopplerConfig: string;
+  workerName: string;
+  /** Direct vessel origin used by the project config-worker proxy. */
+  baseUrl: string;
+  /** OS deployment that owns the workspaces this vessel addresses. */
+  osBaseUrl: string;
+}
+
+function docsPreviewSlot(n: number): DocsEnv {
+  return {
+    cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
+    dopplerConfig: `preview_${n}`,
+    workerName: `docs-preview-${n}`,
+    baseUrl: `https://docs-preview-${n}.iterate-dev-stg.workers.dev`,
+    osBaseUrl: `https://os.iterate-preview-${n}.com`,
+  };
+}
+
+export const docsEnvs = {
+  prd: {
+    cloudflareAccountId: PRD_ACCOUNT_ID,
+    dopplerConfig: "prd",
+    workerName: "docs",
+    baseUrl: "https://docs.iterate.workers.dev",
+    osBaseUrl: "https://os.iterate.com",
+  },
+  preview_2: docsPreviewSlot(2),
+  preview_3: docsPreviewSlot(3),
+  preview_4: docsPreviewSlot(4),
+  preview_5: docsPreviewSlot(5),
+  preview_6: docsPreviewSlot(6),
+  preview_7: docsPreviewSlot(7),
+  preview_8: docsPreviewSlot(8),
+  preview_9: docsPreviewSlot(9),
+} satisfies Record<string, DocsEnv>;

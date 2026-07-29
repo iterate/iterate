@@ -48,8 +48,8 @@ verified by using it against the platform).
 ## Task comments
 
 Tasks carry Linear-style discussion threads **inside the markdown file
-itself**: an EOF store of paired `<!-- task-thread:v1 … -->` /
-`<!-- task-comment:v1 … -->` HTML-comment sentinels, readable in any editor
+itself**: an EOF store of paired `<!-- iterate-thread:v1 … -->` /
+`<!-- iterate-comment:v1 … -->` HTML-comment sentinels, readable in any editor
 and invisible in rendered markdown. Parsing and splice-based mutations live
 in the standalone `iterate/annotated-markdown` codec
 (`packages/iterate/src/annotated-markdown/README.md` is the grammar).

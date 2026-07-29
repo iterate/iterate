@@ -1,0 +1,66 @@
+@import "@iterate-com/ui/globals.css";
+
+@source "./**/*.{ts,tsx}";
+@source "../../../packages/workspace-documents/src/**/*.{ts,tsx}";
+
+html,
+body {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--background);
+}
+
+.docs-html-preview {
+  color: var(--foreground);
+  font-size: 15px;
+  line-height: 1.75;
+}
+
+.docs-html-preview :where(h1, h2, h3, h4) {
+  margin-block: 1.5em 0.55em;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.docs-html-preview h1 {
+  font-size: 2rem;
+}
+
+.docs-html-preview h2 {
+  font-size: 1.5rem;
+}
+
+.docs-html-preview :where(p, ul, ol, pre, blockquote, table) {
+  margin-block: 0.9em;
+}
+
+.docs-html-preview :where(ul, ol) {
+  padding-left: 1.5rem;
+}
+
+.docs-html-preview pre {
+  overflow-x: auto;
+  border-radius: 0.5rem;
+  background: var(--muted);
+  padding: 1rem;
+}
+
+.docs-html-preview blockquote {
+  border-left: 2px solid var(--border);
+  padding-left: 1rem;
+  color: var(--muted-foreground);
+}
+
+.docs-html-preview table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.docs-html-preview :where(th, td) {
+  border: 1px solid var(--border);
+  padding: 0.5rem 0.65rem;
+  text-align: left;
+}

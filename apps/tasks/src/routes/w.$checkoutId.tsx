@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIcon } from "lucide-react";
 import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { Button } from "@iterate-com/ui/components/button";
+import { commentIdentityFor } from "@iterate-com/workspace-documents/identity";
 import type { CollabEditorApi } from "../lib/collab-editor-api.ts";
 import { Board } from "../components/board.tsx";
 import {
@@ -25,7 +26,6 @@ import { taskPathInFolder, unclaimedPath, type BoardTask, type RowField } from "
 import { DEFAULT_REPO_PATH, normalizeRepoPath } from "../lib/checkout-shared.ts";
 import {
   columnsForTasks,
-  commentAuthorFor,
   fallbackCommitMessage,
   isTaskFilePath,
   newTaskFile,
@@ -154,9 +154,7 @@ function WorkspaceBoardPage() {
     authorDisplay?: string;
   } | null>(null);
   useEffect(() => {
-    void import("../lib/use-collab-editor.ts").then(
-      (module) => void module.ensureCollabIdentity(),
-    );
+    void import("@iterate-com/workspace-documents/editor");
     void import("../components/workspace-task-preview.tsx");
     void whoami()
       .then((me) => {
@@ -164,7 +162,7 @@ function WorkspaceBoardPage() {
           me.name && me.email
             ? `${me.name} <${me.email}>`
             : (me.email ?? me.name ?? me.userId ?? undefined);
-        setCommentIdentity(commentAuthorFor(me));
+        setCommentIdentity(commentIdentityFor(me));
       })
       .catch(() => {});
   }, []);

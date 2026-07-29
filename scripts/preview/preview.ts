@@ -11,6 +11,7 @@ import { z } from "zod";
 import { createSemaphoreClient } from "../../apps/semaphore/src/contract.ts";
 import {
   authEnvs,
+  docsEnvs,
   dummyPetshopEnvs,
   envs,
   previewEnvironmentSlotNumbers,
@@ -1777,6 +1778,7 @@ function resolveProvisionAuthPreviewSlotNumbers(input: {
 
 export const CloudflarePreviewAppSlug = z.enum([
   "os",
+  "docs",
   "semaphore",
   "auth",
   "streams-example-app",
@@ -1901,6 +1903,7 @@ const osTuiRetryTelemetryFile = "/tmp/os-preview-tui-retries.json";
 /** Same contract for the streams-example-app lane's vitest sub-lane. */
 const streamsExampleVitestRetryTelemetryFile =
   "/tmp/os-preview-streams-example-vitest-retries.json";
+const docsVitestTelemetryFile = "/tmp/docs-preview-vitest-results.json";
 const authVitestTelemetryFile = "/tmp/auth-preview-vitest-results.json";
 const semaphoreVitestTelemetryFile = "/tmp/semaphore-preview-vitest-results.json";
 const dummyPetshopVitestTelemetryFile = "/tmp/dummy-petshop-preview-vitest-results.json";
@@ -2305,6 +2308,42 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       // TUI is currently an explicit no-op skip and produces no test report.
       return combineTestSummaries([smoke, vitest, specs]);
     },
+  },
+  docs: {
+    slug: "docs",
+    displayName: "Docs",
+    appPath: "apps/docs",
+    deployCommandArgs: ["pnpm", "run-script", "deploy"],
+    destroyCommandArgs: ["pnpm", "run-script", "destroy"],
+    dopplerProject: "docs",
+    resolvePreviewAppConfig: (dopplerConfig) => {
+      const environment = requirePreviewEnvironment("docs", dopplerConfig, docsEnvs);
+      return { baseUrl: environment.baseUrl, workerName: environment.workerName };
+    },
+    paths: ["apps/docs/**", "packages/workspace-documents/**", "packages/iterate/**"],
+    // The vessel reads and writes workspace files through the OS deployment
+    // for the same slot. Co-select OS so a Docs preview never reviews a
+    // different revision of the workspace API.
+    previewDependencies: ["os"],
+    previewReadyUrlPath: "/healthz",
+    previewReadyWorkerVersion: true,
+    previewTestBaseUrlEnvVar: "DOCS_BASE_URL",
+    previewTestArtifactSources: [previewVitestArtifactSource("@iterate-com/docs")],
+    previewTestCommandArgs: [
+      "bash",
+      "-c",
+      [
+        "set -euo pipefail",
+        `rm -f ${docsVitestTelemetryFile}`,
+        'test "$(curl --fail --silent --show-error "$DOCS_BASE_URL/healthz")" = "ok"',
+        'curl --fail --silent --show-error "$DOCS_BASE_URL/" | grep --fixed-strings "Open a workspace document" >/dev/null',
+        `TEST_TELEMETRY_KIND=e2e TEST_TELEMETRY_LANE=vitest TEST_TELEMETRY_WORKSPACE=@iterate-com/docs TEST_TELEMETRY_ARTIFACT_FILE=${docsVitestTelemetryFile} pnpm test`,
+      ].join("; "),
+    ],
+    collectTestTelemetry: async () =>
+      readTestTelemetryLane("docs vitest lane", () =>
+        readCanonicalTestTelemetry(docsVitestTelemetryFile, "vitest"),
+      ),
   },
   semaphore: {
     slug: "semaphore",

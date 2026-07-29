@@ -357,6 +357,7 @@ function SheetBody({
           key={editorEpoch ?? 0}
           checkoutId={checkoutId}
           repoPath={repoPath}
+          displayName={commentIdentity?.authorDisplay ?? commentIdentity?.author}
           path={task.path}
           redline={redline ?? true}
           focusHeadline={focusHeadline}

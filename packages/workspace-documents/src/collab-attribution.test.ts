@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { ChangeSet, Text } from "@codemirror/state";
-import { attributedChanges } from "./collab-changes.ts";
+import { attributedChanges } from "./collab-attribution.ts";
 
 const BASE = "alpha beta gamma";
 const base = () => Text.of([BASE]);

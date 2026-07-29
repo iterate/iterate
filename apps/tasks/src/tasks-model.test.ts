@@ -1,5 +1,6 @@
 import { describe, expect, it, test } from "vitest";
-import { commentAuthorFor, parseTaskCard, setTaskCardState } from "./tasks-model.ts";
+import { commentIdentityFor } from "@iterate-com/workspace-documents/identity";
+import { parseTaskCard, setTaskCardState } from "./tasks-model.ts";
 
 const md = (...lines: string[]): string => lines.join("\n");
 
@@ -13,18 +14,18 @@ const DISCUSSED = md(
   "",
   "Body text.",
   "",
-  "<!-- task-discussions:v1 -->",
+  "<!-- iterate-annotations:v1 -->",
   "",
   "## Discussion",
   "",
-  "<!-- task-thread:v1 begin id=th_a status=open -->",
-  "<!-- task-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
+  "<!-- iterate-thread:v1 begin id=th_a status=open -->",
+  "<!-- iterate-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
   "A live comment.",
-  "<!-- task-comment:v1 end id=cm_a -->",
-  "<!-- task-comment:v1 begin id=cm_b author=sam created=2026-07-28T09:00:00Z in-reply-to=cm_a deleted=true -->",
+  "<!-- iterate-comment:v1 end id=cm_a -->",
+  "<!-- iterate-comment:v1 begin id=cm_b author=sam created=2026-07-28T09:00:00Z in-reply-to=cm_a deleted=true -->",
   "*Deleted.*",
-  "<!-- task-comment:v1 end id=cm_b -->",
-  "<!-- task-thread:v1 end id=th_a -->",
+  "<!-- iterate-comment:v1 end id=cm_b -->",
+  "<!-- iterate-thread:v1 end id=th_a -->",
   "",
 );
 
@@ -48,12 +49,12 @@ describe("parseTaskCard with discussions", () => {
       "",
       "no heading in the body",
       "",
-      "<!-- task-discussions:v1 -->",
-      "<!-- task-thread:v1 begin id=th_a status=open -->",
-      "<!-- task-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
+      "<!-- iterate-annotations:v1 -->",
+      "<!-- iterate-thread:v1 begin id=th_a status=open -->",
+      "<!-- iterate-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
       "# Not the task title",
-      "<!-- task-comment:v1 end id=cm_a -->",
-      "<!-- task-thread:v1 end id=th_a -->",
+      "<!-- iterate-comment:v1 end id=cm_a -->",
+      "<!-- iterate-thread:v1 end id=th_a -->",
       "",
     );
     expect(parseTaskCard("tasks/quiet.md", source).title).toBe("tasks/quiet.md");
@@ -68,8 +69,8 @@ describe("parseTaskCard with discussions", () => {
       "",
       "# Broken store",
       "",
-      "<!-- task-discussions:v1 -->",
-      "<!-- task-thread:v1 begin id=th_a status=open -->",
+      "<!-- iterate-annotations:v1 -->",
+      "<!-- iterate-thread:v1 begin id=th_a status=open -->",
       "",
     );
     const card = parseTaskCard("tasks/broken-store.md", source);
@@ -90,11 +91,11 @@ describe("parseTaskCard with discussions", () => {
       "",
       "no heading in the real body",
       "",
-      "<!-- task-discussions:v1 -->",
-      "<!-- task-thread:v1 begin id=th_a status=open -->",
-      "<!-- task-comment:v1 begin id=cm_a author=importer created=2026-07-26T10:00:00Z -->",
+      "<!-- iterate-annotations:v1 -->",
+      "<!-- iterate-thread:v1 begin id=th_a status=open -->",
+      "<!-- iterate-comment:v1 begin id=cm_a author=importer created=2026-07-26T10:00:00Z -->",
       "# Sneaky store heading",
-      "<!-- task-thread:v1 end id=th_a -->",
+      "<!-- iterate-thread:v1 end id=th_a -->",
       "",
     );
     const card = parseTaskCard("tasks/mangled.md", source);
@@ -109,14 +110,14 @@ describe("parseTaskCard with discussions", () => {
   it("frontmatter edits leave the discussion store untouched", () => {
     const next = setTaskCardState(DISCUSSED, "done");
     expect(next).toContain("state: done");
-    expect(next.slice(next.indexOf("<!-- task-discussions:v1 -->"))).toBe(
-      DISCUSSED.slice(DISCUSSED.indexOf("<!-- task-discussions:v1 -->")),
+    expect(next.slice(next.indexOf("<!-- iterate-annotations:v1 -->"))).toBe(
+      DISCUSSED.slice(DISCUSSED.indexOf("<!-- iterate-annotations:v1 -->")),
     );
     expect(parseTaskCard("tasks/a.md", next).commentCount).toBe(1);
   });
 });
 
-describe("commentAuthorFor", () => {
+describe("commentIdentityFor", () => {
   test.for([
     {
       me: { name: "Jonas Templestein", email: "jonas@nustom.com", userId: "usr_1" },
@@ -132,6 +133,6 @@ describe("commentAuthorFor", () => {
     },
     { me: { name: null, email: null, userId: null }, expected: { author: "someone" } },
   ])("derives $expected.author", ({ me, expected }) => {
-    expect(commentAuthorFor(me)).toEqual(expected);
+    expect(commentIdentityFor(me)).toEqual(expected);
   });
 });
