@@ -89,7 +89,6 @@ type SeedProject = {
   secrets: SeedSecret[];
   integrations: SeedIntegration[];
   configRepo?: RepositorySeed;
-  repositories: Array<RepositorySeed & { path: string }>;
 };
 
 type ProjectSeedArchive = {
@@ -259,22 +258,7 @@ export async function capture(options: CaptureOptions) {
     ),
   );
 
-  const repositoryPaths = [
-    ...new Set([
-      "/repos/config",
-      ...projectSnapshot.state.repos.map((repository) => repository.path),
-    ]),
-  ].sort();
-  const repositories = await Promise.all(
-    repositoryPaths.map(async (path) => ({
-      path,
-      seed: await captureRepository({ connected, path, project }),
-    })),
-  );
-  const configRepo = repositories.find(({ path }) => path === "/repos/config")!.seed;
-  const additionalRepositories = repositories
-    .filter(({ path }) => path !== "/repos/config")
-    .map(({ path, seed }) => ({ path, ...seed }));
+  const configRepo = await captureConfigRepository({ connected, project });
   const members = [...authSnapshot.members].sort((left, right) =>
     left.user.email.localeCompare(right.user.email),
   );
@@ -303,18 +287,17 @@ export async function capture(options: CaptureOptions) {
         slug: identity.slug,
         organization: authSnapshot.organization.slug,
         directHostnames: projectSnapshot.state.customDomains
-          .filter((domain) => domain.kind === "direct" && domain.status === "active")
+          .filter((domain) => domain.kind === "direct")
           .map((domain) => domain.hostname)
           .sort(),
         cloudflareHostnames: projectSnapshot.state.customDomains
-          .filter((domain) => domain.kind === "cloudflare" && domain.status === "active")
+          .filter((domain) => domain.kind === "cloudflare")
           .map((domain) => domain.hostname)
           .sort(),
         email: { allowedSenders: [...emailSnapshot.state.allowedSenders].sort() },
         secrets,
         integrations,
         configRepo,
-        repositories: additionalRepositories,
       },
     ],
   };
@@ -466,25 +449,12 @@ export async function apply(options: SeedOptions) {
   const configRepo =
     seed.configRepo === undefined
       ? null
-      : await restoreRepository({
+      : await restoreConfigRepository({
           project,
-          path: "/repos/config",
           seed: seed.configRepo,
           integrations: restoredIntegrations,
           workerUrls,
         });
-  const repositories = [];
-  for (const repository of seed.repositories) {
-    repositories.push(
-      await restoreRepository({
-        project,
-        path: repository.path,
-        seed: repository,
-        integrations: restoredIntegrations,
-      }),
-    );
-  }
-
   return {
     targetEnvironment: archive.targetEnvironment,
     project: identity,
@@ -499,7 +469,6 @@ export async function apply(options: SeedOptions) {
     secrets: seed.secrets.map((secret) => secret.path),
     integrations: restoredIntegrations,
     configRepo,
-    repositories,
   };
 }
 
@@ -528,16 +497,16 @@ async function captureSecret(project: ProjectRpc, projectId: string, path: strin
   };
 }
 
-async function captureRepository(input: {
+async function captureConfigRepository(input: {
   connected: readonly {
     connection: string;
     provider: string;
     status: { externalId: string | null };
   }[];
-  path: string;
   project: ProjectRpc;
 }): Promise<RepositorySeed> {
-  const repository = input.project.repos.get(input.path);
+  const path = "/repos/config";
+  const repository = input.project.repos.get(path);
   const [snapshot, local] = await Promise.all([
     repository.processor.snapshot(),
     repository.listFiles(),
@@ -551,14 +520,14 @@ async function captureRepository(input: {
         entry.status.externalId === github.installationId,
     );
     if (!installation) {
-      throw new Error(`${input.path} has no matching GitHub connection.`);
+      throw new Error(`${path} has no matching GitHub connection.`);
     }
     const remote = await readGithubHead(
       input.project.integrations.github.get(github.connection).octokit,
       github,
     );
     if (remote.commitOid !== local.commitOid) {
-      throw new Error(`${input.path} is not synchronized with GitHub.`);
+      throw new Error(`${path} is not synchronized with GitHub.`);
     }
     return {
       source: "github",
@@ -575,7 +544,7 @@ async function captureRepository(input: {
         encoding: "base64",
         commitOid: local.commitOid,
       });
-      if (file === null) throw new Error(`${input.path}/${path} disappeared during capture.`);
+      if (file === null) throw new Error(`/repos/config/${path} disappeared during capture.`);
       return { path, contentBase64: file.content };
     }),
   );
@@ -586,15 +555,14 @@ async function captureRepository(input: {
   };
 }
 
-async function restoreRepository(input: {
+async function restoreConfigRepository(input: {
   project: ProjectRpc;
-  path: string;
   seed: RepositorySeed;
   integrations: readonly RestoredIntegration[];
   workerUrls?: readonly string[];
 }) {
-  const repository = input.project.repos.get(input.path);
-  if (input.path !== "/repos/config") await repository.create({ type: "empty" });
+  const path = "/repos/config";
+  const repository = input.project.repos.get(path);
   if (input.seed.source === "local") {
     const before = await repository.listFiles();
     const wanted = new Set(input.seed.files.map((file) => file.path));
@@ -617,12 +585,12 @@ async function restoreRepository(input: {
           });
     const after = await repository.listFiles();
     if (!sameStrings(after.paths, [...wanted])) {
-      throw new Error(`${input.path} file-tree proof failed.`);
+      throw new Error(`${path} file-tree proof failed.`);
     }
     const served =
       input.workerUrls === undefined ? null : await proveWorkers(input.workerUrls, after.commitOid);
     return {
-      path: input.path,
+      path,
       source: "local" as const,
       commitOid: after.commitOid,
       changedPaths: "changedPaths" in commit ? commit.changedPaths : [],
@@ -638,7 +606,10 @@ async function restoreRepository(input: {
     throw new Error(`No GitHub connection for installation ${githubSeed.installationId}.`);
   }
   const github = input.project.integrations.github.get(connection).octokit;
-  const before = await readGithubHead(github, githubSeed);
+  const [before, local] = await Promise.all([
+    readGithubHead(github, githubSeed),
+    repository.listFiles(),
+  ]);
   const link = await repository.linkGithub({
     connection,
     createIfMissing: false,
@@ -647,25 +618,30 @@ async function restoreRepository(input: {
     repo: githubSeed.repo,
   });
   if (link.created) throw new Error(`${githubSeed.owner}/${githubSeed.repo} did not exist.`);
-  const reset = await repository.resetFromGithub({});
+  const needsReset = local.commitOid !== before.commitOid;
+  const restored = needsReset ? await repository.resetFromGithub({ depth: 1 }) : before;
   const after = await readGithubHead(github, githubSeed);
   if (
-    before.commitOid !== reset.commitOid ||
-    after.commitOid !== reset.commitOid ||
-    before.branch !== reset.branch
+    before.commitOid !== restored.commitOid ||
+    after.commitOid !== restored.commitOid ||
+    before.branch !== restored.branch ||
+    after.branch !== restored.branch
   ) {
-    throw new Error(`${input.path} changed while it was restored from GitHub.`);
+    throw new Error(`${path} changed while it was restored from GitHub.`);
   }
   const served =
-    input.workerUrls === undefined ? null : await proveWorkers(input.workerUrls, reset.commitOid);
+    input.workerUrls === undefined
+      ? null
+      : await proveWorkers(input.workerUrls, restored.commitOid);
   return {
-    path: input.path,
+    path,
     source: "github" as const,
     connection,
     owner: githubSeed.owner,
     repo: githubSeed.repo,
-    branch: reset.branch,
-    commitOid: reset.commitOid,
+    branch: restored.branch,
+    commitOid: restored.commitOid,
+    reset: needsReset,
     served,
   };
 }
@@ -810,7 +786,6 @@ function validateSelectedProject(archive: ProjectSeedArchive, project: SeedProje
     !Array.isArray(project.cloudflareHostnames) ||
     !Array.isArray(project.secrets) ||
     !Array.isArray(project.integrations) ||
-    !Array.isArray(project.repositories) ||
     !Array.isArray(project.email?.allowedSenders)
   ) {
     throw new Error(`Project ${String(project.slug)} has an invalid seed shape.`);
@@ -882,10 +857,6 @@ function projectSeedPlan(archive: ProjectSeedArchive, project: SeedProject) {
             : integration.googleUserId,
     })),
     configRepo: repositorySummary(project.configRepo),
-    repositories: project.repositories.map((repository) => ({
-      path: repository.path,
-      repository: repositorySummary(repository),
-    })),
   };
 }
 

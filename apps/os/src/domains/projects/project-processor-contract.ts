@@ -1,10 +1,10 @@
 // The project processor CONTRACT. Self-contained: state schema, events,
 // consumes/emits, deps — and it OWNS every nested data structure (birth
-// certificate, custom-domain snapshot, egress rule, approval payloads);
+// certificate, custom-domain entry, egress rule, approval payloads);
 // consumers reach into this module for pieces, never the other way around.
 // Schemas are spelled INLINE in the contract; the ones it genuinely needs
-// twice (the birth certificate, the Cloudflare custom-domain snapshot, the
-// egress rule) are hoisted functions defined below the contract, so the
+// twice (the birth certificate and the egress rule) are hoisted functions
+// defined below the contract, so the
 // contract still opens the file.
 //
 // The pure half of the human-approval scheme (rule matching, the canonical
@@ -26,7 +26,7 @@ import { StreamContext } from "./stream-context.ts";
 
 export const ProjectProcessorContract = defineProcessorContract({
   slug: "project",
-  version: "0.2.0",
+  version: "0.3.0",
   description:
     "Project root: births the sibling processors every project gets (root capability host, " +
     "primary scheduler, config repo, email router, notification facet), marks the project " +
@@ -95,30 +95,20 @@ export const ProjectProcessorContract = defineProcessorContract({
       }),
     customDomains: z
       .array(
-        projectCustomDomainCloudflareSnapshotSchema().extend({
-          kind: z
-            .enum(["cloudflare", "direct"])
-            .default("cloudflare")
-            .meta({
-              description:
-                "How the hostname routes: `cloudflare` = a Cloudflare-for-SaaS custom hostname " +
-                "this processor provisions and polls; `direct` = a platform-owned apex served " +
-                "by worker routes plus an operator-primed hostname-directory registration — " +
-                "no provisioning lifecycle, and the provisioner must never touch it.",
-            }),
-          createdAt: z
-            .string()
-            .meta({ description: "createdAt of the event that first recorded this hostname." }),
-          updatedAt: z
-            .string()
-            .meta({ description: "createdAt of the newest event that touched this hostname." }),
+        z.object({
+          hostname: z.string().meta({ description: "The custom hostname." }),
+          kind: z.enum(["cloudflare", "direct"]).meta({
+            description:
+              "`cloudflare` is provisioned through Cloudflare for SaaS; `direct` is a " +
+              "platform-owned hostname already covered by a Worker route.",
+          }),
         }),
       )
       .default([])
       .meta({
         description:
-          "The project's custom domains, sorted by hostname: the newest Cloudflare snapshot " +
-          "per hostname plus local bookkeeping timestamps.",
+          "A small display/export catalog. The hostname KV directory, not this state, is the " +
+          "routing authority.",
       }),
     egressRules: z
       .array(egressRuleSchema())
@@ -186,33 +176,20 @@ export const ProjectProcessorContract = defineProcessorContract({
           .meta({ description: "The DNS hostname to provision, e.g. app.acme-inc.com." }),
       }),
     },
-    "events.iterate.com/project/custom-domain-refresh-requested": {
-      description: "Refresh Cloudflare status for a custom domain.",
-      payloadSchema: z.object({
-        hostname: z.string().meta({ description: "The already-configured hostname to re-poll." }),
-      }),
-    },
     "events.iterate.com/project/custom-domain-remove-requested": {
       description: "A custom domain should be removed from this project.",
       payloadSchema: z.object({
         hostname: z.string().meta({ description: "The hostname to detach from the project." }),
       }),
     },
-    "events.iterate.com/project/custom-domain-cloudflare-observed": {
-      description: "Cloudflare custom-hostname status observed for a project custom domain.",
-      payloadSchema: projectCustomDomainCloudflareSnapshotSchema(),
-    },
-    "events.iterate.com/project/custom-domain-direct-observed": {
+    "events.iterate.com/project/custom-domain-configured": {
       description:
-        "The hostname routes to this project directly: a platform-owned apex served by worker " +
-        "routes plus an operator-primed hostname-directory registration, with no " +
-        "Cloudflare-for-SaaS custom hostname behind it. Appended by platform operators, never by " +
-        "this processor; recording it keeps the settings UI honest without starting any " +
-        "provisioning lifecycle — add/refresh/remove requests for a direct hostname are inert.",
+        "The hostname is configured and its KV routing registration points at this project.",
       payloadSchema: z.object({
-        hostname: z
-          .string()
-          .meta({ description: "The directly routed hostname, e.g. iterate.com." }),
+        hostname: z.string().meta({ description: "The configured hostname." }),
+        kind: z.enum(["cloudflare", "direct"]).meta({
+          description: "Whether Cloudflare for SaaS or a direct Worker route serves it.",
+        }),
       }),
     },
     "events.iterate.com/project/custom-domain-provision-failed": {
@@ -388,10 +365,8 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/project/human-approval-key-revoked",
     "events.iterate.com/project/human-approval-requested",
     "events.iterate.com/project/custom-domain-add-requested",
-    "events.iterate.com/project/custom-domain-cloudflare-observed",
-    "events.iterate.com/project/custom-domain-direct-observed",
+    "events.iterate.com/project/custom-domain-configured",
     "events.iterate.com/project/custom-domain-provision-failed",
-    "events.iterate.com/project/custom-domain-refresh-requested",
     "events.iterate.com/project/custom-domain-remove-requested",
     "events.iterate.com/project/custom-domain-removed",
     "events.iterate.com/project/onboarding-completed",
@@ -421,7 +396,7 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/email/created",
     "events.iterate.com/capability-host/created",
     "events.iterate.com/scheduler/created",
-    "events.iterate.com/project/custom-domain-cloudflare-observed",
+    "events.iterate.com/project/custom-domain-configured",
     "events.iterate.com/project/custom-domain-provision-failed",
     "events.iterate.com/project/custom-domain-removed",
     "events.iterate.com/project/ready",
@@ -448,11 +423,6 @@ export type ProjectProcessorState = ProcessorState<ProjectProcessorContract>;
 
 /** One custom domain as reduced onto project processor state. */
 export type ProjectCustomDomain = ProjectProcessorState["customDomains"][number];
-
-/** The Cloudflare custom-hostname snapshot (the custom-domain-cloudflare-observed payload). */
-export type ProjectCustomDomainCloudflareSnapshot = z.output<
-  (typeof ProjectProcessorContract.events)["events.iterate.com/project/custom-domain-cloudflare-observed"]["payloadSchema"]
->;
 
 /** One egress approval rule as reduced onto project processor state. */
 export type EgressRule = ProjectProcessorState["egressRules"][number];
@@ -493,67 +463,6 @@ function projectBirthCertificateSchema() {
           }),
       })
       .meta({ description: "Birth-time configuration, recorded verbatim onto state." }),
-  });
-}
-
-/**
- * The Cloudflare custom-hostname snapshot — used twice (the
- * custom-domain-cloudflare-observed payload and, extended with local
- * timestamps, the reduced state's customDomains entries), so it lives in this
- * hoisted function instead of inline.
- */
-function projectCustomDomainCloudflareSnapshotSchema() {
-  return z.object({
-    cloudflareHostnameId: z.string().nullable().default(null).meta({
-      description: "Cloudflare's custom-hostname id; null before the create call succeeded.",
-    }),
-    error: z.string().nullable().default(null).meta({
-      description: "The newest provisioning/validation error Cloudflare reported, if any.",
-    }),
-    hostname: z.string().meta({ description: "The custom hostname this snapshot describes." }),
-    hostnameStatus: z.string().nullable().default(null).meta({
-      description: "Cloudflare's raw hostname status (pending, active, …); null when unknown.",
-    }),
-    ownershipVerification: z
-      .object({
-        name: z.string().meta({ description: "TXT record name proving hostname ownership." }),
-        value: z.string().meta({ description: "TXT record value proving hostname ownership." }),
-      })
-      .nullable()
-      .default(null)
-      .meta({
-        description:
-          "The DNS TXT record the owner must create to prove control; null once verified.",
-      }),
-    sslStatus: z.string().nullable().default(null).meta({
-      description: "Cloudflare's raw certificate status; null when unknown.",
-    }),
-    status: z
-      .enum(["requested", "provisioning", "pending_validation", "active", "failed", "removing"])
-      .meta({
-        description:
-          "Our rollup of the raw statuses: what the dashboard shows and routing acts on. " +
-          "Only `active` routes traffic.",
-      }),
-    validationRecords: z
-      .array(
-        z.object({
-          name: z.string().meta({ description: "TXT record name for certificate validation." }),
-          status: z
-            .string()
-            .nullable()
-            .default(null)
-            .meta({ description: "Cloudflare's per-record validation status; null when unknown." }),
-          value: z.string().meta({ description: "TXT record value for certificate validation." }),
-        }),
-      )
-      .default([])
-      .meta({
-        description: "DNS records the owner still has to create for certificate validation.",
-      }),
-    wildcard: z.boolean().default(true).meta({
-      description: "Whether the certificate also covers *.<hostname> (we always request it).",
-    }),
   });
 }
 

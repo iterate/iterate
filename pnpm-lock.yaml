@@ -1213,9 +1213,6 @@ importers:
       '@tanstack/react-query':
         specifier: 5.101.2
         version: 5.101.2(react@19.2.7)
-      minimatch:
-        specifier: ^10.2.4
-        version: 10.2.4
       react:
         specifier: ^19.2.7
         version: 19.2.7

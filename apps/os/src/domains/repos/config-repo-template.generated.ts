@@ -207,7 +207,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  #aiLintApp = GithubAiLinter.create(this.env, {\n" +
       "    policyVersion: \"2\",\n" +
       "    rules: {\n" +
-      "      glob: \"rules/**/*.md\",\n" +
+      "      paths: [\n" +
+      "        \"rules/structure/no-small-single-use-helper.md\",\n" +
+      "        \"rules/typescript/explain-type-cast.md\",\n" +
+      "        \"rules/typescript/no-inferable-type-annotation.md\",\n" +
+      "      ],\n" +
       "      repoPath: \"/repos/config\",\n" +
       "    },\n" +
       "  });\n" +
