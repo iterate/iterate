@@ -43,7 +43,8 @@ export function transformHtmlDocumentAnnotations(
   if (next === annotatedSource) return source;
 
   const parsed = parseAnnotatedMarkdown(next);
-  if (parsed.kind !== "structured" || parsed.discussion === null) return source;
+  if (parsed.kind !== "structured") return source;
+  if (parsed.discussion === null) return next;
 
   const body = next.slice(0, parsed.discussion.range.start);
   const annotations = next.slice(parsed.discussion.range.start);

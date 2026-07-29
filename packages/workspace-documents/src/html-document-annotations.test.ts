@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { addComment, addThread, parseAnnotatedMarkdown } from "iterate/annotated-markdown";
+import {
+  addComment,
+  addThread,
+  deleteComment,
+  parseAnnotatedMarkdown,
+} from "iterate/annotated-markdown";
 import {
   annotationsSourceForHtmlDocument,
   transformHtmlDocumentAnnotations,
@@ -65,6 +70,28 @@ describe("HTML document annotations", () => {
     expect(reopened.discussion?.threads[0]?.comments[1]?.body).toBe(
       "Literal </script> stays inert.",
     );
+  });
+
+  it("removes the envelope when the final thread is removed", () => {
+    const withThread = transformHtmlDocumentAnnotations(HTML, (source) => {
+      const doc = parseAnnotatedMarkdown(source);
+      if (doc.kind !== "structured") throw new Error("expected structured document");
+      return addThread(doc, {
+        threadId: "thread-1",
+        commentId: "comment-1",
+        author: "reviewer",
+        authorDisplay: "Reviewer",
+        body: "Remove me",
+        createdAt: "2026-07-29T16:00:00Z",
+      }).raw;
+    });
+    const withoutThread = transformHtmlDocumentAnnotations(withThread, (source) => {
+      const doc = parseAnnotatedMarkdown(source);
+      if (doc.kind !== "structured") throw new Error("expected structured document");
+      return deleteComment(doc, "comment-1").raw;
+    });
+
+    expect(withoutThread).toBe(HTML);
   });
 
   it("leaves ordinary HTML and unrelated JSON scripts alone", () => {
