@@ -1,5 +1,6 @@
 ---
 id: structure/simplify-truthiness-checks
+severity: error
 files:
   [
     "**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}",
