@@ -59,7 +59,7 @@ test("a linked connection gets a hosted review processor", async () => {
           },
           filter: {
             eventTypes: ["events.iterate.com/github/webhook-received"],
-            jsonataCondition: "offset > 8123",
+            jsonataCondition: expect.stringMatching(/^offset > 8123 and /),
           },
           subscriptionKey: "app-review-bot#review-bot",
         },
@@ -147,7 +147,7 @@ test("a config worker update refreshes every linked connection processor", async
           },
           filter: {
             eventTypes: ["events.iterate.com/github/webhook-received"],
-            jsonataCondition: "offset > 7500",
+            jsonataCondition: expect.stringMatching(/^offset > 7500 and /),
           },
           subscriptionKey: "app-review-bot#review-bot",
         },

@@ -331,7 +331,7 @@ describe("StreamEventSender hosted processor delivery", () => {
     await h.settle();
 
     expect(h.wakeCalls).toHaveLength(1);
-    expect(attemptedOffsets).toEqual([[2, 3]]);
+    expect(attemptedOffsets).toEqual([[2]]);
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
       acknowledgedOffset: 3,
       attempt: 1,
@@ -1753,6 +1753,7 @@ async function flushMicrotasks() {
 function connectionsHarness(
   options: {
     events?: StreamEvent[];
+    readBatch?: ConstructorParameters<typeof StreamConnections>[0]["hooks"]["readBatch"];
     onAppend?: (args: {
       connections: StreamConnections;
       state: CoreProcessorState;
@@ -1794,11 +1795,13 @@ function connectionsHarness(
     idleTeardownMs: 60_000,
     hooks: {
       // Force several batches so the test can observe the one-at-a-time gate.
-      readBatch: (afterOffset) =>
-        events
-          .filter((event) => event.offset > afterOffset)
-          .slice(0, 1)
-          .map((event) => ({ event, byteLength: JSON.stringify(event).length })),
+      readBatch:
+        options.readBatch ??
+        ((afterOffset) =>
+          events
+            .filter((event) => event.offset > afterOffset)
+            .slice(0, 1)
+            .map((event) => ({ event, byteLength: JSON.stringify(event).length }))),
       coreState: () => state,
       store,
       appendDeliveryEvent: (event) => {
@@ -2111,6 +2114,50 @@ describe("StreamConnections hosted delivery watchdog", () => {
       inFlightConnectionGeneration: 7,
     });
     expect(disposed).not.toHaveBeenCalled();
+  });
+
+  it("gives each matching hosted event an acknowledgement boundary without rescanning non-matches", async () => {
+    const events = [
+      streamEvent(1, "events.example.com/ignored"),
+      streamEvent(2, "events.example.com/matched"),
+      streamEvent(3, "events.example.com/matched"),
+      streamEvent(4, "events.example.com/ignored"),
+    ];
+    const readLimits: number[] = [];
+    const h = connectionsHarness({
+      events,
+      readBatch: (afterOffset, beforeOffset, limit) => {
+        readLimits.push(limit);
+        return events
+          .filter((event) => event.offset > afterOffset && event.offset < beforeOffset)
+          .slice(0, limit)
+          .map((event) => ({ event, byteLength: JSON.stringify(event).length }));
+      },
+    });
+    const calls: DeliveryCall[] = [];
+    const connection = h.connections.openHosted({
+      connectionKey: "processor",
+      expectedHostedDelivery: h.expectedDelivery,
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+      filter: compileEventFilter({ eventTypes: ["events.example.com/matched"] }),
+    });
+
+    connection.sendQueued();
+    expect(calls[0]!.batch).toMatchObject({
+      scannedAfterOffset: 0,
+      scannedThroughOffset: 2,
+    });
+    expect(calls[0]!.batch.events.map((event) => event.offset)).toEqual([2]);
+
+    calls[0]!.report("ok");
+    await flushMicrotasks();
+    expect(calls[1]!.batch).toMatchObject({
+      scannedAfterOffset: 2,
+      scannedThroughOffset: 4,
+    });
+    expect(calls[1]!.batch.events.map((event) => event.offset)).toEqual([3]);
+    expect(readLimits).toEqual([100, 100]);
   });
 
   it("turns a live callback timeout into a counted failure and ignores its late result", async () => {
