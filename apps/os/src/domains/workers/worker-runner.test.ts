@@ -320,11 +320,13 @@ it("re-acquires a stale stateful worker and invokes only the version-ready targe
   expect(h.workerGetByName).toHaveBeenCalledTimes(2);
 });
 
-it("keeps a failed stateful operation terminal and forgets only its readiness proof", async () => {
+it("keeps a failed unsafe stateful operation terminal and forgets only its readiness proof", async () => {
   const reset = Object.assign(new Error("Durable Object reset because its code was updated."), {
     durableObjectReset: true,
   });
-  h.statefulFetch.mockRejectedValue(reset);
+  h.statefulFetch
+    .mockRejectedValueOnce(reset)
+    .mockResolvedValueOnce(new Response("independent call"));
   const runner = new DynamicWorkerRunner({
     streamContext: { kind: "scope", scopePath: statefulRef.path },
     exports: {} as ExecutionContext["exports"],
@@ -335,13 +337,18 @@ it("keeps a failed stateful operation terminal and forgets only its readiness pr
   await expect(
     runner.fetch({
       ref: statefulRef,
-      request: new Request("https://example.com/reset"),
+      request: new Request("https://example.com/reset", { method: "POST" }),
     }),
   ).rejects.toBe(reset);
+  const response = await runner.fetch({
+    ref: statefulRef,
+    request: new Request("https://example.com/independent", { method: "POST" }),
+  });
 
-  expect(h.statefulDeploymentVersion).toHaveBeenCalledOnce();
-  expect(h.statefulFetch).toHaveBeenCalledOnce();
-  expect(h.workerGetByName).toHaveBeenCalledOnce();
+  expect(await response.text()).toBe("independent call");
+  expect(h.statefulDeploymentVersion).toHaveBeenCalledTimes(2);
+  expect(h.statefulFetch).toHaveBeenCalledTimes(2);
+  expect(h.workerGetByName).toHaveBeenCalledTimes(2);
 });
 
 it("recovers a safe stateless fetch once with a fresh loader after clone-version skew", async () => {
