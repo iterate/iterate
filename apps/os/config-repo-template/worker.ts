@@ -2,6 +2,7 @@ import { GithubAiLinter } from "iterate/starter-apps/github-ai-linter";
 import { GuestbookApp } from "iterate/starter-apps/guestbook";
 import { IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
 import { TodoApp } from "iterate/starter-apps/todo";
+import { z } from "zod";
 
 // An iterate project is, in the abstract, just a fetch function.
 // HTTP clients on the internet can send us Requests, and we will send responses and
@@ -105,6 +106,27 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         }),
       );
     }
+    if (app === "docs") {
+      // Member-gated reverse proxy to the stateless Docs vessel. A link
+      // chooses one existing workspace and file through query parameters;
+      // document content and annotations stay in that workspace.
+      const itx = await this.itx;
+      const denied = await itx.auth.get({ policy: "project-member" }).fetch(req);
+      if (denied) return denied;
+      const docsUrl = new URL(req.url);
+      const configuredOrigin = z
+        .string()
+        .nullable()
+        .parse(await itx.kv.get("docs-app-origin"));
+      const originValue = configuredOrigin || "https://docs.iterate.workers.dev";
+      const origin = new URL(originValue);
+      if (origin.protocol !== "https:" || origin.origin !== originValue) {
+        throw new Error("docs-app-origin must be one complete HTTPS origin");
+      }
+      docsUrl.protocol = origin.protocol;
+      docsUrl.host = origin.host;
+      return fetch(new Request(new Request(docsUrl, req), { redirect: "manual" }));
+    }
     if (app) return new Response(`unknown app: ${app}`, { status: 404 });
 
     const url = new URL(req.url);
@@ -121,6 +143,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
                 <li><a href="${appUrl("todo")}">todo</a> (LiveState + Cap'n Web, project members only)</li>
                 <li><a href="${appUrl("guestbook")}">guestbook</a> (stream processor reduce on /guestbook, public)</li>
                 <li><a href="${appUrl("tasks")}">tasks</a> (collaborative task board over tasks/, project members only)</li>
+                <li><a href="${appUrl("docs")}">docs</a> (direct workspace document review, project members only)</li>
               </ul>
               <p>Edit worker.ts in the project repo to change this.</p>
             </main>

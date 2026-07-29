@@ -2,20 +2,20 @@ import type { AnchorSelector, DiagnosticCode, SourceRange } from "./types.ts";
 
 // Sentinel lines are the machine boundaries of the discussion store:
 //
-//   <!-- task-discussions:v1 -->
-//   <!-- task-thread:v1 begin id=th_X status=open -->
-//   <!-- task-anchor:v1 {"quote":{...}} -->
-//   <!-- task-comment:v1 begin id=cm_Y author=lee created=2026-07-28T08:30:00Z -->
-//   <!-- task-comment:v1 end id=cm_Y -->
-//   <!-- task-thread:v1 end id=th_X -->
+//   <!-- iterate-annotations:v1 -->
+//   <!-- iterate-thread:v1 begin id=th_X status=open -->
+//   <!-- iterate-anchor:v1 {"quote":{...}} -->
+//   <!-- iterate-comment:v1 begin id=cm_Y author=lee created=2026-07-28T08:30:00Z -->
+//   <!-- iterate-comment:v1 end id=cm_Y -->
+//   <!-- iterate-thread:v1 end id=th_X -->
 //
 // A sentinel occupies a whole line starting at column 0. Anything that starts
 // with the reserved prefix but fails strict parsing is a fatal diagnostic —
 // the caller falls back to a plain document rather than guessing. `--` is
 // forbidden anywhere inside the comment because HTML comments cannot contain
-// it; anchor JSON escapes double hyphens as `--` when writing.
+// it; anchor JSON escapes double hyphens when writing.
 
-const SENTINEL_PREFIX = "<!-- task-";
+const SENTINEL_PREFIX = "<!-- iterate-";
 
 const SENTINEL_SUFFIX = " -->";
 const MAX_ID_LENGTH = 128;
@@ -204,7 +204,7 @@ export function parseSentinelLine(lineContent: string, lineStart: number): Senti
   if (!lineContent.endsWith(SENTINEL_SUFFIX)) {
     return malformed("missing ` -->` terminator");
   }
-  const inner = lineContent.slice(SENTINEL_PREFIX.length - "task-".length, -SENTINEL_SUFFIX.length);
+  const inner = lineContent.slice("<!-- ".length, -SENTINEL_SUFFIX.length);
   if (inner.includes("--")) {
     return malformed("`--` is not allowed inside an HTML comment");
   }
@@ -212,14 +212,10 @@ export function parseSentinelLine(lineContent: string, lineStart: number): Senti
   const head = spaceIndex === -1 ? inner : inner.slice(0, spaceIndex);
   const rest = spaceIndex === -1 ? "" : inner.slice(spaceIndex + 1);
   const headParts = head.split(":");
-  if (headParts.length !== 2) return malformed("expected `task-<kind>:<version>`");
+  if (headParts.length !== 2) return malformed("expected `<namespace>-<kind>:<version>`");
   const [tag, version] = headParts as [string, string];
-  if (
-    tag !== "task-discussions" &&
-    tag !== "task-thread" &&
-    tag !== "task-comment" &&
-    tag !== "task-anchor"
-  ) {
+  const kind = tag.startsWith("iterate-") ? tag.slice("iterate-".length) : "";
+  if (kind !== "annotations" && kind !== "thread" && kind !== "comment" && kind !== "anchor") {
     return malformed(`unknown sentinel kind \`${tag}\``);
   }
   if (!/^v\d+$/.test(version)) return malformed(`invalid version \`${version}\``);
@@ -231,12 +227,12 @@ export function parseSentinelLine(lineContent: string, lineStart: number): Senti
     };
   }
 
-  if (tag === "task-discussions") {
-    if (spaceIndex !== -1) return malformed("task-discussions takes no attributes");
+  if (kind === "annotations") {
+    if (spaceIndex !== -1) return malformed(`${tag} takes no attributes`);
     return { ok: true, token: { kind: "store" } };
   }
 
-  if (tag === "task-anchor") {
+  if (kind === "anchor") {
     if (rest.length === 0 || rest.length > MAX_ANCHOR_JSON_LENGTH) {
       return {
         ok: false,
@@ -264,9 +260,9 @@ export function parseSentinelLine(lineContent: string, lineStart: number): Senti
     return { ok: true, token: { kind: "anchor", selector } };
   }
 
-  // task-thread / task-comment: `begin <attrs>` or `end <attrs>`, single
+  // thread / comment: `begin <attrs>` or `end <attrs>`, single
   // spaces, `key=value` tokens with no duplicate or unknown keys.
-  const restStart = SENTINEL_PREFIX.length - "task-".length + head.length + 1;
+  const restStart = "<!-- ".length + head.length + 1;
   const tokens: { text: string; start: number }[] = [];
   if (rest !== "") {
     let cursor = 0;
@@ -301,11 +297,14 @@ export function parseSentinelLine(lineContent: string, lineStart: number): Senti
       return malformed(`unknown attribute \`${[...attrs.keys()][0]}\` on end sentinel`);
     return {
       ok: true,
-      token: { kind: tag === "task-thread" ? "thread-end" : "comment-end", id: id.value },
+      token: {
+        kind: kind === "thread" ? "thread-end" : "comment-end",
+        id: id.value,
+      },
     };
   }
 
-  if (tag === "task-thread") {
+  if (kind === "thread") {
     const status = take("status");
     if (status === undefined || (status.value !== "open" && status.value !== "resolved")) {
       return malformed("thread `status` must be `open` or `resolved`");
@@ -369,15 +368,15 @@ export function parseSentinelLine(lineContent: string, lineStart: number): Senti
 }
 
 export function formatStoreSentinel(): string {
-  return "<!-- task-discussions:v1 -->";
+  return "<!-- iterate-annotations:v1 -->";
 }
 
 export function formatThreadBegin(id: string, status: "open" | "resolved"): string {
-  return `<!-- task-thread:v1 begin id=${id} status=${status} -->`;
+  return `<!-- iterate-thread:v1 begin id=${id} status=${status} -->`;
 }
 
 export function formatThreadEnd(id: string): string {
-  return `<!-- task-thread:v1 end id=${id} -->`;
+  return `<!-- iterate-thread:v1 end id=${id} -->`;
 }
 
 export function formatCommentBegin(comment: {
@@ -392,11 +391,11 @@ export function formatCommentBegin(comment: {
   if (comment.modifiedAt != null) attrs += ` modified=${comment.modifiedAt}`;
   if (comment.inReplyTo != null) attrs += ` in-reply-to=${comment.inReplyTo}`;
   if (comment.deleted === true) attrs += " deleted=true";
-  return `<!-- task-comment:v1 begin ${attrs} -->`;
+  return `<!-- iterate-comment:v1 begin ${attrs} -->`;
 }
 
 export function formatCommentEnd(id: string): string {
-  return `<!-- task-comment:v1 end id=${id} -->`;
+  return `<!-- iterate-comment:v1 end id=${id} -->`;
 }
 
 export function formatAnchorSentinel(selector: AnchorSelector): string {
@@ -413,5 +412,5 @@ export function formatAnchorSentinel(selector: AnchorSelector): string {
   // `--` cannot appear inside an HTML comment; JSON only produces it inside
   // string literals, where a `-` escape is transparent to JSON.parse.
   const json = JSON.stringify(canonical).replace(/-(?=-)/g, "\\u002d");
-  return `<!-- task-anchor:v1 ${json} -->`;
+  return `<!-- iterate-anchor:v1 ${json} -->`;
 }

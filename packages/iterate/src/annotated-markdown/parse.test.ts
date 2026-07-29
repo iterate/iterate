@@ -14,29 +14,29 @@ const FIXTURE = md(
   "",
   "Publishing must durably enqueue invalidation before returning. [T1](#thread-th_alpha)",
   "",
-  "<!-- task-discussions:v1 -->",
+  "<!-- iterate-annotations:v1 -->",
   "",
   "## Discussion",
   "",
-  "<!-- task-thread:v1 begin id=th_alpha status=open -->",
+  "<!-- iterate-thread:v1 begin id=th_alpha status=open -->",
   '<a id="thread-th_alpha"></a>',
   "### T1 · Open",
   "",
-  '<!-- task-anchor:v1 {"quote":{"exact":"durably enqueue","prefix":"must ","suffix":" invalidation"},"position":{"start":47,"end":62}} -->',
+  '<!-- iterate-anchor:v1 {"quote":{"exact":"durably enqueue","prefix":"must ","suffix":" invalidation"},"position":{"start":47,"end":62}} -->',
   "",
-  "<!-- task-comment:v1 begin id=cm_one author=lee created=2026-07-28T08:30:00Z -->",
+  "<!-- iterate-comment:v1 begin id=cm_one author=lee created=2026-07-28T08:30:00Z -->",
   "#### Lee · 2026-07-28 08:30 UTC",
   "",
   'Does "durably enqueue" require the queue write to finish?',
-  "<!-- task-comment:v1 end id=cm_one -->",
+  "<!-- iterate-comment:v1 end id=cm_one -->",
   "",
-  "<!-- task-comment:v1 begin id=cm_two author=sam created=2026-07-28T09:00:00Z in-reply-to=cm_one -->",
+  "<!-- iterate-comment:v1 begin id=cm_two author=sam created=2026-07-28T09:00:00Z in-reply-to=cm_one -->",
   "#### Sam · 2026-07-28 09:00 UTC",
   "",
   "Yes — the write must land before the 200.",
-  "<!-- task-comment:v1 end id=cm_two -->",
+  "<!-- iterate-comment:v1 end id=cm_two -->",
   "",
-  "<!-- task-thread:v1 end id=th_alpha -->",
+  "<!-- iterate-thread:v1 end id=th_alpha -->",
   "",
 );
 
@@ -109,7 +109,7 @@ describe("golden fixture", () => {
     const two = thread?.comments[1];
     expect(doc.raw.slice(two?.bodyRange.start, two?.bodyRange.end)).toBe(two?.body);
     expect(doc.raw.slice(doc.discussion?.range.start, doc.discussion?.range.end)).toBe(
-      doc.raw.slice(doc.raw.indexOf("<!-- task-discussions:v1 -->")),
+      doc.raw.slice(doc.raw.indexOf("<!-- iterate-annotations:v1 -->")),
     );
   });
 
@@ -187,9 +187,9 @@ describe("structured documents without discussions", () => {
     },
     {
       name: "indented sentinel lookalike is plain content",
-      content: md("# Title", "", "    <!-- task-thread:v1 begin id=x status=open -->", ""),
+      content: md("# Title", "", "    <!-- iterate-thread:v1 begin id=x status=open -->", ""),
       frontmatter: null,
-      body: md("# Title", "", "    <!-- task-thread:v1 begin id=x status=open -->", ""),
+      body: md("# Title", "", "    <!-- iterate-thread:v1 begin id=x status=open -->", ""),
     },
   ])("$name", ({ content, frontmatter, body }) => {
     const doc = expectStructured(content);
@@ -203,7 +203,7 @@ describe("structured documents without discussions", () => {
 describe("discussion store shapes", () => {
   test("empty store", () => {
     const doc = expectStructured(
-      md("# T", "", "<!-- task-discussions:v1 -->", "", "## Discussion", ""),
+      md("# T", "", "<!-- iterate-annotations:v1 -->", "", "## Discussion", ""),
     );
     expect(doc.discussion?.threads).toEqual([]);
     expect(doc.body).toBe("# T\n\n");
@@ -214,17 +214,17 @@ describe("discussion store shapes", () => {
       md(
         "# T",
         "",
-        "<!-- task-discussions:v1 -->",
+        "<!-- iterate-annotations:v1 -->",
         "",
         "## Discussion",
         "",
         "A stray human note between threads.",
         "",
-        "<!-- task-thread:v1 begin id=th_a status=resolved -->",
-        "<!-- task-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
+        "<!-- iterate-thread:v1 begin id=th_a status=resolved -->",
+        "<!-- iterate-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
         "Hi.",
-        "<!-- task-comment:v1 end id=cm_a -->",
-        "<!-- task-thread:v1 end id=th_a -->",
+        "<!-- iterate-comment:v1 end id=cm_a -->",
+        "<!-- iterate-thread:v1 end id=th_a -->",
         "",
       ),
     );
@@ -240,9 +240,9 @@ describe("discussion store shapes", () => {
   test("thread with no comments and no heading", () => {
     const doc = expectStructured(
       md(
-        "<!-- task-discussions:v1 -->",
-        "<!-- task-thread:v1 begin id=th_a status=open -->",
-        "<!-- task-thread:v1 end id=th_a -->",
+        "<!-- iterate-annotations:v1 -->",
+        "<!-- iterate-thread:v1 begin id=th_a status=open -->",
+        "<!-- iterate-thread:v1 end id=th_a -->",
         "",
       ),
     );
@@ -257,11 +257,11 @@ describe("discussion store shapes", () => {
   test("comment with empty content has an empty body", () => {
     const doc = expectStructured(
       md(
-        "<!-- task-discussions:v1 -->",
-        "<!-- task-thread:v1 begin id=th_a status=open -->",
-        "<!-- task-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
-        "<!-- task-comment:v1 end id=cm_a -->",
-        "<!-- task-thread:v1 end id=th_a -->",
+        "<!-- iterate-annotations:v1 -->",
+        "<!-- iterate-thread:v1 begin id=th_a status=open -->",
+        "<!-- iterate-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
+        "<!-- iterate-comment:v1 end id=cm_a -->",
+        "<!-- iterate-thread:v1 end id=th_a -->",
         "",
       ),
     );
@@ -273,9 +273,9 @@ describe("discussion store shapes", () => {
   test("heading is presentation: only the first content line is stripped", () => {
     const doc = expectStructured(
       md(
-        "<!-- task-discussions:v1 -->",
-        "<!-- task-thread:v1 begin id=th_a status=open -->",
-        "<!-- task-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
+        "<!-- iterate-annotations:v1 -->",
+        "<!-- iterate-thread:v1 begin id=th_a status=open -->",
+        "<!-- iterate-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
         "#### Lee · 2026-07-28 08:30 UTC",
         "",
         "First paragraph.",
@@ -283,8 +283,8 @@ describe("discussion store shapes", () => {
         "#### A markdown heading inside the body",
         "",
         "Second paragraph.",
-        "<!-- task-comment:v1 end id=cm_a -->",
-        "<!-- task-thread:v1 end id=th_a -->",
+        "<!-- iterate-comment:v1 end id=cm_a -->",
+        "<!-- iterate-thread:v1 end id=th_a -->",
         "",
       ),
     );
@@ -302,12 +302,12 @@ describe("discussion store shapes", () => {
   test("comment without a heading keeps its whole content as body", () => {
     const doc = expectStructured(
       md(
-        "<!-- task-discussions:v1 -->",
-        "<!-- task-thread:v1 begin id=th_a status=open -->",
-        "<!-- task-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
+        "<!-- iterate-annotations:v1 -->",
+        "<!-- iterate-thread:v1 begin id=th_a status=open -->",
+        "<!-- iterate-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
         "Just text, no heading.",
-        "<!-- task-comment:v1 end id=cm_a -->",
-        "<!-- task-thread:v1 end id=th_a -->",
+        "<!-- iterate-comment:v1 end id=cm_a -->",
+        "<!-- iterate-thread:v1 end id=th_a -->",
         "",
       ),
     );
@@ -318,15 +318,15 @@ describe("discussion store shapes", () => {
   test("tombstone comment", () => {
     const doc = expectStructured(
       md(
-        "<!-- task-discussions:v1 -->",
-        "<!-- task-thread:v1 begin id=th_a status=open -->",
-        "<!-- task-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z deleted=true -->",
+        "<!-- iterate-annotations:v1 -->",
+        "<!-- iterate-thread:v1 begin id=th_a status=open -->",
+        "<!-- iterate-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z deleted=true -->",
         "*Deleted.*",
-        "<!-- task-comment:v1 end id=cm_a -->",
-        "<!-- task-comment:v1 begin id=cm_b author=sam created=2026-07-28T09:00:00Z in-reply-to=cm_a -->",
+        "<!-- iterate-comment:v1 end id=cm_a -->",
+        "<!-- iterate-comment:v1 begin id=cm_b author=sam created=2026-07-28T09:00:00Z in-reply-to=cm_a -->",
         "A reply that keeps the tombstone alive.",
-        "<!-- task-comment:v1 end id=cm_b -->",
-        "<!-- task-thread:v1 end id=th_a -->",
+        "<!-- iterate-comment:v1 end id=cm_b -->",
+        "<!-- iterate-thread:v1 end id=th_a -->",
         "",
       ),
     );
@@ -337,11 +337,11 @@ describe("discussion store shapes", () => {
   test("descriptive labels parse from the heading", () => {
     const doc = expectStructured(
       md(
-        "<!-- task-discussions:v1 -->",
-        "<!-- task-thread:v1 begin id=th_a status=resolved -->",
+        "<!-- iterate-annotations:v1 -->",
+        "<!-- iterate-thread:v1 begin id=th_a status=resolved -->",
         "### Perf question · Resolved",
         "",
-        "<!-- task-thread:v1 end id=th_a -->",
+        "<!-- iterate-thread:v1 end id=th_a -->",
         "",
       ),
     );
@@ -353,12 +353,12 @@ describe("discussion store shapes", () => {
       md(
         "# Émoji 🎉 und Ümlaute",
         "",
-        "<!-- task-discussions:v1 -->",
-        "<!-- task-thread:v1 begin id=th_a status=open -->",
-        "<!-- task-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
+        "<!-- iterate-annotations:v1 -->",
+        "<!-- iterate-thread:v1 begin id=th_a status=open -->",
+        "<!-- iterate-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
         "日本語のコメント 🚀 with emoji.",
-        "<!-- task-comment:v1 end id=cm_a -->",
-        "<!-- task-thread:v1 end id=th_a -->",
+        "<!-- iterate-comment:v1 end id=cm_a -->",
+        "<!-- iterate-thread:v1 end id=th_a -->",
         "",
       ),
     );
@@ -368,10 +368,10 @@ describe("discussion store shapes", () => {
   test("anchor json with escaped double hyphens round-trips", () => {
     const doc = expectStructured(
       md(
-        "<!-- task-discussions:v1 -->",
-        "<!-- task-thread:v1 begin id=th_a status=open -->",
-        '<!-- task-anchor:v1 {"quote":{"exact":"a-\\u002d-b","prefix":"","suffix":""}} -->',
-        "<!-- task-thread:v1 end id=th_a -->",
+        "<!-- iterate-annotations:v1 -->",
+        "<!-- iterate-thread:v1 begin id=th_a status=open -->",
+        '<!-- iterate-anchor:v1 {"quote":{"exact":"a-\\u002d-b","prefix":"","suffix":""}} -->',
+        "<!-- iterate-thread:v1 end id=th_a -->",
         "",
       ),
     );
@@ -453,29 +453,29 @@ describe("whole-file plain fallback", () => {
     },
     {
       name: "sentinel missing terminator",
-      content: md("<!-- task-discussions:v1", ""),
+      content: md("<!-- iterate-annotations:v1", ""),
       code: "sentinel-malformed",
     },
     {
       name: "unknown sentinel kind",
-      content: md("<!-- task-frobnicate:v1 -->", ""),
+      content: md("<!-- iterate-frobnicate:v1 -->", ""),
       code: "sentinel-malformed",
     },
     {
       name: "unsupported store version",
-      content: md("<!-- task-discussions:v2 -->", ""),
+      content: md("<!-- iterate-annotations:v2 -->", ""),
       code: "sentinel-unsupported-version",
     },
     {
       name: "store with attributes",
-      content: md("<!-- task-discussions:v1 extra -->", ""),
+      content: md("<!-- iterate-annotations:v1 extra -->", ""),
       code: "sentinel-malformed",
     },
     {
       name: "thread sentinel before the store",
       content: md(
-        "<!-- task-thread:v1 begin id=th_a status=open -->",
-        "<!-- task-thread:v1 end id=th_a -->",
+        "<!-- iterate-thread:v1 begin id=th_a status=open -->",
+        "<!-- iterate-thread:v1 end id=th_a -->",
         "",
       ),
       code: "sentinel-outside-store",
@@ -483,9 +483,9 @@ describe("whole-file plain fallback", () => {
     {
       name: "comment at store level",
       content: md(
-        "<!-- task-discussions:v1 -->",
-        "<!-- task-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
-        "<!-- task-comment:v1 end id=cm_a -->",
+        "<!-- iterate-annotations:v1 -->",
+        "<!-- iterate-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
+        "<!-- iterate-comment:v1 end id=cm_a -->",
         "",
       ),
       code: "sentinel-unexpected",
@@ -493,8 +493,8 @@ describe("whole-file plain fallback", () => {
     {
       name: "anchor at store level",
       content: md(
-        "<!-- task-discussions:v1 -->",
-        '<!-- task-anchor:v1 {"quote":{"exact":"x","prefix":"","suffix":""}} -->',
+        "<!-- iterate-annotations:v1 -->",
+        '<!-- iterate-anchor:v1 {"quote":{"exact":"x","prefix":"","suffix":""}} -->',
         "",
       ),
       code: "sentinel-unexpected",
@@ -502,9 +502,9 @@ describe("whole-file plain fallback", () => {
     {
       name: "nested thread begin",
       content: md(
-        "<!-- task-discussions:v1 -->",
-        "<!-- task-thread:v1 begin id=th_a status=open -->",
-        "<!-- task-thread:v1 begin id=th_b status=open -->",
+        "<!-- iterate-annotations:v1 -->",
+        "<!-- iterate-thread:v1 begin id=th_a status=open -->",
+        "<!-- iterate-thread:v1 begin id=th_b status=open -->",
         "",
       ),
       code: "sentinel-unexpected",
@@ -512,9 +512,9 @@ describe("whole-file plain fallback", () => {
     {
       name: "mismatched thread end id",
       content: md(
-        "<!-- task-discussions:v1 -->",
-        "<!-- task-thread:v1 begin id=th_a status=open -->",
-        "<!-- task-thread:v1 end id=th_b -->",
+        "<!-- iterate-annotations:v1 -->",
+        "<!-- iterate-thread:v1 begin id=th_a status=open -->",
+        "<!-- iterate-thread:v1 end id=th_b -->",
         "",
       ),
       code: "sentinel-mismatched",
@@ -522,10 +522,10 @@ describe("whole-file plain fallback", () => {
     {
       name: "mismatched comment end id",
       content: md(
-        "<!-- task-discussions:v1 -->",
-        "<!-- task-thread:v1 begin id=th_a status=open -->",
-        "<!-- task-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
-        "<!-- task-comment:v1 end id=cm_b -->",
+        "<!-- iterate-annotations:v1 -->",
+        "<!-- iterate-thread:v1 begin id=th_a status=open -->",
+        "<!-- iterate-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
+        "<!-- iterate-comment:v1 end id=cm_b -->",
         "",
       ),
       code: "sentinel-mismatched",
@@ -533,10 +533,10 @@ describe("whole-file plain fallback", () => {
     {
       name: "thread end while a comment is open (crossed pair)",
       content: md(
-        "<!-- task-discussions:v1 -->",
-        "<!-- task-thread:v1 begin id=th_a status=open -->",
-        "<!-- task-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
-        "<!-- task-thread:v1 end id=th_a -->",
+        "<!-- iterate-annotations:v1 -->",
+        "<!-- iterate-thread:v1 begin id=th_a status=open -->",
+        "<!-- iterate-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
+        "<!-- iterate-thread:v1 end id=th_a -->",
         "",
       ),
       code: "sentinel-unexpected",
@@ -544,10 +544,10 @@ describe("whole-file plain fallback", () => {
     {
       name: "comment begin inside an open comment",
       content: md(
-        "<!-- task-discussions:v1 -->",
-        "<!-- task-thread:v1 begin id=th_a status=open -->",
-        "<!-- task-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
-        "<!-- task-comment:v1 begin id=cm_b author=lee created=2026-07-28T08:30:00Z -->",
+        "<!-- iterate-annotations:v1 -->",
+        "<!-- iterate-thread:v1 begin id=th_a status=open -->",
+        "<!-- iterate-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
+        "<!-- iterate-comment:v1 begin id=cm_b author=lee created=2026-07-28T08:30:00Z -->",
         "",
       ),
       code: "sentinel-unexpected",
@@ -555,8 +555,8 @@ describe("whole-file plain fallback", () => {
     {
       name: "unterminated thread at eof",
       content: md(
-        "<!-- task-discussions:v1 -->",
-        "<!-- task-thread:v1 begin id=th_a status=open -->",
+        "<!-- iterate-annotations:v1 -->",
+        "<!-- iterate-thread:v1 begin id=th_a status=open -->",
         "",
       ),
       code: "sentinel-unterminated",
@@ -564,9 +564,9 @@ describe("whole-file plain fallback", () => {
     {
       name: "unterminated comment at eof",
       content: md(
-        "<!-- task-discussions:v1 -->",
-        "<!-- task-thread:v1 begin id=th_a status=open -->",
-        "<!-- task-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
+        "<!-- iterate-annotations:v1 -->",
+        "<!-- iterate-thread:v1 begin id=th_a status=open -->",
+        "<!-- iterate-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
         "dangling",
         "",
       ),
@@ -574,15 +574,15 @@ describe("whole-file plain fallback", () => {
     },
     {
       name: "second discussion store",
-      content: md("<!-- task-discussions:v1 -->", "", "<!-- task-discussions:v1 -->", ""),
+      content: md("<!-- iterate-annotations:v1 -->", "", "<!-- iterate-annotations:v1 -->", ""),
       code: "store-duplicate",
     },
     {
       name: "store sentinel inside a thread",
       content: md(
-        "<!-- task-discussions:v1 -->",
-        "<!-- task-thread:v1 begin id=th_a status=open -->",
-        "<!-- task-discussions:v1 -->",
+        "<!-- iterate-annotations:v1 -->",
+        "<!-- iterate-thread:v1 begin id=th_a status=open -->",
+        "<!-- iterate-annotations:v1 -->",
         "",
       ),
       code: "store-duplicate",
@@ -590,11 +590,11 @@ describe("whole-file plain fallback", () => {
     {
       name: "duplicate thread id",
       content: md(
-        "<!-- task-discussions:v1 -->",
-        "<!-- task-thread:v1 begin id=th_a status=open -->",
-        "<!-- task-thread:v1 end id=th_a -->",
-        "<!-- task-thread:v1 begin id=th_a status=open -->",
-        "<!-- task-thread:v1 end id=th_a -->",
+        "<!-- iterate-annotations:v1 -->",
+        "<!-- iterate-thread:v1 begin id=th_a status=open -->",
+        "<!-- iterate-thread:v1 end id=th_a -->",
+        "<!-- iterate-thread:v1 begin id=th_a status=open -->",
+        "<!-- iterate-thread:v1 end id=th_a -->",
         "",
       ),
       code: "duplicate-id",
@@ -602,15 +602,15 @@ describe("whole-file plain fallback", () => {
     {
       name: "duplicate comment id across threads",
       content: md(
-        "<!-- task-discussions:v1 -->",
-        "<!-- task-thread:v1 begin id=th_a status=open -->",
-        "<!-- task-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
-        "<!-- task-comment:v1 end id=cm_a -->",
-        "<!-- task-thread:v1 end id=th_a -->",
-        "<!-- task-thread:v1 begin id=th_b status=open -->",
-        "<!-- task-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
-        "<!-- task-comment:v1 end id=cm_a -->",
-        "<!-- task-thread:v1 end id=th_b -->",
+        "<!-- iterate-annotations:v1 -->",
+        "<!-- iterate-thread:v1 begin id=th_a status=open -->",
+        "<!-- iterate-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
+        "<!-- iterate-comment:v1 end id=cm_a -->",
+        "<!-- iterate-thread:v1 end id=th_a -->",
+        "<!-- iterate-thread:v1 begin id=th_b status=open -->",
+        "<!-- iterate-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
+        "<!-- iterate-comment:v1 end id=cm_a -->",
+        "<!-- iterate-thread:v1 end id=th_b -->",
         "",
       ),
       code: "duplicate-id",
@@ -618,11 +618,11 @@ describe("whole-file plain fallback", () => {
     {
       name: "comment id equals thread id",
       content: md(
-        "<!-- task-discussions:v1 -->",
-        "<!-- task-thread:v1 begin id=x status=open -->",
-        "<!-- task-comment:v1 begin id=x author=lee created=2026-07-28T08:30:00Z -->",
-        "<!-- task-comment:v1 end id=x -->",
-        "<!-- task-thread:v1 end id=x -->",
+        "<!-- iterate-annotations:v1 -->",
+        "<!-- iterate-thread:v1 begin id=x status=open -->",
+        "<!-- iterate-comment:v1 begin id=x author=lee created=2026-07-28T08:30:00Z -->",
+        "<!-- iterate-comment:v1 end id=x -->",
+        "<!-- iterate-thread:v1 end id=x -->",
         "",
       ),
       code: "duplicate-id",
@@ -630,11 +630,11 @@ describe("whole-file plain fallback", () => {
     {
       name: "reply to a missing comment",
       content: md(
-        "<!-- task-discussions:v1 -->",
-        "<!-- task-thread:v1 begin id=th_a status=open -->",
-        "<!-- task-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z in-reply-to=cm_nope -->",
-        "<!-- task-comment:v1 end id=cm_a -->",
-        "<!-- task-thread:v1 end id=th_a -->",
+        "<!-- iterate-annotations:v1 -->",
+        "<!-- iterate-thread:v1 begin id=th_a status=open -->",
+        "<!-- iterate-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z in-reply-to=cm_nope -->",
+        "<!-- iterate-comment:v1 end id=cm_a -->",
+        "<!-- iterate-thread:v1 end id=th_a -->",
         "",
       ),
       code: "invalid-reply",
@@ -642,11 +642,11 @@ describe("whole-file plain fallback", () => {
     {
       name: "reply to itself",
       content: md(
-        "<!-- task-discussions:v1 -->",
-        "<!-- task-thread:v1 begin id=th_a status=open -->",
-        "<!-- task-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z in-reply-to=cm_a -->",
-        "<!-- task-comment:v1 end id=cm_a -->",
-        "<!-- task-thread:v1 end id=th_a -->",
+        "<!-- iterate-annotations:v1 -->",
+        "<!-- iterate-thread:v1 begin id=th_a status=open -->",
+        "<!-- iterate-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z in-reply-to=cm_a -->",
+        "<!-- iterate-comment:v1 end id=cm_a -->",
+        "<!-- iterate-thread:v1 end id=th_a -->",
         "",
       ),
       code: "invalid-reply",
@@ -654,15 +654,15 @@ describe("whole-file plain fallback", () => {
     {
       name: "reply across threads",
       content: md(
-        "<!-- task-discussions:v1 -->",
-        "<!-- task-thread:v1 begin id=th_a status=open -->",
-        "<!-- task-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
-        "<!-- task-comment:v1 end id=cm_a -->",
-        "<!-- task-thread:v1 end id=th_a -->",
-        "<!-- task-thread:v1 begin id=th_b status=open -->",
-        "<!-- task-comment:v1 begin id=cm_b author=lee created=2026-07-28T08:30:00Z in-reply-to=cm_a -->",
-        "<!-- task-comment:v1 end id=cm_b -->",
-        "<!-- task-thread:v1 end id=th_b -->",
+        "<!-- iterate-annotations:v1 -->",
+        "<!-- iterate-thread:v1 begin id=th_a status=open -->",
+        "<!-- iterate-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
+        "<!-- iterate-comment:v1 end id=cm_a -->",
+        "<!-- iterate-thread:v1 end id=th_a -->",
+        "<!-- iterate-thread:v1 begin id=th_b status=open -->",
+        "<!-- iterate-comment:v1 begin id=cm_b author=lee created=2026-07-28T08:30:00Z in-reply-to=cm_a -->",
+        "<!-- iterate-comment:v1 end id=cm_b -->",
+        "<!-- iterate-thread:v1 end id=th_b -->",
         "",
       ),
       code: "invalid-reply",
@@ -670,12 +670,12 @@ describe("whole-file plain fallback", () => {
     {
       name: "anchor after the first comment",
       content: md(
-        "<!-- task-discussions:v1 -->",
-        "<!-- task-thread:v1 begin id=th_a status=open -->",
-        "<!-- task-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
-        "<!-- task-comment:v1 end id=cm_a -->",
-        '<!-- task-anchor:v1 {"quote":{"exact":"x","prefix":"","suffix":""}} -->',
-        "<!-- task-thread:v1 end id=th_a -->",
+        "<!-- iterate-annotations:v1 -->",
+        "<!-- iterate-thread:v1 begin id=th_a status=open -->",
+        "<!-- iterate-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
+        "<!-- iterate-comment:v1 end id=cm_a -->",
+        '<!-- iterate-anchor:v1 {"quote":{"exact":"x","prefix":"","suffix":""}} -->',
+        "<!-- iterate-thread:v1 end id=th_a -->",
         "",
       ),
       code: "anchor-misplaced",
@@ -683,11 +683,11 @@ describe("whole-file plain fallback", () => {
     {
       name: "two anchors in one thread",
       content: md(
-        "<!-- task-discussions:v1 -->",
-        "<!-- task-thread:v1 begin id=th_a status=open -->",
-        '<!-- task-anchor:v1 {"quote":{"exact":"x","prefix":"","suffix":""}} -->',
-        '<!-- task-anchor:v1 {"quote":{"exact":"y","prefix":"","suffix":""}} -->',
-        "<!-- task-thread:v1 end id=th_a -->",
+        "<!-- iterate-annotations:v1 -->",
+        "<!-- iterate-thread:v1 begin id=th_a status=open -->",
+        '<!-- iterate-anchor:v1 {"quote":{"exact":"x","prefix":"","suffix":""}} -->',
+        '<!-- iterate-anchor:v1 {"quote":{"exact":"y","prefix":"","suffix":""}} -->',
+        "<!-- iterate-thread:v1 end id=th_a -->",
         "",
       ),
       code: "anchor-misplaced",
@@ -695,10 +695,10 @@ describe("whole-file plain fallback", () => {
     {
       name: "anchor json invalid",
       content: md(
-        "<!-- task-discussions:v1 -->",
-        "<!-- task-thread:v1 begin id=th_a status=open -->",
-        "<!-- task-anchor:v1 {not json} -->",
-        "<!-- task-thread:v1 end id=th_a -->",
+        "<!-- iterate-annotations:v1 -->",
+        "<!-- iterate-thread:v1 begin id=th_a status=open -->",
+        "<!-- iterate-anchor:v1 {not json} -->",
+        "<!-- iterate-thread:v1 end id=th_a -->",
         "",
       ),
       code: "anchor-invalid",
@@ -706,10 +706,10 @@ describe("whole-file plain fallback", () => {
     {
       name: "anchor json wrong shape",
       content: md(
-        "<!-- task-discussions:v1 -->",
-        "<!-- task-thread:v1 begin id=th_a status=open -->",
-        '<!-- task-anchor:v1 {"quote":{"exact":"x","prefix":"","suffix":""},"extra":1} -->',
-        "<!-- task-thread:v1 end id=th_a -->",
+        "<!-- iterate-annotations:v1 -->",
+        "<!-- iterate-thread:v1 begin id=th_a status=open -->",
+        '<!-- iterate-anchor:v1 {"quote":{"exact":"x","prefix":"","suffix":""},"extra":1} -->',
+        "<!-- iterate-thread:v1 end id=th_a -->",
         "",
       ),
       code: "anchor-invalid",
@@ -717,25 +717,29 @@ describe("whole-file plain fallback", () => {
     {
       name: "double hyphen inside a sentinel",
       content: md(
-        "<!-- task-discussions:v1 -->",
-        "<!-- task-thread:v1 begin id=th_a status=open -->",
-        "<!-- task-comment:v1 begin id=cm_a author=a--b created=2026-07-28T08:30:00Z -->",
-        "<!-- task-comment:v1 end id=cm_a -->",
-        "<!-- task-thread:v1 end id=th_a -->",
+        "<!-- iterate-annotations:v1 -->",
+        "<!-- iterate-thread:v1 begin id=th_a status=open -->",
+        "<!-- iterate-comment:v1 begin id=cm_a author=a--b created=2026-07-28T08:30:00Z -->",
+        "<!-- iterate-comment:v1 end id=cm_a -->",
+        "<!-- iterate-thread:v1 end id=th_a -->",
         "",
       ),
       code: "sentinel-malformed",
     },
     {
       name: "missing thread status",
-      content: md("<!-- task-discussions:v1 -->", "<!-- task-thread:v1 begin id=th_a -->", ""),
+      content: md(
+        "<!-- iterate-annotations:v1 -->",
+        "<!-- iterate-thread:v1 begin id=th_a -->",
+        "",
+      ),
       code: "sentinel-malformed",
     },
     {
       name: "invalid thread status",
       content: md(
-        "<!-- task-discussions:v1 -->",
-        "<!-- task-thread:v1 begin id=th_a status=maybe -->",
+        "<!-- iterate-annotations:v1 -->",
+        "<!-- iterate-thread:v1 begin id=th_a status=maybe -->",
         "",
       ),
       code: "sentinel-malformed",
@@ -743,8 +747,8 @@ describe("whole-file plain fallback", () => {
     {
       name: "unknown attribute",
       content: md(
-        "<!-- task-discussions:v1 -->",
-        "<!-- task-thread:v1 begin id=th_a status=open color=red -->",
+        "<!-- iterate-annotations:v1 -->",
+        "<!-- iterate-thread:v1 begin id=th_a status=open color=red -->",
         "",
       ),
       code: "sentinel-malformed",
@@ -752,8 +756,8 @@ describe("whole-file plain fallback", () => {
     {
       name: "duplicate attribute",
       content: md(
-        "<!-- task-discussions:v1 -->",
-        "<!-- task-thread:v1 begin id=th_a id=th_b status=open -->",
+        "<!-- iterate-annotations:v1 -->",
+        "<!-- iterate-thread:v1 begin id=th_a id=th_b status=open -->",
         "",
       ),
       code: "sentinel-malformed",
@@ -761,8 +765,8 @@ describe("whole-file plain fallback", () => {
     {
       name: "double space between attributes",
       content: md(
-        "<!-- task-discussions:v1 -->",
-        "<!-- task-thread:v1 begin id=th_a  status=open -->",
+        "<!-- iterate-annotations:v1 -->",
+        "<!-- iterate-thread:v1 begin id=th_a  status=open -->",
         "",
       ),
       code: "sentinel-malformed",
@@ -770,9 +774,9 @@ describe("whole-file plain fallback", () => {
     {
       name: "invalid created timestamp",
       content: md(
-        "<!-- task-discussions:v1 -->",
-        "<!-- task-thread:v1 begin id=th_a status=open -->",
-        "<!-- task-comment:v1 begin id=cm_a author=lee created=yesterday -->",
+        "<!-- iterate-annotations:v1 -->",
+        "<!-- iterate-thread:v1 begin id=th_a status=open -->",
+        "<!-- iterate-comment:v1 begin id=cm_a author=lee created=yesterday -->",
         "",
       ),
       code: "sentinel-malformed",
@@ -780,9 +784,9 @@ describe("whole-file plain fallback", () => {
     {
       name: "non-utc created timestamp",
       content: md(
-        "<!-- task-discussions:v1 -->",
-        "<!-- task-thread:v1 begin id=th_a status=open -->",
-        "<!-- task-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00+02:00 -->",
+        "<!-- iterate-annotations:v1 -->",
+        "<!-- iterate-thread:v1 begin id=th_a status=open -->",
+        "<!-- iterate-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00+02:00 -->",
         "",
       ),
       code: "sentinel-malformed",
@@ -790,9 +794,9 @@ describe("whole-file plain fallback", () => {
     {
       name: "deleted must be true",
       content: md(
-        "<!-- task-discussions:v1 -->",
-        "<!-- task-thread:v1 begin id=th_a status=open -->",
-        "<!-- task-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z deleted=false -->",
+        "<!-- iterate-annotations:v1 -->",
+        "<!-- iterate-thread:v1 begin id=th_a status=open -->",
+        "<!-- iterate-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z deleted=false -->",
         "",
       ),
       code: "sentinel-malformed",
@@ -800,10 +804,10 @@ describe("whole-file plain fallback", () => {
     {
       name: "comment end with extra attribute",
       content: md(
-        "<!-- task-discussions:v1 -->",
-        "<!-- task-thread:v1 begin id=th_a status=open -->",
-        "<!-- task-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
-        "<!-- task-comment:v1 end id=cm_a author=lee -->",
+        "<!-- iterate-annotations:v1 -->",
+        "<!-- iterate-thread:v1 begin id=th_a status=open -->",
+        "<!-- iterate-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
+        "<!-- iterate-comment:v1 end id=cm_a author=lee -->",
         "",
       ),
       code: "sentinel-malformed",
@@ -830,26 +834,26 @@ describe("anchor selector spellings", () => {
     md(
       "Alpha beta gamma.",
       "",
-      "<!-- task-discussions:v1 -->",
+      "<!-- iterate-annotations:v1 -->",
       "",
-      "<!-- task-thread:v1 begin id=th_a status=open -->",
+      "<!-- iterate-thread:v1 begin id=th_a status=open -->",
       anchorLine,
-      "<!-- task-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
+      "<!-- iterate-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
       "Body.",
-      "<!-- task-comment:v1 end id=cm_a -->",
-      "<!-- task-thread:v1 end id=th_a -->",
+      "<!-- iterate-comment:v1 end id=cm_a -->",
+      "<!-- iterate-thread:v1 end id=th_a -->",
       "",
     );
 
   test("the W3C spelling parses to the same selector as the legacy spelling", () => {
     const w3c = expectStructured(
       store(
-        '<!-- task-anchor:v1 {"selector":[{"type":"TextQuoteSelector","exact":"beta","prefix":"Alpha ","suffix":" gamma."},{"type":"TextPositionSelector","start":6,"end":10}]} -->',
+        '<!-- iterate-anchor:v1 {"selector":[{"type":"TextQuoteSelector","exact":"beta","prefix":"Alpha ","suffix":" gamma."},{"type":"TextPositionSelector","start":6,"end":10}]} -->',
       ),
     );
     const legacy = expectStructured(
       store(
-        '<!-- task-anchor:v1 {"quote":{"exact":"beta","prefix":"Alpha ","suffix":" gamma."},"position":{"start":6,"end":10}} -->',
+        '<!-- iterate-anchor:v1 {"quote":{"exact":"beta","prefix":"Alpha ","suffix":" gamma."},"position":{"start":6,"end":10}} -->',
       ),
     );
     const expected = {
@@ -862,7 +866,9 @@ describe("anchor selector spellings", () => {
 
   test("W3C prefix and suffix are optional and default to empty", () => {
     const result = expectStructured(
-      store('<!-- task-anchor:v1 {"selector":[{"type":"TextQuoteSelector","exact":"beta"}]} -->'),
+      store(
+        '<!-- iterate-anchor:v1 {"selector":[{"type":"TextQuoteSelector","exact":"beta"}]} -->',
+      ),
     );
     expect(result.discussion?.threads[0]?.anchor?.selector).toEqual({
       quote: { exact: "beta", prefix: "", suffix: "" },
@@ -895,7 +901,7 @@ describe("anchor selector spellings", () => {
       json: '{"selector":[]}',
     },
   ] as const)("rejected W3C shape: $name", ({ json }) => {
-    const result = expectPlain(store(`<!-- task-anchor:v1 ${json} -->`));
+    const result = expectPlain(store(`<!-- iterate-anchor:v1 ${json} -->`));
     expect(result.diagnostics[0]?.code).toBe("anchor-invalid");
   });
 });
@@ -905,13 +911,13 @@ describe("comment modified attribute", () => {
     const content = md(
       "Body.",
       "",
-      "<!-- task-discussions:v1 -->",
+      "<!-- iterate-annotations:v1 -->",
       "",
-      "<!-- task-thread:v1 begin id=th_a status=open -->",
-      "<!-- task-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z modified=2026-07-29T09:00:00Z -->",
+      "<!-- iterate-thread:v1 begin id=th_a status=open -->",
+      "<!-- iterate-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z modified=2026-07-29T09:00:00Z -->",
       "Edited body.",
-      "<!-- task-comment:v1 end id=cm_a -->",
-      "<!-- task-thread:v1 end id=th_a -->",
+      "<!-- iterate-comment:v1 end id=cm_a -->",
+      "<!-- iterate-thread:v1 end id=th_a -->",
       "",
     );
     const result = expectStructured(content);
@@ -920,11 +926,11 @@ describe("comment modified attribute", () => {
 
   test("an invalid modified value is a fatal sentinel diagnostic", () => {
     const content = md(
-      "<!-- task-discussions:v1 -->",
-      "<!-- task-thread:v1 begin id=th_a status=open -->",
-      "<!-- task-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z modified=yesterday -->",
-      "<!-- task-comment:v1 end id=cm_a -->",
-      "<!-- task-thread:v1 end id=th_a -->",
+      "<!-- iterate-annotations:v1 -->",
+      "<!-- iterate-thread:v1 begin id=th_a status=open -->",
+      "<!-- iterate-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z modified=yesterday -->",
+      "<!-- iterate-comment:v1 end id=cm_a -->",
+      "<!-- iterate-thread:v1 end id=th_a -->",
       "",
     );
     const result = expectPlain(content);

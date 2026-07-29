@@ -30,3 +30,5 @@ setup:
     path: apps/tunnels/
   - project: dummy-petshop
     path: apps/dummy-petshop/
+  - project: docs
+    path: apps/docs/

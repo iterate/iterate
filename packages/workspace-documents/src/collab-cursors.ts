@@ -8,8 +8,8 @@ import {
 } from "@codemirror/view";
 import { RangeSetBuilder } from "@codemirror/state";
 import type { CollabConnection } from "./collab-client.ts";
-import type { CollabPresence } from "./tasks-api.ts";
-import { authorColor, authorLabel } from "./collab-redline.ts";
+import type { CollabPresence } from "./types.ts";
+import { authorColor, authorLabel } from "./collab-author.ts";
 
 /**
  * Live cursors: everyone else's caret as a colored bar wearing a small name
@@ -76,7 +76,11 @@ function cursorDecorations(
       );
     }
     const head = Math.min(client.head, docLength);
-    builder.add(head, head, Decoration.widget({ side: 1, widget: new CursorWidget(client.clientId) }));
+    builder.add(
+      head,
+      head,
+      Decoration.widget({ side: 1, widget: new CursorWidget(client.clientId) }),
+    );
   }
   return builder.finish();
 }

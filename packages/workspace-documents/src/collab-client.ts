@@ -7,13 +7,12 @@ import {
 } from "@codemirror/collab";
 import { ChangeSet, type Extension } from "@codemirror/state";
 import { ViewPlugin, type EditorView, type ViewUpdate } from "@codemirror/view";
-import { withProject, withProjectOnce } from "./use-checkout.ts";
 import type {
   CollabChanges,
   CollabPresence,
   CollabWaitResult,
-  TasksWorkspace,
-} from "./tasks-api.ts";
+  WorkspaceDocumentTransport,
+} from "./types.ts";
 
 /**
  * The browser's end of the no-Yjs collab lane (PoC): @codemirror/collab's
@@ -29,17 +28,11 @@ const slugify = (value: string) =>
     .replace(/^-+|-+$/g, "")
     .slice(0, 24) || "someone";
 
-let displaySlug = "someone";
-/** Redline tooltips say WHO — the display name rides inside the client id
- * (`u-<slug>-<rand>`), set once identity is known. */
-export function setCollabDisplayName(name: string): void {
-  displaySlug = slugify(name);
-}
-
-const freshClientId = () => `u-${displaySlug}-${Math.random().toString(36).slice(2, 8)}`;
+const freshClientId = (displayName: string) =>
+  `u-${slugify(displayName)}-${Math.random().toString(36).slice(2, 8)}`;
 
 export class CollabConnection {
-  clientId = freshClientId();
+  clientId: string;
   epoch = "";
   /** Own ops seen back in deliveries — the stable clientSeq base. */
   confirmed = 0;
@@ -72,6 +65,10 @@ export class CollabConnection {
     this.#deliveredOps = ops;
   }
 
+  hasDeliveredOps(): boolean {
+    return this.#deliveredOps !== null;
+  }
+
   takeDeliveredOps(): { changes: unknown; clientId: string }[] | null {
     const ops = this.#deliveredOps;
     this.#deliveredOps = null;
@@ -79,21 +76,17 @@ export class CollabConnection {
   }
 
   constructor(
-    readonly checkoutId: string,
-    readonly repoPath: string,
+    readonly transport: WorkspaceDocumentTransport,
     readonly filePath: string,
-  ) {}
-
-  #lane(project: {
-    workspace(checkoutId: string, repoPath?: string): unknown;
-  }): TasksWorkspace {
-    return project.workspace(this.checkoutId, this.repoPath) as TasksWorkspace;
+    readonly displayName = "someone",
+  ) {
+    this.clientId = freshClientId(displayName);
   }
 
   async open(): Promise<{ content: string; version: number }> {
     // Identity first: the client id embeds the display name for attribution.
-    this.clientId = freshClientId();
-    const opened = await withProject((project) => this.#lane(project).open(this.filePath));
+    this.clientId = freshClientId(this.displayName);
+    const opened = await this.transport.run((lane) => lane.open(this.filePath));
     this.epoch = opened.epoch;
     this.confirmed = 0;
     return opened;
@@ -104,8 +97,8 @@ export class CollabConnection {
       changes: update.changes.toJSON(),
       clientSeq: this.confirmed + index,
     }));
-    return withProject((project) =>
-      this.#lane(project).push({
+    return this.transport.run((lane) =>
+      lane.push({
         baseVersion,
         clientId: this.clientId,
         epoch: this.epoch,
@@ -122,8 +115,8 @@ export class CollabConnection {
       changes: update.changes.toJSON(),
       clientSeq: this.confirmed + index,
     }));
-    return withProjectOnce((project) =>
-      this.#lane(project).push({
+    return this.transport.runOnce((lane) =>
+      lane.push({
         baseVersion,
         clientId: this.clientId,
         epoch: this.epoch,
@@ -134,14 +127,8 @@ export class CollabConnection {
   }
 
   async wait(afterVersion: number): Promise<CollabWaitResult> {
-    const result = await withProject((project) =>
-      this.#lane(project).wait(
-        this.filePath,
-        this.epoch,
-        afterVersion,
-        this.clientId,
-        this.presenceGeneration,
-      ),
+    const result = await this.transport.run((lane) =>
+      lane.wait(this.filePath, this.epoch, afterVersion, this.clientId, this.presenceGeneration),
     );
     if (result.status === "ops" && result.presence !== undefined) {
       this.presenceGeneration = result.presence.generation;
@@ -153,13 +140,13 @@ export class CollabConnection {
   /** Fire-and-forget cursor announce — one quiet try on the live session
    * (presence is decoration; a dropped update self-heals on the next move). */
   present(selection: { anchor: number; head: number } | null): void {
-    void withProjectOnce((project) =>
-      this.#lane(project).present(this.filePath, this.clientId, selection),
-    ).catch(() => {});
+    void this.transport
+      .runOnce((lane) => lane.present(this.filePath, this.clientId, selection))
+      .catch(() => {});
   }
 
   async changes(): Promise<CollabChanges> {
-    return withProject((project) => this.#lane(project).changes(this.filePath));
+    return this.transport.run((lane) => lane.changes(this.filePath));
   }
 
   /** Fold delivered ops into the confirmed baseline and count own ones. */
@@ -181,9 +168,8 @@ export class CollabConnection {
     // Fresh dedupe identity: same-epoch recovery restarts clientSeq at 0, and
     // the server has already acked the old (clientId, seq) pairs — reusing
     // them would silently drop every carried edit.
-    this.clientId = freshClientId();
+    this.clientId = freshClientId(this.displayName);
   }
-
 }
 
 const MAX_BACKOFF_MS = 10_000;
@@ -227,7 +213,9 @@ export function peerExtension(connection: CollabConnection, startVersion: number
               // than retrying an impossible push forever.
               this.done = true;
               connection.dead = true;
-              connection.onStatus(`edit too large (cap ${result.maxBytes} bytes) — reopen the file`);
+              connection.onStatus(
+                `edit too large (cap ${result.maxBytes} bytes) — reopen the file`,
+              );
               return;
             case "epoch-mismatch":
             case "history-miss":

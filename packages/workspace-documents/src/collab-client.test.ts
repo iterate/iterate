@@ -1,9 +1,15 @@
 import { describe, expect, test } from "vitest";
 import { CollabConnection } from "./collab-client.ts";
+import type { WorkspaceDocumentTransport } from "./types.ts";
+
+const unusedTransport: WorkspaceDocumentTransport = {
+  run: () => Promise.reject(new Error("not used by this test")),
+  runOnce: () => Promise.reject(new Error("not used by this test")),
+};
 
 describe("CollabConnection.reseed", () => {
   test("resets the confirmed baseline AND mints a fresh client identity", () => {
-    const instance = new CollabConnection("c1", "/repos/config", "/tasks/x.md");
+    const instance = new CollabConnection(unusedTransport, "/tasks/x.md", "Jonas");
     instance.confirmed = 7;
     const before = instance.clientId;
     instance.reseed({ content: "fresh", epoch: "e2", version: 42 });

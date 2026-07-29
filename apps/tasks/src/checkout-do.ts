@@ -1,6 +1,8 @@
-import { newWebSocketRpcSession } from "capnweb";
-import type { RpcStub } from "capnweb";
-import type { Project, UnauthenticatedOs } from "iterate/client";
+import {
+  ProjectDial,
+  readCookie,
+  type ProjectCredential,
+} from "@iterate-com/workspace-documents/server";
 import * as Y from "yjs";
 import { YServer } from "y-partyserver";
 import type { Connection, ConnectionContext } from "partyserver";
@@ -30,7 +32,7 @@ import {
   normalizeRepoPath,
   registerCollaborator,
 } from "./lib/checkout-shared.ts";
-import type { CheckoutSnapshot, ProjectCredential } from "./lib/tasks-api.ts";
+import type { CheckoutSnapshot } from "./lib/tasks-api.ts";
 const PROJECT_ID_HEADER = "x-itx-project-id";
 const AUTH_COOKIE = "iterate-project-auth";
 const TASK_COMMIT_MODEL = "openai/gpt-5.5";
@@ -365,77 +367,6 @@ export class TasksCheckoutDurableObject extends YServer {
 }
 
 /**
- * A lazy dial to the platform as one principal: opened on first use,
- * redialed once when a cached session goes stale mid-operation. The
- * credential decides who — a user (`project-app-session`, the browser lane)
- * or the project itself (`project-secret`, the machine lane).
- */
-export class ProjectDial {
-  #project: RpcStub<Project> | null = null;
-  #socket: WebSocket | null = null;
-  #session: { [Symbol.dispose]?: () => void } | null = null;
-  #closed = false;
-
-  constructor(
-    private readonly osBaseUrl: string,
-    private readonly projectId: string,
-    private readonly credential: ProjectCredential,
-  ) {}
-
-  async #open(): Promise<RpcStub<Project>> {
-    this.#dispose();
-    const response = await fetch(new URL("/api", this.osBaseUrl).toString(), {
-      headers: { upgrade: "websocket" },
-    });
-    const socket = response.webSocket;
-    if (!socket) throw new Error(`os /api did not upgrade: ${response.status}`);
-    socket.accept();
-    this.#socket = socket as unknown as WebSocket;
-    const os = newWebSocketRpcSession<UnauthenticatedOs>(socket as unknown as WebSocket);
-    this.#session = os as { [Symbol.dispose]?: () => void };
-    const session = os.authenticate(this.credential as never);
-    return session.projects.get(this.projectId) as unknown as RpcStub<Project>;
-  }
-
-  async withProject<T>(operation: (project: RpcStub<Project>) => Promise<T>): Promise<T> {
-    if (this.#closed) throw new Error("connection closed");
-    if (!this.#project) this.#project = await this.#open();
-    try {
-      return await operation(this.#project);
-    } catch (firstError) {
-      this.#project = await this.#open();
-      try {
-        return await operation(this.#project);
-      } catch (secondError) {
-        this.#project = null;
-        throw secondError ?? firstError;
-      }
-    }
-  }
-
-  #dispose(): void {
-    try {
-      this.#session?.[Symbol.dispose]?.();
-    } catch {
-      // dispose races on a half-open socket are fine
-    }
-    try {
-      this.#socket?.close();
-    } catch {
-      // ignore
-    }
-    this.#socket = null;
-    this.#session = null;
-    this.#project = null;
-  }
-
-  close(): void {
-    this.#closed = true;
-    this.#dispose();
-  }
-}
-
-/**
  * The repo this checkout edits, from the `?repoPath=` query the worker also
  * bound into the DO's name — so every request a given instance sees carries
  * the same value. Absent means /repos/config.
@@ -444,13 +375,4 @@ function repoPathFromRequest(request: Request): string {
   const repoPath = normalizeRepoPath(new URL(request.url).searchParams.get("repoPath"));
   if (repoPath === null) throw new Error("bad repoPath");
   return repoPath;
-}
-
-function readCookie(request: Request, name: string): string | undefined {
-  const header = request.headers.get("cookie") ?? "";
-  for (const part of header.split(";")) {
-    const [key, ...rest] = part.trim().split("=");
-    if (key === name) return rest.join("=");
-  }
-  return undefined;
 }

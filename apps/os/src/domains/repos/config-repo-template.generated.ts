@@ -281,6 +281,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "import { GuestbookApp } from \"iterate/starter-apps/guestbook\";\n" +
       "import { IterateWorkerEntrypoint, type StreamEvent } from \"iterate/sdk\";\n" +
       "import { TodoApp } from \"iterate/starter-apps/todo\";\n" +
+      "import { z } from \"zod\";\n" +
       "\n" +
       "// An iterate project is, in the abstract, just a fetch function.\n" +
       "// HTTP clients on the internet can send us Requests, and we will send responses and\n" +
@@ -384,6 +385,27 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        }),\n" +
       "      );\n" +
       "    }\n" +
+      "    if (app === \"docs\") {\n" +
+      "      // Member-gated reverse proxy to the stateless Docs vessel. A link\n" +
+      "      // chooses one existing workspace and file through query parameters;\n" +
+      "      // document content and annotations stay in that workspace.\n" +
+      "      const itx = await this.itx;\n" +
+      "      const denied = await itx.auth.get({ policy: \"project-member\" }).fetch(req);\n" +
+      "      if (denied) return denied;\n" +
+      "      const docsUrl = new URL(req.url);\n" +
+      "      const configuredOrigin = z\n" +
+      "        .string()\n" +
+      "        .nullable()\n" +
+      "        .parse(await itx.kv.get(\"docs-app-origin\"));\n" +
+      "      const originValue = configuredOrigin || \"https://docs.iterate.workers.dev\";\n" +
+      "      const origin = new URL(originValue);\n" +
+      "      if (origin.protocol !== \"https:\" || origin.origin !== originValue) {\n" +
+      "        throw new Error(\"docs-app-origin must be one complete HTTPS origin\");\n" +
+      "      }\n" +
+      "      docsUrl.protocol = origin.protocol;\n" +
+      "      docsUrl.host = origin.host;\n" +
+      "      return fetch(new Request(new Request(docsUrl, req), { redirect: \"manual\" }));\n" +
+      "    }\n" +
       "    if (app) return new Response(`unknown app: ${app}`, { status: 404 });\n" +
       "\n" +
       "    const url = new URL(req.url);\n" +
@@ -400,6 +422,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "                <li><a href=\"${appUrl(\"todo\")}\">todo</a> (LiveState + Cap'n Web, project members only)</li>\n" +
       "                <li><a href=\"${appUrl(\"guestbook\")}\">guestbook</a> (stream processor reduce on /guestbook, public)</li>\n" +
       "                <li><a href=\"${appUrl(\"tasks\")}\">tasks</a> (collaborative task board over tasks/, project members only)</li>\n" +
+      "                <li><a href=\"${appUrl(\"docs\")}\">docs</a> (direct workspace document review, project members only)</li>\n" +
       "              </ul>\n" +
       "              <p>Edit worker.ts in the project repo to change this.</p>\n" +
       "            </main>\n" +

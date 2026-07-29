@@ -141,10 +141,10 @@ function normalizeBodyLines(body: string): string[] {
   while (lines.length > 0 && lines[lines.length - 1]?.trim() === "") lines.pop();
   if (lines.length === 0) return fail("invalid-body", "comment text is empty");
   for (const line of lines) {
-    if (line.startsWith("<!-- task-")) {
+    if (line.startsWith("<!-- iterate-")) {
       return fail(
         "invalid-body",
-        "comment text may not contain a task-* sentinel line at column 0",
+        "comment text may not contain an annotation sentinel line at column 0",
       );
     }
   }
@@ -240,7 +240,7 @@ function nextThreadLabel(doc: StructuredDocument): string {
 }
 
 export interface AddThreadOptions extends NewCommentInput {
-  /** Anchor the thread to body text; omitted for a plain task-level comment. */
+  /** Anchor the thread to body text; omitted for a document-level comment. */
   anchor?: AnchorSelector;
   /** Insert a `[T1](#thread-…)` link after the anchored text. Default: anchored. */
   insertMarker?: boolean;

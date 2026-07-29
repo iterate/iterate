@@ -214,6 +214,10 @@ describe("preview app dependency expansion", () => {
     ]);
   });
 
+  test("expands docs to include its OS workspace backend", () => {
+    expect(expandPreviewDependencies(["docs"])).toEqual(["os", "docs", "auth", "dummy-petshop"]);
+  });
+
   test("deduplicates dependencies", () => {
     expect(expandPreviewDependencies(["os", "os", "auth"])).toEqual([
       "os",
@@ -253,12 +257,13 @@ describe("preview deploy ordering", () => {
     expect(
       orderPreviewDeployBatches([
         cloudflarePreviewApps.os,
+        cloudflarePreviewApps.docs,
         cloudflarePreviewApps.semaphore,
         cloudflarePreviewApps["streams-example-app"],
         cloudflarePreviewApps.auth,
         cloudflarePreviewApps["dummy-petshop"],
       ]).map((batch) => batch.map((app) => app.slug)),
-    ).toEqual([["os", "semaphore", "streams-example-app", "auth", "dummy-petshop"]]);
+    ).toEqual([["os", "docs", "semaphore", "streams-example-app", "auth", "dummy-petshop"]]);
   });
 });
 
@@ -293,6 +298,10 @@ describe("preview workflow scope", () => {
         baseUrl: "https://auth.iterate-preview-3.com",
         workerName: "auth-preview-3",
       },
+      docs: {
+        baseUrl: "https://docs-preview-3.iterate-dev-preview.workers.dev",
+        workerName: "docs-preview-3",
+      },
       "dummy-petshop": {
         baseUrl: "https://dummy-petshop.iterate-preview-3.com",
         workerName: "dummy-petshop-preview-3",
@@ -326,6 +335,7 @@ describe("preview workflow scope", () => {
       ),
     ).toEqual({
       auth: ["vitest-retry-telemetry-reporter:vitest/e2e/vitest@@iterate-com/auth"],
+      docs: ["vitest-retry-telemetry-reporter:vitest/e2e/vitest@@iterate-com/docs"],
       "dummy-petshop": [
         "vitest-retry-telemetry-reporter:vitest/e2e/vitest@@iterate-com/dummy-petshop",
       ],
@@ -1372,7 +1382,7 @@ describe("preview deploy selection", () => {
       probeAppServing: everythingServing,
     });
 
-    expect(apps.map((app) => app.slug)).toEqual(["os", "auth", "dummy-petshop"]);
+    expect(apps.map((app) => app.slug)).toEqual(["os", "docs", "auth", "dummy-petshop"]);
   });
 
   test("selects the full fleet for an e2e policy-only change", async () => {
@@ -1392,6 +1402,7 @@ describe("preview deploy selection", () => {
 
     expect(apps.map((app) => app.slug)).toEqual([
       "os",
+      "docs",
       "semaphore",
       "auth",
       "streams-example-app",
@@ -1486,6 +1497,7 @@ describe("preview deploy selection", () => {
 
     expect(apps.map((app) => app.slug)).toEqual([
       "os",
+      "docs",
       "semaphore",
       "auth",
       "streams-example-app",
@@ -1512,6 +1524,7 @@ describe("preview deploy selection", () => {
 
     expect(apps.map((app) => app.slug)).toEqual([
       "os",
+      "docs",
       "semaphore",
       "auth",
       "streams-example-app",

@@ -5,7 +5,7 @@
  * module is text-in, text-out only — no storage, no network, no UI.
  */
 import { parseDocument, type Document } from "yaml";
-import { isValidAuthor, parseAnnotatedMarkdown } from "iterate/annotated-markdown";
+import { parseAnnotatedMarkdown } from "iterate/annotated-markdown";
 import { BOARD_COLUMNS, type TaskCard, type TaskChangeSummary } from "./state.ts";
 
 const DEFAULT_TASK_STATE = BOARD_COLUMNS[0];
@@ -111,30 +111,6 @@ export function setTaskCardLabels(source: string, labels: readonly string[]): st
     if (labels.length === 0) document.delete("tags");
     else document.set("tags", [...labels]);
   });
-}
-
-/**
- * The discussion-comment identity for a signed-in user: the sentinel `author`
- * token (email when it is attribute-safe, else a slug) plus the display name
- * written into the visible comment heading.
- */
-export function commentAuthorFor(me: {
-  name: string | null;
-  email: string | null;
-  userId: string | null;
-}): { author: string; authorDisplay?: string } {
-  const slug = (value: string): string =>
-    value
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 48);
-  const author =
-    me.email !== null && isValidAuthor(me.email)
-      ? me.email
-      : slug(me.name ?? me.userId ?? "") || "someone";
-  const display = me.name ?? me.email ?? undefined;
-  return display === undefined ? { author } : { author, authorDisplay: display };
 }
 
 /** The conventional agent path for a task — apps/os's repoTaskAgentPath. */
@@ -286,8 +262,8 @@ function firstHeadingTitle(body: string): string | undefined {
  * headings inside it (comment prose) must never become the board title.
  */
 function beforeDiscussionStore(text: string): string {
-  if (text.startsWith("<!-- task-discussions:")) return "";
-  const at = text.indexOf("\n<!-- task-discussions:");
+  if (text.startsWith("<!-- iterate-annotations:")) return "";
+  const at = text.indexOf("\n<!-- iterate-annotations:");
   return at === -1 ? text : text.slice(0, at);
 }
 

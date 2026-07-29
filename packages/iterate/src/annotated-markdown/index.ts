@@ -6,6 +6,8 @@
 // grammar and its invariants are documented in README.md next to this file.
 
 export { parseAnnotatedMarkdown } from "./parse.ts";
+export { projectMarkdownPreview } from "./preview.ts";
+export type { MarkdownPreviewProjection } from "./preview.ts";
 export {
   addComment,
   addThread,

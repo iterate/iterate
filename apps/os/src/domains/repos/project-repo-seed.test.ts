@@ -8,11 +8,14 @@ test("no knobs seed the template verbatim", () => {
   expect(projectRepoSeedFiles({})).toBe(PROJECT_REPO_INITIAL_FILES);
 });
 
-test("the seed keeps the root worker and tasks app proxy", () => {
+test("the seed keeps the root worker and hosted app proxies", () => {
   const worker = projectRepoSeedFiles({}).find((file) => file.path === "worker.ts");
   expect(worker?.content).toContain('if (app === "tasks")');
   expect(worker?.content).toContain('itx.kv.get("tasks-app-origin")');
   expect(worker?.content).toContain('"tasks.iterate.workers.dev"');
+  expect(worker?.content).toContain('if (app === "docs")');
+  expect(worker?.content).toContain('itx.kv.get("docs-app-origin")');
+  expect(worker?.content).toContain('"https://docs.iterate.workers.dev"');
 });
 
 test("a ref pins every iterate/iterate pkg.pr.new spec in every manifest", () => {

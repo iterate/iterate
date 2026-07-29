@@ -1,4 +1,15 @@
+import type { WorkspaceDocumentLane } from "@iterate-com/workspace-documents/types";
+import type { ProjectCredential } from "@iterate-com/workspace-documents/server";
 import type { CommitResult, TaskChangeSummary } from "../state.ts";
+
+export type { ProjectCredential } from "@iterate-com/workspace-documents/server";
+
+export type {
+  CollabAcceptResult,
+  CollabChanges,
+  CollabOpened,
+  CollabWaitResult,
+} from "@iterate-com/workspace-documents/types";
 
 /**
  * The vessel's ONE public API: a Cap'n Web WebSocket session at `/api`.
@@ -20,10 +31,6 @@ import type { CommitResult, TaskChangeSummary } from "../state.ts";
  * (`itx.secrets.get("/secrets/project-api-key").reveal()`) without any
  * browser in the loop, at the cost of project- rather than user-attribution.
  */
-export type ProjectCredential =
-  | { type: "project-app-session"; token: string }
-  | { type: "project-secret"; projectId: string; secret: string };
-
 export interface TasksApi {
   /**
    * Prove a credential by using it against the platform and get the
@@ -76,40 +83,6 @@ export interface TasksProject {
   workspace(checkoutId: string, repoPath?: string): TasksWorkspace;
 }
 
-// The collab wire, shared verbatim by the vessel and the browser client —
-// mirrors the platform engine's contracts (collab-engine.ts).
-export type CollabOpened = { content: string; epoch: string; version: number };
-export type CollabAcceptResult =
-  | { status: "accepted"; version: number }
-  | { status: "epoch-mismatch"; epoch: string }
-  | { status: "history-miss" }
-  | { status: "too-large"; maxBytes: number };
-/** Ephemeral cursor presence for one session, in each sender's own head
- * coordinates (receivers clamp and map through subsequent edits). */
-export type CollabPresence = {
-  clients: { anchor: number; at: number; clientId: string; head: number }[];
-  generation: number;
-};
-export type CollabWaitResult =
-  | { ops: { changes: unknown; clientId: string }[]; presence?: CollabPresence; status: "ops" }
-  | { snapshot: { ackedSeq: number; content: string; epoch: string; version: number }; status: "snapshot" }
-  /** The session was durably ended (deleted/replaced/reset) — reopen to resume. */
-  | { status: "ended" };
-
-export type CollabChangeSegment =
-  | { clientId: string; createdAt?: number; from: number; kind: "inserted"; to: number }
-  | { at: number; clientId: string; createdAt?: number; kind: "deleted"; text: string };
-
-/** Two plain arrays on the wire (a union array breaks the platform's
- * generated capnweb types); consumers re-interleave by position. */
-export type CollabChanges = {
-  baseContent: string;
-  baseVersion: number;
-  deleted: { at: number; clientId: string; createdAt?: number; text: string }[];
-  headVersion: number;
-  inserted: { clientId: string; createdAt?: number; from: number; to: number }[];
-};
-
 /** One event from the workspace's platform stream (the event-sourced spine). */
 export type WorkspaceStreamEvent = {
   createdAt: string;
@@ -118,40 +91,15 @@ export type WorkspaceStreamEvent = {
   type: string;
 };
 
-export interface TasksWorkspace {
-  open(filePath: string): Promise<CollabOpened>;
+export interface TasksWorkspace extends WorkspaceDocumentLane {
   /** The mount content at HEAD — what uncommitted work diffs against. */
   readBase(filePath: string): Promise<string | null>;
-  /** Attributed tracked changes since the last commit (redline segments). */
-  changes(filePath: string): Promise<CollabChanges>;
-  push(input: {
-    baseVersion: number;
-    clientId: string;
-    epoch: string;
-    ops: { changes: unknown; clientSeq: number }[];
-    path: string;
-  }): Promise<CollabAcceptResult>;
-  /** Long-poll: ops after a version (parking ~20s), or a snapshot past the
-   * floor; with afterPresence given, also resolves on cursor movement. */
-  wait(
-    filePath: string,
-    epoch: string,
-    afterVersion: number,
-    clientId?: string,
-    afterPresence?: number,
-  ): Promise<CollabWaitResult>;
   /** Fresh caret presence per open file — the card dots (clientIds). */
   presenceSummary(): Promise<Record<string, string[]>>;
   /** Everyone with the BOARD open (heartbeats): clientId -> display name. */
   boardViewers(): Promise<Record<string, string>>;
   /** Heartbeat (or clear, with null name) this client viewing the board. */
   boardPresent(clientId: string, name: string | null): Promise<void>;
-  /** Announce (or clear, with null) this client's cursor for one session. */
-  present(
-    filePath: string,
-    clientId: string,
-    selection: { anchor: number; head: number } | null,
-  ): Promise<void>;
   /** Head versions of every live session — the board's change cursor. */
   versions(): Promise<Record<string, number>>;
   /** The newest page of the workspace's stream events (the audit spine). */
