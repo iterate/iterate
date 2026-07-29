@@ -273,7 +273,10 @@ export const GithubAiLinterProcessorContract = defineProcessorContract({
     {
       "events.iterate.com/agent/paused": {
         description: "The generic Agent processor paused its autonomous turn loop.",
-        payloadSchema: z.object({ reason: z.string().optional() }),
+        payloadSchema: z.object({
+          reason: z.string().optional(),
+          triggerOffset: StreamOffset.optional(),
+        }),
       },
     },
   ],
