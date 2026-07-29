@@ -241,7 +241,7 @@ function rethrowItxDeliveryError(error: unknown): never {
   throw error;
 }
 
-function disposeAcknowledgedRpcResult(result: unknown, operation: string): void {
+function disposeAcknowledgedRpcResult(result: unknown, operation: string) {
   try {
     disposeIgnoredRpcResult(result);
   } catch (error) {
@@ -1131,7 +1131,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     return receipt;
   }
 
-  async #appendCoreEventToStreamPath(path: string, event: StreamEventInput): Promise<void> {
+  async #appendCoreEventToStreamPath(path: string, event: StreamEventInput) {
     const result = await this.#streamStub(path).appendCoreEvent(event);
     disposeAcknowledgedRpcResult(result, "ancestor-core-event");
   }
