@@ -5,13 +5,15 @@ import {
   type WorkerDeploymentVersionFormat,
 } from "../env.ts";
 import { settleByDeadline } from "./execution-deadline.ts";
-import { isRetryableDurableObjectAvailabilityError } from "./streams/stream-unavailable.ts";
+import {
+  isRetryableDurableObjectAvailabilityError,
+  isTransientPlatformInternalReferenceError,
+} from "./streams/stream-unavailable.ts";
 
 const DEPLOYMENT_WAIT_TIMEOUT_MS = 30_000;
 const DEPLOYMENT_PROBE_TIMEOUT_MS = 2_000;
 const DEPLOYMENT_POLL_INTERVAL_MS = 250;
 const DEPLOYMENT_MAX_POLL_INTERVAL_MS = 4_000;
-const TRANSIENT_PLATFORM_INTERNAL_ERROR = /^internal error; reference = [a-z0-9]{24}$/iu;
 
 export type DeploymentVersionReadinessOptions = {
   maxPollIntervalMs?: number;
@@ -91,11 +93,6 @@ function deploymentRelation(
   return observedTimestamp > expectedTimestamp ? "newer" : undefined;
 }
 
-function isTransientPlatformVersionProbeError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return TRANSIENT_PLATFORM_INTERNAL_ERROR.test(message);
-}
-
 type WaitForDurableObjectDeploymentVersionInput = DeploymentVersionReadinessOptions & {
   expectedVersion: WorkerDeploymentVersionLike;
   notReadyError: (detail: string, cause?: unknown) => Error;
@@ -158,10 +155,10 @@ export async function waitForDurableObjectDeploymentVersion(
       }
       mismatches += 1;
     } else if (outcome.status === "rejected") {
-      if (isRetryableDurableObjectAvailabilityError(outcome.error)) {
-        lifecycleFailures += 1;
-      } else if (isTransientPlatformVersionProbeError(outcome.error)) {
+      if (isTransientPlatformInternalReferenceError(outcome.error)) {
         platformFailures += 1;
+      } else if (isRetryableDurableObjectAvailabilityError(outcome.error)) {
+        lifecycleFailures += 1;
       } else {
         const reason =
           outcome.error instanceof Error ? outcome.error.message : String(outcome.error);

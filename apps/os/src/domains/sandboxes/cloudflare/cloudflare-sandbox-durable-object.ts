@@ -50,6 +50,7 @@ import {
   sandboxProcessGroupCleanupCommand,
   waitForSandboxExecAdmission,
 } from "./sandbox-exec-admission.ts";
+import { ensureSandboxReadiness } from "./sandbox-readiness.ts";
 
 /**
  * The workspace root inside every sandbox container: what the backup/restore
@@ -612,7 +613,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
       type: "events.iterate.com/sandbox/start-requested",
       payload: {},
     });
-    await this.#ensureWorkspaceCurrent();
+    await this.#ensureReady();
     // onStart cannot wait for the processor while it is inside the SDK's
     // blockConcurrencyWhile budget. The ordinary command boundary can: do
     // not return a successful start while the live controls still see the
@@ -837,6 +838,9 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
   }
 
   #workspaceReady: Promise<void> | undefined;
+  #readinessEpoch = 0;
+  #readinessInFlight: Promise<void> | undefined;
+  #readinessRecycleInFlight: Promise<void> | undefined;
   #lastStartedOffset: number | undefined;
   #lastStoppedOffset: number | undefined;
   // Whether the CURRENT container's workspace was fully provisioned (snapshot
@@ -987,13 +991,15 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
    * container and only a REAL mid-run crash invalidates it. The warm path
    * (memo present) skips the exec entirely.
    */
-  async #ensureWorkspaceCurrent(): Promise<void> {
+  async #ensureWorkspaceCurrent(readinessEpoch: number): Promise<void> {
     while (true) {
       if (this.#workspaceReady === undefined) {
         await this.#redialOnInterruptedSessionSetup(() => super.exec(":"));
+        this.#assertReadinessEpoch(readinessEpoch);
       }
       const run = this.#ensureWorkspace();
       await run;
+      this.#assertReadinessEpoch(readinessEpoch);
       if (this.#workspaceReady === run) return;
     }
   }
@@ -1113,7 +1119,94 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
 
   async #ensureReady(): Promise<void> {
     this.#assertUsable();
-    await this.#ensureWorkspaceCurrent();
+    if (this.#readinessInFlight !== undefined) {
+      await this.#readinessInFlight;
+      return;
+    }
+    if (this.#readinessRecycleInFlight !== undefined) {
+      throw new Error(
+        "Sandbox container recycle is still in progress after a readiness timeout; retry after it settles",
+      );
+    }
+
+    const readiness = ensureSandboxReadiness({
+      attempt: () => {
+        const readinessEpoch = this.#readinessEpoch;
+        return this.#ensureWorkspaceCurrent(readinessEpoch);
+      },
+      onAttemptDeadline: ({ attempt, attemptTimeoutMs, maxAttempts }) => {
+        // Supersede the silent attempt before teardown. If its pending boot or
+        // provisioning later settles, #ensureWorkspaceCurrent stops at its
+        // epoch fence instead of starting another container behind the fresh
+        // attempt.
+        this.#readinessEpoch += 1;
+        this.#invalidateWorkspaceMemo();
+        console.warn("sandbox readiness timed out; recycling container placement", {
+          attempt,
+          attemptTimeoutMs,
+          maxAttempts,
+          path: this.#identity().path,
+          projectId: this.#identity().projectId,
+        });
+      },
+      onRecycleDeadline: ({ attempt, recycle, recycleTimeoutMs }) => {
+        // The request reports unconfirmed teardown, but the already-issued
+        // destroy remains owned and observed so a recovering control plane can
+        // still release the slot. Do not start another placement while its
+        // state is unknown.
+        this.ctx.waitUntil(
+          recycle.then(
+            () => {
+              this.#invalidateWorkspaceMemo();
+              console.warn("sandbox readiness container recycle eventually completed", {
+                attempt,
+                path: this.#identity().path,
+                projectId: this.#identity().projectId,
+                recycleTimeoutMs,
+              });
+            },
+            (error: unknown) => {
+              console.error("sandbox readiness container recycle eventually failed", {
+                attempt,
+                error,
+                path: this.#identity().path,
+                projectId: this.#identity().projectId,
+                recycleTimeoutMs,
+              });
+            },
+          ),
+        );
+      },
+      recycle: async ({ attempt }) => {
+        const recycle = super.destroy();
+        this.#readinessRecycleInFlight = recycle;
+        try {
+          await recycle;
+          this.#invalidateWorkspaceMemo();
+          console.warn("sandbox readiness recycled timed-out container placement", {
+            attempt,
+            path: this.#identity().path,
+            projectId: this.#identity().projectId,
+          });
+        } finally {
+          if (this.#readinessRecycleInFlight === recycle) {
+            this.#readinessRecycleInFlight = undefined;
+          }
+        }
+      },
+    });
+    this.#readinessInFlight = readiness;
+    try {
+      await readiness;
+    } finally {
+      if (this.#readinessInFlight === readiness) this.#readinessInFlight = undefined;
+    }
+  }
+
+  #assertReadinessEpoch(readinessEpoch: number): void {
+    if (readinessEpoch !== this.#readinessEpoch) {
+      throw new Error("Sandbox readiness attempt was superseded by a container recycle");
+    }
   }
 
   /**

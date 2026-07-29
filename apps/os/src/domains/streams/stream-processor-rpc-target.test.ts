@@ -593,6 +593,41 @@ describe("StreamRpcTarget", () => {
     expect(acquisitions).toBe(2);
   });
 
+  it("replays a keyed root append once after an exact platform-reference failure", async () => {
+    const platformError = new Error("internal error; reference = 3c3on0i7t8mchl8ae86jhlad");
+    const event = {
+      createdAt: new Date(0).toISOString(),
+      idempotencyKey: "root-birth-platform-retry",
+      offset: 3,
+      path: "/",
+      type: "events.iterate.com/test/root-birth-platform-retry",
+    } satisfies StreamEvent;
+    let acquisitions = 0;
+
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
+        acquisitions += 1;
+        return {
+          append: () =>
+            acquisitions === 1 ? Promise.reject(platformError) : Promise.resolve([event]),
+        } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/",
+      projectId: "prj_test",
+    });
+
+    await expect(
+      stream.append({
+        idempotencyKey: event.idempotencyKey,
+        type: event.type,
+      }),
+    ).resolves.toEqual([event]);
+    expect(acquisitions).toBe(2);
+  });
+
   it("replays a keyed non-root append once after an immediate deployment reset", async () => {
     const lifecycleError = Object.assign(new Error("code updated"), {
       durableObjectReset: true,

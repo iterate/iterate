@@ -4,6 +4,7 @@ import {
   isDurableObjectLifecycleError,
   isDurableObjectOverloadError,
   isRetryableDurableObjectAvailabilityError,
+  isTransientPlatformInternalReferenceError,
   isStreamWaitTimeoutError,
   isStreamUnavailableError,
   rethrowStreamUnavailable,
@@ -36,6 +37,34 @@ describe("isDurableObjectLifecycleError", () => {
     ["undefined", undefined, false],
   ])("%s → %s", (_name, error, expected) => {
     expect(isDurableObjectLifecycleError(error)).toBe(expected);
+  });
+});
+
+describe("isTransientPlatformInternalReferenceError", () => {
+  it.each([
+    [
+      "exact Cloudflare internal reference",
+      new Error("internal error; reference = 3c3on0i7t8mchl8ae86jhlad"),
+      true,
+    ],
+    [
+      "uppercase exact Cloudflare internal reference",
+      new Error("internal error; reference = 3C3ON0I7T8MCHL8AE86JHLAD"),
+      true,
+    ],
+    [
+      "application context containing a reference",
+      new Error("append failed: internal error; reference = 3c3on0i7t8mchl8ae86jhlad"),
+      false,
+    ],
+    [
+      "wrong-length reference",
+      new Error("internal error; reference = 3c3on0i7t8mchl8ae86jhla"),
+      false,
+    ],
+    ["non-Error rejection", "internal error; reference = 3c3on0i7t8mchl8ae86jhlad", false],
+  ])("%s → %s", (_name, error, expected) => {
+    expect(isTransientPlatformInternalReferenceError(error)).toBe(expected);
   });
 });
 
@@ -81,6 +110,26 @@ describe("retryIdempotentDurableObjectOperation", () => {
     );
     expect(operation).toHaveBeenCalledTimes(2);
     expect(onRetry).toHaveBeenCalledWith({ attempt: 1, error: wrapped, maxAttempts: 2 });
+  });
+
+  it("retries one exact platform-reference failure and keeps contextual app errors terminal", async () => {
+    const platformError = new Error("internal error; reference = 3c3on0i7t8mchl8ae86jhlad");
+    const operation = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(platformError)
+      .mockResolvedValueOnce("recovered");
+
+    await expect(retryIdempotentDurableObjectOperation({ operation })).resolves.toBe("recovered");
+    expect(operation).toHaveBeenCalledTimes(2);
+
+    const applicationError = new Error(
+      "append failed: internal error; reference = 3c3on0i7t8mchl8ae86jhlad",
+    );
+    const applicationOperation = vi.fn<() => Promise<string>>().mockRejectedValue(applicationError);
+    await expect(
+      retryIdempotentDurableObjectOperation({ operation: applicationOperation }),
+    ).rejects.toBe(applicationError);
+    expect(applicationOperation).toHaveBeenCalledOnce();
   });
 
   it("recognises the stream wire tag and stops after one retry", async () => {
@@ -150,6 +199,13 @@ describe("rethrowStreamUnavailable", () => {
     expect(caught).not.toBe(original);
     expect((caught as Error).cause).toBeUndefined();
     expect(isStreamUnavailableError(caught)).toBe(true);
+  });
+
+  it("tags an exact platform-reference rejection after bounded replay is exhausted", () => {
+    const original = new Error("internal error; reference = 3c3on0i7t8mchl8ae86jhlad");
+    expect(() => rethrowStreamUnavailable(original)).toThrow(
+      `${STREAM_UNAVAILABLE_MESSAGE_PREFIX}${original.message}`,
+    );
   });
 
   it("preserves an app-level rejection's message in a plain local error", () => {

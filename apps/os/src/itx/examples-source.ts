@@ -480,11 +480,19 @@ return await itx.projects.get(pid).__describe();
       });
 
       // exec runs a shell command; the first one boots the container.
-      const uname = await sandbox.exec("uname -s");
+      const uname = await sandbox.exec("uname -s", { timeout: 15_000 });
+      if (!uname.success) {
+        throw new Error(`uname failed with exit ${uname.exitCode}: ${uname.stderr}`);
+      }
 
       // Only /workspace survives stop/idle (snapshot-restored) — keep durable
       // work there.
-      const marker = await sandbox.exec("echo hello > /workspace/marker && cat /workspace/marker");
+      const marker = await sandbox.exec("echo hello > /workspace/marker && cat /workspace/marker", {
+        timeout: 15_000,
+      });
+      if (!marker.success) {
+        throw new Error(`marker write failed with exit ${marker.exitCode}: ${marker.stderr}`);
+      }
 
       return {
         os: uname.stdout.trim(), // "Linux"

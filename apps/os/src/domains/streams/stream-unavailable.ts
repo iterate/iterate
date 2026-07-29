@@ -9,8 +9,11 @@
 // call — capnweb serializes `message` (and a whitelisted `name`) and strips
 // everything else, and a custom subclass name downgrades to plain `Error` on
 // the way through. The message prefix is the one channel every hop preserves,
-// and it is ours: matching it is contract enforcement, not sniffing
-// Cloudflare-internal strings whose wording can change under us.
+// and it is ours. One exact Cloudflare opaque-reference shape also needs
+// recognition at the FIRST worker boundary because it has been observed there
+// without lifecycle flags; that direct rejection is immediately translated
+// into this owned prefix, so downstream callers never infer from loose
+// platform wording.
 
 /**
  * Prefix on rejections from stream capability calls that failed because the
@@ -37,6 +40,19 @@ export const STREAM_KILL_REASON = "kill requested";
  * it must distinguish an exhausted internal slice from a predicate failure.
  */
 export const STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX = "stream-wait-timeout: ";
+
+const TRANSIENT_PLATFORM_INTERNAL_REFERENCE_ERROR = /^internal error; reference = [a-z0-9]{24}$/iu;
+
+/**
+ * Whether workerd returned Cloudflare's exact opaque internal-reference
+ * failure for a Durable Object call. This form has been observed without the
+ * ordinary lifecycle flags even at the first Worker boundary. Keep the match
+ * exact and Error-only: application context containing the same words remains
+ * terminal, as does every other unclassified rejection.
+ */
+export function isTransientPlatformInternalReferenceError(error: unknown): boolean {
+  return error instanceof Error && TRANSIENT_PLATFORM_INTERNAL_REFERENCE_ERROR.test(error.message);
+}
 
 /**
  * Whether workerd rejected a Durable Object stub call because the target
@@ -89,8 +105,9 @@ export function isExplicitStreamKillLifecycleError(error: unknown): boolean {
 
 /**
  * Whether an idempotent caller may replay a Durable Object operation after
- * either a direct workerd lifecycle rejection or a nested Stream rejection
- * that crossed RPC with the explicit stream-unavailable tag.
+ * a direct workerd lifecycle rejection, an exact opaque platform-reference
+ * rejection, or a nested Stream rejection that crossed RPC with the explicit
+ * stream-unavailable tag.
  *
  * Domain code commonly wraps infrastructure failures with useful context, so
  * inspect the local cause chain as well. Cycles are rejected rather than
@@ -100,7 +117,11 @@ export function isRetryableDurableObjectAvailabilityError(error: unknown): boole
   const seen = new Set<object>();
   let candidate = error;
   while (typeof candidate === "object" && candidate !== null) {
-    if (isDurableObjectLifecycleError(candidate) || isStreamUnavailableError(candidate)) {
+    if (
+      isDurableObjectLifecycleError(candidate) ||
+      isTransientPlatformInternalReferenceError(candidate) ||
+      isStreamUnavailableError(candidate)
+    ) {
       return true;
     }
     if (seen.has(candidate)) return false;
@@ -133,10 +154,11 @@ export async function retryIdempotentDurableObjectOperation<Result>(args: {
 
 /**
  * Terminate a Durable Object RPC rejection at the public worker boundary.
- * Lifecycle failures receive {@link STREAM_UNAVAILABLE_MESSAGE_PREFIX};
- * application failures retain their message. Every outcome becomes a fresh,
- * plain `Error`: a native Workers RPC exception can carry remote internals
- * that cannot safely be forwarded through Cap'n Web as a second RPC error.
+ * Lifecycle and exact opaque platform-reference failures receive
+ * {@link STREAM_UNAVAILABLE_MESSAGE_PREFIX}; application failures retain
+ * their message. Every outcome becomes a fresh, plain `Error`: a native
+ * Workers RPC exception can carry remote internals that cannot safely be
+ * forwarded through Cap'n Web as a second RPC error.
  *
  * `.catch` this onto stream stub calls that return plain data promises — never
  * onto ones returning stubs (a `.catch` collapses an RpcPromise into a settled
@@ -144,7 +166,7 @@ export async function retryIdempotentDurableObjectOperation<Result>(args: {
  */
 export function rethrowStreamUnavailable(error: unknown): never {
   const message = error instanceof Error ? error.message : String(error);
-  if (isDurableObjectLifecycleError(error)) {
+  if (isDurableObjectLifecycleError(error) || isTransientPlatformInternalReferenceError(error)) {
     throw new Error(`${STREAM_UNAVAILABLE_MESSAGE_PREFIX}${message}`);
   }
   throw new Error(message);

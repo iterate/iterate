@@ -286,14 +286,14 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
   "sandbox-exec": {
     // One shared sandbox name for this serial case: the first runtime pays
     // the create + container cold boot, the rest reuse the warm container
-    // (the example's get-or-create makes reuse natural), and the retry's
-    // attemptSalt re-rolls the container placement. No marker on
-    // purpose. 150s: a healthy cold boot is well under a minute; a boot
-    // past this is a container stuck provisioning on a bad placement, and
-    // the retry's FRESH attempt re-rolls placement and typically lands in
-    // ~15s — waiting out a 300s budget just stretched both e2e lanes past
-    // their watchdogs (2026-07-10 marathon j3tqdhncb6 run 2: one 5.1m boot
-    // stalled the spec AND examples-matrix; the retry passed in 14.8s).
+    // (the example's get-or-create makes reuse natural). Product readiness
+    // now bounds a silent placement at 30s, confirms its destruction, and
+    // tries one fresh placement; attemptSalt still gives a test retry an
+    // independent pet if that bounded recovery itself fails. No marker on
+    // purpose. The 150s outer watchdog contains both readiness placements,
+    // their teardown budgets, and the example's explicitly timed commands.
+    // This replaced the old 5.1m bad-placement stall observed in marathon
+    // j3tqdhncb6.
     completionTimeoutMs: 150_000,
     // Avoid four simultaneous cold boots; unrelated examples remain parallel.
     runtimeExecution: "serial",
