@@ -3698,9 +3698,13 @@ function previewProvisionedIntegrationSecrets() {
 }
 
 async function ensureAuthPreviewConfigs(input: { rotate: boolean; slots: number[] }) {
-  const authSigningPrivateJwk = getDopplerSecret("_shared", "preview", "AUTH_FORGE_PRIVATE_JWK");
+  const authSigningPrivateJwk = getDopplerSecret(
+    "_shared",
+    "preview",
+    "AUTH_FORGE_ES256_PRIVATE_JWK",
+  );
   if (!authSigningPrivateJwk) {
-    throw new Error("_shared/preview is missing AUTH_FORGE_PRIVATE_JWK");
+    throw new Error("_shared/preview is missing AUTH_FORGE_ES256_PRIVATE_JWK");
   }
 
   // This is deliberately inherited, not copied: every app's preview
@@ -3708,10 +3712,10 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean; slots: number[
   // of truth. Fail closed if that topology has drifted instead of writing a
   // second app-local copy that could later shadow the shared key.
   for (const project of ["auth", "os", "semaphore", "streams-example-app"]) {
-    const effectiveKey = getDopplerSecret(project, "preview", "AUTH_FORGE_PRIVATE_JWK");
+    const effectiveKey = getDopplerSecret(project, "preview", "AUTH_FORGE_ES256_PRIVATE_JWK");
     if (effectiveKey !== authSigningPrivateJwk) {
       throw new Error(
-        `${project}/preview must inherit AUTH_FORGE_PRIVATE_JWK from _shared/preview`,
+        `${project}/preview must inherit AUTH_FORGE_ES256_PRIVATE_JWK from _shared/preview`,
       );
     }
   }

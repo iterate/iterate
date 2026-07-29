@@ -26,7 +26,7 @@ export function requireSemaphoreBaseUrl() {
 /**
  * Bearer-token provider for the suite: SEMAPHORE_API_TOKEN (a pre-minted
  * bearer token), else an admin access token forge-minted from the Doppler
- * config's AUTH_FORGE_PRIVATE_JWK — semaphore verifies both against the same
+ * config's AUTH_FORGE_ES256_PRIVATE_JWK — semaphore verifies both against the same
  * apps/auth relying-party setup as os.
  */
 export function semaphoreApiTokenProvider(baseURL: string) {

@@ -322,5 +322,5 @@ Implementation ownership:
   dashboard application.
 
 `pnpm auth:mint` remains a separate non-production auth-testing tool. It forges
-a complete auth-worker identity and requires `AUTH_FORGE_PRIVATE_JWK`; it is
+a complete auth-worker identity and requires `AUTH_FORGE_ES256_PRIVATE_JWK`; it is
 not the production support path for opening a project.

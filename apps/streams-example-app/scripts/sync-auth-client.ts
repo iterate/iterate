@@ -75,15 +75,15 @@ upsertAuthSeedOAuthClient({
   skipConsent: true,
 });
 
-const forgePrivateJwk = getDopplerSecret("os", "prd", "AUTH_FORGE_PRIVATE_JWK");
+const forgePrivateJwk = getDopplerSecret("os", "prd", "AUTH_FORGE_ES256_PRIVATE_JWK");
 const allowProduction = getDopplerSecret("os", "prd", "AUTH_FORGE_ALLOW_PRODUCTION");
 if (!forgePrivateJwk || !allowProduction) {
   throw new Error(
-    "os/prd is missing AUTH_FORGE_PRIVATE_JWK or AUTH_FORGE_ALLOW_PRODUCTION — cannot mirror the forge key.",
+    "os/prd is missing AUTH_FORGE_ES256_PRIVATE_JWK or AUTH_FORGE_ALLOW_PRODUCTION — cannot mirror the forge key.",
   );
 }
 setDopplerSecrets("streams-example-app", "prd", {
-  AUTH_FORGE_PRIVATE_JWK: forgePrivateJwk,
+  AUTH_FORGE_ES256_PRIVATE_JWK: forgePrivateJwk,
   AUTH_FORGE_ALLOW_PRODUCTION: allowProduction,
 });
 console.log("forge key mirrored into streams-example-app/prd");
