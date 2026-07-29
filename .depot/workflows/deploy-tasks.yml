@@ -45,8 +45,13 @@ jobs:
         working-directory: apps/tasks
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: 04b3b57291ef2626c6a8daa9d47065a7
-        run: doppler run --project os --config prd -- pnpm run deploy
+        # The account pin is applied AFTER doppler injects its secrets —
+        # `doppler run` overrides pre-set env vars by default, so a step-env
+        # pin could silently lose to a config-supplied value.
+        run: >-
+          doppler run --project os --config prd --
+          env CLOUDFLARE_ACCOUNT_ID=04b3b57291ef2626c6a8daa9d47065a7
+          pnpm run deploy
   notify:
     needs:
       - deploy
