@@ -7,7 +7,7 @@ import { forgedSubjectForEmail, mintForgedAccessToken, mintForgedIdToken } from 
 // Mint an OS session for any identity — dev, preview, and production.
 //
 // Auth and every relying party use one environment signing key whose private
-// half lives in Doppler (`AUTH_FORGE_PRIVATE_JWK`, from `_shared/dev` /
+// half lives in Doppler (`AUTH_FORGE_ES256_PRIVATE_JWK`, from `_shared/dev` /
 // `_shared/preview` and the prd app configs). This script signs an access+id
 // token pair with that key — fully offline, no auth worker involved — so you
 // can be any user instantly. The key is a master key; in prod it is gated
@@ -104,10 +104,10 @@ function resolveBaseUrl(): string {
   );
 }
 
-const forgePrivateJwkJson = process.env.AUTH_FORGE_PRIVATE_JWK?.trim();
+const forgePrivateJwkJson = process.env.AUTH_FORGE_ES256_PRIVATE_JWK?.trim();
 if (!forgePrivateJwkJson) {
   throw new Error(
-    "AUTH_FORGE_PRIVATE_JWK is not in the environment. Run under a Doppler config that carries " +
+    "AUTH_FORGE_ES256_PRIVATE_JWK is not in the environment. Run under a Doppler config that carries " +
       "the forge key — dev, preview, or prd (e.g. `doppler run --project os --config dev -- pnpm auth:mint ...`). " +
       "Prod additionally requires AUTH_FORGE_ALLOW_PRODUCTION=true in each consuming app's deploy config.",
   );

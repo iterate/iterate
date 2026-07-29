@@ -47,7 +47,7 @@ test("phone client seam: new mobile chat gets a live agent reply", async () => {
 
   // The phone lane: bearer token over the app's own dial.
   const token = await mintForgedAccessToken({
-    forgePrivateJwk: requireEnv("AUTH_FORGE_PRIVATE_JWK"),
+    forgePrivateJwk: requireEnv("AUTH_FORGE_ES256_PRIVATE_JWK"),
     issuer: requireEnv("APP_CONFIG_ITERATE_AUTH__ISSUER"),
     audience: process.env.APP_CONFIG_ITERATE_AUTH__RESOURCE?.trim() || portlessOrigin(baseUrl),
     email: "mobile-e2e@nustom.com",
