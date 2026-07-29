@@ -17,7 +17,7 @@
 
 import { ITX_EXAMPLES, runScriptEnvelope } from "../../itx/examples.ts";
 
-export type ResolvedSlashCommand = {
+type ResolvedSlashCommand = {
   /** Which command matched — recorded on nothing, useful for tests/logs. */
   command: "example" | "script";
   /** The exact `async (itx) => …` source handed to the run-script door. */
