@@ -15,5 +15,10 @@ function DocumentPage() {
   if (search.workspace === undefined || search.path === undefined) {
     return <DeepLinkEmptyState />;
   }
-  return <WorkspaceDocumentPage workspacePath={search.workspace} path={search.path} />;
+  // A deep link owns one collab session. Switching either address must tear
+  // down its live editor, refs, and attach gate before the next snapshot shows.
+  const documentKey = JSON.stringify([search.workspace, search.path]);
+  return (
+    <WorkspaceDocumentPage key={documentKey} workspacePath={search.workspace} path={search.path} />
+  );
 }
