@@ -258,7 +258,7 @@ export const envs = {
   preview_19: previewSlot(19, {
     projectDirectoryKvId: "916fa97c2ec84067997012702f242646",
     workerBuildCacheKvId: "a22450ba186a40549cfe2cff29079aca",
-    authDbId: "f9facd1f-0699-4766-8aa4-b00c7a59ff34",
+    authDbId: "42efe1e4-194f-4c61-8e62-810ec35fbf43",
   }),
 } satisfies Record<string, DeployedEnv>;
 

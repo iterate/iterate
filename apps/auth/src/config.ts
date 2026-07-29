@@ -1,6 +1,9 @@
 import { parseAppConfigFromEnv, publicValue, redacted, Redacted } from "@iterate-com/shared/config";
 import { z } from "zod/v4";
-import { parseAuthSigningPrivateJwk } from "../../../scripts/lib/bake-auth-jwks.ts";
+import {
+  parseAuthSigningEs256PrivateJwk,
+  parseAuthSigningPrivateJwk,
+} from "../../../scripts/lib/bake-auth-jwks.ts";
 
 /**
  * Default glob allowlist promoting matching emails to platform admin.
@@ -67,6 +70,12 @@ export const AppConfig = z.object({
 export type AppConfig = z.output<typeof AppConfig> & {
   /** Doppler-owned Ed25519 key used by Better Auth to sign JWTs. */
   authSigningPrivateJwk: Redacted<string>;
+  /**
+   * Optional Doppler-owned ES256 (P-256) key. When present, Better Auth signs
+   * new id/access tokens with it (Cloudflare Access rejects EdDSA) while the
+   * Ed25519 public key stays in the JWKS for existing verifiers.
+   */
+  authSigningEs256PrivateJwk?: Redacted<string>;
 };
 
 /**
@@ -82,6 +91,14 @@ export function parseConfig(env: unknown): AppConfig {
   }
   parseAuthSigningPrivateJwk(privateJwk);
 
+  // Optional ES256 key: validate its shape now (fail fast) when present.
+  const es256PrivateJwkRaw = rawEnv.AUTH_FORGE_ES256_PRIVATE_JWK;
+  const es256PrivateJwk =
+    typeof es256PrivateJwkRaw === "string" && es256PrivateJwkRaw.trim() !== ""
+      ? es256PrivateJwkRaw
+      : undefined;
+  if (es256PrivateJwk) parseAuthSigningEs256PrivateJwk(es256PrivateJwk);
+
   return {
     ...parseAppConfigFromEnv({
       configSchema: AppConfig,
@@ -89,5 +106,6 @@ export function parseConfig(env: unknown): AppConfig {
       env: rawEnv,
     }),
     authSigningPrivateJwk: new Redacted(privateJwk),
+    ...(es256PrivateJwk ? { authSigningEs256PrivateJwk: new Redacted(es256PrivateJwk) } : {}),
   };
 }

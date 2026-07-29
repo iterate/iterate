@@ -28,7 +28,10 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
 import { authEnvs } from "../../../envs.ts";
-import { authSigningPrivateJwkForEnvironment } from "../../../scripts/lib/bake-auth-jwks.ts";
+import {
+  authSigningEs256PrivateJwkForEnvironment,
+  authSigningPrivateJwkForEnvironment,
+} from "../../../scripts/lib/bake-auth-jwks.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
 import { run } from "../../../scripts/lib/deploy-helpers.ts";
 import { DEFAULT_ADMIN_ALLOWLIST } from "../src/config.ts";
@@ -60,10 +63,20 @@ export default async function deploy(
     // projectDirectoryKvId is not auth's concern.
     resources: (env) => ({ authDbId: env.resources.authDbId }),
     requiredSecrets: REQUIRED_SECRETS,
+    // Optional ES256 signing key: shipped to the worker only when the env's
+    // Doppler config carries it. Its presence flips id/access token signing to
+    // ES256 (for Cloudflare Access), keeping the Ed25519 public key in the JWKS.
+    optionalSecrets: ["AUTH_FORGE_ES256_PRIVATE_JWK"],
     prepare: (ctx, secretValues, credentials) => {
       // Validate the fixed signing key and the production-key opt-in
       // before migrations or any other deployed state can change.
       authSigningPrivateJwkForEnvironment({
+        dopplerConfig: ctx.env.dopplerConfig,
+        envName: ctx.name,
+        secrets: ctx.secrets,
+      });
+      // Validate the optional ES256 key's shape now (no-op when unset).
+      authSigningEs256PrivateJwkForEnvironment({
         dopplerConfig: ctx.env.dopplerConfig,
         envName: ctx.name,
         secrets: ctx.secrets,
