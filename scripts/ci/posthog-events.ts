@@ -99,7 +99,11 @@ export function systemEvent(
   };
 }
 
-/** UUIDv5 using the RFC URL namespace; PostHog deduplicates retries by this top-level field. */
+/**
+ * UUIDv5 using the RFC URL namespace. PostHog eventually deduplicates rows
+ * sharing this UUID, event name, timestamp, and distinct ID during background
+ * ClickHouse merges; exact fresh-data queries must still group by UUID first.
+ */
 function deterministicEventUuid(identity: string) {
   const urlNamespace = Buffer.from("6ba7b8119dad11d180b400c04fd430c8", "hex");
   const bytes = createHash("sha1").update(urlNamespace).update(identity).digest().subarray(0, 16);

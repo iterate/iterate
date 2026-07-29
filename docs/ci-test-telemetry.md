@@ -133,8 +133,13 @@ doppler run --project _shared --config prd -- \
 ```
 
 Every event has both a readable stable `$insert_id` property and a
-deterministic top-level `uuid`; PostHog deduplicates retries and replays by the
-UUID. A repeated normalized batch is therefore idempotent.
+deterministic top-level `uuid`. PostHog treats rows with the same UUID, event
+name, timestamp, and distinct ID as the same event, so a repeated normalized
+batch is idempotent in the settled dataset. That collapse is eventual: it
+happens during background ClickHouse merges, and freshly replayed physical
+rows can remain query-visible in the meantime. Exact HogQL counts, rates, and
+distributions must therefore first collapse matching system events to one row
+per UUID. Never use a raw `count()` or quantile over replayable events.
 
 The unit job also sets `TEST_TELEMETRY_EXPECTED_WORKSPACES` to all ten test
 workspaces. Preview cannot use a static workspace list because its selected app
@@ -241,10 +246,13 @@ while PostHog events remain the query representation used by this repository.
 `.depot/workflows/ci-telemetry.yml` runs
 `scripts/ci/sync-ci-telemetry.ts` every 15 minutes over a rolling window.
 Stable insert IDs make overlapping windows and manual backfills of immutable
-completion events idempotent. Review-state events are periodic snapshots and
-therefore use the sync's actual observation time. Event timestamps are the
-provider's completion time or the snapshot's observation time, not an
-unrelated PR-updated timestamp.
+completion events eventually idempotent. The overlapping window intentionally
+trades temporary physical duplicates for outage recovery; canonical saved
+insights collapse by UUID before aggregating so background merge timing cannot
+change their answer. Review-state events are periodic snapshots and therefore
+use the sync's actual observation time. Event timestamps are the provider's
+completion time or the snapshot's observation time, not an unrelated
+PR-updated timestamp.
 
 The scheduled collector reads `github-actions`, `github-reviews`, and `depot` as
 independent sources. A failed provider cannot erase healthy events from either
@@ -327,7 +335,9 @@ GH_TOKEN="$(gh auth token)" \
   outcomes and unresolved state.
 
 Both dashboards default to 30 days and honor the dashboard date filter. A
-healthy zero never renders as a blank table:
+saved aggregation first collapses deterministic replay UUIDs; dashboard counts
+and percentiles must not depend on PostHog's background merge timing. A healthy
+zero never renders as a blank table:
 
 - test finalizers say `HEALTHY` or `INCOMPLETE`;
 - review snapshots say `HEALTHY`, `ACTION REQUIRED`, or

@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { postHogEventBatches, systemEvent, type PostHogEvent } from "./posthog-events.ts";
 
-it("uses a stable top-level PostHog UUID for retry and replay deduplication", () => {
+it("uses a stable top-level PostHog UUID for eventual retry and replay deduplication", () => {
   const first = systemEvent("ci test finished", "stable-source-occurrence", "ci-test:1", {});
   const replay = systemEvent("ci test finished", "stable-source-occurrence", "ci-test:1", {});
   const other = systemEvent("ci test finished", "different-occurrence", "ci-test:1", {});

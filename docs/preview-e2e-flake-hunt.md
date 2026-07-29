@@ -640,6 +640,37 @@ shop state and still performs real WebCrypto signing and verification. The
 focused 12-test file fell from 19.8 seconds with one timeout to 0.5 seconds
 green.
 
+After merging the newer `origin/main` at `8c3a38405`, candidate
+`6c5576931` passed the complete local monorepo gate and its automatic
+exact-head CI. Depot aggregate `44qpcl357s` ran every provider job on attempt
+one. The canonical preview workflow `jpgsxnmsmc`, job `0hx8pwbdd9`, attempt
+`j1rtnvrkkb` finished successfully in 241 seconds. Its retained artifact
+contains all ten required raw sources, 322 tests, 7,092 normalized PostHog
+events, zero failures, zero retries, and no incomplete or foreign evidence.
+The separate Depot Test job finished in 82 seconds, lint/typecheck in 32
+seconds, and the remaining required checks were green.
+
+The acceptance audit also found a telemetry-query defect before it could
+distort the new streak. The 15-minute collector intentionally replays an
+overlapping provider window with stable UUIDs. PostHog eventually collapses
+matching UUID, event, timestamp, and distinct-ID rows during background
+ClickHouse merges, but two or three identical physical rows can remain visible
+to fresh HogQL queries until that merge occurs. Raw dashboard counts and
+quantiles therefore depended on merge timing even though the settled dataset
+was idempotent.
+
+All fourteen affected saved aggregations on the test and CI dashboards now
+collapse to one logical row per UUID before counting or computing a
+distribution. Both eight-tile dashboards passed forced fresh execution and
+the subsequent UI cache-path read with no query errors; the three collector
+sources reported `HEALTHY`. The corrected deduplicated 24-hour Depot view had
+119 Test runs, all green (90.0-second p50, 150.2-second p90), and 119 preview
+runs: 73 green, 28 intentionally surfaced failures, and 18 cancellations,
+with successful duration at 292.0-second p50 and 369.8-second p90. The preview
+failure population includes this round's deliberately rejected diagnostic
+proof runs, so it is evidence of the flake hunt rather than a production
+release-rate estimate.
+
 ## Round 15 (2026-07-23, post-#2284)
 
 This round starts from merged `origin/main` at
