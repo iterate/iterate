@@ -6,6 +6,7 @@ import {
   GithubAiLinterProcessorContract,
   githubAiLinterEventTypes,
   type GithubAiLinterAnalysisRequested,
+  type GithubAiLinterPublicationResult,
 } from "./contract.ts";
 
 const analysisRequest = (headSha: string): GithubAiLinterAnalysisRequested => ({
@@ -277,5 +278,55 @@ describe("GithubAiLinterProcessor", () => {
       },
     ]);
     expect(publishReview).not.toHaveBeenCalled();
+  });
+
+  it("cancels superseded publication while its previous attempt is still in flight", async () => {
+    const publication = Promise.withResolvers<GithubAiLinterPublicationResult>();
+    const publishReview = vi.fn(() => publication.promise);
+    const h = makeProcessorHarness<GithubAiLinterProcessorContract, GithubAiLinterProcessor>({
+      createProcessor: (deps) =>
+        new GithubAiLinterProcessor({
+          path: deps.path,
+          projectId: deps.projectId,
+          publishReview,
+          stream: deps.stream,
+        }),
+    });
+
+    await h.append({
+      type: githubAiLinterEventTypes.analysisRequested,
+      payload: analysisRequest("head-one"),
+    });
+    await h.append({
+      type: githubAiLinterEventTypes.analysisSettled,
+      payload: {
+        analysisRequestOffset: 1,
+        result: {
+          assessment: { summary: "The first head is clean.", verdict: "approve" },
+          status: "succeeded",
+        },
+      },
+    });
+    expect(publishReview).toHaveBeenCalledOnce();
+
+    await h.append({
+      type: githubAiLinterEventTypes.analysisRequested,
+      payload: analysisRequest("head-two"),
+    });
+
+    expect(h.state().analyses[0]?.publication).toEqual({
+      reason: "A newer analysis superseded this unpublished review.",
+      status: "cancelled",
+    });
+
+    publication.resolve({
+      reviewId: 42,
+      reviewUrl: "https://github.com/acme/widgets/pull/7#pullrequestreview-42",
+      status: "succeeded",
+    });
+    await h.settle();
+
+    // The late network result loses the processor-owned terminal-key race.
+    expect(h.state().analyses[0]?.publication.status).toBe("cancelled");
   });
 });

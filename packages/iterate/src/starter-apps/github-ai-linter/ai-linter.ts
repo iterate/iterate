@@ -352,7 +352,7 @@ export class GithubAiLinterProcessor extends StreamProcessor<
       );
     }
 
-    if (latest === null || this.#livePublications.has(latest.analysisRequestOffset)) return;
+    if (latest === null) return;
     const latestSummary = state.analyses.find(
       ({ analysisRequestOffset }) => analysisRequestOffset === latest.analysisRequestOffset,
     );
@@ -383,6 +383,12 @@ export class GithubAiLinterProcessor extends StreamProcessor<
       );
       return;
     }
+
+    // Supersession above is a durable consequence and must not be hidden by
+    // this incarnation's runtime-only attempt guard. If publication is already
+    // in flight, its eventual settlement races the cancellation on the same
+    // idempotency key and the cancellation remains authoritative.
+    if (this.#livePublications.has(latest.analysisRequestOffset)) return;
 
     this.#livePublications.add(latest.analysisRequestOffset);
     // A dropped attempt is recovered from the still-requested state on the
