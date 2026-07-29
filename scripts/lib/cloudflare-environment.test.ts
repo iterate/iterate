@@ -106,6 +106,28 @@ describe("destroyWranglerEnvironment", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("fails instead of looping when listed Artifact repos are already absent", async () => {
+    const cf = async <T = unknown>(path: string, init?: RequestInit): Promise<T> => {
+      if (path.startsWith("/artifacts/namespaces/os-preview-1-repos/repos?")) {
+        return [{ name: "stale-repository" }] as T;
+      }
+      if (path.startsWith("/artifacts/namespaces/os-preview-1-repos/repos/")) {
+        throw new CloudflareApiError(init?.method ?? "GET", path, 404, []);
+      }
+      return [] as T;
+    };
+
+    await expect(
+      destroyWranglerEnvironment({
+        ctx: { cf },
+        osWorkerName: "os-preview-1",
+        workerNames: ["os-preview-1"],
+      }),
+    ).rejects.toThrow(
+      "Artifacts cleanup made no progress for os-preview-1-repos; Cloudflare still lists: stale-repository",
+    );
+  });
+
   it("fails when Cloudflare reports a deletion but retains the Worker", async () => {
     const cf = async <T = unknown>(path: string): Promise<T> => {
       if (path === "/workers/scripts") return [{ id: "auth-dev-global" }] as T;

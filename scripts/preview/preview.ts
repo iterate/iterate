@@ -4059,7 +4059,7 @@ async function cleanupPreviewForPullRequest(
             ? "Preview environment released."
             : `Preview teardown failed: ${formatPreviewErrorMessage(cleanupFailure)}`,
           cleanupDurationMs,
-          status: ok ? ("released" as const) : ("cleanup-failed" as const),
+          status: ok ? "released" : "cleanup-failed",
           updatedAt: new Date().toISOString(),
         },
       ]),

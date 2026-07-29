@@ -56,10 +56,19 @@ async function destroyArtifactRepositories(ctx: CfContext, namespace: string) {
   for (;;) {
     const repositories = await listArtifactRepositoryPage(ctx, namespace);
     if (repositories.length === 0) break;
+    let deleted = 0;
     for (const repository of repositories) {
       if (await deleteIfPresent(ctx, `${path}/${encodeURIComponent(repository.name)}`)) {
+        deleted += 1;
         console.log(`deleted Artifacts repository ${namespace}/${repository.name}`);
       }
+    }
+    if (deleted === 0) {
+      throw new Error(
+        `Artifacts cleanup made no progress for ${namespace}; Cloudflare still lists: ${repositories
+          .map(({ name }) => name)
+          .join(", ")}`,
+      );
     }
   }
   console.log(
