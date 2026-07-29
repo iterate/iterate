@@ -189,6 +189,9 @@ test("review a workspace document in the seeded Docs app", async ({ baseURL, pag
       .waitFor({ timeout: 120_000 });
   });
   await page.getByText(/^live · v\d+$/).waitFor({ timeout: 30_000 });
+  // The PR walkthrough is about reviewing the document, not account
+  // provisioning and cold-start setup that this end-to-end proof also covers.
+  page.videoMode?.setStartTime();
 
   // A task-list checkbox is part of its list row, not a detached line above
   // the copy. This geometric assertion protects the exact rendering failure
