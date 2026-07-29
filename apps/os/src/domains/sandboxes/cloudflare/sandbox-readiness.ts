@@ -2,7 +2,7 @@ import { settleByDeadline } from "../../execution-deadline.ts";
 
 /**
  * The named catalogue-command phase was 12.5s at p99 across 421 samples
- * within the 463 browser sandbox-exec runs reviewed on 2026-07-28. Thirty
+ * within the 463 browser sandbox-exec runs reviewed on 2026-07-29. Thirty
  * seconds leaves more than twice that tail for one placement while refusing
  * the observed 150s+ silent provisioning wedge.
  */
