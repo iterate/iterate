@@ -196,6 +196,37 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
             ]),
           );
         }
+        // SLASH COMMANDS — a user message that resolves to a known command
+        // runs as a codemode script with this agent's provenance instead of
+        // triggering an LLM turn (contextTriggerSource skips it via the SAME
+        // pure resolver, so processor and reduce can never disagree). Checked
+        // BEFORE the interrupt: a command is a side-band action, not
+        // conversation — it must neither cancel an in-flight turn nor be
+        // swallowed by the interrupt path's early return. Blocked per-event
+        // consequence with the assistant-script path's discipline:
+        // deterministic body (expiry anchored to the event, never `now`) so
+        // an at-least-once redelivery dedupes on the key, race-tolerant for
+        // a config change between deliveries. Non-resolving "/..." text falls
+        // through to the model untouched.
+        if (payload.role === "user") {
+          const slashCommand = resolveSlashCommand(payload.content);
+          if (slashCommand !== null) {
+            blockProcessorWhile(() =>
+              this.#appendUnlessLostIdempotencyRace(append, [
+                {
+                  type: "events.iterate.com/capability-host/script-run-requested",
+                  payload: {
+                    code: slashCommand.code,
+                    executionId: `${SLASH_COMMAND_EXECUTION_PREFIX}${event.offset}`,
+                    expiresAt: Date.parse(event.createdAt) + state.config.llmRequestExpiryMs,
+                  },
+                  idempotencyKey: this.idempotencyKey(`slash-command@${event.offset}`),
+                },
+              ]),
+            );
+            break;
+          }
+        }
         // INTERRUPT — cancellation is a property of new input, never a
         // free-standing command. Abort whatever this incarnation is running
         // and settle the open request as cancelled, carrying the streamed
@@ -256,34 +287,6 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           // settlement's own delivery re-runs everything over the settled
           // reduce, where the interrupting input's trigger drives the next turn.
           return;
-        }
-        // SLASH COMMANDS — a user message that resolves to a known command
-        // runs as a codemode script with this agent's provenance instead of
-        // triggering an LLM turn (contextTriggerSource skips it via the SAME
-        // pure resolver, so processor and reduce can never disagree). Blocked
-        // per-event consequence with the assistant-script path's discipline:
-        // deterministic body (expiry anchored to the event, never `now`) so
-        // an at-least-once redelivery dedupes on the key, race-tolerant for
-        // a config change between deliveries. Non-resolving "/..." text falls
-        // through to the model untouched.
-        if (payload.role === "user") {
-          const slashCommand = resolveSlashCommand(payload.content);
-          if (slashCommand !== null) {
-            blockProcessorWhile(() =>
-              this.#appendUnlessLostIdempotencyRace(append, [
-                {
-                  type: "events.iterate.com/capability-host/script-run-requested",
-                  payload: {
-                    code: slashCommand.code,
-                    executionId: `${SLASH_COMMAND_EXECUTION_PREFIX}${event.offset}`,
-                    expiresAt: Date.parse(event.createdAt) + state.config.llmRequestExpiryMs,
-                  },
-                  idempotencyKey: this.idempotencyKey(`slash-command@${event.offset}`),
-                },
-              ]),
-            );
-            break;
-          }
         }
         // RESPONSE PARSING — an accepted assistant output may carry ONE
         // codemode script; extraction rides the same delivery that reduced the

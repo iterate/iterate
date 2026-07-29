@@ -112,10 +112,10 @@ grilling:
 - [x] Notification intent: agent-thread destination for thread-scoped batches _notification processor emits {kind: "agent-chat", path} for batches with /agents/ script provenance; approvals destination remains for scope holds_
 - [ ] Push suppression: seen-claim + grace window in the delivery layer
 - [x] Mobile routing: thread deep-link focuses the in-thread dialog _agent-chat routing already lands on the chat screen, which now renders every open batch for the thread — no focusing param needed_
-- [ ] Expiry/pre-approve: design notes written (above), explicitly no code
-- [ ] Spec: rewrite around `/example` from the chat composer; DELETE both
-      spinner-waiter disables; fresh VIDEO_MODE recording in the PR body
-- [ ] `pnpm typecheck && pnpm lint && pnpm knip && pnpm test`; PR hygiene
+- [x] Expiry/pre-approve: design notes written (above), explicitly no code
+- [x] Spec: rewrite around a slash command from the chat composer; fresh
+      VIDEO_MODE recording in the PR body _rewritten around `/script` (self-contained echo burst, no external host); the OLD dead-air disables are gone — three narrowly-scoped frame-gap guards remain with comments (batch-card mounts on live pushes; spinner-waiter's 100ms handoff bridge is narrower than a React commit gap — candidate middlewright improvement); 5 local passes ~30s_
+- [x] `pnpm typecheck && pnpm lint && pnpm knip && pnpm test`; PR hygiene _green_
 
 ## Out of scope
 

@@ -1789,6 +1789,32 @@ describe("AgentProcessor slash commands", () => {
     expect(h.events(REQUESTED)).toHaveLength(0);
   });
 
+  it("a /script mid-turn runs as a side-band action: no interrupt, no lost command", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("Hello there")],
+      ["advanceTime", 10_000], // open the turn — the LLM call is now in flight
+    );
+    expect(h.state().openRequest).not.toBeNull();
+
+    await h.play([
+      "append",
+      userMessage("/script await itx.__describe()", { behaviour: "interrupt-current-request" }),
+    ]);
+
+    // The command ran; the in-flight turn was NOT cancelled by it.
+    expect(h.events("events.iterate.com/capability-host/script-run-requested")).toHaveLength(1);
+    expect(h.state().openRequest).not.toBeNull();
+    expect(
+      h
+        .events(SETTLED)
+        .filter(
+          (event) =>
+            (event.payload as { result: { status: string } }).result.status === "cancelled",
+        ),
+    ).toHaveLength(0);
+  });
+
   it("a non-resolving /example (bad slug) falls through to an ordinary model turn", async () => {
     const h = makeAgentHarness();
     await h.play(
