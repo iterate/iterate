@@ -106,7 +106,9 @@ describe("NotificationProcessor approval intents", () => {
         audience: { kind: "project" },
         title: "Approvals needed",
         body: "Script run waiting: 3 requests (2x gmail.googleapis.com, 1x api.stripe.com)",
-        destination: { kind: "approvals", approvalRequestEventOffset: 2 },
+        // An agent thread's batch deep-links to the THREAD — the in-thread
+        // dialog is the approval surface; the approvals screen is history.
+        destination: { kind: "agent-chat", path: "/agents/demo" },
         expiresAt: Date.parse("2026-07-19T08:05:00.000Z"),
       },
     });

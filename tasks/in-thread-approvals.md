@@ -104,14 +104,14 @@ grilling:
 
 ## Checklist
 
-- [ ] Slash commands: server-side interception at the inbound door;
-      `/example` + `/script`; unknown commands fall through; unit tests
-- [ ] Mobile chat: in-thread approval dialog (open batches for this thread),
-      approve/reject with reason, reusing the approvals lib
+- [x] Slash commands: server-side interception at the inbound door;
+      `/example` + `/script`; unknown commands fall through; unit tests _slash-commands.ts (pure resolver shared by processEvent + contextTriggerSource, so a resolving command runs deterministically and triggers no model turn); runScriptEnvelope moved into the examples catalogue; resolver unit tests + two harness lanes_
+- [x] Mobile chat: in-thread approval dialog (open batches for this thread),
+      approve/reject with reason, reusing the approvals lib _components/in-thread-approval.tsx rendered at the inverted list's visual bottom; shares the approvals screen's query key; reject-reason prompt moved to lib/reject-reason.ts_
 - [ ] Approvals screen: thread-status-at-request-time context line
-- [ ] Notification intent: agent-thread destination for thread-scoped batches
+- [x] Notification intent: agent-thread destination for thread-scoped batches _notification processor emits {kind: "agent-chat", path} for batches with /agents/ script provenance; approvals destination remains for scope holds_
 - [ ] Push suppression: seen-claim + grace window in the delivery layer
-- [ ] Mobile routing: thread deep-link focuses the in-thread dialog
+- [x] Mobile routing: thread deep-link focuses the in-thread dialog _agent-chat routing already lands on the chat screen, which now renders every open batch for the thread — no focusing param needed_
 - [ ] Expiry/pre-approve: design notes written (above), explicitly no code
 - [ ] Spec: rewrite around `/example` from the chat composer; DELETE both
       spinner-waiter disables; fresh VIDEO_MODE recording in the PR body
@@ -125,4 +125,17 @@ grilling:
 
 ## Implementation log
 
-(append as work proceeds)
+- Slash-command trigger suppression is derived from the SAME pure resolver in
+  both the event handler and contextTriggerSource — processor and reduce can
+  never disagree about whether a message was a command.
+- The command's script runs with executionId `slash-command:<offset>`; the
+  settled render and activeScriptExecutionIds treat it like an agent-authored
+  run, so the result lands in context and drives the agent's next turn — the
+  chat's working indicator therefore spans command → run → (approval) →
+  result → reply, which is what lets the spec drop its spinner-waiter
+  disables.
+- Push-suppression design note (not yet built): the seen-claim must reference
+  the approval BATCH offset (the client never sees device-stream offsets),
+  so the notification intent/device obligation needs to carry it even for
+  agent-chat destinations; and the grace expiry needs the device DO's alarm
+  to nudge the state-derived send pass. Design carefully before building.
