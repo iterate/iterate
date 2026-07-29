@@ -1,4 +1,9 @@
-import type { ItxBinding, StreamEvent, StreamEventInput } from "../../sdk.ts";
+import type {
+  ItxBinding,
+  StatefulDynamicWorkerRef,
+  StreamEvent,
+  StreamEventInput,
+} from "../../sdk.ts";
 import type { GithubAiLinterRuleSource } from "./rules.ts";
 
 export type GithubAiLinterConfig = {
@@ -81,5 +86,5 @@ function reviewBotAppRef(connection: string, config: GithubAiLinterConfig) {
         },
       },
     },
-  } as const;
+  } satisfies StatefulDynamicWorkerRef;
 }
