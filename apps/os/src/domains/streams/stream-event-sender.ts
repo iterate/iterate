@@ -143,10 +143,12 @@ const DELIVERY_BATCH_LIMIT = 1000;
  * Hosted processors can turn one event into arbitrary Durable Object and
  * external work. Give each matching event its own acknowledgement boundary so
  * a slow event cannot make already-processed siblings time out and replay.
- * The source still scans up to DELIVERY_BATCH_LIMIT rows at once, so filters
- * skip irrelevant stretches without emitting one empty callback per row.
+ * Matching work is deliberately one-at-a-time. The separate scan limit keeps
+ * reconstructing and filtering a noisy source from filling the source Durable
+ * Object's memory before that one-event boundary can help.
  */
 const HOSTED_CALLBACK_EVENT_LIMIT = 1;
+const HOSTED_SCAN_EVENT_LIMIT = 100;
 
 /** Soft cap on a delivery batch's payload bytes (large events shrink the batch). */
 const DELIVERY_BATCH_BYTE_LIMIT = 1024 * 1024;
@@ -1978,7 +1980,7 @@ export class StreamConnections {
             const readEvents = this.#hooks.readBatch(
               deliveredThroughOffset,
               Number.MAX_SAFE_INTEGER,
-              DELIVERY_BATCH_LIMIT,
+              kind === "hosted" ? HOSTED_SCAN_EVENT_LIMIT : DELIVERY_BATCH_LIMIT,
             );
             const lastOffset = readEvents.at(-1)?.event.offset;
             if (lastOffset === undefined) {

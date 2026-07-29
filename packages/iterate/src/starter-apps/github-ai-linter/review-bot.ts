@@ -162,10 +162,10 @@ export async function handleGithubPullRequestWebhook(
     headSha !== undefined &&
     baseSha !== undefined;
 
-  // The durable agent subscription copies all later PR history. This router
-  // only acts when a delivery can create/wake the normal agent or request a
-  // linter analysis; status/edit/thread bookkeeping stays on the copied
-  // history without making this connection-level processor do work.
+  // The router turns the few webhooks which require work into explicit agent
+  // context or linter events below. The normal PR agent can read GitHub when
+  // asked; mirroring every raw webhook onto its stream only creates a second
+  // unbounded history and a source subscription per PR.
   if (!reviewLifecycleEvent && !mention) return;
 
   const linkedRepos =
@@ -200,9 +200,7 @@ export async function handleGithubPullRequestWebhook(
     streamPath: event.path,
     type: "event",
   };
-  // The durable receive rule below records every matching webhook on the
-  // agent stream with platform-authored source.copiedFrom history. These are
-  // only the companion agent events that should trigger work.
+  // These are the only companion agent events which should trigger work.
   const agentEvents: StreamEventInput[] = [];
 
   if (mention && author !== undefined && typeof requestBody === "string") {
@@ -237,16 +235,6 @@ export async function handleGithubPullRequestWebhook(
     );
   }
 
-  await agent.stream.subscribeToEventsFrom({
-    sourceStreamPath: event.path,
-    subscriptionKey: `userspace:github-pr:${repoPath}`,
-    description: `Verified GitHub webhooks for ${repository.owner}/${repository.repo}#${number}`,
-    filter: {
-      eventTypes: ["events.iterate.com/github/webhook-received"],
-      jsonataCondition: `payload.associations.repository.id = ${repository.id} and payload.associations.pullRequest.number = ${number}`,
-    },
-    start: "beginning",
-  });
   await agent.append(
     {
       type: "events.iterate.com/agents/context-added",

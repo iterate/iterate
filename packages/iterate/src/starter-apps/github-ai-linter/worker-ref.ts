@@ -1,4 +1,5 @@
 import type { StatefulDynamicWorkerRef, StreamEvent, StreamEventInput } from "../../sdk.ts";
+import { githubAiLinterEventTypes } from "./contract.ts";
 import type { GithubAiLinterRuleSource } from "./rules.ts";
 
 export type GithubAiLinterConfig = {
@@ -85,6 +86,13 @@ export async function pullRequestLinterSubscriptionEvent(
     type: "events.iterate.com/stream/subscription-configured",
     payload: {
       subscriptionKey: "app-github-ai-linter#github-ai-linter",
+      // The linter Durable Object reduces this explicit protocol, not the
+      // surrounding agent's tool calls, LLM bookkeeping, or conversation.
+      // Source-side filtering makes a restart proportional to analyses rather
+      // than to every durable event the generic agent has ever appended.
+      filter: {
+        eventTypes: Object.values(githubAiLinterEventTypes),
+      },
       receiver: {
         action: "processor-wake",
         expression: [

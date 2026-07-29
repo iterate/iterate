@@ -2123,13 +2123,16 @@ describe("StreamConnections hosted delivery watchdog", () => {
       streamEvent(3, "events.example.com/matched"),
       streamEvent(4, "events.example.com/ignored"),
     ];
+    const readLimits: number[] = [];
     const h = connectionsHarness({
       events,
-      readBatch: (afterOffset, beforeOffset, limit) =>
-        events
+      readBatch: (afterOffset, beforeOffset, limit) => {
+        readLimits.push(limit);
+        return events
           .filter((event) => event.offset > afterOffset && event.offset < beforeOffset)
           .slice(0, limit)
-          .map((event) => ({ event, byteLength: JSON.stringify(event).length })),
+          .map((event) => ({ event, byteLength: JSON.stringify(event).length }));
+      },
     });
     const calls: DeliveryCall[] = [];
     const connection = h.connections.openHosted({
@@ -2154,6 +2157,7 @@ describe("StreamConnections hosted delivery watchdog", () => {
       scannedThroughOffset: 4,
     });
     expect(calls[1]!.batch.events.map((event) => event.offset)).toEqual([3]);
+    expect(readLimits).toEqual([100, 100]);
   });
 
   it("turns a live callback timeout into a counted failure and ignores its late result", async () => {

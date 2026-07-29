@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GithubRepoLink, Project, StreamEvent, StreamEventInput } from "iterate/sdk";
-import { handleGithubPullRequestWebhook as handleGithubPullRequestWebhookWithPolicy } from "iterate/starter-apps/github-ai-linter/worker";
+import {
+  githubAiLinterEventTypes,
+  handleGithubPullRequestWebhook as handleGithubPullRequestWebhookWithPolicy,
+} from "iterate/starter-apps/github-ai-linter/worker";
 
 const testAndSpecFileGlobs = [
   "!**/*.{test,spec}.{js,jsx,mjs,cjs,ts,tsx,mts,cts}",
@@ -319,17 +322,7 @@ describe("userspace GitHub pull-request routing", () => {
         },
       },
     ]);
-    expect(test.subscribeToEventsFrom).toHaveBeenCalledWith(agentPath, {
-      sourceStreamPath: "/integrations/github/install-789",
-      subscriptionKey: "userspace:github-pr:/repos/config",
-      description: "Verified GitHub webhooks for acme/widgets#7",
-      filter: {
-        eventTypes: ["events.iterate.com/github/webhook-received"],
-        jsonataCondition:
-          "payload.associations.repository.id = 101 and payload.associations.pullRequest.number = 7",
-      },
-      start: "beginning",
-    });
+    expect(test.subscribeToEventsFrom).not.toHaveBeenCalled();
     expect(linterAgentEvents).toMatchObject([
       {
         idempotencyKey: "github-ai-linter/agent-policy:v1",
@@ -375,6 +368,9 @@ describe("userspace GitHub pull-request routing", () => {
           "github-ai-linter/subscription:install-789:101:7:policy:2:stream:/agents/repos/config/pr/7/ai-linter",
         payload: {
           subscriptionKey: "app-github-ai-linter#github-ai-linter",
+          filter: {
+            eventTypes: Object.values(githubAiLinterEventTypes),
+          },
           receiver: {
             action: "processor-wake",
             processorSlug: "github-ai-linter",
@@ -445,10 +441,7 @@ describe("userspace GitHub pull-request routing", () => {
     expect(test.create).toHaveBeenCalledWith(iterateAgentPath);
     expect(test.create).toHaveBeenCalledWith(iterateLinterPath);
     expect(test.appendBatches[0]?.path).toBe(iterateAgentPath);
-    expect(test.subscribeToEventsFrom).toHaveBeenCalledWith(
-      iterateAgentPath,
-      expect.objectContaining({ subscriptionKey: "userspace:github-pr:/repos/iterate" }),
-    );
+    expect(test.subscribeToEventsFrom).not.toHaveBeenCalled();
   });
 
   it("self-heals both agents from a later synchronize delivery", async () => {
