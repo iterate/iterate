@@ -96,14 +96,15 @@ the app's own zod schema before uploading anything.
 `pnpm infra destroy --env <name>` deletes the whole environment in dependency
 order:
 
-1. Every repository in the OS Artifacts namespace. Cloudflare has no
-   Artifacts-namespace delete API, so the command verifies the implicit
-   namespace is empty.
-2. Container applications attached to the OS Worker's Durable Object
+1. Container applications attached to the OS Worker's Durable Object
    namespaces, verified absent before their namespaces disappear.
-3. All seven environment Workers with Cloudflare's `force=true` API. This is
+2. All seven environment Workers with Cloudflare's `force=true` API. This is
    the supported whole-namespace Durable Object teardown: the scripts' DO
    namespaces, instances, storage, and alarms are deleted with them.
+3. Every repository in the OS Artifacts namespace, after no Worker can create
+   more. Cloudflare has no Artifacts-namespace delete API, so the command
+   drains the cursor-paginated repo listing and verifies the implicit namespace
+   is empty.
 4. The Alchemy stack: two D1 databases, two KV namespaces, two R2 buckets,
    state, and generated output.
 

@@ -3,7 +3,7 @@ import { destroyWranglerEnvironment } from "./cloudflare-environment.ts";
 import { CloudflareApiError } from "./env-context.ts";
 
 describe("destroyWranglerEnvironment", () => {
-  it("deletes repositories and container apps before force-deleting Workers and their DOs", async () => {
+  it("stops Workers before draining every page of Artifact repos", async () => {
     const calls: Array<{ init?: RequestInit; path: string }> = [];
     let repositories = Array.from({ length: 51 }, (_, index) => ({
       name: index === 0 ? "project-one" : `project-${index + 1}`,
@@ -29,8 +29,7 @@ describe("destroyWranglerEnvironment", () => {
     const cf = async <T = unknown>(path: string, init?: RequestInit): Promise<T> => {
       calls.push({ init, path });
       if (path.startsWith("/artifacts/namespaces/os-preview-1-repos/repos?")) {
-        const page = Number(new URL(`https://api.cloudflare.test${path}`).searchParams.get("page"));
-        return repositories.slice((page - 1) * 50, page * 50) as T;
+        return repositories.slice(0, 50) as T;
       }
       if (path.startsWith("/artifacts/namespaces/os-preview-1-repos/repos/")) {
         const name = decodeURIComponent(path.split("/").at(-1) ?? "");
@@ -77,6 +76,13 @@ describe("destroyWranglerEnvironment", () => {
     ).toHaveLength(51);
     expect(calls.findIndex(({ path }) => path === "/containers/applications/app-one")).toBeLessThan(
       calls.findIndex(({ path }) => path === "/workers/scripts/os-preview-1?force=true"),
+    );
+    expect(
+      calls.findIndex(({ path }) => path === "/workers/scripts/os-preview-1?force=true"),
+    ).toBeLessThan(
+      calls.findIndex(
+        ({ path }) => path === "/artifacts/namespaces/os-preview-1-repos/repos/project-one",
+      ),
     );
   });
 

@@ -37,17 +37,12 @@ async function deleteIfPresent(ctx: CfContext, path: string) {
   }
 }
 
-async function listArtifactRepositories(ctx: CfContext, namespace: string) {
-  const repositories: z.infer<typeof ArtifactRepository>[] = [];
+async function listArtifactRepositoryPage(ctx: CfContext, namespace: string) {
   const path = `/artifacts/namespaces/${encodeURIComponent(namespace)}/repos`;
   try {
-    for (let page = 1; ; page += 1) {
-      const batch = z
-        .array(ArtifactRepository)
-        .parse(await ctx.cf(`${path}?per_page=${ARTIFACT_REPOSITORY_PAGE_SIZE}&page=${page}`));
-      repositories.push(...batch);
-      if (batch.length < ARTIFACT_REPOSITORY_PAGE_SIZE) return repositories;
-    }
+    return z
+      .array(ArtifactRepository)
+      .parse(await ctx.cf(`${path}?per_page=${ARTIFACT_REPOSITORY_PAGE_SIZE}`));
   } catch (error) {
     if (error instanceof CloudflareApiError && error.status === 404) return [];
     throw error;
@@ -56,16 +51,16 @@ async function listArtifactRepositories(ctx: CfContext, namespace: string) {
 
 async function destroyArtifactRepositories(ctx: CfContext, namespace: string) {
   const path = `/artifacts/namespaces/${encodeURIComponent(namespace)}/repos`;
-  for (const repository of await listArtifactRepositories(ctx, namespace)) {
-    if (await deleteIfPresent(ctx, `${path}/${encodeURIComponent(repository.name)}`)) {
-      console.log(`deleted Artifacts repository ${namespace}/${repository.name}`);
+  // This endpoint is cursor-paginated. Deleting the current page and then
+  // reading page one again avoids carrying a cursor across a mutating result set.
+  for (;;) {
+    const repositories = await listArtifactRepositoryPage(ctx, namespace);
+    if (repositories.length === 0) break;
+    for (const repository of repositories) {
+      if (await deleteIfPresent(ctx, `${path}/${encodeURIComponent(repository.name)}`)) {
+        console.log(`deleted Artifacts repository ${namespace}/${repository.name}`);
+      }
     }
-  }
-  const remaining = await listArtifactRepositories(ctx, namespace);
-  if (remaining.length > 0) {
-    throw new Error(
-      `Artifacts repositories remain in ${namespace}: ${remaining.map(({ name }) => name).join(", ")}`,
-    );
   }
   console.log(
     `Artifacts namespace ${namespace} is empty (Cloudflare exposes no namespace delete API).`,
@@ -118,7 +113,6 @@ export async function destroyWranglerEnvironment(input: {
   osWorkerName?: string;
 }) {
   if (input.osWorkerName) {
-    await destroyArtifactRepositories(input.ctx, `${input.osWorkerName}-repos`);
     await destroyContainerApplications(input.ctx, input.osWorkerName);
   }
 
@@ -156,5 +150,9 @@ export async function destroyWranglerEnvironment(input: {
         .filter(Boolean)
         .join("; "),
     );
+  }
+
+  if (input.osWorkerName) {
+    await destroyArtifactRepositories(input.ctx, `${input.osWorkerName}-repos`);
   }
 }

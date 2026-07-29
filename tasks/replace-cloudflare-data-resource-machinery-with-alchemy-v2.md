@@ -50,17 +50,19 @@ branch, or Alchemy patch.
 `pnpm infra destroy --env <stage>` is the only destructive lifecycle command.
 It is explicit, idempotent, and ordered:
 
-1. Delete every repository in `${osWorkerName}-repos`, then verify the
-   Artifacts namespace is empty. Cloudflare exposes no API to delete an
-   Artifacts namespace itself; an empty implicit namespace is the only
-   unavoidable remainder.
-2. Delete and verify every container application attached to the OS Worker's
+1. Delete and verify every container application attached to the OS Worker's
    Durable Object namespaces.
-3. Force-delete the seven stage Workers: OS, its two compiler sidecars, Auth,
+2. Force-delete the seven stage Workers: OS, its two compiler sidecars, Auth,
    Semaphore, dummy Petshop, and streams example. Cloudflare's supported
    `force=true` Worker deletion also deletes each script's Durable Object
    namespaces, instances, storage, and alarms. Verify both Workers and
    namespaces are absent.
+3. Drain the cursor-paginated repositories in `${osWorkerName}-repos` after no
+   Worker can create more, then verify the Artifacts namespace is empty.
+   Cloudflare exposes no API to delete an Artifacts namespace itself; an empty
+   implicit namespace is the only unavoidable remainder. Alchemy's
+   `Artifacts.Namespace` is likewise a binding marker, not a provisioned
+   resource with create/destroy operations.
 4. Destroy the Alchemy stack and remove its generated manifest.
 
 `dev_global` runs the same path for its single Auth Worker and Auth D1.
