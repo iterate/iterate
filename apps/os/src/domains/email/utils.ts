@@ -216,27 +216,55 @@ export function normalizeInboundEmailAllowedSender(pattern: string): string {
  * True when Cloudflare's inbound MX reports `dmarc=pass` on an
  * Authentication-Results header. The sender allowlist alone authenticates
  * nothing — anyone can put an allowlisted address in the From header — so
- * this gate requires the trusted authserv-id (`mx.cloudflare.net`) on the
- * same AR *record* as `dmarc=pass`. A self-forged
- * `Authentication-Results: evil; dmarc=pass` alone no longer satisfies it.
+ * this gate requires the trusted authserv-id (`mx.cloudflare.net`) on an
+ * AR record that contains `dmarc=pass`.
  *
- * Callers typically pass `headers.get("authentication-results")`, which
- * joins duplicate AR headers with `", "`. We therefore split on both
- * newlines and commas that introduce a new authserv-id, then require a
- * Cloudflare-authored record that contains `dmarc=pass`.
+ * Callers pass `headers.get("authentication-results")`, which joins
+ * duplicate AR headers with `", "`. We split those into records carefully
+ * (see `splitAuthenticationResultsRecords`) and use the **last**
+ * Cloudflare-authored record — MTAs append their AR last, so a trailing
+ * real CF fail is not overridden by an earlier forgery.
  */
 export function dmarcPasses(authenticationResults: string | null): boolean {
   if (authenticationResults === null) return false;
-  // Split into AR records. Fetch `Headers.get` joins multiples with ", ";
-  // raw MIME may separate them with newlines. Within a single record,
-  // methods are `;`-separated (not comma-separated).
-  const records = authenticationResults.split(/(?:\r?\n|,(?=\s*[^,;\s]+\s*;))/);
-  return records.some((record) => {
+
+  let lastCloudflareRecord: string | undefined;
+  for (const record of splitAuthenticationResultsRecords(authenticationResults)) {
     const trimmed = record.trim();
     // Exact authserv-id (optional version digit), then ";". A word-boundary
     // pin would accept forgeries like mx.cloudflare.net.evil / net-evil.
-    return /^mx\.cloudflare\.net(?:\s+\d+)?\s*;/i.test(trimmed) && /\bdmarc=pass\b/i.test(trimmed);
-  });
+    if (/^mx\.cloudflare\.net(?:\s+\d+)?\s*;/i.test(trimmed)) {
+      lastCloudflareRecord = trimmed;
+    }
+  }
+  return lastCloudflareRecord != null && /\bdmarc=pass\b/i.test(lastCloudflareRecord);
+}
+
+/**
+ * Split a combined Authentication-Results value into records.
+ *
+ * - Newlines separate records (raw MIME / multi-line).
+ * - Commas from `Headers.get` also separate records, but only when the text
+ *   *before* the comma is already a complete AR record (`authserv-id; …`).
+ *   That blocks `evil, mx.cloudflare.net; dmarc=pass` from being treated as
+ *   a synthetic Cloudflare record (the left side has no `;`).
+ */
+function splitAuthenticationResultsRecords(value: string): string[] {
+  const records: string[] = [];
+  for (const line of value.split(/\r?\n/)) {
+    let start = 0;
+    const re = /,(?=\s*[^,;\s]+\s*;)/g;
+    let match: RegExpExecArray | null;
+    while ((match = re.exec(line)) !== null) {
+      const left = line.slice(start, match.index);
+      if (left.includes(";")) {
+        records.push(left);
+        start = match.index + 1;
+      }
+    }
+    records.push(line.slice(start));
+  }
+  return records;
 }
 
 /**

@@ -176,6 +176,18 @@ describe("dmarcPasses", () => {
     // Forged alone, still joined shape.
     expect(dmarcPasses("evil.example; dmarc=pass, other.example; spf=pass")).toBe(false);
   });
+
+  test("does not treat 'evil, mx.cloudflare.net; dmarc=pass' as a CF record", () => {
+    // Comma without a complete left-hand AR record is attacker content inside
+    // one header value, not a Headers.get join of two AR headers.
+    expect(dmarcPasses("evil, mx.cloudflare.net; dmarc=pass")).toBe(false);
+    expect(dmarcPasses("not-an-ar-record, mx.cloudflare.net; dmarc=pass")).toBe(false);
+  });
+
+  test("uses the last Cloudflare-authored record (MTA append order)", () => {
+    expect(dmarcPasses("mx.cloudflare.net; dmarc=pass, mx.cloudflare.net; dmarc=fail")).toBe(false);
+    expect(dmarcPasses("mx.cloudflare.net; dmarc=fail, mx.cloudflare.net; dmarc=pass")).toBe(true);
+  });
 });
 
 describe("fallbackInboundMessageKey", () => {
