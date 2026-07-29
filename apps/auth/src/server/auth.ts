@@ -22,9 +22,23 @@ export function getAllowedBrowserOrigins(): string[] {
   return origins;
 }
 
-function isAllowedBrowserOrigin(origin: string | null | undefined) {
+export function isAllowedBrowserOrigin(origin: string | null | undefined) {
   if (!origin || !URL.canParse(origin)) return false;
-  return getAllowedBrowserOrigins().includes(new URL(origin).origin);
+  const url = new URL(origin);
+  // Loopback web clients on ARBITRARY ports — the Expo Web mobile app that
+  // playwright specs and local dev drive (its port is random per run; the
+  // fixed-port MCP-inspector entries above predate this). Browser-side OAuth
+  // (discovery, dynamic registration, token exchange) needs CORS, which
+  // native apps never do. Gated on the test-automation flag so production
+  // auth never trusts localhost pages.
+  if (
+    config.fixedTestOtpEnabled &&
+    url.protocol === "http:" &&
+    ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
+  ) {
+    return true;
+  }
+  return getAllowedBrowserOrigins().includes(url.origin);
 }
 
 export type ProjectIngressTokenPayload = {
@@ -61,8 +75,13 @@ export const auth = betterAuth({
     emailBinding: env.EMAIL,
     emailSenderDomain: config.emailSenderDomain,
   }),
-  trustedOrigins: (request) =>
-    isAllowedBrowserOrigin(request?.headers.get("origin")) ? getAllowedBrowserOrigins() : [],
+  trustedOrigins: (request) => {
+    const origin = request?.headers.get("origin");
+    if (!isAllowedBrowserOrigin(origin)) return [];
+    // Include the requesting origin itself: loopback web clients pass the
+    // predicate on shape, not by membership in the static list.
+    return [...getAllowedBrowserOrigins(), new URL(origin!).origin];
+  },
   secret: config.betterAuthSecret.exposeSecret(),
   session: {
     storeSessionInDatabase: true,
