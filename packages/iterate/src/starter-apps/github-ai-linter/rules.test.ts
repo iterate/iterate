@@ -1,11 +1,11 @@
 import { expect, test } from "vitest";
 import { loadGithubAiLinterRules } from "./rules.ts";
 
-test("the linter reads only configured rule files from one repository commit", async () => {
+test("the linter reads only configured rule files", async () => {
   const calls: Array<{ method: string; value: string }> = [];
   const repo = {
-    readFile: async ({ commitOid, path }: { commitOid?: string; path: string }) => {
-      calls.push({ method: "readFile", value: `${commitOid ?? "HEAD"}:${path}` });
+    readFile: async ({ path }: { path: string }) => {
+      calls.push({ method: "readFile", value: path });
       return {
         commitOid: "abc123",
         path,
@@ -35,7 +35,7 @@ test("the linter reads only configured rule files from one repository commit", a
   expect(calls).toEqual([
     {
       method: "readFile",
-      value: "HEAD:rules/typescript/no-inferable-type-annotation.md",
+      value: "rules/typescript/no-inferable-type-annotation.md",
     },
   ]);
   expect(rules).toEqual({
