@@ -7,6 +7,7 @@
     "skipLibCheck": true,
     "verbatimModuleSyntax": true,
     "declaration": true,
+    "declarationMap": true,
     "outDir": "dist-package",
     "rootDir": "src"
   },

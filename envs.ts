@@ -561,12 +561,5 @@ export const docsEnvs = {
     baseUrl: "https://docs.iterate.workers.dev",
     osBaseUrl: "https://os.iterate.com",
   },
-  preview_2: docsPreviewSlot(2),
-  preview_3: docsPreviewSlot(3),
-  preview_4: docsPreviewSlot(4),
-  preview_5: docsPreviewSlot(5),
-  preview_6: docsPreviewSlot(6),
-  preview_7: docsPreviewSlot(7),
-  preview_8: docsPreviewSlot(8),
-  preview_9: docsPreviewSlot(9),
-} satisfies Record<string, DocsEnv>;
+  ...mapDeployedPreviewEnvs((env) => docsPreviewSlot(previewEnvironmentSlotNumber(env))),
+} satisfies Record<EnvName, DocsEnv>;
