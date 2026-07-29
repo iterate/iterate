@@ -19,10 +19,7 @@ import {
 } from "@iterate-com/workspace-documents/html-annotations";
 import { commentIdentityFor } from "@iterate-com/workspace-documents/identity";
 import { MarkdownDocumentPreview } from "@iterate-com/workspace-documents/preview";
-import type {
-  CommentIdentity,
-  WorkspaceDocumentTransport,
-} from "@iterate-com/workspace-documents/types";
+import type { WorkspaceDocumentTransport } from "@iterate-com/workspace-documents/types";
 import { parseAnnotatedMarkdown } from "iterate/annotated-markdown";
 import { withDocsProject, withDocsProjectOnce } from "../lib/docs-client.ts";
 import type { DocsUser, WorkspaceDocumentSnapshot } from "../lib/docs-api.ts";
@@ -135,7 +132,7 @@ export function WorkspaceDocumentPage({
     );
   }
 
-  const identity: CommentIdentity = commentIdentityFor(loaded.user);
+  const identity = commentIdentityFor(loaded.user);
   const displayName =
     loaded.user.name ?? loaded.user.email ?? loaded.user.userId ?? identity.authorDisplay;
   const busy = status === "connecting…";

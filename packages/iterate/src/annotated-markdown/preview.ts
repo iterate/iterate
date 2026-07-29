@@ -14,16 +14,18 @@ export interface MarkdownPreviewProjection {
  * frontmatter remains byte-for-byte visible with the rest of the raw file.
  */
 export function projectMarkdownPreview(content: string): MarkdownPreviewProjection {
-  const match = /^(?:\uFEFF)?---[ \t]*\r?\n([\s\S]*?)^(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/m.exec(
-    content,
-  );
-  if (match === null) return { body: content, metadata: [] };
+  const opening = /^(?:\uFEFF)?---[ \t]*\r?\n/.exec(content);
+  if (opening === null) return { body: content, metadata: [] };
 
-  const parsed = parseRestrictedFrontmatterYaml(match[1] ?? "");
+  const afterOpening = content.slice(opening[0].length);
+  const closing = /^(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/m.exec(afterOpening);
+  if (closing === null) return { body: content, metadata: [] };
+
+  const parsed = parseRestrictedFrontmatterYaml(afterOpening.slice(0, closing.index));
   if (!parsed.ok) return { body: content, metadata: [] };
 
   return {
-    body: content.slice(match[0].length),
+    body: afterOpening.slice(closing.index + closing[0].length),
     metadata: Object.entries(parsed.data).map(([key, value]) => ({
       key,
       value: formatFrontmatterValue(value),

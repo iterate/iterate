@@ -47,6 +47,23 @@ test("leaves ordinary or invalid frontmatter byte-for-byte visible", () => {
     metadata: [],
   });
 
+  const midDocumentFences = [
+    "# Plain Markdown",
+    "",
+    "Intro before the thematic break.",
+    "",
+    "---",
+    "title: This is document content",
+    "---",
+    "",
+    "Keep the whole document visible.",
+    "",
+  ].join("\n");
+  expect(projectMarkdownPreview(midDocumentFences)).toEqual({
+    body: midDocumentFences,
+    metadata: [],
+  });
+
   const malformed = "---\nlabels: [broken\n---\n# Keep this visible\n";
   expect(projectMarkdownPreview(malformed)).toEqual({ body: malformed, metadata: [] });
 
