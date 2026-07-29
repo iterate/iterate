@@ -96,9 +96,16 @@ It includes two destroy fixes missing from published `2.0.0-beta.65`:
 - [`cd6671e2`](https://github.com/alchemy-run/alchemy/commit/cd6671e297375282104ba81ec6dcb6347ab7a0fd)
   aggregates sibling deletion failures.
 
-There is no local patch. The `pkg.ing` URL is suitable only for this prototype:
-it expires and has no integrity hash. Merge only after Alchemy publishes a
-release containing both fixes with a working dependency graph.
+There is no local patch. The exact-SHA `pkg.ing` package is built by
+[Alchemy's own main-branch package workflow](https://github.com/alchemy-run/alchemy/blob/cd6671e297375282104ba81ec6dcb6347ab7a0fd/.github/workflows/pr-package.yml)
+from that upstream commit. That workflow deliberately retains commit tags
+after PR closure so existing install URLs continue to resolve. A direct pnpm
+Git-subdirectory dependency was also tested and rejected: Alchemy's source
+package depends on monorepo `workspace:*` packages and does not commit its
+built `lib` exports, so consuming Git directly would require custom
+build/package machinery. Keep the retained upstream artifact until npm's
+`next` release includes the fixes; the package URL does not have a separate
+SRI, but it is not a local fork or an expiring PR artifact.
 
 Alchemy stays in a nested, independently locked workspace. Folding it into
 the root lock was tested: it reduced raw lockfile lines but rewrote hundreds
@@ -162,9 +169,9 @@ Live proof on `preview_5` after granting Secrets Store Write:
 
 The one-time Alchemy state-store replacement initially observed the old Worker
 version for 59.47s after upload and failed explicitly. A normal rerun converged
-without a patch. The remaining release blocker is replacing the temporary
-upstream snapshot with a published Alchemy prerelease containing both destroy
-fixes.
+without a patch. Final CI on `f7070bbc9` then deployed the complete preview and
+passed smoke/e2e in 5m41s with no 429, rate-limit backoff, or unexplained
+control-plane failure.
 
 ## Acceptance criteria
 
@@ -178,6 +185,8 @@ fixes.
 - [x] Claude Fable Max and Codex GPT-5.6 Sol Max reviews incorporated.
 - [x] Live create, repeat apply, full Worker deploy/smoke, repeated
       destroy/recreate, and post-destroy absence proven.
-- [ ] Preview e2e proven by CI on the final pushed revision.
-- [ ] Published Alchemy release replaces the expiring prototype pin.
+- [x] Preview e2e proven by CI on the final pushed revision.
+- [x] Alchemy comes from its retained, upstream-built exact-commit package;
+      direct Git consumption and the older npm prerelease were rejected with
+      documented reasons.
 - [ ] All-environment destructive rollout receives explicit human approval.
