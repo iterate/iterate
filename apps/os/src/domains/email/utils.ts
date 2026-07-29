@@ -237,7 +237,7 @@ export function dmarcPasses(authenticationResults: string | null): boolean {
       lastCloudflareRecord = trimmed;
     }
   }
-  return lastCloudflareRecord != null && /\bdmarc=pass\b/i.test(lastCloudflareRecord);
+  return !!lastCloudflareRecord && /\bdmarc=pass\b/i.test(lastCloudflareRecord);
 }
 
 /**
