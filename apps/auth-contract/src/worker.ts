@@ -1,6 +1,7 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import type {
   IterateAuthAccessTokenOrganizationClaim,
+  IterateAuthOrganizationClaim,
   IterateAuthProjectClaim,
 } from "@iterate-com/shared/auth-claims";
 import type {
@@ -83,6 +84,17 @@ export abstract class AuthWorker<Env = unknown> extends WorkerEntrypoint<Env> {
   ): Promise<ProjectCreationResult>;
   abstract getProjectBySlug(input: ProjectInput): Promise<ProjectRecord | null>;
   abstract listProjectsForUser(input: { userId: string }): Promise<UserProjectRecord[]>;
+  /**
+   * Everything a user can reach in one call: the organization + project grants an
+   * access token would carry for them, keyed on `userId` and unfiltered by scope.
+   * The same `{ organizations, projects }` shape the token/session already speak —
+   * for a directory / org-switcher view when identity comes from a wall, not a
+   * grants-bearing token. (`listProjectsForUser` stays as the narrow membership probe.)
+   */
+  abstract getUserGrants(input: { userId: string }): Promise<{
+    organizations: IterateAuthOrganizationClaim[];
+    projects: IterateAuthProjectClaim[];
+  }>;
   abstract mintProjectAppSession(
     input: MintProjectAppSessionInput,
   ): Promise<{ token: string } | null>;
