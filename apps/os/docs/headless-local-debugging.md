@@ -35,7 +35,7 @@ Gotchas:
 - The Doppler scope for `apps/auth` must resolve to a config that exists. If
   `pnpm dev-all` dies with `Could not find requested config 'dev_<you>'`, point it
   at the shared dev config: `doppler configure set config dev --scope apps/auth`.
-- Local Auth and OS read the same `AUTH_FORGE_PRIVATE_JWK`. Auth signs with its
+- Local Auth and OS read the same `AUTH_FORGE_ES256_PRIVATE_JWK`. Auth signs with its
   private half and generated OS config derives the public JWKS, exactly like a
   deployment; no live JWKS fallback is involved.
 

@@ -18,7 +18,7 @@ export async function seedEnvironmentConfigLeases(input: SeedEnvironmentConfigLe
 
   const semaphore = createSemaphoreClient({
     // SEMAPHORE_API_TOKEN (a pre-minted bearer token), else forge-mint an
-    // admin access token from the config's AUTH_FORGE_PRIVATE_JWK.
+    // admin access token from the config's AUTH_FORGE_ES256_PRIVATE_JWK.
     apiKey: createSemaphoreTokenProvider({
       baseUrl: semaphoreBaseUrl,
       email: "semaphore-seed@iterate.com",
