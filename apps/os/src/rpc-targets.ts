@@ -6404,9 +6404,32 @@ export function deploymentItxForInternal(props: { auth: ItxAuth; ctx: CfExecutio
 
 async function projectProcessorState(projectId: string) {
   const project = env.PROJECT.getByName(DurableObjectNameCodec.stringify({ path: "/", projectId }));
-  const processor = await project.processor;
-  const { state } = await processor.snapshot();
-  return state;
+  try {
+    const processor = await project.processor;
+    try {
+      return detachPlainRpcResult(await processor.snapshot()).state;
+    } finally {
+      disposeProjectProcessorStateResource(processor, "processor", projectId);
+    }
+  } finally {
+    disposeProjectProcessorStateResource(project, "project", projectId);
+  }
+}
+
+function disposeProjectProcessorStateResource(
+  resource: unknown,
+  resourceType: "processor" | "project",
+  projectId: string,
+): void {
+  try {
+    disposeIgnoredRpcResult(resource);
+  } catch (error) {
+    console.warn("project processor-state RPC resource dispose failed", {
+      error,
+      projectId,
+      resourceType,
+    });
+  }
 }
 
 /**
