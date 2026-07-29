@@ -37,6 +37,8 @@ export type WorkerBindings = Record<string, unknown>;
 
 const resolvedArtifactMemo = new Map<string, ResolvedWorkerSource>();
 const RESOLVED_ARTIFACT_MEMO_LIMIT = 64;
+const replacementLoaderNonceMemo = new Map<string, string>();
+const REPLACEMENT_LOADER_NONCE_MEMO_LIMIT = 64;
 
 export async function resolveWorkerSource({
   buildBudgetMs,
@@ -214,7 +216,7 @@ export function loadResolvedWorker({
   // "Unable to deserialize cloned data due to invalid or unsupported version".
   // Build artifacts remain content-addressed and shared; only the cheap
   // loaded isolate is deployment-scoped.
-  const cacheKey = [
+  const loaderIdentity = [
     "worker-loader",
     env.WORKER_SELF,
     workerVersion(env),
@@ -222,7 +224,21 @@ export function loadResolvedWorker({
     scopePath,
     JSON.stringify(StreamContext.parse(streamContext)),
     resolved.cacheKey,
-    freshInstanceNonce ?? "shared",
+  ].join(":");
+  if (freshInstanceNonce) {
+    // Clone-version recovery proved the shared loader for this exact identity
+    // stale. Keep using the successful replacement instead of falling back to
+    // the same broken cache hit on every subsequent event batch.
+    replacementLoaderNonceMemo.delete(loaderIdentity);
+    if (replacementLoaderNonceMemo.size >= REPLACEMENT_LOADER_NONCE_MEMO_LIMIT) {
+      const oldest = replacementLoaderNonceMemo.keys().next().value;
+      if (oldest !== undefined) replacementLoaderNonceMemo.delete(oldest);
+    }
+    replacementLoaderNonceMemo.set(loaderIdentity, freshInstanceNonce);
+  }
+  const cacheKey = [
+    loaderIdentity,
+    freshInstanceNonce || replacementLoaderNonceMemo.get(loaderIdentity) || "shared",
   ].join(":");
   return env.LOADER.get(cacheKey, () => ({
     compatibilityDate: resolved.wranglerConfig?.compatibilityDate ?? WORKER_COMPATIBILITY_DATE,
