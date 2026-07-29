@@ -161,6 +161,23 @@ test.skipIf(signingSecret === null)(
       120_000,
     );
 
+    // Router-created agents are normal agents through the public handle. Their
+    // birth event has a source-lifetime suffix on its retry key, so existence
+    // must come from reduced agent state rather than one exact key spelling.
+    using routedAgent = project.agents.get(agentStreamPath);
+    const activity = `Slack e2e public append ${runSuffix}`;
+    await expect(
+      routedAgent.append({
+        type: "events.iterate.com/agent/summary-updated",
+        payload: { activity },
+      }),
+    ).resolves.toMatchObject([
+      {
+        type: "events.iterate.com/agent/summary-updated",
+        payload: { activity },
+      },
+    ]);
+
     // --- LLM reply: codemode script execution requested on the agent stream.
     // The Slack prompt tells the model to reply via its connection's postMessage.
     const withScript = await waitFor(
