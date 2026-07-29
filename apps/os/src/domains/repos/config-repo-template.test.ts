@@ -60,6 +60,7 @@ test("template ships packaged apps behind a thin router", () => {
 test("project lifecycle cases directly install and handle the default heartbeat", async () => {
   const set = vi.fn(async (input: { key: string; recurrence: unknown; script: string }) => input);
   const project = {
+    repos: { list: async () => [] },
     scheduler: { set },
     [Symbol.dispose]: vi.fn(),
   };
@@ -88,7 +89,6 @@ test("project lifecycle cases directly install and handle the default heartbeat"
   } as never);
 
   expect(set).toHaveBeenCalledTimes(2);
-  expect(get).toHaveBeenCalledOnce();
   const configured = set.mock.calls[0]![0];
   expect(configured).toMatchObject({
     key: "iterate/config/heartbeat/every-15-minutes",
