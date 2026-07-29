@@ -1,4 +1,4 @@
-import * as SecureStore from "expo-secure-store";
+import * as SecureStore from "./secure-store.ts";
 import { lastProjectStorageKey } from "./storage-keys.ts";
 
 // Keychain-backed storage. Only small, durable things live here: the server

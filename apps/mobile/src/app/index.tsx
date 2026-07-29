@@ -92,7 +92,7 @@ export default function SignInScreen() {
   if (bootstrap.isPending) {
     return (
       <View style={styles.loading}>
-        <ActivityIndicator color={colors.textMuted} />
+        <ActivityIndicator accessibilityLabel="Loading" color={colors.textMuted} />
       </View>
     );
   }
@@ -163,7 +163,7 @@ export default function SignInScreen() {
           style={[styles.signIn, login.isPending && { opacity: 0.6 }]}
         >
           {login.isPending ? (
-            <ActivityIndicator color={colors.background} />
+            <ActivityIndicator accessibilityLabel="Loading" color={colors.background} />
           ) : (
             <Text style={styles.signInText}>Sign in</Text>
           )}

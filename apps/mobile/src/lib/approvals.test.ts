@@ -265,6 +265,51 @@ test("decide signs ONCE over the whole batch and appends ONE decided event", asy
   ]);
 });
 
+test("a rejection reason rides the decided event and surfaces on the resolved batch", async () => {
+  const open = deriveOpenBatches([requestedBurst(1, "gmail-sends", 2)]);
+  const appended: any[] = [];
+
+  await decide({
+    stream: { append: async (event: any) => void appended.push(event) } as any,
+    projectId: "prj_test",
+    offset: open[0]!.offset,
+    payload: open[0]!.payload,
+    verdicts: ["reject", "reject"],
+    reason: "  wrong recipient — use staging  ",
+    sign: null,
+  });
+
+  // Trimmed on the way in; unsigned like every rejection.
+  expect(appended).toMatchObject([
+    {
+      type: EVENT.decided,
+      payload: {
+        approvalRequestEventOffset: 1,
+        verdicts: ["reject", "reject"],
+        decidedBy: "human",
+        reason: "wrong recipient — use staging",
+      },
+    },
+  ]);
+
+  const resolved = deriveRecentResolvedBatches(
+    [
+      requestedBurst(1, "gmail-sends", 2),
+      {
+        type: EVENT.decided,
+        offset: 2,
+        createdAt: new Date(2026, 0, 1, 0, 0, 2).toISOString(),
+        path: "/",
+        payload: appended[0].payload,
+      },
+    ],
+    5,
+  );
+  expect(resolved).toMatchObject([
+    { offset: 1, decisionSummary: "Rejected", reason: "wrong recipient — use staging" },
+  ]);
+});
+
 test("an all-reject decision never signs — deny is the fail-safe direction", async () => {
   const open = deriveOpenBatches([requestedBurst(1, "gmail-sends", 2)]);
   const appended: any[] = [];
