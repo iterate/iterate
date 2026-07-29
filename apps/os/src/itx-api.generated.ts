@@ -107,6 +107,12 @@ export interface Project {
    */
   identity(): Promise<ProjectIdentity>;
   /**
+   * Canonical URL for one named app on this project's platform hostname.
+   * The deployment config keeps links on the matching production, preview,
+   * or localhost environment.
+   */
+  appUrl(appSlug: string): Promise<string>;
+  /**
    * Admin-only project-seed repair for a platform-owned apex that already
    * reaches this worker through Worker routes. Primes the routing directory,
    * records the hostname in the small project catalog, and waits for it.

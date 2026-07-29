@@ -18,10 +18,8 @@
 # repos with a dangling @<sha> ref.
 #
 # @iterate-com/tasks and @iterate-com/docs are config-side connectors for
-# independently deployed apps. OS itself never depends on them — they exist
-# for external project config repos (e.g. iterate/config), which install them
-# from the @main URLs above. Keeping them out of the seeded template keeps the
-# OS kernel free of hosted-app implementation dependencies.
+# independently deployed apps. The seeded worker installs Docs for its proxy
+# and agent-facing link capability; external config repos can install either.
 #
 # This lives in .github/workflows (real GitHub Actions, like
 # claude-assistant.yml) rather than .depot/workflows: pkg.pr.new's backend

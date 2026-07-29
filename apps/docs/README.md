@@ -11,13 +11,16 @@ addresses one existing workspace and one existing file:
 https://docs--<project>.iterate.app/?workspace=/workspaces/agents/<agent>&path=/reviews/plan.md
 ```
 
-Percent-encoding the two query values is recommended when constructing links
-programmatically:
+The default project worker exposes the Docs connector as
+`itx.worker.docs`. Agents should ask that RpcTarget for the environment-correct
+production, preview, or localhost link instead of assembling a hostname:
 
 ```ts
-const url = new URL(`https://docs--${projectSlug}.iterate.app/`);
-url.searchParams.set("workspace", workspacePath);
-url.searchParams.set("path", filePath);
+const url = await itx.worker.docs.link({
+  workspace: "/workspaces/agents/reviewer",
+  path: "/reviews/plan.md",
+});
+await itx.chat.sendMessage(`[Review the plan](${url})`);
 ```
 
 Supported file extensions are `.md`, `.markdown`, `.html`, and `.htm`. Docs
