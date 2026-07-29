@@ -47,6 +47,9 @@ export class GithubAiLinterProcessor extends StreamProcessor<
     state,
   }: ReduceArgs<GithubAiLinterProcessorContract>): GithubAiLinterState {
     switch (event.type) {
+      case "events.iterate.com/agent/paused":
+        return state;
+
       case githubAiLinterEventTypes.analysisRequested:
         return {
           ...state,
@@ -293,6 +296,28 @@ export class GithubAiLinterProcessor extends StreamProcessor<
             result: {
               reason: `Superseded by analysis ${event.offset}.`,
               status: "cancelled",
+            },
+          },
+        }),
+      );
+    }
+
+    if (event?.type === "events.iterate.com/agent/paused" && state.currentAnalysis !== null) {
+      const analysisRequestOffset = state.currentAnalysis.analysisRequestOffset;
+      const reason = event.payload.reason
+        ? `: ${event.payload.reason}`
+        : " before completing its task.";
+      blockProcessorWhile(() =>
+        this.#appendUnlessLostSettlementRace(append, {
+          type: githubAiLinterEventTypes.analysisSettled,
+          idempotencyKey: this.idempotencyKey(
+            `analysis-failed-on-agent-pause:${analysisRequestOffset}`,
+          ),
+          payload: {
+            analysisRequestOffset,
+            result: {
+              error: `Analysis agent paused${reason}`.slice(0, 8_000),
+              status: "failed",
             },
           },
         }),

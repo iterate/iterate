@@ -15,7 +15,7 @@ const analysisRequest = (headSha: string): GithubAiLinterAnalysisRequested => ({
   connection: "install-789",
   headSha,
   policyVersion: "2",
-  promptVersion: "1",
+  promptVersion: "2",
   pullRequestNumber: 7,
   repository: { id: 101, owner: "acme", repo: "widgets" },
   rules: {
@@ -274,6 +274,48 @@ describe("GithubAiLinterProcessor", () => {
         payload: {
           analysisRequestOffset: 1,
           result: { reason: "Superseded by analysis 2.", status: "cancelled" },
+        },
+      },
+    ]);
+    expect(publishReview).not.toHaveBeenCalled();
+  });
+
+  it("fails an unfinished analysis when its agent exhausts the turn budget", async () => {
+    const publishReview = vi.fn();
+    const h = makeProcessorHarness<GithubAiLinterProcessorContract, GithubAiLinterProcessor>({
+      createProcessor: (deps) =>
+        new GithubAiLinterProcessor({
+          path: deps.path,
+          projectId: deps.projectId,
+          publishReview,
+          stream: deps.stream,
+        }),
+    });
+
+    await h.append({
+      type: githubAiLinterEventTypes.analysisRequested,
+      payload: analysisRequest("head-one"),
+    });
+    await h.append({
+      type: "events.iterate.com/agent/paused",
+      payload: {
+        reason: "autonomous turn limit reached (10 consecutive turns without external input)",
+      },
+    });
+
+    expect(h.state()).toMatchObject({
+      analyses: [{ analysisRequestOffset: 1, status: "failed" }],
+      currentAnalysis: null,
+    });
+    expect(h.events(githubAiLinterEventTypes.analysisSettled)).toMatchObject([
+      {
+        payload: {
+          analysisRequestOffset: 1,
+          result: {
+            error:
+              "Analysis agent paused: autonomous turn limit reached (10 consecutive turns without external input)",
+            status: "failed",
+          },
         },
       },
     ]);

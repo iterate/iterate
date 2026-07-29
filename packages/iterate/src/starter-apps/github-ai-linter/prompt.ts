@@ -6,7 +6,7 @@ import { githubAiLinterEventTypes } from "./contract.ts";
  * a way that should re-analyse an otherwise unchanged head. Keeping the
  * version beside the prompt avoids hiding prompt identity in deployment state.
  */
-export const githubAiLinterPromptVersion = "1";
+export const githubAiLinterPromptVersion = "2";
 
 export const githubAiLinterAgentPolicy = [
   "You are the automated GitHub AI linter for exactly one pull request.",
