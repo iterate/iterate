@@ -30,7 +30,7 @@
 //   {"type":"error","offset":42,"message":"…"}
 //
 // In (stdin):
-//   {"offset":42,"decision":"approve"|"reject"}
+//   {"offset":42,"decision":"approve"|"reject","reason":"optional reject reason"}
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { createInterface } from "node:readline";
@@ -184,9 +184,9 @@ export async function runApprovalJson(input: {
   async function handleDecision(raw: string): Promise<void> {
     const trimmed = raw.trim();
     if (trimmed === "") return;
-    let decision: { offset?: number; decision?: string };
+    let decision: { offset?: number; decision?: string; reason?: string };
     try {
-      decision = JSON.parse(trimmed) as { offset?: number; decision?: string };
+      decision = JSON.parse(trimmed) as { offset?: number; decision?: string; reason?: string };
     } catch {
       emit({ type: "error", message: "malformed decision line" });
       return;
@@ -226,6 +226,7 @@ export async function runApprovalJson(input: {
         offset,
         payload,
         verdicts,
+        reason: typeof decision.reason === "string" ? decision.reason : undefined,
       });
     } catch (error) {
       decided.delete(offset); // the append failed — allow another attempt
@@ -279,6 +280,7 @@ function dispatch(
     approvalRequestEventOffset?: number;
     verdicts?: Verdict[];
     decidedBy?: string;
+    reason?: string;
   };
   const offset = payload.approvalRequestEventOffset;
   if (typeof offset !== "number") return;
@@ -296,6 +298,7 @@ function dispatch(
         offset,
         outcome: "rejected",
         reason: payload.decidedBy === "expiry" ? "expiry" : "human",
+        ...(typeof payload.reason === "string" ? { humanReason: payload.reason } : {}),
       });
       return;
     }

@@ -13,6 +13,7 @@ import { newMobileAgentPath } from "../../../lib/chat.ts";
 import { getProjectItx } from "../../../lib/itx.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
 import { getServerBaseUrl } from "../../../lib/storage.ts";
+import { ensureApproverKeyEnrolled } from "../../../lib/approver.ts";
 import { enrollPushDevice } from "../../../lib/push-device.ts";
 import { colors, radius, spacing } from "../../../lib/theme.ts";
 
@@ -36,6 +37,20 @@ export default function ChatListScreen() {
     },
     retry: false,
     refetchOnWindowFocus: "always",
+  });
+  // Opening a project silently enrolls this device's approval key (a
+  // Keychain write never prompts Face ID) so held requests are approvable
+  // the moment they appear — the approvals screen's enroll banner is now the
+  // fallback, not the common path. Best-effort like the push enrollment: a
+  // failure must not block the project, and the next open retries. The query
+  // cache also lets the approvals screen read enrollment without refetching.
+  useQuery({
+    queryKey: ["approver-key-enrollment", projectId],
+    queryFn: async () => {
+      const baseUrl = (await getServerBaseUrl()) || DEFAULT_SERVER;
+      return await ensureApproverKeyEnrolled(baseUrl, projectId);
+    },
+    retry: false,
   });
 
   const openChat = (agentPath: string) =>

@@ -13,7 +13,10 @@
 // build.
 
 import * as Crypto from "expo-crypto";
-import * as SecureStore from "expo-secure-store";
+import { Platform } from "react-native";
+import { EVENT } from "./approvals.ts";
+import { getProjectItx } from "./itx.ts";
+import * as SecureStore from "./secure-store.ts";
 import { generateApproverKey, installRandomSource, signApprovalMessage } from "./approver-core.ts";
 
 installRandomSource(Crypto.getRandomValues);
@@ -54,6 +57,39 @@ export async function enrollApproverKey(
   const info: ApproverKeyInfo = { keyId: key.keyId, publicKey: key.publicKey, label };
   await SecureStore.setItemAsync(publicKey_(projectId), JSON.stringify(info));
   return info;
+}
+
+/**
+ * Auto-enrollment on project open: make sure this device holds an approval
+ * key for the project AND the project trusts it — silently (a Keychain WRITE
+ * never prompts Face ID; only authenticated reads do). Best-effort by
+ * contract: callers fire it from a query on the project home screen, a
+ * failure must not block opening the project, and the next open retries.
+ * Respect for revocation is the one wrinkle: a key the project has revoked
+ * (locally present or not) is NEVER silently re-added — un-revoking is a
+ * deliberate human act, so those fall back to the approvals screen's manual
+ * enroll after deleting local material.
+ */
+export async function ensureApproverKeyEnrolled(
+  baseUrl: string,
+  projectId: string,
+): Promise<ApproverKeyInfo | null> {
+  const key = await enrollApproverKey(
+    projectId,
+    Platform.OS === "web" ? "This browser (dev)" : "This iPhone",
+  );
+  const project = await getProjectItx(baseUrl, projectId);
+  const enrolled = (await project.processor.snapshot()).state.humanApprovalKeys as Array<{
+    keyId: string;
+    revokedAt: string | null;
+  }>;
+  const existing = enrolled.find((candidate) => candidate.keyId === key.keyId);
+  if (existing) return existing.revokedAt === null ? key : null;
+  await project.streams.get("/").append({
+    type: EVENT.keyAdded,
+    payload: { keyId: key.keyId, publicKey: key.publicKey, label: key.label },
+  });
+  return key;
 }
 
 /**

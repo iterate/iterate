@@ -132,7 +132,9 @@ export function hostBreakdown(requests: readonly { url: string }[]): string {
  * `sign` is null for a keyless project (plain decision); otherwise it's
  * called with the canonical message and must return the enrolled key's
  * signature — approver.ts's signWithApproverKey, which prompts Face ID.
- * All-reject decisions never sign: deny is the fail-safe direction.
+ * All-reject decisions never sign: deny is the fail-safe direction. A
+ * rejection `reason` rides the event (unsigned, like rejections themselves)
+ * and lands in each rejected fetch's 403 body for the calling agent.
  */
 export async function decide(input: {
   stream: RpcStub<Stream>;
@@ -140,18 +142,21 @@ export async function decide(input: {
   offset: number;
   payload: RequestedPayload;
   verdicts: readonly Verdict[];
+  reason?: string;
   sign: ((message: Uint8Array) => Promise<{ keyId: string; signature: string }>) | null;
 }): Promise<void> {
   const signs = input.sign !== null && input.verdicts.includes("approve");
   const signed = signs
     ? await input.sign!(messageFor(input.projectId, input.offset, input.payload, input.verdicts))
     : null;
+  const reason = input.reason?.trim();
   await input.stream.append({
     type: EVENT.decided,
     payload: {
       approvalRequestEventOffset: input.offset,
       verdicts: [...input.verdicts],
       decidedBy: "human",
+      ...(reason ? { reason } : {}),
       ...(signed ? { keyId: signed.keyId, signature: signed.signature } : {}),
     },
   });
@@ -174,6 +179,8 @@ export type ResolvedBatch = {
   resolutionEventOffset: number;
   verdicts: Verdict[];
   decidedBy: "human" | "expiry";
+  /** The human's stated rejection reason, when one was given. */
+  reason: string | null;
   /** Per-index: a settle outcome for approved indexes (null until it lands), null for rejected ones. */
   outcomes: Array<{ status: number | null; error: string | null } | null>;
   /** "Approved" / "Rejected" / "Expired" / "9 approved · 3 rejected" — the header badge. */
@@ -243,6 +250,7 @@ export function deriveRecentResolvedBatches(
       resolutionEventOffset: decision.eventOffset,
       verdicts: decision.verdicts,
       decidedBy: decision.decidedBy,
+      reason: decision.reason,
       outcomes,
       decisionSummary,
     });
@@ -361,7 +369,12 @@ function indexApprovalEvents(events: readonly StreamEvent[]) {
   const requests = new Map<number, RequestedPayload>();
   const decisions = new Map<
     number,
-    { verdicts: Verdict[]; decidedBy: "human" | "expiry"; eventOffset: number }
+    {
+      verdicts: Verdict[];
+      decidedBy: "human" | "expiry";
+      reason: string | null;
+      eventOffset: number;
+    }
   >();
   const settles = new Map<number, Map<number, { status: number | null; error: string | null }>>();
   const settledIndexes = new Map<number, Set<number>>();
@@ -374,6 +387,7 @@ function indexApprovalEvents(events: readonly StreamEvent[]) {
       approvalRequestEventOffset?: number;
       verdicts?: Verdict[];
       decidedBy?: string;
+      reason?: string;
       index?: number;
       status?: number;
       error?: string;
@@ -394,6 +408,7 @@ function indexApprovalEvents(events: readonly StreamEvent[]) {
         decisions.set(ref, {
           verdicts: payload.verdicts,
           decidedBy: payload.decidedBy === "expiry" ? "expiry" : "human",
+          reason: typeof payload.reason === "string" ? payload.reason : null,
           eventOffset: event.offset,
         });
       }

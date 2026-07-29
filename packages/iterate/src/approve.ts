@@ -139,6 +139,7 @@ export async function runApprovalCli(input: {
             offset,
             payload,
             verdicts: allReject,
+            reason: await promptRejectReason(),
           });
           prompts.log.warn(`Rejected #${offset}.`);
           return "next";
@@ -160,6 +161,7 @@ export async function runApprovalCli(input: {
             offset,
             payload,
             verdicts: allReject,
+            reason: await promptRejectReason(),
           });
           prompts.log.warn(`Rejected #${offset}.`);
           return "next";
@@ -316,6 +318,18 @@ async function revokeKey(input: {
   );
 }
 
+/** Optional free-text rejection reason — rides the decided event into each
+ * rejected fetch's 403 body so the calling agent reads WHY. Ctrl-C or empty
+ * input means no reason; the rejection itself already happened by choice. */
+async function promptRejectReason(): Promise<string | undefined> {
+  const reason = await prompts.text({
+    message: "Why? (optional — the calling agent sees this)",
+    placeholder: "wrong recipient, try the staging host, …",
+  });
+  if (prompts.isCancel(reason) || !reason.trim()) return undefined;
+  return reason.trim();
+}
+
 /** Back-off before re-arming a settlement watch after a transient read error. */
 const SETTLEMENT_RETRY_MS = 2_000;
 
@@ -358,7 +372,7 @@ function reportSettlement(offset: number, settlement: Exclude<Settlement, { kind
       return prompts.log.warn(
         settlement.decidedBy === "expiry"
           ? `#${offset} expired before the decision landed.`
-          : `Rejected #${offset}.`,
+          : `Rejected #${offset}.${settlement.reason ? ` Reason: ${settlement.reason}` : ""}`,
       );
     case "unsettled":
       return prompts.log.warn(

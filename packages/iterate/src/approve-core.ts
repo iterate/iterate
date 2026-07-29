@@ -94,7 +94,7 @@ export type Settlement =
       /** One entry per approved index, in index order. */
       outcomes: Array<{ index: number; status: number | null; error: string | null }>;
     }
-  | { kind: "rejected"; decidedBy: "human" | "expiry" }
+  | { kind: "rejected"; decidedBy: "human" | "expiry"; reason?: string }
   | { kind: "unsettled" } // the deadline elapsed with no outcome — safe to re-offer
   | { kind: "error"; message: string }; // a transport/protocol failure — NOT re-offerable
 
@@ -169,6 +169,9 @@ export async function decide(input: {
   offset: number;
   payload: RequestedPayload;
   verdicts: readonly Verdict[];
+  /** The human's rejection reason — rides the event (unsigned, like
+   * rejections themselves) into each rejected fetch's 403 body. */
+  reason?: string;
   signature?: string;
 }): Promise<void> {
   const signs = input.key !== null && input.verdicts.includes("approve");
@@ -179,12 +182,14 @@ export async function decide(input: {
       messageFor(input.projectId, input.offset, input.payload, input.verdicts),
     );
   }
+  const reason = input.reason?.trim();
   await input.stream.append({
     type: EVENT.decided,
     payload: {
       approvalRequestEventOffset: input.offset,
       verdicts: [...input.verdicts],
       decidedBy: "human",
+      ...(reason ? { reason } : {}),
       ...(signs ? { keyId: input.key!.keyId, signature } : {}),
     },
   });

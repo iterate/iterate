@@ -11,7 +11,9 @@ import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useMemo } from "react";
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -100,7 +102,9 @@ export default function ApprovalsScreen() {
 
   // ONE decision per batch: approve all or reject all. The approval.v2
   // message binds every request plus the verdicts, so a 12-request batch is
-  // still one Face ID, one signature, one append.
+  // still one Face ID, one signature, one append. Rejecting first asks for an
+  // optional reason, which rides the decided event back to the calling
+  // script's 403 body — the agent reads WHY and can retry with a change.
   const respond = useMutation({
     mutationFn: async (input: { batch: OpenBatch; decision: "approve" | "reject" }) => {
       const project = await getProjectItx(baseUrl!, projectId);
@@ -109,12 +113,15 @@ export default function ApprovalsScreen() {
         (): Verdict => (input.decision === "approve" ? "approve" : "reject"),
       );
       if (input.decision === "reject") {
+        const reason = await promptForRejectReason(input.batch.payload.requests.length);
+        if (reason === null) return; // cancelled — leave the batch held
         await decide({
           stream,
           projectId,
           offset: input.batch.offset,
           payload: input.batch.payload,
           verdicts,
+          reason: reason || undefined,
           sign: null,
         });
         return;
@@ -330,6 +337,9 @@ function BatchCard({
         <Text style={styles.method}>{headline}</Text>
       )}
       {single ? null : <Text style={styles.groupHosts}>{hostBreakdown(payload.requests)}</Text>}
+      {resolved?.reason ? (
+        <Text style={styles.rejectReason}>Rejected because: {resolved.reason}</Text>
+      ) : null}
 
       {details.data.expanded ? (
         <>
@@ -560,6 +570,32 @@ function RequestDetails({
   );
 }
 
+/**
+ * Ask the human WHY they're rejecting — optional free text that rides the
+ * decided event into each rejected fetch's 403 body, so the calling agent can
+ * retry with a change. Resolves null when the human cancels (the batch stays
+ * held), "" for a reasonless reject. Native gets Alert.prompt (iOS); web gets
+ * window.prompt — the same dialog the playwright spec answers.
+ */
+function promptForRejectReason(count: number): Promise<string | null> {
+  const title = count === 1 ? "Reject this request?" : `Reject all ${count} requests?`;
+  const message = "Optionally tell the agent why, so it can retry differently.";
+  if (Platform.OS === "web") {
+    return Promise.resolve(window.prompt(`${title}\n${message}`, ""));
+  }
+  return new Promise((resolve) => {
+    Alert.prompt(
+      title,
+      message,
+      [
+        { text: "Cancel", style: "cancel", onPress: () => resolve(null) },
+        { text: "Reject", style: "destructive", onPress: (text?: string) => resolve(text || "") },
+      ],
+      "plain-text",
+    );
+  });
+}
+
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
   center: {
@@ -687,6 +723,7 @@ const styles = StyleSheet.create({
   buttonDisabled: { opacity: 0.4 },
   approveText: { color: colors.background, fontSize: 14, fontWeight: "600" },
   groupHosts: { color: colors.textMuted, fontFamily: "Menlo", fontSize: 11 },
+  rejectReason: { color: colors.danger, fontSize: 12 },
   groupMembers: {
     gap: spacing.sm,
   },
