@@ -1,0 +1,71 @@
+import { afterEach, describe, expect, test, vi } from "vitest";
+import { DocsApp } from "./config-bridge.ts";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe("DocsApp", () => {
+  test("gates project members and proxies the complete request URL", async () => {
+    const dispose = vi.fn();
+    const fetchMock = vi.fn(async (request: Request) => new Response(request.url));
+    vi.stubGlobal("fetch", fetchMock);
+    const app = DocsApp.create(
+      {
+        ITX: {
+          get: async () => ({
+            [Symbol.dispose]: dispose,
+            auth: { get: () => ({ fetch: async () => null }) },
+            kv: { get: async () => null },
+          }),
+        },
+      },
+      {
+        auth: { policy: "project-member" },
+        proxy: {
+          origin: "https://docs.iterate.workers.dev",
+          originOverrideKvKey: "docs-app-origin",
+        },
+      },
+    );
+
+    const response = await app.fetch(
+      new Request(
+        "https://docs--demo.iterate.app/?workspace=%2Fworkspaces%2Fagents%2Freviewer&path=%2Fplan.md",
+      ),
+    );
+
+    await expect(response.text()).resolves.toBe(
+      "https://docs.iterate.workers.dev/?workspace=%2Fworkspaces%2Fagents%2Freviewer&path=%2Fplan.md",
+    );
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  test("returns the member gate response without contacting the vessel", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const denied = new Response("sign in", { status: 401 });
+    const app = DocsApp.create(
+      {
+        ITX: {
+          get: async () => ({
+            [Symbol.dispose]: () => undefined,
+            auth: { get: () => ({ fetch: async () => denied }) },
+            kv: { get: async () => null },
+          }),
+        },
+      },
+      {
+        auth: { policy: "project-member" },
+        proxy: {
+          origin: "https://docs.iterate.workers.dev",
+          originOverrideKvKey: "docs-app-origin",
+        },
+      },
+    );
+
+    await expect(app.fetch(new Request("https://docs--demo.iterate.app/"))).resolves.toBe(denied);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});

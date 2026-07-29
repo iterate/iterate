@@ -152,7 +152,7 @@ auth's `/project-access` page. The MCP server advertises auth as its
 authorization server.
 
 **(b) JWT verification — one Doppler-owned signing key.** Auth's Better Auth
-JWT adapter signs with `AUTH_FORGE_PRIVATE_JWK`. OS, Semaphore, and Streams
+JWT adapter signs with `AUTH_FORGE_ES256_PRIVATE_JWK`. OS, Semaphore, and Streams
 derive only its public half during deploy and verify locally; they neither wait
 for Auth's live JWKS nor fall back to it at runtime. `pnpm auth:mint` uses the
 same private key, so minted and Auth-issued tokens have one trust path.

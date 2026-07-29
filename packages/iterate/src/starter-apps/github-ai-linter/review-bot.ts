@@ -162,10 +162,10 @@ export async function handleGithubPullRequestWebhook(
     headSha !== undefined &&
     baseSha !== undefined;
 
-  // The durable agent subscription copies all later PR history. This router
-  // only acts when a delivery can create/wake the normal agent or request a
-  // linter analysis; status/edit/thread bookkeeping stays on the copied
-  // history without making this connection-level processor do work.
+  // The router turns the few webhooks which require work into explicit agent
+  // context or linter events below. The normal PR agent can read GitHub when
+  // asked; mirroring every raw webhook onto its stream only creates a second
+  // unbounded history and a source subscription per PR.
   if (!reviewLifecycleEvent && !mention) return;
 
   const linkedRepos =
@@ -200,9 +200,7 @@ export async function handleGithubPullRequestWebhook(
     streamPath: event.path,
     type: "event",
   };
-  // The durable receive rule below records every matching webhook on the
-  // agent stream with platform-authored source.copiedFrom history. These are
-  // only the companion agent events that should trigger work.
+  // These are the only companion agent events which should trigger work.
   const agentEvents: StreamEventInput[] = [];
 
   if (mention && author !== undefined && typeof requestBody === "string") {
@@ -237,16 +235,6 @@ export async function handleGithubPullRequestWebhook(
     );
   }
 
-  await agent.stream.subscribeToEventsFrom({
-    sourceStreamPath: event.path,
-    subscriptionKey: `userspace:github-pr:${repoPath}`,
-    description: `Verified GitHub webhooks for ${repository.owner}/${repository.repo}#${number}`,
-    filter: {
-      eventTypes: ["events.iterate.com/github/webhook-received"],
-      jsonataCondition: `payload.associations.repository.id = ${repository.id} and payload.associations.pullRequest.number = ${number}`,
-    },
-    start: "beginning",
-  });
   await agent.append(
     {
       type: "events.iterate.com/agents/context-added",
@@ -299,6 +287,15 @@ export async function handleGithubPullRequestWebhook(
   if (!linterExists) await linter.create();
 
   await linter.append(
+    {
+      type: "events.iterate.com/agent/configured",
+      idempotencyKey: "github-ai-linter/turn-budget:v1",
+      payload: {
+        config: {
+          maxAutonomousTurns: 10,
+        },
+      },
+    },
     {
       type: "events.iterate.com/agents/context-added",
       idempotencyKey: `github-ai-linter/agent-policy:v${githubAiLinterPromptVersion}`,
@@ -381,28 +378,49 @@ export async function handleGithubPullRequestWebhook(
   // the task. If this second append fails, the connection processor's held
   // checkpoint redelivers the webhook: analysis-requested dedupes, returns
   // the same offset, and the missing task is retried.
-  await linter.append({
-    type: "events.iterate.com/agents/context-added",
-    idempotencyKey: `github-ai-linter/task:${analysisRequest.offset}`,
-    payload: {
-      content: githubAiLinterTask({
-        analysis: analysisInput.payload,
-        analysisRequestOffset: analysisRequest.offset,
-        streamPath: linterPath,
-      }),
-      key: `github-ai-linter/analysis:${analysisRequest.offset}`,
-      llmRequestPolicy: { behaviour: "interrupt-current-request" },
-      refs: [
-        {
-          eventType: analysisRequest.type,
-          offset: analysisRequest.offset,
-          streamPath: analysisRequest.path,
-          type: "event",
-        },
-      ],
-      role: "developer",
+  await linter.append(
+    {
+      type: "events.iterate.com/agents/context-added",
+      idempotencyKey: `github-ai-linter/task:${analysisRequest.offset}`,
+      payload: {
+        content: githubAiLinterTask({
+          analysis: analysisInput.payload,
+          analysisRequestOffset: analysisRequest.offset,
+          streamPath: linterPath,
+        }),
+        key: `github-ai-linter/analysis:${analysisRequest.offset}`,
+        llmRequestPolicy: { behaviour: "dont-trigger-request" },
+        refs: [
+          {
+            eventType: analysisRequest.type,
+            offset: analysisRequest.offset,
+            streamPath: analysisRequest.path,
+            type: "event",
+          },
+        ],
+        role: "developer",
+      },
     },
-  });
+    {
+      type: "events.iterate.com/agents/context-added",
+      idempotencyKey: `github-ai-linter/trigger:${analysisRequest.offset}`,
+      payload: {
+        actor: { type: "integration", name: "github-ai-linter" },
+        content:
+          "A verified GitHub pull-request lifecycle event requested the preceding trusted analysis task.",
+        llmRequestPolicy: { behaviour: "interrupt-current-request" },
+        refs: [
+          {
+            eventType: analysisRequest.type,
+            offset: analysisRequest.offset,
+            streamPath: analysisRequest.path,
+            type: "event",
+          },
+        ],
+        role: "user",
+      },
+    },
+  );
 }
 
 const PositiveSafeInteger = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);

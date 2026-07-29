@@ -2,29 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { getSyncedVersion, sendableUpdates } from "@codemirror/collab";
 import { EditorView } from "@codemirror/view";
-import { CollabConnection, peerExtension, setCollabDisplayName } from "./collab-client.ts";
-import { whoami } from "./use-checkout.ts";
+import { CollabConnection, peerExtension } from "./collab-client.ts";
 import { redlineExtension } from "./collab-redline.ts";
 import { remoteCursorsExtension } from "./collab-cursors.ts";
 import type { CollabEditorApi } from "./collab-editor-api.ts";
-
-// The PROMISE is the memo: a second editor mounting mid-lookup awaits the
-// same whoami instead of opening with the default display slug. Exported so
-// the board can warm it while the sheet is still closed — the first editor
-// open then skips the whoami round trip.
-let identityPromise: Promise<void> | null = null;
-export function ensureCollabIdentity(): Promise<void> {
-  identityPromise ??= (async () => {
-    try {
-      const me = await whoami();
-      const name = me.name ?? me.email ?? me.userId;
-      if (name) setCollabDisplayName(name);
-    } catch {
-      // Anonymous is fine — tooltips fall back to "someone".
-    }
-  })();
-  return identityPromise;
-}
+import type { WorkspaceDocumentTransport } from "./types.ts";
 
 /**
  * The ONE collaborative-editor state machine, shared by every surface that
@@ -38,10 +20,12 @@ export function ensureCollabIdentity(): Promise<void> {
  * review — never silently merged into other people's text.
  */
 export function useCollabEditor(input: {
-  checkoutId: string;
-  repoPath: string;
-  /** Repo-relative file path (no leading slash). */
+  transport: WorkspaceDocumentTransport;
+  displayName?: string;
+  /** Host-facing document identifier used in callbacks and CollabEditorApi. */
   path: string;
+  /** Path sent to the workspace collab lane. Defaults to `path`. */
+  workspacePath?: string;
   /** Extra extensions for the surface (keymaps, theme, listeners). */
   extensions: Extension;
   /** Redline layers on at build time (kept in sync with toggle()). */
@@ -61,7 +45,17 @@ export function useCollabEditor(input: {
   const [recovery, setRecovery] = useState<string | null>(null);
   const redlineRef = useRef(input.redline);
   const toggleRef = useRef<((on: boolean) => void) | null>(null);
-  const { checkoutId, repoPath, path, extensions, onLiveContent, onStatus, focusHeadline, apiRef } = input;
+  const {
+    transport,
+    displayName,
+    path,
+    workspacePath = path,
+    extensions,
+    onLiveContent,
+    onStatus,
+    focusHeadline,
+    apiRef,
+  } = input;
   // Ref writes never happen during render — React may replay render work.
   useEffect(() => {
     redlineRef.current = input.redline;
@@ -81,7 +75,7 @@ export function useCollabEditor(input: {
     // "live · vN" would keep attach-gated UI (the comments strip) open
     // while the new session is still seeding.
     setStatus("connecting…");
-    const connection = new CollabConnection(checkoutId, repoPath, `/${path}`);
+    const connection = new CollabConnection(transport, workspacePath, displayName);
     connection.onStatus = setStatus;
     const redlineLayer = new Compartment();
     let view: EditorView | null = null;
@@ -99,10 +93,7 @@ export function useCollabEditor(input: {
             if (!update.docChanged) return;
             // Debounced: reflecting every keystroke reparses the whole board.
             if (reflectTimer) clearTimeout(reflectTimer);
-            reflectTimer = setTimeout(
-              () => onLiveContent(path, update.state.doc.toString()),
-              200,
-            );
+            reflectTimer = setTimeout(() => onLiveContent(path, update.state.doc.toString()), 200);
           });
 
     const buildState = (content: string, version: number, redlines: Extension) =>
@@ -134,10 +125,11 @@ export function useCollabEditor(input: {
       setStatus(`re-synced · v${snapshot.version}`);
     };
 
-    void ensureCollabIdentity()
-      .then(() => connection.open())
+    void connection
+      .open()
       .then((opened) => {
         if (cancelled || host.current === null) return;
+        onLiveContent?.(path, opened.content);
         view = new EditorView({
           parent: host.current,
           state: buildState(opened.content, opened.version, redlines(redlineRef.current)),
@@ -219,7 +211,17 @@ export function useCollabEditor(input: {
       if (apiRef !== undefined) apiRef.current = null;
       view?.destroy();
     };
-  }, [checkoutId, repoPath, path, extensions, onLiveContent, setStatus, focusHeadline, apiRef]);
+  }, [
+    transport,
+    displayName,
+    path,
+    workspacePath,
+    extensions,
+    onLiveContent,
+    setStatus,
+    focusHeadline,
+    apiRef,
+  ]);
 
   return {
     dismissRecovery: () => setRecovery(null),

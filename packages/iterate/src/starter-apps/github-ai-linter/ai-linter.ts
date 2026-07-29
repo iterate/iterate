@@ -47,6 +47,9 @@ export class GithubAiLinterProcessor extends StreamProcessor<
     state,
   }: ReduceArgs<GithubAiLinterProcessorContract>): GithubAiLinterState {
     switch (event.type) {
+      case "events.iterate.com/agent/paused":
+        return state;
+
       case githubAiLinterEventTypes.analysisRequested:
         return {
           ...state,
@@ -297,6 +300,36 @@ export class GithubAiLinterProcessor extends StreamProcessor<
           },
         }),
       );
+    }
+
+    if (event?.type === "events.iterate.com/agent/paused" && state.currentAnalysis !== null) {
+      const analysisRequestOffset = state.currentAnalysis.analysisRequestOffset;
+      // A breaker pause is appended in the background. A newer analysis may
+      // have committed first; its request offset then proves this pause
+      // belongs to the superseded analysis and must not fail the new head.
+      const pauseIsCurrent =
+        event.payload.triggerOffset === undefined ||
+        event.payload.triggerOffset >= analysisRequestOffset;
+      if (pauseIsCurrent) {
+        const reason = event.payload.reason
+          ? `: ${event.payload.reason}`
+          : " before completing its task.";
+        blockProcessorWhile(() =>
+          this.#appendUnlessLostSettlementRace(append, {
+            type: githubAiLinterEventTypes.analysisSettled,
+            idempotencyKey: this.idempotencyKey(
+              `analysis-failed-on-agent-pause:${analysisRequestOffset}`,
+            ),
+            payload: {
+              analysisRequestOffset,
+              result: {
+                error: `Analysis agent paused${reason}`.slice(0, 8_000),
+                status: "failed",
+              },
+            },
+          }),
+        );
+      }
     }
 
     if (event?.type === githubAiLinterEventTypes.analysisSettled) {

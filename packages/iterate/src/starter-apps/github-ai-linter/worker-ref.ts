@@ -1,4 +1,5 @@
 import type { StatefulDynamicWorkerRef, StreamEvent, StreamEventInput } from "../../sdk.ts";
+import { githubAiLinterEventTypes } from "./contract.ts";
 import type { GithubAiLinterRuleSource } from "./rules.ts";
 
 export type GithubAiLinterConfig = {
@@ -16,6 +17,27 @@ const configuredWorkerEntrypoint =
 
 export const REVIEW_BOT_SUBSCRIPTION_KEY = "app-review-bot#review-bot";
 
+const REVIEW_BOT_RELEVANT_WEBHOOK_CONDITION = [
+  '(payload.delivery.name = "pull_request" and',
+  '(payload.body.action = "opened" or',
+  'payload.body.action = "ready_for_review" or',
+  'payload.body.action = "synchronize"))',
+  "or",
+  '((payload.delivery.name = "issue_comment" or',
+  'payload.delivery.name = "pull_request_review" or',
+  'payload.delivery.name = "pull_request_review_comment") and',
+  "$count(payload.associations.mentionedUsers) > 0)",
+].join(" ");
+
+/**
+ * The review router only needs lifecycle deliveries and explicit mentions.
+ * Filtering on the source stream keeps check/workflow webhook bursts out of
+ * the hosted processor while the offset prefix preserves the restore cutoff.
+ */
+function reviewBotSubscriptionCondition(startAfterOffset: number) {
+  return `offset > ${startAfterOffset} and (${REVIEW_BOT_RELEVANT_WEBHOOK_CONDITION})`;
+}
+
 export async function reviewBotSubscriptionEvent(
   sourceEvent: StreamEvent,
   connection: string,
@@ -31,7 +53,7 @@ export async function reviewBotSubscriptionEvent(
       // Config refreshes preserve the original cutoff in index.ts.
       filter: {
         eventTypes: ["events.iterate.com/github/webhook-received"],
-        jsonataCondition: `offset > ${startAfterOffset}`,
+        jsonataCondition: reviewBotSubscriptionCondition(startAfterOffset),
       },
       receiver: {
         action: "processor-wake",
@@ -64,6 +86,13 @@ export async function pullRequestLinterSubscriptionEvent(
     type: "events.iterate.com/stream/subscription-configured",
     payload: {
       subscriptionKey: "app-github-ai-linter#github-ai-linter",
+      // The linter Durable Object reduces this explicit protocol, not the
+      // surrounding agent's tool calls, LLM bookkeeping, or conversation.
+      // Source-side filtering makes a restart proportional to analyses rather
+      // than to every durable event the generic agent has ever appended.
+      filter: {
+        eventTypes: Object.values(githubAiLinterEventTypes),
+      },
       receiver: {
         action: "processor-wake",
         expression: [

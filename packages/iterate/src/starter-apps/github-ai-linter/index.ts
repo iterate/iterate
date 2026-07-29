@@ -48,7 +48,11 @@ export const GithubAiLinter = {
             const existingCondition =
               runtime.coreProcessorState.subscriptions.outbound.byKey[REVIEW_BOT_SUBSCRIPTION_KEY]
                 ?.configuration.filter?.jsonataCondition;
-            const existingCutoffMatch = existingCondition?.match(/^offset > ([0-9]+)$/);
+            // Both the original cutoff-only condition and the narrowed
+            // condition start with this durable boundary. Keep accepting the
+            // old shape so the first config refresh upgrades in place without
+            // skipping webhooks which arrived since installation.
+            const existingCutoffMatch = existingCondition?.match(/^offset > ([0-9]+)(?:\s|$)/);
             const existingCutoff = existingCutoffMatch ? Number(existingCutoffMatch[1]) : null;
 
             // First configuration deliberately starts at the current head: a

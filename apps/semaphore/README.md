@@ -21,7 +21,7 @@ admin** identity:
   `iterate_session` cookie.
 - **API/CLI:** `Authorization: Bearer <access token>`, verified as a JWT
   against Auth's Doppler-derived public signing key. CLIs
-  mint admin tokens offline with the config's `AUTH_FORGE_PRIVATE_JWK`
+  mint admin tokens offline with the config's `AUTH_FORGE_ES256_PRIVATE_JWK`
   (`scripts/auth/semaphore-token.ts`, same mechanism as `pnpm auth:mint`), or
   accept a pre-minted token via `SEMAPHORE_API_TOKEN`.
 

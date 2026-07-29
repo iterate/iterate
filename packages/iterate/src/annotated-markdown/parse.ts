@@ -251,7 +251,7 @@ export function parseAnnotatedMarkdown(raw: string): ParseResult {
       if (storeLine !== null) {
         return plain({
           code: "store-duplicate",
-          message: "more than one task-discussions store",
+          message: "more than one iterate-annotations store",
           range: lineRange(line),
         });
       }
@@ -264,7 +264,7 @@ export function parseAnnotatedMarkdown(raw: string): ParseResult {
     if (storeLine === null) {
       return plain({
         code: "sentinel-outside-store",
-        message: `${token.kind} sentinel before the task-discussions store`,
+        message: `${token.kind} sentinel before the iterate-annotations store`,
         range: lineRange(line),
       });
     }

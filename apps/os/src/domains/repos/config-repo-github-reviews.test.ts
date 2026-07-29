@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GithubRepoLink, Project, StreamEvent, StreamEventInput } from "iterate/sdk";
-import { handleGithubPullRequestWebhook as handleGithubPullRequestWebhookWithPolicy } from "iterate/starter-apps/github-ai-linter/worker";
+import {
+  githubAiLinterEventTypes,
+  handleGithubPullRequestWebhook as handleGithubPullRequestWebhookWithPolicy,
+} from "iterate/starter-apps/github-ai-linter/worker";
 
 const testAndSpecFileGlobs = [
   "!**/*.{test,spec}.{js,jsx,mjs,cjs,ts,tsx,mts,cts}",
@@ -319,20 +322,19 @@ describe("userspace GitHub pull-request routing", () => {
         },
       },
     ]);
-    expect(test.subscribeToEventsFrom).toHaveBeenCalledWith(agentPath, {
-      sourceStreamPath: "/integrations/github/install-789",
-      subscriptionKey: "userspace:github-pr:/repos/config",
-      description: "Verified GitHub webhooks for acme/widgets#7",
-      filter: {
-        eventTypes: ["events.iterate.com/github/webhook-received"],
-        jsonataCondition:
-          "payload.associations.repository.id = 101 and payload.associations.pullRequest.number = 7",
-      },
-      start: "beginning",
-    });
+    expect(test.subscribeToEventsFrom).not.toHaveBeenCalled();
     expect(linterAgentEvents).toMatchObject([
       {
-        idempotencyKey: "github-ai-linter/agent-policy:v1",
+        idempotencyKey: "github-ai-linter/turn-budget:v1",
+        payload: {
+          config: {
+            maxAutonomousTurns: 10,
+          },
+        },
+        type: "events.iterate.com/agent/configured",
+      },
+      {
+        idempotencyKey: "github-ai-linter/agent-policy:v2",
         payload: {
           key: "github-ai-linter/policy",
           llmRequestPolicy: { behaviour: "dont-trigger-request" },
@@ -348,19 +350,27 @@ describe("userspace GitHub pull-request routing", () => {
         },
       },
       {
-        idempotencyKey: "github-ai-linter/task:6",
+        idempotencyKey: "github-ai-linter/task:7",
         payload: {
-          key: "github-ai-linter/analysis:6",
-          llmRequestPolicy: { behaviour: "interrupt-current-request" },
+          key: "github-ai-linter/analysis:7",
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
           refs: [
             {
               eventType: "events.iterate.com/github-ai-linter/analysis-requested",
-              offset: 6,
+              offset: 7,
               streamPath: linterPath,
               type: "event",
             },
           ],
           role: "developer",
+        },
+      },
+      {
+        idempotencyKey: "github-ai-linter/trigger:7",
+        payload: {
+          actor: { name: "github-ai-linter", type: "integration" },
+          llmRequestPolicy: { behaviour: "interrupt-current-request" },
+          role: "user",
         },
       },
     ]);
@@ -375,6 +385,9 @@ describe("userspace GitHub pull-request routing", () => {
           "github-ai-linter/subscription:install-789:101:7:policy:2:stream:/agents/repos/config/pr/7/ai-linter",
         payload: {
           subscriptionKey: "app-github-ai-linter#github-ai-linter",
+          filter: {
+            eventTypes: Object.values(githubAiLinterEventTypes),
+          },
           receiver: {
             action: "processor-wake",
             processorSlug: "github-ai-linter",
@@ -384,14 +397,14 @@ describe("userspace GitHub pull-request routing", () => {
       {
         type: "events.iterate.com/github-ai-linter/analysis-requested",
         idempotencyKey:
-          "github-ai-linter/analysis:install-789:iterate:101:acme/widgets:7:2:1:rules-abc:base-abc:head-abc",
+          "github-ai-linter/analysis:install-789:iterate:101:acme/widgets:7:2:2:rules-abc:base-abc:head-abc",
         payload: {
           appSlug: "iterate",
           baseSha: "base-abc",
           connection: "install-789",
           headSha: "head-abc",
           policyVersion: "2",
-          promptVersion: "1",
+          promptVersion: "2",
           pullRequestNumber: 7,
           repository: { id: 101, owner: "acme", repo: "widgets" },
           rules,
@@ -403,11 +416,11 @@ describe("userspace GitHub pull-request routing", () => {
     expect(JSON.stringify(linterStreamEvents[1])).toMatch(
       /"durableWorkerKey":"app-gh-linter-[0-9a-f]{32}"/,
     );
-    expect(JSON.stringify(linterAgentEvents[0])).toContain(
+    expect(JSON.stringify(linterAgentEvents[1])).toContain(
       "The stream processor mechanically publishes the review from your events",
     );
 
-    const task = JSON.stringify(linterAgentEvents[2]);
+    const task = JSON.stringify(linterAgentEvents[3]);
     expect(task).toContain("complete changed-file list");
     expect(task).toContain("octokit.paginate");
     expect(task).toContain("GET /repos/{owner}/{repo}/pulls/{pull_number}/files");
@@ -445,10 +458,7 @@ describe("userspace GitHub pull-request routing", () => {
     expect(test.create).toHaveBeenCalledWith(iterateAgentPath);
     expect(test.create).toHaveBeenCalledWith(iterateLinterPath);
     expect(test.appendBatches[0]?.path).toBe(iterateAgentPath);
-    expect(test.subscribeToEventsFrom).toHaveBeenCalledWith(
-      iterateAgentPath,
-      expect.objectContaining({ subscriptionKey: "userspace:github-pr:/repos/iterate" }),
-    );
+    expect(test.subscribeToEventsFrom).not.toHaveBeenCalled();
   });
 
   it("self-heals both agents from a later synchronize delivery", async () => {
@@ -489,6 +499,11 @@ describe("userspace GitHub pull-request routing", () => {
     );
     expect(tasks).toHaveLength(2);
     expect(tasks[0]?.idempotencyKey).toBe(tasks[1]?.idempotencyKey);
+    const triggers = eventsFor(test.agentAppendBatches, linterPath).filter(({ idempotencyKey }) =>
+      idempotencyKey?.startsWith("github-ai-linter/trigger:"),
+    );
+    expect(triggers).toHaveLength(2);
+    expect(triggers[0]?.idempotencyKey).toBe(triggers[1]?.idempotencyKey);
   });
 
   it("reuses one agent, interrupts on a new head, and deduplicates an unchanged head", async () => {
@@ -513,18 +528,24 @@ describe("userspace GitHub pull-request routing", () => {
       ({ type }) => type === "events.iterate.com/github-ai-linter/analysis-requested",
     );
     expect(analyses.map(({ idempotencyKey }) => idempotencyKey)).toEqual([
-      "github-ai-linter/analysis:install-789:iterate:101:acme/widgets:7:2:1:rules-abc:base-abc:head-one",
-      "github-ai-linter/analysis:install-789:iterate:101:acme/widgets:7:2:1:rules-abc:base-abc:head-two",
-      "github-ai-linter/analysis:install-789:iterate:101:acme/widgets:7:2:1:rules-abc:base-abc:head-two",
+      "github-ai-linter/analysis:install-789:iterate:101:acme/widgets:7:2:2:rules-abc:base-abc:head-one",
+      "github-ai-linter/analysis:install-789:iterate:101:acme/widgets:7:2:2:rules-abc:base-abc:head-two",
+      "github-ai-linter/analysis:install-789:iterate:101:acme/widgets:7:2:2:rules-abc:base-abc:head-two",
     ]);
     const tasks = eventsFor(test.agentAppendBatches, linterPath).filter(({ idempotencyKey }) =>
       idempotencyKey?.startsWith("github-ai-linter/task:"),
     );
     expect(tasks).toHaveLength(3);
     expect(tasks[1]).toMatchObject({
-      payload: { llmRequestPolicy: { behaviour: "interrupt-current-request" } },
+      payload: { llmRequestPolicy: { behaviour: "dont-trigger-request" } },
     });
     expect(tasks[1]?.idempotencyKey).toBe(tasks[2]?.idempotencyKey);
+    const triggers = eventsFor(test.agentAppendBatches, linterPath).filter(({ idempotencyKey }) =>
+      idempotencyKey?.startsWith("github-ai-linter/trigger:"),
+    );
+    expect(triggers).toHaveLength(3);
+    expect(triggers[0]?.idempotencyKey).not.toBe(triggers[1]?.idempotencyKey);
+    expect(triggers[1]?.idempotencyKey).toBe(triggers[2]?.idempotencyKey);
   });
 
   it.each([
@@ -578,7 +599,7 @@ describe("userspace GitHub pull-request routing", () => {
       ),
     ).toMatchObject({
       idempotencyKey:
-        "github-ai-linter/analysis:install-789:iterate:101:renamed/widgets-next:7:2:1:rules-abc:base-abc:head-abc",
+        "github-ai-linter/analysis:install-789:iterate:101:renamed/widgets-next:7:2:2:rules-abc:base-abc:head-abc",
       payload: { repository: { id: 101, owner: "renamed", repo: "widgets-next" } },
     });
     expect(JSON.stringify(linterAgentEvents)).toContain(

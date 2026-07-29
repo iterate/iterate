@@ -95,6 +95,17 @@ export abstract class AuthWorker<Env = unknown> extends WorkerEntrypoint<Env> {
     organizations: IterateAuthOrganizationClaim[];
     projects: IterateAuthProjectClaim[];
   }>;
+  /**
+   * Same grant bundle as {@link getUserGrants}, but keyed on the user's verified
+   * `email` instead of `userId`. For callers that only know the email — e.g. a
+   * kernel behind a Cloudflare Access wall, whose Access JWT carries the IdP-
+   * verified email but a Cloudflare-issued `sub` (not the auth user id). An
+   * unknown email resolves to empty grants, never an error.
+   */
+  abstract getUserGrantsByEmail(input: { email: string }): Promise<{
+    organizations: IterateAuthOrganizationClaim[];
+    projects: IterateAuthProjectClaim[];
+  }>;
   abstract mintProjectAppSession(
     input: MintProjectAppSessionInput,
   ): Promise<{ token: string } | null>;

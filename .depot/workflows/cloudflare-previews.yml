@@ -73,6 +73,8 @@ on:
       - apps/auth/**
       - apps/auth-contract/**
       - apps/os/src/domains/streams/**
+      - apps/docs/**
+      - packages/workspace-documents/**
       - apps/semaphore/**
       - apps/streams-example-app/**
       - apps/dummy-petshop/**
