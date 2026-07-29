@@ -18,6 +18,8 @@ setup:
     path: apps/mobile/
   - project: semaphore
     path: apps/semaphore/
+  - project: kit
+    path: apps/kit/
   - project: streams-example-app
     path: apps/streams-example-app/
   - project: auth

@@ -1,0 +1,68 @@
+name: Deploy Kit
+permissions:
+  contents: read
+concurrency:
+  group: deploy-kit-production
+  cancel-in-progress: false
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .depot/workflows/deploy-kit.yml
+      - envs.ts
+      - scripts/lib/**
+      - apps/kit/**
+      - packages/ui/**
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to deploy. Leave empty for the current branch or commit.
+        required: false
+        type: string
+        default: ""
+jobs:
+  deploy:
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ inputs.ref || github.sha }}
+      - name: Reconcile dependencies (baked)
+        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Setup Doppler (baked CLI)
+        run: doppler setup --config prd --project kit
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Deploy apps/kit
+        working-directory: apps/kit
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: doppler run -- pnpm run-script deploy
+  notify:
+    needs:
+      - deploy
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && (needs.deploy.result == 'success' || needs.deploy.result == 'failure')
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 10
+    env:
+      DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          clean: false
+      - name: Reconcile dependencies (baked)
+        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Notify Slack
+        env:
+          APP_DISPLAY_NAME: Kit
+          PUBLIC_URL: https://k.iterate.com
+        run: pnpm tsx scripts/ci/notify.ts deploy-${{ needs.deploy.result }}

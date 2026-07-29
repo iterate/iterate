@@ -1848,15 +1848,28 @@ export type ItxAuthCredentials =
   /**
    * A project's own long-lived machine credential — for externally deployed
    * apps that connect back to /api as their project (docs/remote-apps.md).
-   * Verified against the secret every project is born with at
-   * `/secrets/project-api-key` (the comparison happens inside the Secret
-   * Durable Object — this door never receives material, only a one-bit
-   * answer). None of the existing lanes fit this caller: `bearer` is a
-   * user identity, `operator-session` is a short-lived human grant, and
-   * `admin-secret` is deployment-global. Grants exactly one project, no
-   * admin, no user identity.
+   * The preferred address is the immutable project slug; the authentication
+   * door resolves it to the stable id before verifying the secret every
+   * project is born with at `/secrets/project-api-key`. The comparison happens
+   * inside the Secret Durable Object, so this door receives no secret material
+   * back. Grants exactly one resolved project, no admin, no user identity.
    */
-  | { type: "project-secret"; projectId: string; secret: string }
+  | {
+      type: "project-secret";
+      projectSlug: string;
+      projectId?: never;
+      secret: string;
+    }
+  /**
+   * Stable-id addressing for machine callers that already operate on ids.
+   * New user-facing setup flows should use `projectSlug`.
+   */
+  | {
+      type: "project-secret";
+      projectId: string;
+      projectSlug?: never;
+      secret: string;
+    }
   /**
    * The short-lived user-on-project token auth mints for project app hosts
    * (the `iterate-project-auth` cookie). A config worker reverse-proxying an
