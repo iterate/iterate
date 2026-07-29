@@ -19,10 +19,11 @@
  *   until superseded); a `null` before records a ref creation, which is
  *   exactly what supersedes an outstanding deletion.
  *
- * Resolutions that may not be cached are still SERVED once — availability is
- * preserved; only durable authority waits for the evidence. Convergence: once
- * every push in a window has been delivered, the frontier is precisely the
- * true tip.
+ * Ordinary content reads may still serve a non-cacheable resolution once;
+ * `RepoDurableObject.getHead`, the worker-source boundary, rejects it as
+ * temporarily unavailable so a stale worker cannot acknowledge source-change
+ * work. Convergence: once every push in a window has been delivered, the
+ * frontier is precisely the true tip.
  */
 export interface ObservedPush {
   afterCommitOid: string | null;

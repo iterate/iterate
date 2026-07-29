@@ -1,5 +1,6 @@
 ---
 id: structure/no-lame-helpers
+severity: error
 files:
   [
     "**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}",

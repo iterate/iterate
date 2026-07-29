@@ -8,7 +8,7 @@ import { mintForgedAccessToken } from "./forge-token.ts";
  * Semaphore sits behind the same apps/auth relying-party auth as os, so CLIs
  * authenticate with a real identity: an explicit pre-minted bearer token via
  * SEMAPHORE_API_TOKEN, else an admin access token forge-minted offline from
- * AUTH_FORGE_PRIVATE_JWK (the same mechanism as `pnpm auth:mint`).
+ * AUTH_FORGE_ES256_PRIVATE_JWK (the same mechanism as `pnpm auth:mint`).
  */
 
 /** Resolve the auth issuer for a deployed semaphore base URL via the root envs.ts. */
@@ -50,11 +50,11 @@ export function createSemaphoreTokenProvider(input: {
     if (explicit) return Promise.resolve(explicit);
 
     minted ??= (async () => {
-      const forgePrivateJwk = env.AUTH_FORGE_PRIVATE_JWK?.trim();
+      const forgePrivateJwk = env.AUTH_FORGE_ES256_PRIVATE_JWK?.trim();
       if (!forgePrivateJwk) {
         throw new Error(
           "Authenticating against semaphore needs SEMAPHORE_API_TOKEN (a pre-minted bearer token) " +
-            "or AUTH_FORGE_PRIVATE_JWK in the environment. Run under a Doppler config that carries " +
+            "or AUTH_FORGE_ES256_PRIVATE_JWK in the environment. Run under a Doppler config that carries " +
             "the forge key (e.g. `doppler run --project _shared --config prd`).",
         );
       }

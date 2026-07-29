@@ -10,7 +10,7 @@ import { ONBOARDING_AGENT_PATH, isOnboardingActive } from "~/lib/onboarding-agen
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 
 const HomeSearch = StreamViewSearch.extend({
-  /** Set by the create form: play the creation checklist until `ready`, then
+  /** Set by the create form: play the creation checklist until `created`, then
    * hand over to the onboarding agent. */
   welcome: z.boolean().optional().catch(undefined),
   /** The root SSR handoff could not prove/commit project birth. The welcome
@@ -44,20 +44,20 @@ function ProjectHomePage() {
     [project.id],
     { slug: project.id },
   );
-  const ready = lifecycle.value?.ready ?? false;
+  const created = lifecycle.value?.birthCertificate != null;
   const inOnboarding = lifecycle.value === undefined ? false : isOnboardingActive(lifecycle.value);
   // Create lands here with `welcome` as soon as the project exists. Stay on
-  // the checklist until bootstrap flips `ready`, then hand off to the
+  // the checklist until bootstrap commits `project/created`, then hand off to the
   // onboarding agent so the user watches the saga rather than waiting on the
   // create button.
-  const handOffToOnboarding = welcome === true && ready && inOnboarding;
+  const handOffToOnboarding = welcome === true && created && inOnboarding;
   // The checklist gates on the PROJECT's state, not the URL: any visit to a
-  // not-yet-ready project (second tab, bookmark) sees the creation saga, never
+  // not-yet-created project (second tab, bookmark) sees the creation saga, never
   // a live dashboard. Before the first push we only know we're mid-create when
   // the create flow's `?welcome` says so; the handoff case keeps the checklist
   // up while its navigation is in flight.
   const showChecklist =
-    lifecycle.value === undefined ? welcome === true : !ready || handOffToOnboarding;
+    lifecycle.value === undefined ? welcome === true : !created || handOffToOnboarding;
 
   useEffect(() => {
     if (ensureBirth !== true || birthRecoveryStarted.current) return;
@@ -67,7 +67,7 @@ function ProjectHomePage() {
       const session = await connectIterateSession();
       await session.projects
         .get(project.slug)
-        .create({ projectId: project.id }, { waitUntilReady: false });
+        .create({ projectId: project.id }, { waitUntilCreated: false });
     })().catch((error: unknown) => {
       console.error("project welcome: browser birth recovery failed", {
         projectId: project.id,
@@ -118,7 +118,7 @@ function ProjectHomePage() {
     );
   }
 
-  // Before the first LiveState push we can't tell ready from mid-create:
+  // Before the first LiveState push we can't tell created from mid-create:
   // hold a loading state rather than flashing a live composer at a project
   // that may still be bootstrapping.
   if (lifecycle.value === undefined) {

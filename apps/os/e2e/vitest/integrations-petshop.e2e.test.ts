@@ -28,7 +28,6 @@ import {
   shouldSkipPetshopE2e,
 } from "./petshop-support.ts";
 
-const RUN = crypto.randomUUID().slice(0, 8);
 const REDIRECT_URI = "https://example.com/callback";
 
 // Local runs can opt in by pointing PETSHOP_BASE_URL at a fixture. Preview CI
@@ -37,6 +36,9 @@ const REDIRECT_URI = "https://example.com/callback";
 test.skipIf(shouldSkipPetshopE2e())(
   "two OAuth clients, two connections: connect, call, forced-expiry refresh",
   async () => {
+    // A retry must not remint clients while reusing durable write-only Secret
+    // state. Give the complete provider/project fixture a fresh identity.
+    const run = crypto.randomUUID().slice(0, 8);
     const petshop = petshopBaseUrl();
     // Both instances get a unique project-owned (userspace) client. Their
     // credentials live IN each connection secret's material, next to the
@@ -44,13 +46,13 @@ test.skipIf(shouldSkipPetshopE2e())(
     // seeded client is reserved for the concurrently running first-party test.
     const [clientA, clientB] = await Promise.all([petshopMintClient(), petshopMintClient()]);
     const instances = [
-      { ...clientA, slug: `petshop-home-${RUN}`, connection: "jonas" },
-      { ...clientB, slug: `petshop-work-${RUN}`, connection: "ops" },
+      { ...clientA, slug: `petshop-home-${run}`, connection: "jonas" },
+      { ...clientB, slug: `petshop-work-${run}`, connection: "ops" },
     ];
 
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = await itx.projects.get(`petshop-${RUN}`).create({});
+    using project = await itx.projects.get(`petshop-${run}`).create({});
     await project.__describe();
 
     for (const instance of instances) {
@@ -124,14 +126,15 @@ test.skipIf(shouldSkipPetshopE2e())(
 test.skipIf(shouldSkipPetshopE2e())(
   "first-party lane: client credential resolves from platform config, same strategy",
   async () => {
+    const run = crypto.randomUUID().slice(0, 8);
     const petshop = petshopBaseUrl();
-    const slug = `petshop-firstparty-${RUN}`;
+    const slug = `petshop-firstparty-${run}`;
     const connectionPath = `/secrets/integrations/${slug}/acme`;
     const { clientId, clientSecret } = PETSHOP_DEFAULT_CLIENT;
 
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = await itx.projects.get(`petshop-fp-${RUN}`).create({});
+    using project = await itx.projects.get(`petshop-fp-${run}`).create({});
     await project.__describe();
 
     const code = await petshopAuthorize({ clientId, redirectUri: REDIRECT_URI });

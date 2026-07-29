@@ -26,10 +26,10 @@ export function resolveDeployedEnv(workerUrl: string | undefined) {
 export async function mintAdminAccessToken(workerUrl: string | undefined) {
   const env = resolveDeployedEnv(workerUrl);
   if (!env) return null;
-  const forgePrivateJwk = process.env.AUTH_FORGE_PRIVATE_JWK?.trim();
+  const forgePrivateJwk = process.env.AUTH_FORGE_ES256_PRIVATE_JWK?.trim();
   if (!forgePrivateJwk) {
     throw new Error(
-      "AUTH_FORGE_PRIVATE_JWK is required to run e2e against a deployed playground. " +
+      "AUTH_FORGE_ES256_PRIVATE_JWK is required to run e2e against a deployed playground. " +
         "Run under the env's Doppler config (doppler run --project streams-example-app --config <env> -- ...).",
     );
   }
@@ -49,11 +49,11 @@ export async function mintAdminAccessToken(workerUrl: string | undefined) {
 export async function mintAdminBrowserTokens(workerUrl: string | undefined) {
   const env = resolveDeployedEnv(workerUrl);
   if (!env) return null;
-  const forgePrivateJwk = process.env.AUTH_FORGE_PRIVATE_JWK?.trim();
+  const forgePrivateJwk = process.env.AUTH_FORGE_ES256_PRIVATE_JWK?.trim();
   const clientId = process.env.APP_CONFIG_ITERATE_AUTH__CLIENT_ID?.trim();
   if (!forgePrivateJwk || !clientId) {
     throw new Error(
-      "AUTH_FORGE_PRIVATE_JWK and APP_CONFIG_ITERATE_AUTH__CLIENT_ID are required to run browser " +
+      "AUTH_FORGE_ES256_PRIVATE_JWK and APP_CONFIG_ITERATE_AUTH__CLIENT_ID are required to run browser " +
         "e2e against a deployed playground. Run under the env's Doppler config.",
     );
   }

@@ -5,6 +5,7 @@
  * module is text-in, text-out only — no storage, no network, no UI.
  */
 import { parseDocument, type Document } from "yaml";
+import { isValidAuthor, parseAnnotatedMarkdown } from "iterate/annotated-markdown";
 import { BOARD_COLUMNS, type TaskCard, type TaskChangeSummary } from "./state.ts";
 
 const DEFAULT_TASK_STATE = BOARD_COLUMNS[0];
@@ -21,36 +22,69 @@ export function isTaskFilePath(path: string): boolean {
  * the first level-one Markdown heading, then the filename. A legacy
  * `state: backlog` stays literal on disk but lands in the Todo column, so the
  * card's state is normalized here.
+ *
+ * The strict annotated-markdown codec is the primary parser: it also yields
+ * the discussion threads (comment counts here; the sheet renders them). When
+ * the codec refuses the file (fail-open plain), the card falls back to the
+ * legacy lenient split so board metadata still renders — comments are then
+ * unavailable for the file, never guessed at.
  */
 export function parseTaskCard(path: string, source: string): TaskCard {
+  const parsed = parseAnnotatedMarkdown(source);
+  if (parsed.kind === "structured") {
+    const metadata = parsed.frontmatter?.data ?? {};
+    let commentCount = 0;
+    for (const thread of parsed.discussion?.threads ?? []) {
+      commentCount += thread.comments.filter((comment) => !comment.deleted).length;
+    }
+    return {
+      path,
+      // A task with no heading (and no title key) is named by its full path.
+      title: stringValue(metadata.title) ?? firstHeadingTitle(parsed.body) ?? path,
+      state: normalizeTaskState(stringValue(metadata.state)),
+      // `tags` is the canonical key; `labels` stays readable for apps/os
+      // compatibility and older files.
+      labels: uniqueStrings([...stringArray(metadata.tags), ...stringArray(metadata.labels)]),
+      agent: stringValue(metadata.agent) ?? null,
+      createdBy: stringValue(metadata["created-by"]) ?? null,
+      source,
+      frontmatterError: false,
+      commentCount,
+    };
+  }
   const frontmatter = parseMarkdownFrontmatter(source);
-  if (frontmatter.invalid) {
+  if (frontmatter.exists && frontmatter.invalid) {
     // Broken YAML: the whole file is plain text — no state, no tags, and
     // the UI surfaces the breakage instead of guessing.
     return {
       path,
-      title: firstHeadingTitle(source) ?? path,
+      title: firstHeadingTitle(beforeDiscussionStore(source)) ?? path,
       state: normalizeTaskState(undefined),
       labels: [],
       agent: null,
       createdBy: null,
       source,
       frontmatterError: true,
+      commentCount: 0,
     };
   }
+  // The codec refused for a non-YAML reason (restricted-YAML strictness, a
+  // malformed discussion store, …): keep board metadata via the lenient
+  // split; the sheet shows why comments are unavailable.
   const metadata = markdownFrontmatterRecord(frontmatter.document);
   return {
     path,
-    // A task with no heading (and no title key) is named by its full path.
-    title: stringValue(metadata.title) ?? firstHeadingTitle(frontmatter.body) ?? path,
+    title:
+      stringValue(metadata.title) ??
+      firstHeadingTitle(beforeDiscussionStore(frontmatter.body)) ??
+      path,
     state: normalizeTaskState(stringValue(metadata.state)),
-    // `tags` is the canonical key; `labels` stays readable for apps/os
-    // compatibility and older files.
     labels: uniqueStrings([...stringArray(metadata.tags), ...stringArray(metadata.labels)]),
     agent: stringValue(metadata.agent) ?? null,
     createdBy: stringValue(metadata["created-by"]) ?? null,
     source,
     frontmatterError: false,
+    commentCount: 0,
   };
 }
 
@@ -77,6 +111,30 @@ export function setTaskCardLabels(source: string, labels: readonly string[]): st
     if (labels.length === 0) document.delete("tags");
     else document.set("tags", [...labels]);
   });
+}
+
+/**
+ * The discussion-comment identity for a signed-in user: the sentinel `author`
+ * token (email when it is attribute-safe, else a slug) plus the display name
+ * written into the visible comment heading.
+ */
+export function commentAuthorFor(me: {
+  name: string | null;
+  email: string | null;
+  userId: string | null;
+}): { author: string; authorDisplay?: string } {
+  const slug = (value: string): string =>
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48);
+  const author =
+    me.email !== null && isValidAuthor(me.email)
+      ? me.email
+      : slug(me.name ?? me.userId ?? "") || "someone";
+  const display = me.name ?? me.email ?? undefined;
+  return display === undefined ? { author } : { author, authorDisplay: display };
 }
 
 /** The conventional agent path for a task — apps/os's repoTaskAgentPath. */
@@ -221,6 +279,16 @@ function normalizeTaskState(state: string | undefined): string {
 function firstHeadingTitle(body: string): string | undefined {
   const match = /^#\s+(.+?)\s*#*\s*$/m.exec(body);
   return match?.[1]?.trim();
+}
+
+/**
+ * On the codec's plain fallback the store may be malformed but still present;
+ * headings inside it (comment prose) must never become the board title.
+ */
+function beforeDiscussionStore(text: string): string {
+  if (text.startsWith("<!-- task-discussions:")) return "";
+  const at = text.indexOf("\n<!-- task-discussions:");
+  return at === -1 ? text : text.slice(0, at);
 }
 
 function parseMarkdownFrontmatter(content: string): {

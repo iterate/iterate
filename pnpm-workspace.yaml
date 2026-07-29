@@ -64,6 +64,8 @@ overrides:
   # present in this state"). Force a single resolution for the whole repo.
   '@codemirror/state': ^6.7.1
   '@codemirror/view': ^6.43.6
+  # ESP Web Tools 10.4 imports a Material dialog module removed in 2.5.
+  '@material/web': 2.4.1
   '@orpc/client': 1.13.14
   '@orpc/contract': 1.13.14
   '@orpc/json-schema': 1.13.14

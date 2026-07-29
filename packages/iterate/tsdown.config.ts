@@ -55,6 +55,33 @@ export default defineConfig([
     clean: false,
   },
   {
+    // The dynamic worker host installs the config repo's dependencies, not
+    // transitive dependencies inside iterate's tarball. This physical entry
+    // therefore carries its complete runtime graph; only Cloudflare's API and
+    // the per-install virtual config remain external.
+    entry: {
+      "starter-apps/github-ai-linter/configured-worker":
+        "src/starter-apps/github-ai-linter/configured-worker.ts",
+    },
+    format: "esm",
+    fixedExtension: true,
+    platform: "neutral",
+    target: "es2022",
+    inputOptions: {
+      resolve: {
+        conditionNames: ["workerd", "worker", "import", "default"],
+      },
+    },
+    deps: {
+      alwaysBundle: ["@iterate-com/capnweb", "yaml", "zod"],
+      neverBundle: ["cloudflare:workers", "iterate:github-ai-linter-config"],
+      onlyBundle: ["@iterate-com/capnweb", "yaml", "zod"],
+    },
+    dts: false,
+    sourcemap: true,
+    clean: false,
+  },
+  {
     entry: ["src/index.ts", "src/stream-tui/agent-chat-terminal.tsx"],
     format: "esm",
     // The CLI + TUI are STANDALONE PROCESS artifacts (bin/iterate spawns the
@@ -87,31 +114,6 @@ export default defineConfig([
     copy: [{ from: "src/worker.d.mts", to: "dist" }],
   },
   {
-    // Config repos call this app directly from their project worker and should
-    // not have to repeat its private parser dependencies. Keep the published
-    // entry self-contained, just like the physical starter-app workers above.
-    entry: {
-      "starter-apps/github-ai-linter/index": "src/starter-apps/github-ai-linter/index.ts",
-      "starter-apps/github-ai-linter/worker": "src/starter-apps/github-ai-linter/worker.ts",
-    },
-    format: "esm",
-    fixedExtension: true,
-    platform: "neutral",
-    target: "es2022",
-    inputOptions: {
-      resolve: {
-        conditionNames: ["workerd", "worker", "import", "default"],
-      },
-    },
-    deps: {
-      alwaysBundle: ["minimatch", "yaml", "zod"],
-      neverBundle: ["cloudflare:workers"],
-    },
-    dts: false,
-    sourcemap: true,
-    clean: false,
-  },
-  {
     // The sdk + stream-processor machinery + its node test harness, ONE
     // config object on purpose: sdk.ts hosts createProcessorHost, which
     // constructs the registry/runner over processor instances built from the
@@ -128,6 +130,8 @@ export default defineConfig([
     // in the build script instead.
     entry: {
       sdk: "src/sdk.ts",
+      "starter-apps/github-ai-linter/index": "src/starter-apps/github-ai-linter/index.ts",
+      "starter-apps/github-ai-linter/worker": "src/starter-apps/github-ai-linter/worker.ts",
       "starter-apps/guestbook/index": "src/starter-apps/guestbook/index.ts",
       "starter-apps/guestbook/worker": "src/starter-apps/guestbook/worker.ts",
       "starter-apps/todo/index": "src/starter-apps/todo/index.ts",
@@ -159,6 +163,13 @@ export default defineConfig([
       "sdk/capnweb": "src/sdk/capnweb/index.ts",
       "sdk/capnweb/react": "src/sdk/capnweb/react.tsx",
       "sdk/itx/react": "src/sdk/itx/react.ts",
+      // Self-contained codec; shares no modules with the entries above, so
+      // joining this group adds no chunk coupling. Declarations come from the
+      // tsconfig.sdk.json tsc pass like the rest of the group.
+      "annotated-markdown": "src/annotated-markdown/index.ts",
+      // The React viewer imports the codec entry's modules — same group so
+      // they share one chunk instead of inlining a second copy.
+      "annotated-markdown-react": "src/annotated-markdown/react/index.ts",
     },
     format: "esm",
     dts: false,

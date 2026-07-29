@@ -8,10 +8,53 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
   {
     path: "AGENTS.md",
     content:
-      "iterate project config repo — `worker.ts` is the project worker. It handles\n" +
-      "HTTP and declares packaged apps such as `GithubAiLinter`, `GuestbookApp`, and\n" +
-      "`TodoApp`; project-owned app source lives under `apps/`. The packaged linter\n" +
-      "reads this project's editable policy from `rules/`.\n",
+      "# Project configuration\n" +
+      "\n" +
+      "This repository is the project's executable configuration. `worker.ts` is the\n" +
+      "default project worker (`fetch` plus `processEvent`). It declares packaged apps\n" +
+      "such as `GithubAiLinter`, `GuestbookApp`, and `TodoApp`; project-owned app source\n" +
+      "lives under `apps/`, and the packaged linter reads editable policy from `rules/`.\n" +
+      "\n" +
+      "## Project lifecycle hooks\n" +
+      "\n" +
+      "The `processEvent` switch in `worker.ts` exposes the lifecycle events. Each\n" +
+      "case is ordinary userspace TypeScript: `const itx = await this.itx` gives that\n" +
+      "stateless invocation one memoized project-root session, then write whatever\n" +
+      "calls the project needs. There is no configuration-reconciliation framework\n" +
+      "around them.\n" +
+      "\n" +
+      "- `project/heartbeat-triggered` is the ordinary event appended by that\n" +
+      "  Scheduler script. Its payload is only `{ scheduleKey }`. Put arbitrary\n" +
+      "  periodic itx calls directly in this case.\n" +
+      "- root `stream/woken` is available for work that should run when the project\n" +
+      "  stream wakes after hibernation or an OS deployment.\n" +
+      "- `project/worker-updated` is the config-application hook. The\n" +
+      "  project-creation terminal publishes the first one after probing the trusted\n" +
+      "  seed worker; it does not react to the raw seed commit. For each later config\n" +
+      "  repo commit, the platform appends another only after the current default\n" +
+      "  worker has built, loaded, and answered a readiness probe. If several commits\n" +
+      "  land quickly, a later HEAD may reconcile earlier commit facts too. This is\n" +
+      "  deliberately a reconcile-current-config hook, not an exact per-commit\n" +
+      "  activation callback. The seeded example calls\n" +
+      "  `itx.scheduler.set(...)` here to install one 15-minute heartbeat.\n" +
+      "\n" +
+      "`project/create-requested` and `project/created` belong to the platform's\n" +
+      "creation saga. They are not userspace lifecycle hooks and the config worker\n" +
+      "does not handle them.\n" +
+      "\n" +
+      "The heartbeat uses the Scheduler's native recurrence shape:\n" +
+      "`{ every: seconds }`, `{ cron, timezone? }`, or `{ at: ISO timestamp }`. Copy\n" +
+      "the literal `scheduler.set(...)` call to add another schedule, use\n" +
+      "`{ every: 1 }` in a fast test project, or delete it when a project needs no\n" +
+      "heartbeat. `set(...)` leaves a matching schedule's clock, run count, and\n" +
+      "defining event untouched.\n" +
+      "\n" +
+      "Nothing interprets the source file as desired state. Changing or deleting an\n" +
+      "existing schedule is explicit code too: call `scheduler.set(...)` or\n" +
+      "`scheduler.cancel(...)` from whichever lifecycle case should apply the change.\n" +
+      "Missed interval occurrences coalesce; the Scheduler does not backfill one event\n" +
+      "per missed interval. The scheduler execution ID is the heartbeat append's\n" +
+      "idempotency key.\n",
   },
   {
     path: "ONBOARDING.md",
@@ -54,10 +97,53 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
   {
     path: "README.md",
     content:
-      "iterate project config repo — `worker.ts` is the project worker. It handles\n" +
-      "HTTP and declares packaged apps such as `GithubAiLinter`, `GuestbookApp`, and\n" +
-      "`TodoApp`; project-owned app source lives under `apps/`. The packaged linter\n" +
-      "reads this project's editable policy from `rules/`.\n",
+      "# Project configuration\n" +
+      "\n" +
+      "This repository is the project's executable configuration. `worker.ts` is the\n" +
+      "default project worker (`fetch` plus `processEvent`). It declares packaged apps\n" +
+      "such as `GithubAiLinter`, `GuestbookApp`, and `TodoApp`; project-owned app source\n" +
+      "lives under `apps/`, and the packaged linter reads editable policy from `rules/`.\n" +
+      "\n" +
+      "## Project lifecycle hooks\n" +
+      "\n" +
+      "The `processEvent` switch in `worker.ts` exposes the lifecycle events. Each\n" +
+      "case is ordinary userspace TypeScript: `const itx = await this.itx` gives that\n" +
+      "stateless invocation one memoized project-root session, then write whatever\n" +
+      "calls the project needs. There is no configuration-reconciliation framework\n" +
+      "around them.\n" +
+      "\n" +
+      "- `project/heartbeat-triggered` is the ordinary event appended by that\n" +
+      "  Scheduler script. Its payload is only `{ scheduleKey }`. Put arbitrary\n" +
+      "  periodic itx calls directly in this case.\n" +
+      "- root `stream/woken` is available for work that should run when the project\n" +
+      "  stream wakes after hibernation or an OS deployment.\n" +
+      "- `project/worker-updated` is the config-application hook. The\n" +
+      "  project-creation terminal publishes the first one after probing the trusted\n" +
+      "  seed worker; it does not react to the raw seed commit. For each later config\n" +
+      "  repo commit, the platform appends another only after the current default\n" +
+      "  worker has built, loaded, and answered a readiness probe. If several commits\n" +
+      "  land quickly, a later HEAD may reconcile earlier commit facts too. This is\n" +
+      "  deliberately a reconcile-current-config hook, not an exact per-commit\n" +
+      "  activation callback. The seeded example calls\n" +
+      "  `itx.scheduler.set(...)` here to install one 15-minute heartbeat.\n" +
+      "\n" +
+      "`project/create-requested` and `project/created` belong to the platform's\n" +
+      "creation saga. They are not userspace lifecycle hooks and the config worker\n" +
+      "does not handle them.\n" +
+      "\n" +
+      "The heartbeat uses the Scheduler's native recurrence shape:\n" +
+      "`{ every: seconds }`, `{ cron, timezone? }`, or `{ at: ISO timestamp }`. Copy\n" +
+      "the literal `scheduler.set(...)` call to add another schedule, use\n" +
+      "`{ every: 1 }` in a fast test project, or delete it when a project needs no\n" +
+      "heartbeat. `set(...)` leaves a matching schedule's clock, run count, and\n" +
+      "defining event untouched.\n" +
+      "\n" +
+      "Nothing interprets the source file as desired state. Changing or deleting an\n" +
+      "existing schedule is explicit code too: call `scheduler.set(...)` or\n" +
+      "`scheduler.cancel(...)` from whichever lifecycle case should apply the change.\n" +
+      "Missed interval occurrences coalesce; the Scheduler does not backfill one event\n" +
+      "per missed interval. The scheduler execution ID is the heartbeat append's\n" +
+      "idempotency key.\n",
   },
   {
     path: "apps/guestbook/client.tsx",
@@ -120,6 +206,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
     content:
       "---\n" +
       "id: structure/no-small-single-use-helper\n" +
+      "severity: error\n" +
       "files:\n" +
       "  [\n" +
       "    \"**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}\",\n" +
@@ -137,6 +224,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
     content:
       "---\n" +
       "id: typescript/explain-type-cast\n" +
+      "severity: error\n" +
       "files:\n" +
       "  [\n" +
       "    \"**/*.{ts,tsx,mts,cts}\",\n" +
@@ -154,6 +242,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
     content:
       "---\n" +
       "id: typescript/no-inferable-type-annotation\n" +
+      "severity: error\n" +
       "files:\n" +
       "  [\n" +
       "    \"**/*.{ts,tsx,mts,cts}\",\n" +
@@ -221,6 +310,43 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  // The base class delivers committed events on ANY stream here at least once and in\n" +
       "  // per-stream order.\n" +
       "  protected override async processEvent(event: StreamEvent): Promise<void> {\n" +
+      "    switch (event.type) {\n" +
+      "      case \"events.iterate.com/project/heartbeat-triggered\": {\n" +
+      "        if (event.path !== \"/\") break;\n" +
+      "        console.log(\"Project heartbeat fired\", { scheduleKey: event.payload?.scheduleKey });\n" +
+      "        // Write arbitrary periodic work against itx here:\n" +
+      "        // const itx = await this.itx;\n" +
+      "        break;\n" +
+      "      }\n" +
+      "      case \"events.iterate.com/stream/woken\": {\n" +
+      "        if (event.path !== \"/\") break;\n" +
+      "        // Write arbitrary project-stream wake work against itx here:\n" +
+      "        // const itx = await this.itx;\n" +
+      "        break;\n" +
+      "      }\n" +
+      "      case \"events.iterate.com/project/worker-updated\": {\n" +
+      "        if (event.path !== \"/\") break;\n" +
+      "        // The platform appends this only after the current config worker has\n" +
+      "        // built, loaded, and answered. Put arbitrary idempotent ITX calls\n" +
+      "        // directly in this case.\n" +
+      "        const itx = await this.itx;\n" +
+      "        await itx.scheduler.set({\n" +
+      "          key: \"iterate/config/heartbeat/every-15-minutes\",\n" +
+      "          recurrence: { every: 15 * 60 },\n" +
+      "          script: `async (itx, schedule, trigger) => {\n" +
+      "            await itx.streams.get(\"/\").append({\n" +
+      "              type: \"events.iterate.com/project/heartbeat-triggered\",\n" +
+      "              idempotencyKey: \"iterate/config/heartbeat:\" + trigger.executionId,\n" +
+      "              payload: { scheduleKey: schedule.key },\n" +
+      "            });\n" +
+      "          }`,\n" +
+      "        });\n" +
+      "        break;\n" +
+      "      }\n" +
+      "      default:\n" +
+      "        break;\n" +
+      "    }\n" +
+      "\n" +
       "    await this.#aiLintApp.processEvent(event);\n" +
       "    await this.#guestbookApp.processEvent(event);\n" +
       "  }\n" +
@@ -228,7 +354,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  async fetch(req: Request): Promise<Response> {\n" +
       "    const app = req.headers.get(\"x-iterate-app\");\n" +
       "    if (app === \"todo\") {\n" +
-      "      using itx = await this.env.ITX.get();\n" +
+      "      const itx = await this.itx;\n" +
       "      const authResponse = await itx.auth.get({ policy: \"project-member\" }).fetch(req);\n" +
       "      if (authResponse) return authResponse;\n" +
       "      return this.#todoApp.fetch(req);\n" +
@@ -241,7 +367,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      // tasks board (github.com/iterate/tasks), which authenticates each\n" +
       "      // visitor back to os.iterate.com. The kv knob targets a dev tunnel\n" +
       "      // while developing the tasks app itself.\n" +
-      "      using itx = await this.env.ITX.get();\n" +
+      "      const itx = await this.itx;\n" +
       "      const denied = await itx.auth.get({ policy: \"project-member\" }).fetch(req);\n" +
       "      if (denied) return denied;\n" +
       "      const tasksUrl = new URL(req.url);\n" +
