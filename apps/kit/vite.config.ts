@@ -12,7 +12,18 @@ writeWranglerConfig();
 export default defineConfig({
   plugins: [
     cloudflare({ viteEnvironment: { name: "ssr" } }),
-    tanstackStart(),
+    tanstackStart({
+      router: {
+        routeTreeFileHeader: [
+          "/* eslint-disable */",
+          "// @ts-nocheck",
+          "// noinspection JSUnusedGlobalSymbols",
+          "// TanStack Router generates the `as any` route-update assertions below because",
+          "// the route IDs are registered by the later FileRoutesByPath declaration; the",
+          "// generated declaration makes those otherwise-unrepresentable assertions safe.",
+        ],
+      },
+    }),
     tailwindcss(),
     viteReact(),
   ],

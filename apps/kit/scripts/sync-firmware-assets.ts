@@ -56,14 +56,14 @@ function assertNoOverlappingEspRegions(
   regions: Array<{ label: string; offset: number; size: number }>,
 ) {
   const sorted = [...regions].sort((left, right) => left.offset - right.offset);
-  for (let index = 1; index < sorted.length; index += 1) {
-    const previous = sorted[index - 1]!;
-    const current = sorted[index]!;
-    if (previous.offset + previous.size > current.offset) {
+  let previous: (typeof sorted)[number] | undefined;
+  for (const current of sorted) {
+    if (previous && previous.offset + previous.size > current.offset) {
       throw new Error(
         `ESP flash regions overlap: ${previous.label} and ${current.label} at 0x${current.offset.toString(16)}.`,
       );
     }
+    previous = current;
   }
 }
 
