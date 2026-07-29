@@ -26,7 +26,7 @@ test("phone example runner: egress-rules-configured runs for real against a real
   const { projectId } = await created.__describe();
 
   const token = await mintForgedAccessToken({
-    forgePrivateJwk: requireEnv("AUTH_FORGE_PRIVATE_JWK"),
+    forgePrivateJwk: requireEnv("AUTH_FORGE_ES256_PRIVATE_JWK"),
     issuer: requireEnv("APP_CONFIG_ITERATE_AUTH__ISSUER"),
     audience: process.env.APP_CONFIG_ITERATE_AUTH__RESOURCE?.trim() || portlessOrigin(baseUrl),
     email: "mobile-examples-e2e@nustom.com",

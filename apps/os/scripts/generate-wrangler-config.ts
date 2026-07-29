@@ -501,7 +501,7 @@ function localDevBindings() {
     ...authBinding,
   });
   const localAuthJwks = localDevAuthJwks({
-    forgePrivateJwk: process.env.AUTH_FORGE_PRIVATE_JWK,
+    forgePrivateJwk: process.env.AUTH_FORGE_ES256_PRIVATE_JWK,
     deployedEnv: process.env.CLOUDFLARE_ENV,
   });
   return {
@@ -529,8 +529,8 @@ function localDevBindings() {
           }
         : {}),
       // Local dev trusts forge-minted sessions by deriving the public key from
-      // AUTH_FORGE_PRIVATE_JWK. Do not read APP_CONFIG_ITERATE_AUTH__JWKS from
-      // Doppler here: stale snapshots caused login verification failures.
+      // AUTH_FORGE_ES256_PRIVATE_JWK. Do not read APP_CONFIG_ITERATE_AUTH__JWKS
+      // from Doppler here: stale snapshots caused login verification failures.
       ...(localAuthJwks ? { APP_CONFIG_ITERATE_AUTH__JWKS: localAuthJwks } : {}),
     },
   };
@@ -555,7 +555,7 @@ export function localDevAuthJwks(input: {
   return bakeStaticAuthJwks({
     envName: "dev",
     dopplerConfig: process.env.DOPPLER_CONFIG ?? "local dev",
-    secrets: { AUTH_FORGE_PRIVATE_JWK: forgePrivateJwk },
+    secrets: { AUTH_FORGE_ES256_PRIVATE_JWK: forgePrivateJwk },
   });
 }
 
