@@ -388,6 +388,39 @@ describe("resolveWorkerSource", () => {
     ]);
   });
 
+  test("keeps using a clone-skew replacement instead of returning to the stale loader", async () => {
+    const resolved = sourceFrom(
+      await resolveWorkerSource({
+        projectId: "prj_replacement",
+        source: {
+          createWorker: {
+            files: { files: { "main.js": "export default {};" }, type: "inline" },
+          },
+        },
+      }),
+    );
+    const load = (freshInstanceNonce?: string) =>
+      loadResolvedWorker({
+        bindings: {},
+        freshInstanceNonce,
+        globalOutbound: {} as Fetcher,
+        projectId: "prj_replacement",
+        resolved,
+        scopePath: "/",
+        streamContext: { kind: "scope", scopePath: "/" },
+      });
+
+    load();
+    load("replacement-1");
+    load();
+
+    expect(h.state.loaderCalls.map(({ key }) => key)).toEqual([
+      expect.stringMatching(/:shared$/),
+      expect.stringMatching(/:replacement-1$/),
+      expect.stringMatching(/:replacement-1$/),
+    ]);
+  });
+
   test("does not reuse stream-context-bound workers across script executions", async () => {
     const resolved = sourceFrom(
       await resolveWorkerSource({
