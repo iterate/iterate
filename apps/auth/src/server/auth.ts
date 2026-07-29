@@ -7,38 +7,22 @@ import { config, env } from "./env.ts";
 import { getAuthPlugins } from "./auth-plugins.ts";
 import { authJwt } from "./auth-jwt.ts";
 
-const LOCAL_OAUTH_CLIENT_ORIGINS = [
-  "http://localhost:6274",
-  "http://127.0.0.1:6274",
-  "http://[::1]:6274",
-] as const;
-
-export function getAllowedBrowserOrigins(): string[] {
-  // config.authAppOrigin/publicUrl are `publicValue`-tagged strings; a tagged
-  // string is assignable to `string`, so collect them into a plain `string[]`
-  // (dropping an unset publicUrl) for comparing/`Set`ing against request origins.
-  const origins: string[] = [config.authAppOrigin, ...LOCAL_OAUTH_CLIENT_ORIGINS];
-  if (config.publicUrl) origins.push(config.publicUrl);
-  return origins;
-}
-
+/**
+ * THE browser-origin trust decision, in one place. Loopback origins: on
+ * test-automation stages (fixedTestOtpEnabled — local/dev/preview, never
+ * production) ANY loopback port is trusted, because the Expo Web mobile app's
+ * browser-side OAuth (discovery, dynamic registration, token exchange —
+ * native apps never hit CORS) runs on a random port per invocation;
+ * production trusts only the MCP inspector's fixed port 6274. Everything
+ * else must BE this deployment: the auth app origin, or its public alias.
+ */
 export function isAllowedBrowserOrigin(origin: string | null | undefined) {
   if (!origin || !URL.canParse(origin)) return false;
   const url = new URL(origin);
-  // Loopback web clients on ARBITRARY ports — the Expo Web mobile app that
-  // playwright specs and local dev drive (its port is random per run; the
-  // fixed-port MCP-inspector entries above predate this). Browser-side OAuth
-  // (discovery, dynamic registration, token exchange) needs CORS, which
-  // native apps never do. Gated on the test-automation flag so production
-  // auth never trusts localhost pages.
-  if (
-    config.fixedTestOtpEnabled &&
-    url.protocol === "http:" &&
-    ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
-  ) {
-    return true;
-  }
-  return getAllowedBrowserOrigins().includes(url.origin);
+  const isLoopback =
+    url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+  if (isLoopback) return config.fixedTestOtpEnabled || url.port === "6274";
+  return url.origin === config.authAppOrigin || url.origin === config.publicUrl;
 }
 
 export type ProjectIngressTokenPayload = {
@@ -78,9 +62,12 @@ export const auth = betterAuth({
   trustedOrigins: (request) => {
     const origin = request?.headers.get("origin");
     if (!isAllowedBrowserOrigin(origin)) return [];
-    // Include the requesting origin itself: loopback web clients pass the
-    // predicate on shape, not by membership in the static list.
-    return [...getAllowedBrowserOrigins(), new URL(origin!).origin];
+    // The allowed requester plus this deployment's own origins — loopback
+    // clients pass the predicate on shape, so the requester must be listed
+    // explicitly.
+    const trusted: string[] = [new URL(origin!).origin, config.authAppOrigin];
+    if (config.publicUrl) trusted.push(config.publicUrl);
+    return trusted;
   },
   secret: config.betterAuthSecret.exposeSecret(),
   session: {

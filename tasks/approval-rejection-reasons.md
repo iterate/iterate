@@ -117,6 +117,14 @@ had no button role.
 - Real WebAuthn/passkey signing on web
 - Push notifications on web
 
+# Follow-ups
+
+- approvals should appear inline in a thread. now that we trace what thread they come from they can just become a sort of dialog within the chat
+- the approvals view should show the status of the thread at the time the approval request was created for a bit of extra context now that the approvals view is kinda just for viewing history
+- we should only send the push notification if the user isn't already in the app. the system can give a chance (maybe a second or so) for the mobile to say "don't worry I've shown the user the approval request). the new in-thread approval dialog can then send that message when it successfully renders the thing in the thread
+- push notifications should probably now jump to the thread rather than approvals screen because approvals are now associated with a thread and the UI will be better
+- this isn't ready for implementation but I'd like to think through how expiry works. it'd be good to be able to pre-approve somehow. scenario: timer based task needs approval when I'm asleep. push notification suppressed because sleep mode. when I wake I see it, tap to go to the approval. it's expired. could there be an "Approve retry" button that would get an approval ready and then tell the agent "you can try again with the exact same request if still appropriate" or something. or maybe it should just be "request retry" which doesn't do faceid, just tells the agent "pls try again, I'll approve quickly this time" which will inevitably lead to another approval request within a second or so.
+
 ## Implementation log
 
 - Rejection reasons: `reason` deliberately outside the approval.v2 signature
