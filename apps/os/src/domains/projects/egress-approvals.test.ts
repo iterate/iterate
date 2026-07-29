@@ -8,7 +8,7 @@ import {
   bytesToBase64,
   canonicalJson,
   derSignatureToRaw,
-  evaluateGrant,
+  evaluateDecision,
   matchEgressRule,
   verifyApprovalSignature,
   type EgressRule,
@@ -71,49 +71,62 @@ test("approvalRequestBody keeps UTF-8 readable when the byte cap splits a code p
   });
 });
 
-test("the approval request contract exposes one nullish body object", () => {
+test("the approval request contract holds a non-empty batch with one nullish body object per request", () => {
   const schema =
     ProjectProcessorContract.events["events.iterate.com/project/human-approval-requested"]
       .payloadSchema;
-  const base = {
+  const request = {
     method: "POST",
     url: "https://api.stripe.com/v1/transfers",
     headers: {},
     secretPaths: [],
+  };
+  const base = {
     ruleKey: "stripe",
     expiresAt: "2026-07-22T15:00:00.000Z",
   };
 
-  expect(schema.parse({ ...base, body: null })).toEqual({
+  expect(schema.parse({ ...base, requests: [{ ...request, body: null }] })).toEqual({
     ...base,
-    body: null,
+    requests: [{ ...request, body: null }],
     ruleDescription: "",
   });
   expect(
     schema.parse({
       ...base,
-      body: {
-        encoding: "utf8",
-        content: '{"orderId":1234}',
-        originalByteLength: 16,
-        sha256: "body-sha256",
-      },
+      requests: [
+        {
+          ...request,
+          body: {
+            encoding: "utf8",
+            content: '{"orderId":1234}',
+            originalByteLength: 16,
+            sha256: "body-sha256",
+          },
+        },
+      ],
     }),
   ).toMatchObject({
-    body: {
-      encoding: "utf8",
-      content: '{"orderId":1234}',
-      originalByteLength: 16,
-      sha256: "body-sha256",
-      truncated: false,
-    },
+    requests: [
+      {
+        body: {
+          encoding: "utf8",
+          content: '{"orderId":1234}',
+          originalByteLength: 16,
+          sha256: "body-sha256",
+          truncated: false,
+        },
+      },
+    ],
   });
   expect(() =>
     schema.parse({
       ...base,
-      body: { encoding: "utf8", content: "missing hash" },
+      requests: [{ ...request, body: { encoding: "utf8", content: "missing hash" } }],
     }),
   ).toThrow();
+  // A batch is never empty — a lone request is a batch of one.
+  expect(() => schema.parse({ ...base, requests: [] })).toThrow();
 });
 
 const rule = (overrides: Partial<EgressRule> & Pick<EgressRule, "ruleKey">): EgressRule => ({
@@ -121,6 +134,7 @@ const rule = (overrides: Partial<EgressRule> & Pick<EgressRule, "ruleKey">): Egr
   match: {},
   verdict: "hold",
   approvalTimeoutMs: 600_000,
+  debounceMs: 100,
   ...overrides,
 });
 
@@ -208,6 +222,8 @@ describe("matchEgressRule", () => {
     const state = ProjectProcessorContract.stateSchema.parse({ egressRules: [timeoutless] });
     expect(state.egressRules[0].approvalTimeoutMs).toBe(600_000);
     expect(Number.isFinite(Date.now() + state.egressRules[0].approvalTimeoutMs)).toBe(true);
+    // The dataloader default: 100ms batches a Promise.all burst; null disables.
+    expect(state.egressRules[0].debounceMs).toBe(100);
   });
 
   test("an unparseable URL never throws, and only disables host/path matchers", () => {
@@ -254,24 +270,30 @@ describe("canonical approval message", () => {
     secretPaths: ["/secrets/stripe/prod"],
   };
 
-  test("is deterministic and binds every covered field", () => {
+  test("is deterministic and binds every covered field, including the verdicts", () => {
     const message = (overrides: Partial<Parameters<typeof buildApprovalMessage>[0]> = {}) =>
       new TextDecoder().decode(
         buildApprovalMessage({
           projectId: "prj_1",
           approvalRequestEventOffset: 42,
-          requested,
-          decision: "granted",
+          requests: [requested, { ...requested, url: "https://gmail.googleapis.com/send" }],
+          verdicts: ["approve", "approve"],
           ...overrides,
         }),
       );
     expect(message()).toBe(message());
-    expect(message({ decision: "rejected" })).not.toBe(message());
+    expect(message({ verdicts: ["approve", "reject"] })).not.toBe(message());
     expect(message({ approvalRequestEventOffset: 43 })).not.toBe(message());
     expect(message({ projectId: "prj_2" })).not.toBe(message());
-    expect(message({ requested: { ...requested, url: "https://evil.example" } })).not.toBe(
-      message(),
-    );
+    expect(
+      message({ requests: [requested, { ...requested, url: "https://evil.example" }] }),
+    ).not.toBe(message());
+    // Order is identity: swapping two requests (with their verdicts) changes the bytes.
+    expect(
+      message({
+        requests: [{ ...requested, url: "https://gmail.googleapis.com/send" }, requested],
+      }),
+    ).not.toBe(message());
   });
 
   test("keeps the body hash field explicit for a bodyless request", () => {
@@ -279,12 +301,12 @@ describe("canonical approval message", () => {
       buildApprovalMessage({
         projectId: "prj_1",
         approvalRequestEventOffset: 42,
-        requested: { ...requested, body: null },
-        decision: "granted",
+        requests: [{ ...requested, body: null }],
+        verdicts: ["approve"],
       }),
     );
 
-    expect(JSON.parse(message)).toMatchObject({ bodySha256: null });
+    expect(JSON.parse(message)).toMatchObject({ requests: [{ bodySha256: null }] });
   });
 });
 
@@ -313,14 +335,16 @@ describe("verifyApprovalSignature", () => {
   const message = buildApprovalMessage({
     projectId: "prj_1",
     approvalRequestEventOffset: 7,
-    requested: {
-      method: "DELETE",
-      url: "https://api.example.com/prod-db",
-      headers: {},
-      body: null,
-      secretPaths: [],
-    },
-    decision: "granted",
+    requests: [
+      {
+        method: "DELETE",
+        url: "https://api.example.com/prod-db",
+        headers: {},
+        body: null,
+        secretPaths: [],
+      },
+    ],
+    verdicts: ["approve"],
   });
 
   test("accepts a valid signature and refuses tampering, wrong keys, and garbage", async () => {
@@ -335,14 +359,16 @@ describe("verifyApprovalSignature", () => {
     const tampered = buildApprovalMessage({
       projectId: "prj_1",
       approvalRequestEventOffset: 8,
-      requested: {
-        method: "DELETE",
-        url: "https://api.example.com/prod-db",
-        headers: {},
-        body: null,
-        secretPaths: [],
-      },
-      decision: "granted",
+      requests: [
+        {
+          method: "DELETE",
+          url: "https://api.example.com/prod-db",
+          headers: {},
+          body: null,
+          secretPaths: [],
+        },
+      ],
+      verdicts: ["approve"],
     });
     await expect(
       verifyApprovalSignature({ publicKey: alice.publicKey, signature, message: tampered }),
@@ -358,7 +384,7 @@ describe("verifyApprovalSignature", () => {
     );
   });
 
-  test("evaluateGrant: plain grants pass only until a key is enrolled; revoked keys don't count", async () => {
+  test("evaluateDecision: plain approvals pass only until a key is enrolled; all-reject never needs one", async () => {
     const alice = await keypair();
     const enrolled: HumanApprovalKey = {
       keyId: "alice",
@@ -368,41 +394,62 @@ describe("verifyApprovalSignature", () => {
       revokedAt: null,
     };
     const signature = await alice.sign(message);
+    const approve = { verdicts: ["approve"] as const };
 
-    // Phase 1 — nothing enrolled: a plain grant is accepted.
-    await expect(evaluateGrant({ grant: {}, keys: [], message })).resolves.toEqual({
-      accepted: true,
-    });
+    // Phase 1 — nothing enrolled: a plain approval is accepted.
+    await expect(
+      evaluateDecision({ decision: { ...approve }, keys: [], message }),
+    ).resolves.toEqual({ accepted: true });
     // Only revoked keys = nothing enrolled.
     await expect(
-      evaluateGrant({
-        grant: {},
+      evaluateDecision({
+        decision: { ...approve },
         keys: [{ ...enrolled, revokedAt: "2026-01-02T00:00:00.000Z" }],
         message,
       }),
     ).resolves.toEqual({ accepted: true });
 
-    // Phase 2 — a key is enrolled: unsigned/unknown/bad grants are refused...
-    await expect(evaluateGrant({ grant: {}, keys: [enrolled], message })).resolves.toMatchObject({
-      accepted: false,
-    });
+    // Phase 2 — a key is enrolled: unsigned/unknown/bad approvals are refused...
     await expect(
-      evaluateGrant({ grant: { keyId: "mallory", signature }, keys: [enrolled], message }),
+      evaluateDecision({ decision: { ...approve }, keys: [enrolled], message }),
     ).resolves.toMatchObject({ accepted: false });
     await expect(
-      evaluateGrant({ grant: { keyId: "alice" }, keys: [enrolled], message }),
+      evaluateDecision({
+        decision: { ...approve, keyId: "mallory", signature },
+        keys: [enrolled],
+        message,
+      }),
     ).resolves.toMatchObject({ accepted: false });
-    // ...a revoked key's own valid signature is refused...
     await expect(
-      evaluateGrant({
-        grant: { keyId: "alice", signature },
+      evaluateDecision({ decision: { ...approve, keyId: "alice" }, keys: [enrolled], message }),
+    ).resolves.toMatchObject({ accepted: false });
+    // ...a revoked key's own valid signature falls back to phase 1 (revoked-only)...
+    await expect(
+      evaluateDecision({
+        decision: { ...approve, keyId: "alice", signature },
         keys: [{ ...enrolled, revokedAt: "2026-01-02T00:00:00.000Z" }],
         message,
       }),
-    ).resolves.toEqual({ accepted: true }); // revoked-only ⇒ back to phase 1
+    ).resolves.toEqual({ accepted: true });
     // ...and a valid signature from the enrolled key releases.
     await expect(
-      evaluateGrant({ grant: { keyId: "alice", signature }, keys: [enrolled], message }),
+      evaluateDecision({
+        decision: { ...approve, keyId: "alice", signature },
+        keys: [enrolled],
+        message,
+      }),
+    ).resolves.toEqual({ accepted: true });
+    // Mixed verdicts count as an approval: unsigned is refused with a key enrolled.
+    await expect(
+      evaluateDecision({
+        decision: { verdicts: ["approve", "reject"] },
+        keys: [enrolled],
+        message,
+      }),
+    ).resolves.toMatchObject({ accepted: false });
+    // All-reject is the fail-safe direction: accepted unsigned even with keys enrolled.
+    await expect(
+      evaluateDecision({ decision: { verdicts: ["reject", "reject"] }, keys: [enrolled], message }),
     ).resolves.toEqual({ accepted: true });
   });
 

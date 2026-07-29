@@ -482,7 +482,7 @@ describe("ProjectProcessor egress policy", () => {
     );
 
     // Wholesale replacement: only the second rule list survives, with the
-    // schema's timeout default filled in.
+    // schema's timeout and debounce defaults filled in.
     expect(h.state().egressRules).toEqual([
       {
         ruleKey: "deny-all",
@@ -490,6 +490,7 @@ describe("ProjectProcessor egress policy", () => {
         match: {},
         verdict: "deny",
         approvalTimeoutMs: 600_000,
+        debounceMs: 100,
       },
     ]);
     // Re-enrolling an existing keyId is a no-op (the first enrollment's
