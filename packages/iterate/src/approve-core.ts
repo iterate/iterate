@@ -182,7 +182,9 @@ export async function decide(input: {
       messageFor(input.projectId, input.offset, input.payload, input.verdicts),
     );
   }
-  const reason = input.reason?.trim();
+  // Cap to the contract's 1000-char bound so a long pasted reason survives
+  // truncated instead of degrading to absent via the schema's catch.
+  const reason = input.reason?.trim().slice(0, 1_000);
   await input.stream.append({
     type: EVENT.decided,
     payload: {

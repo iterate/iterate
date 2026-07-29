@@ -324,12 +324,17 @@ export const ProjectProcessorContract = defineProcessorContract({
             "Who decided: a human, or the door's own timeout (expiry is always all-reject and " +
             "never signed).",
         }),
+        // `.catch(undefined)`: the reason is cosmetic next to the verdicts, so
+        // an invalid one (too long, blank) degrades to ABSENT instead of
+        // failing the whole payload parse — a malformed reason must never make
+        // the door ignore an otherwise-valid decision and strand the hold.
         reason: z
           .string()
           .trim()
           .min(1)
           .max(1_000)
           .optional()
+          .catch(undefined)
           .meta({
             description:
               "The human's stated reason, applying to every rejected index in this decision. It " +
