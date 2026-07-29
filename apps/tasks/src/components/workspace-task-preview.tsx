@@ -203,7 +203,11 @@ function AnnotatedPreview({
       else push(`a-${slugForAuthor(authorOf(thread))}`, ranges);
       if (thread.id === selectedThreadId) push("selected", ranges);
     }
-    if (pending !== null) push("pending", projection.sourceRangeToDomRanges(pending.range));
+    // A pending range only paints against the body it was computed on — a
+    // kept-for-its-draft stale selection must not highlight the wrong text.
+    if (pending !== null && pending.sourceBody === body) {
+      push("pending", projection.sourceRangeToDomRanges(pending.range));
+    }
     // Registration order is paint order: selected and pending go last so
     // they win where highlights overlap.
     const ordered = [...groups.entries()].sort(
@@ -239,24 +243,29 @@ function AnnotatedPreview({
   // Live edits move the body under a pending selection: re-find the selected
   // text so the pending paint stays on the right passage (and the bubble
   // follows it — this runs AFTER the layout effect rebuilt the projection
-  // for the new body), dropping the selection when it can't be re-found
-  // unambiguously (the submit path would refuse it anyway).
+  // for the new body). When it can't be re-found unambiguously: a bare
+  // bubble just drops, but an OPEN composer keeps its typed draft — the
+  // stale selection stops painting (the paint effect checks sourceBody) and
+  // submit's own re-find surfaces "reselect and retry" while the text
+  // survives for the user to copy.
   useEffect(() => {
     setPending((current) => {
       if (current === null || current.sourceBody === body) return current;
       const exact = current.sourceBody.slice(current.range.start, current.range.end);
       const first = body.indexOf(exact);
-      if (first === -1 || body.indexOf(exact, first + 1) !== -1) {
-        setComposerOpen(false);
-        return null;
-      }
-      const range = { start: first, end: first + exact.length };
       const projection = projectionRef.current;
       const wrapper = wrapperRef.current;
-      const rect = projection?.sourceRangeToDomRanges(range)[0]?.getBoundingClientRect();
+      const range =
+        first !== -1 && body.indexOf(exact, first + 1) === -1
+          ? { start: first, end: first + exact.length }
+          : null;
+      const rect =
+        range === null
+          ? undefined
+          : projection?.sourceRangeToDomRanges(range)[0]?.getBoundingClientRect();
       const wrapperRect = wrapper?.getBoundingClientRect();
-      if (rect === undefined || wrapperRect === undefined) {
-        setComposerOpen(false);
+      if (range === null || rect === undefined || wrapperRect === undefined) {
+        if (composerOpen) return current;
         return null;
       }
       return {
@@ -266,7 +275,7 @@ function AnnotatedPreview({
         left: Math.max(0, rect.left - wrapperRect.left),
       };
     });
-  }, [body]);
+  }, [body, composerOpen]);
 
   const onMouseUp = useCallback(() => {
     if (identity === null || composerOpen) return;
