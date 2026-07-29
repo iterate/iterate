@@ -260,7 +260,7 @@ describe("BrowserHandoffSession", () => {
     await expect(waiting).rejects.toThrow(/closed during human handoff/);
   });
 
-  it("validates the handoff lifetime against Browser Run keep-alive", async () => {
+  it("keeps the handoff timeout below Browser Run's idle disconnect", async () => {
     const { session } = createSession();
     await expect(
       session.startHandoff({

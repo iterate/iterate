@@ -18,9 +18,12 @@ import type {
 const DEFAULT_HANDOFF_TIMEOUT_MS = 5 * 60_000;
 const BROWSER_KEEP_ALIVE_MS = 10 * 60_000;
 const HANDOFF_COMPLETION_GRACE_MS = 5_000;
-const HANDOFF_SETUP_HEADROOM_MS = 55_000;
+// Browser Run's keep_alive is an inactivity timeout reset by commands. Leave
+// enough idle headroom for our completion watchdog to classify a missing event
+// before Browser Run disconnects the session.
+const HANDOFF_IDLE_HEADROOM_MS = 55_000;
 const MAX_HANDOFF_TIMEOUT_MS =
-  BROWSER_KEEP_ALIVE_MS - HANDOFF_COMPLETION_GRACE_MS - HANDOFF_SETUP_HEADROOM_MS;
+  BROWSER_KEEP_ALIVE_MS - HANDOFF_COMPLETION_GRACE_MS - HANDOFF_IDLE_HEADROOM_MS;
 const DEFAULT_TEXT_CHARACTERS = 20_000;
 const MAX_TEXT_CHARACTERS = 100_000;
 const HandoffComplete = z.object({
@@ -121,18 +124,18 @@ export class BrowserHandoffSession {
         completion: completion.promise,
         handoffId: undefined,
         listener: (event) => {
-          if (pending.outcome !== undefined) return;
-          clearTimeout(pending.timeoutId);
           const result = HandoffComplete.safeParse(event);
-          pending.outcome = result.success
-            ? { event: result.data, status: "completed" }
-            : {
-                error: new Error(
-                  `Browser Run returned an invalid handoff completion: ${result.error}`,
-                ),
-                status: "failed",
-              };
-          completion.resolve(pending.outcome);
+          this.#settlePendingHandoff(
+            pending,
+            result.success
+              ? { event: result.data, status: "completed" }
+              : {
+                  error: new Error(
+                    `Browser Run returned an invalid handoff completion: ${result.error}`,
+                  ),
+                  status: "failed",
+                },
+          );
         },
         outcome: undefined,
         protocolAnomaly: undefined,
@@ -266,11 +269,16 @@ export class BrowserHandoffSession {
 
   #failPendingHandoff(error: Error): void {
     const pending = this.#pendingHandoff;
-    if (pending === undefined || pending.outcome !== undefined) return;
+    if (pending === undefined) return;
+    this.#settlePendingHandoff(pending, { error, status: "failed" });
+  }
+
+  #settlePendingHandoff(pending: PendingHandoff, outcome: HandoffCompletion): void {
+    if (pending.outcome !== undefined) return;
     clearTimeout(pending.timeoutId);
     this.#cdp.off("Cloudflare.handoffComplete", pending.listener);
-    pending.outcome = { error, status: "failed" };
-    pending.resolve(pending.outcome);
+    pending.outcome = outcome;
+    pending.resolve(outcome);
   }
 
   readonly #handleBrowserDisconnected = (): void => {

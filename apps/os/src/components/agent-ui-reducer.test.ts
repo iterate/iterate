@@ -420,6 +420,7 @@ describe("agent-ui reducer", () => {
       since: "2026-06-11T00:00:19.000Z",
     });
     expect(activeProjection.items).toMatchObject([{ kind: "assistant", text: "20" }]);
+    expect(activeProjection.items).not.toBe(activeProjection.endState.deferredAssistantMessages);
     expect(activeProjection.endState.deferredAssistantMessages).toMatchObject([
       { kind: "assistant", text: "20" },
     ]);

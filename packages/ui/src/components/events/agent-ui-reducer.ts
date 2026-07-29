@@ -519,7 +519,7 @@ export function reduceAgentUiRuntime(
         ...start,
         live: ensureLive(start, transition.sinceOffset, boundaryAtMs),
       },
-      items: start.deferredAssistantMessages,
+      items: [...start.deferredAssistantMessages],
     };
   }
 

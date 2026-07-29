@@ -131,7 +131,10 @@ export function StreamFeedView({
       if (index < itemCount) return index;
       if (live != null && index === itemCount) return "live";
       const transient = transientItems[index - itemCount - liveCount];
-      return transient == null ? `transient-missing:${index}` : `transient:${transient.id}`;
+      if (transient === undefined) {
+        throw new Error(`Stream feed requested missing transient item at index ${index}.`);
+      }
+      return `transient:${transient.id}`;
     },
     [itemCount, live, liveCount, transientItems],
   );
