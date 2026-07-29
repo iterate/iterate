@@ -241,6 +241,19 @@ function rethrowItxDeliveryError(error: unknown): never {
   throw error;
 }
 
+function disposeAcknowledgedRpcResult(result: unknown, operation: string): void {
+  try {
+    disposeIgnoredRpcResult(result);
+  } catch (error) {
+    // The remote call already committed. Cleanup must stay visible without
+    // turning its acknowledgement into a retry of the same durable work.
+    console.warn("stream internal RPC result dispose failed after acknowledgement", {
+      operation,
+      error,
+    });
+  }
+}
+
 /** Build the four concrete calls used by the receiver union. */
 function createSubscriptionReceiverCalls(deps: {
   projectId: string | null;
@@ -296,7 +309,10 @@ function createSubscriptionReceiverCalls(deps: {
     },
 
     async copyToStream(path: string, batch: StreamDeliveryBatch) {
-      return deps.copyToStream(path, batch);
+      const result = await deps.copyToStream(path, batch);
+      const receipt = { acknowledged: result.acknowledged };
+      disposeAcknowledgedRpcResult(result, "copy-to-stream");
+      return receipt;
     },
 
     async deliverToWebhook(url: string, delivery: StreamWebhookDelivery) {
@@ -1115,8 +1131,9 @@ export class StreamDurableObject extends DurableObject<Env> {
     return receipt;
   }
 
-  #appendCoreEventToStreamPath(path: string, event: StreamEventInput) {
-    return this.#streamStub(path).appendCoreEvent(event);
+  async #appendCoreEventToStreamPath(path: string, event: StreamEventInput): Promise<void> {
+    const result = await this.#streamStub(path).appendCoreEvent(event);
+    disposeAcknowledgedRpcResult(result, "ancestor-core-event");
   }
 
   #runInBackground(work: () => Promise<unknown>): void {
