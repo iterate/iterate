@@ -1,78 +1,100 @@
-import type { ItxBinding, StreamEvent, StreamEventInput } from "../../sdk.ts";
-import type { GithubAiLinterRuleSource } from "./rules.ts";
+import type { ItxBinding, Project, StreamEvent } from "../../sdk.ts";
+import {
+  handleGithubPullRequestWebhook,
+  loadLinkedGithubRepos,
+  type LinkedGithubRepo,
+} from "./review-bot.ts";
+import { loadGithubAiLinterRules, type GithubAiLinterRuleSource } from "./rules.ts";
 
 export type GithubAiLinterConfig = {
   policyVersion: string;
   rules: GithubAiLinterRuleSource;
 };
 
-const reviewBotSubscriptionConfigVersion = 4;
-const configuredWorkerEntrypoint =
-  "node_modules/iterate/dist/starter-apps/github-ai-linter/configured-worker.mjs";
-
 export const GithubAiLinter = {
   create(env: { ITX: ItxBinding }, config: GithubAiLinterConfig) {
+    let linkedRepos: LinkedGithubRepo[] | undefined;
     return {
       async processEvent(event: StreamEvent) {
-        if (event.type !== "events.iterate.com/repo/github-link-configured") return;
-        const connection = event.payload?.connection;
-        if (typeof connection !== "string" || connection.length === 0) return;
-        const subscriptionEvents = reviewBotSubscriptionEvents(event, connection, config);
+        if (
+          event.type !== "events.iterate.com/github/webhook-received" &&
+          event.type !== "events.iterate.com/repo/github-link-configured" &&
+          event.type !== "events.iterate.com/repo/github-unlinked"
+        ) {
+          return;
+        }
+        if (
+          event.type === "events.iterate.com/github/webhook-received" &&
+          event.source?.copiedFrom !== undefined
+        ) {
+          return;
+        }
+        if (event.type === "events.iterate.com/repo/github-unlinked") {
+          linkedRepos = undefined;
+          return;
+        }
+        if (
+          event.type === "events.iterate.com/github/webhook-received" &&
+          !mightWakePullRequestAgent(event)
+        ) {
+          return;
+        }
         using itx = await env.ITX.get();
-        await itx.streams.get(`/integrations/github/${connection}`).append(...subscriptionEvents);
+        if (event.type === "events.iterate.com/repo/github-link-configured") {
+          linkedRepos = undefined;
+          const connection = event.payload?.connection;
+          if (typeof connection === "string" && connection.length > 0) {
+            await retireHostedReviewBot(itx, connection);
+          }
+          return;
+        }
+        await handleGithubPullRequestWebhook(itx, event, {
+          loadLinkedRepos: async () => (linkedRepos ??= await loadLinkedGithubRepos(itx)),
+          loadRules: () => loadGithubAiLinterRules(itx, config.rules),
+          policyVersion: config.policyVersion,
+        });
       },
     };
   },
 };
 
-function reviewBotSubscriptionEvents(
-  sourceEvent: StreamEvent,
-  connection: string,
-  config: GithubAiLinterConfig,
-): StreamEventInput[] {
-  return [
-    {
-      type: "events.iterate.com/stream/subscription-configured",
-      payload: {
-        subscriptionKey: "app-review-bot#review-bot",
-        receiver: {
-          action: "processor-wake",
-          expression: [
-            "workers",
-            ["get", reviewBotAppRef(connection, config)],
-            "processor",
-            "wakeStreamProcessor",
-          ],
-          processorSlug: "review-bot",
-        },
-      },
-      idempotencyKey: `review-bot/subscription:v${reviewBotSubscriptionConfigVersion}:${sourceEvent.path}:${sourceEvent.offset}`,
-    },
-  ];
+function mightWakePullRequestAgent(event: StreamEvent): boolean {
+  // The platform created this envelope after signature verification. This
+  // deliberately stays a loose prefilter; the handler below performs the
+  // complete authorization and payload validation after an ITX session opens.
+  const webhook = event.payload as
+    | {
+        associations?: { mentionedUsers?: unknown[] };
+        body?: { action?: unknown };
+        delivery?: { name?: unknown };
+      }
+    | undefined;
+  const name = webhook?.delivery?.name;
+  const action = webhook?.body?.action;
+  return (
+    (name === "pull_request" &&
+      (action === "opened" || action === "ready_for_review" || action === "synchronize")) ||
+    ((name === "issue_comment" ||
+      name === "pull_request_review" ||
+      name === "pull_request_review_comment") &&
+      (webhook?.associations?.mentionedUsers?.length ?? 0) > 0)
+  );
 }
 
-function reviewBotAppRef(connection: string, config: GithubAiLinterConfig) {
-  const durableConnection = connection.replaceAll("-", "--").replaceAll("_", "-u");
-  return {
-    type: "stateful",
-    path: "/",
-    className: "ReviewBotApp",
-    // Connection slugs admit `_`, but durable keys do not. Escaping both
-    // separator characters keeps the identity readable and collision-free.
-    durableWorkerKey: `app-review-bot-${durableConnection}`,
-    source: {
-      createWorker: {
-        entryPoint: configuredWorkerEntrypoint,
-        files: {
-          type: "repo",
-          repoPath: "/repos/config",
-          include: ["package.json"],
-        },
-        minify: true,
-        virtualModules: {
-          "iterate:github-ai-linter-config": `export default ${JSON.stringify(config)};`,
-        },
-      },
+async function retireHostedReviewBot(itx: Project, connection: string): Promise<void> {
+  const stream = itx.streams.get(`/integrations/github/${connection}`);
+  const state = await stream.runtimeState();
+  if (
+    state.coreProcessorState.subscriptions.outbound.byKey["app-review-bot#review-bot"] === undefined
+  ) {
+    return;
+  }
+  await stream.append({
+    type: "events.iterate.com/stream/subscription-removed",
+    idempotencyKey: "github-ai-linter:retire-hosted-review-bot:v1",
+    payload: {
+      subscriptionKey: "app-review-bot#review-bot",
+      reason: "requested",
     },
-  } as const;
+  });
 }

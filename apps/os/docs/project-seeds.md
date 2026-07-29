@@ -45,8 +45,9 @@ doppler run --project os --config prd -- \
 
 GitHub config repositories are references: installation ID, owner, and
 repository name. GitHub remains authoritative, so restore refuses to create a
-missing remote, performs no starter push, imports the current default branch,
-and checks that the remote head did not move during the operation.
+missing remote, performs no starter push, re-establishes the link on every
+apply, imports the current default branch when the local head differs, and
+checks that the remote head did not move during the operation.
 
 A config repository without a GitHub link is stored as a base64 file tree in
 the archive. After restoring it, the CLI waits for every

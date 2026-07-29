@@ -55,41 +55,6 @@ export default defineConfig([
     clean: false,
   },
   {
-    // This is installed as the dynamic worker's PHYSICAL entry point. The
-    // worker-bundler host installs the root config repo's dependencies, not
-    // transitive dependencies declared inside an installed tarball, so this
-    // artifact must carry its complete runtime graph. The only imports left
-    // for workerd to resolve are its built-in API and the per-install config
-    // virtual supplied by GithubAiLinter.create().
-    entry: {
-      "starter-apps/github-ai-linter/configured-worker":
-        "src/starter-apps/github-ai-linter/configured-worker.ts",
-    },
-    format: "esm",
-    fixedExtension: true,
-    platform: "neutral",
-    inputOptions: {
-      resolve: {
-        conditionNames: ["workerd", "worker", "import", "default"],
-      },
-    },
-    deps: {
-      alwaysBundle: ["@iterate-com/capnweb", "minimatch", "yaml", "zod"],
-      neverBundle: ["cloudflare:workers", "iterate:github-ai-linter-config"],
-      onlyBundle: [
-        "@iterate-com/capnweb",
-        "balanced-match",
-        "brace-expansion",
-        "minimatch",
-        "yaml",
-        "zod",
-      ],
-    },
-    dts: false,
-    sourcemap: true,
-    clean: false,
-  },
-  {
     entry: ["src/index.ts", "src/stream-tui/agent-chat-terminal.tsx"],
     format: "esm",
     // The CLI + TUI are STANDALONE PROCESS artifacts (bin/iterate spawns the
@@ -122,6 +87,31 @@ export default defineConfig([
     copy: [{ from: "src/worker.d.mts", to: "dist" }],
   },
   {
+    // Config repos call this app directly from their project worker and should
+    // not have to repeat its private parser dependencies. Keep the published
+    // entry self-contained, just like the physical starter-app workers above.
+    entry: {
+      "starter-apps/github-ai-linter/index": "src/starter-apps/github-ai-linter/index.ts",
+      "starter-apps/github-ai-linter/worker": "src/starter-apps/github-ai-linter/worker.ts",
+    },
+    format: "esm",
+    fixedExtension: true,
+    platform: "neutral",
+    target: "es2022",
+    inputOptions: {
+      resolve: {
+        conditionNames: ["workerd", "worker", "import", "default"],
+      },
+    },
+    deps: {
+      alwaysBundle: ["minimatch", "yaml", "zod"],
+      neverBundle: ["cloudflare:workers"],
+    },
+    dts: false,
+    sourcemap: true,
+    clean: false,
+  },
+  {
     // The sdk + stream-processor machinery + its node test harness, ONE
     // config object on purpose: sdk.ts hosts createProcessorHost, which
     // constructs the registry/runner over processor instances built from the
@@ -140,8 +130,6 @@ export default defineConfig([
       sdk: "src/sdk.ts",
       "starter-apps/guestbook/index": "src/starter-apps/guestbook/index.ts",
       "starter-apps/guestbook/worker": "src/starter-apps/guestbook/worker.ts",
-      "starter-apps/github-ai-linter/index": "src/starter-apps/github-ai-linter/index.ts",
-      "starter-apps/github-ai-linter/worker": "src/starter-apps/github-ai-linter/worker.ts",
       "starter-apps/todo/index": "src/starter-apps/todo/index.ts",
       processors: "src/processors/index.ts",
       "processors-cloudflare": "src/processors/cloudflare.ts",

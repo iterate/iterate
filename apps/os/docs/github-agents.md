@@ -10,21 +10,21 @@ what the agent should do.
 GitHub App webhook
   -> /integrations/github/<connection>       verified original fact
        |-> /repos/<project path>              default-branch pushes only
-       `-> ReviewBotApp (packaged userspace DO, wake subscription per connection)
-            -> ReviewBotProcessor -> handleGithubPullRequestWebhook
-                 -> match itx.repos.list() links
-                      -> /agents/repos/<project path>/pr/<n>
-                                                PR history and agent loop
+       `-> project config worker              normal project-worker delivery
+            -> GithubAiLinter.processEvent
+                 -> handleGithubPullRequestWebhook
+                      -> match itx.repos.list() links
+                           -> /agents/repos/<project path>/pr/<n>
+                                                     PR history and agent loop
 ```
 
-The review bot is a USERSPACE stream processor: `ReviewBotProcessor` (the
-same `iterate/processors` machinery as the seeded guestbook) hosted by a
-`ReviewBotApp` Durable Object, one instance per GitHub connection, attached
-to that connection's webhook stream through a durable wake subscription. The
-platform still has no pull-request processor of its own. The agent stream
-remains the durable journal and execution loop for its pull request; the
-bot's processor folds no state — every durable fact it produces lives on
-agent streams, under stable idempotency keys.
+The review bot is userspace project policy. Every project stream already
+delivers committed events to the project's config worker, so the packaged
+`GithubAiLinter` handles first-hand GitHub webhooks there directly. There is no
+second Durable Object, hosted processor, replay cursor, or connection-specific
+subscription. The platform still has no pull-request processor of its own. The
+agent stream remains the durable journal and execution loop for its pull
+request, under stable idempotency keys.
 
 ## The webhook fact
 
@@ -77,32 +77,15 @@ userspace consumes the original connection event and rejects every received copy
 
 ## The userspace router
 
-The router and its host live in
+The router lives in
 [`iterate/starter-apps/github-ai-linter`](../../../packages/iterate/src/starter-apps/github-ai-linter/review-bot.ts).
-The package contains the `ReviewBotProcessorContract` (consuming
-`events.iterate.com/github/webhook-received`), the processor, and the
-`handleGithubPullRequestWebhook` router it runs per delivered webhook inside
-`blockProcessorWhile` — short must-happen work, so the cursor is held, a crash
-redelivers the frame, and the router's stable idempotency keys collapse the
-re-run.
-
-Event processing uses the guestbook's hosted-processor wake mechanism, with one difference: webhook streams
-are per connection and no user action touches them directly, so nothing can
-configure the subscription at creation time. Instead the config worker passes
-its environment and app config to `GithubAiLinter.create`, keeps the returned
-app in a private field, and calls its dependency-free `processEvent(event)`
-method explicitly. On a `repo/github-link-configured` event
-(whose payload names the connection), it idempotently appends the bot's
-`stream/subscription-configured` event to that
-connection's webhook stream, once per (re-)link rather than once per webhook.
-The stream spine wakes the newly configured hosted processor immediately, and
-a fresh subscription replays from offset zero, so pull requests opened shortly
-before the link are still delivered. Because that replay covers the stream's
-whole history, the processor drops webhooks older than a freshness horizon
-(`reviewBotFreshnessHorizonMs`) — attaching to an old stream must not review
-long-dead pull requests. A project that already had linked repos before
-adopting this template picks the bot up by re-running `linkGithub` (re-links
-replace subscriptions by key and repair by design).
+The package contains the `handleGithubPullRequestWebhook` router and the rule
+loader it calls. The config worker passes its environment and app config to
+`GithubAiLinter.create`, keeps the returned app in a private field, and calls
+its `processEvent(event)` method explicitly. The project's existing
+`project-worker` delivery supplies each verified first-hand webhook at least
+once; the router's stable idempotency keys collapse a redelivery. Copied
+webhooks are ignored.
 
 The router lists the project's repos, reads their current links, and accepts
 the event only when one link's stream path, installation, and stable repository

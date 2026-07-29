@@ -216,6 +216,32 @@ async function withProject<T>(env: IterateEnv, fn: (project: Project) => Promise
 }
 
 /**
+ * Detach plain data returned by Workers RPC before releasing the per-call
+ * result capability. Disposing the project root does not release values
+ * obtained through it; each stream call owns its own result reference.
+ */
+function detachPlainRpcResult<T>(result: T): T {
+  if (result === null || (typeof result !== "object" && typeof result !== "function")) {
+    return result;
+  }
+  // ProcessorStream returns JSON-shaped data only. Workers RPC adds a hidden
+  // disposer that is absent from the generated data types; a shallow spread
+  // preserves that data and drops the capability, but TypeScript cannot prove
+  // that the generic spread still has T's exact shape.
+  const detached = Array.isArray(result) ? [...result] : { ...result };
+  Reflect.deleteProperty(detached, Symbol.dispose);
+  try {
+    const dispose = Reflect.get(result, Symbol.dispose);
+    if (typeof dispose === "function") Reflect.apply(dispose, result, []);
+  } catch (error) {
+    // The plain data is already detached and the remote operation succeeded.
+    // Keep cleanup failure visible without rewriting that outcome as failure.
+    console.warn("project stream RPC result dispose failed after detaching plain data", { error });
+  }
+  return detached as T;
+}
+
+/**
  * A view of `target` with `overrides` in front and everything else passed
  * through. Proxies (not spreads or Object.create) because DurableObjectState
  * and DurableObjectStorage are host objects: their methods must be invoked
@@ -244,7 +270,7 @@ function overlay<T extends object>(target: T, overrides: Record<PropertyKey, unk
  */
 export function itxProjectStream(env: IterateEnv, path: string): ProcessorStream {
   const withStream = <T>(fn: (streams: Project["streams"]) => Promise<T>): Promise<T> =>
-    withProject(env, (project) => fn(project.streams));
+    withProject(env, (project) => fn(project.streams)).then(detachPlainRpcResult);
   return {
     append: (...events) => withStream((streams) => streams.get(path).append(...events)),
     appendIfStreamId: (args) => withStream((streams) => streams.get(path).appendIfStreamId(args)),
@@ -262,7 +288,7 @@ export function itxProjectStream(env: IterateEnv, path: string): ProcessorStream
             project,
           }));
           const { pager } = await opened;
-          return await pager.next();
+          return detachPlainRpcResult(await pager.next());
         },
         [Symbol.dispose]() {
           closed = true;
@@ -509,9 +535,9 @@ export type ProcessorHost<State extends object> = {
  *
  * With `path` the host serves one fixed home stream (the guestbook shape).
  * Without it the host learns its stream from the first wake request and
- * caches the coordinates durably (the review-bot shape: one Durable Object
- * per dynamic stream, keyed by the ref that names it). One host per Durable
- * Object — the cache keys assume it.
+ * caches the coordinates durably (one Durable Object per dynamic stream,
+ * keyed by the ref that names it). One host per Durable Object — the cache
+ * keys assume it.
  */
 export function createProcessorHost<State extends object = Record<string, unknown>>(args: {
   ctx: DurableObjectState;

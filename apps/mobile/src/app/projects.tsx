@@ -60,7 +60,11 @@ export default function ProjectsScreen() {
             <Pressable
               onPress={async () => {
                 const baseUrl = (await getServerBaseUrl()) || DEFAULT_SERVER;
-                await revokeEnrolledPushDevices(baseUrl);
+                // Server-side cleanup is best-effort: an unreachable server
+                // must never trap the user in a signed-in state.
+                await revokeEnrolledPushDevices(baseUrl).catch((error) => {
+                  console.log(`[auth] push revocation skipped on sign-out: ${String(error)}`);
+                });
                 await signOut(baseUrl);
                 disconnectItxSession();
                 queryClient.clear();

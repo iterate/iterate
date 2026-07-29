@@ -56,7 +56,12 @@ export async function enrollApproverKey(
   return info;
 }
 
-/** Sign one approval message — prompts Face ID / Touch ID / passcode to unlock the private key. */
+/**
+ * Sign one approval message — prompts Face ID / Touch ID / passcode to
+ * unlock the private key. One decision covers a whole batch (the approval.v2
+ * message binds every request plus the verdicts), so approving 12 requests
+ * is still exactly one prompt and one signature.
+ */
 export async function signWithApproverKey(
   projectId: string,
   message: Uint8Array,

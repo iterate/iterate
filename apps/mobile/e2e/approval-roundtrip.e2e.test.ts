@@ -15,13 +15,7 @@ import { connectItx } from "iterate/node";
 import { waitForCondition } from "../../os/e2e/test-support/wait-for-condition.ts";
 import { withTunnel } from "../../os/e2e/test-support/tunnel.ts";
 import { generateApproverKey, signApprovalMessage } from "../src/lib/approver-core.ts";
-import {
-  deriveOpenRequests,
-  EVENT,
-  grant,
-  reject,
-  type RequestedPayload,
-} from "../src/lib/approvals.ts";
+import { decide, deriveOpenBatches, EVENT, type RequestedPayload } from "../src/lib/approvals.ts";
 import { requireEnv, resolveBaseUrl } from "./e2e-helpers.ts";
 
 const RULES_CONFIGURED = "events.iterate.com/project/egress-rules-configured";
@@ -107,18 +101,20 @@ test("phone approver: enrolled key signs a real held request and the door releas
 
     // Confirm the UI's pure derivation agrees before we act — this is what
     // the approvals screen would render right now.
-    const backlog = deriveOpenRequests(
+    const backlog = deriveOpenBatches(
       await stream.getEvents({
-        eventTypes: [EVENT.requested, EVENT.granted, EVENT.rejected, EVENT.settled],
+        eventTypes: [EVENT.requested, EVENT.decided, EVENT.settled],
       }),
     );
     expect(backlog).toMatchObject([{ offset: requested.offset, submitted: false }]);
 
-    await grant({
+    // ONE decision, ONE signature over the whole batch (of one).
+    await decide({
       stream,
       projectId,
       offset: requested.offset,
       payload: requested.payload as RequestedPayload,
+      verdicts: ["approve"],
       sign: async (message) => ({
         keyId: key.keyId,
         signature: signApprovalMessage(key.privateKey, message),
@@ -135,6 +131,7 @@ test("phone approver: enrolled key signs a real held request and the door releas
     });
     expect(settled.payload).toMatchObject({
       approvalRequestEventOffset: requested.offset,
+      index: 0,
       status: 200,
     });
   } finally {
@@ -186,14 +183,21 @@ test("phone approver: a rejection refuses the held request without signing anyth
       timeoutMs: 30_000,
     });
 
-    await reject(stream, requested.offset);
+    await decide({
+      stream,
+      projectId: (await project.__describe()).projectId,
+      offset: requested.offset,
+      payload: requested.payload as RequestedPayload,
+      verdicts: ["reject"],
+      sign: null,
+    });
 
     const rejectedResponse = await rejectedFetch;
     expect(rejectedResponse).toMatchObject({ status: 403 });
 
-    const backlog = deriveOpenRequests(
+    const backlog = deriveOpenBatches(
       await stream.getEvents({
-        eventTypes: [EVENT.requested, EVENT.granted, EVENT.rejected, EVENT.settled],
+        eventTypes: [EVENT.requested, EVENT.decided, EVENT.settled],
       }),
     );
     expect(backlog).toEqual([]);
