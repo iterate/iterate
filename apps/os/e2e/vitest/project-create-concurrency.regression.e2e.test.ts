@@ -21,6 +21,6 @@ test.fails(
 
     expect(secondIdentity).toEqual(firstIdentity);
     expect(firstIdentity).toMatchObject({ organizationId: null, slug });
-    await first.waitUntilReady();
+    await first.waitUntilCreated();
   },
 );

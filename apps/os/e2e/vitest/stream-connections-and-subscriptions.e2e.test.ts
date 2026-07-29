@@ -1772,7 +1772,7 @@ test("a filter failure retries in order and never advances past later events", a
   );
 });
 
-test("every project stream is born with ordinary project-worker and PostHog ITX receivers", async () => {
+test("every project child stream is born with ordinary project-worker and PostHog ITX receivers", async () => {
   const marker = crypto.randomUUID();
   const streamPath = `/e2e/subscriptions/platform-defaults/${marker}`;
 

@@ -94,7 +94,10 @@ export function AppSidebar({ routeConfig }: { routeConfig: PublicRouteConfig }) 
   });
   // Missing projects (auth knows them, this deployment's engine does not) are
   // not navigable — the /projects page owns setting them up.
-  const projects = data?.filter((project) => project.deploymentStatus !== "missing") ?? [];
+  const projects =
+    data?.filter(
+      (project) => project.deploymentStatus !== "missing" && project.deploymentStatus !== "failed",
+    ) ?? [];
   // Sidebar composition follows shadcn sidebar blocks 07/08:
   // https://ui.shadcn.com/blocks/sidebar
   // CloseMobileSidebarOnNavigate must sit outside <Sidebar>: on mobile, Sidebar

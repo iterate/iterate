@@ -156,7 +156,7 @@ export const RepoProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/repo/commit-completed": {
       description:
-        "The repo's default branch advanced, normalized from a Cloudflare Artifacts pushed event. This includes pushes made outside OS through Git.",
+        "The repo's default branch advanced. OS-owned writes append this fact directly; Cloudflare Artifacts pushed events normalize external Git writes into the same fact.",
       payloadSchema: z.object({
         beforeCommitOid: z.string().trim().min(1).nullable().meta({
           description: "The branch head before the push, or null for a newly created ref.",

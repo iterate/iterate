@@ -5,11 +5,23 @@
 // Behavior is proven where it runs: worker-build.e2e.test.ts edits and
 // rebuilds a seeded worker, and the seeded-apps/github-review flows exercise
 // the template live.
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
+import ProjectWorker from "../../../config-repo-template/worker.ts";
 import { PROJECT_REPO_INITIAL_FILES } from "./config-repo-template.generated.ts";
 
 function templateFile(path: string): string {
   return PROJECT_REPO_INITIAL_FILES.find((file) => file.path === path)!.content;
+}
+
+function deliver(
+  worker: ProjectWorker,
+  event: {
+    type: string;
+    path: string;
+    payload?: Record<string, unknown>;
+  },
+): Promise<void> {
+  return worker.processEventBatch({ events: [event] } as never);
 }
 
 test("template ships packaged apps behind a thin router", () => {
@@ -43,6 +55,96 @@ test("template ships packaged apps behind a thin router", () => {
     react: expect.any(String),
     zod: expect.any(String),
   });
+});
+
+test("project lifecycle cases directly install and handle the default heartbeat", async () => {
+  const set = vi.fn(async (input: { key: string; recurrence: unknown; script: string }) => input);
+  const project = {
+    scheduler: { set },
+    [Symbol.dispose]: vi.fn(),
+  };
+  const get = vi.fn(async () => project);
+  const worker = new ProjectWorker(
+    {} as never,
+    {
+      ITERATE_WORKER_VERSION: "test",
+      ITX: { get },
+    } as never,
+  );
+
+  await worker.processEventBatch({
+    events: [
+      {
+        type: "events.iterate.com/project/worker-updated",
+        path: "/",
+        payload: { commitOid: "b".repeat(40) },
+      },
+      {
+        type: "events.iterate.com/project/worker-updated",
+        path: "/",
+        payload: { commitOid: "c".repeat(40) },
+      },
+    ],
+  } as never);
+
+  expect(set).toHaveBeenCalledTimes(2);
+  expect(get).toHaveBeenCalledOnce();
+  const configured = set.mock.calls[0]![0];
+  expect(configured).toMatchObject({
+    key: "iterate/config/heartbeat/every-15-minutes",
+    recurrence: { every: 900 },
+  });
+
+  // Pin the exact source handed to the Scheduler; the Scheduler's own tests
+  // prove that it invokes action strings with (itx, schedule, trigger).
+  expect(configured.script).toContain('type: "events.iterate.com/project/heartbeat-triggered"');
+  expect(configured.script).toContain(
+    'idempotencyKey: "iterate/config/heartbeat:" + trigger.executionId',
+  );
+  expect(configured.script).toContain("payload: { scheduleKey: schedule.key }");
+
+  const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+  await deliver(worker, {
+    type: "events.iterate.com/project/heartbeat-triggered",
+    path: "/",
+    payload: { scheduleKey: configured.key },
+  });
+  expect(log).toHaveBeenCalledWith("Project heartbeat fired", {
+    scheduleKey: configured.key,
+  });
+  await deliver(worker, {
+    type: "events.iterate.com/stream/woken",
+    path: "/",
+  });
+  // Heartbeat and wake cases are independent literal hooks; neither silently
+  // re-runs the worker-update case's Scheduler call.
+  expect(set).toHaveBeenCalledTimes(2);
+
+  const ignored = [
+    {
+      type: "events.iterate.com/project/create-requested",
+      path: "/",
+    },
+    {
+      type: "events.iterate.com/project/created",
+      path: "/",
+    },
+    {
+      type: "events.iterate.com/project/heartbeat-triggered",
+      path: "/agents/not-the-project-root",
+    },
+    {
+      type: "events.iterate.com/stream/woken",
+      path: "/agents/not-the-project-root",
+    },
+    {
+      type: "events.iterate.com/project/worker-updated",
+      path: "/agents/not-the-project-root",
+    },
+  ];
+  for (const event of ignored) await deliver(worker, event);
+  expect(set).toHaveBeenCalledTimes(2);
+  expect(log).toHaveBeenCalledOnce();
 });
 
 test("packaged apps stay behind the thin router", () => {

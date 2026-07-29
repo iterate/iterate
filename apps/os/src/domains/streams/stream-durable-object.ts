@@ -354,9 +354,9 @@ function toInvocation(expression: ItxExpression, payload: unknown): ItxExpressio
 }
 
 /**
- * The subscription key of the birth-certificate worker feed every
- * project-scoped stream configures on itself (see the constructor). Userspace
- * overrides it by re-appending `subscription-configured` with this same key.
+ * The subscription key of the worker feed every project-scoped stream uses.
+ * Child streams configure it at birth. The project creation saga configures
+ * it on `/` only after the seeded default worker has built.
  */
 const PROJECT_WORKER_SUBSCRIPTION_KEY = "project-worker";
 
@@ -524,10 +524,12 @@ export class StreamDurableObject extends DurableObject<Env> {
     // (fetch, RPC, alarm) appends a `woken` event, whose post-commit sends are
     // also what re-establishes durable deliveries after hibernation.
     //
-    // Project streams are born with their ordinary platform feeds. Declaring
-    // both here means there is no asynchronous wiring window before the first
-    // user event, while subscription events remain removable/replaceable
-    // through the same public lifecycle as any other subscription.
+    // Child project streams are born with their ordinary platform feeds. The
+    // root is deliberately different: its project-worker feed is installed by
+    // the project creation saga only after the seeded worker has built. That
+    // keeps an unavailable worker from looking broken during its own build;
+    // project/created means the worker was reachable and its permanent feed
+    // was committed, not that userspace consumed a platform creation event.
     if (this.#coreProcessorState.eventCount === 0) {
       this.#append({ authority: "core-event" }, [
         {
@@ -543,23 +545,25 @@ export class StreamDurableObject extends DurableObject<Env> {
       // project worker. Do not invent a fake callback owner there: OS's PROJECT
       // binding is the capability that makes this feed real.
       if (this.name.projectId !== null && "PROJECT" in this.env) {
-        this.append({
-          type: "events.iterate.com/stream/subscription-configured",
-          payload: {
-            subscriptionKey: PROJECT_WORKER_SUBSCRIPTION_KEY,
-            receiver: {
-              action: "itx-call",
-              expression: ["processEventBatch"],
-              delivery: {
-                // Everything, from the beginning: the worker sees the
-                // stream's full history once it first builds.
-                start: "beginning",
-                // One failing event must not silence a project's entire feed.
-                onFailingEvent: "skip",
+        if (this.name.path !== "/") {
+          this.append({
+            type: "events.iterate.com/stream/subscription-configured",
+            payload: {
+              subscriptionKey: PROJECT_WORKER_SUBSCRIPTION_KEY,
+              receiver: {
+                action: "itx-call",
+                expression: ["processEventBatch"],
+                delivery: {
+                  // Everything, from the beginning: the worker sees the
+                  // stream's full history once it first builds.
+                  start: "beginning",
+                  // One failing event must not silence a project's entire feed.
+                  onFailingEvent: "skip",
+                },
               },
-            },
-          } satisfies SubscriptionConfiguredPayload,
-        });
+            } satisfies SubscriptionConfiguredPayload,
+          });
+        }
         // The standalone streams playground also has no PostHog credential or
         // receiver. Deployed OS environments require the credential, so its
         // presence is the integration boundary.
@@ -644,6 +648,21 @@ export class StreamDurableObject extends DurableObject<Env> {
       throw new StreamIdMismatchError(streamIdMismatchMessage(args.streamId, currentStreamId));
     }
     return this.#append({ authority: "public" }, args.events);
+  }
+
+  /** Internal platform append, atomically fenced to one stream lifetime. */
+  appendCoreEventsIfStreamId(args: {
+    streamId: string;
+    events: StreamEventInput[];
+  }): StreamEvent[] {
+    if (args.streamId.trim().length === 0) {
+      throw new Error("streamId must be a non-empty string");
+    }
+    const currentStreamId = this.#coreProcessorState.streamId;
+    if (currentStreamId !== args.streamId) {
+      throw new StreamIdMismatchError(streamIdMismatchMessage(args.streamId, currentStreamId));
+    }
+    return this.#append({ authority: "core-event" }, args.events);
   }
 
   /**
