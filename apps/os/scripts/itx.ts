@@ -65,16 +65,17 @@ export async function run(options: RunOptions) {
         initialConnectionRetryOptions(),
       )
     : await connectItxReady(connection, initialConnectionRetryOptions());
-  const result = await script(itx, vars, RpcTarget).catch((error: unknown) => {
+  let result: unknown;
+  try {
+    result = await script(itx, vars, RpcTarget);
+  } catch (error) {
     process.stderr.write(formatScriptError(error));
-    process.exit(1);
-  });
+    process.exitCode = 1;
+    return;
+  }
 
   // Exactly one JSON document on stdout — scripts and the e2e suite parse it.
   process.stdout.write(`${JSON.stringify(result ?? null, null, 2)}\n`);
-
-  // The Cap'n Web WebSocket would otherwise keep the process alive.
-  process.exit(0);
 }
 
 /**
