@@ -42,6 +42,7 @@ import {
   mintProjectId,
   userCanAccessProject,
 } from "./project-directory.ts";
+import { buildAccessTokenGrantClaims } from "./oauth-project-selection.ts";
 
 const app = hono();
 const AUTH_ISSUER_PATH = "/api/auth";
@@ -209,6 +210,16 @@ export default class AuthWorker extends AuthWorkerContract<CloudflareEnv> {
 
   listProjectsForUser(input: { userId: string }) {
     return listProjectsForUser(input, db);
+  }
+
+  async getUserGrants(input: { userId: string }) {
+    // Reuse the single source of truth for "what a token grants": no scopes + no
+    // selection => every organization and project this user can reach.
+    const { organizations, projects } = await buildAccessTokenGrantClaims(
+      { userId: input.userId, requestedScopes: [], selection: null },
+      db,
+    );
+    return { organizations, projects };
   }
 
   mintProjectAppSession(input: MintProjectAppSessionInput) {

@@ -138,12 +138,58 @@ describe("normalizeInboundEmailAllowedSender", () => {
 });
 
 describe("dmarcPasses", () => {
-  test("requires dmarc=pass in the Authentication-Results value", () => {
+  test("requires Cloudflare authserv-id with dmarc=pass on the same record", () => {
     expect(dmarcPasses("mx.cloudflare.net; spf=pass; dkim=pass; dmarc=pass action=none")).toBe(
       true,
     );
     expect(dmarcPasses("mx.cloudflare.net; spf=pass; dmarc=fail")).toBe(false);
     expect(dmarcPasses(null)).toBe(false);
+  });
+
+  test("rejects a self-forged Authentication-Results without Cloudflare authserv-id", () => {
+    expect(dmarcPasses("evil.example; dmarc=pass")).toBe(false);
+    expect(dmarcPasses("fake.local; spf=pass; dmarc=pass")).toBe(false);
+    // Prefix forgeries must not satisfy a word-boundary-style pin.
+    expect(dmarcPasses("mx.cloudflare.net.evil; dmarc=pass")).toBe(false);
+    expect(dmarcPasses("mx.cloudflare.net-evil; dmarc=pass")).toBe(false);
+    expect(dmarcPasses("mx.cloudflare.netevil; dmarc=pass")).toBe(false);
+  });
+
+  test("allows optional authserv-id version before the semicolon", () => {
+    expect(dmarcPasses("mx.cloudflare.net 1; dmarc=pass")).toBe(true);
+    // Versioned CF record after a Headers.get join must still split out.
+    expect(dmarcPasses("evil.example; dmarc=pass, mx.cloudflare.net 1; dmarc=pass")).toBe(true);
+    expect(dmarcPasses("evil.example; dmarc=pass, mx.cloudflare.net 1; dmarc=fail")).toBe(false);
+  });
+
+  test("handles newline-separated AR records (raw MIME)", () => {
+    expect(dmarcPasses("evil.example; dmarc=pass\nmx.cloudflare.net; spf=pass; dmarc=pass")).toBe(
+      true,
+    );
+    expect(dmarcPasses("evil.example; dmarc=pass\nmx.cloudflare.net; dmarc=fail")).toBe(false);
+  });
+
+  test("handles comma-joined AR records from Headers.get", () => {
+    // headers.get("authentication-results") joins duplicates with ", ".
+    expect(dmarcPasses("evil.example; dmarc=pass, mx.cloudflare.net; spf=pass; dmarc=pass")).toBe(
+      true,
+    );
+    // A forged pass after a real Cloudflare fail must not match across the join.
+    expect(dmarcPasses("mx.cloudflare.net; dmarc=fail, evil.example; dmarc=pass")).toBe(false);
+    // Forged alone, still joined shape.
+    expect(dmarcPasses("evil.example; dmarc=pass, other.example; spf=pass")).toBe(false);
+  });
+
+  test("does not treat 'evil, mx.cloudflare.net; dmarc=pass' as a CF record", () => {
+    // Comma without a complete left-hand AR record is attacker content inside
+    // one header value, not a Headers.get join of two AR headers.
+    expect(dmarcPasses("evil, mx.cloudflare.net; dmarc=pass")).toBe(false);
+    expect(dmarcPasses("not-an-ar-record, mx.cloudflare.net; dmarc=pass")).toBe(false);
+  });
+
+  test("uses the last Cloudflare-authored record (MTA append order)", () => {
+    expect(dmarcPasses("mx.cloudflare.net; dmarc=pass, mx.cloudflare.net; dmarc=fail")).toBe(false);
+    expect(dmarcPasses("mx.cloudflare.net; dmarc=fail, mx.cloudflare.net; dmarc=pass")).toBe(true);
   });
 });
 

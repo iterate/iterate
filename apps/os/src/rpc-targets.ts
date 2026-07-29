@@ -6602,16 +6602,23 @@ export class UnauthenticatedOsRpcTarget extends IterateRpcTarget<"Unauthenticate
       credentials: input,
       headers: this.props.headers,
       requestUrl: this.props.requestUrl,
-      // The project-secret lane's verifier: a one-bit constant-time compare
-      // INSIDE the project's born ingress-credential Secret DO — material
-      // never leaves the secret system, this door included.
-      verifyProjectSecret: ({ projectId, secret }) =>
-        env.SECRET.getByName(
+      // Resolve the public immutable slug before the one-project authority is
+      // minted. The constant-time compare remains INSIDE the project's born
+      // ingress-credential Secret DO — material never leaves the secret system.
+      verifyProjectSecret: async ({ projectIdentifier, secret }) => {
+        const projectId = await resolveProjectIdBySlug({
+          directory: env.PROJECT_DIRECTORY,
+          identifier: projectIdentifier,
+        });
+        if (projectId === null) return null;
+        const verified = await env.SECRET.getByName(
           DurableObjectNameCodec.stringify({
             projectId,
             path: normalizeSecretPath(PROJECT_API_KEY_SECRET_PATH),
           }),
-        ).verifyMaterialField({ value: secret }),
+        ).verifyMaterialField({ value: secret });
+        return verified ? projectId : null;
+      },
       // The project-app-session lane's verifier: local HS256 against the
       // shared session secret — no auth-worker hop; membership was checked
       // at mint time and the token's 15-minute TTL bounds revocation lag.

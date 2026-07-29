@@ -70,15 +70,28 @@ export type ItxAuthCredentials =
   /**
    * A project's own long-lived machine credential — for externally deployed
    * apps that connect back to /api as their project (docs/remote-apps.md).
-   * Verified against the secret every project is born with at
-   * `/secrets/project-api-key` (the comparison happens inside the Secret
-   * Durable Object — this door never receives material, only a one-bit
-   * answer). None of the existing lanes fit this caller: `bearer` is a
-   * user identity, `operator-session` is a short-lived human grant, and
-   * `admin-secret` is deployment-global. Grants exactly one project, no
-   * admin, no user identity.
+   * The preferred address is the immutable project slug; the authentication
+   * door resolves it to the stable id before verifying the secret every
+   * project is born with at `/secrets/project-api-key`. The comparison happens
+   * inside the Secret Durable Object, so this door receives no secret material
+   * back. Grants exactly one resolved project, no admin, no user identity.
    */
-  | { type: "project-secret"; projectId: string; secret: string }
+  | {
+      type: "project-secret";
+      projectSlug: string;
+      projectId?: never;
+      secret: string;
+    }
+  /**
+   * Stable-id addressing for machine callers that already operate on ids.
+   * New user-facing setup flows should use `projectSlug`.
+   */
+  | {
+      type: "project-secret";
+      projectId: string;
+      projectSlug?: never;
+      secret: string;
+    }
   /**
    * The short-lived user-on-project token auth mints for project app hosts
    * (the `iterate-project-auth` cookie). A config worker reverse-proxying an
@@ -266,11 +279,15 @@ export async function resolveItxAuth(input: {
   credentials: ItxAuthCredentials;
   headers: Headers;
   requestUrl: string;
-  /** The `project-secret` lane's verifier — dials the project's born
-   * `/secrets/project-api-key` Secret Durable Object for a one-bit
-   * constant-time comparison (rpc-targets wires it; auth stays free of DO
-   * plumbing). Absent means the caller does not serve that lane. */
-  verifyProjectSecret?: (input: { projectId: string; secret: string }) => Promise<boolean>;
+  /** The `project-secret` lane's verifier resolves the supplied slug/id and
+   * dials the project's born `/secrets/project-api-key` Secret Durable Object
+   * for a constant-time comparison (rpc-targets wires it; auth stays free of
+   * directory and DO plumbing). It returns the canonical id only after a
+   * match. Absent means the caller does not serve that lane. */
+  verifyProjectSecret?: (input: {
+    projectIdentifier: string;
+    secret: string;
+  }) => Promise<string | null>;
   /** The `project-app-session` lane's verifier — a local HS256 signature +
    * expiry check against the shared session secret (rpc-targets wires it).
    * Answers the token's own claims or null; absent means the caller does not
@@ -288,19 +305,25 @@ export async function resolveItxAuth(input: {
 
   if (credentials.type === "project-secret") {
     if (input.verifyProjectSecret === undefined) throw new ItxAuthenticationError();
-    if (credentials.secret.length === 0) throw new ItxAuthenticationError();
-    const verified = await input.verifyProjectSecret({
-      projectId: credentials.projectId,
+    const hasProjectId = credentials.projectId !== undefined;
+    const hasProjectSlug = credentials.projectSlug !== undefined;
+    if (hasProjectId === hasProjectSlug || credentials.secret.length === 0) {
+      throw new ItxAuthenticationError();
+    }
+    const projectIdentifier = credentials.projectSlug ?? credentials.projectId;
+    if (projectIdentifier.length === 0) throw new ItxAuthenticationError();
+    const projectId = await input.verifyProjectSecret({
+      projectIdentifier,
       secret: credentials.secret,
     });
-    if (!verified) throw new ItxAuthenticationError();
+    if (projectId === null) throw new ItxAuthenticationError();
     // Exactly one project, no admin, no user identity — and no directory
     // fallback: the credential IS the project scope; there is nothing to
     // widen into.
     return new ItxAuthContext({
       isAdmin: false,
-      principal: `project-secret:${credentials.projectId}`,
-      projectIds: [credentials.projectId],
+      principal: `project-secret:${projectId}`,
+      projectIds: [projectId],
     });
   }
 

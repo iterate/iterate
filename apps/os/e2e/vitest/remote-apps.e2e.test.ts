@@ -22,9 +22,8 @@ import { adminSecret, withItxSession } from "./test-helpers.ts";
 test("an external client authenticates with the project-secret credential and gets exactly its project", async () => {
   using session = withItxSession();
   using admin = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await admin.projects
-    .get(`remote-ingress-${crypto.randomUUID().slice(0, 8)}`)
-    .create({});
+  const projectSlug = `remote-ingress-${crypto.randomUUID().slice(0, 8)}`;
+  using project = await admin.projects.get(projectSlug).create({});
   const projectId = await project.projectId;
   using other = await admin.projects
     .get(`remote-ingress-other-${crypto.randomUUID().slice(0, 8)}`)
@@ -54,8 +53,8 @@ test("an external client authenticates with the project-secret credential and ge
   // project-scoped credential, use the project.
   using externalSession = withItxSession();
   using externalProject = externalSession
-    .authenticate({ type: "project-secret", projectId, secret: apiKey })
-    .projects.get(projectId);
+    .authenticate({ type: "project-secret", projectSlug, secret: apiKey })
+    .projects.get(projectSlug);
   expect(await externalProject.projectId).toBe(projectId);
 
   // Confinement: the same credential reaches NOTHING else. (Async closures:
@@ -63,7 +62,7 @@ test("an external client authenticates with the project-secret credential and ge
   using externalSession2 = withItxSession();
   using scoped = externalSession2.authenticate({
     type: "project-secret",
-    projectId,
+    projectSlug,
     secret: apiKey,
   });
   await expect(async () => {
@@ -91,10 +90,10 @@ test("an external client authenticates with the project-secret credential and ge
   await expect(async () => {
     using denied = rejectedSession.authenticate({
       type: "project-secret",
-      projectId,
+      projectSlug,
       secret: "itxk_wrong",
     });
-    using deniedProject = denied.projects.get(projectId);
+    using deniedProject = denied.projects.get(projectSlug);
     await deniedProject.projectId;
   }).rejects.toThrow(/missing or invalid auth/i);
 });

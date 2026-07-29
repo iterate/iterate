@@ -81,18 +81,18 @@ describe("resolveItxAuth", () => {
     });
   });
 
-  it("grants exactly one project for a verified project-secret credential", async () => {
-    const verifyProjectSecret = vi.fn().mockResolvedValue(true);
+  it("grants exactly the project resolved from a verified project-secret slug", async () => {
+    const verifyProjectSecret = vi.fn().mockResolvedValue("prj_one");
     const auth = await resolveItxAuth({
       config: config(),
-      credentials: { type: "project-secret", projectId: "prj_one", secret: "itxk_known" },
+      credentials: { type: "project-secret", projectSlug: "one", secret: "itxk_known" },
       headers: new Headers(),
       requestUrl: `${ORIGIN}/api`,
       verifyProjectSecret,
     });
 
     expect(verifyProjectSecret).toHaveBeenCalledWith({
-      projectId: "prj_one",
+      projectIdentifier: "one",
       secret: "itxk_known",
     });
     expect(auth.isAdmin()).toBe(false);
@@ -104,12 +104,29 @@ describe("resolveItxAuth", () => {
     await expect(async () => auth.assertCanAccessProject("prj_other")).rejects.toThrow(/no access/);
   });
 
+  it("also accepts an existing machine caller's stable project id", async () => {
+    const verifyProjectSecret = vi.fn().mockResolvedValue("prj_one");
+    const auth = await resolveItxAuth({
+      config: config(),
+      credentials: { type: "project-secret", projectId: "prj_one", secret: "itxk_known" },
+      headers: new Headers(),
+      requestUrl: `${ORIGIN}/api`,
+      verifyProjectSecret,
+    });
+
+    expect(verifyProjectSecret).toHaveBeenCalledWith({
+      projectIdentifier: "prj_one",
+      secret: "itxk_known",
+    });
+    expect(auth.canAccessProject("prj_one")).toBe(true);
+  });
+
   it("rejects a project-secret credential the verifier refuses, and an empty secret without dialing", async () => {
-    const verifyProjectSecret = vi.fn().mockResolvedValue(false);
+    const verifyProjectSecret = vi.fn().mockResolvedValue(null);
     await expect(
       resolveItxAuth({
         config: config(),
-        credentials: { type: "project-secret", projectId: "prj_one", secret: "wrong" },
+        credentials: { type: "project-secret", projectSlug: "one", secret: "wrong" },
         headers: new Headers(),
         requestUrl: `${ORIGIN}/api`,
         verifyProjectSecret,
@@ -120,7 +137,7 @@ describe("resolveItxAuth", () => {
     await expect(
       resolveItxAuth({
         config: config(),
-        credentials: { type: "project-secret", projectId: "prj_one", secret: "" },
+        credentials: { type: "project-secret", projectSlug: "one", secret: "" },
         headers: new Headers(),
         requestUrl: `${ORIGIN}/api`,
         verifyProjectSecret,
@@ -132,7 +149,7 @@ describe("resolveItxAuth", () => {
     await expect(
       resolveItxAuth({
         config: config(),
-        credentials: { type: "project-secret", projectId: "prj_one", secret: "itxk_known" },
+        credentials: { type: "project-secret", projectSlug: "one", secret: "itxk_known" },
         headers: new Headers(),
         requestUrl: `${ORIGIN}/api`,
       }),

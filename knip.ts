@@ -101,6 +101,17 @@ function makeTanstackTodoWorkspace(): WorkspaceConfig {
   };
 }
 
+function makeKitWorkspace(): WorkspaceConfig {
+  return {
+    entry: ["vite.config.ts", "vitest.config.ts", "scripts/**/*.ts"],
+    project: ["scripts/**/*.ts", "src/**/*.{ts,tsx}!", "!dist/**!"],
+    vite: false,
+    // TanStack Start resolves this factory by convention, while Wrangler and
+    // Tailwind back plugins rather than direct runtime imports.
+    ignoreDependencies: ["cloudflare", "tailwindcss", "wrangler"],
+  };
+}
+
 function makeTasksWorkspace(): WorkspaceConfig {
   return {
     entry: [
@@ -213,6 +224,7 @@ const config: KnipConfig = {
     "!apps/semaphore",
     "!apps/streams-example-app",
     "!apps/tanstack",
+    "!apps/kit",
     "!apps/tasks",
     "packages/*",
     "!packages/shared",
@@ -231,6 +243,7 @@ const config: KnipConfig = {
     // entrypoint, so there is no direct import Knip can follow.
     "apps/semaphore/src/router.tsx": ["exports"],
     "apps/tanstack/src/router.tsx": ["exports"],
+    "apps/kit/src/router.tsx": ["exports"],
     "apps/tasks/src/router.tsx": ["exports"],
   },
   workspaces: {
@@ -238,6 +251,7 @@ const config: KnipConfig = {
     "apps/os": makeOsCloudflareAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/streams-example-app": makeStreamsExampleAppWorkspace(),
     "apps/tanstack": makeTanstackTodoWorkspace(),
+    "apps/kit": makeKitWorkspace(),
     "apps/tasks": makeTasksWorkspace(),
     "packages/shared": makeSharedWorkspace(),
     "packages/ui": makeUiWorkspace(),
