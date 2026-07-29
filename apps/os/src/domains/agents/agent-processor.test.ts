@@ -1764,6 +1764,44 @@ describe("AgentProcessor stream facts", () => {
 // Summary + presence
 // =============================================================================
 
+describe("AgentProcessor slash commands", () => {
+  it("a resolving /script runs deterministically and triggers NO model turn", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("/script await itx.__describe()")],
+      ["advanceTime", 10_000], // would close the turn debounce if a turn were owed
+    );
+
+    const scriptRequests = h.events("events.iterate.com/capability-host/script-run-requested");
+    expect(scriptRequests).toHaveLength(1);
+    const commandOffset = h
+      .events(CONTEXT_ADDED)
+      .find((event) =>
+        (event.payload as { content?: string }).content?.startsWith("/script"),
+      )!.offset;
+    expect(scriptRequests[0]!.payload).toMatchObject({
+      code: "async (itx) => {\nreturn (await itx.__describe());\n}",
+      executionId: `slash-command:${commandOffset}`,
+    });
+    // The command IS the action — the model's turn comes later, from the
+    // script result's render, not from the command message.
+    expect(h.llm.calls).toHaveLength(0);
+    expect(h.events(REQUESTED)).toHaveLength(0);
+  });
+
+  it("a non-resolving /example (bad slug) falls through to an ordinary model turn", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("/example not-a-real-slug")],
+      ["advanceTime", 10_000],
+    );
+
+    expect(h.events("events.iterate.com/capability-host/script-run-requested")).toHaveLength(0);
+    expect(h.llm.calls).toHaveLength(1);
+    expect(h.llm.calls[0]!.messages.at(-2)?.content).toContain("/example not-a-real-slug");
+  });
+});
+
 describe("AgentProcessor summary", () => {
   it("folds summary updates, and a qualifying wake conditionally clears only a wait it followed", async () => {
     const h = makeAgentHarness();
