@@ -96,7 +96,7 @@ export const SchedulerProcessorContract = defineProcessorContract({
                   "key can never dedupe against a spent request from a past incarnation).",
               }),
             metadata: z
-              .record(z.string(), z.unknown())
+              .record(z.string(), z.json())
               .optional()
               .meta({
                 description:
@@ -150,15 +150,16 @@ export const SchedulerProcessorContract = defineProcessorContract({
     "events.iterate.com/scheduler/schedule-set": {
       description:
         "A Schedule was created or replaced under its key: a keyed upsert of recurrence + " +
-        "Action. Re-setting a key resets its run count and re-anchors its next occurrence; a " +
-        "Trigger already in flight for the old version runs the NEW code (latest-code-wins).",
+        "Action. scheduler.set does not append this event when the canonical definition already " +
+        "matches; an actual replacement resets its run count and re-anchors its next occurrence. " +
+        "A Trigger already in flight for the old version runs the NEW code (latest-code-wins).",
       payloadSchema: z.looseObject({
         action: schedulerActionSchema(),
         key: z.string().trim().min(1).meta({
           description: "The Schedule's stable identity — upserts and cancels address this key.",
         }),
         metadata: z
-          .record(z.string(), z.unknown())
+          .record(z.string(), z.json())
           .optional()
           .meta({
             description:
@@ -268,6 +269,36 @@ export type SchedulerProcessorState = ProcessorState<SchedulerProcessorContract>
 export type ScheduleSetPayload = z.output<
   (typeof SchedulerProcessorContract.events)["events.iterate.com/scheduler/schedule-set"]["payloadSchema"]
 >;
+
+/**
+ * Validate and lower a command to the exact JSON shape the stream persists.
+ * The round-trip intentionally normalizes JSON edge cases such as `-0` before
+ * set() compares them with a previously stored definition.
+ */
+export function parseScheduleSetPayload(input: unknown): ScheduleSetPayload {
+  const parsed =
+    SchedulerProcessorContract.events[
+      "events.iterate.com/scheduler/schedule-set"
+    ].payloadSchema.parse(input);
+  return parsed.metadata === undefined
+    ? parsed
+    : {
+        ...parsed,
+        metadata: canonicalJson(parsed.metadata) as ScheduleSetPayload["metadata"],
+      };
+}
+
+function canonicalJson(value: unknown): unknown {
+  if (typeof value === "number") return value === 0 ? 0 : value;
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  if (value === null || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+      key,
+      canonicalJson(item),
+    ]),
+  );
+}
 
 /**
  * When a Schedule triggers — used twice (the `schedule-set` payload and the

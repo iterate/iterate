@@ -4,17 +4,17 @@ import { notificationCreationEvents } from "../notifications/notification-defaul
 import { buildHostedProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 
-/** The immutable `project/created` birth certificate payload. */
+/** The immutable `project/create-requested` creation intent. */
 type ProjectCreatePayload = z.input<
-  (typeof ProjectProcessorContract.events)["events.iterate.com/project/created"]["payloadSchema"]
+  (typeof ProjectProcessorContract.events)["events.iterate.com/project/create-requested"]["payloadSchema"]
 >;
 
 /**
- * The complete atomic root-stream birth batch for one project: the project
- * and notification birth certificates plus the subscriptions arming both
- * processors hosted by the Project Durable Object.
+ * The complete atomic root-stream creation-request batch for one project: the
+ * project intent, notification birth certificate, and subscriptions arming
+ * both processors hosted by the Project Durable Object.
  *
- * The created-event keys contain identity only, never payload. Identical
+ * The creation-event keys contain identity only, never payload. Identical
  * retries dedupe; a retry with different birth facts is rejected by the
  * stream's same-key-different-body check.
  */
@@ -23,8 +23,8 @@ export function projectCreationEvents(input: { payload: ProjectCreatePayload; pr
   const durableObjectName = DurableObjectNameCodec.stringify({ path: "/", projectId });
   return [
     ProjectProcessorContract.buildEvent({
-      type: "events.iterate.com/project/created",
-      idempotencyKey: `project-created:${projectId}`,
+      type: "events.iterate.com/project/create-requested",
+      idempotencyKey: `project-create-requested:${projectId}`,
       payload,
     }),
     ...notificationCreationEvents({ projectId }),

@@ -4,6 +4,8 @@
   // contract's getter signatures, so sdk declarations are emitted with plain
   // tsc instead (see the sdk entry in tsdown.config.ts + the build script).
   "files": [
+    "src/annotated-markdown/index.ts",
+    "src/annotated-markdown/react/index.ts",
     "src/sdk.ts",
     "src/client.ts",
     "src/node.ts",
@@ -31,7 +33,7 @@
     // convention); legal under emitDeclarationOnly, and the emitted d.ts keeps
     // the .ts specifiers, which consumers resolve to the sibling .d.ts.
     "rewriteRelativeImportExtensions": true,
-    "lib": ["ESNext", "DOM"],
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
     "strict": true,
     "declaration": true,
     "emitDeclarationOnly": true,

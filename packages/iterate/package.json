@@ -26,6 +26,8 @@
   },
   "exports": {
     ".": "./src/index.ts",
+    "./annotated-markdown": "./src/annotated-markdown/index.ts",
+    "./annotated-markdown/react": "./src/annotated-markdown/react/index.ts",
     "./client": "./src/client.ts",
     "./node": "./src/node.ts",
     "./starter-apps/github-ai-linter": "./src/starter-apps/github-ai-linter/index.ts",
@@ -50,6 +52,16 @@
         "types": "./dist/index.d.mts",
         "import": "./dist/index.mjs",
         "default": "./dist/index.mjs"
+      },
+      "./annotated-markdown": {
+        "types": "./dist/annotated-markdown/index.d.ts",
+        "import": "./dist/annotated-markdown.mjs",
+        "default": "./dist/annotated-markdown.mjs"
+      },
+      "./annotated-markdown/react": {
+        "types": "./dist/annotated-markdown/react/index.d.ts",
+        "import": "./dist/annotated-markdown-react.mjs",
+        "default": "./dist/annotated-markdown-react.mjs"
       },
       "./client": {
         "types": "./dist/client.d.ts",
@@ -151,6 +163,10 @@
     "@orpc/client": "1.13.14",
     "@orpc/server": "1.13.14",
     "@tanstack/react-query": "^5.101.2",
+    "approx-string-match": "^2.0.0",
+    "mdast-util-from-markdown": "^2.0.3",
+    "mdast-util-gfm": "^3.1.0",
+    "micromark-extension-gfm": "^3.0.0",
     "react": "^19.2.7",
     "sqlfu": "0.1.1",
     "trpc-cli": "0.15.1",
@@ -174,6 +190,7 @@
   },
   "devDependencies": {
     "@iterate-com/ui": "workspace:*",
+    "@types/mdast": "^4.0.4",
     "@types/node": "^22.0.0",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",

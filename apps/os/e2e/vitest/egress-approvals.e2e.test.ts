@@ -159,12 +159,18 @@ test("hold → approve releases, hold → reject refuses, short timeouts expire"
         approvalRequestEventOffset: rejectedRequested.offset,
         verdicts: ["reject"],
         decidedBy: "human",
+        reason: "wrong recipient — use the staging address",
       },
     });
     const rejectedResponse = await rejectedFetch;
     expect(rejectedResponse).toMatchObject({ status: 403 });
+    // The human's reason lands verbatim in the 403 body — this is what the
+    // calling script/agent reads to decide whether to retry differently.
     await expect(rejectedResponse.json()).resolves.toMatchObject({
       error: "approval_rejected",
+      deniedBy: "human",
+      reason: "wrong recipient — use the staging address",
+      detail: expect.stringContaining("wrong recipient — use the staging address"),
       ruleKey: "post-echo",
     });
 
@@ -210,6 +216,7 @@ test("hold → approve releases, hold → reject refuses, short timeouts expire"
     expect(expiredResponse).toMatchObject({ status: 403 });
     await expect(expiredResponse.json()).resolves.toMatchObject({
       error: "approval_expired",
+      deniedBy: "expiry",
       ruleKey: "impatient",
     });
     // The expiry decision is committed before the 403 returns, so a plain

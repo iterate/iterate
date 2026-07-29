@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { LiveStateRpcTarget } from "iterate/sdk/capnweb";
+import { disposeIgnoredRpcResult, LiveStateRpcTarget } from "iterate/sdk/capnweb";
 import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
 import type { StreamProcessorWakeRequest, StreamProcessorWakeResponse } from "iterate/processors";
 import type { StreamEvent } from "iterate/processors";
@@ -9,6 +9,7 @@ import { workerVersion, type Env } from "../../env.ts";
 import {
   itxForScope,
   ProjectEgressInterceptRpcTarget,
+  STREAM_DURABLE_OBJECT_STUB,
   StreamProcessorRpcTarget,
   StreamRpcTarget,
 } from "../../rpc-targets.ts";
@@ -40,6 +41,8 @@ import { EmailProcessor } from "../email/email-processor-implementation.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
 import { NotificationProcessor } from "../notifications/notification-processor-implementation.ts";
 import { isRetryableDurableObjectAvailabilityError } from "../streams/stream-unavailable.ts";
+import { defaultProjectWorkerRef } from "../repos/utils.ts";
+import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import type { ProjectEgressIntercept, ProjectEgressInterceptor } from "./egress.ts";
 import {
   buildApprovalMessage,
@@ -135,6 +138,25 @@ export class ProjectDurableObject extends DurableObject<Env> {
         path: "/",
         projectId: this.#name.projectId,
       }),
+      workerFetch: (request) =>
+        new DynamicWorkerRunner({
+          streamContext: { kind: "scope", scopePath: "/" },
+          exports: this.ctx.exports,
+          projectId: this.#name.projectId,
+          scopePath: "/",
+        }).fetch({
+          ref: defaultProjectWorkerRef(),
+          request,
+          traceRole: "project_config",
+        }),
+      appendPlatformEvents: async ({ events, streamId }) => {
+        disposeIgnoredRpcResult(
+          await this.#stream[STREAM_DURABLE_OBJECT_STUB].appendCoreEventsIfStreamId({
+            events,
+            streamId,
+          }),
+        );
+      },
     }),
   );
   readonly #notificationProcessor = this.#registry.register(
@@ -521,13 +543,13 @@ export class ProjectDurableObject extends DurableObject<Env> {
       });
       const approvalRequestEventOffset = requested!.offset;
 
-      const verdicts = await this.#awaitBatchDecision({
+      const decision = await this.#awaitBatchDecision({
         approvalRequestEventOffset,
         deadline,
         requestedPayload,
       });
 
-      if (verdicts === "expired") {
+      if (decision === "expired") {
         await stream.append({
           type: "events.iterate.com/project/human-approval-decided",
           idempotencyKey: `human-approval-expired:${approvalRequestEventOffset}`,
@@ -542,6 +564,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
             approvalGateResponse({
               approvalRequestEventOffset,
               code: "approval_expired",
+              deniedBy: "expiry",
               detail: `No human answered within ${rule.approvalTimeoutMs}ms (rule "${rule.ruleKey}").`,
               ruleKey: rule.ruleKey,
             }),
@@ -557,12 +580,18 @@ export class ProjectDurableObject extends DurableObject<Env> {
       // gets whatever upstream truly returned (or the true upstream error).
       await Promise.all(
         entries.map(async (entry, index) => {
-          if (verdicts[index] === "reject") {
+          if (decision.verdicts[index] === "reject") {
             entry.resolve(
               approvalGateResponse({
                 approvalRequestEventOffset,
                 code: "approval_rejected",
-                detail: `A human rejected this request (rule "${rule.ruleKey}").`,
+                deniedBy: "human",
+                // The human's stated reason rides the 403 body verbatim so
+                // the calling script/agent reads WHY and can retry changed.
+                reason: decision.reason,
+                detail:
+                  `A human rejected this request (rule "${rule.ruleKey}")` +
+                  (decision.reason === undefined ? "." : `: ${decision.reason}`),
                 ruleKey: rule.ruleKey,
               }),
             );
@@ -621,7 +650,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     approvalRequestEventOffset: number;
     deadline: number;
     requestedPayload: HumanApprovalRequestedPayload;
-  }): Promise<readonly ("approve" | "reject")[] | "expired"> {
+  }): Promise<AcceptedBatchDecision | "expired"> {
     const stream = this.#stream;
     const resolutionEventTypes = ["events.iterate.com/project/human-approval-decided"];
     let cursor = input.approvalRequestEventOffset;
@@ -663,8 +692,8 @@ export class ProjectDurableObject extends DurableObject<Env> {
       }
       availabilityBackoffMs = 200;
       cursor = event.offset;
-      const verdicts = await this.#judgeDecision(event, input);
-      if (verdicts !== null) return verdicts;
+      const decision = await this.#judgeDecision(event, input);
+      if (decision !== null) return decision;
     }
 
     // Expiry sweep: a decision appended in the last chunk's shadow must still
@@ -680,17 +709,18 @@ export class ProjectDurableObject extends DurableObject<Env> {
       for (const event of page) {
         if (Date.parse(event.createdAt) > input.deadline) return "expired";
         cursor = event.offset;
-        const verdicts = await this.#judgeDecision(event, input);
-        if (verdicts !== null) return verdicts;
+        const decision = await this.#judgeDecision(event, input);
+        if (decision !== null) return decision;
       }
     }
   }
 
   /**
-   * Judge one decided event for a specific batch: its verdicts when it
-   * references this batch and passes signature policy against FRESH key
-   * state, or null (not ours, or an ignored decision — malformed/unsigned/
-   * bad-sig/catch-up-failed — which is never fatal to the hold).
+   * Judge one decided event for a specific batch: its verdicts (plus the
+   * human's rejection reason) when it references this batch and passes
+   * signature policy against FRESH key state, or null (not ours, or an
+   * ignored decision — malformed/unsigned/bad-sig/catch-up-failed — which is
+   * never fatal to the hold).
    */
   async #judgeDecision(
     event: StreamEvent,
@@ -699,7 +729,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
       deadline: number;
       requestedPayload: HumanApprovalRequestedPayload;
     },
-  ): Promise<readonly ("approve" | "reject")[] | null> {
+  ): Promise<AcceptedBatchDecision | null> {
     const decided = ProjectProcessorContract.events[
       "events.iterate.com/project/human-approval-decided"
     ].payloadSchema.safeParse(event.payload);
@@ -758,7 +788,9 @@ export class ProjectDurableObject extends DurableObject<Env> {
         keys: this.#projectReads.currentState.humanApprovalKeys,
         message,
       });
-      if (verdict.accepted) return decided.data.verdicts;
+      if (verdict.accepted) {
+        return { verdicts: decided.data.verdicts, reason: decided.data.reason };
+      }
       console.warn("egress approval: decision ignored", {
         approvalRequestEventOffset: input.approvalRequestEventOffset,
         keyId: decided.data.keyId,
@@ -905,11 +937,22 @@ export class ProjectDurableObject extends DurableObject<Env> {
 function approvalGateResponse(body: {
   approvalRequestEventOffset?: number;
   code: "egress_denied" | "approval_rejected" | "approval_expired";
+  /** Who refused a held batch: a human's decision, or the door's timeout. */
+  deniedBy?: "human" | "expiry";
+  /** The human's stated rejection reason, verbatim — what the calling agent reads. */
+  reason?: string;
   detail: string;
   ruleKey: string;
 }): Response {
   return Response.json({ error: body.code, ...body }, { status: 403 });
 }
+
+/** The FIRST accepted decision's substance: a verdict per index, plus the
+ * human's rejection reason when one was given. */
+type AcceptedBatchDecision = {
+  verdicts: readonly ("approve" | "reject")[];
+  reason: string | undefined;
+};
 
 /** One parked caller inside a pending batch: its buffered request, its
  * placeholder-form record for the event, and the promise handles its fetch

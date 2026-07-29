@@ -347,7 +347,7 @@ they are never persisted.
 
 ## Project-default receivers
 
-Each project stream starts with ordinary ITX subscriptions:
+Every non-root project stream starts with ordinary ITX subscriptions:
 
 - `project-worker`, from the beginning, skips one repeatedly failing event;
 - `iterate-platform-posthog` when configured, from the beginning, halts on a
@@ -355,6 +355,16 @@ Each project stream starts with ordinary ITX subscriptions:
 
 They use the same configuration event, cursor storage, filter, batching, and retry
 code as authored ITX receivers.
+
+The root `/` stream is the deliberate exception. The project creation saga
+waits for the trusted config-repo template worker to build, then atomically
+appends the `project-worker` receiver with `start: "now"`, terminal
+`project/created`, and the first `project/worker-updated`. Delaying that
+subscription prevents the stream from classifying the worker as unavailable
+during its initial build. Creation does not wait for userspace to consume a
+platform creation event. Later config commits and all other root facts use the
+ordinary feed; if a later worker build is in progress, delivery retries without
+advancing its cursor.
 
 ## Testing
 

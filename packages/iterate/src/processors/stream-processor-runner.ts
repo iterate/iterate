@@ -178,6 +178,8 @@ type ProcessorDurability<State> = {
 
 /** Honest delivery information handed to `processEvent`. */
 export type DeliveryContext = {
+  /** Random identity of the stream lifetime that delivered this turn. */
+  streamId: string;
   /**
    * The at-head signal: the scan has reached the highest raw stream offset
    * the runner has observed, so `state` is the complete reduction of
@@ -629,6 +631,7 @@ export class StreamProcessorRunner<
           if (caughtUp) firedCaughtUp = true;
           const delivery: DeliveryContext = {
             caughtUp,
+            streamId: batch.streamId,
           };
           // FIFO blocker chain: each registration starts only after the
           // previous one settles, so a later registration in the same
@@ -693,6 +696,7 @@ export class StreamProcessorRunner<
       if (batchCaughtUp && !firedCaughtUp) {
         const delivery: DeliveryContext = {
           caughtUp: true,
+          streamId: batch.streamId,
         };
         // Same FIFO blocker chain as the per-event dispatch; its work is
         // awaited before the deferred batch-end commit.

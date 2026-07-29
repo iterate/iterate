@@ -80,7 +80,7 @@ terminal state:
 - Inside config-repo birth, `artifact-get-or-create` failed after 32.7 seconds.
   The config stream then recorded `repos/create-failed` with `An internal error
   occurred.` and cross-posted it to the root stream. It never recorded
-  `repos/created` or `project/ready`, including after later processor wakes.
+  `repos/created` or terminal `project/created`, including after later processor wakes.
 - The test retry created `prj_20587…`, completed birth in 3.8 seconds, and
   passed. The test retry therefore hid a defective first project; this was not
   merely a slow browser or a lost readiness notification.

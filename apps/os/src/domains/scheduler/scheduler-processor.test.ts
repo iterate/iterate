@@ -29,6 +29,7 @@ import {
   recordedSpans,
   resetRecordedSpans,
 } from "../../test/cloudflare-workers-shim.ts";
+import type { JsonValue } from "../workers/schemas.ts";
 import {
   SchedulerProcessor,
   type SchedulerProcessorDeps,
@@ -61,7 +62,7 @@ function setEvent(
   key: string,
   script = "async () => {}",
   extra?: {
-    metadata?: Record<string, unknown>;
+    metadata?: Record<string, JsonValue>;
     recurrence?: { at: string } | { every: number } | { cron: string; timezone?: string };
   },
 ): SchedulerEventInput {

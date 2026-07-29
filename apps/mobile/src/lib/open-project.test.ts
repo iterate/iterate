@@ -40,7 +40,7 @@ test("omits organizationSlug when the project has none", async () => {
   expect(calls).toEqual([{ projectId: "prj_a", slug: "alpha" }]);
 });
 
-test.each(["ready", "unknown"] as const)(
+test.each(["created", "creating", "failed", "unknown"] as const)(
   "does nothing when deploymentStatus is %s",
   async (deploymentStatus) => {
     const calls: unknown[] = [];
@@ -59,7 +59,7 @@ function project(overrides: Partial<ProjectListEntry>): ProjectListEntry {
     organizationId: "org_a",
     organizationName: "Acme",
     organizationSlug: "acme",
-    deploymentStatus: "ready",
+    deploymentStatus: "created",
     ...overrides,
   };
 }

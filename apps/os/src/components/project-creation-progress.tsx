@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { CheckIcon, LoaderCircleIcon } from "lucide-react";
+import { CheckIcon, CircleXIcon, LoaderCircleIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { cn } from "@iterate-com/ui/lib/utils";
 import type { ProjectProcessorState } from "../domains/projects/project-processor-contract.ts";
@@ -30,22 +30,27 @@ function creationSteps(state: ProjectProcessorState | undefined): CreationStep[]
   // The onboarding agent is not a saga step: its chat page explicitly creates
   // it before sending the first message.
   return [
-    { key: "registered", label: "Registering project", done: state?.birthCertificate != null },
+    { key: "registered", label: "Registering project", done: state?.createRequest != null },
     {
       key: "integrations",
       label: "Wiring integrations",
       done:
         state !== undefined &&
-        (state.streams.some((stream) => stream.path === "/integrations/email") || state.ready),
+        (state.streams.some((stream) => stream.path === "/integrations/email") ||
+          state.birthCertificate !== null),
     },
     { key: "repo", label: "Seeding repository", done: (state?.repos.length ?? 0) > 0 },
-    { key: "ready", label: "Finalizing project", done: state?.ready ?? false },
+    {
+      key: "created",
+      label: "Finalizing project",
+      done: state?.birthCertificate != null,
+    },
   ];
 }
 
 /**
  * The "Creating project" checklist the home page shows until the bootstrap
- * saga commits `project/ready`. Every tick appears the moment the processor
+ * saga commits terminal `project/created`. Every tick appears the moment the processor
  * pushes the state change that records it; the first not-yet-done step wears
  * the spinner.
  */
@@ -60,9 +65,29 @@ export function ProjectCreationProgress({ state }: { state: ProjectProcessorStat
   const [stalled, setStalled] = useState(false);
   useEffect(() => {
     setStalled(false);
+    if (state?.createFailure !== null && state?.createFailure !== undefined) return;
     const timer = setTimeout(() => setStalled(true), STALL_AFTER_MS);
     return () => clearTimeout(timer);
-  }, [doneCount]);
+  }, [doneCount, state?.createFailure]);
+
+  if (state?.createFailure) {
+    return (
+      <section
+        className="mx-auto w-full max-w-md rounded-lg border border-destructive/40 bg-card p-6"
+        data-testid="project-creation-failed"
+      >
+        <div className="flex items-center gap-2 text-destructive">
+          <CircleXIcon aria-hidden="true" className="size-5" />
+          <h1 className="text-lg font-semibold">Project creation failed</h1>
+        </div>
+        <p className="mt-3 text-sm text-muted-foreground">{state.createFailure.error}</p>
+        <p className="mt-2 text-sm text-muted-foreground">
+          The project root stream beside this panel contains the complete audit trail for this
+          terminal failure.
+        </p>
+      </section>
+    );
+  }
 
   return (
     <section

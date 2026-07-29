@@ -29,38 +29,50 @@ export function chooseRootProjectRedirect(input: {
   preferredProjectSlug: string | null;
   projects: RootRedirectProject[];
 }): RootProjectRedirectDecision {
-  const readyProjects = input.projects.filter((project) => project.deploymentStatus === "ready");
-  const preferredReadyProject = readyProjects.find(
+  const openProjects = input.projects.filter(
+    (project) => project.deploymentStatus === "created" || project.deploymentStatus === "creating",
+  );
+  const preferredOpenProject = openProjects.find(
     (project) => project.slug === input.preferredProjectSlug,
   );
 
-  if (preferredReadyProject) {
+  if (preferredOpenProject) {
     return {
       kind: "project",
-      project: preferredReadyProject,
-      welcome: false,
+      project: preferredOpenProject,
+      welcome: preferredOpenProject.deploymentStatus === "creating",
       ensureBirth: false,
     };
   }
 
-  if (readyProjects.length === 1) {
+  const createdProjects = openProjects.filter((project) => project.deploymentStatus === "created");
+  if (createdProjects.length === 1) {
     return {
       kind: "project",
-      project: readyProjects[0]!,
+      project: createdProjects[0]!,
       welcome: false,
       ensureBirth: false,
     };
   }
-
-  if (input.projects.length === 1 && input.projects[0]!.deploymentStatus !== "ready") {
+  if (openProjects.length === 1) {
     return {
       kind: "project",
-      project: input.projects[0]!,
+      project: openProjects[0]!,
+      welcome: true,
+      ensureBirth: false,
+    };
+  }
+
+  const onlyProject = input.projects.length === 1 ? input.projects[0]! : undefined;
+  if (onlyProject?.deploymentStatus === "missing" || onlyProject?.deploymentStatus === "unknown") {
+    return {
+      kind: "project",
+      project: onlyProject,
       welcome: true,
       // "unknown" means the deployment-status probe itself failed. Treat it
       // as uncertainty to heal, not evidence that a single-project user
       // belongs on a dead-end list page.
-      ensureBirth: input.projects[0]!.deploymentStatus === "unknown",
+      ensureBirth: onlyProject.deploymentStatus === "unknown",
     };
   }
 
@@ -69,12 +81,12 @@ export function chooseRootProjectRedirect(input: {
 
 /**
  * Commit a missing project's birth before the root SSR redirect, without
- * waiting for the bootstrap saga's `project/ready` event. The project home
+ * waiting for the bootstrap saga's terminal `project/created` event. The project home
  * renders that remaining progress from live state.
  */
 export async function createMissingRootRedirectProject(
   project: Pick<ProjectRpcTarget, "create">,
   args: Parameters<ProjectRpcTarget["create"]>[0],
 ): Promise<void> {
-  await project.create(args, { waitUntilReady: false });
+  await project.create(args, { waitUntilCreated: false });
 }

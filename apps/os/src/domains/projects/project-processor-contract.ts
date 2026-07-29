@@ -3,9 +3,9 @@
 // certificate, custom-domain entry, egress rule, approval payloads);
 // consumers reach into this module for pieces, never the other way around.
 // Schemas are spelled INLINE in the contract; the ones it genuinely needs
-// twice (the birth certificate and the egress rule) are hoisted functions
-// defined below the contract, so the
-// contract still opens the file.
+// more than once (the project creation payload, terminal creation facts, and
+// the egress rule) are hoisted functions below, so the contract still opens
+// the file.
 //
 // The pure half of the human-approval scheme (rule matching, the canonical
 // approval message, signature verification) lives in egress-approvals.ts and
@@ -13,7 +13,12 @@
 // `iterate approve` CLI both build on that module.
 
 import { z } from "zod";
-import { defineProcessorContract, StreamListItem, type ProcessorState } from "iterate/processors";
+import {
+  defineProcessorContract,
+  StreamListItem,
+  type ProcessorState,
+  type StreamEvent,
+} from "iterate/processors";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { RepoProcessorContract } from "../repos/repo-processor-contract.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
@@ -22,32 +27,49 @@ import { CapabilityHostProcessorContract } from "../capability-host/capability-h
 import { SchedulerProcessorContract } from "../scheduler/scheduler-processor-contract.ts";
 import { DeviceProcessorContract } from "../devices/device-processor-contract.ts";
 import { NotificationLifecycleContract } from "../notifications/notification-lifecycle-contract.ts";
+import { internalStreamId } from "../streams/stream-delivery-utils.ts";
 import { StreamContext } from "./stream-context.ts";
 
 export const ProjectProcessorContract = defineProcessorContract({
   slug: "project",
-  version: "0.3.0",
+  version: "0.6.0",
   description:
-    "Project root: births the sibling processors every project gets (root capability host, " +
-    "primary scheduler, config repo, email router, notification facet), marks the project " +
-    "ready once its default worker answers, catalogs the project's streams and domain " +
-    "objects, manages custom-domain routing, and holds the egress-approval policy.",
+    "Project root: runs the project/create-requested → project/created bootstrap saga, births " +
+    "the sibling processors every project gets (root capability host, primary scheduler, config " +
+    "repo, email router, notification facet), catalogs the project's streams and domain objects, " +
+    "manages custom-domain routing, and holds the egress-approval policy.",
   stateSchema: z.object({
+    createRequest: projectCreationPayloadSchema().nullable().default(null).meta({
+      description:
+        "The durable creation intent, from project/create-requested; null until the saga opens.",
+    }),
+    createRequestedAtOffset: z
+      .number()
+      .int()
+      .positive()
+      .nullable()
+      .default(null)
+      .meta({
+        description:
+          "Offset of project/create-requested: the causal link for terminal creation facts and " +
+          "the lower bound of the later userspace worker feed.",
+      }),
+    createFailure: projectCreationFailureSchema()
+      .nullable()
+      .default(null)
+      .meta({
+        description:
+          "The terminal creation failure, from project/create-failed; a failed project is " +
+          "closed for good in this deployment.",
+      }),
     birthCertificate: projectBirthCertificateSchema()
       .nullable()
       .default(null)
       .meta({
         description:
-          "Existence marker: null until project/created reduces. Stores the created payload " +
-          "verbatim; no other reaction runs before it.",
-      }),
-    ready: z
-      .boolean()
-      .default(false)
-      .meta({
-        description:
-          "True once project/ready reduced: the config repo exists and the default project " +
-          "worker answered its readiness probe. `projects.get(slug).create()` waits for this.",
+          "Existence marker: null until terminal project/created reduces after sibling " +
+          "processors exist, the seeded default worker is reachable, and its permanent feed " +
+          "has been committed.",
       }),
     onboardingActive: z
       .boolean()
@@ -55,7 +77,7 @@ export const ProjectProcessorContract = defineProcessorContract({
       .meta({
         description:
           "True while the onboarding agent flow is running for the project owner: set from " +
-          "the birth certificate's onboardingActive, cleared by project/onboarding-completed.",
+          "project/create-requested, cleared by project/onboarding-completed.",
       }),
     onboardingCompletedAt: z.string().nullable().default(null).meta({
       description: "createdAt of the project/onboarding-completed event; null until then.",
@@ -152,13 +174,62 @@ export const ProjectProcessorContract = defineProcessorContract({
     }),
   }),
   events: {
+    "events.iterate.com/project/create-requested": {
+      description:
+        "Requests the project creation saga. The terminal project/created certificate is " +
+        "appended only after sibling processors exist, the seeded default worker has built and " +
+        "answered its readiness probe, and its permanent root feed has been installed.",
+      payloadSchema: projectCreationPayloadSchema(),
+    },
     "events.iterate.com/project/created": {
-      description: "Birth certificate for this project processor.",
+      description:
+        "The project creation saga completed: sibling processors exist, the seeded default " +
+        "project worker is reachable, and its permanent root feed is installed. This is a " +
+        "platform certificate, not a userspace lifecycle hook.",
       payloadSchema: projectBirthCertificateSchema(),
     },
-    "events.iterate.com/project/ready": {
-      description: "The project bootstrap saga completed and its default worker is ready.",
-      payloadSchema: z.object({}),
+    "events.iterate.com/project/create-failed": {
+      description:
+        "The project creation saga reached a deterministic terminal failure and did not declare " +
+        "the project created. Transient availability and timeout failures remain open for durable " +
+        "redelivery. Fail-closed: nothing else reacts on the failed project stream.",
+      payloadSchema: projectCreationFailureSchema(),
+    },
+    "events.iterate.com/project/worker-updated": {
+      description:
+        "The platform successfully built, loaded, and probed the current default project " +
+        "worker, during creation or after a later config repo commit. This is the userspace " +
+        "configuration lifecycle hook; the raw trusted seed commit is not translated.",
+      payloadSchema: z.object({
+        commitOid: z.string().trim().min(1).meta({
+          description: "The config-repo commit associated with the readiness certificate.",
+        }),
+      }),
+    },
+    "events.iterate.com/project/worker-update-failed": {
+      description:
+        "A post-creation config repo commit deterministically failed to build as the default " +
+        "project worker. A later config commit can repair it; transient availability remains " +
+        "open for redelivery.",
+      payloadSchema: z.object({
+        commitOid: z.string().trim().min(1).meta({
+          description: "The config-repo commit that triggered the failed readiness check.",
+        }),
+        error: z.string().trim().min(1).meta({
+          description: "The deterministic worker build failure.",
+        }),
+      }),
+    },
+    "events.iterate.com/project/heartbeat-triggered": {
+      description:
+        "A project-owned Scheduler heartbeat fired. Userspace handles this lifecycle event " +
+        "directly in the config worker.",
+      payloadSchema: z.object({
+        scheduleKey: z
+          .string()
+          .min(1)
+          .meta({ description: "The scheduler key whose heartbeat fired." }),
+      }),
     },
     "events.iterate.com/project/onboarding-completed": {
       description: "The project owner completed the onboarding agent flow.",
@@ -324,6 +395,26 @@ export const ProjectProcessorContract = defineProcessorContract({
             "Who decided: a human, or the door's own timeout (expiry is always all-reject and " +
             "never signed).",
         }),
+        // `.catch(undefined)`: the reason is cosmetic next to the verdicts, so
+        // an invalid one (too long, blank) degrades to ABSENT instead of
+        // failing the whole payload parse — a malformed reason must never make
+        // the door ignore an otherwise-valid decision and strand the hold.
+        reason: z
+          .string()
+          .trim()
+          .min(1)
+          .max(1_000)
+          .optional()
+          .catch(undefined)
+          .meta({
+            description:
+              "The human's stated reason, applying to every rejected index in this decision. It " +
+              "rides back to the calling script in each rejected fetch's 403 body, so the agent " +
+              "can read why and retry with a change. Deliberately NOT covered by the approval.v2 " +
+              "signature: rejections never need signatures (deny is the fail-safe direction — " +
+              "stream-append access already suffices to veto), so signing the reason would " +
+              "protect nothing. Expiry decisions never carry one.",
+          }),
         keyId: z
           .string()
           .optional()
@@ -370,10 +461,16 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/project/custom-domain-remove-requested",
     "events.iterate.com/project/custom-domain-removed",
     "events.iterate.com/project/onboarding-completed",
+    "events.iterate.com/project/create-requested",
     "events.iterate.com/project/created",
-    "events.iterate.com/project/ready",
+    "events.iterate.com/project/create-failed",
+    "events.iterate.com/project/worker-updated",
+    "events.iterate.com/project/worker-update-failed",
+    "events.iterate.com/project/heartbeat-triggered",
     "events.iterate.com/device/created",
+    "events.iterate.com/repo/commit-completed",
     "events.iterate.com/repos/created",
+    "events.iterate.com/repos/create-failed",
     "events.iterate.com/secret/created",
     "events.iterate.com/stream/created",
     "events.iterate.com/stream/child-stream-created",
@@ -399,9 +496,13 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/project/custom-domain-configured",
     "events.iterate.com/project/custom-domain-provision-failed",
     "events.iterate.com/project/custom-domain-removed",
-    "events.iterate.com/project/ready",
+    "events.iterate.com/project/created",
+    "events.iterate.com/project/create-failed",
+    "events.iterate.com/project/worker-updated",
+    "events.iterate.com/project/worker-update-failed",
     "events.iterate.com/repos/create-requested",
     "events.iterate.com/stream/subscription-configured",
+    "events.iterate.com/stream/subscription-removed",
     "events.iterate.com/notification/created",
   ],
 });
@@ -415,11 +516,94 @@ export type ProjectProcessorContract = typeof ProjectProcessorContract;
 
 /**
  * The project processor's reduced state, inferred from the contract's
- * `stateSchema` — the one definition of the shape. `ready` flips when the
- * bootstrap saga lands; the list fields are what the collection `list()`
- * methods read.
+ * `stateSchema` — the one definition of the shape. A non-null
+ * `birthCertificate` is the terminal creation marker; the list fields are
+ * what the collection `list()` methods read.
  */
 export type ProjectProcessorState = ProcessorState<ProjectProcessorContract>;
+
+type ProjectCreationRequest = Pick<NonNullable<ProjectProcessorState["createRequest"]>, "config">;
+
+/** Exact equality for the immutable creation facts carried through the saga. */
+function sameProjectCreationRequest(
+  left: ProjectCreationRequest,
+  right: ProjectCreationRequest,
+): boolean {
+  return (
+    left.config.slug === right.config.slug &&
+    left.config.onboardingActive === right.config.onboardingActive &&
+    left.config.creatorEmail === right.config.creatorEmail
+  );
+}
+
+type ProjectCreationTerminal =
+  | {
+      type: "events.iterate.com/project/created";
+      payload: z.output<
+        (typeof ProjectProcessorContract.events)["events.iterate.com/project/created"]["payloadSchema"]
+      >;
+    }
+  | {
+      type: "events.iterate.com/project/create-failed";
+      payload: z.output<
+        (typeof ProjectProcessorContract.events)["events.iterate.com/project/create-failed"]["payloadSchema"]
+      >;
+    };
+
+/**
+ * Parse the one terminal fact that can settle a creation request.
+ *
+ * The canonical idempotency key is in the stream's platform-only namespace:
+ * public appends reject it before idempotency lookup, while the Project
+ * Durable Object commits it through the server-only append path. The payload
+ * then binds that platform fact to the exact open request.
+ */
+export function parseProjectCreationTerminal(input: {
+  event: StreamEvent;
+  projectId: string;
+  request: ProjectCreationRequest;
+  requestOffset: number;
+}): ProjectCreationTerminal | null {
+  const { event, projectId, request, requestOffset } = input;
+  if (event.path !== "/" || event.source?.copiedFrom !== undefined) {
+    return null;
+  }
+
+  switch (event.type) {
+    case "events.iterate.com/project/created": {
+      if (
+        event.idempotencyKey !== internalStreamId("project-creation-terminal", projectId, "created")
+      ) {
+        return null;
+      }
+      const parsed = ProjectProcessorContract.events[
+        "events.iterate.com/project/created"
+      ].payloadSchema.safeParse(event.payload);
+      return parsed.success &&
+        parsed.data.createRequestedAtOffset === requestOffset &&
+        sameProjectCreationRequest(request, parsed.data)
+        ? { type: event.type, payload: parsed.data }
+        : null;
+    }
+    case "events.iterate.com/project/create-failed": {
+      if (
+        event.idempotencyKey !== internalStreamId("project-creation-terminal", projectId, "failed")
+      ) {
+        return null;
+      }
+      const parsed = ProjectProcessorContract.events[
+        "events.iterate.com/project/create-failed"
+      ].payloadSchema.safeParse(event.payload);
+      return parsed.success &&
+        parsed.data.createRequestedAtOffset === requestOffset &&
+        sameProjectCreationRequest(request, parsed.data.request)
+        ? { type: event.type, payload: parsed.data }
+        : null;
+    }
+    default:
+      return null;
+  }
+}
 
 /** One custom domain as reduced onto project processor state. */
 export type ProjectCustomDomain = ProjectProcessorState["customDomains"][number];
@@ -439,11 +623,9 @@ export type HumanApprovalRequestedPayload = z.output<
 export type HeldRequest = HumanApprovalRequestedPayload["requests"][number];
 
 /**
- * The project's birth certificate — the ONE schema the contract uses twice
- * (the project/created payload and the reduced state's birthCertificate), so
- * it lives in this hoisted function instead of inline.
+ * The payload shared by the creation intent and terminal certificate.
  */
-function projectBirthCertificateSchema() {
+function projectCreationPayloadSchema() {
   return z.object({
     config: z
       .object({
@@ -463,6 +645,36 @@ function projectBirthCertificateSchema() {
           }),
       })
       .meta({ description: "Birth-time configuration, recorded verbatim onto state." }),
+  });
+}
+
+/**
+ * The successful terminal certificate. The request offset is an explicit
+ * causal link: an old or independently appended birth-shaped fact cannot
+ * satisfy the new creation contract.
+ */
+function projectBirthCertificateSchema() {
+  return projectCreationPayloadSchema().extend({
+    createRequestedAtOffset: z
+      .number()
+      .int()
+      .positive()
+      .meta({ description: "Offset of the project/create-requested event this settles." }),
+  });
+}
+
+/** The terminal project creation failure, shared by its event and state slot. */
+function projectCreationFailureSchema() {
+  return z.object({
+    createRequestedAtOffset: z
+      .number()
+      .int()
+      .positive()
+      .meta({ description: "Offset of the project/create-requested event this settles." }),
+    error: z.string().meta({ description: "The terminal bootstrap failure." }),
+    request: projectCreationPayloadSchema().meta({
+      description: "The project/create-requested intent that could not complete.",
+    }),
   });
 }
 
