@@ -65,10 +65,10 @@ export const AgentProcessorContract = defineProcessorContract({
             model: z
               .string()
               .min(1)
-              .default("openai/gpt-5.6-sol")
+              .default("openai/gpt-5.6-terra")
               .meta({ description: "Model identifier passed to the LLM transport." }),
           })
-          .default({ model: "openai/gpt-5.6-sol" })
+          .default({ model: "openai/gpt-5.6-terra" })
           .meta({ description: "LLM transport selection." }),
         llmRequestDebounceMs: z
           .number()
