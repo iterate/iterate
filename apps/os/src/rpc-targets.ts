@@ -6420,7 +6420,7 @@ function disposeProjectProcessorStateResource(
   resource: unknown,
   resourceType: "processor" | "project",
   projectId: string,
-): void {
+) {
   try {
     disposeIgnoredRpcResult(resource);
   } catch (error) {
