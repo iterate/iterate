@@ -109,8 +109,10 @@ describe("waitForCreatedScopeDeploymentVersion", () => {
     ).rejects.toThrow(
       'agent scope at "/agents/test" completed durable creation, but its Agent Durable Object ' +
         'was not ready for deployment version "version-new" before create returned: it did not ' +
-        'converge within 500ms; the last observed version was "version-old". The creation facts ' +
-        "remain committed; an identical create call safely rejoins the same scope.",
+        'converge within 500ms; the last observed version was "version-old"; retryable outcomes ' +
+        "were lifecycle resets=0, transient platform failures=0, probe timeouts=0, version " +
+        "mismatches=2 across 2 read-only probes. The creation facts remain committed; an " +
+        "identical create call safely rejoins the same scope.",
     );
   });
 });

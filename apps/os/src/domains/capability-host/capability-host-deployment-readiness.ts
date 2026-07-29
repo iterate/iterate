@@ -52,8 +52,9 @@ function notStartedError(
  * existing Durable Object can still serve the previous version until the
  * rollout resets it. A script cannot be replayed once it starts because its
  * external effects may have happened, so this read-only guard waits at the
- * last safe boundary. Mismatches and one lifecycle reset are bounded by one
- * short deadline; application failures and a second reset stay observable.
+ * last safe boundary. Mismatches and exactly classified rollout availability
+ * failures are bounded by one short deadline; application failures remain
+ * immediately observable and deadline exhaustion preserves outcome counts.
  */
 export async function waitForCapabilityHostDeploymentVersion(
   input: WaitForCapabilityHostDeploymentVersionInput,

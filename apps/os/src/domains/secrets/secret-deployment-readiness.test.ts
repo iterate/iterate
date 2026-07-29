@@ -89,8 +89,10 @@ describe("fetchFromDeploymentReadySecret", () => {
     ).rejects.toThrow(
       'Secret at "/integrations/petshop/alice" was not ready for deployment version ' +
         '"version-new" before credential-bearing project egress was requested: it did not ' +
-        'converge within 500ms; the last observed version was "version-old". The request ' +
-        "was not forwarded and no credential refresh ran.",
+        'converge within 500ms; the last observed version was "version-old"; retryable outcomes ' +
+        "were lifecycle resets=0, transient platform failures=0, probe timeouts=0, version " +
+        "mismatches=2 across 2 read-only probes. The request was not forwarded and no " +
+        "credential refresh ran.",
     );
     expect(fetch).not.toHaveBeenCalled();
   });

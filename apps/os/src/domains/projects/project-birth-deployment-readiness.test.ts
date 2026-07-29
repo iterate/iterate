@@ -61,6 +61,68 @@ describe("waitForProjectBirthDeploymentVersion", () => {
     info.mockRestore();
   });
 
+  it("waits through repeated rollout resets before birth facts can be appended", async () => {
+    const reset = Object.assign(new Error("code updated"), {
+      durableObjectReset: true,
+    });
+    const disposals: number[] = [];
+    let acquisition = 0;
+    let time = 0;
+    const readyProject = {
+      [Symbol.dispose]: () => disposals.push(4),
+      deploymentVersion: vi.fn(async () => "version-new"),
+    };
+    const getTarget = vi.fn(() => {
+      acquisition += 1;
+      if (acquisition === 4) return readyProject;
+      const currentAcquisition = acquisition;
+      return {
+        [Symbol.dispose]: () => disposals.push(currentAcquisition),
+        deploymentVersion: async () => {
+          throw reset;
+        },
+      };
+    });
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+
+    await expect(
+      waitForProjectBirthDeploymentVersion(
+        {
+          expectedVersion: "version-new",
+          getTarget,
+          projectId: "prj_test",
+          targetKind: "Project Durable Object",
+        },
+        {
+          now: () => time,
+          pollIntervalMs: 100,
+          sleep: async (durationMs) => {
+            time += durationMs;
+          },
+          timeoutMs: 1_000,
+        },
+      ),
+    ).resolves.toMatchObject({
+      readiness: {
+        lifecycleFailures: 3,
+        probes: 4,
+        waitedMs: 700,
+      },
+      target: readyProject,
+    });
+    expect(getTarget).toHaveBeenCalledTimes(4);
+    expect(disposals).toEqual([1, 2, 3]);
+    expect(info).toHaveBeenCalledWith(
+      "project birth Durable Object deployment version converged before append",
+      expect.objectContaining({
+        lifecycleFailures: 3,
+        probes: 4,
+        projectId: "prj_test",
+      }),
+    );
+    info.mockRestore();
+  });
+
   it("fails before birth with an explicit, safely retryable state description", async () => {
     let time = 0;
 
@@ -85,9 +147,10 @@ describe("waitForProjectBirthDeploymentVersion", () => {
       'Project "prj_test" has an identity and directory entry, but its Stream Durable Object ' +
         'was not ready for deployment version "version-new" before this create attempt appended ' +
         "root birth facts: it did not converge within 500ms; the last observed version was " +
-        '"version-old". This attempt appended no new birth facts; facts from any earlier identical ' +
-        "call remain authoritative, and another identical create call safely rejoins the " +
-        "registered project.",
+        '"version-old"; retryable outcomes were lifecycle resets=0, transient platform failures=0, ' +
+        "probe timeouts=0, version mismatches=2 across 2 read-only probes. This attempt appended " +
+        "no new birth facts; facts from any earlier identical call remain authoritative, and " +
+        "another identical create call safely rejoins the registered project.",
     );
   });
 });

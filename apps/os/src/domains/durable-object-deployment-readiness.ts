@@ -106,11 +106,12 @@ type WaitForDurableObjectDeploymentVersionInput = DeploymentVersionReadinessOpti
  * Wait at a read-only boundary until one Durable Object runs the caller's
  * deployment version or a provably newer one. An older target is unsafe; a
  * newer target already owns the post-rollout side-effect boundary and must not
- * be mistaken for stale. A mismatch, a bounded probe timeout, one rollout
- * reset, and one exact Cloudflare internal-reference failure are expected
- * convergence states. A second reset, repeated platform failure, application
- * failure, invalid/missing ordering metadata, or total deadline remains
- * explicit through the caller's domain-specific error.
+ * be mistaken for stale. Mismatches, bounded probe timeouts, rollout resets,
+ * and exact Cloudflare internal-reference failures are expected convergence
+ * states only within the total deadline. Application failures remain
+ * immediately terminal; invalid/missing ordering metadata remains a mismatch;
+ * and deadline exhaustion reports every classified outcome through the
+ * caller's domain-specific error.
  */
 export async function waitForDurableObjectDeploymentVersion(
   input: WaitForDurableObjectDeploymentVersionInput,
@@ -159,19 +160,8 @@ export async function waitForDurableObjectDeploymentVersion(
     } else if (outcome.status === "rejected") {
       if (isRetryableDurableObjectAvailabilityError(outcome.error)) {
         lifecycleFailures += 1;
-        if (lifecycleFailures > 1) {
-          throw input.notReadyError("the version probe was reset more than once", outcome.error);
-        }
       } else if (isTransientPlatformVersionProbeError(outcome.error)) {
         platformFailures += 1;
-        if (platformFailures > 1) {
-          const reason =
-            outcome.error instanceof Error ? outcome.error.message : String(outcome.error);
-          throw input.notReadyError(
-            `the version probe returned repeated transient platform failures; latest: "${reason}"`,
-            outcome.error,
-          );
-        }
       } else {
         const reason =
           outcome.error instanceof Error ? outcome.error.message : String(outcome.error);
@@ -200,7 +190,10 @@ export async function waitForDurableObjectDeploymentVersion(
       ? "no deployment version was returned"
       : `the last observed version was ${describeDeploymentVersion(lastObservedVersion)}`;
   throw input.notReadyError(
-    `it did not converge within ${Math.max(0, now() - startedAt)}ms; ${lastObservation}`,
+    `it did not converge within ${Math.max(0, now() - startedAt)}ms; ${lastObservation}; ` +
+      `retryable outcomes were lifecycle resets=${lifecycleFailures}, transient platform ` +
+      `failures=${platformFailures}, probe timeouts=${probeTimeouts}, version ` +
+      `mismatches=${mismatches} across ${probes} read-only probes`,
   );
 }
 

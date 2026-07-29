@@ -146,13 +146,15 @@ describe("waitForCapabilityHostDeploymentVersion", () => {
     });
   });
 
-  it("re-acquires after one deployment lifecycle reset", async () => {
+  it("re-acquires through repeated deployment lifecycle resets", async () => {
     const reset = Object.assign(new Error("code updated"), {
       durableObjectReset: true,
     });
     let time = 0;
     const readVersion = vi
       .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(reset)
+      .mockRejectedValueOnce(reset)
       .mockRejectedValueOnce(reset)
       .mockResolvedValueOnce("version-new");
 
@@ -168,14 +170,14 @@ describe("waitForCapabilityHostDeploymentVersion", () => {
         timeoutMs: 1_000,
       }),
     ).resolves.toEqual({
-      lifecycleFailures: 1,
+      lifecycleFailures: 3,
       mismatches: 0,
       observedVersion: { id: "version-new" },
       platformFailures: 0,
       probeTimeouts: 0,
-      probes: 2,
+      probes: 4,
       targetNewer: false,
-      waitedMs: 100,
+      waitedMs: 700,
     });
   });
 
@@ -211,7 +213,7 @@ describe("waitForCapabilityHostDeploymentVersion", () => {
     }
   });
 
-  it("keeps a second deployment lifecycle reset terminal before journaling", async () => {
+  it("bounds persistent deployment lifecycle resets by the total deadline", async () => {
     const reset = Object.assign(new Error("code updated"), {
       durableObjectReset: true,
     });
@@ -231,14 +233,19 @@ describe("waitForCapabilityHostDeploymentVersion", () => {
         timeoutMs: 1_000,
       }),
     ).rejects.toThrow(
-      "the version probe was reset more than once. The script was not requested and did not run.",
+      "it did not converge within 1000ms; no deployment version was returned; retryable " +
+        "outcomes were lifecycle resets=4, transient platform failures=0, probe timeouts=0, " +
+        "version mismatches=0 across 4 read-only probes. The script was not requested and " +
+        "did not run.",
     );
   });
 
-  it("retries one exact transient platform failure before journaling", async () => {
+  it("retries repeated exact transient platform failures before journaling", async () => {
     let time = 0;
     const readVersion = vi
       .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(new Error("internal error; reference = s6apsm9qv3sm4n3kgq3c0uk1"))
+      .mockRejectedValueOnce(new Error("internal error; reference = x6apsm9qv3sm4n3kgq3c0uk2"))
       .mockRejectedValueOnce(new Error("internal error; reference = s6apsm9qv3sm4n3kgq3c0uk1"))
       .mockResolvedValueOnce("version-new");
 
@@ -257,15 +264,15 @@ describe("waitForCapabilityHostDeploymentVersion", () => {
       lifecycleFailures: 0,
       mismatches: 0,
       observedVersion: { id: "version-new" },
-      platformFailures: 1,
+      platformFailures: 3,
       probeTimeouts: 0,
-      probes: 2,
+      probes: 4,
       targetNewer: false,
-      waitedMs: 100,
+      waitedMs: 700,
     });
   });
 
-  it("keeps a repeated transient platform failure terminal before journaling", async () => {
+  it("bounds persistent exact transient platform failures by the total deadline", async () => {
     const failure = new Error("internal error; reference = s6apsm9qv3sm4n3kgq3c0uk1");
     let time = 0;
 
@@ -283,9 +290,10 @@ describe("waitForCapabilityHostDeploymentVersion", () => {
         timeoutMs: 1_000,
       }),
     ).rejects.toThrow(
-      "the version probe returned repeated transient platform failures; latest: " +
-        '"internal error; reference = s6apsm9qv3sm4n3kgq3c0uk1". ' +
-        "The script was not requested and did not run.",
+      "it did not converge within 1000ms; no deployment version was returned; retryable " +
+        "outcomes were lifecycle resets=0, transient platform failures=4, probe timeouts=0, " +
+        "version mismatches=0 across 4 read-only probes. The script was not requested and " +
+        "did not run.",
     );
   });
 
@@ -318,8 +326,10 @@ describe("waitForCapabilityHostDeploymentVersion", () => {
         timeoutMs: 500,
       }),
     ).rejects.toThrow(
-      'it did not converge within 500ms; the last observed version was "version-old". ' +
-        "The script was not requested and did not run.",
+      'it did not converge within 500ms; the last observed version was "version-old"; ' +
+        "retryable outcomes were lifecycle resets=0, transient platform failures=0, probe " +
+        "timeouts=0, version mismatches=2 across 2 read-only probes. The script was not " +
+        "requested and did not run.",
     );
   });
 
@@ -420,8 +430,9 @@ describe("provideCapabilityOnDeploymentReadyHost", () => {
     ).rejects.toThrow(
       'Capability host at "/agents/test" was not ready for deployment version "version-new" ' +
         'before capability "tools.probe" was provided: it did not converge within 500ms; the ' +
-        'last observed version was "version-old". The capability was not mounted and its ' +
-        "provider was not retained.",
+        'last observed version was "version-old"; retryable outcomes were lifecycle resets=0, ' +
+        "transient platform failures=0, probe timeouts=0, version mismatches=2 across 2 " +
+        "read-only probes. The capability was not mounted and its provider was not retained.",
     );
     expect(provideCapability).not.toHaveBeenCalled();
   });

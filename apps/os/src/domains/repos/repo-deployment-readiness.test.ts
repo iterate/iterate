@@ -243,7 +243,9 @@ describe("commitFilesOnDeploymentReadyRepo", () => {
     ).rejects.toThrow(
       'Repo at "/repos/ide" was not ready for deployment version "version-new" before ' +
         "commitFiles was requested: it did not converge within 200ms; the last observed " +
-        'version was "version-old". No repo mutation was sent.',
+        'version was "version-old"; retryable outcomes were lifecycle resets=0, transient ' +
+        "platform failures=0, probe timeouts=0, version mismatches=2 across 2 read-only probes. " +
+        "No repo mutation was sent.",
     );
     expect(commitFiles).not.toHaveBeenCalled();
     expect(disposals).toEqual([1, 2]);

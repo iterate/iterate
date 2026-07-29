@@ -86,7 +86,9 @@ describe("fetchFromDeploymentReadyProject", () => {
     ).rejects.toThrow(
       'Project "prj_test" was not ready for deployment version "version-new" before outbound ' +
         "egress was requested: it did not converge within 500ms; the last observed version " +
-        'was "version-old". The request was not forwarded and no external side effect ran.',
+        'was "version-old"; retryable outcomes were lifecycle resets=0, transient platform ' +
+        "failures=0, probe timeouts=0, version mismatches=2 across 2 read-only probes. The " +
+        "request was not forwarded and no external side effect ran.",
     );
     expect(fetch).not.toHaveBeenCalled();
   });
