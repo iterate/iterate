@@ -37,6 +37,10 @@ export type WorkerBindings = Record<string, unknown>;
 
 const resolvedArtifactMemo = new Map<string, ResolvedWorkerSource>();
 const RESOLVED_ARTIFACT_MEMO_LIMIT = 64;
+// Worker Loader isolates retain the loopback RPC bindings supplied by the
+// parent isolate that created them. This is initialized lazily because Workers
+// forbids random-value generation in module-global execution.
+let parentIsolateLoaderNonce: string | undefined;
 const replacementLoaderNonceMemo = new Map<string, string>();
 const REPLACEMENT_LOADER_NONCE_MEMO_LIMIT = 64;
 
@@ -209,13 +213,14 @@ export function loadResolvedWorker({
   scopePath: string;
   streamContext: StreamContext;
 }): WorkerStub {
-  // Loader isolates capture the parent deployment's loopback RPC bindings.
-  // They must not survive an OS rollout: a hit created by the previous
-  // version can only speak that version of workerd's cloned-data protocol,
-  // and crossing it from the new parent fails with
+  // Loader isolates capture the parent isolate's loopback RPC bindings.
+  // They must not survive that isolate, including a Durable Object eviction
+  // within one deployment: crossing the orphaned bindings from the next
+  // parent fails with
   // "Unable to deserialize cloned data due to invalid or unsupported version".
-  // Build artifacts remain content-addressed and shared; only the cheap
-  // loaded isolate is deployment-scoped.
+  // Build artifacts remain content-addressed and shared; only the cheap loaded
+  // isolate is parent-scoped. The deployment id still keeps identities easy
+  // to attribute and guarantees separation across a rollout.
   const loaderIdentity = [
     "worker-loader",
     env.WORKER_SELF,
@@ -238,7 +243,9 @@ export function loadResolvedWorker({
   }
   const cacheKey = [
     loaderIdentity,
-    freshInstanceNonce || replacementLoaderNonceMemo.get(loaderIdentity) || "shared",
+    freshInstanceNonce ||
+      replacementLoaderNonceMemo.get(loaderIdentity) ||
+      (parentIsolateLoaderNonce ??= crypto.randomUUID()),
   ].join(":");
   return env.LOADER.get(cacheKey, () => ({
     compatibilityDate: resolved.wranglerConfig?.compatibilityDate ?? WORKER_COMPATIBILITY_DATE,
