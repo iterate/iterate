@@ -583,13 +583,18 @@ export class ProjectDurableObject extends DurableObject<Env> {
                   projectId: this.#name.projectId,
                 });
               });
-          const released = new Request(entry.held.url, {
-            method: entry.held.method,
-            headers: entry.held.headers,
-            body: entry.bodyBytes as BodyInit | null,
-            redirect: entry.redirect,
-          });
+          // The whole per-entry path is inside this try so one entry's
+          // failure (even Request reconstruction) settles and rejects THAT
+          // entry alone — the fan-out Promise.all must never reject, or the
+          // outer catch would blast every pending sibling with an unrelated
+          // error while their released upstream calls run on.
           try {
+            const released = new Request(entry.held.url, {
+              method: entry.held.method,
+              headers: entry.held.headers,
+              body: entry.bodyBytes as BodyInit | null,
+              redirect: entry.redirect,
+            });
             const response = await this.#egress(released);
             await settle({ status: response.status });
             entry.resolve(response);
