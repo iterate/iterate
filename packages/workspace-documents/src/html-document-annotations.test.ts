@@ -71,4 +71,23 @@ describe("HTML document annotations", () => {
     const source = `${HTML}<script type="application/json">{"ok":true}</script>\n`;
     expect(annotationsSourceForHtmlDocument(source)).toBe(source);
   });
+
+  it.each([
+    {
+      name: "the extracted discussion fails to parse",
+      annotations:
+        "\n<!-- iterate-annotations:v1 -->\n<!-- iterate-thread:v1 begin id=thread-1 status=maybe -->\n",
+    },
+    {
+      name: "the extracted document has no discussion",
+      annotations: "",
+    },
+  ])("preserves the HTML envelope when $name", ({ annotations }) => {
+    const source = `${HTML}<script type="application/json" data-iterate-annotations="v1">
+${JSON.stringify(annotations)}
+</script>
+`;
+
+    expect(transformHtmlDocumentAnnotations(source, (current) => current)).toBe(source);
+  });
 });

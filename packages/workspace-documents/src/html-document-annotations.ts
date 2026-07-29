@@ -30,16 +30,20 @@ export function annotationsSourceForHtmlDocument(source: string): string {
 /**
  * Applies an annotated-Markdown mutation to an HTML document, then stores the
  * resulting discussion as inert JSON while leaving the HTML body byte-for-byte
- * unchanged. Escaping `<` prevents a comment containing `</script>` from
- * terminating the envelope in an HTML parser.
+ * unchanged. Failed or no-op transforms preserve the complete original source.
+ * Escaping `<` prevents a comment containing `</script>` from terminating the
+ * envelope in an HTML parser.
  */
 export function transformHtmlDocumentAnnotations(
   source: string,
   transform: (annotatedSource: string) => string,
 ): string {
-  const next = transform(annotationsSourceForHtmlDocument(source));
+  const annotatedSource = annotationsSourceForHtmlDocument(source);
+  const next = transform(annotatedSource);
+  if (next === annotatedSource) return source;
+
   const parsed = parseAnnotatedMarkdown(next);
-  if (parsed.kind !== "structured" || parsed.discussion === null) return next;
+  if (parsed.kind !== "structured" || parsed.discussion === null) return source;
 
   const body = next.slice(0, parsed.discussion.range.start);
   const annotations = next.slice(parsed.discussion.range.start);
