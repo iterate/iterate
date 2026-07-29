@@ -50,7 +50,7 @@ pnpm dev          # fully-local OS dev server on http://localhost:<port>
   but they should not carry app/MCP/project-host URL overrides.
 
   Don't add old flat auth OAuth/JWKS vars in these configs. Auth signs JWTs
-  with `AUTH_FORGE_PRIVATE_JWK`; local and deployed relying parties derive its
+  with `AUTH_FORGE_ES256_PRIVATE_JWK`; local and deployed relying parties derive its
   public JWKS locally from the same Doppler value. Doppler
   `APP_CONFIG_ITERATE_AUTH__JWKS` snapshots should be absent: generated config
   and deploy scripts own that derived binding, so a manually pinned copy can
@@ -171,9 +171,9 @@ security model. The forge-key flow below remains useful in non-production when
 testing the real OAuth-session shape, arbitrary organization claims, or auth UI
 behavior.
 
-Auth signs JWTs with one Doppler-owned Ed25519 key. OS and the other relying
+Auth signs JWTs with one Doppler-owned ES256 (P-256) key. OS and the other relying
 workers trust only its public half, derived locally during config generation or
-deploy from `AUTH_FORGE_PRIVATE_JWK` (inherited from `_shared/dev` /
+deploy from `AUTH_FORGE_ES256_PRIVATE_JWK` (inherited from `_shared/dev` /
 `_shared/preview` / `_shared/prd`). The same private key powers offline
 identity minting, so minting is instant and does not call the auth worker:
 
@@ -274,7 +274,7 @@ APP_CONFIG_BASE_URL=https://os-preview-3.iterate.com \
 
 Forged-session specs validate one env contract: `APP_CONFIG_ADMIN_API_SECRET`
 for project fixture setup, plus `APP_CONFIG_ITERATE_AUTH__CLIENT_ID`,
-`APP_CONFIG_ITERATE_AUTH__ISSUER`, and `AUTH_FORGE_PRIVATE_JWK` for JWT
+`APP_CONFIG_ITERATE_AUTH__ISSUER`, and `AUTH_FORGE_ES256_PRIVATE_JWK` for JWT
 minting. Those values are expected to come from the same `os` Doppler config as
 the worker under test. The access-token resource is derived from the target OS
 base URL (`http://localhost` for loopback local dev, otherwise the normalized
@@ -301,7 +301,7 @@ doppler run --project os --config prd -- pnpm auth:mint --email someone@nustom.c
 # open the printed URL → signed in on https://os.iterate.com as that user
 ```
 
-The forge key is a **master key**: anyone holding `AUTH_FORGE_PRIVATE_JWK`
+The forge key is a **master key**: anyone holding `AUTH_FORGE_ES256_PRIVATE_JWK`
 from `os/prd` can mint a session as any user, including admins. There is no
 audit trail yet — an audited mint endpoint on the auth worker is the planned
 replacement. Until then, guard that Doppler value like any production secret
@@ -309,7 +309,7 @@ and prefer minting a scoped (non-admin) identity when you can.
 
 Because the prd signing key is god-mode, Auth and relying-party deploys refuse
 to use it unless you opt in explicitly: their prd Doppler configs must resolve
-both `AUTH_FORGE_PRIVATE_JWK` and `AUTH_FORGE_ALLOW_PRODUCTION=true`. A key
+both `AUTH_FORGE_ES256_PRIVATE_JWK` and `AUTH_FORGE_ALLOW_PRODUCTION=true`. A key
 that lands in a prod config without the flag fails the deploy loudly rather
 than silently arming Auth signing and offline minting (each environment also
 uses its own key id — `iterate-forge-dev`/`-preview`/`-prd` — so a leak is
@@ -586,7 +586,7 @@ need no deploy-time coordination. Provisioning/rotation:
 `doppler run --project _shared --config prd -- pnpm preview provision-auth-preview-configs --rotate`.
 
 JWT signing is independent of `APP_CONFIG_BETTER_AUTH_SECRET`: the Better Auth
-JWT adapter reads the fixed `AUTH_FORGE_PRIVATE_JWK` from Doppler and does not
+JWT adapter reads the fixed `AUTH_FORGE_ES256_PRIVATE_JWK` from Doppler and does not
 store generated signing keys in D1. Rotating the Better Auth secret therefore
 needs no JWKS cleanup.
 

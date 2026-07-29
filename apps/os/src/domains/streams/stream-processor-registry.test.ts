@@ -519,10 +519,11 @@ describe("wakeStreamProcessor", () => {
     });
   });
 
-  it("reports processor failures with lifecycle classification intact", async () => {
+  it("reports processor failures with lifecycle classification and ITX correlation intact", async () => {
     const h = makeHarness();
     const lifecycleReset = Object.assign(new Error("subscriber incarnation reset"), {
       durableObjectReset: true,
+      itxCallId: "log_0123456789abcdef0123456789abcdef",
       retryable: true,
     });
     h.hooks.alpha.onProcess = (args) => {
@@ -551,6 +552,7 @@ describe("wakeStreamProcessor", () => {
           name: "Error",
           message: "subscriber incarnation reset",
           durableObjectReset: true,
+          itxCallId: "log_0123456789abcdef0123456789abcdef",
           retryable: true,
         },
       });

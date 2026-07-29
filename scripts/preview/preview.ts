@@ -2065,10 +2065,14 @@ function announceRetryTelemetry(slug: string, summary: PreviewRetrySummary) {
   if (!rendered) {
     return;
   }
-  const level = summary.retried.length >= 4 ? "warning" : "notice";
+  const retryStillFailed = summary.retried.some((record) => !record.passedAfterRetry);
+  const level = retryStillFailed || summary.retried.length >= 4 ? "warning" : "notice";
+  const outcome = retryStillFailed
+    ? "At least one listed retry still failed; the test command's final exit code remains authoritative for this run."
+    : "Every listed retry passed; retry telemetry does not override the test command's final exit code.";
   console.log(
-    `::${level} title=Preview e2e retries::${slug}: ${rendered}. The retry passed and does not fail ` +
-      `this run; quarantine recurring or pathologically slow unrelated flakes per docs/testing.md.`,
+    `::${level} title=Preview e2e retries::${slug}: ${rendered}. ${outcome} ` +
+      "Quarantine recurring or pathologically slow unrelated flakes per docs/testing.md.",
   );
 }
 
@@ -3737,9 +3741,13 @@ function previewProvisionedIntegrationSecrets() {
 }
 
 async function ensureAuthPreviewConfigs(input: { rotate: boolean; slots: number[] }) {
-  const authSigningPrivateJwk = getDopplerSecret("_shared", "preview", "AUTH_FORGE_PRIVATE_JWK");
+  const authSigningPrivateJwk = getDopplerSecret(
+    "_shared",
+    "preview",
+    "AUTH_FORGE_ES256_PRIVATE_JWK",
+  );
   if (!authSigningPrivateJwk) {
-    throw new Error("_shared/preview is missing AUTH_FORGE_PRIVATE_JWK");
+    throw new Error("_shared/preview is missing AUTH_FORGE_ES256_PRIVATE_JWK");
   }
 
   // This is deliberately inherited, not copied: every app's preview
@@ -3747,10 +3755,10 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean; slots: number[
   // of truth. Fail closed if that topology has drifted instead of writing a
   // second app-local copy that could later shadow the shared key.
   for (const project of ["auth", "os", "semaphore", "streams-example-app"]) {
-    const effectiveKey = getDopplerSecret(project, "preview", "AUTH_FORGE_PRIVATE_JWK");
+    const effectiveKey = getDopplerSecret(project, "preview", "AUTH_FORGE_ES256_PRIVATE_JWK");
     if (effectiveKey !== authSigningPrivateJwk) {
       throw new Error(
-        `${project}/preview must inherit AUTH_FORGE_PRIVATE_JWK from _shared/preview`,
+        `${project}/preview must inherit AUTH_FORGE_ES256_PRIVATE_JWK from _shared/preview`,
       );
     }
   }
@@ -6186,6 +6194,7 @@ function resolvePreviewCompareBaseSha(params: {
 export const previewInternals = {
   ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
   acquireAnyEnvironmentConfigLease,
+  announceRetryTelemetry,
   adoptLeaseHeldBySemaphore,
   assignEnvironmentConfigLease,
   claimEnvironmentConfigLease,

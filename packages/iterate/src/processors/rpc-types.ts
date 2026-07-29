@@ -136,14 +136,15 @@ export type ProcessEventBatch = (batch: StreamEventBatch) => unknown;
 /**
  * Serializable failure reported after a durable wake delivery finishes.
  *
- * The result crosses an independent one-way RPC hop, so preserve the
- * lifecycle flags the stream uses to distinguish a dead Durable Object from
- * an application failure. Error prototypes and arbitrary properties do not
- * survive that hop reliably.
+ * The result crosses an independent one-way RPC hop, so preserve the lifecycle
+ * flags and ITX call correlation that distinguish and locate failures. Error
+ * prototypes and arbitrary properties do not survive that hop reliably.
  */
 export type StreamWakeDeliveryError = {
   name: string;
   message: string;
+  /** Wide-log ID of the failed ITX call, when the failure crossed that boundary. */
+  itxCallId?: string;
   durableObjectReset?: true;
   overloaded?: true;
   retryable?: true;

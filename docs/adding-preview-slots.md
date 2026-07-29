@@ -263,7 +263,7 @@ Doppler state, so its exact config list belongs in the approved plan.
 Verify names, inheritance, and required-secret presence without printing
 values. Auth must have its OAuth seed and runtime secrets; OS, Semaphore, and
 Streams must have matching per-slot Auth client IDs and secrets; Semaphore and
-Streams must have `AUTH_FORGE_PRIVATE_JWK`. OS must also have
+Streams must have `AUTH_FORGE_ES256_PRIVATE_JWK`. OS must also have
 `APP_CONFIG_INTEGRATIONS__PETSHOP`; an OS deploy cannot infer the Dummy Petshop
 client.
 
