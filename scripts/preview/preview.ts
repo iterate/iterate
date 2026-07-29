@@ -2062,10 +2062,14 @@ function announceRetryTelemetry(slug: string, summary: PreviewRetrySummary) {
   if (!rendered) {
     return;
   }
-  const level = summary.retried.length >= 4 ? "warning" : "notice";
+  const retryStillFailed = summary.retried.some((record) => !record.passedAfterRetry);
+  const level = retryStillFailed || summary.retried.length >= 4 ? "warning" : "notice";
+  const outcome = retryStillFailed
+    ? "At least one listed retry still failed; the test command's final exit code remains authoritative for this run."
+    : "Every listed retry passed; retry telemetry does not override the test command's final exit code.";
   console.log(
-    `::${level} title=Preview e2e retries::${slug}: ${rendered}. The retry passed and does not fail ` +
-      `this run; quarantine recurring or pathologically slow unrelated flakes per docs/testing.md.`,
+    `::${level} title=Preview e2e retries::${slug}: ${rendered}. ${outcome} ` +
+      "Quarantine recurring or pathologically slow unrelated flakes per docs/testing.md.",
   );
 }
 
@@ -6151,6 +6155,7 @@ function resolvePreviewCompareBaseSha(params: {
 export const previewInternals = {
   ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
   acquireAnyEnvironmentConfigLease,
+  announceRetryTelemetry,
   adoptLeaseHeldBySemaphore,
   assignEnvironmentConfigLease,
   claimEnvironmentConfigLease,
