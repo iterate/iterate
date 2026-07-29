@@ -69,18 +69,6 @@ const clientBundles: BundleManifestEntry[] = [
 
 const physicalWorkerBundles: BundleManifestEntry[] = [
   {
-    allowedImports: ["iterate:github-ai-linter-config"],
-    allowedImportPrefixes: ["cloudflare:"],
-    entrypoint: new URL(
-      "../dist/starter-apps/github-ai-linter/configured-worker.mjs",
-      import.meta.url,
-    ),
-    followRelativeImports: true,
-    name: "configured GitHub AI linter worker",
-    requiredSource: [],
-    target: "physical-worker",
-  },
-  {
     allowedImports: [],
     allowedImportPrefixes: ["cloudflare:"],
     entrypoint: new URL("../dist/starter-apps/guestbook/configured-worker.mjs", import.meta.url),

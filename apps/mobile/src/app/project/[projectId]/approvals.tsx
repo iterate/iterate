@@ -2,10 +2,9 @@
 // (generates a P-256 "software" approval key — same kind
 // packages/iterate/src/approval-keys.ts uses for CI/non-Mac machines — and
 // keeps the private half in the Keychain behind Face ID / Touch ID), then
-// grant or reject held requests as they arrive live. See
-// apps/mobile/src/lib/approvals.ts for the protocol and
-// tasks/mobile-native-capabilities.md for what a real dev build would add
-// (hardware-isolated signing, push notifications).
+// decide held BATCHES as they arrive live: one card per batch (a lone
+// request is a batch of one), one Face ID, one signed decision covering
+// every request. See apps/mobile/src/lib/approvals.ts for the protocol.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { router, Stack, useLocalSearchParams } from "expo-router";
@@ -22,18 +21,20 @@ import {
 import { CodeBlock } from "../../../components/activity-card.tsx";
 import { enrollApproverKey, loadApproverKey, signWithApproverKey } from "../../../lib/approver.ts";
 import {
-  deriveOpenRequests,
-  deriveRecentResolvedRequests,
+  deriveOpenBatches,
+  deriveRecentResolvedBatches,
   EVENT,
-  focusOpenRequest,
+  focusOpenBatch,
   approvalBodyForDisplay,
-  grant,
-  reject,
+  decide,
+  hostBreakdown,
   safeHost,
   scriptCodeForApproval,
-  type OpenRequest,
+  type HeldRequest,
+  type OpenBatch,
   type RequestedPayload,
-  type ResolvedRequest,
+  type ResolvedBatch,
+  type Verdict,
 } from "../../../lib/approvals.ts";
 import { getProjectItx } from "../../../lib/itx.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
@@ -41,7 +42,7 @@ import { getServerBaseUrl } from "../../../lib/storage.ts";
 import { colors, radius, spacing } from "../../../lib/theme.ts";
 import { useLiveEvents } from "../../../lib/use-live-events.ts";
 
-const APPROVAL_EVENT_TYPES = [EVENT.requested, EVENT.granted, EVENT.rejected, EVENT.settled];
+const APPROVAL_EVENT_TYPES = [EVENT.requested, EVENT.decided, EVENT.settled];
 
 export default function ApprovalsScreen() {
   const { projectId, approvalRequestEventOffset, slug } = useLocalSearchParams<{
@@ -92,33 +93,44 @@ export default function ApprovalsScreen() {
   });
 
   const open = useMemo(
-    () => focusOpenRequest(deriveOpenRequests(events.data || []), targetOffset),
+    () => focusOpenBatch(deriveOpenBatches(events.data || []), targetOffset),
     [events.data, targetOffset],
   );
-  const recentResolved = useMemo(
-    () => deriveRecentResolvedRequests(events.data || [], 5),
-    [events.data],
-  );
+  const recent = useMemo(() => deriveRecentResolvedBatches(events.data || [], 5), [events.data]);
 
+  // ONE decision per batch: approve all or reject all. The approval.v2
+  // message binds every request plus the verdicts, so a 12-request batch is
+  // still one Face ID, one signature, one append.
   const respond = useMutation({
-    mutationFn: async (input: { request: OpenRequest; decision: "grant" | "reject" }) => {
+    mutationFn: async (input: { batch: OpenBatch; decision: "approve" | "reject" }) => {
       const project = await getProjectItx(baseUrl!, projectId);
       const stream = project.streams.get("/");
+      const verdicts = input.batch.payload.requests.map(
+        (): Verdict => (input.decision === "approve" ? "approve" : "reject"),
+      );
       if (input.decision === "reject") {
-        await reject(stream, input.request.offset);
+        await decide({
+          stream,
+          projectId,
+          offset: input.batch.offset,
+          payload: input.batch.payload,
+          verdicts,
+          sign: null,
+        });
         return;
       }
-      // Always sign: an unsigned grant that a keyed project's egress door
-      // ignores would still show as "submitted" (a grant landed) and strand
-      // the hold with no visible way to retry. Requiring enrollment first
-      // means every grant this app sends is real, whether or not other
-      // devices have keys.
+      // Always sign: an unsigned decision that a keyed project's egress door
+      // ignores would still show as "submitted" (a decision landed) and
+      // strand the hold with no visible way to retry. Requiring enrollment
+      // first means every approval this app sends is real, whether or not
+      // other devices have keys.
       if (!key.data) throw new Error("Enroll this device before approving.");
-      await grant({
+      await decide({
         stream,
         projectId,
-        offset: input.request.offset,
-        payload: input.request.payload,
+        offset: input.batch.offset,
+        payload: input.batch.payload,
+        verdicts,
         sign: (message) => signWithApproverKey(projectId, message),
       });
     },
@@ -161,46 +173,44 @@ export default function ApprovalsScreen() {
       ) : (
         <FlatList
           data={open}
-          keyExtractor={(request) => String(request.offset)}
+          keyExtractor={(batch) => `batch:${batch.offset}`}
           contentContainerStyle={{ padding: spacing.md, gap: spacing.sm }}
           ListEmptyComponent={
             <Text style={styles.empty}>No held requests right now — nothing needs you.</Text>
           }
           refreshing={events.isRefetching}
           onRefresh={() => events.refetch()}
-          renderItem={({ item: request }) => {
-            const pending =
-              respond.isPending && respond.variables?.request.offset === request.offset;
-            return (
-              <ApprovalCard
-                baseUrl={baseUrl!}
-                interaction={{
-                  kind: "pending",
-                  canApprove: Boolean(key.data),
-                  onRespond: (decision) => respond.mutate({ request, decision }),
-                  pending,
-                  submitted: request.submitted,
-                }}
-                projectId={projectId}
-                projectSlug={slug || ""}
-                request={request}
-                targeted={request.offset === targetOffset}
-              />
-            );
-          }}
+          renderItem={({ item }) => (
+            <BatchCard
+              baseUrl={baseUrl!}
+              interaction={{
+                kind: "pending",
+                canApprove: Boolean(key.data),
+                onRespond: (decision) => respond.mutate({ batch: item, decision }),
+                pending: respond.isPending && respond.variables?.batch.offset === item.offset,
+                submitted: item.submitted,
+              }}
+              offset={item.offset}
+              payload={item.payload}
+              projectId={projectId}
+              projectSlug={slug || ""}
+              targeted={item.offset === targetOffset}
+            />
+          )}
           ListFooterComponent={
-            recentResolved.length === 0 ? null : (
+            recent.length === 0 ? null : (
               <View style={styles.recent}>
                 <Text style={styles.recentTitle}>Recent</Text>
-                {recentResolved.map((request) => (
-                  <ApprovalCard
+                {recent.map((batch) => (
+                  <BatchCard
                     baseUrl={baseUrl!}
-                    interaction={{ kind: "resolved", outcome: request.outcome }}
-                    key={request.offset}
+                    interaction={{ kind: "resolved", resolved: batch }}
+                    key={`resolved:${batch.offset}`}
+                    offset={batch.offset}
+                    payload={batch.payload}
                     projectId={projectId}
                     projectSlug={slug || ""}
-                    request={request}
-                    targeted={request.offset === targetOffset}
+                    targeted={batch.offset === targetOffset}
                   />
                 ))}
               </View>
@@ -212,12 +222,19 @@ export default function ApprovalsScreen() {
   );
 }
 
-function ApprovalCard({
+/**
+ * One approval batch, open or resolved. A batch of one renders exactly like
+ * the classic single-request card; a burst gets a count + host-breakdown
+ * header with Approve all / Reject all right on it (the Face ID sheet is the
+ * confirm step) and per-request details behind an expander.
+ */
+function BatchCard({
   baseUrl,
   interaction,
+  offset,
+  payload,
   projectId,
   projectSlug,
-  request,
   targeted,
 }: {
   baseUrl: string;
@@ -225,21 +242,23 @@ function ApprovalCard({
     | {
         kind: "pending";
         canApprove: boolean;
-        onRespond(decision: "grant" | "reject"): void;
+        onRespond(decision: "approve" | "reject"): void;
         pending: boolean;
         submitted: boolean;
       }
-    | { kind: "resolved"; outcome: ResolvedRequest["outcome"] };
+    | { kind: "resolved"; resolved: ResolvedBatch };
+  offset: number;
+  payload: RequestedPayload;
   projectId: string;
   projectSlug: string;
-  request: { offset: number; payload: RequestedPayload };
   targeted: boolean;
 }) {
   const queryClient = useQueryClient();
-  const detailsKey = ["approval-details", projectId, request.offset, interaction.kind];
+  const single = payload.requests.length === 1;
+  const detailsKey = ["approval-details", projectId, offset, interaction.kind];
   const initialDetails = {
-    body: false,
     expanded: interaction.kind === "pending",
+    members: false,
     script: false,
   };
   const details = useQuery({
@@ -248,7 +267,7 @@ function ApprovalCard({
     initialData: initialDetails,
     staleTime: Infinity,
   });
-  const streamContext = request.payload.streamContext;
+  const streamContext = payload.streamContext;
   const script = useQuery({
     queryKey:
       streamContext?.kind === "script-execution"
@@ -259,7 +278,7 @@ function ApprovalCard({
             streamContext.streamPath,
             streamContext.scriptRunRequestedEventOffset,
           ]
-        : ["approval-source-script", baseUrl, projectId, "none", request.offset],
+        : ["approval-source-script", baseUrl, projectId, "none", offset],
     queryFn: async () => {
       if (streamContext?.kind !== "script-execution") {
         throw new Error("This approval has no codemode script source.");
@@ -268,24 +287,26 @@ function ApprovalCard({
       const event = await project.streams.get(streamContext.streamPath).getEvent({
         offset: streamContext.scriptRunRequestedEventOffset,
       });
-      return scriptCodeForApproval(request.payload, event);
+      return scriptCodeForApproval(payload, event);
     },
     enabled: details.data.script && streamContext?.kind === "script-execution",
     staleTime: Infinity,
   });
-  const body = approvalBodyForDisplay(request.payload);
-  const toggle = (section: "body" | "expanded" | "script") => {
+  const toggle = (section: "expanded" | "members" | "script") => {
     queryClient.setQueryData(detailsKey, { ...details.data, [section]: !details.data[section] });
   };
+
+  const headline = single
+    ? `${payload.requests[0]!.method} ${safeHost(payload.requests[0]!.url)}`
+    : `Script run · ${payload.requests.length} requests`;
+  const resolved = interaction.kind === "resolved" ? interaction.resolved : null;
 
   return (
     <View style={[styles.card, targeted && styles.targetedCard]}>
       {targeted ? (
-        <Text style={styles.targetedLabel}>
-          Opened from notification · request #{request.offset}
-        </Text>
+        <Text style={styles.targetedLabel}>Opened from notification · batch #{offset}</Text>
       ) : null}
-      {interaction.kind === "resolved" ? (
+      {resolved ? (
         <Pressable
           accessibilityRole="button"
           accessibilityState={{ expanded: details.data.expanded }}
@@ -293,84 +314,72 @@ function ApprovalCard({
           style={styles.compactSummary}
         >
           <Text numberOfLines={1} style={[styles.method, styles.compactMethod]}>
-            {request.payload.method} {safeHost(request.payload.url)}
+            {headline}
           </Text>
           <Text
             style={[
               styles.outcomeBadge,
-              interaction.outcome.decision === "approved"
-                ? styles.approvedBadge
-                : styles.rejectedBadge,
+              resolved.decisionSummary === "Approved" ? styles.approvedBadge : styles.rejectedBadge,
             ]}
           >
-            {interaction.outcome.decision === "approved" ? "Approved" : "Rejected"}
+            {resolved.decisionSummary}
           </Text>
           <Text style={styles.compactChevron}>{details.data.expanded ? "▾" : "▸"}</Text>
         </Pressable>
       ) : (
-        <Text style={styles.method}>
-          {request.payload.method} {safeHost(request.payload.url)}
-        </Text>
+        <Text style={styles.method}>{headline}</Text>
       )}
+      {single ? null : <Text style={styles.groupHosts}>{hostBreakdown(payload.requests)}</Text>}
 
       {details.data.expanded ? (
         <>
-          {interaction.kind === "resolved" ? (
-            <Text style={styles.outcomeDetail}>
-              {interaction.outcome.decision === "rejected"
-                ? interaction.outcome.reason
-                : interaction.outcome.deliveryError
-                  ? `Delivery failed · ${interaction.outcome.deliveryError}`
-                  : `Upstream ${interaction.outcome.upstreamStatus || "status unavailable"}`}
-            </Text>
-          ) : null}
-          <Text style={styles.url} selectable>
-            {request.payload.url}
-          </Text>
-          {request.payload.secretPaths.length > 0 ? (
-            <Text style={styles.secretLine}>spends {request.payload.secretPaths.join(", ")}</Text>
-          ) : null}
-          <Text style={styles.meta} selectable>
-            body sha256: {request.payload.body?.sha256 || "none"}
-          </Text>
-
-          {body ? (
+          {single ? (
+            <RequestDetails
+              outcome={
+                resolved
+                  ? {
+                      verdict: resolved.verdicts[0]!,
+                      settle: resolved.outcomes[0] || null,
+                      decidedBy: resolved.decidedBy,
+                    }
+                  : null
+              }
+              request={payload.requests[0]!}
+              standalone
+            />
+          ) : (
             <View style={styles.detailSection}>
               <Pressable
                 accessibilityRole="button"
-                onPress={() => toggle("body")}
+                onPress={() => toggle("members")}
                 style={styles.detailHeader}
               >
-                <Text style={styles.chevron}>{details.data.body ? "▾" : "▸"}</Text>
-                <Text style={styles.detailTitle}>
-                  {body.truncated ? "Request body prefix" : "Request body"}
-                </Text>
-                {request.payload.body?.encoding === "base64" || body.truncated ? (
-                  <Text style={styles.detailHint}>
-                    {[
-                      request.payload.body?.encoding === "base64" ? "base64" : "",
-                      body.truncated
-                        ? `64 KiB cap · ${body.originalByteLength?.toLocaleString() || "unknown"} bytes total`
-                        : "",
-                    ]
-                      .filter(Boolean)
-                      .join(" · ")}
-                  </Text>
-                ) : null}
+                <Text style={styles.chevron}>{details.data.members ? "▾" : "▸"}</Text>
+                <Text style={styles.detailTitle}>Requests ({payload.requests.length})</Text>
               </Pressable>
-              {details.data.body ? (
-                body.language === "json" ? (
-                  <CodeBlock language="json" muted={false} text={body.text} />
-                ) : (
-                  <ScrollView style={styles.bodyScroller} nestedScrollEnabled>
-                    <Text style={styles.bodyText} selectable>
-                      {body.text}
-                    </Text>
-                  </ScrollView>
-                )
+              {details.data.members ? (
+                <View style={styles.groupMembers}>
+                  {payload.requests.map((request, index) => (
+                    <View key={index} style={styles.memberCard}>
+                      <RequestDetails
+                        outcome={
+                          resolved
+                            ? {
+                                verdict: resolved.verdicts[index]!,
+                                settle: resolved.outcomes[index] || null,
+                                decidedBy: resolved.decidedBy,
+                              }
+                            : null
+                        }
+                        request={request}
+                        standalone={false}
+                      />
+                    </View>
+                  ))}
+                </View>
               ) : null}
             </View>
-          ) : null}
+          )}
 
           {streamContext?.kind === "script-execution" ? (
             <View style={styles.detailSection}>
@@ -418,19 +427,16 @@ function ApprovalCard({
           ) : streamContext ? (
             <Text style={styles.sourceMeta}>Triggered from {streamContext.scopePath}</Text>
           ) : (
-            <Text style={styles.sourceMeta}>
-              Source metadata unavailable for this older request.
-            </Text>
+            <Text style={styles.sourceMeta}>Source metadata unavailable for this request.</Text>
           )}
 
           <View style={styles.policy}>
             <Text style={styles.detailLabel}>Approval policy</Text>
             <Text style={styles.policyDescription}>
-              {request.payload.ruleDescription || request.payload.ruleKey}
+              {payload.ruleDescription || payload.ruleKey}
             </Text>
             <Text style={styles.meta}>
-              {request.payload.ruleKey} · expires{" "}
-              {new Date(request.payload.expiresAt).toLocaleTimeString()}
+              {payload.ruleKey} · expires {new Date(payload.expiresAt).toLocaleTimeString()}
             </Text>
           </View>
 
@@ -443,7 +449,7 @@ function ApprovalCard({
                 disabled={interaction.pending}
                 onPress={() => interaction.onRespond("reject")}
               >
-                <Text style={styles.rejectText}>Reject</Text>
+                <Text style={styles.rejectText}>{single ? "Reject" : "Reject all"}</Text>
               </Pressable>
               <Pressable
                 style={[
@@ -452,19 +458,103 @@ function ApprovalCard({
                   !interaction.canApprove && styles.buttonDisabled,
                 ]}
                 disabled={interaction.pending || !interaction.canApprove}
-                onPress={() => interaction.onRespond("grant")}
+                onPress={() => interaction.onRespond("approve")}
               >
                 <Text style={styles.approveText}>
                   {interaction.pending
                     ? "Signing…"
-                    : interaction.canApprove
-                      ? "Approve (Face ID)"
-                      : "Enroll to approve"}
+                    : !interaction.canApprove
+                      ? "Enroll to approve"
+                      : single
+                        ? "Approve (Face ID)"
+                        : `Approve all ${payload.requests.length} (Face ID)`}
                 </Text>
               </Pressable>
             </View>
           )}
         </>
+      ) : null}
+    </View>
+  );
+}
+
+/**
+ * One held request's inspectable details — URL, spent secrets, body hash and
+ * bounded body preview — plus its per-index outcome on a resolved batch.
+ * Body previews render inline (no per-request toggle): the batch expander
+ * above is the reveal step.
+ */
+function RequestDetails({
+  outcome,
+  request,
+  standalone,
+}: {
+  outcome: {
+    verdict: Verdict;
+    settle: { status: number | null; error: string | null } | null;
+    decidedBy: "human" | "expiry";
+  } | null;
+  request: HeldRequest;
+  standalone: boolean;
+}) {
+  const body = approvalBodyForDisplay(request);
+  return (
+    <View style={{ gap: 4 }}>
+      {standalone ? null : (
+        <Text style={styles.memberHeadline}>
+          {request.method} {safeHost(request.url)}
+        </Text>
+      )}
+      {outcome ? (
+        <Text style={styles.outcomeDetail}>
+          {outcome.verdict === "reject"
+            ? outcome.decidedBy === "expiry"
+              ? "Expired"
+              : "Rejected"
+            : outcome.settle === null
+              ? "Approved — awaiting the egress door…"
+              : outcome.settle.error !== null
+                ? `Delivery failed · ${outcome.settle.error}`
+                : `Upstream ${outcome.settle.status || "status unavailable"}`}
+        </Text>
+      ) : null}
+      <Text style={styles.url} selectable>
+        {request.url}
+      </Text>
+      {request.secretPaths.length > 0 ? (
+        <Text style={styles.secretLine}>spends {request.secretPaths.join(", ")}</Text>
+      ) : null}
+      <Text style={styles.meta} selectable>
+        body sha256: {request.body?.sha256 || "none"}
+      </Text>
+      {body ? (
+        <View style={styles.detailSection}>
+          <Text style={styles.detailTitle}>
+            {body.truncated ? "Request body prefix" : "Request body"}
+            {request.body?.encoding === "base64" || body.truncated ? (
+              <Text style={styles.detailHint}>
+                {"  "}
+                {[
+                  request.body?.encoding === "base64" ? "base64" : "",
+                  body.truncated
+                    ? `64 KiB cap · ${body.originalByteLength?.toLocaleString() || "unknown"} bytes total`
+                    : "",
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </Text>
+            ) : null}
+          </Text>
+          {body.language === "json" ? (
+            <CodeBlock language="json" muted={false} text={body.text} />
+          ) : (
+            <ScrollView style={styles.bodyScroller} nestedScrollEnabled>
+              <Text style={styles.bodyText} selectable>
+                {body.text}
+              </Text>
+            </ScrollView>
+          )}
+        </View>
       ) : null}
     </View>
   );
@@ -524,8 +614,9 @@ const styles = StyleSheet.create({
   },
   approvedBadge: { borderColor: colors.accent, color: colors.accent },
   rejectedBadge: { borderColor: colors.danger, color: colors.danger },
-  outcomeDetail: { color: colors.textMuted, flex: 1, fontSize: 11 },
+  outcomeDetail: { color: colors.textMuted, fontSize: 11 },
   method: { color: colors.text, fontSize: 15, fontWeight: "600" },
+  memberHeadline: { color: colors.text, fontSize: 13, fontWeight: "600" },
   url: { color: colors.textMuted, fontSize: 12, fontFamily: "Menlo", flexShrink: 1 },
   secretLine: { color: colors.working, fontSize: 12 },
   meta: { color: colors.textFaint, fontSize: 11 },
@@ -595,6 +686,15 @@ const styles = StyleSheet.create({
   approve: { backgroundColor: colors.accent },
   buttonDisabled: { opacity: 0.4 },
   approveText: { color: colors.background, fontSize: 14, fontWeight: "600" },
+  groupHosts: { color: colors.textMuted, fontFamily: "Menlo", fontSize: 11 },
+  groupMembers: {
+    gap: spacing.sm,
+  },
+  memberCard: {
+    backgroundColor: colors.background,
+    borderRadius: radius.sm,
+    padding: spacing.sm,
+  },
   recent: { marginTop: spacing.lg, gap: spacing.sm },
   recentTitle: { color: colors.textFaint, fontSize: 11, textTransform: "uppercase" },
   empty: { color: colors.textMuted, fontSize: 14 },

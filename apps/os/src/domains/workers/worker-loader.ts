@@ -173,25 +173,38 @@ async function resolveFileSource({
   const repo = env.REPO.getByName(
     DurableObjectNameCodec.stringify({ path: files.repoPath, projectId }),
   );
-  const head = await repo.getHead(files.ref === undefined ? {} : { branch: files.ref.branch });
   try {
-    return {
-      branch: head.branch,
-      commitOid: head.commitOid,
-      contentHash: head.contentHash,
-      exclude: files.exclude,
-      include: files.include,
-      repoPath: files.repoPath,
-      type: "repo",
-    };
+    const head = await repo.getHead(files.ref === undefined ? {} : { branch: files.ref.branch });
+    try {
+      return {
+        branch: head.branch,
+        commitOid: head.commitOid,
+        contentHash: head.contentHash,
+        exclude: files.exclude,
+        include: files.include,
+        repoPath: files.repoPath,
+        type: "repo",
+      };
+    } finally {
+      disposeIgnoredRpcResult(head);
+    }
   } finally {
-    disposeIgnoredRpcResult(head);
+    try {
+      disposeIgnoredRpcResult(repo);
+    } catch (error) {
+      console.warn("worker source repo Durable Object stub dispose failed", {
+        error,
+        projectId,
+        repoPath: files.repoPath,
+      });
+    }
   }
 }
 
 export function loadResolvedWorker({
   bindings,
   globalOutbound,
+  loaderInstanceNonce,
   projectId,
   resolved,
   scopePath,
@@ -199,19 +212,22 @@ export function loadResolvedWorker({
 }: {
   bindings: WorkerBindings;
   globalOutbound: Fetcher;
+  /** The runner lifetime that minted these loopback RPC bindings. */
+  loaderInstanceNonce: string;
   projectId: string;
   resolved: ResolvedWorkerSource;
   scopePath: string;
   streamContext: StreamContext;
 }): WorkerStub {
-  // Loader isolates capture the parent deployment's loopback RPC bindings.
-  // They must not survive an OS rollout: a hit created by the previous
-  // version can only speak that version of workerd's cloned-data protocol,
-  // and crossing it from the new parent fails with
+  // Loader isolates capture this runner's loopback RPC bindings. They must not
+  // survive the runner that minted them: a stateless ingress runner lives for
+  // one request, while a Durable Object runner lives for one incarnation.
+  // Crossing orphaned bindings from a later runner fails with
   // "Unable to deserialize cloned data due to invalid or unsupported version".
-  // Build artifacts remain content-addressed and shared; only the cheap
-  // loaded isolate is deployment-scoped.
-  const cacheKey = [
+  // Build artifacts remain content-addressed and shared; only the cheap loaded
+  // isolate is runner-scoped. The deployment id still keeps identities easy
+  // to attribute and guarantees separation across a rollout.
+  const loaderIdentity = [
     "worker-loader",
     env.WORKER_SELF,
     workerVersion(env),
@@ -220,6 +236,7 @@ export function loadResolvedWorker({
     JSON.stringify(StreamContext.parse(streamContext)),
     resolved.cacheKey,
   ].join(":");
+  const cacheKey = [loaderIdentity, loaderInstanceNonce].join(":");
   return env.LOADER.get(cacheKey, () => ({
     compatibilityDate: resolved.wranglerConfig?.compatibilityDate ?? WORKER_COMPATIBILITY_DATE,
     compatibilityFlags: resolved.wranglerConfig?.compatibilityFlags ?? WORKER_COMPATIBILITY_FLAGS,

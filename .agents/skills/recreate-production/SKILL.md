@@ -39,10 +39,11 @@ ID, hostnames, inbound-email senders, generic secrets, supported integrations,
 and the config repository. It is convergent and proves its GitHub/local state
 and the served config commit before returning.
 
-GitHub is authoritative. Restore links an existing remote without an initial
-push and imports its current default branch. A local-only config repository
-comes from the archived file tree. Other project repositories are deliberately
-outside the recovery seed.
+GitHub is authoritative. Every apply re-establishes the existing remote link
+without an initial push and imports its current default branch only when the
+local head differs. A local-only config repository comes from the archived
+file tree. Other project repositories are deliberately outside the recovery
+seed.
 
 ## Boundaries
 

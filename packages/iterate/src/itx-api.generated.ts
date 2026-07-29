@@ -108,15 +108,14 @@ export interface Project {
   /**
    * Admin-only project-seed repair for a platform-owned apex that already
    * reaches this worker through Worker routes. Primes the routing directory,
-   * records a fresh current-version direct-observed fact, and waits until the
-   * project state reports the hostname active.
+   * records the hostname in the small project catalog, and waits for it.
    */
   restoreDirectHostname(input: { hostname: string }): Promise<{ hostname: string }>;
   /**
    * Admin-only project-seed command for a Cloudflare-managed custom hostname.
-   * This submits a fresh current-version provision/refresh intent through the
-   * normal project processor, uses the hostname routing directory as the
-   * ownership authority, and proves active routing before returning.
+   * This submits a fresh idempotent provision intent through the normal
+   * project processor. The hostname routing directory is the ownership and
+   * routing authority; project state only catalogs the hostname and kind.
    */
   restoreCloudflareHostname(input: { hostname: string }): Promise<{ hostname: string }>;
   /**
@@ -1918,20 +1917,7 @@ export type ProjectProcessorState = {
   repos: { createdAt: string; path: string }[];
   secrets: { createdAt: string; path: string }[];
   streams: { createdAt: string; path: string }[];
-  customDomains: {
-    kind: "cloudflare" | "direct";
-    createdAt: string;
-    updatedAt: string;
-    cloudflareHostnameId: string | null;
-    error: string | null;
-    hostname: string;
-    hostnameStatus: string | null;
-    ownershipVerification: { name: string; value: string } | null;
-    sslStatus: string | null;
-    status: "active" | "failed" | "pending_validation" | "provisioning" | "removing" | "requested";
-    validationRecords: { name: string; status: string | null; value: string }[];
-    wildcard: boolean;
-  }[];
+  customDomains: { hostname: string; kind: "cloudflare" | "direct" }[];
   egressRules: {
     ruleKey: string;
     description: string;
@@ -1943,6 +1929,7 @@ export type ProjectProcessorState = {
     };
     verdict: "deny" | "hold";
     approvalTimeoutMs: number;
+    debounceMs: number | null;
   }[];
   humanApprovalKeys: {
     keyId: string;

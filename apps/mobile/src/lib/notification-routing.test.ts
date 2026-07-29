@@ -22,6 +22,12 @@ test("opening the same notification retries the same durable observation", () =>
   });
 });
 
+test("an unknown destination kind routes nowhere", () => {
+  expect(
+    pushNotificationRoute({ destination: { kind: "approvals-group" }, projectId: "prj_test" }),
+  ).toBeNull();
+});
+
 test("an agent push opens only a well-formed agent path", () => {
   expect(
     pushNotificationRoute({

@@ -17,7 +17,11 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
   #aiLintApp = GithubAiLinter.create(this.env, {
     policyVersion: "2",
     rules: {
-      glob: "rules/**/*.md",
+      paths: [
+        "rules/structure/no-small-single-use-helper.md",
+        "rules/typescript/explain-type-cast.md",
+        "rules/typescript/no-inferable-type-annotation.md",
+      ],
       repoPath: "/repos/config",
     },
   });

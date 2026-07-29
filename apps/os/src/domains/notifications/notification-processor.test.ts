@@ -1,20 +1,25 @@
 // The notification processor's executable spec, on the generic step harness
 // from iterate/processors/testing: the REAL StreamProcessorRunner over the
 // shared MemoryStream (production idempotency semantics: a same-key append
-// with a different body is REJECTED). The processor takes no domain fakes —
-// every intent derives from the triggering event alone.
+// with a different body is REJECTED). The processor is stateless per event —
+// every intent derives from the triggering approval batch event alone; the
+// egress door already coalesced any burst into ONE event (ADR 0007).
 
 import { describe, expect, it } from "vitest";
 import type { ConsumedInput } from "iterate/processors";
 import {
   makeMemoryProgressStore,
   makeProcessorHarness,
+  MemoryStream,
   type HarnessSubstrate,
 } from "iterate/processors/testing";
 import { NotificationProcessorContract } from "./notification-processor-contract.ts";
 import { NotificationProcessor } from "./notification-processor-implementation.ts";
 
 type NotificationEventInput = ConsumedInput<NotificationProcessorContract>;
+
+const T0 = Date.parse("2026-07-19T08:00:00Z");
+const INTENT = "events.iterate.com/notification/requested";
 
 const NOTIFICATION_CREATED = {
   type: "events.iterate.com/notification/created",
@@ -24,28 +29,22 @@ const NOTIFICATION_CREATED = {
 const STRIPE_APPROVAL = {
   type: "events.iterate.com/project/human-approval-requested",
   payload: {
-    method: "POST",
-    url: "https://api.stripe.com/v1/transfers",
-    headers: {},
-    body: null,
-    secretPaths: ["/secrets/stripe/prod"],
+    requests: [
+      {
+        method: "POST",
+        url: "https://api.stripe.com/v1/transfers",
+        headers: {},
+        body: null,
+        secretPaths: ["/secrets/stripe/prod"],
+      },
+    ],
     ruleKey: "stripe-mutations",
     expiresAt: "2026-07-19T08:05:00.000Z",
   },
 } satisfies NotificationEventInput;
 
-/** The generic harness on the project ROOT stream — where this processor is
- * registered in production, and what the idempotency keys embed. */
-function makeNotificationHarness(substrate?: HarnessSubstrate) {
-  return makeProcessorHarness<NotificationProcessorContract>({
-    createProcessor: (deps) => new NotificationProcessor(deps),
-    path: "/",
-    ...(substrate === undefined ? {} : { substrate }),
-  });
-}
-
 describe("NotificationProcessor approval intents", () => {
-  it("one held approval becomes one project notification intent, keyed on the approval event", async () => {
+  it("one held batch of one becomes one project notification intent, keyed on the batch event", async () => {
     const h = makeNotificationHarness();
     await h.play(["append", NOTIFICATION_CREATED, STRIPE_APPROVAL]);
 
@@ -68,7 +67,52 @@ describe("NotificationProcessor approval intents", () => {
     expect(h.state().birthCertificate).toEqual({ config: {} });
   });
 
-  it("an approval recorded before notification setup is delivered during replay", async () => {
+  it("a script run's burst batch becomes ONE summary push, hosts busiest-first", async () => {
+    const h = makeNotificationHarness();
+    await h.play([
+      "append",
+      NOTIFICATION_CREATED,
+      {
+        type: "events.iterate.com/project/human-approval-requested",
+        payload: {
+          requests: [
+            gmailSend(),
+            gmailSend(),
+            {
+              method: "POST",
+              url: "https://api.stripe.com/v1/transfers",
+              headers: {},
+              body: null,
+              secretPaths: [],
+            },
+          ],
+          ruleKey: "gmail-sends",
+          ruleDescription: "Gmail sends need a human",
+          expiresAt: "2026-07-19T08:05:00.000Z",
+          streamContext: {
+            kind: "script-execution",
+            streamPath: "/agents/demo",
+            scriptRunRequestedEventOffset: 1,
+            executionId: "exec-1",
+          },
+        },
+      },
+    ]);
+
+    expect(h.events(INTENT)).toHaveLength(1);
+    expect(h.events(INTENT)[0]).toMatchObject({
+      idempotencyKey: "notification/approval-requested@/:2",
+      payload: {
+        audience: { kind: "project" },
+        title: "Approvals needed",
+        body: "Script run waiting: 3 requests (2x gmail.googleapis.com, 1x api.stripe.com)",
+        destination: { kind: "approvals", approvalRequestEventOffset: 2 },
+        expiresAt: Date.parse("2026-07-19T08:05:00.000Z"),
+      },
+    });
+  });
+
+  it("a batch recorded before notification setup is delivered during replay", async () => {
     const h = makeNotificationHarness();
     await h.play(["append", STRIPE_APPROVAL, NOTIFICATION_CREATED]);
 
@@ -89,11 +133,15 @@ describe("NotificationProcessor approval intents", () => {
       {
         type: "events.iterate.com/project/human-approval-requested",
         payload: {
-          method: "POST",
-          url: "buy milk near the supermarket",
-          headers: {},
-          body: null,
-          secretPaths: [],
+          requests: [
+            {
+              method: "POST",
+              url: "buy milk near the supermarket",
+              headers: {},
+              body: null,
+              secretPaths: [],
+            },
+          ],
           ruleKey: "custom-action",
           expiresAt: "2026-07-19T08:05:00.000Z",
         },
@@ -120,9 +168,9 @@ describe("NotificationProcessor approval intents", () => {
   it("a full replay (fresh cursor over the same stream) re-appends identical intents that dedupe on the key", async () => {
     // The harshest at-least-once redelivery: a fresh progress store over the
     // SAME stream replays every event, so the per-event blocked append
-    // re-runs. The intent body is deterministic from the approval event
-    // (expiresAt copies the approval's horizon, never `now`), so the
-    // re-append dedupes instead of raising a same-key conflict.
+    // re-runs. The intent body is deterministic from the batch event
+    // (expiresAt copies the batch's horizon, never `now`), so the re-append
+    // dedupes instead of raising a same-key conflict.
     const h = makeNotificationHarness();
     await h.play(["append", NOTIFICATION_CREATED, STRIPE_APPROVAL], ["advanceTime", 60_000]);
     const committedOffsets = h.events().map((event) => event.offset);
@@ -139,3 +187,31 @@ describe("NotificationProcessor approval intents", () => {
     expect(replay.state().birthCertificate).toEqual({ config: {} });
   });
 });
+
+// -----------------------------------------------------------------------------
+// Fixtures.
+// -----------------------------------------------------------------------------
+
+/** The generic harness on the project ROOT stream — where this processor is
+ * registered in production, and what the idempotency keys embed. */
+function makeNotificationHarness(substrateOverride?: HarnessSubstrate) {
+  const substrate: HarnessSubstrate = substrateOverride || {
+    clock: { now: T0 },
+    stream: new MemoryStream("/"),
+    progress: makeMemoryProgressStore(NotificationProcessorContract),
+  };
+  return makeProcessorHarness<NotificationProcessorContract, NotificationProcessor>({
+    createProcessor: (deps) => new NotificationProcessor(deps),
+    substrate,
+  });
+}
+
+function gmailSend() {
+  return {
+    method: "POST",
+    url: "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+    headers: {},
+    body: null,
+    secretPaths: [],
+  };
+}

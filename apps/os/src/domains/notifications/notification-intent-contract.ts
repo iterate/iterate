@@ -60,11 +60,11 @@ export const NotificationIntentContract = defineProcessorContract({
                   .positive()
                   .meta({
                     description:
-                      "The held egress request's identity: the offset of its " +
+                      "The held approval batch's identity: the offset of its " +
                       "project/human-approval-requested event on the project root stream.",
                   }),
               })
-              .meta({ description: "The approvals screen, focused on one held egress request." }),
+              .meta({ description: "The approvals screen, focused on one held approval batch." }),
             z
               .strictObject({
                 kind: z.literal("agent-chat"),

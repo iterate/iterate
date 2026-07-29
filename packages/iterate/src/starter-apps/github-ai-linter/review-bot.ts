@@ -1,19 +1,9 @@
-// The GitHub pull-request review bot. This is ordinary project policy: every
-// GitHub-linked project repository is in scope; no platform GitHub code knows
-// that pull-request agents exist. It is modeled as a stream processor on each
-// connection's webhook stream (`/integrations/github/<connection>`): the
-// runner delivers each committed webhook exactly like the guestbook's spine
-// delivery, and `handleGithubPullRequestWebhook` — the one testable userspace
-// boundary — turns it into history and, when appropriate, one task on the
-// associated PR agent. The processor folds no state of its own: every durable
-// fact lives on the agent streams it appends to, keyed so redeliveries
-// collapse.
-import { z } from "zod";
-import { defineProcessorContract, StreamProcessor } from "../../processors/index.ts";
-import type { ProcessEventArgs } from "../../processors/index.ts";
-import type { Project, StreamEvent, StreamEventInput } from "../../sdk.ts";
-import type { GithubAiLinterConfig } from "./index.ts";
-import { loadGithubAiLinterRules, type GithubAiLinterRules } from "./rules.ts";
+// The GitHub pull-request review bot is ordinary project policy. The project
+// worker already receives every verified connection event through its normal
+// stream subscription, so this router turns each relevant webhook directly
+// into durable PR-agent facts. Stable idempotency keys collapse redeliveries.
+import type { GithubRepoLink, Project, StreamEvent, StreamEventInput } from "../../sdk.ts";
+import type { GithubAiLinterRules } from "./rules.ts";
 
 const pullRequestAgentPolicyVersion = "2";
 const pullRequestAgentPolicy = [
@@ -26,73 +16,6 @@ const pullRequestAgentPolicy = [
 ].join("\n");
 
 /**
- * A newly attached wake subscription replays its stream from offset zero —
- * that is exactly what makes the declarative bootstrap safe (the webhook that
- * provoked it is redelivered here), but it also means attaching to a
- * connection stream with months of history would replay every historical
- * webhook. Events older than this horizon are history, not work; idempotency
- * keys still collapse re-runs of anything younger.
- */
-export const reviewBotFreshnessHorizonMs = 24 * 60 * 60 * 1000;
-
-export const ReviewBotProcessorContract = defineProcessorContract({
-  slug: "review-bot",
-  version: "0.1.0",
-  description:
-    "Routes first-hand GitHub webhooks on one connection stream into per-pull-request agents.",
-  stateSchema: z.object({}),
-  events: {
-    "events.iterate.com/github/webhook-received": {
-      description:
-        "A signed GitHub webhook the platform verified and appended to this connection stream. The payload envelope is platform-produced; the router validates the fields it needs, so the contract keeps the schema loose.",
-      payloadSchema: z.looseObject({}),
-    },
-  },
-  consumes: ["events.iterate.com/github/webhook-received"],
-  emits: [],
-});
-export type ReviewBotProcessorContract = typeof ReviewBotProcessorContract;
-
-type ReviewBotProcessorDeps = {
-  config: GithubAiLinterConfig;
-  /** Opens the project itx handle the webhook router acts through. */
-  getItx: () => Promise<Project & Disposable>;
-  /** Injectable clock for the freshness gate; defaults to Date.now. */
-  now?: () => number;
-};
-
-/**
- * The processor is only delivery plumbing: no fold (`reduce` stays the
- * identity default), no emits to its own stream. Each fresh webhook runs the
- * router inside `blockProcessorWhile` — short, must-happen work, so the
- * cursor is held, a crash redelivers the frame, and the router's stable
- * idempotency keys collapse the re-run (the at-least-once contract).
- */
-export class ReviewBotProcessor extends StreamProcessor<
-  ReviewBotProcessorContract,
-  ReviewBotProcessorDeps
-> {
-  readonly contract = ReviewBotProcessorContract;
-
-  protected override processEvent(args: ProcessEventArgs<ReviewBotProcessorContract>): undefined {
-    const { blockProcessorWhile, event } = args;
-    if (event === null || event.type !== "events.iterate.com/github/webhook-received") return;
-    // First-hand facts only: a copy received from another stream is history,
-    // never fresh input for this router.
-    if (event.source?.copiedFrom !== undefined) return;
-    const now = this.deps.now || Date.now;
-    if (now() - Date.parse(event.createdAt) > reviewBotFreshnessHorizonMs) return;
-    blockProcessorWhile(async () => {
-      using itx = await this.deps.getItx();
-      await handleGithubPullRequestWebhook(itx, event, {
-        loadRules: () => loadGithubAiLinterRules(itx, this.deps.config.rules),
-        policyVersion: this.deps.config.policyVersion,
-      });
-    });
-  }
-}
-
-/**
  * The one testable userspace boundary: a verified first-hand connection event
  * becomes history and, when appropriate, one task on the associated PR agent.
  */
@@ -100,6 +23,7 @@ export async function handleGithubPullRequestWebhook(
   itx: Project,
   event: StreamEvent,
   githubPullRequests: {
+    loadLinkedRepos?: () => Promise<LinkedGithubRepo[]>;
     loadRules: () => Promise<GithubAiLinterRules>;
     policyVersion: string;
   },
@@ -131,23 +55,6 @@ export async function handleGithubPullRequestWebhook(
     return;
   }
 
-  const repos = await itx.repos.list();
-  const linkedRepos = await Promise.all(
-    repos.map(async ({ path }) => ({
-      path,
-      route: (await itx.repos.get(path).processor.snapshot()).state.github,
-    })),
-  );
-  const linkedRepo = linkedRepos.find(
-    ({ route }) =>
-      route !== null &&
-      event.path === `/integrations/github/${route.connection}` &&
-      webhook.installationId === route.installationId &&
-      repository.id === route.repositoryId,
-  );
-  if (linkedRepo === undefined || linkedRepo.route === null) return;
-  const { path: repoPath, route } = linkedRepo;
-
   const action = webhook.body.action;
   const appSlug = webhook.appSlug;
   const author = webhook.associations.author;
@@ -176,6 +83,27 @@ export async function handleGithubPullRequestWebhook(
     ((webhook.delivery.name === "issue_comment" && action === "created") ||
       (webhook.delivery.name === "pull_request_review" && action === "submitted") ||
       (webhook.delivery.name === "pull_request_review_comment" && action === "created"));
+  const reviewLifecycleEvent =
+    webhook.delivery.name === "pull_request" &&
+    (action === "opened" || action === "ready_for_review" || action === "synchronize");
+
+  // The durable agent subscription copies all later PR history. This router
+  // only needs to act when a delivery can create or wake the agent; skipping
+  // status, edit, and thread bookkeeping here keeps a webhook burst bounded.
+  if (!reviewLifecycleEvent && !mention) return;
+
+  const linkedRepos =
+    (await githubPullRequests.loadLinkedRepos?.()) ?? (await loadLinkedGithubRepos(itx));
+  const linkedRepo = linkedRepos.find(
+    ({ route }) =>
+      route !== null &&
+      event.path === `/integrations/github/${route.connection}` &&
+      webhook.installationId === route.installationId &&
+      repository.id === route.repositoryId,
+  );
+  if (linkedRepo === undefined || linkedRepo.route === null) return;
+  const { path: repoPath, route } = linkedRepo;
+
   const agentPath = `/agents${repoPath}/pr/${number}`;
   const agent = itx.agents.get(agentPath);
   const exists =
@@ -343,3 +271,18 @@ type GithubWebhookPayload = {
   delivery: { id: string; name: string };
   installationId: string;
 };
+
+export type LinkedGithubRepo = {
+  path: string;
+  route: GithubRepoLink | null;
+};
+
+export async function loadLinkedGithubRepos(itx: Project): Promise<LinkedGithubRepo[]> {
+  const repos = await itx.repos.list();
+  return await Promise.all(
+    repos.map(async ({ path }) => ({
+      path,
+      route: (await itx.repos.get(path).processor.snapshot()).state.github,
+    })),
+  );
+}
