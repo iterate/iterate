@@ -1,3 +1,4 @@
+import approxSearch from "approx-string-match";
 import type { AnchorSelector, SourceRange } from "./types.ts";
 
 // Anchor reconciliation. Anchor drift is nonfatal by design: a thread whose
@@ -23,6 +24,7 @@ const MAX_FUZZY_BODY_LENGTH = 256 * 1024;
 const FUZZY_ATTACH_THRESHOLD = 0.8;
 const FUZZY_REVIEW_THRESHOLD = 0.6;
 const FUZZY_AMBIGUITY_MARGIN = 0.05;
+const MIN_APPROX_QUOTE_LENGTH = 8;
 
 export function createAnchorSelector(
   body: string,
@@ -201,37 +203,64 @@ function fuzzyResolve(body: string, selector: AnchorSelector): AnchorResolution 
     }
   }
 
-  // Sliding-window bigram similarity (Dice coefficient) as the last resort.
-  const window = exact.length;
-  const step = Math.max(1, Math.floor(window / 8));
-  const target = bigramCounts(exact);
-  let bestStart = -1;
-  let bestScore = 0;
-  let runnerUpScore = 0;
-  for (let start = 0; start + window <= body.length; start += step) {
-    const score = diceSimilarity(target, bigramCounts(body.slice(start, start + window)));
-    if (bestStart !== -1 && Math.abs(start - bestStart) < window) {
-      // Same region as the current best: keep the max, don't count it as an
-      // independent runner-up.
-      if (score > bestScore) bestScore = score;
-      continue;
-    }
-    if (score > bestScore) {
-      runnerUpScore = bestScore;
-      bestScore = score;
-      bestStart = start;
-    } else if (score > runnerUpScore) {
-      runnerUpScore = score;
-    }
-  }
-  if (bestStart === -1 || bestScore < FUZZY_REVIEW_THRESHOLD) {
+  // Approximate search (bitap over edit distance — the engine Hypothesis
+  // settled on) as the last resort. Candidates are RANKED by a weighted
+  // fusion of quote similarity, surviving context, and distance from the
+  // recorded position; the reported confidence stays the quote similarity
+  // alone so thresholds keep their meaning.
+  if (exact.length < MIN_APPROX_QUOTE_LENGTH) {
+    // One-or-two-word quotes produce spurious approximate matches; they only
+    // attach via the exact rungs above.
     return { state: "orphaned", method: null, range: null, confidence: 0 };
   }
-  const range: SourceRange = { start: bestStart, end: Math.min(body.length, bestStart + window) };
-  if (bestScore >= FUZZY_ATTACH_THRESHOLD && bestScore - runnerUpScore >= FUZZY_AMBIGUITY_MARGIN) {
-    return { state: "attached", method: "fuzzy", range, confidence: bestScore };
+  const maxErrors = Math.floor(exact.length * (1 - FUZZY_REVIEW_THRESHOLD));
+  const matches = approxSearch(body, exact, maxErrors);
+  interface Candidate {
+    range: SourceRange;
+    similarity: number;
+    rank: number;
   }
-  return { state: "needs_review", method: "fuzzy", range, confidence: bestScore };
+  let best: Candidate | null = null;
+  let runnerUp: Candidate | null = null;
+  for (const match of matches) {
+    const similarity = 1 - match.errors / exact.length;
+    const context =
+      contextScore(body, match.start, match.end - match.start, selector) /
+      Math.max(1, selector.quote.prefix.length + selector.quote.suffix.length);
+    const positionCloseness =
+      selector.position === undefined
+        ? 0
+        : 1 -
+          Math.min(1, Math.abs(match.start - selector.position.start) / Math.max(1, body.length));
+    const rank = similarity + 0.25 * context + 0.1 * positionCloseness;
+    const candidate: Candidate = {
+      range: { start: match.start, end: match.end },
+      similarity,
+      rank,
+    };
+    if (best !== null && Math.abs(candidate.range.start - best.range.start) < exact.length) {
+      // Same region as the current best: keep the better, don't count it as
+      // an independent runner-up.
+      if (candidate.rank > best.rank) best = candidate;
+      continue;
+    }
+    if (best === null || candidate.rank > best.rank) {
+      runnerUp = best;
+      best = candidate;
+    } else if (runnerUp === null || candidate.rank > runnerUp.rank) {
+      runnerUp = candidate;
+    }
+  }
+  if (best === null || best.similarity < FUZZY_REVIEW_THRESHOLD) {
+    return { state: "orphaned", method: null, range: null, confidence: 0 };
+  }
+  if (
+    best.similarity >= FUZZY_ATTACH_THRESHOLD &&
+    (runnerUp === null || best.rank - runnerUp.rank >= FUZZY_AMBIGUITY_MARGIN)
+  ) {
+    return { state: "attached", method: "fuzzy", range: best.range, confidence: best.similarity };
+  }
+  return { state: "needs_review", method: "fuzzy", range: best.range, confidence: best.similarity };
 }
 
 function normalizeWithMap(text: string): { text: string; map: number[] } {
@@ -254,27 +283,4 @@ function normalizeWithMap(text: string): { text: string; map: number[] } {
     map.push(i);
   }
   return { text: out, map };
-}
-
-function bigramCounts(text: string): Map<string, number> {
-  const counts = new Map<string, number>();
-  for (let i = 0; i + 1 < text.length; i++) {
-    const bigram = text.slice(i, i + 2);
-    counts.set(bigram, (counts.get(bigram) ?? 0) + 1);
-  }
-  return counts;
-}
-
-function diceSimilarity(a: Map<string, number>, b: Map<string, number>): number {
-  let aTotal = 0;
-  for (const count of a.values()) aTotal += count;
-  let bTotal = 0;
-  for (const count of b.values()) bTotal += count;
-  if (aTotal === 0 || bTotal === 0) return 0;
-  let overlap = 0;
-  for (const [bigram, count] of a) {
-    const other = b.get(bigram);
-    if (other !== undefined) overlap += Math.min(count, other);
-  }
-  return (2 * overlap) / (aTotal + bTotal);
 }

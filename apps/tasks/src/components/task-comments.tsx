@@ -11,15 +11,15 @@ import {
   editComment,
   formatUtcTimestamp,
   parseAnnotatedMarkdown,
+  resolveThreadAnchor,
   setThreadStatus,
 } from "iterate/annotated-markdown";
-import type { StructuredDocument, Thread, ThreadComment } from "iterate/annotated-markdown";
+import type { AnchorResolution, Thread, ThreadComment } from "iterate/annotated-markdown";
 import { authorColor } from "../lib/collab-redline.ts";
+import { useDiscussionApply } from "../lib/use-discussion-apply.ts";
+import type { DiscussionOp } from "../lib/use-discussion-apply.ts";
 
 export type CommentIdentity = { author: string; authorDisplay?: string };
-
-/** An edit against the parsed document; returns the next raw source. */
-type DiscussionOp = (doc: StructuredDocument) => { raw: string };
 
 /**
  * Linear-style discussion for one task file, backed by the annotated-markdown
@@ -32,6 +32,8 @@ export function TaskComments({
   identity,
   busy,
   onTransform,
+  selectedThreadId = null,
+  onSelectThread,
 }: {
   source: string;
   identity: CommentIdentity | null;
@@ -42,48 +44,38 @@ export function TaskComments({
   /** Route a whole-file transform to the live editor or the write lane;
    * resolves whether it landed (the write lane can roll back). */
   onTransform: (transform: (source: string) => string) => Promise<boolean>;
+  /** Two-way selection sync with the preview's highlights. */
+  selectedThreadId?: string | null;
+  onSelectThread?: (threadId: string | null) => void;
 }) {
   const parsed = useMemo(() => parseAnnotatedMarkdown(source), [source]);
   const [open, setOpen] = useState(true);
   const [showResolved, setShowResolved] = useState(false);
-  const [opError, setOpError] = useState<string | null>(null);
+  const { apply, opError } = useDiscussionApply({ busy, onTransform });
 
-  // The transform re-parses at apply time: the live document may have moved
-  // since this render, so ops must re-find their targets by id — and back off
-  // to a no-op (surfacing the reason) instead of corrupting the file.
-  // Resolution waits for the WRITE, not just the transform: the fallback
-  // write lane is optimistic and rolls back on RPC failure, and callers
-  // (composers clearing drafts) must not celebrate a change that vanished.
-  const apply = async (op: DiscussionOp): Promise<boolean> => {
-    if (busy) {
-      setOpError("Comment change failed: the editor is still connecting — retry in a moment");
-      return false;
+  const threads = useMemo(
+    () => (parsed.kind === "structured" ? (parsed.discussion?.threads ?? []) : []),
+    [parsed],
+  );
+  const body = parsed.kind === "structured" ? parsed.body : "";
+  // Anchored threads sort by where their text sits in the document, like the
+  // margin of a review; document-level threads keep append order below them.
+  const resolutions = useMemo(() => {
+    const map = new Map<string, AnchorResolution>();
+    for (const thread of threads) {
+      if (thread.anchor === null) continue;
+      map.set(thread.id, resolveThreadAnchor(body, thread.id, thread.anchor.selector));
     }
-    let ok = false;
-    let failure = "the file changed mid-edit";
-    const landed = await onTransform((current) => {
-      const doc = parseAnnotatedMarkdown(current);
-      if (doc.kind !== "structured") {
-        failure = doc.diagnostics[0]?.message ?? "the file failed to parse";
-        return current;
-      }
-      try {
-        const result = op(doc);
-        ok = true;
-        return result.raw;
-      } catch (error) {
-        failure = error instanceof Error ? error.message : String(error);
-        return current;
-      }
-    });
-    if (ok && !landed) failure = "the write did not reach the workspace — retry";
-    ok = ok && landed;
-    setOpError(ok ? null : `Comment change failed: ${failure}`);
-    return ok;
-  };
-
-  const threads = parsed.kind === "structured" ? (parsed.discussion?.threads ?? []) : [];
-  const openThreads = threads.filter((thread) => thread.status === "open");
+    return map;
+  }, [body, threads]);
+  const threadKind = (thread: Thread): number => (thread.anchor !== null ? 0 : 1);
+  const positionOf = (thread: Thread): number =>
+    resolutions.get(thread.id)?.range?.start ?? Number.MAX_SAFE_INTEGER;
+  const byPosition = (a: Thread, b: Thread): number =>
+    threadKind(a) !== threadKind(b)
+      ? threadKind(a) - threadKind(b)
+      : positionOf(a) - positionOf(b);
+  const openThreads = threads.filter((thread) => thread.status === "open").sort(byPosition);
   const resolvedThreads = threads.filter((thread) => thread.status === "resolved");
   const commentTotal = threads.reduce(
     (total, thread) => total + thread.comments.filter((comment) => !comment.deleted).length,
@@ -117,7 +109,15 @@ export function TaskComments({
               <p className="pb-2 text-xs text-muted-foreground">No comments yet.</p>
             ) : null}
             {openThreads.map((thread) => (
-              <ThreadBlock key={thread.id} thread={thread} identity={identity} apply={apply} />
+              <ThreadBlock
+                key={thread.id}
+                thread={thread}
+                identity={identity}
+                apply={apply}
+                resolution={resolutions.get(thread.id) ?? null}
+                selected={thread.id === selectedThreadId}
+                onSelect={onSelectThread}
+              />
             ))}
             {resolvedThreads.length > 0 ? (
               <button
@@ -130,7 +130,15 @@ export function TaskComments({
             ) : null}
             {showResolved
               ? resolvedThreads.map((thread) => (
-                  <ThreadBlock key={thread.id} thread={thread} identity={identity} apply={apply} />
+                  <ThreadBlock
+                    key={thread.id}
+                    thread={thread}
+                    identity={identity}
+                    apply={apply}
+                    resolution={resolutions.get(thread.id) ?? null}
+                    selected={thread.id === selectedThreadId}
+                    onSelect={onSelectThread}
+                  />
                 ))
               : null}
           </div>
@@ -158,19 +166,54 @@ function ThreadBlock({
   thread,
   identity,
   apply,
+  resolution,
+  selected,
+  onSelect,
 }: {
   thread: Thread;
   identity: CommentIdentity | null;
   apply: (op: DiscussionOp) => Promise<boolean>;
+  /** Null for document-level threads (no anchor). */
+  resolution: AnchorResolution | null;
+  selected: boolean;
+  onSelect?: (threadId: string | null) => void;
 }) {
   const [replyOpen, setReplyOpen] = useState(false);
+  const blockRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (selected) blockRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [selected]);
   const resolved = thread.status === "resolved";
+  const quote = thread.anchor?.selector.quote.exact ?? null;
   return (
-    <div className={cn("border-b border-border/50 py-2 last:border-b-0", resolved && "opacity-70")}>
+    // eslint-disable-next-line jsx-a11y/no-static-element-interactions, jsx-a11y/click-events-have-key-events -- selection sync only; every action inside is a real button
+    <div
+      ref={blockRef}
+      onClick={onSelect === undefined ? undefined : () => onSelect(thread.id)}
+      className={cn(
+        "-mx-2 border-b border-border/50 px-2 py-2 last:border-b-0",
+        resolved && "opacity-70",
+        selected && "rounded-md bg-primary/5 ring-1 ring-primary/30",
+      )}
+    >
       {thread.label !== null && (
         <p className="pb-1 font-mono text-[10px] text-muted-foreground">
           {thread.label}
           {resolved ? " · resolved" : ""}
+        </p>
+      )}
+      {quote !== null && (
+        <p
+          className="mb-1.5 truncate border-l-2 pl-2 text-xs text-muted-foreground italic"
+          style={{ borderColor: authorColor(thread.comments[0]?.author ?? "someone", 0.8) }}
+          title={quote}
+        >
+          {quote}
+        </p>
+      )}
+      {resolution !== null && resolution.state !== "attached" && (
+        <p className="mb-1 text-[10px] font-medium tracking-wide text-amber-700 uppercase">
+          {resolution.state === "needs_review" ? "anchor needs review" : "anchor lost"}
         </p>
       )}
       {thread.comments.map((comment) => (
@@ -263,6 +306,14 @@ function CommentRow({
           >
             {relativeTime(comment.createdAt)}
           </time>
+          {comment.modifiedAt !== null && !comment.deleted ? (
+            <span
+              className="text-[10px] text-muted-foreground/70"
+              title={`edited ${formatUtcTimestamp(comment.modifiedAt)}`}
+            >
+              (edited)
+            </span>
+          ) : null}
           {comment.deleted || !mine ? null : (
             <span className="ml-auto hidden shrink-0 items-center gap-1 group-hover:flex">
               <button
@@ -294,7 +345,7 @@ function CommentRow({
             focusOnMount
             onCancel={() => setEditing(null)}
             onSubmit={(body) =>
-              apply((doc) => editComment(doc, comment.id, body)).then((ok) => {
+              apply((doc) => editComment(doc, comment.id, body, { modifiedAt: nowIso() })).then((ok) => {
                 if (ok) setEditing(null);
                 return ok;
               })
@@ -314,7 +365,7 @@ function CommentRow({
   );
 }
 
-function CommentComposer({
+export function CommentComposer({
   placeholder,
   submitLabel,
   initialValue,

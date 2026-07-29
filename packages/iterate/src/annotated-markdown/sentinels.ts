@@ -41,6 +41,10 @@ type SentinelToken =
       id: string;
       author: string;
       createdAt: string;
+      /** From the optional `modified=<instant>` attribute. */
+      modifiedAt: string | null;
+      /** Absolute range of the modified value, for minimal re-stamp splices. */
+      modifiedValueRange: SourceRange | null;
       inReplyTo: string | null;
       deleted: boolean;
       attrsEnd: number;
@@ -81,9 +85,18 @@ export function isValidCreatedAt(value: string): boolean {
   );
 }
 
+/**
+ * Accepts the written W3C spelling (`{"selector":[{type:"TextQuoteSelector",…},
+ * {type:"TextPositionSelector",…}]}`) plus the pre-W3C spelling
+ * (`{quote:{…},position:{…}}`) this codec wrote before the rename — read-only
+ * compatibility for files born in that window; the writer emits W3C only.
+ */
 export function validateAnchorSelector(value: unknown): AnchorSelector | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const keys = Object.keys(value);
+  if (keys.length === 1 && keys[0] === "selector") {
+    return validateW3cSelectorList((value as { selector: unknown }).selector);
+  }
   if (keys.some((k) => k !== "quote" && k !== "position")) return null;
   const { quote, position } = value as { quote?: unknown; position?: unknown };
   if (typeof quote !== "object" || quote === null || Array.isArray(quote)) return null;
@@ -94,21 +107,79 @@ export function validateAnchorSelector(value: unknown): AnchorSelector | null {
     prefix?: unknown;
     suffix?: unknown;
   };
+  const validQuote = validateQuoteParts(exact, prefix, suffix);
+  if (validQuote === null) return null;
+  const selector: AnchorSelector = { quote: validQuote };
+  if (position !== undefined) {
+    const validPosition = validatePositionParts(position);
+    if (validPosition === null) return null;
+    selector.position = validPosition;
+  }
+  return selector;
+}
+
+function validateQuoteParts(
+  exact: unknown,
+  prefix: unknown,
+  suffix: unknown,
+): AnchorSelector["quote"] | null {
   if (typeof exact !== "string" || exact.length === 0 || exact.length > MAX_QUOTE_EXACT_LENGTH) {
     return null;
   }
-  if (typeof prefix !== "string" || prefix.length > MAX_QUOTE_CONTEXT_LENGTH) return null;
-  if (typeof suffix !== "string" || suffix.length > MAX_QUOTE_CONTEXT_LENGTH) return null;
-  const selector: AnchorSelector = { quote: { exact, prefix, suffix } };
-  if (position !== undefined) {
-    if (typeof position !== "object" || position === null || Array.isArray(position)) return null;
-    const positionKeys = Object.keys(position);
-    if (positionKeys.some((k) => k !== "start" && k !== "end")) return null;
-    const { start, end } = position as { start?: unknown; end?: unknown };
-    if (!Number.isInteger(start) || !Number.isInteger(end)) return null;
-    if ((start as number) < 0 || (end as number) < (start as number)) return null;
-    selector.position = { start: start as number, end: end as number };
+  if (prefix !== undefined && typeof prefix !== "string") return null;
+  if (suffix !== undefined && typeof suffix !== "string") return null;
+  const prefixValue = prefix ?? "";
+  const suffixValue = suffix ?? "";
+  if (prefixValue.length > MAX_QUOTE_CONTEXT_LENGTH) return null;
+  if (suffixValue.length > MAX_QUOTE_CONTEXT_LENGTH) return null;
+  return { exact, prefix: prefixValue, suffix: suffixValue };
+}
+
+function validatePositionParts(position: unknown): { start: number; end: number } | null {
+  if (typeof position !== "object" || position === null || Array.isArray(position)) return null;
+  const positionKeys = Object.keys(position);
+  if (positionKeys.some((k) => k !== "start" && k !== "end")) return null;
+  const { start, end } = position as { start?: unknown; end?: unknown };
+  if (!Number.isInteger(start) || !Number.isInteger(end)) return null;
+  if ((start as number) < 0 || (end as number) < (start as number)) return null;
+  return { start: start as number, end: end as number };
+}
+
+function validateW3cSelectorList(list: unknown): AnchorSelector | null {
+  if (!Array.isArray(list) || list.length === 0 || list.length > 2) return null;
+  let quote: AnchorSelector["quote"] | null = null;
+  let position: { start: number; end: number } | null = null;
+  for (const entry of list) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return null;
+    const { type } = entry as { type?: unknown };
+    if (type === "TextQuoteSelector") {
+      if (quote !== null) return null;
+      const entryKeys = Object.keys(entry);
+      if (entryKeys.some((k) => k !== "type" && k !== "exact" && k !== "prefix" && k !== "suffix"))
+        return null;
+      const { exact, prefix, suffix } = entry as {
+        exact?: unknown;
+        prefix?: unknown;
+        suffix?: unknown;
+      };
+      quote = validateQuoteParts(exact, prefix, suffix);
+      if (quote === null) return null;
+      continue;
+    }
+    if (type === "TextPositionSelector") {
+      if (position !== null) return null;
+      const entryKeys = Object.keys(entry);
+      if (entryKeys.some((k) => k !== "type" && k !== "start" && k !== "end")) return null;
+      const { start, end } = entry as { start?: unknown; end?: unknown };
+      position = validatePositionParts({ start, end });
+      if (position === null) return null;
+      continue;
+    }
+    return null;
   }
+  if (quote === null) return null;
+  const selector: AnchorSelector = { quote };
+  if (position !== null) selector.position = position;
   return selector;
 }
 
@@ -255,6 +326,10 @@ export function parseSentinelLine(lineContent: string, lineStart: number): Senti
   if (created === undefined || !isValidCreatedAt(created.value)) {
     return malformed("`created` must be an ISO-8601 UTC instant like 2026-07-28T08:30:00Z");
   }
+  const modified = take("modified");
+  if (modified !== undefined && !isValidCreatedAt(modified.value)) {
+    return malformed("`modified` must be an ISO-8601 UTC instant like 2026-07-28T08:30:00Z");
+  }
   const inReplyTo = take("in-reply-to");
   if (inReplyTo !== undefined && !isValidId(inReplyTo.value))
     return malformed("invalid `in-reply-to`");
@@ -270,6 +345,14 @@ export function parseSentinelLine(lineContent: string, lineStart: number): Senti
       id: id.value,
       author: author.value,
       createdAt: created.value,
+      modifiedAt: modified?.value ?? null,
+      modifiedValueRange:
+        modified === undefined
+          ? null
+          : {
+              start: lineStart + modified.valueStart,
+              end: lineStart + modified.valueStart + modified.value.length,
+            },
       inReplyTo: inReplyTo?.value ?? null,
       deleted: deleted !== undefined,
       attrsEnd,
@@ -293,10 +376,12 @@ export function formatCommentBegin(comment: {
   id: string;
   author: string;
   createdAt: string;
+  modifiedAt?: string | null;
   inReplyTo?: string | null;
   deleted?: boolean;
 }): string {
   let attrs = `id=${comment.id} author=${comment.author} created=${comment.createdAt}`;
+  if (comment.modifiedAt != null) attrs += ` modified=${comment.modifiedAt}`;
   if (comment.inReplyTo != null) attrs += ` in-reply-to=${comment.inReplyTo}`;
   if (comment.deleted === true) attrs += " deleted=true";
   return `<!-- task-comment:v1 begin ${attrs} -->`;
@@ -307,8 +392,16 @@ export function formatCommentEnd(id: string): string {
 }
 
 export function formatAnchorSentinel(selector: AnchorSelector): string {
-  const canonical: AnchorSelector = { quote: { ...selector.quote } };
-  if (selector.position !== undefined) canonical.position = { ...selector.position };
+  // Written in W3C Web Annotation spelling (TextQuoteSelector +
+  // TextPositionSelector) so the persisted form is the interop form. Offsets
+  // stay UTF-16 code units (see README divergences) — third-party readers
+  // counting code points recover via the quote selector.
+  const canonical: { selector: Record<string, unknown>[] } = {
+    selector: [{ type: "TextQuoteSelector", ...selector.quote }],
+  };
+  if (selector.position !== undefined) {
+    canonical.selector.push({ type: "TextPositionSelector", ...selector.position });
+  }
   // `--` cannot appear inside an HTML comment; JSON only produces it inside
   // string literals, where a `-` escape is transparent to JSON.parse.
   const json = JSON.stringify(canonical).replace(/-(?=-)/g, "\\u002d");

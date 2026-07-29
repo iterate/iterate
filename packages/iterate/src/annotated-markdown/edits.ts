@@ -375,7 +375,12 @@ export function setThreadStatus(
   return finish(doc, splices);
 }
 
-export function editComment(doc: StructuredDocument, commentId: string, body: string): EditResult {
+export function editComment(
+  doc: StructuredDocument,
+  commentId: string,
+  body: string,
+  options: { modifiedAt?: string } = {},
+): EditResult {
   const { comment } = requireComment(doc, commentId);
   if (comment.deleted) return fail("comment-deleted", `comment ${commentId} is deleted`);
   const eol = dominantEol(doc.raw);
@@ -384,7 +389,30 @@ export function editComment(doc: StructuredDocument, commentId: string, body: st
     comment.bodyRange.start === comment.bodyRange.end
       ? bodyLines.join(eol) + eol
       : bodyLines.join(eol);
-  return finish(doc, [{ range: comment.bodyRange, insert }]);
+  const splices: Splice[] = [];
+  if (options.modifiedAt !== undefined) {
+    if (!isValidCreatedAt(options.modifiedAt)) {
+      return fail(
+        "invalid-created",
+        "modifiedAt must be an ISO-8601 UTC instant like 2026-07-28T08:30:00Z",
+      );
+    }
+    const beginLine = lineAt(doc.raw, comment.range.start);
+    const parsed = parseSentinelLine(beginLine.content, comment.range.start);
+    if (!parsed.ok || parsed.token.kind !== "comment-begin") {
+      throw new Error("unreachable: structured comment has an unparsable begin sentinel");
+    }
+    splices.push(
+      parsed.token.modifiedValueRange !== null
+        ? { range: parsed.token.modifiedValueRange, insert: options.modifiedAt }
+        : {
+            range: { start: parsed.token.attrsEnd, end: parsed.token.attrsEnd },
+            insert: ` modified=${options.modifiedAt}`,
+          },
+    );
+  }
+  splices.push({ range: comment.bodyRange, insert });
+  return finish(doc, splices);
 }
 
 export function deleteComment(doc: StructuredDocument, commentId: string): EditResult {

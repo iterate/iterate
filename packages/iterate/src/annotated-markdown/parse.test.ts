@@ -824,3 +824,110 @@ describe("whole-file plain fallback", () => {
     expect(result.diagnostics[0]?.code).toBe("frontmatter-yaml-error");
   });
 });
+
+describe("anchor selector spellings", () => {
+  const store = (anchorLine: string): string =>
+    md(
+      "Alpha beta gamma.",
+      "",
+      "<!-- task-discussions:v1 -->",
+      "",
+      "<!-- task-thread:v1 begin id=th_a status=open -->",
+      anchorLine,
+      "<!-- task-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
+      "Body.",
+      "<!-- task-comment:v1 end id=cm_a -->",
+      "<!-- task-thread:v1 end id=th_a -->",
+      "",
+    );
+
+  test("the W3C spelling parses to the same selector as the legacy spelling", () => {
+    const w3c = expectStructured(
+      store(
+        '<!-- task-anchor:v1 {"selector":[{"type":"TextQuoteSelector","exact":"beta","prefix":"Alpha ","suffix":" gamma."},{"type":"TextPositionSelector","start":6,"end":10}]} -->',
+      ),
+    );
+    const legacy = expectStructured(
+      store(
+        '<!-- task-anchor:v1 {"quote":{"exact":"beta","prefix":"Alpha ","suffix":" gamma."},"position":{"start":6,"end":10}} -->',
+      ),
+    );
+    const expected = {
+      quote: { exact: "beta", prefix: "Alpha ", suffix: " gamma." },
+      position: { start: 6, end: 10 },
+    };
+    expect(w3c.discussion?.threads[0]?.anchor?.selector).toEqual(expected);
+    expect(legacy.discussion?.threads[0]?.anchor?.selector).toEqual(expected);
+  });
+
+  test("W3C prefix and suffix are optional and default to empty", () => {
+    const result = expectStructured(
+      store('<!-- task-anchor:v1 {"selector":[{"type":"TextQuoteSelector","exact":"beta"}]} -->'),
+    );
+    expect(result.discussion?.threads[0]?.anchor?.selector).toEqual({
+      quote: { exact: "beta", prefix: "", suffix: "" },
+    });
+  });
+
+  test.for([
+    {
+      name: "unknown selector type",
+      json: '{"selector":[{"type":"CssSelector","value":"p"}]}',
+    },
+    {
+      name: "two quote selectors",
+      json: '{"selector":[{"type":"TextQuoteSelector","exact":"a"},{"type":"TextQuoteSelector","exact":"b"}]}',
+    },
+    {
+      name: "position without a quote",
+      json: '{"selector":[{"type":"TextPositionSelector","start":0,"end":4}]}',
+    },
+    {
+      name: "unknown key inside a selector entry",
+      json: '{"selector":[{"type":"TextQuoteSelector","exact":"a","refinedBy":{}}]}',
+    },
+    {
+      name: "selector key mixed with the legacy quote key",
+      json: '{"selector":[{"type":"TextQuoteSelector","exact":"a"}],"quote":{"exact":"a"}}',
+    },
+    {
+      name: "empty selector list",
+      json: '{"selector":[]}',
+    },
+  ] as const)("rejected W3C shape: $name", ({ json }) => {
+    const result = expectPlain(store(`<!-- task-anchor:v1 ${json} -->`));
+    expect(result.diagnostics[0]?.code).toBe("anchor-invalid");
+  });
+});
+
+describe("comment modified attribute", () => {
+  test("modified parses onto the comment and survives round-trip", () => {
+    const content = md(
+      "Body.",
+      "",
+      "<!-- task-discussions:v1 -->",
+      "",
+      "<!-- task-thread:v1 begin id=th_a status=open -->",
+      "<!-- task-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z modified=2026-07-29T09:00:00Z -->",
+      "Edited body.",
+      "<!-- task-comment:v1 end id=cm_a -->",
+      "<!-- task-thread:v1 end id=th_a -->",
+      "",
+    );
+    const result = expectStructured(content);
+    expect(result.discussion?.threads[0]?.comments[0]?.modifiedAt).toBe("2026-07-29T09:00:00Z");
+  });
+
+  test("an invalid modified value is a fatal sentinel diagnostic", () => {
+    const content = md(
+      "<!-- task-discussions:v1 -->",
+      "<!-- task-thread:v1 begin id=th_a status=open -->",
+      "<!-- task-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z modified=yesterday -->",
+      "<!-- task-comment:v1 end id=cm_a -->",
+      "<!-- task-thread:v1 end id=th_a -->",
+      "",
+    );
+    const result = expectPlain(content);
+    expect(result.diagnostics[0]?.code).toBe("sentinel-malformed");
+  });
+});

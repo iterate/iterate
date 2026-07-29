@@ -29,7 +29,7 @@ Publishing must durably enqueue invalidation before returning. [T1](#thread-th_0
 
 ### T1 · Open
 
-<!-- task-anchor:v1 {"quote":{"exact":"durably enqueue","prefix":"must ","suffix":" invalidation"},"position":{"start":58,"end":73}} -->
+<!-- task-anchor:v1 {"selector":[{"type":"TextQuoteSelector","exact":"durably enqueue","prefix":"must ","suffix":" invalidation"},{"type":"TextPositionSelector","start":58,"end":73}]} -->
 
 <!-- task-comment:v1 begin id=cm_01K… author=lee created=2026-07-28T08:30:00Z -->
 
@@ -64,12 +64,16 @@ closes is fatal.
   `<!-- task-thread:v1 end id=<id> -->` — a thread block. Only legal at store
   level; ids on both boundaries must match.
 - `<!-- task-comment:v1 begin id=<id> author=<token> created=<iso-utc>
-[in-reply-to=<id>] [deleted=true] -->` …
+[modified=<iso-utc>] [in-reply-to=<id>] [deleted=true] -->` …
   `<!-- task-comment:v1 end id=<id> -->` — a comment block inside a thread.
+  `modified` is the last-edit instant; `editComment` stamps it when asked.
 - `<!-- task-anchor:v1 <json> -->` — at most one per thread, before the first
-  comment: a W3C-style selector
-  `{"quote":{"exact","prefix","suffix"},"position?":{"start","end"}}` with
-  body-relative offsets.
+  comment: a W3C Web Annotation selector list
+  `{"selector":[{"type":"TextQuoteSelector","exact","prefix?","suffix?"},
+{"type":"TextPositionSelector","start","end"}?]}` — exactly one
+  TextQuoteSelector, at most one TextPositionSelector, body-relative offsets.
+  The pre-W3C spelling `{"quote":{…},"position?":{…}}` is still read (files
+  written before the rename); the writer emits W3C only.
 
 Attributes are single-space-separated `key=value` tokens; unknown or duplicate
 attributes are fatal. Ids are opaque `[A-Za-z0-9._-]` tokens (this codec
@@ -140,6 +144,12 @@ Comment text may not contain a line starting with `<!-- task-` at column 0
 (indent or fence such lines to quote them).
 
 ## Divergences from the task-spec sketch
+
+- Offsets everywhere (positions, ranges, splices) are UTF-16 code units — the
+  native JavaScript string index — while the W3C model counts Unicode code
+  points. The two diverge only after astral characters (emoji); a third-party
+  reader counting code points still recovers through the quote selector, which
+  is exactly what the reconciliation ladder is for.
 
 - The spec sketch carries `format: task/v1` in front matter; existing iterate
   task files predate that key, so this codec neither requires nor interprets

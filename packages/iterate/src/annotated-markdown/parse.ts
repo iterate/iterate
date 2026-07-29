@@ -150,6 +150,7 @@ export function parseAnnotatedMarkdown(raw: string): ParseResult {
     id: string;
     author: string;
     createdAt: string;
+    modifiedAt: string | null;
     inReplyTo: string | null;
     deleted: boolean;
     beginLine: Line;
@@ -202,6 +203,7 @@ export function parseAnnotatedMarkdown(raw: string): ParseResult {
       id: comment.id,
       author: comment.author,
       createdAt: comment.createdAt,
+      modifiedAt: comment.modifiedAt,
       inReplyTo: comment.inReplyTo,
       deleted: comment.deleted,
       displayName,
@@ -300,6 +302,7 @@ export function parseAnnotatedMarkdown(raw: string): ParseResult {
           id: token.id,
           author: token.author,
           createdAt: token.createdAt,
+          modifiedAt: token.modifiedAt,
           inReplyTo: token.inReplyTo,
           deleted: token.deleted,
           beginLine: line,

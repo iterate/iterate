@@ -68,6 +68,8 @@ export interface ThreadComment {
   author: string;
   /** ISO-8601 UTC instant exactly as written in the sentinel. */
   createdAt: string;
+  /** Last-edit instant from the optional `modified` attribute. */
+  modifiedAt: string | null;
   inReplyTo: string | null;
   deleted: boolean;
   /** Presentation name from a `#### Lee · 2026-07-28 08:30 UTC` heading. */

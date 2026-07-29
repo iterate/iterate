@@ -190,6 +190,8 @@ function SheetBody({
   onRequestClose: () => void;
 }) {
   const [status, setStatus] = useState("connecting…");
+  // One selection shared by the preview's highlights and the comments strip.
+  const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   // The path is editable in place; SheetBody is keyed by task.path, so a
   // successful rename remounts with the fresh path and clean state.
   const [pathDraft, setPathDraft] = useState(task.path);
@@ -337,7 +339,14 @@ function SheetBody({
       </div>
         <TabsContent value="preview" className="flex min-h-0 flex-1 flex-col">
           <Suspense fallback={<p className="p-4 text-sm text-muted-foreground">Rendering…</p>}>
-            <WorkspaceTaskPreview source={liveSource?.() ?? task.source} />
+            <WorkspaceTaskPreview
+              source={liveSource?.() ?? task.source}
+              identity={commentIdentity}
+              busy={status === "connecting…"}
+              onTransform={onApplyTransform}
+              selectedThreadId={selectedThreadId}
+              onSelectThread={setSelectedThreadId}
+            />
           </Suspense>
         </TabsContent>
         <TabsContent value="editor" keepMounted className="flex min-h-0 flex-1 flex-col data-[hidden]:hidden">
@@ -369,6 +378,8 @@ function SheetBody({
             // overwrites with its older snapshot, dropping the comment.
             busy={status === "connecting…"}
             onTransform={onApplyTransform}
+            selectedThreadId={selectedThreadId}
+            onSelectThread={setSelectedThreadId}
           />
         </Suspense>
       </div>

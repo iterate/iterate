@@ -150,7 +150,7 @@ describe("addThread", () => {
         '<a id="thread-th_1"></a>',
         "### T1 · Open",
         "",
-        '<!-- task-anchor:v1 {"quote":{"exact":"beta","prefix":"Alpha ","suffix":" gamma.\\n"},"position":{"start":6,"end":10}} -->',
+        '<!-- task-anchor:v1 {"selector":[{"type":"TextQuoteSelector","exact":"beta","prefix":"Alpha ","suffix":" gamma.\\n"},{"type":"TextPositionSelector","start":6,"end":10}]} -->',
         "",
         "<!-- task-comment:v1 begin id=cm_1 author=jonas created=2026-07-28T10:00:00Z -->",
         "#### Jonas · 2026-07-28 10:00 UTC",
@@ -187,7 +187,7 @@ describe("addThread", () => {
         '<a id="thread-th_1"></a>',
         "### T1 · Open",
         "",
-        '<!-- task-anchor:v1 {"quote":{"exact":"beta","prefix":"Alpha ","suffix":""},"position":{"start":6,"end":10}} -->',
+        '<!-- task-anchor:v1 {"selector":[{"type":"TextQuoteSelector","exact":"beta","prefix":"Alpha ","suffix":""},{"type":"TextPositionSelector","start":6,"end":10}]} -->',
         "",
         "<!-- task-comment:v1 begin id=cm_1 author=jonas created=2026-07-28T10:00:00Z -->",
         "#### Jonas · 2026-07-28 10:00 UTC",
@@ -396,6 +396,45 @@ describe("editComment", () => {
     const result = editComment(structured(content), "cm_a", "Now with text.");
     expect(result.doc.discussion?.threads[0]?.comments[0]?.body).toBe("Now with text.");
     expectMinimalDiff(content, result);
+  });
+
+  test("modifiedAt stamps the begin sentinel and re-stamps in place", () => {
+    const base = addThread(structured(BARE), {
+      ...WHO,
+      body: "First.",
+      threadId: "th_1",
+      commentId: "cm_1",
+    });
+    const stamped = editComment(base.doc, "cm_1", "Second.", {
+      modifiedAt: "2026-07-29T09:00:00Z",
+    });
+    expect(stamped.raw).toContain(
+      "<!-- task-comment:v1 begin id=cm_1 author=jonas created=2026-07-28T10:00:00Z modified=2026-07-29T09:00:00Z -->",
+    );
+    expect(stamped.doc.discussion?.threads[0]?.comments[0]?.modifiedAt).toBe(
+      "2026-07-29T09:00:00Z",
+    );
+    expectMinimalDiff(base.raw, stamped);
+
+    // A later edit replaces the value, never accumulates attributes.
+    const again = editComment(stamped.doc, "cm_1", "Third.", {
+      modifiedAt: "2026-07-29T10:30:00Z",
+    });
+    expect(again.raw).toContain("modified=2026-07-29T10:30:00Z");
+    expect(again.raw).not.toContain("2026-07-29T09:00:00Z");
+    expectMinimalDiff(stamped.raw, again);
+  });
+
+  test("an invalid modifiedAt is rejected", () => {
+    const base = addThread(structured(BARE), {
+      ...WHO,
+      body: "First.",
+      threadId: "th_1",
+      commentId: "cm_1",
+    });
+    expect(() => editComment(base.doc, "cm_1", "X.", { modifiedAt: "yesterday" })).toThrowError(
+      /modifiedAt/,
+    );
   });
 });
 
