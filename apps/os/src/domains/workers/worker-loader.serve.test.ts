@@ -30,6 +30,7 @@ const h = vi.hoisted(() => {
     head: { branch: "main", commitOid: "c1", contentHash: "h1" },
     headDisposals: 0,
     loaderCalls: [] as Array<{ config: Record<string, unknown>; key: string }>,
+    repoDisposals: 0,
     snapshotDisposals: 0,
     snapshotCalls: [] as Array<Record<string, unknown>>,
     wranglerConfig: undefined as
@@ -67,6 +68,9 @@ const h = vi.hoisted(() => {
     },
     REPO: {
       getByName: () => ({
+        [Symbol.dispose]() {
+          state.repoDisposals++;
+        },
         getFilesSnapshot: async (input: Record<string, unknown>) => {
           state.snapshotCalls.push(input);
           return {
@@ -164,6 +168,7 @@ beforeEach(async () => {
   h.state.failRuntime = false;
   h.state.headDisposals = 0;
   h.state.loaderCalls.splice(0);
+  h.state.repoDisposals = 0;
   h.state.snapshotDisposals = 0;
   h.state.snapshotCalls.splice(0);
   h.itxEnv.CF_VERSION_METADATA.id = "version-1";
@@ -185,6 +190,7 @@ describe("resolveWorkerSource", () => {
     expect(h.state.buildCalls).toEqual(["A1"]);
     expect(h.state.artifactDisposals).toBe(1);
     expect(h.state.headDisposals).toBe(1);
+    expect(h.state.repoDisposals).toBe(2);
     expect(h.state.snapshotDisposals).toBe(1);
     expect([...h.kv.data.keys()]).toEqual([expect.stringMatching(artifactKeyPattern)]);
 
@@ -196,6 +202,7 @@ describe("resolveWorkerSource", () => {
     );
     expect(second.cacheKey).toBe(first.cacheKey);
     expect(h.state.buildCalls).toEqual(["A1"]);
+    expect(h.state.repoDisposals).toBe(3);
   });
 
   test("shares deterministic artifacts across projects", async () => {
