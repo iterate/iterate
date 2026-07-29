@@ -10,6 +10,10 @@ const network = vi.hoisted(() => {
   };
   const streams = new Map<string, StoredEvent[]>();
   const appendBatches: Array<{ inputs: Omit<StoredEvent, "offset">[]; name: string }> = [];
+  const eventReads: Array<{
+    input: { afterOffset?: number; eventTypes?: string[]; limit?: number };
+    name: string;
+  }> = [];
   return {
     STREAM: {
       getByName(name: string) {
@@ -29,6 +33,7 @@ const network = vi.hoisted(() => {
             });
           },
           getEvents(input: { afterOffset?: number; eventTypes?: string[]; limit?: number } = {}) {
+            eventReads.push({ input, name });
             const { afterOffset = 0, eventTypes, limit = 500 } = input;
             return stored
               .filter(
@@ -44,8 +49,10 @@ const network = vi.hoisted(() => {
     reset() {
       streams.clear();
       appendBatches.length = 0;
+      eventReads.length = 0;
     },
     appendBatches,
+    eventReads,
     streams,
   };
 });
@@ -95,6 +102,17 @@ describe("explicit webhook router creation", () => {
       slug: "slack",
     });
 
+    expect(network.eventReads).toContainEqual({
+      input: {
+        afterOffset: 0,
+        eventTypes: [
+          "events.iterate.com/integration/connection-claimed",
+          "events.iterate.com/integration/connection-unclaimed",
+        ],
+        limit: 500,
+      },
+      name: expect.any(String),
+    });
     expect(network.appendBatches).toHaveLength(1);
     expect(network.appendBatches[0]?.inputs).toEqual([
       expect.objectContaining({

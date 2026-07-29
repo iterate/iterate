@@ -16,13 +16,17 @@ export function integrationStreamStub(projectId: string | null, path: string) {
   );
 }
 
-/** All events of one stream, oldest first, paged through the getEvents cursor. */
-async function readAllStreamEvents(projectId: string | null, path: string): Promise<StreamEvent[]> {
+/** All selected events of one stream, oldest first, paged through the getEvents cursor. */
+async function readAllStreamEvents(
+  projectId: string | null,
+  path: string,
+  eventTypes: readonly string[],
+): Promise<StreamEvent[]> {
   const stream = integrationStreamStub(projectId, path);
   const events: StreamEvent[] = [];
   let afterOffset = 0;
   for (;;) {
-    const page = await stream.getEvents({ afterOffset, limit: 500 });
+    const page = await stream.getEvents({ afterOffset, eventTypes, limit: 500 });
     events.push(...page);
     if (page.length < 500) return events;
     afterOffset = page[page.length - 1]!.offset;
@@ -30,6 +34,10 @@ async function readAllStreamEvents(projectId: string | null, path: string): Prom
 }
 
 const FILTERED_PAGE_SIZE = 500;
+const CONNECTION_DIRECTORY_EVENT_TYPES = [
+  "events.iterate.com/integration/connection-claimed",
+  "events.iterate.com/integration/connection-unclaimed",
+] as const;
 
 /**
  * The latest event matching any of the requested types.
@@ -119,7 +127,15 @@ export async function lookupConnectionClaim(
   slug: string,
   externalId: string,
 ): Promise<ConnectionClaim | null> {
-  const events = await readAllStreamEvents(null, INTEGRATION_DIRECTORY_STREAM_PATH);
+  // The directory stream also contains ordinary stream lifecycle events. Webhook
+  // ingress is bursty, so hydrating every unrelated event here multiplies one
+  // GitHub delivery into a large SQLite/body-read workload on a single DO.
+  // Storage-side event-type filtering leaves only the tiny claim history.
+  const events = await readAllStreamEvents(
+    null,
+    INTEGRATION_DIRECTORY_STREAM_PATH,
+    CONNECTION_DIRECTORY_EVENT_TYPES,
+  );
   return foldConnectionDirectory(events).get(directoryKey(slug, externalId)) ?? null;
 }
 
