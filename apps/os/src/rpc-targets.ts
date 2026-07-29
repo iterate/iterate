@@ -262,6 +262,7 @@ import type {
   RepoCommitDetails,
   RepoLogResult,
 } from "./domains/repos/types.ts";
+import { commitFilesOnDeploymentReadyRepo } from "./domains/repos/repo-deployment-readiness.ts";
 import type {
   BuiltinIntegrationSlug,
   CompleteConnectResult,
@@ -1546,7 +1547,13 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
 
   /** Commit a batch of file changes; use `edit` for a targeted single-string replacement. */
   commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult> {
-    return this.#durableObjectStub.commitFiles(input);
+    return commitFilesOnDeploymentReadyRepo({
+      commit: input,
+      expectedVersion: workerDeploymentVersion(env),
+      getRepo: () => this.#durableObjectStub,
+      path: normalizePath(this.props.path),
+      projectId: this.props.projectId,
+    });
   }
 
   /**
