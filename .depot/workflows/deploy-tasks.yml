@@ -14,6 +14,10 @@ on:
     paths:
       - .depot/workflows/deploy-tasks.yml
       - apps/tasks/**
+      # The vessel bundles shared apps/os sources through its `~` alias
+      # (vite.config.ts) — those trees must redeploy it too.
+      - apps/os/src/components/**
+      - apps/os/src/domains/workspaces/**
       - packages/iterate/**
       - packages/ui/**
   workflow_dispatch:
