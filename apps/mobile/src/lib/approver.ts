@@ -14,6 +14,7 @@
 
 import * as Crypto from "expo-crypto";
 import { Platform } from "react-native";
+import type { HumanApprovalKey } from "../../../os/src/domains/projects/egress-approvals.ts";
 import { EVENT } from "./approvals.ts";
 import { getProjectItx } from "./itx.ts";
 import * as SecureStore from "./secure-store.ts";
@@ -78,13 +79,10 @@ export async function ensureApproverKeyEnrolled(
     projectId,
     Platform.OS === "web" ? "This browser (dev)" : "This iPhone",
   );
-  const project = await getProjectItx(baseUrl, projectId);
-  const enrolled = (await project.processor.snapshot()).state.humanApprovalKeys as Array<{
-    keyId: string;
-    revokedAt: string | null;
-  }>;
+  const enrolled = await projectApprovalKeys(baseUrl, projectId);
   const existing = enrolled.find((candidate) => candidate.keyId === key.keyId);
   if (existing) return existing.revokedAt === null ? key : null;
+  const project = await getProjectItx(baseUrl, projectId);
   await project.streams.get("/").append({
     type: EVENT.keyAdded,
     payload: { keyId: key.keyId, publicKey: key.publicKey, label: key.label },
@@ -111,11 +109,7 @@ export async function approverKeyStatus(
 ): Promise<ApproverKeyStatus> {
   const key = await loadApproverKey(projectId);
   if (!key) return { kind: "unenrolled" };
-  const project = await getProjectItx(baseUrl, projectId);
-  const enrolled = (await project.processor.snapshot()).state.humanApprovalKeys as Array<{
-    keyId: string;
-    revokedAt: string | null;
-  }>;
+  const enrolled = await projectApprovalKeys(baseUrl, projectId);
   const entry = enrolled.find((candidate) => candidate.keyId === key.keyId);
   if (entry && entry.revokedAt !== null) return { kind: "revoked", key };
   return { kind: "enrolled", key };
@@ -161,6 +155,22 @@ export async function signWithApproverKey(
   if (!privateKey)
     throw new Error("Enrolled key's public half exists but the private half is gone.");
   return { keyId: info.keyId, signature: signApprovalMessage(privateKey, message) };
+}
+
+/**
+ * The project's enrolled approval keys, from the project processor's reduced
+ * state. The snapshot crosses the itx RPC boundary untyped; the cast is to
+ * the CONTRACT-derived {@link HumanApprovalKey} — the exact type the server
+ * reduces this field with (project-processor-contract.ts stateSchema), so
+ * shape drift is a compile error on the server side, not a runtime surprise
+ * here.
+ */
+async function projectApprovalKeys(
+  baseUrl: string,
+  projectId: string,
+): Promise<HumanApprovalKey[]> {
+  const project = await getProjectItx(baseUrl, projectId);
+  return (await project.processor.snapshot()).state.humanApprovalKeys as HumanApprovalKey[];
 }
 
 /** Local key material only — the caller still needs to append `human-approval-key-revoked` for the platform to stop trusting it. */

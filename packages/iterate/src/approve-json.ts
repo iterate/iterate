@@ -184,9 +184,16 @@ export async function runApprovalJson(input: {
   async function handleDecision(raw: string): Promise<void> {
     const trimmed = raw.trim();
     if (trimmed === "") return;
-    let decision: { offset?: number; decision?: string; reason?: string };
+    // Arbitrary stdin: JSON.parse proves nothing about shape, so validate at
+    // this boundary — reject non-objects here, then typeof-check each field
+    // where it's read below.
+    let decision: Record<string, unknown>;
     try {
-      decision = JSON.parse(trimmed) as { offset?: number; decision?: string; reason?: string };
+      const parsed: unknown = JSON.parse(trimmed);
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        throw new Error("decision line must be a JSON object");
+      }
+      decision = parsed as Record<string, unknown>;
     } catch {
       emit({ type: "error", message: "malformed decision line" });
       return;

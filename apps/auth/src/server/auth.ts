@@ -61,11 +61,11 @@ export const auth = betterAuth({
   }),
   trustedOrigins: (request) => {
     const origin = request?.headers.get("origin");
-    if (!isAllowedBrowserOrigin(origin)) return [];
+    if (!origin || !isAllowedBrowserOrigin(origin)) return [];
     // The allowed requester plus this deployment's own origins — loopback
     // clients pass the predicate on shape, so the requester must be listed
     // explicitly.
-    const trusted: string[] = [new URL(origin!).origin, config.authAppOrigin];
+    const trusted: string[] = [new URL(origin).origin, config.authAppOrigin];
     if (config.publicUrl) trusted.push(config.publicUrl);
     return trusted;
   },
