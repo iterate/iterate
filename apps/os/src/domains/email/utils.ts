@@ -253,7 +253,10 @@ function splitAuthenticationResultsRecords(value: string): string[] {
   const records: string[] = [];
   for (const line of value.split(/\r?\n/)) {
     let start = 0;
-    const re = /,(?=\s*[^,;\s]+\s*;)/g;
+    // Next record starts with authserv-id, optional version digit(s), then ";".
+    // Without the version group, "mx.cloudflare.net 1; …" would not split after
+    // a Headers.get join and legitimate CF-stamped mail would be dropped.
+    const re = /,(?=\s*[^,;\s]+(?:\s+\d+)?\s*;)/g;
     let match: RegExpExecArray | null;
     while ((match = re.exec(line)) !== null) {
       const left = line.slice(start, match.index);

@@ -157,6 +157,9 @@ describe("dmarcPasses", () => {
 
   test("allows optional authserv-id version before the semicolon", () => {
     expect(dmarcPasses("mx.cloudflare.net 1; dmarc=pass")).toBe(true);
+    // Versioned CF record after a Headers.get join must still split out.
+    expect(dmarcPasses("evil.example; dmarc=pass, mx.cloudflare.net 1; dmarc=pass")).toBe(true);
+    expect(dmarcPasses("evil.example; dmarc=pass, mx.cloudflare.net 1; dmarc=fail")).toBe(false);
   });
 
   test("handles newline-separated AR records (raw MIME)", () => {
