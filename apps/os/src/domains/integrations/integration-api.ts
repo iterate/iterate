@@ -55,6 +55,20 @@ async function handleOAuthCallback(input: {
   const error = url.searchParams.get("error");
   const state = url.searchParams.get("state");
 
+  // GitHub revisits the App's setup URL after an administrator accepts new
+  // permissions. That update is already complete and is not an Iterate
+  // connection attempt, so it has no project-bound OAuth state to verify.
+  if (
+    input.provider === "github" &&
+    !state &&
+    url.searchParams.get("setup_action") === "update" &&
+    url.searchParams.get("installation_id")
+  ) {
+    return new Response("GitHub App permissions updated. You can close this tab.", {
+      headers: { "content-type": "text/plain; charset=utf-8" },
+    });
+  }
+
   if (!state) return Response.json({ error: "Missing OAuth state." }, { status: 400 });
   const unverified = parseOAuthStateUnverified(state);
   if (!unverified || unverified.provider !== input.provider) {
