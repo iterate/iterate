@@ -671,6 +671,49 @@ failure population includes this round's deliberately rejected diagnostic
 proof runs, so it is evidence of the flake hunt rather than a production
 release-rate estimate.
 
+Candidate `85c480903` then passed the complete local monorepo gate and every
+automatic exact-head check. All provider jobs ran on Depot and on attempt one:
+the preview check finished in 214 seconds, Test in 78 seconds,
+lint/typecheck in 32 seconds, LOC in 16 seconds, and autofix in 14 seconds.
+The retained Test telemetry contains 3,322 tests with zero failures or
+retries. Preview telemetry contains 322 tests from every expected source with
+zero failures or retries. A separate strict preflight completed in 281 seconds
+on Depot aggregate `00pjpknbbl`.
+
+The subsequent strict proof recorded 18 consecutive clean, fresh-data
+canonical Depot preview runs in 304, 290, 271, 276, 262, 271, 295, 284, 261,
+302, 295, 271, 353, 290, 312, 274, 293, and 224 seconds. Run 19, aggregate
+`t6pkz70rbm`, completed in 251 seconds but was correctly rejected because
+`stream-capnweb.test.ts › stream capnweb protocol › append returns events in
+input order including idempotency hits` needed one Vitest retry after
+`stream-unavailable: keyed stream append received no response within 10000ms`.
+All 19 iterations were separate invocations of the canonical Depot workflow
+with fresh slot data, the full app fleet, retained artifacts, and finalized
+PostHog telemetry. The rejection resets the immutable-head proof to 0/25.
+
+Cloudflare trace `3f23ce9d671d4e6dde2ba7a7a05c247c` isolates the failure
+to a healthy but unusually slow birth of the keyed Stream Durable Object at
+`/stream-capnweb-batch-c3879892-82af-4789-8923-abe8380114e0`. The outer
+WebSocket request spent 20.006 seconds in its Worker invocation. The first
+append was still pending when its 10-second acknowledgement deadline launched
+a fresh retry, and the retry was also pending when the second independent
+10-second deadline rejected the public call. Target Stream storage did not
+begin until about 21.8 seconds after the request started; both already-issued
+calls then executed successfully, and the trace completed at about 22.5
+seconds. This was neither a socket failure nor an application exception. The
+sequential deadlines discarded a valid late result, reported a false
+unavailability, and duplicated cold-start work.
+
+Keyed non-root appends now keep the original native RPC live and start one
+fresh idempotent hedge after 10 seconds. Either invocation may supply the
+authoritative result within one 25-second total bound; every losing or late
+native result remains observed and explicitly disposed. Deployment/eviction
+rejections can defer to the surviving attempt, while application failures and
+an explicit stream `kill()` remain terminal and cannot be masked by a hedge.
+If both invocations remain silent the operation still fails loudly before the
+standard 30-second watchdog. Unkeyed appends and root project-birth appends
+retain their existing no-deadline behavior.
+
 ## Round 15 (2026-07-23, post-#2284)
 
 This round starts from merged `origin/main` at

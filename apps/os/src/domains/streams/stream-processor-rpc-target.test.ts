@@ -222,7 +222,7 @@ describe("StreamRpcTarget", () => {
     }
   });
 
-  it("replays a keyed append once when its native RPC acknowledgement is orphaned", async () => {
+  it("hedges a keyed append once when its native RPC acknowledgement is orphaned", async () => {
     vi.useFakeTimers();
     const firstAppend = Promise.withResolvers<StreamEvent[]>();
     const firstDispose = vi.fn();
@@ -268,14 +268,13 @@ describe("StreamRpcTarget", () => {
       expect(acquisitions).toBe(2);
       expect(secondDispose).toHaveBeenCalledOnce();
       expect(info).toHaveBeenCalledWith(
-        "keyed stream append retrying after Durable Object unavailability",
-        expect.objectContaining({
-          error: expect.objectContaining({
-            message: expect.stringContaining("received no response within 10000ms"),
-          }),
+        "keyed stream append hedging after slow Durable Object acknowledgement",
+        {
+          hedgeAfterMs: 10_000,
           path: "/events",
           projectId: "prj_test",
-        }),
+          totalTimeoutMs: 25_000,
+        },
       );
 
       firstAppend.resolve(firstResult);
@@ -283,6 +282,188 @@ describe("StreamRpcTarget", () => {
       expect(firstDispose).toHaveBeenCalledOnce();
     } finally {
       firstAppend.reject(new Error("late keyed append rejection"));
+      await appending.catch(() => undefined);
+      info.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("accepts a slow original keyed append after hedging and disposes the losing result", async () => {
+    vi.useFakeTimers();
+    const firstAppend = Promise.withResolvers<StreamEvent[]>();
+    const hedgeAppend = Promise.withResolvers<StreamEvent[]>();
+    const firstDispose = vi.fn();
+    const hedgeDispose = vi.fn();
+    const event = {
+      createdAt: new Date(0).toISOString(),
+      idempotencyKey: "keyed-slow-start",
+      offset: 3,
+      path: "/events",
+      payload: { recovered: true },
+      type: "events.iterate.com/test/keyed-slow-start",
+    } satisfies StreamEvent;
+    const firstResult = [{ ...event }];
+    const hedgeResult = [{ ...event }];
+    Object.defineProperty(firstResult, Symbol.dispose, { value: firstDispose });
+    Object.defineProperty(hedgeResult, Symbol.dispose, { value: hedgeDispose });
+    let acquisitions = 0;
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
+        acquisitions += 1;
+        return {
+          append: () => (acquisitions === 1 ? firstAppend.promise : hedgeAppend.promise),
+        } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/events",
+      projectId: "prj_test",
+    });
+
+    const appending = stream.append({
+      idempotencyKey: event.idempotencyKey,
+      payload: event.payload,
+      type: event.type,
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(22_000);
+      expect(acquisitions).toBe(2);
+
+      firstAppend.resolve(firstResult);
+      await expect(appending).resolves.toEqual([event]);
+      expect(firstDispose).toHaveBeenCalledOnce();
+      expect(hedgeDispose).not.toHaveBeenCalled();
+
+      hedgeAppend.resolve(hedgeResult);
+      await vi.runAllTimersAsync();
+      expect(hedgeDispose).toHaveBeenCalledOnce();
+    } finally {
+      firstAppend.reject(new Error("late original keyed append rejection"));
+      hedgeAppend.reject(new Error("late hedge keyed append rejection"));
+      await appending.catch(() => undefined);
+      info.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds two silent keyed append attempts with one total deadline", async () => {
+    vi.useFakeTimers();
+    const firstAppend = Promise.withResolvers<StreamEvent[]>();
+    const hedgeAppend = Promise.withResolvers<StreamEvent[]>();
+    const firstDispose = vi.fn();
+    const hedgeDispose = vi.fn();
+    const event = {
+      createdAt: new Date(0).toISOString(),
+      idempotencyKey: "keyed-silent",
+      offset: 3,
+      path: "/events",
+      type: "events.iterate.com/test/keyed-silent",
+    } satisfies StreamEvent;
+    const firstResult = [{ ...event }];
+    const hedgeResult = [{ ...event }];
+    Object.defineProperty(firstResult, Symbol.dispose, { value: firstDispose });
+    Object.defineProperty(hedgeResult, Symbol.dispose, { value: hedgeDispose });
+    let acquisitions = 0;
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
+        acquisitions += 1;
+        return {
+          append: () => (acquisitions === 1 ? firstAppend.promise : hedgeAppend.promise),
+        } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/events",
+      projectId: "prj_test",
+    });
+
+    const appending = stream.append({
+      idempotencyKey: event.idempotencyKey,
+      type: event.type,
+    });
+    try {
+      const rejected = expect(appending).rejects.toThrow(
+        "stream-unavailable: keyed stream append received no response within 25000ms across 2 attempts",
+      );
+      await vi.advanceTimersByTimeAsync(25_000);
+      await rejected;
+      expect(acquisitions).toBe(2);
+
+      firstAppend.resolve(firstResult);
+      hedgeAppend.resolve(hedgeResult);
+      await vi.runAllTimersAsync();
+      expect(firstDispose).toHaveBeenCalledOnce();
+      expect(hedgeDispose).toHaveBeenCalledOnce();
+    } finally {
+      firstAppend.reject(new Error("late original keyed append rejection"));
+      hedgeAppend.reject(new Error("late hedge keyed append rejection"));
+      await appending.catch(() => undefined);
+      info.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps an explicit stream kill authoritative after a keyed append hedge starts", async () => {
+    vi.useFakeTimers();
+    const firstAppend = Promise.withResolvers<StreamEvent[]>();
+    const hedgeAppend = Promise.withResolvers<StreamEvent[]>();
+    const hedgeDispose = vi.fn();
+    const hedgeResult = [
+      {
+        createdAt: new Date(0).toISOString(),
+        idempotencyKey: "explicit-kill-after-hedge",
+        offset: 3,
+        path: "/events",
+        type: "events.iterate.com/test/explicit-kill-after-hedge",
+      } satisfies StreamEvent,
+    ];
+    Object.defineProperty(hedgeResult, Symbol.dispose, { value: hedgeDispose });
+    let acquisitions = 0;
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
+        acquisitions += 1;
+        return {
+          append: () => (acquisitions === 1 ? firstAppend.promise : hedgeAppend.promise),
+        } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/events",
+      projectId: "prj_test",
+    });
+
+    const appending = stream.append({
+      idempotencyKey: hedgeResult[0]!.idempotencyKey,
+      type: hedgeResult[0]!.type,
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(acquisitions).toBe(2);
+
+      firstAppend.reject(
+        Object.assign(new Error(STREAM_KILL_REASON), {
+          durableObjectReset: true,
+        }),
+      );
+      await expect(appending).rejects.toThrow(
+        `${STREAM_UNAVAILABLE_MESSAGE_PREFIX}${STREAM_KILL_REASON}`,
+      );
+
+      hedgeAppend.resolve(hedgeResult);
+      await vi.runAllTimersAsync();
+      expect(hedgeDispose).toHaveBeenCalledOnce();
+    } finally {
+      firstAppend.reject(new Error("late original keyed append rejection"));
+      hedgeAppend.reject(new Error("late hedge keyed append rejection"));
       await appending.catch(() => undefined);
       info.mockRestore();
       vi.useRealTimers();
@@ -406,6 +587,56 @@ describe("StreamRpcTarget", () => {
       }),
     ).resolves.toEqual([event]);
     expect(acquisitions).toBe(2);
+  });
+
+  it("replays a keyed non-root append once after an immediate deployment reset", async () => {
+    const lifecycleError = Object.assign(new Error("code updated"), {
+      durableObjectReset: true,
+    });
+    const event = {
+      createdAt: new Date(0).toISOString(),
+      idempotencyKey: "keyed-reset",
+      offset: 3,
+      path: "/events",
+      type: "events.iterate.com/test/keyed-reset",
+    } satisfies StreamEvent;
+    let acquisitions = 0;
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
+        acquisitions += 1;
+        return {
+          append: () =>
+            acquisitions === 1 ? Promise.reject(lifecycleError) : Promise.resolve([event]),
+        } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/events",
+      projectId: "prj_test",
+    });
+
+    try {
+      await expect(
+        stream.append({
+          idempotencyKey: event.idempotencyKey,
+          type: event.type,
+        }),
+      ).resolves.toEqual([event]);
+      expect(acquisitions).toBe(2);
+      expect(info).toHaveBeenCalledWith(
+        "keyed stream append retrying after Durable Object unavailability",
+        {
+          error: lifecycleError,
+          path: "/events",
+          projectId: "prj_test",
+        },
+      );
+    } finally {
+      info.mockRestore();
+    }
   });
 
   it("starts a rollout-gated append on the exact Stream stub that passed readiness", async () => {

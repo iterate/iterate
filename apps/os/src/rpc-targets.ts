@@ -506,14 +506,16 @@ function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): Op
 }
 
 const STREAM_WAIT_REACQUIRE_MS = 10_000;
-// Keyed non-root appends are safe to replay after an acknowledgement is lost.
-// Bound each DO invocation below the outer e2e/client watchdog so a half-open
-// native RPC cannot park the public call forever; two attempts still fit
-// comfortably inside the standard 30-second operation budget. Root appends
-// are excluded: project/capability-host birth can legitimately spend longer
-// than this under load, and those callers already own explicit end-to-ready
+// Keyed non-root appends are safe to hedge after an acknowledgement is lost.
+// Keep the first invocation authoritative while starting one fresh invocation
+// after 10 seconds: a cold-started DO can legitimately acknowledge after the
+// hedge starts, while a genuinely orphaned invocation must not park the public
+// call forever. Either idempotent result may win inside one total bound. Root
+// appends are excluded: project/capability-host birth can legitimately spend
+// longer under load, and those callers already own explicit end-to-ready
 // deadlines around the whole durable saga.
-const KEYED_STREAM_APPEND_ATTEMPT_TIMEOUT_MS = 10_000;
+const KEYED_STREAM_APPEND_HEDGE_AFTER_MS = 10_000;
+const KEYED_STREAM_APPEND_TOTAL_TIMEOUT_MS = 25_000;
 
 function detachPlainRpcResult<T>(result: T[]): T[];
 function detachPlainRpcResult<T extends object>(result: T): T;
@@ -532,6 +534,36 @@ function detachPlainRpcResult(result: object): object {
       console.warn("stream plain-data RPC result dispose failed", { error });
     }
   }
+}
+
+function firstAppendFulfilledWithIndex<T>(
+  promises: Promise<T>[],
+): Promise<{ index: number; value: T }> {
+  const winner = Promise.withResolvers<{ index: number; value: T }>();
+  let rejectionCount = 0;
+  let lastError: unknown;
+  promises.forEach((promise, index) => {
+    void promise.then(
+      (value) => winner.resolve({ index, value }),
+      (error: unknown) => {
+        if (
+          !isRetryableDurableObjectAvailabilityError(error) ||
+          isExplicitStreamKillLifecycleError(error)
+        ) {
+          winner.reject(error);
+          return;
+        }
+        rejectionCount += 1;
+        lastError = error;
+        if (rejectionCount === promises.length) winner.reject(lastError);
+      },
+    );
+  });
+  return winner.promise;
+}
+
+function disposeLateRpcResult(promise: Promise<unknown>): void {
+  void promise.then(disposeIgnoredRpcResult, () => undefined);
 }
 
 /**
@@ -654,43 +686,93 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     const isKeyed = events.every(
       (event) => typeof event.idempotencyKey === "string" && event.idempotencyKey.length > 0,
     );
-    const canLifecycleReplay = isKeyed;
-    const canDeadlineReplay = isKeyed && this.props.path !== "/";
     let nextTarget = initialTarget;
     const append = async () => {
       const target = nextTarget ?? this[STREAM_DURABLE_OBJECT_STUB];
       nextTarget = undefined;
-      const invocation = Promise.resolve(target.append(...events));
-      if (!canDeadlineReplay) return await invocation;
+      return await target.append(...events);
+    };
 
-      const outcome = await settleByDeadline(
-        invocation,
-        Date.now() + KEYED_STREAM_APPEND_ATTEMPT_TIMEOUT_MS,
-        Date.now,
-      );
-      if (outcome.status === "fulfilled") return outcome.value;
-      if (outcome.status === "rejected") throw outcome.error;
+    if (!isKeyed || this.props.path === "/") {
+      const result = await (
+        isKeyed
+          ? retryLoggedIdempotentOperation({
+              context: { path: this.props.path, projectId: this.props.projectId },
+              message: "keyed stream append retrying after Durable Object unavailability",
+              operation: append,
+              retryWhen: (error) => !isExplicitStreamKillLifecycleError(error),
+            })
+          : append()
+      ).catch(rethrowStreamUnavailable);
+      return detachPlainRpcResult(result);
+    }
 
-      // The late invocation may have committed and may eventually return a
-      // native disposable. Observe and release it; the replay uses the same
-      // idempotency keys, so either completion order yields one durable batch.
-      void invocation.then(disposeIgnoredRpcResult, () => undefined);
+    const startedAt = Date.now();
+    const totalDeadline = startedAt + KEYED_STREAM_APPEND_TOTAL_TIMEOUT_MS;
+    const first = append();
+    const firstOutcome = await settleByDeadline(
+      first,
+      startedAt + KEYED_STREAM_APPEND_HEDGE_AFTER_MS,
+      Date.now,
+    );
+    if (firstOutcome.status === "fulfilled") {
+      return detachPlainRpcResult(firstOutcome.value);
+    }
+    if (firstOutcome.status === "rejected") {
+      if (
+        !isRetryableDurableObjectAvailabilityError(firstOutcome.error) ||
+        isExplicitStreamKillLifecycleError(firstOutcome.error)
+      ) {
+        rethrowStreamUnavailable(firstOutcome.error);
+      }
+      console.info("keyed stream append retrying after Durable Object unavailability", {
+        error: firstOutcome.error,
+        path: this.props.path,
+        projectId: this.props.projectId,
+      });
+      const replay = append();
+      const replayOutcome = await settleByDeadline(replay, totalDeadline, Date.now);
+      if (replayOutcome.status === "fulfilled") {
+        return detachPlainRpcResult(replayOutcome.value);
+      }
+      if (replayOutcome.status === "rejected") {
+        rethrowStreamUnavailable(replayOutcome.error);
+      }
+      disposeLateRpcResult(replay);
       throw new Error(
         `${STREAM_UNAVAILABLE_MESSAGE_PREFIX}keyed stream append received no response within ` +
-          `${KEYED_STREAM_APPEND_ATTEMPT_TIMEOUT_MS}ms`,
+          `${KEYED_STREAM_APPEND_TOTAL_TIMEOUT_MS}ms across 2 attempts`,
       );
-    };
-    const result = await (
-      canLifecycleReplay
-        ? retryLoggedIdempotentOperation({
-            context: { path: this.props.path, projectId: this.props.projectId },
-            message: "keyed stream append retrying after Durable Object unavailability",
-            operation: append,
-            retryWhen: (error) => !isExplicitStreamKillLifecycleError(error),
-          })
-        : append()
-    ).catch(rethrowStreamUnavailable);
-    return detachPlainRpcResult(result);
+    }
+
+    console.info("keyed stream append hedging after slow Durable Object acknowledgement", {
+      hedgeAfterMs: KEYED_STREAM_APPEND_HEDGE_AFTER_MS,
+      path: this.props.path,
+      projectId: this.props.projectId,
+      totalTimeoutMs: KEYED_STREAM_APPEND_TOTAL_TIMEOUT_MS,
+    });
+    const hedge = append();
+    const attempts = [first, hedge];
+    const hedgeOutcome = await settleByDeadline(
+      firstAppendFulfilledWithIndex(attempts),
+      totalDeadline,
+      Date.now,
+    );
+    if (hedgeOutcome.status === "fulfilled") {
+      attempts.forEach((attempt, index) => {
+        if (index !== hedgeOutcome.value.index) disposeLateRpcResult(attempt);
+      });
+      return detachPlainRpcResult(hedgeOutcome.value.value);
+    }
+    if (hedgeOutcome.status === "rejected") {
+      attempts.forEach(disposeLateRpcResult);
+      rethrowStreamUnavailable(hedgeOutcome.error);
+    }
+    attempts.forEach(disposeLateRpcResult);
+    throw new Error(
+      `${STREAM_UNAVAILABLE_MESSAGE_PREFIX}keyed stream append received no response within ` +
+        `${KEYED_STREAM_APPEND_TOTAL_TIMEOUT_MS}ms across 2 attempts`,
+    );
   }
 
   /** Commit events; resolves with the same events carrying offsets and timestamps. */
