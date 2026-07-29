@@ -214,7 +214,15 @@ describe("replaceWithInheritedProcess", () => {
   });
 });
 
-describe("bin wrapper", () => {
+// These integration-style unit tests cold-start Node over package source. The
+// workspace runs packages in parallel, so that startup can exceed Vitest's
+// generic 5s limit under CPU contention. The child still has its own 10s kill
+// boundary; the outer 12s budget only leaves time to report that bounded
+// failure cleanly.
+const BIN_WRAPPER_PROCESS_TIMEOUT_MS = 10_000;
+const BIN_WRAPPER_TEST_TIMEOUT_MS = 12_000;
+
+describe("bin wrapper", { timeout: BIN_WRAPPER_TEST_TIMEOUT_MS }, () => {
   test("can load repo source through Node's strip-only TypeScript loader", () => {
     const binPath = fileURLToPath(new URL("../bin/iterate.js", import.meta.url));
     const packageRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -222,10 +230,11 @@ describe("bin wrapper", () => {
       cwd: packageRoot,
       encoding: "utf8",
       env: { ...process.env, NO_COLOR: "1" },
+      timeout: BIN_WRAPPER_PROCESS_TIMEOUT_MS,
     });
 
     expect(result.stderr).not.toContain("ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX");
-    expect(result.status, result.stderr || result.stdout).toBe(0);
+    expect(result.status, result.error?.message || result.stderr || result.stdout).toBe(0);
     expect(`${result.stdout}\n${result.stderr}`).toContain("iterate");
   });
 
@@ -256,9 +265,10 @@ describe("bin wrapper", () => {
           npm_command: "exec",
           npm_lifecycle_event: "npx",
         },
+        timeout: BIN_WRAPPER_PROCESS_TIMEOUT_MS,
       });
 
-      expect(result.status, result.stderr || result.stdout).toBe(0);
+      expect(result.status, result.error?.message || result.stderr || result.stdout).toBe(0);
       expect(result.stdout.trim()).toBe("fake published dist");
     } finally {
       rmSync(tempRoot, { force: true, recursive: true });
@@ -293,9 +303,10 @@ describe("bin wrapper", () => {
           npm_command: "",
           npm_lifecycle_event: "",
         },
+        timeout: BIN_WRAPPER_PROCESS_TIMEOUT_MS,
       });
 
-      expect(result.status, result.stderr || result.stdout).toBe(0);
+      expect(result.status, result.error?.message || result.stderr || result.stdout).toBe(0);
       expect(result.stdout.trim()).toBe("forced built dist");
     } finally {
       rmSync(tempRoot, { force: true, recursive: true });
@@ -330,9 +341,10 @@ describe("bin wrapper", () => {
           npm_command: "",
           npm_lifecycle_event: "",
         },
+        timeout: BIN_WRAPPER_PROCESS_TIMEOUT_MS,
       });
 
-      expect(result.status, result.stderr || result.stdout).toBe(0);
+      expect(result.status, result.error?.message || result.stderr || result.stdout).toBe(0);
       expect(result.stdout).not.toContain("fake published dist");
       expect(`${result.stdout}\n${result.stderr}`).toContain("Iterate CLI");
     } finally {
