@@ -13,6 +13,10 @@ import { Spinner } from "@iterate-com/ui/components/spinner";
 import { DocumentComments } from "@iterate-com/workspace-documents/comments";
 import type { DocumentCommentsHandle } from "@iterate-com/workspace-documents/comments";
 import type { CollabEditorApi } from "@iterate-com/workspace-documents/editor-api";
+import {
+  annotationsSourceForHtmlDocument,
+  transformHtmlDocumentAnnotations,
+} from "@iterate-com/workspace-documents/html-annotations";
 import { commentIdentityFor } from "@iterate-com/workspace-documents/identity";
 import { MarkdownDocumentPreview } from "@iterate-com/workspace-documents/preview";
 import type {
@@ -99,6 +103,16 @@ export function WorkspaceDocumentPage({
     },
     [],
   );
+  const format = loaded?.snapshot.format;
+  const onCommentTransform = useCallback(
+    (transform: (current: string) => string) =>
+      onTransform((current) =>
+        format === "html"
+          ? transformHtmlDocumentAnnotations(current, transform)
+          : transform(current),
+      ),
+    [format, onTransform],
+  );
 
   const copyLink = () => {
     void navigator.clipboard.writeText(window.location.href).then(() => {
@@ -124,8 +138,10 @@ export function WorkspaceDocumentPage({
   const identity: CommentIdentity = commentIdentityFor(loaded.user);
   const displayName =
     loaded.user.name ?? loaded.user.email ?? loaded.user.userId ?? identity.authorDisplay;
-  const busy = !status.startsWith("live");
+  const busy = status === "connecting…";
   const title = documentTitle(source, loaded.snapshot.format, path);
+  const commentsSource =
+    loaded.snapshot.format === "html" ? annotationsSourceForHtmlDocument(source) : source;
 
   return (
     <main className="flex min-h-svh flex-col bg-background lg:h-svh lg:overflow-hidden">
@@ -230,10 +246,10 @@ export function WorkspaceDocumentPage({
         <aside className="min-h-0 border-t bg-muted/5 lg:border-t-0 lg:border-l">
           <DocumentComments
             ref={commentsRef}
-            source={source}
+            source={commentsSource}
             identity={identity}
             busy={busy}
-            onTransform={onTransform}
+            onTransform={onCommentTransform}
             selectedThreadId={selectedThreadId}
             onSelectThread={setSelectedThreadId}
           />

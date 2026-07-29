@@ -2,6 +2,7 @@ import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
 import { env as workerEnv } from "cloudflare:workers";
 import { newWorkersWebSocketRpcResponse } from "capnweb";
 import type { AppEnv } from "./env.ts";
+import { docsHealthResponse } from "./health.ts";
 import { DocsApiRoot } from "./rpc-api.ts";
 
 // The generated Wrangler config supplies this exact binding shape; the
@@ -13,7 +14,7 @@ export default createServerEntry({
     const url = new URL(request.url);
 
     if (url.pathname === "/healthz") {
-      return new Response("ok", { headers: { "content-type": "text/plain" } });
+      return docsHealthResponse(env);
     }
 
     if (url.pathname === "/api") {

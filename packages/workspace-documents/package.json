@@ -9,6 +9,7 @@
     "./comments": "./src/document-comments.tsx",
     "./editor": "./src/workspace-document-editor.tsx",
     "./editor-api": "./src/collab-editor-api.ts",
+    "./html-annotations": "./src/html-document-annotations.ts",
     "./identity": "./src/comment-identity.ts",
     "./preview": "./src/markdown-document-preview.tsx",
     "./server": "./src/server.ts",
