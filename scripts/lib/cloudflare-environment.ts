@@ -14,6 +14,7 @@ const ContainerApplication = z.object({
   name: z.string(),
 });
 const ArtifactRepository = z.object({ name: z.string() });
+const ARTIFACT_DELETE_CONCURRENCY = 10;
 const ARTIFACT_REPOSITORY_PAGE_SIZE = 50;
 
 async function listDurableObjectNamespaces(ctx: CfContext) {
@@ -57,11 +58,16 @@ async function destroyArtifactRepositories(ctx: CfContext, namespace: string) {
     const repositories = await listArtifactRepositoryPage(ctx, namespace);
     if (repositories.length === 0) break;
     let deleted = 0;
-    for (const repository of repositories) {
-      if (await deleteIfPresent(ctx, `${path}/${encodeURIComponent(repository.name)}`)) {
-        deleted += 1;
-        console.log(`deleted Artifacts repository ${namespace}/${repository.name}`);
-      }
+    for (let index = 0; index < repositories.length; index += ARTIFACT_DELETE_CONCURRENCY) {
+      const batch = repositories.slice(index, index + ARTIFACT_DELETE_CONCURRENCY);
+      await Promise.all(
+        batch.map(async (repository) => {
+          if (await deleteIfPresent(ctx, `${path}/${encodeURIComponent(repository.name)}`)) {
+            deleted += 1;
+            console.log(`deleted Artifacts repository ${namespace}/${repository.name}`);
+          }
+        }),
+      );
     }
     if (deleted === 0) {
       throw new Error(
