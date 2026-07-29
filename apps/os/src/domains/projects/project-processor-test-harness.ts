@@ -196,7 +196,7 @@ export function makeProjectHarness(
         itx,
         customDomains,
         workerFetch,
-        appendCreationEvents: async ({ events, streamId }) => {
+        appendPlatformEvents: async ({ events, streamId }) => {
           await deps.stream.appendIfStreamId({ events, streamId });
         },
       }),

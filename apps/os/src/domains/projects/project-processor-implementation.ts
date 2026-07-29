@@ -199,7 +199,7 @@ export class ProjectProcessor extends StreamProcessor<
           }
 
           if (event.type === "events.iterate.com/repos/create-failed") {
-            await this.deps.appendCreationEvents({
+            await this.deps.appendPlatformEvents({
               streamId: delivery.streamId,
               events: [
                 ProjectProcessorContract.parseEventInput({
@@ -224,7 +224,7 @@ export class ProjectProcessor extends StreamProcessor<
             );
           } catch (error) {
             if (!isWorkerBuildFailedError(error)) throw error;
-            await this.deps.appendCreationEvents({
+            await this.deps.appendPlatformEvents({
               streamId: delivery.streamId,
               events: [
                 ProjectProcessorContract.parseEventInput({
@@ -241,7 +241,7 @@ export class ProjectProcessor extends StreamProcessor<
             return;
           }
           await timedStep("create-timing", timing, "project-created-append", () =>
-            this.deps.appendCreationEvents({
+            this.deps.appendPlatformEvents({
               streamId: delivery.streamId,
               events: [
                 ProjectProcessorContract.parseEventInput({
@@ -268,7 +268,7 @@ export class ProjectProcessor extends StreamProcessor<
                 }),
                 ProjectProcessorContract.parseEventInput({
                   type: "events.iterate.com/project/worker-updated",
-                  idempotencyKey: `project/worker-update:${seedCommitOid}`,
+                  idempotencyKey: internalStreamId("project-worker-update", seedCommitOid),
                   payload: { commitOid: seedCommitOid },
                 }),
               ],
@@ -289,7 +289,10 @@ export class ProjectProcessor extends StreamProcessor<
           break;
         }
         blockProcessorWhile(async () => {
-          const outcomeIdempotencyKey = `project/worker-update:${event.payload.commitOid}`;
+          const outcomeIdempotencyKey = internalStreamId(
+            "project-worker-update",
+            event.payload.commitOid,
+          );
           const existingOutcome = await this.stream.getEvent({
             idempotencyKey: outcomeIdempotencyKey,
           });
@@ -311,24 +314,34 @@ export class ProjectProcessor extends StreamProcessor<
             servedCommitOid = await this.#waitForDefaultProjectWorker();
           } catch (error) {
             if (!isWorkerBuildFailedError(error)) throw error;
-            await append({
-              type: "events.iterate.com/project/worker-update-failed",
-              idempotencyKey: outcomeIdempotencyKey,
-              payload: {
-                commitOid: event.payload.commitOid,
-                error: errorMessage(error),
-              },
+            await this.deps.appendPlatformEvents({
+              streamId: delivery.streamId,
+              events: [
+                ProjectProcessorContract.parseEventInput({
+                  type: "events.iterate.com/project/worker-update-failed",
+                  idempotencyKey: outcomeIdempotencyKey,
+                  payload: {
+                    commitOid: event.payload.commitOid,
+                    error: errorMessage(error),
+                  },
+                }),
+              ],
             });
             return;
           }
-          await append({
-            type: "events.iterate.com/project/worker-updated",
-            // The trigger owns the outcome key even when the readiness probe
-            // observes a newer HEAD. A lost checkpoint therefore finds this
-            // committed result instead of probing the now-current worker
-            // again and possibly contradicting the prior success.
-            idempotencyKey: outcomeIdempotencyKey,
-            payload: { commitOid: servedCommitOid },
+          await this.deps.appendPlatformEvents({
+            streamId: delivery.streamId,
+            events: [
+              ProjectProcessorContract.parseEventInput({
+                type: "events.iterate.com/project/worker-updated",
+                // The trigger owns the outcome key even when the readiness probe
+                // observes a newer HEAD. A lost checkpoint therefore finds this
+                // committed result instead of probing the now-current worker
+                // again and possibly contradicting the prior success.
+                idempotencyKey: outcomeIdempotencyKey,
+                payload: { commitOid: servedCommitOid },
+              }),
+            ],
           });
         });
         break;
@@ -723,8 +736,8 @@ type ProjectProcessorDeps = {
   itx: ProjectRpcTarget;
   /** Fetch-lane dispatch into the default worker; successful responses carry OS source identity. */
   workerFetch: (request: Request) => Promise<Response>;
-  /** Commit the creation terminal batch through the platform-only stream door. */
-  appendCreationEvents: (args: { events: StreamEventInput[]; streamId: string }) => Promise<void>;
+  /** Commit platform lifecycle facts through the stream's reserved-key door. */
+  appendPlatformEvents: (args: { events: StreamEventInput[]; streamId: string }) => Promise<void>;
   /** Cloudflare custom-hostname provisioning; absent in hosts without it. */
   customDomains?: ProjectCustomDomainDeps;
   /** Injectable clock and sleep — virtual time in tests, real time in prod. */

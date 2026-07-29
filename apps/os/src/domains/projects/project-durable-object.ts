@@ -149,7 +149,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
           request,
           traceRole: "project_config",
         }),
-      appendCreationEvents: async ({ events, streamId }) => {
+      appendPlatformEvents: async ({ events, streamId }) => {
         disposeIgnoredRpcResult(
           await this.#stream[STREAM_DURABLE_OBJECT_STUB].appendCoreEventsIfStreamId({
             events,

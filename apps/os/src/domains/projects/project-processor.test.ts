@@ -37,7 +37,7 @@ describe("ProjectProcessor worker lifecycle", () => {
     expect(h.workerFetchCalls()).toBe(1);
     expect(h.events("events.iterate.com/project/worker-updated")).toMatchObject([
       {
-        idempotencyKey: `project/worker-update:${"b".repeat(40)}`,
+        idempotencyKey: internalStreamId("project-worker-update", "b".repeat(40)),
         payload: { commitOid: "b".repeat(40) },
       },
     ]);
@@ -61,7 +61,7 @@ describe("ProjectProcessor worker lifecycle", () => {
     expect(h.workerFetchCalls()).toBe(2);
     expect(h.events("events.iterate.com/project/worker-updated")).toMatchObject([
       {
-        idempotencyKey: `project/worker-update:${"b".repeat(40)}`,
+        idempotencyKey: internalStreamId("project-worker-update", "b".repeat(40)),
         payload: { commitOid: "b".repeat(40) },
       },
     ]);
@@ -79,7 +79,10 @@ describe("ProjectProcessor worker lifecycle", () => {
 
     expect(h.events("events.iterate.com/project/worker-updated")).toMatchObject([
       {
-        idempotencyKey: `project/worker-update:${CONFIG_REPO_COMMIT_COMPLETED.payload.commitOid}`,
+        idempotencyKey: internalStreamId(
+          "project-worker-update",
+          CONFIG_REPO_COMMIT_COMPLETED.payload.commitOid,
+        ),
         payload: { commitOid: servedCommitOid },
       },
     ]);
@@ -111,7 +114,10 @@ describe("ProjectProcessor worker lifecycle", () => {
     expect(replay.workerFetchCalls()).toBe(0);
     expect(replay.events("events.iterate.com/project/worker-updated")).toMatchObject([
       {
-        idempotencyKey: `project/worker-update:${CONFIG_REPO_COMMIT_COMPLETED.payload.commitOid}`,
+        idempotencyKey: internalStreamId(
+          "project-worker-update",
+          CONFIG_REPO_COMMIT_COMPLETED.payload.commitOid,
+        ),
         payload: { commitOid: servedCommitOid },
       },
     ]);
@@ -195,7 +201,7 @@ describe("ProjectProcessor worker lifecycle", () => {
 
     expect(h.events("events.iterate.com/project/worker-update-failed")).toMatchObject([
       {
-        idempotencyKey: `project/worker-update:${"b".repeat(40)}`,
+        idempotencyKey: internalStreamId("project-worker-update", "b".repeat(40)),
         payload: {
           commitOid: "b".repeat(40),
           error: "Expected ; but found is",
@@ -204,7 +210,7 @@ describe("ProjectProcessor worker lifecycle", () => {
     ]);
     expect(h.events("events.iterate.com/project/worker-updated")).toMatchObject([
       {
-        idempotencyKey: `project/worker-update:${"c".repeat(40)}`,
+        idempotencyKey: internalStreamId("project-worker-update", "c".repeat(40)),
         payload: { commitOid: "c".repeat(40) },
       },
     ]);

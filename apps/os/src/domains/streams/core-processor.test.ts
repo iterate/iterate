@@ -855,6 +855,7 @@ describe("StreamCoreProcessor validation and dispatch", () => {
     "filter-condition-failed",
     "subscription-failing-event-skipped",
     "project-creation-terminal",
+    "project-worker-update",
   ])("public appends cannot use the platform-only %s idempotency-key family", (family) => {
     const { processor, state } = harness();
     expect(() =>
