@@ -14,6 +14,7 @@ const ContainerApplication = z.object({
   name: z.string(),
 });
 const ArtifactRepository = z.object({ name: z.string() });
+const ARTIFACT_REPOSITORY_PAGE_SIZE = 50;
 
 async function listDurableObjectNamespaces(ctx: CfContext) {
   const namespaces: z.infer<typeof DurableObjectNamespace>[] = [];
@@ -43,9 +44,9 @@ async function listArtifactRepositories(ctx: CfContext, namespace: string) {
     for (let page = 1; ; page += 1) {
       const batch = z
         .array(ArtifactRepository)
-        .parse(await ctx.cf(`${path}?per_page=100&page=${page}`));
+        .parse(await ctx.cf(`${path}?per_page=${ARTIFACT_REPOSITORY_PAGE_SIZE}&page=${page}`));
       repositories.push(...batch);
-      if (batch.length < 100) return repositories;
+      if (batch.length < ARTIFACT_REPOSITORY_PAGE_SIZE) return repositories;
     }
   } catch (error) {
     if (error instanceof CloudflareApiError && error.status === 404) return [];
