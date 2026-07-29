@@ -349,12 +349,12 @@ type GithubWebhookPayload = {
   installationId: string;
 };
 
-export type LinkedGithubRepo = {
+type LinkedGithubRepo = {
   path: string;
   route: GithubRepoLink | null;
 };
 
-export async function loadLinkedGithubRepos(itx: Project): Promise<LinkedGithubRepo[]> {
+async function loadLinkedGithubRepos(itx: Project): Promise<LinkedGithubRepo[]> {
   const repos = await itx.repos.list();
   return await Promise.all(
     repos.map(async ({ path }) => ({
