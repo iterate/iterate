@@ -122,16 +122,34 @@ async function destroyContainerApplications(ctx: CfContext, workerName: string) 
  * Worker is Cloudflare's supported whole-namespace Durable Object deletion:
  * its classes, instances, storage, and alarms are deleted with the script.
  */
-export async function destroyWranglerEnvironment(input: {
-  ctx: CfContext;
-  workerNames: string[];
-  osWorkerName?: string;
-}) {
+export async function destroyWranglerEnvironment(
+  input: {
+    ctx: CfContext;
+    osWorkerName?: string;
+  } & (
+    | { previewSlot: number; workerNames?: never }
+    | { previewSlot?: never; workerNames: string[] }
+  ),
+) {
+  let workerNames: string[];
+  if ("previewSlot" in input) {
+    const previewWorkerPattern = new RegExp(`(?:^|-)preview-${input.previewSlot}(?:-|$)`);
+    workerNames = z
+      .array(WorkerScript)
+      .parse(await input.ctx.cf("/workers/scripts"))
+      .filter(({ id }) => previewWorkerPattern.test(id))
+      .map(({ id }) => id);
+  } else {
+    workerNames = input.workerNames;
+  }
+
   if (input.osWorkerName) {
     await destroyContainerApplications(input.ctx, input.osWorkerName);
   }
 
-  for (const workerName of input.workerNames) {
+  // Keep these sequential. Cloudflare rate-limits Worker control-plane calls
+  // per API user, so parallel teardown can starve unrelated deployments.
+  for (const workerName of workerNames) {
     if (
       await deleteIfPresent(
         input.ctx,
@@ -142,7 +160,7 @@ export async function destroyWranglerEnvironment(input: {
     }
   }
 
-  const targetWorkers = new Set(input.workerNames);
+  const targetWorkers = new Set(workerNames);
   const remainingWorkers = z
     .array(WorkerScript)
     .parse(await input.ctx.cf("/workers/scripts"))

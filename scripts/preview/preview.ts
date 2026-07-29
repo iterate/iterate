@@ -2329,7 +2329,6 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     displayName: "Docs",
     appPath: "apps/docs",
     deployCommandArgs: ["pnpm", "run-script", "deploy"],
-    destroyCommandArgs: ["pnpm", "run-script", "destroy"],
     dopplerProject: "docs",
     resolvePreviewAppConfig: (dopplerConfig) => {
       const environment = requirePreviewEnvironment("docs", dopplerConfig, docsEnvs);

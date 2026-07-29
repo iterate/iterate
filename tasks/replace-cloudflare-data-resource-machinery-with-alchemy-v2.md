@@ -52,8 +52,8 @@ It is explicit, idempotent, and ordered:
 
 1. Delete and verify every container application attached to the OS Worker's
    Durable Object namespaces.
-2. Force-delete the seven stage Workers: OS, its two compiler sidecars, Auth,
-   Semaphore, dummy Petshop, and streams example. Cloudflare's supported
+2. Force-delete the eight stage Workers: OS, its two compiler sidecars, Auth,
+   Semaphore, Docs, dummy Petshop, and streams example. Cloudflare's supported
    `force=true` Worker deletion also deletes each script's Durable Object
    namespaces, instances, storage, and alarms. Verify both Workers and
    namespaces are absent.
@@ -133,27 +133,38 @@ net-negative.
 
 ## Proof and rollout
 
-Use `preview_19` as the disposable proof stage:
+Use `preview_5` as the disposable proof stage:
 
-1. Grant the shared preview Cloudflare token account-level Secrets Store Write.
-2. Destroy the stage and prove all Workers, DO namespaces, container apps,
+1. Destroy the stage and prove all Workers, DO namespaces, container apps,
    Artifact repos, D1, KV, and R2 resources are absent.
-3. Apply Alchemy and validate every manifest identifier against Cloudflare.
-4. Apply again and prove identities are stable.
-5. Generate and inspect Auth, Semaphore, and OS Wrangler configs.
-6. Deploy the full preview and run smoke/e2e.
-7. Destroy, rerun destroy to prove idempotence, recreate, and verify fresh
+2. Apply Alchemy and validate every manifest identifier against Cloudflare.
+3. Apply again and prove identities are stable.
+4. Generate and inspect Auth, Semaphore, and OS Wrangler configs.
+5. Deploy the full preview and run smoke/e2e.
+6. Destroy, rerun destroy to prove idempotence, recreate, and verify fresh
    identifiers.
-8. Interrupt an apply, retry it, and verify persisted state converges.
+7. Interrupt an apply, retry it, and verify persisted state converges.
 
 For rollout, quiesce automatic deploys, explicitly nuke all deployed
 environments, discard prototype state out of band, then recreate and redeploy
 the fleet. A merge is not permission to erase production.
 
-Current live blocker: preview_19's old data resources were deleted, but both
-available preview tokens lack Secrets Store Write, so stock Alchemy stops
-before creating replacements. Do not work around that credential prerequisite
-with a local state store or patch.
+Live proof on `preview_5` after granting Secrets Store Write:
+
+- eight stable no-op applies averaged 4.92s;
+- four resource creates averaged 12.36s and four destroys averaged 19.70s;
+- two complete fresh fleet deploys took 223.00s and 200.86s;
+- two complete environment destroys took 29.60s and 33.28s;
+- both destroys left zero matching Workers, DO namespaces, container apps,
+  Artifact repos, D1 databases, KV namespaces, and R2 buckets;
+- no 429 or rate-limit backoff occurred. One first-cycle Wrangler asset upload
+  retried successfully; the second full cycle had no upload retry.
+
+The one-time Alchemy state-store replacement initially observed the old Worker
+version for 59.47s after upload and failed explicitly. A normal rerun converged
+without a patch. The remaining release blocker is replacing the temporary
+upstream snapshot with a published Alchemy prerelease containing both destroy
+fixes.
 
 ## Acceptance criteria
 
@@ -165,7 +176,8 @@ with a local state store or patch.
 - [x] One destroy command owns Artifacts repos, containers, Workers/DOs, and
       the Alchemy stack.
 - [x] Claude Fable Max and Codex GPT-5.6 Sol Max reviews incorporated.
-- [ ] Live deploy, repeat apply, interrupted apply, destroy/recreate, and
-      preview e2e proven after the token permission is fixed.
+- [x] Live create, repeat apply, full Worker deploy/smoke, repeated
+      destroy/recreate, and post-destroy absence proven.
+- [ ] Preview e2e proven by CI on the final pushed revision.
 - [ ] Published Alchemy release replaces the expiring prototype pin.
 - [ ] All-environment destructive rollout receives explicit human approval.

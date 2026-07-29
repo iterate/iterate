@@ -1,7 +1,14 @@
 import { rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
-import { authEnvs, dummyPetshopEnvs, envs, streamsExampleEnvs } from "../envs.ts";
+import {
+  authEnvs,
+  docsEnvs,
+  dummyPetshopEnvs,
+  envs,
+  previewEnvironmentSlotNumber,
+  streamsExampleEnvs,
+} from "../envs.ts";
 import { alchemyResourcesPath } from "./lib/alchemy-resources.ts";
 import { destroyWranglerEnvironment } from "./lib/cloudflare-environment.ts";
 import { run } from "./lib/deploy-helpers.ts";
@@ -57,33 +64,36 @@ export async function destroy(options: { env: string; yesIMeanPrd?: boolean }) {
   }
 
   if (platformEnvironment) {
-    const dummyPetshop = Object.values(dummyPetshopEnvs).find(
-      (environment) => environment.dopplerConfig === options.env,
-    );
-    const streamsExample = Object.values(streamsExampleEnvs).find(
-      (environment) => environment.dopplerConfig === options.env,
-    );
-    if (!dummyPetshop || !streamsExample) {
-      throw new Error(`${options.env} is missing a deployed app definition in envs.ts.`);
-    }
     const ctx = await resolveEnvContext({
       envs,
       dopplerProject: "os",
       env: options.env,
     });
-    await destroyWranglerEnvironment({
-      ctx,
-      osWorkerName: platformEnvironment.osWorkerName,
-      workerNames: [
-        platformEnvironment.osWorkerName,
-        `${platformEnvironment.osWorkerName}-typechecker`,
-        `${platformEnvironment.osWorkerName}-worker-bundler`,
-        platformEnvironment.authWorkerName,
-        platformEnvironment.semaphoreWorkerName,
-        dummyPetshop.workerName,
-        streamsExample.workerName,
-      ],
-    });
+    if (options.env === "prd") {
+      const docs = docsEnvs.prd;
+      const dummyPetshop = dummyPetshopEnvs.prd;
+      const streamsExample = streamsExampleEnvs.prd;
+      await destroyWranglerEnvironment({
+        ctx,
+        osWorkerName: platformEnvironment.osWorkerName,
+        workerNames: [
+          platformEnvironment.osWorkerName,
+          `${platformEnvironment.osWorkerName}-typechecker`,
+          `${platformEnvironment.osWorkerName}-worker-bundler`,
+          platformEnvironment.authWorkerName,
+          platformEnvironment.semaphoreWorkerName,
+          docs.workerName,
+          dummyPetshop.workerName,
+          streamsExample.workerName,
+        ],
+      });
+    } else {
+      await destroyWranglerEnvironment({
+        ctx,
+        osWorkerName: platformEnvironment.osWorkerName,
+        previewSlot: previewEnvironmentSlotNumber(platformEnvironment),
+      });
+    }
   } else {
     const authEnvironment = Object.values(authEnvs).find(
       (environment) => environment.dopplerConfig === options.env,

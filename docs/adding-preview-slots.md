@@ -123,14 +123,14 @@ the point of failure before retrying the slot.
 
 | Layer         | Per-slot state                                                                                                                               |
 | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| Repository    | Stable environment names/hosts/accounts; derived Auth, Streams, Dummy Petshop, OAuth-audience, mobile, and lease projections                 |
-| Doppler       | `preview_N` in `os`, `auth`, `semaphore`, `streams-example-app`, and `dummy-petshop`                                                         |
-| Cloudflare    | Two zones, seven Workers, two D1 databases, two KV namespaces, two R2 buckets, one Queue, DNS, routes, six container apps, and email routing |
+| Repository    | Stable environment names/hosts/accounts; derived Auth, Docs, Streams, Dummy Petshop, OAuth-audience, mobile, and lease projections           |
+| Doppler       | `preview_N` in `os`, `auth`, `docs`, `semaphore`, `streams-example-app`, and `dummy-petshop`                                                 |
+| Cloudflare    | Two zones, eight Workers, two D1 databases, two KV namespaces, two R2 buckets, one Queue, DNS, routes, six container apps, and email routing |
 | External apps | One GitHub App and one Slack app for full integration parity                                                                                 |
 | Lease fleet   | One production Semaphore `environment-config-lease` resource                                                                                 |
 
-The seven Workers are OS, its typechecker and worker-bundler sidecars, Auth,
-Semaphore, Streams, and Dummy Petshop. OS deploys six sandbox container
+The eight Workers are OS, its typechecker and worker-bundler sidecars, Auth,
+Docs, Semaphore, Streams, and Dummy Petshop. OS deploys six sandbox container
 classes. AI Search and the container-backed builder were removed in July 2026;
 old account objects may still exist and are not a slot template.
 

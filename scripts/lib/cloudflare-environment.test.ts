@@ -106,6 +106,54 @@ describe("destroyWranglerEnvironment", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("discovers every Worker in one exact preview slot without scanning settings", async () => {
+    const calls: Array<{ init?: RequestInit; path: string }> = [];
+    let workers = [
+      { id: "os-preview-5" },
+      { id: "os-preview-5-typechecker" },
+      { id: "docs-preview-5" },
+      { id: "auth-preview-5" },
+      { id: "os-preview-50" },
+      { id: "not-preview-5x" },
+      { id: "alchemy-state-store" },
+    ];
+    const cf = async <T = unknown>(path: string, init?: RequestInit): Promise<T> => {
+      calls.push({ init, path });
+      if (path === "/workers/scripts") return workers as T;
+      if (path.startsWith("/workers/durable_objects/namespaces?")) return [] as T;
+      const workerMatch = /^\/workers\/scripts\/([^?]+)\?force=true$/.exec(path);
+      if (workerMatch) {
+        const workerName = decodeURIComponent(workerMatch[1]);
+        workers = workers.filter(({ id }) => id !== workerName);
+        return {} as T;
+      }
+      throw new Error(`Unexpected Cloudflare API call ${path}`);
+    };
+
+    await destroyWranglerEnvironment({
+      ctx: { cf },
+      previewSlot: 5,
+    });
+
+    expect(
+      calls
+        .filter(({ init, path }) => init?.method === "DELETE" && path.includes("/workers/scripts/"))
+        .map(({ path }) => path),
+    ).toEqual([
+      "/workers/scripts/os-preview-5?force=true",
+      "/workers/scripts/os-preview-5-typechecker?force=true",
+      "/workers/scripts/docs-preview-5?force=true",
+      "/workers/scripts/auth-preview-5?force=true",
+    ]);
+    expect(calls.filter(({ path }) => path === "/workers/scripts")).toHaveLength(2);
+    expect(calls.some(({ path }) => path.endsWith("/settings"))).toBe(false);
+    expect(workers).toEqual([
+      { id: "os-preview-50" },
+      { id: "not-preview-5x" },
+      { id: "alchemy-state-store" },
+    ]);
+  });
+
   it("fails instead of looping when listed Artifact repos are already absent", async () => {
     const cf = async <T = unknown>(path: string, init?: RequestInit): Promise<T> => {
       if (path.startsWith("/artifacts/namespaces/os-preview-1-repos/repos?")) {
