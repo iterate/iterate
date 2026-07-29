@@ -418,12 +418,9 @@ test("split view can mount the same stream twice and display appends", async ({ 
   await expect(eventMeta(page, type)).toHaveCount(2);
 });
 
-// Covers the original writer role requirement across browser tabs. Closing the elected writer
-// must release the lock, promote the reader, reconnect, and keep future appends live.
-test("two browser tabs update and hand off writer role after the writer closes", async ({
-  context,
-  page,
-}) => {
+// Dedicated simultaneous cold-bootstrap contract: two tabs racing from an empty local database
+// must converge on exactly one writer and one reader, share events, and hand off cleanly.
+test("simultaneous cold tabs converge and hand off the writer role", async ({ context, page }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
   const otherPage = await context.newPage();
 
@@ -436,8 +433,13 @@ test("two browser tabs update and hand off writer role after the writer closes",
     expect(eventMeta(otherPage, "events.iterate.com/stream/created").first()).toBeVisible(),
   ]);
 
-  const type = "events.iterate.com/debug/playwright-two-tabs";
-  await appendComposerEvent(page, {
+  const writer = (await isWriter(page)) ? page : otherPage;
+  const reader = writer === page ? otherPage : page;
+  await expect(writer.getByTestId("database-role")).toHaveText("writer");
+  await expect(reader.getByTestId("database-role")).toHaveText("reader");
+
+  const type = "events.iterate.com/debug/playwright-simultaneous-cold-tabs";
+  await appendComposerEvent(reader, {
     type,
     payload: { streamPath, value: crypto.randomUUID() },
   });
@@ -447,9 +449,6 @@ test("two browser tabs update and hand off writer role after the writer closes",
     expect(eventMeta(otherPage, type).first()).toBeVisible(),
   ]);
 
-  const writer = (await isWriter(page)) ? page : otherPage;
-  const reader = writer === page ? otherPage : page;
-  await expect(reader.getByTestId("database-role")).toContainText(/reader|writer/);
   await writer.close();
   await expect(reader.getByTestId("database-role")).toHaveText("writer");
 
@@ -998,27 +997,26 @@ test("killing the stream DO mid-blast loses no appends and duplicates none", asy
     .toBe(insertedCount);
 });
 
-// Same guarantee from a READER tab: appends ride the reader's own connection (no
-// writer role required), survive a mid-blast DO kill, and both tabs' databases contain
-// the exact same count.
-test("two tabs: reader blast survives a DO kill and both databases contain every event", async ({
+// Same guarantee from an established READER tab: appends ride the reader's own connection
+// (no writer role required), survive a mid-blast DO kill, and both tabs' databases contain
+// the exact same count. Cold writer election is intentionally outside this contract; the
+// simultaneous-cold-tabs test above owns that independent race.
+test("established reader blast survives a DO kill and both databases contain every event", async ({
   context,
   page,
 }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
-  const otherPage = await context.newPage();
-  await Promise.all([
-    page.goto(streamRoute({ path: streamPath })),
-    otherPage.goto(streamRoute({ path: streamPath })),
-  ]);
-  await Promise.all([
-    expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible(),
-    expect(eventMeta(otherPage, "events.iterate.com/stream/created").first()).toBeVisible(),
-  ]);
+  await page.goto(streamRoute({ path: streamPath }));
+  await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
+  await expect(page.getByTestId("database-role")).toHaveText("writer");
 
-  const writer = (await isWriter(page)) ? page : otherPage;
-  const reader = writer === page ? otherPage : page;
-  await expect(reader.getByTestId("database-role")).toContainText(/reader|writer/);
+  const otherPage = await context.newPage();
+  await otherPage.goto(streamRoute({ path: streamPath }));
+  await expect(eventMeta(otherPage, "events.iterate.com/stream/created").first()).toBeVisible();
+  await expect(otherPage.getByTestId("database-role")).toHaveText("reader");
+
+  const writer = page;
+  const reader = otherPage;
 
   const insertedCount = 2000;
   await reader.getByLabel("Count").fill(String(insertedCount));
