@@ -19,7 +19,6 @@ import {
   SelectValue,
 } from "@iterate-com/ui/components/select";
 import { CircleAlertIcon, UsbIcon } from "lucide-react";
-import { z } from "zod";
 import { FirmwareInstallButton } from "../components/firmware-install-button.tsx";
 import {
   DEFAULT_DEVICE_ID,
@@ -30,16 +29,11 @@ import {
   resolveFirmwareRelease,
 } from "../firmware/catalog.ts";
 import { normalizeOsBaseUrl, type DeviceConfiguration } from "../firmware/config-image.ts";
-
-const DEFAULT_OS_BASE_HOST = "os.iterate.com";
-const Search = z.object({
-  host: z.string().default(DEFAULT_OS_BASE_HOST).catch(DEFAULT_OS_BASE_HOST),
-  project: z.string().default("").catch(""),
-});
+import { DEFAULT_OS_BASE_HOST, KitSearch } from "../kit-search.ts";
 
 export const Route = createFileRoute("/devices/$deviceId/firmware/$firmwareVersion")({
-  validateSearch: Search,
-  beforeLoad: ({ params }) => {
+  validateSearch: KitSearch,
+  beforeLoad: ({ params, search }) => {
     const device = findFirmwareDevice(params.deviceId);
     if (!device) {
       throw redirect({
@@ -48,6 +42,7 @@ export const Route = createFileRoute("/devices/$deviceId/firmware/$firmwareVersi
           deviceId: DEFAULT_DEVICE_ID,
           firmwareVersion: DEFAULT_FIRMWARE_VERSION,
         },
+        search,
       });
     }
     if (
@@ -60,6 +55,7 @@ export const Route = createFileRoute("/devices/$deviceId/firmware/$firmwareVersi
           deviceId: device.id,
           firmwareVersion: DEFAULT_FIRMWARE_VERSION,
         },
+        search,
       });
     }
   },
@@ -327,6 +323,7 @@ function KitPage() {
             <div className="flex flex-col gap-2 sm:col-start-2">
               {release && isEspWebToolsRelease(release) && preparedConfiguration.configuration ? (
                 <FirmwareInstallButton
+                  key={`${device.id}:${release.version}`}
                   configuration={preparedConfiguration.configuration}
                   device={device}
                   formRef={formRef}
