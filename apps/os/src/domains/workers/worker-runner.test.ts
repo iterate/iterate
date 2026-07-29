@@ -116,6 +116,41 @@ it("gives bare fetch and scoped ITX the same host-minted invocation source", () 
   expect(h.projectEgressFetcher).toHaveBeenCalledWith(expect.anything(), "prj_private", source);
 });
 
+it("reuses a loaded worker within one runner but not across runner lifetimes", async () => {
+  h.resolveWorkerSource.mockResolvedValue({
+    ok: true,
+    source: {
+      assetConfig: undefined,
+      assetManifest: {},
+      assets: {},
+      cacheKey: "build-key",
+      commitOid: "commit-1",
+      mainModule: "worker.js",
+      modules: {},
+      wranglerConfig: undefined,
+    },
+  });
+  h.loadResolvedWorker.mockImplementation(() => ({
+    getEntrypoint: () => ({ fetch: () => Promise.resolve(new Response("ok")) }),
+  }));
+  const createRunner = () =>
+    new DynamicWorkerRunner({
+      streamContext: { kind: "scope", scopePath: inlineRef.path },
+      exports: {} as ExecutionContext["exports"],
+      projectId: "prj_private",
+      scopePath: inlineRef.path,
+    });
+  const firstRunner = createRunner();
+
+  await firstRunner.fetch({ ref: inlineRef, request: new Request("https://example.com/1") });
+  await firstRunner.fetch({ ref: inlineRef, request: new Request("https://example.com/2") });
+  await createRunner().fetch({ ref: inlineRef, request: new Request("https://example.com/3") });
+
+  const loaderNonces = h.loadResolvedWorker.mock.calls.map(([input]) => input.loaderInstanceNonce);
+  expect(loaderNonces[0]).toBe(loaderNonces[1]);
+  expect(loaderNonces[2]).not.toBe(loaderNonces[0]);
+});
+
 describe("dynamic worker spans", () => {
   it.each<{
     expectedKind: string;
@@ -276,8 +311,11 @@ it("recovers a safe stateless fetch once with a fresh loader after clone-version
 
   expect(await response.text()).toBe("recovered");
   expect(workerFetch).toHaveBeenCalledTimes(2);
-  expect(h.loadResolvedWorker.mock.calls[0]?.[0].freshInstanceNonce).toBeUndefined();
-  expect(h.loadResolvedWorker.mock.calls[1]?.[0].freshInstanceNonce).toEqual(expect.any(String));
+  const initialLoader = h.loadResolvedWorker.mock.calls[0]?.[0].loaderInstanceNonce;
+  const replacementLoader = h.loadResolvedWorker.mock.calls[1]?.[0].loaderInstanceNonce;
+  expect(initialLoader).toEqual(expect.any(String));
+  expect(replacementLoader).toEqual(expect.any(String));
+  expect(replacementLoader).not.toBe(initialLoader);
   expect(recordedSpans[0]?.attributes).toMatchObject({
     "http.response.status_code": 200,
     "iterate.worker.rpc_clone_version_retry": true,
@@ -321,8 +359,11 @@ it("recovers a stateless event batch once with a fresh loader after clone-versio
   });
 
   expect(processEventBatch).toHaveBeenCalledTimes(2);
-  expect(h.loadResolvedWorker.mock.calls[0]?.[0].freshInstanceNonce).toBeUndefined();
-  expect(h.loadResolvedWorker.mock.calls[1]?.[0].freshInstanceNonce).toEqual(expect.any(String));
+  const initialLoader = h.loadResolvedWorker.mock.calls[0]?.[0].loaderInstanceNonce;
+  const replacementLoader = h.loadResolvedWorker.mock.calls[1]?.[0].loaderInstanceNonce;
+  expect(initialLoader).toEqual(expect.any(String));
+  expect(replacementLoader).toEqual(expect.any(String));
+  expect(replacementLoader).not.toBe(initialLoader);
   expect(recordedSpans[0]?.attributes).toMatchObject({
     "iterate.worker.rpc_clone_version_retry": true,
   });

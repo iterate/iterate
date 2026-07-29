@@ -58,6 +58,7 @@ type StatefulWorkerRpc = {
 export class DynamicWorkerRunner {
   readonly #bindings: WorkerBindings;
   readonly #globalOutbound: Fetcher;
+  #loaderInstanceNonce: string = crypto.randomUUID();
   readonly #projectId: string;
   readonly #scopePath: string;
   readonly #streamContext: StreamContext;
@@ -382,10 +383,13 @@ export class DynamicWorkerRunner {
   }
 
   #loadResolved(resolved: ResolvedWorkerSource, freshInstanceNonce?: string): WorkerStub {
+    if (freshInstanceNonce !== undefined) {
+      this.#loaderInstanceNonce = freshInstanceNonce;
+    }
     return loadResolvedWorker({
       bindings: this.#bindings,
-      freshInstanceNonce,
       globalOutbound: this.#globalOutbound,
+      loaderInstanceNonce: this.#loaderInstanceNonce,
       projectId: this.#projectId,
       resolved,
       scopePath: this.#scopePath,
