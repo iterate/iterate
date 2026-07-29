@@ -37,12 +37,6 @@ export type WorkerBindings = Record<string, unknown>;
 
 const resolvedArtifactMemo = new Map<string, ResolvedWorkerSource>();
 const RESOLVED_ARTIFACT_MEMO_LIMIT = 64;
-// Worker Loader isolates retain the loopback RPC bindings supplied by the
-// parent isolate that created them. This is initialized lazily because Workers
-// forbids random-value generation in module-global execution.
-let parentIsolateLoaderNonce: string | undefined;
-const replacementLoaderNonceMemo = new Map<string, string>();
-const REPLACEMENT_LOADER_NONCE_MEMO_LIMIT = 64;
 
 export async function resolveWorkerSource({
   buildBudgetMs,
@@ -197,29 +191,29 @@ async function resolveFileSource({
 
 export function loadResolvedWorker({
   bindings,
-  freshInstanceNonce,
   globalOutbound,
+  loaderInstanceNonce,
   projectId,
   resolved,
   scopePath,
   streamContext,
 }: {
   bindings: WorkerBindings;
-  /** Force a one-off loader isolate instead of reusing the normal cache hit. */
-  freshInstanceNonce?: string;
   globalOutbound: Fetcher;
+  /** The runner lifetime that minted these loopback RPC bindings. */
+  loaderInstanceNonce: string;
   projectId: string;
   resolved: ResolvedWorkerSource;
   scopePath: string;
   streamContext: StreamContext;
 }): WorkerStub {
-  // Loader isolates capture the parent isolate's loopback RPC bindings.
-  // They must not survive that isolate, including a Durable Object eviction
-  // within one deployment: crossing the orphaned bindings from the next
-  // parent fails with
+  // Loader isolates capture this runner's loopback RPC bindings. They must not
+  // survive the runner that minted them: a stateless ingress runner lives for
+  // one request, while a Durable Object runner lives for one incarnation.
+  // Crossing orphaned bindings from a later runner fails with
   // "Unable to deserialize cloned data due to invalid or unsupported version".
   // Build artifacts remain content-addressed and shared; only the cheap loaded
-  // isolate is parent-scoped. The deployment id still keeps identities easy
+  // isolate is runner-scoped. The deployment id still keeps identities easy
   // to attribute and guarantees separation across a rollout.
   const loaderIdentity = [
     "worker-loader",
@@ -230,23 +224,7 @@ export function loadResolvedWorker({
     JSON.stringify(StreamContext.parse(streamContext)),
     resolved.cacheKey,
   ].join(":");
-  if (freshInstanceNonce) {
-    // Clone-version recovery proved the shared loader for this exact identity
-    // stale. Keep using the successful replacement instead of falling back to
-    // the same broken cache hit on every subsequent event batch.
-    replacementLoaderNonceMemo.delete(loaderIdentity);
-    if (replacementLoaderNonceMemo.size >= REPLACEMENT_LOADER_NONCE_MEMO_LIMIT) {
-      const oldest = replacementLoaderNonceMemo.keys().next().value;
-      if (oldest !== undefined) replacementLoaderNonceMemo.delete(oldest);
-    }
-    replacementLoaderNonceMemo.set(loaderIdentity, freshInstanceNonce);
-  }
-  const cacheKey = [
-    loaderIdentity,
-    freshInstanceNonce ||
-      replacementLoaderNonceMemo.get(loaderIdentity) ||
-      (parentIsolateLoaderNonce ??= crypto.randomUUID()),
-  ].join(":");
+  const cacheKey = [loaderIdentity, loaderInstanceNonce].join(":");
   return env.LOADER.get(cacheKey, () => ({
     compatibilityDate: resolved.wranglerConfig?.compatibilityDate ?? WORKER_COMPATIBILITY_DATE,
     compatibilityFlags: resolved.wranglerConfig?.compatibilityFlags ?? WORKER_COMPATIBILITY_FLAGS,

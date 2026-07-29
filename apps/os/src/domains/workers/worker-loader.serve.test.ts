@@ -336,6 +336,7 @@ describe("resolveWorkerSource", () => {
     loadResolvedWorker({
       bindings: {},
       globalOutbound: {} as Fetcher,
+      loaderInstanceNonce: "runner-1",
       projectId: "prj_wrangler",
       resolved,
       scopePath: "/",
@@ -364,6 +365,7 @@ describe("resolveWorkerSource", () => {
       loadResolvedWorker({
         bindings: {},
         globalOutbound: {} as Fetcher,
+        loaderInstanceNonce: "runner-1",
         projectId: "prj_rollout",
         resolved,
         scopePath: "/",
@@ -380,7 +382,7 @@ describe("resolveWorkerSource", () => {
     ]);
   });
 
-  test("scopes the loader to its parent isolate and keeps a clone-skew replacement", async () => {
+  test("scopes loaded workers to the runner that minted their RPC bindings", async () => {
     const resolved = sourceFrom(
       await resolveWorkerSource({
         projectId: "prj_replacement",
@@ -391,26 +393,28 @@ describe("resolveWorkerSource", () => {
         },
       }),
     );
-    const load = (freshInstanceNonce?: string) =>
+    const load = (loaderInstanceNonce: string) =>
       loadResolvedWorker({
         bindings: {},
-        freshInstanceNonce,
         globalOutbound: {} as Fetcher,
+        loaderInstanceNonce,
         projectId: "prj_replacement",
         resolved,
         scopePath: "/",
         streamContext: { kind: "scope", scopePath: "/" },
       });
 
-    load();
-    load("replacement-1");
-    load();
+    load("runner-1");
+    load("runner-2");
+    load("runner-2");
 
-    const [initial, replacement, reusedReplacement] = h.state.loaderCalls.map(({ key }) => key);
-    expect(initial).toMatch(/:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
-    expect(initial).not.toMatch(/:shared$/);
-    expect(replacement).toMatch(/:replacement-1$/);
-    expect(reusedReplacement).toBe(replacement);
+    const [firstRunner, secondRunner, reusedBySecondRunner] = h.state.loaderCalls.map(
+      ({ key }) => key,
+    );
+    expect(firstRunner).toMatch(/:runner-1$/);
+    expect(secondRunner).toMatch(/:runner-2$/);
+    expect(secondRunner).not.toBe(firstRunner);
+    expect(reusedBySecondRunner).toBe(secondRunner);
   });
 
   test("does not reuse stream-context-bound workers across script executions", async () => {
@@ -428,6 +432,7 @@ describe("resolveWorkerSource", () => {
       loadResolvedWorker({
         bindings: {},
         globalOutbound: {} as Fetcher,
+        loaderInstanceNonce: "runner-1",
         projectId: "prj_context",
         resolved,
         scopePath: "/agents/refund-agent",
