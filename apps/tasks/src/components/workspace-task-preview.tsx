@@ -136,6 +136,8 @@ function FrontmatterTable({ metadata }: { metadata: { key: string; value: string
 
 interface PendingSelection {
   range: { start: number; end: number };
+  /** The body the range was computed against — live edits must remap. */
+  sourceBody: string;
   /** Bubble position, relative to the positioned content wrapper. */
   top: number;
   left: number;
@@ -234,6 +236,23 @@ function AnnotatedPreview({
     setComposerOpen(false);
   }, []);
 
+  // Live edits move the body under a pending selection: re-find the selected
+  // text so the pending paint stays on the right passage, and drop the
+  // selection when it can't be re-found unambiguously (the submit path would
+  // refuse it anyway).
+  useEffect(() => {
+    setPending((current) => {
+      if (current === null || current.sourceBody === body) return current;
+      const exact = current.sourceBody.slice(current.range.start, current.range.end);
+      const first = body.indexOf(exact);
+      if (first === -1 || body.indexOf(exact, first + 1) !== -1) {
+        setComposerOpen(false);
+        return null;
+      }
+      return { ...current, range: { start: first, end: first + exact.length }, sourceBody: body };
+    });
+  }, [body]);
+
   const onMouseUp = useCallback(() => {
     if (identity === null || composerOpen) return;
     const root = markdownRef.current;
@@ -250,11 +269,12 @@ function AnnotatedPreview({
     const wrapperRect = wrapper.getBoundingClientRect();
     setPending({
       range,
+      sourceBody: body,
       top: rect.bottom - wrapperRect.top + 8,
       left: Math.max(0, rect.left - wrapperRect.left),
     });
     setComposerOpen(false);
-  }, [identity, composerOpen]);
+  }, [identity, composerOpen, body]);
 
   const onClick = useCallback(
     (event: React.MouseEvent) => {
@@ -272,7 +292,7 @@ function AnnotatedPreview({
       let best: { threadId: string; width: number } | null = null;
       for (const { thread, resolution } of resolved) {
         const range = resolution.range;
-        if (range === null || offset < range.start || offset >= range.end) continue;
+        if (range === null || offset < range.start || offset > range.end) continue;
         const width = range.end - range.start;
         if (best === null || width < best.width) best = { threadId: thread.id, width };
       }
