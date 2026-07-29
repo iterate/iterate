@@ -52,6 +52,7 @@ function executor(
       events: Parameters<MemoryStream["append"]>;
     }) => Promise<unknown>;
     executorName?: string;
+    putState?: (key: string, value: unknown) => void;
     records?: Map<string, unknown>;
     stream?: MemoryStream;
   } = {},
@@ -68,7 +69,11 @@ function executor(
       kv: {
         delete: (key: string) => records.delete(key),
         get: <T>(key: string) => records.get(key) as T | undefined,
-        put: (key: string, value: unknown) => records.set(key, value),
+        put:
+          input.putState ??
+          ((key: string, value: unknown) => {
+            records.set(key, value);
+          }),
       },
       setAlarm,
     },
@@ -171,6 +176,62 @@ describe("ScriptExecutionDurableObject alarm ownership", () => {
     await firstAlarm;
     expect(h.invoke).toHaveBeenCalledOnce();
     expect(stream.events).toHaveLength(1);
+    consoleWarn.mockRestore();
+  });
+
+  it("recovers a committed result when executor storage resets at the terminal write", async () => {
+    const invocation = Promise.withResolvers<unknown>();
+    h.invoke.mockReturnValueOnce(invocation.promise);
+    const records = new Map<string, unknown>();
+    const stream = new MemoryStream(SCOPE_PATH);
+    let failNextStateWrite = false;
+    const first = executor({
+      putState: (key, value) => {
+        if (failNextStateWrite) {
+          failNextStateWrite = false;
+          throw new Error("Internal error in Durable Object storage caused object to be reset");
+        }
+        records.set(key, value);
+      },
+      records,
+      stream,
+    });
+    await first.value.start("async () => ({ answer: 42 })", options());
+    const firstAlarm = first.value.alarm();
+    await vi.waitFor(() => {
+      expect(records.get(STATE_KEY)).toMatchObject({ phase: "running" });
+    });
+
+    // Cloudflare reset the real executor on this exact boundary: the dynamic
+    // worker had returned, but the next executor-state write failed.
+    failNextStateWrite = true;
+    invocation.resolve({ answer: 42 });
+    await expect(firstAlarm).rejects.toThrow("Internal error in Durable Object storage");
+
+    expect(records.get(STATE_KEY)).toMatchObject({ phase: "running" });
+    expect(stream.events).toMatchObject([
+      {
+        payload: {
+          executionId: EXECUTION_ID,
+          settlement: { result: { answer: 42 }, status: "succeeded" },
+        },
+      },
+    ]);
+
+    const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const recovered = executor({ records, stream });
+    await recovered.value.alarm();
+
+    expect(h.invoke).toHaveBeenCalledOnce();
+    expect(records.get(STATE_KEY)).toMatchObject({ phase: "settled" });
+    expect(stream.events).toHaveLength(1);
+    expect(consoleInfo).toHaveBeenCalledWith(
+      "[script-execution] recovered committed settlement after executor reset",
+      { executionId: EXECUTION_ID, status: "succeeded" },
+    );
+    expect(consoleWarn).not.toHaveBeenCalled();
+    consoleInfo.mockRestore();
     consoleWarn.mockRestore();
   });
 

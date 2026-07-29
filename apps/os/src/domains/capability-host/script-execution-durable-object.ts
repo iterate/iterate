@@ -140,9 +140,15 @@ export function sandboxExecTimeout(input: {
  * phase is also the at-most-once fence:
  *
  * - queued may invoke once, after first persisting running;
- * - a recovered running phase is settled orphaned and is never invoked again;
+ * - a recovered running phase first accepts an already-committed keyed
+ *   settlement, otherwise it is settled orphaned and is never invoked again;
  * - settling retries only the exact keyed stream append;
  * - settled is a permanent, compact tombstone for duplicate handoffs.
+ *
+ * A terminal invocation result is appended to the stream before replacing
+ * `running` with the compact tombstone. If executor storage resets at that
+ * boundary, the alarm retry can recover the exact keyed stream fact instead
+ * of misclassifying the completed script as orphaned.
  *
  * This deliberately prefers an explicit possibly-partial failure over replaying
  * arbitrary user code after an actor reset.
@@ -181,6 +187,20 @@ export class ScriptExecutionDurableObject extends DurableObject<Env> {
       return;
     }
     if (state.phase === "running") {
+      const committedSettlement = await readScriptExecutionSettlement({
+        executionId: state.request.options.streamContext.executionId,
+        getStream: () => this.#settlementStream(state.request.options),
+        settlementExpiresAt: state.request.options.settlementExpiresAt,
+      });
+      if (committedSettlement !== undefined) {
+        console.info("[script-execution] recovered committed settlement after executor reset", {
+          executionId: state.request.options.streamContext.executionId,
+          status: committedSettlement.status,
+        });
+        this.#putState({ fingerprint: state.fingerprint, phase: "settled" });
+        return;
+      }
+
       console.warn("[script-execution] recovered interrupted alarm without replaying script", {
         executionId: state.request.options.streamContext.executionId,
       });
@@ -189,7 +209,6 @@ export class ScriptExecutionDurableObject extends DurableObject<Env> {
         phase: "settling",
         settlement: settlementForUndrivenScript("started"),
       };
-      this.#putState(settling);
       await this.#appendAndFinish(settling);
       return;
     }
@@ -215,14 +234,12 @@ export class ScriptExecutionDurableObject extends DurableObject<Env> {
       settlement = await this.#invoke(request);
     }
 
-    const settling: Extract<ScriptExecutionState, { phase: "settling" }> = {
+    await this.#appendAndFinish({
       fingerprint: state.fingerprint,
       phase: "settling",
       request,
       settlement,
-    };
-    this.#putState(settling);
-    await this.#appendAndFinish(settling);
+    });
   }
 
   async #invoke({ code, options }: ScriptExecutionRequest): Promise<ScriptExecutionSettlement> {
@@ -255,22 +272,33 @@ export class ScriptExecutionDurableObject extends DurableObject<Env> {
     state: Extract<ScriptExecutionState, { phase: "settling" }>,
   ): Promise<void> {
     const { options } = state.request;
-    await appendScriptExecutionSettlement({
-      executionId: options.streamContext.executionId,
-      getStream: () =>
-        this.env.STREAM.getByName(
-          DurableObjectNameCodec.stringify({
-            projectId: options.projectId,
-            path: options.scopePath,
-          }),
-        ),
-      projectId: options.projectId,
-      scopePath: options.scopePath,
-      settlement: state.settlement,
-      settlementExpiresAt: options.settlementExpiresAt,
-      streamId: options.streamId,
-    });
+    try {
+      await appendScriptExecutionSettlement({
+        executionId: options.streamContext.executionId,
+        getStream: () => this.#settlementStream(options),
+        projectId: options.projectId,
+        scopePath: options.scopePath,
+        settlement: state.settlement,
+        settlementExpiresAt: options.settlementExpiresAt,
+        streamId: options.streamId,
+      });
+    } catch (error) {
+      // Preserve the exact terminal result only when its authoritative stream
+      // append could not be confirmed. An alarm retry can then replay that
+      // keyed append without invoking arbitrary code again.
+      this.#putState(state);
+      throw error;
+    }
     this.#putState({ fingerprint: state.fingerprint, phase: "settled" });
+  }
+
+  #settlementStream(options: ScriptExecutionStartOptions): ScriptSettlementStream {
+    return this.env.STREAM.getByName(
+      DurableObjectNameCodec.stringify({
+        projectId: options.projectId,
+        path: options.scopePath,
+      }),
+    );
   }
 
   async #assertIdentity(options: ScriptExecutionStartOptions): Promise<void> {
@@ -382,6 +410,37 @@ type ScriptSettlementStream = {
   }): Promise<StreamEvent | undefined> | StreamEvent | undefined;
 };
 
+function scriptExecutionSettlementIdempotencyKey(executionId: string): string {
+  return `${CapabilityHostProcessorContract.slug}/script-run-settled@${executionId}`;
+}
+
+async function readScriptExecutionSettlement(input: {
+  executionId: string;
+  getStream: () => ScriptSettlementStream;
+  settlementExpiresAt: number;
+}): Promise<ScriptExecutionSettlement | undefined> {
+  const idempotencyKey = scriptExecutionSettlementIdempotencyKey(input.executionId);
+  const read = Promise.resolve(input.getStream().getEvent({ idempotencyKey }));
+  const readOutcome = await settleByDeadline(
+    read,
+    Math.min(input.settlementExpiresAt, Date.now() + SETTLEMENT_APPEND_ATTEMPT_TIMEOUT_MS),
+    Date.now,
+  );
+  if (readOutcome.status === "deadline") {
+    void read.then(disposeIgnoredRpcResult, () => undefined);
+    throw new Error(
+      `${STREAM_UNAVAILABLE_MESSAGE_PREFIX}script settlement read received no response within ` +
+        `${SETTLEMENT_APPEND_ATTEMPT_TIMEOUT_MS}ms`,
+    );
+  }
+  if (readOutcome.status === "rejected") throw readOutcome.error;
+  try {
+    return settlementFromScriptCompletionEvent(readOutcome.value, input.executionId);
+  } finally {
+    disposeIgnoredRpcResult(readOutcome.value);
+  }
+}
+
 export async function appendScriptExecutionSettlement(input: {
   executionId: string;
   getStream: () => ScriptSettlementStream;
@@ -391,7 +450,7 @@ export async function appendScriptExecutionSettlement(input: {
   settlementExpiresAt: number;
   streamId: string;
 }): Promise<void> {
-  const idempotencyKey = `${CapabilityHostProcessorContract.slug}/script-run-settled@${input.executionId}`;
+  const idempotencyKey = scriptExecutionSettlementIdempotencyKey(input.executionId);
   const event: StreamEventInput = {
     ...scriptCompletionInput({
       executionId: input.executionId,
@@ -466,25 +525,11 @@ export async function appendScriptExecutionSettlement(input: {
 
     let durableSettlement: ScriptExecutionSettlement | undefined;
     try {
-      const read = Promise.resolve(input.getStream().getEvent({ idempotencyKey }));
-      const readOutcome = await settleByDeadline(
-        read,
-        Math.min(input.settlementExpiresAt, Date.now() + SETTLEMENT_APPEND_ATTEMPT_TIMEOUT_MS),
-        Date.now,
-      );
-      if (readOutcome.status === "deadline") {
-        void read.then(disposeIgnoredRpcResult, () => undefined);
-        throw new Error("timed out reading back the script settlement");
-      }
-      if (readOutcome.status === "rejected") throw readOutcome.error;
-      try {
-        durableSettlement = settlementFromScriptCompletionEvent(
-          readOutcome.value,
-          input.executionId,
-        );
-      } finally {
-        disposeIgnoredRpcResult(readOutcome.value);
-      }
+      durableSettlement = await readScriptExecutionSettlement({
+        executionId: input.executionId,
+        getStream: input.getStream,
+        settlementExpiresAt: input.settlementExpiresAt,
+      });
       if (durableSettlement === undefined) throw appendError;
     } catch (verificationError) {
       if (verificationError === appendError) throw appendError;
