@@ -1,11 +1,11 @@
 // The project processor CONTRACT. Self-contained: state schema, events,
 // consumes/emits, deps — and it OWNS every nested data structure (birth
-// certificate, custom-domain snapshot, egress rule, approval payloads);
+// certificate, custom-domain entry, egress rule, approval payloads);
 // consumers reach into this module for pieces, never the other way around.
 // Schemas are spelled INLINE in the contract; the ones it genuinely needs
-// more than once (the project creation payload, the Cloudflare custom-domain
-// snapshot, the egress rule) are hoisted functions defined below the contract,
-// so the contract still opens the file.
+// more than once (the project creation payload, terminal creation facts, and
+// the egress rule) are hoisted functions below, so the contract still opens
+// the file.
 //
 // The pure half of the human-approval scheme (rule matching, the canonical
 // approval message, signature verification) lives in egress-approvals.ts and
@@ -32,7 +32,7 @@ import { StreamContext } from "./stream-context.ts";
 
 export const ProjectProcessorContract = defineProcessorContract({
   slug: "project",
-  version: "0.5.0",
+  version: "0.6.0",
   description:
     "Project root: runs the project/create-requested → project/created bootstrap saga, births " +
     "the sibling processors every project gets (root capability host, primary scheduler, config " +
@@ -117,30 +117,20 @@ export const ProjectProcessorContract = defineProcessorContract({
       }),
     customDomains: z
       .array(
-        projectCustomDomainCloudflareSnapshotSchema().extend({
-          kind: z
-            .enum(["cloudflare", "direct"])
-            .default("cloudflare")
-            .meta({
-              description:
-                "How the hostname routes: `cloudflare` = a Cloudflare-for-SaaS custom hostname " +
-                "this processor provisions and polls; `direct` = a platform-owned apex served " +
-                "by worker routes plus an operator-primed hostname-directory registration — " +
-                "no provisioning lifecycle, and the provisioner must never touch it.",
-            }),
-          createdAt: z
-            .string()
-            .meta({ description: "createdAt of the event that first recorded this hostname." }),
-          updatedAt: z
-            .string()
-            .meta({ description: "createdAt of the newest event that touched this hostname." }),
+        z.object({
+          hostname: z.string().meta({ description: "The custom hostname." }),
+          kind: z.enum(["cloudflare", "direct"]).meta({
+            description:
+              "`cloudflare` is provisioned through Cloudflare for SaaS; `direct` is a " +
+              "platform-owned hostname already covered by a Worker route.",
+          }),
         }),
       )
       .default([])
       .meta({
         description:
-          "The project's custom domains, sorted by hostname: the newest Cloudflare snapshot " +
-          "per hostname plus local bookkeeping timestamps.",
+          "A small display/export catalog. The hostname KV directory, not this state, is the " +
+          "routing authority.",
       }),
     egressRules: z
       .array(egressRuleSchema())
@@ -257,33 +247,20 @@ export const ProjectProcessorContract = defineProcessorContract({
           .meta({ description: "The DNS hostname to provision, e.g. app.acme-inc.com." }),
       }),
     },
-    "events.iterate.com/project/custom-domain-refresh-requested": {
-      description: "Refresh Cloudflare status for a custom domain.",
-      payloadSchema: z.object({
-        hostname: z.string().meta({ description: "The already-configured hostname to re-poll." }),
-      }),
-    },
     "events.iterate.com/project/custom-domain-remove-requested": {
       description: "A custom domain should be removed from this project.",
       payloadSchema: z.object({
         hostname: z.string().meta({ description: "The hostname to detach from the project." }),
       }),
     },
-    "events.iterate.com/project/custom-domain-cloudflare-observed": {
-      description: "Cloudflare custom-hostname status observed for a project custom domain.",
-      payloadSchema: projectCustomDomainCloudflareSnapshotSchema(),
-    },
-    "events.iterate.com/project/custom-domain-direct-observed": {
+    "events.iterate.com/project/custom-domain-configured": {
       description:
-        "The hostname routes to this project directly: a platform-owned apex served by worker " +
-        "routes plus an operator-primed hostname-directory registration, with no " +
-        "Cloudflare-for-SaaS custom hostname behind it. Appended by platform operators, never by " +
-        "this processor; recording it keeps the settings UI honest without starting any " +
-        "provisioning lifecycle — add/refresh/remove requests for a direct hostname are inert.",
+        "The hostname is configured and its KV routing registration points at this project.",
       payloadSchema: z.object({
-        hostname: z
-          .string()
-          .meta({ description: "The directly routed hostname, e.g. iterate.com." }),
+        hostname: z.string().meta({ description: "The configured hostname." }),
+        kind: z.enum(["cloudflare", "direct"]).meta({
+          description: "Whether Cloudflare for SaaS or a direct Worker route serves it.",
+        }),
       }),
     },
     "events.iterate.com/project/custom-domain-provision-failed": {
@@ -303,8 +280,8 @@ export const ProjectProcessorContract = defineProcessorContract({
       description:
         "Replace the project's egress approval rules wholesale. Every outbound request is matched " +
         "against the ordered list at the Project DO's egress decision point (first match wins, no " +
-        "match allows): a `hold` verdict parks the request until a human grants or rejects it on " +
-        "this stream, `deny` refuses it outright.",
+        "match allows): a `hold` verdict parks the request in an approval batch until a human " +
+        "decides it on this stream, `deny` refuses it outright.",
       payloadSchema: z.object({
         rules: z
           .array(egressRuleSchema())
@@ -313,9 +290,10 @@ export const ProjectProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/project/human-approval-key-added": {
       description:
-        "Enroll a public key whose holder may grant held egress requests. Once any active key " +
-        "exists, grants MUST carry a valid ECDSA P-256 signature over the canonical approval " +
-        "message (approval.v1) — unsigned grants are ignored. Rejections never require a signature.",
+        "Enroll a public key whose holder may approve held egress batches. Once any active key " +
+        "exists, decisions containing any `approve` verdict MUST carry a valid ECDSA P-256 " +
+        "signature over the canonical approval message (approval.v2) — unsigned approvals are " +
+        "ignored. All-reject decisions never require a signature.",
       payloadSchema: z.object({
         keyId: z
           .string()
@@ -337,87 +315,107 @@ export const ProjectProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/project/human-approval-requested": {
       description:
-        "An outbound request matched a `hold` rule and is parked at the egress door awaiting a " +
-        "human. Everything is placeholder form — getSecret(...) references, never material. The " +
-        "requested event's offset IS the held request's identity: grants and rejections reference " +
-        "it as approvalRequestEventOffset.",
+        "A batch of outbound requests matched one `hold` rule and is parked at the egress door " +
+        "awaiting a human — a lone request is a batch of one. Everything is placeholder form — " +
+        "getSecret(...) references, never material. The requested event's offset IS the batch's " +
+        "identity: the decision references it as approvalRequestEventOffset, and each request's " +
+        "position in `requests` is its index within the batch.",
       payloadSchema: z.object({
-        method: z.string().meta({ description: "HTTP method of the held request." }),
-        url: z.string().meta({ description: "Destination URL of the held request." }),
-        headers: z.record(z.string(), z.string()).meta({
-          description: "All headers as they would be forwarded, placeholder form.",
-        }),
-        body: z
-          .object({
-            encoding: z.enum(["utf8", "base64"]),
-            content: z.string(),
-            originalByteLength: z.number().int().nonnegative().optional(),
-            sha256: z.string(),
-            truncated: z.boolean().default(false),
-          })
-          .nullish()
+        requests: z
+          .array(
+            z.object({
+              method: z.string().meta({ description: "HTTP method of the held request." }),
+              url: z.string().meta({ description: "Destination URL of the held request." }),
+              headers: z.record(z.string(), z.string()).meta({
+                description: "All headers as they would be forwarded, placeholder form.",
+              }),
+              body: z
+                .object({
+                  encoding: z.enum(["utf8", "base64"]),
+                  content: z.string(),
+                  originalByteLength: z.number().int().nonnegative().optional(),
+                  sha256: z.string(),
+                  truncated: z.boolean().default(false),
+                })
+                .nullish()
+                .meta({
+                  description:
+                    "A bounded inspection prefix in placeholder form plus the complete body's " +
+                    "SHA-256.",
+                }),
+              secretPaths: z.array(z.string()).default([]).meta({
+                description:
+                  'Secret paths the request references — the "spends this secret" headline.',
+              }),
+            }),
+          )
+          .min(1)
           .meta({
             description:
-              "A bounded inspection prefix in placeholder form plus the complete body's SHA-256.",
+              "The held requests, in arrival order. Index within this array is each request's " +
+              "identity inside the batch (verdicts and settlements refer to it).",
           }),
-        secretPaths: z.array(z.string()).default([]).meta({
-          description: 'Secret paths the request references — the "spends this secret" headline.',
-        }),
-        ruleKey: z.string().meta({ description: "The rule that caught the request." }),
+        ruleKey: z.string().meta({ description: "The one rule that caught every request here." }),
         ruleDescription: z.string().default("").meta({
           description: "The matched rule's human-readable explanation, snapshotted at gate time.",
         }),
         streamContext: StreamContext.optional().meta({
           description:
-            "Host-minted durable stream context for the invocation that attempted this request.",
+            "Host-minted durable stream context for the invocation that attempted these " +
+            "requests. Batches with 2+ requests always carry script-execution provenance — " +
+            "only one script run's concurrent burst at one rule ever coalesces.",
         }),
         expiresAt: z.string().meta({
-          description: "ISO horizon after which the hold auto-rejects with reason expired.",
+          description: "ISO horizon after which the whole batch auto-rejects as expired.",
         }),
       }),
     },
-    "events.iterate.com/project/human-approval-granted": {
+    "events.iterate.com/project/human-approval-decided": {
       description:
-        "A human approved a held egress request. When the project has active approval keys, " +
-        "`keyId` + `signature` (raw 64-byte r‖s ECDSA P-256 over the canonical approval.v1 " +
-        "message, base64) are required and verified before the request is released.",
+        "THE verdict on a held batch — one event decides every request in it, by index. When the " +
+        "project has active approval keys, a decision containing any `approve` verdict must carry " +
+        "`keyId` + `signature` (raw 64-byte r‖s ECDSA P-256 over the canonical approval.v2 " +
+        "message, base64) or the whole event is ignored. All-reject decisions never need a " +
+        "signature — deny is the fail-safe direction. The door honors the FIRST decided event " +
+        "referencing a batch; later ones are ignored.",
       payloadSchema: z.object({
         approvalRequestEventOffset: z.number().int().nonnegative().meta({
+          description: "The batch's identity: the offset of its human-approval-requested event.",
+        }),
+        verdicts: z
+          .array(z.enum(["approve", "reject"]))
+          .min(1)
+          .meta({
+            description:
+              "One verdict per request, same order as the batch's `requests` array. A count " +
+              "mismatch makes the event malformed and ignored.",
+          }),
+        decidedBy: z.enum(["human", "expiry"]).meta({
           description:
-            "The held request's identity: the offset of its human-approval-requested event.",
+            "Who decided: a human, or the door's own timeout (expiry is always all-reject and " +
+            "never signed).",
         }),
         keyId: z
           .string()
           .optional()
-          .meta({ description: "The enrolled key that signed this grant." }),
+          .meta({ description: "The enrolled key that signed this decision." }),
         signature: z.string().optional().meta({
           description:
-            "Base64 raw 64-byte r‖s ECDSA P-256 signature over the canonical approval message.",
+            "Base64 raw 64-byte r‖s ECDSA P-256 signature over the canonical approval.v2 message.",
         }),
-      }),
-    },
-    "events.iterate.com/project/human-approval-rejected": {
-      description:
-        "A held egress request was refused — by a human, or automatically when its hold expired. " +
-        "Rejections are deliberately unsigned: deny is the fail-safe direction.",
-      payloadSchema: z.object({
-        approvalRequestEventOffset: z.number().int().nonnegative().meta({
-          description:
-            "The held request's identity: the offset of its human-approval-requested event.",
-        }),
-        reason: z
-          .enum(["human", "expired"])
-          .meta({ description: "Who refused: a human, or the hold's timeout." }),
       }),
     },
     "events.iterate.com/project/human-approval-settled": {
       description:
-        "What actually happened after a granted request was released: the upstream status, or the " +
-        "delivery failure. Approval and outcome are separate facts — audits want both.",
+        "What actually happened after one approved request was released: the upstream status, or " +
+        "the delivery failure. Approval and outcome are separate facts — audits want both — and " +
+        "a batch's released requests finish independently, so each settles on its own.",
       payloadSchema: z.object({
         approvalRequestEventOffset: z.number().int().nonnegative().meta({
-          description:
-            "The held request's identity: the offset of its human-approval-requested event.",
+          description: "The batch's identity: the offset of its human-approval-requested event.",
+        }),
+        index: z.number().int().nonnegative().meta({
+          description: "Which request in the batch this settlement is about.",
         }),
         status: z
           .number()
@@ -438,10 +436,8 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/project/human-approval-key-revoked",
     "events.iterate.com/project/human-approval-requested",
     "events.iterate.com/project/custom-domain-add-requested",
-    "events.iterate.com/project/custom-domain-cloudflare-observed",
-    "events.iterate.com/project/custom-domain-direct-observed",
+    "events.iterate.com/project/custom-domain-configured",
     "events.iterate.com/project/custom-domain-provision-failed",
-    "events.iterate.com/project/custom-domain-refresh-requested",
     "events.iterate.com/project/custom-domain-remove-requested",
     "events.iterate.com/project/custom-domain-removed",
     "events.iterate.com/project/onboarding-completed",
@@ -477,7 +473,7 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/email/created",
     "events.iterate.com/capability-host/created",
     "events.iterate.com/scheduler/created",
-    "events.iterate.com/project/custom-domain-cloudflare-observed",
+    "events.iterate.com/project/custom-domain-configured",
     "events.iterate.com/project/custom-domain-provision-failed",
     "events.iterate.com/project/custom-domain-removed",
     "events.iterate.com/project/created",
@@ -592,21 +588,19 @@ export function parseProjectCreationTerminal(input: {
 /** One custom domain as reduced onto project processor state. */
 export type ProjectCustomDomain = ProjectProcessorState["customDomains"][number];
 
-/** The Cloudflare custom-hostname snapshot (the custom-domain-cloudflare-observed payload). */
-export type ProjectCustomDomainCloudflareSnapshot = z.output<
-  (typeof ProjectProcessorContract.events)["events.iterate.com/project/custom-domain-cloudflare-observed"]["payloadSchema"]
->;
-
 /** One egress approval rule as reduced onto project processor state. */
 export type EgressRule = ProjectProcessorState["egressRules"][number];
 
 /** One enrolled approval public key as reduced onto project processor state. */
 export type HumanApprovalKey = ProjectProcessorState["humanApprovalKeys"][number];
 
-/** The complete human-approval-requested event payload; approval.v1 signs its request-subject fields. */
+/** The complete human-approval-requested event payload — a batch; approval.v2 signs its request-subject fields plus the verdicts. */
 export type HumanApprovalRequestedPayload = z.output<
   (typeof ProjectProcessorContract.events)["events.iterate.com/project/human-approval-requested"]["payloadSchema"]
 >;
+
+/** One held request inside a batch. */
+export type HeldRequest = HumanApprovalRequestedPayload["requests"][number];
 
 /**
  * The payload shared by the creation intent and terminal certificate.
@@ -665,67 +659,6 @@ function projectCreationFailureSchema() {
 }
 
 /**
- * The Cloudflare custom-hostname snapshot — used twice (the
- * custom-domain-cloudflare-observed payload and, extended with local
- * timestamps, the reduced state's customDomains entries), so it lives in this
- * hoisted function instead of inline.
- */
-function projectCustomDomainCloudflareSnapshotSchema() {
-  return z.object({
-    cloudflareHostnameId: z.string().nullable().default(null).meta({
-      description: "Cloudflare's custom-hostname id; null before the create call succeeded.",
-    }),
-    error: z.string().nullable().default(null).meta({
-      description: "The newest provisioning/validation error Cloudflare reported, if any.",
-    }),
-    hostname: z.string().meta({ description: "The custom hostname this snapshot describes." }),
-    hostnameStatus: z.string().nullable().default(null).meta({
-      description: "Cloudflare's raw hostname status (pending, active, …); null when unknown.",
-    }),
-    ownershipVerification: z
-      .object({
-        name: z.string().meta({ description: "TXT record name proving hostname ownership." }),
-        value: z.string().meta({ description: "TXT record value proving hostname ownership." }),
-      })
-      .nullable()
-      .default(null)
-      .meta({
-        description:
-          "The DNS TXT record the owner must create to prove control; null once verified.",
-      }),
-    sslStatus: z.string().nullable().default(null).meta({
-      description: "Cloudflare's raw certificate status; null when unknown.",
-    }),
-    status: z
-      .enum(["requested", "provisioning", "pending_validation", "active", "failed", "removing"])
-      .meta({
-        description:
-          "Our rollup of the raw statuses: what the dashboard shows and routing acts on. " +
-          "Only `active` routes traffic.",
-      }),
-    validationRecords: z
-      .array(
-        z.object({
-          name: z.string().meta({ description: "TXT record name for certificate validation." }),
-          status: z
-            .string()
-            .nullable()
-            .default(null)
-            .meta({ description: "Cloudflare's per-record validation status; null when unknown." }),
-          value: z.string().meta({ description: "TXT record value for certificate validation." }),
-        }),
-      )
-      .default([])
-      .meta({
-        description: "DNS records the owner still has to create for certificate validation.",
-      }),
-    wildcard: z.boolean().default(true).meta({
-      description: "Whether the certificate also covers *.<hostname> (we always request it).",
-    }),
-  });
-}
-
-/**
  * One egress approval rule — used twice (the egress-rules-configured payload
  * and the reduced state's egressRules), so it lives in this hoisted function
  * instead of inline.
@@ -766,7 +699,22 @@ function egressRuleSchema() {
       description: "hold parks the request for a human; deny refuses it outright.",
     }),
     approvalTimeoutMs: z.number().int().positive().max(3_600_000).default(600_000).meta({
-      description: "How long a held request waits for a human before auto-rejecting.",
+      description: "How long a held batch waits for a human before auto-rejecting.",
     }),
+    debounceMs: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(60_000)
+      .nullable()
+      .default(100)
+      .meta({
+        description:
+          "How long the egress door waits for more of a script run's concurrent requests before " +
+          "committing them as ONE approval batch (each arrival extends the wait, capped at 3x). " +
+          "Only concurrent requests can ever coalesce — a sequential caller's next request starts " +
+          "after the previous one is approved — so the default 100ms covers Promise.all bursts. " +
+          "null disables batching: every request becomes its own batch of one.",
+      }),
   });
 }

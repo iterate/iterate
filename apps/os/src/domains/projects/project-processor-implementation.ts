@@ -86,9 +86,9 @@ const SIBLING_BIRTH_BARRIER_TIMEOUT_MS = 75_000;
  *
  * CUSTOM DOMAINS + EGRESS POLICY. Custom-domain requests call the injected
  * Cloudflare provisioner and record what happened as
- * `custom-domain-cloudflare-observed` / `custom-domain-provision-failed` /
- * `custom-domain-removed` facts; state holds the newest snapshot per
- * hostname. Egress rules and human-approval keys are pure reductions — the
+ * `custom-domain-configured` / `custom-domain-provision-failed` /
+ * `custom-domain-removed` facts; state holds only hostname and routing kind.
+ * Egress rules and human-approval keys are pure reductions — the
  * Project DO's egress gate reads them from state; the approval lifecycle
  * events (`human-approval-*`) are appended by the DO and the approve CLI,
  * not by this processor.
@@ -333,15 +333,10 @@ export class ProjectProcessor extends StreamProcessor<
         });
         break;
       }
-      case "events.iterate.com/project/custom-domain-add-requested":
-      case "events.iterate.com/project/custom-domain-refresh-requested": {
+      case "events.iterate.com/project/custom-domain-add-requested": {
         const { hostname } = event.payload;
-        // Direct registrations (owned apexes on worker routes + an
-        // operator-primed hostname-directory entry) have no Cloudflare
-        // hostname to provision or poll. Running ensure() for one would
-        // create a pending SaaS hostname whose non-active snapshot DELETES
-        // the live KV registration — taking the domain down. Inert on
-        // purpose.
+        // Direct registrations are already covered by Worker routes. Never
+        // create a Cloudflare-for-SaaS resource for one.
         if (customDomainKind(state, hostname) === "direct") break;
         blockProcessorWhile(async () => {
           try {
@@ -349,20 +344,11 @@ export class ProjectProcessor extends StreamProcessor<
             const project =
               (await provisioner.readProject()) ??
               projectRecordFromState(state, this.deps.itx.projectId);
-            const snapshot =
-              event.type === "events.iterate.com/project/custom-domain-add-requested"
-                ? await provisioner.ensure({ hostname, project })
-                : await provisioner.refresh({
-                    cloudflareHostnameId: state.customDomains.find(
-                      (candidate) => candidate.hostname === hostname,
-                    )?.cloudflareHostnameId,
-                    hostname,
-                    project,
-                  });
+            await provisioner.ensure({ hostname, project });
             await append({
-              type: "events.iterate.com/project/custom-domain-cloudflare-observed",
-              idempotencyKey: this.idempotencyKey("custom-domain-observed", event),
-              payload: snapshot,
+              type: "events.iterate.com/project/custom-domain-configured",
+              idempotencyKey: this.idempotencyKey("custom-domain-configured", event),
+              payload: { hostname, kind: "cloudflare" },
             });
           } catch (error) {
             await append({
@@ -383,8 +369,7 @@ export class ProjectProcessor extends StreamProcessor<
         if (customDomainKind(state, hostname) === "direct") break;
         blockProcessorWhile(async () => {
           try {
-            const domain = state.customDomains.find((candidate) => candidate.hostname === hostname);
-            if (!domain) {
+            if (!state.customDomains.some((candidate) => candidate.hostname === hostname)) {
               throw new Error(`Custom domain "${hostname}" is not configured on this project.`);
             }
             const provisioner = this.#customDomainProvisioner();
@@ -392,7 +377,6 @@ export class ProjectProcessor extends StreamProcessor<
               (await provisioner.readProject()) ??
               projectRecordFromState(state, this.deps.itx.projectId);
             await provisioner.remove({
-              cloudflareHostnameId: domain.cloudflareHostnameId,
               hostname,
               project,
             });
@@ -696,100 +680,13 @@ export class ProjectProcessor extends StreamProcessor<
               : key,
           ),
         };
-      case "events.iterate.com/project/custom-domain-add-requested": {
+      case "events.iterate.com/project/custom-domain-configured": {
         const existingDomain = state.customDomains.find(
           (domain) => domain.hostname === event.payload.hostname,
         );
-        if (existingDomain) {
-          // A direct registration has no provisioning lifecycle to restart.
-          if (existingDomain.kind === "direct") return state;
-          return upsertCustomDomain(state, {
-            ...existingDomain,
-            error: null,
-            status: existingDomain.status === "active" ? "active" : "requested",
-            updatedAt: event.createdAt,
-          });
-        }
-        return upsertCustomDomain(state, {
-          cloudflareHostnameId: null,
-          createdAt: event.createdAt,
-          error: null,
-          hostname: event.payload.hostname,
-          hostnameStatus: null,
-          kind: "cloudflare",
-          ownershipVerification: null,
-          sslStatus: null,
-          status: "requested",
-          updatedAt: event.createdAt,
-          validationRecords: [],
-          wildcard: true,
-        });
-      }
-      case "events.iterate.com/project/custom-domain-cloudflare-observed": {
-        const observedDomain = state.customDomains.find(
-          (domain) => domain.hostname === event.payload.hostname,
-        );
-        // A direct registration outranks any Cloudflare snapshot — a stray
-        // observed fact (e.g. a pre-direct obligation settling late) must not
-        // resurrect lifecycle fields and their refresh/remove affordances.
-        if (observedDomain?.kind === "direct") return state;
-        return upsertCustomDomain(state, {
-          ...event.payload,
-          kind: "cloudflare",
-          createdAt: observedDomain?.createdAt ?? event.createdAt,
-          updatedAt: event.createdAt,
-        });
-      }
-      case "events.iterate.com/project/custom-domain-direct-observed": {
-        // An operator's statement of routing truth: the hostname is live on
-        // worker routes + a primed hostname-directory registration. Active by
-        // definition; no Cloudflare snapshot ever describes it.
-        const existingDomain = state.customDomains.find(
-          (domain) => domain.hostname === event.payload.hostname,
-        );
-        return upsertCustomDomain(state, {
-          cloudflareHostnameId: null,
-          createdAt: existingDomain?.createdAt ?? event.createdAt,
-          error: null,
-          hostname: event.payload.hostname,
-          hostnameStatus: null,
-          kind: "direct",
-          ownershipVerification: null,
-          sslStatus: null,
-          status: "active",
-          updatedAt: event.createdAt,
-          validationRecords: [],
-          wildcard: false,
-        });
-      }
-      case "events.iterate.com/project/custom-domain-provision-failed": {
-        const failedDomain = state.customDomains.find(
-          (domain) => domain.hostname === event.payload.hostname,
-        );
-        // Keep the last observed Cloudflare snapshot; only record the error —
-        // an active domain stays active when a later refresh attempt fails.
-        // Direct registrations have no provisioning to fail.
-        if (!failedDomain || failedDomain.kind === "direct") return state;
-        return upsertCustomDomain(state, {
-          ...failedDomain,
-          error: event.payload.error,
-          status: failedDomain.status === "active" ? "active" : "failed",
-          updatedAt: event.createdAt,
-        });
-      }
-      case "events.iterate.com/project/custom-domain-remove-requested": {
-        const domain = state.customDomains.find(
-          (candidate) => candidate.hostname === event.payload.hostname,
-        );
-        // Direct registrations never enter `removing`: the request is inert
-        // (see processEvent) and the entry only leaves state through an
-        // operator-appended `custom-domain-removed`.
-        if (!domain || domain.kind === "direct") return state;
-        return upsertCustomDomain(state, {
-          ...domain,
-          status: "removing",
-          updatedAt: event.createdAt,
-        });
+        // Direct Worker routes outrank a late Cloudflare result.
+        if (existingDomain?.kind === "direct" && event.payload.kind === "cloudflare") return state;
+        return upsertCustomDomain(state, event.payload);
       }
       case "events.iterate.com/project/custom-domain-removed":
         return {

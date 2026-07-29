@@ -14,10 +14,7 @@ import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { WORKER_BUILDING_HEADER } from "../workers/worker-fetch-dispatch.ts";
 import { withWorkerCommit } from "../workers/worker-serve-info.ts";
 import { internalStreamId } from "../streams/stream-delivery-utils.ts";
-import {
-  ProjectProcessorContract,
-  type ProjectCustomDomainCloudflareSnapshot,
-} from "./project-processor-contract.ts";
+import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
 
 export type ProjectEventInput = ConsumedInput<ProjectProcessorContract>;
@@ -124,23 +121,6 @@ export const PROJECT: ProjectDirectoryRecord = {
   slug: "garple",
 };
 
-export function customDomainSnapshot(
-  input: Partial<ProjectCustomDomainCloudflareSnapshot> = {},
-): ProjectCustomDomainCloudflareSnapshot {
-  return {
-    cloudflareHostnameId: "custom-hostname-1",
-    error: null,
-    hostname: "garple.com",
-    hostnameStatus: "active",
-    ownershipVerification: null,
-    sslStatus: "active",
-    status: "active",
-    validationRecords: [],
-    wildcard: true,
-    ...input,
-  };
-}
-
 type SiblingName = "capability-host" | "scheduler" | "repo" | "email";
 const SIBLINGS = ["capability-host", "scheduler", "repo", "email"] as const;
 
@@ -179,15 +159,8 @@ export function makeProjectHarness(
       await options.siblingWaitBarriers?.[sibling];
     };
   const customDomains = {
-    ensure: vi.fn(async () =>
-      customDomainSnapshot({
-        hostnameStatus: "pending",
-        sslStatus: "pending_validation",
-        status: "pending_validation",
-      }),
-    ),
+    ensure: vi.fn(async () => {}),
     readProject: vi.fn(async (): Promise<ProjectDirectoryRecord | null> => PROJECT),
-    refresh: vi.fn(async () => customDomainSnapshot()),
     remove: vi.fn(async () => {}),
   };
   const itx = {

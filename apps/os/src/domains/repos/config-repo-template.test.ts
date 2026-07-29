@@ -184,10 +184,6 @@ test("template gets the platform sdk from iterate/sdk, not a committed snapshot"
 });
 
 test("seeded GitHub AI linter reads editable rules shipped in the config repo", () => {
-  expect(templateFile("worker.ts")).toContain(
-    'glob: "rules/**/*.md",\n      repoPath: "/repos/config"',
-  );
-
   const rulePaths = PROJECT_REPO_INITIAL_FILES.map((file) => file.path).filter((path) =>
     path.startsWith("rules/"),
   );
@@ -196,4 +192,7 @@ test("seeded GitHub AI linter reads editable rules shipped in the config repo", 
     "rules/typescript/explain-type-cast.md",
     "rules/typescript/no-inferable-type-annotation.md",
   ]);
+  for (const rulePath of rulePaths) {
+    expect(templateFile("worker.ts")).toContain(JSON.stringify(rulePath));
+  }
 });

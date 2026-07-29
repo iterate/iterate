@@ -1,26 +1,27 @@
 // =============================================================================
 // Human-in-the-loop egress approvals.
 //
-// The whole idea: egress rules are project state; a held request is an open
-// fetch promise plus a `human-approval-requested` event; that event's OFFSET
-// is the held request's identity; humans answer by appending events; and
-// once approval keys are enrolled, a grant is unforgeable without the
+// The whole idea: egress rules are project state; a held BATCH of requests
+// (a lone request is a batch of one) is a set of open fetch promises plus
+// one `human-approval-requested` event; that event's OFFSET is the batch's
+// identity and each request's array position is its index; a human answers
+// with ONE `human-approval-decided` event carrying a verdict per index; and
+// once approval keys are enrolled, an approval is unforgeable without the
 // enrolled private key. The lifecycle:
 //
-//   requested ──(signed grant)──▶ granted ──▶ released ──▶ settled
-//        │
-//        ├──(human)────▶ rejected (reason: human)
-//        └──(timeout)──▶ rejected (reason: expired)
+//   requested ──(signed decision)──▶ decided ──▶ released ──▶ settled (per approve index)
+//        │                              └──▶ refused (per reject index)
+//        └──(timeout)──▶ decided (decidedBy: expiry, all reject)
 //
 // This file is the pure half — rule matching and the signature scheme — used
 // by the gate in project-durable-object.ts (orchestration) and the
 // `iterate approve` CLI (the human's signer).
 //
 // The signature covers canonical JSON bytes reconstructable by BOTH sides
-// from the requested event alone (no detached digest): WebCrypto's ECDSA and
-// the Secure Enclave's `ecdsaSignatureMessageX962SHA256` both hash the
-// message internally, so signer and verifier only ever exchange the raw
-// 64-byte r‖s signature.
+// from the requested event plus the verdicts (no detached digest):
+// WebCrypto's ECDSA and the Secure Enclave's
+// `ecdsaSignatureMessageX962SHA256` both hash the message internally, so
+// signer and verifier only ever exchange the raw 64-byte r‖s signature.
 // =============================================================================
 
 // The event payload and state schemas live INLINE in the project processor
@@ -35,6 +36,7 @@ import type {
 
 export type {
   EgressRule,
+  HeldRequest,
   HumanApprovalKey,
   HumanApprovalRequestedPayload,
 } from "./project-processor-contract.ts";
@@ -98,7 +100,7 @@ function hostMatches(hostname: string, pattern: string): boolean {
 }
 
 // -----------------------------------------------------------------------------
-// Canonical approval message (approval.v1).
+// Canonical approval message (approval.v2).
 // -----------------------------------------------------------------------------
 
 /**
@@ -123,32 +125,38 @@ function sortKeysDeep(value: unknown): unknown {
 }
 
 /**
- * The exact bytes an approval signature covers. Reconstructable by both
- * sides from the requested event alone: the CLI builds it from the event it
- * received, the Project DO from the payload it appended. Display/provenance
- * fields and `expiresAt` are deliberately excluded — the signature covers the
- * body via its hash, and expiry is enforced server-side.
+ * The exact bytes an approval signature covers: the batch's request subjects
+ * plus the verdict per index. Reconstructable by both sides from the
+ * requested event plus the verdicts being signed: the approver builds it
+ * from the event it received, the Project DO from the payload it appended
+ * and the decided event's verdicts. Display/provenance fields and
+ * `expiresAt` are deliberately excluded — the signature covers each body via
+ * its hash, and expiry is enforced server-side.
  */
 export function buildApprovalMessage(input: {
   projectId: string;
   approvalRequestEventOffset: number;
-  requested: Pick<
-    HumanApprovalRequestedPayload,
-    "method" | "url" | "headers" | "body" | "secretPaths"
+  requests: Array<
+    Pick<
+      HumanApprovalRequestedPayload["requests"][number],
+      "method" | "url" | "headers" | "body" | "secretPaths"
+    >
   >;
-  decision: "granted" | "rejected";
+  verdicts: readonly ("approve" | "reject")[];
 }): Uint8Array {
   return new TextEncoder().encode(
     canonicalJson({
-      v: "approval.v1",
+      v: "approval.v2",
       projectId: input.projectId,
       approvalRequestEventOffset: input.approvalRequestEventOffset,
-      method: input.requested.method,
-      url: input.requested.url,
-      headers: input.requested.headers,
-      bodySha256: input.requested.body?.sha256 || null,
-      secretPaths: input.requested.secretPaths,
-      decision: input.decision,
+      requests: input.requests.map((request) => ({
+        method: request.method,
+        url: request.url,
+        headers: request.headers,
+        bodySha256: request.body?.sha256 || null,
+        secretPaths: request.secretPaths,
+      })),
+      verdicts: input.verdicts,
     }),
   );
 }
@@ -201,25 +209,31 @@ function decodeUtf8InspectionBytes(bytes: Uint8Array, truncated: boolean): strin
 // -----------------------------------------------------------------------------
 
 /**
- * THE grant-acceptance policy, in one place: with no active keys enrolled a
- * plain grant is accepted (phase 1); once any active key exists, a grant is
- * accepted only with a valid signature from one of them. Everything else is
- * ignored — never rejected — so a bad grant can't kill a hold that a good
- * one (or a human rejection) would settle.
+ * THE decision-acceptance policy, in one place. An all-reject decision is
+ * always accepted — deny is the fail-safe direction and never needs a
+ * signature. A decision containing any `approve` verdict is accepted plain
+ * while no active key is enrolled (phase 1); once any active key exists it
+ * needs a valid signature from one of them over the canonical approval.v2
+ * message (which covers the verdicts). Everything else is ignored — never
+ * rejected — so a bad decision can't kill a hold that a good one (or the
+ * expiry) would settle.
  */
-export async function evaluateGrant(input: {
-  grant: { keyId?: string; signature?: string };
+export async function evaluateDecision(input: {
+  decision: { keyId?: string; signature?: string; verdicts: readonly ("approve" | "reject")[] };
   keys: readonly HumanApprovalKey[];
   message: Uint8Array;
 }): Promise<{ accepted: true } | { accepted: false; reason: string }> {
+  if (input.decision.verdicts.every((verdict) => verdict === "reject")) return { accepted: true };
   const activeKeys = input.keys.filter((key) => key.revokedAt === null);
   if (activeKeys.length === 0) return { accepted: true };
-  const key = activeKeys.find((candidate) => candidate.keyId === input.grant.keyId);
+  const key = activeKeys.find((candidate) => candidate.keyId === input.decision.keyId);
   if (key === undefined) return { accepted: false, reason: "unknown or missing keyId" };
-  if (input.grant.signature === undefined) return { accepted: false, reason: "missing signature" };
+  if (input.decision.signature === undefined) {
+    return { accepted: false, reason: "missing signature" };
+  }
   const verified = await verifyApprovalSignature({
     publicKey: key.publicKey,
-    signature: input.grant.signature,
+    signature: input.decision.signature,
     message: input.message,
   });
   return verified ? { accepted: true } : { accepted: false, reason: "invalid signature" };

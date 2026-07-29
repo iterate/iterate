@@ -18,6 +18,18 @@ const PUSH_ENROLLMENTS_KEY = "iterate.pushEnrollments.v1";
 let pushLifecycle: Promise<void> = Promise.resolve();
 
 if (Platform.OS !== "web") {
+  // Without a handler iOS silently drops pushes that arrive while the app is
+  // FOREGROUNDED — watching the Approvals screen suppressed the very banner
+  // announcing new holds (confirmed on-device: Expo accepted the ticket, no
+  // banner). Pure JS; expo-notifications is already in the build.
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+      shouldShowBanner: true,
+      shouldShowList: true,
+    }),
+  });
   Notifications.addNotificationResponseReceivedListener(() => {
     void queryClient.invalidateQueries({ queryKey: ["initial-notification"] });
   });

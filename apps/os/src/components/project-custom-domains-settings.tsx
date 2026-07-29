@@ -1,12 +1,16 @@
 import type { FormEvent } from "react";
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { PlusIcon, RefreshCwIcon, Trash2Icon } from "lucide-react";
+import { PlusIcon, Trash2Icon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { connectItx } from "iterate/sdk/itx/react";
-import { ProjectProcessorContract } from "~/domains/projects/project-processor-contract.ts";
+import {
+  ProjectProcessorContract,
+  type ProjectCustomDomain,
+  type ProjectProcessorState,
+} from "~/domains/projects/project-processor-contract.ts";
 import {
   isReservedProjectHostname,
   isValidCustomHostname,
@@ -14,10 +18,6 @@ import {
   normalizeProjectHostnameBase,
 } from "~/lib/project-host-routing.ts";
 import type { PublicRouteConfig } from "~/lib/public-route-config.ts";
-import type {
-  ProjectCustomDomain,
-  ProjectProcessorState,
-} from "~/domains/projects/project-processor-contract.ts";
 
 export function ProjectCustomDomainsSettings({
   projectId,
@@ -28,21 +28,17 @@ export function ProjectCustomDomainsSettings({
   projectState?: ProjectProcessorState;
   routeConfig: PublicRouteConfig;
 }) {
-  const base = normalizeProjectHostnameBase(routeConfig.projectHostnameBases[0] ?? "");
-  const customDomains = projectState?.customDomains;
-
   return (
     <section className="flex flex-col gap-3" data-testid="project-custom-domains-settings">
       <h2 className="text-xs font-medium text-muted-foreground uppercase">Custom domains</h2>
-      <div className="grid gap-2 py-3 text-sm">
-        <p className="text-xs font-medium text-muted-foreground uppercase">DNS setup</p>
-        <CustomDomainsEditor
-          domains={customDomains}
-          projectId={projectId}
-          projectHostnameBase={base}
-          projectHostnameBases={routeConfig.projectHostnameBases}
-        />
-      </div>
+      <CustomDomainsEditor
+        domains={projectState?.customDomains}
+        projectId={projectId}
+        projectHostnameBase={normalizeProjectHostnameBase(
+          routeConfig.projectHostnameBases[0] ?? "",
+        )}
+        projectHostnameBases={routeConfig.projectHostnameBases}
+      />
     </section>
   );
 }
@@ -63,7 +59,7 @@ function CustomDomainsEditor({
     ? `cname.${projectHostnameBase}`
     : null;
   const mutation = useMutation({
-    mutationFn: async (input: { action: "add" | "refresh" | "remove"; hostname: string }) => {
+    mutationFn: async (input: { action: "add" | "remove"; hostname: string }) => {
       const normalizedHostname = normalizeProjectCustomDomainInput({
         hostname: input.hostname,
         projectHostnameBases,
@@ -71,20 +67,21 @@ function CustomDomainsEditor({
       const itx = await connectItx(projectId);
       await itx.streams.get("/").append(
         ProjectProcessorContract.buildEvent({
-          type: customDomainEventType(input.action),
+          type:
+            input.action === "add"
+              ? "events.iterate.com/project/custom-domain-add-requested"
+              : "events.iterate.com/project/custom-domain-remove-requested",
           payload: { hostname: normalizedHostname },
         }),
       );
       return { action: input.action, hostname: normalizedHostname };
     },
-    onSuccess: async ({ action, hostname: mutatedHostname }) => {
+    onSuccess: ({ action, hostname: mutatedHostname }) => {
       if (action === "add") setHostname("");
       toast.success(
         action === "add"
           ? `Custom domain queued: ${mutatedHostname}`
-          : action === "refresh"
-            ? `Refresh queued: ${mutatedHostname}`
-            : `Removal queued: ${mutatedHostname}`,
+          : `Removal queued: ${mutatedHostname}`,
       );
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
@@ -98,7 +95,7 @@ function CustomDomainsEditor({
   };
 
   return (
-    <div className="grid gap-3">
+    <div className="grid gap-3 py-3 text-sm">
       <form className="flex min-w-0 gap-2" onSubmit={onSubmit}>
         <Input
           autoCapitalize="none"
@@ -131,29 +128,17 @@ function CustomDomainsEditor({
         <div className="divide-y rounded-md border">
           {domains.map((domain) => (
             <CustomDomainRow
+              cnameTarget={cnameTarget}
               domain={domain}
               key={domain.hostname}
-              onRefresh={() => mutation.mutate({ action: "refresh", hostname: domain.hostname })}
-              onRemove={() => mutation.mutate({ action: "remove", hostname: domain.hostname })}
-              cnameTarget={cnameTarget}
               mutationPending={mutation.isPending}
+              onRemove={() => mutation.mutate({ action: "remove", hostname: domain.hostname })}
             />
           ))}
         </div>
       )}
     </div>
   );
-}
-
-function customDomainEventType(action: "add" | "refresh" | "remove") {
-  switch (action) {
-    case "add":
-      return "events.iterate.com/project/custom-domain-add-requested";
-    case "refresh":
-      return "events.iterate.com/project/custom-domain-refresh-requested";
-    case "remove":
-      return "events.iterate.com/project/custom-domain-remove-requested";
-  }
 }
 
 function normalizeProjectCustomDomainInput(input: {
@@ -173,126 +158,45 @@ function normalizeProjectCustomDomainInput(input: {
 function CustomDomainRow({
   domain,
   cnameTarget,
-  onRefresh,
   onRemove,
   mutationPending,
 }: {
   domain: ProjectCustomDomain;
   cnameTarget: string;
-  onRefresh: () => void;
   onRemove: () => void;
   mutationPending: boolean;
 }) {
-  // Direct registrations (platform-owned apexes routed by worker routes + the
-  // hostname directory) have no Cloudflare provisioning lifecycle: no DNS
-  // setup steps apply, and refresh/remove must never run — the provisioning
-  // path would tear down the live routing registration.
   const direct = domain.kind === "direct";
-  const ownershipRecords = domain.ownershipVerification
-    ? [{ ...domain.ownershipVerification, type: "TXT" }]
-    : [];
-  const trafficRecords = [
-    { name: domain.hostname, type: "CNAME / ALIAS", value: cnameTarget },
-    ...(domain.wildcard
-      ? [{ name: `*.${domain.hostname}`, type: "CNAME", value: cnameTarget }]
-      : []),
-  ];
-  const certificateRecords = domain.validationRecords.map((record) => ({
-    ...record,
-    type: "TXT",
-  }));
-
   return (
-    <div className="grid gap-3 p-3">
+    <div className="grid gap-2 p-3">
       <div className="flex min-w-0 items-center justify-between gap-2">
         <div className="min-w-0">
           <p className="truncate font-medium">{domain.hostname}</p>
           <p className="text-xs text-muted-foreground">
-            {direct
-              ? "Served directly by iterate — no DNS setup required"
-              : `SSL ${domain.sslStatus ?? "unknown"} / hostname ${domain.hostnameStatus ?? "unknown"}`}
+            {direct ? "Served directly by iterate" : `CNAME / ALIAS → ${cnameTarget}`}
           </p>
+          {direct ? null : (
+            <p className="text-xs text-muted-foreground">
+              *.{domain.hostname} → {cnameTarget}
+            </p>
+          )}
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          {direct ? (
-            <span className="rounded border px-1.5 py-0.5 text-xs capitalize">Direct</span>
-          ) : null}
-          <span className="rounded border px-1.5 py-0.5 text-xs capitalize">
-            {domain.status.replaceAll("_", " ")}
-          </span>
+          <span className="rounded border px-1.5 py-0.5 text-xs capitalize">{domain.kind}</span>
           {direct ? null : (
-            <>
-              <Button
-                aria-label={`Refresh ${domain.hostname}`}
-                disabled={mutationPending || domain.status === "removing"}
-                onClick={onRefresh}
-                size="icon-xs"
-                type="button"
-                variant="ghost"
-              >
-                <RefreshCwIcon aria-hidden="true" />
-              </Button>
-              <Button
-                aria-label={`Remove ${domain.hostname}`}
-                disabled={mutationPending || domain.status === "removing"}
-                onClick={onRemove}
-                size="icon-xs"
-                type="button"
-                variant="ghost"
-              >
-                <Trash2Icon aria-hidden="true" />
-              </Button>
-            </>
+            <Button
+              aria-label={`Remove ${domain.hostname}`}
+              disabled={mutationPending}
+              onClick={onRemove}
+              size="icon-xs"
+              type="button"
+              variant="ghost"
+            >
+              <Trash2Icon aria-hidden="true" />
+            </Button>
           )}
         </div>
       </div>
-
-      {domain.error ? <p className="text-xs text-destructive">{domain.error}</p> : null}
-
-      {direct ? null : (
-        <>
-          <DomainSetupStep records={ownershipRecords} title="Authorize domain" />
-          <DomainSetupStep records={certificateRecords} title="Issue certificate" />
-          <DomainSetupStep records={trafficRecords} title="Connect traffic" />
-        </>
-      )}
     </div>
-  );
-}
-
-function DomainSetupStep({ records, title }: { records: DnsDisplayRecord[]; title: string }) {
-  if (records.length === 0) return null;
-  return (
-    <div className="grid gap-1.5">
-      <p className="text-xs font-medium">{title}</p>
-      <div className="grid gap-1 text-xs">
-        {records.map((record) => (
-          <DnsLine key={`${record.type}:${record.name}:${record.value}`} record={record} />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-type DnsDisplayRecord = { name: string; type: string; value: string };
-
-function DnsLine({ record }: { record: DnsDisplayRecord }) {
-  return (
-    <div className="grid min-w-0 gap-1 sm:grid-cols-[6.25rem_minmax(0,1fr)_minmax(0,1.3fr)]">
-      <code className="rounded bg-muted px-1.5 py-1 text-center">{record.type}</code>
-      <DnsCell label="Name" value={record.name} />
-      <DnsCell label="Value" value={record.value} />
-    </div>
-  );
-}
-
-function DnsCell({ label, value }: { label: string; value: string }) {
-  return (
-    <code className="min-w-0 rounded bg-muted px-1.5 py-1 break-all">
-      <span className="mr-1 font-sans text-[0.65rem] font-medium text-muted-foreground uppercase">
-        {label}
-      </span>
-      {value}
-    </code>
   );
 }

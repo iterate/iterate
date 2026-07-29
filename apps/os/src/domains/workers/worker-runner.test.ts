@@ -156,6 +156,41 @@ it("stamps the resolved repo commit on a stateless fetch response", async () => 
   expect(fetch).toHaveBeenCalledOnce();
 });
 
+it("reuses a loaded worker within one runner but not across runner lifetimes", async () => {
+  h.resolveWorkerSource.mockResolvedValue({
+    ok: true,
+    source: {
+      assetConfig: undefined,
+      assetManifest: {},
+      assets: {},
+      cacheKey: "build-key",
+      commitOid: "commit-1",
+      mainModule: "worker.js",
+      modules: {},
+      wranglerConfig: undefined,
+    },
+  });
+  h.loadResolvedWorker.mockImplementation(() => ({
+    getEntrypoint: () => ({ fetch: () => Promise.resolve(new Response("ok")) }),
+  }));
+  const createRunner = () =>
+    new DynamicWorkerRunner({
+      streamContext: { kind: "scope", scopePath: inlineRef.path },
+      exports: {} as ExecutionContext["exports"],
+      projectId: "prj_private",
+      scopePath: inlineRef.path,
+    });
+  const firstRunner = createRunner();
+
+  await firstRunner.fetch({ ref: inlineRef, request: new Request("https://example.com/1") });
+  await firstRunner.fetch({ ref: inlineRef, request: new Request("https://example.com/2") });
+  await createRunner().fetch({ ref: inlineRef, request: new Request("https://example.com/3") });
+
+  const loaderNonces = h.loadResolvedWorker.mock.calls.map(([input]) => input.loaderInstanceNonce);
+  expect(loaderNonces[0]).toBe(loaderNonces[1]);
+  expect(loaderNonces[2]).not.toBe(loaderNonces[0]);
+});
+
 describe("dynamic worker spans", () => {
   it.each<{
     expectedKind: string;
@@ -276,6 +311,137 @@ describe("createApp asset dispatch", () => {
     expect(h.resolveWorkerSource).not.toHaveBeenCalled();
     expect(h.handleAssetRequest).not.toHaveBeenCalled();
     expect(h.workerGetByName).toHaveBeenCalledOnce();
+  });
+});
+
+it("recovers a safe stateless fetch once with a fresh loader after clone-version skew", async () => {
+  const workerFetch = vi
+    .fn()
+    .mockRejectedValueOnce(
+      new Error("Unable to deserialize cloned data due to invalid or unsupported version."),
+    )
+    .mockResolvedValueOnce(new Response("recovered"));
+  h.resolveWorkerSource.mockResolvedValue({
+    ok: true,
+    source: {
+      assetConfig: undefined,
+      assetManifest: {},
+      assets: {},
+      cacheKey: "build-key",
+      commitOid: "commit-1",
+      mainModule: "worker.js",
+      modules: {},
+      wranglerConfig: undefined,
+    },
+  });
+  h.loadResolvedWorker.mockImplementation(() => ({
+    getEntrypoint: () => ({ fetch: workerFetch }),
+  }));
+  const runner = new DynamicWorkerRunner({
+    streamContext: { kind: "scope", scopePath: inlineRef.path },
+    exports: {} as ExecutionContext["exports"],
+    projectId: "prj_private",
+    scopePath: inlineRef.path,
+  });
+
+  const response = await runner.fetch({
+    ref: inlineRef,
+    request: new Request("https://example.com/"),
+  });
+
+  expect(await response.text()).toBe("recovered");
+  expect(workerFetch).toHaveBeenCalledTimes(2);
+  const initialLoader = h.loadResolvedWorker.mock.calls[0]?.[0].loaderInstanceNonce;
+  const replacementLoader = h.loadResolvedWorker.mock.calls[1]?.[0].loaderInstanceNonce;
+  expect(initialLoader).toEqual(expect.any(String));
+  expect(replacementLoader).toEqual(expect.any(String));
+  expect(replacementLoader).not.toBe(initialLoader);
+  expect(recordedSpans[0]?.attributes).toMatchObject({
+    "http.response.status_code": 200,
+    "iterate.worker.rpc_clone_version_retry": true,
+  });
+});
+
+it("replays one safe stateful fetch after its hosting Durable Object resets", async () => {
+  const reset = Object.assign(new Error("Durable Object reset because its code was updated."), {
+    durableObjectReset: true,
+  });
+  h.statefulFetch.mockRejectedValueOnce(reset).mockResolvedValueOnce(new Response("recovered"));
+  const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+  const runner = new DynamicWorkerRunner({
+    streamContext: { kind: "scope", scopePath: statefulRef.path },
+    exports: {} as ExecutionContext["exports"],
+    projectId: "prj_private",
+    scopePath: statefulRef.path,
+  });
+
+  const response = await runner.fetch({
+    ref: statefulRef,
+    request: new Request("https://example.com/"),
+  });
+
+  expect(await response.text()).toBe("recovered");
+  expect(h.statefulFetch).toHaveBeenCalledTimes(2);
+  expect(info).toHaveBeenCalledWith(
+    "Stateful worker fetch retrying after Durable Object unavailability",
+    {
+      error: reset,
+      projectId: "prj_private",
+      rayId: undefined,
+      traceRole: undefined,
+    },
+  );
+  expect(recordedSpans[0]?.attributes).toMatchObject({
+    "http.response.status_code": 200,
+    "iterate.worker.durable_object_availability_retry": true,
+  });
+  info.mockRestore();
+});
+
+it("recovers a stateless event batch once with a fresh loader after clone-version skew", async () => {
+  const processEventBatch = vi
+    .fn()
+    .mockRejectedValueOnce(
+      new Error("Unable to deserialize cloned data due to invalid or unsupported version."),
+    )
+    .mockResolvedValueOnce(undefined);
+  h.resolveWorkerSource.mockResolvedValue({
+    ok: true,
+    source: {
+      assetConfig: undefined,
+      assetManifest: {},
+      assets: {},
+      cacheKey: "build-key",
+      commitOid: "commit-1",
+      mainModule: "worker.js",
+      modules: {},
+      wranglerConfig: undefined,
+    },
+  });
+  h.loadResolvedWorker.mockImplementation(() => ({
+    getEntrypoint: () => ({ processEventBatch }),
+  }));
+  const runner = new DynamicWorkerRunner({
+    streamContext: { kind: "scope", scopePath: inlineRef.path },
+    exports: {} as ExecutionContext["exports"],
+    projectId: "prj_private",
+    scopePath: inlineRef.path,
+  });
+
+  await runner.invokeCapability({
+    args: [{ events: [] }],
+    path: ["processEventBatch"],
+    ref: inlineRef,
+  });
+
+  expect(processEventBatch).toHaveBeenCalledTimes(2);
+  const initialLoader = h.loadResolvedWorker.mock.calls[0]?.[0].loaderInstanceNonce;
+  const replacementLoader = h.loadResolvedWorker.mock.calls[1]?.[0].loaderInstanceNonce;
+  expect(initialLoader).toEqual(expect.any(String));
+  expect(replacementLoader).toEqual(expect.any(String));
+  expect(replacementLoader).not.toBe(initialLoader);
+  expect(recordedSpans[0]?.attributes).toMatchObject({
+    "iterate.worker.rpc_clone_version_retry": true,
   });
 });
 

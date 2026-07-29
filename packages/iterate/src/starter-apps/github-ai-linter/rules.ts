@@ -1,4 +1,3 @@
-import { minimatch } from "minimatch";
 import { z } from "zod";
 import { parse as parseYaml } from "yaml";
 
@@ -10,7 +9,7 @@ export type GithubAiLinterRule = {
 export type GithubAiLinterRules = Record<string, GithubAiLinterRule>;
 
 export type GithubAiLinterRuleSource = {
-  glob: string;
+  paths: string[];
   repoPath: string;
 };
 
@@ -22,8 +21,10 @@ const RuleMetadata = z.object({
 type RulesProject = {
   repos: {
     get(path: string): {
-      listFiles(): Promise<{ commitOid: string; paths: string[] }>;
-      readFile(input: { commitOid: string; path: string }): Promise<{ content: string } | null>;
+      readFile(input: {
+        commitOid?: string;
+        path: string;
+      }): Promise<{ commitOid: string; content: string } | null>;
     };
   };
 };
@@ -33,20 +34,27 @@ export async function loadGithubAiLinterRules(
   source: GithubAiLinterRuleSource,
 ): Promise<GithubAiLinterRules> {
   const repo = itx.repos.get(source.repoPath);
-  const snapshot = await repo.listFiles();
-  const paths = snapshot.paths
-    .filter((path) => minimatch(path, source.glob, { dot: true }))
-    .toSorted();
+  const paths = [...new Set(source.paths)].toSorted();
   if (paths.length === 0) {
-    throw new Error(
-      `GitHub AI linter rule glob ${source.repoPath}:${source.glob} matched no files`,
-    );
+    throw new Error(`GitHub AI linter has no configured rule paths for ${source.repoPath}`);
+  }
+
+  const firstPath = paths[0]!;
+  const firstFile = await repo.readFile({ path: firstPath });
+  if (firstFile === null) {
+    throw new Error(`GitHub AI linter rule does not exist: ${source.repoPath}:${firstPath}`);
+  }
+  const files = [[firstPath, firstFile] as const];
+  for (const path of paths.slice(1)) {
+    const file = await repo.readFile({ commitOid: firstFile.commitOid, path });
+    if (file === null) {
+      throw new Error(`GitHub AI linter rule does not exist: ${source.repoPath}:${path}`);
+    }
+    files.push([path, file] as const);
   }
 
   const rules: GithubAiLinterRules = {};
-  for (const path of paths) {
-    const file = await repo.readFile({ commitOid: snapshot.commitOid, path });
-    if (file === null) throw new Error(`GitHub AI linter rule disappeared while loading: ${path}`);
+  for (const [path, file] of files) {
     const rule = parseGithubAiLinterRule(path, file.content);
     if (Object.hasOwn(rules, rule.id)) {
       throw new Error(`Duplicate GitHub AI linter rule id "${rule.id}" in ${path}`);
