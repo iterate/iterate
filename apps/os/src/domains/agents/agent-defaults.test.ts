@@ -86,7 +86,7 @@ describe("agentCreationForPath", () => {
     expect(
       defaults.events.find((event) => event.type === "events.iterate.com/agent/configured")
         ?.payload,
-    ).toEqual({ config: { llm: { model: "openai/gpt-5.6-sol" } } });
+    ).toEqual({ config: { llm: { model: "openai/gpt-5.6-terra" } } });
     expect(
       defaults.events.find(
         (event) =>

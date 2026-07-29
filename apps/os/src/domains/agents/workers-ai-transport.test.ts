@@ -5,7 +5,7 @@ import {
   maskCloudflareAiGatewayResponseCacheEntropy,
   runWorkersAiAttempt,
 } from "./workers-ai-transport.ts";
-const DEFAULT_AGENT_MODEL = "openai/gpt-5.6-sol"; // the config schema default
+const DEFAULT_AGENT_MODEL = "openai/gpt-5.6-terra"; // the config schema default
 
 describe("adaptMessagesForModel", () => {
   const messages = [
@@ -260,7 +260,7 @@ describe("the BYOK gateway lane", () => {
     expect(request.headers["cf-aig-cache-ttl"]).toBe("600");
     expect(request.headers["cf-aig-cache-key"]).toMatch(/^[0-9a-f]{64}$/);
     expect(request.query).toMatchObject({
-      model: "gpt-5.6-sol",
+      model: "gpt-5.6-terra",
       messages: [
         { role: "developer", content: "trusted application context" },
         { role: "user", content: "hi" },
