@@ -395,6 +395,26 @@ export const ProjectProcessorContract = defineProcessorContract({
             "Who decided: a human, or the door's own timeout (expiry is always all-reject and " +
             "never signed).",
         }),
+        // `.catch(undefined)`: the reason is cosmetic next to the verdicts, so
+        // an invalid one (too long, blank) degrades to ABSENT instead of
+        // failing the whole payload parse — a malformed reason must never make
+        // the door ignore an otherwise-valid decision and strand the hold.
+        reason: z
+          .string()
+          .trim()
+          .min(1)
+          .max(1_000)
+          .optional()
+          .catch(undefined)
+          .meta({
+            description:
+              "The human's stated reason, applying to every rejected index in this decision. It " +
+              "rides back to the calling script in each rejected fetch's 403 body, so the agent " +
+              "can read why and retry with a change. Deliberately NOT covered by the approval.v2 " +
+              "signature: rejections never need signatures (deny is the fail-safe direction — " +
+              "stream-append access already suffices to veto), so signing the reason would " +
+              "protect nothing. Expiry decisions never carry one.",
+          }),
         keyId: z
           .string()
           .optional()

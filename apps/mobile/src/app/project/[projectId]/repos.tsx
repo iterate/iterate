@@ -35,7 +35,7 @@ export default function ReposScreen() {
       />
       {repos.isPending ? (
         <View style={styles.center}>
-          <ActivityIndicator color={colors.textMuted} />
+          <ActivityIndicator accessibilityLabel="Loading" color={colors.textMuted} />
         </View>
       ) : repos.isError ? (
         <View style={styles.center}>

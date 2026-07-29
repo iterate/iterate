@@ -23,7 +23,7 @@ export function ActivityCard({ activity }: { activity: AgentUiActivity }) {
     <View style={[styles.card, isLive && styles.cardLive]}>
       <Pressable style={styles.summaryRow} onPress={() => setToggled(!expanded)}>
         {isLive && activity.status === "running" ? (
-          <ActivityIndicator size="small" color={colors.working} />
+          <ActivityIndicator accessibilityLabel="Loading" size="small" color={colors.working} />
         ) : (
           <Text style={styles.chevron}>{expanded ? "▾" : "▸"}</Text>
         )}

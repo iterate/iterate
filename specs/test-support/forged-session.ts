@@ -140,6 +140,11 @@ export async function connectAdminItx(baseUrl: string) {
   return connectPlaywrightAdminItx({ baseUrl, config });
 }
 
+/** The OS admin API secret, for specs that dial project-scoped itx handles directly. */
+export async function resolveAdminSecret(): Promise<string> {
+  return (await resolveOsPlaywrightAuthConfig()).adminApiSecret;
+}
+
 async function createAdminProjectAfterPreviewRollout(input: {
   baseUrl: string;
   config: OsPlaywrightAuthConfig;

@@ -569,7 +569,9 @@ function EditorHeader({
 function EmptyEditor({ label }: { label: string }) {
   return (
     <View style={styles.center}>
-      {label.endsWith("…") ? <ActivityIndicator color={colors.textMuted} /> : null}
+      {label.endsWith("…") ? (
+        <ActivityIndicator accessibilityLabel="Loading" color={colors.textMuted} />
+      ) : null}
       <Text style={styles.muted}>{label}</Text>
     </View>
   );

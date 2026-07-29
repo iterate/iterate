@@ -129,6 +129,23 @@ test("the approval request contract holds a non-empty batch with one nullish bod
   expect(() => schema.parse({ ...base, requests: [] })).toThrow();
 });
 
+test("an invalid rejection reason degrades to absent — never poisons the decision", () => {
+  const schema =
+    ProjectProcessorContract.events["events.iterate.com/project/human-approval-decided"]
+      .payloadSchema;
+  const base = { approvalRequestEventOffset: 7, verdicts: ["reject"], decidedBy: "human" };
+
+  expect(schema.parse({ ...base, reason: "  too long to read  " })).toMatchObject({
+    reason: "too long to read",
+  });
+  // Over the 1000-char cap: the decision must SURVIVE with the reason dropped
+  // — failing the whole parse would make the door ignore the decision and
+  // strand the hold until expiry.
+  const oversized = schema.parse({ ...base, reason: "r".repeat(2_000) });
+  expect(oversized).toMatchObject({ verdicts: ["reject"], decidedBy: "human" });
+  expect(oversized.reason).toBeUndefined();
+});
+
 const rule = (overrides: Partial<EgressRule> & Pick<EgressRule, "ruleKey">): EgressRule => ({
   description: "",
   match: {},
