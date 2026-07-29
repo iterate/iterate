@@ -30,7 +30,14 @@ export function uniqueSignupEmail(prefix: string) {
  * Lands on the auth app's login page in email mode. Resolves false when the
  * deployment doesn't offer email OTP sign-in.
  */
-export async function startEmailOtpSignIn(page: Page) {
+export async function startEmailOtpSignIn(page: Page, testInfo: TestInfo) {
+  // Preview teardown leaves a parked OS Worker behind. During a fresh edge
+  // rollout, even the exact-version request can briefly reach that 503
+  // predecessor, so consume the existing rollout boundary before the first
+  // OS navigation rather than waiting later at project creation.
+  await waitForPreviewRolloutBeforeProjectCreation({
+    beforeWait: (waitMs) => testInfo.setTimeout(testInfo.timeout + waitMs),
+  });
   await page.goto("/api/iterate-auth/login?login_hint=email");
   await page.getByText("Sign in to your iterate account").waitFor();
   return await page.getByTestId("email-input").isVisible();

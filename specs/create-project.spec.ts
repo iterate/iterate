@@ -14,7 +14,7 @@ import { test } from "./test-support/test.ts";
 // up the new project claim the post-create navigation authorizes with.
 test("a new user can create a project through the UI form", async ({ page }, testInfo) => {
   test.skip(
-    !(await startEmailOtpSignIn(page)),
+    !(await startEmailOtpSignIn(page, testInfo)),
     "Email OTP sign-in is disabled for this deployment (APP_CONFIG_EMAIL_OTP_ENABLED on auth / APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED on OS).",
   );
   const firstSlug = uniqueFixtureSlug("first-project");
