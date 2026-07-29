@@ -194,5 +194,6 @@ test("seeded GitHub AI linter reads editable rules shipped in the config repo", 
   ]);
   for (const rulePath of rulePaths) {
     expect(templateFile("worker.ts")).toContain(JSON.stringify(rulePath));
+    expect(templateFile(rulePath)).toMatch(/^---\nid: [^\n]+\nseverity: error\n/);
   }
 });
