@@ -1,5 +1,9 @@
 import type { ItxBinding, StreamEvent } from "../../sdk.ts";
-import { reviewBotSubscriptionEvent, type GithubAiLinterConfig } from "./worker-ref.ts";
+import {
+  REVIEW_BOT_SUBSCRIPTION_KEY,
+  reviewBotSubscriptionEvent,
+  type GithubAiLinterConfig,
+} from "./worker-ref.ts";
 
 export type { GithubAiLinterConfig } from "./worker-ref.ts";
 
@@ -39,9 +43,25 @@ export const GithubAiLinter = {
         }
         await Promise.all(
           [...new Set(connections)].map(async (connection) => {
-            await itx.streams
-              .get(`/integrations/github/${connection}`)
-              .append(await reviewBotSubscriptionEvent(event, connection, config));
+            const connectionStream = itx.streams.get(`/integrations/github/${connection}`);
+            const runtime = await connectionStream.runtimeState();
+            const existingCondition =
+              runtime.coreProcessorState.subscriptions.outbound.byKey[REVIEW_BOT_SUBSCRIPTION_KEY]
+                ?.configuration.filter?.jsonataCondition;
+            const existingCutoffMatch = existingCondition?.match(/^offset > ([0-9]+)$/);
+            const existingCutoff = existingCutoffMatch ? Number(existingCutoffMatch[1]) : null;
+
+            // First configuration deliberately starts at the current head: a
+            // semantic project restore must not replay historical webhooks.
+            // Later config-worker updates preserve that boundary so a refresh
+            // cannot skip webhooks that arrived since the bot was installed.
+            const startAfterOffset =
+              existingCutoff !== null && Number.isSafeInteger(existingCutoff)
+                ? existingCutoff
+                : runtime.coreProcessorState.maxOffset;
+            await connectionStream.append(
+              await reviewBotSubscriptionEvent(event, connection, config, startAfterOffset),
+            );
           }),
         );
       },

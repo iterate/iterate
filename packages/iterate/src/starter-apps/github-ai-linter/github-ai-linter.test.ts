@@ -6,7 +6,11 @@ import { mightWakePullRequestAgent } from "./review-bot.ts";
 test("a linked connection gets a hosted review processor", async () => {
   const appended: Array<{ events: StreamEventInput[]; path: string }> = [];
   const app = GithubAiLinter.create(
-    projectEnv((path, ...events) => appended.push({ events, path })),
+    projectEnv(
+      (path, ...events) => appended.push({ events, path }),
+      {},
+      { "/integrations/github/iterate-installation": { maxOffset: 8_123 } },
+    ),
     {
       policyVersion: "2",
       rules: {
@@ -41,7 +45,9 @@ test("a linked connection gets a hosted review processor", async () => {
                 "get",
                 {
                   className: "ReviewBotApp",
-                  durableWorkerKey: expect.stringMatching(/^app-review-bot-[0-9a-f]{32}$/),
+                  durableWorkerKey: expect.stringMatching(
+                    /^github-ai-linter-review-bot-[0-9a-f]{32}$/,
+                  ),
                   path: "/",
                   type: "stateful",
                 },
@@ -50,6 +56,10 @@ test("a linked connection gets a hosted review processor", async () => {
               "wakeStreamProcessor",
             ],
             processorSlug: "review-bot",
+          },
+          filter: {
+            eventTypes: ["events.iterate.com/github/webhook-received"],
+            jsonataCondition: "offset > 8123",
           },
           subscriptionKey: "app-review-bot#review-bot",
         },
@@ -97,10 +107,19 @@ test("a linked connection gets a hosted review processor", async () => {
 test("a config worker update refreshes every linked connection processor", async () => {
   const appended: Array<{ events: StreamEventInput[]; path: string }> = [];
   const app = GithubAiLinter.create(
-    projectEnv((path, ...events) => appended.push({ events, path }), {
-      "/repos/config": "iterate-installation",
-      "/repos/product": "iterate-installation",
-    }),
+    projectEnv(
+      (path, ...events) => appended.push({ events, path }),
+      {
+        "/repos/config": "iterate-installation",
+        "/repos/product": "iterate-installation",
+      },
+      {
+        "/integrations/github/iterate-installation": {
+          existingReviewBotCutoff: 7_500,
+          maxOffset: 9_000,
+        },
+      },
+    ),
     {
       policyVersion: "3",
       rules: {
@@ -125,6 +144,10 @@ test("a config worker update refreshes every linked connection processor", async
           receiver: {
             action: "processor-wake",
             processorSlug: "review-bot",
+          },
+          filter: {
+            eventTypes: ["events.iterate.com/github/webhook-received"],
+            jsonataCondition: "offset > 7500",
           },
           subscriptionKey: "app-review-bot#review-bot",
         },
@@ -183,6 +206,7 @@ function webhookEvent(input: {
 function projectEnv(
   append: (path: string, ...events: StreamEventInput[]) => void,
   repoConnections: Record<string, string> = {},
+  connectionStreams: Record<string, { existingReviewBotCutoff?: number; maxOffset: number }> = {},
 ) {
   return {
     ITX: {
@@ -205,6 +229,31 @@ function projectEnv(
         streams: {
           get: (path: string) => ({
             append: async (...events: StreamEventInput[]) => append(path, ...events),
+            runtimeState: async () => {
+              const fixture = connectionStreams[path];
+              const existingReviewBotCutoff = fixture?.existingReviewBotCutoff;
+              return {
+                coreProcessorState: {
+                  maxOffset: fixture?.maxOffset ?? 0,
+                  subscriptions: {
+                    outbound: {
+                      byKey:
+                        existingReviewBotCutoff === undefined
+                          ? {}
+                          : {
+                              "app-review-bot#review-bot": {
+                                configuration: {
+                                  filter: {
+                                    jsonataCondition: `offset > ${existingReviewBotCutoff}`,
+                                  },
+                                },
+                              },
+                            },
+                    },
+                  },
+                },
+              };
+            },
           }),
         },
       }),
