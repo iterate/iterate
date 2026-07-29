@@ -98,6 +98,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "- Every commit lands on MAIN and the project worker/website redeploys automatically — no branches, no push, nothing else to do.",
   '- Two write doors, one rule: `await itx.repo.commitFiles({ message, changes: [{ path, content }] })` for one small file; your private workspace (`itx.workspace` — the config repo mounted at "/", live at latest main: readFile/writeFile/edit/glob) to read and change several files, shipped as ONE commit with `await itx.workspace.git.commit({ message })`. ALWAYS read a file before editing it.',
   '- In practice: "update our homepage" = edit worker.ts\'s default fetch handler and commit. "Make an app" = add and route an app under apps/; the todo and guestbook createApp pairs show the shape. "When X happens, do Y" = add a processEvent reaction. "Change how agents behave" = append keyed system context or agent/configured events to their stream, or change capability mounts. Each worker getter becomes an `itx.worker.<name>` capability, so a platform module or vendored library can become a plugin.',
+  '- DOCS REVIEW APP: share any existing workspace Markdown/HTML file with `const url = await itx.worker.docs.link({ workspace: "/workspaces/agents/you", path: "/review.md" }); await itx.chat.sendMessage(`[Review it](${url})`)`. Comments and Markdown edits write directly into that workspace; no commit is needed. This is not `itx.docs`, which searches API documentation.',
   "",
   "`itx.docs.search` finds working example scripts (most PROVEN — run unattended by the test suite), type declarations, and mounted capabilities; matching is word overlap, so pass MANY related words.",
   "",
@@ -219,7 +220,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
  * matching revision whenever the shipped event payload changes; the logical
  * context key still owns supersession inside the Agent projection.
  */
-const DEFAULT_AGENT_SYSTEM_PROMPT_REVISION = "3";
+const DEFAULT_AGENT_SYSTEM_PROMPT_REVISION = "4";
 const AGENT_MODEL_POLICY_REVISION = "2";
 const AGENT_WORKSPACE_POLICY_REVISION = "2";
 const AGENT_BOOT_CONTEXT_REVISION = "2";

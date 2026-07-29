@@ -188,6 +188,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  \"type\": \"module\",\n" +
       "  \"description\": \"Iterate project worker and packaged full-stack apps.\",\n" +
       "  \"dependencies\": {\n" +
+      "    \"@iterate-com/docs\": \"https://pkg.pr.new/iterate/iterate/@iterate-com/docs@main\",\n" +
       "    \"iterate\": \"https://pkg.pr.new/iterate/iterate/iterate@main\",\n" +
       "    \"react\": \"19.2.4\",\n" +
       "    \"react-dom\": \"19.2.4\",\n" +
@@ -277,11 +278,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
   {
     path: "worker.ts",
     content:
+      "import { DocsApp } from \"@iterate-com/docs\";\n" +
       "import { GithubAiLinter } from \"iterate/starter-apps/github-ai-linter\";\n" +
       "import { GuestbookApp } from \"iterate/starter-apps/guestbook\";\n" +
       "import { IterateWorkerEntrypoint, type StreamEvent } from \"iterate/sdk\";\n" +
       "import { TodoApp } from \"iterate/starter-apps/todo\";\n" +
-      "import { z } from \"zod\";\n" +
       "\n" +
       "// An iterate project is, in the abstract, just a fetch function.\n" +
       "// HTTP clients on the internet can send us Requests, and we will send responses and\n" +
@@ -305,8 +306,20 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      repoPath: \"/repos/config\",\n" +
       "    },\n" +
       "  });\n" +
+      "  #docsApp = DocsApp.create(this.env, {\n" +
+      "    auth: { policy: \"project-member\" },\n" +
+      "    proxy: {\n" +
+      "      origin: \"https://docs.iterate.workers.dev\",\n" +
+      "      originOverrideKvKey: \"docs-app-origin\",\n" +
+      "    },\n" +
+      "  });\n" +
       "  #guestbookApp = GuestbookApp.create(this.env);\n" +
       "  #todoApp = TodoApp.create(this.env);\n" +
+      "\n" +
+      "  /** Agent-callable Docs helpers, including `itx.worker.docs.link({ workspace, path })`. */\n" +
+      "  get docs() {\n" +
+      "    return this.#docsApp.rpc;\n" +
+      "  }\n" +
       "\n" +
       "  // The base class delivers committed events on ANY stream here at least once and in\n" +
       "  // per-stream order.\n" +
@@ -386,25 +399,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      );\n" +
       "    }\n" +
       "    if (app === \"docs\") {\n" +
-      "      // Member-gated reverse proxy to the stateless Docs vessel. A link\n" +
-      "      // chooses one existing workspace and file through query parameters;\n" +
-      "      // document content and annotations stay in that workspace.\n" +
-      "      const itx = await this.itx;\n" +
-      "      const denied = await itx.auth.get({ policy: \"project-member\" }).fetch(req);\n" +
-      "      if (denied) return denied;\n" +
-      "      const docsUrl = new URL(req.url);\n" +
-      "      const configuredOrigin = z\n" +
-      "        .string()\n" +
-      "        .nullable()\n" +
-      "        .parse(await itx.kv.get(\"docs-app-origin\"));\n" +
-      "      const originValue = configuredOrigin || \"https://docs.iterate.workers.dev\";\n" +
-      "      const origin = new URL(originValue);\n" +
-      "      if (origin.protocol !== \"https:\" || origin.origin !== originValue) {\n" +
-      "        throw new Error(\"docs-app-origin must be one complete HTTPS origin\");\n" +
-      "      }\n" +
-      "      docsUrl.protocol = origin.protocol;\n" +
-      "      docsUrl.host = origin.host;\n" +
-      "      return fetch(new Request(new Request(docsUrl, req), { redirect: \"manual\" }));\n" +
+      "      return this.#docsApp.fetch(req);\n" +
       "    }\n" +
       "    if (app) return new Response(`unknown app: ${app}`, { status: 404 });\n" +
       "\n" +

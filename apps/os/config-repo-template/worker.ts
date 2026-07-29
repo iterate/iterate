@@ -1,8 +1,8 @@
+import { DocsApp } from "@iterate-com/docs";
 import { GithubAiLinter } from "iterate/starter-apps/github-ai-linter";
 import { GuestbookApp } from "iterate/starter-apps/guestbook";
 import { IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
 import { TodoApp } from "iterate/starter-apps/todo";
-import { z } from "zod";
 
 // An iterate project is, in the abstract, just a fetch function.
 // HTTP clients on the internet can send us Requests, and we will send responses and
@@ -26,8 +26,20 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       repoPath: "/repos/config",
     },
   });
+  #docsApp = DocsApp.create(this.env, {
+    auth: { policy: "project-member" },
+    proxy: {
+      origin: "https://docs.iterate.workers.dev",
+      originOverrideKvKey: "docs-app-origin",
+    },
+  });
   #guestbookApp = GuestbookApp.create(this.env);
   #todoApp = TodoApp.create(this.env);
+
+  /** Agent-callable Docs helpers, including `itx.worker.docs.link({ workspace, path })`. */
+  get docs() {
+    return this.#docsApp.rpc;
+  }
 
   // The base class delivers committed events on ANY stream here at least once and in
   // per-stream order.
@@ -107,25 +119,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       );
     }
     if (app === "docs") {
-      // Member-gated reverse proxy to the stateless Docs vessel. A link
-      // chooses one existing workspace and file through query parameters;
-      // document content and annotations stay in that workspace.
-      const itx = await this.itx;
-      const denied = await itx.auth.get({ policy: "project-member" }).fetch(req);
-      if (denied) return denied;
-      const docsUrl = new URL(req.url);
-      const configuredOrigin = z
-        .string()
-        .nullable()
-        .parse(await itx.kv.get("docs-app-origin"));
-      const originValue = configuredOrigin || "https://docs.iterate.workers.dev";
-      const origin = new URL(originValue);
-      if (origin.protocol !== "https:" || origin.origin !== originValue) {
-        throw new Error("docs-app-origin must be one complete HTTPS origin");
-      }
-      docsUrl.protocol = origin.protocol;
-      docsUrl.host = origin.host;
-      return fetch(new Request(new Request(docsUrl, req), { redirect: "manual" }));
+      return this.#docsApp.fetch(req);
     }
     if (app) return new Response(`unknown app: ${app}`, { status: 404 });
 

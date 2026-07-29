@@ -15,6 +15,7 @@ describe("DocsApp", () => {
         ITX: {
           get: async () => ({
             [Symbol.dispose]: dispose,
+            appUrl: async () => "https://docs--demo.iterate.app",
             auth: { get: () => ({ fetch: async () => null }) },
             kv: { get: async () => null },
           }),
@@ -51,6 +52,7 @@ describe("DocsApp", () => {
         ITX: {
           get: async () => ({
             [Symbol.dispose]: () => undefined,
+            appUrl: async () => "https://docs--demo.iterate.app",
             auth: { get: () => ({ fetch: async () => denied }) },
             kv: { get: async () => null },
           }),
@@ -67,5 +69,40 @@ describe("DocsApp", () => {
 
     await expect(app.fetch(new Request("https://docs--demo.iterate.app/"))).resolves.toBe(denied);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test("builds an environment-correct review link for a workspace document", async () => {
+    const dispose = vi.fn();
+    const appUrl = vi.fn(async () => "https://docs--demo.iterate-preview-3.app");
+    const app = DocsApp.create(
+      {
+        ITX: {
+          get: async () => ({
+            [Symbol.dispose]: dispose,
+            appUrl,
+            auth: { get: () => ({ fetch: async () => null }) },
+            kv: { get: async () => null },
+          }),
+        },
+      },
+      {
+        auth: { policy: "project-member" },
+        proxy: {
+          origin: "https://docs.iterate.workers.dev",
+          originOverrideKvKey: "docs-app-origin",
+        },
+      },
+    );
+
+    await expect(
+      app.rpc.link({
+        workspace: "/workspaces/agents/reviewer",
+        path: "/reviews/launch plan.md",
+      }),
+    ).resolves.toBe(
+      "https://docs--demo.iterate-preview-3.app/?workspace=%2Fworkspaces%2Fagents%2Freviewer&path=%2Freviews%2Flaunch+plan.md",
+    );
+    expect(appUrl).toHaveBeenCalledWith("docs");
+    expect(dispose).toHaveBeenCalledOnce();
   });
 });

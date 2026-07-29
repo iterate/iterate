@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Iterate project worker and packaged full-stack apps.",
   "dependencies": {
+    "@iterate-com/docs": "https://pkg.pr.new/iterate/iterate/@iterate-com/docs@main",
     "iterate": "https://pkg.pr.new/iterate/iterate/iterate@main",
     "react": "19.2.4",
     "react-dom": "19.2.4",
