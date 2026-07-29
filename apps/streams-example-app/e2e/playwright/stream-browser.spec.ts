@@ -933,10 +933,23 @@ test("kill reconnects and appends a new woken event", async ({ page }) => {
   await expect(page.getByTestId("stream-status")).toHaveText("receiving-events", {
     timeout: 30_000,
   });
-  // The killed incarnation took every connection with it: the reboot appends a
-  // fresh woken fact and the browser's reconnect a fresh connection-opened.
-  await expect(page.getByTestId("event-count")).toHaveText("5", { timeout: 30_000 });
-  await expect(eventMeta(page, "events.iterate.com/stream/woken")).toHaveCount(2);
+  // The killed incarnation took every connection with it: recovery must append
+  // at least one fresh woken fact and the browser must open a replacement
+  // connection. Do not assert a raw total of five: nudge's liveness read and
+  // the callback reconnect are separate turns, and Cloudflare may evict/reset
+  // the DO between them (each legitimate incarnation appends another woken).
+  await expect
+    .poll(() => eventMeta(page, "events.iterate.com/stream/woken").count(), {
+      timeout: 30_000,
+    })
+    .toBeGreaterThanOrEqual(2);
+  await expect
+    .poll(() => eventMeta(page, "events.iterate.com/stream/connection-opened").count(), {
+      timeout: 30_000,
+    })
+    .toBeGreaterThanOrEqual(2);
+  await expect(eventMeta(page, "events.iterate.com/stream/created")).toHaveCount(1);
+  await expect(eventMeta(page, "events.iterate.com/stream/error-occurred")).toHaveCount(0);
 });
 
 // The stream DO can die at any moment (eviction, deploy, explicit kill) and browser-side

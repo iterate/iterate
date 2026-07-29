@@ -15,7 +15,8 @@ vi.mock("../workers/worker-runner.ts", () => ({
   },
 }));
 
-const { ScriptExecutionDurableObject } = await import("./script-execution-durable-object.ts");
+const { ScriptExecutionDurableObject, scriptExecutionDurableObjectName } =
+  await import("./script-execution-durable-object.ts");
 
 const EXECUTION_ID = "exec-alarm-owned";
 const PROJECT_ID = "prj_test";
@@ -42,13 +43,15 @@ function options(
   };
 }
 
+const EXECUTOR_NAME = await scriptExecutionDurableObjectName(options());
+
 function executor(
   input: {
     appendIfStreamId?: (args: {
       streamId: string;
       events: Parameters<MemoryStream["append"]>;
     }) => Promise<unknown>;
-    executionId?: string;
+    executorName?: string;
     records?: Map<string, unknown>;
     stream?: MemoryStream;
   } = {},
@@ -60,7 +63,7 @@ function executor(
   const ctx = {
     blockConcurrencyWhile: async <T>(callback: () => Promise<T>) => await callback(),
     exports: {},
-    id: { name: input.executionId ?? EXECUTION_ID },
+    id: { name: input.executorName ?? EXECUTOR_NAME },
     storage: {
       kv: {
         delete: (key: string) => records.delete(key),
@@ -244,10 +247,32 @@ describe("ScriptExecutionDurableObject alarm ownership", () => {
   });
 
   it("rejects a handoff addressed to the wrong executor identity", async () => {
-    const x = executor({ executionId: "exec-other" });
+    const wrongExecutorName = "script-execution:v2:wrong";
+    const x = executor({ executorName: wrongExecutorName });
     await expect(x.value.start("async () => 1", options())).rejects.toThrow(
-      `script execution "${EXECUTION_ID}" does not match executor identity "exec-other"`,
+      `script execution "${EXECUTION_ID}" does not match executor identity "${wrongExecutorName}"`,
     );
     expect(x.records.size).toBe(0);
+  });
+
+  it("does not alias a stream-local execution id across projects, scopes, or lifetimes", async () => {
+    const original = options();
+    const sameIdentityWithNormalizedScope = {
+      ...original,
+      scopePath: SCOPE_PATH.slice(1),
+    };
+    const otherProject = { ...original, projectId: "prj_other" };
+    const otherScope = { ...original, scopePath: "/agents/other" };
+    const otherLifetime = {
+      ...original,
+      streamId: "22222222-2222-4222-8222-222222222222",
+    };
+
+    await expect(scriptExecutionDurableObjectName(sameIdentityWithNormalizedScope)).resolves.toBe(
+      EXECUTOR_NAME,
+    );
+    await expect(scriptExecutionDurableObjectName(otherProject)).resolves.not.toBe(EXECUTOR_NAME);
+    await expect(scriptExecutionDurableObjectName(otherScope)).resolves.not.toBe(EXECUTOR_NAME);
+    await expect(scriptExecutionDurableObjectName(otherLifetime)).resolves.not.toBe(EXECUTOR_NAME);
   });
 });

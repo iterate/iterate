@@ -85,6 +85,27 @@ type ScriptExecutionState =
 const SCRIPT_EXECUTION_STATE_KEY = "script-execution:state";
 
 /**
+ * Return the globally unique, bounded Durable Object name for one immutable
+ * script execution. Execution ids are offsets local to a scope stream (for
+ * example `agent-output:166`), so using one directly aliases unrelated
+ * projects and reset stream lifetimes in the global DO namespace.
+ */
+export async function scriptExecutionDurableObjectName(
+  options: Pick<
+    ScriptExecutionStartOptions,
+    "projectId" | "scopePath" | "streamContext" | "streamId"
+  >,
+): Promise<string> {
+  const digest = await stableSha256({
+    executionId: options.streamContext.executionId,
+    projectId: options.projectId,
+    scopePath: normalizePath(options.scopePath),
+    streamId: options.streamId,
+  });
+  return `script-execution:v2:${digest}`;
+}
+
+/**
  * Compute the timeout forwarded to one sandbox command inside a script. This
  * exact function is embedded into the generated worker below (via
  * Function#toString), so the executable unit tests and the deployed script
@@ -128,7 +149,7 @@ export function sandboxExecTimeout(input: {
  */
 export class ScriptExecutionDurableObject extends DurableObject<Env> {
   async start(code: string, options: ScriptExecutionStartOptions): Promise<void> {
-    this.#assertIdentity(options);
+    await this.#assertIdentity(options);
     const request = normalizedScriptExecutionRequest(code, options);
     const fingerprint = await stableSha256(request);
 
@@ -252,9 +273,10 @@ export class ScriptExecutionDurableObject extends DurableObject<Env> {
     this.#putState({ fingerprint: state.fingerprint, phase: "settled" });
   }
 
-  #assertIdentity(options: ScriptExecutionStartOptions): void {
+  async #assertIdentity(options: ScriptExecutionStartOptions): Promise<void> {
     const executionId = options.streamContext.executionId;
-    if (this.ctx.id.name !== executionId) {
+    const expectedName = await scriptExecutionDurableObjectName(options);
+    if (this.ctx.id.name !== expectedName) {
       throw new TypeError(
         `script execution "${executionId}" does not match executor identity "${this.ctx.id.name}"`,
       );

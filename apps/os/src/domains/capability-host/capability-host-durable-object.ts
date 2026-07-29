@@ -20,6 +20,7 @@ import {
   type CapabilityHostProcessorReads,
 } from "./capability-host-processor-implementation.ts";
 import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
+import { scriptExecutionDurableObjectName } from "./script-execution-durable-object.ts";
 import type { ProvideCapabilityInput } from "./types.ts";
 
 type ScriptExecutionExecutor = {
@@ -113,15 +114,19 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
 
   #scriptExecutionExecutor(): ScriptExecutionExecutor {
     // The host records `started`, then hands the immutable execution to its
-    // own alarm-backed Durable Object. Addressing by execution id makes the DO
-    // itself the at-most-once fence across host retries and evictions.
+    // own alarm-backed Durable Object. The scope, stream lifetime, and local
+    // execution id together address a globally unique DO, which is the
+    // at-most-once fence across host retries and evictions.
     return {
-      start: (code, options) =>
-        this.env.SCRIPT_EXECUTION.getByName(options.streamContext.executionId).start(code, {
+      start: async (code, options) => {
+        const executionOptions = {
           ...options,
           projectId: this.#name.projectId,
           scopePath: this.#name.path,
-        }),
+        };
+        const executorName = await scriptExecutionDurableObjectName(executionOptions);
+        await this.env.SCRIPT_EXECUTION.getByName(executorName).start(code, executionOptions);
+      },
     };
   }
 
