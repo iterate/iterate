@@ -1,3 +1,4 @@
+import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
 import {
   WORKER_DEPLOYMENT_VERSION_METADATA_FORMAT,
   type WorkerDeploymentVersion,
@@ -42,6 +43,30 @@ export type DeploymentVersionReadiness = {
 
 function normalizeDeploymentVersion(version: WorkerDeploymentVersionLike): WorkerDeploymentVersion {
   return typeof version === "string" ? { id: version } : version;
+}
+
+function disposeDeploymentReadinessValue(value: unknown, kind: "result" | "target"): void {
+  try {
+    disposeIgnoredRpcResult(value);
+  } catch (error) {
+    // The probe outcome has already been observed. Cleanup failure must stay
+    // visible without changing rollout classification or the operation that
+    // follows a successful readiness proof.
+    console.warn(`Durable Object deployment version ${kind} dispose failed`, { error });
+  }
+}
+
+function detachDeploymentVersion(
+  version: WorkerDeploymentVersionLike,
+): WorkerDeploymentVersionLike {
+  if (typeof version === "string") return version;
+  try {
+    const detached = { ...version };
+    Reflect.deleteProperty(detached, Symbol.dispose);
+    return detached;
+  } finally {
+    disposeDeploymentReadinessValue(version, "result");
+  }
 }
 
 export function describeDeploymentVersion(version: WorkerDeploymentVersionLike): string {
@@ -191,6 +216,8 @@ type AcquireDurableObjectDeploymentTargetInput<Target extends DurableObjectDeplo
  * exact stub whose probe crossed the rollout boundary. Callers can then issue
  * one non-replayable operation on that stub without accidentally falling back
  * to the incarnation whose lifecycle failure triggered the next probe.
+ * Superseded and failed-probe stubs are released here; ownership of the final
+ * successful target transfers to the caller.
  */
 export async function acquireDurableObjectDeploymentTarget<
   Target extends DurableObjectDeploymentTarget,
@@ -198,24 +225,36 @@ export async function acquireDurableObjectDeploymentTarget<
   input: AcquireDurableObjectDeploymentTargetInput<Target>,
 ): Promise<{ readiness: DeploymentVersionReadiness; target: Target }> {
   let readyTarget: Target | undefined;
-  const readiness = await waitForDurableObjectDeploymentVersion({
-    expectedVersion: input.expectedVersion,
-    maxPollIntervalMs: input.maxPollIntervalMs,
-    notReadyError: input.notReadyError,
-    now: input.now,
-    pollIntervalMs: input.pollIntervalMs,
-    probeTimeoutMs: input.probeTimeoutMs,
-    readVersion: () => {
-      readyTarget = input.getTarget();
-      return Promise.resolve(
-        readyTarget.deploymentVersion(WORKER_DEPLOYMENT_VERSION_METADATA_FORMAT),
-      );
-    },
-    sleep: input.sleep,
-    timeoutMs: input.timeoutMs,
-  });
-  if (readyTarget === undefined) {
-    throw input.notReadyError("the version probe returned no target");
+  let targetTransferred = false;
+  try {
+    const readiness = await waitForDurableObjectDeploymentVersion({
+      expectedVersion: input.expectedVersion,
+      maxPollIntervalMs: input.maxPollIntervalMs,
+      notReadyError: input.notReadyError,
+      now: input.now,
+      pollIntervalMs: input.pollIntervalMs,
+      probeTimeoutMs: input.probeTimeoutMs,
+      readVersion: async () => {
+        if (readyTarget !== undefined) {
+          disposeDeploymentReadinessValue(readyTarget, "target");
+          readyTarget = undefined;
+        }
+        const target = input.getTarget();
+        readyTarget = target;
+        const version = await target.deploymentVersion(WORKER_DEPLOYMENT_VERSION_METADATA_FORMAT);
+        return detachDeploymentVersion(version);
+      },
+      sleep: input.sleep,
+      timeoutMs: input.timeoutMs,
+    });
+    if (readyTarget === undefined) {
+      throw input.notReadyError("the version probe returned no target");
+    }
+    targetTransferred = true;
+    return { readiness, target: readyTarget };
+  } finally {
+    if (!targetTransferred && readyTarget !== undefined) {
+      disposeDeploymentReadinessValue(readyTarget, "target");
+    }
   }
-  return { readiness, target: readyTarget };
 }

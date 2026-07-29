@@ -1,3 +1,4 @@
+import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
 import type { WorkerDeploymentVersionFormat } from "../../env.ts";
 import {
   acquireDurableObjectDeploymentTarget,
@@ -34,6 +35,40 @@ function commitNotSentError(
   return cause === undefined ? new Error(message) : new Error(message, { cause });
 }
 
+function disposeRepoRpcValue(
+  value: unknown,
+  kind: "commit RPC result" | "Durable Object stub",
+  input: CommitFilesOnDeploymentReadyRepoInput,
+): void {
+  try {
+    disposeIgnoredRpcResult(value);
+  } catch (error) {
+    // The mutation outcome is already authoritative. Keep cleanup failure
+    // observable without replacing success or inviting an unsafe replay.
+    console.warn(`repo ${kind} dispose failed`, {
+      error,
+      path: input.path,
+      projectId: input.projectId,
+    });
+  }
+}
+
+function detachCommitResult(
+  result: CommitRepoFilesResult,
+  input: CommitFilesOnDeploymentReadyRepoInput,
+): CommitRepoFilesResult {
+  try {
+    const detached = {
+      ...result,
+      changedPaths: [...result.changedPaths],
+    };
+    Reflect.deleteProperty(detached, Symbol.dispose);
+    return detached;
+  } finally {
+    disposeRepoRpcValue(result, "commit RPC result", input);
+  }
+}
+
 /**
  * Keep a repo mutation behind the last read-only rollout boundary and issue it
  * through that exact proven stub. A fresh stub can still route to the
@@ -66,5 +101,9 @@ export async function commitFilesOnDeploymentReadyRepo(
       waitedMs: readiness.waitedMs,
     });
   }
-  return await readyRepo.commitFiles(input.commit);
+  try {
+    return detachCommitResult(await readyRepo.commitFiles(input.commit), input);
+  } finally {
+    disposeRepoRpcValue(readyRepo, "Durable Object stub", input);
+  }
 }
