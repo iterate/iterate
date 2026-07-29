@@ -29,6 +29,7 @@ const PreviewWorkflowConcurrency = z.object({
 const {
   ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
   acquireAnyEnvironmentConfigLease,
+  announceRetryTelemetry,
   adoptLeaseHeldBySemaphore,
   claimEnvironmentConfigLease,
   describeForcePushCompareHazard,
@@ -788,6 +789,54 @@ describe("preview test commands", () => {
     const source = readFileSync(resolve(repoRoot, "scripts/preview/preview.ts"), "utf8");
 
     expect(source).not.toContain("E2E_RETRY_TELEMETRY_FILE");
+  });
+
+  test("announces a recovered retry as a notice without overriding the command exit code", () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      announceRetryTelemetry("os", {
+        retried: [
+          {
+            lane: "vitest",
+            name: "recovers",
+            retryCount: 1,
+            passedAfterRetry: true,
+          },
+        ],
+      });
+
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "::notice title=Preview e2e retries::os: 1 retried: recovers (vitest x1). Every listed retry passed;",
+        ),
+      );
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  test("warns when retry telemetry still contains a failed test", () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      announceRetryTelemetry("os", {
+        retried: [
+          {
+            lane: "playwright",
+            name: "still broken",
+            retryCount: 1,
+            passedAfterRetry: false,
+          },
+        ],
+      });
+
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "::warning title=Preview e2e retries::os: 1 retried: still broken (playwright x1, still failed). At least one listed retry still failed;",
+        ),
+      );
+    } finally {
+      log.mockRestore();
+    }
   });
 
   test("builds a focused Vitest invocation from the OS app", () => {
