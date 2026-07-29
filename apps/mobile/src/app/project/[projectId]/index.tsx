@@ -5,7 +5,7 @@
 // here regardless of where it started) and "New chat" opens an empty thread
 // instead of a voice session.
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import { ProjectDrawerButton } from "../../../components/project-drawer.tsx";
@@ -19,6 +19,7 @@ import { colors, radius, spacing } from "../../../lib/theme.ts";
 
 export default function ChatListScreen() {
   const { projectId, slug } = useLocalSearchParams<{ projectId: string; slug?: string }>();
+  const queryClient = useQueryClient();
 
   const agents = useQuery({
     queryKey: ["agents", projectId],
@@ -42,13 +43,22 @@ export default function ChatListScreen() {
   // Keychain write never prompts Face ID) so held requests are approvable
   // the moment they appear — the approvals screen's enroll banner is now the
   // fallback, not the common path. Best-effort like the push enrollment: a
-  // failure must not block the project, and the next open retries. The query
-  // cache also lets the approvals screen read enrollment without refetching.
+  // failure must not block the project, and the next open retries. A
+  // successful enroll PRIMES the approvals screen's key-status query (same
+  // key it reads) so its Approve button never flashes "Enroll to approve"
+  // while re-deriving what this query just established.
   useQuery({
     queryKey: ["approver-key-enrollment", projectId],
     queryFn: async () => {
       const baseUrl = (await getServerBaseUrl()) || DEFAULT_SERVER;
-      return await ensureApproverKeyEnrolled(baseUrl, projectId);
+      const key = await ensureApproverKeyEnrolled(baseUrl, projectId);
+      if (key !== null) {
+        queryClient.setQueryData(["approver-key-status", projectId, baseUrl], {
+          kind: "enrolled",
+          key,
+        });
+      }
+      return key;
     },
     retry: false,
   });

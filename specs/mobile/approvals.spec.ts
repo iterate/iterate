@@ -110,6 +110,12 @@ test("approve a burst with one confirm; reject with a reason the script reads", 
     // stand-in), every request released.
     const approving = burst("approve-me");
     await page.goto(`/project/${projectId}/approvals?slug=${projectSlug}`);
+    // Same shape as the reject lane below: the burst is still coalescing at
+    // the egress door, the screen is honestly at rest (no spinner to wait
+    // on), so hold the spinner-waiter off while the batch card appears.
+    await spinnerWaiter.settings.run({ disabled: true }, () =>
+      page.getByRole("button", { name: "Approve all 3 (Face ID)" }).waitFor({ timeout: 30_000 }),
+    );
     acceptNextDialog(page);
     await page.getByRole("button", { name: "Approve all 3 (Face ID)" }).click();
     await page.getByText("Approved").first().waitFor();
