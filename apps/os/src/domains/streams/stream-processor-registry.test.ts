@@ -430,6 +430,48 @@ describe("recovery revival", () => {
 // =============================================================================
 
 describe("wakeStreamProcessor", () => {
+  it("starts a fresh hosted processor at the subscription configuration offset", async () => {
+    const h = makeHarness();
+    await h.stream.append(
+      { type: REQUESTED, payload: { id: "historical-a" } },
+      { type: REQUESTED, payload: { id: "historical-b" } },
+    );
+
+    const woken = await h.registry.wakeStreamProcessor({
+      stream: {
+        projectId: null,
+        path: HOME,
+        streamId: STREAM_ID,
+        streamMaxOffset: h.head(),
+      },
+      subscriptionKey: "wake:alpha-proc",
+      processorSlug: "alpha-proc",
+      initialCheckpointOffset: h.head(),
+    });
+
+    expect(woken.checkpointOffset).toBe(2);
+    await expect(woken.getRuntimeState!()).resolves.toMatchObject({
+      snapshot: { offset: 2, state: { ids: [] } },
+    });
+
+    await h.stream.append({ type: REQUESTED, payload: { id: "new" } });
+    await expect(
+      deliverWakeBatch(woken, {
+        projectId: null,
+        path: HOME,
+        streamId: STREAM_ID,
+        events: h.stream.events.filter((event) => event.offset > woken.checkpointOffset),
+        scannedAfterOffset: woken.checkpointOffset,
+        scannedThroughOffset: h.head(),
+        streamMaxOffset: h.head(),
+        state: null,
+      }),
+    ).resolves.toEqual({ outcome: "ok" });
+    await expect(woken.getRuntimeState!()).resolves.toMatchObject({
+      snapshot: { offset: 3, state: { ids: ["new"] } },
+    });
+  });
+
   it("answers the runner's cursor, processEventBatch, announcement, and runtime capabilities", async () => {
     const h = makeHarness();
     // A multi-processor registry cannot guess which runner a wake is for.

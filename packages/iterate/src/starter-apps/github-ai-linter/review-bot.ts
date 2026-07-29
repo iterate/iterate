@@ -1,9 +1,16 @@
-// The GitHub pull-request review bot is ordinary project policy. The project
-// worker already receives every verified connection event through its normal
-// stream subscription, so this router turns each relevant webhook directly
-// into durable PR-agent facts. Stable idempotency keys collapse redeliveries.
+// The GitHub pull-request review bot. This is ordinary project policy, hosted
+// as one stream processor Durable Object per GitHub connection. The processor
+// owns only a checkpoint; all review facts live on idempotently keyed agent
+// streams.
+import { z } from "zod";
+import {
+  defineProcessorContract,
+  StreamProcessor,
+  type ProcessEventArgs,
+} from "../../processors/index.ts";
 import type { GithubRepoLink, Project, StreamEvent, StreamEventInput } from "../../sdk.ts";
-import type { GithubAiLinterRules } from "./rules.ts";
+import type { GithubAiLinterConfig } from "./index.ts";
+import { loadGithubAiLinterRules, type GithubAiLinterRules } from "./rules.ts";
 
 const pullRequestAgentPolicyVersion = "2";
 const pullRequestAgentPolicy = [
@@ -14,6 +21,76 @@ const pullRequestAgentPolicy = [
   "If several review tasks are visible, review only the newest one. A new head interrupts and supersedes unfinished work for an older head.",
   "Keep resolved findings resolved unless the relevant code changes; do not oscillate on an unchanged head.",
 ].join("\n");
+
+export const ReviewBotProcessorContract = defineProcessorContract({
+  slug: "review-bot",
+  version: "0.2.0",
+  description:
+    "Routes first-hand GitHub webhooks on one connection stream into per-pull-request agents.",
+  stateSchema: z.object({}),
+  events: {
+    "events.iterate.com/github/webhook-received": {
+      description:
+        "A signed GitHub webhook the platform verified and appended to this connection stream.",
+      payloadSchema: z.looseObject({}),
+    },
+  },
+  consumes: ["events.iterate.com/github/webhook-received"],
+  emits: [],
+});
+export type ReviewBotProcessorContract = typeof ReviewBotProcessorContract;
+
+export class ReviewBotProcessor extends StreamProcessor<
+  ReviewBotProcessorContract,
+  {
+    config: GithubAiLinterConfig;
+    getItx: () => Promise<Project & Disposable>;
+  }
+> {
+  readonly contract = ReviewBotProcessorContract;
+
+  protected override processEvent(args: ProcessEventArgs<ReviewBotProcessorContract>): undefined {
+    const { blockProcessorWhile, event } = args;
+    if (
+      event === null ||
+      event.type !== "events.iterate.com/github/webhook-received" ||
+      event.source?.copiedFrom !== undefined ||
+      !mightWakePullRequestAgent(event)
+    ) {
+      return;
+    }
+    blockProcessorWhile(async () => {
+      using itx = await this.deps.getItx();
+      await handleGithubPullRequestWebhook(itx, event, {
+        loadRules: () => loadGithubAiLinterRules(itx, this.deps.config.rules),
+        policyVersion: this.deps.config.policyVersion,
+      });
+    });
+  }
+}
+
+export function mightWakePullRequestAgent(event: StreamEvent): boolean {
+  // The platform created this envelope after signature verification. This is
+  // deliberately a loose, allocation-free prefilter; the handler performs
+  // complete authorization and payload validation before acting.
+  const webhook = event.payload as
+    | {
+        associations?: { mentionedUsers?: unknown[] };
+        body?: { action?: unknown };
+        delivery?: { name?: unknown };
+      }
+    | undefined;
+  const name = webhook?.delivery?.name;
+  const action = webhook?.body?.action;
+  return (
+    (name === "pull_request" &&
+      (action === "opened" || action === "ready_for_review" || action === "synchronize")) ||
+    ((name === "issue_comment" ||
+      name === "pull_request_review" ||
+      name === "pull_request_review_comment") &&
+      (webhook?.associations?.mentionedUsers?.length ?? 0) > 0)
+  );
+}
 
 /**
  * The one testable userspace boundary: a verified first-hand connection event

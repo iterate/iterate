@@ -10,21 +10,27 @@ what the agent should do.
 GitHub App webhook
   -> /integrations/github/<connection>       verified original fact
        |-> /repos/<project path>              default-branch pushes only
-       `-> project config worker              normal project-worker delivery
-            -> GithubAiLinter.processEvent
-                 -> handleGithubPullRequestWebhook
-                      -> match itx.repos.list() links
-                           -> /agents/repos/<project path>/pr/<n>
+       `-> ReviewBotApp                       hosted processor for this connection
+            -> handleGithubPullRequestWebhook
+                 -> match itx.repos.list() links
+                      -> /agents/repos/<project path>/pr/<n>
                                                      PR history and agent loop
 ```
 
-The review bot is userspace project policy. Every project stream already
-delivers committed events to the project's config worker, so the packaged
-`GithubAiLinter` handles first-hand GitHub webhooks there directly. There is no
-second Durable Object, hosted processor, replay cursor, or connection-specific
-subscription. The platform still has no pull-request processor of its own. The
+The review bot remains userspace project policy. When the config worker sees a
+repository link, `GithubAiLinter` configures a hosted-processor subscription on
+that connection stream. Its stateful worker contains one `ReviewBotProcessor`
+Durable Object whose durable checkpoint survives worker deployments and
+evictions. The platform still has no pull-request processor of its own. The
 agent stream remains the durable journal and execution loop for its pull
 request, under stable idempotency keys.
+
+A fresh processor starts at the committed subscription configuration event,
+not offset zero and not the later wake-time stream head. That skips historical
+webhooks without losing an event that races the first wake. The processor also
+rejects irrelevant webhook envelopes before opening ITX. Structural review
+rules are read sequentially from the config's explicit paths, so routing a
+webhook never enumerates or clones the linked product repository.
 
 ## The webhook fact
 
@@ -79,13 +85,13 @@ userspace consumes the original connection event and rejects every received copy
 
 The router lives in
 [`iterate/starter-apps/github-ai-linter`](../../../packages/iterate/src/starter-apps/github-ai-linter/review-bot.ts).
-The package contains the `handleGithubPullRequestWebhook` router and the rule
-loader it calls. The config worker passes its environment and app config to
-`GithubAiLinter.create`, keeps the returned app in a private field, and calls
-its `processEvent(event)` method explicitly. The project's existing
-`project-worker` delivery supplies each verified first-hand webhook at least
-once; the router's stable idempotency keys collapse a redelivery. Copied
-webhooks are ignored.
+The package contains the hosted processor, the
+`handleGithubPullRequestWebhook` router, and the rule loader it calls. The
+config worker passes its environment and app config to `GithubAiLinter.create`
+and forwards project events to it. A repository-link event installs or
+replaces the connection-specific subscription; the source stream then wakes
+the hosted processor with verified first-hand webhooks. The router's stable
+idempotency keys collapse redelivery, and copied webhooks are ignored.
 
 The router lists the project's repos, reads their current links, and accepts
 the event only when one link's stream path, installation, and stable repository
@@ -127,7 +133,7 @@ directly rather than spending an agent turn fetching the same webhook again.
 
 ## Structural reviews
 
-Rules are Markdown files in the repo and glob declared by the config worker.
+Rules are Markdown files at the explicit paths declared by the config worker.
 Frontmatter IDs are stable keys used in suppressions, comments, idempotency,
 and future analytics:
 

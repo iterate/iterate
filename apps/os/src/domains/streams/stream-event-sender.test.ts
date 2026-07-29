@@ -75,6 +75,7 @@ afterEach(() => vi.restoreAllMocks());
 
 function hostedConfig(
   filter?: SubscriptionConfiguredPayload["filter"],
+  start?: "beginning" | "now",
 ): SubscriptionConfiguredPayload {
   return {
     subscriptionKey: PROCESSOR_KEY,
@@ -84,6 +85,7 @@ function hostedConfig(
       action: "processor-wake",
       expression: ["agents", ["get", "/source"], "processor", "wakeStreamProcessor"],
       processorSlug: "test-processor",
+      ...(start === undefined ? {} : { delivery: { start } }),
     },
   };
 }
@@ -183,6 +185,31 @@ function harness(args: {
 }
 
 describe("StreamEventSender hosted processor delivery", () => {
+  it("seeds start-now processors at the configuration event, not the later wake-time head", async () => {
+    const deliveredOffsets: number[] = [];
+    const h = harness({
+      events: [event(2, "a", { keep: true })],
+      configuration: hostedConfig(undefined, "now"),
+      wakeProcessor: async (_expression, request) => ({
+        streamId: SOURCE_STREAM_ID,
+        checkpointOffset: request.initialCheckpointOffset ?? 0,
+        processEventBatch: retainedProcessEventBatch((batch) => {
+          deliveredOffsets.push(...batch.events.map(({ offset }) => offset));
+          batch.reportDeliveryResult({ outcome: "ok" });
+        }),
+      }),
+    });
+
+    h.eventSender.sendDue();
+    await h.settle();
+
+    expect(h.wakeCalls[0]?.[1]).toMatchObject({
+      initialCheckpointOffset: 1,
+      stream: { streamMaxOffset: 2 },
+    });
+    expect(deliveredOffsets).toEqual([2]);
+  });
+
   it("backs off without publishing when recording the hosted open is interrupted", async () => {
     const disposed = vi.fn();
     const h = harness({

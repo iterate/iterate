@@ -314,14 +314,17 @@ export class StreamProcessorRunner<
    * hosting transport may adapt how the promise is observed, but must not
    * duplicate these semantics.
    */
-  async openEventBatchCallback(expectedStreamId?: string): Promise<{
+  async openEventBatchCallback(
+    expectedStreamId?: string,
+    initialCheckpointOffset = 0,
+  ): Promise<{
     checkpointOffset: number;
     processEventBatch: (batch: StreamProcessorEventBatch) => Promise<void>;
   }> {
     this.#assertNotDisposed();
     const checkpointOffset = await this.#enqueue(async () => {
       const streamId = await this.#readCurrentStreamId(expectedStreamId);
-      await this.#load(streamId);
+      await this.#load(streamId, initialCheckpointOffset);
       return this.#requireProgress().processing.acknowledgedThroughOffset;
     });
     return {
@@ -835,7 +838,7 @@ export class StreamProcessorRunner<
   // Progress load / refold / commit.
   // ---------------------------------------------------------------------------
 
-  #load(streamId: string): Promise<void> {
+  #load(streamId: string, initialCheckpointOffset = 0): Promise<void> {
     if (this.#hasLoaded && this.#progress?.streamId === streamId) return Promise.resolve();
     if (this.#hasLoaded) {
       this.#hasLoaded = false;
@@ -844,10 +847,10 @@ export class StreamProcessorRunner<
     }
     if (this.#loaded !== undefined) {
       if (this.#loadingStreamId === streamId) return this.#loaded;
-      return this.#loaded.then(() => this.#load(streamId));
+      return this.#loaded.then(() => this.#load(streamId, initialCheckpointOffset));
     }
     this.#loadingStreamId = streamId;
-    this.#loaded = this.#loadOnce(streamId).catch((error: unknown) => {
+    this.#loaded = this.#loadOnce(streamId, initialCheckpointOffset).catch((error: unknown) => {
       // Clear the memoized load so a later call retries instead of replaying
       // this rejection forever.
       this.#loaded = undefined;
@@ -860,26 +863,28 @@ export class StreamProcessorRunner<
   #freshProgress(
     streamId: string,
     cursorRevision: number,
+    initialCheckpointOffset: number,
   ): ProcessorProgress<ProcessorState<Contract>> {
     return {
       streamId,
       reduction: {
         reducerVersion: this.hooks.contract.version,
-        reducedThroughOffset: 0,
+        reducedThroughOffset: initialCheckpointOffset,
         state: this.hooks.initialState(),
       },
-      processing: { acknowledgedThroughOffset: 0, cursorRevision },
+      processing: { acknowledgedThroughOffset: initialCheckpointOffset, cursorRevision },
     };
   }
 
-  async #loadOnce(streamId: string): Promise<void> {
+  async #loadOnce(streamId: string, initialCheckpointOffset: number): Promise<void> {
     const persisted = await this.durability?.progress.read();
     if (persisted === undefined) {
-      // Fresh processor: nothing observed yet, so the schema default IS the
-      // fold of the (empty) acknowledged prefix. Persist the stream ID before
-      // a checkpoint can escape, so no later wake can adopt unrelated
-      // pre-existing progress.
-      const fresh = this.#freshProgress(streamId, 0);
+      // A fresh processor has observed no events before its configured start.
+      // Its schema default is therefore the fold of the empty subscribed
+      // prefix, while both cursors skip the intentionally excluded history.
+      // Persist the stream ID before a checkpoint can escape, so no later wake
+      // can adopt unrelated pre-existing progress.
+      const fresh = this.#freshProgress(streamId, 0, initialCheckpointOffset);
       await this.#commit(fresh, {
         expectedCursorRevision: 0,
         expectedStreamId: undefined,
@@ -898,14 +903,21 @@ export class StreamProcessorRunner<
             `this durability backend must reset its related projections before reopening`,
         );
       }
-      const fresh = this.#freshProgress(streamId, persisted.processing.cursorRevision + 1);
+      const fresh = this.#freshProgress(
+        streamId,
+        persisted.processing.cursorRevision + 1,
+        initialCheckpointOffset,
+      );
       await replaceForStream(fresh, {
         expectedCursorRevision: persisted.processing.cursorRevision,
         expectedStreamId: persisted.streamId,
       });
       this.#progress = fresh;
       this.#hasLoaded = true;
-      this.#notifyStateChange({ offset: 0, state: fresh.reduction.state });
+      this.#notifyStateChange({
+        offset: initialCheckpointOffset,
+        state: fresh.reduction.state,
+      });
       return;
     }
 
