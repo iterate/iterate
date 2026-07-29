@@ -282,7 +282,7 @@ describe("userspace GitHub pull-request routing", () => {
 
     expect(parentAgentEvents).toMatchObject([
       {
-        idempotencyKey: "github-pr/agent-policy:v3",
+        idempotencyKey: "github-pr/agent-policy:v4",
         payload: {
           key: "github/pull-request-policy",
           llmRequestPolicy: { behaviour: "dont-trigger-request" },
@@ -300,7 +300,10 @@ describe("userspace GitHub pull-request routing", () => {
       },
     ]);
     expect(JSON.stringify(parentAgentEvents[0])).toContain(
-      "Automated rule analysis belongs to the sibling /ai-linter stream",
+      "The sibling /ai-linter stream is the sole author of APPROVE, COMMENT, and REQUEST_CHANGES",
+    );
+    expect(JSON.stringify(parentAgentEvents[0])).toContain(
+      "Never create, submit, or dismiss a pull-request review",
     );
     expect(parentStreamEvents).toEqual([
       {
@@ -617,6 +620,7 @@ describe("userspace GitHub pull-request routing", () => {
     const instructions = JSON.stringify(test.appendBatches[0]?.events[1]);
     expect(instructions).toContain("GitHub's signed webhook identifies @jonas as MEMBER");
     expect(instructions).toContain("issues.createComment");
+    expect(instructions).toContain("never create, submit, or dismiss a pull-request review");
     expect(instructions).not.toContain("@iterate please review");
     const request = JSON.stringify(test.appendBatches[0]?.events[2]);
     expect(request).toContain("@iterate please review");

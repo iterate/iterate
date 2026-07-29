@@ -248,7 +248,9 @@ guard if the review landed but the settlement append was interrupted:
 
 The parent PR agent remains a normal conversational agent throughout. Mentions
 go to the parent and can discuss qualitative or borderline issues without
-being forced through the rule-diagnostic protocol.
+being forced through the rule-diagnostic protocol. It may publish PR
+conversation comments and replies, but it cannot create, submit, or dismiss a
+GitHub review; the `/ai-linter` processor alone owns review verdict state.
 
 ## Mentions
 
