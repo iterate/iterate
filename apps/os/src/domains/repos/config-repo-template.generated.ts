@@ -393,10 +393,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      const denied = await itx.auth.get({ policy: \"project-member\" }).fetch(req);\n" +
       "      if (denied) return denied;\n" +
       "      const docsUrl = new URL(req.url);\n" +
-      "      const originValue = z\n" +
+      "      const configuredOrigin = z\n" +
       "        .string()\n" +
-      "        .min(1)\n" +
-      "        .parse((await itx.kv.get(\"docs-app-origin\")) ?? \"https://docs.iterate.workers.dev\");\n" +
+      "        .nullable()\n" +
+      "        .parse(await itx.kv.get(\"docs-app-origin\"));\n" +
+      "      const originValue = configuredOrigin || \"https://docs.iterate.workers.dev\";\n" +
       "      const origin = new URL(originValue);\n" +
       "      if (origin.protocol !== \"https:\" || origin.origin !== originValue) {\n" +
       "        throw new Error(\"docs-app-origin must be one complete HTTPS origin\");\n" +

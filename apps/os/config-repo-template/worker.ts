@@ -114,10 +114,11 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       const denied = await itx.auth.get({ policy: "project-member" }).fetch(req);
       if (denied) return denied;
       const docsUrl = new URL(req.url);
-      const originValue = z
+      const configuredOrigin = z
         .string()
-        .min(1)
-        .parse((await itx.kv.get("docs-app-origin")) ?? "https://docs.iterate.workers.dev");
+        .nullable()
+        .parse(await itx.kv.get("docs-app-origin"));
+      const originValue = configuredOrigin || "https://docs.iterate.workers.dev";
       const origin = new URL(originValue);
       if (origin.protocol !== "https:" || origin.origin !== originValue) {
         throw new Error("docs-app-origin must be one complete HTTPS origin");
