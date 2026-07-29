@@ -85,6 +85,8 @@ function taskSummary(source: string): { text: string; from: number } {
   const body = source.slice(bodyOffset);
   let lineOffset = 0;
   for (const line of body.split("\n")) {
+    // The discussion store at EOF is not card-summary material.
+    if (line.startsWith("<!-- task-")) break;
     const trimmed = line.trim();
     if (trimmed !== "" && !trimmed.startsWith("#")) {
       const from = bodyOffset + lineOffset + line.indexOf(trimmed);

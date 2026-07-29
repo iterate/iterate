@@ -10,6 +10,11 @@
 export interface CollabEditorApi {
   /** Repo-relative path of the live document. */
   path: string;
+  /** False once the session can never sync again (ended / disconnected /
+   * over-cap). A dead view still renders its text, but treating it as live
+   * would swallow mutations (dispatches never push) and leak its stale text
+   * into write lanes — dead means route around this API entirely. */
+  isLive(): boolean;
   /** The live document text, synchronously. */
   source(): string;
   /** The caret position (doc offset), synchronously. */

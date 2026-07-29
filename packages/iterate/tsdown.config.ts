@@ -159,6 +159,13 @@ export default defineConfig([
       "sdk/capnweb": "src/sdk/capnweb/index.ts",
       "sdk/capnweb/react": "src/sdk/capnweb/react.tsx",
       "sdk/itx/react": "src/sdk/itx/react.ts",
+      // Self-contained codec; shares no modules with the entries above, so
+      // joining this group adds no chunk coupling. Declarations come from the
+      // tsconfig.sdk.json tsc pass like the rest of the group.
+      "annotated-markdown": "src/annotated-markdown/index.ts",
+      // The React viewer imports the codec entry's modules — same group so
+      // they share one chunk instead of inlining a second copy.
+      "annotated-markdown-react": "src/annotated-markdown/react/index.ts",
     },
     format: "esm",
     dts: false,
