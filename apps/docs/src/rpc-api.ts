@@ -102,6 +102,11 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
   workspace(workspacePath: string): DocsWorkspace {
     return new DocsWorkspaceApi(this.#dial, requireWorkspacePath(workspacePath));
   }
+
+  /** Release the downstream OS session when Cap'n Web drops this project capability. */
+  [Symbol.dispose](): void {
+    this.#dial.close();
+  }
 }
 
 class DocsWorkspaceApi extends RpcTarget implements DocsWorkspace {
