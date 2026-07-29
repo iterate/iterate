@@ -26,7 +26,7 @@ const PositiveSafeInteger = z.number().int().positive().max(Number.MAX_SAFE_INTE
 const StreamOffset = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const RuleName = z.string().regex(/^[a-z0-9-]+(?:\/[a-z0-9-]+)*$/);
 
-export const GithubAiLinterRule = z.object({
+const GithubAiLinterRule = z.object({
   files: z.array(z.string().min(1)).min(1),
   invariant: z.string().min(1),
   severity: z.enum(["error", "warning"]),
@@ -70,7 +70,7 @@ const WholeLineSpanSchema = z
     "a source span must end on or after its start line",
   );
 
-export const GithubAiLinterDiagnostic = z.object({
+const GithubAiLinterDiagnostic = z.object({
   /**
    * Cross-analysis identity. Unlike the GitHub line, this should survive
    * nearby edits: rule + filename + a short semantic anchor is the intended
@@ -111,11 +111,11 @@ export const GithubAiLinterDiagnostic = z.object({
   severity: z.enum(["error", "warning"]),
 });
 
-export const GithubAiLinterDiagnosticReportedPayload = GithubAiLinterDiagnostic.extend({
+const GithubAiLinterDiagnosticReportedPayload = GithubAiLinterDiagnostic.extend({
   analysisRequestOffset: StreamOffset,
 });
 
-export const GithubAiLinterDiagnosticSuppressedPayload = z.object({
+const GithubAiLinterDiagnosticSuppressedPayload = z.object({
   analysisRequestOffset: StreamOffset,
   diagnosticOffset: StreamOffset,
   directive: z.enum(["disable", "disable-line", "disable-next-line"]),
@@ -124,12 +124,12 @@ export const GithubAiLinterDiagnosticSuppressedPayload = z.object({
   reason: z.string().min(1).max(4_000),
 });
 
-export const GithubAiLinterAssessment = z.object({
+const GithubAiLinterAssessment = z.object({
   summary: z.string().min(1).max(20_000),
   verdict: z.enum(["approve", "comment", "request-changes"]),
 });
 
-export const GithubAiLinterAnalysisResult = z.discriminatedUnion("status", [
+const GithubAiLinterAnalysisResult = z.discriminatedUnion("status", [
   z.object({
     assessment: GithubAiLinterAssessment,
     status: z.literal("succeeded"),
@@ -144,7 +144,7 @@ export const GithubAiLinterAnalysisResult = z.discriminatedUnion("status", [
   }),
 ]);
 
-export const GithubAiLinterAnalysisSettledPayload = z.object({
+const GithubAiLinterAnalysisSettledPayload = z.object({
   analysisRequestOffset: StreamOffset,
   result: GithubAiLinterAnalysisResult,
 });
@@ -280,5 +280,4 @@ export const GithubAiLinterProcessorContract = defineProcessorContract({
 export type GithubAiLinterProcessorContract = typeof GithubAiLinterProcessorContract;
 export type GithubAiLinterState = z.infer<typeof GithubAiLinterState>;
 export type GithubAiLinterAnalysisRequested = z.infer<typeof GithubAiLinterAnalysisRequested>;
-export type GithubAiLinterDiagnostic = z.infer<typeof GithubAiLinterDiagnostic>;
 export type GithubAiLinterPublicationResult = z.infer<typeof GithubAiLinterPublicationResult>;

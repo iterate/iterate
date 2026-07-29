@@ -13,7 +13,7 @@ import {
   type GithubAiLinterState,
 } from "./contract.ts";
 
-export type GithubAiLinterPublicationAnalysis = NonNullable<
+type GithubAiLinterPublicationAnalysis = NonNullable<
   GithubAiLinterState["latestSuccessfulAnalysis"]
 >;
 
