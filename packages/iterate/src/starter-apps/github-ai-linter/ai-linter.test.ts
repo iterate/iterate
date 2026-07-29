@@ -186,6 +186,55 @@ describe("GithubAiLinterProcessor", () => {
     const reviewBody = createReview.mock.calls[0]![0].body;
     expect(reviewBody).toContain("1 errors, 0 warnings, 1 suppressed, 0 resolved.");
     expect(reviewBody).not.toContain("This diagnostic is suppressed.");
+
+    await h.append({
+      type: githubAiLinterEventTypes.analysisRequested,
+      payload: analysisRequest("head-abc"),
+    });
+    const secondAnalysisOffset = h
+      .events(githubAiLinterEventTypes.analysisRequested)
+      .at(-1)!.offset;
+    await h.append({
+      type: githubAiLinterEventTypes.diagnosticReported,
+      payload: {
+        analysisRequestOffset: secondAnalysisOffset,
+        diagnosticKey: "structure/example-rule:src/example.ts:example-export",
+        filename: "src/example.ts",
+        labels: [{ span: { endLine: 10, startLine: 10 } }],
+        message: "Use the direct export.",
+        ruleName: "structure/example-rule",
+        severity: "error",
+      },
+    });
+    const secondDiagnosticOffset = h
+      .events(githubAiLinterEventTypes.diagnosticReported)
+      .at(-1)!.offset;
+    await h.append({
+      type: githubAiLinterEventTypes.diagnosticSuppressed,
+      payload: {
+        analysisRequestOffset: secondAnalysisOffset,
+        diagnosticOffset: secondDiagnosticOffset,
+        directive: "disable-next-line",
+        filename: "src/example.ts",
+        line: 9,
+        reason: "The direct export is intentionally deferred.",
+      },
+    });
+    await h.append({
+      type: githubAiLinterEventTypes.analysisSettled,
+      payload: {
+        analysisRequestOffset: secondAnalysisOffset,
+        result: {
+          assessment: { summary: "The diagnostic is suppressed.", verdict: "approve" },
+          status: "succeeded",
+        },
+      },
+    });
+
+    expect(h.state().latestSuccessfulAnalysis?.resolvedDiagnostics).toEqual([]);
+    const secondReviewBody = createReview.mock.calls[1]![0].body;
+    expect(secondReviewBody).toContain("0 errors, 0 warnings, 1 suppressed, 0 resolved.");
+    expect(secondReviewBody).not.toContain("### Resolved");
   });
 
   it("settles an unfinished analysis as cancelled when a new head arrives", async () => {

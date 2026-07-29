@@ -196,7 +196,10 @@ export class GithubAiLinterProcessor extends StreamProcessor<
           previousDiagnostics.map(({ diagnostic }) => diagnostic.diagnosticKey),
         );
         const seenKeys = new Set(state.seenDiagnosticKeys);
-        const currentKeys = new Set(
+        const currentReportedKeys = new Set(
+          current.diagnostics.map(({ diagnostic }) => diagnostic.diagnosticKey),
+        );
+        const currentVisibleKeys = new Set(
           current.diagnostics
             .filter(({ suppression }) => suppression === null)
             .map(({ diagnostic }) => diagnostic.diagnosticKey),
@@ -215,10 +218,12 @@ export class GithubAiLinterProcessor extends StreamProcessor<
           }
           return { ...diagnostic, classification: "new" as const };
         });
+        // Suppression is a disposition of a diagnostic reported on this head,
+        // not evidence that a previously visible diagnostic disappeared.
         const resolvedDiagnostics = previousDiagnostics
-          .filter(({ diagnostic }) => !currentKeys.has(diagnostic.diagnosticKey))
+          .filter(({ diagnostic }) => !currentReportedKeys.has(diagnostic.diagnosticKey))
           .map(({ diagnostic }) => diagnostic);
-        for (const diagnosticKey of currentKeys) seenKeys.add(diagnosticKey);
+        for (const diagnosticKey of currentVisibleKeys) seenKeys.add(diagnosticKey);
 
         return {
           ...state,
