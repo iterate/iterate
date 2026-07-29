@@ -1916,6 +1916,7 @@ export type ProjectProcessorState = {
     };
     verdict: "deny" | "hold";
     approvalTimeoutMs: number;
+    debounceMs: number | null;
   }[];
   humanApprovalKeys: {
     keyId: string;

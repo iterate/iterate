@@ -1,5 +1,9 @@
 export type PushNotificationData = {
-  destination?: { kind?: string; path?: string; approvalRequestEventOffset?: number };
+  destination?: {
+    kind?: string;
+    path?: string;
+    approvalRequestEventOffset?: number;
+  };
   projectId?: string;
   requestOffset?: number;
 };

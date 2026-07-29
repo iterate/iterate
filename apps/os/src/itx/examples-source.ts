@@ -746,6 +746,53 @@ return await itx.projects.get(pid).__describe();
     },
   }),
   projectExample({
+    id: "grouped-approvals-demo",
+    e2eProven: false,
+    title: "Grouped approvals demo: a 12-request burst, ONE approval",
+    description:
+      'DESTRUCTIVE: REPLACES this project\'s egress rules — run it in a disposable project. Installs one `hold` rule on dummy-petshop.iterate.com (our deployed fake pet-shop service), waits for the egress gate to see it, then fires 12 GETs in one Promise.all burst. The egress door coalesces the burst into ONE approval batch event and ONE push ("Script run waiting: 12 requests (12x dummy-petshop.iterate.com)") that deep-links to the batch — Approve all is a single Face ID and a single signed decision, and the script then resolves with every status code. Holds expire after 10 minutes. Interactive by definition: it blocks on a human.',
+    runtimes: ["run-script"],
+    fn: async (itx, vars: { requests?: number; url?: string }) => {
+      // The grouping needs script-execution provenance, which only the
+      // run-script isolate mints — hence the single runtime. The target is
+      // our own deployed dummy service: harmless, stable, fine with a dozen
+      // GETs.
+      const url = vars.url || "https://dummy-petshop.iterate.com/";
+      const count = vars.requests || 12;
+
+      // REPLACE the project's egress rules with one hold on the demo host.
+      const [configured] = await itx.streams.get("/").append({
+        type: "events.iterate.com/project/egress-rules-configured",
+        payload: {
+          rules: [
+            {
+              ruleKey: "grouped-approvals-demo",
+              description: "Grouped-approvals demo: pet-shop GETs need a human",
+              match: { hosts: [new URL(url).hostname], methods: ["GET"] },
+              verdict: "hold",
+              approvalTimeoutMs: 600_000,
+            },
+          ],
+        },
+      });
+
+      // Read-your-writes on the fold, then outwait the egress gate's ~5s
+      // rules cache (project-durable-object.ts #egressRules) so no request
+      // of the burst can slip through pre-hold.
+      await itx.processor.waitUntilProcessed({ offset: configured.offset, timeoutMs: 15_000 });
+      await new Promise((resolve) => setTimeout(resolve, 6_000));
+
+      // The burst. Every fetch parks behind a human decision; expect ONE
+      // push, approve all from it, and these promises resolve for real.
+      const responses = await Promise.all(
+        Array.from({ length: count }, (_, index) =>
+          fetch(url + "?grouped-approvals-demo=" + index, { method: "GET" }),
+        ),
+      );
+      return { statuses: responses.map((response) => response.status) };
+    },
+  }),
+  projectExample({
     id: "secret-postman-echo",
     e2eProven: false,
     title: "Use a stored secret in a Postman Echo request",
