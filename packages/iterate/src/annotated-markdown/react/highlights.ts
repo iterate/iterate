@@ -15,6 +15,10 @@ interface HighlightApi {
 }
 
 function highlightApi(): HighlightApi | null {
+  // CSS.highlights and the Highlight constructor are Baseline browser APIs
+  // that TypeScript's DOM lib doesn't model yet (and jsdom lacks). The casts
+  // only add them as OPTIONAL members — presence is probed at runtime below,
+  // so an environment without them returns null instead of crashing.
   const cssGlobal = globalThis.CSS as (typeof CSS & { highlights?: HighlightRegistry }) | undefined;
   const highlightCtor = (globalThis as { Highlight?: HighlightApi["Highlight"] }).Highlight;
   if (cssGlobal?.highlights === undefined || highlightCtor === undefined) return null;

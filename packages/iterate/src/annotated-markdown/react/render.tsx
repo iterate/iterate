@@ -184,6 +184,9 @@ function RenderNode({ ctx, node }: { ctx: RenderContext; node: RootContent }): R
     case "paragraph":
       return <p {...blockAttrs(node)}>{renderChildren(ctx, node)}</p>;
     case "heading": {
+      // mdast constrains depth to 1..6, so the template yields h1–h6; they
+      // share h1's prop type, and the single-literal cast keeps JSX typing
+      // without enumerating six branches.
       const Tag = `h${node.depth}` as "h1";
       return <Tag {...blockAttrs(node)}>{renderChildren(ctx, node)}</Tag>;
     }

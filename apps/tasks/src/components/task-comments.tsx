@@ -68,13 +68,14 @@ export function TaskComments({
     }
     return map;
   }, [body, threads]);
-  const threadKind = (thread: Thread): number => (thread.anchor !== null ? 0 : 1);
-  const positionOf = (thread: Thread): number =>
-    resolutions.get(thread.id)?.range?.start ?? Number.MAX_SAFE_INTEGER;
-  const byPosition = (a: Thread, b: Thread): number =>
-    threadKind(a) !== threadKind(b)
-      ? threadKind(a) - threadKind(b)
-      : positionOf(a) - positionOf(b);
+  const byPosition = (a: Thread, b: Thread) => {
+    const kindA = a.anchor !== null ? 0 : 1;
+    const kindB = b.anchor !== null ? 0 : 1;
+    if (kindA !== kindB) return kindA - kindB;
+    const positionA = resolutions.get(a.id)?.range?.start ?? Number.MAX_SAFE_INTEGER;
+    const positionB = resolutions.get(b.id)?.range?.start ?? Number.MAX_SAFE_INTEGER;
+    return positionA - positionB;
+  };
   const openThreads = threads.filter((thread) => thread.status === "open").sort(byPosition);
   const resolvedThreads = threads.filter((thread) => thread.status === "resolved");
   const commentTotal = threads.reduce(

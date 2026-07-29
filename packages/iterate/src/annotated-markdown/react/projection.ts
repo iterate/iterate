@@ -47,6 +47,8 @@ export function buildProjection(root: HTMLElement): SourceProjection {
     let sourceCursor = start;
     const walker = span.ownerDocument.createTreeWalker(span, NodeFilter.SHOW_TEXT);
     for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+      // SHOW_TEXT guarantees every visited node is a Text node; the walker's
+      // return type is just the general Node.
       const text = node as Text;
       const length = text.data.length;
       if (atomic) {
@@ -190,6 +192,9 @@ export function sourceOffsetAtPoint(
   x: number,
   y: number,
 ): number | null {
+  // caretPositionFromPoint (standard) and caretRangeFromPoint (WebKit) are
+  // divergent vendor APIs missing from TypeScript's DOM lib; the cast adds
+  // them as OPTIONAL members and both calls are runtime-probed with ?. below.
   const caretDocument = documentRef as Document & {
     caretPositionFromPoint?: (x: number, y: number) => CaretPositionLike | null;
     caretRangeFromPoint?: (x: number, y: number) => Range | null;

@@ -98,6 +98,9 @@ export function validateAnchorSelector(value: unknown): AnchorSelector | null {
     return validateW3cSelectorList((value as { selector: unknown }).selector);
   }
   if (keys.some((k) => k !== "quote" && k !== "position")) return null;
+  // The key filter above proves only these two keys exist; the cast just
+  // names them as unknown members for the structural checks that follow —
+  // TypeScript can't narrow an object's members through Object.keys.
   const { quote, position } = value as { quote?: unknown; position?: unknown };
   if (typeof quote !== "object" || quote === null || Array.isArray(quote)) return null;
   const quoteKeys = Object.keys(quote);
@@ -141,6 +144,8 @@ function validatePositionParts(position: unknown): { start: number; end: number 
   if (positionKeys.some((k) => k !== "start" && k !== "end")) return null;
   const { start, end } = position as { start?: unknown; end?: unknown };
   if (!Number.isInteger(start) || !Number.isInteger(end)) return null;
+  // Number.isInteger proved both are numbers; it isn't a type guard in
+  // TypeScript's lib, so the casts restate what was just validated.
   if ((start as number) < 0 || (end as number) < (start as number)) return null;
   return { start: start as number, end: end as number };
 }
@@ -151,6 +156,9 @@ function validateW3cSelectorList(list: unknown): AnchorSelector | null {
   let position: { start: number; end: number } | null = null;
   for (const entry of list) {
     if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return null;
+    // Each entry is proven a plain object above; the casts along this path
+    // only name members as unknown for validation (unknown-object members
+    // aren't reachable without an assertion), never assume validated shapes.
     const { type } = entry as { type?: unknown };
     if (type === "TextQuoteSelector") {
       if (quote !== null) return null;

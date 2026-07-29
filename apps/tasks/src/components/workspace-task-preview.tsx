@@ -53,7 +53,7 @@ const BODY_STYLES = [
   "[&_code[data-raw-html]]:block [&_code[data-raw-html]]:whitespace-pre-wrap [&_code[data-raw-html]]:text-muted-foreground",
 ].join(" ");
 
-const slugForAuthor = (author: string): string =>
+const slugForAuthor = (author: string) =>
   author.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "someone";
 
 export function WorkspaceTaskPreview({
@@ -181,7 +181,7 @@ function AnnotatedPreview({
     return entries;
   }, [body, threads]);
 
-  const authorOf = (thread: Thread): string => thread.comments[0]?.author ?? "someone";
+  const authorOf = (thread: Thread) => thread.comments[0]?.author ?? "someone";
 
   // Projection + paint after every body/thread render. Highlights are a
   // registry beside the DOM (CSS Custom Highlight API): repainting is
@@ -310,7 +310,7 @@ function AnnotatedPreview({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [cancelPending]);
 
-  const submitThread = (commentBody: string): Promise<boolean> => {
+  const submitThread = (commentBody: string) => {
     const selection = pending;
     if (selection === null || identity === null) return Promise.resolve(false);
     const renderBody = body;

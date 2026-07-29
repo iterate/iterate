@@ -24,7 +24,7 @@ export function useDiscussionApply({
 }) {
   const [opError, setOpError] = useState<string | null>(null);
 
-  const apply = async (op: DiscussionOp): Promise<boolean> => {
+  const apply = async (op: DiscussionOp) => {
     if (busy) {
       setOpError("Comment change failed: the editor is still connecting — retry in a moment");
       return false;
