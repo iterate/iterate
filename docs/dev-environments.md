@@ -527,10 +527,9 @@ wait
 # "Acting as users" above; bare --admin lands on the auth login page):
 doppler run --project os --config preview_9 -- pnpm auth:mint --admin --browser-url
 
-# Release when done. Workers/routes/DNS stay deployed — releasing a slot is
-# just giving the lease back. You don't need to erase: the slot's next
-# holder erases on entry. Do it yourself only if the data shouldn't linger:
-(cd apps/os && pnpm erase-data --env preview_9)  # optional
+# Release when done. You don't need to destroy the environment: the slot's
+# next holder does that on entry. Do it yourself only if the data should not linger:
+pnpm infra destroy --env preview_9  # optional
 doppler run --project _shared --config prd -- pnpm preview release --slot 9 --lease-id <leaseId>
 ```
 

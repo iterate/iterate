@@ -61,12 +61,11 @@ pass, not a quick patch.
 
 ## 3. Auth readiness endpoint is not data-aware
 
-After `erase-data` on a slot, the auth worker still answers
-`/api/auth/ok` 200 while its D1 is empty (no seeded OAuth clients), so
-#1795's liveness probe cannot detect an erased auth directly — it is only
-healed via the os dependency edge (an erase always parks os, and os drags
-auth into the redeploy). Defense-in-depth: a readiness endpoint that
-verifies seeded data exists (e.g. at least one OAuth client row), probed by
+After destroying a slot, the auth worker is absent while its D1 is empty (no
+seeded OAuth clients), so #1795's original liveness failure mode no longer
+exists. If partial deployment can ever recreate Auth without seeding, add a
+data-aware readiness endpoint that verifies seeded data exists (e.g. at least
+one OAuth client row), probed by
 `selectRecordedGreenAppsNotServing`. Mind the deploy ordering: the deploy
 smoke must keep using the shallow liveness check, since client seeding runs
 after the worker deploys.

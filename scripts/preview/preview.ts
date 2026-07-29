@@ -4075,7 +4075,7 @@ async function cleanupPreviewForPullRequest(
   // dirt is self-healing — every acquire erases the slot before handing it
   // out (see eraseAcquiredSlotOrGiveItBack) — but a lease that is never
   // released leaks until its 24h expiry and starves the 9-slot fleet
-  // (2026-07-14: a Cloudflare API 429 failed erase-data mid-cleanup for the
+  // (2026-07-14: a Cloudflare API 429 failed cleanup for the
   // merged pr-1950; the old code bailed before releasing and pr-1988 waited
   // 360s for a slot that never came). So: always release; `ok: false` now
   // means the RELEASE itself failed — the lease truly leaked.
@@ -4293,7 +4293,6 @@ async function deployPreviewApp(input: {
     app: input.app,
     commandEnvironment: input.commandEnvironment,
     dopplerConfig: input.dopplerConfig,
-    operation: "up",
     repositoryRoot: input.repositoryRoot,
     signal: input.signal,
   });
@@ -4388,19 +4387,9 @@ async function runPreviewDeployCommand(input: {
   app: PreviewAppRuntime;
   commandEnvironment: NodeJS.ProcessEnv;
   dopplerConfig: string;
-  operation: "up" | "down";
   repositoryRoot: string;
   signal?: AbortSignal;
 }) {
-  // Destroys are erase-data-backed and require an explicit --env (trpc-cli
-  // enforces the required flag; no DOPPLER_CONFIG fallback — a destructive
-  // script must never pick its target from ambient shell state). Deploys
-  // resolve the env from the DOPPLER_CONFIG the `doppler run` wrapper sets.
-  const commandArgs =
-    input.operation === "down"
-      ? ["pnpm", "run-script", "erase-data", "--env", input.dopplerConfig]
-      : input.app.deployCommandArgs;
-
   return await runCommand({
     args: [
       "run",
@@ -4409,7 +4398,7 @@ async function runPreviewDeployCommand(input: {
       "--config",
       input.dopplerConfig,
       "--",
-      ...commandArgs,
+      ...input.app.deployCommandArgs,
     ],
     command: "doppler",
     environment: input.commandEnvironment,
@@ -4436,27 +4425,18 @@ function makePreviewSlotDataEraser(runtime: {
 }): EraseSlotData {
   return async ({ dopplerConfig, slug }) => {
     const startedAt = Date.now();
-    logPreview(`erasing ${slug} data before handover (doppler config ${dopplerConfig})`);
-    // OS destroys the shared data plane; streams owns one separate DO namespace.
-    for (const app of [
-      cloudflarePreviewApps.os,
-      cloudflarePreviewApps["streams-example-app"],
-    ] as const) {
-      const result = await runPreviewDeployCommand({
-        app,
-        commandEnvironment: runtime.commandEnvironment,
-        dopplerConfig,
-        operation: "down",
-        repositoryRoot: runtime.repositoryRoot,
-        signal: runtime.signal,
-      });
-      if (result.exitCode !== 0) {
-        throw new Error(
-          commandFailureMessage(result, `Erasing ${slug} ${app.displayName} data failed.`),
-        );
-      }
+    logPreview(`destroying ${slug} before handover (environment ${dopplerConfig})`);
+    const result = await runCommand({
+      args: ["infra", "destroy", "--env", dopplerConfig],
+      command: "pnpm",
+      environment: runtime.commandEnvironment,
+      signal: runtime.signal,
+      workingDirectory: runtime.repositoryRoot,
+    });
+    if (result.exitCode !== 0) {
+      throw new Error(commandFailureMessage(result, `Destroying ${slug} failed.`));
     }
-    logPreview(`erased ${slug} data (${formatDurationMs(Date.now() - startedAt)})`);
+    logPreview(`destroyed ${slug} (${formatDurationMs(Date.now() - startedAt)})`);
   };
 }
 
@@ -4916,10 +4896,9 @@ async function acquireAnyEnvironmentConfigLease(input: {
   // comes straight back from the semaphore after we release it, so without
   // a pause the loop hot-cycles the same broken slot (observed 2026-07-09:
   // three unerasable slots, ~6s per lap, 150+ laps burning the entire wait
-  // budget while spamming the log). Erase is expected to self-heal now
-  // (do-reset resurrects unlisted classes), so a repeat failure means the
-  // slot needs a human/agent — pause to let other slots free up instead of
-  // thrashing, and say so once.
+  // budget while spamming the log). A repeat failure means the slot needs a
+  // human/agent — pause to let other slots free up instead of thrashing, and
+  // say so once.
   const eraseFailuresBySlug = new Map<string, number>();
   const brokenSlotPauseMs = 30_000;
 
@@ -4957,7 +4936,7 @@ async function acquireAnyEnvironmentConfigLease(input: {
       eraseFailuresBySlug.set(acquired.slug, eraseFailures);
       if (eraseFailures === 2) {
         logPreview(
-          `${acquired.slug} failed erase twice — it needs repair (scripts/lib/do-reset.ts header has the recipe). ` +
+          `${acquired.slug} failed destroy twice — it needs repair. ` +
             `Pausing ${brokenSlotPauseMs / 1000}s between further attempts instead of hot-cycling it.`,
         );
       }
@@ -5563,16 +5542,16 @@ async function probePreviewAppServingOnce(url: URL): Promise<{ ok: boolean; deta
 /**
  * Recorded-green apps ("deployed"/"awaiting-tests") whose deployment is no
  * longer actually serving. A green row is normally trustworthy — but an
- * erase-data on the slot (the documented remedy when merged-main lands a
- * non-migratable schema change) parks the os worker behind a 503 and wipes
- * the slot's shared data WITHOUT touching the recorded PR-body state. Trusting
+ * destroying the slot (the documented remedy when merged-main lands a
+ * non-migratable schema change) removes its Workers and data WITHOUT touching
+ * the recorded PR-body state. Trusting
  * the stale green rows then redeploys only the failed apps and leaves the slot
  * half-dead: observed 2026-07-09 on preview-7 (PR #1793), where e2e failed
- * with "no such column: epoch", the erase parked os and emptied auth's D1
+ * with "no such column: epoch", the destroy removed os and emptied auth's D1
  * (OAuth clients), and the retry — os and auth both recorded green — never
  * redeployed either; auth had to be redeployed by hand. Probing each green
- * app's readiness URL once makes erase + re-run self-healing: the parked app
- * fails its probe, joins the retry selection, and pulls its dependencies
+ * app's readiness URL once makes destroy + re-run self-healing: the missing
+ * app fails its probe, joins the retry selection, and pulls its dependencies
  * (auth, whose OAuth-client seed lives in the wiped D1) along via
  * expandPreviewDependencies.
  */

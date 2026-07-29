@@ -27,8 +27,8 @@ export interface SmokeProbe {
  *
  * Durable Object classes are declared in each app's wrangler config
  * `exports` map and reconciled by the server on every deploy — no migration
- * tags, no bootstrap ordering. A worker fresh, parked by erase-data, or left
- * in any state by another branch deploys the same way.
+ * tags. A freshly created worker and a steady-state redeploy use the same
+ * pipeline (container classes have one small first-deploy bootstrap).
  *
  * This is a parameterized imperative function, not a framework: every input
  * is a plain value or a hook called exactly once at a fixed point you can

@@ -53,10 +53,8 @@ export interface EnvContext<E extends DeployableEnv> {
  * `doppler run --config preview_N -- pnpm run-script deploy` (no flags)
  * selects the matching env without extra plumbing (env names and Doppler
  * config names coincide; the account-id assertion below still catches any
- * mismatch). Deploys pass `allowDopplerConfigFallback: true`; erase-data
- * does NOT (destructive = explicit flag only — trpc-cli enforces the
- * required `--env` option); ensure-resources passes true (harmless,
- * create-only).
+ * mismatch). Deploys and ensure-resources pass
+ * `allowDopplerConfigFallback: true`; the root destroy command does not.
  */
 export async function resolveEnvContext<E extends DeployableEnv>(options: {
   envs: Record<string, E>;
@@ -95,7 +93,7 @@ export async function resolveEnvContext<E extends DeployableEnv>(options: {
   const cfV4 = async <T>(path: string, init?: RequestInit): Promise<T> => {
     // This fetch is THE choke point for every Cloudflare API call the deploy
     // tooling makes (ctx.cf / ctx.cfV4 across deploy, ensure-resources and
-    // erase-data scripts), so 429 backoff lives here once instead of at each
+    // environment destroy), so 429 backoff lives here once instead of at each
     // call site. Request bodies are always strings (see the content-type
     // sniff below), so replaying the same init per attempt is safe.
     const response = await fetchCloudflareWith429Retry(

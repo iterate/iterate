@@ -19,8 +19,8 @@
  *   6. Re-seed the declarative OAuth clients from AUTH_SEED_OAUTH_CLIENTS
  *      (Doppler is the source of truth; a no-op when values are unchanged).
  *
- * The worker script is never deleted and routes are ensure-only, so a deploy
- * can never strand the env's hostname (the old zombie-route/522 class).
+ * Normal deploys only upsert; whole-environment deletion lives in the root
+ * infrastructure command.
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

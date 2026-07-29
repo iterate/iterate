@@ -1344,8 +1344,8 @@ describe("preview deploy selection", () => {
 
   test("self-heals an erased slot: a parked recorded-green app is redeployed with its dependencies", async () => {
     // Live incident (PR #1793 on preview-7, 2026-07-09): e2e failed with
-    // "no such column: epoch", the documented remedy `erase-data` parked the
-    // os worker (503) and wiped auth's D1 (OAuth clients), but os and auth
+    // "no such column: epoch", destroying the environment removed os and
+    // wiped auth's D1 (OAuth clients), but os and auth
     // were recorded green — so the retry redeployed only the failed app and
     // every sign-in-dependent spec then failed on a slot with no OAuth
     // clients until auth was redeployed by hand. The probe catches the parked
@@ -2685,7 +2685,7 @@ describe("cleanup lease release", () => {
   const lease = { type: "environment-config", slug: "preview-4", leaseId: "lease-1950" };
 
   test("releases the lease even when teardown/erase failed — the slot is left dirty, not leaked", async () => {
-    // 2026-07-14 incident: a Cloudflare 429 failed erase-data mid-cleanup and
+    // 2026-07-14 incident: a Cloudflare 429 failed teardown mid-cleanup and
     // the old code bailed before releasing; the merged PR's lease leaked for
     // 24h and starved the fleet. The dirty slot is the harmless half: every
     // acquire erases on entry (see the entry-invariant test above).

@@ -16,33 +16,18 @@
  *   3. `wrangler deploy --config <built config> --secrets-file <doppler>` —
  *      secrets land atomically in the same version as the code, and the
  *      config's declarative Durable Object `exports` are reconciled
- *      server-side in the same upload (a brand-new env, a parked slot and a
- *      steady-state redeploy are all the same single command).
+ *      server-side in the same upload.
  *   4. Smoke-probe the deployed base URL; exit nonzero unless the env is
  *      actually serving.
- *   5. Before touching any deployed resource, delete retired secret bindings
- *      still carried by the live Worker (deploy scripts are their only
- *      writer, so lingering ones are just stale deploys — verified removed)
- *      and assert the removed auth service token is absent from Doppler
- *      (human-edited: fail closed). After deploy, force an uncached
- *      project-directory lookup through AUTH.
- *
- * The worker script is never deleted and routes are ensure-only, so a deploy
- * can never strand the env's hostnames (the old zombie-route/522 class).
+ *   5. Force an uncached project-directory lookup through AUTH.
  */
 import { fileURLToPath } from "node:url";
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
-import { z } from "zod";
 import { envs, type DeployedEnv } from "../../../envs.ts";
 import { bakeStaticAuthJwks } from "../../../scripts/lib/bake-auth-jwks.ts";
+import { ensureContainerClasses } from "../../../scripts/lib/container-class-bootstrap.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
-import {
-  assertDopplerSecretAbsent,
-  removeWorkerSecrets,
-  runAsync,
-  smokeResponse,
-} from "../../../scripts/lib/deploy-helpers.ts";
-import { ensureContainerClasses } from "../../../scripts/lib/do-reset.ts";
+import { runAsync, smokeResponse } from "../../../scripts/lib/deploy-helpers.ts";
 import { parseConfig } from "../src/config.ts";
 import { templateIterateRepoPkgSpecs } from "../src/domains/repos/project-repo-seed.ts";
 import { pinIterateRepoPkgRef } from "../src/pkg-pr-new.ts";
@@ -55,8 +40,6 @@ import {
   envShapedVars,
   OPTIONAL_SECRETS,
   REQUIRED_SECRETS,
-  RETIRED_AUTH_SERVICE_TOKEN,
-  RETIRED_WORKER_SECRETS,
   writeWranglerConfig,
 } from "./generate-wrangler-config.ts";
 import { ensureInboundEmailRouting } from "./email-routing-resources.ts";
@@ -65,22 +48,6 @@ const PREVIEW_PETSHOP_CONFIG = "APP_CONFIG_INTEGRATIONS__PETSHOP";
 const PREVIEW_PACKAGE_AVAILABILITY_TIMEOUT_MS = 120_000;
 const PREVIEW_PACKAGE_POLL_MS = 1_000;
 const PREVIEW_PACKAGE_REQUEST_TIMEOUT_MS = 10_000;
-const RETIRED_QUEUE_PAGE_SIZE = 100;
-const RETIRED_WORKER_QUEUE_CONSUMERS = [
-  { label: "Artifact event", suffix: "-events" },
-  { label: "AI Search index-write", suffix: "-search-index-writes" },
-] as const;
-
-const RetiredQueue = z.object({
-  queue_id: z.string(),
-  queue_name: z.string(),
-});
-const RetiredQueueConsumer = z.object({
-  consumer_id: z.string(),
-  script: z.string().optional(),
-  script_name: z.string().optional(),
-  type: z.string().optional(),
-});
 
 /**
  * Every pkg.pr.new URL a preview pinned to `ref` will install: the config
@@ -140,63 +107,6 @@ export async function waitForPreviewPackage(
 
   throw new Error(
     `Timed out waiting ${timeoutMs}ms for the preview package ${packageSpec}. Last check: ${lastFailure}. The pkg.pr.new GitHub Actions publish must succeed before this preview can deploy.`,
-  );
-}
-
-/**
- * Cloudflare refuses a handler-less Worker upload while a previous Queue
- * consumer still targets that script. Detach only the exact consumers left
- * behind by retired features; later deploys are read-only no-ops. The queues
- * themselves are deliberately left for separately audited resource cleanup.
- */
-export async function detachRetiredWorkerQueueConsumers(input: {
-  cf: <T = unknown>(path: string, init?: RequestInit) => Promise<T>;
-  workerName: string;
-}): Promise<Array<{ queueName: string; status: "absent" | "detached" }>> {
-  const retiredQueues = RETIRED_WORKER_QUEUE_CONSUMERS.map(({ label, suffix }) => ({
-    label,
-    queueName: `${input.workerName}${suffix}`,
-  }));
-  const queueNames = new Set(retiredQueues.map(({ queueName }) => queueName));
-  const queuesByName = new Map<string, z.infer<typeof RetiredQueue>>();
-  for (let page = 1; queuesByName.size < queueNames.size; page += 1) {
-    const queues = z
-      .array(RetiredQueue)
-      .parse(await input.cf(`/queues?per_page=${RETIRED_QUEUE_PAGE_SIZE}&page=${page}`));
-    for (const queue of queues) {
-      if (queueNames.has(queue.queue_name)) queuesByName.set(queue.queue_name, queue);
-    }
-    if (queues.length < RETIRED_QUEUE_PAGE_SIZE) break;
-  }
-
-  return Promise.all(
-    retiredQueues.map(async ({ label, queueName }) => {
-      const queue = queuesByName.get(queueName);
-      if (!queue) {
-        console.log(`retired ${label} Queue absent: ${queueName}`);
-        return { queueName, status: "absent" } as const;
-      }
-
-      const consumers = z
-        .array(RetiredQueueConsumer)
-        .parse(await input.cf(`/queues/${encodeURIComponent(queue.queue_id)}/consumers`));
-      const consumer = consumers.find(
-        (candidate) =>
-          candidate.type === "worker" &&
-          (candidate.script === input.workerName || candidate.script_name === input.workerName),
-      );
-      if (!consumer) {
-        console.log(`retired ${label} Queue consumer absent: ${queueName}`);
-        return { queueName, status: "absent" } as const;
-      }
-
-      await input.cf(
-        `/queues/${encodeURIComponent(queue.queue_id)}/consumers/${encodeURIComponent(consumer.consumer_id)}`,
-        { method: "DELETE" },
-      );
-      console.log(`detached retired ${label} Queue consumer: ${queueName} -> ${input.workerName}`);
-      return { queueName, status: "detached" } as const;
-    }),
   );
 }
 
@@ -325,29 +235,6 @@ export default async function deploy(
     optionalSecrets: OPTIONAL_SECRETS,
     buildEnv: (ctx) => posthogBuildEnv(ctx.name, ctx.secrets),
     prepare: async (ctx, secretValues) => {
-      // Doppler is human-edited, so a retired secret reappearing there is
-      // config drift that needs a human: fail closed, never auto-fix.
-      assertDopplerSecretAbsent({
-        project: "os",
-        config: ctx.env.dopplerConfig,
-        secretName: RETIRED_AUTH_SERVICE_TOKEN,
-        secrets: ctx.secrets,
-      });
-      // Worker secrets have exactly one writer — this deploy pipeline (and
-      // the erase/handover flows). Omitted secrets survive `--secrets-file`
-      // uploads, so the only way a retired name can linger is a Worker last
-      // deployed by older code; deleting it here (loudly, verified) converges
-      // every deploy to the current contract. An assert instead of a delete
-      // proved sticky for previews: a lease RENEWAL deliberately skips the
-      // erase-on-acquire, and each failed deploy renews the lease, so a slot
-      // carrying a retired binding could never reach the erase that would
-      // have healed it.
-      await removeWorkerSecrets({
-        cf: ctx.cf,
-        workerName: ctx.env.osWorkerName,
-        secretNames: RETIRED_WORKER_SECRETS,
-      });
-
       // Derive Auth's public key locally from the shared Doppler private key.
       // The private half never ships to OS, and this deploy never waits on Auth.
       secretValues.APP_CONFIG_ITERATE_AUTH__JWKS = bakeStaticAuthJwks({
@@ -375,15 +262,6 @@ export default async function deploy(
       // Parse the exact env the worker will see (secrets + generated vars) with
       // the worker's own schema — the strongest possible pre-flight.
       parseConfig({ ...secretValues, ...envShapedVars(ctx.env) });
-
-      // Removing the queue binding and handler from source is insufficient for
-      // an existing deployment: Cloudflare retains its consumer and rejects
-      // the handler-less upload. This exact, idempotent detach is the rollout
-      // migration; it never creates or reconciles subscriptions.
-      await detachRetiredWorkerQueueConsumers({
-        cf: ctx.cf,
-        workerName: ctx.env.osWorkerName,
-      });
 
       // Sandbox container classes must exist container-enabled BEFORE the
       // exports deploy — the exports reconciliation can't enable namespaces

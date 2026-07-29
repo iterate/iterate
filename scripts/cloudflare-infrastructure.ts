@@ -1,10 +1,11 @@
 import { rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
-import { authEnvs, envs } from "../envs.ts";
+import { authEnvs, dummyPetshopEnvs, envs, streamsExampleEnvs } from "../envs.ts";
 import { alchemyResourcesPath } from "./lib/alchemy-resources.ts";
+import { destroyWranglerEnvironment } from "./lib/cloudflare-environment.ts";
 import { run } from "./lib/deploy-helpers.ts";
-import { loadDopplerSecrets } from "./lib/env-context.ts";
+import { loadDopplerSecrets, resolveEnvContext } from "./lib/env-context.ts";
 
 const INFRA_ROOT = fileURLToPath(new URL("../infra", import.meta.url));
 
@@ -46,21 +47,59 @@ export function deploy(options: { env: string }) {
   }
 }
 
-/** Destroy one environment's whole Alchemy stack and its generated output. */
-export function destroy(options: {
-  env: string;
-  afterWorkerDataReset?: boolean;
-  yesIMeanPrd?: boolean;
-}) {
-  const platformEnvironment = Object.values(envs).some(
+/** Destroy one complete environment: Wrangler resources first, then its Alchemy stack. */
+export async function destroy(options: { env: string; yesIMeanPrd?: boolean }) {
+  const platformEnvironment = Object.values(envs).find(
     (environment) => environment.dopplerConfig === options.env,
   );
   if (options.env === "prd" && !options.yesIMeanPrd) {
-    throw new Error("Refusing to destroy PRODUCTION data without --yes-i-mean-prd.");
+    throw new Error("Refusing to destroy PRODUCTION without --yes-i-mean-prd.");
   }
-  if (platformEnvironment && !options.afterWorkerDataReset) {
-    throw new Error(`${options.env} includes Worker data; erase it through apps/os.`);
+
+  if (platformEnvironment) {
+    const dummyPetshop = Object.values(dummyPetshopEnvs).find(
+      (environment) => environment.dopplerConfig === options.env,
+    );
+    const streamsExample = Object.values(streamsExampleEnvs).find(
+      (environment) => environment.dopplerConfig === options.env,
+    );
+    if (!dummyPetshop || !streamsExample) {
+      throw new Error(`${options.env} is missing a deployed app definition in envs.ts.`);
+    }
+    const ctx = await resolveEnvContext({
+      envs,
+      dopplerProject: "os",
+      env: options.env,
+    });
+    await destroyWranglerEnvironment({
+      ctx,
+      osWorkerName: platformEnvironment.osWorkerName,
+      workerNames: [
+        platformEnvironment.osWorkerName,
+        `${platformEnvironment.osWorkerName}-typechecker`,
+        `${platformEnvironment.osWorkerName}-worker-bundler`,
+        platformEnvironment.authWorkerName,
+        platformEnvironment.semaphoreWorkerName,
+        dummyPetshop.workerName,
+        streamsExample.workerName,
+      ],
+    });
+  } else {
+    const authEnvironment = Object.values(authEnvs).find(
+      (environment) => environment.dopplerConfig === options.env,
+    );
+    if (!authEnvironment) throw new Error(`Unknown deployed environment ${options.env}.`);
+    const ctx = await resolveEnvContext({
+      envs: authEnvs,
+      dopplerProject: "auth",
+      env: options.env,
+    });
+    await destroyWranglerEnvironment({
+      ctx,
+      workerNames: [authEnvironment.authWorkerName],
+    });
   }
+
   const credentials = credentialsForEnvironment(options.env);
   installDependencies();
   rmSync(alchemyResourcesPath(options.env), { force: true });
@@ -68,6 +107,7 @@ export function destroy(options: {
     cwd: INFRA_ROOT,
     env: credentials,
   });
+  console.log(`✅ destroyed ${options.env}; it can now be recreated from an empty stack`);
 }
 
 void createCli({ ...import.meta, name: "infra" }).run({

@@ -81,13 +81,12 @@ code via `wrangler deploy --secrets-file`.
 | `pnpm dev`                        | local dev server (vite + workerd); `start --detach`/`status`/`attach`/`kill` for parallel worktrees |
 | `pnpm run deploy --env preview_3` | build → deploy+secrets (one version) → smoke probe                                                  |
 | `pnpm ensure-resources --env X`   | create-only DNS and inbound Email Routing setup                                                     |
-| `pnpm erase-data --env X`         | reset Durable Objects, then destroy the environment's Alchemy D1/KV/R2 stack                        |
+| `pnpm infra destroy --env X`      | delete Artifact repos, container apps, Workers/DO namespaces, then the Alchemy D1/KV/R2 stack       |
 
-Workers are never deleted and routes/DNS are ensure-only, so deploys can't
-strand an environment's hostnames (the old zombie-route/522 class is
-structurally gone). There is no Cloudflare API to delete DO instances; the
-only storage-reclaim path is a `deleted_classes`/re-add migration dance —
-run rarely, if ever, since orphaned storage costs pennies.
+Normal deploys are upserts. Full environment teardown force-deletes each
+Worker; Cloudflare deletes that Worker's Durable Object namespaces, instances,
+storage, and alarms at the same time. The next deployment recreates routes and
+Workers from the generated config.
 
 ## Notes
 
@@ -101,14 +100,3 @@ run rarely, if ever, since orphaned storage costs pennies.
 - Local dev containers are off by default (`dev.enable_containers: false` in
   wrangler.jsonc) so `pnpm dev` never needs Docker; sandbox DOs fail at
   their constructor until you enable them.
-
-## Cutover from the 11-worker topology
-
-The first single-worker deploy to an env that previously ran the per-DO
-split creates FRESH Durable Object namespaces on the merged script — every
-existing stream/agent/project DO in that env becomes an unreachable orphan.
-That's a data reset, not a code deploy: pair it with `erase-data` and an
-auth redeploy so the env is coherently empty rather than half-remembered.
-The old `os-<env>` per-DO scripts (`os-<env>-stream`, `-agent`, …) are dead
-afterwards and can be deleted from the Cloudflare dashboard at leisure —
-deleting them cascades nothing the new world uses.

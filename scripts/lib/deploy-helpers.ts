@@ -1,5 +1,5 @@
 /**
- * Shared primitives for the per-app deploy/ensure-resources/erase-data
+ * Shared primitives for the per-app deploy/ensure-resources
  * scripts (apps/{os,auth,semaphore,tunnels,streams-example-app,dummy-petshop}/scripts).
  *
  * Each script stays an imperative top-to-bottom program; these are the
@@ -11,10 +11,8 @@ import { spawn, spawnSync } from "node:child_process";
 import { globSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { z } from "zod";
-import { CloudflareApiError, type DeployableEnv, type EnvContext } from "./env-context.ts";
+import type { DeployableEnv, EnvContext } from "./env-context.ts";
 
-const SecretBindings = z.array(z.object({ name: z.string(), type: z.string() }));
 // Wrangler does not expose Retry-After, but a direct API call in the same live
 // incident returned 120s. The final attempt therefore lands just beyond that
 // observed window instead of exhausting the budget at 110s.
@@ -231,86 +229,6 @@ export async function deployWithSecrets(input: {
   } finally {
     rmSync(secretsDir, { recursive: true, force: true });
   }
-}
-
-/**
- * Remove an explicit allowlist of retired secrets from an existing Worker and
- * prove they are absent afterwards (fails if a deletion does not stick).
- *
- * `wrangler deploy --secrets-file` deliberately preserves omitted secrets
- * (https://developers.cloudflare.com/workers/configuration/secrets/#upload-secrets-alongside-code),
- * so removing a name from generated config is not enough. Deploy scripts are
- * the ONLY writers of Worker secrets, which is why normal deploys may run
- * this convergence rather than fail closed: a lingering retired name can
- * only mean the Worker was last deployed by older code. Doppler-side
- * retirement stays an assertion ({@link assertDopplerSecretAbsent}) because
- * Doppler is human-edited — a reappearance there is drift for a human.
- */
-export async function removeWorkerSecrets(input: {
-  cf: (path: string, init?: RequestInit) => Promise<unknown>;
-  workerName: string;
-  secretNames: readonly string[];
-}): Promise<string[]> {
-  const scriptPath = `/workers/scripts/${encodeURIComponent(input.workerName)}/secrets`;
-  let current: z.infer<typeof SecretBindings>;
-  try {
-    current = SecretBindings.parse(await input.cf(scriptPath));
-  } catch (error) {
-    if (error instanceof CloudflareApiError && error.status === 404) {
-      console.log(`Worker not created; no retired secrets to remove: ${input.workerName}`);
-      return [];
-    }
-    throw error;
-  }
-
-  const retired = new Set(input.secretNames);
-  const present = current
-    .map((binding) => binding.name)
-    .filter((name) => retired.has(name))
-    .sort();
-  for (const secretName of present) {
-    await input.cf(`${scriptPath}/${encodeURIComponent(secretName)}`, { method: "DELETE" });
-    console.log(`removed retired Worker secret: ${input.workerName}/${secretName}`);
-  }
-
-  if (present.length === 0) {
-    console.log(`retired Worker secrets absent: ${input.workerName}`);
-    return [];
-  }
-
-  const remaining = SecretBindings.parse(await input.cf(scriptPath));
-  const stale = remaining
-    .map((binding) => binding.name)
-    .filter((name) => retired.has(name))
-    .sort();
-  if (stale.length > 0) {
-    throw new Error(
-      `Retired Worker secrets remain after deletion: ${input.workerName}/${stale.join(", ")}`,
-    );
-  }
-  console.log(`verified retired Worker secrets absent: ${input.workerName}`);
-  return present;
-}
-
-/**
- * Refuse to deploy when the resolved Doppler config contains a forbidden
- * secret. Checking the already-resolved config catches direct and inherited
- * values without issuing a second download or exposing the value.
- */
-export function assertDopplerSecretAbsent(input: {
-  project: string;
-  config: string;
-  secretName: string;
-  secrets: Record<string, string>;
-}): void {
-  if (Object.hasOwn(input.secrets, input.secretName)) {
-    throw new Error(
-      `Forbidden Doppler secret is present: ${input.project}/${input.config}/${input.secretName}. Remove it explicitly before deploying.`,
-    );
-  }
-  console.log(
-    `forbidden Doppler secret absent: ${input.project}/${input.config}/${input.secretName}`,
-  );
 }
 
 /**

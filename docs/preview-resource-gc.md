@@ -6,15 +6,12 @@ see [Dev environments](dev-environments.md); this doc is the "why".
 
 ## The principle: releasing a slot never waits on teardown
 
-There are nineteen preview **slots**. Each keeps a fixed Worker/DNS shell, but
-its D1, KV, and R2 data resources are one disposable Alchemy stack. Acquisition
-destroys any previous stack and creates a fresh one before app deployment.
-Workers are never deleted (recreating a container-bearing Durable Object class
-is broken upstream). Erase preserves container classes declared by the incoming
-branch, but deletes any retired container application before tombstoning a
-class left by another branch. A slot is leased to one PR at a time through the
-[semaphore](../apps/semaphore); a PR's deploy and e2e renew the lease, and
-closing the PR releases it.
+There are nineteen preview **slots**. Each environment is disposable:
+acquisition destroys its Workers and Alchemy stack, then recreates both before
+deployment. The one upstream exception is container class creation, handled by
+a small first-deploy bootstrap before Wrangler takes over. A slot is leased to
+one PR at a time through the [semaphore](../apps/semaphore); a PR's deploy and
+e2e renew the lease, and closing the PR releases it.
 
 The bug this design fixes: teardown used to be **on the critical path of
 releasing the slot**. Cleanup erased the slot's data, and only then released
@@ -32,11 +29,12 @@ resources is a separate, lazy, rate-limited job.
 
 Teardown splits by what it costs to leave running:
 
-| Concern                                                                                                                 | Reaped by                                                                                         | When                                                                 |
-| ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| Orphaned **compute** — Durable Object scheduler alarms keep firing agent turns (real LLM spend) against erased projects | one O(1) parked-worker deploy that tombstones every DO class (`do-reset.ts`)                      | **promptly**, on PR-close cleanup, and as a backstop in the GC sweep |
-| **R2 storage** — itx.files + sandbox backups                                                                            | Alchemy destroy empties/deletes the buckets; lifecycle rules bound abandoned data before teardown | cleanup / erase-on-acquire; otherwise 3h after write                 |
-| **D1 / KV**                                                                                                             | Alchemy destroys the whole databases/namespaces                                                   | cleanup / erase-on-acquire                                           |
+| Concern                                                                                                                 | Reaped by                                                                                          | When                                                   |
+| ----------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| Orphaned **compute** — Durable Object scheduler alarms keep firing agent turns (real LLM spend) against erased projects | force-delete each environment Worker, which also deletes all of its DO namespaces and data         | cleanup / destroy-on-acquire / GC backstop             |
+| Container applications and Artifact repos                                                                               | explicit Cloudflare API deletion and verification before their owning Worker/data stack disappears | cleanup / destroy-on-acquire / GC backstop             |
+| **R2 storage** — itx.files + sandbox backups                                                                            | Alchemy destroy empties/deletes the buckets; lifecycle rules bound abandoned data before teardown  | cleanup / destroy-on-acquire; otherwise 3h after write |
+| **D1 / KV**                                                                                                             | Alchemy destroys the whole databases/namespaces                                                    | cleanup / destroy-on-acquire                           |
 
 The expensive, rate-limit-prone operations were the **per-item** R2 deletes.
 Everything else is one or a few bounded calls. Moving R2 to lifecycle rules
@@ -79,15 +77,15 @@ runs `pnpm preview gc`, which:
 1. Lists every slot and selects those whose lease is **leased but past its
    expiry** (`selectExpiredLeasesForGc`). An expired lease means no live tenant,
    so the whole slot is fair game. (Available slots are cleaned by their next
-   acquirer's erase-on-acquire, not here.)
+   acquirer's destroy-on-acquire, not here.)
 2. For each, takes it under a fresh lease with a **non-force** acquire. This is
    the entire race story: a non-force acquire succeeds _only if the slot is
    genuinely free_. If a new PR grabbed the slot between the snapshot and the
    take, the acquire returns null and the sweep skips it — that PR's own
-   erase-on-acquire will clean it. No verdict logic, no stealing.
-3. Erases the slot (the same `erase-data` teardown), then releases it. An erase
-   failure releases the slot anyway — its next taker erases first, so a
-   half-wiped slot is self-healing and must never be parked out of the pool.
+   destroy-on-acquire will clean it. No verdict logic, no stealing.
+3. Destroys the slot with `pnpm infra destroy`, then releases it. A failure
+   releases the slot anyway — its next taker destroys first, so a
+   half-destroyed slot is self-healing and must never be parked out of the pool.
 
 It runs sequentially (naturally rate-limited) and is idempotent — safe to run
 as often as we like. `pnpm preview gc --dry-run` reports the plan without
@@ -100,7 +98,7 @@ is therefore one cron interval, and only in the failure case.
 
 ## Self-healing invariants
 
-- **Erase-on-acquire**: every acquire erases the slot before handing it out
+- **Destroy-on-acquire**: every acquire destroys the slot before handing it out
   (`eraseAcquiredSlotOrGiveItBack`), so any teardown that's skipped, deferred,
   or half-finished is harmless — the next tenant wipes first.
 - **Non-force GC acquire**: the sweep can never take a live tenant's slot.
@@ -112,7 +110,7 @@ is therefore one cron interval, and only in the failure case.
 | Thing                                       | File                                              |
 | ------------------------------------------- | ------------------------------------------------- |
 | D1/KV/R2 stack and lifecycle rules          | `infra/alchemy.run.ts`                            |
-| Whole-stack destruction after DO reset      | `apps/os/scripts/erase-data.ts`                   |
+| Whole-environment destruction               | `scripts/cloudflare-infrastructure.ts`            |
 | Lease TTL, `gc`, `selectExpiredLeasesForGc` | `scripts/preview/preview.ts`                      |
 | The scheduled sweep                         | `.depot/workflows/cloudflare-preview-gc.yml`      |
 | PR-close cleanup (the fast path)            | `.depot/workflows/cloudflare-preview-cleanup.yml` |

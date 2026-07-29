@@ -7,7 +7,7 @@
  * gives up after ~30s total never rides one out. On 2026-07-14 the shared
  * dev/preview account hit exactly this: every `preview deploy` app failed in
  * ~2s with a 429 (deploy prepare hooks → ctx.cf), and `preview cleanup`'s
- * erase-data D1 query 429'd, failing cleanup and leaking the merged PR's
+ * cleanup D1 query 429'd, failing cleanup and leaking the merged PR's
  * slot lease for 24h, which starved the 9-slot preview fleet.
  *
  * Policy: up to 5 attempts. Between attempts, honor the server's Retry-After

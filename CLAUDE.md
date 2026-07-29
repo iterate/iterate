@@ -9,9 +9,9 @@ Monorepo for Iterate's Cloudflare Workers platform. **`apps/os`** is the main ap
   identifiers, and Doppler supplies secrets, one config per env (`prd`,
   `preview_N`; `dev`/`dev_<you>` are fully local and never deploy).
 - Each app deploys with its own small scripts: `pnpm run deploy --env <name>`
-  (build → wrangler deploy with atomic secrets → smoke) and only the
-  app-specific `ensure-resources` / `erase-data` commands it needs. Workers are
-  never deleted.
+  (build → wrangler deploy with atomic secrets → smoke) and
+  `ensure-resources`. `pnpm infra destroy --env <name>` deletes the complete
+  environment before a fresh-stack recreation.
 - Details: [DevOps: Cloudflare And Doppler](docs/devops-cloudflare-doppler.md).
 
 ## Talking to OS

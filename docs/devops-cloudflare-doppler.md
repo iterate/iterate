@@ -24,7 +24,7 @@ secrets. Each app keeps its small imperative deployment scripts:
 | `generate-wrangler-config.ts` | combine envs.ts + that manifest into gitignored `wrangler.jsonc` (vite dev/build regenerate it automatically)          |
 | `deploy.ts`                   | `pnpm run deploy --env <name>`: build → `wrangler deploy --secrets-file` (code + secrets in one version) → smoke probe |
 | `ensure-resources.ts`         | create-only Worker-adjacent setup that is outside Alchemy, currently DNS and inbound email                             |
-| `erase-data.ts`               | reset Wrangler-owned Durable Objects, then destroy the environment's entire Alchemy stack                              |
+| `pnpm infra destroy`          | delete the environment's Wrangler-owned resources, then destroy its entire Alchemy stack                               |
 
 Small apps skip pieces they don't need (tunnels has a hand-written,
 committed wrangler.jsonc and no generator; streams-example-app has no
@@ -48,8 +48,8 @@ Every script takes `--env <name>` and looks the environment up in envs.ts.
 In CI, `DOPPLER_CONFIG` (from the surrounding `doppler run`) is accepted as a
 fallback for `deploy` — env names and Doppler config names coincide — and
 every invocation asserts the Doppler-supplied `CLOUDFLARE_ACCOUNT_ID` matches
-the envs.ts entry, so a wrong-config wrap fails loudly. Destructive scripts
-(`erase-data`) accept only the explicit flag.
+the envs.ts entry, so a wrong-config wrap fails loudly. `infra destroy`
+accepts only an explicit `--env`.
 
 ## Core Doppler model
 
@@ -91,31 +91,32 @@ Runtime config is zod-parsed from `APP_CONFIG_*` env vars (see each app's
 Deploy scripts additionally validate the exact assembled runtime env with
 the app's own zod schema before uploading anything.
 
-## Workers are never deleted
+## Destroying an environment
 
-Deploys only ever upsert. Routes are declared in wrangler config
-(re-ensured on every deploy); DNS records are created once by
-`ensure-resources` (create-only) and never touched again. This makes the
-historical zombie-route/522 failure class (script deletion cascading route
-deletion at the edge) structurally impossible. Alchemy destroy deletes only
-its D1/KV/R2 stack; the Worker and routes remain parked.
+`pnpm infra destroy --env <name>` deletes the whole environment in dependency
+order:
 
-## Erasing an environment
+1. Every repository in the OS Artifacts namespace. Cloudflare has no
+   Artifacts-namespace delete API, so the command verifies the implicit
+   namespace is empty.
+2. Container applications attached to the OS Worker's Durable Object
+   namespaces, verified absent before their namespaces disappear.
+3. All seven environment Workers with Cloudflare's `force=true` API. This is
+   the supported whole-namespace Durable Object teardown: the scripts' DO
+   namespaces, instances, storage, and alarms are deleted with them.
+4. The Alchemy stack: two D1 databases, two KV namespaces, two R2 buckets,
+   state, and generated output.
 
-`pnpm erase-data --env <name>` (in apps/os) resets the environment's
-Wrangler-owned Durable Object classes and runs
-`pnpm infra destroy --env <name>`. Alchemy deletes the D1 databases, KV
-namespaces, R2 buckets, and stack output. The next preview acquisition runs
-`pnpm infra deploy` and gets a fresh stack before any app deploys. Auth's
-deploy then reruns migrations and re-seeds its OAuth clients.
+The next preview acquisition runs `pnpm infra deploy` and gets a fresh stack
+before app deploys recreate the Workers. Auth then reruns migrations and
+re-seeds its OAuth clients. Routes and create-only DNS records are reattached
+by normal deployment.
 
 Production requires `--yes-i-mean-prd`. Destroying production or migrating an
 existing fleet remains an explicit operator action; a code merge is not
 permission to erase live environments. Quiesce automatic deploys before the
 merge that introduces the Alchemy-backed push workflows. The all-at-once
-migration deletes every old environment's data resources, proves their names
-absent, discards any prototype Alchemy state store out of band, and recreates
-every stack from empty.
+migration destroys every environment and recreates each stack from empty.
 
 ## Bringing up a new environment
 
