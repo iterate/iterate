@@ -21,7 +21,10 @@ const RuleMetadata = z.object({
 type RulesProject = {
   repos: {
     get(path: string): {
-      readFile(input: { path: string }): Promise<{ content: string } | null>;
+      readFile(input: {
+        commitOid?: string;
+        path: string;
+      }): Promise<{ commitOid: string; content: string } | null>;
     };
   };
 };
@@ -36,12 +39,22 @@ export async function loadGithubAiLinterRules(
     throw new Error(`GitHub AI linter has no configured rule paths for ${source.repoPath}`);
   }
 
-  const rules: GithubAiLinterRules = {};
-  for (const path of paths) {
-    const file = await repo.readFile({ path });
+  const firstPath = paths[0]!;
+  const firstFile = await repo.readFile({ path: firstPath });
+  if (firstFile === null) {
+    throw new Error(`GitHub AI linter rule does not exist: ${source.repoPath}:${firstPath}`);
+  }
+  const files = [[firstPath, firstFile] as const];
+  for (const path of paths.slice(1)) {
+    const file = await repo.readFile({ commitOid: firstFile.commitOid, path });
     if (file === null) {
       throw new Error(`GitHub AI linter rule does not exist: ${source.repoPath}:${path}`);
     }
+    files.push([path, file] as const);
+  }
+
+  const rules: GithubAiLinterRules = {};
+  for (const [path, file] of files) {
     const rule = parseGithubAiLinterRule(path, file.content);
     if (Object.hasOwn(rules, rule.id)) {
       throw new Error(`Duplicate GitHub AI linter rule id "${rule.id}" in ${path}`);
