@@ -276,10 +276,22 @@ function RenderNode({ ctx, node }: { ctx: RenderContext; node: RootContent }): R
         node.checked === true || node.checked === false ? (
           <input type="checkbox" checked={node.checked} readOnly disabled aria-hidden />
         ) : null;
+      const [firstChild, ...remainingChildren] = node.children;
+      const taskContent =
+        checkbox !== null && firstChild?.type === "paragraph" ? (
+          <>
+            <span {...blockAttrs(firstChild)}>{renderChildren(ctx, firstChild)}</span>
+            {remainingChildren.map((child, index) => (
+              <RenderNode key={index} ctx={ctx} node={child} />
+            ))}
+          </>
+        ) : (
+          renderChildren(ctx, node)
+        );
       return (
         <li {...blockAttrs(node)} data-task={checkbox === null ? undefined : ""}>
           {checkbox}
-          {renderChildren(ctx, node)}
+          {taskContent}
         </li>
       );
     }

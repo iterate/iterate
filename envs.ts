@@ -548,7 +548,7 @@ function docsPreviewSlot(n: number): DocsEnv {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
     dopplerConfig: `preview_${n}`,
     workerName: `docs-preview-${n}`,
-    baseUrl: `https://docs-preview-${n}.iterate-dev-stg.workers.dev`,
+    baseUrl: `https://docs-preview-${n}.iterate-dev-preview.workers.dev`,
     osBaseUrl: `https://os.iterate-preview-${n}.com`,
   };
 }

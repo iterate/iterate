@@ -298,7 +298,7 @@ describe("preview workflow scope", () => {
         workerName: "auth-preview-3",
       },
       docs: {
-        baseUrl: "https://docs-preview-3.iterate-dev-stg.workers.dev",
+        baseUrl: "https://docs-preview-3.iterate-dev-preview.workers.dev",
         workerName: "docs-preview-3",
       },
       "dummy-petshop": {
