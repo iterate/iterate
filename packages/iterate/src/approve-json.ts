@@ -35,6 +35,8 @@
 
 import { createInterface } from "node:readline";
 
+import { z } from "zod";
+
 import type { RpcStub } from "@iterate-com/capnweb";
 
 import type { ItxAuthCredentials, Stream, StreamEvent } from "./itx-api.generated.ts";
@@ -49,6 +51,14 @@ import {
   type RequestedPayload,
   type Verdict,
 } from "./approve-core.ts";
+
+/** The complete stdin decision line — the ONE boundary where the menu bar's
+ * arbitrary NDJSON becomes trusted input. */
+const StdinDecisionLine = z.object({
+  offset: z.number(),
+  decision: z.enum(["approve", "reject"]),
+  reason: z.string().optional(),
+});
 
 /** Back-off before re-arming a settlement watch after a transient read error. */
 const SETTLEMENT_RETRY_MS = 2_000;
@@ -184,32 +194,32 @@ export async function runApprovalJson(input: {
   async function handleDecision(raw: string): Promise<void> {
     const trimmed = raw.trim();
     if (trimmed === "") return;
-    // Arbitrary stdin: JSON.parse proves nothing about shape, so validate at
-    // this boundary — reject non-objects here, then typeof-check each field
-    // where it's read below.
-    let decision: Record<string, unknown>;
+    let json: unknown;
     try {
-      const parsed: unknown = JSON.parse(trimmed);
-      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-        throw new Error("decision line must be a JSON object");
-      }
-      decision = parsed as Record<string, unknown>;
+      json = JSON.parse(trimmed);
     } catch {
       emit({ type: "error", message: "malformed decision line" });
       return;
     }
-    const offset = decision.offset;
-    if (typeof offset !== "number") return;
+    const line = StdinDecisionLine.safeParse(json);
+    if (!line.success) {
+      // Salvage the offset when there is one, so the menu bar can clear that
+      // row's spinner instead of only surfacing a global error.
+      const offsetOnly = z.object({ offset: z.number() }).loose().safeParse(json);
+      emit({
+        type: "error",
+        ...(offsetOnly.success ? { offset: offsetOnly.data.offset } : {}),
+        message: `malformed decision line: ${z.prettifyError(line.error)}`,
+      });
+      return;
+    }
+    const { offset, decision, reason } = line.data;
     // The door acts on the first decision; once a batch has resolved, or
     // we've already appended a decision for it (decided, awaiting the door),
     // a second decision can't take effect and must not append a dead-weight
     // event or pop Touch ID again. Refuse it.
     if (resolved.has(offset) || decided.has(offset)) {
       emit({ type: "error", offset, message: "already decided" });
-      return;
-    }
-    if (decision.decision !== "approve" && decision.decision !== "reject") {
-      emit({ type: "error", offset, message: `unknown decision "${decision.decision}"` });
       return;
     }
     const payload = pending.get(offset);
@@ -220,9 +230,7 @@ export async function runApprovalJson(input: {
     // Claim the offset BEFORE any async work so a second line queued right behind
     // this one is refused above; release it only if the append fails.
     decided.add(offset);
-    const verdicts = payload.requests.map(
-      (): Verdict => (decision.decision === "approve" ? "approve" : "reject"),
-    );
+    const verdicts = payload.requests.map((): Verdict => decision);
     try {
       // Signs on the enclave path — Touch ID pops here (approve only;
       // all-reject decisions are never signed).
@@ -233,7 +241,7 @@ export async function runApprovalJson(input: {
         offset,
         payload,
         verdicts,
-        reason: typeof decision.reason === "string" ? decision.reason : undefined,
+        reason,
       });
     } catch (error) {
       decided.delete(offset); // the append failed — allow another attempt
