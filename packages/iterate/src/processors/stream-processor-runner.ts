@@ -82,6 +82,13 @@ export type ReductionProgress<State> = {
 export type ProcessingProgress = {
   /** Every effect at or below this offset is acknowledged (durably settled). */
   acknowledgedThroughOffset: number;
+  /**
+   * Highest offset intentionally excluded when this processor was first
+   * installed. Reduce-only cache rebuilds start after this offset instead of
+   * folding history the processor never observed. Absent legacy records mean
+   * zero.
+   */
+  skippedThroughOffset?: number;
   /** Monotonic fencing token; a bump is the only sanctioned way to move
    * `acknowledgedThroughOffset` backward. */
   cursorRevision: number;
@@ -89,12 +96,14 @@ export type ProcessingProgress = {
 
 /**
  * A processor's two durable positions, persisted as one record. Invariant
- * (when persisted): `reduction.reducedThroughOffset <=
- * processing.acknowledgedThroughOffset` — the fold cache may lag the effect
- * cursor (it is rebuildable), but a fold AHEAD of acknowledged effects would
- * let `snapshot()` show state derived from events whose effects a cursor
- * rewind is about to re-run. Core (Phase 2) is the graceful degradation:
- * reduction only, no processing cursor — same structure, same reduce-only refold.
+ * (when persisted): `(processing.skippedThroughOffset ?? 0) <=
+ * reduction.reducedThroughOffset <= processing.acknowledgedThroughOffset` —
+ * the fold cache may lag the effect cursor (it is rebuildable), but it cannot
+ * precede intentionally skipped history or run ahead of acknowledged effects.
+ * The latter would let `snapshot()` show state derived from events whose
+ * effects a cursor rewind is about to re-run. Core (Phase 2) is the graceful
+ * degradation: reduction only, no processing cursor — same structure, same
+ * reduce-only refold.
  */
 export type ProcessorProgress<State> = {
   /** Random identity of the stream lifetime whose offsets and fold this record describes. */
@@ -753,7 +762,8 @@ export class StreamProcessorRunner<
    * event filtered out, nothing re-saved), losing the batch durably.
    */
   async #commitBatchContext(ctx: BatchContext<ProcessorState<Contract>>): Promise<void> {
-    const streamId = this.#requireProgress().streamId;
+    const current = this.#requireProgress();
+    const { streamId } = current;
     const next: ProcessorProgress<ProcessorState<Contract>> = {
       streamId,
       reduction: {
@@ -762,6 +772,9 @@ export class StreamProcessorRunner<
         state: ctx.state,
       },
       processing: {
+        ...(current.processing.skippedThroughOffset === undefined
+          ? {}
+          : { skippedThroughOffset: current.processing.skippedThroughOffset }),
         acknowledgedThroughOffset: ctx.completedThroughOffset,
         cursorRevision: ctx.revision,
       },
@@ -872,7 +885,11 @@ export class StreamProcessorRunner<
         reducedThroughOffset: initialCheckpointOffset,
         state: this.hooks.initialState(),
       },
-      processing: { acknowledgedThroughOffset: initialCheckpointOffset, cursorRevision },
+      processing: {
+        acknowledgedThroughOffset: initialCheckpointOffset,
+        ...(initialCheckpointOffset === 0 ? {} : { skippedThroughOffset: initialCheckpointOffset }),
+        cursorRevision,
+      },
     };
   }
 
@@ -922,16 +939,30 @@ export class StreamProcessorRunner<
     }
 
     const acknowledged = persisted.processing.acknowledgedThroughOffset;
+    const skippedThroughOffset = persisted.processing.skippedThroughOffset ?? 0;
+    if (
+      !Number.isSafeInteger(skippedThroughOffset) ||
+      skippedThroughOffset < 0 ||
+      skippedThroughOffset > acknowledged
+    ) {
+      throw new Error(
+        `stream processor "${this.hooks.contract.slug}" persisted skipped-through offset ` +
+          `${skippedThroughOffset} must be a safe integer between 0 and the acknowledged ` +
+          `offset ${acknowledged}`,
+      );
+    }
     const parsed = this.hooks.parseState(persisted.reduction.state);
     // A persisted reduction AHEAD of the acknowledgement violates the record
     // invariant (see ProcessorProgress): publishing it would show state
     // derived from events whose effects are not acknowledged. Treat it as a
     // cache miss — discard the fold, refold reduce-only through ack (below).
     const reducedAheadOfAck = persisted.reduction.reducedThroughOffset > acknowledged;
+    const reducedBeforeStart = persisted.reduction.reducedThroughOffset < skippedThroughOffset;
     if (
       persisted.reduction.reducerVersion === this.hooks.contract.version &&
       parsed.success &&
-      !reducedAheadOfAck
+      !reducedAheadOfAck &&
+      !reducedBeforeStart
     ) {
       let reduction: ReductionProgress<ProcessorState<Contract>> = {
         ...persisted.reduction,
@@ -981,13 +1012,21 @@ export class StreamProcessorRunner<
             `(${persisted.reduction.reducedThroughOffset}) is AHEAD of the acknowledged cursor ` +
             `(${acknowledged}) — an invalid record; discarding the fold and refolding ` +
             `reduce-only through the acknowledgement`
-        : `stream processor "${this.hooks.contract.slug}" reduction cache is stale ` +
+        : reducedBeforeStart
+          ? `stream processor "${this.hooks.contract.slug}" persisted reduction cursor ` +
+            `(${persisted.reduction.reducedThroughOffset}) is BEFORE the subscribed start ` +
+            `(${skippedThroughOffset}) — an invalid record; discarding the fold and refolding ` +
+            `reduce-only from the subscribed start through the acknowledgement`
+          : `stream processor "${this.hooks.contract.slug}" reduction cache is stale ` +
             `(persisted reducerVersion "${persisted.reduction.reducerVersion}", ` +
             `current "${this.hooks.contract.version}", state ${parsed.success ? "valid" : "invalid"}); ` +
             `refolding reduce-only through acknowledged offset ` +
             `${acknowledged}`,
     );
-    const reduction = await this.#rebuildReduction(streamId, acknowledged);
+    const reduction = await this.#rebuildReduction(streamId, acknowledged, {
+      state: this.hooks.initialState(),
+      reducedThroughOffset: skippedThroughOffset,
+    });
     const progress: ProcessorProgress<ProcessorState<Contract>> = {
       streamId,
       reduction,
@@ -1001,16 +1040,16 @@ export class StreamProcessorRunner<
     this.#hasLoaded = true;
   }
 
-  /** Rebuild the fold through `throughOffset`, reduce ONLY, paged — from
-   * offset 0 by default, or extending `from` (a valid persisted fold that
-   * LAGS the target, so only the gap's events are read). */
+  /** Rebuild the fold through `throughOffset`, reduce ONLY, paged, extending
+   * `from` (either the subscribed-prefix default or a valid persisted fold
+   * that lags the target). */
   async #rebuildReduction(
     streamId: string,
     throughOffset: number,
-    from?: { state: ProcessorState<Contract>; reducedThroughOffset: number },
+    from: { state: ProcessorState<Contract>; reducedThroughOffset: number },
   ): Promise<ReductionProgress<ProcessorState<Contract>>> {
-    let state = from?.state ?? this.hooks.initialState();
-    let afterOffset = from?.reducedThroughOffset ?? 0;
+    let { state } = from;
+    let afterOffset = from.reducedThroughOffset;
     if (throughOffset > afterOffset) {
       for (;;) {
         const page = await this.stream.getEventPage({

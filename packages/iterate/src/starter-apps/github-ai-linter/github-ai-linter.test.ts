@@ -42,7 +42,7 @@ test("a linked connection gets a start-now hosted review processor", async () =>
                 "get",
                 {
                   className: "ReviewBotApp",
-                  durableWorkerKey: "app-review-bot-iterate--installation-v2",
+                  durableWorkerKey: expect.stringMatching(/^app-review-bot-[0-9a-f]{32}-v2$/),
                   path: "/",
                   type: "stateful",
                 },

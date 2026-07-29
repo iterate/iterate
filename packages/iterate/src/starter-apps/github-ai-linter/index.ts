@@ -26,51 +26,55 @@ export const GithubAiLinter = {
         using itx = await env.ITX.get();
         await itx.streams
           .get(`/integrations/github/${connection}`)
-          .append(...reviewBotSubscriptionEvents(event, connection, config));
+          .append(await reviewBotSubscriptionEvent(event, connection, config));
       },
     };
   },
 };
 
-function reviewBotSubscriptionEvents(
+async function reviewBotSubscriptionEvent(
   sourceEvent: StreamEvent,
   connection: string,
   config: GithubAiLinterConfig,
-): StreamEventInput[] {
-  return [
-    {
-      type: "events.iterate.com/stream/subscription-configured",
-      payload: {
-        subscriptionKey: "app-review-bot#review-bot",
-        receiver: {
-          action: "processor-wake",
-          expression: [
-            "workers",
-            ["get", reviewBotAppRef(connection, config)],
-            "processor",
-            "wakeStreamProcessor",
-          ],
-          processorSlug: "review-bot",
-          // A restored connection stream can contain months of webhooks. The
-          // processor starts after this committed configuration event, while
-          // stream delivery still includes anything appended after it.
-          delivery: { start: "now" },
-        },
+): Promise<StreamEventInput> {
+  return {
+    type: "events.iterate.com/stream/subscription-configured",
+    payload: {
+      subscriptionKey: "app-review-bot#review-bot",
+      receiver: {
+        action: "processor-wake",
+        expression: [
+          "workers",
+          ["get", await reviewBotAppRef(connection, config)],
+          "processor",
+          "wakeStreamProcessor",
+        ],
+        processorSlug: "review-bot",
+        // A restored connection stream can contain months of webhooks. The
+        // processor starts after this committed configuration event, while
+        // stream delivery still includes anything appended after it.
+        delivery: { start: "now" },
       },
-      idempotencyKey: `review-bot/subscription:v${reviewBotSubscriptionConfigVersion}:${sourceEvent.path}:${sourceEvent.offset}`,
     },
-  ];
+    idempotencyKey: `review-bot/subscription:v${reviewBotSubscriptionConfigVersion}:${sourceEvent.path}:${sourceEvent.offset}`,
+  };
 }
 
-function reviewBotAppRef(connection: string, config: GithubAiLinterConfig) {
-  const durableConnection = connection.replaceAll("-", "--").replaceAll("_", "-u");
+async function reviewBotAppRef(
+  connection: string,
+  config: GithubAiLinterConfig,
+): Promise<StatefulDynamicWorkerRef> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(connection));
+  const durableConnection = [...new Uint8Array(digest).slice(0, 16)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
   return {
     type: "stateful",
     path: "/",
     className: "ReviewBotApp",
-    // Fence the retired offset-zero processor's progress. Connection slugs
-    // admit `_`, but durable keys do not; escaping both separator characters
-    // keeps the identity readable and collision-free.
+    // Fence the retired offset-zero processor's progress. A truncated SHA-256
+    // keeps arbitrary connection slugs within the platform's 63-character
+    // durable-key limit while retaining a collision-resistant identity.
     durableWorkerKey: `app-review-bot-${durableConnection}-v${reviewBotDurableWorkerVersion}`,
     source: {
       createWorker: {
@@ -86,5 +90,5 @@ function reviewBotAppRef(connection: string, config: GithubAiLinterConfig) {
         },
       },
     },
-  } satisfies StatefulDynamicWorkerRef;
+  };
 }
