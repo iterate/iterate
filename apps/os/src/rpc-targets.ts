@@ -1000,9 +1000,22 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    * sampling); live debug surfaces should subscribe through `liveState`.
    */
   async runtimeState(): Promise<StreamRuntimeDebugState> {
-    const result = await this.#read("runtimeState", () =>
-      Promise.resolve(this[STREAM_DURABLE_OBJECT_STUB].runtimeState()),
-    ).catch(rethrowStreamUnavailable);
+    const result = await this.#read("runtimeState", async () => {
+      const stub = this[STREAM_DURABLE_OBJECT_STUB];
+      try {
+        return await stub.runtimeState();
+      } finally {
+        try {
+          disposeIgnoredRpcResult(stub);
+        } catch (error) {
+          console.warn("stream runtime-state Durable Object stub dispose failed", {
+            error,
+            path: this.props.path,
+            projectId: this.props.projectId,
+          });
+        }
+      }
+    }).catch(rethrowStreamUnavailable);
     return detachPlainRpcResult(result);
   }
 
@@ -6777,9 +6790,32 @@ export function deploymentItxForInternal(props: { auth: ItxAuth; ctx: CfExecutio
 
 async function projectProcessorState(projectId: string) {
   const project = env.PROJECT.getByName(DurableObjectNameCodec.stringify({ path: "/", projectId }));
-  const processor = await project.processor;
-  const { state } = await processor.snapshot();
-  return state;
+  try {
+    const processor = await project.processor;
+    try {
+      return detachPlainRpcResult(await processor.snapshot()).state;
+    } finally {
+      disposeProjectProcessorStateResource(processor, "processor", projectId);
+    }
+  } finally {
+    disposeProjectProcessorStateResource(project, "project", projectId);
+  }
+}
+
+function disposeProjectProcessorStateResource(
+  resource: unknown,
+  resourceType: "processor" | "project",
+  projectId: string,
+) {
+  try {
+    disposeIgnoredRpcResult(resource);
+  } catch (error) {
+    console.warn("project processor-state RPC resource dispose failed", {
+      error,
+      projectId,
+      resourceType,
+    });
+  }
 }
 
 /**

@@ -131,15 +131,27 @@ async function resolvedSourceFiles(
   const repo = buildEnv.REPO.getByName(
     DurableObjectNameCodec.stringify({ path: resolved.repoPath, projectId }),
   );
-  const snapshot = await repo.getFilesSnapshot({
-    branch: resolved.branch,
-    commitOid: resolved.commitOid,
-    exclude: resolved.exclude,
-    include: resolved.include,
-  });
   try {
-    return snapshot.files;
+    const snapshot = await repo.getFilesSnapshot({
+      branch: resolved.branch,
+      commitOid: resolved.commitOid,
+      exclude: resolved.exclude,
+      include: resolved.include,
+    });
+    try {
+      return snapshot.files;
+    } finally {
+      disposeIgnoredRpcResult(snapshot);
+    }
   } finally {
-    disposeIgnoredRpcResult(snapshot);
+    try {
+      disposeIgnoredRpcResult(repo);
+    } catch (error) {
+      console.warn("worker build repo Durable Object stub dispose failed", {
+        error,
+        projectId,
+        repoPath: resolved.repoPath,
+      });
+    }
   }
 }

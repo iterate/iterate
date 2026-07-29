@@ -392,6 +392,42 @@ it("recovers a safe stateless fetch once with a fresh loader after clone-version
   });
 });
 
+it("replays one safe stateful fetch after its hosting Durable Object resets", async () => {
+  const reset = Object.assign(new Error("Durable Object reset because its code was updated."), {
+    durableObjectReset: true,
+  });
+  h.statefulFetch.mockRejectedValueOnce(reset).mockResolvedValueOnce(new Response("recovered"));
+  const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+  const runner = new DynamicWorkerRunner({
+    streamContext: { kind: "scope", scopePath: statefulRef.path },
+    exports: {} as ExecutionContext["exports"],
+    projectId: "prj_private",
+    scopePath: statefulRef.path,
+  });
+
+  const response = await runner.fetch({
+    ref: statefulRef,
+    request: new Request("https://example.com/"),
+  });
+
+  expect(await response.text()).toBe("recovered");
+  expect(h.statefulFetch).toHaveBeenCalledTimes(2);
+  expect(info).toHaveBeenCalledWith(
+    "Stateful worker fetch retrying after Durable Object unavailability",
+    {
+      error: reset,
+      projectId: "prj_private",
+      rayId: undefined,
+      traceRole: undefined,
+    },
+  );
+  expect(recordedSpans[0]?.attributes).toMatchObject({
+    "http.response.status_code": 200,
+    "iterate.worker.durable_object_availability_retry": true,
+  });
+  info.mockRestore();
+});
+
 it("recovers a stateless event batch once with a fresh loader after clone-version skew", async () => {
   const processEventBatch = vi
     .fn()

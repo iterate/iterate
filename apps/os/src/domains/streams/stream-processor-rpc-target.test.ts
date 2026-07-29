@@ -129,6 +129,7 @@ describe("StreamRpcTarget", () => {
     const waitDispose = vi.fn();
     const processorStateDispose = vi.fn();
     const runtimeStateDispose = vi.fn();
+    const runtimeStateStubDispose = vi.fn();
     Object.defineProperty(appended, Symbol.dispose, { value: appendDispose });
     Object.defineProperty(read, Symbol.dispose, { enumerable: true, value: readDispose });
     Object.defineProperty(page, Symbol.dispose, { value: pageDispose });
@@ -138,14 +139,16 @@ describe("StreamRpcTarget", () => {
 
     class TestStreamRpcTarget extends StreamRpcTarget {
       override get [STREAM_DURABLE_OBJECT_STUB]() {
-        return {
+        const stub = {
           append: async () => appended,
           getEvent: async () => read,
           getEvents: async () => page,
           getProcessorRuntimeState: async () => processorState,
           runtimeState: async () => runtimeState,
           waitForEvent: async () => waited,
-        } as never;
+        };
+        Object.defineProperty(stub, Symbol.dispose, { value: runtimeStateStubDispose });
+        return stub as never;
       }
     }
     const stream = new TestStreamRpcTarget({
@@ -182,6 +185,7 @@ describe("StreamRpcTarget", () => {
     expect(waitDispose).toHaveBeenCalledOnce();
     expect(processorStateDispose).toHaveBeenCalledOnce();
     expect(runtimeStateDispose).toHaveBeenCalledOnce();
+    expect(runtimeStateStubDispose).toHaveBeenCalledOnce();
   });
 
   it("preserves a successful plain-data result when native disposal throws", async () => {

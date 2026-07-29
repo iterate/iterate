@@ -173,19 +173,31 @@ async function resolveFileSource({
   const repo = env.REPO.getByName(
     DurableObjectNameCodec.stringify({ path: files.repoPath, projectId }),
   );
-  const head = await repo.getHead(files.ref === undefined ? {} : { branch: files.ref.branch });
   try {
-    return {
-      branch: head.branch,
-      commitOid: head.commitOid,
-      contentHash: head.contentHash,
-      exclude: files.exclude,
-      include: files.include,
-      repoPath: files.repoPath,
-      type: "repo",
-    };
+    const head = await repo.getHead(files.ref === undefined ? {} : { branch: files.ref.branch });
+    try {
+      return {
+        branch: head.branch,
+        commitOid: head.commitOid,
+        contentHash: head.contentHash,
+        exclude: files.exclude,
+        include: files.include,
+        repoPath: files.repoPath,
+        type: "repo",
+      };
+    } finally {
+      disposeIgnoredRpcResult(head);
+    }
   } finally {
-    disposeIgnoredRpcResult(head);
+    try {
+      disposeIgnoredRpcResult(repo);
+    } catch (error) {
+      console.warn("worker source repo Durable Object stub dispose failed", {
+        error,
+        projectId,
+        repoPath: files.repoPath,
+      });
+    }
   }
 }
 
