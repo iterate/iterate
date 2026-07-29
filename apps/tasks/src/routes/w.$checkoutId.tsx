@@ -187,23 +187,32 @@ function WorkspaceBoardPage() {
   );
 
 
-  /** Live text of the open file, else the board's copy. */
-  const sourceOf = useCallback((task: BoardTask): string => {
+  /** The open file's LIVE editor api — null when absent or when its session
+   * died (ended/disconnected/over-cap): a dead view still renders text, but
+   * its dispatches never sync and its text can be stale, so every mutation
+   * and read must route around it as if no editor were open. */
+  const liveApi = useCallback((path: string) => {
     const api = editorApiRef.current;
-    return api !== null && api.path === task.path ? api.source() : task.source;
+    return api !== null && api.path === path && api.isLive() ? api : null;
   }, []);
+
+  /** Live text of the open file, else the board's copy. */
+  const sourceOf = useCallback(
+    (task: BoardTask): string => liveApi(task.path)?.source() ?? task.source,
+    [liveApi],
+  );
 
   /** Transform the OPEN file in the live editor; false when not open. */
   const applyLive = useCallback(
     (path: string, transform: (source: string) => string): boolean => {
-      const api = editorApiRef.current;
-      if (api === null || api.path !== path) return false;
+      const api = liveApi(path);
+      if (api === null) return false;
       api.applyTransform(transform);
       // Reflect immediately so cards/commit summaries don't lag the doc.
       board.reflectLiveContent(path, api.source());
       return true;
     },
-    [board],
+    [board, liveApi],
   );
 
   /** The live-doc rule, structurally: transform the OPEN file in its editor,
@@ -441,11 +450,11 @@ function WorkspaceBoardPage() {
   const settleDraft = useCallback(async (): Promise<void> => {
     const path = draftPathRef.current;
     if (path === null) return;
-    const api = editorApiRef.current;
-    const liveSource = api !== null && api.path === path ? api.source() : null;
-    if (api !== null && api.path === path) await api.flushPending().catch(() => {});
+    const api = liveApi(path);
+    const liveSource = api?.source() ?? null;
+    if (api !== null) await api.flushPending().catch(() => {});
     await settleDraftRename(path, liveSource);
-  }, [settleDraftRename]);
+  }, [liveApi, settleDraftRename]);
 
   // The sheet's path field: any rename the board can represent is allowed —
   // the file must stay a task (.md under a folder named "tasks").
@@ -612,10 +621,7 @@ function WorkspaceBoardPage() {
         liveSource={() => {
           // Read the ref AT CALL TIME — it fills after mount without a
           // re-render, so a render-time conditional would miss it.
-          const api = editorApiRef.current;
-          return api !== null && openTask !== null && api.path === openTask.path
-            ? api.source()
-            : null;
+          return openTask === null ? null : (liveApi(openTask.path)?.source() ?? null);
         }}
         onRevert={() => {
           if (openTask === null) return;
@@ -640,12 +646,9 @@ function WorkspaceBoardPage() {
           // title — the rename runs now, with nothing mounted to flash, never
           // under the open editor. Reopening is an ordinary open.
           const path = draftPathRef.current;
-          const api = editorApiRef.current;
-          const liveSource = path !== null && api?.path === path ? api.source() : null;
-          const flushed =
-            path !== null && api?.path === path
-              ? api.flushPending().catch(() => {})
-              : Promise.resolve();
+          const api = path === null ? null : liveApi(path);
+          const liveSource = api?.source() ?? null;
+          const flushed = api === null ? Promise.resolve() : api.flushPending().catch(() => {});
           setDraftPath(null);
           draftFocusRef.current = undefined;
           patchSearch({ task: "" });

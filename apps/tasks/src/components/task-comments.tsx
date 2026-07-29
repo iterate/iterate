@@ -333,19 +333,26 @@ function CommentComposer({
   onCancel?: () => void;
 }) {
   const [draft, setDraft] = useState(initialValue ?? "");
+  // State drives the disabled button; the ref closes the same-tick window
+  // (state lands next render, so a double ⌘-Enter would submit twice).
   const [submitting, setSubmitting] = useState(false);
+  const inFlight = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   useEffect(() => {
     if (focusOnMount) textareaRef.current?.focus();
   }, [focusOnMount]);
   const submit = () => {
-    if (submitting || draft.trim() === "") return;
+    if (inFlight.current || draft.trim() === "") return;
+    inFlight.current = true;
     setSubmitting(true);
     void onSubmit(draft)
       .then((ok) => {
         if (ok) setDraft("");
       })
-      .finally(() => setSubmitting(false));
+      .finally(() => {
+        inFlight.current = false;
+        setSubmitting(false);
+      });
   };
   return (
     <div className="flex flex-col gap-1.5">

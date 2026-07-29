@@ -173,6 +173,7 @@ export function useCollabEditor(input: {
               if (pending.length === 0) return;
               await connection.pushOnce(getSyncedVersion(live.state), pending).catch(() => {});
             },
+            isLive: () => !connection.dead,
             path,
             selectionHead: () => live.state.selection.main.head,
             source: () => live.state.doc.toString(),
