@@ -200,8 +200,9 @@ const MaterializedAnalysis = z.object({
 const ActiveAnalysis = z.object({
   /**
    * There is deliberately no wall-clock expiry in the first slice. New pushes
-   * cancel old work, while a genuinely orphaned run remains visibly
-   * `running`. The eventual timeout should be a typed processor-authored
+   * cancel old work, while the Agent processor's autonomous-turn breaker
+   * explicitly fails an analysis which cannot finish within its configured
+   * budget. A future time limit should likewise be a typed processor-authored
    * settlement event driven by a durable alarm, not an implicit timestamp
    * check that silently changes reduced state.
    */
@@ -232,7 +233,7 @@ export const GithubAiLinterState = z.object({
 
 export const GithubAiLinterProcessorContract = defineProcessorContract({
   slug: "github-ai-linter",
-  version: "0.1.0",
+  version: "0.2.0",
   description:
     "Reduces one pull request's AI diagnostics and mechanically publishes its GitHub review.",
   stateSchema: GithubAiLinterState,
@@ -265,7 +266,21 @@ export const GithubAiLinterProcessorContract = defineProcessorContract({
       }),
     },
   },
-  consumes: Object.values(githubAiLinterEventTypes),
+  // `agent/paused` is owned by the platform Agent contract. This userspace
+  // processor consumes it only to turn an exhausted analysis into a durable
+  // terminal fact instead of leaving it visibly `running`.
+  processorDeps: [
+    {
+      "events.iterate.com/agent/paused": {
+        description: "The generic Agent processor paused its autonomous turn loop.",
+        payloadSchema: z.object({
+          reason: z.string().optional(),
+          triggerOffset: StreamOffset.optional(),
+        }),
+      },
+    },
+  ],
+  consumes: [...Object.values(githubAiLinterEventTypes), "events.iterate.com/agent/paused"],
   // `diagnostic-reported` and `diagnostic-suppressed` are declared above and
   // consumed here, but are not processor emissions: the generic Agent appends
   // them with its ordinary stream capability. This list is deliberately only

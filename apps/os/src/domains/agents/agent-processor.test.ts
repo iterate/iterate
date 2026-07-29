@@ -795,7 +795,12 @@ describe("AgentProcessor failure policy", () => {
     // Two autonomous turns ran; the third trigger tripped the breaker.
     expect(h.llm.calls).toHaveLength(2);
     expect(h.events("events.iterate.com/agent/paused")).toMatchObject([
-      { payload: { reason: expect.stringContaining("autonomous turn limit") } },
+      {
+        payload: {
+          reason: expect.stringContaining("autonomous turn limit"),
+          triggerOffset: expect.any(Number),
+        },
+      },
     ]);
     expect(h.state().paused).not.toBeNull();
     expect(h.state().pendingLlmRequestTrigger).toBeNull();
@@ -806,6 +811,29 @@ describe("AgentProcessor failure policy", () => {
     expect(h.state().paused).toBeNull();
     expect(h.state().autonomousTurnCount).toBe(0);
     expect(h.llm.calls).toHaveLength(3);
+  });
+
+  it("ignores a delayed breaker pause superseded by newer external input", async () => {
+    const h = makeAgentHarness();
+    await h.play(["append", ...NEW_AGENT_EVENTS, agentLoopNote("old analysis continuation")]);
+    const oldTriggerOffset = h.events("events.iterate.com/agents/context-added").at(-1)!.offset;
+
+    await h.play(
+      ["append", userMessage("start the new analysis")],
+      [
+        "append",
+        {
+          type: "events.iterate.com/agent/paused",
+          payload: {
+            reason: "autonomous turn limit reached",
+            triggerOffset: oldTriggerOffset,
+          },
+        },
+      ],
+    );
+
+    expect(h.state().paused).toBeNull();
+    expect(h.state().pendingLlmRequestTrigger).toMatchObject({ source: "external" });
   });
 
   it("the retry window is debounce + 2^(n-1)×base, capped at backoffMaxMs", async () => {
