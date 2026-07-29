@@ -2409,6 +2409,7 @@ export type AgentProcessorState = {
     };
   }[];
   lastLlmRequestOffset: number;
+  latestExternalTriggerOffset: number;
   pendingLlmRequestTrigger: {
     offset: number;
     atMs: number;
@@ -2515,7 +2516,10 @@ export type AgentEventInput =
             };
       }
     >
-  | TypedConsumedEventInput<"events.iterate.com/agent/paused", { reason?: string | undefined }>
+  | TypedConsumedEventInput<
+      "events.iterate.com/agent/paused",
+      { reason?: string | undefined; triggerOffset?: number | undefined }
+    >
   | TypedConsumedEventInput<"events.iterate.com/agent/resumed", { reason?: string | undefined }>
   | TypedConsumedEventInput<
       "events.iterate.com/agent/summary-updated",

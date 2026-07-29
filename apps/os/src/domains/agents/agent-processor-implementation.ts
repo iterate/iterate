@@ -484,6 +484,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
             type: "events.iterate.com/agent/paused",
             payload: {
               reason: `autonomous turn limit reached (${maxAutonomousTurns} consecutive turns without external input)`,
+              triggerOffset: trigger.offset,
             },
             idempotencyKey: this.idempotencyKey(`pause/${trigger.offset}`),
           }),
@@ -1162,7 +1163,13 @@ function reduceAgentEventCore(input: {
         },
         // Fresh external input is a fresh start: the autonomous-turn budget
         // and the failure streak both reset.
-        ...(trigger === "external" ? { autonomousTurnCount: 0, consecutiveLlmFailures: 0 } : {}),
+        ...(trigger === "external"
+          ? {
+              autonomousTurnCount: 0,
+              consecutiveLlmFailures: 0,
+              latestExternalTriggerOffset: event.offset,
+            }
+          : {}),
       };
     }
     case "events.iterate.com/agent/llm-request-requested": {
@@ -1243,6 +1250,15 @@ function reduceAgentEventCore(input: {
       return projection === undefined ? state : { ...state, ...projection };
     }
     case "events.iterate.com/agent/paused":
+      // The breaker consequence is appended in the background. If external
+      // input landed after its causal trigger but before the pause fact, that
+      // input already started a fresh budget and the delayed pause is stale.
+      if (
+        event.payload.triggerOffset !== undefined &&
+        event.payload.triggerOffset < state.latestExternalTriggerOffset
+      ) {
+        return state;
+      }
       // The breaker (or an operator) parked the loop. Only a SELF-DRIVEN
       // pending trigger dies with it: an external trigger that raced the
       // pause append survives, so the paused branch of the at-head pass

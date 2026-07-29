@@ -33,7 +33,7 @@ import { AgentBinding, AgentSummary, AgentSummaryUpdated } from "./agent-presenc
 
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
-  version: "5.0.0",
+  version: "5.1.0",
   description:
     "Maintains model-visible history, schedules debounced offset-identified LLM turns, runs " +
     "them through the Workers AI transport, and executes scripts through the capability host.",
@@ -189,6 +189,16 @@ export const AgentProcessorContract = defineProcessorContract({
           "by a compaction item). Context items at or below it have been covered by a " +
           "request: a keyed update to a covered item appends instead of replacing in place, " +
           "keeping every covered prompt reconstructible.",
+      }),
+    latestExternalTriggerOffset: z
+      .number()
+      .int()
+      .nonnegative()
+      .default(0)
+      .meta({
+        description:
+          "Offset of the newest external context trigger. A delayed autonomous-breaker pause " +
+          "whose causal trigger is older than this input is stale and reduces to nothing.",
       }),
     pendingLlmRequestTrigger: z
       .object({
@@ -522,9 +532,21 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/paused": {
       description:
         "The agent stopped scheduling turns (autonomous-loop breaker, or an operator). Mirrors " +
-        "stream/paused. The next external message resumes it; self-driven triggers stay parked.",
+        "stream/paused. A breaker pause names its causal trigger and reduces to nothing if newer " +
+        "external input already superseded it. The next external message resumes an applied pause; " +
+        "self-driven triggers stay parked.",
       payloadSchema: z.object({
         reason: z.string().trim().min(1).optional().meta({ description: "Why the loop paused." }),
+        triggerOffset: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .meta({
+            description:
+              "Self-driven context offset that tripped the autonomous breaker; absent for an " +
+              "operator-authored pause.",
+          }),
       }),
     },
     "events.iterate.com/agent/resumed": {
