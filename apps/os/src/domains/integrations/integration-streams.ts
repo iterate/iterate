@@ -37,7 +37,7 @@ const FILTERED_PAGE_SIZE = 500;
 const CONNECTION_DIRECTORY_EVENT_TYPES = [
   "events.iterate.com/integration/connection-claimed",
   "events.iterate.com/integration/connection-unclaimed",
-] as const;
+];
 
 /**
  * The latest event matching any of the requested types.
