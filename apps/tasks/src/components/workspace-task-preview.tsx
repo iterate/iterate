@@ -214,8 +214,13 @@ function AnnotatedPreview({
     return () => clearHighlights("amv");
   }, [body, resolved, selectedThreadId, pending]);
 
-  // Selected-from-panel: bring the thread's text into view.
+  // Selected-from-panel: bring the thread's text into view — once per
+  // selection. `resolved` recomputes on every live edit, and re-scrolling
+  // then would yank the viewport away from wherever the user is reading.
+  const scrolledThreadRef = useRef<string | null>(null);
   useEffect(() => {
+    if (selectedThreadId === scrolledThreadRef.current) return;
+    scrolledThreadRef.current = selectedThreadId;
     if (selectedThreadId === null) return;
     const projection = projectionRef.current;
     const entry = resolved.find(({ thread }) => thread.id === selectedThreadId);

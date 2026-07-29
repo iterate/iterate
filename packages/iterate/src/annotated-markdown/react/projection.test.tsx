@@ -84,6 +84,35 @@ describe("selection → source", () => {
     expect(body.slice(range!.start, range!.end)).toBe("pnpm test");
   });
 
+  test("a fence body echoing its info string maps to the body, not the fence", () => {
+    const body = "Use this:\n\n```python\npython\n```\n\nDone.\n";
+    const { root } = mount(body);
+    const projection = buildProjection(root);
+    const point = domPointAt(root, "python");
+    const range = projection.domRangeToSource({
+      startContainer: point.node,
+      startOffset: point.offset,
+      endContainer: point.node,
+      endOffset: point.offset + "python".length,
+    });
+    // The BODY "python" sits on the line after the opening fence.
+    expect(range).toEqual({
+      start: body.indexOf("python\n```"),
+      end: body.indexOf("python\n```") + "python".length,
+    });
+  });
+
+  test("single-line indented code still maps its content", () => {
+    const body = "Steps:\n\n    make deploy\n\nDone.\n";
+    const { root } = mount(body);
+    const projection = buildProjection(root);
+    const point = domPointAt(root, "make deploy");
+    const start = projection.domPointToSource(point.node, point.offset, "start");
+    // Indented code has no fence line; the mapping may be exact or snap to
+    // the block atomically, but it must land on the code, never elsewhere.
+    expect(body.slice(start!, start! + 4)).toBe("make");
+  });
+
   test("fenced code content maps to the inside of the fence", () => {
     const body = "Before.\n\n```ts\nconst x = 1;\n```\n\nAfter.\n";
     const { root } = mount(body);

@@ -128,13 +128,25 @@ function textSegment(ctx: RenderContext, node: Nodes & { value: string }): React
  * Inline code / fenced code carry their content INSIDE delimiters; locate the
  * verbatim content within the node's slice so the segment maps exactly, and
  * fall back to an atomic whole-node segment when it isn't contiguous
- * (indented code blocks, exotic escapes).
+ * (indented code blocks, exotic escapes). Fenced content starts on the line
+ * AFTER the opening fence — searching from the top would bind a body that
+ * echoes the info string (```python whose body is `python`) to the fence.
  */
-function innerSegment(ctx: RenderContext, node: Nodes & { value: string }): { segment: ReactNode } {
+function innerSegment(
+  ctx: RenderContext,
+  node: Nodes & { value: string },
+  { afterFirstLine = false }: { afterFirstLine?: boolean } = {},
+): { segment: ReactNode } {
   const offsets = offsetsOf(node);
   if (offsets === null) return { segment: node.value };
   const slice = ctx.source.slice(offsets.start, offsets.end);
-  const inner = node.value.length === 0 ? -1 : slice.indexOf(node.value);
+  let searchFrom = 0;
+  // Indented code blocks have no fence line — only skip a real one.
+  if (afterFirstLine && /^[`~]/.test(slice)) {
+    const firstLineEnd = slice.indexOf("\n");
+    searchFrom = firstLineEnd === -1 ? slice.length : firstLineEnd + 1;
+  }
+  const inner = node.value.length === 0 ? -1 : slice.indexOf(node.value, searchFrom);
   if (inner === -1) {
     return {
       segment: <Segment value={node.value} start={offsets.start} end={offsets.end} atomic={true} />,
@@ -184,7 +196,7 @@ function RenderNode({ ctx, node }: { ctx: RenderContext; node: RootContent }): R
     case "inlineCode":
       return <code>{innerSegment(ctx, node).segment}</code>;
     case "code": {
-      const { segment } = innerSegment(ctx, node);
+      const { segment } = innerSegment(ctx, node, { afterFirstLine: true });
       return (
         <pre {...blockAttrs(node)} data-language={node.lang ?? undefined}>
           <code>{segment}</code>
