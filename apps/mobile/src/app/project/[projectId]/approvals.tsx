@@ -21,7 +21,12 @@ import {
   View,
 } from "react-native";
 import { CodeBlock } from "../../../components/activity-card.tsx";
-import { enrollApproverKey, loadApproverKey, signWithApproverKey } from "../../../lib/approver.ts";
+import {
+  approverKeyStatus,
+  enrollApproverKey,
+  reenrollApproverKey,
+  signWithApproverKey,
+} from "../../../lib/approver.ts";
 import {
   deriveOpenBatches,
   deriveRecentResolvedBatches,
@@ -63,13 +68,23 @@ export default function ApprovalsScreen() {
   });
   const baseUrl = server.data;
 
+  // The JOIN of the local key and the project's enrolled-key state: a
+  // locally present key the project has revoked must NOT offer Approve (the
+  // door ignores its signatures — batches would strand as "submitted").
   const key = useQuery({
-    queryKey: ["approver-key", projectId],
-    queryFn: () => loadApproverKey(projectId),
+    queryKey: ["approver-key-status", projectId, baseUrl],
+    queryFn: () => approverKeyStatus(baseUrl!, projectId),
+    enabled: baseUrl !== undefined,
   });
+  const enrolledKey = key.data?.kind === "enrolled" ? key.data.key : null;
 
   const enroll = useMutation({
     mutationFn: async () => {
+      if (key.data?.kind === "revoked") {
+        // Recovering a revoked device is a deliberate act: fresh keypair,
+        // never a resurrection of the revoked keyId.
+        return await reenrollApproverKey(baseUrl!, projectId, "This iPhone");
+      }
       const info = await enrollApproverKey(projectId, "This iPhone");
       const project = await getProjectItx(baseUrl!, projectId);
       const stream = project.streams.get("/");
@@ -131,7 +146,7 @@ export default function ApprovalsScreen() {
       // strand the hold with no visible way to retry. Requiring enrollment
       // first means every approval this app sends is real, whether or not
       // other devices have keys.
-      if (!key.data) throw new Error("Enroll this device before approving.");
+      if (!enrolledKey) throw new Error("Enroll this device before approving.");
       await decide({
         stream,
         projectId,
@@ -146,7 +161,7 @@ export default function ApprovalsScreen() {
   return (
     <View style={styles.screen}>
       <Stack.Screen options={{ title: "Approvals" }} />
-      {key.data === null ? (
+      {key.data?.kind === "unenrolled" ? (
         <Pressable
           accessibilityRole="button"
           style={styles.enrollBanner}
@@ -157,10 +172,23 @@ export default function ApprovalsScreen() {
             {enroll.isPending ? "Enrolling…" : "Enroll this device to sign approvals"}
           </Text>
         </Pressable>
-      ) : key.data ? (
+      ) : key.data?.kind === "revoked" ? (
+        <Pressable
+          accessibilityRole="button"
+          style={styles.enrollBanner}
+          onPress={() => enroll.mutate()}
+          disabled={enroll.isPending}
+        >
+          <Text style={styles.enrollText}>
+            {enroll.isPending
+              ? "Re-enrolling…"
+              : "This device's approval key was revoked — tap to re-enroll with a fresh key"}
+          </Text>
+        </Pressable>
+      ) : key.data?.kind === "enrolled" ? (
         <View style={styles.enrolledBanner}>
           <Text style={styles.enrolledText}>
-            Signing as {key.data.label} · {key.data.keyId}
+            Signing as {key.data.key.label} · {key.data.key.keyId}
           </Text>
         </View>
       ) : null}
@@ -193,7 +221,7 @@ export default function ApprovalsScreen() {
               baseUrl={baseUrl!}
               interaction={{
                 kind: "pending",
-                canApprove: Boolean(key.data),
+                canApprove: enrolledKey !== null,
                 onRespond: (decision) => respond.mutate({ batch: item, decision }),
                 pending: respond.isPending && respond.variables?.batch.offset === item.offset,
                 submitted: item.submitted,

@@ -92,6 +92,56 @@ export async function ensureApproverKeyEnrolled(
   return key;
 }
 
+export type ApproverKeyStatus =
+  | { kind: "unenrolled" }
+  | { kind: "enrolled"; key: ApproverKeyInfo }
+  | { kind: "revoked"; key: ApproverKeyInfo };
+
+/**
+ * What the approvals screen should believe about this device's key — the
+ * JOIN of the local Keychain half and the project's enrolled-key state. A
+ * locally present key the project has REVOKED must surface as `revoked`,
+ * never `enrolled`: the door ignores its signatures, so offering Approve
+ * would strand batches as "submitted" until expiry. A local key the project
+ * doesn't know yet counts as `enrolled` — auto-enroll's append is in flight.
+ */
+export async function approverKeyStatus(
+  baseUrl: string,
+  projectId: string,
+): Promise<ApproverKeyStatus> {
+  const key = await loadApproverKey(projectId);
+  if (!key) return { kind: "unenrolled" };
+  const project = await getProjectItx(baseUrl, projectId);
+  const enrolled = (await project.processor.snapshot()).state.humanApprovalKeys as Array<{
+    keyId: string;
+    revokedAt: string | null;
+  }>;
+  const entry = enrolled.find((candidate) => candidate.keyId === key.keyId);
+  if (entry && entry.revokedAt !== null) return { kind: "revoked", key };
+  return { kind: "enrolled", key };
+}
+
+/**
+ * The deliberate human act that recovers a revoked device: destroy the local
+ * material and enroll a FRESH keypair (a new keyId — re-appending a revoked
+ * one is a reducer no-op, and silently resurrecting it would defeat
+ * revocation). Only the approvals screen's revoked banner calls this.
+ */
+export async function reenrollApproverKey(
+  baseUrl: string,
+  projectId: string,
+  label: string,
+): Promise<ApproverKeyInfo> {
+  await deleteApproverKey(projectId);
+  const key = await enrollApproverKey(projectId, label);
+  const project = await getProjectItx(baseUrl, projectId);
+  await project.streams.get("/").append({
+    type: EVENT.keyAdded,
+    payload: { keyId: key.keyId, publicKey: key.publicKey, label: key.label },
+  });
+  return key;
+}
+
 /**
  * Sign one approval message — prompts Face ID / Touch ID / passcode to
  * unlock the private key. One decision covers a whole batch (the approval.v2
