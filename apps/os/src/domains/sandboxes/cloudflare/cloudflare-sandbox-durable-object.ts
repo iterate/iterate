@@ -52,7 +52,7 @@ const SANDBOX_PROCESSOR_WAIT_TIMEOUT_MS = 15_000;
  * How long a sandbox's workspace backup survives without the sandbox waking
  * again. The SDK only CHECKS the ttl at restore time — it never deletes
  * expired objects from R2; actual deletion is the bucket's lifecycle rule
- * (prefix `backups/`, set by apps/os/scripts/ensure-resources.ts — keep the
+ * (prefix `backups/`, set by infra/alchemy.run.ts — keep the
  * two aligned). 90 days: long enough that any plausibly-still-wanted
  * workspace comes back intact, short enough that abandoned sandboxes do not
  * accumulate in R2 forever.

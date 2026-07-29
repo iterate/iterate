@@ -54,17 +54,9 @@ const deploymentWorkflows = [
   },
   {
     file: ".depot/workflows/deploy-os.yml",
-    group: "deploy-auth-os-production",
+    group: "deploy-cloudflare-production",
     jobs: {
       deploy: { size: "4x16", timeoutMinutes: 45 },
-      notify: { size: "2x8", timeoutMinutes: 10 },
-    },
-  },
-  {
-    file: ".depot/workflows/deploy-semaphore.yml",
-    group: "deploy-semaphore-production",
-    jobs: {
-      deploy: { size: "2x8", timeoutMinutes: 20 },
       notify: { size: "2x8", timeoutMinutes: 10 },
     },
   },
@@ -129,16 +121,16 @@ describe("Depot deployment safety", () => {
     expect(workflow.on?.push?.paths).toContain("packages/iterate/**");
   });
 
-  it.each([
-    ".depot/workflows/deploy-semaphore.yml",
-    ".depot/workflows/deploy-streams-example-app.yml",
-  ])("$file redeploys when its bundled Auth workspace code changes", (file) => {
-    const workflow = loadWorkflow(file);
+  it.each([".depot/workflows/deploy-os.yml", ".depot/workflows/deploy-streams-example-app.yml"])(
+    "$file redeploys when its bundled Auth workspace code changes",
+    (file) => {
+      const workflow = loadWorkflow(file);
 
-    expect(workflow.on?.push?.paths).toEqual(
-      expect.arrayContaining(["apps/auth/**", "apps/auth-contract/**"]),
-    );
-  });
+      expect(workflow.on?.push?.paths).toEqual(
+        expect.arrayContaining(["apps/auth/**", "apps/auth-contract/**"]),
+      );
+    },
+  );
 });
 
 describe("Depot credential boundaries", () => {

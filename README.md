@@ -31,12 +31,13 @@ signal. "Unavoidable error spam" is not a category.
 ## Environments
 
 - The root `envs.ts` is the typed map of every deployed environment
-  (hostnames, worker names, accounts, resource IDs); Doppler supplies only
-  secrets, one config per env (`prd`, `preview_N`; `dev`/`dev_<you>` are
-  fully local and never deploy).
+  (hostnames, worker names, accounts); Alchemy supplies generated D1/KV
+  identifiers, and Doppler supplies secrets, one config per env (`prd`,
+  `preview_N`; `dev`/`dev_<you>` are fully local and never deploy).
 - Each app deploys with its own small scripts: `pnpm run deploy --env <name>`
-  (build → wrangler deploy with atomic secrets → smoke), `ensure-resources`,
-  `erase-data`. Workers are never deleted.
+  (build → wrangler deploy with atomic secrets → smoke) and only the
+  app-specific `ensure-resources` / `erase-data` commands it needs. Workers are
+  never deleted.
 - Details: [DevOps: Cloudflare And Doppler](docs/devops-cloudflare-doppler.md).
 
 ## Talking to OS

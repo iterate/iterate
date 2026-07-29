@@ -59,7 +59,6 @@ import {
   RETIRED_WORKER_SECRETS,
   writeWranglerConfig,
 } from "./generate-wrangler-config.ts";
-import { ensureR2Bucket } from "./ensure-resources.ts";
 import { ensureInboundEmailRouting } from "./email-routing-resources.ts";
 
 const PREVIEW_PETSHOP_CONFIG = "APP_CONFIG_INTEGRATIONS__PETSHOP";
@@ -322,7 +321,6 @@ export default async function deploy(
     env: options.env,
     workerName: (env) => env.osWorkerName,
     servingUrl: (env) => env.baseUrl,
-    resources: (env) => env.resources,
     requiredSecrets: REQUIRED_SECRETS,
     optionalSecrets: OPTIONAL_SECRETS,
     buildEnv: (ctx) => posthogBuildEnv(ctx.name, ctx.secrets),
@@ -387,11 +385,6 @@ export default async function deploy(
         workerName: ctx.env.osWorkerName,
       });
 
-      // Same rationale for R2: wrangler validates bucket bindings at upload,
-      // and the files bucket is new — existing envs (previews, prd) get it
-      // created here on their next deploy instead of a manual
-      // ensure-resources run per environment.
-      await ensureR2Bucket(ctx.cf, `${ctx.env.osWorkerName}-files`);
       // Sandbox container classes must exist container-enabled BEFORE the
       // exports deploy — the exports reconciliation can't enable namespaces
       // it creates (upstream gap; see ensureContainerClasses). Makes
@@ -421,7 +414,7 @@ export default async function deploy(
       // Materialize the sidecar config before the independent build lane
       // starts. The main Vite build also regenerates this file, but doing it
       // here avoids racing that write with the sidecar's Wrangler process.
-      writeWranglerConfig();
+      writeWranglerConfig(ctx.name);
     },
     extraDeployArgs: () => containerDeployArgs,
     // Deploy the compiler sidecars while the OS Vite build runs. Keep their

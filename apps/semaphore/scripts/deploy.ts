@@ -51,7 +51,6 @@ export default async function deploy(
     env: options.env,
     workerName: (env) => env.workerName,
     servingUrl: (env) => env.baseUrl,
-    resources: (env) => env.resources,
     requiredSecrets: REQUIRED_SECRETS,
     prepare: async (ctx, secretValues, credentials) => {
       // Derive Auth's public key locally from the shared Doppler private key;
@@ -68,7 +67,7 @@ export default async function deploy(
 
       // The migrations step below reads wrangler.jsonc directly (and the vite
       // build regenerates it again on its own) — write a fresh one now.
-      writeWranglerConfig();
+      writeWranglerConfig(ctx.name);
       run(
         "pnpm",
         [

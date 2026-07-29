@@ -56,9 +56,6 @@ export default async function deploy(
     env: options.env,
     workerName: (env) => env.authWorkerName,
     servingUrl: (env) => env.authBaseUrl,
-    // Only auth's own resource: authEnvs spreads the os envs, whose
-    // projectDirectoryKvId is not auth's concern.
-    resources: (env) => ({ authDbId: env.resources.authDbId }),
     requiredSecrets: REQUIRED_SECRETS,
     prepare: (ctx, secretValues, credentials) => {
       // Validate the single ES256 signing key's shape and the production-key
@@ -93,7 +90,7 @@ export default async function deploy(
       // ---- D1 migrations + bootstrap-admin seed ----------------------------
       // The migrations step below reads wrangler.jsonc directly (and the vite
       // build regenerates it again on its own) — write a fresh one now.
-      writeWranglerConfig();
+      writeWranglerConfig(ctx.name);
       const checkedInConfigArgs = ["--env", ctx.name, "--remote", "--config", "wrangler.jsonc"];
       run("pnpm", ["exec", "wrangler", "d1", "migrations", "apply", "DB", ...checkedInConfigArgs], {
         cwd: APP_ROOT,

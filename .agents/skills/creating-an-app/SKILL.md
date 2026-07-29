@@ -14,10 +14,11 @@ primitives in `scripts/lib/` (see `scripts/lib/deploy-app.ts`):
 
 - `deploy` — `pnpm run deploy --env <name>` (build → wrangler deploy with atomic
   secrets → smoke)
-- `ensure-resources` — create-only Cloudflare resource provisioning
-- `erase-data` — wipe an env's data without deleting the worker
+- `ensure-resources` only when the app needs create-once Worker-adjacent setup
+  outside Alchemy, such as DNS
+- `erase-data` only when the app owns data outside the shared Alchemy stack
 - `gen:wrangler` — expand the generated, gitignored `wrangler.jsonc` from the
-  root `envs.ts`
+  root `envs.ts` and, when needed, Alchemy's generated resource manifest
 - `test:e2e` if the app has live preview tests
 
 The package scripts should own only the app action. Doppler selection belongs
@@ -30,8 +31,8 @@ CI and deploy workflows are hand-written Depot CI YAML in `.depot/workflows/`
 
 The current pattern is:
 
-1. Copy an existing deploy workflow (for example
-   `.depot/workflows/deploy-semaphore.yml`) to
+1. Copy an existing workflow with the same lifecycle (for example
+   `.depot/workflows/deploy-streams-example-app.yml`) to
    `.depot/workflows/deploy-<app>.yml` and edit the app name, Doppler project,
    deploy command, and `paths` filters directly.
 2. If the app participates in PR previews, wire it into the repo preview

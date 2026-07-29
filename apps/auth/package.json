@@ -21,8 +21,6 @@
     "db:migrate": "sqlfu migrate",
     "db:rebuild": "rm -rf ./.wrangler/state/v3/d1 && pnpm db:migrate",
     "deploy": "tsx ./scripts/deploy.ts",
-    "destroy": "tsx ./scripts/erase-data.ts",
-    "erase-data": "tsx ./scripts/erase-data.ts",
     "ensure-resources": "tsx ./scripts/ensure-resources.ts",
     "gen:wrangler": "tsx ./scripts/generate-wrangler-config.ts",
     "seed-oauth-clients": "tsx ./scripts/seed-oauth-clients.ts",

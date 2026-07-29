@@ -2,31 +2,26 @@
  * The complete map of deployed Iterate environments, for every app.
  *
  * This file is the single source of truth for what makes one deployed
- * environment different from another: hostnames, worker names, Cloudflare
- * account, and the IDs of the handful of Cloudflare resources that carry
- * them (D1, KV). Everything here is non-secret and reviewed like any other
- * code; secrets live in Doppler (one config per env per app, named below).
+ * environment different from another: hostnames, worker names, and Cloudflare
+ * account. Everything here is non-secret and reviewed like any other code;
+ * secrets live in Doppler (one config per env per app, named below).
  *
  * Each app has its own map (envs/os, authEnvs, semaphoreEnvs, kitEnvs,
  * tunnelsEnvs, streamsExampleEnvs, dummyPetshopEnvs) because apps deploy to different
  * subsets of environments — forcing them into one record would mean optional
- * fields that lie. Hostnames follow conventions (`previewSlot(n)` derives them);
- * resource IDs are Cloudflare-assigned and must be spelled out.
+ * fields that lie. Hostnames follow conventions (`previewSlot(n)` derives them).
  *
- * Consumers: each app's scripts/{generate-wrangler-config,deploy,
- * ensure-resources,erase-data}.ts, via scripts/lib/env-context.ts. All take
- * `--env <name>` and look the environment up here. The generated
+ * Consumers: app deploy/config/resource scripts, via
+ * scripts/lib/env-context.ts. They take `--env <name>` and look the
+ * environment up here. The generated
  * wrangler.jsonc files are gitignored — this file is the reviewed artifact.
+ *
+ * Alchemy creates each deployed environment's D1, KV, and R2 resources. Its
+ * generated output supplies their identifiers to the generated Wrangler config.
  *
  * Local dev environments (`dev`, `dev_<you>`) are deliberately NOT listed:
  * they never deploy — `pnpm dev` runs each app's top-level wrangler config
  * defaults under your local Doppler context.
- *
- * Bringing up a new env (e.g. a new preview slot): add its entry with
- * `UNPROVISIONED` resource IDs, run that app's
- * `pnpm ensure-resources --env <name>` (creates whatever is missing and
- * prints the real IDs), paste them here, commit, regenerate wrangler config,
- * deploy. Deploys refuse to ship UNPROVISIONED IDs.
  */
 
 /** The production Cloudflare account (iterate.com zones). */
@@ -35,15 +30,9 @@ export const PRD_ACCOUNT_ID = "04b3b57291ef2626c6a8daa9d47065a7";
 export const PREVIEW_AND_DEV_ACCOUNT_ID = "376ef7ed81b0573f93524de763666c15";
 
 /**
- * Placeholder for a Cloudflare resource that hasn't been created yet.
- * Deploy scripts refuse to ship it; `ensure-resources` replaces it.
- */
-export const UNPROVISIONED = "UNPROVISIONED";
-
-/**
  * One deployed environment of the OS product. A single environment spans
- * apps — the os worker and the auth worker (whose D1 the os erase-data
- * script wipes) deploy into the same env entry.
+ * apps — the os worker and the auth worker deploy into the same stage and
+ * consume resources from the same Alchemy output manifest.
  */
 export interface DeployedEnv {
   /**
@@ -58,6 +47,8 @@ export interface DeployedEnv {
   osWorkerName: string;
   /** The auth worker script name, e.g. `auth-prd`. */
   authWorkerName: string;
+  /** The semaphore worker script name, e.g. `semaphore-prd`. */
+  semaphoreWorkerName: string;
   /** Dashboard origin, e.g. https://os.iterate.com */
   baseUrl: string;
   /** MCP host origin, e.g. https://mcp.iterate.com */
@@ -66,6 +57,8 @@ export interface DeployedEnv {
   eventDocsBaseUrl: string;
   /** Auth app origin, e.g. https://auth.iterate.com */
   authBaseUrl: string;
+  /** Semaphore app origin, e.g. https://semaphore.iterate.com */
+  semaphoreBaseUrl: string;
   /**
    * Base domains for deployed project hosts (`<slug>.<base>`). Worker routes are
    * generated for the built-in project host patterns.
@@ -103,33 +96,21 @@ export interface DeployedEnv {
    * never receive a cached agent reply.
    */
   cloudflareAiGatewayResponseCacheTtlSeconds?: number;
-  /** IDs of the Cloudflare resources this env owns (created once by ensure-resources). */
-  resources: {
-    /** KV: slug -> project-id cache in front of the auth project directory. */
-    projectDirectoryKvId: string;
-    /** KV: content-addressed dynamic worker build artifact cache. Every
-     * entry is reproducible from its deterministic build key, so the
-     * namespace is safe to wipe. */
-    workerBuildCacheKvId: string;
-    /** D1: the auth worker's database (identities, orgs, projects). */
-    authDbId: string;
-  };
 }
 
-/**
- * Everything about a preview slot follows from its number by convention;
- * only the Cloudflare-assigned resource IDs must be spelled out.
- */
-function previewSlot(n: number, resources: DeployedEnv["resources"]): DeployedEnv {
+/** Everything about a preview slot follows from its number by convention. */
+function previewSlot(n: number): DeployedEnv {
   return {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
     dopplerConfig: `preview_${n}`,
     osWorkerName: `os-preview-${n}`,
     authWorkerName: `auth-preview-${n}`,
+    semaphoreWorkerName: `semaphore-preview-${n}`,
     baseUrl: `https://os.iterate-preview-${n}.com`,
     mcpBaseUrl: `https://mcp.iterate-preview-${n}.com`,
     eventDocsBaseUrl: `https://events.iterate-preview-${n}.com`,
     authBaseUrl: `https://auth.iterate-preview-${n}.com`,
+    semaphoreBaseUrl: `https://semaphore.iterate-preview-${n}.com`,
     projectHostnameBases: [`iterate-preview-${n}.app`],
     cloudflareForSaasProjectHostnameBases: [],
     ownedProjectCustomApexes: [],
@@ -137,7 +118,6 @@ function previewSlot(n: number, resources: DeployedEnv["resources"]): DeployedEn
     // 7 days: long enough that overnight marathons and PR-lifetime reruns
     // replay each other, short enough that stale answers age out on their own.
     cloudflareAiGatewayResponseCacheTtlSeconds: 7 * 24 * 60 * 60,
-    resources,
   };
 }
 
@@ -147,10 +127,12 @@ export const envs = {
     dopplerConfig: "prd",
     osWorkerName: "os-prd",
     authWorkerName: "auth-prd",
+    semaphoreWorkerName: "semaphore-prd",
     baseUrl: "https://os.iterate.com",
     mcpBaseUrl: "https://mcp.iterate.com",
     eventDocsBaseUrl: "https://events.iterate.com",
     authBaseUrl: "https://auth.iterate.com",
+    semaphoreBaseUrl: "https://semaphore.iterate.com",
     projectHostnameBases: ["iterate.app"],
     cloudflareForSaasProjectHostnameBases: ["iterate.app"],
     ownedProjectCustomApexes: ["iterate.com"],
@@ -159,107 +141,26 @@ export const envs = {
     // latency-neutral-or-better. NO response cache here — that knob stays
     // preview/dev-only; a real user must never receive a cached agent reply.
     cloudflareAiGatewayTransport: "byok",
-    resources: {
-      projectDirectoryKvId: "79d78df2e83b46d2b9083533e9f189c4",
-      workerBuildCacheKvId: "43306c224d364c7aa804c3ff762c4d08",
-      authDbId: "f33fec8c-d5a3-44cf-b792-6a319ee1f729",
-    },
   },
-  preview_1: previewSlot(1, {
-    projectDirectoryKvId: "6d35023e80cc47f5a8d43550fe4679dc",
-    workerBuildCacheKvId: "e02fcfb5dc30454489ce1004cf5f3499",
-    authDbId: "73e5042b-f076-43a3-9ada-c13caaae7a35",
-  }),
-  preview_2: previewSlot(2, {
-    projectDirectoryKvId: "237cc9a316a146e98f04f00218b0a69c",
-    workerBuildCacheKvId: "6cbee4966b99490e9b43bd01b957b834",
-    authDbId: "c5a24ab5-e10b-4ca5-a2f2-2451803bc146",
-  }),
-  preview_3: previewSlot(3, {
-    projectDirectoryKvId: "dd06b3a37bbd4b9f838fadc895e5a6d6",
-    workerBuildCacheKvId: "3cb31a916afd41cd82ede40718547fdd",
-    authDbId: "2017a0b9-ebd5-482c-b2b8-894a27733dbc",
-  }),
-  preview_4: previewSlot(4, {
-    projectDirectoryKvId: "d0b6679c68114add86e024cf7d0a7646",
-    workerBuildCacheKvId: "855531fbd02740f78d27c1465cac3202",
-    authDbId: "bd115332-9515-4bbf-96d5-f041e628bcf9",
-  }),
-  preview_5: previewSlot(5, {
-    projectDirectoryKvId: "a0f87dc67b39465bb9c00bd05587eadc",
-    workerBuildCacheKvId: "34f27e888b6243189e42a0ea5a93291f",
-    authDbId: "f8542574-48e3-4374-910f-3186293137f0",
-  }),
-  preview_6: previewSlot(6, {
-    projectDirectoryKvId: "e414e68c13e1471a8a3c41f5e50136e4",
-    workerBuildCacheKvId: "2fecfd3043184552af0e833dca7d7a4a",
-    authDbId: "bd78258a-2167-429f-a504-9e1eb1c18ef2",
-  }),
-  preview_7: previewSlot(7, {
-    projectDirectoryKvId: "619f43ebb6d647229693e41b51ab2a32",
-    workerBuildCacheKvId: "fad0de53747645369f8aa3aa99049886",
-    authDbId: "d2ff0612-3487-4196-ae21-19681020e7b0",
-  }),
-  preview_8: previewSlot(8, {
-    projectDirectoryKvId: "b36864421f924ac2b6d382c17a20cddc",
-    workerBuildCacheKvId: "14554ce1beba4d868de4227c27c6e5fa",
-    authDbId: "d59dd035-41f9-47be-bc31-260ef1784ed0",
-  }),
-  preview_9: previewSlot(9, {
-    projectDirectoryKvId: "9fac543a7e994b7f972328c6a07152ac",
-    workerBuildCacheKvId: "3599fdcb79db418db0ead561f1ef85f7",
-    authDbId: "ebf149cb-d3ed-48c5-a2d0-010166b25033",
-  }),
-  preview_10: previewSlot(10, {
-    projectDirectoryKvId: "975b82fbaaf94f2285c2a080b0893f9d",
-    workerBuildCacheKvId: "225a2d03540343c8a80a80e8ee81a92e",
-    authDbId: "7f7562b4-f76a-4c4d-a51e-003e6995f591",
-  }),
-  preview_11: previewSlot(11, {
-    projectDirectoryKvId: "37e3b6b8d8644cb2b3f8d71cfbdb6adc",
-    workerBuildCacheKvId: "85edcb497a9c4d10bde0022da2228838",
-    authDbId: "b6912e60-8277-4c60-9416-4058670491c6",
-  }),
-  preview_12: previewSlot(12, {
-    projectDirectoryKvId: "1852d3bdbcb543b48913aba870df041a",
-    workerBuildCacheKvId: "78d193b3ceb5487db2784f286a72997e",
-    authDbId: "99b3a290-0b0c-4c50-9311-9d4b0f34ac49",
-  }),
-  preview_13: previewSlot(13, {
-    projectDirectoryKvId: "2e070d546cd84a718b20ab9c887c9493",
-    workerBuildCacheKvId: "96ca19d3add14f21854af80979385884",
-    authDbId: "19c09ae5-f1a9-4e9e-9789-6729ea5c56f3",
-  }),
-  preview_14: previewSlot(14, {
-    projectDirectoryKvId: "437e3e8bfbbe4ad7b4d1c7dcc3b5fcb7",
-    workerBuildCacheKvId: "0e12021cc75844a7bb340d0649a75fa5",
-    authDbId: "f47f6543-9893-4d83-9175-841886b1132f",
-  }),
-  preview_15: previewSlot(15, {
-    projectDirectoryKvId: "cf71da84c3f0494d9c77f7079371de9b",
-    workerBuildCacheKvId: "f2bd516c48424f97878341cb70f74b2f",
-    authDbId: "e407fdcd-5a13-40b8-90a9-4e9e3b74d902",
-  }),
-  preview_16: previewSlot(16, {
-    projectDirectoryKvId: "1284f65e2e6d48389c3e24db0f008f9f",
-    workerBuildCacheKvId: "c02600858b3145f386e27b7def5a59cf",
-    authDbId: "02937e8d-c094-4c27-b2c7-faccf9f4d40e",
-  }),
-  preview_17: previewSlot(17, {
-    projectDirectoryKvId: "07bf59cf202d4db389bf29f252d6013c",
-    workerBuildCacheKvId: "8d8bd21f6ec648049a2d4331a2e1a9bc",
-    authDbId: "013a87bd-647e-46a8-a41b-e8df561d4cac",
-  }),
-  preview_18: previewSlot(18, {
-    projectDirectoryKvId: "f65665b9c7cf4c718349f6f2343ca0bc",
-    workerBuildCacheKvId: "e77f68c63752430a8af531e53157cf89",
-    authDbId: "2f61f8f0-b16a-4d53-89ef-b75b2982452c",
-  }),
-  preview_19: previewSlot(19, {
-    projectDirectoryKvId: "916fa97c2ec84067997012702f242646",
-    workerBuildCacheKvId: "a22450ba186a40549cfe2cff29079aca",
-    authDbId: "42efe1e4-194f-4c61-8e62-810ec35fbf43",
-  }),
+  preview_1: previewSlot(1),
+  preview_2: previewSlot(2),
+  preview_3: previewSlot(3),
+  preview_4: previewSlot(4),
+  preview_5: previewSlot(5),
+  preview_6: previewSlot(6),
+  preview_7: previewSlot(7),
+  preview_8: previewSlot(8),
+  preview_9: previewSlot(9),
+  preview_10: previewSlot(10),
+  preview_11: previewSlot(11),
+  preview_12: previewSlot(12),
+  preview_13: previewSlot(13),
+  preview_14: previewSlot(14),
+  preview_15: previewSlot(15),
+  preview_16: previewSlot(16),
+  preview_17: previewSlot(17),
+  preview_18: previewSlot(18),
+  preview_19: previewSlot(19),
 } satisfies Record<string, DeployedEnv>;
 
 /** A deployed environment name, e.g. "prd" or "preview_3". */
@@ -304,7 +205,6 @@ export interface AuthDeployedEnv {
   authBaseUrl: string;
   /** Enables fixed `+test@nustom.com` OTPs for test automation. */
   fixedTestOtpEnabled: boolean;
-  resources: { authDbId: string };
 }
 
 function authEnvFromDeployedEnv(
@@ -317,7 +217,6 @@ function authEnvFromDeployedEnv(
     authWorkerName: env.authWorkerName,
     authBaseUrl: env.authBaseUrl,
     fixedTestOtpEnabled: options.fixedTestOtpEnabled,
-    resources: { authDbId: env.resources.authDbId },
   };
 }
 
@@ -330,7 +229,6 @@ export const authEnvs = {
     authWorkerName: "auth-dev-global",
     authBaseUrl: "https://auth.iterate-dev.com",
     fixedTestOtpEnabled: true,
-    resources: { authDbId: "a4e70d97-74aa-4f9f-8da9-4540e552b2a9" },
   },
 } satisfies Record<EnvName | "dev_global", AuthDeployedEnv>;
 
@@ -351,51 +249,21 @@ export interface SemaphoreEnv {
    * requests authenticate with iterate sessions or bearer access tokens.
    */
   authBaseUrl: string;
-  resources: {
-    /** D1: lease inventory (`<worker>-resources`). */
-    resourcesDbId: string;
-  };
 }
 
-function semaphorePreviewSlot(n: number, resourcesDbId: string): SemaphoreEnv {
+function semaphoreEnvFromDeployedEnv(env: DeployedEnv): SemaphoreEnv {
   return {
-    cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
-    dopplerConfig: `preview_${n}`,
-    workerName: `semaphore-preview-${n}`,
-    baseUrl: `https://semaphore.iterate-preview-${n}.com`,
-    authBaseUrl: `https://auth.iterate-preview-${n}.com`,
-    resources: { resourcesDbId },
+    cloudflareAccountId: env.cloudflareAccountId,
+    dopplerConfig: env.dopplerConfig,
+    workerName: env.semaphoreWorkerName,
+    baseUrl: env.semaphoreBaseUrl,
+    authBaseUrl: env.authBaseUrl,
   };
 }
 
 export const semaphoreEnvs = {
-  prd: {
-    cloudflareAccountId: PRD_ACCOUNT_ID,
-    dopplerConfig: "prd",
-    workerName: "semaphore-prd",
-    baseUrl: "https://semaphore.iterate.com",
-    authBaseUrl: "https://auth.iterate.com",
-    resources: { resourcesDbId: "2a393c91-3f01-455c-a462-2486653b0a10" },
-  },
-  preview_1: semaphorePreviewSlot(1, "1a5b713d-eba3-4538-a356-0e5c3e2e8251"),
-  preview_2: semaphorePreviewSlot(2, "711994bd-4faa-42f0-80ac-fc292d68569d"),
-  preview_3: semaphorePreviewSlot(3, "17493958-1589-4a2c-a280-0a55bc11a92c"),
-  preview_4: semaphorePreviewSlot(4, "f61083ef-23b5-4201-8731-8d3d46ebfeaa"),
-  preview_5: semaphorePreviewSlot(5, "eea19312-34e2-4e5c-be19-fe6929636544"),
-  preview_6: semaphorePreviewSlot(6, "eff27a10-2f52-4077-9372-05dcf1c77ccd"),
-  preview_7: semaphorePreviewSlot(7, "f4b1b641-71bd-4952-8726-3c2c543383fe"),
-  preview_8: semaphorePreviewSlot(8, "77af433e-c870-43a6-be8e-1d2452feb23d"),
-  preview_9: semaphorePreviewSlot(9, "53522759-5f82-4055-b0c2-248d66988b7d"),
-  preview_10: semaphorePreviewSlot(10, "384502bd-21e2-47df-88dd-b1b76c8ccb40"),
-  preview_11: semaphorePreviewSlot(11, "89a91a9b-6277-437b-9687-1f4b5efe27e5"),
-  preview_12: semaphorePreviewSlot(12, "63d10828-212f-4c20-9ec7-c2e27c42e150"),
-  preview_13: semaphorePreviewSlot(13, "3eb37481-d6ca-4baf-835d-2f38e42976a7"),
-  preview_14: semaphorePreviewSlot(14, "4abfc09f-cd6f-40c7-a76f-62dfe78df357"),
-  preview_15: semaphorePreviewSlot(15, "c6cf12a5-cce8-4edf-a0b2-b2e4cf90ef79"),
-  preview_16: semaphorePreviewSlot(16, "69bd6563-c889-484e-ada3-d0e3f94021b9"),
-  preview_17: semaphorePreviewSlot(17, "8fc3a6ff-f42b-4215-b6e5-aaacba27b82c"),
-  preview_18: semaphorePreviewSlot(18, "c8762bd2-f4d0-4207-b038-0c03a83aabed"),
-  preview_19: semaphorePreviewSlot(19, "d1eab1d5-8a03-46b7-9c43-73b10f6133e0"),
+  prd: semaphoreEnvFromDeployedEnv(envs.prd),
+  ...mapDeployedPreviewEnvs(semaphoreEnvFromDeployedEnv),
 } satisfies Record<EnvName, SemaphoreEnv>;
 
 /**

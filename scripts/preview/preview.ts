@@ -516,20 +516,21 @@ async function deployPreviewApps({
     logPreview(`PR body requests ${requestedEnvironment}`);
   }
 
-  let environmentConfigLease: EnvironmentConfigLease;
+  let leaseClaim: {
+    lease: EnvironmentConfigLease;
+    stackWasDestroyed: boolean;
+  };
   try {
     const recordedSlug = current.state.environmentConfigLease?.slug ?? null;
-    environmentConfigLease = requestedEnvironment
-      ? (
-          await assignEnvironmentConfigLease({
-            eraseSlotData: makePreviewSlotDataEraser(runtime),
-            holder,
-            leaseMs: defaultPreviewLeaseMs,
-            recordedSlug,
-            semaphore,
-            wantedSlug: requestedEnvironment,
-          })
-        ).lease
+    leaseClaim = requestedEnvironment
+      ? await assignEnvironmentConfigLease({
+          eraseSlotData: makePreviewSlotDataEraser(runtime),
+          holder,
+          leaseMs: defaultPreviewLeaseMs,
+          recordedSlug,
+          semaphore,
+          wantedSlug: requestedEnvironment,
+        })
       : await claimEnvironmentConfigLease({
           eraseSlotData: makePreviewSlotDataEraser(runtime),
           holder,
@@ -556,25 +557,18 @@ async function deployPreviewApps({
     }));
     throw error;
   }
-  // A slot move invalidates every previously recorded deployment, not just
-  // the diff-selected apps: anything left undeployed would keep old-slot URLs
-  // and e2e would run against another slot's deployment.
+  const environmentConfigLease = leaseClaim.lease;
+  // A handed-over slot has just had its whole Alchemy stack destroyed. Recreating it
+  // gives D1/KV/R2 new identities, so every Worker must regenerate its config.
+  // The signal is explicit because a lapsed lease can reclaim and erase the
+  // same slug. An uninterrupted same-stack deploy remains incremental.
   const previousSlug = current.state.environmentConfigLease?.slug ?? null;
-  const appsToDeploy =
-    previousSlug && previousSlug !== environmentConfigLease.slug
-      ? expandPreviewDependencies([
-          ...new Set([
-            ...selectedApps.map((app) => app.slug),
-            ...Object.keys(current.state.apps).filter(
-              (appSlug): appSlug is CloudflarePreviewAppSlugType =>
-                cloudflarePreviewApps[appSlug as CloudflarePreviewAppSlugType] != null,
-            ),
-          ]),
-        ]).map((appSlug) => cloudflarePreviewApps[appSlug])
-      : selectedApps;
-  if (appsToDeploy.length > selectedApps.length) {
+  const appsToDeploy = leaseClaim.stackWasDestroyed
+    ? Object.values(cloudflarePreviewApps)
+    : selectedApps;
+  if (leaseClaim.stackWasDestroyed) {
     logPreview(
-      `slot changed from ${previousSlug} to ${environmentConfigLease.slug}: redeploying every previously recorded app (${appsToDeploy.map((app) => app.slug).join(", ")}) so nothing keeps pointing at the old slot`,
+      `${environmentConfigLease.slug} data stack was recreated: redeploying the full fleet against its fresh resource IDs`,
     );
   }
   // A successful claim clears exhaustion/takeover banners; a slot move
@@ -590,6 +584,23 @@ async function deployPreviewApps({
     environmentConfigLease: toSlotDisplay(environmentConfigLease),
     notice: claimNotice,
   }));
+
+  logPreview(`provisioning ${environmentConfigLease.dopplerConfig} data stack with Alchemy`);
+  const infrastructure = await runCommand({
+    command: "pnpm",
+    args: ["infra", "deploy", "--env", environmentConfigLease.dopplerConfig],
+    environment: runtime.commandEnvironment,
+    signal: runtime.signal,
+    workingDirectory: runtime.repositoryRoot,
+  });
+  if (infrastructure.exitCode !== 0) {
+    throw new Error(
+      commandFailureMessage(
+        infrastructure,
+        `Alchemy provisioning failed for ${environmentConfigLease.dopplerConfig}.`,
+      ),
+    );
+  }
 
   // Both are read-only GitHub lookups, so overlap them before starting the
   // deploy fleet. A missing size baseline only costs the "vs main" delta;
@@ -1231,7 +1242,7 @@ export async function assign(options: AssignOptions = {}) {
   // Anything but a kept/renewed lease breaks continuous ownership: even a
   // re-acquisition of the SAME slug means someone else may have deployed over
   // this PR's apps in the interim, so recorded deployments cannot be trusted.
-  const needsRedeploy = result.outcome !== "kept";
+  const needsRedeploy = result.stackWasDestroyed || result.outcome !== "kept";
   const redeployMessage = result.changedFromSlug
     ? `Slot reassigned from ${result.changedFromSlug} to ${result.lease.slug}; run preview deploy to redeploy here.`
     : `Slot ${result.lease.slug} was re-acquired after this PR's lease lapsed — previous deployments there may have been replaced. Run preview deploy to redeploy.`;
@@ -1792,11 +1803,9 @@ export type CloudflarePreviewApp = {
   appPath: `apps/${string}`;
   /**
    * Run under `doppler run --project <p> --config preview_N --` in appPath;
-   * every app exposes `deploy` (full deploy to the slot) and `destroy`
-   * (release the slot's data — workers/routes/DNS always stay).
+   * every app exposes `deploy` (full deploy to the slot).
    */
   deployCommandArgs: readonly [string, ...string[]];
-  destroyCommandArgs: readonly [string, ...string[]];
   dopplerProject: string;
   /**
    * Resolve the public URL and Worker script from the repo's typed envs.ts.
@@ -2082,6 +2091,7 @@ export const cloudflareAppSharedPaths = [
   // recorded heads stale at the previous commit, so the test lane then skips
   // every app ("no apps are testable for this head sha") — observed when a
   // patches/-only commit no-op'd the deploy and stranded the PR head.
+  "package.json",
   "pnpm-lock.yaml",
   "pnpm-workspace.yaml",
   "patches/**",
@@ -2096,9 +2106,10 @@ export const cloudflarePreviewSharedPaths = [
   ".depot/workflows/cloudflare-previews.yml",
   ...cloudflareAppSharedPaths,
   "scripts/preview/**",
-  // Every app's generated wrangler config (routes, worker names, resource
-  // IDs) derives from the root envs.ts — an envs.ts change (e.g. recreating a
-  // slot's deleted D1) must redeploy the fleet or the fix never ships.
+  "infra/**",
+  "scripts/cloudflare-infrastructure.ts",
+  // Every app's generated Wrangler config derives from envs.ts and the
+  // Alchemy stack — changing either must redeploy the fleet.
   "envs.ts",
   "scripts/lib/**",
 ] as const;
@@ -2174,7 +2185,6 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     displayName: "OS",
     appPath: "apps/os",
     deployCommandArgs: ["pnpm", "run-script", "deploy"],
-    destroyCommandArgs: ["pnpm", "run-script", "destroy"],
     dopplerProject: "os",
     resolvePreviewAppConfig: (dopplerConfig) => {
       const environment = requirePreviewEnvironment("os", dopplerConfig, envs);
@@ -2313,7 +2323,6 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     deployCommandArgs: ["pnpm", "run-script", "deploy"],
     // Semaphore's preview e2e generates per-run-unique resource types and
     // self-cleans; there is nothing slot-scoped to erase on release.
-    destroyCommandArgs: ["pnpm", "run-script", "destroy"],
     dopplerProject: "semaphore",
     resolvePreviewAppConfig: (dopplerConfig) => {
       const environment = requirePreviewEnvironment("semaphore", dopplerConfig, semaphoreEnvs);
@@ -2357,7 +2366,6 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     displayName: "Auth",
     appPath: "apps/auth",
     deployCommandArgs: ["pnpm", "run-script", "deploy"],
-    destroyCommandArgs: ["pnpm", "run-script", "destroy"],
     dopplerProject: "auth",
     resolvePreviewAppConfig: (dopplerConfig) => {
       const environment = requirePreviewEnvironment("auth", dopplerConfig, authEnvs);
@@ -2391,7 +2399,6 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     displayName: "Streams Example App",
     appPath: "apps/streams-example-app",
     deployCommandArgs: ["pnpm", "run-script", "deploy"],
-    destroyCommandArgs: ["pnpm", "run-script", "destroy"],
     dopplerProject: "streams-example-app",
     resolvePreviewAppConfig: (dopplerConfig) => {
       const environment = requirePreviewEnvironment(
@@ -2466,7 +2473,6 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     deployCommandArgs: ["pnpm", "run-script", "deploy"],
     // The fixture holds only fake data, so cleanup deliberately leaves its
     // worker and singleton Durable Object in place.
-    destroyCommandArgs: ["pnpm", "run-script", "destroy"],
     dopplerProject: "dummy-petshop",
     resolvePreviewAppConfig: (dopplerConfig) => {
       const environment = requirePreviewEnvironment(
@@ -4030,66 +4036,39 @@ async function cleanupPreviewForPullRequest(
     };
   }
 
-  let ok = true;
-  let latestState = current.state;
-  const appsToCleanUp = (Object.keys(current.state.apps) as CloudflarePreviewAppSlugType[])
-    .map((appSlug) => cloudflarePreviewApps[appSlug])
-    .filter((app): app is PreviewAppRuntime => app != null);
-  const cleanupBatches = [...orderPreviewDeployBatches(appsToCleanUp)].reverse();
-  // Same stale-read guard as deploy: keep every batch's entries in each write.
-  const accumulatedEntries: Record<string, CloudflarePreviewAppEntry> = {};
-  for (const batch of cleanupBatches) {
-    const entries = await mapWithConcurrency(
-      batch,
-      defaultPreviewDeployConcurrency,
-      async (app) => {
-        const startedAt = Date.now();
-        logPreview(
-          `cleanup start: destroying ${app.slug} on ${environmentConfigLease.slug} (doppler config ${environmentConfigLease.dopplerConfig})`,
-        );
-        const destroyResult = await runPreviewDeployCommand({
-          app,
-          commandEnvironment: params.commandEnvironment,
-          dopplerConfig: environmentConfigLease.dopplerConfig,
-          operation: "down",
-          repositoryRoot: params.repositoryRoot,
-          signal: params.signal,
-        });
-        const cleanupDurationMs = Date.now() - startedAt;
-        console.error(
-          `[preview] cleanup ${destroyResult.exitCode === 0 ? "passed" : "failed"}: ${app.slug} (${formatDurationMs(cleanupDurationMs)})`,
-        );
-        const existingEntry = latestState.apps[app.slug];
-        return CloudflarePreviewAppEntry.parse({
-          ...existingEntry,
-          appDisplayName: app.displayName,
-          appSlug: app.slug,
-          message:
-            destroyResult.exitCode === 0
-              ? "Preview app released."
-              : commandFailureMessage(destroyResult, "Preview teardown failed."),
-          cleanupDurationMs,
-          status: destroyResult.exitCode === 0 ? "released" : "cleanup-failed",
-          updatedAt: new Date().toISOString(),
-        });
-      },
-    );
-    if (entries.some((entry) => entry.status === "cleanup-failed")) {
-      ok = false;
-    }
-
-    for (const entry of entries) {
-      accumulatedEntries[entry.appSlug] = entry;
-    }
-    const update = await updatePreviewState(params.context, (state) => ({
-      ...state,
-      apps: {
-        ...state.apps,
-        ...accumulatedEntries,
-      },
-    }));
-    latestState = update.state;
+  const cleanupStartedAt = Date.now();
+  let cleanupFailure: unknown;
+  try {
+    await makePreviewSlotDataEraser(params)({
+      dopplerConfig: environmentConfigLease.dopplerConfig,
+      slug: environmentConfigLease.slug,
+    });
+  } catch (error) {
+    cleanupFailure = error;
   }
+  const cleanupDurationMs = Date.now() - cleanupStartedAt;
+  const ok = cleanupFailure === undefined;
+  const updateAfterCleanup = await updatePreviewState(params.context, (state) => ({
+    ...state,
+    apps: Object.fromEntries(
+      Object.entries(state.apps).map(([appSlug, entry]) => [
+        appSlug,
+        {
+          ...entry,
+          message: ok
+            ? "Preview environment released."
+            : `Preview teardown failed: ${formatPreviewErrorMessage(cleanupFailure)}`,
+          cleanupDurationMs,
+          status: ok ? ("released" as const) : ("cleanup-failed" as const),
+          updatedAt: new Date().toISOString(),
+        },
+      ]),
+    ),
+  }));
+  const latestState = updateAfterCleanup.state;
+  console.error(
+    `[preview] environment cleanup ${ok ? "passed" : "failed"}: ${environmentConfigLease.slug} (${formatDurationMs(cleanupDurationMs)})`,
+  );
 
   // Cleanup's contract: RELEASING THE LEASE is the load-bearing outcome, not
   // the teardown. A failed teardown/erase leaves only slot-local dirt, and
@@ -4419,7 +4398,7 @@ async function runPreviewDeployCommand(input: {
   // resolve the env from the DOPPLER_CONFIG the `doppler run` wrapper sets.
   const commandArgs =
     input.operation === "down"
-      ? [...input.app.destroyCommandArgs, "--env", input.dopplerConfig]
+      ? ["pnpm", "run-script", "erase-data", "--env", input.dopplerConfig]
       : input.app.deployCommandArgs;
 
   return await runCommand({
@@ -4450,14 +4429,6 @@ async function runPreviewDeployCommand(input: {
  */
 type EraseSlotData = (input: { dopplerConfig: string; slug: string }) => Promise<void>;
 
-/**
- * Every app that owns slot-persistent data. OS wipes the shared data plane;
- * the streams playground separately owns its StreamDurableObject namespace.
- */
-function selectPreviewSlotDataOwners() {
-  return [cloudflarePreviewApps.os, cloudflarePreviewApps["streams-example-app"]] as const;
-}
-
 function makePreviewSlotDataEraser(runtime: {
   commandEnvironment: NodeJS.ProcessEnv;
   repositoryRoot: string;
@@ -4466,7 +4437,11 @@ function makePreviewSlotDataEraser(runtime: {
   return async ({ dopplerConfig, slug }) => {
     const startedAt = Date.now();
     logPreview(`erasing ${slug} data before handover (doppler config ${dopplerConfig})`);
-    for (const app of selectPreviewSlotDataOwners()) {
+    // OS destroys the shared data plane; streams owns one separate DO namespace.
+    for (const app of [
+      cloudflarePreviewApps.os,
+      cloudflarePreviewApps["streams-example-app"],
+    ] as const) {
       const result = await runPreviewDeployCommand({
         app,
         commandEnvironment: runtime.commandEnvironment,
@@ -5060,22 +5035,24 @@ async function claimEnvironmentConfigLease(input: {
   semaphore: PreviewSemaphoreResourceClient;
   waitTotalMs: number;
 }) {
+  let adoptedStackWasDestroyed = false;
   const adopted = await adoptLeaseHeldBySemaphore({
     holder: input.holder,
     leaseMs: input.leaseMs,
-    onAdopted: (lease) =>
-      lease.slug === input.recordedSlug
-        ? Promise.resolve(true)
-        : eraseAcquiredSlotOrGiveItBack({
-            eraseSlotData: input.eraseSlotData,
-            lease,
-            semaphore: input.semaphore,
-          }),
+    onAdopted: async (lease) => {
+      if (lease.slug === input.recordedSlug) return true;
+      adoptedStackWasDestroyed = await eraseAcquiredSlotOrGiveItBack({
+        eraseSlotData: input.eraseSlotData,
+        lease,
+        semaphore: input.semaphore,
+      });
+      return adoptedStackWasDestroyed;
+    },
     preferSlug: input.recordedSlug,
     semaphore: input.semaphore,
   });
   if (adopted) {
-    return adopted;
+    return { lease: adopted, stackWasDestroyed: adoptedStackWasDestroyed };
   }
 
   const retaken = await retakeRecordedSlotIfFree({
@@ -5085,7 +5062,7 @@ async function claimEnvironmentConfigLease(input: {
     semaphore: input.semaphore,
   });
   if (retaken) {
-    return retaken;
+    return { lease: retaken, stackWasDestroyed: false };
   }
 
   const lease = await acquireAnyEnvironmentConfigLease({
@@ -5099,7 +5076,7 @@ async function claimEnvironmentConfigLease(input: {
   logPreview(
     `lease acquired: ${lease.slug} held by ${input.holder} until ${formatUntil(lease.expiresAt)}`,
   );
-  return toEnvironmentConfigLease(lease);
+  return { lease: toEnvironmentConfigLease(lease), stackWasDestroyed: true };
 }
 
 /**
@@ -5122,19 +5099,22 @@ async function assignEnvironmentConfigLease(input: {
   outcome: "kept" | "assigned" | "moved";
   changedFromSlug: string | null;
   previousLeaseReleased: boolean;
+  stackWasDestroyed: boolean;
 }> {
+  let heldStackWasDestroyed = false;
   const heldLease =
     (await adoptLeaseHeldBySemaphore({
       holder: input.holder,
       leaseMs: input.leaseMs,
-      onAdopted: (lease) =>
-        lease.slug === input.recordedSlug
-          ? Promise.resolve(true)
-          : eraseAcquiredSlotOrGiveItBack({
-              eraseSlotData: input.eraseSlotData,
-              lease,
-              semaphore: input.semaphore,
-            }),
+      onAdopted: async (lease) => {
+        if (lease.slug === input.recordedSlug) return true;
+        heldStackWasDestroyed = await eraseAcquiredSlotOrGiveItBack({
+          eraseSlotData: input.eraseSlotData,
+          lease,
+          semaphore: input.semaphore,
+        });
+        return heldStackWasDestroyed;
+      },
       preferSlug: input.recordedSlug,
       semaphore: input.semaphore,
     })) ??
@@ -5150,6 +5130,7 @@ async function assignEnvironmentConfigLease(input: {
       outcome: "kept",
       changedFromSlug: null,
       previousLeaseReleased: false,
+      stackWasDestroyed: heldStackWasDestroyed,
     };
   }
 
@@ -5277,6 +5258,7 @@ async function assignEnvironmentConfigLease(input: {
     outcome: heldLease ? "moved" : "assigned",
     changedFromSlug: previousSlug && previousSlug !== lease.slug ? previousSlug : null,
     previousLeaseReleased,
+    stackWasDestroyed: true,
   };
 }
 
@@ -6196,7 +6178,6 @@ export const previewInternals = {
   selectPreviewAppsForPullRequest,
   selectPreviewAppsNeedingRetry,
   selectPreviewAppsForTesting,
-  selectPreviewSlotDataOwners,
   splitRepositoryFullName,
   syncPreviewInventory,
   waitForHttpReadiness,

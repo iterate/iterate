@@ -270,12 +270,13 @@ signing key removes JWT deployment sequencing. Breaking RPC interface changes
 still need their own coordinated rollout; additive changes do not.
 
 Production uses `.depot/workflows/deploy-os.yml` as the single coordinated
-Auth + OS rollout. It checks out one revision, deploys `auth-prd`, and only
-then deploys `os-prd`. Every dispatch uses one fixed, non-cancelling concurrency
-group because the target Workers are the same even when the requested Git ref
-differs. `.depot/workflows/deploy-auth.yml` owns only the shared development auth
-worker. Do not add a second production auth job: independent workflows can race
-and leave OS bound to an incompatible revision.
+Cloudflare platform rollout. It checks out one revision, reconciles the Alchemy
+stack once, then deploys Auth, Semaphore, and OS in order. Every dispatch uses
+one fixed, non-cancelling concurrency group because the stack and Workers are
+the same even when the requested Git ref differs.
+`.depot/workflows/deploy-auth.yml` owns only the shared development Auth
+worker. Do not add a second production job: independent workflows can race
+Alchemy applies or leave OS bound to an incompatible revision.
 
 Every OS deploy now treats the removed
 `APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN` as a forbidden invariant. Before any

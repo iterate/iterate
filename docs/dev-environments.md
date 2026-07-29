@@ -5,11 +5,11 @@ How local development, preview environments, and identities work.
 ## The core model (read this much at minimum)
 
 Every deployed environment is an entry in the root **`envs.ts`** (hostnames,
-worker names, accounts, resource IDs) plus a Doppler config of the same name
-carrying its secrets. `pnpm run deploy --env prd` deploys production,
-`--env preview_N` a preview slot; `dev` runs a fully-local server and never
-deploys. Scripts never branch on environment names; envs.ts + the config
-supply everything.
+worker names, and accounts), an Alchemy-generated data-resource manifest, plus
+a Doppler config of the same name carrying its secrets.
+`pnpm run deploy --env prd` deploys production, `--env preview_N` a preview
+slot; `dev` runs a fully-local server and never deploys. Scripts never branch
+on environment names; envs.ts + the manifest + the config supply everything.
 
 Local dev is **fully local**: D1/DOs run in miniflare inside your worktree's
 `.wrangler/`, the server listens on a random free port at
@@ -144,8 +144,9 @@ ALLOW_REMOTE_PRODUCTION_AUTH_RPC=1 pnpm run deploy --env prd
 
 Preview CI deploys every selected app concurrently. Auth and its relying
 parties use the same Doppler-owned signing key, so JWT verification creates no
-deployment dependency. Production uses the coordinated `Deploy Auth + OS`
-workflow; the dedicated auth workflow deploys only `auth-dev-global`.
+deployment dependency. Production uses the coordinated
+`Deploy Cloudflare Platform` workflow for Auth, Semaphore, and OS; the
+dedicated auth workflow deploys only `auth-dev-global`.
 
 ## Acting as users and admins
 

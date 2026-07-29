@@ -37,7 +37,7 @@ Local dev sign-in needs `APP_CONFIG_ITERATE_AUTH__*` keys in `semaphore/dev`
 
 - `wrangler.jsonc` — GENERATED from the root `envs.ts` by `scripts/generate-wrangler-config.ts`; top level is local dev, env blocks are the deployed environments
 - `scripts/deploy.ts` — deploy an env (`--env prd`/`--env preview_N`): secret verification, D1 migrations, `vite build`, `wrangler deploy --secrets-file`, smoke
-- `scripts/ensure-resources.ts` — create-only D1 + DNS bring-up for a new env
+- `scripts/ensure-resources.ts` — create-only DNS bring-up for a new env
 - `vite.config.ts` — `@cloudflare/vite-plugin` + TanStack Start; optional `PORT` for dev
 - `src/worker.ts` — Worker fetch + `withEvlog`
 - `src/config.ts` — `AppConfig` schema + `parseConfig`
@@ -111,10 +111,12 @@ Deploys are wrangler-native, driven by the root `envs.ts` (see
 
 - `pnpm deploy --env prd`
 - `pnpm deploy --env preview_3`
-- `pnpm ensure-resources --env preview_9` — bring up a new env's D1 + DNS, then paste the printed IDs into the root `envs.ts`
+- `pnpm infra deploy --env preview_9` from the repo root — create the stage's
+  Alchemy D1/KV/R2 stack and generated manifest
+- `pnpm ensure-resources --env preview_9` — create the Semaphore DNS record
 
 **CAUTION:** `semaphore-prd`'s `ResourceCoordinator` Durable Object holds the
 live preview-slot lease state for the whole fleet. Always deploy over it;
-never delete the worker or erase its storage. `pnpm destroy` is deliberately
-a no-op — semaphore's preview e2e generates per-run-unique resource types and
+never delete the worker or erase its storage. Semaphore has no data-erasure
+command; its preview e2e generates per-run-unique resource types and
 self-cleans.

@@ -7,12 +7,7 @@ import {
   runAsync,
   smoke,
 } from "./deploy-helpers.ts";
-import {
-  assertProvisioned,
-  resolveEnvContext,
-  type DeployableEnv,
-  type EnvContext,
-} from "./env-context.ts";
+import { resolveEnvContext, type DeployableEnv, type EnvContext } from "./env-context.ts";
 
 /** One smoke probe against the deployed app. */
 export interface SmokeProbe {
@@ -25,8 +20,8 @@ export interface SmokeProbe {
 /**
  * THE deploy pipeline — the same top-to-bottom program every app runs:
  *
- *   resolve --env → assert resources provisioned → collect secrets →
- *   app-specific prepare (migrations, seeds, config preflight) → build plus
+ *   resolve --env → collect secrets → app-specific prepare (migrations,
+ *   seeds, config preflight) → build plus
  *   explicitly independent prerequisites → deploy code+secrets in one version →
  *   smoke-probe → ✅
  *
@@ -58,8 +53,6 @@ export async function deployApp<E extends DeployableEnv>(input: {
   workerName: (env: E) => string;
   /** Public origin for the final success line. */
   servingUrl: (env: E) => string;
-  /** Resource-ID map to assert provisioned (omit when the app owns none). */
-  resources?: (env: E) => Record<string, string>;
   /** Secret names the deploy fails without / ships when present. */
   requiredSecrets?: readonly string[];
   optionalSecrets?: readonly string[];
@@ -112,7 +105,6 @@ export async function deployApp<E extends DeployableEnv>(input: {
     env: input.env,
     allowDopplerConfigFallback: true,
   });
-  if (input.resources) assertProvisioned(ctx.name, input.resources(ctx.env));
   const workerName = input.workerName(ctx.env);
   console.log(
     `Deploying ${input.appLabel} to ${ctx.name} (worker ${workerName}, account ${ctx.env.cloudflareAccountId})`,

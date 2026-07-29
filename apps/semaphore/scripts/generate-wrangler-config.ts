@@ -6,8 +6,8 @@
  * `pnpm gen:wrangler` refreshes it by hand for ad-hoc wrangler commands.
  *
  * The top-level config is local dev (no routes, a placeholder D1 id for
- * miniflare); each deployed environment gets an env block expanded from its
- * semaphoreEnvs entry. Wrangler env blocks do not inherit binding keys, so
+ * miniflare); a deployed build gets only its selected semaphoreEnvs block.
+ * Wrangler env blocks do not inherit binding keys, so
  * the shared bindings are spelled out per env by this script — that
  * repetition is exactly why the file is generated instead of hand-written.
  *
@@ -18,8 +18,10 @@
  */
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
 import { semaphoreEnvs, type SemaphoreEnv } from "../../../envs.ts";
+import { loadPlatformAlchemyResources } from "../../../scripts/lib/alchemy-resources.ts";
 import {
   OBSERVABILITY,
+  selectedDeployedEnvironmentBlock,
   writeGeneratedWranglerConfig,
 } from "../../../scripts/lib/wrangler-config.ts";
 
@@ -76,18 +78,22 @@ function workerBindings(input: { resourcesDbId: string }) {
   };
 }
 
-function envBlock(env: SemaphoreEnv) {
+function envBlock(
+  name: string,
+  env: SemaphoreEnv,
+  resources = loadPlatformAlchemyResources(name, env.cloudflareAccountId),
+) {
   const host = new URL(env.baseUrl).hostname;
   return {
     name: env.workerName,
     account_id: env.cloudflareAccountId,
     routes: [{ pattern: `${host}/*`, zone_name: host.split(".").slice(1).join(".") }],
-    ...workerBindings({ resourcesDbId: env.resources.resourcesDbId }),
+    ...workerBindings({ resourcesDbId: resources.semaphoreDbId }),
     vars: envShapedVars(env),
   };
 }
 
-const config = {
+const baseConfig = {
   $schema: "node_modules/wrangler/config-schema.json",
   // Env-less service name: wrangler tags every `--env` deploy with
   // `cf:service=<top-level name>`, so a "-dev" suffix here would mis-bucket
@@ -123,17 +129,26 @@ const config = {
       "APP_CONFIG_ITERATE_AUTH__JWKS",
     ],
   },
-  env: Object.fromEntries(
-    Object.entries(semaphoreEnvs).map(([name, env]) => [name, envBlock(env)]),
-  ),
 };
 
+export const wranglerConfig = (
+  name?: string,
+  resources?: ReturnType<typeof loadPlatformAlchemyResources>,
+) => ({
+  ...baseConfig,
+  env: selectedDeployedEnvironmentBlock(
+    semaphoreEnvs,
+    (envName, env) => envBlock(envName, env, resources),
+    name,
+  ),
+});
+
 /** Write wrangler.jsonc (gitignored) if changed — see writeGeneratedWranglerConfig. */
-export const writeWranglerConfig = () =>
+export const writeWranglerConfig = (environmentName = process.env.CLOUDFLARE_ENV?.trim()) =>
   writeGeneratedWranglerConfig({
     configUrl: new URL("../wrangler.jsonc", import.meta.url),
     appLabel: "apps/semaphore",
-    config,
+    config: wranglerConfig(environmentName),
   });
 
 /** Regenerate apps/semaphore/wrangler.jsonc from the root envs.ts. */

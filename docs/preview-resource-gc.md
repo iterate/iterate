@@ -6,15 +6,15 @@ see [Dev environments](dev-environments.md); this doc is the "why".
 
 ## The principle: releasing a slot never waits on teardown
 
-There are nine preview **slots**. Each is a fixed shell of Cloudflare
-resources — a Worker, its hostname/DNS, a D1 database, KV namespaces, and R2
-buckets — created once by `ensure-resources` and
-**never deleted** (Workers especially: recreating a container-bearing Durable
-Object class is broken upstream). Erase preserves container classes declared
-by the incoming branch, but deletes any retired container application before
-tombstoning a class left by another branch. A slot is leased to one PR at a
-time through the [semaphore](../apps/semaphore); a PR's deploy and e2e renew
-the lease, and closing the PR releases it.
+There are nineteen preview **slots**. Each keeps a fixed Worker/DNS shell, but
+its D1, KV, and R2 data resources are one disposable Alchemy stack. Acquisition
+destroys any previous stack and creates a fresh one before app deployment.
+Workers are never deleted (recreating a container-bearing Durable Object class
+is broken upstream). Erase preserves container classes declared by the incoming
+branch, but deletes any retired container application before tombstoning a
+class left by another branch. A slot is leased to one PR at a time through the
+[semaphore](../apps/semaphore); a PR's deploy and e2e renew the lease, and
+closing the PR releases it.
 
 The bug this design fixes: teardown used to be **on the critical path of
 releasing the slot**. Cleanup erased the slot's data, and only then released
@@ -32,11 +32,11 @@ resources is a separate, lazy, rate-limited job.
 
 Teardown splits by what it costs to leave running:
 
-| Concern                                                                                                                 | Reaped by                                                                    | When                                                                 |
-| ----------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| Orphaned **compute** — Durable Object scheduler alarms keep firing agent turns (real LLM spend) against erased projects | one O(1) parked-worker deploy that tombstones every DO class (`do-reset.ts`) | **promptly**, on PR-close cleanup, and as a backstop in the GC sweep |
-| **R2 storage** — itx.files + sandbox backups                                                                            | Cloudflare **lifecycle rules** (server-side, zero control-plane calls)       | continuously, 3h after last write                                    |
-| **D1 rows / KV keys**                                                                                                   | O(1) batched wipe                                                            | on cleanup / erase-on-acquire                                        |
+| Concern                                                                                                                 | Reaped by                                                                                         | When                                                                 |
+| ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| Orphaned **compute** — Durable Object scheduler alarms keep firing agent turns (real LLM spend) against erased projects | one O(1) parked-worker deploy that tombstones every DO class (`do-reset.ts`)                      | **promptly**, on PR-close cleanup, and as a backstop in the GC sweep |
+| **R2 storage** — itx.files + sandbox backups                                                                            | Alchemy destroy empties/deletes the buckets; lifecycle rules bound abandoned data before teardown | cleanup / erase-on-acquire; otherwise 3h after write                 |
+| **D1 / KV**                                                                                                             | Alchemy destroys the whole databases/namespaces                                                   | cleanup / erase-on-acquire                                           |
 
 The expensive, rate-limit-prone operations were the **per-item** R2 deletes.
 Everything else is one or a few bounded calls. Moving R2 to lifecycle rules
@@ -45,19 +45,16 @@ keeps cleanup within the account-wide control-plane budget.
 ## Everything disposable expires 3 hours after last use
 
 Preview data is synthetic and previews churn, so retention is a pure cost knob.
-One TTL governs it: **3 hours** (`PREVIEW_DISPOSABLE_TTL_SECONDS` in
-`scripts/lib/deploy-helpers.ts`).
+One TTL governs it: **3 hours**.
 
 - **Lease TTL** (`defaultPreviewLeaseMs`, `scripts/preview/preview.ts`): a slot
   whose PR hasn't deployed/tested for 3h has an expired lease and is reclaimed.
   A deploy/e2e cycle is minutes, so an active PR never lapses mid-run; a PR that
   goes quiet stops costing us within ~3h instead of a full day.
 - **R2 lifecycle** on the preview `-files` and `-sandboxes`
-  (`backups/`) buckets: objects are deleted 3h after they're written.
-  `ensure-resources` installs these rules for preview slots only, and
-  `erase-data` re-installs both on every acquire/cleanup so existing slots
-  self-heal without a manual `ensure-resources` run (CI never runs that). Prd
-  keeps its data (sandbox backups 90 days, files forever).
+  (`backups/`) buckets: objects are deleted 3h after they're written. The
+  Alchemy stack declares these rules for preview slots. Production keeps files
+  forever and sandbox backups for 90 days.
 - **Sandboxes**: containers already sleep after ~10 min idle
   (`onActivityExpired` snapshots then destroys the container). The 3h backup
   expiry finishes the job — a preview sandbox not used for 3h loses its backup,
@@ -107,17 +104,15 @@ is therefore one cron interval, and only in the failure case.
   (`eraseAcquiredSlotOrGiveItBack`), so any teardown that's skipped, deferred,
   or half-finished is harmless — the next tenant wipes first.
 - **Non-force GC acquire**: the sweep can never take a live tenant's slot.
-- **Lifecycle rules are the reaper**: the SDK/worker only _check_ ttls at
-  read/restore time and never delete from R2 themselves, so the rules are what
-  actually reclaims the storage.
+- **Fresh-stack handover**: no data object or physical identifier is adopted
+  by the next tenant. Destroy/recreate is the recovery path.
 
 ## Where things live
 
-| Thing                                          | File                                              |
-| ---------------------------------------------- | ------------------------------------------------- |
-| The 3h TTL + R2 lifecycle helpers              | `scripts/lib/deploy-helpers.ts`                   |
-| Lifecycle rules installed per slot             | `apps/os/scripts/ensure-resources.ts`             |
-| Preview R2 walk skipped in favour of lifecycle | `apps/os/scripts/erase-data.ts`                   |
-| Lease TTL, `gc`, `selectExpiredLeasesForGc`    | `scripts/preview/preview.ts`                      |
-| The scheduled sweep                            | `.depot/workflows/cloudflare-preview-gc.yml`      |
-| PR-close cleanup (the fast path)               | `.depot/workflows/cloudflare-preview-cleanup.yml` |
+| Thing                                       | File                                              |
+| ------------------------------------------- | ------------------------------------------------- |
+| D1/KV/R2 stack and lifecycle rules          | `infra/alchemy.run.ts`                            |
+| Whole-stack destruction after DO reset      | `apps/os/scripts/erase-data.ts`                   |
+| Lease TTL, `gc`, `selectExpiredLeasesForGc` | `scripts/preview/preview.ts`                      |
+| The scheduled sweep                         | `.depot/workflows/cloudflare-preview-gc.yml`      |
+| PR-close cleanup (the fast path)            | `.depot/workflows/cloudflare-preview-cleanup.yml` |

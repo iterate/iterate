@@ -157,7 +157,7 @@ export interface Env {
    * (domains/files/project-files.ts). Keys follow the durable-object name
    * convention `{projectId}.iterate{path}`; bytes are served publicly through
    * HMAC-signed URLs on the reserved `iterate-files` platform app. One bucket
-   * per env (`${WORKER_SELF}-files`), created by ensure-resources.ts.
+   * per env (`${WORKER_SELF}-files`), created by the Alchemy data stack.
    */
   FILES_BUCKET: R2Bucket;
   /**

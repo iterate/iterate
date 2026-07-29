@@ -15,6 +15,11 @@ on:
       - .depot/workflows/deploy-auth.yml
       - apps/auth/**
       - envs.ts
+      - infra/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - scripts/cloudflare-infrastructure.ts
       - scripts/lib/**
       - apps/auth-contract/**
       - packages/shared/**
@@ -41,6 +46,10 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
       - name: Reconcile dependencies (baked)
         run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Provision Cloudflare data resources
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: pnpm infra deploy --env dev_global
       - name: Setup Doppler (baked CLI)
         run: doppler setup --config dev_global --project auth
         env:

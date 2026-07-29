@@ -62,11 +62,12 @@ did — and same-script DO hops reuse the loaded isolate.
 Everything is declared in two places:
 
 - [`envs.ts`](../../../envs.ts) (repo root) — the typed map of deployed
-  environments: hostnames, worker names, Cloudflare account, resource IDs.
-- `wrangler.jsonc` — generated from envs.ts (gitignored; vite.config.ts
-  regenerates it before every dev/build, `pnpm gen:wrangler` by hand). Top
-  level is local dev; each env gets a flattened block selected at build time
-  via `CLOUDFLARE_ENV`. Its header comments explain the layout.
+  environments: hostnames, worker names, and Cloudflare account.
+- `wrangler.jsonc` — generated from envs.ts plus Alchemy's D1/KV manifest
+  (gitignored; vite.config.ts regenerates it before every dev/build,
+  `pnpm gen:wrangler` by hand). Top level is local dev; each env gets a
+  flattened block selected at build time via `CLOUDFLARE_ENV`. Its header
+  comments explain the layout.
 
 Secrets live in Doppler only. `secrets.required` in the config lists their
 names: local dev (`doppler run -- vite dev`) loads exactly those keys from
@@ -79,8 +80,8 @@ code via `wrangler deploy --secrets-file`.
 | --------------------------------- | --------------------------------------------------------------------------------------------------- |
 | `pnpm dev`                        | local dev server (vite + workerd); `start --detach`/`status`/`attach`/`kill` for parallel worktrees |
 | `pnpm run deploy --env preview_3` | build → deploy+secrets (one version) → smoke probe                                                  |
-| `pnpm ensure-resources --env X`   | create-only bring-up (KV, auth D1, DNS); reconciles IDs into envs.ts                                |
-| `pnpm erase-data --env X`         | wipe auth D1 rows + project-directory KV; DOs become unreachable orphans                            |
+| `pnpm ensure-resources --env X`   | create-only DNS and inbound Email Routing setup                                                     |
+| `pnpm erase-data --env X`         | reset Durable Objects, then destroy the environment's Alchemy D1/KV/R2 stack                        |
 
 Workers are never deleted and routes/DNS are ensure-only, so deploys can't
 strand an environment's hostnames (the old zombie-route/522 class is

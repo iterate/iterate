@@ -3,15 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  buildR2ObjectExpiryLifecycleRules,
-  ensureR2ObjectExpiryLifecycle,
-  PREVIEW_DISPOSABLE_TTL_SECONDS,
-  PREVIEW_FILES_OBJECT_EXPIRY,
   removeWorkerSecrets,
   runCloudflareCommandWith429Retry,
   runAsync,
-  SANDBOX_BACKUP_EXPIRY_RULE,
-  SANDBOX_BACKUP_TTL_SECONDS_PRD,
   smokeResponse,
 } from "./deploy-helpers.ts";
 import { CloudflareApiError } from "./env-context.ts";
@@ -215,66 +209,5 @@ describe("smokeResponse", () => {
     ).resolves.toBeUndefined();
 
     expect(fetchMock).toHaveBeenCalledOnce();
-  });
-});
-
-describe("R2 object-expiry lifecycle", () => {
-  it("builds one Age rule scoped to every object by default (empty prefix)", () => {
-    const rules = buildR2ObjectExpiryLifecycleRules({ ruleId: "r", ttlSeconds: 3600 });
-
-    expect(rules).toEqual([
-      {
-        id: "r",
-        enabled: true,
-        // Empty prefix = all objects; deleting after an Age in seconds.
-        conditions: { prefix: "" },
-        deleteObjectsTransition: { condition: { type: "Age", maxAge: 3600 } },
-      },
-    ]);
-  });
-
-  it("scopes the shared sandbox rule to backups/ (prd 90d ttl here)", () => {
-    // Same rule id + prefix as ensure-resources and erase-data both install
-    // (they differ only in ttl: 3h preview, 90d prd).
-    expect(SANDBOX_BACKUP_EXPIRY_RULE).toEqual({
-      ruleId: "expire-sandbox-workspace-backups",
-      prefix: "backups/",
-    });
-    const rules = buildR2ObjectExpiryLifecycleRules({
-      ...SANDBOX_BACKUP_EXPIRY_RULE,
-      ttlSeconds: SANDBOX_BACKUP_TTL_SECONDS_PRD,
-    });
-
-    expect(rules[0]?.conditions).toEqual({ prefix: "backups/" });
-    expect(rules[0]?.deleteObjectsTransition.condition).toEqual({
-      type: "Age",
-      maxAge: 90 * 24 * 60 * 60,
-    });
-  });
-
-  it("expires all preview disposable data 3h after write", () => {
-    // Guards against an accidental bump: erase-data relies on prompt expiry so
-    // it can skip per-object preview deletes.
-    expect(PREVIEW_DISPOSABLE_TTL_SECONDS).toBe(3 * 60 * 60);
-    expect(PREVIEW_FILES_OBJECT_EXPIRY.ttlSeconds).toBe(PREVIEW_DISPOSABLE_TTL_SECONDS);
-    expect(PREVIEW_FILES_OBJECT_EXPIRY.ruleId).toBe("expire-preview-files");
-  });
-
-  it("PUTs the rule to the bucket's lifecycle endpoint", async () => {
-    const cf = vi.fn(async () => ({}));
-
-    await ensureR2ObjectExpiryLifecycle(
-      { cf, cfV4: vi.fn() } as never,
-      "os-preview-7-files",
-      PREVIEW_FILES_OBJECT_EXPIRY,
-    );
-
-    expect(cf).toHaveBeenCalledOnce();
-    const [path, init] = cf.mock.calls[0] as unknown as [string, RequestInit];
-    expect(path).toBe("/r2/buckets/os-preview-7-files/lifecycle");
-    expect(init.method).toBe("PUT");
-    expect(JSON.parse(init.body as string)).toEqual({
-      rules: buildR2ObjectExpiryLifecycleRules(PREVIEW_FILES_OBJECT_EXPIRY),
-    });
   });
 });

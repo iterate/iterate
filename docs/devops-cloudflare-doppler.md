@@ -1,28 +1,46 @@
 # DevOps: Cloudflare And Doppler
 
-This repo deploys Cloudflare apps with plain `wrangler deploy` driven by two
+This repo deploys Cloudflare apps with plain `wrangler deploy` driven by three
 sources of truth:
 
 - **`envs.ts` (repo root)** — the typed map of every deployed environment,
-  per app: hostnames, worker names, Cloudflare account, and the IDs of the
-  few Cloudflare resources an env owns (D1, KV). Non-secret, committed,
-  reviewed. Read it before asking "what is preview_3".
+  per app: hostnames, worker names, and Cloudflare account. Non-secret,
+  committed, reviewed. Read it before asking "what is preview_3".
+- **Alchemy v2** — one stateful stack per deployed environment owns D1, KV,
+  R2, and their lifecycle rules. Its generated manifest supplies D1/KV IDs to
+  the Wrangler config generators; R2 bindings use deterministic worker-based
+  names.
 - **Doppler** — secrets only. One config per env per app (`prd`,
   `preview_N`, plus fully-local `dev`/`dev_<user>` that never deploy).
 
-There is no IaC framework and no deploy-time state store. Each app carries a
-small set of rhyming imperative scripts in `apps/<app>/scripts/`:
+Alchemy and Wrangler have a strict boundary. Alchemy owns independent data
+resources; Wrangler owns Workers, bindings, Durable Object classes, Browser
+Rendering, loaders, entrypoints, routes, queues, containers, migrations, and
+secrets. Each app keeps its small imperative deployment scripts:
 
-| Script                        | What                                                                                                                   |
+| Command or script             | What                                                                                                                   |
 | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `generate-wrangler-config.ts` | expands envs.ts into the gitignored `wrangler.jsonc` (vite dev/build regenerate it automatically)                      |
-| `deploy.ts`                   | `pnpm run deploy --env <name>`: build → `wrangler deploy --secrets-file` (code + secrets in ONE version) → smoke probe |
-| `ensure-resources.ts`         | create-only bring-up (D1/KV/DNS); reconciles new IDs back into envs.ts                                                 |
-| `erase-data.ts`               | wipe an env's data; infrastructure stays (see below)                                                                   |
+| `pnpm infra deploy`           | apply one environment's Alchemy stack and atomically generate its resource manifest                                    |
+| `generate-wrangler-config.ts` | combine envs.ts + that manifest into gitignored `wrangler.jsonc` (vite dev/build regenerate it automatically)          |
+| `deploy.ts`                   | `pnpm run deploy --env <name>`: build → `wrangler deploy --secrets-file` (code + secrets in one version) → smoke probe |
+| `ensure-resources.ts`         | create-only Worker-adjacent setup that is outside Alchemy, currently DNS and inbound email                             |
+| `erase-data.ts`               | reset Wrangler-owned Durable Objects, then destroy the environment's entire Alchemy stack                              |
 
 Small apps skip pieces they don't need (tunnels has a hand-written,
 committed wrangler.jsonc and no generator; streams-example-app has no
-secrets). Generated configs are gitignored — envs.ts is what you review.
+secrets). Generated configs and Alchemy manifests are gitignored; review
+`envs.ts` and `infra/alchemy.run.ts`.
+
+`infra` has its own lockfile so Alchemy's beta dependency graph cannot alter
+application resolutions. The `pnpm infra` command installs that exact nested
+lock before deploy or destroy; the root lockfile contains no Alchemy packages.
+
+The lifecycle is deliberately fresh-stack-only. There is no repository import,
+adoption, state reconstruction, committed fallback ID, or compatibility mode.
+Alchemy's providers can silently reuse same-name objects after create
+collisions, so a destructive cutover must prove those names absent before the
+first apply. If a stack's state is lost or irreparably inconsistent, destroy
+that named environment's data resources and recreate it.
 
 ## Environment selection is explicit
 
@@ -43,6 +61,10 @@ the envs.ts entry, so a wrong-config wrap fails loudly. Destructive scripts
   Cloudflare credential sets. There are exactly three: `_shared/dev`,
   `_shared/preview`, `_shared/prd`. Never override `CLOUDFLARE_ACCOUNT_ID`
   or `CLOUDFLARE_API_TOKEN` in app or branch configs.
+- The Cloudflare API tokens must include account-level **Secrets Store Write**.
+  Alchemy's official remote state store keeps its bearer token and encryption
+  key in Cloudflare Secrets Store; without that permission even the first
+  `pnpm infra deploy` fails before creating D1, KV, or R2.
 - Put values in the highest config that is correct (shared root → app
   project → branch config). Do not use Doppler personal configs; use named
   shared configs such as `dev_jonas`.
@@ -75,19 +97,25 @@ Deploys only ever upsert. Routes are declared in wrangler config
 (re-ensured on every deploy); DNS records are created once by
 `ensure-resources` (create-only) and never touched again. This makes the
 historical zombie-route/522 failure class (script deletion cascading route
-deletion at the edge) structurally impossible — there is no destroy, no
-"parking", and no route-healing machinery.
+deletion at the edge) structurally impossible. Alchemy destroy deletes only
+its D1/KV/R2 stack; the Worker and routes remain parked.
 
 ## Erasing an environment
 
-`pnpm erase-data --env <name>` (in apps/os) wipes the auth D1 rows and the
-project-directory KV. Durable Objects are addressed by project id, so with
-those gone every existing DO becomes a permanently unreachable orphan and
-the env is logically pristine with zero downtime — orphaned DO storage costs
-pennies and there is no Cloudflare API to delete DO instances. Redeploy auth
-afterwards (OAuth clients are data too; its deploy re-seeds them). Preview
-slots persist data across pushes; erasing is an explicit action, not part of
-deploys.
+`pnpm erase-data --env <name>` (in apps/os) resets the environment's
+Wrangler-owned Durable Object classes and runs
+`pnpm infra destroy --env <name>`. Alchemy deletes the D1 databases, KV
+namespaces, R2 buckets, and stack output. The next preview acquisition runs
+`pnpm infra deploy` and gets a fresh stack before any app deploys. Auth's
+deploy then reruns migrations and re-seeds its OAuth clients.
+
+Production requires `--yes-i-mean-prd`. Destroying production or migrating an
+existing fleet remains an explicit operator action; a code merge is not
+permission to erase live environments. Quiesce automatic deploys before the
+merge that introduces the Alchemy-backed push workflows. The all-at-once
+migration deletes every old environment's data resources, proves their names
+absent, discards any prototype Alchemy state store out of band, and recreates
+every stack from empty.
 
 ## Bringing up a new environment
 
@@ -96,19 +124,22 @@ Preview slots also require lease inventory, OAuth audiences, Doppler branch
 configs, external integration apps, and fleet verification; the steps below
 cover only the shared Cloudflare resource/deploy skeleton.
 
-1. Add the entry to envs.ts (preview slots: `previewSlot(N, {...UNPROVISIONED})`).
-2. `pnpm ensure-resources --env <name>` per app — creates missing D1/KV/DNS
-   and prints the IDs to paste into envs.ts. A brand-new OS Worker defers its
-   inbound-email catch-all until deploy because Cloudflare does not accept a
-   route to a missing script.
-3. Commit envs.ts (wrangler.jsonc is generated on demand, never committed).
-4. After Doppler and resources are ready, deploy auth and os concurrently.
-   Both consume one Doppler-owned signing key; os derives only its public half
-   and never waits for auth's JWKS endpoint. A brand-new environment still
-   needs the auth service to exist before Cloudflare can resolve os's service
-   binding, but subsequent revisions have no JWT-driven deployment order. The
-   os deploy also requires the post-upload inbound-email catch-all to
-   reconcile.
+1. Add the entry to `envs.ts` with `previewSlot(N)`; there are no physical
+   resource IDs to fill in.
+2. Run `pnpm infra deploy --env <name>` once. Validate
+   `infra/output/<name>/cloudflare-resources.json`, then run the command again
+   and require the same physical IDs.
+3. Run each app's `ensure-resources` for DNS and other Worker-adjacent setup.
+   A brand-new OS Worker defers its inbound-email catch-all until deploy because
+   Cloudflare does not accept a route to a missing script.
+4. Commit the environment and stack definitions. Generated manifests and
+   `wrangler.jsonc` files are never committed.
+5. For a brand-new environment, deploy Auth first so Cloudflare can resolve
+   OS's service binding. Then deploy the remaining apps. Subsequent preview
+   revisions may fan out because every Worker already exists and all apps
+   derive the same signing key from Doppler. Production always uses the single
+   serialized `Deploy Cloudflare Platform` workflow. The OS deploy also
+   requires the post-upload inbound-email catch-all to reconcile.
 
 ## Cloudflare accounts
 

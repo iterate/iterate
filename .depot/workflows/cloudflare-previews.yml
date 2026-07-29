@@ -55,10 +55,13 @@ on:
       - .depot/workflows/cloudflare-previews.yml
       - packages/shared/**
       - packages/ui/**
+      - package.json
       - pnpm-lock.yaml
       - pnpm-workspace.yaml
       - patches/**
       - scripts/preview/**
+      - infra/**
+      - scripts/cloudflare-infrastructure.ts
       - envs.ts
       - scripts/lib/**
       - apps/auth-example/**

@@ -5,8 +5,8 @@
  * every dev/build, deploys therefore always see a fresh one, and
  * `pnpm gen:wrangler` refreshes it by hand for ad-hoc wrangler commands.
  *
- * The top-level config is local dev (no routes, a miniflare-only D1 id); each
- * deployed environment gets an env block expanded from its authEnvs entry.
+ * The top-level config is local dev (no routes, a miniflare-only D1 id); a
+ * deployed build gets only its selected env block from authEnvs.
  * Wrangler env blocks do not inherit binding keys, so the shared bindings are
  * spelled out per env by this script — that repetition is exactly why the
  * file is generated instead of hand-written.
@@ -18,8 +18,10 @@
  */
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
 import { authEnvs, type AuthDeployedEnv } from "../../../envs.ts";
+import { loadAlchemyResources } from "../../../scripts/lib/alchemy-resources.ts";
 import {
   OBSERVABILITY,
+  selectedDeployedEnvironmentBlock,
   writeGeneratedWranglerConfig,
 } from "../../../scripts/lib/wrangler-config.ts";
 
@@ -110,7 +112,11 @@ function d1Bindings(input: { workerName: string; databaseId: string }) {
   ];
 }
 
-function envBlock(env: AuthDeployedEnv) {
+function envBlock(
+  name: string,
+  env: AuthDeployedEnv,
+  resources = loadAlchemyResources(name, env.cloudflareAccountId),
+) {
   const authHost = new URL(env.authBaseUrl).hostname;
   return {
     name: env.authWorkerName,
@@ -118,7 +124,7 @@ function envBlock(env: AuthDeployedEnv) {
     routes: [{ pattern: `${authHost}/*`, zone_name: authHost.split(".").slice(1).join(".") }],
     d1_databases: d1Bindings({
       workerName: env.authWorkerName,
-      databaseId: env.resources.authDbId,
+      databaseId: resources.authDbId,
     }),
     send_email: sendEmailBindings,
     vars: envShapedVars(env),
@@ -131,7 +137,7 @@ function envBlock(env: AuthDeployedEnv) {
   };
 }
 
-export const config = {
+const baseConfig = {
   $schema: "node_modules/wrangler/config-schema.json",
   // Env-less service name: wrangler tags every `--env` deploy with
   // `cf:service=<top-level name>`, so a "-dev" suffix here would mis-bucket
@@ -164,15 +170,26 @@ export const config = {
   // (deployed envs get it as a generated var instead).
   secrets: { required: [...REQUIRED_SECRETS, ...DERIVED_SECRETS, ...ENV_SHAPED_KEYS] },
   observability: OBSERVABILITY,
-  env: Object.fromEntries(Object.entries(authEnvs).map(([name, env]) => [name, envBlock(env)])),
 };
 
+export const wranglerConfig = (
+  name?: string,
+  resources?: ReturnType<typeof loadAlchemyResources>,
+) => ({
+  ...baseConfig,
+  env: selectedDeployedEnvironmentBlock(
+    authEnvs,
+    (envName, env) => envBlock(envName, env, resources),
+    name,
+  ),
+});
+
 /** Write wrangler.jsonc (gitignored) if changed — see writeGeneratedWranglerConfig. */
-export const writeWranglerConfig = () =>
+export const writeWranglerConfig = (environmentName = process.env.CLOUDFLARE_ENV?.trim()) =>
   writeGeneratedWranglerConfig({
     configUrl: new URL("../wrangler.jsonc", import.meta.url),
     appLabel: "apps/auth",
-    config,
+    config: wranglerConfig(environmentName),
   });
 
 /** Regenerate apps/auth/wrangler.jsonc from the root envs.ts. */

@@ -1,5 +1,4 @@
 import { spawnSync } from "node:child_process";
-import { UNPROVISIONED } from "../../envs.ts";
 import { fetchCloudflareWith429Retry } from "./cloudflare-429-retry.ts";
 
 /**
@@ -148,21 +147,6 @@ export async function resolveEnvContext<E extends DeployableEnv>(options: {
     cf: <T>(path: string, init?: RequestInit) => cfV4<T>(`/accounts/${accountId}${path}`, init),
     cfV4,
   };
-}
-
-/**
- * Refuse to deploy an env whose resources were never created — the fix is
- * `pnpm ensure-resources --env <name>` followed by pasting the printed IDs
- * into envs.ts.
- */
-export function assertProvisioned(name: string, resources: Record<string, string>) {
-  const missing = Object.entries(resources).filter(([, id]) => id === UNPROVISIONED);
-  if (missing.length > 0) {
-    throw new Error(
-      `Environment ${name} has unprovisioned resources (${missing.map(([key]) => key).join(", ")}). ` +
-        `Run ensure-resources --env ${name}, paste the printed IDs into envs.ts, and retry.`,
-    );
-  }
 }
 
 /** Download a Doppler config's secrets as a plain object. */

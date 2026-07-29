@@ -1,13 +1,12 @@
-name: Deploy Auth + OS
+name: Deploy Cloudflare Platform
 permissions:
   contents: read
   deployments: write
   statuses: write
 concurrency:
-  # Every dispatch below targets the same production Workers, even when the
-  # checked-out ref differs. Serialize the complete Auth -> OS -> revocation
-  # cutover and never cancel it between those steps.
-  group: deploy-auth-os-production
+  # Every dispatch below targets the same production stack and Workers.
+  # Serialize the complete rollout and never cancel it between those steps.
+  group: deploy-cloudflare-production
   cancel-in-progress: false
 on:
   push:
@@ -17,11 +16,17 @@ on:
       - .depot/workflows/deploy-os.yml
       - .depot/workflows/deploy-auth.yml
       - envs.ts
+      - infra/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - scripts/cloudflare-infrastructure.ts
       - scripts/lib/**
       - apps/os/**
       - packages/iterate/**
       - apps/auth/**
       - apps/auth-contract/**
+      - apps/semaphore/**
       - apps/os/src/domains/streams/**
       - packages/shared/**
       - packages/ui/**
@@ -49,6 +54,10 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
       - name: Reconcile dependencies (baked)
         run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Provision Cloudflare data resources
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: pnpm infra deploy --env prd
       # Auth owns the default RPC entrypoint. This is the one production rollout
       # path for both workers, so a push cannot race independent auth and OS
       # workflows at different commits.
@@ -57,6 +66,11 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: doppler run --project auth --config prd -- pnpm run-script deploy
+      - name: Deploy apps/semaphore
+        working-directory: apps/semaphore
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: doppler run --project semaphore --config prd -- pnpm run-script deploy
       - name: Setup Doppler (baked CLI)
         run: doppler setup --config prd --project os
         env:
@@ -121,7 +135,7 @@ jobs:
         run: pnpm install --frozen-lockfile --prefer-offline
       - name: Notify Slack
         env:
-          APP_DISPLAY_NAME: OS
+          APP_DISPLAY_NAME: Cloudflare Platform
           PUBLIC_URL: ${{ needs.deploy.outputs.public_url }}
           DEPLOY_RESULT: ${{ needs.deploy.result == 'success' && 'success' || 'failure' }}
         run: pnpm tsx scripts/ci/notify.ts deploy-${DEPLOY_RESULT}

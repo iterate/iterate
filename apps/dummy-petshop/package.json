@@ -5,7 +5,6 @@
   "scripts": {
     "dev": "pnpm gen:wrangler && wrangler dev",
     "deploy": "tsx ./scripts/deploy.ts",
-    "destroy": "node -e \"console.log('dummy-petshop destroy is a no-op: it holds only fake data, and workers stay')\" --",
     "ensure-resources": "tsx ./scripts/ensure-resources.ts",
     "gen:wrangler": "tsx ./scripts/generate-wrangler-config.ts",
     "test": "vitest run --reporter=default --reporter=../../packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",

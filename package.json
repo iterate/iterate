@@ -13,6 +13,7 @@
     "skills:sync": "npx skills add . --skill '*' -a claude-code -a opencode -g -y",
     "skills:list": "npx skills list -g -a claude-code -a opencode",
     "iterate": "node ./packages/iterate/bin/iterate.js",
+    "infra": "tsx scripts/cloudflare-infrastructure.ts",
     "preview": "trpc-cli scripts/preview/preview.ts",
     "preview:ci": "./scripts/preview/run-ci-locally.sh",
     "lint": "oxlint . --threads 1 --deny-warnings",

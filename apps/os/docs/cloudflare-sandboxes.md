@@ -303,4 +303,5 @@ pnpm exec wrangler tail                                  # stream logs (containe
 
 The sandbox smoke recipe lives in
 [Sandboxes → Local dev](./sandboxes.md#local-dev-orbstack--docker); the R2
-bucket for a new env is created by `pnpm ensure-resources --env <env>`.
+bucket for a deployed env is created by `pnpm infra deploy --env <env>` from
+the repository root.

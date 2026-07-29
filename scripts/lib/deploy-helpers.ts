@@ -4,9 +4,8 @@
  *
  * Each script stays an imperative top-to-bottom program; these are the
  * handful of moves they all make (spawn-and-fail-fast, smoke probes, the
- * wrangler secrets-file deploy dance, create-only Cloudflare resource
- * ensures, D1 wipes). Plain functions with explicit params — no config
- * machinery.
+ * wrangler secrets-file deploy dance, and DNS ensures). Plain functions with
+ * explicit params — no config machinery.
  */
 import { spawn, spawnSync } from "node:child_process";
 import { globSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -14,9 +13,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
 import { CloudflareApiError, type DeployableEnv, type EnvContext } from "./env-context.ts";
-
-/** The slice of EnvContext these helpers actually need: the Cloudflare API fetchers. */
-type CfContext = Pick<EnvContext<DeployableEnv>, "cf" | "cfV4">;
 
 const SecretBindings = z.array(z.object({ name: z.string(), type: z.string() }));
 // Wrangler does not expose Retry-After, but a direct API call in the same live
@@ -362,107 +358,14 @@ export function collectSecrets(
 }
 
 /**
- * Create-only D1 ensure: return the database named `name`, creating it when
- * missing. Never deletes or modifies an existing database.
- */
-export async function ensureD1(
-  ctx: CfContext,
-  name: string,
-): Promise<{ uuid: string; name: string }> {
-  const databases = await ctx.cf<{ uuid: string; name: string }[]>(`/d1/database?per_page=1000`);
-  const existing = databases.find((database) => database.name === name);
-  if (existing) {
-    console.log(`D1 database ${name} exists (${existing.uuid})`);
-    return existing;
-  }
-  const created = await ctx.cf<{ uuid: string; name: string }>(`/d1/database`, {
-    method: "POST",
-    body: JSON.stringify({ name }),
-  });
-  console.log(`created D1 database ${name} (${created.uuid})`);
-  return created;
-}
-
-/**
- * One TTL to rule the preview fleet: a preview slot's disposable data (search
- * corpus, project files, sandbox backups) is expired 3 hours after it was last
- * written. Short because previews are synthetic and churn constantly, and the
- * whole point is cost — abandoned data should not linger. Prd keeps its own,
- * much longer retention (see `SANDBOX_BACKUP_TTL_SECONDS_PRD`); this constant
- * is never applied there. See docs/preview-resource-gc.md.
- */
-export const PREVIEW_DISPOSABLE_TTL_SECONDS = 3 * 60 * 60;
-
-/** Prd sandbox workspace backups: 90 days, matching the DO's SANDBOX_BACKUP_TTL_SECONDS. */
-export const SANDBOX_BACKUP_TTL_SECONDS_PRD = 90 * 24 * 60 * 60;
-
-/**
- * The sandbox workspace backup expiry rule — shared id + `backups/` prefix so
- * ensure-resources and erase-data install the SAME rule (the ttl differs: 3h on
- * preview, 90 days on prd). Sandboxes snapshot `/workspace` under `backups/`
- * and the DO only checks the ttl at restore time, so this rule is what actually
- * reaps them.
- */
-export const SANDBOX_BACKUP_EXPIRY_RULE = {
-  ruleId: "expire-sandbox-workspace-backups",
-  prefix: "backups/",
-} as const;
-
-/** Preview project-file storage (itx.files) expires after 3h. */
-export const PREVIEW_FILES_OBJECT_EXPIRY = {
-  ruleId: "expire-preview-files",
-  ttlSeconds: PREVIEW_DISPOSABLE_TTL_SECONDS,
-} as const;
-
-/**
- * Pure builder for a "delete every matching object `ttlSeconds` after it was
- * written" R2 lifecycle policy. `prefix` scopes the rule; an empty prefix (the
- * default) covers all objects/uploads, per the R2 lifecycle API. The Age
- * transition takes seconds.
- */
-export function buildR2ObjectExpiryLifecycleRules(input: {
-  ruleId: string;
-  ttlSeconds: number;
-  prefix?: string;
-}) {
-  return [
-    {
-      id: input.ruleId,
-      enabled: true,
-      conditions: { prefix: input.prefix ?? "" },
-      deleteObjectsTransition: { condition: { type: "Age", maxAge: input.ttlSeconds } },
-    },
-  ];
-}
-
-/**
- * Put a single "expire matching objects after `ttlSeconds`" lifecycle rule on
- * an R2 bucket, so Cloudflare garbage-collects the objects server-side instead
- * of erase-data walking the bucket with one rate-limited DELETE per object. PUT
- * replaces the bucket's lifecycle config wholesale — fine while this is the
- * only rule the target buckets carry.
- */
-export async function ensureR2ObjectExpiryLifecycle(
-  ctx: CfContext,
-  bucketName: string,
-  input: { ruleId: string; ttlSeconds: number; prefix?: string },
-): Promise<void> {
-  await ctx.cf(`/r2/buckets/${bucketName}/lifecycle`, {
-    method: "PUT",
-    body: JSON.stringify({ rules: buildR2ObjectExpiryLifecycleRules(input) }),
-  });
-  console.log(
-    `R2 bucket ${bucketName} lifecycle: objects under "${input.prefix ?? ""}" expire ${input.ttlSeconds}s after write (${input.ruleId})`,
-  );
-}
-
-/**
  * Create-only DNS ensure for a Worker-routed hostname: worker zone routes
  * only fire when a proxied DNS record answers the hostname, so create a
  * proxied originless AAAA (100::) when nothing exists. Any existing record
  * of any type counts as "exists" — we never fight an operator's hand-made
  * record. Warns (does not throw) when no zone in `zones` covers the host.
  */
+type CfContext = Pick<EnvContext<DeployableEnv>, "cf" | "cfV4">;
+
 export async function ensureProxiedDnsRecord(
   ctx: CfContext,
   zones: { id: string; name: string }[],
@@ -496,35 +399,4 @@ export async function ensureProxiedDnsRecord(
     }),
   });
   console.log(`created proxied DNS record for ${host}`);
-}
-
-/**
- * Delete every row of every user table in a D1 database (skipping sqlite
- * internals, `_cf_*` and `d1_migrations`), logging per-table row counts.
- * One request = one session, so the pragma and every DELETE share a
- * transaction — FK ordering can't bite and the wipe is atomic. Schema and
- * migration history stay intact (rows are deleted, tables kept).
- */
-export async function wipeD1Tables(ctx: CfContext, dbId: string) {
-  const d1 = (sql: string) =>
-    ctx.cf<{ results?: { name: string }[]; meta?: { changes?: number } }[]>(
-      `/d1/database/${dbId}/query`,
-      { method: "POST", body: JSON.stringify({ sql }) },
-    );
-
-  const tables = (
-    await d1(
-      `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' AND name != 'd1_migrations'`,
-    )
-  )[0].results!;
-
-  const wiped = await d1(
-    [
-      "PRAGMA defer_foreign_keys = on",
-      ...tables.map((table) => `DELETE FROM "${table.name}"`),
-    ].join("; "),
-  );
-  tables.forEach((table, index) => {
-    console.log(`D1: cleared ${table.name} (${wiped[index + 1]?.meta?.changes ?? "?"} rows)`);
-  });
 }

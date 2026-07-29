@@ -118,12 +118,12 @@ hung off the SDK's own lifecycle hooks:
   doesn't need to: every public op awaits readiness internally.
 - Backups expire after **90 days idle** — the SDK checks its `ttl` only at
   restore time; actual R2 deletion is a bucket lifecycle rule on the
-  `backups/` prefix, set by `ensure-resources`. An expired workspace degrades
+  `backups/` prefix, set by the Alchemy stack. An expired workspace degrades
   to an empty one.
 
 Plumbing: **one bucket per env**, `${osWorkerName}-sandboxes`, created by
-`ensure-resources` (create-only) and bound as `BACKUP_BUCKET` — that exact
-binding name is the SDK's contract, as are the `BACKUP_BUCKET_NAME` /
+Alchemy and bound by Wrangler as `BACKUP_BUCKET` — that exact binding name is
+the SDK's contract, as are the `BACKUP_BUCKET_NAME` /
 `CLOUDFLARE_R2_ACCOUNT_ID` vars and the `R2_ACCESS_KEY_ID` /
 `R2_SECRET_ACCESS_KEY` presigning secrets. The secrets are optional and select
 the transfer mode: **with** them the SDK presigns

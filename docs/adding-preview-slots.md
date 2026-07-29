@@ -98,7 +98,7 @@ a single-slot rehearsal into another range expansion.
 
 The order is:
 
-1. Add `preview_20` to `envs.ts` with `UNPROVISIONED` IDs.
+1. Add `preview_20` to `envs.ts`; no physical resource IDs are committed.
 2. Confirm both zones, provider names, capacity, prices, and the exact writes.
 3. Create the five Doppler configs and provision Auth without `--rotate`.
 4. Create the dedicated GitHub App and Slack bootstrap app.
@@ -123,7 +123,7 @@ the point of failure before retrying the slot.
 
 | Layer         | Per-slot state                                                                                                                               |
 | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| Repository    | OS and Semaphore resource IDs; derived Auth, Streams, Dummy Petshop, OAuth-audience, mobile, and lease projections                           |
+| Repository    | Stable environment names/hosts/accounts; derived Auth, Streams, Dummy Petshop, OAuth-audience, mobile, and lease projections                 |
 | Doppler       | `preview_N` in `os`, `auth`, `semaphore`, `streams-example-app`, and `dummy-petshop`                                                         |
 | Cloudflare    | Two zones, seven Workers, two D1 databases, two KV namespaces, two R2 buckets, one Queue, DNS, routes, six container apps, and email routing |
 | External apps | One GitHub App and one Slack app for full integration parity                                                                                 |
@@ -185,12 +185,12 @@ References: [Workers](https://developers.cloudflare.com/workers/platform/limits/
 ## 1. Teach the repository about slots 10–19
 
 In `envs.ts`, add `preview_10`–`preview_19` to `envs` using
-`previewSlot(N, ...)`, with all three resource IDs set to `UNPROVISIONED`. Add
-the same names to `semaphoreEnvs` using
-`semaphorePreviewSlot(N, UNPROVISIONED)`.
+`previewSlot(N)`. Add the same names to `semaphoreEnvs` using
+`semaphorePreviewSlot(N)`. Alchemy creates the physical D1, KV, and R2
+resources later and its generated manifest feeds Wrangler.
 
-Never invent IDs or copy them from another slot. OS and Auth intentionally
-share the Auth D1 ID; Semaphore has its own D1 ID.
+Never add resource IDs back to `envs.ts`. OS and Auth consume the same Auth D1
+from the stage manifest; Semaphore consumes its own D1 from that manifest.
 
 The resource-free maps and consumers derive from `envs.ts`:
 
@@ -384,12 +384,13 @@ Add redirects in small batches with normal typed input. After every save,
 reload the client and require the new values to persist. The slots 10–19
 rehearsal succeeded in batches of six after one nineteen-row bulk fill failed.
 
-## 5. Create Cloudflare resources and record IDs
+## 5. Create Cloudflare resources
 
 Run management calls sequentially so retries and rate limits remain legible:
 
 ```bash
 for n in $(seq 10 19); do
+  pnpm infra deploy --env "preview_$n"
   pnpm --dir apps/auth ensure-resources --env "preview_$n"
   pnpm --dir apps/semaphore ensure-resources --env "preview_$n"
   pnpm --dir apps/dummy-petshop ensure-resources --env "preview_$n"
@@ -397,9 +398,10 @@ for n in $(seq 10 19); do
 done
 ```
 
-Streams has no `ensure-resources`; its deploy creates its DNS record. OS also
-installs R2 lifecycle rules, creates its Queue and exact-repo event
-subscriptions, and enables inbound Email Routing. On a brand-new slot the
+The single Alchemy apply creates both D1 databases, both KV namespaces, both R2
+buckets, and their lifecycle rules. App ensures handle only Worker-adjacent
+resources such as DNS and inbound Email Routing. Streams has no
+`ensure-resources`; its deploy creates its DNS record. On a brand-new slot the
 Email Routing catch-all is explicitly deferred because Cloudflare rejects a
 Worker action until that script exists; the first OS deploy installs and
 verifies the catch-all after uploading the Worker.
@@ -409,17 +411,13 @@ the approved batch, an agent may drive it using the dedicated browser profile,
 but must stop before onboarding a different sender domain or changing existing
 DNS. Verify each sender after saving.
 
-Paste these IDs into the branch:
-
-- OS `projectDirectoryKvId` and `workerBuildCacheKvId`;
-- the shared OS/Auth `authDbId`;
-- Semaphore `resourcesDbId`.
-
-Run every `ensure-resources` command again. The second pass must match the
-recorded IDs and create nothing. Before the first OS deploy, its one expected
-deferred result is `Email Routing catch-all ... deferred until worker ...
-deploys`; any collision, warning, different ID, or other new object is a failed
-checkpoint.
+Validate `infra/output/preview_N/cloudflare-resources.json` against the live
+Cloudflare objects, then run `pnpm infra deploy --env preview_N` again. The
+second apply must retain every physical ID and report no data-resource
+replacement. Run every app `ensure-resources` again and require no new DNS or
+email resource. Before the first OS deploy, its one expected deferred result is
+`Email Routing catch-all ... deferred until worker ... deploys`; any collision,
+warning, replacement, or other new object is a failed checkpoint.
 
 ## 6. Test and merge the repository change
 
@@ -437,7 +435,7 @@ pnpm format:check
 ```
 
 Inspect generated Wrangler config for every new environment. Names, routes,
-D1/KV IDs, and container caps must be slot-specific.
+Alchemy-supplied D1/KV/R2 bindings, and container caps must be slot-specific.
 
 Merge this branch before deployment or leasing. Never seed production
 Semaphore from an unmerged expansion branch.
@@ -453,6 +451,7 @@ still absent from Semaphore, so there is no lease holder to race.
 ```bash
 for n in $(seq 10 19); do
   target_env="preview_$n"
+  pnpm infra deploy --env "$target_env"
   pnpm --dir apps/auth run deploy --env "$target_env"
   pnpm --dir apps/dummy-petshop run deploy --env "$target_env"
   pnpm --dir apps/semaphore run deploy --env "$target_env"
@@ -461,11 +460,12 @@ for n in $(seq 10 19); do
 done
 ```
 
-Auth, OS, Semaphore, and Streams may deploy concurrently; they derive the same
-public signing key from Doppler and do not fetch one another's JWKS. Dummy
-Petshop must precede OS e2e. Do not replace a failed deploy with a curl-only
-health check; the deploy command validates secrets, resources, migrations,
-routes, and smoke probes.
+For a never-deployed slot, deploy Auth first so Cloudflare can resolve OS's
+service binding, then deploy the remaining apps. Subsequent preview revisions
+may fan out because all Workers already exist and derive the same public
+signing key from Doppler. Dummy Petshop must precede OS e2e. Do not replace a
+failed deploy with a curl-only health check; the deploy command validates
+secrets, resources, migrations, routes, and smoke probes.
 
 Fresh hostnames can return Cloudflare 522 while edge certificates propagate.
 The deploy smoke owns that bounded retry. Auth's post-deploy OAuth-client seed
@@ -591,18 +591,18 @@ the next preview dispatch can claim another slot for the still-eligible draft.
 Keep this ledger in the expansion PR. `created` is not `verified`; mark the
 cell only after reading the state back from the owning system.
 
-| Slot | Domains | Doppler | Cloudflare + second ensure | GitHub | Slack | Five apps | Lease | Lifecycle |
-| ---- | ------- | ------- | -------------------------- | ------ | ----- | --------- | ----- | --------- |
-| 10   | ☐       | ☐       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
-| 11   | ☐       | ☐       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
-| 12   | ☐       | ☐       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
-| 13   | ☐       | ☐       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
-| 14   | ☐       | ☐       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
-| 15   | ☐       | ☐       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
-| 16   | ☐       | ☐       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
-| 17   | ☐       | ☐       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
-| 18   | ☐       | ☐       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
-| 19   | ☐       | ☐       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
+| Slot | Domains | Doppler | Alchemy + second apply | GitHub | Slack | Five apps | Lease | Lifecycle |
+| ---- | ------- | ------- | ---------------------- | ------ | ----- | --------- | ----- | --------- |
+| 10   | ☐       | ☐       | ☐                      | ☐      | ☐     | ☐         | ☐     | ☐         |
+| 11   | ☐       | ☐       | ☐                      | ☐      | ☐     | ☐         | ☐     | ☐         |
+| 12   | ☐       | ☐       | ☐                      | ☐      | ☐     | ☐         | ☐     | ☐         |
+| 13   | ☐       | ☐       | ☐                      | ☐      | ☐     | ☐         | ☐     | ☐         |
+| 14   | ☐       | ☐       | ☐                      | ☐      | ☐     | ☐         | ☐     | ☐         |
+| 15   | ☐       | ☐       | ☐                      | ☐      | ☐     | ☐         | ☐     | ☐         |
+| 16   | ☐       | ☐       | ☐                      | ☐      | ☐     | ☐         | ☐     | ☐         |
+| 17   | ☐       | ☐       | ☐                      | ☐      | ☐     | ☐         | ☐     | ☐         |
+| 18   | ☐       | ☐       | ☐                      | ☐      | ☐     | ☐         | ☐     | ☐         |
+| 19   | ☐       | ☐       | ☐                      | ☐      | ☐     | ☐         | ☐     | ☐         |
 
 Before resuming, rerun the planning inventory and compare it with this ledger.
 If the systems disagree, trust the read-back and investigate. Never “finish” a

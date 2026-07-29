@@ -11,7 +11,6 @@
     "dev": "doppler run --project semaphore -- pnpm exec vite dev",
     "build": "doppler run -- pnpm exec vite build",
     "deploy": "tsx ./scripts/deploy.ts",
-    "destroy": "node -e \"console.log('semaphore destroy is a no-op: preview e2e self-cleans, and workers/routes/DNS always stay')\" --",
     "ensure-resources": "tsx ./scripts/ensure-resources.ts",
     "gen:wrangler": "tsx ./scripts/generate-wrangler-config.ts",
     "seed:environment-config-leases": "pnpm cli seed-environment-config-leases",

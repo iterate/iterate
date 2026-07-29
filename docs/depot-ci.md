@@ -272,7 +272,7 @@ Mainline workflows deliberately separate deployment safety from validation
 freshness:
 
 - A credentialed deploy uses one fixed concurrency group named for its actual
-  destination, such as `deploy-auth-os-production`. It always sets
+  destination, such as `deploy-cloudflare-production`. It always sets
   `cancel-in-progress: false`. The checked-out branch is not the destination,
   so it must not appear in that group name. An active rollout finishes; if
   several newer commits queue behind it, Depot keeps the newest pending run.
@@ -281,14 +281,14 @@ freshness:
   validation result obsolete, including on `main`.
 - Every mainline job has `timeout-minutes`. This is a watchdog, not a retry:
   jobs fail at the outer edge and an operator decides whether a rerun is safe.
-  Auth + OS gets 45 minutes because its bounded worst case includes both
-  deployments and four sequential smoke probes.
+  The Cloudflare platform gets 45 minutes because its bounded worst case
+  includes three Worker deployments and OS's sequential smoke probes.
 - Runner size follows observed peak CPU and memory, with headroom. Lint stays
   on `8x32` (parallel oxlint/typecheck/knip). Unit tests use `4x16` — measured
   peaks on `8x32` were ~3 cores / ~2.5GB, and a second large sandbox next to
   lint is the common trigger for no-log `Sandbox terminated before worker
-reported completion` on main. Auth + OS deploy uses `4x16`; short deploy,
-  notification, and autofix jobs use `2x8`. Re-check with
+reported completion` on main. The coordinated Cloudflare platform deploy
+  uses `4x16`; short deploy, notification, and autofix jobs use `2x8`. Re-check with
   `depot ci metrics --run <run-id>` before increasing a size.
 
 These defaults keep a normal all-app main push to 28 requested vCPUs before

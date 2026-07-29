@@ -7,8 +7,8 @@
  *
  * The top-level config is local dev (no routes, containers off by default so
  * `pnpm dev` never needs Docker — opt in with OS_SANDBOX_CONTAINER_LOCAL_DEV);
- * each deployed environment gets an env block expanded
- * from its envs.ts entry. Wrangler env blocks do not inherit binding keys,
+ * a deployed build gets only its selected env block expanded from envs.ts.
+ * Wrangler env blocks do not inherit binding keys,
  * so the shared bindings are spelled out per env by this script — that
  * repetition is exactly why the file is generated instead of hand-written.
  *
@@ -19,9 +19,11 @@
  */
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
 import { authEnvs, envs, PREVIEW_AND_DEV_ACCOUNT_ID, type DeployedEnv } from "../../../envs.ts";
+import { loadPlatformAlchemyResources } from "../../../scripts/lib/alchemy-resources.ts";
 import { bakeStaticAuthJwks } from "../../../scripts/lib/bake-auth-jwks.ts";
 import {
   OBSERVABILITY,
+  selectedDeployedEnvironmentBlock,
   writeGeneratedWranglerConfig,
 } from "../../../scripts/lib/wrangler-config.ts";
 import {
@@ -342,16 +344,22 @@ function workerBindings(input: {
     version_metadata: { binding: "CF_VERSION_METADATA" },
     worker_loaders: [{ binding: "LOADER" }],
     artifacts: [{ binding: "ARTIFACTS", namespace: `${input.workerName}-repos` }],
-    // Sandbox workspace backups (ensure-resources.ts creates the bucket; the
-    // sandbox DO snapshots /workspace here on idle and restores on start).
+    // Sandbox workspace backups (Alchemy creates the bucket; the sandbox DO
+    // snapshots /workspace here on idle and restores on start).
     // The binding MUST be named BACKUP_BUCKET — the Sandbox SDK reads it from
     // the env by that exact name. Addressed by name, so — unlike KV/D1 — no
-    // per-env id in envs.ts. In local dev miniflare provides it automatically.
+    // generated id. In local dev miniflare provides it automatically.
     // FILES_BUCKET: project file storage for itx.files / agent attachments
-    // (domains/files/project-files.ts). Same create-if-missing story.
+    // (domains/files/project-files.ts).
     r2_buckets: [
-      { binding: "BACKUP_BUCKET", bucket_name: `${input.workerName}-sandboxes` },
-      { binding: "FILES_BUCKET", bucket_name: `${input.workerName}-files` },
+      {
+        binding: "BACKUP_BUCKET",
+        bucket_name: `${input.workerName}-sandboxes`,
+      },
+      {
+        binding: "FILES_BUCKET",
+        bucket_name: `${input.workerName}-files`,
+      },
     ],
     // Email Service send binding for itx.email. Sender authorization is
     // enforced in OS (a project only sends as <slug>@<hostname base>, see
@@ -427,14 +435,18 @@ function routes(env: DeployedEnv) {
   ];
 }
 
-function envBlock(envName: string, env: DeployedEnv) {
+function envBlock(
+  envName: string,
+  env: DeployedEnv,
+  resources = loadPlatformAlchemyResources(envName, env.cloudflareAccountId),
+) {
   const isProduction = env.osWorkerName === "os-prd";
   const bindings = workerBindings({
     workerName: env.osWorkerName,
     accountId: env.cloudflareAccountId,
     authWorkerName: env.authWorkerName,
-    kvId: env.resources.projectDirectoryKvId,
-    workerBuildCacheKvId: env.resources.workerBuildCacheKvId,
+    kvId: resources.projectDirectoryKvId,
+    workerBuildCacheKvId: resources.workerBuildCacheKvId,
     sandboxCaps: isProduction ? "production" : "preview",
   });
   return {
@@ -559,7 +571,7 @@ export function localDevAuthJwks(input: {
   });
 }
 
-export const config = {
+const baseConfig = {
   $schema: "node_modules/wrangler/config-schema.json",
   // The top-level name is BOTH the local dev worker name and the service
   // identity: wrangler tags every `--env` deploy with `cf:service=<top-level
@@ -603,7 +615,6 @@ export const config = {
       ...ENV_SHAPED_KEYS.filter((key) => !(key in LOCAL_DEV_BINDINGS.vars)),
     ],
   },
-  env: Object.fromEntries(Object.entries(envs).map(([name, env]) => [name, envBlock(name, env)])),
 };
 
 /**
@@ -613,23 +624,13 @@ export const config = {
  * bundles src/typechecker.ts directly (no vite); local dev runs it as an
  * auxiliary worker in the same workerd (vite.config.ts).
  */
-export const typecheckerConfig = {
+const typecheckerBaseConfig = {
   $schema: "node_modules/wrangler/config-schema.json",
   name: "os-typechecker",
   main: "./src/typechecker.ts",
   compatibility_date: COMPATIBILITY_DATE,
   compatibility_flags: ["nodejs_compat"],
   observability: OBSERVABILITY,
-  env: Object.fromEntries(
-    Object.entries(envs).map(([name, env]) => [
-      name,
-      {
-        name: typecheckerWorkerName(env.osWorkerName),
-        account_id: env.cloudflareAccountId,
-        observability: OBSERVABILITY,
-      },
-    ]),
-  ),
 };
 
 /**
@@ -637,42 +638,66 @@ export const typecheckerConfig = {
  * Wrangler bundles this independently so esbuild-wasm never enters the OS
  * product script; local dev runs it as a Vite auxiliary Worker.
  */
-export const workerBundlerConfig = {
+const workerBundlerBaseConfig = {
   $schema: "node_modules/wrangler/config-schema.json",
   name: "os-worker-bundler",
   main: "./src/worker-bundler.ts",
   compatibility_date: COMPATIBILITY_DATE,
   compatibility_flags: ["nodejs_compat"],
   observability: OBSERVABILITY,
-  env: Object.fromEntries(
-    Object.entries(envs).map(([name, env]) => [
-      name,
-      {
-        name: workerBundlerWorkerName(env.osWorkerName),
-        account_id: env.cloudflareAccountId,
-        observability: OBSERVABILITY,
-      },
-    ]),
-  ),
 };
 
+const typecheckerEnvBlock = (_name: string, env: DeployedEnv) => ({
+  name: typecheckerWorkerName(env.osWorkerName),
+  account_id: env.cloudflareAccountId,
+  observability: OBSERVABILITY,
+});
+
+const workerBundlerEnvBlock = (_name: string, env: DeployedEnv) => ({
+  name: workerBundlerWorkerName(env.osWorkerName),
+  account_id: env.cloudflareAccountId,
+  observability: OBSERVABILITY,
+});
+
+export const wranglerConfig = (
+  name?: string,
+  resources?: ReturnType<typeof loadPlatformAlchemyResources>,
+) => ({
+  ...baseConfig,
+  env: selectedDeployedEnvironmentBlock(
+    envs,
+    (envName, env) => envBlock(envName, env, resources),
+    name,
+  ),
+});
+
+export const typecheckerWranglerConfig = (name?: string) => ({
+  ...typecheckerBaseConfig,
+  env: selectedDeployedEnvironmentBlock(envs, typecheckerEnvBlock, name),
+});
+
+export const workerBundlerWranglerConfig = (name?: string) => ({
+  ...workerBundlerBaseConfig,
+  env: selectedDeployedEnvironmentBlock(envs, workerBundlerEnvBlock, name),
+});
+
 /** Write all three gitignored Wrangler configs if changed. */
-export const writeWranglerConfig = () => {
+export const writeWranglerConfig = (environmentName = process.env.CLOUDFLARE_ENV?.trim()) => {
   writeGeneratedWranglerConfig({
     configUrl: new URL("../wrangler.typechecker.jsonc", import.meta.url),
     appLabel: "apps/os (typechecker sidecar)",
-    config: typecheckerConfig,
+    config: typecheckerWranglerConfig(environmentName),
   });
   writeGeneratedWranglerConfig({
     configUrl: new URL("../wrangler.worker-bundler.jsonc", import.meta.url),
     appLabel: "apps/os (worker-bundler sidecar)",
-    config: workerBundlerConfig,
+    config: workerBundlerWranglerConfig(environmentName),
   });
   return writeGeneratedWranglerConfig({
     configUrl: new URL("../wrangler.jsonc", import.meta.url),
     appLabel: "apps/os",
     extraDocs: "apps/os/docs/worker-topology.md",
-    config,
+    config: wranglerConfig(environmentName),
   });
 };
 

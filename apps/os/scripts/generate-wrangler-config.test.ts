@@ -2,15 +2,46 @@ import { expect, it } from "vitest";
 
 import { envs } from "../../../envs.ts";
 import {
-  config,
   localDevAuthJwks,
   localAuthServiceBinding,
   OPTIONAL_SECRETS,
   REQUIRED_SECRETS,
   envShapedVars,
-  typecheckerConfig,
-  workerBundlerConfig,
+  typecheckerWranglerConfig,
+  workerBundlerWranglerConfig,
+  wranglerConfig,
 } from "./generate-wrangler-config.ts";
+
+const alchemyResources = (stage: "prd" | "preview_6") => ({
+  kind: "platform" as const,
+  stage,
+  accountId: envs[stage].cloudflareAccountId,
+  authDbId: `${stage}-auth-db`,
+  projectDirectoryKvId: `${stage}-project-directory`,
+  workerBuildCacheKvId: `${stage}-worker-build-cache`,
+  semaphoreDbId: `${stage}-semaphore-db`,
+});
+const config = {
+  ...wranglerConfig(),
+  env: {
+    ...wranglerConfig("prd", alchemyResources("prd")).env,
+    ...wranglerConfig("preview_6", alchemyResources("preview_6")).env,
+  },
+};
+const typecheckerConfig = {
+  ...typecheckerWranglerConfig(),
+  env: {
+    ...typecheckerWranglerConfig("prd").env,
+    ...typecheckerWranglerConfig("preview_6").env,
+  },
+};
+const workerBundlerConfig = {
+  ...workerBundlerWranglerConfig(),
+  env: {
+    ...workerBundlerWranglerConfig("prd").env,
+    ...workerBundlerWranglerConfig("preview_6").env,
+  },
+};
 
 it("does not emit the local forge JWKS into deployed builds", () => {
   const forgePrivateJwk = JSON.stringify({
