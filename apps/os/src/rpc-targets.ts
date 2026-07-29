@@ -4147,15 +4147,14 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
    */
   async #threadIdFromBirthCertificate(): Promise<string | null> {
     if (!this.props.scopePath.startsWith("/agents/")) return null;
-    const event = await integrationStreamStub(this.props.projectId, this.props.scopePath).getEvent({
-      idempotencyKey: `email-agent/created:${this.props.projectId}:${this.props.scopePath}`,
+    const [event] = await integrationStreamStub(
+      this.props.projectId,
+      this.props.scopePath,
+    ).getEvents({
+      eventTypes: ["events.iterate.com/email-agent/created"],
+      limit: 1,
     });
     if (event === undefined) return null;
-    if (event.type !== "events.iterate.com/email-agent/created") {
-      throw new Error(
-        `email agent birth key on "${this.props.scopePath}" names unexpected event type "${event.type}"`,
-      );
-    }
     return EmailProcessorContract.events[
       "events.iterate.com/email-agent/created"
     ].payloadSchema.parse(event.payload).config.threadId;
@@ -4315,17 +4314,34 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
   }
 }
 
-async function assertAgentCreated(input: { path: string; projectId: string }): Promise<void> {
-  const event = await integrationStreamStub(input.projectId, input.path).getEvent({
-    idempotencyKey: `agent/created:${input.projectId}:${input.path}`,
+function agentProcessorRelay(input: {
+  auth: ItxAuth;
+  path: string;
+  projectId: string;
+}): ProcessorRelayRpcTarget<AgentProcessorState> {
+  return new ProcessorRelayRpcTarget<AgentProcessorState>({
+    auth: input.auth,
+    host: () =>
+      // Workers generates the concrete Agent DO stub, while the shared relay
+      // accepts the smaller processor-host surface. The DO implements that
+      // surface; the double assertion only bridges those RPC types.
+      env.AGENT.getByName(
+        DurableObjectNameCodec.stringify({
+          projectId: input.projectId,
+          path: input.path,
+        }),
+      ) as unknown as ProcessorHostStub,
   });
-  if (event === undefined) {
+}
+
+async function assertAgentCreated(input: {
+  auth: ItxAuth;
+  path: string;
+  projectId: string;
+}): Promise<void> {
+  const { state } = await agentProcessorRelay(input).snapshot();
+  if (state.birthCertificate === null) {
     throw new Error(`agent at "${input.path}" has not been created`);
-  }
-  if (event.type !== "events.iterate.com/agent/created") {
-    throw new Error(
-      `agent birth key on "${input.path}" names unexpected event type "${event.type}"`,
-    );
   }
 }
 
@@ -4371,7 +4387,11 @@ class AgentChatRpcTarget extends IterateRpcTarget<"AgentChat"> {
     message: string,
     options?: { files?: Array<{ contentType: string; data: FileData; filename: string }> },
   ): Promise<StreamEvent> {
-    await assertAgentCreated({ path: this.props.path, projectId: this.props.projectId });
+    await assertAgentCreated({
+      auth: this.props.auth,
+      path: this.props.path,
+      projectId: this.props.projectId,
+    });
     const trimmed = message.trim();
     if (trimmed === "") throw new Error("itx.chat.sendMessage requires a non-empty message.");
     const files =
@@ -4478,12 +4498,10 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
 
   /** The agent stream processor (snapshot/state). */
   get processor(): StreamProcessorRpc<AgentProcessorState> {
-    return new ProcessorRelayRpcTarget<AgentProcessorState>({
+    return agentProcessorRelay({
       auth: this.#props.auth,
-      // Workers generates the concrete Agent DO stub, while the shared relay
-      // accepts the smaller processor-host surface. The DO implements that
-      // surface; the double assertion only bridges those RPC types.
-      host: () => this.durableObjectStub as unknown as ProcessorHostStub,
+      path: this.#path,
+      projectId: this.#props.projectId,
     });
   }
 
@@ -4770,7 +4788,11 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   }
 
   async #assertCreated(): Promise<void> {
-    await assertAgentCreated({ path: this.#path, projectId: this.#props.projectId });
+    await assertAgentCreated({
+      auth: this.#props.auth,
+      path: this.#path,
+      projectId: this.#props.projectId,
+    });
   }
 }
 
@@ -5311,7 +5333,6 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
         await runCapabilityHostScript({
           command,
           path: this.#props.path,
-          projectId: this.#props.projectId,
           stream: this.#stream,
         }),
     });
