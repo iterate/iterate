@@ -125,6 +125,7 @@ the PR ready for review also starts previews. Lease model details:
 | Path                | What                                                                               |
 | ------------------- | ---------------------------------------------------------------------------------- |
 | `apps/os/`          | **Main app** — product dashboard (`os.iterate.com`; local dev: `localhost:<port>`) |
+| `apps/kit/`         | Browser installer for supported devices (`k.iterate.com`)                          |
 | `packages/iterate/` | `iterate` CLI — delegates to local source when run inside this repo                |
 | `docs/`             | Detailed documentation                                                             |
 | `tasks/`            | Work tracking (markdown + frontmatter)                                             |
@@ -198,6 +199,7 @@ from your machine, and when you need a public callback URL. Doppler/Cloudflare/d
 ### App-specific
 
 - [OS app](apps/os/AGENTS.md)
+- [Kit device installer](apps/kit/README.md)
 - [Auth app](apps/auth/README.md) — public OIDC/oRPC plus OS-only Workers RPC for the org/project directory
 - [itx](apps/os/src/README.md) — the `/api/itx` surface and its public contract (`types.ts`)
 - [OS worker topology](apps/os/docs/worker-topology.md)

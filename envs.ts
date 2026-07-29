@@ -7,8 +7,8 @@
  * them (D1, KV). Everything here is non-secret and reviewed like any other
  * code; secrets live in Doppler (one config per env per app, named below).
  *
- * Each app has its own map (envs/os, authEnvs, semaphoreEnvs, tunnelsEnvs,
- * streamsExampleEnvs, dummyPetshopEnvs) because apps deploy to different
+ * Each app has its own map (envs/os, authEnvs, semaphoreEnvs, kitEnvs,
+ * tunnelsEnvs, streamsExampleEnvs, dummyPetshopEnvs) because apps deploy to different
  * subsets of environments — forcing them into one record would mean optional
  * fields that lie. Hostnames follow conventions (`previewSlot(n)` derives them);
  * resource IDs are Cloudflare-assigned and must be spelled out.
@@ -397,6 +397,29 @@ export const semaphoreEnvs = {
   preview_18: semaphorePreviewSlot(18, "c8762bd2-f4d0-4207-b038-0c03a83aabed"),
   preview_19: semaphorePreviewSlot(19, "d1eab1d5-8a03-46b7-9c43-73b10f6133e0"),
 } satisfies Record<EnvName, SemaphoreEnv>;
+
+/**
+ * apps/kit — the browser device installer. Production only: it intentionally
+ * has no preview fleet and owns no stateful Cloudflare resources.
+ */
+export interface KitEnv {
+  cloudflareAccountId: string;
+  /** Doppler config (project `kit`) supplying deploy credentials. */
+  dopplerConfig: string;
+  workerName: string;
+  baseUrl: string;
+}
+
+export const kitEnvs = {
+  prd: {
+    cloudflareAccountId: PRD_ACCOUNT_ID,
+    dopplerConfig: "prd",
+    // The production account's workers.dev subdomain is `iterate`, making
+    // this worker available at kiterate.iterate.workers.dev as well.
+    workerName: "kiterate",
+    baseUrl: "https://k.iterate.com",
+  },
+} satisfies Record<string, KitEnv>;
 
 /**
  * apps/tunnels — the captun gateway. prd only; dev tunnels ride prd.

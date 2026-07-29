@@ -87,10 +87,15 @@ born with:
 
    using project = connectItx({
      baseUrl: "https://os.iterate.com",
-     auth: { type: "project-secret", projectId: "prj_…", secret: apiKey },
-     projectId: "prj_…",
+     auth: { type: "project-secret", projectSlug: "my-project", secret: apiKey },
+     projectId: "my-project",
    });
    ```
+
+The authentication door resolves the immutable slug to its stable project ID
+before checking the key and minting one-project authority. Stable-ID addressing
+remains available for machine callers that already operate on IDs, but setup
+flows do not need to ask a person for one.
 
 Treat that key as the project's root credential: prefer the user lane
 wherever a human is present, and rotate the key with an ordinary
