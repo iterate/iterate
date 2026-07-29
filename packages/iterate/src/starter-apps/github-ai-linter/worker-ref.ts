@@ -16,6 +16,27 @@ const configuredWorkerEntrypoint =
 
 export const REVIEW_BOT_SUBSCRIPTION_KEY = "app-review-bot#review-bot";
 
+const REVIEW_BOT_RELEVANT_WEBHOOK_CONDITION = [
+  '(payload.delivery.name = "pull_request" and',
+  '(payload.body.action = "opened" or',
+  'payload.body.action = "ready_for_review" or',
+  'payload.body.action = "synchronize"))',
+  "or",
+  '((payload.delivery.name = "issue_comment" or',
+  'payload.delivery.name = "pull_request_review" or',
+  'payload.delivery.name = "pull_request_review_comment") and',
+  "$count(payload.associations.mentionedUsers) > 0)",
+].join(" ");
+
+/**
+ * The review router only needs lifecycle deliveries and explicit mentions.
+ * Filtering on the source stream keeps check/workflow webhook bursts out of
+ * the hosted processor while the offset prefix preserves the restore cutoff.
+ */
+function reviewBotSubscriptionCondition(startAfterOffset: number) {
+  return `offset > ${startAfterOffset} and (${REVIEW_BOT_RELEVANT_WEBHOOK_CONDITION})`;
+}
+
 export async function reviewBotSubscriptionEvent(
   sourceEvent: StreamEvent,
   connection: string,
@@ -31,7 +52,7 @@ export async function reviewBotSubscriptionEvent(
       // Config refreshes preserve the original cutoff in index.ts.
       filter: {
         eventTypes: ["events.iterate.com/github/webhook-received"],
-        jsonataCondition: `offset > ${startAfterOffset}`,
+        jsonataCondition: reviewBotSubscriptionCondition(startAfterOffset),
       },
       receiver: {
         action: "processor-wake",

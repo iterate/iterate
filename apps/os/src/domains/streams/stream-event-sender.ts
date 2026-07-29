@@ -139,6 +139,15 @@ const MAX_FAILING_EVENT_SKIPS_SINCE_LAST_SUCCESS = 3;
  */
 const DELIVERY_BATCH_LIMIT = 1000;
 
+/**
+ * Hosted processors can turn one event into arbitrary Durable Object and
+ * external work. Give each matching event its own acknowledgement boundary so
+ * a slow event cannot make already-processed siblings time out and replay.
+ * The source still scans up to DELIVERY_BATCH_LIMIT rows at once, so filters
+ * skip irrelevant stretches without emitting one empty callback per row.
+ */
+const HOSTED_CALLBACK_EVENT_LIMIT = 1;
+
 /** Soft cap on a delivery batch's payload bytes (large events shrink the batch). */
 const DELIVERY_BATCH_BYTE_LIMIT = 1024 * 1024;
 
@@ -1985,10 +1994,21 @@ export class StreamConnections {
                       (entry) =>
                         entry.event.ephemeral !== true || entry.event.offset > openedAtOffset,
                     );
-              const delivered =
+              const matched =
                 args.filter === undefined
                   ? visible
                   : visible.filter((entry) => args.filter!.matches(entry.event));
+              const delivered =
+                kind === "hosted" ? matched.slice(0, HOSTED_CALLBACK_EVENT_LIMIT) : matched;
+              // If more matching hosted work remains in the scanned window,
+              // stop at the last event actually handed to the callback. The
+              // next acknowledged batch resumes immediately after it; all
+              // preceding non-matches have still been skipped durably.
+              const lastDeliveredOffset = delivered.at(-1)?.event.offset;
+              deliveredThroughOffset =
+                delivered.length < matched.length && lastDeliveredOffset !== undefined
+                  ? lastDeliveredOffset
+                  : lastOffset;
               events = delivered.map((entry) => entry.event);
               deliveredBytes = delivered.reduce((sum, entry) => sum + entry.byteLength, 0);
             }
