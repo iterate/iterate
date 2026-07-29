@@ -149,6 +149,14 @@ describe("dmarcPasses", () => {
   test("rejects a self-forged Authentication-Results without Cloudflare authserv-id", () => {
     expect(dmarcPasses("evil.example; dmarc=pass")).toBe(false);
     expect(dmarcPasses("fake.local; spf=pass; dmarc=pass")).toBe(false);
+    // Prefix forgeries must not satisfy a word-boundary-style pin.
+    expect(dmarcPasses("mx.cloudflare.net.evil; dmarc=pass")).toBe(false);
+    expect(dmarcPasses("mx.cloudflare.net-evil; dmarc=pass")).toBe(false);
+    expect(dmarcPasses("mx.cloudflare.netevil; dmarc=pass")).toBe(false);
+  });
+
+  test("allows optional authserv-id version before the semicolon", () => {
+    expect(dmarcPasses("mx.cloudflare.net 1; dmarc=pass")).toBe(true);
   });
 
   test("handles newline-separated AR records (raw MIME)", () => {

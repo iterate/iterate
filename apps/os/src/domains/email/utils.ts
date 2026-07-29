@@ -233,7 +233,9 @@ export function dmarcPasses(authenticationResults: string | null): boolean {
   const records = authenticationResults.split(/(?:\r?\n|,(?=\s*[^,;\s]+\s*;))/);
   return records.some((record) => {
     const trimmed = record.trim();
-    return /^mx\.cloudflare\.net\b/i.test(trimmed) && /\bdmarc=pass\b/i.test(trimmed);
+    // Exact authserv-id (optional version digit), then ";". A word-boundary
+    // pin would accept forgeries like mx.cloudflare.net.evil / net-evil.
+    return /^mx\.cloudflare\.net(?:\s+\d+)?\s*;/i.test(trimmed) && /\bdmarc=pass\b/i.test(trimmed);
   });
 }
 
