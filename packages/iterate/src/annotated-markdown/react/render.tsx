@@ -68,6 +68,14 @@ function textSegment(ctx: RenderContext, node: Nodes & { value: string }): React
   if (slice === node.value) {
     return <Segment value={node.value} start={offsets.start} end={offsets.end} atomic={false} />;
   }
+  // Multiline mismatch: blockquote `> ` continuations (and list lazy
+  // indents) live in the SOURCE between the value's lines. Align line by
+  // line — each rendered line maps exactly, and each newline becomes an
+  // atomic unit covering the newline plus the structural prefix.
+  if (node.value.includes("\n")) {
+    const lineSegments = alignLines(node.value, slice, offsets.start);
+    if (lineSegments !== null) return <>{lineSegments}</>;
+  }
   // Decoded text (an entity, an escape): keep the identical prefix and
   // suffix as exact segments so only the decoded core snaps atomically —
   // one `&amp;` must not make a whole paragraph indivisible.
@@ -122,6 +130,53 @@ function textSegment(ctx: RenderContext, node: Nodes & { value: string }): React
       ) : null}
     </>
   );
+}
+
+/**
+ * Map a multiline text value onto its source slice line by line. Every value
+ * line must appear in order in the slice (blockquote/list prefixes only ever
+ * sit BETWEEN lines); returns null when it doesn't so the caller falls back
+ * to prefix/suffix splitting.
+ */
+function alignLines(value: string, slice: string, sliceStart: number): ReactNode[] | null {
+  const lines = value.split("\n");
+  const segments: ReactNode[] = [];
+  let cursor = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? "";
+    const at = line === "" ? cursor : slice.indexOf(line, cursor);
+    if (at === -1) return null;
+    if (line !== "") {
+      segments.push(
+        <Segment
+          key={segments.length}
+          value={line}
+          start={sliceStart + at}
+          end={sliceStart + at + line.length}
+          atomic={false}
+        />,
+      );
+      cursor = at + line.length;
+    }
+    if (i < lines.length - 1) {
+      const gapEnd = slice.indexOf("\n", cursor);
+      if (gapEnd === -1) return null;
+      const nextLine = lines[i + 1] ?? "";
+      const nextAt = nextLine === "" ? gapEnd + 1 : slice.indexOf(nextLine, gapEnd + 1);
+      if (nextAt === -1) return null;
+      segments.push(
+        <Segment
+          key={segments.length}
+          value={"\n"}
+          start={sliceStart + cursor}
+          end={sliceStart + nextAt}
+          atomic={true}
+        />,
+      );
+      cursor = nextAt;
+    }
+  }
+  return segments;
 }
 
 /**

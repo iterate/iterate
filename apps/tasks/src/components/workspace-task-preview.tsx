@@ -237,9 +237,10 @@ function AnnotatedPreview({
   }, []);
 
   // Live edits move the body under a pending selection: re-find the selected
-  // text so the pending paint stays on the right passage, and drop the
-  // selection when it can't be re-found unambiguously (the submit path would
-  // refuse it anyway).
+  // text so the pending paint stays on the right passage (and the bubble
+  // follows it — this runs AFTER the layout effect rebuilt the projection
+  // for the new body), dropping the selection when it can't be re-found
+  // unambiguously (the submit path would refuse it anyway).
   useEffect(() => {
     setPending((current) => {
       if (current === null || current.sourceBody === body) return current;
@@ -249,7 +250,21 @@ function AnnotatedPreview({
         setComposerOpen(false);
         return null;
       }
-      return { ...current, range: { start: first, end: first + exact.length }, sourceBody: body };
+      const range = { start: first, end: first + exact.length };
+      const projection = projectionRef.current;
+      const wrapper = wrapperRef.current;
+      const rect = projection?.sourceRangeToDomRanges(range)[0]?.getBoundingClientRect();
+      const wrapperRect = wrapper?.getBoundingClientRect();
+      if (rect === undefined || wrapperRect === undefined) {
+        setComposerOpen(false);
+        return null;
+      }
+      return {
+        range,
+        sourceBody: body,
+        top: rect.bottom - wrapperRect.top + 8,
+        left: Math.max(0, rect.left - wrapperRect.left),
+      };
     });
   }, [body]);
 
@@ -313,14 +328,15 @@ function AnnotatedPreview({
   const submitThread = (commentBody: string) => {
     const selection = pending;
     if (selection === null || identity === null) return Promise.resolve(false);
-    const renderBody = body;
     return apply((doc) => {
-      // The document may have moved since the selection was made: keep the
-      // offsets only while the body is byte-identical, otherwise re-find the
-      // selected text and refuse ambiguity rather than anchor wrongly.
+      // The document may have moved since the selection was made: the range
+      // is only valid against the body it was computed on (the remap effect
+      // keeps that current, but the apply-time doc can be newer still) —
+      // otherwise re-find the selected text and refuse ambiguity rather
+      // than anchor wrongly.
       let range = selection.range;
-      if (doc.body !== renderBody) {
-        const exact = renderBody.slice(selection.range.start, selection.range.end);
+      if (doc.body !== selection.sourceBody) {
+        const exact = selection.sourceBody.slice(selection.range.start, selection.range.end);
         const first = doc.body.indexOf(exact);
         if (first === -1 || doc.body.indexOf(exact, first + 1) !== -1) {
           throw new Error("the document changed under the selection — reselect and retry");

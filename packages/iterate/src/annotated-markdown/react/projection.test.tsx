@@ -127,6 +127,23 @@ describe("selection → source", () => {
     expect(body.slice(range!.start, range!.end)).toBe("const x");
   });
 
+  test("multiline blockquote lines map exactly through the > prefixes", () => {
+    const body = "> first quoted line\n> second quoted line\n> third here.\n";
+    const { root } = mount(body);
+    const projection = buildProjection(root);
+    const point = domPointAt(root, "second quoted");
+    const range = projection.domRangeToSource({
+      startContainer: point.node,
+      startOffset: point.offset,
+      endContainer: point.node,
+      endOffset: point.offset + "second quoted".length,
+    });
+    expect(body.slice(range!.start, range!.end)).toBe("second quoted");
+    // And source → DOM picks exactly the same words back out.
+    const painted = projection.sourceRangeToDomRanges(range!);
+    expect(painted.map((r) => r.toString()).join("")).toBe("second quoted");
+  });
+
   test("entity-decoded text snaps atomically to its source unit", () => {
     const body = "Fish &amp; chips forever.\n";
     const { root } = mount(body);
