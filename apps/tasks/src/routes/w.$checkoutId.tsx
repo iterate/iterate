@@ -223,14 +223,20 @@ function WorkspaceBoardPage() {
   // One transform at a time: the strip and the preview each own an apply
   // hook, and on the write lane two overlapping submits would read the same
   // snapshot and the later write would clobber the earlier one. Chaining
-  // defers each transform until the previous write LANDED, so it reads the
-  // post-write source.
+  // defers each transform until the previous write LANDED — and the run
+  // must read THROUGH A REF at that moment: the call-time task object (and
+  // any render's board identity) is a snapshot from before the queue ahead
+  // of it drained.
   const mutationChainRef = useRef<Promise<unknown>>(Promise.resolve());
+  const boardFilesRef = useRef(board.files);
+  useEffect(() => {
+    boardFilesRef.current = board.files;
+  });
   const mutateTask = useCallback(
     (task: BoardTask, transform: (source: string) => string): Promise<boolean> => {
       const run = (): Promise<boolean> => {
         if (applyLive(task.path, transform)) return Promise.resolve(true);
-        const current = sourceOf(task);
+        const current = boardFilesRef.current?.[task.path] ?? sourceOf(task);
         const next = transform(current);
         // A refused or no-op transform (a comment op backing off, a status
         // already set) must not dirty the file or spend a write RPC.
