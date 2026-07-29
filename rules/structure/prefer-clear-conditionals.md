@@ -1,5 +1,6 @@
 ---
 id: structure/prefer-clear-conditionals
+severity: error
 files:
   [
     "**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}",

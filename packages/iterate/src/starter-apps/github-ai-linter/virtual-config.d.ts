@@ -2,7 +2,7 @@ declare module "iterate:github-ai-linter-config" {
   const config: {
     policyVersion: string;
     rules: {
-      glob: string;
+      paths: string[];
       repoPath: string;
     };
   };
