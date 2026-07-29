@@ -14,15 +14,25 @@ export type GithubAiLinterConfig = {
 const configuredWorkerEntrypoint =
   "node_modules/iterate/dist/starter-apps/github-ai-linter/configured-worker.mjs";
 
+export const REVIEW_BOT_SUBSCRIPTION_KEY = "app-review-bot#review-bot";
+
 export async function reviewBotSubscriptionEvent(
   sourceEvent: StreamEvent,
   connection: string,
   config: GithubAiLinterConfig,
+  startAfterOffset: number,
 ): Promise<StreamEventInput> {
   return {
     type: "events.iterate.com/stream/subscription-configured",
     payload: {
-      subscriptionKey: "app-review-bot#review-bot",
+      subscriptionKey: REVIEW_BOT_SUBSCRIPTION_KEY,
+      // A restored connection stream can contain thousands of old webhooks.
+      // This cutoff gives a newly configured review bot future work only.
+      // Config refreshes preserve the original cutoff in index.ts.
+      filter: {
+        eventTypes: ["events.iterate.com/github/webhook-received"],
+        jsonataCondition: `offset > ${startAfterOffset}`,
+      },
       receiver: {
         action: "processor-wake",
         expression: [
@@ -86,7 +96,7 @@ async function reviewBotAppRef(
   return dynamicWorkerRef({
     className: "ReviewBotApp",
     config,
-    durableWorkerKey: `app-review-bot-${await durableIdentity(connection)}`,
+    durableWorkerKey: `github-ai-linter-review-bot-${await durableIdentity(connection)}`,
   });
 }
 
