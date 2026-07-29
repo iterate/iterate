@@ -199,8 +199,8 @@ test("Preview provisioning includes the Dummy Petshop client OS deploys require"
 });
 
 describe("preview app dependency expansion", () => {
-  test("expands os to include its auth and dummy-petshop dependencies", () => {
-    expect(expandPreviewDependencies(["os"])).toEqual(["os", "auth", "dummy-petshop"]);
+  test("expands os to include the apps exercised by its end-to-end suite", () => {
+    expect(expandPreviewDependencies(["os"])).toEqual(["os", "docs", "auth", "dummy-petshop"]);
   });
 
   test("expands semaphore to include its auth dependency", () => {
@@ -221,6 +221,7 @@ describe("preview app dependency expansion", () => {
   test("deduplicates dependencies", () => {
     expect(expandPreviewDependencies(["os", "os", "auth"])).toEqual([
       "os",
+      "docs",
       "auth",
       "dummy-petshop",
     ]);
@@ -247,10 +248,11 @@ describe("preview deploy ordering", () => {
     expect(
       orderPreviewDeployBatches([
         cloudflarePreviewApps.os,
+        cloudflarePreviewApps.docs,
         cloudflarePreviewApps.auth,
         cloudflarePreviewApps["dummy-petshop"],
       ]).map((batch) => batch.map((app) => app.slug)),
-    ).toEqual([["os", "auth", "dummy-petshop"]]);
+    ).toEqual([["os", "docs", "auth", "dummy-petshop"]]);
   });
 
   test("deploys the whole selected fleet in one batch", () => {
@@ -444,7 +446,7 @@ describe("preview workflow scope", () => {
         "packages/iterate/**",
         "specs/**",
       ]),
-      previewDependencies: ["auth", "dummy-petshop"],
+      previewDependencies: ["auth", "docs", "dummy-petshop"],
       previewTestDependencyBaseUrlEnvVars: {
         "dummy-petshop": "PETSHOP_BASE_URL",
       },
@@ -495,7 +497,7 @@ describe("preview workflow scope", () => {
       probeAppServing: async () => ({ ok: true, detail: "HTTP 200" }),
     });
 
-    expect(apps.map((app) => app.slug)).toEqual(["os", "auth", "dummy-petshop"]);
+    expect(apps.map((app) => app.slug)).toEqual(["os", "docs", "auth", "dummy-petshop"]);
   });
 
   test("pins tests to every current-head deployment's exact Worker version", () => {
@@ -1245,7 +1247,7 @@ describe("preview retry selection", () => {
         headSha: "current-head",
         status: "tests-failed" as const,
       },
-      expected: ["os", "auth", "dummy-petshop"],
+      expected: ["os", "docs", "auth", "dummy-petshop"],
     },
     {
       // Semaphore's retry pulls in its auth dependency (relying-party JWKS).
@@ -1270,7 +1272,7 @@ describe("preview retry selection", () => {
         headSha: "old-head",
         status: "deploy-failed" as const,
       },
-      expected: ["os", "auth", "dummy-petshop"],
+      expected: ["os", "docs", "auth", "dummy-petshop"],
     },
     {
       // An awaiting-tests entry at any head is a deploy whose tests never ran
@@ -1285,7 +1287,7 @@ describe("preview retry selection", () => {
         headSha: "old-head",
         status: "awaiting-tests" as const,
       },
-      expected: ["os", "auth", "dummy-petshop"],
+      expected: ["os", "docs", "auth", "dummy-petshop"],
     },
     {
       name: "redeploys legacy green rows that cannot pin an immutable Worker version",
@@ -1296,7 +1298,7 @@ describe("preview retry selection", () => {
         publicUrl: "https://os.iterate-preview-7.com",
         status: "deployed" as const,
       },
-      expected: ["os", "auth", "dummy-petshop"],
+      expected: ["os", "docs", "auth", "dummy-petshop"],
     },
   ])("$name", ({ recorded, expected }) => {
     expect(
@@ -1385,6 +1387,24 @@ describe("preview deploy selection", () => {
     expect(apps.map((app) => app.slug)).toEqual(["os", "docs", "auth", "dummy-petshop"]);
   });
 
+  test("selects Docs for an auth-only change because OS Playwright reviews a seeded document", async () => {
+    const apps = await selectPreviewAppsForPullRequest({
+      ...selectionInput,
+      previousState: {
+        apps: {},
+        environmentConfigLease: null,
+        notice: null,
+      },
+      fetchCompare: async () => ({
+        status: "ahead",
+        changedFilenames: ["apps/auth-contract/src/worker.ts", "apps/auth/src/server/worker.ts"],
+      }),
+      probeAppServing: everythingServing,
+    });
+
+    expect(apps.map((app) => app.slug)).toEqual(["os", "docs", "auth", "dummy-petshop"]);
+  });
+
   test("selects the full fleet for an e2e policy-only change", async () => {
     const apps = await selectPreviewAppsForPullRequest({
       ...selectionInput,
@@ -1444,6 +1464,7 @@ describe("preview deploy selection", () => {
 
     expect(apps.map((app) => app.slug)).toEqual([
       "os",
+      "docs",
       "auth",
       "streams-example-app",
       "dummy-petshop",
@@ -1476,7 +1497,13 @@ describe("preview deploy selection", () => {
       probeAppServing: everythingServing,
     });
 
-    expect(apps.map((app) => app.slug)).toEqual(["os", "semaphore", "auth", "dummy-petshop"]);
+    expect(apps.map((app) => app.slug)).toEqual([
+      "os",
+      "docs",
+      "semaphore",
+      "auth",
+      "dummy-petshop",
+    ]);
   });
 
   test("deploys the full fleet when the compare 404s because a force-push rewrote the deployed head away", async () => {

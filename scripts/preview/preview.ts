@@ -2214,10 +2214,11 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "apps/dummy-petshop/**",
       "apps/os/src/domains/streams/**",
     ],
-    // OS binds auth's RPC entrypoint, and its integration e2e uses dummy
-    // Petshop. Co-select both; every deploy starts concurrently and OS derives
-    // Auth's public signing key directly from Doppler.
-    previewDependencies: ["auth", "dummy-petshop"],
+    // OS binds auth's RPC entrypoint, its root Playwright suite reviews a
+    // workspace document through Docs, and its integration e2e uses dummy
+    // Petshop. Co-select all three; every deploy starts concurrently and OS
+    // derives Auth's public signing key directly from Doppler.
+    previewDependencies: ["auth", "docs", "dummy-petshop"],
     // Tests pin wrangler's immutable edge version explicitly.
     previewDeployBudgetMs: 90_000,
     previewTestBudgetMs: 100_000,
