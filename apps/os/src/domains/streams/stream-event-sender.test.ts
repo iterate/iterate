@@ -1984,8 +1984,17 @@ describe("StreamConnections hosted delivery watchdog", () => {
       "stream durable callback unavailable; backing off before waking it again",
       {
         connectionKey: "processor",
-        errorMessage: "transport closed",
         source: "rpc-broken",
+        errorName: "Error",
+        errorMessage: "transport closed",
+        projectId: "project",
+        streamPath: "/source",
+        streamId: "11111111-1111-4111-8111-111111111111",
+        configuredAtOffset: 12,
+        cursorChangedAtOffset: 12,
+        connectionGeneration: 7,
+        deliveredThroughOffset: 0,
+        streamMaxOffset: 3,
       },
     );
     expect(errorLog).not.toHaveBeenCalled();
@@ -2108,11 +2117,24 @@ describe("StreamConnections hosted delivery watchdog", () => {
     const h = connectionsHarness();
     const calls: DeliveryCall[] = [];
     const disposed = vi.fn();
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const connection = h.connections.openHosted({
       connectionKey: "processor",
       expectedHostedDelivery: h.expectedDelivery,
       processEventBatch: recordingProcessEventBatch(calls, disposed),
       replayAfterOffset: 0,
+      openedBy: {
+        processor: {
+          announcement: {
+            slug: "test-processor",
+            version: "1.0.0",
+            description: "Test processor",
+            consumes: [],
+            emits: [],
+            ownedEvents: [],
+          },
+        },
+      },
     });
     connection.sendQueued();
     expect(calls).toHaveLength(1);
@@ -2129,11 +2151,74 @@ describe("StreamConnections hosted delivery watchdog", () => {
     expect(connection.isLive()).toBe(false);
     expect(disposed).toHaveBeenCalledTimes(1);
     expect(h.durableDeliveryWakes).toHaveBeenCalledTimes(1);
+    expect(errorLog).toHaveBeenCalledWith(
+      "stream durable callback failed; backing off before waking it again",
+      {
+        connectionKey: "processor",
+        source: "delivery",
+        errorName: "Error",
+        errorMessage: `hosted processor batch acknowledgement timed out after ${DEFAULT_DELIVERY_TIMEOUT_MS}ms`,
+        projectId: "project",
+        streamPath: "/source",
+        streamId: "11111111-1111-4111-8111-111111111111",
+        configuredAtOffset: 12,
+        cursorChangedAtOffset: 12,
+        connectionGeneration: 7,
+        deliveredThroughOffset: 1,
+        streamMaxOffset: 3,
+        pendingDeliveryStartedAt: "1970-01-01T00:00:01.000Z",
+        pendingDeliveryDeadlineAt: "1970-01-01T00:00:21.000Z",
+        processorSlug: "test-processor",
+        processorContractVersion: "1.0.0",
+      },
+    );
 
     calls[0]!.report("ok");
     await flushMicrotasks();
     expect(calls).toHaveLength(1);
     expect(h.deliveryFailures).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps ITX and Cloudflare references when a hosted processor reports an opaque failure", async () => {
+    const h = connectionsHarness();
+    const calls: DeliveryCall[] = [];
+    const warnLog = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const connection = h.connections.openHosted({
+      connectionKey: "processor",
+      expectedHostedDelivery: h.expectedDelivery,
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+    });
+    connection.sendQueued();
+
+    (calls[0]!.batch as StreamWakeEventBatch).reportDeliveryResult({
+      outcome: "error",
+      error: {
+        name: "Error",
+        message:
+          "Internal error in Durable Object storage caused object to be reset; reference = h9ikm3iuo9v4aofff54akrbo",
+        itxCallId: "log_0123456789abcdef0123456789abcdef",
+        retryable: true,
+      },
+    });
+
+    expect(warnLog).toHaveBeenCalledWith(
+      "stream durable callback unavailable; backing off before waking it again",
+      expect.objectContaining({
+        connectionKey: "processor",
+        source: "delivery",
+        errorName: "Error",
+        itxCallId: "log_0123456789abcdef0123456789abcdef",
+        cloudflareErrorReference: "h9ikm3iuo9v4aofff54akrbo",
+      }),
+    );
+    expect(h.deliveryFailures).toHaveBeenCalledOnce();
+    expect(h.store.get("processor")).toMatchObject({
+      attempt: 1,
+      inFlightDeadlineAt: null,
+      inFlightConnectionGeneration: null,
+    });
+    expect(connection.isLive()).toBe(false);
   });
 
   it("idle teardown never acknowledges a batch that has not completed", () => {

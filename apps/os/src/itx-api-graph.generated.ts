@@ -2707,7 +2707,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "StreamWakeDeliveryError",
     kind: "typeAlias",
     sourceText:
-      "/**\n * Serializable failure reported after a durable wake delivery finishes.\n *\n * The result crosses an independent one-way RPC hop, so preserve the\n * lifecycle flags the stream uses to distinguish a dead Durable Object from\n * an application failure. Error prototypes and arbitrary properties do not\n * survive that hop reliably.\n */\nexport type StreamWakeDeliveryError = {\n  name: string;\n  message: string;\n  durableObjectReset?: true;\n  overloaded?: true;\n  retryable?: true;\n};",
+      "/**\n * Serializable failure reported after a durable wake delivery finishes.\n *\n * The result crosses an independent one-way RPC hop, so preserve the lifecycle\n * flags and ITX call correlation that distinguish and locate failures. Error\n * prototypes and arbitrary properties do not survive that hop reliably.\n */\nexport type StreamWakeDeliveryError = {\n  name: string;\n  message: string;\n  /** Wide-log ID of the failed ITX call, when the failure crossed that boundary. */\n  itxCallId?: string;\n  durableObjectReset?: true;\n  overloaded?: true;\n  retryable?: true;\n};",
     summary: "Serializable failure reported after a durable wake delivery finishes.",
     memberSummaries: {},
     referencedTypeNames: [],

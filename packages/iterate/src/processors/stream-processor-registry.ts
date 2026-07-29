@@ -172,23 +172,29 @@ type RegistryEntry = {
   runner: StreamProcessorRunner<any>;
 };
 
+const WakeDeliveryThrowableFields = z.object({
+  durableObjectReset: z.unknown().optional(),
+  itxCallId: z.unknown().optional(),
+  message: z.unknown().optional(),
+  name: z.unknown().optional(),
+  overloaded: z.unknown().optional(),
+  retryable: z.unknown().optional(),
+});
+
 function serializeWakeDeliveryError(error: unknown): StreamWakeDeliveryError {
-  const candidate =
-    typeof error === "object" && error !== null
-      ? (error as {
-          durableObjectReset?: unknown;
-          message?: unknown;
-          name?: unknown;
-          overloaded?: unknown;
-          retryable?: unknown;
-        })
-      : undefined;
+  const parsed = WakeDeliveryThrowableFields.safeParse(error);
+  const candidate = parsed.success ? parsed.data : undefined;
   return {
     name: typeof candidate?.name === "string" ? candidate.name : "Error",
     message:
       typeof candidate?.message === "string"
         ? candidate.message
         : String(error) || "unknown delivery failure",
+    ...(typeof candidate?.itxCallId === "string" &&
+    candidate.itxCallId.length > 0 &&
+    candidate.itxCallId.length <= 200
+      ? { itxCallId: candidate.itxCallId }
+      : {}),
     ...(candidate?.durableObjectReset === true ? { durableObjectReset: true as const } : {}),
     ...(candidate?.overloaded === true ? { overloaded: true as const } : {}),
     ...(candidate?.retryable === true ? { retryable: true as const } : {}),
