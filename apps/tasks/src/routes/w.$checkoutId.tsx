@@ -223,7 +223,12 @@ function WorkspaceBoardPage() {
   const mutateTask = useCallback(
     (task: BoardTask, transform: (source: string) => string): Promise<boolean> => {
       if (applyLive(task.path, transform)) return Promise.resolve(true);
-      return board.writeTask(task.path, transform(sourceOf(task)));
+      const current = sourceOf(task);
+      const next = transform(current);
+      // A refused or no-op transform (a comment op backing off, a status
+      // already set) must not dirty the file or spend a write RPC.
+      if (next === current) return Promise.resolve(true);
+      return board.writeTask(task.path, next);
     },
     [applyLive, board, sourceOf],
   );
