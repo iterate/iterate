@@ -7,6 +7,7 @@ import {
   addThread,
   createAnchorSelector,
   parseAnnotatedMarkdown,
+  projectMarkdownPreview,
   resolveThreadAnchor,
 } from "iterate/annotated-markdown";
 import type { AnchorResolution, Thread } from "iterate/annotated-markdown";
@@ -27,8 +28,8 @@ import { CommentComposer } from "./document-comments.tsx";
 // source-stamped viewer, anchored threads paint as CSS highlights in their
 // author's color, and selecting text grows a comment bubble whose thread is
 // an ordinary whole-file edit through the same landed-outcome lane as the
-// comments strip. Fail-open files keep the old read-only streamdown path —
-// when the codec refuses a file, nothing may interpret it.
+// comments strip. Fail-open files keep the read-only streamdown path, with
+// independently valid frontmatter projected away from the document body.
 
 const BODY_STYLES = [
   "text-[15px] leading-relaxed text-foreground",
@@ -94,11 +95,13 @@ export function MarkdownDocumentPreview({
   );
 }
 
-/** The pre-annotation rendering path, kept verbatim for fail-open files. */
+/** Read-only rendering for files whose annotation structure is invalid. */
 function PlainPreview({ source }: { source: string }) {
+  const preview = projectMarkdownPreview(source);
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto w-full max-w-3xl px-8 py-6 text-sm">
+        <FrontmatterTable metadata={preview.metadata} />
         {/* A settled document, not a stream — skip streamdown's unpaired-
             marker balancing (it appends a phantom `*` to text like "17 * 23"). */}
         <MessageResponse
@@ -109,7 +112,7 @@ function PlainPreview({ source }: { source: string }) {
           }
           parseIncompleteMarkdown={false}
         >
-          {source}
+          {preview.body}
         </MessageResponse>
       </div>
     </div>
