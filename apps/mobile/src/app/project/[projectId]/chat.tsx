@@ -53,6 +53,9 @@ import {
   type MobileFeedItem,
 } from "../../../lib/feed.ts";
 import { getProjectItx } from "../../../lib/itx.ts";
+import { deriveOpenBatches, EVENT as APPROVAL_EVENT } from "../../../lib/approvals.ts";
+import { approverKeyStatus } from "../../../lib/approver.ts";
+import { InThreadApprovalCard } from "../../../components/in-thread-approval.tsx";
 import { useLiveEvents } from "../../../lib/use-live-events.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
 import { getServerBaseUrl } from "../../../lib/storage.ts";
@@ -92,6 +95,33 @@ export default function ChatScreen() {
     eventTypes: undefined,
     projectId,
     streamPath: path,
+  });
+
+  // Approvals live on the project ROOT stream; a held batch whose
+  // script-execution provenance names THIS thread renders as a dialog inside
+  // the conversation (same query key as the Approvals screen — shared cache).
+  const approvalEvents = useLiveEvents({
+    queryKey: ["approval-events", baseUrl || "pending", projectId],
+    read: async () => {
+      const project = await getProjectItx(baseUrl!, projectId);
+      return await project.streams.get("/").getEvents({
+        eventTypes: [APPROVAL_EVENT.requested, APPROVAL_EVENT.decided, APPROVAL_EVENT.settled],
+      });
+    },
+    enabled: baseUrl !== undefined,
+    eventTypes: [APPROVAL_EVENT.requested, APPROVAL_EVENT.decided, APPROVAL_EVENT.settled],
+    projectId,
+    streamPath: "/",
+  });
+  const threadBatches = deriveOpenBatches(approvalEvents.data || []).filter(
+    (batch) =>
+      batch.payload.streamContext?.kind === "script-execution" &&
+      batch.payload.streamContext.streamPath === path,
+  );
+  const approverKey = useQuery({
+    queryKey: ["approver-key-status", projectId, baseUrl],
+    queryFn: () => approverKeyStatus(baseUrl!, projectId),
+    enabled: baseUrl !== undefined,
   });
 
   const [draft, setDraft] = useState("");
@@ -209,7 +239,23 @@ export default function ChatScreen() {
           </Pressable>
         </View>
       ) : viewMode === "chat" ? (
-        <FeedList feed={feed} sendPending={send.isPending} />
+        <FeedList
+          approvals={
+            baseUrl === undefined
+              ? null
+              : threadBatches.map((batch) => (
+                  <InThreadApprovalCard
+                    baseUrl={baseUrl}
+                    batch={batch}
+                    canApprove={approverKey.data?.kind === "enrolled"}
+                    key={batch.offset}
+                    projectId={projectId}
+                  />
+                ))
+          }
+          feed={feed}
+          sendPending={send.isPending}
+        />
       ) : (
         <EventList events={events.data || []} />
       )}
@@ -282,9 +328,11 @@ export default function ChatScreen() {
 }
 
 function FeedList({
+  approvals,
   feed,
   sendPending,
 }: {
+  approvals: React.ReactNode;
   feed: ReturnType<typeof reduceFeed>;
   sendPending: boolean;
 }) {
@@ -299,13 +347,18 @@ function FeedList({
       keyExtractor={(item) => item.id}
       contentContainerStyle={{ padding: spacing.md, gap: spacing.sm }}
       ListHeaderComponent={
-        // Inverted list: the "header" renders at the visual bottom.
-        sendPending || (feed.working && feed.live?.steps.length === 0) ? (
-          <View style={styles.workingRow}>
-            <ActivityIndicator accessibilityLabel="Loading" size="small" color={colors.working} />
-            <Text style={styles.workingText}>working…</Text>
-          </View>
-        ) : null
+        // Inverted list: the "header" renders at the visual bottom — held
+        // approval dialogs for THIS thread sit under the working row, right
+        // where the human is already looking.
+        <View style={styles.bottomStack}>
+          {approvals}
+          {sendPending || (feed.working && feed.live?.steps.length === 0) ? (
+            <View style={styles.workingRow}>
+              <ActivityIndicator accessibilityLabel="Loading" size="small" color={colors.working} />
+              <Text style={styles.workingText}>working…</Text>
+            </View>
+          ) : null}
+        </View>
       }
       ListEmptyComponent={
         <View style={styles.emptyFlip}>
@@ -471,6 +524,7 @@ const styles = StyleSheet.create({
   },
   bubbleUserText: { color: colors.background, fontSize: 15, lineHeight: 21 },
   bubbleAssistantText: { color: colors.text, fontSize: 15, lineHeight: 21 },
+  bottomStack: { gap: spacing.sm },
   workingRow: {
     flexDirection: "row",
     alignItems: "center",
