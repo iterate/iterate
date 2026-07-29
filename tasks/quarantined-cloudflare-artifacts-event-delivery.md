@@ -29,10 +29,10 @@ shared Cloudflare account control plane before it could become ready.
 ## Quarantined behavior
 
 - Cloudflare Artifacts pushes are not consumed from an OS Worker queue.
-- Normal and externally initiated pushes therefore do not automatically emit
-  `repo/cloudflare-artifact-event-received`, `repo/commit-completed`, or
-  `repo/task-*` stream facts. Repository contents, direct reads/writes,
-  builds, and project readiness remain active.
+- OS-owned default-branch writes and GitHub adoptions emit
+  `repo/commit-completed` directly. Raw pushes made outside OS still do not
+  automatically emit `repo/cloudflare-artifact-event-received`,
+  `repo/commit-completed`, or `repo/task-*` stream facts.
 - The live e2e contract is explicitly skipped in
   `apps/os/e2e/vitest/artifact-event-delivery.e2e.test.ts`.
 
@@ -48,8 +48,6 @@ shared Cloudflare account control plane before it could become ready.
   audited deletion of the retired subscriptions and queues; verify there is no
   producer traffic or retained-message backlog. Do not put subscription/queue
   enumeration or cleanup back into project creation or steady-state deploys.
-- Emit commit facts directly for OS-owned writes and imports so they do not
-  depend on eventual account-level events.
 - Choose a bounded, deployment-global mechanism for genuinely external
   Artifact pushes. It must not perform per-project control-plane
   reconciliation and must expose queueing, saturation, and failure telemetry.

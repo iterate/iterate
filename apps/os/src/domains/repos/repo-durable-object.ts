@@ -96,6 +96,12 @@ const GITHUB_LINK_KV_KEY = "github-link:v1";
 // compares it against the durable head cursor and re-materializes only when
 // main actually moved.
 const REPO_HEAD_TREE_KEY = "repo-head-tree:v1";
+// One OS-owned default-branch push may be durable in Artifacts before its
+// repo-stream fact crosses into the Stream Durable Object. Keep that exact
+// event here until the append acknowledges; a retry flushes it before making
+// another mutation, so an already-landed Git commit cannot become a silent
+// no-op with no repo/commit-completed fact.
+const PENDING_COMMIT_COMPLETED_KV_KEY = "pending-commit-completed:v1";
 // The lazy head-record publication computes the whole-snapshot contentHash
 // (worker builds want it hot) only when the manifest is small enough for
 // that to be a cheap in-store read; bigger repos leave the record to the
@@ -710,6 +716,7 @@ export class RepoDurableObject extends DurableObject<Env> {
   }
 
   async #commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult> {
+    await this.#flushPendingCommitCompleted();
     const parsed = parseCommitFilesInput(input);
     const repo = await this.gitAccess();
     const branch = parsed.branch ?? repo.defaultBranch;
@@ -720,7 +727,10 @@ export class RepoDurableObject extends DurableObject<Env> {
       // surfaces as an error: retrying the mutation through ANY lane could
       // apply it twice.
       const attempt = await this.#commitFilesLazy(parsed);
-      if (attempt.kind === "completed") return attempt.result;
+      if (attempt.kind === "completed") {
+        await this.#flushPendingCommitCompleted();
+        return attempt.result;
+      }
       if (attempt.kind === "indeterminate") {
         throw new Error(
           `commit push is indeterminate (proposed ${attempt.proposedCommitOid}): ${attempt.detail} — ` +
@@ -739,6 +749,13 @@ export class RepoDurableObject extends DurableObject<Env> {
       token: repo.token,
     });
     this.#recordPushedHead(result);
+    if (!result.noChanges && result.branch === REPO_DEFAULT_BRANCH) {
+      this.#stageCommitCompleted({
+        beforeCommitOid: result.parentCommitOid,
+        branch: result.branch,
+        commitOid: result.commitOid,
+      });
+    }
 
     // `commitFiles()` is our read-your-write boundary: once it returns, the
     // durable head cache names the pushed commit, so the next worker source
@@ -750,6 +767,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     if (!result.noChanges) {
       this.#scheduleGithubMirrorPush(result.branch);
     }
+    await this.#flushPendingCommitCompleted();
 
     return {
       branch: result.branch,
@@ -800,6 +818,11 @@ export class RepoDurableObject extends DurableObject<Env> {
         branch,
         commitOid: applied.commitOid,
         parentCommitOid: applied.parentCommitOid,
+      });
+      this.#stageCommitCompleted({
+        beforeCommitOid: applied.parentCommitOid,
+        branch,
+        commitOid: applied.commitOid,
       });
       this.#scheduleGithubMirrorPush(branch);
       this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
@@ -882,6 +905,7 @@ export class RepoDurableObject extends DurableObject<Env> {
   }
 
   async #edit(input: EditRepoFileInput): Promise<EditRepoFileResult> {
+    await this.#flushPendingCommitCompleted();
     const parsed = parseEditRepoFileInput(input);
     const repo = await this.gitAccess();
     const branch = parsed.branch ?? repo.defaultBranch;
@@ -898,6 +922,13 @@ export class RepoDurableObject extends DurableObject<Env> {
       token: repo.token,
     });
     this.#recordPushedHead(result);
+    if (!result.noChanges && result.branch === REPO_DEFAULT_BRANCH) {
+      this.#stageCommitCompleted({
+        beforeCommitOid: result.parentCommitOid,
+        branch: result.branch,
+        commitOid: result.commitOid,
+      });
+    }
 
     // Same read-your-write boundary as commitFiles(): the durable head cache
     // names the pushed commit before the RPC resolves.
@@ -908,6 +939,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     if (!result.noChanges) {
       this.#scheduleGithubMirrorPush(result.branch);
     }
+    await this.#flushPendingCommitCompleted();
 
     return {
       branch: result.branch,
@@ -985,6 +1017,35 @@ export class RepoDurableObject extends DurableObject<Env> {
         commitOid: result.commitOid,
       }),
     );
+  }
+
+  #stageCommitCompleted(input: {
+    beforeCommitOid: string | null;
+    branch: string;
+    commitOid: string;
+  }): void {
+    if (this.ctx.storage.kv.get<unknown>(PENDING_COMMIT_COMPLETED_KV_KEY) !== undefined) {
+      throw new Error("Cannot replace an unappended repo/commit-completed event.");
+    }
+    this.ctx.storage.kv.put(
+      PENDING_COMMIT_COMPLETED_KV_KEY,
+      RepoProcessorContract.parseEventInput({
+        type: "events.iterate.com/repo/commit-completed",
+        idempotencyKey: `repo/commit-completed:${input.beforeCommitOid ?? "none"}:${input.commitOid}:${input.branch}`,
+        payload: input,
+      }),
+    );
+  }
+
+  async #flushPendingCommitCompleted(): Promise<void> {
+    const pending = this.ctx.storage.kv.get<unknown>(PENDING_COMMIT_COMPLETED_KV_KEY);
+    if (pending === undefined) return;
+    // The runtime parser accepts unknown input; its generic signature keeps
+    // typed callers' discriminated return type, so this storage boundary must
+    // widen the unknown value only for the parser call.
+    const event = RepoProcessorContract.parseEventInput(pending as { type: string });
+    await this.#stream.append(event);
+    this.ctx.storage.kv.delete(PENDING_COMMIT_COMPLETED_KV_KEY);
   }
 
   #invalidateArtifactState(branch: string) {
@@ -1195,9 +1256,9 @@ export class RepoDurableObject extends DurableObject<Env> {
   // of GitHub's availability — and a best-effort push mirrors every commit.
   // git push is cumulative, so a failed mirror push self-heals on the next
   // commit; `pushToGithub` repairs on demand. GitHub push webhooks ask the repo
-  // processor to fast-forward Artifacts through `syncFromGithub`; the ensuing
-  // Artifacts queue event remains the sole source of commit facts. The public
-  // sync verb is also the explicit repair/forced-adoption lane.
+  // processor to fast-forward Artifacts through `syncFromGithub`; that
+  // OS-owned write appends its commit fact directly. The public sync verb is
+  // also the explicit repair/forced-adoption lane.
   // ===========================================================================
 
   /** The current GitHub link, or null when this repo is not linked. */
@@ -1354,6 +1415,7 @@ export class RepoDurableObject extends DurableObject<Env> {
   }
 
   async #syncFromGithub(input: { depth?: number; force?: boolean }): Promise<GithubSyncResult> {
+    await this.#flushPendingCommitCompleted();
     const link = this.#requireGithubLink();
     const branch = REPO_DEFAULT_BRANCH;
     const previous = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(branch));
@@ -1428,7 +1490,9 @@ export class RepoDurableObject extends DurableObject<Env> {
     // the cache; getHead's lags-the-push guard keeps it unavailable until the
     // adopted head is authoritative.
     this.#recordPushedHead({ branch, commitOid: headOid });
+    this.#stageCommitCompleted({ beforeCommitOid: previousCommitOid, branch, commitOid: headOid });
     this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
+    await this.#flushPendingCommitCompleted();
 
     await this.#stream.append({
       type: "events.iterate.com/repo/github-synced",
@@ -1466,11 +1530,15 @@ export class RepoDurableObject extends DurableObject<Env> {
   }
 
   async #resetFromGithub(input: { depth?: number }): Promise<GithubResetResult> {
+    await this.#flushPendingCommitCompleted();
     assertGithubHistoryDepth(input.depth, "resetFromGithub");
     const link = this.#requireGithubLink();
     const branch = REPO_DEFAULT_BRANCH;
     const previous = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(branch));
-    const previousCommitOid = isRepoHeadRecord(previous) ? previous.commitOid : null;
+    const previousCommitOid = githubSyncBaseCommitOid({
+      cachedHeadCommitOid: isRepoHeadRecord(previous) ? previous.commitOid : null,
+      pushedFloor: this.#branchAuthority(branch).pushedFloor,
+    });
     const token = await this.#mintGithubToken(link);
     const headOid = await this.#githubBranchHead({ branch, link, token });
 
@@ -1506,7 +1574,15 @@ export class RepoDurableObject extends DurableObject<Env> {
     // succeeded even if an immediate clone still reaches a lagging replica.
     // The next getHead call waits for the adopted head before serving it.
     this.#recordPushedHead({ branch, commitOid: headOid });
+    if (previousCommitOid !== headOid) {
+      this.#stageCommitCompleted({
+        beforeCommitOid: previousCommitOid,
+        branch,
+        commitOid: headOid,
+      });
+    }
     this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
+    await this.#flushPendingCommitCompleted();
 
     await this.#stream.append({
       type: "events.iterate.com/repo/github-synced",
