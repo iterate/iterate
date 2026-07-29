@@ -859,9 +859,22 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    * sampling); live debug surfaces should subscribe through `liveState`.
    */
   async runtimeState(): Promise<StreamRuntimeDebugState> {
-    const result = await this.#read("runtimeState", () =>
-      Promise.resolve(this[STREAM_DURABLE_OBJECT_STUB].runtimeState()),
-    ).catch(rethrowStreamUnavailable);
+    const result = await this.#read("runtimeState", async () => {
+      const stub = this[STREAM_DURABLE_OBJECT_STUB];
+      try {
+        return await stub.runtimeState();
+      } finally {
+        try {
+          disposeIgnoredRpcResult(stub);
+        } catch (error) {
+          console.warn("stream runtime-state Durable Object stub dispose failed", {
+            error,
+            path: this.props.path,
+            projectId: this.props.projectId,
+          });
+        }
+      }
+    }).catch(rethrowStreamUnavailable);
     return detachPlainRpcResult(result);
   }
 
