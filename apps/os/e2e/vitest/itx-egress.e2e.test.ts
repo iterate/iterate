@@ -160,16 +160,26 @@ test("an in-flight refresh cannot resurrect material after an egress event", asy
   });
 
   using probe = egressProbeWorker(project);
-  const request = probe.probeFetch({
-    headerValue: `Bearer getSecret("${secretPath}", { field: "accessToken" })`,
-    url: `${provider.url}/resource`,
-  });
-  await refreshStarted;
-  await project.streams.get(secretPath).append({
-    type: "events.iterate.com/secret/updated",
-    payload: { egress: { urls: [attacker.url] } },
-  });
-  releaseRefresh();
+  const request = Promise.resolve(
+    probe.probeFetch({
+      headerValue: `Bearer getSecret("${secretPath}", { field: "accessToken" })`,
+      url: `${provider.url}/resource`,
+    }),
+  );
+  try {
+    await waitForBarrierOrRequest({
+      barrier: refreshStarted,
+      description: "the OAuth refresh request to reach its provider",
+      request,
+      timeoutMs: 30_000,
+    });
+    await project.streams.get(secretPath).append({
+      type: "events.iterate.com/secret/updated",
+      payload: { egress: { urls: [attacker.url] } },
+    });
+  } finally {
+    releaseRefresh();
+  }
 
   await expect(request).resolves.toEqual({ stale: true });
   expect(await secret.__describe()).toMatchObject({
@@ -225,16 +235,26 @@ test("a repeated refresh event before its snapshot cannot resurrect material", a
   });
 
   using probe = egressProbeWorker(project);
-  const request = probe.probeFetch({
-    headerValue: `Bearer getSecret("${secretPath}", { field: "accessToken" })`,
-    url: `${provider.url}/resource`,
-  });
-  await resourceStarted;
-  await project.streams.get(secretPath).append({
-    type: "events.iterate.com/secret/updated",
-    payload: { refresh },
-  });
-  releaseResource();
+  const request = Promise.resolve(
+    probe.probeFetch({
+      headerValue: `Bearer getSecret("${secretPath}", { field: "accessToken" })`,
+      url: `${provider.url}/resource`,
+    }),
+  );
+  try {
+    await waitForBarrierOrRequest({
+      barrier: resourceStarted,
+      description: "the resource request to reach its provider",
+      request,
+      timeoutMs: 30_000,
+    });
+    await project.streams.get(secretPath).append({
+      type: "events.iterate.com/secret/updated",
+      payload: { refresh },
+    });
+  } finally {
+    releaseResource();
+  }
 
   await expect(request).resolves.toEqual({ stale: true });
   expect(tokenRequests).toBe(0);
@@ -575,3 +595,38 @@ test("Project egress intercept catches explicit and worker fetches before secret
     await echo.close();
   }
 });
+
+async function waitForBarrierOrRequest({
+  barrier,
+  description,
+  request,
+  timeoutMs,
+}: {
+  barrier: Promise<void>;
+  description: string;
+  request: Promise<unknown>;
+  timeoutMs: number;
+}): Promise<void> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      barrier,
+      request.then(
+        () => {
+          throw new Error(`Egress request settled before ${description}`);
+        },
+        (error: unknown) => {
+          throw error;
+        },
+      ),
+      new Promise<never>((_resolve, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new Error(`Timed out after ${timeoutMs}ms waiting for ${description}`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  }
+}

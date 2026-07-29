@@ -486,10 +486,7 @@ export class StreamProcessorRunner<
       // No await between the check above and registering the waiter below
       // (the helper below registers synchronously), so a batch cannot
       // advance the cursor past `offset` in the gap and be missed.
-      const reached = this.#waitForEventCondition(
-        { kind: "offset", offset },
-        { signal, timeoutMs },
-      );
+      const reached = this.#registerEventWaiter({ kind: "offset", offset }, { signal, timeoutMs });
       // Self-pull, not wait-and-hope: this form's contract is read-your-writes
       // over an append that already committed. A waiting caller must not depend
       // only on an open callback that may stop responding or on a wake call
@@ -508,7 +505,8 @@ export class StreamProcessorRunner<
       return await reached.promise;
     }
     const { predicate, signal, timeoutMs } = args;
-    await this.#waitForEventCondition({ kind: "predicate", predicate }, { signal, timeoutMs });
+    await this.#registerEventWaiter({ kind: "predicate", predicate }, { signal, timeoutMs })
+      .promise;
   }
 
   /** Release processor resources. Idempotent; a disposed runner rejects new work. */
@@ -1156,7 +1154,7 @@ export class StreamProcessorRunner<
     }
   }
 
-  #waitForEventCondition(
+  #registerEventWaiter(
     match:
       | { kind: "predicate"; predicate: (event: StreamEvent) => boolean }
       | { kind: "offset"; offset: number },

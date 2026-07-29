@@ -34,16 +34,18 @@ import {
   shouldSkipPetshopE2e,
 } from "./petshop-support.ts";
 
-const RUN = crypto.randomUUID().slice(0, 8);
-
 // Local runs opt in explicitly; preview CI supplies its leased Petshop URL
 // and fails closed if orchestration ever drops it.
 test.skipIf(shouldSkipPetshopE2e())(
   "bring-your-own App: mint installation token in the Secret DO, act as the installation, re-mint on expiry",
   async () => {
+    // Vitest retries re-enter this callback. Keep the project, Secret, App,
+    // installation, and keypair in one fresh attempt-local identity so durable
+    // write-only state can never be paired with a later attempt's public key.
+    const run = crypto.randomUUID().slice(0, 8);
     const petshop = petshopBaseUrl();
-    const appId = `gh-app-${RUN}`;
-    const installationId = `gh-inst-${RUN}`;
+    const appId = `gh-app-${run}`;
+    const installationId = `gh-inst-${run}`;
 
     // The App keypair. Its PRIVATE half (PKCS#8 PEM) goes into the connection
     // secret's material and is only ever signed with inside the DO; its PUBLIC
@@ -57,10 +59,10 @@ test.skipIf(shouldSkipPetshopE2e())(
 
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = await itx.projects.get(`github-${RUN}`).create({});
+    using project = await itx.projects.get(`github-${run}`).create({});
     await project.__describe();
 
-    const connectionPath = `/secrets/integrations/mygithub-${RUN}/acme`;
+    const connectionPath = `/secrets/integrations/mygithub-${run}/acme`;
 
     // Connection secret: the App private key in material, the installation to
     // act as in the strategy config (the installation id is public). Egress is
