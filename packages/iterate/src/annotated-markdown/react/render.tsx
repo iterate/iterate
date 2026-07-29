@@ -138,7 +138,7 @@ function textSegment(ctx: RenderContext, node: Nodes & { value: string }): React
  * sit BETWEEN lines); returns null when it doesn't so the caller falls back
  * to prefix/suffix splitting.
  */
-function alignLines(value: string, slice: string, sliceStart: number): ReactNode[] | null {
+function alignLines(value: string, slice: string, sliceStart: number) {
   const lines = value.split("\n");
   const segments: ReactNode[] = [];
   let cursor = 0;
