@@ -3,7 +3,7 @@ import type { StreamEvent, StreamEventInput } from "../../sdk.ts";
 import { GithubAiLinter } from "./index.ts";
 import { mightWakePullRequestAgent } from "./review-bot.ts";
 
-test("a linked connection gets a start-now hosted review processor", async () => {
+test("a linked connection gets a hosted review processor", async () => {
   const appended: Array<{ events: StreamEventInput[]; path: string }> = [];
   const app = GithubAiLinter.create(
     projectEnv((path, ...events) => appended.push({ events, path })),
@@ -31,18 +31,17 @@ test("a linked connection gets a start-now hosted review processor", async () =>
     path: "/integrations/github/iterate-installation",
     events: [
       {
-        idempotencyKey: "review-bot/subscription:v5:/:3",
+        idempotencyKey: "review-bot/subscription:/:3",
         payload: {
           receiver: {
             action: "processor-wake",
-            delivery: { start: "now" },
             expression: [
               "workers",
               [
                 "get",
                 {
                   className: "ReviewBotApp",
-                  durableWorkerKey: expect.stringMatching(/^app-review-bot-[0-9a-f]{32}-v2$/),
+                  durableWorkerKey: expect.stringMatching(/^app-review-bot-[0-9a-f]{32}$/),
                   path: "/",
                   type: "stateful",
                 },

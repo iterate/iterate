@@ -643,16 +643,6 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
       if (!z.uuid().safeParse(args.stream.streamId).success) {
         throw new Error(`wakeStreamProcessor streamId must be a UUID`);
       }
-      const initialCheckpointOffset = args.initialCheckpointOffset ?? 0;
-      if (
-        !Number.isSafeInteger(initialCheckpointOffset) ||
-        initialCheckpointOffset < 0 ||
-        initialCheckpointOffset > args.stream.streamMaxOffset
-      ) {
-        throw new Error(
-          `wakeStreamProcessor initial checkpoint ${initialCheckpointOffset} must be a safe integer between 0 and streamMaxOffset ${args.stream.streamMaxOffset}`,
-        );
-      }
       // The runner owns all frame semantics: serialization, offset dedupe,
       // whole-attempt keepalive, and the trailing unfiltered catch-up. The
       // registry adds only the transport boundary: the stream's callback call
@@ -664,10 +654,7 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
       // this RPC makes the stream pull a result that cannot settle until the
       // nested append reaches the stream again — a cyclic actor-drain tree
       // that workerd can retain until idle teardown.
-      const opened = await entry.runner.openEventBatchCallback(
-        args.stream.streamId,
-        initialCheckpointOffset,
-      );
+      const opened = await entry.runner.openEventBatchCallback(args.stream.streamId);
       const processEventBatch = (batch: StreamWakeEventBatch) => {
         const { reportDeliveryResult, ...frame } = batch;
         if (

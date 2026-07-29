@@ -369,12 +369,11 @@ describe("userspace GitHub pull-request routing", () => {
       {
         type: "events.iterate.com/stream/subscription-configured",
         idempotencyKey:
-          "github-ai-linter/subscription:v1:install-789:101:7:policy:2:stream:/agents/repos/config/pr/7/ai-linter",
+          "github-ai-linter/subscription:install-789:101:7:policy:2:stream:/agents/repos/config/pr/7/ai-linter",
         payload: {
           subscriptionKey: "app-github-ai-linter#github-ai-linter",
           receiver: {
             action: "processor-wake",
-            delivery: { start: "now" },
             processorSlug: "github-ai-linter",
           },
         },
@@ -399,7 +398,7 @@ describe("userspace GitHub pull-request routing", () => {
     ]);
     expect(JSON.stringify(linterStreamEvents[1])).toContain('"className":"GithubAiLinterApp"');
     expect(JSON.stringify(linterStreamEvents[1])).toMatch(
-      /"durableWorkerKey":"app-gh-linter-[0-9a-f]{32}-v1"/,
+      /"durableWorkerKey":"app-gh-linter-[0-9a-f]{32}"/,
     );
     expect(JSON.stringify(linterAgentEvents[0])).toContain(
       "The stream processor mechanically publishes the review from your events",

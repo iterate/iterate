@@ -77,7 +77,7 @@ const physicalWorkerBundles: BundleManifestEntry[] = [
     ),
     followRelativeImports: true,
     name: "configured GitHub AI linter worker",
-    requiredSource: ["review-bot", "initialCheckpointOffset"],
+    requiredSource: ["review-bot"],
     target: "physical-worker",
   },
   {

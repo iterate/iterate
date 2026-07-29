@@ -1060,41 +1060,6 @@ describe("StreamProcessorRunner reduce-only refold", () => {
       consoleWarn.mockRestore();
     }
   });
-
-  it("a start checkpoint remains the lower bound when a stale reduction is rebuilt", async () => {
-    const journal = makeJournal();
-    for (const id of ["historical-a", "historical-b", "live-c"]) {
-      journal.seed({ type: REQUESTED, payload: { id } });
-    }
-    const harness = makeHarness({ journal });
-    const opened = await harness.runner.openEventBatchCallback(TEST_STREAM_ID, 2);
-    expect(opened.checkpointOffset).toBe(2);
-    await opened.processEventBatch(eventBatch(journal.rows().slice(2), 3));
-    await expect(harness.runner.snapshot()).resolves.toEqual({
-      offset: 3,
-      state: { count: 1, open: ["live-c"] },
-    });
-    expect(harness.store.record?.processing).toEqual({
-      acknowledgedThroughOffset: 3,
-      skippedThroughOffset: 2,
-      cursorRevision: 0,
-    });
-
-    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      const redeployed = harness.crash({ contract: taskContract("0.0.2"), readPageSize: 1 });
-      const reopened = await redeployed.runner.openEventBatchCallback();
-      expect(reopened.checkpointOffset).toBe(3);
-      await expect(redeployed.runner.snapshot()).resolves.toEqual({
-        offset: 3,
-        state: { count: 1, open: ["live-c"] },
-      });
-      expect(redeployed.store.record?.reduction.reducerVersion).toBe("0.0.2");
-      expect(consoleWarn).toHaveBeenCalledWith(expect.stringContaining("refolding reduce-only"));
-    } finally {
-      consoleWarn.mockRestore();
-    }
-  });
 });
 
 // =============================================================================

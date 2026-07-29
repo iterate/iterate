@@ -158,17 +158,16 @@ export function computeBackoffMs(attempt: number, random: number): number {
   return Math.round(base * jitter);
 }
 
-/** The initial exclusive cursor for a subscription. */
+/** The initial exclusive cursor for a copy, ITX-call, or webhook subscription. */
 function initialCursor(start: SubscriptionStart, configuredEventOffset: number): number {
   return start === "now" ? configuredEventOffset : 0;
 }
 
 /**
  * The one place receiver-specific initial cursor policy is spelled out:
- * hosted-processor rows store only checkpoints the processor reported, so
- * their source-owned cursor still starts at 0. The processor receives its own
- * initial checkpoint policy in the wake request. Copy, ITX-call, and webhook
- * rows start where their delivery policy says.
+ * hosted-processor rows start at 0 (the stored value means "the processor reported
+ * a checkpoint through N", and a processor that has never been woken has observed nothing);
+ * copy, ITX-call, and webhook rows start where their delivery policy says.
  */
 function initialCursorFor(config: SubscriptionConfiguredPayload, configOffset: number): number {
   return config.receiver.action === "processor-wake"
@@ -538,10 +537,6 @@ export class StreamEventSender {
       },
       subscriptionKey,
       ...(receiver.processorSlug === undefined ? {} : { processorSlug: receiver.processorSlug }),
-      initialCheckpointOffset: initialCursor(
-        receiver.delivery?.start ?? "beginning",
-        expectedDelivery.configuredAtOffset,
-      ),
     };
 
     this.#hooks.runDurable(async () => {

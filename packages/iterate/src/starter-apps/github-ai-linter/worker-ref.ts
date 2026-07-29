@@ -11,10 +11,6 @@ export type GithubAiLinterConfig = {
   rules: GithubAiLinterRuleSource;
 };
 
-const reviewBotSubscriptionConfigVersion = 5;
-const reviewBotDurableWorkerVersion = 2;
-const pullRequestLinterSubscriptionConfigVersion = 1;
-const pullRequestLinterDurableWorkerVersion = 1;
 const configuredWorkerEntrypoint =
   "node_modules/iterate/dist/starter-apps/github-ai-linter/configured-worker.mjs";
 
@@ -36,13 +32,9 @@ export async function reviewBotSubscriptionEvent(
           "wakeStreamProcessor",
         ],
         processorSlug: "review-bot",
-        // A restored connection stream can contain months of webhooks. The
-        // processor starts after this committed configuration event, while
-        // stream delivery still includes anything appended after it.
-        delivery: { start: "now" },
       },
     },
-    idempotencyKey: `review-bot/subscription:v${reviewBotSubscriptionConfigVersion}:${sourceEvent.path}:${sourceEvent.offset}`,
+    idempotencyKey: `review-bot/subscription:${sourceEvent.path}:${sourceEvent.offset}`,
   };
 }
 
@@ -71,10 +63,6 @@ export async function pullRequestLinterSubscriptionEvent(
           "wakeStreamProcessor",
         ],
         processorSlug: "github-ai-linter",
-        // The router appends this configuration before analysis-requested.
-        // Starting "now" therefore skips generic Agent birth/policy history
-        // while guaranteeing delivery of the analysis immediately after it.
-        delivery: { start: "now" },
       },
     },
     // Every route coordinate which changes the worker ref is part of the key.
@@ -82,7 +70,6 @@ export async function pullRequestLinterSubscriptionEvent(
     // bump it, or same-key/different-body validation exposes the omission.
     idempotencyKey: [
       "github-ai-linter/subscription",
-      `v${pullRequestLinterSubscriptionConfigVersion}`,
       input.connection,
       input.repositoryId,
       input.pullRequestNumber,
@@ -99,7 +86,7 @@ async function reviewBotAppRef(
   return dynamicWorkerRef({
     className: "ReviewBotApp",
     config,
-    durableWorkerKey: `app-review-bot-${await durableIdentity(connection)}-v${reviewBotDurableWorkerVersion}`,
+    durableWorkerKey: `app-review-bot-${await durableIdentity(connection)}`,
   });
 }
 
@@ -121,7 +108,7 @@ async function pullRequestLinterAppRef(
   return dynamicWorkerRef({
     className: "GithubAiLinterApp",
     config,
-    durableWorkerKey: `app-gh-linter-${await durableIdentity(identity)}-v${pullRequestLinterDurableWorkerVersion}`,
+    durableWorkerKey: `app-gh-linter-${await durableIdentity(identity)}`,
   });
 }
 

@@ -30,12 +30,13 @@ Durable Object. The child stream is the durable analysis journal; the generic
 Agent and the linter reducer consume it independently. The platform still has
 no pull-request processor of its own.
 
-A fresh processor starts at the committed subscription configuration event,
-not offset zero and not the later wake-time stream head. That skips historical
-webhooks without losing an event that races the first wake. The processor also
-rejects irrelevant webhook envelopes before opening ITX. Structural review
-rules are read from the config's explicit paths as one commit-pinned snapshot,
-so routing a webhook never enumerates or clones the linked product repository.
+This proof of concept assumes a freshly recreated production data plane.
+Hosted processors therefore use their normal beginning-of-stream checkpoint;
+there is no compatibility checkpoint or version-fenced Durable Object identity
+for an earlier deployment. The processor rejects irrelevant webhook envelopes
+before opening ITX. Structural review rules are read from the config's explicit
+paths as one commit-pinned snapshot, so routing a webhook never enumerates or
+clones the linked product repository.
 
 ## The webhook fact
 

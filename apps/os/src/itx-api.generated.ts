@@ -2181,12 +2181,6 @@ export type StreamProcessorWakeRequest = {
   subscriptionKey: SubscriptionKey;
   /** Which hosted processor to wake (multi-processor hosts resolve on it). */
   processorSlug?: string;
-  /**
-   * Exclusive checkpoint for a processor with no progress for this stream
-   * lifetime. The source derives it from the committed subscription event,
-   * rather than its current head, so a webhook racing the wake is not skipped.
-   */
-  initialCheckpointOffset?: number;
 };
 
 /**
@@ -3350,14 +3344,6 @@ export type SubscriptionConfigurationForDelivery = {
           action: "processor-wake";
           expression: Array<string | [method: string, ...args: unknown[]]>;
           processorSlug?: string;
-          /**
-           * Where a fresh hosted processor begins. Existing durable progress
-           * always wins; `now` seeds a new checkpoint at this configuration
-           * event so events committed after configuration are never skipped.
-           */
-          delivery?: {
-            start: "beginning" | "now";
-          };
         }
       | {
           action: "copy-to-stream";
@@ -3616,7 +3602,6 @@ export type CommittedSubscriptionConfiguredEvent = Omit<
             action: "processor-wake";
             expression: ItxExpression;
             processorSlug?: string | undefined;
-            delivery?: { start: "beginning" | "now" } | undefined;
           }
         | {
             action: "copy-to-stream";
@@ -3649,7 +3634,6 @@ export type CommittedSubscriptionConfiguredEvent = Omit<
             action: "processor-wake";
             expression: ItxExpression;
             processorSlug?: string | undefined;
-            delivery?: { start: "beginning" | "now" } | undefined;
           }
         | {
             action: "copy-to-stream";
@@ -4193,7 +4177,6 @@ export type CoreProcessorState = {
                   action: "processor-wake";
                   expression: ItxExpression;
                   processorSlug?: string | undefined;
-                  delivery?: { start: "beginning" | "now" } | undefined;
                 }
               | {
                   action: "copy-to-stream";

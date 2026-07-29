@@ -131,14 +131,6 @@ export const SubscriptionReceiver = z.discriminatedUnion("action", [
     action: z.literal("processor-wake"),
     expression: DeliveryExpression,
     processorSlug: z.string().trim().min(1).optional(),
-    // Unlike source-owned delivery cursors, a hosted processor persists its
-    // own checkpoint. This policy only seeds that checkpoint when no progress
-    // exists for the current stream lifetime.
-    delivery: z
-      .strictObject({
-        start: SubscriptionStart,
-      })
-      .optional(),
   }),
   z.strictObject({
     action: z.literal("copy-to-stream"),
