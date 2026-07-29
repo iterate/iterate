@@ -4085,6 +4085,7 @@ async function cleanupPreviewForPullRequest(
 
   const cleanupStartedAt = Date.now();
   let cleanupFailure: unknown;
+  let teardownOk = true;
   try {
     await makePreviewSlotDataEraser(params)({
       dopplerConfig: environmentConfigLease.dopplerConfig,
@@ -4092,9 +4093,9 @@ async function cleanupPreviewForPullRequest(
     });
   } catch (error) {
     cleanupFailure = error;
+    teardownOk = false;
   }
   const cleanupDurationMs = Date.now() - cleanupStartedAt;
-  const ok = cleanupFailure === undefined;
   const updateAfterCleanup = await updatePreviewState(params.context, (state) => ({
     ...state,
     apps: Object.fromEntries(
@@ -4102,11 +4103,11 @@ async function cleanupPreviewForPullRequest(
         appSlug,
         {
           ...entry,
-          message: ok
+          message: teardownOk
             ? "Preview environment released."
             : `Preview teardown failed: ${formatPreviewErrorMessage(cleanupFailure)}`,
           cleanupDurationMs,
-          status: ok ? "released" : "cleanup-failed",
+          status: teardownOk ? "released" : "cleanup-failed",
           updatedAt: new Date().toISOString(),
         },
       ]),
@@ -4114,7 +4115,7 @@ async function cleanupPreviewForPullRequest(
   }));
   const latestState = updateAfterCleanup.state;
   console.error(
-    `[preview] environment cleanup ${ok ? "passed" : "failed"}: ${environmentConfigLease.slug} (${formatDurationMs(cleanupDurationMs)})`,
+    `[preview] environment cleanup ${teardownOk ? "passed" : "failed"}: ${environmentConfigLease.slug} (${formatDurationMs(cleanupDurationMs)})`,
   );
 
   // Cleanup's contract: RELEASING THE LEASE is the load-bearing outcome, not
@@ -4129,7 +4130,7 @@ async function cleanupPreviewForPullRequest(
   const releaseResult = await releaseLeaseDespiteTeardownFailure({
     lease: environmentConfigLease,
     semaphore,
-    teardownOk: ok,
+    teardownOk,
   });
   if (!releaseResult.ok) {
     // Keep the recorded lease in the PR body so a cleanup re-run still finds
@@ -4137,14 +4138,14 @@ async function cleanupPreviewForPullRequest(
     return {
       ok: false,
       released: false,
-      teardownFailed: !ok,
+      teardownFailed: !teardownOk,
       state: latestState,
     };
   }
   const update = await updatePreviewState(params.context, (state) => ({
     ...state,
     environmentConfigLease: null,
-    notice: ok
+    notice: teardownOk
       ? state.notice
       : `Teardown failed but the lease was released; ${environmentConfigLease.slug} is left dirty and its next acquire erases it before use. (preview cleanup at ${new Date().toISOString()})`,
   }));
@@ -4152,7 +4153,7 @@ async function cleanupPreviewForPullRequest(
   return {
     ok: true,
     released: releaseResult.released,
-    teardownFailed: !ok,
+    teardownFailed: !teardownOk,
     state: update.state,
   };
 }
