@@ -4,6 +4,7 @@ import { itxEntrypointBinding, itxEntrypointProps } from "../itx/utils.ts";
 import type { StreamContext } from "../projects/stream-context.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { isDurableObjectLifecycleError } from "../streams/stream-unavailable.ts";
 import { invokePreferringFlattenedPath, replayPath } from "../capability-host/live-capability.ts";
 import { WorkerBuildFailedError, type WorkerBuildFailure } from "./artifact-store.ts";
 import type {
@@ -222,7 +223,6 @@ export class DynamicWorkerRunner {
       };
 
       const retryRequest =
-        ref.type === "stateless" &&
         !isWebSocketUpgradeRequest(request) &&
         (request.method === "GET" || request.method === "HEAD")
           ? // Cloudflare's clone() widens the Request metadata generics even
@@ -233,20 +233,35 @@ export class DynamicWorkerRunner {
       try {
         response = await dispatch(request);
       } catch (error) {
-        if (
-          retryRequest === undefined ||
-          !(error instanceof Error) ||
-          !error.message.includes(WORKERS_RPC_CLONE_VERSION_ERROR)
+        if (retryRequest && ref.type === "stateful" && isDurableObjectLifecycleError(error)) {
+          span.setAttribute("iterate.worker.durable_object_availability_retry", true);
+          console.info("Stateful worker fetch retrying after Durable Object unavailability", {
+            error,
+            projectId: this.#projectId,
+            rayId: request.headers.get("cf-ray") ?? undefined,
+            traceRole,
+          });
+          // GET/HEAD are safe to replay. A deploy, eviction, or temporary
+          // platform fault may retire the hosting DO between dispatch and
+          // response; the second lookup reaches a fresh incarnation, and a
+          // second failure remains terminal.
+          response = await dispatch(retryRequest);
+        } else if (
+          retryRequest &&
+          ref.type === "stateless" &&
+          error instanceof Error &&
+          error.message.includes(WORKERS_RPC_CLONE_VERSION_ERROR)
         ) {
+          span.setAttribute("iterate.worker.rpc_clone_version_retry", true);
+          console.warn("Workers RPC clone-version skew; retrying stateless fetch once", {
+            projectId: this.#projectId,
+            rayId: request.headers.get("cf-ray") ?? undefined,
+            traceRole,
+          });
+          response = await dispatch(retryRequest, crypto.randomUUID());
+        } else {
           throw error;
         }
-        span.setAttribute("iterate.worker.rpc_clone_version_retry", true);
-        console.warn("Workers RPC clone-version skew; retrying stateless fetch once", {
-          projectId: this.#projectId,
-          rayId: request.headers.get("cf-ray") ?? undefined,
-          traceRole,
-        });
-        response = await dispatch(retryRequest, crypto.randomUUID());
       }
       span.setAttribute("http.response.status_code", response.status);
       return response;
