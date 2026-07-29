@@ -20,6 +20,7 @@ test("the linter reads only configured rule files", async () => {
           '    "**/*.{ts,tsx,mts,cts}",',
           '    "!**/*.test.ts",',
           "  ]",
+          "severity: error",
           "---",
           `# ${id}`,
           "",
@@ -49,14 +50,19 @@ test("the linter reads only configured rule files", async () => {
     },
   ]);
   expect(rules).toEqual({
-    "structure/no-lame-helpers": {
-      files: ["**/*.{ts,tsx,mts,cts}", "!**/*.test.ts"],
-      invariant: "# structure/no-lame-helpers\n\nApply structure/no-lame-helpers.",
-    },
-    "typescript/no-inferable-type-annotation": {
-      files: ["**/*.{ts,tsx,mts,cts}", "!**/*.test.ts"],
-      invariant:
-        "# typescript/no-inferable-type-annotation\n\nApply typescript/no-inferable-type-annotation.",
+    commitOid: "abc123",
+    rules: {
+      "structure/no-lame-helpers": {
+        files: ["**/*.{ts,tsx,mts,cts}", "!**/*.test.ts"],
+        invariant: "# structure/no-lame-helpers\n\nApply structure/no-lame-helpers.",
+        severity: "error",
+      },
+      "typescript/no-inferable-type-annotation": {
+        files: ["**/*.{ts,tsx,mts,cts}", "!**/*.test.ts"],
+        invariant:
+          "# typescript/no-inferable-type-annotation\n\nApply typescript/no-inferable-type-annotation.",
+        severity: "error",
+      },
     },
   });
 });

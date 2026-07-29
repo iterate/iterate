@@ -84,9 +84,11 @@ describe("agentCreationForPath", () => {
       defaults.events.find((event) => event.type === "events.iterate.com/agent/created")?.payload,
     ).toEqual({});
     expect(
-      defaults.events.find((event) => event.type === "events.iterate.com/agent/configured")
-        ?.payload,
-    ).toEqual({ config: { llm: { model: "openai/gpt-5.6-sol" } } });
+      defaults.events.find((event) => event.type === "events.iterate.com/agent/configured"),
+    ).toMatchObject({
+      idempotencyKey: `agent/model-configured:v2:${PROJECT_ID}:/agents/demo`,
+      payload: { config: { llm: { model: "openai/gpt-5.6-terra" } } },
+    });
     expect(
       defaults.events.find(
         (event) =>

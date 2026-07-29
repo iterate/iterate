@@ -206,6 +206,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
     content:
       "---\n" +
       "id: structure/no-small-single-use-helper\n" +
+      "severity: error\n" +
       "files:\n" +
       "  [\n" +
       "    \"**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}\",\n" +
@@ -223,6 +224,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
     content:
       "---\n" +
       "id: typescript/explain-type-cast\n" +
+      "severity: error\n" +
       "files:\n" +
       "  [\n" +
       "    \"**/*.{ts,tsx,mts,cts}\",\n" +
@@ -240,6 +242,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
     content:
       "---\n" +
       "id: typescript/no-inferable-type-annotation\n" +
+      "severity: error\n" +
       "files:\n" +
       "  [\n" +
       "    \"**/*.{ts,tsx,mts,cts}\",\n" +

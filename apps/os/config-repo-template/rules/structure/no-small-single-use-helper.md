@@ -1,5 +1,6 @@
 ---
 id: structure/no-small-single-use-helper
+severity: error
 files:
   [
     "**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}",

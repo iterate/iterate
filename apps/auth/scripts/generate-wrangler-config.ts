@@ -38,9 +38,9 @@ export const LOCAL_DEV_AUTH_DB_ID = "local-dev-auth-db";
  * `deploy.ts` fails before deploying when the Doppler config is missing one.
  */
 export const REQUIRED_SECRETS = [
-  // One Doppler-owned key signs Auth JWTs; relying-party deploys derive only
+  // The single ES256 key signs Auth JWTs; relying-party deploys derive only
   // its public half, so they never wait for Auth's live JWKS endpoint.
-  "AUTH_FORGE_PRIVATE_JWK",
+  "AUTH_FORGE_ES256_PRIVATE_JWK",
   "APP_CONFIG_BETTER_AUTH_SECRET",
   "APP_CONFIG_EMAIL_SENDER_DOMAIN",
   "APP_CONFIG_GOOGLE_CLIENT_ID",

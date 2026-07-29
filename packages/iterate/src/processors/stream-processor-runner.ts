@@ -316,7 +316,17 @@ export class StreamProcessorRunner<
    * hosting transport may adapt how the promise is observed, but must not
    * duplicate these semantics.
    */
-  async openEventBatchCallback(expectedStreamId?: string): Promise<{
+  async openEventBatchCallback(
+    expectedStreamId?: string,
+    options?: {
+      /**
+       * The callback source scans every raw offset and sends empty batches for
+       * filtered gaps. It is therefore the sole catch-up driver: a second,
+       * unfiltered journal pull here would bypass the source's filter.
+       */
+      sourceScansAllEvents?: boolean;
+    },
+  ): Promise<{
     checkpointOffset: number;
     processEventBatch: (batch: StreamProcessorEventBatch) => Promise<void>;
   }> {
@@ -338,35 +348,32 @@ export class StreamProcessorRunner<
         // next fire to revival); the transport observes the same rejection
         // through the returned promise and owns the redelivery.
         this.durability?.recovery?.keepAliveWhile(() => attempt);
-        // Hosted-processor batches contain only consumed event types but carry the
-        // stream's maximum offset, so a successful
-        // batch can leave the acknowledged cursor behind `streamMaxOffset`
-        // with remaining unconsumed durable events nothing else will ever send —
-        // the cursor remains below that maximum offset, the last consumed event's
-        // `delivery.caughtUp` never becomes true, and the obligation the batch
-        // opened gets stuck. Every such batch therefore gets a type-unfiltered
-        // read that folds the remaining events through `streamMaxOffset`. Its final
-        // page either marks the last consumed event caught up or makes an
-        // eventless caught-up call when those events contain no consumed event. It
-        // runs on the runner's chain — serialized
-        // with batches, reading the freshest cursor — and is kept alive,
-        // NOT the promise returned to the transport: a failed follow-up read
-        // reads as FAILURE to the keepalive, blocking the quiet-clean disarm
-        // and routing the next alarm fire to revival, whose unfiltered
-        // catch-up is this pull's retry. A failed main attempt takes the
-        // stream's ordinary redelivery instead; no trailing pull follows it.
-        this.#runInBackground(() =>
-          attempt.then(
-            () =>
-              this.#enqueue(async () => {
-                const { processing } = this.#requireProgress();
-                if (processing.acknowledgedThroughOffset < batch.streamMaxOffset) {
-                  await this.#selfCatchUp();
-                }
-              }),
-            () => undefined,
-          ),
-        );
+        // Direct callback batches can contain only consumed event types while
+        // carrying a later raw stream maximum. Without another reader, an
+        // unconsumed tail would keep `delivery.caughtUp` false and strand any
+        // obligation the batch opened. The runner therefore pulls the raw
+        // journal after a successful direct batch. The pull is serialized with
+        // delivery, kept alive independently from the transport promise, and
+        // retried by durable recovery if it fails.
+        //
+        // Hosted stream delivery is different: its source already scans every
+        // raw offset and sends empty frames across configured-filter gaps.
+        // That transport must remain the only catch-up driver or a runner pull
+        // would consume events the subscription explicitly excluded.
+        if (options?.sourceScansAllEvents !== true) {
+          this.#runInBackground(() =>
+            attempt.then(
+              () =>
+                this.#enqueue(async () => {
+                  const { processing } = this.#requireProgress();
+                  if (processing.acknowledgedThroughOffset < batch.streamMaxOffset) {
+                    await this.#selfCatchUp();
+                  }
+                }),
+              () => undefined,
+            ),
+          );
+        }
         return attempt;
       },
     };
@@ -486,10 +493,7 @@ export class StreamProcessorRunner<
       // No await between the check above and registering the waiter below
       // (the helper below registers synchronously), so a batch cannot
       // advance the cursor past `offset` in the gap and be missed.
-      const reached = this.#waitForEventCondition(
-        { kind: "offset", offset },
-        { signal, timeoutMs },
-      );
+      const reached = this.#registerEventWaiter({ kind: "offset", offset }, { signal, timeoutMs });
       // Self-pull, not wait-and-hope: this form's contract is read-your-writes
       // over an append that already committed. A waiting caller must not depend
       // only on an open callback that may stop responding or on a wake call
@@ -508,7 +512,8 @@ export class StreamProcessorRunner<
       return await reached.promise;
     }
     const { predicate, signal, timeoutMs } = args;
-    await this.#waitForEventCondition({ kind: "predicate", predicate }, { signal, timeoutMs });
+    await this.#registerEventWaiter({ kind: "predicate", predicate }, { signal, timeoutMs })
+      .promise;
   }
 
   /** Release processor resources. Idempotent; a disposed runner rejects new work. */
@@ -1156,7 +1161,7 @@ export class StreamProcessorRunner<
     }
   }
 
-  #waitForEventCondition(
+  #registerEventWaiter(
     match:
       | { kind: "predicate"; predicate: (event: StreamEvent) => boolean }
       | { kind: "offset"; offset: number },

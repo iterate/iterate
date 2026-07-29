@@ -220,7 +220,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
  * context key still owns supersession inside the Agent projection.
  */
 const DEFAULT_AGENT_SYSTEM_PROMPT_REVISION = "3";
-const AGENT_MODEL_POLICY_REVISION = "1";
+const AGENT_MODEL_POLICY_REVISION = "2";
 const AGENT_WORKSPACE_POLICY_REVISION = "2";
 const AGENT_BOOT_CONTEXT_REVISION = "2";
 
