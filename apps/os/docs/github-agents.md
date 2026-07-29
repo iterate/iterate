@@ -95,9 +95,12 @@ The package contains the hosted processor, the
 `handleGithubPullRequestWebhook` router, and the rule loader it calls. The
 config worker passes its environment and app config to `GithubAiLinter.create`
 and forwards project events to it. A repository-link event installs or
-replaces the connection-specific subscription; the source stream then wakes
-the hosted processor with verified first-hand webhooks. The router's stable
-idempotency keys collapse redelivery, and copied webhooks are ignored.
+replaces the connection-specific subscription. A root
+`project/worker-updated` event also reapplies subscriptions for every current
+repo link, so a policy version or rule-path change takes effect without
+relinking GitHub. The source stream then wakes the hosted processor with
+verified first-hand webhooks. The router's stable idempotency keys collapse
+redelivery, and copied webhooks are ignored.
 
 The router lists the project's repos, reads their current links, and accepts
 the event only when one link's stream path, installation, and stable repository

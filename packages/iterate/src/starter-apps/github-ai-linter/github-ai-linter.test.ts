@@ -94,6 +94,46 @@ test("a linked connection gets a hosted review processor", async () => {
   );
 });
 
+test("a config worker update refreshes every linked connection processor", async () => {
+  const appended: Array<{ events: StreamEventInput[]; path: string }> = [];
+  const app = GithubAiLinter.create(
+    projectEnv((path, ...events) => appended.push({ events, path }), {
+      "/repos/config": "iterate-installation",
+      "/repos/product": "iterate-installation",
+    }),
+    {
+      policyVersion: "3",
+      rules: {
+        paths: ["rules/structure/no-small-single-use-helper.md"],
+        repoPath: "/repos/config",
+      },
+    },
+  );
+
+  await app.processEvent({
+    ...githubLinkConfigured("ignored", 4),
+    type: "events.iterate.com/project/worker-updated",
+  });
+
+  expect(appended).toHaveLength(1);
+  expect(appended[0]).toMatchObject({
+    path: "/integrations/github/iterate-installation",
+    events: [
+      {
+        idempotencyKey: "review-bot/subscription:/:4",
+        payload: {
+          receiver: {
+            action: "processor-wake",
+            processorSlug: "review-bot",
+          },
+          subscriptionKey: "app-review-bot#review-bot",
+        },
+      },
+    ],
+  });
+  expect(JSON.stringify(appended[0])).toContain('\\"policyVersion\\":\\"3\\"');
+});
+
 test("the processor prefilter admits only review lifecycle events and explicit mentions", () => {
   expect(
     mightWakePullRequestAgent(
@@ -140,11 +180,28 @@ function webhookEvent(input: {
   };
 }
 
-function projectEnv(append: (path: string, ...events: StreamEventInput[]) => void) {
+function projectEnv(
+  append: (path: string, ...events: StreamEventInput[]) => void,
+  repoConnections: Record<string, string> = {},
+) {
   return {
     ITX: {
       get: async () => ({
         [Symbol.dispose]() {},
+        repos: {
+          get: (path: string) => ({
+            processor: {
+              snapshot: async () => ({
+                state: {
+                  github: {
+                    connection: repoConnections[path],
+                  },
+                },
+              }),
+            },
+          }),
+          list: async () => Object.keys(repoConnections).map((path) => ({ path })),
+        },
         streams: {
           get: (path: string) => ({
             append: async (...events: StreamEventInput[]) => append(path, ...events),
