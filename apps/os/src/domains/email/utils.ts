@@ -217,16 +217,24 @@ export function normalizeInboundEmailAllowedSender(pattern: string): string {
  * Authentication-Results header. The sender allowlist alone authenticates
  * nothing — anyone can put an allowlisted address in the From header — so
  * this gate requires the trusted authserv-id (`mx.cloudflare.net`) on the
- * same header line as `dmarc=pass`. A self-forged
+ * same AR *record* as `dmarc=pass`. A self-forged
  * `Authentication-Results: evil; dmarc=pass` alone no longer satisfies it.
+ *
+ * Callers typically pass `headers.get("authentication-results")`, which
+ * joins duplicate AR headers with `", "`. We therefore split on both
+ * newlines and commas that introduce a new authserv-id, then require a
+ * Cloudflare-authored record that contains `dmarc=pass`.
  */
 export function dmarcPasses(authenticationResults: string | null): boolean {
   if (authenticationResults === null) return false;
-  // Pin authserv-id to Cloudflare's MX so a sender-forged AR header cannot
-  // satisfy the check by itself.
-  return /(?:^|[\r\n])[ \t]*mx\.cloudflare\.net\b[^\r\n]*\bdmarc=pass\b/i.test(
-    authenticationResults,
-  );
+  // Split into AR records. Fetch `Headers.get` joins multiples with ", ";
+  // raw MIME may separate them with newlines. Within a single record,
+  // methods are `;`-separated (not comma-separated).
+  const records = authenticationResults.split(/(?:\r?\n|,(?=\s*[^,;\s]+\s*;))/);
+  return records.some((record) => {
+    const trimmed = record.trim();
+    return /^mx\.cloudflare\.net\b/i.test(trimmed) && /\bdmarc=pass\b/i.test(trimmed);
+  });
 }
 
 /**

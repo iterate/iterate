@@ -138,7 +138,7 @@ describe("normalizeInboundEmailAllowedSender", () => {
 });
 
 describe("dmarcPasses", () => {
-  test("requires Cloudflare authserv-id with dmarc=pass on the same line", () => {
+  test("requires Cloudflare authserv-id with dmarc=pass on the same record", () => {
     expect(dmarcPasses("mx.cloudflare.net; spf=pass; dkim=pass; dmarc=pass action=none")).toBe(
       true,
     );
@@ -151,13 +151,22 @@ describe("dmarcPasses", () => {
     expect(dmarcPasses("fake.local; spf=pass; dmarc=pass")).toBe(false);
   });
 
-  test("still accepts Cloudflare pass when a forged line is also present", () => {
-    // CF appends its own AR; an attacker-forged line must not be enough on
-    // its own, but a real CF pass on another line still counts.
+  test("handles newline-separated AR records (raw MIME)", () => {
     expect(dmarcPasses("evil.example; dmarc=pass\nmx.cloudflare.net; spf=pass; dmarc=pass")).toBe(
       true,
     );
     expect(dmarcPasses("evil.example; dmarc=pass\nmx.cloudflare.net; dmarc=fail")).toBe(false);
+  });
+
+  test("handles comma-joined AR records from Headers.get", () => {
+    // headers.get("authentication-results") joins duplicates with ", ".
+    expect(dmarcPasses("evil.example; dmarc=pass, mx.cloudflare.net; spf=pass; dmarc=pass")).toBe(
+      true,
+    );
+    // A forged pass after a real Cloudflare fail must not match across the join.
+    expect(dmarcPasses("mx.cloudflare.net; dmarc=fail, evil.example; dmarc=pass")).toBe(false);
+    // Forged alone, still joined shape.
+    expect(dmarcPasses("evil.example; dmarc=pass, other.example; spf=pass")).toBe(false);
   });
 });
 
