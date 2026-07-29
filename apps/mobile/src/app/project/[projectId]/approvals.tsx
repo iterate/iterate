@@ -11,7 +11,9 @@ import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useMemo } from "react";
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -19,7 +21,12 @@ import {
   View,
 } from "react-native";
 import { CodeBlock } from "../../../components/activity-card.tsx";
-import { enrollApproverKey, loadApproverKey, signWithApproverKey } from "../../../lib/approver.ts";
+import {
+  approverKeyStatus,
+  enrollApproverKey,
+  reenrollApproverKey,
+  signWithApproverKey,
+} from "../../../lib/approver.ts";
 import {
   deriveOpenBatches,
   deriveRecentResolvedBatches,
@@ -61,13 +68,23 @@ export default function ApprovalsScreen() {
   });
   const baseUrl = server.data;
 
+  // The JOIN of the local key and the project's enrolled-key state: a
+  // locally present key the project has revoked must NOT offer Approve (the
+  // door ignores its signatures — batches would strand as "submitted").
   const key = useQuery({
-    queryKey: ["approver-key", projectId],
-    queryFn: () => loadApproverKey(projectId),
+    queryKey: ["approver-key-status", projectId, baseUrl],
+    queryFn: () => approverKeyStatus(baseUrl!, projectId),
+    enabled: baseUrl !== undefined,
   });
+  const enrolledKey = key.data?.kind === "enrolled" ? key.data.key : null;
 
   const enroll = useMutation({
     mutationFn: async () => {
+      if (key.data?.kind === "revoked") {
+        // Recovering a revoked device is a deliberate act: fresh keypair,
+        // never a resurrection of the revoked keyId.
+        return await reenrollApproverKey(baseUrl!, projectId, "This iPhone");
+      }
       const info = await enrollApproverKey(projectId, "This iPhone");
       const project = await getProjectItx(baseUrl!, projectId);
       const stream = project.streams.get("/");
@@ -100,7 +117,9 @@ export default function ApprovalsScreen() {
 
   // ONE decision per batch: approve all or reject all. The approval.v2
   // message binds every request plus the verdicts, so a 12-request batch is
-  // still one Face ID, one signature, one append.
+  // still one Face ID, one signature, one append. Rejecting first asks for an
+  // optional reason, which rides the decided event back to the calling
+  // script's 403 body — the agent reads WHY and can retry with a change.
   const respond = useMutation({
     mutationFn: async (input: { batch: OpenBatch; decision: "approve" | "reject" }) => {
       const project = await getProjectItx(baseUrl!, projectId);
@@ -109,12 +128,15 @@ export default function ApprovalsScreen() {
         (): Verdict => (input.decision === "approve" ? "approve" : "reject"),
       );
       if (input.decision === "reject") {
+        const reason = await promptForRejectReason(input.batch.payload.requests.length);
+        if (reason === null) return; // cancelled — leave the batch held
         await decide({
           stream,
           projectId,
           offset: input.batch.offset,
           payload: input.batch.payload,
           verdicts,
+          reason: reason || undefined,
           sign: null,
         });
         return;
@@ -124,7 +146,7 @@ export default function ApprovalsScreen() {
       // strand the hold with no visible way to retry. Requiring enrollment
       // first means every approval this app sends is real, whether or not
       // other devices have keys.
-      if (!key.data) throw new Error("Enroll this device before approving.");
+      if (!enrolledKey) throw new Error("Enroll this device before approving.");
       await decide({
         stream,
         projectId,
@@ -139,8 +161,9 @@ export default function ApprovalsScreen() {
   return (
     <View style={styles.screen}>
       <Stack.Screen options={{ title: "Approvals" }} />
-      {key.data === null ? (
+      {key.data?.kind === "unenrolled" ? (
         <Pressable
+          accessibilityRole="button"
           style={styles.enrollBanner}
           onPress={() => enroll.mutate()}
           disabled={enroll.isPending}
@@ -149,10 +172,23 @@ export default function ApprovalsScreen() {
             {enroll.isPending ? "Enrolling…" : "Enroll this device to sign approvals"}
           </Text>
         </Pressable>
-      ) : key.data ? (
+      ) : key.data?.kind === "revoked" ? (
+        <Pressable
+          accessibilityRole="button"
+          style={styles.enrollBanner}
+          onPress={() => enroll.mutate()}
+          disabled={enroll.isPending}
+        >
+          <Text style={styles.enrollText}>
+            {enroll.isPending
+              ? "Re-enrolling…"
+              : "This device's approval key was revoked — tap to re-enroll with a fresh key"}
+          </Text>
+        </Pressable>
+      ) : key.data?.kind === "enrolled" ? (
         <View style={styles.enrolledBanner}>
           <Text style={styles.enrolledText}>
-            Signing as {key.data.label} · {key.data.keyId}
+            Signing as {key.data.key.label} · {key.data.key.keyId}
           </Text>
         </View>
       ) : null}
@@ -161,7 +197,7 @@ export default function ApprovalsScreen() {
 
       {events.isPending ? (
         <View style={styles.center}>
-          <ActivityIndicator color={colors.textMuted} />
+          <ActivityIndicator accessibilityLabel="Loading" color={colors.textMuted} />
         </View>
       ) : events.isError ? (
         <View style={styles.center}>
@@ -185,7 +221,7 @@ export default function ApprovalsScreen() {
               baseUrl={baseUrl!}
               interaction={{
                 kind: "pending",
-                canApprove: Boolean(key.data),
+                canApprove: enrolledKey !== null,
                 onRespond: (decision) => respond.mutate({ batch: item, decision }),
                 pending: respond.isPending && respond.variables?.batch.offset === item.offset,
                 submitted: item.submitted,
@@ -330,6 +366,9 @@ function BatchCard({
         <Text style={styles.method}>{headline}</Text>
       )}
       {single ? null : <Text style={styles.groupHosts}>{hostBreakdown(payload.requests)}</Text>}
+      {resolved?.reason ? (
+        <Text style={styles.rejectReason}>Rejected because: {resolved.reason}</Text>
+      ) : null}
 
       {details.data.expanded ? (
         <>
@@ -416,7 +455,11 @@ function BatchCard({
               </Pressable>
               {details.data.script ? (
                 script.isPending ? (
-                  <ActivityIndicator color={colors.textMuted} size="small" />
+                  <ActivityIndicator
+                    accessibilityLabel="Loading"
+                    color={colors.textMuted}
+                    size="small"
+                  />
                 ) : script.isError ? (
                   <Text style={styles.error}>{script.error.message}</Text>
                 ) : (
@@ -445,6 +488,7 @@ function BatchCard({
           ) : (
             <View style={styles.actions}>
               <Pressable
+                accessibilityRole="button"
                 style={[styles.button, styles.reject]}
                 disabled={interaction.pending}
                 onPress={() => interaction.onRespond("reject")}
@@ -452,6 +496,7 @@ function BatchCard({
                 <Text style={styles.rejectText}>{single ? "Reject" : "Reject all"}</Text>
               </Pressable>
               <Pressable
+                accessibilityRole="button"
                 style={[
                   styles.button,
                   styles.approve,
@@ -558,6 +603,32 @@ function RequestDetails({
       ) : null}
     </View>
   );
+}
+
+/**
+ * Ask the human WHY they're rejecting — optional free text that rides the
+ * decided event into each rejected fetch's 403 body, so the calling agent can
+ * retry with a change. Resolves null when the human cancels (the batch stays
+ * held), "" for a reasonless reject. Native gets Alert.prompt (iOS); web gets
+ * window.prompt — the same dialog the playwright spec answers.
+ */
+function promptForRejectReason(count: number): Promise<string | null> {
+  const title = count === 1 ? "Reject this request?" : `Reject all ${count} requests?`;
+  const message = "Optionally tell the agent why, so it can retry differently.";
+  if (Platform.OS === "web") {
+    return Promise.resolve(window.prompt(`${title}\n${message}`, ""));
+  }
+  return new Promise((resolve) => {
+    Alert.prompt(
+      title,
+      message,
+      [
+        { text: "Cancel", style: "cancel", onPress: () => resolve(null) },
+        { text: "Reject", style: "destructive", onPress: (text?: string) => resolve(text || "") },
+      ],
+      "plain-text",
+    );
+  });
 }
 
 const styles = StyleSheet.create({
@@ -687,6 +758,7 @@ const styles = StyleSheet.create({
   buttonDisabled: { opacity: 0.4 },
   approveText: { color: colors.background, fontSize: 14, fontWeight: "600" },
   groupHosts: { color: colors.textMuted, fontFamily: "Menlo", fontSize: 11 },
+  rejectReason: { color: colors.danger, fontSize: 12 },
   groupMembers: {
     gap: spacing.sm,
   },

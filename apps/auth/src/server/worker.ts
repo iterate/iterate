@@ -22,7 +22,7 @@ import { cors } from "hono/cors";
 import { RequestHeadersPlugin } from "@orpc/server/plugins";
 import { onError, ORPCError } from "@orpc/server";
 import { RPCHandler } from "@orpc/server/fetch";
-import { auth, getAllowedBrowserOrigins } from "./auth.ts";
+import { auth, isAllowedBrowserOrigin } from "./auth.ts";
 import { db } from "./db/index.ts";
 import { config } from "./env.ts";
 import { hono, variablesProvider, type Variables } from "./utils/hono.ts";
@@ -44,7 +44,6 @@ import {
 } from "./project-directory.ts";
 
 const app = hono();
-const allowedBrowserOrigins = new Set(getAllowedBrowserOrigins());
 const AUTH_ISSUER_PATH = "/api/auth";
 
 app.use(
@@ -52,7 +51,7 @@ app.use(
     origin: (origin) => {
       if (!origin || !URL.canParse(origin)) return null;
       const normalizedOrigin = new URL(origin).origin;
-      return allowedBrowserOrigins.has(normalizedOrigin) ? normalizedOrigin : null;
+      return isAllowedBrowserOrigin(normalizedOrigin) ? normalizedOrigin : null;
     },
     credentials: true,
     allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],

@@ -1,5 +1,5 @@
 import * as Crypto from "expo-crypto";
-import * as SecureStore from "expo-secure-store";
+import * as SecureStore from "./secure-store.ts";
 
 const DEVICE_ID_KEY = "iterate.mobileDeviceId.v1";
 const LEGACY_LOCATION_DEVICE_ID_KEY = "iterate.locationReminderDeviceId.v1";
