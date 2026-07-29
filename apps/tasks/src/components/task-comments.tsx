@@ -39,8 +39,9 @@ export function TaskComments({
    * wait it out: the raw-write fallback lane races the arriving session,
    * which then flushes its older snapshot over the write. */
   busy: boolean;
-  /** Route a whole-file transform to the live editor or the write lane. */
-  onTransform: (transform: (source: string) => string) => void;
+  /** Route a whole-file transform to the live editor or the write lane;
+   * resolves whether it landed (the write lane can roll back). */
+  onTransform: (transform: (source: string) => string) => Promise<boolean>;
 }) {
   const parsed = useMemo(() => parseAnnotatedMarkdown(source), [source]);
   const [open, setOpen] = useState(true);
@@ -50,14 +51,17 @@ export function TaskComments({
   // The transform re-parses at apply time: the live document may have moved
   // since this render, so ops must re-find their targets by id — and back off
   // to a no-op (surfacing the reason) instead of corrupting the file.
-  const apply = (op: DiscussionOp): boolean => {
+  // Resolution waits for the WRITE, not just the transform: the fallback
+  // write lane is optimistic and rolls back on RPC failure, and callers
+  // (composers clearing drafts) must not celebrate a change that vanished.
+  const apply = async (op: DiscussionOp): Promise<boolean> => {
     if (busy) {
       setOpError("Comment change failed: the editor is still connecting — retry in a moment");
       return false;
     }
     let ok = false;
     let failure = "the file changed mid-edit";
-    onTransform((current) => {
+    const landed = await onTransform((current) => {
       const doc = parseAnnotatedMarkdown(current);
       if (doc.kind !== "structured") {
         failure = doc.diagnostics[0]?.message ?? "the file failed to parse";
@@ -72,6 +76,8 @@ export function TaskComments({
         return current;
       }
     });
+    if (ok && !landed) failure = "the write did not reach the workspace — retry";
+    ok = ok && landed;
     setOpError(ok ? null : `Comment change failed: ${failure}`);
     return ok;
   };
@@ -155,7 +161,7 @@ function ThreadBlock({
 }: {
   thread: Thread;
   identity: CommentIdentity | null;
-  apply: (op: DiscussionOp) => boolean;
+  apply: (op: DiscussionOp) => Promise<boolean>;
 }) {
   const [replyOpen, setReplyOpen] = useState(false);
   const resolved = thread.status === "resolved";
@@ -189,7 +195,7 @@ function ThreadBlock({
           <button
             type="button"
             onClick={() =>
-              apply((doc) => setThreadStatus(doc, thread.id, resolved ? "open" : "resolved"))
+              void apply((doc) => setThreadStatus(doc, thread.id, resolved ? "open" : "resolved"))
             }
             className="flex items-center gap-1 text-xs text-muted-foreground underline-offset-2 hover:underline"
           >
@@ -212,13 +218,14 @@ function ThreadBlock({
             submitLabel="Reply"
             focusOnMount
             onCancel={() => setReplyOpen(false)}
-            onSubmit={(body) => {
-              const ok = apply((doc) =>
+            onSubmit={(body) =>
+              apply((doc) =>
                 addComment(doc, { threadId: thread.id, body, createdAt: nowIso(), ...identity }),
-              );
-              if (ok) setReplyOpen(false);
-              return ok;
-            }}
+              ).then((ok) => {
+                if (ok) setReplyOpen(false);
+                return ok;
+              })
+            }
           />
         </div>
       ) : null}
@@ -233,7 +240,7 @@ function CommentRow({
 }: {
   comment: ThreadComment;
   mine: boolean;
-  apply: (op: DiscussionOp) => boolean;
+  apply: (op: DiscussionOp) => Promise<boolean>;
 }) {
   const [editing, setEditing] = useState<string | null>(null);
   const name = comment.displayName ?? comment.author;
@@ -269,7 +276,7 @@ function CommentRow({
               <button
                 type="button"
                 aria-label="Delete comment"
-                onClick={() => apply((doc) => deleteComment(doc, comment.id))}
+                onClick={() => void apply((doc) => deleteComment(doc, comment.id))}
                 className="text-muted-foreground hover:text-destructive"
               >
                 <Trash2Icon aria-hidden className="size-3" />
@@ -286,11 +293,12 @@ function CommentRow({
             initialValue={editing}
             focusOnMount
             onCancel={() => setEditing(null)}
-            onSubmit={(body) => {
-              const ok = apply((doc) => editComment(doc, comment.id, body));
-              if (ok) setEditing(null);
-              return ok;
-            }}
+            onSubmit={(body) =>
+              apply((doc) => editComment(doc, comment.id, body)).then((ok) => {
+                if (ok) setEditing(null);
+                return ok;
+              })
+            }
           />
         ) : (
           <div className="text-sm">
@@ -319,18 +327,25 @@ function CommentComposer({
   initialValue?: string;
   /** Reply/edit composers appear on user action and take focus then. */
   focusOnMount?: boolean;
-  /** Returns whether the edit landed — the draft clears only on success. */
-  onSubmit: (body: string) => boolean;
+  /** Resolves whether the edit LANDED (the write lane is async and can roll
+   * back) — the draft clears only on success, so nothing typed is lost. */
+  onSubmit: (body: string) => Promise<boolean>;
   onCancel?: () => void;
 }) {
   const [draft, setDraft] = useState(initialValue ?? "");
+  const [submitting, setSubmitting] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   useEffect(() => {
     if (focusOnMount) textareaRef.current?.focus();
   }, [focusOnMount]);
   const submit = () => {
-    if (draft.trim() === "") return;
-    if (onSubmit(draft)) setDraft("");
+    if (submitting || draft.trim() === "") return;
+    setSubmitting(true);
+    void onSubmit(draft)
+      .then((ok) => {
+        if (ok) setDraft("");
+      })
+      .finally(() => setSubmitting(false));
   };
   return (
     <div className="flex flex-col gap-1.5">
@@ -358,7 +373,7 @@ function CommentComposer({
             Cancel
           </Button>
         )}
-        <Button size="sm" disabled={draft.trim() === ""} onClick={submit}>
+        <Button size="sm" disabled={submitting || draft.trim() === ""} onClick={submit}>
           {submitLabel}
         </Button>
       </div>

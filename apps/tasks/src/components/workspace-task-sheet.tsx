@@ -91,8 +91,9 @@ export function WorkspaceTaskSheet({
   editorApiRef?: { current: import("../lib/collab-editor-api.ts").CollabEditorApi | null };
   /** Who authors discussion comments (null → comments are read-only). */
   commentIdentity: import("./task-comments.tsx").CommentIdentity | null;
-  /** Route a whole-file transform to the live editor or the write lane. */
-  onApplyTransform: (transform: (source: string) => string) => void;
+  /** Route a whole-file transform to the live editor or the write lane;
+   * resolves whether it landed (the write lane can roll back). */
+  onApplyTransform: (transform: (source: string) => string) => Promise<boolean>;
   onLiveContent: (path: string, content: string) => void;
   onChangeState: (state: string) => void;
   onChangeLabels: (labels: string[]) => void;
@@ -177,8 +178,9 @@ function SheetBody({
   editorApiRef?: { current: import("../lib/collab-editor-api.ts").CollabEditorApi | null };
   /** Who authors discussion comments (null → comments are read-only). */
   commentIdentity: import("./task-comments.tsx").CommentIdentity | null;
-  /** Route a whole-file transform to the live editor or the write lane. */
-  onApplyTransform: (transform: (source: string) => string) => void;
+  /** Route a whole-file transform to the live editor or the write lane;
+   * resolves whether it landed (the write lane can roll back). */
+  onApplyTransform: (transform: (source: string) => string) => Promise<boolean>;
   onLiveContent: (path: string, content: string) => void;
   onChangeState: (state: string) => void;
   onChangeLabels: (labels: string[]) => void;

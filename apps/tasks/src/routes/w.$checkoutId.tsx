@@ -207,10 +207,14 @@ function WorkspaceBoardPage() {
   );
 
   /** The live-doc rule, structurally: transform the OPEN file in its editor,
-   * else write the transformed board copy. */
+   * else write the transformed board copy. Resolves whether the change
+   * LANDED — the write lane is optimistic and rolls back on RPC failure, so
+   * callers that promised the user something (a comment composer clearing
+   * its draft) must wait for this, not for the sync transform. */
   const mutateTask = useCallback(
-    (task: BoardTask, transform: (source: string) => string) => {
-      if (!applyLive(task.path, transform)) board.writeTask(task.path, transform(sourceOf(task)));
+    (task: BoardTask, transform: (source: string) => string): Promise<boolean> => {
+      if (applyLive(task.path, transform)) return Promise.resolve(true);
+      return board.writeTask(task.path, transform(sourceOf(task)));
     },
     [applyLive, board, sourceOf],
   );
@@ -309,7 +313,7 @@ function WorkspaceBoardPage() {
         return next;
       };
       if (folder === task.folder) {
-        mutateTask(task, transform);
+        void mutateTask(task, transform);
         return;
       }
       // ONE rename at a time (same lock as the path input and the draft
@@ -585,11 +589,12 @@ function WorkspaceBoardPage() {
         changeStatus={openTask === null ? undefined : board.changes.get(openTask.path)}
         onLiveContent={board.reflectLiveContent}
         onChangeState={(state) => {
-          if (openTask !== null) mutateTask(openTask, (current) => setTaskCardState(current, state));
+          if (openTask !== null)
+            void mutateTask(openTask, (current) => setTaskCardState(current, state));
         }}
         onChangeLabels={(labels) => {
           if (openTask !== null)
-            mutateTask(openTask, (current) => setTaskCardLabels(current, labels));
+            void mutateTask(openTask, (current) => setTaskCardLabels(current, labels));
         }}
         onRename={(nextPath) =>
           openTask === null ? Promise.resolve(null) : renameTask(openTask, nextPath)
@@ -598,9 +603,9 @@ function WorkspaceBoardPage() {
         redline={trackChanges}
         editorApiRef={editorApiRef}
         commentIdentity={commentIdentity}
-        onApplyTransform={(transform) => {
-          if (openTask !== null) mutateTask(openTask, transform);
-        }}
+        onApplyTransform={(transform) =>
+          openTask === null ? Promise.resolve(false) : mutateTask(openTask, transform)
+        }
         focusHeadline={
           openTask !== null && openTask.path === draftPath ? draftFocusRef.current : undefined
         }
