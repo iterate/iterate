@@ -45,6 +45,30 @@ There is no pairing form, no OIDC client, and no capability door. The only
 DO state is the Yjs blob; auth is per-join and per-op (the token is
 verified by using it against the platform).
 
+## Task comments
+
+Tasks carry Linear-style discussion threads **inside the markdown file
+itself**: an EOF store of paired `<!-- task-thread:v1 … -->` /
+`<!-- task-comment:v1 … -->` HTML-comment sentinels, readable in any editor
+and invisible in rendered markdown. Parsing and splice-based mutations live
+in the standalone `iterate/annotated-markdown` codec
+(`packages/iterate/src/annotated-markdown/README.md` is the grammar).
+`tasks-model.ts` parses cards through the codec (comment counts on board
+cards; strict-parse failures fall back to the legacy lenient split), the
+sheet's Comments section (`components/task-comments.tsx`) renders and
+mutates threads, and every mutation is an ordinary whole-file transform
+through the live-editor/write lane — so comments commit, diff, and merge
+like any other task edit.
+
+The Preview tab is the annotation surface: the body renders through
+`iterate/annotated-markdown/react` (a source-stamped mdast renderer),
+anchored threads paint as CSS Custom Highlights in their author's color,
+and selecting text opens a comment bubble whose thread lands in the file
+with a W3C-style anchor (quote + context + position; no inline marker).
+Clicking a highlight selects its thread in the Comments strip and vice
+versa; drifted anchors surface as `needs_review`/`orphaned` badges rather
+than painting the wrong text.
+
 ## Using it
 
 Install `@iterate-com/tasks`, configure its project-side connector, and route

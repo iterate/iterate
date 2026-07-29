@@ -43,6 +43,10 @@ export class CollabConnection {
   epoch = "";
   /** Own ops seen back in deliveries — the stable clientSeq base. */
   confirmed = 0;
+  /** True once this session can never sync again (file ended, pull loop gave
+   * up, or an over-cap push stopped it). The peer plugin sets it exactly
+   * where it stops; a reseed rebuilds a fresh plugin and clears it. */
+  dead = false;
   /** Fold of confirmed ops only — the reseed baseline for carrying
    * unconfirmed local edits across a snapshot re-sync. */
   onStatus: (status: string) => void = () => {};
@@ -173,6 +177,7 @@ export class CollabConnection {
   reseed(snapshot: { content: string; epoch: string; version: number }): void {
     this.epoch = snapshot.epoch;
     this.confirmed = 0;
+    this.dead = false;
     // Fresh dedupe identity: same-epoch recovery restarts clientSeq at 0, and
     // the server has already acked the old (clientId, seq) pairs — reusing
     // them would silently drop every carried edit.
@@ -221,6 +226,7 @@ export function peerExtension(connection: CollabConnection, startVersion: number
               // The batch can never succeed; stop the session loudly rather
               // than retrying an impossible push forever.
               this.done = true;
+              connection.dead = true;
               connection.onStatus(`edit too large (cap ${result.maxBytes} bytes) — reopen the file`);
               return;
             case "epoch-mismatch":
@@ -250,6 +256,7 @@ export function peerExtension(connection: CollabConnection, startVersion: number
               // The file was deleted/replaced/reset: the session is gone for
               // everyone. Surface it and stop — reopening is a page decision.
               this.done = true;
+              connection.dead = true;
               connection.onStatus("session ended (file deleted or replaced)");
               return;
             }
@@ -291,6 +298,7 @@ export function peerExtension(connection: CollabConnection, startVersion: number
             this.failures++;
             if (this.failures > 8) {
               this.done = true;
+              connection.dead = true;
               connection.onStatus(`disconnected: ${message(error)}`);
               return;
             }
