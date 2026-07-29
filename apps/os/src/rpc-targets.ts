@@ -465,6 +465,11 @@ const PARALLEL_API_BASE_URL = "https://api.parallel.ai";
 // A wedged processor must fail the caller loudly instead of parking an RPC
 // forever; the durable birth events remain committed for ordinary redelivery.
 const PROCESSOR_BIRTH_WAIT_TIMEOUT_MS = 75_000;
+// A newly addressed Durable Object can remain assigned to the previous Worker
+// version beyond the generic 30-second readiness window. Project birth is
+// still entirely read-only at this boundary, so give rollout convergence a
+// larger bounded share of create() without appending or replaying birth facts.
+const PROJECT_BIRTH_DEPLOYMENT_WAIT_TIMEOUT_MS = 60_000;
 // Project birth is heavier than the other creation barriers: it includes the
 // config repository's Artifacts write and terminal copy. Keep explicit
 // headroom between the nested sibling barrier (75s), the Project processor
@@ -5803,24 +5808,38 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       projectId: registered.projectId,
     });
     const expectedDeploymentVersion = workerDeploymentVersion(env);
+    const projectBirthDeploymentWaitTimeoutMs = Math.min(
+      PROJECT_BIRTH_DEPLOYMENT_WAIT_TIMEOUT_MS,
+      Math.max(1, projectCreateDeadline - Date.now()),
+    );
     const [, { target: readyBirthStream }] = await timedStep(
       "create-timing",
       timing,
       "wait-project-deployment-before-birth",
       () =>
         Promise.all([
-          waitForProjectBirthDeploymentVersion({
-            expectedVersion: expectedDeploymentVersion,
-            getTarget: () => this.durableObjectStub,
-            projectId: registered.projectId,
-            targetKind: "Project Durable Object",
-          }),
-          waitForProjectBirthDeploymentVersion({
-            expectedVersion: expectedDeploymentVersion,
-            getTarget: () => birthStream[STREAM_DURABLE_OBJECT_STUB],
-            projectId: registered.projectId,
-            targetKind: "Stream Durable Object",
-          }),
+          waitForProjectBirthDeploymentVersion(
+            {
+              expectedVersion: expectedDeploymentVersion,
+              getTarget: () => this.durableObjectStub,
+              projectId: registered.projectId,
+              targetKind: "Project Durable Object",
+            },
+            {
+              timeoutMs: projectBirthDeploymentWaitTimeoutMs,
+            },
+          ),
+          waitForProjectBirthDeploymentVersion(
+            {
+              expectedVersion: expectedDeploymentVersion,
+              getTarget: () => birthStream[STREAM_DURABLE_OBJECT_STUB],
+              projectId: registered.projectId,
+              targetKind: "Stream Durable Object",
+            },
+            {
+              timeoutMs: projectBirthDeploymentWaitTimeoutMs,
+            },
+          ),
         ]),
     );
     const creatorEmail = userPrincipalOf(this.#props.auth)?.email;

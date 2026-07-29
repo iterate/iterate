@@ -598,6 +598,48 @@ behavior unless the input is explicitly selected. Each counted run still uses
 the normal 16-core Depot preview job, every normal test lane, retained
 artifacts, GitHub timing, and the same PostHog finalizer.
 
+Subsequent lifecycle diagnostics closed three more unsafe identity and
+settlement boundaries before another count could begin. Script execution ids
+are offsets local to one scope stream, not globally unique names, so executors
+now hash project, scope, stream lifetime, and execution id into their Durable
+Object identity. A terminal script result is appended to the authoritative
+stream before executor state is compacted; a recovered `running` executor reads
+that keyed settlement and adopts it instead of falsely declaring an already
+completed script orphaned. Repo `commitFiles` now performs its final read-only
+deployment-version convergence on a fresh Repo stub and sends the mutation
+only through that exact proven stub. It never retries an ambiguous mutation.
+
+The automatic exact-head run for `c4178375d` then completed successfully in 244
+seconds but was correctly rejected because
+`agent-chat.spec.ts › agent replies to a browser chat message in the feed`
+passed only on Playwright's second attempt. Depot aggregate `nk44mbjxdh`,
+canonical workflow `vptlfsn2q4`, job `pq90nzl6bg`, and attempt `4mrph785nx`
+retained ten raw artifacts and normalized 7,154 PostHog events. The first
+attempt spent its entire 30-second pre-birth gate observing the new project's
+Stream Durable Object on the previous Worker version; no root birth fact was
+appended. Retry began after rollout had converged and passed.
+
+Cloudflare trace `d46c7886236ff1df6fa8197fe24b3cee` makes the boundary
+explicit. The public `Project.create` turn lasted 30.192 seconds. Eleven Stream
+version probes and 35 matching storage spans executed on the previous version
+across the whole window, while the sibling Project probe reached the expected
+version. This is a safe, read-only convergence timeout, not a partially applied
+create. Brand-new project birth therefore receives a bounded 60-second
+deployment wait inside its existing 100-second outer create deadline. Both the
+Project and root Stream must converge before any birth append; exhausting the
+larger window still fails with the durable identity and directory entry
+preserved and zero birth mutations sent.
+
+The post-merge monorepo gate also exposed an independent local test flake rather
+than hiding it with a rerun. `dummy-petshop` generated eleven separate 2048-bit
+RSA keypairs inside individual five-second tests. Under host contention the
+expired-JWT case timed out during setup at 5.025 seconds, while the assertion
+was never reached. The file now generates one immutable legitimate keypair and
+one attacker keypair in a bounded suite fixture; every test still owns isolated
+shop state and still performs real WebCrypto signing and verification. The
+focused 12-test file fell from 19.8 seconds with one timeout to 0.5 seconds
+green.
+
 ## Round 15 (2026-07-23, post-#2284)
 
 This round starts from merged `origin/main` at

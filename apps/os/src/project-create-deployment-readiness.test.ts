@@ -58,18 +58,30 @@ describe("ProjectRpcTarget create deployment readiness", () => {
     ).rejects.toBe(notReady);
 
     expect(projectDirectoryPut).toHaveBeenCalledTimes(2);
-    expect(waitForProjectBirthDeploymentVersion).toHaveBeenNthCalledWith(1, {
-      expectedVersion: { id: "version-new" },
-      getTarget: expect.any(Function),
-      projectId: "prj_rollout_race",
-      targetKind: "Project Durable Object",
-    });
-    expect(waitForProjectBirthDeploymentVersion).toHaveBeenNthCalledWith(2, {
-      expectedVersion: { id: "version-new" },
-      getTarget: expect.any(Function),
-      projectId: "prj_rollout_race",
-      targetKind: "Stream Durable Object",
-    });
+    expect(waitForProjectBirthDeploymentVersion).toHaveBeenNthCalledWith(
+      1,
+      {
+        expectedVersion: { id: "version-new" },
+        getTarget: expect.any(Function),
+        projectId: "prj_rollout_race",
+        targetKind: "Project Durable Object",
+      },
+      {
+        timeoutMs: 60_000,
+      },
+    );
+    expect(waitForProjectBirthDeploymentVersion).toHaveBeenNthCalledWith(
+      2,
+      {
+        expectedVersion: { id: "version-new" },
+        getTarget: expect.any(Function),
+        projectId: "prj_rollout_race",
+        targetKind: "Stream Durable Object",
+      },
+      {
+        timeoutMs: 60_000,
+      },
+    );
     expect(streamGetByName).not.toHaveBeenCalled();
   });
 });
