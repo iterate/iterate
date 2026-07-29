@@ -138,12 +138,26 @@ describe("normalizeInboundEmailAllowedSender", () => {
 });
 
 describe("dmarcPasses", () => {
-  test("requires dmarc=pass in the Authentication-Results value", () => {
+  test("requires Cloudflare authserv-id with dmarc=pass on the same line", () => {
     expect(dmarcPasses("mx.cloudflare.net; spf=pass; dkim=pass; dmarc=pass action=none")).toBe(
       true,
     );
     expect(dmarcPasses("mx.cloudflare.net; spf=pass; dmarc=fail")).toBe(false);
     expect(dmarcPasses(null)).toBe(false);
+  });
+
+  test("rejects a self-forged Authentication-Results without Cloudflare authserv-id", () => {
+    expect(dmarcPasses("evil.example; dmarc=pass")).toBe(false);
+    expect(dmarcPasses("fake.local; spf=pass; dmarc=pass")).toBe(false);
+  });
+
+  test("still accepts Cloudflare pass when a forged line is also present", () => {
+    // CF appends its own AR; an attacker-forged line must not be enough on
+    // its own, but a real CF pass on another line still counts.
+    expect(dmarcPasses("evil.example; dmarc=pass\nmx.cloudflare.net; spf=pass; dmarc=pass")).toBe(
+      true,
+    );
+    expect(dmarcPasses("evil.example; dmarc=pass\nmx.cloudflare.net; dmarc=fail")).toBe(false);
   });
 });
 

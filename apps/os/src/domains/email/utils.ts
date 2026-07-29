@@ -213,19 +213,20 @@ export function normalizeInboundEmailAllowedSender(pattern: string): string {
 }
 
 /**
- * True when an Authentication-Results header (added by Cloudflare's inbound
- * MX) reports `dmarc=pass`. Without this, the sender allowlist authenticates
- * nothing — anyone can put an allowlisted address in the From header.
- *
- * Spike caveat: this scans the combined Authentication-Results value rather
- * than verifying the authserv-id, so a sender who *also* forges an
- * `Authentication-Results: ...dmarc=pass` header of their own could satisfy
- * it. Acceptable while inbound is allowlist-gated to trusted senders;
- * production hardening should pin the `mx.cloudflare.net` authserv-id chunk.
+ * True when Cloudflare's inbound MX reports `dmarc=pass` on an
+ * Authentication-Results header. The sender allowlist alone authenticates
+ * nothing — anyone can put an allowlisted address in the From header — so
+ * this gate requires the trusted authserv-id (`mx.cloudflare.net`) on the
+ * same header line as `dmarc=pass`. A self-forged
+ * `Authentication-Results: evil; dmarc=pass` alone no longer satisfies it.
  */
 export function dmarcPasses(authenticationResults: string | null): boolean {
   if (authenticationResults === null) return false;
-  return /\bdmarc=pass\b/i.test(authenticationResults);
+  // Pin authserv-id to Cloudflare's MX so a sender-forged AR header cannot
+  // satisfy the check by itself.
+  return /(?:^|[\r\n])[ \t]*mx\.cloudflare\.net\b[^\r\n]*\bdmarc=pass\b/i.test(
+    authenticationResults,
+  );
 }
 
 /**

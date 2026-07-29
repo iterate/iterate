@@ -2321,13 +2321,14 @@ function parseEditRepoFileInput(input: EditRepoFileInput): EditRepoFileInput {
 function normalizeRepoFilePath(path: string): string {
   if (typeof path !== "string") throw new Error("Repo file path must be a string.");
   const normalized = path.trim().replace(/^\/+/, "");
+  // Reject empty / relative / .git paths, including bare ".." and any
+  // path segment that is ".." or "." (e.g. "foo/..", "foo/./bar").
   if (
     normalized === "" ||
     normalized === "." ||
-    normalized.startsWith("../") ||
-    normalized.includes("/../") ||
-    normalized.includes("/./") ||
-    normalized.startsWith(".git/")
+    normalized === ".." ||
+    normalized.startsWith(".git/") ||
+    normalized.split("/").some((segment) => segment === "" || segment === "." || segment === "..")
   ) {
     throw new Error(`Invalid repo file path: "${path}".`);
   }

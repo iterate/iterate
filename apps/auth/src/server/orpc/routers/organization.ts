@@ -217,6 +217,12 @@ const createInvite = os.organization.createInvite
 
     const inviteId = generateId("inv");
     const role = input.role ?? "member";
+    // Mirror updateMemberRole: admin middleware admits both owner and admin,
+    // so owner elevation must be checked here or a non-owner admin can mint
+    // an owner invite for themselves.
+    if (role === "owner" && context.membership?.role !== "owner" && context.user.role !== "admin") {
+      throw new ORPCError("FORBIDDEN", { message: "Only owners can invite as owner" });
+    }
     const config = parseConfig(context.env);
     const invitationUrl = new URL(`/invitations/${inviteId}`, config.authAppOrigin);
     invitationUrl.searchParams.set("organization", context.organization.slug);
