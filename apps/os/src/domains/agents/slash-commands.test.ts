@@ -28,10 +28,18 @@ test("/script never return-wraps statement keywords, even on one line", () => {
 });
 
 test("/example resolves a catalogue slug into the shared run-script envelope", () => {
-  const resolved = resolveSlashCommand('/example whoami {"who":"me"}');
+  const resolved = resolveSlashCommand('/example describe-project {"who":"me"}');
   expect(resolved).toMatchObject({ command: "example" });
   expect(resolved!.code).toContain('const vars = {"who":"me"};');
   expect(resolved!.code.startsWith("async (itx) => {")).toBe(true);
+});
+
+test("/example only resolves entries the run-script door can actually run", () => {
+  // `whoami` is session-context (needs the OS Session, no itx here) and
+  // `run-script` is a project entry without the run-script runtime — both
+  // fall through to the LLM instead of silently doing nothing.
+  expect(resolveSlashCommand("/example whoami")).toBeNull();
+  expect(resolveSlashCommand("/example run-script")).toBeNull();
 });
 
 test("anything that does not resolve falls through to the model as plain text", () => {

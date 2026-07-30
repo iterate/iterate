@@ -1857,6 +1857,23 @@ describe("AgentProcessor slash commands", () => {
 });
 
 describe("AgentProcessor summary", () => {
+  it("a resolving slash command is a side-band action and does not retire the wait", async () => {
+    const h = makeAgentHarness();
+    await h.play([
+      "append",
+      ...NEW_AGENT_EVENTS,
+      {
+        type: "events.iterate.com/agent/summary-updated",
+        payload: { waitingFor: "user_input" },
+      },
+      userMessage("/script await itx.__describe()"),
+    ]);
+    // The command ran (script requested) but the agent still awaits a real
+    // answer — no clear was appended.
+    expect(h.state().summary.waitingFor).toBe("user_input");
+    expect(h.events("events.iterate.com/agent/summary-updated")).toHaveLength(1);
+  });
+
   it("folds summary updates, and a qualifying wake conditionally clears only a wait it followed", async () => {
     const h = makeAgentHarness();
     await h.play([

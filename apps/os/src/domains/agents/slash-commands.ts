@@ -42,7 +42,15 @@ export function resolveSlashCommand(content: string): ResolvedSlashCommand | nul
   const exampleMatch = trimmed.match(/^\/example\s+([a-z0-9-]+)\s*([\s\S]*)$/);
   if (exampleMatch) {
     const [, slug, rest] = exampleMatch;
-    const example = ITX_EXAMPLES.find((entry) => entry.id === slug);
+    // Only entries that genuinely run through the run-script door qualify:
+    // session-context examples (whoami via the OS Session) have no itx here,
+    // and non-run-script runtimes would silently do nothing. Agent-context
+    // entries DO qualify — a chat thread is exactly the live conversation
+    // they need. Everything else falls through to the LLM like a typo.
+    const example = ITX_EXAMPLES.find(
+      (entry) =>
+        entry.id === slug && entry.context !== "session" && entry.runtimes.includes("run-script"),
+    );
     if (!example) return null;
     let vars: Record<string, unknown> = {};
     if (rest!.trim() !== "") {
