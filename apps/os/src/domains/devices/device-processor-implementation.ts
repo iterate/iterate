@@ -41,6 +41,18 @@ import {
  * idempotency-keyed on the requestOffset, so the expiry sweep, the send path,
  * and the receipt check collapse to one terminal fact.
  *
+ * Approval-batch obligations (their request carries an
+ * approvalRequestEventOffset) additionally wait `config.approvalGraceMs`
+ * before any attempt: a client already showing the batch appends a
+ * `project/approval-presented` claim to the project root stream (the same
+ * subscription copies it here), and a claim that reduces while the obligation
+ * is still `requested` settles it `suppressed` — the phone must not ring
+ * about something on screen. A grace expiry appends no event, so the at-head
+ * pass points the DO's grace alarm slice at the earliest pending expiry and
+ * the alarm calls `releaseApprovalGraces` to run the send outside delivery
+ * (the receipt check's exact shape). A claim arriving after the attempt
+ * started is a no-op.
+ *
  * Receipts run outside delivery: the at-head pass points the Durable Object's
  * alarm slice at the earliest due check (`ticketObservedAt` +
  * `config.receiptCheckDelayMs`), and the DO's alarm calls `checkReceipts` with
@@ -144,7 +156,13 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
     const settlements: { requestOffset: number; outcome: DeviceNotificationOutcome }[] = [];
     for (const [offset, notification] of Object.entries(state.notifications)) {
       const requestOffset = Number(offset);
-      if (notification.status === "requested" && notification.expiresAt <= this.deps.now()) {
+      if (notification.status === "requested" && notification.presentedAt !== undefined) {
+        // A claim landed while the obligation was still unattempted: the user
+        // is already looking at the batch, so the push dies here — checked
+        // before expiry because both mean "never dial Expo" and suppression
+        // is the truer account.
+        settlements.push({ requestOffset, outcome: { kind: "suppressed" } });
+      } else if (notification.status === "requested" && notification.expiresAt <= this.deps.now()) {
         settlements.push({ requestOffset, outcome: { kind: "expired" } });
       } else if (notification.status === "requested" && pushTokenSecret === null) {
         settlements.push({ requestOffset, outcome: { kind: "device-unavailable" } });
@@ -171,7 +189,23 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
         const at = notification.ticketObservedAt! + state.config.receiptCheckDelayMs;
         return earliest === null || at < earliest ? at : earliest;
       }, null);
-    if (settlements.length > 0 || nextReceiptCheck !== null) {
+    // Approval obligations inside their grace window wait for a claim that may
+    // never come, and a grace expiry appends NO event — so point the DO's
+    // grace alarm slice at the earliest pending expiry; its firing calls
+    // releaseApprovalGraces below.
+    const nextGraceExpiry = Object.values(state.notifications)
+      .filter(
+        (notification) =>
+          notification.status === "requested" &&
+          notification.approvalRequestEventOffset !== undefined &&
+          notification.presentedAt === undefined,
+      )
+      .reduce<number | null>((earliest, notification) => {
+        const at = notification.requestedAt + state.config.approvalGraceMs;
+        if (at <= this.deps.now()) return earliest;
+        return earliest === null || at < earliest ? at : earliest;
+      }, null);
+    if (settlements.length > 0 || nextReceiptCheck !== null || nextGraceExpiry !== null) {
       runInBackground(async () => {
         if (settlements.length > 0) {
           // Race-tolerant: the alarm-driven receipt check (or a raced sibling
@@ -190,6 +224,9 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
         if (nextReceiptCheck !== null) {
           await this.deps.repointReceiptAlarm(nextReceiptCheck);
         }
+        if (nextGraceExpiry !== null) {
+          await this.deps.repointApprovalGraceAlarm(nextGraceExpiry);
+        }
       });
     }
 
@@ -200,9 +237,18 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
     if (pushTokenSecret === null || this.projectId === null) return;
     for (const [offset, notification] of Object.entries(state.notifications)) {
       const requestOffset = Number(offset);
+      // An approval obligation is not runnable until its grace window
+      // elapses (giving a foregrounded client time to claim it), and never
+      // once claimed — the sweep above settles claimed ones `suppressed`.
+      const graceUntil =
+        notification.approvalRequestEventOffset === undefined
+          ? 0
+          : notification.requestedAt + state.config.approvalGraceMs;
       if (
         notification.status !== "requested" ||
         notification.expiresAt <= this.deps.now() ||
+        notification.presentedAt !== undefined ||
+        this.deps.now() < graceUntil ||
         this.#liveSendAttempts.has(requestOffset)
       ) {
         continue;
@@ -279,14 +325,38 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
           notifications: {
             ...state.notifications,
             [event.offset]: {
+              ...(event.payload.approvalRequestEventOffset === undefined
+                ? {}
+                : { approvalRequestEventOffset: event.payload.approvalRequestEventOffset }),
               body: event.payload.body,
               destination: event.payload.destination,
               expiresAt: event.payload.expiresAt,
+              requestedAt: Date.parse(event.createdAt),
               title: event.payload.title,
               status: "requested" as const,
             },
           },
         };
+      case "events.iterate.com/project/approval-presented": {
+        // The claim marks every still-`requested` obligation for the batch;
+        // the send pass settles them `suppressed`. Claims matching nothing
+        // reduce to nothing — the obligation may already be settled, the
+        // attempt may already have started (the push is out; too late), or
+        // the claim may even have been copied here before the intent (an
+        // accepted race: the push then goes out despite the claim).
+        const claimed = Object.entries(state.notifications).filter(
+          ([, notification]) =>
+            notification.status === "requested" &&
+            notification.approvalRequestEventOffset === event.payload.approvalRequestEventOffset &&
+            notification.presentedAt === undefined,
+        );
+        if (claimed.length === 0) return state;
+        const notifications = { ...state.notifications };
+        for (const [offset, notification] of claimed) {
+          notifications[offset] = { ...notification, presentedAt: Date.parse(event.createdAt) };
+        }
+        return { ...state, notifications };
+      }
       case "events.iterate.com/device/notification-attempt-started": {
         const notification = state.notifications[event.payload.requestOffset];
         if (notification === undefined) return state;
@@ -414,6 +484,66 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
       );
     }
     await this.deps.repointReceiptAlarm(nextCheckAt);
+  }
+
+  /**
+   * Send every approval obligation whose grace window elapsed unclaimed —
+   * called by the device Durable Object's grace alarm with the current state,
+   * never from delivery: a grace expiry appends NO event, so no delivery pass
+   * would otherwise run the send. The rules mirror the at-head pass exactly:
+   * claimed obligations are skipped (the delivery pass that reduced the claim
+   * settles them `suppressed`), an expired one settles expired, a missing
+   * credential waits for the at-head device-unavailable sweep, the live-set
+   * guards against double dials, and obligations still inside grace re-arm
+   * the alarm. Errors propagate to the DO, which re-arms a retry alarm.
+   */
+  async releaseApprovalGraces(state: DeviceProcessorState): Promise<void> {
+    const now = this.deps.now();
+    let nextGraceExpiry: number | null = null;
+    for (const [offset, notification] of Object.entries(state.notifications)) {
+      if (
+        notification.status !== "requested" ||
+        notification.approvalRequestEventOffset === undefined ||
+        notification.presentedAt !== undefined
+      ) {
+        continue;
+      }
+      const graceUntil = notification.requestedAt + state.config.approvalGraceMs;
+      if (now < graceUntil) {
+        nextGraceExpiry =
+          nextGraceExpiry === null ? graceUntil : Math.min(nextGraceExpiry, graceUntil);
+        continue;
+      }
+      const requestOffset = Number(offset);
+      if (notification.expiresAt <= now) {
+        await this.#appendUnlessLostIdempotencyRace(
+          (...events) => this.append(...events),
+          [
+            {
+              type: "events.iterate.com/device/notification-settled",
+              idempotencyKey: this.idempotencyKey(`notification-settled@${requestOffset}`),
+              payload: { requestOffset, outcome: { kind: "expired" } },
+            },
+          ],
+        );
+        continue;
+      }
+      if (
+        state.pushTokenSecret === null ||
+        this.projectId === null ||
+        this.#liveSendAttempts.has(requestOffset)
+      ) {
+        continue;
+      }
+      this.#liveSendAttempts.add(requestOffset);
+      await this.#sendNotification({
+        notification,
+        pushTokenSecretPath: state.pushTokenSecret.path,
+        pushTokenSecretUpdatedOffset: state.pushTokenSecret.updatedOffset,
+        requestOffset,
+      });
+    }
+    await this.deps.repointApprovalGraceAlarm(nextGraceExpiry);
   }
 
   /**
@@ -568,6 +698,8 @@ type DeviceProcessorDeps = {
   getReceipt: (ticketId: string) => Promise<DevicePushReceipt>;
   /** Injectable clock — virtual time in tests, real time in the DO. */
   now: () => number;
+  /** Point the DO's approval-grace alarm slice at an epoch ms, or disarm with null. */
+  repointApprovalGraceAlarm: (atMs: number | null) => Promise<void>;
   /** Point the DO's receipt alarm slice at an epoch ms, or disarm with null. */
   repointReceiptAlarm: (atMs: number | null) => Promise<void>;
   send: DevicePushSender;
@@ -579,9 +711,11 @@ type DeviceProcessorDeps = {
 
 /**
  * The notification-intent subscription on the project root stream: sends
- * every project-level `notification/requested` intent onto this device's
- * stream, where it reduces into a push obligation. Keyed per device path, so
- * created/updated re-arms converge on one rule.
+ * every project-level `notification/requested` intent — and every
+ * `project/approval-presented` suppression claim, which must chase the
+ * intents it cancels down the same ordered lane — onto this device's stream,
+ * where they reduce into push obligations and claim marks. Keyed per device
+ * path, so created/updated re-arms converge on one rule.
  */
 function notificationIntentSubscriptionEvent(input: { idempotencyKey: string; path: string }) {
   return {
@@ -590,7 +724,12 @@ function notificationIntentSubscriptionEvent(input: { idempotencyKey: string; pa
     payload: {
       subscriptionKey: `notification-intent:${input.path}`,
       description: `Delivers project notification intents to ${input.path} for device-owned delivery.`,
-      filter: { eventTypes: ["events.iterate.com/notification/requested"] },
+      filter: {
+        eventTypes: [
+          "events.iterate.com/notification/requested",
+          "events.iterate.com/project/approval-presented",
+        ],
+      },
       receiver: {
         action: "copy-to-stream" as const,
         receivingStreamPath: input.path,
