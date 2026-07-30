@@ -7,11 +7,13 @@ size: small
 
 ## Status summary
 
-Implemented. The pure helper (`lastVisibleMessageAtOrBefore` in
-`apps/mobile/src/lib/chat.ts`) plus its unit tests landed first; the
-approvals screen now renders a tappable thread-context line on every
-agent-born batch card, queue and history alike. Nothing outstanding beyond
-PR review. Split out of #2339's task
+Implemented, then reworked after Misha's review: the context line now shows
+the thread's agent-maintained STATUS (`agent/summary-updated`, folded by
+`threadContextForScriptRun` in `apps/mobile/src/lib/chat.ts`) in full, with
+the last visible message only as a statusless-thread fallback. Tappable line
+on every agent-born batch card, queue and history alike; the spec asserts
+the full status text and the deep-link. Nothing outstanding beyond PR
+review. Split out of #2339's task
 (`tasks/complete/2026-07-30-in-thread-approvals.md` › "thread-status line"),
 which made the approvals screen mostly a cross-thread queue + history view.
 
@@ -65,6 +67,13 @@ doing?" should be answerable without opening the thread.
       settle, asserts the context line's text on both history cards, and taps
       it back into the thread; 3 consecutive passes; VIDEO_MODE recording
       captured for the PR body_
+- [x] Rework (Misha, round 2): show the thread's STATUS, not the truncated
+      last message — _`threadContextForScriptRun` folds `agent/summary-updated`
+      (independent title/activity fields, explicit-null clears) through the
+      run's own `script-run-settled` event; the card shows the status IN FULL
+      (wraps, never clipped); the spec's scripts set status like a real agent
+      turn and the screen act asserts both cards' full text by equality;
+      video re-recorded_
 - [x] `pnpm typecheck && pnpm lint && pnpm knip && pnpm test`; PR hygiene —
       _all four green from the worktree root_
 
@@ -105,3 +114,20 @@ doing?" should be answerable without opening the thread.
   not the DOM — the live activity card streams the script's code expanded,
   which contains the same "approve-me outcomes:" literal as the narration
   (getByText hit a strict-mode violation on exactly that).
+- Round-2 rework (Misha: the truncated "you: /script con…" line is useless;
+  show the STATUS, set via `itx.agent.append` like an agent would, in full):
+  - Bound decision: a status the script sets lands AFTER
+    `scriptRunRequestedEventOffset` (same stream, later offset), so an
+    offset-at-or-before fold would exclude exactly the status the run set.
+    The fold's upper bound is instead the run's own `script-run-settled`
+    event (matched by `executionId`; no bound while unsettled) — single
+    stream, no cross-stream clock comparison, and "this run's status"
+    includes what the script wrote before (or after) its held fetch, while
+    a later turn's status is excluded.
+  - Fallback decision: threads with no summary events fall back to the last
+    visible message at-or-before the run request, one-lined (a user's ask is
+    still better context than nothing); name-only when the thread is empty.
+    The full-text no-clip guarantee applies to the status form only.
+  - The spec's inter-lane guard became "run 1 settled" (was "narration
+    landed"): settlement closes batch 1's fold window, so lane 2's status
+    appends can never leak into the approve card's context.
