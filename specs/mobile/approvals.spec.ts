@@ -1,15 +1,21 @@
 // The phone approver, end to end in a browser — and entirely INSIDE the
 // conversation: `/script` typed into the chat composer runs a burst
-// deterministically (no model turn for the command itself), the requests
-// park at the egress door as ONE batch, and the approval dialog appears
-// in-thread where the human is already looking. Approve all behind the
-// Face ID stand-in (the web build gates authenticated key reads behind
-// `confirm()`), then a second burst rejected with a typed reason the
-// script's 403 body carries back to the agent.
+// deterministically, the requests park at the egress door as ONE batch, and
+// the approval dialog appears in-thread where the human is already looking.
+// Approve all behind the Face ID stand-in (the web build gates authenticated
+// key reads behind `confirm()`), then a second burst rejected with a typed
+// reason the script's 403 body carries back into the thread.
 //
-// No spinner-waiter escapes anywhere: the chat's working indicator is
+// ZERO model turns, asserted: the scripts narrate their own outcomes with
+// `itx.chat.sendMessage(...)` and return nothing, so the settled result
+// render has nothing to append and no LLM request ever opens. Every event in
+// the thread is deterministic.
+//
+// No dead-air spinner-waiter escapes: the running-code activity spinner is
 // honest product UI spanning command → run → parked-at-the-door → decision,
-// so every wait extends against a real spinner.
+// so every wait extends against a real spinner. The only scoped disables are
+// frame-gap guards around the batch card's mount (see waitForBatchCardButton
+// and decideBatch).
 //
 // Web-platform approximations, deliberate and dev-only: secure storage is
 // localStorage with confirm()-gated reads (apps/mobile/src/lib/secure-store.ts),
@@ -93,8 +99,11 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     await page.getByText("New chat").click();
     await page.getByPlaceholder("Message").waitFor();
     const agentPath = decodeURIComponent(new URL(page.url()).searchParams.get("path")!);
+    // The script narrates its own outcome (success or error) and returns
+    // nothing — an undefined settlement result appends no context, so no
+    // model turn follows. The thread stays 100% deterministic.
     const burstCommand = (marker: string) =>
-      `/script const responses = await Promise.all(Array.from({length: 3}, (_, index) => fetch(${JSON.stringify(echo.url)} + "?${marker}=" + index, {method: "POST", body: "${marker} " + index}))); return await Promise.all(responses.map(async (response) => ({status: response.status, body: await response.json()})));`;
+      `/script const burst = async () => { const responses = await Promise.all(Array.from({length: 3}, (_, index) => fetch(${JSON.stringify(echo.url)} + "?${marker}=" + index, {method: "POST", body: "${marker} " + index}))); const outcomes = await Promise.all(responses.map(async (response) => ({status: response.status, body: await response.json()}))); return "${marker} outcomes: " + JSON.stringify(outcomes); }; await itx.chat.sendMessage(await burst().catch(String));`;
 
     // Approve lane: the command runs deterministically (no model turn), the
     // burst parks as one batch, and the dialog appears in-thread while the
@@ -110,37 +119,41 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     await waitForBatchCardButton(page, "Reject all");
     await decideBatch(page, "Reject all", (dialog) => dialog.accept(reason));
 
-    // ── The agent's-eye view, asserted from the protocol: both runs settled
-    // on the agent stream — the approved one with 200s, the rejected one
-    // with 403s whose bodies carry the human's reason verbatim (the cue the
-    // agent reads to retry differently).
-    // Only the slash commands' own runs: the agent's follow-up turns may run
-    // scripts of their own (agent-output:* executionIds) — not ours to count.
-    const readSettlements = async () =>
+    // ── Asserted from the protocol: each script narrated its outcomes into
+    // the thread — the approved burst with 200s, the rejected one with 403s
+    // whose bodies carry the human's reason verbatim (the cue an agent would
+    // read to retry differently).
+    const readOutcomeMessages = async () =>
       (
         await itx.streams.get(agentPath).getEvents({
-          eventTypes: ["events.iterate.com/capability-host/script-run-settled"],
+          eventTypes: ["events.iterate.com/agents/web-message-sent"],
         })
-      ).filter((event) =>
-        String((event.payload as { executionId?: string }).executionId).startsWith(
-          "slash-command:",
-        ),
-      );
-    await expect.poll(async () => (await readSettlements()).length, { timeout: 60_000 }).toBe(2);
-    const outcomes = (await readSettlements()).map(
-      (event) =>
-        event.payload as {
-          settlement: { result?: Array<{ status: number; body: Record<string, unknown> }> };
-        },
+      )
+        .map((event) => (event.payload as { message: string }).message)
+        .filter((message) => message.includes(" outcomes: "));
+    await expect
+      .poll(async () => (await readOutcomeMessages()).length, { timeout: 60_000 })
+      .toBe(2);
+    const outcomes = Object.fromEntries(
+      (await readOutcomeMessages()).map((message) => {
+        const [marker, json] = message.split(" outcomes: ");
+        return [
+          marker,
+          JSON.parse(json!) as Array<{ status: number; body: Record<string, unknown> }>,
+        ];
+      }),
     );
-    const approved = outcomes.find((outcome) =>
-      outcome.settlement.result?.every((entry) => entry.status === 200),
-    );
-    const rejected = outcomes.find((outcome) =>
-      outcome.settlement.result?.every((entry) => entry.status === 403),
-    );
-    expect(approved).toBeDefined();
-    expect(rejected!.settlement.result![0]!.body).toMatchObject({ deniedBy: "human", reason });
+    expect(outcomes["approve-me"]!.map((entry) => entry.status)).toEqual([200, 200, 200]);
+    expect(outcomes["reject-me"]!.map((entry) => entry.status)).toEqual([403, 403, 403]);
+    expect(outcomes["reject-me"]![0]!.body).toMatchObject({ deniedBy: "human", reason });
+
+    // The headline guarantee: the ENTIRE conversation — two commands, two
+    // bursts, two decisions, two narrated outcomes — never opened a single
+    // LLM request.
+    const llmRequests = await itx.streams.get(agentPath).getEvents({
+      eventTypes: ["events.iterate.com/agent/llm-request-requested"],
+    });
+    expect(llmRequests).toEqual([]);
   } finally {
     await echo.close();
   }
@@ -180,6 +193,16 @@ function waitForBatchCardButton(page: Page, name: string) {
  * occasionally drops a synthesized press outright — no handler call at all —
  * and a decision must not silently not-happen. `answerDialog` re-arms per
  * attempt: each press summons a fresh Face ID confirm / reason prompt.
+ *
+ * The whole attempt — press AND detach-wait — runs under one scoped
+ * frame-gap guard: the spinner-waiter otherwise rewrites even explicit
+ * timeouts to its 1ms fast-fail whenever no spinner is up, which misreads a
+ * decision that IS landing as a lost press. The click's own errors are
+ * swallowed (its 1ms fast-fail can dispatch-then-throw: press lands, dialog
+ * fires, decision goes through, the call still raises) — departure of the
+ * button is the one honest success signal. The dialog handler is removed
+ * after every attempt: a stale armed handler would win the race for the
+ * NEXT lane's dialog and answer it with the wrong response.
  */
 async function decideBatch(
   page: Page,
@@ -188,14 +211,20 @@ async function decideBatch(
 ) {
   const button = page.getByRole("button", { name: buttonName });
   for (let attempt = 0; attempt < 3; attempt++) {
-    page.once("dialog", (dialog) => void answerDialog(dialog));
-    await button.click();
+    const handler = (dialog: import("@playwright/test").Dialog) =>
+      void Promise.resolve(answerDialog(dialog)).catch(() => {});
+    page.once("dialog", handler);
     try {
-      await button.waitFor({ state: "detached", timeout: 15_000 });
+      await spinnerWaiter.settings.run({ disabled: true }, async () => {
+        await button.click({ timeout: 10_000 }).catch(() => {});
+        await button.waitFor({ state: "detached", timeout: 15_000 });
+      });
       return;
     } catch {
       // Press lost or decision not landed — re-arm and press again. The
       // door honors the FIRST decision, so a duplicate press is harmless.
+    } finally {
+      page.off("dialog", handler);
     }
   }
   throw new Error(`The "${buttonName}" decision never left the thread after 3 presses.`);

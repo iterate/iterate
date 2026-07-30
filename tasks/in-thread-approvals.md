@@ -139,3 +139,15 @@ grilling:
   so the notification intent/device obligation needs to carry it even for
   agent-chat destinations; and the grace expiry needs the device DO's alarm
   to nudge the state-derived send pass. Design carefully before building.
+- Spec made FULLY deterministic (Misha's follow-up): the `/script` payloads
+  end with `await itx.chat.sendMessage(await burst().catch(String));` and
+  return nothing — an undefined settlement result appends no context (the
+  settled render returns null), so no model turn ever fires. The spec asserts
+  zero `llm-request-requested` events across the whole conversation and reads
+  outcomes from the narrated `web-message-sent` messages instead of
+  settlement results. Uncovered and fixed two spec bugs in decideBatch: the
+  detach-wait ran OUTSIDE the scoped spinner-waiter disable (its 15s timeout
+  got rewritten to the 1ms fast-fail, misreading landed decisions as lost
+  presses) and retries leaked armed `page.once("dialog")` handlers (a stale
+  approve-lane handler accepted the reject prompt with the default empty
+  string, silently dropping the reason). ~20s per run, 4 consecutive passes.
