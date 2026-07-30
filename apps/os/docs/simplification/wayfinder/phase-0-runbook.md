@@ -143,6 +143,11 @@ assume `mcp.iterate.com`.
 
 - ✅ **Self-hosted, walled** — `kernel-selfhost` deployed to `*.shiterate.com` (prd `04b3…`); confinement
   holds live (`smoke-test.shiterate.com/__debug` → `seenBindings:["ITX"]`, anonymous public site).
+  - ✅ **Wall proven end-to-end via email One-time-PIN** — the shiterate dashboard Access app pinned to
+    **OTP only** (no Google, **no auth.iterate.com**): `dashboard--test.shiterate.com` → enter email →
+    6-digit code → in. **Email OTP is the canonical self-host IdP for this example** — nothing to
+    configure, no external IdP (Google-direct is deferred; it needs a Google OAuth redirect-URI fix).
+    A **Log out** link (`/cdn-cgi/access/logout`) on the dashboard clears the session.
 - ✅ **Routing table, live** — a `route:` key written to the live `ROUTING_KV` made
   `routing-proof.shiterate.com` resolve to `routed-live` (overriding slug-parse), then cleaned up. The KV
   read path works in production.

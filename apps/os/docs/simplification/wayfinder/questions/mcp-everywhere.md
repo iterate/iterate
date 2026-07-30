@@ -61,22 +61,34 @@ Docs assert "MCP works via the wall" but it's aspirational.
 `authorization_servers` defaults to `https://auth.iterate.com/api/auth` (`mcp-handler.ts:449`);
 `resolveMcpBaseUrl` only auto-derives for localhost.
 
-## ⚠️ Correction (Jonas, 2026-07-30): NOT a kernel-reserved `/mcp` PATH route
+## The model (Jonas, 2026-07-30): MCP is a SIBLING TO `/api` on the headless control plane
 
-Jonas is **against kernel-reserved routes based on paths** (a `/mcp` path carved out of every project
-host, like `/api` today). **MCP lives on the CONTROL PLANE** and should be addressed the way other
-control-plane surfaces are — **by hostname/app**, not a path. Precedent: the dashboard is a reserved
-**app** at a hostname (`dashboard--<slug>`), and apps/os puts MCP at a dedicated **host** (`mcp.iterate.com`).
-So MCP is a control-plane host/app, not `/mcp` on project hostnames. _(Reconsider `/api`'s path-reservation
-in the same light later — Jonas's aversion is general.)_
+Not a path reserved on _project_ hostnames (my earlier bad framing). **MCP is a control-plane endpoint,
+right next to `/api`** — both **headless control-plane surfaces** (no app, no UI), differing only in
+_protocol_: `/api` speaks capnweb, `/mcp` speaks MCP. Both do the same job: **authenticate via the wall →
+hit the directory to list your projects + create new ones → operate across them.**
+
+**Three faces of the control plane:**
+
+- **`/api`** — programmatic (capnweb).
+- **`/mcp`** — agent/LLM (MCP). Cross-project: connect with no project → it lists yours and lets you
+  **create** one → then operate. This _is_ "emerge with a project" (ADR 0029).
+- **dashboard** — human (a UI; the one with an app). Cross-project-ish too — the resemblance Jonas spotted.
+
+**Addressing (resolves the earlier path-route objection):** `/api` and `/mcp` are the control plane's OWN
+endpoints, so a path is fine _here_ — they belong on the **control plane's own hostname**, headless. The
+objection was only to carving `/mcp` out of _project_ hostnames. Note the current one-worker quirk: `/api`
+is served on project hostnames today (the fetch handler resolves a project host first). The clean home for
+`/api` + `/mcp` is the control plane's own front door — which is exactly what motivates the
+control-plane/project-worker split (ADR 0017).
 
 ## Recommendation (updated)
 
 The kernel **wall** is a cleaner fit than os's bespoke OAuth. Smallest to prove "MCP everywhere":
 
-1. **MCP is a control-plane surface addressed by hostname/app** (a reserved app like the dashboard, or a
-   dedicated control-plane host à la `mcp.iterate.com`) — **not** a path carved before `resolveIngress`.
-   Exact addressing TBD; the point is host/app-based, config-driven, no path reservation.
+1. **`/mcp` as a sibling to `/api` on the (headless) control plane** — same auth (wall) + directory
+   surface, MCP protocol instead of capnweb. On the control plane's own hostname (once split); no path
+   reserved on project hostnames.
 2. **MCP auth via the wall, not a ported resource-server:** Access-fronted = Access Managed-OAuth-for-MCP
    injects the JWT the wall verifies; no-auth = wall unset → anonymous. Both fall out of the 47-line wall.
 3. **Config-driven URLs** — no `mcp.iterate.com`/`auth.iterate.com` literals.
