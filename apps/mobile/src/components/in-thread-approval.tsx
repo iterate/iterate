@@ -4,9 +4,9 @@
 // full inspectable card (bodies, script source, history) stays on the
 // Approvals screen, which is now the cross-thread queue + history view.
 
-import { useMutation } from "@tanstack/react-query";
-import { Pressable, StyleSheet, Text, View } from "react-native";
-import { decide, hostBreakdown, type OpenBatch, type Verdict } from "../lib/approvals.ts";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { AppState, Pressable, StyleSheet, Text, View } from "react-native";
+import { decide, EVENT, hostBreakdown, type OpenBatch, type Verdict } from "../lib/approvals.ts";
 import { signWithApproverKey } from "../lib/approver.ts";
 import { getProjectItx } from "../lib/itx.ts";
 import { promptForRejectReason } from "../lib/reject-reason.ts";
@@ -23,6 +23,30 @@ export function InThreadApprovalCard({
   canApprove: boolean;
   projectId: string;
 }) {
+  // Tell push channels the user is already looking at this batch: a claim
+  // that lands inside the device processor's ~1.5s grace window suppresses
+  // the pending approval push on EVERY device, and a claim after the push
+  // went out is a harmless no-op — so failures are ignored (the push simply
+  // goes out, the designed fallback). useQuery fires it once per batch per
+  // mount; the idempotency key makes any refire a stream-level no-op. Only a
+  // foregrounded app may claim — a backgrounded render is not the user
+  // looking (on web, AppState.currentState is always "active").
+  useQuery({
+    queryKey: ["approval-presented", projectId, batch.offset],
+    queryFn: async () => {
+      const project = await getProjectItx(baseUrl, projectId);
+      await project.streams.get("/").append({
+        type: EVENT.presented,
+        idempotencyKey: `project/approval-presented:${batch.offset}`,
+        payload: { approvalRequestEventOffset: batch.offset },
+      });
+      return true;
+    },
+    enabled: AppState.currentState === "active",
+    staleTime: Infinity,
+    retry: false,
+  });
+
   const respond = useMutation({
     mutationFn: async (decision: "approve" | "reject") => {
       const project = await getProjectItx(baseUrl, projectId);
