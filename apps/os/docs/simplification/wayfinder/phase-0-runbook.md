@@ -138,3 +138,18 @@ assume `mcp.iterate.com`.
 4. **Secret handling** — `PROJECT_APP_SESSION_SECRET` is a committed POC var; a real deploy (esp. a
    customer account) must supply it via `wrangler secret`/Doppler. Kernel has **no Doppler wiring** today.
 5. **Wildcard DNS/TLS is manual per zone** — not provisioned by `routes`.
+
+## Proven live (2026-07-30)
+
+- ✅ **Self-hosted, walled** — `kernel-selfhost` deployed to `*.shiterate.com` (prd `04b3…`); confinement
+  holds live (`smoke-test.shiterate.com/__debug` → `seenBindings:["ITX"]`, anonymous public site).
+- ✅ **Routing table, live** — a `route:` key written to the live `ROUTING_KV` made
+  `routing-proof.shiterate.com` resolve to `routed-live` (overriding slug-parse), then cleaned up. The KV
+  read path works in production.
+- ✅ **Separate customer account (isolation)** — the SAME bundle deployed to **Jonas personal `05958…`**
+  as `kernel-personal` (`kernel-personal.templestein.workers.dev`); `/__debug` → `seenBindings:["ITX"]`
+  in a different account. **Finding: the customer account needs Workers Paid** — Worker Loaders are
+  paid-plan-only (`error 10195`); personal was upgraded. workers.dev only for now; a burnable personal
+  domain + route is the next step (the OS custom-domain e2e zone `iterate-e2e-test-custom-cloudflare-domain.com`
+  is off-limits — it CNAMEs to `cname.ingress.iterate.com`).
+- ⬜ **iterate-hosted** (default, iterate2.app) + **Miniflare/dev** — not yet re-smoked this pass.

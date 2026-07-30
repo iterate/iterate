@@ -77,5 +77,25 @@
         "PROJECT_APP_SESSION_SECRET": "872df450ac06f2761a5c629349804d7648dfc9e840c7d0b8ed58d657e9c44c73",
       },
     },
+
+    // ---- SEPARATE CUSTOMER ACCOUNT (Jonas personal 05958…): the SAME bundle in a DIFFERENT Cloudflare
+    // account — the isolation proof (ADR 0027). Wide open + kv directory, its OWN KV namespace. workers.dev
+    // only for now (a burnable personal domain + route comes later). Proves same-bundle-different-account. ----
+    "personal": {
+      "name": "kernel-personal",
+      "account_id": "05958bb7b57a2ac7eb5d3906fd3cf8bb",
+      "workers_dev": true,
+      "worker_loaders": [{ "binding": "LOADER" }],
+      "kv_namespaces": [
+        { "binding": "DIRECTORY_KV", "id": "82100d0688cf4ef3801f42ec5dcd2027" },
+        { "binding": "ROUTING_KV", "id": "82100d0688cf4ef3801f42ec5dcd2027" },
+      ],
+      "vars": {
+        "APP_CONFIG": "{\"directory\":{\"provider\":\"kv\"}}",
+        "PROJECT_APP_SESSION_SECRET": "872df450ac06f2761a5c629349804d7648dfc9e840c7d0b8ed58d657e9c44c73",
+      },
+      // Clear the inherited top-level route (iterate2.app is not in this account); workers.dev only for now.
+      "routes": [],
+    },
   },
 }
