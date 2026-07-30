@@ -8,7 +8,12 @@ import { z } from "zod";
 import { envManagerEnv } from "../../../envs.ts";
 import { mintForgedAccessToken } from "../../../scripts/auth/forge-token.ts";
 import { isCompiledEnvironmentStage } from "../src/environments.ts";
-import { EnvironmentState, type EnvironmentApi, type EnvironmentStage } from "../src/state.ts";
+import {
+  EnvironmentState,
+  MAX_ENVIRONMENT_DESTROY_BATCHES,
+  type EnvironmentApi,
+  type EnvironmentStage,
+} from "../src/state.ts";
 
 const DopplerSecrets = z.looseObject({
   AUTH_FORGE_ES256_PRIVATE_JWK: z.string().optional(),
@@ -144,57 +149,94 @@ export async function readEnvironmentState(stage: EnvironmentStage): Promise<Env
   return await withEnvironment(stage, (api) => api.status());
 }
 
+async function destroyEnvironmentBatch(
+  stage: EnvironmentStage,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  const operationId = crypto.randomUUID();
+  const connection = await connect(stage);
+  try {
+    signal?.throwIfAborted();
+    const remote = connection.api.destroy(stage, operationId);
+    let complete: boolean;
+    if (signal === undefined) {
+      complete = await remote;
+    } else {
+      let onAbort: (() => void) | undefined;
+      const aborted = new Promise<unknown>((resolve) => {
+        onAbort = () => resolve(signal.reason ?? new Error("Environment destroy aborted."));
+        signal.addEventListener("abort", onAbort, { once: true });
+      });
+      try {
+        const first = await Promise.race([
+          remote.then((remoteComplete) => ({
+            kind: "completed" as const,
+            complete: remoteComplete,
+          })),
+          aborted.then((reason) => ({ kind: "aborted" as const, reason })),
+        ]);
+        if (first.kind === "aborted") {
+          let cancelled: boolean;
+          try {
+            cancelled = await connection.api.cancel(operationId);
+          } catch (cause) {
+            await remote.catch(() => undefined);
+            throw new AggregateError(
+              [first.reason, cause],
+              `Destroying ${stage} lost its lease fence and the manager cancellation call failed.`,
+            );
+          }
+          if (!cancelled) {
+            await remote.catch(() => undefined);
+            throw new Error(
+              `Destroying ${stage} lost its lease fence, but operation ${operationId} was no longer active.`,
+              { cause: first.reason },
+            );
+          }
+          await remote.catch(() => undefined);
+          throw first.reason;
+        }
+        complete = first.complete;
+      } finally {
+        if (onAbort) signal.removeEventListener("abort", onAbort);
+      }
+    }
+    if (!complete) {
+      const state = EnvironmentState.parse(await connection.api.status());
+      if (state.lifecycle !== "destroying" || state.operationFinishedAt === undefined) {
+        throw new Error(
+          `Destroying ${stage} returned a partial result without a settled destroying lifecycle.`,
+        );
+      }
+    }
+    return complete;
+  } finally {
+    connection.close();
+  }
+}
+
 /**
- * Destroy through the manager while keeping caller cancellation attached to
- * the remote operation. The exact operation id prevents a late abort from
- * interrupting a newer lifecycle command.
+ * Destroy through bounded manager operations while keeping caller
+ * cancellation attached to the currently active exact operation id. Closing
+ * the Cap'n Web connection after every successful batch keeps each Durable
+ * Object request far below Cloudflare's request lifetime.
  */
 export async function destroyEnvironment(
   stage: EnvironmentStage,
   signal?: AbortSignal,
 ): Promise<EnvironmentState> {
-  const operationId = crypto.randomUUID();
-  return await withEnvironment(stage, async (api) => {
-    signal?.throwIfAborted();
-    const remote = api.destroy(stage, operationId);
-    if (!signal) {
-      await remote;
-      return;
-    }
-
-    let onAbort: (() => void) | undefined;
-    const aborted = new Promise<unknown>((resolve) => {
-      onAbort = () => resolve(signal.reason ?? new Error("Environment destroy aborted."));
-      signal.addEventListener("abort", onAbort, { once: true });
-    });
-    try {
-      const first = await Promise.race([
-        remote.then(() => ({ kind: "completed" as const })),
-        aborted.then((reason) => ({ kind: "aborted" as const, reason })),
-      ]);
-      if (first.kind === "completed") return;
-
-      let cancelled: boolean;
-      try {
-        cancelled = await api.cancel(operationId);
-      } catch (cause) {
-        await remote.catch(() => undefined);
-        throw new AggregateError(
-          [first.reason, cause],
-          `Destroying ${stage} lost its lease fence and the manager cancellation call failed.`,
-        );
-      }
-      if (!cancelled) {
-        await remote.catch(() => undefined);
+  for (let batch = 1; batch <= MAX_ENVIRONMENT_DESTROY_BATCHES; batch += 1) {
+    if (await destroyEnvironmentBatch(stage, signal)) {
+      const state = await readEnvironmentState(stage);
+      if (state.lifecycle !== "empty") {
         throw new Error(
-          `Destroying ${stage} lost its lease fence, but operation ${operationId} was no longer active.`,
-          { cause: first.reason },
+          `Destroying ${stage} completed but canonical environment state is ${state.lifecycle}, not empty.`,
         );
       }
-      await remote.catch(() => undefined);
-      throw first.reason;
-    } finally {
-      if (onAbort) signal.removeEventListener("abort", onAbort);
+      return state;
     }
-  });
+  }
+  throw new Error(
+    `Destroying ${stage} did not converge after ${MAX_ENVIRONMENT_DESTROY_BATCHES} bounded batches; canonical Cloudflare inventory still contains resources.`,
+  );
 }

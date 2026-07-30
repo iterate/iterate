@@ -104,12 +104,17 @@ export class EnvironmentDurableObject extends DurableObject<Env> {
 
   #run(
     lifecycle: "checking" | "deploying" | "destroying",
-    operation: (signal: AbortSignal) => Promise<void>,
+    operation: (signal: AbortSignal) => Promise<boolean>,
     operationId: string = crypto.randomUUID(),
-  ): Promise<void> {
+  ): Promise<boolean> {
     if (this.#operation !== undefined) {
       throw new Error(
         `${this.#stage} is already ${this.#live.getState().lifecycle}; concurrent lifecycle operations are refused.`,
+      );
+    }
+    if (this.#live.getState().lifecycle === "destroying" && lifecycle !== "destroying") {
+      throw new Error(
+        `${this.#stage} has a partial destroy to complete before another lifecycle operation may start.`,
       );
     }
     const startedAt = new Date().toISOString();
@@ -124,15 +129,16 @@ export class EnvironmentDurableObject extends DurableObject<Env> {
     const abort = new AbortController();
     const running = Promise.resolve()
       .then(() => operation(abort.signal))
-      .then(() => {
+      .then((complete) => {
         const current = this.#live.getState();
         const resources = this.#readResources();
         this.#setState({
           ...current,
-          lifecycle: resources === undefined ? "empty" : "ready",
+          lifecycle: complete ? (resources === undefined ? "empty" : "ready") : lifecycle,
           operationFinishedAt: new Date().toISOString(),
           resources,
         });
+        return complete;
       })
       .catch((error: unknown) => {
         let resources: AlchemyResourcesType | undefined;
@@ -210,14 +216,15 @@ export class EnvironmentDurableObject extends DurableObject<Env> {
       if (resources === undefined) {
         throw new Error(`Alchemy deploy for ${this.#stage} produced no stack output.`);
       }
-    });
+      return true;
+    }).then(() => undefined);
   }
 
   destroy(
     confirmation: EnvironmentStage,
     allowProductionDestroy: boolean,
     operationId?: string,
-  ): Promise<void> {
+  ): Promise<boolean> {
     assertEnvironmentDestroyAllowed({
       browserSession: allowProductionDestroy,
       confirmation,
@@ -228,7 +235,7 @@ export class EnvironmentDurableObject extends DurableObject<Env> {
       async (signal) => {
         const apiToken = await this.#apiToken();
         signal.throwIfAborted();
-        await makeCloudflareControlPlane({
+        const wranglerResourcesDestroyed = await makeCloudflareControlPlane({
           accountId: this.#environment.accountId,
           apiToken,
           onProgress: (progress) => this.#publishProgress(progress),
@@ -238,6 +245,7 @@ export class EnvironmentDurableObject extends DurableObject<Env> {
           osWorkerName:
             this.#environment.kind === "platform" ? this.#environment.osWorkerName : undefined,
         });
+        if (!wranglerResourcesDestroyed) return false;
         signal.throwIfAborted();
         await runEnvironmentAlchemy({
           accountId: this.#environment.accountId,
@@ -251,6 +259,7 @@ export class EnvironmentDurableObject extends DurableObject<Env> {
         if (this.#readResources() !== undefined) {
           throw new Error(`Alchemy destroy for ${this.#stage} retained its stack output.`);
         }
+        return true;
       },
       operationId,
     );
@@ -269,7 +278,8 @@ export class EnvironmentDurableObject extends DurableObject<Env> {
         apiToken,
         signal,
       }).assertResourcesExist(resources, this.#environment.workerNames);
-    });
+      return true;
+    }).then(() => undefined);
   }
 
   override fetch(request: Request): Response | Promise<Response> {
@@ -303,8 +313,8 @@ class EnvironmentSession extends RpcTarget implements EnvironmentApi {
     await this.environment.deploy();
   }
 
-  async destroy(confirmation: EnvironmentStage, operationId?: string): Promise<void> {
-    await this.environment.destroy(confirmation, this.browserSession, operationId);
+  async destroy(confirmation: EnvironmentStage, operationId?: string): Promise<boolean> {
+    return await this.environment.destroy(confirmation, this.browserSession, operationId);
   }
 
   async cancel(operationId: string): Promise<boolean> {

@@ -122,7 +122,10 @@ environment in dependency order:
 3. Every repository in the OS Artifacts namespace, after no Worker can create
    more. Cloudflare has no Artifacts-namespace delete API, so the command
    drains the cursor-paginated repo listing and verifies the implicit namespace
-   is empty.
+   is empty. Each manager request deletes at most 1,000 repositories and the
+   client reconnects between successful partial batches. The Durable Object
+   remains explicitly `destroying` between batches and re-reads Cloudflare
+   inventory rather than persisting a cursor or duplicate repository manifest.
 4. The Alchemy stack: two D1 databases, two KV namespaces, two R2 buckets,
    state, and generated output.
 

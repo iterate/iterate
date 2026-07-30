@@ -7,6 +7,7 @@ import {
   persistedEnvironmentState,
   reconcileEnvironmentState,
   recoverInterruptedEnvironmentState,
+  type PersistedEnvironmentState,
 } from "./state.ts";
 
 const previewResources = {
@@ -140,5 +141,23 @@ describe("durable environment lifecycle", () => {
       lastError: "Environment manager restarted while destroying; retry the operation.",
       progress: [],
     });
+  });
+
+  test("preserves an explicitly completed partial destroy batch across restarts", () => {
+    const state = {
+      stage: "preview_18",
+      lifecycle: "destroying",
+      operationStartedAt: "2026-07-30T12:00:00.000Z",
+      operationFinishedAt: "2026-07-30T12:01:00.000Z",
+      progress: [
+        {
+          id: "wrangler-artifacts",
+          type: "Cloudflare Artifacts",
+          status: "destroying",
+        },
+      ],
+    } satisfies PersistedEnvironmentState;
+
+    expect(recoverInterruptedEnvironmentState(state, "2026-07-30T12:02:00.000Z")).toEqual(state);
   });
 });

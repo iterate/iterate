@@ -58,7 +58,7 @@ describe("Cloudflare control plane", () => {
         errors: [],
       }),
     );
-    await expect(destroyed).resolves.toBeUndefined();
+    await expect(destroyed).resolves.toBe(true);
 
     const requests = fetch.mock.calls.map(([request]) => new URL(String(request)));
     expect(requests.map(({ pathname }) => pathname)).toEqual([
@@ -149,7 +149,7 @@ describe("Cloudflare control plane", () => {
         accountId: "account-id",
         apiToken: "api-token",
       }).destroyWranglerResources({ workerNames: ["worker-one"] }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(true);
 
     const puts = fetch.mock.calls.filter(
       ([request, init]) => (request instanceof Request ? request.method : init?.method) === "PUT",
@@ -230,7 +230,7 @@ describe("Cloudflare control plane", () => {
         accountId: "account-id",
         apiToken: "api-token",
       }).destroyWranglerResources({ workerNames: ["worker-one"] }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(true);
 
     const put = fetch.mock.calls.find(
       ([request, init]) => (request instanceof Request ? request.method : init?.method) === "PUT",
@@ -294,7 +294,7 @@ describe("Cloudflare control plane", () => {
         workerNames: [],
         osWorkerName: "os-worker",
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(true);
 
     const requests = fetch.mock.calls.map(([request]) => new URL(String(request)));
     const artifactLists = requests.filter(({ pathname }) =>
@@ -326,7 +326,7 @@ describe("Cloudflare control plane", () => {
         id: "wrangler-artifacts",
         type: "Cloudflare Artifacts",
         status: "deleting",
-        message: "Deleting 3 repositories from os-worker-repos.",
+        message: "Deleting a bounded batch of 3 repositories from os-worker-repos.",
       },
       {
         id: "wrangler-artifacts",
@@ -341,6 +341,72 @@ describe("Cloudflare control plane", () => {
         message: "Deleted every repository from os-worker-repos.",
       },
     ]);
+  });
+
+  it("returns an explicit partial result after one bounded Artifact batch", async () => {
+    const repositories = new Set(
+      Array.from({ length: 1_001 }, (_, index) => `repository-${index}`),
+    );
+    const onProgress = vi.fn();
+    const fetch = vi.fn<typeof globalThis.fetch>((request, init) => {
+      const url = new URL(String(request));
+      const method = request instanceof Request ? request.method : init?.method;
+      const repositoryPrefix =
+        "/client/v4/accounts/account-id/artifacts/namespaces/os-worker-repos/repos/";
+      if (method === "DELETE" && url.pathname.startsWith(repositoryPrefix)) {
+        repositories.delete(decodeURIComponent(url.pathname.slice(repositoryPrefix.length)));
+        return Promise.resolve(Response.json({ success: true, result: null, errors: [] }));
+      }
+      if (
+        method === "GET" &&
+        url.pathname.endsWith("/artifacts/namespaces/os-worker-repos/repos")
+      ) {
+        return Promise.resolve(
+          Response.json({
+            success: true,
+            result: [...repositories].map((name) => ({ name })),
+            result_info: { cursor: null },
+            errors: [],
+          }),
+        );
+      }
+      return Promise.resolve(
+        Response.json({
+          success: true,
+          result: method === "DELETE" ? null : [],
+          errors: [],
+        }),
+      );
+    });
+    vi.stubGlobal("fetch", fetch);
+    const controlPlane = makeCloudflareControlPlane({
+      accountId: "account-id",
+      apiToken: "api-token",
+      onProgress,
+    });
+
+    await expect(
+      controlPlane.destroyWranglerResources({
+        workerNames: [],
+        osWorkerName: "os-worker",
+      }),
+    ).resolves.toBe(false);
+    expect(repositories.size).toBe(1);
+    expect(onProgress).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "wrangler-artifacts",
+        status: "destroying",
+        message: expect.stringContaining("canonical Cloudflare inventory still contains"),
+      }),
+    );
+
+    await expect(
+      controlPlane.destroyWranglerResources({
+        workerNames: [],
+        osWorkerName: "os-worker",
+      }),
+    ).resolves.toBe(true);
+    expect(repositories.size).toBe(0);
   });
 
   it("interrupts in-flight Cloudflare work when its ownership fence is aborted", async () => {

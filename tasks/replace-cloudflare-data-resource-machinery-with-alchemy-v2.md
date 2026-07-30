@@ -152,15 +152,16 @@ The main code movement is:
 
 - delete the 703-line DO reset, 425-line reset tests, parked Worker, per-app
   erasers, and retired deployment shims;
-- add a 76-line Alchemy graph, its Effect/SQLite execution boundary, one strict
+- add a 69-line Alchemy graph, its Effect/SQLite execution boundary, one strict
   manifest reader, a thin remote CLI, the environment manager dashboard/DO,
   one typed Distilled teardown module, and the required container bootstrap;
 - use only the generated root lockfile.
 
-The PR's +4,106 net headline is mostly generated dependency metadata: the root
-lock accounts for +2,658 net lines. Excluding the lock and this task record,
-application, workflow, and documentation changes are +1,215 net while replacing
-the old reset/recovery system and adding the lifecycle API plus dashboard.
+The PR's roughly +4.8k net headline is mostly generated dependency metadata:
+the root lock accounts for +2,658 net lines. Excluding the lock and this task
+record, application, workflow, and documentation changes are +1,819 net while
+replacing the old reset/recovery system and adding the lifecycle API plus
+dashboard.
 
 ## Thermonuclear lifecycle review
 
@@ -246,15 +247,33 @@ bounded data-dependent prefix for account-wide 429s.
 
 The recovery run then exposed the true cardinality after its initial listing:
 53,143 repositories remained in `os-preview-7-repos`. At the deliberately safe
-deletion rate that is a roughly 4.5-hour one-time drain, so a 60-minute limit
+deletion rate that is a roughly 5.5-hour one-time drain, so a 60-minute limit
 would merely move the same unexplained cancellation. The workflow backstop is
 six hours while individual deploy/test watchdogs remain unchanged. Env-manager
-publishes Worker, container, and Artifacts
-teardown progress into the existing lifecycle state, including repository
-totals and each 100 completions, so a long destroy is explicitly classified
-instead of presenting an empty `destroying` state. This is progress
-observability only: Alchemy SQLite remains the sole durable resource manifest,
-and env-manager remains the sole cleanup-obligation authority.
+publishes Worker, container, and Artifacts teardown progress into the existing
+lifecycle state, including each 100 completions, so a long destroy is
+explicitly classified instead of presenting an empty `destroying` state.
+
+That recovery also proved a single multi-hour manager RPC is invalid. The
+environment Durable Object was reset at exactly 40 minutes with
+`Durable Object storage operation exceeded timeout which caused object to be
+reset` (Workers trace `0179ed356032fb7b4cfa006fcbd8371`). It had deleted 6,700
+repositories, renewed the exact Semaphore lease throughout, emitted no 429,
+and then durably classified the interrupted operation as failed. This was a
+request-lifetime failure, not an Alchemy hang, API-rate failure, or lost lease.
+
+Artifact cleanup is therefore an explicit convergent protocol: one manager RPC
+deletes at most 1,000 repositories, re-reads canonical Cloudflare inventory,
+and returns either complete or more-work-remains. A successful partial batch
+persists `destroying` with `operationFinishedAt`; no repository list, count, or
+cursor is persisted. The CLI and dashboard close the Cap'n Web session after
+each batch and open a new one for the next batch. An interrupted batch remains
+`failed`; a caller/lease abort cancels only its exact operation; at most 100
+batches may run in one command. This is bounded continuation, not an automatic
+retry: every next batch follows an explicitly successful partial result and
+re-inventories Cloudflare. Alchemy SQLite remains the sole durable resource
+manifest, Cloudflare remains the canonical Wrangler-resource inventory, and
+env-manager remains the sole cleanup-obligation authority.
 
 ## Proof and rollout
 
@@ -336,6 +355,10 @@ Final lifecycle-review proof on reserved `preview_18` and PR-owned
   KV namespaces, R2 buckets, and Artifact repositories.
 - The new manager-backed GC dry run read all seventeen claimable environments
   and found zero non-empty environments without a live tenant.
+- The production Semaphore inventory was converged from nineteen historical
+  rows to the canonical seventeen claimable rows. `preview_18` and
+  `preview_19` remain compiled, disposable env-manager proof stages but are
+  physically absent from Semaphore, not merely filtered during acquisition.
 
 ## Acceptance criteria
 

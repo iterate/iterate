@@ -3,6 +3,8 @@ import { z } from "zod";
 
 export type EnvironmentStage = "prd" | "dev_global" | `preview_${number}`;
 
+export const MAX_ENVIRONMENT_DESTROY_BATCHES = 100;
+
 export const EnvironmentStage = z.custom<EnvironmentStage>(
   (value) =>
     value === "prd" ||
@@ -135,7 +137,9 @@ export function recoverInterruptedEnvironmentState(
   state: PersistedEnvironmentState,
   recoveredAt: string,
 ): PersistedEnvironmentState {
-  if (!interruptedLifecycles.has(state.lifecycle)) return state;
+  if (!interruptedLifecycles.has(state.lifecycle) || state.operationFinishedAt !== undefined) {
+    return state;
+  }
   return {
     ...state,
     lifecycle: "failed",
@@ -148,7 +152,7 @@ export type EnvironmentApi = {
   liveState: LiveStateRpc<EnvironmentState>;
   status(): Promise<EnvironmentState>;
   deploy(): Promise<void>;
-  destroy(confirmation: EnvironmentStage, operationId?: string): Promise<void>;
+  destroy(confirmation: EnvironmentStage, operationId?: string): Promise<boolean>;
   cancel(operationId: string): Promise<boolean>;
   check(): Promise<void>;
 };

@@ -18,11 +18,13 @@ import {
 import { Skeleton } from "@iterate-com/ui/components/skeleton";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { environments, type CompiledEnvironment } from "~/environments.ts";
-import type {
-  AlchemyResources,
-  EnvironmentApi,
-  EnvironmentLifecycle,
-  EnvironmentState,
+import {
+  MAX_ENVIRONMENT_DESTROY_BATCHES,
+  type AlchemyResources,
+  type EnvironmentApi,
+  type EnvironmentLifecycle,
+  type EnvironmentStage,
+  type EnvironmentState,
 } from "~/state.ts";
 
 export const Route = createFileRoute("/_app/environments")({
@@ -51,11 +53,29 @@ function EnvironmentsPage() {
   );
 }
 
+function environmentWebSocketUrl(stage: string): string {
+  const endpoint = new URL(`/api/environments/${stage}`, window.location.href);
+  endpoint.protocol = endpoint.protocol === "https:" ? "wss:" : "ws:";
+  return endpoint.toString();
+}
+
+async function destroyEnvironmentInBatches(stage: EnvironmentStage): Promise<void> {
+  for (let batch = 1; batch <= MAX_ENVIRONMENT_DESTROY_BATCHES; batch += 1) {
+    const api = newWebSocketRpcSession<EnvironmentApi>(environmentWebSocketUrl(stage));
+    try {
+      if (await api.destroy(stage)) return;
+    } finally {
+      api[Symbol.dispose]?.();
+    }
+  }
+  throw new Error(
+    `Destroying ${stage} did not converge after ${MAX_ENVIRONMENT_DESTROY_BATCHES} bounded batches; canonical Cloudflare inventory still contains resources.`,
+  );
+}
+
 function EnvironmentConnection({ environment }: { environment: CompiledEnvironment }) {
   const makeConnection = useCallback(() => {
-    const endpoint = new URL(`/api/environments/${environment.stage}`, window.location.href);
-    endpoint.protocol = endpoint.protocol === "https:" ? "wss:" : "ws:";
-    return newWebSocketRpcSession<EnvironmentApi>(endpoint.toString());
+    return newWebSocketRpcSession<EnvironmentApi>(environmentWebSocketUrl(environment.stage));
   }, [environment.stage]);
 
   return (
@@ -79,9 +99,10 @@ function EnvironmentCard({ environment }: { environment: CompiledEnvironment }) 
   const state = live.value;
   const operating =
     pending !== undefined ||
-    state?.lifecycle === "checking" ||
-    state?.lifecycle === "deploying" ||
-    state?.lifecycle === "destroying";
+    ((state?.lifecycle === "checking" ||
+      state?.lifecycle === "deploying" ||
+      state?.lifecycle === "destroying") &&
+      state.operationFinishedAt === undefined);
   const error = actionError ?? live.error ?? state?.lastError;
 
   const run = async (operation: PendingOperation, action: () => Promise<void>) => {
@@ -135,7 +156,7 @@ function EnvironmentCard({ environment }: { environment: CompiledEnvironment }) 
       </CardContent>
       <CardFooter className="flex flex-wrap gap-2">
         <Button
-          disabled={api === undefined || operating}
+          disabled={api === undefined || operating || state?.lifecycle === "destroying"}
           onClick={() => {
             if (api !== undefined) void run("deploy", () => api.deploy());
           }}
@@ -149,7 +170,12 @@ function EnvironmentCard({ environment }: { environment: CompiledEnvironment }) 
         </Button>
         <Button
           variant="outline"
-          disabled={api === undefined || operating || state?.resources === undefined}
+          disabled={
+            api === undefined ||
+            operating ||
+            state?.lifecycle === "destroying" ||
+            state?.resources === undefined
+          }
           onClick={() => {
             if (api !== undefined) void run("check", () => api.check());
           }}
@@ -173,7 +199,7 @@ function EnvironmentCard({ environment }: { environment: CompiledEnvironment }) 
                     `Completely destroy ${environment.stage}, including its Workers, Durable Object data, D1, KV, and R2?`,
                   );
             if (api !== undefined && confirmed) {
-              void run("destroy", () => api.destroy(environment.stage));
+              void run("destroy", () => destroyEnvironmentInBatches(environment.stage));
             }
           }}
           className="ml-auto"

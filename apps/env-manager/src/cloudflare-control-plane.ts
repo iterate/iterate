@@ -15,6 +15,7 @@ import type * as HttpClient from "effect/unstable/http/HttpClient";
 import type { AlchemyResources, ResourceProgress } from "./state.ts";
 
 const ARTIFACT_DELETE_CONCURRENCY = 10;
+const ARTIFACT_DELETE_BATCH_SIZE = 1_000;
 const ARTIFACT_REPOSITORY_PAGE_SIZE = 200;
 const DELETED_WORKER_COMPATIBILITY_DATE = "2026-07-30";
 const DELETED_WORKER_MODULE = new File(
@@ -158,7 +159,7 @@ export function makeCloudflareControlPlane(input: {
       .items({ accountId: input.accountId, perPage: 100 })
       .pipe(Stream.runCollect);
 
-  const listArtifactRepositoriesInNamespace = (namespace: string) =>
+  const listArtifactRepositoriesInNamespace = (namespace: string, limit: number) =>
     listArtifactRepositories
       .items({
         accountId: input.accountId,
@@ -166,19 +167,23 @@ export function makeCloudflareControlPlane(input: {
         limit: ARTIFACT_REPOSITORY_PAGE_SIZE,
       })
       .pipe(
+        Stream.take(limit),
         Stream.runCollect,
         Effect.catchTag("NotFound", () => Effect.succeed([])),
       );
 
   const destroyArtifactRepositories = (namespace: string) =>
     Effect.gen(function* () {
-      const repositories = yield* listArtifactRepositoriesInNamespace(namespace);
+      const repositories = yield* listArtifactRepositoriesInNamespace(
+        namespace,
+        ARTIFACT_DELETE_BATCH_SIZE,
+      );
       let deleted = 0;
       input.onProgress?.({
         id: "wrangler-artifacts",
         type: "Cloudflare Artifacts",
         status: "deleting",
-        message: `Deleting ${repositories.length} repositories from ${namespace}.`,
+        message: `Deleting a bounded batch of ${repositories.length} repositories from ${namespace}.`,
       });
       yield* Effect.forEach(
         repositories,
@@ -206,15 +211,15 @@ export function makeCloudflareControlPlane(input: {
         { concurrency: ARTIFACT_DELETE_CONCURRENCY },
       );
 
-      const remaining = yield* listArtifactRepositoriesInNamespace(namespace);
+      const remaining = yield* listArtifactRepositoriesInNamespace(namespace, 1);
       if (remaining.length > 0) {
-        return yield* Effect.fail(
-          new Error(
-            `Artifact repositories remain for ${namespace}: ${remaining
-              .map(({ name }) => name)
-              .join(", ")}`,
-          ),
-        );
+        input.onProgress?.({
+          id: "wrangler-artifacts",
+          type: "Cloudflare Artifacts",
+          status: "destroying",
+          message: `Deleted a bounded batch of ${repositories.length} repositories from ${namespace}; canonical Cloudflare inventory still contains repositories.`,
+        });
+        return false;
       }
       input.onProgress?.({
         id: "wrangler-artifacts",
@@ -222,6 +227,7 @@ export function makeCloudflareControlPlane(input: {
         status: "deleted",
         message: `Deleted every repository from ${namespace}.`,
       });
+      return true;
     });
 
   const destroyContainerApplications = (workerName: string) =>
@@ -443,9 +449,9 @@ export function makeCloudflareControlPlane(input: {
             message: `Deleted ${destroyInput.workerNames.length} Workers and their Durable Object namespaces.`,
           });
 
-          if (destroyInput.osWorkerName !== undefined) {
-            yield* destroyArtifactRepositories(`${destroyInput.osWorkerName}-repos`);
-          }
+          return destroyInput.osWorkerName === undefined
+            ? true
+            : yield* destroyArtifactRepositories(`${destroyInput.osWorkerName}-repos`);
         }),
       );
     },

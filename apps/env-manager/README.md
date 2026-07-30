@@ -36,6 +36,12 @@ state reconstruction, or legacy-ID fallback: a broken environment is destroyed
 and recreated. During an ordinary apply, Alchemy's unmodified providers retain
 their native deterministic-name reconciliation for interrupted creates.
 
+Artifact drains run as explicit batches of at most 1,000 repositories. The
+client reconnects after each successful partial result; the Durable Object
+retains a settled `destroying` lifecycle and refuses deploy/check until destroy
+converges. Cloudflare inventory, not a stored cursor or repository count, is
+the checkpoint for every batch.
+
 ## Commands
 
 ```bash
