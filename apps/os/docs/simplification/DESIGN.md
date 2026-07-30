@@ -2,22 +2,23 @@
 
 > **What this is.** A small, load-bearing document we build from scratch and grow
 > deliberately. The old exploration pile (`index.html`, `simplification-*.md`, the
-> lenses, the vote) is on the shelf — we drag things *out* of it and *into here*
+> lenses, the vote) is on the shelf — we drag things _out_ of it and _into here_
 > only once we believe them.
 >
 > **How it works (the diffusion).** Everything starts life at the bottom, in **Open
-> questions**. As we resolve something, it moves *up* into a **Belief**, a
-> **Requirement**, or a **Decision**. Resolved *terms* move into the **Taxonomy**
+> questions**. As we resolve something, it moves _up_ into a **Belief**, a
+> **Requirement**, or a **Decision**. Resolved _terms_ move into the **Taxonomy**
 > (§6) — our canonical glossary: one word per concept, rejected synonyms listed as
 > _Avoid_. Nothing is locked until it's in one of those sections. Items have stable
 > IDs (B1, R1, D1, Q1…) so we can point at them.
 >
 > **The three buckets, kept separate on purpose:**
-> - **Belief** — a claim about the *world or the future* that motivates the design.
+>
+> - **Belief** — a claim about the _world or the future_ that motivates the design.
 >   Could turn out wrong. ("AI will be smarter than us soon.")
-> - **Requirement** — a constraint the system *must* satisfy. ("A user can work on
+> - **Requirement** — a constraint the system _must_ satisfy. ("A user can work on
 >   many repos at once.")
-> - **Decision** — a design choice we're *locking in*. ("Trust is binary: inside
+> - **Decision** — a design choice we're _locking in_. ("Trust is binary: inside
 >   the project vs outside.")
 >
 > Status tags on individual lines: **[LOCKED]** we're sure · **[PROPOSED]** leaning
@@ -27,16 +28,27 @@
 
 ## 1. What this is (the high-level description)
 
-_The tip of the pyramid. Must pass the Paul-Graham test: a smart outsider gets it
-in one read. Structure: two prose paragraphs → the primitives → a worked example.
-(Noun locked: **digital organism**.)_
+_The tip of the pyramid. Must pass the Paul-Graham test: a smart outsider gets it in one
+read. Structure (Jonas): **where we're going** (the audacious destination — the hook that
+picks people up) → **the big idea, concretely** (what it is today) → **how it works** → a
+worked example → the anatomy. (Noun locked: **digital organism**.)_
 
-An **iterate project is a self-improving digital organism.** It can do **anything a
-human with an internet-connected computer can do — and it gets better over time.** It
-might be a **company**, a **personal assistant**, or a **co-worker**.
+**Where this is going.** We are building toward **digital organisms that run themselves** —
+software entities that don't just do work, but **improve their own code, host their own
+infrastructure, and fund their own existence.** In the limit an iterate project is a genuinely
+**autonomous digital lifeform**: it earns money for the work it does, **pays its own compute
+bills out of what it earns**, rewrites itself to get better, and needs a human only where we
+**deliberately** keep one in the loop (the membrane — [[D14]]). That is the destination.
+Everything below is the concrete, mostly-unglamorous machinery that gets us there — but the
+destination is worth saying out loud, because every decision here is in service of it.
 
-The simplest way to picture it is as a **web server.** HTTP requests come in from the
-outside world, and in response it does three things: **updates its own state, sends
+**The big idea, concretely.** Today, an **iterate project is a self-improving digital
+organism.** It can do **anything a human with an internet-connected computer can do — and it
+gets better over time.** It might be a **company**, a **personal assistant**, a **co-worker**,
+a **tutor**, or a **game that rewrites its own rules as people play** (see `use-cases.md`).
+
+**How it works.** The simplest way to picture it is as a **web server.** HTTP requests come in
+from the outside world, and in response it does three things: **updates its own state, sends
 HTTP responses, and makes its own outbound HTTP requests.** That is the entire
 surface — **HTTP out is the only way it can influence the world.**
 
@@ -68,7 +80,7 @@ what matters is that behavior is **code the organism writes.**
 
 ### A worked example (a SaaS company)
 
-Suppose the organism *is* a SaaS company, and its website lives in its git repo. A
+Suppose the organism _is_ a SaaS company, and its website lives in its git repo. A
 customer emails support to complain about a bug — that email arrives as an **HTTP
 request** (a webhook). The **TypeScript** in the git repo routes it to an **agent**,
 which pings the founder on Slack, **edits the website's TypeScript in the git repo** to
@@ -97,6 +109,13 @@ Everything else — agents, integrations, the dashboard, workflows — is built 
 those two functions plus the streams they read and write. ([[D4]] locks the pair;
 [[R13]] keeps `fetch` stateless.)
 
+**And there are only two ways anything ever starts.** Trace any activity back and it
+began as one of exactly two triggers: an **inbound HTTP request** (from the outside world
+into a project — landing in `fetch` — or into the control plane at `os.iterate.com`); or
+an **internal alarm** (a timed Durable Object event) from the inside. Every agent run,
+every code change, every outbound call is set in motion by one of those two. ([[D18]]; the
+self-improvement loop that runs on top of them: [[D19]].)
+
 ---
 
 ## 2. What makes it different
@@ -104,18 +123,39 @@ those two functions plus the streams they read and write. ([[D4]] locks the pair
 _Given the primitives (§1), why this is not just "a web app" or "an agent framework":_
 
 - **You never configure it — you change its code, and it changes its own.** Behavior
-  is determined *entirely* by the config repo; there's nothing it isn't involved in,
+  is determined _entirely_ by the config repo; there's nothing it isn't involved in,
   except the small kernel. It's all userspace ([[D2]], [[D4]]).
 - **Agents produce code and consume events** — not tool-calls and tool-results. A
-  webhook is barely transcribed; the agent just cares that *something happened* and
+  webhook is barely transcribed; the agent just cares that _something happened_ and
   writes code to handle it. _(ref: PI coding agent, [[Q13]].)_
 - **Everything is a stream, so everything is observable** — and replayable. Anything
   that goes wrong is visible after the fact.
 - **The kernel is tiny; the organism is userspace.** All the interesting behavior
   lives on top of a small, fixed core ([[D2]]).
+- **An agent is just events on a stream.** The only thing separating a stream that does
+  nothing from the most powerful coding agent in the world is a **set of events** you append
+  — there is no agent data structure ([[D20]]). _(Enshrined, unshakable — Jonas.)_
+- **Everything is a stream processor** — the browser UI, the CLI, and the agent alike; each
+  reads one stream and reacts ([[D22]], [[D23]]). _(Loud and clear — Jonas.)_
 
 _Rejected words: "fenced-off computer", "intelligent entity runtime" (mean nothing to
 an outsider); don't open with "it's basically a web app" (undersells self-improvement)._
+
+### North-star (a stated design vision)
+
+_Two levels of "iterate on iterate," deliberately separated:_
+
+- _**Company-level (intended, near-term).** We intend to **run our entire company on an
+  iterate config repo** — Iterate's own operations are themselves an iterate organism. This
+  is just "iterate is one of its own customers": safe dogfooding, no circular platform
+  dependency._
+- _**Platform-level (the north-star, deferred).** In the limit, the **control plane itself
+  is just another organism** — `os.iterate.com` a privileged project on the same `itx`, the
+  same two entry points ([[D18]]), the same streams, improving itself the same way. We
+  **don't do this at the start**: a platform that provides *its own* platform is too easy to
+  **break everything at once** (bootstrapping / circular-dependency risk). But it's the
+  aspiration the architecture must keep reachable ([[R15]]) — the payoff of "everything is
+  userspace" ([[D2]]) and "deployment is placement" ([[R10]])._
 
 ---
 
@@ -151,12 +191,12 @@ against them** (fallbacks, extra machinery) unless we're really forced to._
   in the future, they'll more likely all get the **same access the AI has** — because
   internal authz checks tie you in knots and are genuinely hard. This is the belief
   under [[D1]]: we build binary trust precisely because internal authz is probably
-  *unnecessary* **and** definitely *painful*.
+  _unnecessary_ **and** definitely _painful_.
 - **WA2 [ASSUMPTION].** **Prompt-injection is solved with more AI, not more
   human-in-the-loop.** For the few actions that legally require a human, we need a
   **cryptographically verified human-approval** path (secure enclave / attestation —
   [[Q15]]). For everything else, **AI is the guardrail** — and in the not-so-distant
-  future even *human* actions will require **AI approval**, not the reverse.
+  future even _human_ actions will require **AI approval**, not the reverse.
 
 ---
 
@@ -215,6 +255,40 @@ The design must not foreclose them; we don't have to ship them now._
   **Transitive:** spend limits **nest** — you can hand an agent a **sub-budget** ("spend up
   to $20 on this, then come back to me if you haven't solved it") that **pauses and reports
   back** when exhausted, rather than failing silently.
+- **R15 [LOCKED]. Don't foreclose the platform running on itself.** The architecture must
+  leave the door open for the control plane (`os.iterate.com`) to eventually be **just
+  another organism** — iterate running on iterate — even though we **won't build that day
+  one**. It's the natural consequence of homogeneity + [[R10]] (same substrate; deployment
+  is placement). _Why not now: a platform that provides its own platform is too easy to
+  break all at once — see the North-star note in §2._
+- **R16 [LOCKED]. Iterate's integrations work out of the box, but every one is overridable in
+  userspace.** A project can reach any third-party API **through iterate's own integration** —
+  iterate provides the key/account and charges a **pass-through fee** — so it works **out of
+  the box**. But **every one is overridable**: if you don't want iterate's OpenAI key or the
+  surcharge, you **bring your own** (your own OpenAI account, your own keys/secrets) and the
+  default steps aside. **No forced surcharge, no forced key.** (This is [[D2]] / [[D17]]
+  applied to integrations & billing; BYO extends to secrets — [[D10]].)
+- **R17 [LOCKED]. In the future you must be able to run a project on your own accounts —
+  "renting only the kernel."** A project must be able to run in **your own Cloudflare
+  account**, with **your own** OpenAI account, secrets — **everything** — the platform↔your-
+  account connection done over **Cap'n Web (capnweb)**. At that limit **you're just renting
+  the kernel** from iterate. **Directional, not day-one** — it's fuzzy ("not at all clear what
+  it means"), and we won't yet have access to your artefact bindings — but the door must stay
+  open. (Sharpens [[R10]]; connects the [[R15]] north-star and the [[D2]] kernel.)
+  _Model: the **streams (and iterate's code) run in the customer's Cloudflare account** — like
+  a normal **enterprise on-prem deployment**, where they run our code and we push updates to
+  it. Jonas: "could still work quite well."_
+- **R18 [LOCKED]. What iterate brings to the table (the "walls" you rent).** Even when you bring
+  your own accounts / keys ([[R16]], [[R17]]), iterate provides real value out of the box:
+  **first-party, pre-approved OAuth clients** (e.g. a ready Google OAuth client), a **polished
+  mobile app**, and the **kernel walls themselves** (the egress MITM proxy, the stream
+  substrate, identity). "**Renting the wall**" is a good way to think about it — you rent the
+  walls and the pre-built surface, and bring the rest.
+- **R19 [LOCKED]. The entire product can _be_ an agent.** It must be **trivial** to build an
+  application where the **whole product is an agent**: every visitor **starts an agent
+  conversation** and interacts with it directly. There is **no difference between an internal and
+  an external agent** — same machinery, same events ([[D8]], [[D20]], [[D22]]). An agent-as-product
+  is just an agent reachable from the public edge. _(Jonas, loudly: this must be possible.)_
 
 _(Former R8 "everything expressible in userspace" folded into [[D2]]. R9
 "replay-from-streams" rejected — durable state also lives in git ([[D9]]).)_
@@ -238,10 +312,25 @@ now they're gathered here._
   ([[B1]], [[B4]]); any line drawn inside a project is both incoherent for that world
   and a huge source of complexity._ _(Name still workshoppable — want something more
   self-explanatory than "binary trust".)_
+  _Clarification: the **interior** is binary — employees, or partners in a marriage using it as a
+  family butler, all trust each other and see everything. But the **outside is not monolithic**:
+  the organism interacts with **external stakeholders at different trust levels**, so the **edge**
+  is where graded trust actually lives — *what can this third party see? what am I allowed to show
+  them? am I being tricked?* The binary is about the interior; the **boundary itself is rich**
+  (enforced at the egress / interaction door — [[D6]], [[D15]])._
+  _Users vs holders (2026-07-15): the differentiated parties a project **serves** — a startup's
+  customers, a tutor's kids, a game's players — are **users, not interior members.** They **never
+  hold an `itx`**; they're HTTP visitors the config worker's `fetch` authenticates and serves
+  **per-user views** (ordinary userspace web-app auth). So D1's binary is precisely "**who holds an
+  `itx`**": inside = the project's agents + operators, fully trusted; and differentiated visibility
+  among users needs **no interior levels** — it falls out of users being *outside*. Orthogonally
+  (Jonas leans toward this as "even better / more meaningful"): a user may *also* be their **own
+  project** — e.g. a kid is a sovereign organism holding an `itx` to their *own* streams, and the
+  tutor holds a *granted capability* across the edge (federation). Both models compose._
 - **D2 [LOCKED]. Everything except a tiny kernel is overridable in userspace.** A
   project's behavior is defined in its config repo; there is almost nothing the
   platform does that a project can't override in userspace — except a small fixed
-  **kernel** (the things that genuinely *cannot* be expressed in userspace, plus two
+  **kernel** (the things that genuinely _cannot_ be expressed in userspace, plus two
   or three so essential we keep them in anyway). We call it the **kernel** (or core),
   never "seed". → [[Q7]] (what the non-kernel layer is called).
 - **D6 [LOCKED]. The only real security is at the network egress door.** To the
@@ -258,14 +347,14 @@ now they're gathered here._
   convenience, not a security change._
 - **D13 [LOCKED]. Security is object-capability, not access-control-lists.** Authority
   is **what you hold**, not **who you are**: an `itx` (and every reference reachable
-  through it) is an unforgeable handle that both *names* a thing and *carries* the
+  through it) is an unforgeable handle that both _names_ a thing and _carries_ the
   right to use it. There is **no per-use permission check** — if you can call it,
   you're allowed. Checks happen at **mint time**, not use time: `authenticate()` is
   the one identity→capability conversion, and `session.projects.get("prj_x")` asserts
   your claims cover the project **before** handing back the itx. Confinement is
-  **structural, not guarded** — a project-A itx literally cannot *express* a reference
+  **structural, not guarded** — a project-A itx literally cannot _express_ a reference
   to project B, so there is nothing to check ([[R1]] by construction). The smell to
-  avoid: "get the reference, then check whether the holder is allowed" at *use* time —
+  avoid: "get the reference, then check whether the holder is allowed" at _use_ time —
   that's an ACL leaking into a capability system. The fixes are always (1) move the
   check to **mint time**, (2) **attenuate instead of check** (hand out a narrower
   capability that structurally can't do the forbidden thing — bind-as-attenuation,
@@ -274,14 +363,15 @@ now they're gathered here._
   not the holder.
 - **D14 [LOCKED]. A small protected control plane (the "membrane") lives outside
   userspace — the one deliberate exception to [[D2]].** A self-editing organism has no
-  floor unless a *tiny* part of it is un-editable by its own code. That part is held by
+  floor unless a _tiny_ part of it is un-editable by its own code. That part is held by
   the **platform, not the organism**, requires **human sign-off to change**, and is what
   lets everything **grind to a halt**. It holds exactly four kinds of thing, and nothing
   else:
   1. **The promotion / rollback gate** on the "which version of me is live" pointer.
-     Code may be *written* freely (userspace); making it *live* — merge/push to the
+     Code may be _written_ freely (userspace); making it _live_ — merge/push to the
      artifact's main — passes a gate the live code can't rewrite, so a bad commit is
-     always rollback-able. Shaped like a **GitHub pull-request review**.
+     always rollback-able. Shaped like a **GitHub pull-request review** — realized as a
+     **protected `main` branch on the artefact** ([[D19]]).
   2. **Spend controls** ([[B5]], [[R14]]) — caps and a kill switch on money the organism
      can spend, implicitly (LLM requests) and explicitly (virtual cards, third parties,
      infra).
@@ -291,20 +381,20 @@ now they're gathered here._
      very seriously; **used rarely**.
   4. **Runaway / loop controls** — loop detection and similar, which also require human
      sign-off to change.
-  _Does **not** contradict [[B4]]: the default is still "AI doesn't need a human to sign
-  off." The membrane is the deliberate, minimal minority — for legal need and for not
-  burning the house down. Name still open (membrane / control plane / guardrails /
-  constitution)._ _Pin (detailed design, not now): the money-spent event shape, its
-  multi-level aggregation, and the kill-switch mechanics ([[R14]])._
+     _Does **not** contradict [[B4]]: the default is still "AI doesn't need a human to sign
+     off." The membrane is the deliberate, minimal minority — for legal need and for not
+     burning the house down. Name still open (membrane / control plane / guardrails /
+     constitution)._ _Pin (detailed design, not now): the money-spent event shape, its
+     multi-level aggregation, and the kill-switch mechanics ([[R14]])._
 - **D15 [LOCKED]. The egress door is a programmable man-in-the-middle SSL proxy — the
   project boundary made physical.** At the network level there must be **no way to reach
   the internet without passing through our gate**. What enforces it is a **programmable
   egress proxy** doing **full man-in-the-middle SSL**, so all outbound bytes are visible
   and controllable at the boundary. Think **draconian enterprise security**: it can log,
   capture and store all egress, filter, data-mine, and do **data-loss prevention** — all
-  at the edge of a project. This is the mechanism *behind* [[D6]], and it's where [[D10]]
+  at the edge of a project. This is the mechanism _behind_ [[D6]], and it's where [[D10]]
   substitutes secrets (the agent sends a placeholder; the proxy injects the real secret at
-  the door). It answers "what forces code through the one door?": nothing *asks* it to —
+  the door). It answers "what forces code through the one door?": nothing _asks_ it to —
   there is structurally **no other exit**.
   - **Code runs sandboxed.** The organism's own code runs in a **sandbox** — on Cloudflare
     a **dynamic worker**, or a **VM / Cloudflare container with egress interception** —
@@ -317,17 +407,40 @@ now they're gathered here._
   - **Borrowed machines too:** when a capability lends a real machine to the project
     (e.g. Jonas's Mac), that machine's egress is likewise forced through the gate. No
     un-proxied path out, from anywhere.
+    _Reality check (2026-07-15): the **forced single egress door is shipped** — a Dynamic Worker's
+    bare `fetch()` routes via `globalOutbound` → the Project DO so explicit RPC egress and bare
+    fetch "share one decision point" (`projects/egress.ts` `ProjectEgressEntrypoint`), and the
+    interceptor "sees getSecret(...) placeholders, never material" (`:5`). The richer **MITM-SSL /
+    log-capture / DLP / data-mine** framing is **aspirational** — not (yet) in the code I read; the
+    shipped reality is a single forced egress + secret substitution + origin allowlist._
+- **D18 [LOCKED]. The entire system has exactly two entry points: an inbound HTTP request
+  and an internal alarm.** Trace any activity to its root and it began as one of two
+  triggers: (1) an **inbound HTTP request** — from the outside world into a **project**
+  (→ the project worker's `fetch`), or into the **control plane** (`os.iterate.com`); or
+  (2) an **internal alarm** — a timed **Durable Object alarm** from the inside. Everything
+  else (agent runs, code changes, outbound calls) is set in motion by one of these two.
+  _(Cloudflare offers other worker entry points — a queue consumer, an email consumer — but
+  they don't apply to projects as designed today. The project-vs-control-plane HTTP split
+  may get refactored.)_
+- **D24 [LOCKED]. We build the agent harness _as a distributed system_ — and embrace it.** We
+  **want** parts to **degrade or fail independently**: one stream processor implements basic
+  agent turn-taking, another _completely independently_ implements loop detection, and neither
+  can take the other down. Independence is a **feature**, not a cost we tolerate. (Follows from
+  [[D22]] (everything is a processor), [[D23]] (one processor : one stream), [[R6]] (any part
+  can fail and recover); it's part of why we accept cross-post's duplication.)
 
 ### Streams & events
 
 - **D3 [LOCKED]. We are event-sourcing purists.** The organism's runtime state is
-  derived by reducing event streams (its *code* lives in git — [[D9]]), and mechanisms
+  derived by reducing event streams (its _code_ lives in git — [[D9]]), and mechanisms
   are expressed as **events on the normal path**, not special-case hooks (waking is a
   `stream/woken` event, not a `reconcile` method — [[Q2]]). We hold the line even when
   it looks inefficient.
   _Concrete example: the **only** way a stream processor can react to events in two
   different streams is to **cross-post** one stream's events onto the other. It looks
   inefficient — and it's actually really useful._
+  _(We hold this line **completely** — the whole agent lifecycle is events. Sharpened in
+  [[D23]]: one processor : one stream; cross-post is the only multi-stream mechanism.)_
 - **D7 [LOCKED]. One stream + stream-processor abstraction does everything.** A single
   abstraction is our **primary database, our persistent task queue, our workflow
   engine, and our live-streaming infrastructure** — four systems collapsed into one.
@@ -345,12 +458,12 @@ now they're gathered here._
   the rejected R9 — is wrong: you replay streams **and** resolve their references into
   git and blobs.)_
 - **D11 [REVISED → explicit dimensions; TTL deferred]. An event isn't a durable/
-  ephemeral *type*.** "Ephemeral" is a **colloquial label** for a combination of a few
+  ephemeral _type_.** "Ephemeral" is a **colloquial label** for a combination of a few
   **explicit, orthogonal** properties. Preference: model each property **explicitly**,
-  rather than a wishy-washy "ephemeral" type or *deriving* one property from another.
+  rather than a wishy-washy "ephemeral" type or _deriving_ one property from another.
   1. **Included-by-default on subscriptions? (delivery)** — most events are delivered to
      all subscribers by default. High-frequency lanes (audio PCM chunks, streaming LLM
-     tokens) are **excluded by default from *both* push and pull subscribers** (and from
+     tokens) are **excluded by default from _both_ push and pull subscribers** (and from
      a live `waitFor`); a subscriber gets them only by **explicitly opting in**, using
      the **same signature as `subscribe`**. _Why: a quick `itx.subscribe` in a script
      must not suddenly be flooded with chunk spam — opt-in is least-tedious._
@@ -360,7 +473,7 @@ now they're gathered here._
      TTL number violates the **principle of least surprise**; an explicit flag is
      obvious. _(Leaning explicit; likely a formal dimension.)_
   3. **TTL** — `null` / `undefined` = **forever**; `0` = **deletable ~immediately** (for
-     now just a *signal* of the event's real nature; actual deletion **not implemented**).
+     now just a _signal_ of the event's real nature; actual deletion **not implemented**).
      This is the real property "ephemeral" was gesturing at. _(Concept set; mechanics
      **deferred to the detailed stream design** — pin in [[Q16]]; connects to future
      **R2 offload** for streams past the ~10 GB SQLite limit.)_
@@ -371,17 +484,18 @@ now they're gathered here._
   and the rule that **durable truth is always its own durable append.**
   _(Supersedes "events are durable or ephemeral"; refines the earlier 3-knob draft —
   side-effects is now explicit, not derived. — Jonas, 2026-07-15.)_
+
 - **D12 [LOCKED]. Capture verbatim, transform by appending — middleware is append +
   react.** Raw ingress is recorded as a **sacred, never-mutated fact**; the normalized
   or routed version is a **separate appended fact next to it** (normalize / enrich /
   route / drop = append the transformed version, or simply don't forward it onward). A
   chain of append+react **is** a middleware system, with no middleware machinery. Two
-  kinds: **`fetch` middleware** is synchronous and *in-path* (transform request →
+  kinds: **`fetch` middleware** is synchronous and _in-path_ (transform request →
   response, can short-circuit — like Express/Hono); **event middleware** is
-  *post-commit reaction* (the fact lands first; you can only react by appending, never
+  _post-commit reaction_ (the fact lands first; you can only react by appending, never
   rewrite it). **Pre-commit rejection stays kernel** — only the inline core processor
   may reject a malformed or paused append; userspace middleware is always the
-  post-commit reaction chain. This preserves [[D3]] purism (the raw fact is *always*
+  post-commit reaction chain. This preserves [[D3]] purism (the raw fact is _always_
   recorded), journal sovereignty (an append can't be blocked by user code), and
   stateless scaling (userspace off the commit hot path).
 - **D16 [LOCKED]. The stream substrate has exactly two primitives — `append` and
@@ -390,21 +504,56 @@ now they're gathered here._
     recorded as an event, and `append` returns once that's done (the wait is inherent —
     [[D4]]). The event input may carry an optional **offset precondition**: "append this
     **only if the stream hasn't moved** past this offset." That optional compare-and-swap
-    is what lets the *same* log be a **task queue** (claim a job = conditional-append a
+    is what lets the _same_ log be a **task queue** (claim a job = conditional-append a
     `claimed` fact; exactly one wins) and a **database** (sell the last ticket = append
     conditional on the current stock offset).
   - **`processEvent`** — the read/react side: you are invoked for **every event on a
     stream from a starting offset**, and checking each event is how you reduce, react, or
     wait. This is the "consume a stream and check every event" operation — but we call it
-    **`processEvent`** everywhere, *never* "consume." A third-party processor ([[R11]])
+    **`processEvent`** everywhere, _never_ "consume." A third-party processor ([[R11]])
     does the same thing by processing the stream itself.
   - Everything else is convenience or performance on top:
     - **`waitFor(namedEvent)`** = process events from now and stop when the named one
       appears (optional timeout). Sugar, not a primitive.
     - **Server-side filters** (JSONata, a discrete type filter) = a **speed** optimisation
-      over receiving everything and checking client-side; *logically identical*.
+      over receiving everything and checking client-side; _logically identical_.
   - So "do you wait for the reaction?" **just depends** — you may process until the outcome
     appears, or not; nothing forces the log or the worker to block. (Resolves [[Q5]].)
+    _Reality check ✓ **shipped verbatim** (2026-07-15): `streams/stream-durable-object.ts:224`
+    `append(...)`; the event input's optional `offset` is "an optional optimistic-concurrency
+    assertion" (`:233`), enforced as a compare-and-swap at `:263` (`expected offset X, got Y`)._
+- **D20 [LOCKED · ENSHRINED]. An agent is just a stream with a preset of events appended —
+  there is no "agent" data structure.** The thing that turns an inert stream (one that does
+  nothing) into **the most powerful coding agent in the world** is _simply a set of events_.
+  You take an **array of events as a preset** and **append** it to a stream; the stream then
+  starts driving a processor that appends more events, calls LLMs, and so on. No agent
+  object, no agent schema — **agent-ness is events.** _This is a founder-locked, unshakable
+  statement of the design — Jonas said this, and it should not change (2026-07-15)._ (The
+  deepest form of [[D7]] / [[D8]]: even "being an agent" reduces to events on a stream;
+  connects [[D5]], [[D16]].)
+- **D22 [LOCKED · ENSHRINED]. Everything is a stream processor.** The **browser UI**, the
+  **CLI**, and the **agent** are all stream processors — each reads a stream and reacts.
+  Loud and clear: there is no other kind of actor. (Homogeneity — all written against `itx`;
+  connects [[D8]], [[R11]], [[D20]].)
+- **D23 [LOCKED]. One processor : one stream — the stream is the serialization point;
+  cross-post is the only way to combine streams.** A stream processor processes events from
+  **exactly one stream**, because a single stream is the **only** thing that guarantees a
+  total order. To react to N streams, you **cross-post** their events onto one stream. Events
+  are therefore **duplicated across streams — and that is fine** (storage is cheap). The
+  payoff: within a stream, everyone agrees on the **exact order** things happened — **perfect
+  ordering.** (Sharpens the cross-post rule in [[D3]]; each event carries an incrementing
+  **offset** within its stream.)
+- **D25 [LOCKED · ENSHRINED]. The events _are_ the API — the _durable_ interaction surface.**
+  You interact with the system durably by **appending and reading events** — the event
+  vocabulary is the interface, and there is no separate _durable_ RPC API. Convenience functions
+  may wrap `append`, but underneath it's events. That's how you talk to the system's memory, full
+  stop. (Sharpens [[D16]]; twin of [[D20]] — if an agent is just events, so is talking to one.)
+  - **Caveat (bounds the purism):** **not everything serialises into an event**, deliberately.
+    Rich, _ephemeral_ interactions — **request/response streams and rich JavaScript objects passed
+    across RPC (capnweb) boundaries** — go over **RPC, not events**. This is a **feature**: it
+    lets you write **natural, richly-typed JavaScript** that's legible to an LLM ([[B2]], [[R7]]).
+    So: **events for durable truth; RPC for rich ephemeral interaction.** _(This is why "the last
+    RPC" — collapsing all RPC into events — is rejected.)_
 
 ### Config & code
 
@@ -420,11 +569,11 @@ now they're gathered here._
   more facts. `fetch` is shared (synchronous request/response). `itx` is the plumbing
   around the worker's behavior: `itx.fetch` adds hostname routing + egress policy
   (secrets, allowlist, human-in-the-loop) around the worker's `fetch`; the append lane
-  adds provenance + waking subscribers. Config worker provides the *behavior*; the
-  platform provides the *plumbing*.
+  adds provenance + waking subscribers. Config worker provides the _behavior_; the
+  platform provides the _plumbing_.
   - **One fetch, direction by hostname ("just fetch" — ADOPTED).** `itx.fetch` is the
-    single HTTP verb: an internal name routes *into* the project; an external name goes
-    *out* through the egress door ([[D6]], [[D10]]). The separate `egress` member of
+    single HTTP verb: an internal name routes _into_ the project; an external name goes
+    _out_ through the egress door ([[D6]], [[D10]]). The separate `egress` member of
     the tree **collapses into `itx.fetch`.** An edge request and internal
     `itx.fetch("http://self.iterate/…")` are the **same code path**.
   - **The asymmetry:** `fetch` is fully **stateless** — it touches the DO/streams only
@@ -434,7 +583,50 @@ now they're gathered here._
     wake the worker's `processEvent`, which runs statelessly. Compute is stateless; the
     DO is the ordering point, never the HTTP hot path.
 - **D5 [LOCKED]. Agents produce only code.** No traditional tool-calling — an agent
-  responds to events by writing a script that runs.
+  responds to events by writing a script that runs. (That script is the `itx` script block
+  in the self-improvement loop — [[D19]].)
+- **D17 [LOCKED]. The non-kernel layer is _referenced_ through `itx` (microservices-style),
+  not copied into each repo.** The shared platform layer (default agent prompts, integrations,
+  defaults) lives behind the project's **`itx` binding**; a project **pulls a default out of
+  `itx` and modifies it however it likes**.
+  - **Un-overridden defaults auto-update:** if the platform redeploys and a project **has
+    not overridden** a default, the project **receives the update** (it referenced ours,
+    not a copy). Overridden → the project's own version wins. This is how one improvement
+    reaches a million projects **without rebasing a million repos** ([[Q8]]).
+  - **Versioning `itx` is a candidate, not settled.** _If_ we don't want to **brick existing
+    integrations** on an API-incompatible change (e.g. to how default prompts are retrieved),
+    we _might_ **version `itx`** — but that's an open **maybe** (Jonas: "I don't know"), not a
+    locked decision. → [[Q17]].
+    _This is the "referenced, override-by-exception" resolution of the [[D2]] tension: a
+    project may fork/pin any piece, but by default it references the shared one. The layer's
+    name is still open ([[Q7]])._
+- **D19 [LOCKED]. The self-improvement loop: entry point → deterministic code → event →
+  processor → LLM → code that commits to the repo.** Concretely: an entry point ([[D18]])
+  runs **deterministic code** an LLM authored earlier (the project worker's `fetch`); that
+  **usually just returns an HTTP response** (rendering the product's web pages —
+  disambiguated by hostname, normal auth: _it's just a web application_), but it may also
+  **append an event to a stream**. If a **processor is subscribed** to that stream, it makes
+  **LLM requests**; the LLM produces an **`itx` script block** ([[D5]]); that script **runs
+  code in the project's context**; and that code can call e.g. **`itx.repo.commitFiles`**
+  (`itx.repo` is a top-level getter; the method is `commitFiles`/`edit` — _not_
+  `itx.project.repo.commit`, corrected 2026-07-15), which **updates the project repo** — which
+  is how the deterministic code itself changes.
+  - **Protected main.** The agent may **not** land on live `main` directly: `main` on the
+    artefact is a **protected branch** (the promotion gate of [[D14]], shaped like a GitHub
+    PR review). Self-modification always flows through a repo commit onto a gated branch —
+    never an instant, un-gated change to live code. _Reality check (2026-07-15): **not built
+    on `main`** — `commitFiles` lands straight on the default branch with no gate
+    (`repos/repo-durable-object.ts:301`). The loop's front half is real; the gate is
+    aspirational. See the Reality-check appendix._
+- **D21 [LOCKED · directional]. `itx` is assembled from mounts.** Capabilities are **mounted**
+  onto `itx`, not hardcoded into one god-object. It's a **combination** today — the
+  first-party API surface was written out directly because that was easier before the mount
+  machinery existed — but **strategically `itx` should be assembled**. Userspace mounting
+  **already works**: a project can **durably mount capabilities defined in worker files in
+  git repos that sit at the same level as the platform's own** capabilities. So the
+  first-party surface should migrate from hardcoded toward mounts over time. (Resolves [[Q4]]
+  directionally; same referenced-module machinery as [[D17]]; the kernel provides the
+  **mount primitive** plus the un-mountable capabilities — egress door, repo, identity.)
 
 ### Secrets
 
@@ -450,6 +642,10 @@ now they're gathered here._
   _Principle: the agent must **never see** the secrets that mutate the outside world — the
   same risk reduction human developers get by never touching prod secrets. (Far future: an
   agent may **briefly** see a secret it is itself creating.)_
+  _Reality check ✓ **shipped** (2026-07-15): `secrets/platform-secrets.ts` substitutes
+  `getSecret(...)` references at the egress door, **host-allowlisted** (`secret_not_allowed_for_origin`),
+  never-material, "no partial substitution escapes" (`:88`); the egress interceptor "sees
+  getSecret(...) placeholders, never material" (`projects/egress.ts:5`)._
 
 ---
 
@@ -476,16 +672,24 @@ at a moment in time; not persisted and not derived from the log (an open
 connection, a half-built batch). _[LOCKED Q1]_
 _Avoid_: —
 
-**event** — an immutable, past-tense fact appended to a stream; the only way to
-change durable state. Plain-language synonym: "a fact."
+**event** — an immutable, past-tense fact appended to a stream, at a monotonically
+incrementing **offset**; the only way to change durable state. Plain-language synonym: "a
+fact."
 _Avoid_: message (for the durable record), record.
 
-**stream** — an append-only log of events at a path; the unit of durable state and
-of ordering. Plain-language synonym: "a log."
+**offset** — an event's monotonically incrementing position within its stream; the ordering
+coordinate, and the optional precondition on `append` ([[D16]], [[D23]]).
+_Avoid_: sequence number (colloquial only), index.
+
+**stream** — an append-only log of events at a path, each event carrying a monotonically
+**incrementing offset**; the unit of durable state and the **serialization point** (the one
+total order everyone agrees on — [[D23]]). Plain-language synonym: "a log."
 _Avoid_: journal (code sometimes says "journal" — standardize on stream), table.
 
-**processor** — something that reads a stream and reacts: it reduces events into
-reduced state and causes side effects. An agent is a processor with a prompt.
+**processor** — something that reads **one stream** and reacts: it reduces events into
+reduced state and causes side effects. Processes **exactly one stream** for total ordering
+([[D23]]). The browser UI, the CLI, and the agent are all processors ([[D22]]); an agent is a
+processor with a prompt.
 _Avoid_: consumer, handler.
 
 **append** — the write primitive: submit an **event input**; it is durably recorded as an
@@ -504,6 +708,16 @@ from a starting offset**, and checking each event is how you reduce, react, or w
 implements ([[D4]], [[D16]]).
 _Avoid_: **consume** (rejected — we say `processEvent`).
 
+**agent** — a **stream with a preset of events appended** — nothing more. There is **no agent
+data structure**; appending the right set of events turns an inert stream into an agent
+([[D20]]). Equivalently, "a processor with a prompt," where the prompt and wiring arrive _as
+events_.
+_Avoid_: agent object, agent config (there is no such structure).
+
+**mount** — a capability attached onto `itx`. Capabilities are **mounted** (from the platform,
+or from a project's own worker files in git repos at the same level), not hardcoded ([[D21]]).
+_Avoid_: —
+
 **capability** — a callable reference that lets code do something (call a tool,
 reach another entity, hit the network); you have authority because you hold it.
 _Avoid_: permission, binding.
@@ -516,7 +730,7 @@ _Avoid_: tenant, workspace, org, account.
 **repo** — a git repository owned by a project.
 _Avoid_: —
 
-**config repo** — *the* project's config repo: the git repo holding the project's own
+**config repo** — _the_ project's config repo: the git repo holding the project's own
 code and rules. Its configuration is a **web server** (a fetch function / Cloudflare
 Worker) the platform calls into — not a settings file. The entity rewrites it to
 improve itself. [LOCKED terminology]
@@ -533,7 +747,7 @@ reacting to them, never by calling each other directly.
 _Avoid_: event bus, message queue, workflow engine (accurate but jargon — keep out of
 the opening).
 
-**kernel** — the part of the system that *cannot* be built in userspace, plus the
+**kernel** — the part of the system that _cannot_ be built in userspace, plus the
 two-or-three things that could be but are too essential to leave out; small on
 purpose ([[D2]]).
 _Avoid_: **seed** (rejected).
@@ -541,7 +755,7 @@ _Avoid_: **seed** (rejected).
 ### Flagged ambiguities (names still open)
 
 - **The non-kernel layer** has no agreed name — **not "packages"** (implies npm). → [[Q7]]
-- **kernel vs core** — resolved *against* "seed"; final pick between the two still open.
+- **kernel vs core** — resolved _against_ "seed"; final pick between the two still open.
 - **consume vs subscribe** — RESOLVED: the read/react primitive is **`processEvent`** (not
   "consume"); "subscribe" stays the opt-in **delivery** setup ([[D11]]).
 
@@ -556,12 +770,14 @@ for now they're cross-referenced. **Status: skeleton — we fill objects one at 
 (recommended first: Stream, the most locked)._
 
 ### 7.1 Project — the organism / the trust boundary
+
 - **What:** one iterate entity — its identity, streams, code, secrets, and the single
   trust boundary.
 - **Decisions:** [[D1]] (one trust boundary), [[D13]] (ocap not ACL), [[R1]], [[R10]].
 - **How it works / open:** _stub._
 
 ### 7.2 Stream — the log (memory + messaging)
+
 - **What:** an append-only log of events at a path — both the organism's memory
   (reduced state) and how its parts talk (append + react).
 - **Decisions:** [[D3]] (event-sourcing purist + cross-post), [[D7]] (one abstraction =
@@ -574,35 +790,42 @@ for now they're cross-referenced. **Status: skeleton — we fill objects one at 
   precondition); [[Q3]] (event-pair convention — resolved). _Fill first._
 
 ### 7.3 Processor — reduce + react
+
 - **What:** reads a stream, reduces events into reduced state, reacts by appending /
   side-effecting. An **agent is a processor with a prompt**; a processor can be hosted
   anywhere ([[R11]]).
 - **Decisions:** [[D3]] (reconcile-is-just-wake, [[Q2]] resolved), [[R11]], [[R12]]
-  (concurrency), [[D16]] (`processEvent` = the read/react primitive).
+  (concurrency), [[D16]] (`processEvent` = the read/react primitive), [[D20]] (an agent = a
+  preset of events on a stream).
 - **How it works / open:** the obligation convention (`requested → completed{outcome}`,
   [[Q3]]); the at-head/idempotency mechanics. _stub._
 
 ### 7.4 Config repo & the config worker — the DNA
+
 - **What:** the git repo holding the organism's code; the config worker = `{ fetch,
-  processEvent }`; `itx` wraps both.
+processEvent }`; `itx` wraps both.
 - **Decisions:** [[D4]], [[D2]] (userspace override), [[R13]] (stateless ingress).
 - **How it works / open:** [[Q5]] (largely resolved by R13 — confirm). _stub._
 
 ### 7.5 Capability & `itx` — the addressing tree
+
 - **What:** the one homogeneous surface all code is written against; **addressing, not
   security** ([[D13]]); expressions + bind-as-attenuation; mounts.
-- **Decisions:** [[D2]], [[D13]], [[R7]] (TS-like).
+- **Decisions:** [[D2]], [[D13]], [[R7]] (TS-like), [[D17]] (referenced defaults through
+  `itx`; itx-versioning a candidate — [[Q17]]).
 - **How it works / open:** [[Q4]] (capabilities as mounts installed by processors — a
   hook model), [[Q9]] (make expressions look like TypeScript), [[Q7]] (what the
   non-kernel layer is called). _stub._
 
 ### 7.6 Secret — write-only
+
 - **What:** write-only, host-bound at add-time, substituted at the egress door;
   "secret jail" worker for the rare raw-access case.
 - **Decisions:** [[D10]].
 - **How it works / open:** [[Q14]] (write this section in full). _stub._
 
 ### 7.7 Egress door — the one exit
+
 - **What:** the single place bytes leave the project; `fetch`'s external branch; where
   all outward-facing security lives.
 - **Decisions:** [[D6]], [[D15]] (programmable MITM SSL proxy + sandboxed code + forced
@@ -613,6 +836,7 @@ for now they're cross-referenced. **Status: skeleton — we fill objects one at 
   surface. _stub._
 
 ### 7.8 Repo & blobs — git + big objects
+
 - **What:** git repos (a project may work on many, [[R3]]); events reference commit
   hashes and file objects ([[D9]]).
 - **Decisions:** [[R3]], [[D9]].
@@ -620,6 +844,7 @@ for now they're cross-referenced. **Status: skeleton — we fill objects one at 
   use GitHub + octokit?). _stub._
 
 ### 7.9 Worker / Sandbox — running code
+
 - **What:** dynamic workers / sandboxes for running code; the "secret jail"; machine
   providers plugged in as mounts.
 - **Decisions:** (sandbox = just a capability mount — from the big-ideas evaluation);
@@ -627,6 +852,7 @@ for now they're cross-referenced. **Status: skeleton — we fill objects one at 
 - **How it works / open:** _stub._
 
 ### 7.10 Guardrails — the protected control plane (the membrane)
+
 - **What:** the small, un-editable part of the organism, held by the **platform**, that
   requires human sign-off to change and can **halt everything** ([[D14]]).
 - **Decisions:** [[D14]], [[B5]], [[R14]], [[Q15]]; relates to [[D2]] (the one exception),
@@ -650,43 +876,55 @@ to be explicitly dropped. Roughly ordered by how load-bearing they are._
   waking and (re)connecting already emit events — `stream/woken` and the
   `subscriber-connected` presence facts (`core-processor-contract.ts`). So the alarm
   → wake/reconnect → **event**, and a processor heals by handling that event on its
-  normal reaction path. There is no separate `reconcile` *kind of thing*; it's the
+  normal reaction path. There is no separate `reconcile` _kind of thing_; it's the
   same job (make the world match the reduced state) under a different trigger. Keep
   the alarm; drop `reconcile` as a distinct method. Nuances that survive as
-  *mechanics, not concepts*: act only when at head; re-drive with idempotency keys.
+  _mechanics, not concepts_: act only when at head; re-drive with idempotency keys.
+  _Reality check (2026-07-15, read the code): in current `main`, `reconcile` **is** still a
+  distinct hook — `streams/stream-processor.ts:463` (overridden by the agent at
+  `agents/agent-processor-implementation.ts:462`, called per-batch at `:553`), doing
+  desired-vs-actual re-drive of open LLM obligations (the [[Q3]] pattern: expire / settle /
+  backstop / reschedule). The design's "no separate reconcile" matches the in-flight
+  **stream-processor runner redesign** that removes `reconcile`/`processEventBatch` — i.e. the
+  doc describes the **target**, not today's main. The substance (obligation re-drive) is
+  shipped; only the packaging (a hook vs. a normal-path wake event) is in flux._
 - **Q3 — Event-pair convention. [RESOLVED → convention].** Durable side effects only:
   `<verb>-requested → <verb>-completed { outcome }` — two events, outcome is data (not
   three). Reduced state tracks open ones; wake re-drives them ([[D3]]). **Pair only
   durable effects; plain queries stay normal calls** (no added latency). A convention,
   not a framework. _(Not important / not blocking — parked per Jonas.)_
-- **Q4 — Built-ins as mounts + performance.** Moving built-in tools onto the one
-  capability table dissolves the 6k-line god-file — but what's the perf cost, and is
-  the clean model "hooks" (a processor reacts to repo-push/worker-built and installs
-  capabilities)? The `__describe` story isn't clean yet.
+- **Q4 — Built-ins as mounts. [RESOLVED direction → [[D21]]].** `itx` should be **assembled
+  from mounts** (directionally B), not a hardcoded god-object — a **combination** today
+  (first-party surface hardcoded for expedience), migrating to mounts. Userspace mounting
+  already works (capabilities from worker files in git repos at the same level as platform
+  ones). Dissolves the ~6k-line describe-file. Still open: perf of many mounts; the
+  `__describe` story.
 - **Q5 — Config worker sync/async + stateless vs Durable Object. [RESOLVED → [[D16]]].**
   The substrate is two primitives, `append` + `consume`. `append` waits for durability
-  (inherent); waiting for a *reaction / outcome* is just consuming until the named event
+  (inherent); waiting for a _reaction / outcome_ is just consuming until the named event
   appears — "it just depends," nothing forces a block. `processEvent` is the read/react
   primitive; `waitFor` and server-side filters are optimisations. So the worker needn't be a
   resident DO to block/coordinate — **stateless stands** ([[R13]]); the DO is only the
   **ordering point**. Placement (stateless vs DO) is an optimisation, not a fundamental.
 - **Q6 — Do "other repos" need the repo abstraction at all?** [[R3]] says work on
-  many repos; maybe only the *config* repo is special and the rest are "just use
+  many repos; maybe only the _config_ repo is special and the rest are "just use
   GitHub + octokit like a normal person."
-- **Q7 — How far toward "everything in userspace" / what do we call the layer?**
-  The vote killed "everything ships as an npm package in every project" 6–0; the
-  survivor was "a small number of deep first-party modules + leaf extensions", with
-  "userspace" as a *test* not a mandate. Need our own words (not "packages") and our
-  own line for what's a deep in-kernel/first-party module vs. a userspace extension.
-- **Q8 — Updating a million projects.** Don't rebase a million repos. Publish a
-  version + let projects follow a channel or pin (the apt/App-Store model). Lock the
-  strategy per layer when we're ready.
+- **Q7 — What do we call the non-kernel layer? [upgrade/override contract RESOLVED →
+  [[D17]]; naming still open].** Mechanism settled: the layer is **referenced through
+  `itx`** (auto-updates unless overridden; itx-versioning for breaking changes is a candidate
+  — [[D17]] / [[Q17]]).
+  Still open: the **name** (not "packages" — implies npm) and the line between a deep
+  first-party module and a leaf extension.
+- **Q8 — Updating a million projects. [RESOLVED direction → [[D17]]].** Don't rebase a
+  million repos: shared defaults are **referenced behind `itx`** and **auto-update unless
+  overridden**; API-incompatible changes _might_ be handled by **versioning `itx`** ([[Q17]]
+  — open). (Still to detail: channels vs pins, canary/rollout policy, forced security pushes.)
 - **Q9 — Make expressions look like TypeScript** ([[R7]]) — how, exactly, while
   keeping the grammar tiny (get + call, no loops, no eval) and bind = an enforced
   constraint (not object-merge)?
-- **Q10 — The plain framing. [RESOLVED].** Lead with *what it is/does* (a
+- **Q10 — The plain framing. [RESOLVED].** Lead with _what it is/does_ (a
   self-improving AI entity that can do anything a human-with-a-computer can, and gets
-  better); put the mechanism (HTTP in → state → HTTP out) *second*. Don't open with
+  better); put the mechanism (HTTP in → state → HTTP out) _second_. Don't open with
   "it's basically a web app" — it undersells self-improvement.
 - **Q11 — The noun. [RESOLVED → "digital organism"].** (Considered: AI entity, AI
   coworker, autonomous AI, no-fixed-noun.) Still want the single crispest PG one-liner
@@ -699,7 +937,7 @@ to be explicitly dropped. Roughly ordered by how load-bearing they are._
   placeholder substitution at the egress door, the add-time host allowlist, and the
   "secret jail" dynamic worker for the rare raw-access case ([[D10]]).
 - **Q15 — Cryptographically verified human approval. [DIRECTION LOCKED → [[D14]]; mechanics
-  open].** We *need* this primitive (secure-enclave proof of human approval); it gates
+  open].** We _need_ this primitive (secure-enclave proof of human approval); it gates
   **promotion** and **high-risk egress**, and is used rarely. Open mechanics: what the
   signature actually attests (key-possession vs physical-presence vs informed-consent vs
   legal-identity — different claims), which **attested UI** shows the canonical bytes, and
@@ -708,11 +946,14 @@ to be explicitly dropped. Roughly ordered by how load-bearing they are._
   pinned].** "Ephemeral" decomposes into **explicit** properties, not a hard type
   ([[D11]]): (1) **delivery** — high-freq lanes excluded-by-default from push, pull, and
   `waitFor`, opt-in via the `subscribe` signature; (2) **side-effects** modelled
-  **explicitly** (`sideEffects: "disallow"`), *not* derived from TTL (least surprise);
+  **explicitly** (`sideEffects: "disallow"`), _not_ derived from TTL (least surprise);
   (3) **TTL** (null = forever, 0 = deletable) — concept set, **implementation pinned for
   the detailed stream design** (with R2 offload for >10 GB streams). **PIN: do not design
   TTL / offload mechanics now** — return to the big picture. _Still parked: is a live
   voice **transcript** durable (kept forever) or throwaway (only the final one durable)?_
+- **Q17 — Should `itx` be versioned?** Open (Jonas: "I don't know"). _If_ we don't want to
+  brick existing integrations on an API-incompatible change to the platform surface, we might
+  version the `itx` contract — but it's a **maybe**, not a decision ([[D17]]).
 
 ---
 
@@ -720,6 +961,68 @@ _Parking lot (on the shelf, not lost): the "wild ideas" (entity-is-a-file,
 hire-companies, shadow-selves, time-travel debugging, the-project-as-a-filesystem)
 and their 6-judge vote live in the exploration pile. We pull them in only if/when a
 requirement or belief here calls for them._
+
+---
+
+## Reality check — design vs. `main` (2026-07-15)
+
+_A 5-agent code audit (`apps/os/src/domains/…`, ~480k tokens, 138 tool calls) verified all 39
+locked decisions/requirements against the current code. **Decisions & requirements describe the
+design — "locked" means decided, not built; this appendix records what's actually shipped.**
+Tally: **8 shipped verbatim · 17 real-mechanism (some framing aspirational) · 11 partial · 1
+target (in-flight redesign) · 2 fully aspirational.**_
+
+**The substrate spine is real (shipped verbatim, doc == code):** [[D4]] (config worker =
+`{fetch, processEvent}`), [[D5]] (agents produce only code — codemode, no JSON tool-calls),
+[[D12]] (pre-commit rejection is kernel — the strongest-grounded claim), [[D16]] (append + CAS
+offset precondition), [[D20]] (agent = a preset of events, no agent object), [[D23]] (one
+processor : one stream + cross-post), [[R6]] (eviction recovery: idempotency keys + keepalive
+alarms + obligation re-drive, tested), [[R13]] (stateless ingress, DO is egress-only).
+
+**The gaps that matter most — where the doc claims more than `main` delivers:**
+
+- **[[D14]] the membrane — only 1 of 4 legs built.** Shipped: **cryptographic human-approval**
+  (Secure-Enclave ECDSA P-256, `projects/egress-approvals.ts`). **Not built:** the
+  protected-main promotion gate (leg 1) and **spend caps / kill-switch / money-spent event**
+  (leg 2 — the [[R14]] primitive we pinned). Loop control (leg 4) is inline in the agent, not a
+  platform membrane. The unified "four-thing kernel object" doesn't exist yet.
+- **[[D19]] protected main is aspirational** — `commitFiles` lands straight on the default
+  branch, no gate (`repos/repo-durable-object.ts:301`). (API name corrected inline:
+  `itx.repo.commitFiles`, not `itx.project.repo.commit`.)
+- **[[R16]] BYO-OpenAI — the flagship example isn't real.** Out-of-box iterate keys ship, and
+  BYO works for arbitrary third-party secrets, but "bring your own OpenAI account, iterate steps
+  aside" is **not** implemented — the lane misleadingly named "BYOK" (`workers-ai-transport.ts:33`)
+  is still iterate's own key. No surcharge accounting.
+- **[[R10]] export + [[R17]] run-on-your-own-account — zero scaffolding** (no exporter, no
+  placement code). Both are "must stay possible," so expected — but nothing today.
+- **[[D11]] event dimensions — still one `ephemeral: true` boolean** (`streams/schemas.ts:73`),
+  the "wishy-washy type" D11 says to replace. No `sideEffects` flag, no TTL. D11 is the target.
+- **[[R12]] concurrency is cross-agent, not intra-agent** — many agents run in parallel, but one
+  agent stream is **deliberately single-flight** (one `currentRequest`, supersede-without-dialing).
+- **[[R4]] voice — the ephemeral lane is built, the PCM/audio pipeline is not** (zero codec code).
+- **[[Q2]] reconcile is still a distinct hook** on `main` (`stream-processor.ts:463`) — matches
+  the in-flight runner redesign that removes it; the doc describes the target.
+- **[[D13]] / [[D6]] "structural, not guarded"** is really "structural **and** redundantly
+  guarded" — sub-targets also `assertCanAccessProject` at construction (belt-and-suspenders on an
+  inherited, never caller-supplied id; the spirit holds).
+- **[[D22]]** browser UI + agent genuinely share one `StreamProcessor` base; the **CLI is not** a
+  processor today (it's an itx/RPC client) — the enshrined "CLI is a processor" is the aspiration.
+- **[[D24]]** loop detection lives **inline** in the agent, not as the "completely independent
+  processor" the example cites (the distributed-independence _philosophy_ is real, that instance isn't).
+- **[[D10]]** secret substitution ships; the **"secret jail" raw-access worker doesn't** —
+  HMAC/signing runs as trusted strategies inside the Secret DO, not user code in a jail.
+
+**Real-mechanism, aspirational-framing (core shipped, slogan is doc gloss):** [[D3]], [[D7]]
+("four systems in one" is a conceptualization), [[D9]] (per-payload, not an envelope field),
+[[D25]] (events-as-durable-API sits _beside_ a large itx RPC surface), [[D8]] (fan-in, not one
+literal loop), [[D2]] (real split, but the tiny-kernel _ratio_ is the target — first-party itx is
+still hardcoded), [[D17]] (referenced-defaults shipped for agents; general case is [[D21]]-directional),
+[[D21]], [[D15]], [[D1]], [[R1]], [[R2]], [[R3]], [[R18]].
+
+_Full verdicts (id · status · `file:line` evidence) are in the audit output. Bottom line: the
+**event/stream/agent core is built and matches the doc**; the **safety membrane, portability, and
+BYO-sovereignty layers are designed but largely unbuilt** — which is honest for a forward-looking
+design doc, now labelled as such._
 
 ---
 
@@ -855,7 +1158,7 @@ paraphrase. ✅ = represented in a section above · ⬜ = still to fold / sharpe
   dimensions are populated such-and-such." → revised [[D11]] + [[Q16]].
 - ✅ [2026-07-15, refines D11] ""Ephemeral" is a combination of two dimensions: a time to
   live, and whether to include it by default on subscriptions. Browser / PCM / streaming
-  subscribers explicitly request those events; otherwise they're excluded from *both*
+  subscribers explicitly request those events; otherwise they're excluded from _both_
   push and pull — a quick `itx.subscribe` shouldn't get flooded. A live wait-until-event
   can consider them, but only opt-in, same signature as subscribe. TTL null/undefined =
   forever, 0 = deletable immediately (we won't actually delete yet — it signals the real
@@ -903,5 +1206,107 @@ paraphrase. ✅ = represented in a section above · ⬜ = still to fold / sharpe
   offset — that's your precondition, optional; if you put in an offset it means 'only append
   if the stream hasn't moved.' Also, instead of 'consume' we say **`processEvent`**
   everywhere — that's what we currently call this." → updated [[D16]] (append an event input
-  + optional offset precondition; read primitive = `processEvent`, not consume); taxonomy:
-  append, event input, processEvent (Avoid: consume).
+  - optional offset precondition; read primitive = `processEvent`, not consume); taxonomy:
+    append, event input, processEvent (Avoid: consume).
+- ✅ [2026-07-15, referenced layer + itx versioning] "This would be like a microservices
+  architecture. The shared non-kernel layer is referenced. E.g. the default system prompt is
+  something the project worker can pull out of its `itx` binding and then modify however they
+  please. It does mean if we redeploy and the default has not been overridden, that update
+  will be received. It also means if we make an API-incompatible change — e.g. in how these
+  default agent prompts are retrieved from the platform — we will need to version our `itx`."
+  → new [[D17]]; resolved-direction [[Q8]] + [[Q7]] (upgrade/override contract).
+- ✅ [2026-07-15, two entry points + the self-improvement loop] "From the outside world the
+  only thing that comes in is an HTTP request → deterministic code → the project worker's
+  `fetch`. The only other thing that can happen is an internal clock event — a Durable Object
+  alarm. The only two entry points to the entire system are an HTTP request from outside or an
+  alarm from inside; everything else is triggered by one of those two — which is amazing. (An
+  HTTP request could also hit the control plane, os.iterate.com — we could refactor this.)
+  When an HTTP request comes in, deterministic code an LLM once said should run executes; it
+  can produce an event on a stream, or more often just an HTTP response rendering a web page
+  (disambiguated by hostname, normal auth — just a web application). If the event lands on a
+  stream a processor is subscribed to, that processor does LLM requests; the LLM produces an
+  `itx` script block; the script writes code that runs in the project context; the code calls
+  something like `itx.project.repo.commit` that updates the project repo — that's how the
+  deterministic code gets updated. We could say the agent is not allowed to land live main —
+  a protected main branch on the artefact; probably a good idea. (Cloudflare also has queue-
+  and email-consumer entry points, but they don't apply to projects as written.)" → new
+  [[D18]] (two entry points) + [[D19]] (self-improvement loop + protected main); §1 anatomy;
+  refined [[D14]] (protected main), [[D5]].
+- ✅ [2026-07-15, control plane as an organism — north-star] "In the limit the control plane
+  could be another organism. In the beginning we don't want that — it makes it too easy to
+  basically break everything, because it would be providing its own platform, and that's
+  risky. But that should be a stated design vision, something to aspire to. Just as an
+  example, we intend to run our entire company on this iterate config repo." → new [[R15]] +
+  North-star note (§2), with the company-level (intended) vs platform-level (deferred)
+  distinction; answers I8.
+- ✅ [2026-07-15, agent = events (ENSHRINED) + itx assembled from mounts] "The thing that
+  turns a stream into an agent should simply be a few events. Instead of a big agent data
+  structure, you take an array of events as a preset and append it to a stream; it then starts
+  calling a processor that appends events. The thing that separates a stream that does nothing
+  from the most powerful coding agent in the world is just a set of events — that needs to be
+  enshrined and unshakable. Jonas said this and it shouldn't change. On `itx`: it can be a
+  combination, but directionally assembled-from-mounts (B) is better; it just needed machinery
+  we didn't have, so it was easier to write out the first-party surface. It's already possible
+  to durably mount capabilities defined in worker files in git repos at the same level as the
+  platform ones. Strategically it should be assembled." → new [[D20]] (agent = events,
+  ENSHRINED) + [[D21]] (itx assembled from mounts); resolved [[Q4]]; taxonomy: agent, mount.
+- ✅ [2026-07-15, hold the line: everything is a stream processor + one-stream ordering] "Yes
+  completely — we are going to completely hold the line on event sourcing. Events exist in
+  streams with an incrementing offset. The browser UI is a stream processor, our CLI is a
+  stream processor, our agent is a stream processor — this should be loud and clear. Each
+  stream processor can only process events from one stream, because that's the only way to
+  guarantee order. A stream is a serialisation point; if you want to consume from five streams
+  you have to cross-post. Events will be duplicated in multiple streams and that is fine —
+  storage is cheap and architecturally this gives perfect ordering: within a stream we always
+  agree on the exact order in which things happen." → new [[D22]] (everything is a processor,
+  ENSHRINED) + [[D23]] (one processor : one stream, cross-post only); reaffirms [[D3]];
+  taxonomy: offset added, stream/event/processor sharpened.
+- ✅ [2026-07-15, correction] "I'm not saying `itx` IS a versioned API — I'm saying that IF we
+  didn't want to brick people's existing integrations, we should maybe version `itx`. I don't
+  know." → softened [[D17]] (itx-versioning downgraded to a candidate); added [[Q17]].
+- ✅ [2026-07-15, bring-your-own-everything / rent the kernel] "In the future you should be
+  able to run a project in your own Cloudflare account — the connection to our platform could
+  use Cap'n Web. You should be able to access any third-party API ideally through iterate's own
+  integration where we charge a pass-through fee — but you must be able to override this in
+  userspace: if you don't want our OpenAI key or our surcharge, you don't have to. Works out of
+  the box, but overrideable, and that extends to secrets — bring your own account, your own
+  Cloudflare, your own OpenAI, everything. At that point you're really just renting the kernel
+  from us. It's wishy-washy and not day-one (we won't have access to your artefact bindings),
+  but directionally what we want." → new [[R16]] (out-of-box-but-overridable integrations) +
+  [[R17]] (run on your own accounts / rent the kernel); sharpens [[R10]].
+- ✅ [2026-07-15, distributed system + events-are-the-API + renting the wall] "We are basically
+  building almost like an agent harness as a distributed system. We embrace the distributed
+  nature because we want things to independently degrade or fail — one stream processor
+  implements basic agent turn-taking, another completely independently implements loop
+  detection. A big part of that: the events are the API. There's no separate API. We might have
+  convenience functions that wrap append, but the events are the API — that's how you interact
+  with the system. 'Renting the wall' is not a bad way to put it (we might have a mobile app).
+  Things we bring: first-party pre-approved OAuth clients like a Google OAuth client, a nice
+  mobile app. I do think we'd want all the streams to live in the other Cloudflare account —
+  they'd be running our code, and like a normal enterprise deployment you then update their
+  code. Could still work quite well. And when you say interface [for the kernel], that's
+  abstract — why would these all be on one interface? How could you append without first
+  authenticating?" → new [[D24]] (distributed system), [[D25]] (events are the API), [[R18]]
+  (what iterate brings / walls); refined [[R17]] (streams in customer's CF account, enterprise
+  model); kernel = a capability _chain_ (authenticate → itx → append), not a flat interface
+  ([[D13]]).
+- ✅ [2026-07-15, git-repo-everything + kill last-RPC + entity-file + hire-companies] "I'd like a
+  subagent to explore how feasible it'd be to use Git LFS and not persist ephemeral events — just
+  say everything is a Git repo, including file attachments and the search index. How crazy is
+  that? It would simplify things massively. Probably can't commit per event (billions in prod) but
+  maybe — probably not impossible. Another version: the config repo contains durable references
+  that ARE committed, referencing which files in R2 / external resources exist. The last RPC
+  doesn't work — we lean into JavaScript with rich types: we pass request/response streams and
+  rich JS objects through RPC boundaries; not everything serialises into events, but that's good —
+  you get code natural for the LLM. Entity as a file is a really cool idea to move toward. Hire
+  software companies I don't really get — that's the endgame, ignore for now." → launched research
+  subagent (everything-is-git); ❌ killed the-last-RPC + bounded [[D25]] (events = durable, RPC =
+  rich ephemeral); entity-is-a-file = confirmed direction; hire-companies = endgame/ignore.
+- ✅ [2026-07-15, inter-org + the edge is graded] "A short-term goal: companies should be more
+  efficient if they both have iterate — 'let my iterate talk to your iterate, good things should
+  happen.' And interacting with the outside world you DO need a trust boundary: what can the third
+  party see? what am I allowed to show them? am I being tricked? Inside a project everyone trusts
+  each other — employees, or partners in a marriage using it as a family butler, all have all the
+  information — but the system interacts with the outside world and there are stakeholders of
+  different trust levels." → ⚡ near-term inter-org goal; clarified [[D1]] (interior binary, outside
+  graded — the edge manages disclosure + deception-detection).

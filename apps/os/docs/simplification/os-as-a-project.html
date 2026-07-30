@@ -1,0 +1,419 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OS as a project — grounded in today's code</title>
+    <style>
+      :root {
+        --kernel: #dbe4ff;
+        --kernel-b: #4263eb;
+        --os: #ffe8cc;
+        --os-b: #e8590c;
+        --user: #d3f9d8;
+        --user-b: #2f9e44;
+        --stay: #ffe3e3;
+        --stay-b: #e03131;
+        --ink: #1a1b1e;
+        --muted: #868e96;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        font:
+          15px/1.55 -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+        color: var(--ink);
+        max-width: 1000px;
+        margin: 0 auto;
+        padding: 32px 24px 80px;
+      }
+      h1 {
+        font-size: 26px;
+        margin: 0 0 4px;
+      }
+      h2 {
+        font-size: 20px;
+        margin: 44px 0 6px;
+        border-bottom: 2px solid #e9ecef;
+        padding-bottom: 4px;
+      }
+      .lede {
+        color: var(--muted);
+        margin: 0 0 8px;
+      }
+      code {
+        background: #f1f3f5;
+        padding: 1px 5px;
+        border-radius: 4px;
+        font-size: 13px;
+      }
+      .cap {
+        color: var(--muted);
+        font-size: 13.5px;
+        margin: 8px 0 0;
+      }
+      .box {
+        border: 2px solid #ccc;
+        border-radius: 10px;
+        padding: 12px 14px;
+        margin: 8px 0;
+        background: #fff;
+      }
+      .box .title {
+        font-weight: 700;
+        font-size: 14px;
+        margin-bottom: 8px;
+      }
+      .kernel {
+        background: var(--kernel);
+        border-color: var(--kernel-b);
+      }
+      .os {
+        background: var(--os);
+        border-color: var(--os-b);
+      }
+      .user {
+        background: var(--user);
+        border-color: var(--user-b);
+      }
+      .stay {
+        background: var(--stay);
+        border-color: var(--stay-b);
+      }
+      .chip {
+        display: inline-block;
+        background: #fff;
+        border: 1px solid #adb5bd;
+        border-radius: 6px;
+        padding: 3px 8px;
+        margin: 3px 4px 3px 0;
+        font-size: 12.5px;
+      }
+      .chip.k {
+        border-color: var(--kernel-b);
+      }
+      .chip.o {
+        border-color: var(--os-b);
+      }
+      .chip.u {
+        border-color: var(--user-b);
+      }
+      .chip.s {
+        border-color: var(--stay-b);
+      }
+      .row {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      .row > * {
+        flex: 1;
+        min-width: 230px;
+      }
+      .arrow {
+        text-align: center;
+        color: var(--muted);
+        font-size: 20px;
+        margin: 2px 0;
+      }
+      .legend span {
+        font-size: 12.5px;
+        margin-right: 14px;
+      }
+      .sw {
+        display: inline-block;
+        width: 11px;
+        height: 11px;
+        border-radius: 3px;
+        vertical-align: middle;
+        margin-right: 4px;
+        border: 1px solid #0002;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        font-size: 13.5px;
+        margin-top: 8px;
+      }
+      th,
+      td {
+        border: 1px solid #dee2e6;
+        padding: 7px 9px;
+        text-align: left;
+        vertical-align: top;
+      }
+      th {
+        background: #f8f9fa;
+      }
+      .ref {
+        font-family: ui-monospace, monospace;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .note {
+        background: #fff9db;
+        border: 1px solid #ffe066;
+        border-radius: 8px;
+        padding: 12px 14px;
+        margin: 10px 0;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>OS as a project — what it actually means</h1>
+    <p class="lede">
+      Grounded in today's real code. Scribble on anything confusing. Colours:
+      <span class="legend">
+        <span><span class="sw" style="background: var(--kernel)"></span>kernel</span>
+        <span><span class="sw" style="background: var(--os)"></span>the "os" project</span>
+        <span><span class="sw" style="background: var(--user)"></span>user projects</span>
+        <span
+          ><span class="sw" style="background: var(--stay)"></span>stays global (in kernel)</span
+        >
+      </span>
+    </p>
+
+    <div class="note">
+      <b>The one fact that makes this un-scary:</b> user projects <i>already</i> work this way
+      today. A user's config worker runs confined in a <code>WorkerLoader</code> isolate and only
+      sees <code>env.ITX</code> — never raw Cloudflare bindings (<span class="ref"
+        >worker-loader.ts:226</span
+      >). The <b>OS is the odd one out</b>: its own features live <i>inside</i> the worker with full
+      access. "OS becomes a project" = run the OS's own code across the boundary that already
+      exists.
+    </div>
+
+    <h2>1 · Today — everything is one worker</h2>
+    <div class="box" style="border-style: dashed">
+      <div class="title">apps/os — the OS Worker (one Cloudflare worker, ~82k LOC)</div>
+      <div class="box kernel">
+        <div class="title">
+          Kernel-ish machinery (holds the raw bindings) — but it's tangled, not separated
+        </div>
+        <span class="chip k">raw bindings: AI · R2 · KV · STREAM · LOADER · BROWSER · EMAIL</span>
+        <span class="chip k"
+          >exports <code>ItxEntrypoint</code> (hands <code>env.ITX</code> to workers)</span
+        >
+        <span class="chip k">StreamDO · egress door · CapabilityHost</span>
+        <div class="cap">
+          All fused inside <code>ProjectDurableObject</code>, which is <i>simultaneously</i> the
+          capability provider, the egress gate, the Slack/email processor host, and the capability
+          orchestrator. <span class="ref">worker-runner.ts:71–82</span>
+        </div>
+      </div>
+      <div class="box os">
+        <div class="title">The OS's own features — live INSIDE the worker with full access</div>
+        <span class="chip o">dashboard (routes/ + components/)</span>
+        <span class="chip o">agent (domains/agents)</span>
+        <span class="chip o">integrations: Slack · GitHub · Telegram (domains/integrations)</span>
+      </div>
+      <div class="box stay">
+        <div class="title">
+          Platform-global state — addressed as <code>projectId: null</code> →
+          <code>global.iterate</code>
+        </div>
+        <span class="chip s"
+          >deployment streams/repos e.g. <code>global.iterate/repos/iterate-config-base</code></span
+        >
+        <span class="chip s">PROJECT_DIRECTORY KV (slug↔id)</span>
+        <span class="chip s">worker build cache + coordinator</span>
+        <div class="cap">
+          <span class="ref">durable-object-names.ts:20,130 · project-directory.ts:57–63</span> ·
+          there is NO separate "iterate" project today — the platform itself owns these.
+        </div>
+      </div>
+    </div>
+    <div class="arrow">▲ &nbsp; user projects call back in via <code>env.ITX</code> &nbsp; ▲</div>
+    <div class="row">
+      <div class="box user">
+        <div class="title">user project A</div>
+        <span class="chip u">config worker {fetch, processEvent}</span>
+        <div class="cap">
+          confined isolate · sees only <code>env.ITX</code> + egress fetcher ·
+          <b>no raw bindings</b>
+        </div>
+      </div>
+      <div class="box user">
+        <div class="title">user project B</div>
+        <span class="chip u">config worker {fetch, processEvent}</span>
+        <div class="cap">same — already runs this way today</div>
+      </div>
+    </div>
+    <p class="cap">
+      So the confined kernel↔project boundary <b>already exists</b> — but only user projects use it.
+      The OS's own code sits privileged inside the worker.
+    </p>
+
+    <h2>2 · The idea — pull the kernel out; the OS becomes just another project</h2>
+    <div class="box kernel">
+      <div class="title">KERNEL (the ~6k floor — "what userspace cannot express")</div>
+      <span class="chip k">holds raw bindings: AI · R2 · KV · STREAM · LOADER · …</span>
+      <span class="chip k">runs confined workers (LOADER) · hands out <code>env.ITX</code></span>
+      <span class="chip k"
+        >the log · the egress door · capability resolver · identity/addressing</span
+      >
+      <div class="box stay" style="margin-top: 10px">
+        <div class="title">+ the genuinely-global bits that can't live in any project</div>
+        <span class="chip s">slug directory (needed before you know which project)</span>
+        <span class="chip s">auth boundary (the separate <code>apps/auth</code> service)</span>
+        <span class="chip s">shared build cache/coordinator (artifacts span projects)</span>
+      </div>
+    </div>
+    <div class="arrow">
+      ▲▼ &nbsp; every project talks to the kernel through the SAME <code>env.ITX</code> boundary
+      &nbsp; ▲▼
+    </div>
+    <div class="row">
+      <div class="box os">
+        <div class="title">the "os" project &nbsp;(projectId = "os")</div>
+        <span class="chip o"
+          >dashboard + agent + integrations — now userspace packages using <code>itx.*</code></span
+        >
+        <span class="chip o"
+          >its streams live under <code>projectId:"os"</code> (was
+          <code>projectId:null</code>)</span
+        >
+        <span class="chip o"><b>one superpower:</b> <code>itx.operator</code></span>
+        <div class="cap">
+          the only thing an ordinary project can't do: create projects, fleet billing, leased-OAuth
+          roots.
+        </div>
+      </div>
+      <div class="box user">
+        <div class="title">user project A</div>
+        <span class="chip u">{fetch, processEvent} via <code>itx</code></span>
+        <div class="cap">identical mechanism</div>
+      </div>
+      <div class="box user">
+        <div class="title">user project B</div>
+        <span class="chip u">{fetch, processEvent} via <code>itx</code></span>
+        <div class="cap">identical mechanism</div>
+      </div>
+    </div>
+    <p class="cap">
+      The OS's features move to run through the
+      <b>same confined <code>itx</code> path user projects already use</b>. The only difference
+      between "os" and a user project is one grant: <code>itx.operator</code>.
+    </p>
+
+    <h2>3 · The interface — one project ↔ the kernel (this already exists today)</h2>
+    <div class="row">
+      <div class="box kernel" style="flex: 1.2">
+        <div class="title">KERNEL</div>
+        <div class="cap">holds bindings · runs your worker in a LOADER isolate</div>
+      </div>
+      <div style="flex: 1.1; align-self: center">
+        <div class="arrow" style="margin: 0">
+          — <b>down</b> → &nbsp; <code>env.ITX</code> (scoped capabilities)
+        </div>
+        <div class="arrow" style="margin: 2px 0">
+          — <b>down</b> → &nbsp; egress fetcher (secret substitution)
+        </div>
+        <div class="arrow" style="margin: 8px 0 2px">
+          ← <b>up</b> — &nbsp; <code>itx.ai / streams / files…</code> calls
+        </div>
+        <div class="arrow" style="margin: 2px 0">← <b>up</b> — &nbsp; appends to the log</div>
+        <div class="arrow" style="margin: 2px 0">
+          ← <b>out</b> — &nbsp; fetch() through the one door
+        </div>
+      </div>
+      <div class="box user" style="flex: 1">
+        <div class="title">a project</div>
+        <div class="cap">confined · sees only what's on the left · <b>no raw bindings</b></div>
+      </div>
+    </div>
+    <p class="cap">
+      This is exactly <span class="ref">worker-runner.ts:71–82</span> and
+      <span class="ref">worker-loader.ts:226</span> today. Model 3 just runs the OS's own code
+      across this same line.
+    </p>
+
+    <h2>4 · Where does today's stuff actually go?</h2>
+    <table>
+      <tr>
+        <th>Today</th>
+        <th>Where it lives</th>
+        <th>Goes to</th>
+      </tr>
+      <tr>
+        <td>raw bindings (AI, R2, KV, STREAM, LOADER…)</td>
+        <td class="ref">env.ts</td>
+        <td><b>kernel</b></td>
+      </tr>
+      <tr>
+        <td>StreamDO · egress door · CapabilityHost</td>
+        <td class="ref">domains/streams, projects/egress, capability-host</td>
+        <td><b>kernel</b></td>
+      </tr>
+      <tr>
+        <td>slug directory (PROJECT_DIRECTORY KV)</td>
+        <td class="ref">project-directory.ts</td>
+        <td><b>stays global (kernel)</b> — needed before project identity is known</td>
+      </tr>
+      <tr>
+        <td>auth</td>
+        <td class="ref">apps/auth (separate service)</td>
+        <td><b>stays global (kernel)</b> — protocol boundary</td>
+      </tr>
+      <tr>
+        <td>worker build cache + coordinator</td>
+        <td class="ref">env.ts (WORKER_BUILD_*)</td>
+        <td><b>stays global (kernel)</b> — artifacts shared across projects</td>
+      </tr>
+      <tr>
+        <td><code>global.iterate/…</code> streams &amp; repos (iterate-config-base)</td>
+        <td class="ref">projectId: null</td>
+        <td>
+          <b>the "os" project</b> (projectId: null → "os") ← <i>your hypothesis, confirmed</i>
+        </td>
+      </tr>
+      <tr>
+        <td>dashboard (routes/ + components/)</td>
+        <td class="ref">apps/os/src/routes</td>
+        <td><b>"os" project</b> (userspace, served via its <code>fetch</code>)</td>
+      </tr>
+      <tr>
+        <td>agent</td>
+        <td class="ref">domains/agents</td>
+        <td><b>"os" project</b> — an <code>iterate/*</code> npm package it imports</td>
+      </tr>
+      <tr>
+        <td>Slack / GitHub / Telegram integrations</td>
+        <td class="ref">domains/integrations</td>
+        <td><b>"os" project</b> — <code>iterate/*</code> npm packages</td>
+      </tr>
+      <tr>
+        <td>provisioning · fleet billing · leased-OAuth roots</td>
+        <td class="ref">rpc-targets.ts + platform code</td>
+        <td>
+          <b><code>itx.operator</code></b> — one privileged capability granted to the "os" project
+        </td>
+      </tr>
+    </table>
+
+    <h2>5 · Why this is safe &amp; incremental (not a rewrite)</h2>
+    <p>Each step ships on its own and moves toward the picture in §2:</p>
+    <div class="box">
+      <b>1.</b> Built-ins → mounts (start with <code>kv</code>). The mechanism.
+      <span class="cap">Nothing user-visible changes.</span>
+    </div>
+    <div class="box">
+      <b>2.</b> Move agent + integrations to <code>iterate/*</code> npm packages the config imports
+      (already done for the review bot &amp; starter apps).
+    </div>
+    <div class="box">
+      <b>3.</b> Add <code>itx.operator</code> — name the handful of cross-project powers explicitly.
+    </div>
+    <div class="box">
+      <b>4.</b> Factor the kernel out of <code>ProjectDurableObject</code>, one subsystem at a time.
+      It shrinks toward ~6k as features leave.
+    </div>
+    <p class="cap">
+      At no point is there a big-bang rewrite. The scary part (step 4) comes last and is gradual.
+    </p>
+  </body>
+</html>

@@ -2,6 +2,7 @@ packages:
   - apps/os
   - apps/semaphore
   - apps/*
+  - apps/kernel/mini-apps/*
   - packages/*
   - lint
   - scripts

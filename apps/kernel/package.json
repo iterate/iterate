@@ -1,0 +1,22 @@
+{
+  "name": "kernel",
+  "private": true,
+  "type": "module",
+  "description": "Clean-room pure-play iterate kernel — walking skeleton (see docs/simplification/clean-room-build.md).",
+  "scripts": {
+    "dev": "wrangler dev --env dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "capnweb": "npm:@iterate-com/capnweb@^0.10.0",
+    "jose": "^5.10.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260621.1",
+    "typescript": "^5.9.3",
+    "vitest": "4.0.15",
+    "wrangler": "4.107.0"
+  }
+}

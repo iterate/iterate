@@ -1,0 +1,17 @@
+{
+  // Local-test config only: no routes (so unstable_dev doesn't force the Host header),
+  // hosted-mode identity. The real deploy config is wrangler.jsonc.
+  "name": "kernel-test",
+  "main": "src/kernel.ts",
+  "compatibility_date": "2026-07-01",
+  "worker_loaders": [{ "binding": "LOADER" }],
+  // hostBase example.com so <slug>.example.com resolves; NO wall — INSECURE_STUB_AUTH enables the
+  // forgeable `Bearer session:<who>` stub wall for the e2e ONLY (review #1) — no real config sets it.
+  "vars": {
+    // `routes` = the config input to the ingress routing table (ADR 0020/0025): myapp.test (NOT under
+    // the hostBase) resolves to project alice purely via routing — the custom-domain / single-self-host path.
+    "APP_CONFIG": "{\"hostBase\":\"example.com\",\"directory\":{\"provider\":\"local\",\"projects\":[\"alice\"]},\"routes\":{\"myapp.test\":{\"projectId\":\"alice\"}}}",
+    "INSECURE_STUB_AUTH": "1",
+    "PROJECT_APP_SESSION_SECRET": "test-project-app-session-secret",
+  },
+}

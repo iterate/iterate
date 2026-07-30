@@ -1,0 +1,10 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "kernel-mini-os",
+  "main": "./src/worker.ts",
+  "compatibility_date": "2026-06-17",
+  "compatibility_flags": ["nodejs_compat"],
+  // iterate (prd) account; workers_dev gives it a stable origin the kernel proxies to.
+  "account_id": "04b3b57291ef2626c6a8daa9d47065a7",
+  "workers_dev": true,
+}

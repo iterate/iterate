@@ -1,6 +1,6 @@
 # OpenCode v2 and Iterate: architecture, extension, and forking assessment
 
-> Research snapshot: 2026-07-15. OpenCode `v2` at [`83cfafc8842c959f7ab794e9634b65a646b6a3f4`](https://github.com/anomalyco/opencode/commit/83cfafc8842c959f7ab794e9634b65a646b6a3f4), with 532 branch-only commits after its 2026-06-26 merge base with `dev`. Iterate is the current `simplification` worktree. The chronological, deliberately unedited evidence trail is in [the append-only research log](./opencode-v2-research-log.md).
+> Research snapshot: 2026-07-15. OpenCode `v2` at [`83cfafc8842c959f7ab794e9634b65a646b6a3f4`](https://github.com/anomalyco/opencode/commit/83cfafc8842c959f7ab794e9634b65a646b6a3f4), with 532 branch-only commits after its 2026-06-26 merge base with `dev`. Iterate is the current `simplification` worktree; claims about the deployed browser/subscription path were separately verified at production tag `v2026-07-14-21-00-56` (`7b106d623`) and are unchanged at fetched `origin/main` (`b560198aa`). The chronological, deliberately unedited evidence trail is in [the append-only research log](./opencode-v2-research-log.md).
 
 ## First: did OpenCode discuss Iterate?
 
@@ -29,57 +29,58 @@ That difference drives nearly every strength and weakness:
 - **Iterate’s extension isolation is strategically better.** A config-repository Worker is deployed out of process and can expose capabilities, HTTP, streams, WebSockets, and Durable Objects. OpenCode’s public plug-ins are in-process scoped catalog transforms and hooks. The latter are delightfully composable, but they are not a durability boundary and they receive host-process trust.
 - **Neither system should model a conversation fork by copying raw durable events.** OpenCode copies selected projected semantic messages and instruction state, then records one sparse child fork fact. Iterate should copy a versioned canonical context snapshot into a fresh Agent Stream and record immutable lineage. Copying Iterate events would reactivate subscriptions, LLM/script obligations, and offset-derived identities.
 
-My overall recommendation is to preserve Iterate’s Stream/processor/recovery architecture and steal a handful of OpenCode’s protocol refinements. Do not rebuild Iterate around a monolithic SQLite event/projector kernel or in-process user plug-ins. The most valuable imports are explicit event definition/version ownership, a race-free `synced` log primitive, a more precise Agent execution vocabulary, transactional/scoped extension generations, and projection-oriented conversation forks.
+My overall recommendation is to preserve Iterate’s Stream/processor/recovery architecture and steal a handful of OpenCode’s protocol refinements. Do not rebuild Iterate around a monolithic SQLite event/projector kernel or in-process user plug-ins. The most valuable imports are explicit event definition/version ownership, a more precise Agent execution vocabulary, scoped catalog contribution algebra and provenance, and projection-oriented conversation forks. OpenCode's `log.synced` is useful in OpenCode, but it is not an Iterate correctness gap: the deployed Stream subscription already combines replay and follow around one cursor and carries an immediate state/head boundary.
 
 ## Recommended actions
 
 ### P0 — fix independently of forking
 
 1. **Fence processor-host wake coordinates.** A wake request must match the host’s configured `(projectId, streamPath)`, not merely resolve to a known processor slug. The current gap makes a copied or malformed control expression capable of delivering one Stream’s events into another Stream’s processor host.
-2. **Declare that raw event copying is not a supported fork primitive.** This should be a design invariant before a convenient helper accidentally makes it appear valid.
+2. **Treat config-worker build/materialization failure as receiver unavailability, not event poison.** The default feed uses `onPoison: "skip"`; an invalid repo build currently fails every event as an ordinary error, so the spine can skip two healthy events before its consecutive-skip guard parks on the third. This happened in production: [trace `293ad6847dba317ce52168ec47ebc755`](https://dash.cloudflare.com/04b3b57291ef2626c6a8daa9d47065a7/observability/overview/traces?filters=%5B%7B%22id%22%3A%22trace-filter%22%2C%22type%22%3A%22string%22%2C%22key%22%3A%22%24metadata.traceId%22%2C%22operation%22%3A%22eq%22%2C%22value%22%3A%22293ad6847dba317ce52168ec47ebc755%22%7D%5D&time=%7B%22type%22%3A%22absolute%22%2C%22from%22%3A1783766193000%2C%22to%22%3A1783766197000%7D) durably advanced over a healthy `subscriber-disconnected` fact when the config build failed. Preserve the cursor and park loudly, or explicitly serve the last-known-good artifact.
+3. **Declare that raw event copying is not a supported fork primitive.** This should be a design invariant before a convenient helper accidentally makes it appear valid.
 
 ### P1 — small primitives with disproportionate value
 
-3. **Add a repository-wide durable event catalog with versions and historical decoders/upcasters.** Keep processor-owned reducers, but make every durable type have one owner, one durability classification, and an explicit compatibility story.
-4. **Offer a first-class durable replay/follow API with a `synced` watermark.** This removes a recurring client race and makes UIs, config workers, and external indexers share one well-tested handoff protocol.
-5. **Name Agent execution identities and transitions.** Separate admitted input, promoted request, logical Step, physical attempt, tool settlement, and runner ownership. Preserve the current reducer internally where possible; this is primarily domain vocabulary and event-contract work.
-6. **Give config-repository extensions a manifest and atomic activation generation.** Explicit consumes/emits/capability declarations and stable contribution IDs would make config workers inspectable and filterable without moving their code into the Agent process.
+4. **Add a repository-wide durable event catalog with versions and historical decoders/upcasters.** Keep processor-owned reducers, but make every durable type have one owner, one durability classification, and an explicit compatibility story.
+5. **Document and reuse the existing replay/follow contract instead of adding a second one.** `subscribe({ replayAfterOffset })`, the immediate first batch, and `streamMaxOffset` already close the handoff. Add UI naming only where a product needs to display “ingested through H.”
+6. **Name Agent execution identities and transitions.** Separate admitted input, promoted request, logical Step, physical attempt, tool settlement, and runner ownership. Preserve the current reducer internally where possible; this is primarily domain vocabulary and event-contract work.
+7. **Give config-repository extensions a manifest and expose the exact resolved source revision for each invocation.** Explicit consumes/emits/capability declarations and stable contribution IDs would make config workers inspectable and filterable without moving their code into the Agent process. Revision provenance should first be tracing/runtime context, not a hash copied onto every Agent event.
 
 ### P1/P2 — implement conversation forks as an Agent-domain feature
 
-7. **Create a fresh physical Agent Stream with a `conversation-forked` seed fact containing canonical context plus lineage.** Reset all operational state. Make transcript, capability, workspace, and accounting policies independent parameters.
-8. **Project the branch tree from lineage facts.** A small family metadata Stream may index the tree, but active branches should retain independent Agent Streams and processor checkpoints.
+8. **Create a fresh physical Agent Stream with a `conversation-forked` seed fact containing canonical context plus lineage.** Reset all operational state. Make transcript, capability, workspace, and accounting policies independent parameters.
+9. **Project the branch tree from lineage facts.** A small family metadata Stream may index the tree, but active branches should retain independent Agent Streams and processor checkpoints.
 
 ### P2 — use where the product needs it
 
-9. **Adopt scoped contribution algebra for agents, tools, commands, and integrations.** Contributions should have stable provenance, deterministic precedence, disposable scopes, and all-or-nothing generation swaps.
-10. **Add typed, durable tool-call lifecycle events where observability/recovery warrants them.** Iterate’s script execution already has a durable consequence protocol; ordinary model tool calls deserve similarly inspectable identities if they become resumable or externally executed.
-11. **Add a real multi-Stream registry test double and Miniflare coordinate tests.** The current memory Stream’s `.at()` behavior does not expose all path-independence and subscription-routing bugs.
+10. **Adopt scoped contribution algebra for agents, tools, commands, and integrations.** Contributions should have stable provenance, deterministic precedence, disposable scopes, and all-or-nothing catalog rematerialization within one worker invocation. Do not mistake that local catalog property for a project-wide event-delivery cutover.
+11. **Add typed, durable tool-call lifecycle events where observability/recovery warrants them.** Iterate’s script execution already has a durable consequence protocol; ordinary model tool calls deserve similarly inspectable identities if they become resumable or externally executed.
+12. **Add a real multi-Stream registry test double and Miniflare coordinate tests.** The current memory Stream’s `.at()` behavior does not expose all path-independence and subscription-routing bugs.
 
 ### P3 — optimize only after semantics are stable
 
-12. **Replace embedded fork snapshots with content-addressed context segments or immutable prefix-range references if storage becomes material.** Keep the same public semantics. An O(compacted-context) copy is a very good first implementation.
+13. **Replace embedded fork snapshots with content-addressed context segments or immutable prefix-range references if storage becomes material.** Keep the same public semantics. An O(compacted-context) copy is a very good first implementation.
 
 ## Comparison at a glance
 
-| Concern | OpenCode v2 | Iterate | Assessment |
-|---|---|---|---|
-| Deployment shape | Local/daemon application with one SQLite database per data root | Multi-tenant Cloudflare platform; one Durable Object journal per `(projectId, path)` | Architectural choices are not directly interchangeable |
-| Durable unit | Aggregate event sequence plus synchronous SQL projections | Stream journal plus processor checkpoints | OpenCode optimizes local transactions/queries; Iterate optimizes isolation/recovery |
-| Event admission | Static manifest; every definition says durable or ephemeral | Raw Stream accepts type strings; processor contracts parse consumed types | OpenCode’s global catalog is safer; Iterate’s openness needs version governance |
-| Event authority | Event plus projection committed together; projections can be required for replay | Journal is authoritative; folded checkpoint is disposable | Iterate is more conventionally replay-deterministic |
-| Reads | Relational Session/message/pending/instruction tables | Processor state and explicit cross-stream projections | OpenCode is more queryable; Iterate is more partitioned |
-| Durable streaming | Per-Session paged log with deterministic `log.synced`, then follow | Durable subscriptions with per-source cursors and several delivery modes | Combine OpenCode’s handoff marker with Iterate’s delivery machinery |
-| Ephemeral streaming | Process-local/global volatile feed | Offsetted ephemeral Stream rows, excluded from normal durable reads/subscriptions and evictable | Iterate gives ephemeral items stronger ordering, at storage cost |
-| Input queue | Durable admission and promotion; queue/steer semantics | Requested/scheduled Agent work in folded state | OpenCode’s vocabulary and separate inbox are clearer |
-| Execution owner | Process-local run coordinator; managed graceful suspension marker | Processor host alarm/keepalive, incarnation fence, checkpoint recovery | Iterate is stronger on eviction; neither makes arbitrary external effects exactly-once |
-| Agent definition | Declarative profile assembled from built-ins/config/plugins | Agent Stream state plus platform/config capabilities | OpenCode cleanly separates profile from Session; Iterate is more runtime-centric |
-| Tools | Scoped typed registry; leaf permission check; rich lifecycle | Code-mode scripts and platform capabilities; integrations as processors | OpenCode’s catalog is polished; Iterate’s durable consequence model is stronger |
-| Subagents | Fresh child Session; foreground/background Job | Delegated/nested Agent path and capabilities | Both must enforce monotonic child authority |
-| Public extension | In-process scoped catalog transforms and hooks | Out-of-process config Worker/DO/capability app | Iterate’s isolation wins; OpenCode’s activation algebra is worth copying |
-| Extension event types | Public plugins cannot define/publish durable event types | Workers can append arbitrary event names, but cannot register core reducers/contracts dynamically | Both intentionally stop userspace short of changing core state semantics |
-| Fork | Copy selected projected rows; child log contains lineage fact and sparse sequence | Not yet a first-class semantic primitive | Implement snapshot-plus-lineage, not raw copies and not current OpenCode replay dependency |
-| Testing | Real SQLite layers, deterministic race gates, replay tests, provider cassettes | Real processors/host over durable in-memory stores with crash/incarnation simulation | Each should borrow the other’s strongest test form |
+| Concern               | OpenCode v2                                                                       | Iterate                                                                                                              | Assessment                                                                                 |
+| --------------------- | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Deployment shape      | Local/daemon application with one SQLite database per data root                   | Multi-tenant Cloudflare platform; one Durable Object journal per `(projectId, path)`                                 | Architectural choices are not directly interchangeable                                     |
+| Durable unit          | Aggregate event sequence plus synchronous SQL projections                         | Stream journal plus processor checkpoints                                                                            | OpenCode optimizes local transactions/queries; Iterate optimizes isolation/recovery        |
+| Event admission       | Static manifest; every definition says durable or ephemeral                       | Raw Stream accepts type strings; processor contracts parse consumed types                                            | OpenCode’s global catalog is safer; Iterate’s openness needs version governance            |
+| Event authority       | Event plus projection committed together; projections can be required for replay  | Journal is authoritative; folded checkpoint is disposable                                                            | Iterate is more conventionally replay-deterministic                                        |
+| Reads                 | Relational Session/message/pending/instruction tables                             | Processor state and explicit cross-stream projections                                                                | OpenCode is more queryable; Iterate is more partitioned                                    |
+| Durable streaming     | Per-Session paged log with deterministic `log.synced`, then follow                | One replay/follow subscription handshake, immediate state/head batch, per-source cursors, and several delivery modes | Different encodings of the same safety property; no second Iterate primitive needed        |
+| Ephemeral streaming   | Process-local/global volatile feed                                                | Offsetted ephemeral Stream rows, excluded from normal durable reads/subscriptions and evictable                      | Iterate gives ephemeral items stronger ordering, at storage cost                           |
+| Input queue           | Durable admission and promotion; queue/steer semantics                            | Requested/scheduled Agent work in folded state                                                                       | OpenCode’s vocabulary and separate inbox are clearer                                       |
+| Execution owner       | Process-local run coordinator; managed graceful suspension marker                 | Processor host alarm/keepalive, incarnation fence, checkpoint recovery                                               | Iterate is stronger on eviction; neither makes arbitrary external effects exactly-once     |
+| Agent definition      | Declarative profile assembled from built-ins/config/plugins                       | An Agent is its Stream events plus processors; defaults/configuration compile to idempotent events                   | Different ontology; borrow authoring composition only if it still terminates in events     |
+| Tools                 | Scoped typed registry; leaf permission check; rich lifecycle                      | Code-mode scripts and platform capabilities; integrations as processors                                              | OpenCode’s catalog is polished; Iterate’s durable consequence model is stronger            |
+| Subagents             | Fresh child Session; foreground/background Job                                    | Delegated/nested Agent path and capabilities                                                                         | Both must enforce monotonic child authority                                                |
+| Public extension      | In-process scoped catalog transforms and hooks                                    | Out-of-process config Worker/DO/capability app                                                                       | Iterate’s isolation wins; OpenCode’s activation algebra is worth copying                   |
+| Extension event types | Public plugins cannot define/publish durable event types                          | Workers can append arbitrary event names, but cannot register core reducers/contracts dynamically                    | Both intentionally stop userspace short of changing core state semantics                   |
+| Fork                  | Copy selected projected rows; child log contains lineage fact and sparse sequence | Not yet a first-class semantic primitive                                                                             | Implement snapshot-plus-lineage, not raw copies and not current OpenCode replay dependency |
+| Testing               | Real SQLite layers, deterministic race gates, replay tests, provider cassettes    | Real processors/host over durable in-memory stores with crash/incarnation simulation                                 | Each should borrow the other’s strongest test form                                         |
 
 ## The architecture underneath the vocabulary
 
@@ -163,50 +164,53 @@ There are meaningful beta caveats:
 
 The last point is important. The `subagent` tool starts a **fresh** child Session, optionally in a process-local background Job, and later returns or injects its completion. It does not fork the parent transcript. If the named child’s configured permissions are broader than the parent’s, invocation can become an authority escalation. A child policy must be no more powerful than the intersection of caller authority, delegation grant, and child profile.
 
-### Iterate’s agent is a durable domain projection
+### Iterate’s Agent is its events
 
-Iterate’s Agent processor is closer to a running aggregate. Its fold owns system prompt, model choice, model-visible history, current/scheduled work, request generations, retry counters, open LLM obligations, usage, and failure state. `llm-requested` offsets act as durable execution handles; started, chunks, completion, cancellation, and usage facts refer to those handles. Ephemeral output chunks can disappear, while a durable terminal output restores semantic context.
+The production documentation says it plainly: “An agent is a stream (`/agents/<name>`) plus processors.” The Agent is not the processor instance, its folded state, or a separate profile object. System prompt, selected model, input, capabilities, execution requests, output, failures, and usage are facts on that Stream; processors project those facts and carry out the consequences they imply.
 
-Code mode goes further into userspace than OpenCode’s ordinary profile model. A durable assistant output with an executable fence is deterministically projected into `script-execution-requested`; the eventual result is rendered back as new Agent input. Slack, Telegram, email, and pull-request behaviors can be separate processors hosted around the same Agent Stream rather than branches inside the Agent reducer.
+The Agent processor fold currently projects model-visible history, current/scheduled work, request generations, retry counters, open LLM obligations, usage, and failure state. `llm-requested` offsets act as durable execution handles; started, chunks, completion, cancellation, and usage facts refer to those handles. Ephemeral output chunks can disappear, while a durable terminal output restores semantic context. Those are properties of a projection over the Agent's events, not a second definition of what the Agent is.
 
-This has two strong properties:
-
-1. the Agent’s model context and owed work can be explained from durable facts;
-2. integrations compose as independently checkpointed projections instead of prompt callbacks.
-
-But the authoring story is less sharply separated from runtime state. “Define an agent,” “create an Agent Stream,” “mount capabilities,” “configure integrations,” and “choose a model/system prompt” cross several platform concepts. OpenCode’s small `Agent.Info`-style catalog is worth introducing above that substrate—not as a replacement for the Agent processor, but as a source of immutable/effective configuration used when a request starts.
-
-A possible Iterate profile layer:
+Production already has the relevant authoring boundary. `itx.agents.defaults.forPath(path)` returns `{ systemPrompt, model, events }`, where `events` is the exact idempotency-keyed batch that configures a new Agent. The seeded config worker reacts to the root `stream/child-stream-created` fact and appends that batch to the child Stream:
 
 ```ts
-export const reviewer = defineAgentProfile({
-  id: "reviewer",
-  description: "Reviews changes against repository rules",
-  mode: ["primary", "delegated"],
-  model: { preference: "reasoning" },
-  system: reviewerPrompt,
-  capabilities: {
-    allow: ["project.files.read", "project.search", "github.pullRequest.read"],
-    deny: ["project.files.write", "github.pullRequest.merge"],
-  },
-  limits: { autonomousTurns: 12 },
-})
+if (
+  event.path === "/" &&
+  event.type === "events.iterate.com/stream/child-stream-created" &&
+  childPath.startsWith("/agents/")
+) {
+  const defaults = await itx.agents.defaults.forPath(childPath);
+  await itx.streams.get(childPath).append(...defaults.events);
+}
 ```
 
-The durable request-start event should record the resolved profile ID, generation/digest, model, and authority envelope. That makes live configuration pleasant without making old executions depend on today’s config repository.
+The batch itself contains ordinary Agent/capability facts:
+
+```ts
+[
+  { type: "events.iterate.com/agent/config-updated", payload: { systemPrompt } },
+  { type: "events.iterate.com/agent/llm-provider-selected", payload: { ifUnset: true, model } },
+  { type: "events.iterate.com/capability-host/capability-provided", payload: workspaceMount },
+  { type: "events.iterate.com/agent/input-added", payload: bootContext },
+];
+```
+
+This is already the correct translation of a convenient authoring/configuration surface: it **compiles to events**. Adding an authoritative `AgentProfile` layer would duplicate the config repository and make Agent behavior depend on state outside the Agent Stream. OpenCode's catalog can still suggest better contribution IDs, precedence, provenance, and editing ergonomics, but those are properties of the compiler/config worker; the output remains facts on the Agent Stream.
+
+Code mode goes further into userspace than OpenCode’s ordinary profile model. A durable assistant output with an executable fence is deterministically projected into `script-execution-requested`; the eventual result is rendered back as new Agent input. Slack, Telegram, email, and pull-request behaviors can be separate processors hosted around the same Agent Stream rather than branches inside the Agent reducer.
 
 ### What to copy and what to keep
 
 Copy from OpenCode:
 
-- a small declarative profile schema;
-- deterministic composition and provenance for contributions;
-- a strict distinction between profile, conversation, and execution Step;
+- deterministic composition and provenance for config contributions before they compile to events;
+- a strict distinction between Agent history, a logical execution Step, and a physical attempt;
 - tool definitions independent of Agent classes;
 - monotonic permission narrowing for delegated children.
 
 Keep from Iterate:
 
+- Agent identity and configuration as Stream facts, with no second profile authority;
+- `defaults.forPath(path).events` as the userspace customization seam;
 - durable model-context projection;
 - explicit requested/started/completed execution handles;
 - integration behavior as processors;
@@ -259,14 +263,14 @@ export const AgentInputReceived = defineDurableEvent({
       items: [{ type: "text", text: old.text }],
     }),
   },
-})
+});
 
 export const AgentOutputDelta = defineEphemeralEvent({
   type: "agent/output-delta",
   version: 1,
   owner: "agent-processor",
   schema: AgentOutputDeltaV1,
-})
+});
 ```
 
 The registry should generate or validate:
@@ -303,9 +307,7 @@ The durable log solves the classic replay/live race with a fixed target:
 4. emit `{ type: "log.synced", aggregateID, seq }`;
 5. emit later committed rows from durable database reads, using the wakeup only as a hint.
 
-The marker is part of the data protocol, not a timing guess. Empty aggregates still produce `log.synced`; page boundaries and a commit during replay have deterministic tests. Slow listeners need not trust an in-memory payload queue because the database remains the source.
-
-This is one of the cleanest things Iterate should copy.
+The marker is part of the data protocol, not a timing guess. Empty aggregates still produce `log.synced`; page boundaries and a commit during replay have deterministic tests. Slow listeners need not trust an in-memory payload queue because the database remains the source. This is a clean solution for OpenCode's paged SQLite log API. Source inspection shows that Iterate already encodes the same safety property in a different subscription protocol.
 
 ### Iterate’s richer delivery substrate
 
@@ -313,26 +315,39 @@ Iterate subscriptions are durable stream facts. Push, wake, and webhook destinat
 
 Cross-posting deliberately appends a real target event with provenance. Stream-control facts received via that controlled path are inert, and multi-hop provenance limits loops. This is a sophisticated distribution mechanism, not merely an event emitter.
 
-What is missing is a uniform **consumer-visible replay completion boundary**. Consumers often need “give me all durable facts after offset N, tell me exactly when I have caught the snapshot, then keep following.” A first-class API could sit beneath push/wake/webhook and be exposed through itx:
+The deployed ephemeral subscription is already replay plus follow in one Stream-owned call:
 
 ```ts
-type LogItem<E> =
-  | { type: "event"; event: CommittedEvent<E> }
-  | { type: "synced"; stream: StreamRef; throughOffset: number }
-
-const log = stream.replayThenFollow({
-  afterOffset: cursor,
-  durableOnly: true,
-  follow: true,
-})
-
-for await (const item of log) {
-  if (item.type === "synced") ui.markCaughtUp(item.throughOffset)
-  else await projection.apply(item.event)
-}
+await stream.subscribe({
+  replayAfterOffset: persistedCheckpoint,
+  processEventBatch: ({ events, state, streamMaxOffset }) => {
+    // First call is immediate, even when `events` is empty.
+    return processor.ingest({ events, streamMaxOffset });
+  },
+});
 ```
 
-The implementation must set the wake mechanism before fixing/reading the target and must re-read rows by offset after wakes. A wake payload should never be the only copy of a durable fact. Existing subscription checkpoints can then reuse the same tested primitive.
+On the server, the decisive ordering is synchronous inside the Stream Durable Object:
+
+```ts
+const connection = makeConnection({ cursor: replayAfterOffset });
+connections.set(subscriptionKey, connection);
+connection.wake(); // reads the journal after cursor immediately
+
+// after every append commit
+for (const connection of connections.values()) connection.wake();
+```
+
+This excludes the generic read/listen gap:
+
+- an append before `connections.set` is found by the replay read;
+- an append after `connections.set` wakes the installed connection;
+- an append while the pump is draining is found by its next journal read;
+- after an empty read returns, the next append starts the pump again.
+
+The browser's separate pull-paging phase when it is far behind is flow control, not the correctness boundary. It persists each page and then subscribes with `replayAfterOffset` equal to that persisted cursor; anything committed during the gap is replayed. Failed mirror ingestion tears down and reconnects from the last successful checkpoint.
+
+Every delivered batch carries `state` and `streamMaxOffset` read in the same synchronous block. The processor advances its checkpoint through the consumed prefix and only reconciles when `checkpointOffset >= streamMaxOffset`; the host runs a trailing unfiltered catch-up if a consumes-filtered delivery leaves it behind the durable head. OpenCode emits one explicit `log.synced(H)` item; Iterate supplies a head coordinate on every batch and a checkpointed processor. A UI can derive “ingested through H” from those values if it needs that label. Adding `replayThenFollow()` would duplicate the protocol rather than make it safer.
 
 ### Ephemeral semantics
 
@@ -390,12 +405,12 @@ Iterate can make its current state machine easier to reason about by naming stab
 
 ```ts
 type AgentExecutionIdentity = {
-  inputId: string          // durable user/system work item
-  stepId: string           // one logical agent decision
-  attemptId: string        // one physical provider attempt
-  toolCallId?: string      // one tool protocol instance
-  streamOffset: number     // journal coordinate, not entity identity
-}
+  inputId: string; // durable user/system work item
+  stepId: string; // one logical agent decision
+  attemptId: string; // one physical provider attempt
+  toolCallId?: string; // one tool protocol instance
+  streamOffset: number; // journal coordinate, not entity identity
+};
 ```
 
 A candidate lifecycle language:
@@ -421,9 +436,9 @@ There are cases where Iterate should want OpenCode-like transactional projection
 
 ```ts
 await storage.transaction(async (tx) => {
-  const committed = await journal.append(tx, input)
-  await localProjection.apply(tx, committed)
-})
+  const committed = await journal.append(tx, input);
+  await localProjection.apply(tx, committed);
+});
 ```
 
 The rules should remain:
@@ -445,8 +460,8 @@ Iterate’s capabilities are broader distributed objects. A tool-like operation 
 
 The useful synthesis is:
 
-1. materialize a typed tool catalog from capabilities for each Agent Step;
-2. record the catalog/profile generation or digest on the Step;
+1. materialize a typed tool catalog from capabilities and Agent facts for each execution Step;
+2. when exact replay/audit requires it, append a fact recording the selected catalog contribution generation and authority digest;
 3. enforce authority at invocation, never only when advertising the tool;
 4. use durable requested/settled facts for effects that must survive eviction;
 5. keep provider deltas ephemeral and canonical terminal results durable.
@@ -463,7 +478,7 @@ const effectiveChildAuthority = intersect(
   delegationGrant,
   childProfile.requestedAuthority,
   projectPolicy,
-)
+);
 ```
 
 Conversation forking and subagent spawning should then have different defaults:
@@ -524,7 +539,7 @@ The harness’s current limitation matters for fork/control work: its memory Str
 Add these test layers:
 
 1. **Repository-wide replay corpus:** every durable historical event version refolds under current code.
-2. **Deterministic stream handoff gates:** append between target capture/pages/subscription establishment and assert a single gap-free sequence plus `synced`.
+2. **Subscription-handshake regression gates:** preserve the existing contract with explicit append-before-open, append-after-connection-install, append-during-drain, empty-initial-batch, and reconnect-from-persisted-checkpoint cases. Assert ordered gap-free events plus the correct `streamMaxOffset`; do not build a second protocol for the test.
 3. **Multi-Stream registry harness:** independent journals by exact `(projectId, path)`, real subscription expressions, provenance, and destination routing.
 4. **Real Miniflare Durable Object tests:** coordinate fencing, alarms, and storage transaction behavior.
 5. **Crash-cut matrix:** inject a crash before/after every append, external effect, idempotency record, checkpoint, fork child creation, and lineage index update.
@@ -535,16 +550,16 @@ A concise fault-injection pattern:
 
 ```ts
 for (const cut of forkCreationCuts) {
-  const world = await AgentHarness.start(seed)
-  world.failAt(cut)
-  await expect(world.fork(request)).rejects.toThrow()
+  const world = await AgentHarness.start(seed);
+  world.failAt(cut);
+  await expect(world.fork(request)).rejects.toThrow();
 
-  const recovered = await world.crashAndRestart()
-  const child = await recovered.fork(request) // same forkId
+  const recovered = await world.crashAndRestart();
+  const child = await recovered.fork(request); // same forkId
 
-  expect(await child.canonicalContext()).toEqual(expectedContext)
-  expect(await recovered.childrenOf(parent)).toContainOnce(child.ref)
-  expect(await recovered.effectLog()).not.toContainExecutionFrom(parent)
+  expect(await child.canonicalContext()).toEqual(expectedContext);
+  expect(await recovered.childrenOf(parent)).toContainOnce(child.ref);
+  expect(await recovered.effectLog()).not.toContainExecutionFrom(parent);
 }
 ```
 
@@ -562,18 +577,18 @@ Calling all three “plugins” hides the most important facts: process isolatio
 
 ### Capability comparison
 
-| Property | OpenCode public plug-in | OpenCode internal plug-in | Iterate config Worker/DO | Iterate hosted StreamProcessor |
-|---|---|---|---|---|
-| Runs where | Same process and Location scope | Same process with full core Effect services | Separate Worker or Durable Object isolate/build | Platform-owned Durable Object host |
-| Trust | Effectively host-process code | Core code | Project userspace, isolated by workerd/RPC/fetch | Privileged reviewed platform code |
-| Activation | Scoped; disposable registrations; generation replacement/rollback | Ordered internal pre/post lists | Repo commit/build/deploy; worker reference/generation | Static host dependency/contract wiring |
-| Main contribution | Agents, provider/model catalog, commands, skills, references, integrations, tools, hooks | Built-ins plus full service-backed behavior | `fetch`, project event reactions, methods/getters as capabilities, named Workers/DOs/apps | Durable projection and consequence state machine |
-| Durable event read | Public server event subscription; no native arbitrary aggregate log API | Can access core event service | At-least-once, per-source ordered project event batches | Ordered source Stream consumption from checkpoint |
-| Durable event publish | No public event publisher | Yes, through core service | Yes, append through itx Stream capability | Yes, declared emitted types/consequences |
-| Define durable types | No; manifest is statically compiled | Core can add definitions | Can append a new string type, but cannot register it into core schema/projectors | Contract declares owned/consumed/emitted types in platform code |
-| Projection/reducer | No SQL projector or Session reducer registration | Can use core services, but built-ins are still curated | Own Worker/DO state only; cannot inject an Agent reducer | Yes, pure fold and stored disposable state |
-| Recovery promise | Scope cleanup; hook invocation itself is not a journal/checkpoint | Whatever core service provides | Delivery retry while batch handler rejects; durable workflows require own DO/idempotency protocol | Host alarm, retained checkpoint, incarnation fence, reconciliation |
-| Network/protocol | In-process host APIs | In-process host APIs | Real HTTP, streaming, WebSocket fetch lane, storage, RPC capabilities | Usually internal RPC/wake/consequence surfaces |
+| Property              | OpenCode public plug-in                                                                  | OpenCode internal plug-in                              | Iterate config Worker/DO                                                                          | Iterate hosted StreamProcessor                                     |
+| --------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| Runs where            | Same process and Location scope                                                          | Same process with full core Effect services            | Separate Worker or Durable Object isolate/build                                                   | Platform-owned Durable Object host                                 |
+| Trust                 | Effectively host-process code                                                            | Core code                                              | Project userspace, isolated by workerd/RPC/fetch                                                  | Privileged reviewed platform code                                  |
+| Activation            | Scoped; disposable registrations; generation replacement/rollback                        | Ordered internal pre/post lists                        | Branch head late-bound per invocation; immutable content-addressed artifact for that call         | Static host dependency/contract wiring                             |
+| Main contribution     | Agents, provider/model catalog, commands, skills, references, integrations, tools, hooks | Built-ins plus full service-backed behavior            | `fetch`, project event reactions, methods/getters as capabilities, named Workers/DOs/apps         | Durable projection and consequence state machine                   |
+| Durable event read    | Public server event subscription; no native arbitrary aggregate log API                  | Can access core event service                          | At-least-once, per-source ordered project event batches                                           | Ordered source Stream consumption from checkpoint                  |
+| Durable event publish | No public event publisher                                                                | Yes, through core service                              | Yes, append through itx Stream capability                                                         | Yes, declared emitted types/consequences                           |
+| Define durable types  | No; manifest is statically compiled                                                      | Core can add definitions                               | Can append a new string type, but cannot register it into core schema/projectors                  | Contract declares owned/consumed/emitted types in platform code    |
+| Projection/reducer    | No SQL projector or Session reducer registration                                         | Can use core services, but built-ins are still curated | Own Worker/DO state only; cannot inject an Agent reducer                                          | Yes, pure fold and stored disposable state                         |
+| Recovery promise      | Scope cleanup; hook invocation itself is not a journal/checkpoint                        | Whatever core service provides                         | Delivery retry while batch handler rejects; durable workflows require own DO/idempotency protocol | Host alarm, retained checkpoint, incarnation fence, reconciliation |
+| Network/protocol      | In-process host APIs                                                                     | In-process host APIs                                   | Real HTTP, streaming, WebSocket fetch lane, storage, RPC capabilities                             | Usually internal RPC/wake/consequence surfaces                     |
 
 ### What OpenCode public plug-ins can actually do
 
@@ -654,10 +669,10 @@ export default defineIterateExtension({
     mode: "checkpointed-worker",
     idempotency: "source-path-and-offset",
   },
-})
+});
 ```
 
-The platform can use this to install filtered subscriptions, generate typed clients, display provenance, validate namespace ownership, and atomically activate one build generation. It should not run the extension’s reducer in a core Agent transaction. A project wanting stronger workflow recovery can ship a stateful dynamic Worker/DO or, eventually, a sandboxed userspace processor host with an explicit contract.
+The platform can use this to install filtered subscriptions, generate typed clients, display provenance, validate namespace ownership, and record which immutable build handled an invocation. It should not run the extension’s reducer in a core Agent transaction. A project wanting stronger workflow recovery can ship a stateful dynamic Worker/DO or, eventually, a sandboxed userspace processor host with an explicit contract.
 
 ### Are plug-ins like stream processors?
 
@@ -708,10 +723,12 @@ Steal:
 - stable contribution IDs and displayed provenance;
 - ordered pre/user/post composition where precedence is intentional;
 - one disposable scope per activation;
-- atomic generation replacement and rollback;
+- atomic replacement and rollback for process-local contribution catalogs;
 - catalog editor APIs rather than arbitrary mutable global objects;
-- exact effective-generation capture for long-running Agent Steps;
+- exact source/build provenance when behavior depends on repo code that was not already materialized as Agent events;
 - a narrow host capability passed to extensions.
+
+Do **not** generalize OpenCode's local scope swap into a distributed worker-cutover protocol. Iterate's default stateless project worker has no single active generation to swap: every invocation resolves the config repo's current head, pins the resulting commit for that invocation, and shares no project-wide delivery cursor with other Streams.
 
 Do not steal:
 
@@ -778,19 +795,19 @@ An assistant `output-added` containing a JavaScript fence is not inert transcrip
 
 Examples:
 
-| Path/reference | Meaning | Fork treatment |
-|---|---|---|
-| committed envelope `path` | Physical destination Stream | Assign child path |
-| `source.processor.stream.path` | Historical cause/provenance | Preserve if retained in audit metadata |
-| `whileProcessing.offset` | Historical consequence coordinate | Do not inherit as executable state |
-| `crossPostedFrom` | Historical delivery chain | Do not replay; optionally preserve summarized provenance |
-| `message-received.from.path` | Historical sender/thread | Preserve only as semantic attribution, not subscription |
-| attachment/file path | Address of stored content | Preserve only if child authority can read it; otherwise copy/materialize |
-| subscription expression/wake path | Live delivery configuration | Regenerate or omit |
-| default workspace capability path | Live authority/storage scope | Choose explicit workspace policy |
-| lexical Agent path parent | Capability inheritance topology | Never infer from conversation lineage |
+| Path/reference                    | Meaning                           | Fork treatment                                                           |
+| --------------------------------- | --------------------------------- | ------------------------------------------------------------------------ |
+| committed envelope `path`         | Physical destination Stream       | Assign child path                                                        |
+| `source.processor.stream.path`    | Historical cause/provenance       | Preserve if retained in audit metadata                                   |
+| `whileProcessing.offset`          | Historical consequence coordinate | Do not inherit as executable state                                       |
+| `crossPostedFrom`                 | Historical delivery chain         | Do not replay; optionally preserve summarized provenance                 |
+| `message-received.from.path`      | Historical sender/thread          | Preserve only as semantic attribution, not subscription                  |
+| attachment/file path              | Address of stored content         | Preserve only if child authority can read it; otherwise copy/materialize |
+| subscription expression/wake path | Live delivery configuration       | Regenerate or omit                                                       |
+| default workspace capability path | Live authority/storage scope      | Choose explicit workspace policy                                         |
+| lexical Agent path parent         | Capability inheritance topology   | Never infer from conversation lineage                                    |
 
-A recursive “replace parent path with child path” pass cannot distinguish these roles. Schema-aware copy code would still have to decide whether each *event* represents context or execution.
+A recursive “replace parent path with child path” pass cannot distinguish these roles. Schema-aware copy code would still have to decide whether each _event_ represents context or execution.
 
 #### 6. Path nesting changes authority
 
@@ -804,14 +821,14 @@ Conversation, filesystem, and Git branch semantics need separate choices. This i
 
 ### Candidate storage models
 
-| Model | Creation cost | Normal read | Independence | Main problem | Verdict |
-|---|---:|---:|---|---|---|
-| Copy all durable events | O(all history) | O(local history) | Superficially independent | Re-executes control/lifecycle semantics; references/offsets break | Reject |
-| Copy curated semantic events | O(curated history) | O(local history) | Good if schema is perfect | Every context event must be made seed-safe; history schemas remain coupled | Possible, but snapshot is cleaner |
-| Child stores parent prefix reference plus local tail | O(1) | O(ancestry + tail), cacheable | Depends on retained parent/prefix store | Kernel read/retention/GC and consequence-delivery separation | Good eventual optimization |
-| One physical Stream, `branchId` on every event | O(1) | Projection traverses branch DAG | One aggregate owns all | Branch-awareness infects all state/effects; one serialization bottleneck | Future redefinition, not incremental |
-| Semantic snapshot plus lineage | O(current context) | O(local state) | Self-contained | Snapshot payload/storage and versioning | **Recommended first design** |
-| Content-addressed persistent context segments | O(1)–O(changed paths) | O(segment traversal/cache) | Self-contained with retained blobs | More machinery and GC | Recommended optimization later |
+| Model                                                |         Creation cost |                     Normal read | Independence                            | Main problem                                                               | Verdict                              |
+| ---------------------------------------------------- | --------------------: | ------------------------------: | --------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------ |
+| Copy all durable events                              |        O(all history) |                O(local history) | Superficially independent               | Re-executes control/lifecycle semantics; references/offsets break          | Reject                               |
+| Copy curated semantic events                         |    O(curated history) |                O(local history) | Good if schema is perfect               | Every context event must be made seed-safe; history schemas remain coupled | Possible, but snapshot is cleaner    |
+| Child stores parent prefix reference plus local tail |                  O(1) |   O(ancestry + tail), cacheable | Depends on retained parent/prefix store | Kernel read/retention/GC and consequence-delivery separation               | Good eventual optimization           |
+| One physical Stream, `branchId` on every event       |                  O(1) | Projection traverses branch DAG | One aggregate owns all                  | Branch-awareness infects all state/effects; one serialization bottleneck   | Future redefinition, not incremental |
+| Semantic snapshot plus lineage                       |    O(current context) |                  O(local state) | Self-contained                          | Snapshot payload/storage and versioning                                    | **Recommended first design**         |
+| Content-addressed persistent context segments        | O(1)–O(changed paths) |      O(segment traversal/cache) | Self-contained with retained blobs      | More machinery and GC                                                      | Recommended optimization later       |
 
 The current Agent already compacts model-visible context. That makes O(current-context) materialization bounded by what the next model request would actually consume, rather than by the entire Stream length. Correct simple semantics are likely cheaper than premature structural sharing.
 
@@ -882,7 +899,7 @@ export const AgentConversationForkedV1 = z.object({
     channel: z.literal("detached"),
     accounting: z.literal("child-local"),
   }),
-})
+});
 ```
 
 This is the first **Agent-domain** fact, not physical Stream event 1. The Stream kernel has already written creation and delivery controls. Its reducer must be seed-only:
@@ -928,9 +945,14 @@ Canonical items should distinguish origin and semantics:
 ```ts
 type CanonicalAgentHistoryItem =
   | { id: string; role: "user"; content: CanonicalContent[]; origin: "user" | "channel" | "system" }
-  | { id: string; role: "assistant"; content: CanonicalContent[]; status: "completed" | "interrupted" }
+  | {
+      id: string;
+      role: "assistant";
+      content: CanonicalContent[];
+      status: "completed" | "interrupted";
+    }
   | { id: string; role: "tool"; callId: string; name: string; result: CanonicalContent[] }
-  | { id: string; role: "summary"; content: CanonicalContent[]; summarizesThroughItemId: string }
+  | { id: string; role: "summary"; content: CanonicalContent[]; summarizesThroughItemId: string };
 ```
 
 This avoids copying envelopes that carry processor path/offset identities. It also fixes a subtle boot-context issue: a current history item may include a parent-specific path, channel, or workspace prompt. The fork projection should omit the exact parent boot event and generate child-appropriate boot/system context. Longer term, prompt layering should distinguish platform policy, project policy, channel context, user message, and execution environment instead of flattening them into indistinguishable text.
@@ -972,14 +994,16 @@ Step 3 must pin the target before reading, using the same race discipline as a r
 The current Stream idempotency behavior needs care: reusing an idempotency key can return the existing event without proving that a caller supplied the same body. On a retried fork, read the existing child seed and compare `forkId`, parent coordinate, snapshot version, and canonical digest. A same-key/different-body request is a conflict, not success.
 
 ```ts
-const existing = await child.getEvent({ idempotencyKey: `fork:${forkId}` })
+const existing = await child.getEvent({ idempotencyKey: `fork:${forkId}` });
 if (existing) {
-  const recorded = AgentConversationForkedV1.parse(existing.payload)
-  if (recorded.parent.throughOffset !== parent.throughOffset ||
-      recorded.parent.contextDigest !== contextDigest) {
-    throw new ForkConflictError({ forkId, existing: recorded.parent, requested: parent })
+  const recorded = AgentConversationForkedV1.parse(existing.payload);
+  if (
+    recorded.parent.throughOffset !== parent.throughOffset ||
+    recorded.parent.contextDigest !== contextDigest
+  ) {
+    throw new ForkConflictError({ forkId, existing: recorded.parent, requested: parent });
   }
-  return childRef
+  return childRef;
 }
 ```
 
@@ -987,7 +1011,7 @@ There is an integration race with today’s Agent-default mechanism. New Stream 
 
 - Stream creation accepts initial Agent facts and commits them before publishing the child-birth notification;
 - an `agent/initialized` protocol tells the config worker not to apply ordinary defaults to an already initialized fork;
-- defaults and fork seed compose by an explicit deterministic rule, with the resolved fork profile captured on the seed.
+- the ordinary defaults batch and fork-seed batch compose by an explicit deterministic event rule, with every selected value materialized in the child facts.
 
 Relying on “the fork append will probably beat `processEvent`” would make initial context nondeterministic.
 
@@ -1007,18 +1031,18 @@ Every child seed contains `familyId` and exact parent coordinate. A tree view ca
 
 ```ts
 type ConversationBranch = {
-  stream: StreamRef
-  familyId: string
-  forkId?: string
+  stream: StreamRef;
+  familyId: string;
+  forkId?: string;
   parent?: {
-    stream: StreamRef
-    throughOffset: number
-    throughItemId: string
-  }
-  label?: string
-  createdAt: string
-  deletedAt?: string
-}
+    stream: StreamRef;
+    throughOffset: number;
+    throughItemId: string;
+  };
+  label?: string;
+  createdAt: string;
+  deletedAt?: string;
+};
 ```
 
 A small family metadata Stream can carry branch labels, ordering, archival state, and index repair facts. It should not carry every conversation event. Each active branch retains:
@@ -1038,12 +1062,12 @@ The model is coherent in the abstract:
 
 ```ts
 type BranchCreated = {
-  branchId: string
-  parentBranchId: string
-  parentThroughOffset: number
-}
+  branchId: string;
+  parentBranchId: string;
+  parentThroughOffset: number;
+};
 
-type AgentEvent = ExistingAgentEvent & { branchId: string }
+type AgentEvent = ExistingAgentEvent & { branchId: string };
 ```
 
 Projecting branch `B` would traverse ancestor cutoffs and B’s local tail. The physical log remains append-only, and forks are O(1).
@@ -1066,11 +1090,11 @@ All branches would also share one Durable Object’s single-threaded execution a
 
 Conversation forking should not silently imply a Git branch. Give callers an explicit choice:
 
-| Policy | Initial view | Later parent changes | Child writes | Use |
-|---|---|---|---|---|
-| `fresh` | Latest config-repo main | Follows unshadowed main under current COW rules | Private child overlay | Default cheap conversation exploration |
-| `shared-live` | Parent’s exact workspace | Both see same mutations | Concurrent shared writes | Pair work; must be visibly dangerous |
-| `snapshot` | Immutable parent workspace snapshot/commit at fork | None unless merged | COW child layer | Reproducible code experiment |
+| Policy        | Initial view                                       | Later parent changes                            | Child writes             | Use                                    |
+| ------------- | -------------------------------------------------- | ----------------------------------------------- | ------------------------ | -------------------------------------- |
+| `fresh`       | Latest config-repo main                            | Follows unshadowed main under current COW rules | Private child overlay    | Default cheap conversation exploration |
+| `shared-live` | Parent’s exact workspace                           | Both see same mutations                         | Concurrent shared writes | Pair work; must be visibly dangerous   |
+| `snapshot`    | Immutable parent workspace snapshot/commit at fork | None unless merged                              | COW child layer          | Reproducible code experiment           |
 
 Today only `fresh` and an explicitly shared workspace reference are readily available. “Snapshot” should eventually be built on a content-addressed workspace root or Git commit. Do not pretend that fresh-over-latest-main includes the parent’s uncommitted files.
 
@@ -1122,26 +1146,26 @@ export const ConversationContextImportedV1 = z.object({
   artifacts: z.array(ContentRef),
   workspaceCommit: z.string().optional(),
   digest: z.string(),
-})
+});
 ```
 
 That fact renders curated source context into the target’s next model input without claiming source-side executions happened in the target. Code/file merging belongs to Git or the workspace layer. A conversation fast-forward is possible only when the target has not diverged and the source is its descendant; even then, materializing/importing context is clearer than moving a mutable branch head invisibly.
 
 ### Prior art and what each precedent actually transfers
 
-| System | Fork representation | Transferable lesson | Non-transferable part |
-|---|---|---|---|
-| Git | Immutable commit DAG; mutable branch pointer | Stable lineage and structural sharing | Reading commits does not execute side effects |
-| Temporal | History branch with ancestor ranges plus local tail | Shared immutable prefix, branch-local future, retention accounting | Workflow replay can intentionally re-execute deterministic decisions |
-| Kurrent/EventStore | Link events/projections reference source identities | Link rather than clone identity | One link per row and broad control-event exposure are poor Agent defaults |
-| Kafka | Independent consumer offsets | Cursors are consumer operational state | A new cursor is not a divergent history branch; both see future records |
-| Persistent data structures | Full persistence via path copying/structural sharing | Old version can seed a new future cheaply | Still requires semantic state definition |
-| Neon/lakeFS/Dolt | LSN/page ancestry or zero-copy data branch | Parent cutoff plus child-local writes; workspace is a separate domain | Database merge/conflict semantics do not solve conversation effects |
-| Automerge/Yjs | Idempotent/commutative change integration | Useful for labels/notes/shared artifacts | Assistant/tool histories are not CRDT operations |
-| LangGraph | Checkpoint lineage and replay/time travel | Explicit checkpoint boundary | Replay of later nodes may repeat workflow work; wrong default for context fork |
-| Claude Code | Fresh Session with copied conversation; session permissions do not carry | Separate context from authority | Product internals are not a general Stream model |
-| Codex | Curated rollout prefix, `forked_from_id`, fresh environment choices | Canonicalize context; mark interrupted turn | Its rollout storage format need not be Iterate’s event schema |
-| OpenCode v2 | Copy semantic projections; lineage fact; sparse child sequence | Do not copy operational events | Child-only replay can depend on later parent projection |
+| System                     | Fork representation                                                      | Transferable lesson                                                   | Non-transferable part                                                          |
+| -------------------------- | ------------------------------------------------------------------------ | --------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| Git                        | Immutable commit DAG; mutable branch pointer                             | Stable lineage and structural sharing                                 | Reading commits does not execute side effects                                  |
+| Temporal                   | History branch with ancestor ranges plus local tail                      | Shared immutable prefix, branch-local future, retention accounting    | Workflow replay can intentionally re-execute deterministic decisions           |
+| Kurrent/EventStore         | Link events/projections reference source identities                      | Link rather than clone identity                                       | One link per row and broad control-event exposure are poor Agent defaults      |
+| Kafka                      | Independent consumer offsets                                             | Cursors are consumer operational state                                | A new cursor is not a divergent history branch; both see future records        |
+| Persistent data structures | Full persistence via path copying/structural sharing                     | Old version can seed a new future cheaply                             | Still requires semantic state definition                                       |
+| Neon/lakeFS/Dolt           | LSN/page ancestry or zero-copy data branch                               | Parent cutoff plus child-local writes; workspace is a separate domain | Database merge/conflict semantics do not solve conversation effects            |
+| Automerge/Yjs              | Idempotent/commutative change integration                                | Useful for labels/notes/shared artifacts                              | Assistant/tool histories are not CRDT operations                               |
+| LangGraph                  | Checkpoint lineage and replay/time travel                                | Explicit checkpoint boundary                                          | Replay of later nodes may repeat workflow work; wrong default for context fork |
+| Claude Code                | Fresh Session with copied conversation; session permissions do not carry | Separate context from authority                                       | Product internals are not a general Stream model                               |
+| Codex                      | Curated rollout prefix, `forked_from_id`, fresh environment choices      | Canonicalize context; mark interrupted turn                           | Its rollout storage format need not be Iterate’s event schema                  |
+| OpenCode v2                | Copy semantic projections; lineage fact; sparse child sequence           | Do not copy operational events                                        | Child-only replay can depend on later parent projection                        |
 
 The convergence is strong: **share or materialize semantic prefix, record lineage, and start branch-local operational state fresh.** No credible prior art suggests duplicating subscription cursors and already-executed side effects into a child log.
 
@@ -1174,16 +1198,16 @@ The `v2` branch is not a small feature branch. At the examined tip it has 532 co
 
 The v2-only author shortlog at the snapshot is:
 
-| Contributor | Commits |
-|---|---:|
-| Dax Raad | 229 |
-| Kit Langton | 115 |
-| Aiden Cline | 87 |
-| OpenCode bot | 37 |
-| James Long | 30 |
-| Simon Klee | 13 |
-| Shoubhit Dash | 11 |
-| Dax (alternate Git author identity) | 8 |
+| Contributor                         | Commits |
+| ----------------------------------- | ------: |
+| Dax Raad                            |     229 |
+| Kit Langton                         |     115 |
+| Aiden Cline                         |      87 |
+| OpenCode bot                        |      37 |
+| James Long                          |      30 |
+| Simon Klee                          |      13 |
+| Shoubhit Dash                       |      11 |
+| Dax (alternate Git author identity) |       8 |
 
 On the event/Session/runner/schema paths used for this comparison, Kit has 57 commits, Dax 36, and Aiden 26. It would be inaccurate to tell the history as only Kit and Dax, although their changes expose a particularly legible design dialogue.
 
@@ -1245,7 +1269,7 @@ The transferable lesson is broader: a durable log does not answer who is allowed
 
 #### 7. Forks exposed hidden state horizons
 
-The visible-message copy initially missed an instruction/context checkpoint horizon. Copied parent message sequences combined with a fresh child baseline let stale updates appear current. Fixing the fork required identifying *all semantic state that constrains interpretation of the prefix*, not just what the chat UI renders.
+The visible-message copy initially missed an instruction/context checkpoint horizon. Copied parent message sequences combined with a fresh child baseline let stale updates appear current. Fixing the fork required identifying _all semantic state that constrains interpretation of the prefix_, not just what the chat UI renders.
 
 That is exactly the trap Iterate faces. A canonical fork snapshot needs summary horizons, instruction state, attachment accessibility, and origin-aware boot context—but not execution obligations. “What will the next model see and believe?” is the projection question; “what durable rows existed?” is not.
 
@@ -1282,7 +1306,7 @@ Immediate SQLite transactions make event sequence allocation, projector changes,
 
 ### 3. The replay/live handoff is a real protocol
 
-`log.synced` identifies an exact fixed target. Live notifications are only wakes; durable rows are reread. Empty logs, pagination, and interleaving commits are tested. This is a compact, transferable primitive.
+`log.synced` identifies an exact fixed target. Live notifications are only wakes; durable rows are reread. Empty logs, pagination, and interleaving commits are tested. This is a strong implementation of the property OpenCode needs, but not a missing Iterate primitive: Iterate's installed connection plus replay cursor, immediate state/head batch, and persisted processor checkpoint already provide its counterpart.
 
 ### 4. Agent authoring is cleanly separated from Session execution
 
@@ -1382,52 +1406,44 @@ Processor contracts type current consumption, but the raw Stream accepts arbitra
 
 Offsets identify LLM work, causation, idempotency, and conversation positions. That is compact but makes copying, importing, cross-stream reference, and semantic boundaries fragile. Stable item/step/attempt/tool IDs should supplement—not replace—offset coordinates.
 
-### 3. The Agent profile/runtime boundary is blurry
+### 3. The config worker feed is powerful but underspecified
 
-System prompt, model, boot context, capability mounts, integration/channel path, workspace, and running state enter through several mechanisms. There is no single inspectable effective Agent profile/generation comparable to OpenCode’s catalog.
+It receives every durable project event as an untyped catch-all. There is no consumes/emits/capability manifest or contribution provenance, and the resolved config commit/build is not exposed to the handler as ordinary runtime context. Project code can implement its own durable workflow in a Worker/DO, but that is not the same as a platform convention. This should not be described as a missing atomic deployment primitive: the default stateless worker deliberately resolves the branch head independently on every invocation. The concrete correctness defect is narrower and more serious: compiler/materialization failures are plain receiver errors under an `onPoison: "skip"` feed, so two healthy events can be stepped over before the consecutive-skip guard parks the broken receiver.
 
-### 4. Client replay/live synchronization is not one canonical primitive
-
-The subscription system is richer than OpenCode’s, but consumers can still reinvent “read pages, install live listener, avoid the gap, know when caught up.” A fixed-target `synced` protocol would make the richness safer.
-
-### 5. The config worker feed is powerful but underspecified
-
-It receives every durable project event as an untyped catch-all. There is no consumes/emits/capability manifest, contribution provenance, atomic catalog generation, or processor-style alarm/reconciler contract. Project code can implement these itself, which is not the same as having a platform convention.
-
-### 6. Core logic remains more platform-owned than the userspace vision suggests
+### 4. Core logic remains more platform-owned than the userspace vision suggests
 
 Channel transcribers, integration-specific behavior, agent defaults, and other vertical slices are processors/runtime code in `apps/os`, even where the config worker could express policy. The underlying extension substrate exists; packaging, manifests, safe defaults, and migration paths lag behind it.
 
-### 7. Product projections are more laborious
+### 5. Product projections are more laborious
 
 Per-Stream folds are excellent aggregate state but awkward for relational queries across Sessions, pending work, message search, family trees, and fleet dashboards. Explicit indexing processors are necessary and need the same rebuild/version discipline as local folds.
 
-### 8. Path topology conflates several meanings
+### 6. Path topology conflates several meanings
 
 Paths are identity, routing, capability inheritance, workspace derivation, and sometimes channel topology. That power makes names ergonomic but creates surprising behavior if conversation lineage or copying is encoded by nesting.
 
-### 9. A host coordinate check is missing
+### 7. A host coordinate check is missing
 
 Resolving a wake by processor slug without asserting the exact configured Stream coordinate violates isolation assumptions. Even if no fork copies controls, malformed or stale configuration deserves fail-closed fencing.
 
-### 10. Fork semantics do not fall out of append-only storage
+### 8. Fork semantics do not fall out of append-only storage
 
 There is no safe generic copy. The Agent needs a canonical semantic projection, explicit lineage, and policies for context, authority, workspace, channel, and accounting. Treating forking as a Stream utility would put domain semantics in the wrong layer.
 
 ## Concrete things to steal and how they translate
 
-| OpenCode lesson | Iterate translation | Scope | Main risk |
-|---|---|---:|---|
-| Every event declares durable/ephemeral and version | Global registry layered over processor contracts | Medium | Over-centralizing opaque app events |
-| `log.synced` fixed-target handoff | `replayThenFollow` shared by subscriptions/itx/UI | Small–medium | Treating wakes as payload instead of rereading journal |
-| Input admission versus promotion | Separate durable Agent inbox identity from model-context insertion | Medium | Event proliferation/migration |
-| Step/attempt/tool settlement vocabulary | Stable semantic IDs alongside offsets | Medium | Exposing internal transitions too early |
-| Agent profile catalog | Resolved profile generation recorded at Step start | Medium | Duplicating config/default sources |
-| Scoped plugin transforms | Atomic config-worker contribution generation and provenance | Medium | Reintroducing in-process project code |
-| Projection-copy fork | Canonical semantic snapshot in child seed | Medium–large | Initialization/default race, payload size |
-| Deterministic race hooks | Fixed interleaving gates in Stream/log tests | Small | Tests tied too closely to implementation |
-| Managed suspension distinction | Explicit graceful-handoff vs eviction/crash recovery docs/events | Small | Assuming one mechanism covers both |
-| Public API reduction | Keep internal processor errors/transitions private until consumers act on them | Ongoing | Under-instrumenting operations |
+| OpenCode lesson                                    | Iterate translation                                                                                           |                                      Scope | Main risk                                                                 |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | -----------------------------------------: | ------------------------------------------------------------------------- |
+| Every event declares durable/ephemeral and version | Global registry layered over processor contracts                                                              |                                     Medium | Over-centralizing opaque app events                                       |
+| Input admission versus promotion                   | Separate durable Agent inbox identity from model-context insertion                                            |                                     Medium | Event proliferation/migration                                             |
+| Step/attempt/tool settlement vocabulary            | Stable semantic IDs alongside offsets                                                                         |                                     Medium | Exposing internal transitions too early                                   |
+| Agent catalog composition                          | Config-authoring contributions that compile to idempotent Agent events                                        |                               Small–medium | Accidentally creating a second profile authority                          |
+| Scoped plugin transforms                           | Deterministic config-worker catalog composition plus contribution/source provenance                           |                               Small–medium | Reintroducing in-process project code or inventing a false global cutover |
+| Failed candidate generation retains the old one    | Classify worker materialization failure as receiver-unavailable; optionally retain a last-known-good artifact | Small for fail-closed; medium for fallback | Blocking the feed versus intentionally serving stale policy               |
+| Projection-copy fork                               | Canonical semantic snapshot in child seed                                                                     |                               Medium–large | Initialization/default race, payload size                                 |
+| Deterministic race hooks                           | Fixed interleaving gates in Stream/log tests                                                                  |                                      Small | Tests tied too closely to implementation                                  |
+| Managed suspension distinction                     | Explicit graceful-handoff vs eviction/crash recovery docs/events                                              |                                      Small | Assuming one mechanism covers both                                        |
+| Public API reduction                               | Keep internal processor errors/transitions private until consumers act on them                                |                                    Ongoing | Under-instrumenting operations                                            |
 
 ### 1. Coordinate fence: a small safety fix
 
@@ -1461,16 +1477,20 @@ Use two namespaces:
 
 Processor contracts reference catalog definitions rather than repeating schemas. Extension manifests may register namespaced schemas for documentation/filtering but cannot install code into a core fold. A CI check should replay a retained fixture for every historical version.
 
-### 3. One replay/follow primitive
+### 3. Keep one replay/follow primitive—the existing one
 
-Implement target capture and wake installation inside the Stream DO so clients cannot order them incorrectly. The durable sequence should be:
+Do not add `replayThenFollow`. The Stream DO already owns cursor replay and live installation in one synchronous `subscribe()` call. The contract to preserve is:
 
 ```text
-subscribe wake -> capture durable head H -> page (after, H] -> synced(H)
-              -> on each wake, read durable rows > lastSeen
+choose replay cursor
+  -> install connection in Stream DO
+  -> immediately pump journal rows after cursor
+  -> include state + streamMaxOffset in every batch
+  -> wake installed connection after every append
+  -> reconnect from persisted processor checkpoint after failure
 ```
 
-If the physical allocator includes ephemeral offsets, `H` should identify the last durable row or the protocol should explicitly allow durable offset gaps. `synced(H)` means no durable row at or below H is missing, not that the processor/UI has finished every downstream effect.
+If a UI needs a visible “caught up” transition, define it as its local processor checkpoint reaching the delivered `streamMaxOffset`. That is a projection of existing coordinates, not another wire event or subscription API.
 
 ### 4. Agent inbox and execution IDs
 
@@ -1478,66 +1498,97 @@ Introduce stable IDs in new events while maintaining old offset references durin
 
 ```ts
 type AgentInputAdmitted = {
-  inputId: string
-  delivery: "queue" | "steer"
-  content: AgentInputItem[]
-}
+  inputId: string;
+  delivery: "queue" | "steer";
+  content: AgentInputItem[];
+};
 
 type AgentAttemptStarted = {
-  stepId: string
-  attemptId: string
-  inputId: string
-  requestEventOffset: number // audit/causation bridge during migration
-  model: string
-  profileDigest: string
-}
+  stepId: string;
+  attemptId: string;
+  inputId: string;
+  requestEventOffset: number; // audit/causation bridge during migration
+  model: string;
+};
 ```
 
 The reducer can still derive its current-request structure. The payoff is that fork boundaries, retries, logs, provider traces, and cross-stream results reference semantic identities that do not change when materialized elsewhere.
 
-### 5. Effective Agent profile generation
+### 5. Config authoring must terminate in Agent events
 
-Config-repo defaults, platform fallback, channel policy, capability mounts, and per-request override should compile into a canonical profile. Capture its digest on `step-started`; store the full resolved policy only when necessary for audit/replay.
+Keep `defaults.forPath(path).events` as the boundary. An OpenCode-like catalog may help the config worker compose named contributions, but activation means appending the resulting facts—not attaching a mutable profile object to the Agent:
 
 ```ts
-const effective = resolveAgentProfile({
-  platformFallback,
-  projectGeneration,
-  agentPath,
-  channelContext,
-  requestOverride,
-})
+const defaults = await itx.agents.defaults.forPath(agentPath, {
+  systemPrompt: reviewerPrompt,
+  model: "anthropic/claude-sonnet-4-5",
+});
 
-await stream.append({
-  type: "agents/step-started",
-  payload: {
-    stepId,
-    inputId,
-    profileId: effective.id,
-    profileGeneration: effective.generation,
-    profileDigest: digest(effective),
-    model: effective.model,
-    authorityDigest: digest(effective.capabilities),
-  },
-})
+await itx.streams.get(agentPath).append(...defaults.events);
 ```
 
-This creates the clean profile/Session distinction without moving Agent runtime state out of the processor.
+The Agent request's own Stream offset already pins which prior configuration facts were in its history. Carry a config-repository commit only when behavior depends on repository content that was **not** materialized into the Agent Stream, and then make that provenance another fact:
 
-### 6. Atomic extension generations
+```ts
+await itx.streams.get(agentPath).append({
+  type: "events.example.com/agent/config-generation-applied",
+  idempotencyKey: `agent-config:${agentPath}:${repoCommit}`,
+  payload: { repoCommit },
+});
+```
 
-The build/deploy controller should treat one config-repo revision as a contribution generation:
+Do not drag a repo hash through every Agent event by default. The config repository is not the Agent authority; the configuration facts it caused are.
+
+### 6. Config-worker revisions: observe the real semantics before inventing generations
+
+Production does not deploy one active config-worker generation. Every project-scoped Stream is born with its own durable `project-worker` push subscription and its own SQLite cursor. A delivery calls `project.processEventBatch`, which obtains the default stateless worker ref. The loader resolves the config repo's branch head **for that invocation**, freezes the commit while calculating a content-addressed build, and invokes one entrypoint from that artifact:
+
+```ts
+// Simplified from the deployed path.
+const row = streamSubscriptionCursor.get("project-worker");
+const batch = stream.readAfter(row.ackedOffset);
+
+const head = await configRepo.getHead(); // A or B, chosen now
+const artifact = await buildOrLoad(head.commitOid);
+await artifact.processEventBatch(batch); // one revision for this call
+
+streamSubscriptionCursor.ack(batch.lastOffset, row.epoch);
+```
+
+That gives four concrete behaviors:
+
+- if commit B lands before `getHead()` resolves, B handles the batch—even if the event committed while A was the repo head;
+- if an invocation already resolved A, that invocation remains on A after B lands;
+- if A performs a side effect and then rejects before the Stream records the ack, a retry may resolve B and deliver the same event to B;
+- two source Streams have independent cursors and invocations, so A may be handling one Stream while B handles another.
+
+There is no A/B delivery gap for a worker revision that materializes and runs normally. A cold build is awaited and the source cursor advances only after the handler resolves. There **is**, however, a separate build-failure bug. “Repo not seeded” and budgeted “build still in progress” errors are translated to `StreamReceiverUnavailableError`, which holds the whole batch. A real compiler/bundler/materialization failure propagates as a plain error. Under the default `onPoison: "skip"` feed, the unit-tested down-receiver behavior is: confirm and skip two single events, then park on the third consecutive would-be skip. Those events were healthy; the receiver revision was broken.
+
+That yields two concrete fixes with different product semantics:
+
+```ts
+// Minimum fail-closed fix: never diagnose a build as an event poison.
+try {
+  return await project.worker.processEventBatch(batch);
+} catch (error) {
+  if (isWorkerMaterializationError(error)) {
+    throw new StreamReceiverUnavailableError("config worker failed to materialize", {
+      cause: error,
+    });
+  }
+  throw error; // user handler rejection may still identify a poison event
+}
+```
 
 ```text
-build -> validate manifest/schema ownership/capabilities
-      -> start candidate Worker
-      -> probe contributions and event filters
-      -> install subscriptions/catalog generation atomically
-      -> route new calls/events to candidate
-      -> retire old generation after in-flight work drains
+Optional last-known-good policy:
+  commit B -> build and validate B
+           -> success: atomically set activeArtifact = B
+           -> failure: keep activeArtifact = A and report B as rejected
+  delivery -> load activeArtifact; retain normal per-Stream at-least-once cursor
 ```
 
-Long-running Agent Steps retain the generation/digest they started with. Checkpointed event delivery needs a defined cutover offset so the old and new worker do not both act or leave a gap. The simplest safe rule is one active consumer generation per source cursor with an atomic destination swap; in-flight batch failure is retried by the chosen generation under the same source event idempotency key.
+The second shape is the narrow part of OpenCode's generation rollback worth stealing. It improves build availability; it still does not make already-running A calls, distributed Stream cursors, or external side effects atomically switch. Independently, carry the resolved commit/build identity in the dynamic-worker span and make it available to worker code when it needs to record provenance. Do not append the config hash to every Agent event. Add per-Stream cutover fences only if a named product invariant genuinely requires event-time revision pinning rather than today's attempt-time resolution.
 
 ### 7. Conversation fork as a domain operation
 
@@ -1546,11 +1597,13 @@ Implement the schema/saga in the forking section, not a `Stream.copy()` helper. 
 The key acceptance assertion is:
 
 ```ts
-expect(await refoldChildAfter({
-  parentContinued: true,
-  parentDeleted: true,
-  coldStart: true,
-})).toEqual(contextAtOriginalFork)
+expect(
+  await refoldChildAfter({
+    parentContinued: true,
+    parentDeleted: true,
+    coldStart: true,
+  }),
+).toEqual(contextAtOriginalFork);
 ```
 
 ### 8. Projection/index ergonomics
@@ -1565,7 +1618,7 @@ export const ConversationFamilyIndex = defineProjection({
   reduce: (family, event) => updateFamilyTree(family, event),
   storage: "durable-object-sql",
   rebuildFrom: "project-stream-catalog",
-})
+});
 ```
 
 The API should advertise projection freshness/checkpoint. Do not silently pretend a cross-stream index is transactionally current with every source DO.
@@ -1598,13 +1651,24 @@ OpenCode is especially good at the first; Iterate is especially good at the seco
 
 Generate a report of every processor `consumes`/`emits` type, duplicate owner, durability use, current schema, and fixture availability. Add one old-version fixture and upcaster path end to end. This reveals whether a global catalog can be layered rather than imposed.
 
-### Experiment B — `synced` log for one Agent UI
+### Experiment B — subscription invariant audit, not a new API
 
-Implement fixed-target replay/follow behind an experimental itx method and convert one chat view. Add deterministic append-during-page and reconnect tests. Measure duplicate/gap handling and whether ephemeral offset gaps complicate the marker.
+Keep the production API and add deterministic regression cuts around the existing connection pump: append before installation, immediately after installation, during a draining pump, and during browser pull catch-up; then force mirror-ingest failure and verify replay from the persisted checkpoint. Assert the immediate empty batch and its `streamMaxOffset`. Only add a UI “caught up through H” label if a real view needs it.
 
 ### Experiment C — extension manifest as observation only
 
-Have the seeded config worker export a manifest. Display consumes/emits/capabilities and use consumes only to filter delivery; do not change execution ownership yet. Validate atomic build-generation provenance in logs.
+Have the seeded config worker export a manifest. Display consumes/emits/capabilities and use consumes only to filter delivery; do not change execution ownership yet. Add resolved commit/build provenance to dynamic-worker traces, then gate these interleavings in an end-to-end test:
+
+```text
+A starts event X; commit B; A resolves       -> X acked once under A
+A starts event X; side effect; A rejects;
+commit B; retry                              -> X delivered under B with same delivery identity
+commit B; B compile/build fails              -> red today: two healthy events can skip, then park;
+                                                green target: cursor remains before X or A stays active
+Stream S1 resolves A; Stream S2 resolves B   -> both revisions may coexist
+```
+
+Only propose a project-wide activation generation after naming a real reaction for which those current semantics are wrong.
 
 ### Experiment D — fork projection spike with no execution API
 
@@ -1620,12 +1684,13 @@ Compare fresh/latest-main, shared overlay, and content-addressed/Git snapshot be
 
 ## Bottom line
 
-OpenCode v2 is strongest where Iterate is currently informal: precise public vocabulary, catalog composition, relational projection ergonomics, and the replay/live handoff. Iterate is strongest where OpenCode is currently pragmatic/local: distributed isolation, recoverable processor consequences, eviction adoption, and userspace execution boundaries.
+OpenCode v2 is strongest where Iterate is currently informal: precise public vocabulary, scoped catalog composition, and relational projection ergonomics. Iterate is strongest where OpenCode is currently pragmatic/local: distributed isolation, recoverable processor consequences, eviction adoption, userspace execution boundaries, and the production replay/follow subscription spine.
 
 The right move is not convergence on one implementation. It is a deliberate exchange of invariants:
 
-- give Iterate OpenCode’s event/version/profile/log clarity;
+- give Iterate OpenCode’s event/version, execution-identity, and contribution-lifecycle clarity;
 - keep Iterate’s Stream authority, processor recovery, and Worker isolation;
+- borrow failed-candidate rollback narrowly: a broken config build must never be diagnosed as a poison event, while last-known-good serving remains an explicit availability policy;
 - model plugins, app workers, and durable processors as separate extension tiers;
 - model a fork as semantic context initialization plus immutable lineage;
 - keep operational history, subscriptions, capabilities, workspaces, channels, and accounting branch-local unless a policy explicitly says otherwise.
@@ -1663,6 +1728,8 @@ For the specific fork question: **use an O(current-context) self-contained snaps
 
 - Stream envelopes, source/provenance, and ephemeral shape: [schemas.ts](../../src/domains/streams/schemas.ts)
 - Stream creation, append, and control journal: [stream-durable-object.ts](../../src/domains/streams/stream-durable-object.ts)
+- Push delivery, retry, poison, and receiver-unavailable behavior: [stream-subscribers.ts](../../src/domains/streams/stream-subscribers.ts), [stream-subscribers.test.ts](../../src/domains/streams/stream-subscribers.test.ts)
+- Per-Stream subscription cursor and epoch fencing: [stream-storage.ts](../../src/domains/streams/stream-storage.ts)
 - Processor contract definitions and event ownership: [processor-contracts.ts](../../src/domains/streams/processor-contracts.ts)
 - Fold/checkpoint/consequence runtime: [stream-processor.ts](../../src/domains/streams/stream-processor.ts)
 - Hosted wake/alarm/incarnation behavior: [stream-processor-host.ts](../../src/domains/streams/stream-processor-host.ts)
@@ -1672,6 +1739,9 @@ For the specific fork question: **use an O(current-context) self-contained snaps
 - Agent multi-processor host: [agent-durable-object.ts](../../src/domains/agents/agent-durable-object.ts)
 - Seeded config Worker/DO application surface: [worker.ts](../../config-repo-template/worker.ts)
 - Config Worker dispatch/fetch-lane model: [dynamic-worker-dispatch.md](../dynamic-worker-dispatch.md)
+- Default project-worker ref and config-repo coordinate: [utils.ts](../../src/domains/repos/utils.ts)
+- Dynamic worker head resolution, builds, and artifact loading: [worker-loader.ts](../../src/domains/workers/worker-loader.ts), [worker-runner.ts](../../src/domains/workers/worker-runner.ts)
+- Userspace event-batch contract: [sdk.ts](../../../../packages/iterate/src/sdk.ts)
 - Public capability/RPC targets: [rpc-targets.ts](../../src/rpc-targets.ts)
 - Domain objects and processors overview: [domain-objects-and-stream-processors.md](../../../../docs/domain-objects-and-stream-processors.md)
 - Consequence and reconciler guidance: [writing-stream-processors.md](../../../../docs/writing-stream-processors.md)

@@ -1,0 +1,29 @@
+{
+  "name": "kernel-mini-os",
+  "private": true,
+  "type": "module",
+  "description": "OS dashboard — a TanStack Start app deployed as a remote 'vessel' behind an iterate project. PoC: itx in the SSR render phase AND from the rendered client app.",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build && tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "deploy": "vite build && wrangler deploy"
+  },
+  "dependencies": {
+    "@tanstack/react-router": "^1.170.10",
+    "@tanstack/react-start": "^1.168.18",
+    "capnweb": "npm:@iterate-com/capnweb@^0.10.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "catalog:cloudflare",
+    "@cloudflare/workers-types": "catalog:cloudflare",
+    "@types/node": "^24.12.4",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.2",
+    "vite": "^8.0.16",
+    "wrangler": "catalog:cloudflare"
+  }
+}

@@ -1,0 +1,502 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Self-hosted vs iterate-hosted — walkthroughs</title>
+    <style>
+      :root {
+        --same: #495057;
+        --same-bg: #f1f3f5;
+        --h: #e8590c;
+        --i: #1971c2;
+        --ink: #1a1b1e;
+        --muted: #868e96;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        font:
+          15px/1.55 -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+        color: var(--ink);
+        max-width: 1000px;
+        margin: 0 auto;
+        padding: 32px 24px 80px;
+      }
+      h1 {
+        font-size: 26px;
+        margin: 0 0 4px;
+      }
+      h2 {
+        font-size: 19px;
+        margin: 38px 0 6px;
+      }
+      h3 {
+        font-size: 14px;
+        margin: 16px 0 4px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      .lede {
+        color: var(--muted);
+        margin: 0 0 6px;
+      }
+      code {
+        background: #eef0f2;
+        padding: 1px 5px;
+        border-radius: 4px;
+        font-size: 12.5px;
+      }
+      .thesis {
+        background: #e7f5ff;
+        border: 1px solid #74c0fc;
+        border-radius: 10px;
+        padding: 14px 16px;
+        margin: 14px 0;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        font-size: 13.5px;
+        margin: 6px 0 4px;
+      }
+      th,
+      td {
+        border: 1px solid #dee2e6;
+        padding: 8px 10px;
+        text-align: left;
+        vertical-align: top;
+      }
+      th.h {
+        background: #fff4e6;
+        color: var(--h);
+        width: 44%;
+      }
+      th.i {
+        background: #e7f5ff;
+        color: var(--i);
+        width: 44%;
+      }
+      th.n {
+        width: 12%;
+        background: #f8f9fa;
+      }
+      td.same {
+        background: var(--same-bg);
+        color: #495057;
+      }
+      td.h {
+        background: #fff9f4;
+      }
+      td.i {
+        background: #f5faff;
+      }
+      .num {
+        font-weight: 700;
+        color: var(--muted);
+      }
+      .knob {
+        color: var(--h);
+        font-weight: 600;
+        font-size: 12px;
+      }
+      .ref {
+        font-family: ui-monospace, monospace;
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .diagram {
+        border: 1px solid #dee2e6;
+        border-radius: 10px;
+        padding: 14px;
+        margin: 10px 0;
+        background: #fcfcfd;
+        font-size: 13.5px;
+      }
+      .box {
+        display: inline-block;
+        border: 2px solid #adb5bd;
+        border-radius: 8px;
+        padding: 6px 10px;
+        margin: 3px;
+        background: #fff;
+      }
+      .box.k {
+        border-color: #4263eb;
+        background: #dbe4ff;
+      }
+      .box.f {
+        border-color: #2f9e44;
+        background: #d3f9d8;
+      }
+      .box.p {
+        border-color: #e8590c;
+        background: #ffe8cc;
+      }
+      .flowline {
+        text-align: center;
+        margin: 6px 0;
+      }
+      .arr {
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Self-hosted vs iterate-hosted — the walkthroughs</h1>
+    <p class="lede">
+      Every differing step shows <b style="color: var(--i)">what happens hosted</b> and
+      <b style="color: var(--h)">what happens self-hosted</b>, concretely. Grey rows =
+      byte-identical.
+    </p>
+
+    <div class="thesis">
+      <b>One codebase.</b> The kernel and OS worker are identical in both. The only differences are
+      the values of ~5 config knobs (<code>config.ts</code>): <b>leased OAuth clients</b>,
+      <b>platform egress keys</b>, <b>hostname base</b>, <b>identity authority</b>,
+      <b>billing counterparty</b>. Kernel = streams · files · secrets · ingress+egress · capability
+      resolver · identity · confined-runner. Same everywhere.
+    </div>
+
+    <h2>1 · Creating a project</h2>
+    <table>
+      <tr>
+        <th class="n"></th>
+        <th class="h">self-hosted</th>
+        <th class="i">iterate-hosted</th>
+      </tr>
+      <tr>
+        <td class="num">1</td>
+        <td class="h">
+          Mint <code>projectId</code>+slug via <b>your own</b> auth worker instance (same code)
+          <span class="ref">env.AUTH</span>
+        </td>
+        <td class="i">Mint via <b>iterate's</b> auth worker</td>
+      </tr>
+      <tr>
+        <td class="num">2</td>
+        <td class="same" colspan="2">
+          Prime the directory (slug↔id) in KV; append birth events to the root stream; seed the
+          project API-key secret — <b>identical</b>
+          <span class="ref">project-directory.ts:191 · rpc-targets.ts:5352</span>
+        </td>
+      </tr>
+      <tr>
+        <td class="num">3</td>
+        <td class="h">
+          Hostname = <code>&lt;slug&gt;.your-domain.com</code>
+          <span class="knob">APP_CONFIG_PROJECT_HOSTNAME_BASES = your domain</span>
+        </td>
+        <td class="i">
+          Hostname = <code>&lt;slug&gt;.iterate.app</code>
+          <span class="knob">shared, CF-routed namespace</span>
+        </td>
+      </tr>
+      <tr>
+        <td class="num">4</td>
+        <td class="same" colspan="2">
+          Wait for processors; bootstrap config repo from the template; emit
+          <code>project/ready</code> — <b>identical</b>
+          <span class="ref">rpc-targets.ts:5404,5510</span>
+        </td>
+      </tr>
+      <tr>
+        <td class="num">5</td>
+        <td class="h">
+          No balance seeded; the project spends against <b>your</b> provider keys directly
+        </td>
+        <td class="i">
+          iterate seeds a starting balance and meters spend to bill you
+          <span class="knob">billing counterparty</span>
+        </td>
+      </tr>
+    </table>
+
+    <h2>2 · Connecting Gmail (Google OAuth)</h2>
+    <table>
+      <tr>
+        <th class="n"></th>
+        <th class="h">self-hosted</th>
+        <th class="i">iterate-hosted</th>
+      </tr>
+      <tr>
+        <td class="num">1</td>
+        <td class="h">
+          Redirect to Google consent using <b>your own</b> Google Cloud OAuth app's client id/secret
+          <span class="knob">integrations.google.oauthClient* = yours; unset ⇒ Gmail off</span>
+        </td>
+        <td class="i">
+          Redirect using <b>iterate's CASA-approved</b> Google client (restricted scopes an
+          individual can't get) <span class="ref">config.ts:180</span>
+        </td>
+      </tr>
+      <tr>
+        <td class="num">2</td>
+        <td class="same" colspan="2">
+          Exchange the auth code for access+refresh tokens; store them write-only in the project's
+          Secret DO; pin egress to <code>gmail.googleapis.com</code>; append
+          <code>google/connected</code> — <b>identical</b>
+          <span class="ref">connect-flows.ts:990,1040,1060</span>
+        </td>
+      </tr>
+    </table>
+
+    <h2>3 · Receiving a Slack webhook</h2>
+    <table>
+      <tr>
+        <th class="n"></th>
+        <th class="h">self-hosted</th>
+        <th class="i">iterate-hosted</th>
+      </tr>
+      <tr>
+        <td class="num">1</td>
+        <td class="h">
+          Slack POSTs to <code>&lt;your-domain&gt;/api/integrations/slack/webhook</code> (your Slack
+          app's configured URL)
+        </td>
+        <td class="i">Slack POSTs to <code>os.iterate.com/api/integrations/slack/webhook</code></td>
+      </tr>
+      <tr>
+        <td class="num">2</td>
+        <td class="h">
+          Verify HMAC against <b>your</b> Slack app's signing secret
+          <span class="knob">integrations.slack.webhookSigningSecret = yours</span>
+        </td>
+        <td class="i">
+          Verify against <b>iterate's</b> one distributed Slack app secret
+          <span class="ref">slack-webhook.ts:46</span>
+        </td>
+      </tr>
+      <tr>
+        <td class="num">3</td>
+        <td class="same" colspan="2">
+          Extract <code>team_id</code>; look up which project owns that workspace (directory claim);
+          append <code>slack/webhook-received</code>; the agent reacts — <b>identical</b>
+          <span class="ref">integration-streams.ts:118,168</span>
+        </td>
+      </tr>
+    </table>
+
+    <h2>4 · Releasing a new OS version</h2>
+    <table>
+      <tr>
+        <th class="n"></th>
+        <th class="h">self-hosted</th>
+        <th class="i">iterate-hosted</th>
+      </tr>
+      <tr>
+        <td class="num">1</td>
+        <td class="h">
+          <b>You</b> <code>git pull && wrangler deploy</code> to <b>your</b> CF account, when you
+          choose
+        </td>
+        <td class="i">
+          <b>iterate</b> runs <code>scripts/deploy.ts</code> → <code>wrangler deploy</code> to
+          iterate's accounts (prd, preview_N) <span class="ref">envs.ts</span>
+        </td>
+      </tr>
+      <tr>
+        <td class="num">2</td>
+        <td class="same" colspan="2">
+          New OS+kernel worker deploys to the edge (atomic code+secrets); project config-workers
+          reference <code>iterate@…</code> packages and recompile against the pinned set —
+          <b>identical</b> <span class="ref">deploy.ts · pkg-pr-new.ts</span>
+        </td>
+      </tr>
+      <tr>
+        <td class="num">3</td>
+        <td class="h">Rollout cadence is <b>yours</b> — you pull when ready</td>
+        <td class="i">iterate controls fleet rollout (canary → widen)</td>
+      </tr>
+    </table>
+
+    <h2>5 · Ingress &amp; egress</h2>
+    <h3>Ingress — a request comes in</h3>
+    <table>
+      <tr>
+        <th class="n"></th>
+        <th class="h">self-hosted</th>
+        <th class="i">iterate-hosted</th>
+      </tr>
+      <tr>
+        <td class="num">1</td>
+        <td class="h">
+          Match hostname against <b>your domain</b> / custom hostnames
+          <span class="knob">APP_CONFIG_PROJECT_HOSTNAME_BASES</span>
+        </td>
+        <td class="i">
+          Match against <code>*.iterate.app</code> (shared) + custom domains
+          <span class="ref">ingress.ts:51,89</span>
+        </td>
+      </tr>
+      <tr>
+        <td class="num">2</td>
+        <td class="same" colspan="2">
+          Resolve slug→projectId via directory; set trusted <code>x-itx-project-id</code>; route
+          into the project worker — <b>identical</b> <span class="ref">ingress.ts:127</span>
+        </td>
+      </tr>
+    </table>
+    <h3>Egress — project code fetches out</h3>
+    <table>
+      <tr>
+        <th class="n"></th>
+        <th class="h">self-hosted</th>
+        <th class="i">iterate-hosted</th>
+      </tr>
+      <tr>
+        <td class="num">1</td>
+        <td class="same" colspan="2">
+          Fetch hits the one door
+          (<code>ProjectEgressEntrypoint</code>→<code>ProjectDurableObject.fetch</code>); match
+          egress rules; maybe hold for human approval — <b>identical</b>
+          <span class="ref">egress.ts:39 · egress-approvals.ts:50</span>
+        </td>
+      </tr>
+      <tr>
+        <td class="num">2</td>
+        <td class="h">
+          Substitute <b>your</b> platform API keys (OpenAI etc.); you pay providers directly
+        </td>
+        <td class="i">
+          Substitute <b>iterate's</b> platform keys, pass-through billed
+          <span class="ref">project-durable-object.ts:666</span>
+        </td>
+      </tr>
+      <tr>
+        <td class="num">3</td>
+        <td class="same" colspan="2">
+          Project-specific secrets substituted identically; the real <code>fetch()</code> leaves
+          through the one door — <b>identical</b>
+          <span class="ref">project-durable-object.ts:723</span>
+        </td>
+      </tr>
+    </table>
+
+    <h2>6 · The stateless OS app &amp; how sign-in works</h2>
+    <p class="lede">
+      The big idea: the OS dashboard stops being a large special thing. It becomes a
+      <b>stateless front-end worker</b> that you reach <b>by proxy</b> — exactly like the
+      <code>tasks</code> app in your config template already does (<span class="ref"
+        >config-repo-template/worker.ts:45–66</span
+      >).
+    </p>
+    <div class="diagram">
+      <div class="flowline">
+        browser →
+        <span class="box">os<span style="color: #adb5bd">--</span>&lt;proj&gt;.iterate.app</span>
+        <span class="arr">or</span> <span class="box">os.&lt;yourdomain&gt;</span>
+      </div>
+      <div class="flowline">
+        <span class="arr">↓ proxy (a project's <code>fetch</code>)</span>
+      </div>
+      <div class="flowline">
+        <span class="box p"
+          >① gate: <code>itx.auth.get({policy})</code> — is this visitor a member/operator?</span
+        >
+      </div>
+      <div class="flowline">
+        <span class="arr">↓ if allowed, proxy through with identity attached</span>
+      </div>
+      <div class="flowline">
+        <span class="box f">stateless OS front-end worker (the dashboard UI — holds no state)</span>
+      </div>
+      <div class="flowline"><span class="arr">↕ renders / calls</span></div>
+      <div class="flowline"><span class="box k">the capability tree (kernel)</span></div>
+    </div>
+    <p class="lede">
+      Same shape as <code>tasks</code>, the inbound MCP server, and any user app: a
+      <b>stateless protocol adapter over the capability tree, reached by proxy</b>. You could swap
+      in a different OS front-end and nothing else changes.
+    </p>
+    <h3>Signing in — the flow</h3>
+    <table>
+      <tr>
+        <th class="n"></th>
+        <th class="h">self-hosted</th>
+        <th class="i">iterate-hosted</th>
+      </tr>
+      <tr>
+        <td class="num">1</td>
+        <td class="h">
+          Visit <code>os.&lt;yourdomain&gt;</code> — request passes <b>Cloudflare Access</b> (your
+          wall) first
+        </td>
+        <td class="i">Visit <code>os--&lt;proj&gt;.iterate.app</code> — hits iterate's ingress</td>
+      </tr>
+      <tr>
+        <td class="num">2</td>
+        <td class="h">
+          Identity comes from <b>your</b> IdP: the <code>cf-access-jwt</code> header (or your own
+          OIDC)
+        </td>
+        <td class="i">
+          Identity from <b>iterate's</b> OIDC / operator-session (redirect to sign in, cookie)
+          <span class="ref">auth/operator-session.ts</span>
+        </td>
+      </tr>
+      <tr>
+        <td class="num">3</td>
+        <td class="same" colspan="2">
+          <b>Authorize:</b> the proxy calls
+          <code>itx.auth.get({policy:"project-member"|"operator"}).fetch(req)</code> to gate
+          membership — <b>identical</b> (the same gate <code>tasks</code>/<code>todo</code> use
+          today)
+        </td>
+      </tr>
+      <tr>
+        <td class="num">4</td>
+        <td class="same" colspan="2">
+          <b>Serve:</b> proxy forwards to the stateless OS front-end, which renders by calling the
+          capability tree — <b>identical</b>. The front-end holds no session; auth lives entirely at
+          the proxy.
+        </td>
+      </tr>
+    </table>
+    <p class="lede">
+      <b>Why this connects to auth:</b> today the dashboard has bespoke operator-session auth on the
+      <code>os</code> host, separate from how project apps authenticate. Making the OS a proxied
+      stateless app <b>collapses them into one gate</b> — every front-end (dashboard, MCP, tasks,
+      user apps) authenticates the same way:
+      <b
+        >identity established at the wall (iterate OIDC, or your Cloudflare Access), authorization
+        via <code>itx.auth</code> at the proxy.</b
+      >
+    </p>
+
+    <h2>Contested resources &amp; multi-project</h2>
+    <table>
+      <tr>
+        <th>Resource</th>
+        <th>Self-provisionable?</th>
+      </tr>
+      <tr>
+        <td>Leased OAuth clients (Google restricted-scope, verified Slack app)</td>
+        <td><b>No</b> — need vendor approval. The deepest moat.</td>
+      </tr>
+      <tr>
+        <td><code>*.iterate.app</code> ingress hostnames</td>
+        <td><b>No</b> — iterate's domain; you use your own domain instead.</td>
+      </tr>
+      <tr>
+        <td>Single billing counterparty</td>
+        <td><b>No</b> — else you pay each provider directly.</td>
+      </tr>
+      <tr>
+        <td>Everything else (auth, egress keys, hostnames-on-your-domain, the whole kernel)</td>
+        <td>Yes — same code, your instance / your keys.</td>
+      </tr>
+    </table>
+    <p class="lede">
+      <b>Multiple projects when self-hosting? Yes.</b> The kernel addresses everything by
+      <code>{projectId, path}</code> and the directory maps many slugs → many projects. Only the
+      convenience hostname is tied to <code>*.iterate.app</code>; with your own domain you run as
+      many projects as you like. Multi-project is a kernel property, not a hosted feature.
+    </p>
+  </body>
+</html>
