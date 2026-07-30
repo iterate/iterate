@@ -584,9 +584,9 @@ done
 After each slot, inspect the managed PR table, CI logs, Cloudflare traces, and
 `pnpm preview status`. An unexplained error, skipped Slack test, unhealthy
 storage shard, unreleased lease, or mismatched final state fails the slot.
-Cleanup still releases the tenant lease; its durable stack record remains,
-every failed GC run stays red, and operators must repair a persistent destroy
-failure before trusting that slot again.
+Cleanup still releases the tenant lease; environment-manager retains a failed
+or non-empty lifecycle for GC, every failed sweep stays red, and operators must
+repair a persistent destroy failure before trusting that slot again.
 
 Classify error-level telemetry rather than treating green checks as the final
 barrier. Intentional failure-path tests must be identifiable as such. Durable

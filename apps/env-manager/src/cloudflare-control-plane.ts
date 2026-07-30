@@ -12,6 +12,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import type * as HttpClient from "effect/unstable/http/HttpClient";
+import type { AlchemyResources } from "./state.ts";
 
 const ARTIFACT_DELETE_CONCURRENCY = 10;
 const ARTIFACT_REPOSITORY_PAGE_SIZE = 200;
@@ -131,7 +132,11 @@ const deleteDurableObjectClasses: API.OperationMethod<
   errors: [],
 }));
 
-export function makeCloudflareControlPlane(input: { accountId: string; apiToken: string }) {
+export function makeCloudflareControlPlane(input: {
+  accountId: string;
+  apiToken: string;
+  signal?: AbortSignal;
+}) {
   const cloudflareApi = Layer.mergeAll(
     Credentials.fromApiToken({ apiToken: input.apiToken }),
     FetchHttpClient.layer,
@@ -139,7 +144,10 @@ export function makeCloudflareControlPlane(input: { accountId: string; apiToken:
   );
   const run = <A, E>(
     program: Effect.Effect<A, E, Credentials.Credentials | HttpClient.HttpClient>,
-  ) => Effect.runPromise(Effect.scoped(program.pipe(Effect.provide(cloudflareApi))));
+  ) =>
+    Effect.runPromise(Effect.scoped(program.pipe(Effect.provide(cloudflareApi))), {
+      signal: input.signal,
+    });
 
   const listWorkerScripts = () =>
     Workers.listScripts.items({ accountId: input.accountId }).pipe(Stream.runCollect);
@@ -279,21 +287,7 @@ export function makeCloudflareControlPlane(input: { accountId: string; apiToken:
     });
 
   return {
-    assertResourcesExist(
-      resources:
-        | { kind: "auth"; authDbId: string; stage: string }
-        | {
-            kind: "platform";
-            stage: string;
-            authDbId: string;
-            projectDirectoryKvId: string;
-            workerBuildCacheKvId: string;
-            semaphoreDbId: string;
-            filesBucketName: string;
-            sandboxesBucketName: string;
-          },
-      workerNames: readonly string[],
-    ) {
+    assertResourcesExist(resources: AlchemyResources, workerNames: readonly string[]) {
       return run(
         Effect.gen(function* () {
           const [databases, namespaces, { buckets }, workers] = yield* Effect.all(

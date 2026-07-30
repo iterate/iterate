@@ -347,9 +347,9 @@ invariants:
 - **A PR keeps its slot from first deploy until the PR closes.** Every
   `preview deploy` / `preview test` run renews the lease for 3h; closing the
   PR destroys the environment and releases it. Lease expiry is the safety valve for
-  abandoned PRs (no pushes for >3h). A durable stack record remains until
-  verified destroy, so the scheduled GC still sees failed cleanup after the
-  environment lease is released. See
+  abandoned PRs (no pushes for >3h). Environment-manager retains failed or
+  non-empty lifecycle state, so scheduled GC still sees unfinished cleanup
+  after the environment lease is released. See
   **[Preview resource GC](preview-resource-gc.md)**.
 - **Draft PRs don't claim a slot unless they ask.** Drafts are the default
   for agent-opened PRs, and seventeen claimable slots don't survive a busy night of them. A
@@ -359,14 +359,14 @@ invariants:
   `pnpm preview deploy --allow-draft`; the next push re-applies the policy).
   A draft that holds a slot without asking — e.g. a ready PR converted back
   to draft — gives it back on the next lifecycle run.
-- **The semaphore is the single source of lease truth.** The PR body's
-  managed section only _displays_ the slot (and per-app results); it is never
-  consulted for ownership and never a reason to skip. Before running tests or
-  destroying anything, the tooling asks the semaphore which slot the PR holds
-  right now, and refuses (with an explanation naming the current holder) if
-  the answer is "not that one". So a stale PR's cleanup can never destroy
-  another PR's preview, e2e never runs against someone else's deployment, and
-  nothing steals a live lease without a human `--force`.
+- **The semaphore is the single source of lease truth.** The PR body's managed
+  section records the slot and opaque lease token only so a later command can
+  ask Semaphore to renew that exact lease; the copy is not ownership. Missing
+  or rejected tokens are ownership gaps and force a destroy before reuse.
+  Before tests or destructive work, tooling renews the exact token and refuses
+  if Semaphore does not confirm it. So stale cleanup cannot destroy another
+  PR's preview, e2e cannot run against someone else's deployment, and nothing
+  steals a live lease without a human `--force`.
 - **Contention queues instead of exploding.** When all seventeen claimable slots are leased,
   `preview deploy` waits in line (logging who holds what every few minutes)
   for up to 6 minutes before failing with the full holder table and
@@ -389,7 +389,7 @@ invariants:
   doppler run --project _shared --config prd -- pnpm preview status
   # Free an orphaned/idle slot after checking no cleanup is mid-flight:
   pnpm preview reclaim --slot preview-4 --force
-  # Show recorded stacks without a live tenant (what hourly GC destroys).
+  # Show non-empty manager environments without a live tenant (what hourly GC destroys).
   # The real sweep takes each lease non-force, so it never touches a live slot.
   doppler run --project _shared --config prd -- pnpm preview gc --dry-run
   ```
@@ -559,9 +559,9 @@ Automation never force-reclaims a live lease, including one whose PR is
 closed. That lets close-triggered cleanup remain the sole owner until it has
 finished destroying and releases the slot; another PR can queue but cannot
 deploy or destroy concurrently. Cleanup releases after a failed destroy while
-the durable stack record remains queued for hourly GC; the next tenant also
-destroys before deployment. `reclaim --slot N --force` is the explicit
-operator path when automation itself has stopped.
+environment-manager retains the failed lifecycle for hourly GC; the next
+tenant also destroys before deployment. `reclaim --slot N --force` is the
+explicit operator path when automation itself has stopped.
 
 `--force` (on `acquire`, `release`, and `reclaim`) is the only way to take any
 live lease from its holder. Every eviction logs an

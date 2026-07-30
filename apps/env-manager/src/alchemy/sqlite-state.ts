@@ -16,6 +16,35 @@ type TextRow = { value: string };
 // table so deleting a stack is one atomic SQL statement.
 const STACK_OUTPUT_FQN = "";
 
+function initializeAlchemyStateTable(sql: SqlStorage): void {
+  sql.exec(`
+    create table if not exists alchemy_state (
+      stack text not null,
+      stage text not null,
+      fqn text not null,
+      value text not null,
+      primary key (stack, stage, fqn)
+    )
+  `);
+}
+
+export function readSqliteAlchemyOutput(
+  storage: DurableObjectStorage,
+  input: { stack: string; stage: string },
+): unknown | undefined {
+  const sql = storage.sql;
+  initializeAlchemyStateTable(sql);
+  const row = sql
+    .exec<TextRow>(
+      "select value from alchemy_state where stack = ? and stage = ? and fqn = ?",
+      input.stack,
+      input.stage,
+      STACK_OUTPUT_FQN,
+    )
+    .toArray()[0];
+  return row === undefined ? undefined : decode(row.value);
+}
+
 function attempt<A>(operation: string, evaluate: () => A): Effect.Effect<A, StateStoreError> {
   return Effect.try({
     try: evaluate,
@@ -43,15 +72,7 @@ export function makeSqliteAlchemyState(storage: DurableObjectStorage): Layer.Lay
     Effect.cached(
       Effect.sync(() => {
         const sql = storage.sql;
-        sql.exec(`
-          create table if not exists alchemy_state (
-            stack text not null,
-            stage text not null,
-            fqn text not null,
-            value text not null,
-            primary key (stack, stage, fqn)
-          )
-        `);
+        initializeAlchemyStateTable(sql);
 
         const service: StateService = {
           id: "durable-object-sqlite",

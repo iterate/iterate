@@ -4,6 +4,8 @@ import {
   assertEnvironmentDestroyAllowed,
   EnvironmentResources,
   parsePersistedEnvironmentState,
+  persistedEnvironmentState,
+  reconcileEnvironmentState,
   recoverInterruptedEnvironmentState,
 } from "./state.ts";
 
@@ -68,6 +70,54 @@ describe("durable environment lifecycle", () => {
       lifecycle: "failed",
       progress: [],
       lastError: expect.stringContaining("lifecycle state is invalid"),
+    });
+  });
+
+  test("persists lifecycle only and leaves resources in canonical Alchemy output", () => {
+    expect(
+      persistedEnvironmentState({
+        stage: "preview_18",
+        lifecycle: "ready",
+        progress: [],
+        resources: previewResources,
+      }),
+    ).toEqual({
+      stage: "preview_18",
+      lifecycle: "ready",
+      progress: [],
+    });
+  });
+
+  test("reconciles settled lifecycle against canonical Alchemy output", () => {
+    expect(
+      reconcileEnvironmentState(
+        { stage: "preview_18", lifecycle: "empty", progress: [] },
+        previewResources,
+      ),
+    ).toMatchObject({ lifecycle: "ready", resources: previewResources });
+    expect(
+      reconcileEnvironmentState(
+        { stage: "preview_18", lifecycle: "ready", progress: [] },
+        undefined,
+      ),
+    ).toEqual({ stage: "preview_18", lifecycle: "empty", progress: [] });
+  });
+
+  test("preserves an operation failure while projecting canonical resources", () => {
+    expect(
+      reconcileEnvironmentState(
+        {
+          stage: "preview_18",
+          lifecycle: "failed",
+          progress: [],
+          lastError: "deploy failed",
+        },
+        previewResources,
+      ),
+    ).toMatchObject({
+      lifecycle: "failed",
+      lastError: "deploy failed",
+      resources: previewResources,
     });
   });
 

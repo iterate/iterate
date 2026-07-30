@@ -162,6 +162,60 @@ lock accounts for +2,658 net lines. Excluding the lock and this task record,
 application, workflow, and documentation changes are +1,215 net while replacing
 the old reset/recovery system and adding the lifecycle API plus dashboard.
 
+## Thermonuclear lifecycle review
+
+Three independent read-only reviews identified five issues. All five findings
+were confirmed against the code; the suggested cross-worktree manifest
+generation check was rejected as a separate false solution.
+
+1. **Fail-closed local manifest — confirmed.** `infra destroy` now removes the
+   calling worktree's Wrangler input manifest before asking the manager to
+   mutate Cloudflare. A failed or partial remote destroy therefore cannot leave
+   that worktree with deployable stale IDs. `infra deploy` already invalidated
+   before apply and atomically materialized the canonical output afterward.
+2. **Destructive lease duration/fencing — confirmed.** A live `preview_18`
+   destroy took 41m44s while reclaim and GC used an unrenewed 30-minute hold.
+   Destructive paths now use the normal three-hour lease and renew its exact
+   opaque token before work, at most every five minutes, and after work. A lost,
+   mismatched, or failed renewal aborts the exact environment-manager operation;
+   the Durable Object propagates cancellation into both the Cloudflare control
+   plane Effect and Alchemy Effect. It checks the abort signal before the
+   Worker/DO phase and again before the Alchemy phase. Completion without a
+   final renewal, and every `release=false`, are explicit ownership failures.
+3. **Affinity after an ownership gap — confirmed.** A recorded slug whose exact
+   token no longer renews is only an affinity hint. Automation may acquire it
+   non-force, but must destroy the whole environment before reuse. Matching
+   holder text cannot recover a token, force-reissue a lease, or preserve a
+   deployment.
+4. **Duplicate cleanup obligation — confirmed and deleted.** The Semaphore
+   `preview-stack` resource type, record creation/deletion protocol, conflict
+   recovery, and GC inventory were removed. Semaphore now owns only live lease
+   arbitration/fencing. Hourly GC reads every claimable environment's manager
+   status directly, takes an eligible slot non-force, re-reads under the fence,
+   destroys, and releases. A failed/non-empty manager lifecycle is the sole
+   durable cleanup obligation.
+5. **Triplicated resource truth — confirmed and collapsed.** Alchemy's SQLite
+   stack output is the only durable resource manifest. `environment_state`
+   persists lifecycle/progress/error only; startup and operation completion
+   project validated resources from canonical output and reconcile settled
+   `empty`/`ready` labels against its presence. The CLI JSON remains an
+   ephemeral Wrangler input. Cloudflare teardown consumes the canonical
+   `AlchemyResources` type instead of a hand-copied union.
+
+### Rejected addition: manifest generation/freshness handshake
+
+A manager generation embedded in local JSON would add a second comparison
+protocol without closing the race: Cloudflare could still be destroyed after a
+remote freshness check and before Wrangler deploy. It would also make ordinary
+Wrangler config generation and local `wrangler dev` depend on a live manager,
+contrary to the config bridge's purpose. The supported production and preview
+paths run `infra deploy` immediately before config generation, preview mutation
+is lease-fenced, and an arbitrary worktree must do the same. Deleted D1/KV/R2
+identities fail Cloudflare binding validation rather than silently targeting a
+new resource. The fail-closed local invalidation fixes the actionable bug;
+cross-worktree operation serialization belongs to the deployment lease/workflow,
+not a manifest generation counter.
+
 ## Proof and rollout
 
 Use reserved `preview_18` and `preview_19` as disposable proof stages:
@@ -212,6 +266,36 @@ version for 59.47s after upload and failed explicitly. A normal rerun converged
 without a patch. Final CI on `f7070bbc9` then deployed the complete preview and
 passed smoke/e2e in 5m41s with no 429, rate-limit backoff, or unexplained
 control-plane failure.
+
+Final lifecycle-review proof on reserved `preview_18` and PR-owned
+`preview_15`:
+
+- `preview_18` invalidated its local manifest before the remote destroy
+  completed, then destroyed in 49.75s. Restoring that stale manifest and asking
+  Wrangler to apply Auth D1 migrations failed closed with Cloudflare `7404`
+  (`database ... could not be found`); it did not bind or create anything.
+- An already-empty repeat destroy took 26.36s. Fresh Alchemy creation took
+  5.84s and an exact no-op apply took 1.86s, with byte-identical output and
+  stable physical IDs.
+- Caller cancellation interrupted a remote destroy in under two seconds. The
+  Durable Object settled to `failed` with the exact operation ID and
+  `cancelled by caller`, then a normal destroy converged in 35.49s. A first
+  attempt made immediately after deploying env-manager was interrupted by
+  Cloudflare moving the Durable Object from Worker version `7123d5b4…` to
+  `f58f7471…`; Workers Observability trace `772e9be368fd728be1ddd3bc8886a9f7`
+  classified it explicitly as `This script has been upgraded`, and the settled
+  version passed the controlled cancellation.
+- Recreating `preview_18` after verified absence took 8.23s. All four
+  ID-addressed D1/KV resources received new physical IDs; the two name-addressed
+  R2 buckets retained their declared names.
+- A production-shaped forced reclaim of this PR's complete `preview_15` fleet
+  took 137.8s remotely / 141.28s end to end, renewed and verified its exact
+  lease, released it successfully, and left the environment-manager lifecycle
+  `empty`. Direct Cloudflare API audits for both destroyed slots found zero
+  matching Workers, Durable Object namespaces, container apps, D1 databases,
+  KV namespaces, R2 buckets, and Artifact repositories.
+- The new manager-backed GC dry run read all seventeen claimable environments
+  and found zero non-empty environments without a live tenant.
 
 ## Acceptance criteria
 

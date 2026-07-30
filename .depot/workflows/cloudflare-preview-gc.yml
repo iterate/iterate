@@ -1,15 +1,14 @@
 # Cloudflare Preview GC — the scheduled backstop for the preview resource
 # lifecycle (see docs/preview-resource-gc.md). PR-close cleanup attempts a full
-# destroy, but releases the environment lease even if destroy fails. A durable
-# preview-stack record exists before provisioning and remains until verified
-# destroy, so lease release cannot hide unfinished cleanup. This sweep selects
-# recorded stacks without a live tenant, takes each under a NON-force lease
-# (so it can never steal a live slot), destroys it, deletes the record, and
+# destroy, but releases the environment lease even if destroy fails.
+# Environment-manager's lifecycle state is the sole cleanup obligation; this
+# sweep selects every non-empty environment without a live tenant, takes it
+# under a NON-force lease (so it can never steal a live slot), destroys it, and
 # releases the lease.
 #
-# No GitHub token is needed. The stack record is the cleanup obligation; lease
-# state only answers whether it is safe to act now. Every failed operation
-# leaves the workflow red, and failed destroy keeps the record for the next run.
+# No GitHub token is needed. Semaphore answers only whether it is safe to act.
+# Every failed operation leaves the workflow red, and failed destroy remains
+# visible in environment-manager for the next run.
 #
 # Depot registers automatic triggers when this file is on the default branch —
 # branch-only changes to the `on:` block do not take effect until merged.

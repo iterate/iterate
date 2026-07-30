@@ -12,11 +12,11 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import type { CompiledEnvironment } from "../environments.ts";
-import { AlchemyResources, type ResourceProgress } from "../state.ts";
+import type { AlchemyResources, ResourceProgress } from "../state.ts";
 import { makeEnvironmentResources } from "./environment-resources.ts";
 import { makeSqliteAlchemyState } from "./sqlite-state.ts";
 
-const STACK_NAME = "IterateDataResources";
+export const ENVIRONMENT_STACK_NAME = "IterateDataResources";
 
 function makeProviders(input: { accountId: string; apiToken: string }) {
   const providerServices = Layer.mergeAll(
@@ -87,7 +87,7 @@ function compileEnvironmentStack(input: {
   // @ts-expect-error upstream Stack.make requirement inference is intentionally broad
   return makeEnvironmentResources(input.environment).pipe(
     Stack.make({
-      name: STACK_NAME,
+      name: ENVIRONMENT_STACK_NAME,
       providers: input.providers,
       state: input.state,
     }),
@@ -99,9 +99,10 @@ export async function runEnvironmentAlchemy(input: {
   apiToken: string;
   environment: CompiledEnvironment;
   operation: "deploy" | "destroy";
+  signal?: AbortSignal;
   storage: DurableObjectStorage;
   onProgress: (progress: ResourceProgress) => void;
-}): Promise<AlchemyResources | undefined> {
+}): Promise<void> {
   const state = makeSqliteAlchemyState(input.storage);
   const providers = makeProviders(input);
   const program = compileEnvironmentStack({
@@ -125,6 +126,5 @@ export async function runEnvironmentAlchemy(input: {
     Effect.provide(makeCli(input.onProgress)),
   );
 
-  const output = await Effect.runPromise(Effect.scoped(program));
-  return output === undefined ? undefined : AlchemyResources.parse(output);
+  await Effect.runPromise(Effect.scoped(program), { signal: input.signal });
 }

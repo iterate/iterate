@@ -316,4 +316,31 @@ describe("Cloudflare control plane", () => {
         .sort(),
     ).toEqual(["one", "three", "two"]);
   });
+
+  it("interrupts in-flight Cloudflare work when its ownership fence is aborted", async () => {
+    const requestStarted = Promise.withResolvers<AbortSignal>();
+    const fetch = vi.fn<typeof globalThis.fetch>((request, init) => {
+      const signal = request instanceof Request ? request.signal : init?.signal;
+      if (signal === undefined || signal === null) {
+        return Promise.reject(new Error("Cloudflare request carried no abort signal."));
+      }
+      requestStarted.resolve(signal);
+      return new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    });
+    vi.stubGlobal("fetch", fetch);
+    const ownership = new AbortController();
+
+    const destroying = makeCloudflareControlPlane({
+      accountId: "account-id",
+      apiToken: "api-token",
+      signal: ownership.signal,
+    }).destroyWranglerResources({ workerNames: ["worker-one"] });
+    const requestSignal = await requestStarted.promise;
+    ownership.abort(new Error("lease ownership lost"));
+
+    await expect(destroying).rejects.toThrow();
+    expect(requestSignal.aborted).toBe(true);
+  });
 });

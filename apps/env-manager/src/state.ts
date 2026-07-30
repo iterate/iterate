@@ -54,14 +54,19 @@ export const AlchemyResources = z.discriminatedUnion("kind", [AuthResources, Env
 
 export type AlchemyResources = z.infer<typeof AlchemyResources>;
 
-export const EnvironmentState = z.strictObject({
+export const PersistedEnvironmentState = z.strictObject({
   stage: EnvironmentStage,
   lifecycle: EnvironmentLifecycle,
   operationStartedAt: z.string().optional(),
   operationFinishedAt: z.string().optional(),
   lastError: z.string().optional(),
-  resources: AlchemyResources.optional(),
   progress: z.array(ResourceProgress),
+});
+
+export type PersistedEnvironmentState = z.infer<typeof PersistedEnvironmentState>;
+
+export const EnvironmentState = PersistedEnvironmentState.extend({
+  resources: AlchemyResources.optional(),
 });
 
 export type EnvironmentState = z.infer<typeof EnvironmentState>;
@@ -69,9 +74,9 @@ export type EnvironmentState = z.infer<typeof EnvironmentState>;
 export function parsePersistedEnvironmentState(
   serialized: string,
   stage: EnvironmentStage,
-): EnvironmentState {
+): PersistedEnvironmentState {
   try {
-    const state = EnvironmentState.parse(JSON.parse(serialized));
+    const state = PersistedEnvironmentState.parse(JSON.parse(serialized));
     if (state.stage !== stage) {
       throw new Error(`Stored state belongs to ${state.stage}, not ${stage}.`);
     }
@@ -84,6 +89,25 @@ export function parsePersistedEnvironmentState(
       lastError: `Stored environment-manager lifecycle state is invalid; deploy or destroy the environment to replace it. ${cause instanceof Error ? cause.message : String(cause)}`,
     };
   }
+}
+
+export function persistedEnvironmentState(state: EnvironmentState): PersistedEnvironmentState {
+  const { resources: _resources, ...persisted } = state;
+  return PersistedEnvironmentState.parse(persisted);
+}
+
+export function reconcileEnvironmentState(
+  state: PersistedEnvironmentState,
+  resources: AlchemyResources | undefined,
+): EnvironmentState {
+  if (state.lifecycle === "empty" || state.lifecycle === "ready") {
+    return {
+      ...state,
+      lifecycle: resources === undefined ? "empty" : "ready",
+      resources,
+    };
+  }
+  return { ...state, resources };
 }
 
 export function assertEnvironmentDestroyAllowed(input: {
@@ -108,9 +132,9 @@ const interruptedLifecycles = new Set<EnvironmentLifecycle>([
 ]);
 
 export function recoverInterruptedEnvironmentState(
-  state: EnvironmentState,
+  state: PersistedEnvironmentState,
   recoveredAt: string,
-): EnvironmentState {
+): PersistedEnvironmentState {
   if (!interruptedLifecycles.has(state.lifecycle)) return state;
   return {
     ...state,
@@ -124,6 +148,7 @@ export type EnvironmentApi = {
   liveState: LiveStateRpc<EnvironmentState>;
   status(): Promise<EnvironmentState>;
   deploy(): Promise<void>;
-  destroy(confirmation: EnvironmentStage): Promise<void>;
+  destroy(confirmation: EnvironmentStage, operationId?: string): Promise<void>;
+  cancel(operationId: string): Promise<boolean>;
   check(): Promise<void>;
 };
