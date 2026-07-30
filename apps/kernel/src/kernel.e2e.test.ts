@@ -82,6 +82,52 @@ describe("kernel", () => {
     expect(await res.text()).not.toContain("iterate project"); // didn't fall through to the landing
   });
 
+  // /mcp — the control-plane MCP surface, a sibling to /api (ADR 0022). Deployment-wide (no project
+  // host), so it works on ANY host reaching the worker. Stateless Streamable HTTP JSON-RPC.
+  async function mcp(body: unknown, host = "alice.example.com") {
+    const res = await worker.fetch(`http://${host}/mcp`, {
+      method: "POST",
+      headers: { host, "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify(body),
+    });
+    const text = await res.text();
+    return { status: res.status, body: text ? JSON.parse(text) : null };
+  }
+
+  test("/mcp initialize + tools/list — the control-plane MCP sibling to /api", async () => {
+    const init = await mcp({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+    expect(init.status).toBe(200);
+    expect(init.body.result.serverInfo.name).toBe("iterate-kernel");
+    expect(init.body.result.protocolVersion).toBeTruthy();
+
+    const tools = await mcp({ jsonrpc: "2.0", id: 2, method: "tools/list" });
+    const names = tools.body.result.tools.map((t: { name: string }) => t.name);
+    expect(names).toEqual(["list_projects", "create_project", "get_project"]);
+  });
+
+  test("/mcp tools/call list_projects goes through the directory (the test config knows 'alice')", async () => {
+    // The local directory in wrangler.test.jsonc is { provider: local, projects: ["alice"] }. An
+    // anonymous caller can't list (membership), so we prove get_project resolves the known project.
+    const got = await mcp({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: { name: "get_project", arguments: { slug: "alice" } },
+    });
+    expect(got.status).toBe(200);
+    expect(got.body.result.content[0].text).toBe("alice"); // resolved via the directory
+    expect(got.body.result.isError).toBeFalsy();
+  });
+
+  test("/mcp is deployment-wide — same answer regardless of which host reaches it", async () => {
+    const a = await mcp({ jsonrpc: "2.0", id: 4, method: "tools/list" }, "alice.example.com");
+    const b = await mcp(
+      { jsonrpc: "2.0", id: 4, method: "tools/list" },
+      "dashboard--alice.example.com",
+    );
+    expect(a.body.result.tools.length).toBe(b.body.result.tools.length);
+  });
+
   test("only <slug>.<hostBase> resolves — stray hosts are a 404 (no arbitrary projects)", async () => {
     expect((await worker.fetch("http://127.0.0.1/")).status).toBe(404); // no base match
     expect((await hit("alice.evil.com")).status).toBe(404); // review #14: wrong base is not a project

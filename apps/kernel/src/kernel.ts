@@ -11,6 +11,7 @@ import {
   type DirectoryConfig,
 } from "./directory.ts";
 import { routingFor, type RouteConfig, type Routing } from "./routing.ts";
+import { handleMcpRequest, type McpProjects } from "./mcp.ts";
 
 // ---------------------------------------------------------------------------
 // The iterate kernel — clean-room, pure-play.
@@ -357,6 +358,10 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const cfg = appConfigFrom(env);
     const url = new URL(request.url);
+    // `/mcp` — the control-plane MCP surface, a SIBLING to `/api` (ADR 0022). Headless + deployment-wide
+    // (no project host needed), so it resolves BEFORE ingress: same wall auth + directory as `/api`,
+    // MCP protocol instead of capnweb. (The clean home for both is the control plane's own front door.)
+    if (url.pathname === "/mcp") return handleMcp(request, cfg, env);
     // The ROUTING TABLE resolves the host FIRST (config routes, then ROUTING_KV), then the
     // `<slug>.<hostBase>` convention as the zero-config fallback (ADR 0020/0025). A custom domain or a
     // single-project self-host (one domain, no wildcard base) resolves purely via a routing entry.
@@ -417,6 +422,25 @@ export default {
     return worker.getEntrypoint().fetch(new Request(request, { headers }));
   },
 };
+
+// The `/mcp` handler — build the caller's Session (SAME wall auth + directory as `/api`) and adapt its
+// project collection to the MCP tool surface (list/create/get). MCP is a protocol adapter over the same
+// front desk the capnweb tree exposes (ADR 0022) — not a second backend.
+async function handleMcp(request: Request, cfg: AppConfig, env: Env): Promise<Response> {
+  const caller = await resolveAmbientCaller(request, cfg, env);
+  const collection = new ProjectCollection(caller, directoryFor(cfg, env), routingFor(cfg, env));
+  const projects: McpProjects = {
+    list: () => collection.list(),
+    async create(slug, organizationSlug) {
+      const created = await (
+        await collection.get(slug)
+      ).create(organizationSlug ? { organizationSlug } : {});
+      return created.projectId;
+    },
+    get: async (slug) => (await collection.get(slug)).projectId,
+  };
+  return handleMcpRequest(request, projects, { name: "iterate-kernel", version: "0.1.0" });
+}
 
 // Serve the kernel-reserved dashboard (control plane): mint a narrow project-app-session so the vessel
 // acts AS the caller scoped to THIS project (review #3 — only for an authenticated member; anonymous
