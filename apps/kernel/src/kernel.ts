@@ -12,7 +12,7 @@ import {
 } from "./directory.ts";
 import { routingFor, type RouteConfig, type Routing } from "./routing.ts";
 import { handleMcpRequest, type McpProjects, type McpScripting } from "./mcp.ts";
-import { capabilityRegistry, execScriptInProject } from "./dynamic.ts";
+import { capabilityRegistry, execScriptInProject, scriptingAllowed } from "./dynamic.ts";
 import {
   controlPlaneEgress,
   projectEgress,
@@ -566,11 +566,21 @@ async function handleMcp(
       return capabilityRegistry(env.SECRETS_KV, projectId).list();
     },
   };
+  // SECURITY (thermonuclear review R7 #1): scripting is write+secret+arbitrary-code authority. It must
+  // NOT ride the "public reachability" gate. On a WALLED deployment, `/mcp` may be reachable on a host
+  // Cloudflare Access doesn't front (Access binds app hostnames; a headless /mcp path gets no SSO
+  // redirect) → the caller is anonymous. Refuse scripting for an anonymous caller whenever a wall is
+  // configured; on a truly wide-open deployment (no wall — LAN/Pi, open by design) scripting stays on.
+  // (For the multi-tenant `auth` directory, resolve()/get() already membership-gates per project.)
+  const allow = scriptingAllowed({
+    walled: cfg.wall !== undefined,
+    authenticated: caller.credentials.length > 0,
+  });
   return handleMcpRequest(
     request,
     projects,
     { name: "iterate-kernel", version: "0.1.0" },
-    scripting,
+    allow ? scripting : undefined,
   );
 }
 

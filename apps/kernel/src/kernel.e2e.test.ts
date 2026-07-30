@@ -163,7 +163,10 @@ describe("kernel", () => {
     expect(out.out).toBe(5); // the dynamic capability ran and computed 2+3
   });
 
-  test("scripting tools appear in tools/list (scripting facade present)", async () => {
+  test("scripting tools appear in tools/list (no wall in test config => scripting on)", async () => {
+    // The test config has NO wall (wide-open by design) => scripting is exposed. The SECURITY gate
+    // (walled + anonymous => scripting refused) is unit-tested in kernel-guards.test.ts against the pure
+    // `scriptingAllowed` rule; here we confirm the wide-open path still advertises the tools.
     const tools = await mcp({ jsonrpc: "2.0", id: 13, method: "tools/list" });
     const names = tools.body.result.tools.map((t: { name: string }) => t.name);
     expect(names).toContain("run_script");

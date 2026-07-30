@@ -11,6 +11,14 @@
 //    provide rejects any name in the builtin set. (Config-shadowing a builtin is a separate, trusted path.)
 // ---------------------------------------------------------------------------
 
+// SECURITY gate for the MCP scripting facade (thermonuclear review R7 #1). Scripting = write + secret +
+// arbitrary-code authority; it must NOT ride "public reachability". On a WALLED deployment an anonymous
+// caller (e.g. hitting /mcp on a host Access doesn't front) is refused. Wide-open (no wall — LAN/Pi) is
+// on by design. For the multi-tenant `auth` directory, per-project membership is gated separately.
+export function scriptingAllowed(opts: { walled: boolean; authenticated: boolean }): boolean {
+  return opts.authenticated || !opts.walled;
+}
+
 // Names the ITX tree already owns — a dynamic capability may not take one (builtins always win).
 export const BUILTIN_CAPABILITY_NAMES = new Set([
   "whoami",
@@ -60,13 +68,19 @@ export async function execScriptInProject(opts: {
   makeEntry: (o: { props: { projectId: string } }) => Fetcher;
 }): Promise<unknown> {
   const entry = opts.makeEntry({ props: { projectId: opts.projectId } });
-  const worker = opts.loader.get(`exec:${opts.projectId}:${hash(opts.code)}`, () => ({
-    compatibilityDate: "2026-07-01",
-    mainModule: "exec.js",
-    modules: { "exec.js": wrap(opts.code) },
-    env: { ITX: entry }, // ONLY the ITX capability — same confinement as the config worker
-    globalOutbound: entry, // the egress door
-  }));
+  // Cache key includes code LENGTH + djb2 (review R7 #5b: 32-bit djb2 alone risks collisions → a
+  // different same-project script running from cache; length+hash makes a collision far less likely. A
+  // real content digest is the proper fix — noted for follow-up).
+  const worker = opts.loader.get(
+    `exec:${opts.projectId}:${opts.code.length}:${hash(opts.code)}`,
+    () => ({
+      compatibilityDate: "2026-07-01",
+      mainModule: "exec.js",
+      modules: { "exec.js": wrap(opts.code) },
+      env: { ITX: entry }, // ONLY the ITX capability — same confinement as the config worker
+      globalOutbound: entry, // the egress door
+    }),
+  );
   const res = await worker.getEntrypoint().fetch(
     new Request("https://exec.local/", {
       headers: opts.args !== undefined ? { "x-args": JSON.stringify(opts.args) } : {},

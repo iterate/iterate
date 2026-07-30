@@ -1,5 +1,10 @@
 import { describe, expect, test } from "vitest";
-import { BUILTIN_CAPABILITY_NAMES, capabilityRegistry, type CapabilityKV } from "./dynamic.ts";
+import {
+  BUILTIN_CAPABILITY_NAMES,
+  capabilityRegistry,
+  scriptingAllowed,
+  type CapabilityKV,
+} from "./dynamic.ts";
 
 function mockKV(): CapabilityKV {
   const m = new Map<string, string>();
@@ -29,5 +34,17 @@ describe("dynamic capability registry", () => {
       expect(BUILTIN_CAPABILITY_NAMES.has(builtin)).toBe(true);
       await expect(reg.provide(builtin, "async()=>1")).rejects.toThrow(/builtin/);
     }
+  });
+});
+
+describe("scriptingAllowed — the MCP scripting security gate (R7 #1)", () => {
+  test("walled + anonymous => REFUSED (the live hole this closes)", () => {
+    expect(scriptingAllowed({ walled: true, authenticated: false })).toBe(false);
+  });
+  test("walled + authenticated => allowed", () => {
+    expect(scriptingAllowed({ walled: true, authenticated: true })).toBe(true);
+  });
+  test("wide-open (no wall) => allowed by design (LAN/Pi), even anonymous", () => {
+    expect(scriptingAllowed({ walled: false, authenticated: false })).toBe(true);
   });
 });

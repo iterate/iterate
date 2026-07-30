@@ -172,3 +172,33 @@ provide→invoke add=5, scripting tools in tools/list) + **LIVE** on `kernel-sel
 - **Claude CLI** (`--mcp-config`): drove `run_script` → `itx.streamAppend('cli-log',…)` → **seq 1** — ties
   Claude CLI → MCP → script exec → confined ITX → the R2 durable log, all live in one call.
   42 tests green.
+
+### R7 — Thermonuclear reviews (3 parallel adversarial reviewers) ✅
+
+Three lenses: simplify/collapse · apps/os-trajectory · security/correctness. Full findings folded into
+`morning-brief-2026-07-31.md`. Headlines:
+
+- **Security (CRITICAL, live-exploitable):** anonymous internet caller could `run_script` in ANY project
+  on open/local/kv deployments — the directory's `access()` ignores the caller for 3 of 4 providers, and
+  `/mcp` is reachable on hosts Cloudflare Access doesn't front. Fixed in R8. Also: project secrets not
+  origin-pinned (exfiltratable — mostly closed by the R8 auth gate); redirect-follow leaks platform
+  secrets on custom headers (fixed).
+- **Simplify:** the two project surfaces (capnweb `Project` control-verbs vs flat `ProjectEntrypoint`
+  runtime methods) don't overlap — the promised `project.streams.get(path)` tree was never built. Unify
+  into ONE RpcTarget tree. Fold secrets+capabilities+meter into the stream DO ("everything is the
+  project's durable state"; the meter = count of egress events). → morning brief.
+- **Trajectory:** the native stream DO is a DIFFERENT CONTRACT from apps/os (no offsets/idempotency/
+  reduce/subscription-cursors) — "processEvent killed" is wrong, it's ABSENT. De-risk: adopt apps/os's
+  `StreamEventInput`/offset contract + do the `stream-storage.ts` verbatim-import spike SOON. → morning brief.
+
+### R8 — Fix the critical security findings ✅ + PROVEN LIVE
+
+- **Scripting requires auth on a walled deployment** (`scriptingAllowed({walled, authenticated})`,
+  dynamic.ts): walled + anonymous ⇒ scripting facade withheld (tools hidden + calls refused); wide-open
+  (no wall, LAN/Pi) ⇒ on by design. Unit-tested. **Live-verified:** anonymous `/mcp` on walled selfhost
+  now shows only `list/create/get_project`; `run_script` → "unknown tool".
+- **`redirect: "manual"` at the control-plane egress door** — stops a pinned origin 302-ing a platform
+  secret to an unpinned hop.
+- Exec cache key now includes code length (djb2 collision hardening).
+- 45 tests green. Deferred (in brief): membership-gate `create_project`/`list` for walled multi-tenant;
+  per-secret origin-pin for project secrets; stronger content digest for exec cache.

@@ -95,7 +95,11 @@ export async function controlPlaneEgress(
       return p.value;
     },
   );
-  return fetch(substituted);
+  // SECURITY (thermonuclear review R7 #3): do NOT auto-follow redirects. The Fetch spec strips
+  // `Authorization` on a cross-origin redirect but NOT custom headers (e.g. `x-api-key`), so an
+  // allow-listed origin that 302s to attacker.com would leak the substituted secret. The origin pin is
+  // computed once on the original URL; manual redirect keeps the secret from riding to an unpinned hop.
+  return fetch(new Request(substituted, { redirect: "manual" }));
 }
 
 // The PROJECT egress door: substitute the project's own secrets, then chain into the control-plane door.
