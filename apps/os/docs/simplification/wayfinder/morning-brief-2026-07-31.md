@@ -40,10 +40,12 @@ decision in `two-worker-split-assessment.md`.
   capnweb `Project` and the loopback `ProjectEntrypoint` (now whoami + egress-door + getters). Live.
 - **Security** — optional origin-pin for project secrets; `create_project` gated (walled+anonymous
   refused). Live.
-- **Two-worker split** — **assessed, deliberately NOT executed** (see two-worker-split-assessment.md): the
-  loopback constraint makes the runner necessarily one worker; the CP peels off over a new RPC surface —
-  a multi-step effort whose security motive is already handled in code and whose payoff (cross-account) is
-  large. D-A made it cheaper, not urgent. Sequenced plan documented.
+- **Two-worker split — STEP 1 DONE + live** (see two-worker-split-assessment.md): named the runner
+  interface in-worker (`ProjectRunner` WorkerEntrypoint: `serve` + `runScript`), reached via the one
+  chokepoint `dialRunner(ctx)`. **Key experiment passed: `ctx.exports` works inside a WorkerEntrypoint**,
+  so the physical split (step 2) is a binding swap at `dialRunner`, not a rewrite. Steps 2–4 (physically
+  split into `apps/kernel-runner`; give `/api`+`/mcp` the CP's own host; cross-account capnweb) remain,
+  each a dedicated provable increment.
 
 ---
 
