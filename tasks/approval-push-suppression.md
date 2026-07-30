@@ -7,13 +7,14 @@ size: medium
 
 ## Status summary
 
-Implemented end to end: intent carries the batch identity top-level, the
-claim event exists on the root stream, devices grace-delay approval pushes
-and settle them `suppressed` on a claim, the DO grace alarm nudges the send
-when no claim comes, and the mobile in-thread card appends the claim. All
-targeted tests green; awaiting full-suite/CI confirmation and review.
-Remaining: nothing known — see the implementation log for accepted edge
-cases.
+Core suppression implemented end to end: intent carries the batch identity
+top-level, the claim event exists on the root stream, devices grace-delay
+approval pushes and settle them `suppressed` on a claim, the DO grace alarm
+nudges the send when no claim comes, and the mobile in-thread card appends
+the claim. Scope grew mid-review (Misha): a mobile **Notifications view**
+(past notifications with statuses incl. "you were already looking", deep
+links per row) — built — plus a comparison playwright spec and video — in
+progress. See the implementation log for accepted edge cases.
 
 ## Ask (Misha, via #2339 follow-ups)
 
@@ -95,6 +96,25 @@ Decisions made while fleshing out (assumptions, flag in PR if wrong):
       no-op; alarm re-arms correctly; non-approval intents are unaffected
       _"DeviceProcessor approval-push suppression" section in
       device-processor.test.ts — four specs matching exactly these cases_
+Scope added after review (Misha, on the PR):
+
+- [x] Mobile Notifications view: flat newest-first list of every past
+      notification for this device with a human status per row (Sent /
+      Delivered / "Skipped — you were already looking" / Expired / Send
+      failed / …) and an in-app deep link per row
+      _`apps/mobile/src/app/project/[projectId]/notifications.tsx` + pure
+      reducer `lib/notifications.ts` (unit-tested); drawer entry next to
+      Approvals; rows route through the existing push-tap routing in
+      `lib/notification-routing.ts`_
+- [ ] Comparison spec: the same script-parked batch suppressed when sitting
+      in its thread vs sent when elsewhere, both statuses asserted via the
+      Notifications view UI, deep-link tap asserted
+      _`specs/mobile/notifications.spec.ts`; the device is stood up
+      server-side with an undeliverable Expo token (web has no push
+      channel), so the "sent" lane's deterministic terminal status is "Send
+      failed" — see implementation log_
+- [ ] Comparison video (`VIDEO_MODE=1`), `video-rendered.webm` handed to the
+      orchestrator for the PR body
 - [ ] `pnpm typecheck && pnpm lint && pnpm knip && pnpm test`; PR hygiene
 
 ## Out of scope
