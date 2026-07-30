@@ -26,6 +26,8 @@ setup:
     path: apps/auth/
   - project: auth
     path: apps/auth-example/
+  - project: env-manager
+    path: apps/env-manager/
   - project: tunnels
     path: apps/tunnels/
   - project: dummy-petshop

@@ -1,34 +1,25 @@
-name: Deploy Auth Dev Global
+name: Deploy Environment Manager
 permissions:
   contents: read
-  deployments: write
 concurrency:
-  # Every ref deploys to the same dev_global Worker. Never interrupt a
-  # credentialed deployment midway through its rollout.
-  group: deploy-auth-dev-global
+  group: deploy-environment-manager
   cancel-in-progress: false
 on:
   push:
     branches:
       - main
     paths:
-      - .depot/workflows/deploy-auth.yml
-      - apps/auth/**
+      - .depot/workflows/deploy-env-manager.yml
+      - apps/env-manager/**
+      - apps/auth-contract/**
       - envs.ts
-      - apps/env-manager/alchemy.run.ts
-      - apps/env-manager/scripts/cli.ts
-      - apps/env-manager/src/alchemy/**
-      - apps/env-manager/src/cloudflare-control-plane.ts
-      - apps/env-manager/src/environments.ts
-      - apps/env-manager/src/state.ts
       - package.json
       - pnpm-lock.yaml
       - pnpm-workspace.yaml
       - scripts/lib/**
-      - apps/auth-contract/**
+      - packages/iterate/**
       - packages/shared/**
       - packages/ui/**
-      - patches/**
   workflow_dispatch:
     inputs:
       ref:
@@ -37,7 +28,7 @@ on:
         type: string
         default: ""
 jobs:
-  deploy-dev-global:
+  deploy:
     runs-on:
       size: 2x8
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
@@ -50,16 +41,12 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
       - name: Reconcile dependencies (baked)
         run: pnpm install --frozen-lockfile --prefer-offline
-      - name: Provision Cloudflare data resources
+      - name: Setup Doppler (preview-account deployment credentials)
+        run: doppler setup --config prd --project env-manager
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: pnpm infra deploy --env dev_global
-      - name: Setup Doppler (baked CLI)
-        run: doppler setup --config dev_global --project auth
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      - name: Deploy apps/auth (dev-global)
-        working-directory: apps/auth
+      - name: Deploy apps/env-manager
+        working-directory: apps/env-manager
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: doppler run -- pnpm run-script deploy

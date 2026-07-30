@@ -28,11 +28,19 @@ secrets. Each app keeps its small imperative deployment scripts:
 Small apps skip pieces they don't need (tunnels has a hand-written,
 committed wrangler.jsonc and no generator; streams-example-app has no
 secrets). Generated configs and Alchemy manifests are gitignored; review
-`envs.ts` and `infra/alchemy.run.ts`.
+`envs.ts` and `apps/env-manager/alchemy.run.ts`.
 
-`infra` has its own lockfile so Alchemy's beta dependency graph cannot alter
-application resolutions. The `pnpm infra` command installs that exact nested
-lock before deploy or destroy; the root lockfile contains no Alchemy packages.
+`apps/env-manager` is a normal root workspace and uses the root lockfile.
+Alchemy, Effect, Wrangler, and the app are therefore installed and upgraded as
+one dependency graph; there is no nested package or second lockfile.
+
+For preview stages, `pnpm infra` calls the deployed environment-manager Worker.
+One named Durable Object per slot runs the Alchemy graph and persists Alchemy
+state in its own SQLite storage. The CLI atomically writes the returned IDs to
+`apps/env-manager/.alchemy/output/<stage>/cloudflare-resources.json` for the
+checkout's Wrangler generators. Production and `dev_global` run the same graph
+locally with Alchemy's Cloudflare state provider; production lifecycle remains
+an explicit local operator/CI action.
 
 The Cloudflare resource lifecycle is deliberately fresh-stack-only. There is
 no resource import/adoption, Alchemy state reconstruction, committed fallback
@@ -53,7 +61,8 @@ accepts only an explicit `--env`.
 ## Core Doppler model
 
 - Every independently deployable app has a Doppler project: `os`, `auth`,
-  `semaphore`, `tunnels`, `streams-example-app`, `dummy-petshop`.
+  `env-manager`, `semaphore`, `tunnels`, `streams-example-app`,
+  `dummy-petshop`.
 - `doppler.yaml` maps directories to projects; the working directory picks
   the project unless a command passes `--project`.
 - `_shared` owns values inherited by apps, including the per-environment
@@ -110,9 +119,10 @@ environment in dependency order:
    state, and generated output.
 
 The next preview acquisition runs `pnpm infra deploy` and gets a fresh stack
-before app deploys recreate the Workers. Auth then reruns migrations and
-re-seeds its OAuth clients. A production recreation must also restore
-Semaphore's preview-slot inventory:
+through that slot's environment Durable Object before app deploys recreate the
+Workers. Auth then reruns migrations and re-seeds its OAuth clients using the
+existing `AUTH_SEED_OAUTH_CLIENTS` lifecycle. A production recreation must
+also restore Semaphore's preview-slot inventory:
 
 ```bash
 doppler run --project semaphore --config prd -- \
@@ -137,8 +147,8 @@ cover only the shared Cloudflare resource/deploy skeleton.
 1. Add the entry to `envs.ts` with `previewSlot(N)`; there are no physical
    resource IDs to fill in.
 2. Run `pnpm infra deploy --env <name>` once. Validate
-   `infra/output/<name>/cloudflare-resources.json`, then run the command again
-   and require the same physical IDs.
+   `apps/env-manager/.alchemy/output/<name>/cloudflare-resources.json`, then
+   run the command again and require the same physical IDs.
 3. Run each app's `ensure-resources` for DNS and other Worker-adjacent setup.
    A brand-new OS Worker defers its inbound-email catch-all until deploy because
    Cloudflare does not accept a route to a missing script.
@@ -150,6 +160,23 @@ cover only the shared Cloudflare resource/deploy skeleton.
    derive the same signing key from Doppler. Production always uses the single
    serialized `Deploy Cloudflare Platform` workflow. The OS deploy also
    requires the post-upload inbound-email catch-all to reconcile.
+
+## Environment-manager authentication
+
+The singleton environment-manager Worker is deployed in the preview account
+but signs users in through `https://auth.iterate.com`. It deliberately uses the
+same OAuth-client dance as the existing production relying parties: run
+
+```bash
+doppler run --project auth --config prd -- \
+  pnpm --dir apps/env-manager sync-auth-client
+```
+
+to ensure the client through Auth's internal API, write its ID and secret to
+`env-manager/prd`, and mirror it into `auth/prd`'s
+`AUTH_SEED_OAUTH_CLIENTS`. Normal Auth deployment continues to seed that
+declarative list. No static client ID or alternate Auth behavior is compiled
+into env-manager.
 
 ## Cloudflare accounts
 

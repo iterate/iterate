@@ -56,6 +56,18 @@ function makeSemaphoreCloudflareAppWorkspace(workerEnvShim: string): WorkspaceCo
   };
 }
 
+function makeEnvironmentManagerWorkspace(): WorkspaceConfig {
+  const base = makeCloudflareTanStackAppWorkspace("./worker-configuration.d.ts");
+  return {
+    ...base,
+    entry: [
+      ...(base.entry ?? []).filter((entry) => entry !== "scripts/router.ts"),
+      "alchemy.run.ts",
+      "cloudflare.config.ts",
+    ],
+  };
+}
+
 function makeStreamsExampleAppWorkspace(): WorkspaceConfig {
   return {
     entry: [
@@ -239,6 +251,7 @@ const config: KnipConfig = {
   // unrelated apps with heavyweight config loading.
   ignoreWorkspaces: [
     "apps/*",
+    "!apps/env-manager",
     "!apps/os",
     "!apps/semaphore",
     "!apps/streams-example-app",
@@ -267,8 +280,10 @@ const config: KnipConfig = {
     "apps/kit/src/router.tsx": ["exports"],
     "apps/tasks/src/router.tsx": ["exports"],
     "apps/docs/src/router.tsx": ["exports"],
+    "apps/env-manager/src/router.tsx": ["exports"],
   },
   workspaces: {
+    "apps/env-manager": makeEnvironmentManagerWorkspace(),
     "apps/semaphore": makeSemaphoreCloudflareAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/os": makeOsCloudflareAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/streams-example-app": makeStreamsExampleAppWorkspace(),

@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2024",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "paths": {
+      "~/*": ["./src/*"],
+      "@iterate-com/ui/*": ["../../packages/ui/src/*"],
+      "@iterate-com/shared/*": ["../../packages/shared/src/*"]
+    },
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "noUncheckedSideEffectImports": true,
+    "allowImportingTsExtensions": true,
+    "jsx": "react-jsx",
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "types": ["@cloudflare/workers-types", "node", "vite/client"]
+  },
+  "include": ["alchemy.run.ts", "scripts/**/*.ts", "src/**/*.ts", "src/**/*.tsx", "vite.config.ts"]
+}

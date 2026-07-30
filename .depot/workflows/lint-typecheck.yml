@@ -30,9 +30,5 @@ jobs:
             run: pnpm exec oxlint . --threads 1 --deny-warnings
           - name: Run Typecheck
             run: pnpm typecheck
-          - name: Run Infrastructure Typecheck
-            run: |-
-              pnpm --dir infra install --frozen-lockfile --prefer-offline
-              pnpm --dir infra typecheck
           - name: Run Knip
             run: pnpm knip

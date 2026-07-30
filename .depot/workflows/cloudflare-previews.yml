@@ -60,8 +60,7 @@ on:
       - pnpm-workspace.yaml
       - patches/**
       - scripts/preview/**
-      - infra/**
-      - scripts/cloudflare-infrastructure.ts
+      - apps/env-manager/**
       - envs.ts
       - scripts/lib/**
       - apps/auth-example/**

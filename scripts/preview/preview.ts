@@ -2170,8 +2170,7 @@ export const cloudflarePreviewSharedPaths = [
   ".depot/workflows/cloudflare-previews.yml",
   ...cloudflareAppSharedPaths,
   "scripts/preview/**",
-  "infra/**",
-  "scripts/cloudflare-infrastructure.ts",
+  "apps/env-manager/**",
   // Every app's generated Wrangler config derives from envs.ts and the
   // Alchemy stack — changing either must redeploy the fleet.
   "envs.ts",

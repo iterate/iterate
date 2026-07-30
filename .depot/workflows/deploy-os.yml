@@ -16,11 +16,15 @@ on:
       - .depot/workflows/deploy-os.yml
       - .depot/workflows/deploy-auth.yml
       - envs.ts
-      - infra/**
+      - apps/env-manager/alchemy.run.ts
+      - apps/env-manager/scripts/cli.ts
+      - apps/env-manager/src/alchemy/**
+      - apps/env-manager/src/cloudflare-control-plane.ts
+      - apps/env-manager/src/environments.ts
+      - apps/env-manager/src/state.ts
       - package.json
       - pnpm-lock.yaml
       - pnpm-workspace.yaml
-      - scripts/cloudflare-infrastructure.ts
       - scripts/lib/**
       - apps/os/**
       - packages/iterate/**

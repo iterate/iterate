@@ -117,10 +117,11 @@ interval; a persistent failure remains recorded and keeps each sweep red.
 
 ## Where things live
 
-| Thing                              | File                                              |
-| ---------------------------------- | ------------------------------------------------- |
-| D1/KV/R2 stack and lifecycle rules | `infra/alchemy.run.ts`                            |
-| Whole-environment destruction      | `scripts/cloudflare-infrastructure.ts`            |
-| Lease TTL, stack records, and `gc` | `scripts/preview/preview.ts`                      |
-| The scheduled sweep                | `.depot/workflows/cloudflare-preview-gc.yml`      |
-| PR-close cleanup (the fast path)   | `.depot/workflows/cloudflare-preview-cleanup.yml` |
+| Thing                              | File                                                    |
+| ---------------------------------- | ------------------------------------------------------- |
+| D1/KV/R2 stack and lifecycle rules | `apps/env-manager/src/alchemy/environment-resources.ts` |
+| Preview lifecycle and destruction  | `apps/env-manager/src/environment-durable-object.ts`    |
+| Local production lifecycle         | `apps/env-manager/scripts/cli.ts`                       |
+| Lease TTL, stack records, and `gc` | `scripts/preview/preview.ts`                            |
+| The scheduled sweep                | `.depot/workflows/cloudflare-preview-gc.yml`            |
+| PR-close cleanup (the fast path)   | `.depot/workflows/cloudflare-preview-cleanup.yml`       |

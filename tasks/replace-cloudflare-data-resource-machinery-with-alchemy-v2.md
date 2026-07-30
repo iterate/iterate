@@ -34,17 +34,20 @@ branch, or Alchemy patch.
 
 ### Stack and config bridge
 
-1. `infra/alchemy.run.ts` defines one stage-aware stack. `dev_global` contains
-   only Auth D1; platform stages contain all six resources.
-2. A small Alchemy Action atomically writes
-   `infra/output/<stage>/cloudflare-resources.json` only after a successful
-   apply.
+1. `apps/env-manager/src/alchemy/environment-resources.ts` defines the shared
+   graph. `dev_global` contains only Auth D1; platform stages contain all six
+   resources.
+2. Local applies atomically write
+   `apps/env-manager/.alchemy/output/<stage>/cloudflare-resources.json`.
+   Preview applies run inside a per-stage Durable Object and the CLI
+   materializes the returned, validated output to that same checkout-local
+   path.
 3. `scripts/lib/alchemy-resources.ts` validates the manifest kind and every
    generated binding identity before any config generator can use the output.
 4. `envs.ts` contains stable Worker names and hostnames, never physical D1/KV
    IDs or R2 bucket names.
-5. Preview and production workflows apply the stack once before app deploys
-   fan out.
+5. Preview workflows call the deployed environment manager; production and
+   `dev_global` run the same graph locally before app deploys fan out.
 
 ### Whole-environment teardown
 

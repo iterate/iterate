@@ -412,11 +412,13 @@ the approved batch, an agent may drive it using the dedicated browser profile,
 but must stop before onboarding a different sender domain or changing existing
 DNS. Verify each sender after saving.
 
-Validate `infra/output/preview_N/cloudflare-resources.json` against the live
-Cloudflare objects, then run `pnpm infra deploy --env preview_N` again. The
-second apply must retain every physical ID and report no data-resource
-replacement. Run every app `ensure-resources` again and require no new DNS or
-email resource. Before the first OS deploy, its one expected deferred result is
+Validate
+`apps/env-manager/.alchemy/output/preview_N/cloudflare-resources.json` against
+the live Cloudflare objects, then run
+`pnpm infra deploy --env preview_N` again. The second apply must retain every
+physical ID and report no data-resource replacement. Run every app
+`ensure-resources` again and require no new DNS or email resource. Before the
+first OS deploy, its one expected deferred result is
 `Email Routing catch-all ... deferred until worker ... deploys`; any collision,
 warning, replacement, or other new object is a failed checkpoint.
 
