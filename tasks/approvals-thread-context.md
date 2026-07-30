@@ -7,7 +7,11 @@ size: small
 
 ## Status summary
 
-Spec committed, implementation not started. Split out of #2339's task
+Implemented. The pure helper (`lastVisibleMessageAtOrBefore` in
+`apps/mobile/src/lib/chat.ts`) plus its unit tests landed first; the
+approvals screen now renders a tappable thread-context line on every
+agent-born batch card, queue and history alike. Nothing outstanding beyond
+PR review. Split out of #2339's task
 (`tasks/complete/2026-07-30-in-thread-approvals.md` › "thread-status line"),
 which made the approvals screen mostly a cross-thread queue + history view.
 
@@ -42,14 +46,22 @@ doing?" should be answerable without opening the thread.
 
 ## Checklist
 
-- [ ] Pure helper: last visible message at-or-before an offset (+ unit tests
+- [x] Pure helper: last visible message at-or-before an offset (+ unit tests
       covering: message before, message after only, empty thread, exact-offset
-      message)
-- [ ] Approvals screen: context line on agent-thread batch cards (queue +
-      history), react-query fetch, thread deep-link on tap
-- [ ] Graceful when the agent stream fetch fails or is slow: card renders
-      without the line, no spinner-blocking
-- [ ] `pnpm typecheck && pnpm lint && pnpm knip && pnpm test`; PR hygiene
+      message) — _`lastVisibleMessageAtOrBefore` in `lib/chat.ts` (reuses
+      `reduceChatEvents`' vocabulary); six tests in `lib/chat.test.ts`, incl.
+      one-line collapse + blank-message skip_
+- [x] Approvals screen: context line on agent-thread batch cards (queue +
+      history), react-query fetch, thread deep-link on tap — _`ThreadContextLine`
+      in `approvals.tsx`, rendered by `BatchCard` for `script-execution`
+      batches with an `/agents/…` streamPath; `getEvents` bounded with
+      `beforeOffset`, paged, `staleTime: Infinity` (immutable history)_
+- [x] Graceful when the agent stream fetch fails or is slow: card renders
+      without the line, no spinner-blocking — _line renders immediately with
+      just the tappable thread name; the message text is appended only when
+      the fetch resolves; no pending/error branches block the card_
+- [x] `pnpm typecheck && pnpm lint && pnpm knip && pnpm test`; PR hygiene —
+      _all four green from the worktree root_
 
 ## Out of scope
 
@@ -57,3 +69,25 @@ doing?" should be answerable without opening the thread.
 - Live status ("thread is currently working") — this line is a snapshot at
   request time, deliberately
 - Any protocol/event changes — this is a pure read-side feature
+
+## Implementation log
+
+- Helper went into `lib/chat.ts` rather than a new module: it is pure
+  chat-vocabulary logic and reuses `reduceChatEvents`, so the visible-message
+  event types stay defined in exactly one file. Tests sit with the existing
+  `chat.test.ts` suite and reuse its event fixtures.
+- `getEvents` supports `beforeOffset` (exclusive upper bound), so the fetch
+  is server-bounded to `scriptRunRequestedEventOffset + 1` and filtered to
+  the two visible-message types; the queryFn still pages (afterOffset cursor,
+  loop until empty page, same shape as `reconcileBacklog`) because a busy
+  thread can exceed one page and only the last message matters.
+- The line sits on the card surface (after the headline), not behind the
+  details expander — so settled history rows, which start collapsed, show it
+  too. Decision: the thread name renders synchronously from `streamPath`
+  (`/agents/` prefix stripped, same convention as chat.tsx's title) and is
+  tappable straight away; the `you:`/`agent:` message text joins it when the
+  one-shot fetch lands. Slow/failed fetch = name-only line, never a spinner.
+- Helper collapses whitespace to one line and skips blank messages — a
+  visible message with no visible text would render an empty context line.
+- No playwright spec (per spec): the derivation is unit-tested, the wiring is
+  a plain react-query read.
