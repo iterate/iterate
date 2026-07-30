@@ -271,3 +271,21 @@ Closed two of the deferred R8 items:
    **Still open (bigger, documented in morning-brief):** secrets plaintext in KV (want encryption/Secret DO);
    KV meter races (DO-backed — overlaps deferred D-D); exec cache key content-digest; and the deeper
    `auth`-directory org-membership check on create (needs an auth RPC).
+
+### Two-worker split — assessed, deliberately NOT executed ✅ (judgment)
+
+Full assessment in `two-worker-split-assessment.md`. Key finding (verified in code): the confined config
+worker's `env.ITX`/`globalOutbound` loopback (`ctx.exports.ProjectEntrypoint`) is same-worker-only, so the
+runner (loader + entrypoint + DOs + config-worker serving) is NECESSARILY one worker; only the control
+plane peels off, over a new CP→runner RPC surface (`serve()` + `authenticate()→tree` + `runScript()`).
+That's a genuine multi-step effort with new failure modes. The split's security motive is already closed
+in code (the write/scripting gate); its real payoff is cross-account (large, separate). D-A made the split
+_cheaper_ (one serializable tree) but not urgent. **Decision: leave the coherent, fully-proven one worker;
+do the split deliberately (step 1: name the runner interface in-worker; step 2: physically split,
+service-bound) with live parity proofs — not as an end-of-run big-bang.**
+
+### Final coherence smoke (post D-C/D-B/D-A + security) ✅ ALL LIVE
+
+`coherence.shiterate.com`: ingress+confinement (seenBindings:["ITX"]) · egress (X-Project+X-Platform via
+the tree) · streams (idempotency dedup, offset 1, via the tree) · ai ("Green", via the tree) · /mcp read
+tools present + scripting/create gated (walled+anon). 48 tests green, typecheck clean, prod untouched.

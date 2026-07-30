@@ -26,9 +26,28 @@ control plane with a first-party key._ So per-capability sourcing (M3) + first-p
 
 ---
 
-## DECISIONS FOR YOU (the reviews surfaced these; I did NOT execute them unilaterally — they change the
+## ✅ UPDATE (2026-07-31, later): D-C, D-B, D-A + security follow-ups all EXECUTED + proven live
 
-## authored shape and you should weigh in)
+Per your go-ahead, the sequence below is now **done and pushed** (D-D still deferred). All proven live on
+`kernel-selfhost`, prod untouched, 48 tests green. Evidence in `overnight-log-2026-07-30.md`; split
+decision in `two-worker-split-assessment.md`.
+
+- **D-C** — `platformSecrets` under `AppConfig.product` (the iterate-product boundary). Live.
+- **D-B** — adopted apps/os's **canonical stream contract** (`StreamEventInput`/`StreamEvent` from
+  `iterate/processors`, type-only): offset (eviction-safe) + idempotencyKey dedup + ephemeral. Delivery
+  stubbed. Live.
+- **D-A** — **one nested capability tree** (`project.streams.get(path)`/`.secrets`/`.ai`) shared by the
+  capnweb `Project` and the loopback `ProjectEntrypoint` (now whoami + egress-door + getters). Live.
+- **Security** — optional origin-pin for project secrets; `create_project` gated (walled+anonymous
+  refused). Live.
+- **Two-worker split** — **assessed, deliberately NOT executed** (see two-worker-split-assessment.md): the
+  loopback constraint makes the runner necessarily one worker; the CP peels off over a new RPC surface —
+  a multi-step effort whose security motive is already handled in code and whose payoff (cross-account) is
+  large. D-A made it cheaper, not urgent. Sequenced plan documented.
+
+---
+
+## DECISIONS (original list — now largely executed above; kept for context)
 
 ### D-A. Unify the two "project" surfaces into ONE RpcTarget tree ⭐ (biggest simplification)
 
