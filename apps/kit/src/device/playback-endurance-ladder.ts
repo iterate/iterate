@@ -21,6 +21,8 @@ export type {
   PlaybackEnduranceLoadProfile,
   PlaybackEnduranceMetricSample,
   PlaybackEnduranceMetricsCadenceAudit,
+  PlaybackEndurancePcmDeliveryIncident,
+  PlaybackEndurancePcmSourceEvidence,
   PlaybackEndurancePersistedAcousticAnalysis,
   PlaybackEndurancePolicyIdentity,
   PlaybackEnduranceRunManifest,

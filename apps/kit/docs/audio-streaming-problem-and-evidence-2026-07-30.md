@@ -12,6 +12,30 @@ The broader product goal and verbatim decision transcript remain in
 findings and their disposition are in
 [`fable-audio-review-reconciliation-2026-07-30.md`](./fable-audio-review-reconciliation-2026-07-30.md).
 
+## Remote backup checkpoint
+
+The complete Git-visible worktree state was snapshotted before the next
+physical diagnosis. This is a recovery checkpoint, not a completion claim.
+
+- branch:
+  `backup/c-capabilities-audio-checkpoint-20260730T184536Z`
+- checkpoint commit:
+  `5cfc9276beae458a506d432133b166d894ff0a4e`
+- source branch and parent:
+  `c-capabilities` at `9020285b8128e716f8a5fa23480cc9650b065db1`
+- remote:
+  `origin` (`https://github.com/iterate/iterate.git`)
+- verification:
+  `git ls-remote --heads origin` returned the exact checkpoint commit for the
+  dedicated ref after the push.
+
+The snapshot used a separate Git index so it did not switch or clean the active
+worktree. It contains every tracked modification and every non-ignored
+untracked file reported by Git, including the retained 7,086,080-byte acoustic
+failure artifact. Generated/ignored build trees, dependency installs, managed
+component caches, generated `sdkconfig`, and generated local Wrangler output
+remain reproducible local products and were not forced into Git.
+
 ## Product shape
 
 Each device has two independent long-lived WebSockets:

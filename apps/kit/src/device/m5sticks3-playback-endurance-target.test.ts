@@ -474,6 +474,14 @@ describe("M5StickS3 playback endurance target", () => {
             sampleRateHz: 16_000,
           }),
           quiesceMetricDelivery: async () => {},
+          sourceEvidence: {
+            artifactPath,
+            delivery: {
+              discontinuityCount: 0,
+              emittedFrameCount: 100,
+              retainedIncidents: [],
+            },
+          },
         };
       }),
     });
@@ -497,6 +505,15 @@ describe("M5StickS3 playback endurance target", () => {
         expectedIntervalMs: 1_000,
         maximumHostDeliveryLagGrowthMs: 250,
         maximumRetainedSampleCount: 5,
+      },
+      pcmSource: {
+        artifact: {
+          byteLength: 64_000,
+          format: "pcm-s16le-mono",
+          sampleRateHz: 16_000,
+          sha256: "7fd7f3ede9ee90275323fdeca2e7f8a1d49f9a50ff07b70eefb771d4988497f0",
+        },
+        frameDurationMs: 20,
       },
       runId: "run-001",
     });
@@ -543,6 +560,27 @@ describe("M5StickS3 playback endurance target", () => {
       sampleRateHz: 16_000,
     });
     expect(observation.acoustic.artifact.sha256).not.toBe("b".repeat(64));
+    expect(observation.pcmSource).toEqual({
+      artifact: {
+        byteLength: 64_000,
+        format: "pcm-s16le-mono",
+        hashVerification: {
+          computedSha256:
+            "7fd7f3ede9ee90275323fdeca2e7f8a1d49f9a50ff07b70eefb771d4988497f0",
+          matched: true,
+        },
+        path: artifactPath,
+        sampleRateHz: 16_000,
+        sha256: "7fd7f3ede9ee90275323fdeca2e7f8a1d49f9a50ff07b70eefb771d4988497f0",
+      },
+      delivery: {
+        discontinuityCount: 0,
+        emittedFrameCount: 100,
+        retainedIncidents: [],
+      },
+      expectedByteLength: 64_000,
+      inspectionMaximumBufferedAudioBytes: 64_000,
+    });
     expect(observation.acoustic.watermark).toMatchObject({
       analysis: {
         decodedSeedMatchesExpected: true,

@@ -72,6 +72,32 @@ export interface PlaybackEnduranceArtifact {
   sha256: string;
 }
 
+export interface PlaybackEndurancePcmDeliveryIncident {
+  layer: "provider" | "proxy";
+  observedAtMonotonicMs: number;
+  reason: string;
+}
+
+/**
+ * Host-verifiable proof of the bytes offered to the PCM transport.
+ *
+ * The source and microphone artifacts answer different questions. The source
+ * proves that the host generated and retained the complete requested stream;
+ * the capture proves what became audible. Delivery accounting between them
+ * prevents a reconnect or provider stall from being misdiagnosed as an ESP32
+ * speaker failure.
+ */
+export interface PlaybackEndurancePcmSourceEvidence {
+  artifact: PlaybackEnduranceArtifact;
+  delivery: {
+    discontinuityCount: number;
+    emittedFrameCount: number;
+    retainedIncidents: PlaybackEndurancePcmDeliveryIncident[];
+  };
+  expectedByteLength: number;
+  inspectionMaximumBufferedAudioBytes: number;
+}
+
 export interface PlaybackEnduranceMetricSample {
   /**
    * Host receipt time is the delivery-cadence authority. A device timestamp
@@ -126,6 +152,7 @@ export interface PlaybackEnduranceRunObservation {
   countersBefore: Record<string, number>;
   loadEvidence: PlaybackEnduranceLoadEvidence;
   metricSamples: PlaybackEnduranceMetricSample[];
+  pcmSource?: PlaybackEndurancePcmSourceEvidence;
   playbackCompletedAtMonotonicMs: number;
   playbackStartedAtMonotonicMs: number;
   startedAtIso: string;
@@ -255,6 +282,7 @@ export interface PlaybackEnduranceRunManifest {
   )[];
   metricsCadence: PlaybackEnduranceMetricsCadenceAudit;
   policy: PlaybackEndurancePolicyIdentity;
+  pcmSource?: PlaybackEndurancePcmSourceEvidence;
   result: {
     acceptancePassed: boolean;
     passed: boolean;
