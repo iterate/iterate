@@ -100,10 +100,15 @@ type AppConfig = {
   // BEFORE the `<slug>.<hostBase>` convention, so a custom domain or a single-project self-host (one
   // domain, no wildcard) needs no wildcard cert — just an entry here (or in ROUTING_KV). ADR 0020/0025.
   routes?: RouteConfig;
-  // First-party / platform secrets (the ITERATE-PRODUCT layer, ADR 0030): keys iterate holds and lets
-  // projects use, substituted at the control-plane egress door, origin-pinned + metered. Absent/empty =>
-  // a generic control plane (self-host) with no first-party secrets. Each: {name, value, allowedOrigins}.
-  platformSecrets?: PlatformSecret[];
+  // THE ITERATE-PRODUCT LAYER (ADR 0030, D-C). Everything here is what turns a *generic* control plane
+  // into the *iterate hosted product*. Absent => a generic control plane (self-host) with no first-party
+  // anything. Grouping it under one key makes the seam a boundary, not a convention: "generic control
+  // plane" is literally "config with no `product`". Grows to hold integrations + billing config.
+  //   · platformSecrets — first-party keys iterate holds and lets projects use, substituted at the
+  //     control-plane egress door, origin-pinned + metered. Each: {name, value, allowedOrigins}.
+  product?: {
+    platformSecrets?: PlatformSecret[];
+  };
   // Per-capability SOURCING (ADR/M3), shown for `ai`: this capability resolves to a DIFFERENT backend by
   // config. `local` = the project worker's own `env.AI` (Workers AI, its account). `remote` = a metered
   // first-party endpoint reached THROUGH the control-plane egress door with a platform secret — i.e.
@@ -417,7 +422,7 @@ export class ProjectEntrypoint extends WorkerEntrypoint<Env, ProjectProps> {
   async fetch(request: Request): Promise<Response> {
     const cfg = appConfigFrom(this.env);
     const proj = projectSecrets(this.env.SECRETS_KV, this.ctx.props.projectId);
-    return projectEgress(request, proj, cfg.platformSecrets ?? [], this.#meter());
+    return projectEgress(request, proj, cfg.product?.platformSecrets ?? [], this.#meter());
   }
   // The `ai` capability, PER-CAPABILITY SOURCED (ADR M3). `local` => this account's Workers AI binding.
   // `remote` => a metered first-party endpoint reached through the CONTROL-PLANE egress door with a
@@ -444,7 +449,7 @@ export class ProjectEntrypoint extends WorkerEntrypoint<Env, ProjectProps> {
       },
       body: JSON.stringify({ model: ai.model, prompt }),
     });
-    const res = await controlPlaneEgress(req, cfg.platformSecrets ?? [], this.#meter());
+    const res = await controlPlaneEgress(req, cfg.product?.platformSecrets ?? [], this.#meter());
     return res.text();
   }
 }

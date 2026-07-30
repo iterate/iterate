@@ -202,3 +202,14 @@ Three lenses: simplify/collapse · apps/os-trajectory · security/correctness. F
 - Exec cache key now includes code length (djb2 collision hardening).
 - 45 tests green. Deferred (in brief): membership-gate `create_project`/`list` for walled multi-tenant;
   per-secret origin-pin for project secrets; stronger content digest for exec cache.
+
+---
+
+## Continuation 2026-07-31 (D-C → D-B → D-A → security → two-worker split)
+
+### D-C — Group product config under `AppConfig.product` ✅ DONE + LIVE
+
+Moved `platformSecrets` from top-level into `AppConfig.product` (grows to hold integrations + billing).
+The seam is now a boundary: **"generic control plane" = config with no `product` key.** Refs updated to
+`cfg.product?.platformSecrets`. selfhost APP_CONFIG nests it under `product`. 45 tests green; live-verified
+on `dc-verify.shiterate.com/__egress` — platform secret still substitutes from `product.platformSecrets`.
