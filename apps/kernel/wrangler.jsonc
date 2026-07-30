@@ -91,11 +91,13 @@
         { "binding": "ROUTING_KV", "id": "82100d0688cf4ef3801f42ec5dcd2027" },
       ],
       "vars": {
-        "APP_CONFIG": "{\"directory\":{\"provider\":\"kv\"}}",
+        // hostBase mispwoso.com => <slug>.mispwoso.com is the project; Universal SSL covers one-label
+        // subdomains, so no wildcard-TLS setup needed. wide open (no wall) + kv directory.
+        "APP_CONFIG": "{\"hostBase\":\"mispwoso.com\",\"directory\":{\"provider\":\"kv\"}}",
         "PROJECT_APP_SESSION_SECRET": "872df450ac06f2761a5c629349804d7648dfc9e840c7d0b8ed58d657e9c44c73",
       },
-      // Clear the inherited top-level route (iterate2.app is not in this account); workers.dev only for now.
-      "routes": [],
+      // Burnable personal domain (Jonas OK'd): reassign the existing *.mispwoso.com/* route to this worker.
+      "routes": [{ "pattern": "*.mispwoso.com/*", "zone_name": "mispwoso.com" }],
     },
   },
 }

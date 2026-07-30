@@ -61,15 +61,24 @@ Docs assert "MCP works via the wall" but it's aspirational.
 `authorization_servers` defaults to `https://auth.iterate.com/api/auth` (`mcp-handler.ts:449`);
 `resolveMcpBaseUrl` only auto-derives for localhost.
 
-## Recommendation (the rewrite simplifies MCP)
+## ⚠️ Correction (Jonas, 2026-07-30): NOT a kernel-reserved `/mcp` PATH route
+
+Jonas is **against kernel-reserved routes based on paths** (a `/mcp` path carved out of every project
+host, like `/api` today). **MCP lives on the CONTROL PLANE** and should be addressed the way other
+control-plane surfaces are — **by hostname/app**, not a path. Precedent: the dashboard is a reserved
+**app** at a hostname (`dashboard--<slug>`), and apps/os puts MCP at a dedicated **host** (`mcp.iterate.com`).
+So MCP is a control-plane host/app, not `/mcp` on project hostnames. _(Reconsider `/api`'s path-reservation
+in the same light later — Jonas's aversion is general.)_
+
+## Recommendation (updated)
 
 The kernel **wall** is a cleaner fit than os's bespoke OAuth. Smallest to prove "MCP everywhere":
 
-1. **A kernel-reserved `/mcp` route** analogous to `/api`/`DASHBOARD_APP`, carved **before** `resolveIngress`
-   (so it's not per-project-slug-gated) — a lab build item.
+1. **MCP is a control-plane surface addressed by hostname/app** (a reserved app like the dashboard, or a
+   dedicated control-plane host à la `mcp.iterate.com`) — **not** a path carved before `resolveIngress`.
+   Exact addressing TBD; the point is host/app-based, config-driven, no path reservation.
 2. **MCP auth via the wall, not a ported resource-server:** Access-fronted = Access Managed-OAuth-for-MCP
-   injects the JWT the wall verifies; no-auth = wall unset → anonymous `/mcp`. Both fall out of the
-   existing 47-line wall.
+   injects the JWT the wall verifies; no-auth = wall unset → anonymous. Both fall out of the 47-line wall.
 3. **Config-driven URLs** — no `mcp.iterate.com`/`auth.iterate.com` literals.
 
 ## Test battery (Phase-0-adjacent)
