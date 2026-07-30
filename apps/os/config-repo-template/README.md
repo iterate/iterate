@@ -5,11 +5,12 @@ default project worker (`fetch` plus `processEvent`). It declares packaged apps
 such as `GithubAiLinter`, `GuestbookApp`, and `TodoApp`; project-owned app source
 lives under `apps/`, and the packaged linter reads editable policy from `rules/`.
 
-This file is also the project's `AGENTS.md`: `worker.ts` injects its contents
-into every agent's context automatically (at agent birth and again on every
-config-repo commit — see `#syncAgentsMdContext`). Write stable project facts
-here and every agent learns them; keep it lean, because it rides every LLM
-request of every agent.
+The seeded repo also contains `AGENTS.md` (born with this file's content, then
+independent): `worker.ts` injects `AGENTS.md`'s contents into every agent's
+context automatically (at agent birth and again on every config-repo commit —
+see `#syncAgentsMdContext`). Write stable project facts into `AGENTS.md` and
+every agent learns them; keep it lean, because it rides every LLM request of
+every agent.
 
 ## Project lifecycle hooks
 

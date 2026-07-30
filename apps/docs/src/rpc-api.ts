@@ -14,6 +14,7 @@ import type {
   CollabOpened,
   CollabWaitResult,
 } from "@iterate-com/workspace-documents/types";
+import { requireDocumentPath, requireWorkspacePath } from "./config-bridge.ts";
 import type { AppEnv } from "./env.ts";
 import type {
   DocsApi,
@@ -232,44 +233,10 @@ type WorkspaceDocumentStub = {
   };
 };
 
-export function requireWorkspacePath(value: string): string {
-  if (!value.startsWith("/workspaces/")) {
-    throw new Error(`invalid workspace path: ${JSON.stringify(value)}`);
-  }
-  return requireCanonicalPath(value, "workspace path");
-}
-
-/**
- * A document path is either relative (resolved against a workspace) or a fully
- * qualified stream path (e.g. "/workspaces/agents/you/review.md",
- * "/repos/config/docs/plan.md").
- */
-export function requireDocumentPath(value: string): string {
-  const path = requireCanonicalPath(value, "document path");
-  if (!/\.(?:html?|markdown|md)$/i.test(path)) {
-    throw new Error("document path must end in .md, .markdown, .html, or .htm");
-  }
-  return path;
-}
-
 /** Relative document paths join onto the workspace's own stream path; absolute paths are used verbatim. */
 export function resolveDocumentPath(workspacePath: string, value: string): string {
   const path = requireDocumentPath(value);
   return path.startsWith("/") ? path : `${workspacePath}/${path}`;
-}
-
-function requireCanonicalPath(value: string, description: string): string {
-  const segments = (value.startsWith("/") ? value.slice(1) : value).split("/");
-  if (
-    value.length > 2048 ||
-    value.includes("\\") ||
-    value.includes("\0") ||
-    value.endsWith("/") ||
-    segments.some((segment) => segment === "" || segment === "." || segment === "..")
-  ) {
-    throw new Error(`invalid ${description}: ${JSON.stringify(value)}`);
-  }
-  return value;
 }
 
 function stringClaim(value: unknown): string | null {

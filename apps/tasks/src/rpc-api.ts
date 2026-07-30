@@ -23,7 +23,12 @@ import type {
   TasksUser,
   TasksWorkspace,
 } from "./lib/tasks-api.ts";
-import { DEFAULT_REPO_PATH, isCheckoutId, normalizeRepoPath } from "./lib/checkout-shared.ts";
+import {
+  DEFAULT_REPO_PATH,
+  checkoutWorkspacePath,
+  isCheckoutId,
+  normalizeRepoPath,
+} from "./lib/checkout-shared.ts";
 
 const AUTH_COOKIE = "iterate-project-auth";
 
@@ -388,8 +393,7 @@ class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
   }
 
   get #workspacePath(): string {
-    const repoSlug = this.#repoPath.replace(/^\/+/, "").replaceAll("/", "--");
-    return `/workspaces/tasks/${this.#checkoutId}~${repoSlug}`;
+    return checkoutWorkspacePath(this.#checkoutId, this.#repoPath);
   }
 
   /** Board-lane paths → the platform's mount-qualified form. */
@@ -409,9 +413,9 @@ class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
       const workspaces = (
         project as unknown as { workspaces: { get(path: string): WorkspaceStub } }
       ).workspaces;
-      // The workspace identity ENCODES the repo: the same checkout id against
-      // a different repository is a different workspace — it can never
-      // silently bind to (and edit) the first repository's workspace.
+      // The workspace identity ENCODES the repo (see checkoutWorkspacePath):
+      // the same checkout id against a different repository can never bind
+      // to (and edit) the first repository's workspace.
       const ws = workspaces.get(this.#workspacePath);
       try {
         const result = await operation(ws);

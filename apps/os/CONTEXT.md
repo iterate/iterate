@@ -506,11 +506,15 @@ through itx as a live handle.
 _Avoid_: Repository row, repo provider, GitHub repo
 
 **Workspace Durable Object**:
-A minimal agent-associated durable tool provider that owns Cloudflare Shell workspace state for one Project-local workspace.
-_Avoid_: Organization, Project, event-sourced workspace
+An event-sourced, mount-routed Durable Object owning one workspace's private
+overlay; every project repo is mounted at its own `/repos/**` path by
+derivation.
+_Avoid_: Organization, Project, checkout
 
 **Workspace**:
-A project-scoped live work surface exposed through `itx.workspace`.
+A private working copy of the project's path namespace exposed through
+`itx.workspace`; repo mounts at `/repos/**`, private files under the
+workspace's own path.
 _Avoid_: Organization, Project, workspace alias
 
 **Outbound MCP From Our Client Capability**:
@@ -747,13 +751,14 @@ calls onto its WorkerEntrypoint methods; repo handles expose live Workers RPC
 methods such as `getInfo`, `commitFiles`, `readFiles`, and `readLog`.
 
 ```ts
-await itx.workspace.writeFile("/project/worker.ts", source);
-await itx.workspace.gitCommit({ dir: "/project", message, author });
+await itx.workspace.writeFile("/repos/config/worker.ts", source);
+await itx.workspace.git.commit({ message, scope: "/repos/config" });
 ```
 
-Workspace is an explicit capability selected by the host. Project handles get
-the shared project workspace; agent contexts provide their own isolated
-workspace capability.
+Workspace is an explicit capability selected by the host. Agent contexts
+provide their own isolated workspace — a private working copy of the
+project's path namespace, with every project repo mounted at its own
+`/repos/**` path and private files under the workspace's own directory.
 
 ```ts
 const messages = await itx.integrations.gmail.get().request({

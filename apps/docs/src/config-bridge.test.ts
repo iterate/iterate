@@ -105,4 +105,31 @@ describe("DocsApp", () => {
     expect(appUrl).toHaveBeenCalledWith("docs");
     expect(dispose).toHaveBeenCalledOnce();
   });
+
+  test.each([
+    { path: "../review.md", workspace: "/workspaces/agents/reviewer" },
+    { path: "reviews/../review.md", workspace: "/workspaces/agents/reviewer" },
+    { path: "review.txt", workspace: "/workspaces/agents/reviewer" },
+    { path: "", workspace: "/workspaces/agents/reviewer" },
+    { path: "review.md", workspace: "/repos/config" },
+    { path: "review.md", workspace: "/workspaces/agents/../reviewer" },
+  ])(
+    "refuses to mint a link the review UI would reject ($workspace, $path)",
+    async ({ path, workspace }) => {
+      const itxGet = vi.fn();
+      const app = DocsApp.create(
+        { ITX: { get: itxGet } },
+        {
+          auth: { policy: "project-member" },
+          proxy: {
+            origin: "https://docs.iterate.workers.dev",
+            originOverrideKvKey: "docs-app-origin",
+          },
+        },
+      );
+
+      await expect(app.rpc.link({ path, workspace })).rejects.toThrow();
+      expect(itxGet).not.toHaveBeenCalled();
+    },
+  );
 });

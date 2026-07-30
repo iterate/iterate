@@ -9,7 +9,12 @@ export type DocsAppOptions = {
 };
 
 export type DocsLinkInput = {
+  /**
+   * Document to review: relative to the workspace, or a fully qualified
+   * stream path. Must end in .md, .markdown, .html, or .htm.
+   */
   path: string;
+  /** Absolute /workspaces/** stream path of the reviewing workspace. */
   workspace: string;
 };
 
@@ -39,18 +44,15 @@ export class DocsAppRpcTarget extends RpcTarget {
 
   /** Build a review URL for one Markdown or HTML workspace file. */
   async link(input: DocsLinkInput): Promise<string> {
-    // The document path may be relative (Docs resolves it against the
-    // workspace) or a fully qualified stream path.
-    if (!input.workspace.startsWith("/workspaces/") || input.path === "") {
-      throw new Error(
-        "Docs links require an absolute /workspaces/ path and a non-empty document path.",
-      );
-    }
+    // Same validation DocsWorkspaceApi applies when the document opens, so a
+    // minted link can only address a path the review UI will accept.
+    const workspace = requireWorkspacePath(input.workspace);
+    const path = requireDocumentPath(input.path);
     const itx = await this.#env.ITX.get();
     try {
       const url = new URL(await itx.appUrl("docs"));
-      url.searchParams.set("workspace", input.workspace);
-      url.searchParams.set("path", input.path);
+      url.searchParams.set("workspace", workspace);
+      url.searchParams.set("path", path);
       return url.href;
     } finally {
       itx[Symbol.dispose]();
@@ -84,6 +86,40 @@ export const DocsApp = {
     };
   },
 };
+
+export function requireWorkspacePath(value: string): string {
+  if (!value.startsWith("/workspaces/")) {
+    throw new Error(`invalid workspace path: ${JSON.stringify(value)}`);
+  }
+  return requireCanonicalPath(value, "workspace path");
+}
+
+/**
+ * A document path is either relative (resolved against a workspace when the
+ * document opens) or a fully qualified stream path (e.g.
+ * "/workspaces/agents/you/review.md", "/repos/config/docs/plan.md").
+ */
+export function requireDocumentPath(value: string): string {
+  const path = requireCanonicalPath(value, "document path");
+  if (!/\.(?:html?|markdown|md)$/i.test(path)) {
+    throw new Error("document path must end in .md, .markdown, .html, or .htm");
+  }
+  return path;
+}
+
+function requireCanonicalPath(value: string, description: string): string {
+  const segments = (value.startsWith("/") ? value.slice(1) : value).split("/");
+  if (
+    value.length > 2048 ||
+    value.includes("\\") ||
+    value.includes("\0") ||
+    value.endsWith("/") ||
+    segments.some((segment) => segment === "" || segment === "." || segment === "..")
+  ) {
+    throw new Error(`invalid ${description}: ${JSON.stringify(value)}`);
+  }
+  return value;
+}
 
 function parseOverride(value: unknown, key: string): URL {
   const description = `Docs app proxy override from "${key}"`;

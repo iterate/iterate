@@ -745,7 +745,9 @@ export class WorkspaceCore {
    * mount's local copies and whiteouts — every other mount's uncommitted work
    * (including pending deletions under a deeper mount's subtree) survives.
    */
-  async gitCommit(input: WorkspaceCommitInput): Promise<WorkspaceCommitResult> {
+  async gitCommit(
+    input: WorkspaceCommitInput,
+  ): Promise<WorkspaceCommitResult & { mounts: Record<string, WorkspaceMount> }> {
     if (typeof input.message !== "string" || input.message.trim() === "") {
       throw new Error("commit message must be a non-empty string.");
     }
@@ -852,6 +854,10 @@ export class WorkspaceCore {
           .sort(),
         commitOid: result.commitOid,
         mount: mountPath,
+        // The EXACT table this commit classified and cleaned up against —
+        // the host's baseline stamping must route by it, never by a live
+        // table a concurrent refresh could have moved mid-commit.
+        mounts: snapshot.mounts,
         repoPath: mount.repoPath,
       };
     });

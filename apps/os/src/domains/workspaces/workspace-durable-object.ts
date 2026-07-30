@@ -160,36 +160,34 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
    * subscription lane, while overlay-hit reads never pay the project RPC.
    */
   #repoPathsCache: string[] | null = null;
+  // Single-flight: concurrent refreshes share one project read, so two
+  // out-of-order responses can never regress the cache to an older list.
+  #repoPathsRefresh: Promise<string[]> | null = null;
 
   async #repoPaths(options: { refresh?: boolean } = {}): Promise<string[]> {
-    if (this.#repoPathsCache === null || options.refresh === true) {
-      const projectId = this.#name.projectId;
-      this.#repoPathsCache =
-        projectId === null
-          ? []
-          : (await projectProcessorState(projectId)).repos.map((repo) => repo.path);
-    }
-    return this.#repoPathsCache;
+    if (this.#repoPathsCache !== null && options.refresh !== true) return this.#repoPathsCache;
+    this.#repoPathsRefresh ??= (async () => {
+      try {
+        const projectId = this.#name.projectId;
+        const paths =
+          projectId === null
+            ? []
+            : (await projectProcessorState(projectId)).repos.map((repo) => repo.path);
+        this.#repoPathsCache = paths;
+        return paths;
+      } finally {
+        this.#repoPathsRefresh = null;
+      }
+    })();
+    return this.#repoPathsRefresh;
   }
 
-  /**
-   * The EFFECTIVE mount table: every project repo at its own /repos/** path,
-   * with the stored overlays merged on top. Also kept as a synchronous
-   * snapshot for the commit barrier's ownsPath callback — the barrier fences
-   * configures, so the snapshot the commit classified against is the one the
-   * callback reads.
-   */
-  #effectiveMountsSnapshot: Record<string, WorkspaceMount> = {};
-
+  /** The EFFECTIVE mount table: every project repo at its own /repos/** path,
+   * with the stored overlays merged on top. */
   async #effectiveMounts(
     options: { refresh?: boolean } = {},
   ): Promise<Record<string, WorkspaceMount>> {
-    const mounts = effectiveWorkspaceMounts(
-      await this.#repoPaths(options),
-      this.#currentConfig().mounts,
-    );
-    this.#effectiveMountsSnapshot = mounts;
-    return mounts;
+    return effectiveWorkspaceMounts(await this.#repoPaths(options), this.#currentConfig().mounts);
   }
 
   /**
@@ -351,9 +349,18 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
           const merged = mergeWorkspaceConfigPatch(current, config);
           const effective = effectiveWorkspaceMounts(repoPaths, merged.mounts);
           for (const [key, value] of Object.entries(config.mounts ?? {})) {
-            if (value !== null && !(key in effective)) {
+            if (value === null) continue;
+            if (!(key in effective)) {
               throw new Error(
                 `mount "${key}" patch does not produce a complete mount — new mounts need { repoPath, policy }`,
+              );
+            }
+            // A ghost repoPath would route (writes accepted!) but every
+            // enumeration (listAllFiles/glob/status) then dies on the
+            // unseeded repo stub — one typo must not break the workspace.
+            if (value.repoPath !== undefined && !repoPaths.includes(value.repoPath)) {
+              throw new Error(
+                `mount "${key}" names "${value.repoPath}", which is not a repo in this project — create it first (itx.repos.get(path).create(...))`,
               );
             }
           }
@@ -691,11 +698,17 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     // configure can interleave, and baselines advance mount-scoped to
     // exactly what the commit contained (a commit never spans mounts;
     // stamping another mount's session would erase its redline). ownsPath
-    // routes against the LAST table the core computed — the fence excludes
-    // configures, so that is exactly the table the commit classified with.
+    // routes against the EXACT table the commit classified with — the core
+    // returns it — never a live table a concurrent refresh (getConfig, a
+    // routing miss, a repo created mid-commit) could move under the stamp.
+    let classifiedMounts: Record<string, WorkspaceMount> = {};
     return this.#collab.commitBarrier(
-      () => this.#core.gitCommit(resolved),
-      (path, mount) => routeMount(this.#effectiveMountsSnapshot, path)?.mountPath === mount,
+      async () => {
+        const { mounts, ...result } = await this.#core.gitCommit(resolved);
+        classifiedMounts = mounts;
+        return result;
+      },
+      (path, mount) => routeMount(classifiedMounts, path)?.mountPath === mount,
     );
   }
 

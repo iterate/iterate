@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
-import { requireDocumentPath, requireWorkspacePath, resolveDocumentPath } from "./rpc-api.ts";
+import { requireDocumentPath, requireWorkspacePath } from "./config-bridge.ts";
+import { resolveDocumentPath } from "./rpc-api.ts";
 
 describe("Docs deep-link paths", () => {
   test("accepts canonical workspace and document paths", () => {

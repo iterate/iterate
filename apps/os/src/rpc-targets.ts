@@ -1425,6 +1425,25 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
       RepoProcessorContract.events["events.iterate.com/repos/create-failed"].payloadSchema;
     const request = requestSchema.parse(payload ?? { type: "empty" });
     const path = normalizePath(this.props.path);
+    // NESTED repo paths are rejected against the current catalog: repos
+    // mount at their own paths in every workspace, and a repo born inside
+    // (or above) an existing repo's subtree would silently re-route that
+    // subtree's uncommitted workspace state to a different repository —
+    // a transition no guard can fence after the fact. Door-level check:
+    // two racing creates can slip past it, but the common path fails loudly.
+    if (this.props.projectId !== null) {
+      const existing = (await projectProcessorState(this.props.projectId)).repos.map(
+        (repo) => repo.path,
+      );
+      const nested = existing.find(
+        (other) => other !== path && (other.startsWith(`${path}/`) || path.startsWith(`${other}/`)),
+      );
+      if (nested !== undefined) {
+        throw new Error(
+          `repo path "${path}" nests with the existing repo "${nested}" — repo paths must not contain one another`,
+        );
+      }
+    }
     const stream = new StreamRpcTarget({
       auth: this.props.auth,
       path,
@@ -2163,6 +2182,22 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
   async create(
     input: { mounts?: Record<string, WorkspaceMountOverlay> } = {},
   ): Promise<WorkspaceRpcTarget> {
+    if (input.mounts !== undefined) {
+      // Same ghost-repoPath guard as the configure door: a mount naming a
+      // repo that does not exist would break every enumeration on the
+      // unseeded repo stub. Only paid when mounts are supplied — the common
+      // agent-birth create({}) skips the project read.
+      const repoPaths = new Set(
+        (await projectProcessorState(this.props.projectId)).repos.map((repo) => repo.path),
+      );
+      for (const [key, overlay] of Object.entries(input.mounts)) {
+        if (overlay?.repoPath !== undefined && !repoPaths.has(overlay.repoPath)) {
+          throw new Error(
+            `mount "${key}" names "${overlay.repoPath}", which is not a repo in this project — create it first (itx.repos.get(path).create(...))`,
+          );
+        }
+      }
+    }
     const committed = await this.#stream.append(
       ...workspaceCreationEvents({
         ...(input.mounts === undefined ? {} : { mounts: input.mounts }),
