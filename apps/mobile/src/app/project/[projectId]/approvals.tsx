@@ -8,6 +8,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { router, Stack, useLocalSearchParams } from "expo-router";
+import type { StreamEvent } from "iterate/sdk/itx/react";
 import { useMemo } from "react";
 import {
   ActivityIndicator,
@@ -42,6 +43,11 @@ import {
   type ResolvedBatch,
   type Verdict,
 } from "../../../lib/approvals.ts";
+import {
+  ASSISTANT_MESSAGE_TYPE,
+  lastVisibleMessageAtOrBefore,
+  USER_MESSAGE_TYPE,
+} from "../../../lib/chat.ts";
 import { getProjectItx } from "../../../lib/itx.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
 import { getServerBaseUrl } from "../../../lib/storage.ts";
@@ -365,6 +371,16 @@ function BatchCard({
         <Text style={styles.method}>{headline}</Text>
       )}
       {single ? null : <Text style={styles.groupHosts}>{hostBreakdown(payload.requests)}</Text>}
+      {streamContext?.kind === "script-execution" &&
+      streamContext.streamPath.startsWith("/agents/") ? (
+        <ThreadContextLine
+          baseUrl={baseUrl}
+          offsetBound={streamContext.scriptRunRequestedEventOffset}
+          projectId={projectId}
+          projectSlug={projectSlug}
+          streamPath={streamContext.streamPath}
+        />
+      ) : null}
       {resolved?.reason ? (
         <Text style={styles.rejectReason}>Rejected because: {resolved.reason}</Text>
       ) : null}
@@ -519,6 +535,73 @@ function BatchCard({
         </>
       ) : null}
     </View>
+  );
+}
+
+/**
+ * "What was this run even doing?" — the agent thread's last visible message
+ * at the moment the batch was born, pinned to the card so the queue and
+ * history read without opening each thread. A snapshot deliberately, not live
+ * status: it is derived from immutable history at the script-run offset, so
+ * it works identically for open and settled batches. The line renders
+ * immediately with the thread name (tap = open the thread) and grows the
+ * message once the one-shot fetch lands; a slow or failed fetch never blocks
+ * the card.
+ */
+function ThreadContextLine({
+  baseUrl,
+  offsetBound,
+  projectId,
+  projectSlug,
+  streamPath,
+}: {
+  baseUrl: string;
+  offsetBound: number;
+  projectId: string;
+  projectSlug: string;
+  streamPath: string;
+}) {
+  const context = useQuery({
+    queryKey: ["approval-thread-context", baseUrl, projectId, streamPath, offsetBound],
+    queryFn: async () => {
+      const project = await getProjectItx(baseUrl, projectId);
+      const stream = project.streams.get(streamPath);
+      // Page the whole bounded window: a busy thread can hold more visible
+      // messages than one getEvents page, and only the LAST one matters.
+      const events: StreamEvent[] = [];
+      let cursor = 0;
+      while (true) {
+        const page = await stream.getEvents({
+          afterOffset: cursor,
+          beforeOffset: offsetBound + 1, // exclusive bound — at-or-before the script run
+          eventTypes: [USER_MESSAGE_TYPE, ASSISTANT_MESSAGE_TYPE],
+        });
+        if (page.length === 0) break;
+        events.push(...page);
+        cursor = page.at(-1)!.offset;
+      }
+      return lastVisibleMessageAtOrBefore(events, offsetBound);
+    },
+    staleTime: Infinity,
+  });
+  return (
+    <Pressable
+      accessibilityRole="link"
+      onPress={() =>
+        router.push({
+          pathname: "/project/[projectId]/chat",
+          params: { path: streamPath, projectId, slug: projectSlug },
+        })
+      }
+      style={styles.threadContext}
+    >
+      <Text numberOfLines={1} style={styles.threadContextText}>
+        <Text style={styles.threadContextName}>{streamPath.replace(/^\/agents\//, "")}</Text>
+        {context.data
+          ? ` · ${context.data.role === "user" ? "you" : "agent"}: ${context.data.text}`
+          : ""}
+      </Text>
+    </Pressable>
   );
 }
 
@@ -692,6 +775,9 @@ const styles = StyleSheet.create({
     lineHeight: 17,
     padding: spacing.sm,
   },
+  threadContext: { justifyContent: "center", minHeight: 24 },
+  threadContextText: { color: colors.textMuted, fontSize: 12 },
+  threadContextName: { color: colors.accent, fontWeight: "600" },
   sourceHeader: { alignItems: "center", flexDirection: "row", gap: spacing.sm },
   sourceCopy: { flex: 1, gap: 2 },
   detailLabel: {
