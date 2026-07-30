@@ -48,27 +48,25 @@ const loadDopplerSecrets = Effect.fn("envManager.loadDopplerSecrets")(function* 
   });
 });
 
-let bearerToken: Promise<string> | undefined;
+let dopplerForgeKey: Promise<string | undefined> | undefined;
 
-function managerBearerToken(): Promise<string> {
-  bearerToken ??= resolveManagerBearerToken();
-  return bearerToken;
+function loadDopplerForgeKey(): Promise<string | undefined> {
+  dopplerForgeKey ??= Effect.runPromise(
+    loadDopplerSecrets("_shared", envManagerEnv.dopplerConfig).pipe(
+      Effect.map(({ AUTH_FORGE_ES256_PRIVATE_JWK }) => AUTH_FORGE_ES256_PRIVATE_JWK),
+      Effect.provide(NodeServices.layer),
+      Effect.scoped,
+    ),
+  );
+  return dopplerForgeKey;
 }
 
-async function resolveManagerBearerToken(): Promise<string> {
+async function managerBearerToken(): Promise<string> {
   const explicit = process.env.ENV_MANAGER_API_TOKEN?.trim();
   if (explicit) return explicit;
 
   const forgeKey =
-    process.env.AUTH_FORGE_ES256_PRIVATE_JWK?.trim() ??
-    (
-      await Effect.runPromise(
-        loadDopplerSecrets("_shared", envManagerEnv.dopplerConfig).pipe(
-          Effect.provide(NodeServices.layer),
-          Effect.scoped,
-        ),
-      )
-    ).AUTH_FORGE_ES256_PRIVATE_JWK;
+    process.env.AUTH_FORGE_ES256_PRIVATE_JWK?.trim() ?? (await loadDopplerForgeKey());
   if (forgeKey === undefined) {
     throw new Error(
       "Environment-manager authentication requires ENV_MANAGER_API_TOKEN or " +

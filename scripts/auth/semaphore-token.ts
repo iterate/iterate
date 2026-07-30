@@ -34,7 +34,9 @@ export function authIssuerForSemaphoreBaseUrl(baseUrl: string): string {
 /**
  * Async bearer-token provider for createSemaphoreClient. Prefers an explicit
  * SEMAPHORE_API_TOKEN; otherwise forge-mints an admin access token (audience
- * = the semaphore deployment's base URL origin) and memoizes it for the run.
+ * = the semaphore deployment's base URL origin). A fresh token is minted for
+ * every request so lifecycle commands may safely outlive the one-hour token
+ * TTL.
  */
 export function createSemaphoreTokenProvider(input: {
   baseUrl: string;
@@ -43,30 +45,26 @@ export function createSemaphoreTokenProvider(input: {
   env?: NodeJS.ProcessEnv;
 }): () => Promise<string> {
   const env = input.env ?? process.env;
-  let minted: Promise<string> | null = null;
 
-  return () => {
+  return async () => {
     const explicit = env.SEMAPHORE_API_TOKEN?.trim();
-    if (explicit) return Promise.resolve(explicit);
+    if (explicit) return explicit;
 
-    minted ??= (async () => {
-      const forgePrivateJwk = env.AUTH_FORGE_ES256_PRIVATE_JWK?.trim();
-      if (!forgePrivateJwk) {
-        throw new Error(
-          "Authenticating against semaphore needs SEMAPHORE_API_TOKEN (a pre-minted bearer token) " +
-            "or AUTH_FORGE_ES256_PRIVATE_JWK in the environment. Run under a Doppler config that carries " +
-            "the forge key (e.g. `doppler run --project _shared --config prd`).",
-        );
-      }
+    const forgePrivateJwk = env.AUTH_FORGE_ES256_PRIVATE_JWK?.trim();
+    if (!forgePrivateJwk) {
+      throw new Error(
+        "Authenticating against semaphore needs SEMAPHORE_API_TOKEN (a pre-minted bearer token) " +
+          "or AUTH_FORGE_ES256_PRIVATE_JWK in the environment. Run under a Doppler config that carries " +
+          "the forge key (e.g. `doppler run --project _shared --config prd`).",
+      );
+    }
 
-      return await mintForgedAccessToken({
-        forgePrivateJwk,
-        issuer: authIssuerForSemaphoreBaseUrl(input.baseUrl),
-        audience: new URL(input.baseUrl).origin,
-        email: input.email,
-        admin: true,
-      });
-    })();
-    return minted;
+    return await mintForgedAccessToken({
+      forgePrivateJwk,
+      issuer: authIssuerForSemaphoreBaseUrl(input.baseUrl),
+      audience: new URL(input.baseUrl).origin,
+      email: input.email,
+      admin: true,
+    });
   };
 }

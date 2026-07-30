@@ -261,7 +261,7 @@ type SemaphoreFetch = (input: URL | string | Request, init?: RequestInit) => Pro
 /**
  * The bearer credential sent as `Authorization: Bearer <token>` — an iterate
  * admin access token (semaphore is a relying party of apps/auth). A function
- * lets callers mint lazily (e.g. forge-mint on first request); see
+ * lets callers mint lazily (e.g. forge-mint for each request); see
  * scripts/auth/semaphore-token.ts.
  */
 type SemaphoreApiKey = string | (() => Promise<string> | string);
