@@ -2135,7 +2135,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "DeviceAppendInput",
     kind: "typeAlias",
     sourceText:
-      '/** Public stream vocabulary, mechanically retaining payloads from the processor contract. */\nexport type DeviceAppendInput =\n  | TypedConsumedEventInput<\n      "events.iterate.com/device/notification-opened",\n      { openedAt: string; requestOffset: number }\n    >\n  | TypedConsumedEventInput<\n      "events.iterate.com/device/notification-requested",\n      {\n        body: string;\n        destination:\n          | { kind: "project" }\n          | { kind: "approvals"; approvalRequestEventOffset: number }\n          | { kind: "agent-chat"; path: string };\n        expiresAt: number;\n        title: string;\n      }\n    >;',
+      '/** Public stream vocabulary, mechanically retaining payloads from the processor contract. */\nexport type DeviceAppendInput =\n  | TypedConsumedEventInput<\n      "events.iterate.com/device/notification-opened",\n      { openedAt: string; requestOffset: number }\n    >\n  | TypedConsumedEventInput<\n      "events.iterate.com/device/notification-requested",\n      {\n        approvalRequestEventOffset?: number | undefined;\n        body: string;\n        destination:\n          | { kind: "project" }\n          | { kind: "approvals"; approvalRequestEventOffset: number }\n          | { kind: "agent-chat"; path: string };\n        expiresAt: number;\n        title: string;\n      }\n    >;',
     summary:
       "Public stream vocabulary, mechanically retaining payloads from the processor contract.",
     memberSummaries: {},

@@ -3866,6 +3866,7 @@ export type DeviceAppendInput =
   | TypedConsumedEventInput<
       "events.iterate.com/device/notification-requested",
       {
+        approvalRequestEventOffset?: number | undefined;
         body: string;
         destination:
           | { kind: "project" }
