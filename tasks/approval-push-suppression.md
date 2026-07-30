@@ -7,9 +7,13 @@ size: medium
 
 ## Status summary
 
-Spec committed, implementation not started. Split out of #2339's task
-(`tasks/complete/2026-07-30-in-thread-approvals.md` › "Push suppression"),
-which shipped the in-thread dialog this builds on.
+Implemented end to end: intent carries the batch identity top-level, the
+claim event exists on the root stream, devices grace-delay approval pushes
+and settle them `suppressed` on a claim, the DO grace alarm nudges the send
+when no claim comes, and the mobile in-thread card appends the claim. All
+targeted tests green; awaiting full-suite/CI confirmation and review.
+Remaining: nothing known — see the implementation log for accepted edge
+cases.
 
 ## Ask (Misha, via #2339 follow-ups)
 
@@ -62,18 +66,35 @@ Decisions made while fleshing out (assumptions, flag in PR if wrong):
 
 ## Checklist
 
-- [ ] `notification/requested` intent carries `approvalRequestEventOffset`
+- [x] `notification/requested` intent carries `approvalRequestEventOffset`
       for approval batches on both destination kinds (+ notification
       processor test)
-- [ ] `project/approval-presented` event type on the project root stream,
+      _optional top-level field in notification-intent-contract.ts (0.2.0);
+      set from `event.offset` in notification-processor-implementation.ts;
+      both existing destination-kind tests now assert it_
+- [x] `project/approval-presented` event type on the project root stream,
       appended by the mobile chat screen when the in-thread dialog renders
       foregrounded
-- [ ] Device subscription copies the claim event onto device streams
-- [ ] Device processor: `approvalGraceMs` config, grace-delayed attempts,
+      _defined in the standalone `approval-presented-contract.ts` catalog
+      (spread into the project contract's events — the device contract must
+      consume it too and cannot import the project contract back); appended
+      by `InThreadApprovalCard` via a staleTime-Infinity useQuery gated on
+      `AppState.currentState === "active"`, idempotency-keyed per batch_
+- [x] Device subscription copies the claim event onto device streams
+      _`notificationIntentSubscriptionEvent`'s filter now lists both types;
+      existing devices pick it up on their next enrolls/token-update re-arm_
+- [x] Device processor: `approvalGraceMs` config, grace-delayed attempts,
       alarm nudge at earliest grace expiry, `suppressed` terminal outcome
-- [ ] Device processor tests: push goes out after grace with no claim; claim
+      _contract 0.5.0: `approvalGraceMs` (default 1500ms), obligations gain
+      requestedAt/presentedAt/approvalRequestEventOffset, `suppressed`
+      outcome; implementation: claim reduce, suppressed sweep, grace-gated
+      send loop, `releaseApprovalGraces` called by the DO's new
+      `device-approval-grace` alarm slice_
+- [x] Device processor tests: push goes out after grace with no claim; claim
       inside grace suppresses (no attempt started); claim after send is a
       no-op; alarm re-arms correctly; non-approval intents are unaffected
+      _"DeviceProcessor approval-push suppression" section in
+      device-processor.test.ts — four specs matching exactly these cases_
 - [ ] `pnpm typecheck && pnpm lint && pnpm knip && pnpm test`; PR hygiene
 
 ## Out of scope
@@ -81,3 +102,38 @@ Decisions made while fleshing out (assumptions, flag in PR if wrong):
 - Web dashboard claims (mobile first; the event shape is client-agnostic)
 - Per-device (rather than per-user) suppression semantics
 - Any change to expiry or decision semantics
+
+## Implementation log
+
+- **Contract ownership vs import cycle**: the project contract imports the
+  device contract (processorDeps), so the device contract could not import
+  the claim's schema from it. `defineProcessorContract` accepts standalone
+  event catalogs as `processorDeps`, so the claim lives in
+  `apps/os/src/domains/projects/approval-presented-contract.ts`, spread into
+  the project contract's `events` (docs-site ownership) and listed as a dep
+  catalog by the device contract (typed consumption). One schema, no drift.
+- **Why an explicit `releaseApprovalGraces` method instead of "the alarm
+  nudges catchUp"**: the runner's catchUp early-returns when there are no
+  new events (stream-processor-runner.ts, the
+  `pending.length === 0 && scanned === committed` guard), so it never fires
+  the eventless at-head pass on a pure clock tick. Grace expiry appends
+  nothing, hence the checkReceipts-shaped method the DO alarm calls with the
+  current state; it re-arms/disarms its own slice.
+- **Accepted race (per spec)**: a claim copied onto the device stream BEFORE
+  its intent copy reduces to nothing, and the later intent still sends after
+  grace. Requires the mobile claim to beat the notification processor's
+  intent append on the root stream — unlikely, and the failure mode is just
+  the pre-feature behavior (push arrives while looking at the app).
+- **Replay caveat carried over from #2339**: intents already committed
+  without the top-level field would re-append with a DIFFERENT body if the
+  notification processor ever re-processed those events with lost progress
+  (idempotency same-key conflict → wedge). Same exposure #2339 accepted when
+  it changed the destination shape; progress loss without cache loss is a
+  crash-window rarity. Old committed intents (no top-level field) reduce to
+  UNGATED obligations on devices — they send immediately, documented by the
+  existing "copied project notification intent" test.
+- **Existing devices' subscriptions** keep the old one-type filter until
+  their next enroll/push-token-update re-arms the rule (the mobile app
+  re-enrolls on launch), so suppression activates per device organically.
+- Notification-intent contract bumped 0.1.0 → 0.2.0 (additive optional
+  field); device contract 0.4.0 → 0.5.0 (state shape change refolds caches).

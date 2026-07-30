@@ -10,10 +10,8 @@
 
 import { z } from "zod";
 
-export const APPROVAL_PRESENTED_EVENT_TYPE = "events.iterate.com/project/approval-presented";
-
 export const ApprovalPresentedEvents = {
-  [APPROVAL_PRESENTED_EVENT_TYPE]: {
+  "events.iterate.com/project/approval-presented": {
     description:
       "A signed-in client is ALREADY SHOWING a held approval batch to the user (the mobile " +
       "in-thread dialog appends this when it renders foregrounded). Purely a delivery hint, " +
