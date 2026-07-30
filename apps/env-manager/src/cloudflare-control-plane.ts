@@ -14,7 +14,7 @@ import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import type * as HttpClient from "effect/unstable/http/HttpClient";
 
 const ARTIFACT_DELETE_CONCURRENCY = 10;
-const ARTIFACT_REPOSITORY_PAGE_SIZE = 50;
+const ARTIFACT_REPOSITORY_PAGE_SIZE = 200;
 const DELETED_WORKER_COMPATIBILITY_DATE = "2026-07-30";
 const DELETED_WORKER_MODULE = new File(
   [
@@ -31,7 +31,8 @@ const DELETED_WORKER_MODULE = new File(
 const ListArtifactRepositoriesRequest = Schema.Struct({
   accountId: Schema.String.pipe(T.HttpPath("account_id")),
   namespace: Schema.String.pipe(T.HttpPath("namespace")),
-  perPage: Schema.optional(Schema.Number).pipe(T.HttpQuery("per_page")),
+  limit: Schema.optional(Schema.Number).pipe(T.HttpQuery("limit")),
+  cursor: Schema.optional(Schema.String).pipe(T.HttpQuery("cursor")),
 }).pipe(
   T.Http({
     method: "GET",
@@ -39,18 +40,40 @@ const ListArtifactRepositoriesRequest = Schema.Struct({
   }),
 );
 const ArtifactRepository = Schema.Struct({ name: Schema.String });
-const ListArtifactRepositoriesResponse = Schema.Array(ArtifactRepository).pipe(
-  T.ResponsePath("result"),
+const ListArtifactRepositoriesResponse = Schema.Struct({
+  result: Schema.Array(ArtifactRepository),
+  resultInfo: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        cursor: Schema.optional(Schema.NullOr(Schema.String)),
+      }),
+    ),
+  ),
+}).pipe(
+  Schema.encodeKeys({
+    result: "result",
+    resultInfo: "result_info",
+  }),
 );
-const listArtifactRepositories: API.OperationMethod<
-  Readonly<{ accountId: string; namespace: string; perPage?: number }>,
-  ReadonlyArray<Readonly<{ name: string }>>,
+const listArtifactRepositories: API.PaginatedOperationMethod<
+  Readonly<{ accountId: string; namespace: string; limit?: number; cursor?: string }>,
+  Readonly<{
+    result: ReadonlyArray<Readonly<{ name: string }>>;
+    resultInfo?: Readonly<{ cursor?: string | null }> | null;
+  }>,
   NotFound,
   Credentials.Credentials
-> = API.make(() => ({
+> = API.makePaginated(() => ({
   input: ListArtifactRepositoriesRequest,
   output: ListArtifactRepositoriesResponse,
   errors: [NotFound],
+  pagination: {
+    mode: "cursor",
+    inputToken: "cursor",
+    outputToken: "resultInfo.cursor",
+    items: "result",
+    pageSize: "limit",
+  },
 }));
 
 const DeleteArtifactRepositoryRequest = Schema.Struct({
@@ -126,39 +149,37 @@ export function makeCloudflareControlPlane(input: { accountId: string; apiToken:
       .items({ accountId: input.accountId, perPage: 100 })
       .pipe(Stream.runCollect);
 
-  const listArtifactRepositoryPage = (namespace: string) =>
-    listArtifactRepositories({
-      accountId: input.accountId,
-      namespace,
-      perPage: ARTIFACT_REPOSITORY_PAGE_SIZE,
-    }).pipe(Effect.catchTag("NotFound", () => Effect.succeed([])));
+  const listArtifactRepositoriesInNamespace = (namespace: string) =>
+    listArtifactRepositories
+      .items({
+        accountId: input.accountId,
+        namespace,
+        limit: ARTIFACT_REPOSITORY_PAGE_SIZE,
+      })
+      .pipe(
+        Stream.runCollect,
+        Effect.catchTag("NotFound", () => Effect.succeed([])),
+      );
 
   const destroyArtifactRepositories = (namespace: string) =>
     Effect.gen(function* () {
-      for (;;) {
-        const repositories = yield* listArtifactRepositoryPage(namespace);
-        if (repositories.length === 0) return;
+      const repositories = yield* listArtifactRepositoriesInNamespace(namespace);
+      yield* Effect.forEach(
+        repositories,
+        ({ name }) =>
+          deleteArtifactRepository({
+            accountId: input.accountId,
+            namespace,
+            repository: name,
+          }).pipe(Effect.catchTag("NotFound", () => Effect.void)),
+        { concurrency: ARTIFACT_DELETE_CONCURRENCY },
+      );
 
-        const deleted = yield* Effect.forEach(
-          repositories,
-          ({ name }) =>
-            deleteArtifactRepository({
-              accountId: input.accountId,
-              namespace,
-              repository: name,
-            }).pipe(
-              Effect.as(true),
-              Effect.catchTag("NotFound", () => Effect.succeed(false)),
-            ),
-          { concurrency: ARTIFACT_DELETE_CONCURRENCY },
-        );
-        if (deleted.some(Boolean)) continue;
-
-        const remaining = yield* listArtifactRepositoryPage(namespace);
-        if (remaining.length === 0) return;
+      const remaining = yield* listArtifactRepositoriesInNamespace(namespace);
+      if (remaining.length > 0) {
         return yield* Effect.fail(
           new Error(
-            `Artifacts cleanup made no progress for ${namespace}; Cloudflare still lists: ${remaining
+            `Artifact repositories remain for ${namespace}: ${remaining
               .map(({ name }) => name)
               .join(", ")}`,
           ),

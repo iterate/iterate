@@ -3,9 +3,9 @@ permissions:
   contents: read
   deployments: write
 concurrency:
-  # Every ref deploys to the same dev_global Worker. Never interrupt a
-  # credentialed deployment midway through its rollout.
-  group: deploy-auth-dev-global
+  # This and the OS/env-manager workflows all deploy the singleton manager.
+  # Serialize their complete rollouts so no workflow replaces it mid-apply.
+  group: deploy-environment-manager
   cancel-in-progress: false
 on:
   push:

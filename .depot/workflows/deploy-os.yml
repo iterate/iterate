@@ -4,9 +4,9 @@ permissions:
   deployments: write
   statuses: write
 concurrency:
-  # Every dispatch below targets the same production stack and Workers.
-  # Serialize the complete rollout and never cancel it between those steps.
-  group: deploy-cloudflare-production
+  # This and the auth/env-manager workflows all deploy the singleton manager.
+  # Serialize their complete rollouts so no workflow replaces it mid-apply.
+  group: deploy-environment-manager
   cancel-in-progress: false
 on:
   push:

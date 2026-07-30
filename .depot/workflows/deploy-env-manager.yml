@@ -2,6 +2,8 @@ name: Deploy Environment Manager
 permissions:
   contents: read
 concurrency:
+  # The OS and auth workflows deploy this same singleton before applying an
+  # environment, so all three workflows share one non-cancelling lock.
   group: deploy-environment-manager
   cancel-in-progress: false
 on:

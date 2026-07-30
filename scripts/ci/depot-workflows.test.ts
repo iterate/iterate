@@ -47,14 +47,21 @@ const depotWorkflowFiles = readdirSync(resolve(repoRoot, ".depot/workflows"))
 const deploymentWorkflows = [
   {
     file: ".depot/workflows/deploy-auth.yml",
-    group: "deploy-auth-dev-global",
+    group: "deploy-environment-manager",
     jobs: {
       "deploy-dev-global": { size: "2x8", timeoutMinutes: 20 },
     },
   },
   {
+    file: ".depot/workflows/deploy-env-manager.yml",
+    group: "deploy-environment-manager",
+    jobs: {
+      deploy: { size: "2x8", timeoutMinutes: 20 },
+    },
+  },
+  {
     file: ".depot/workflows/deploy-os.yml",
-    group: "deploy-cloudflare-production",
+    group: "deploy-environment-manager",
     jobs: {
       deploy: { size: "4x16", timeoutMinutes: 45 },
       notify: { size: "2x8", timeoutMinutes: 10 },

@@ -243,4 +243,77 @@ describe("Cloudflare control plane", () => {
       exports: { Orphaned: { type: "durable-object", state: "deleted" } },
     });
   });
+
+  it("cursor-paginates Artifact repos and deletes each one exactly once", async () => {
+    let firstPageReads = 0;
+    const fetch = vi.fn<typeof globalThis.fetch>((request, init) => {
+      const url = new URL(String(request));
+      const method = request instanceof Request ? request.method : init?.method;
+      if (url.pathname.endsWith("/artifacts/namespaces/os-worker-repos/repos")) {
+        if (url.searchParams.get("cursor") === "next-page") {
+          return Promise.resolve(
+            Response.json({
+              success: true,
+              result: [{ name: "three" }],
+              result_info: { cursor: null, count: 1, per_page: 200 },
+              errors: [],
+            }),
+          );
+        }
+        firstPageReads += 1;
+        return Promise.resolve(
+          Response.json({
+            success: true,
+            result: firstPageReads === 1 ? [{ name: "one" }, { name: "two" }] : [],
+            result_info: {
+              cursor: firstPageReads === 1 ? "next-page" : null,
+              count: firstPageReads === 1 ? 2 : 0,
+              per_page: 200,
+            },
+            errors: [],
+          }),
+        );
+      }
+      return Promise.resolve(
+        Response.json({
+          success: true,
+          result: method === "DELETE" ? null : [],
+          errors: [],
+        }),
+      );
+    });
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(
+      makeCloudflareControlPlane({
+        accountId: "account-id",
+        apiToken: "api-token",
+      }).destroyWranglerResources({
+        workerNames: [],
+        osWorkerName: "os-worker",
+      }),
+    ).resolves.toBeUndefined();
+
+    const requests = fetch.mock.calls.map(([request]) => new URL(String(request)));
+    const artifactLists = requests.filter(({ pathname }) =>
+      pathname.endsWith("/artifacts/namespaces/os-worker-repos/repos"),
+    );
+    expect(artifactLists).toHaveLength(3);
+    expect(artifactLists.map(({ searchParams }) => searchParams.get("limit"))).toEqual([
+      "200",
+      "200",
+      "200",
+    ]);
+    expect(artifactLists.map(({ searchParams }) => searchParams.get("cursor"))).toEqual([
+      null,
+      "next-page",
+      null,
+    ]);
+    expect(
+      requests
+        .filter(({ pathname }) => pathname.includes("/artifacts/namespaces/os-worker-repos/repos/"))
+        .map(({ pathname }) => pathname.split("/").at(-1))
+        .sort(),
+    ).toEqual(["one", "three", "two"]);
+  });
 });
