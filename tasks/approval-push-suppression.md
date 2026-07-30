@@ -13,8 +13,10 @@ approval pushes and settle them `suppressed` on a claim, the DO grace alarm
 nudges the send when no claim comes, and the mobile in-thread card appends
 the claim. Scope grew mid-review (Misha): a mobile **Notifications view**
 (past notifications with statuses incl. "you were already looking", deep
-links per row) — built — plus a comparison playwright spec and video — in
-progress. See the implementation log for accepted edge cases.
+links per row) — built, with a comparison playwright spec (3 consecutive
+local passes) and a rendered comparison video handed to the orchestrator.
+Remaining: final full-suite gate + CI. See the implementation log for
+accepted edge cases.
 
 ## Ask (Misha, via #2339 follow-ups)
 
@@ -106,15 +108,18 @@ Scope added after review (Misha, on the PR):
       reducer `lib/notifications.ts` (unit-tested); drawer entry next to
       Approvals; rows route through the existing push-tap routing in
       `lib/notification-routing.ts`_
-- [ ] Comparison spec: the same script-parked batch suppressed when sitting
+- [x] Comparison spec: the same script-parked batch suppressed when sitting
       in its thread vs sent when elsewhere, both statuses asserted via the
       Notifications view UI, deep-link tap asserted
-      _`specs/mobile/notifications.spec.ts`; the device is stood up
-      server-side with an undeliverable Expo token (web has no push
-      channel), so the "sent" lane's deterministic terminal status is "Send
-      failed" — see implementation log_
-- [ ] Comparison video (`VIDEO_MODE=1`), `video-rendered.webm` handed to the
+      _`specs/mobile/notifications.spec.ts` — three consecutive local
+      passes (~22s each); the device is stood up server-side with an
+      undeliverable Expo token (web has no push channel), so the "sent"
+      lane's deterministic terminal status is "Send failed" — see
+      implementation log_
+- [x] Comparison video (`VIDEO_MODE=1`), `video-rendered.webm` handed to the
       orchestrator for the PR body
+      _20s webm; final frame shows both rows side by side ("Send failed" vs
+      the accent-colored "Skipped — you were already looking")_
 - [ ] `pnpm typecheck && pnpm lint && pnpm knip && pnpm test`; PR hygiene
 
 ## Out of scope
@@ -157,3 +162,28 @@ Scope added after review (Misha, on the PR):
   re-enrolls on launch), so suppression activates per device organically.
 - Notification-intent contract bumped 0.1.0 → 0.2.0 (additive optional
   field); device contract 0.4.0 → 0.5.0 (state shape change refolds caches).
+
+Notifications view + spec (the added scope):
+
+- **Web build has NO device enrollment** (`enrollPushDevice` returns null on
+  web; #2337's auto-enroll is the approval KEY, not a device). The spec
+  therefore fixes the browser's device identity up front (the web secure
+  store is localStorage) and enrolls that id server-side via admin itx with
+  a format-valid but undeliverable Expo token — the same "non-user step"
+  lane the approvals spec uses for egress rules.
+- **"Sent" on web is "Send failed", deterministically**: probed the real
+  Expo API — a fabricated token gets ticket `error: DeviceNotRegistered` at
+  SEND time (not only at receipt time), so the sent-lane obligation settles
+  `rejected-by-expo` seconds after grace, and the rejection also revokes the
+  fake device (why that lane runs LAST in the spec). A real phone would show
+  Sent → Delivered. The view's status mapping is honest about it.
+- **Status vocabulary** (lib/notifications.ts): Waiting to send / Sending /
+  Sent (ticketed) / Delivered (accepted-by-push-service) / Skipped — you
+  were already looking (suppressed) / Expired before sending / Not sent —
+  notifications were off (device-unavailable) / Send failed (rejected-*) /
+  Delivery unknown (uncertain + unrecognized future outcomes).
+- The deep-link tap at the spec's end doubles as the live demonstration that
+  a LATE claim is a no-op: opening the offending thread renders its
+  still-open batch card, whose claim fires after the push already went out.
+- Spec gotcha: project slugs must not contain "notifications" — Playwright's
+  getByText substring-matches header titles.
