@@ -380,7 +380,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "            content,\n" +
       "            key: \"config/agents-md\",\n" +
       "            llmRequestPolicy: { behaviour: \"dont-trigger-request\" },\n" +
-      "            role: \"developer\",\n" +
+      "            // SYSTEM role on purpose: compaction keeps keyed system facts\n" +
+      "            // (collapsed to the latest occurrence) — a developer item would\n" +
+      "            // be dropped at the first compaction, and the unchanged-content\n" +
+      "            // re-sync would then dedupe against the birth append forever.\n" +
+      "            role: \"system\",\n" +
       "          },\n" +
       "        });\n" +
       "      }),\n" +

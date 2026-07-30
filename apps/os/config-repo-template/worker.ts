@@ -86,7 +86,11 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
             content,
             key: "config/agents-md",
             llmRequestPolicy: { behaviour: "dont-trigger-request" },
-            role: "developer",
+            // SYSTEM role on purpose: compaction keeps keyed system facts
+            // (collapsed to the latest occurrence) — a developer item would
+            // be dropped at the first compaction, and the unchanged-content
+            // re-sync would then dedupe against the birth append forever.
+            role: "system",
           },
         });
       }),
