@@ -63,6 +63,25 @@ function expectEditError(fn: () => unknown, code: EditErrorCode): void {
 }
 
 describe("addThread", () => {
+  test("writes the neutral workspace-document vocabulary", () => {
+    const first = addThread(structured("# Review\n"), {
+      ...WHO,
+      body: "Clarify this.",
+      threadId: "th_1",
+      commentId: "cm_1",
+    });
+    const second = addComment(first.doc, {
+      ...WHO,
+      body: "Following up.",
+      threadId: "th_1",
+      commentId: "cm_2",
+    });
+
+    expect(second.raw).toContain("<!-- iterate-annotations:v1 -->");
+    expect(second.raw).toContain("<!-- iterate-thread:v1 begin id=th_1 status=open -->");
+    expect(second.raw).toContain("<!-- iterate-comment:v1 begin id=cm_2");
+  });
+
   test("creates the store on first use", () => {
     const doc = structured(BARE);
     const result = addThread(doc, {
@@ -82,26 +101,27 @@ describe("addThread", () => {
         "",
         "The retry loop masks the real failure.",
         "",
-        "<!-- task-discussions:v1 -->",
+        "<!-- iterate-annotations:v1 -->",
         "",
         "## Discussion",
         "",
-        "<!-- task-thread:v1 begin id=th_1 status=open -->",
+        "<!-- iterate-thread:v1 begin id=th_1 status=open -->",
         '<a id="thread-th_1"></a>',
         "### T1 · Open",
         "",
-        "<!-- task-comment:v1 begin id=cm_1 author=jonas created=2026-07-28T10:00:00Z -->",
+        "<!-- iterate-comment:v1 begin id=cm_1 author=jonas created=2026-07-28T10:00:00Z -->",
         "#### Jonas · 2026-07-28 10:00 UTC",
         "",
         "Is this the same flake as last week?",
-        "<!-- task-comment:v1 end id=cm_1 -->",
+        "<!-- iterate-comment:v1 end id=cm_1 -->",
         "",
-        "<!-- task-thread:v1 end id=th_1 -->",
+        "<!-- iterate-thread:v1 end id=th_1 -->",
         "",
       ),
     );
     expect(result.raw.startsWith(BARE)).toBe(true);
     expectMinimalDiff(BARE, result);
+    expect(result.doc.discussion?.threads[0]?.anchor).toBeNull();
     expect(result.doc.discussion?.threads[0]?.comments[0]?.body).toBe(
       "Is this the same flake as last week?",
     );
@@ -142,23 +162,23 @@ describe("addThread", () => {
       md(
         "Alpha beta [T1](#thread-th_1) gamma.",
         "",
-        "<!-- task-discussions:v1 -->",
+        "<!-- iterate-annotations:v1 -->",
         "",
         "## Discussion",
         "",
-        "<!-- task-thread:v1 begin id=th_1 status=open -->",
+        "<!-- iterate-thread:v1 begin id=th_1 status=open -->",
         '<a id="thread-th_1"></a>',
         "### T1 · Open",
         "",
-        '<!-- task-anchor:v1 {"selector":[{"type":"TextQuoteSelector","exact":"beta","prefix":"Alpha ","suffix":" gamma.\\n"},{"type":"TextPositionSelector","start":6,"end":10}]} -->',
+        '<!-- iterate-anchor:v1 {"selector":[{"type":"TextQuoteSelector","exact":"beta","prefix":"Alpha ","suffix":" gamma.\\n"},{"type":"TextPositionSelector","start":6,"end":10}]} -->',
         "",
-        "<!-- task-comment:v1 begin id=cm_1 author=jonas created=2026-07-28T10:00:00Z -->",
+        "<!-- iterate-comment:v1 begin id=cm_1 author=jonas created=2026-07-28T10:00:00Z -->",
         "#### Jonas · 2026-07-28 10:00 UTC",
         "",
         "Looks wrong.",
-        "<!-- task-comment:v1 end id=cm_1 -->",
+        "<!-- iterate-comment:v1 end id=cm_1 -->",
         "",
-        "<!-- task-thread:v1 end id=th_1 -->",
+        "<!-- iterate-thread:v1 end id=th_1 -->",
         "",
       ),
     );
@@ -179,23 +199,23 @@ describe("addThread", () => {
       md(
         "Alpha beta [T1](#thread-th_1)",
         "",
-        "<!-- task-discussions:v1 -->",
+        "<!-- iterate-annotations:v1 -->",
         "",
         "## Discussion",
         "",
-        "<!-- task-thread:v1 begin id=th_1 status=open -->",
+        "<!-- iterate-thread:v1 begin id=th_1 status=open -->",
         '<a id="thread-th_1"></a>',
         "### T1 · Open",
         "",
-        '<!-- task-anchor:v1 {"selector":[{"type":"TextQuoteSelector","exact":"beta","prefix":"Alpha ","suffix":""},{"type":"TextPositionSelector","start":6,"end":10}]} -->',
+        '<!-- iterate-anchor:v1 {"selector":[{"type":"TextQuoteSelector","exact":"beta","prefix":"Alpha ","suffix":""},{"type":"TextPositionSelector","start":6,"end":10}]} -->',
         "",
-        "<!-- task-comment:v1 begin id=cm_1 author=jonas created=2026-07-28T10:00:00Z -->",
+        "<!-- iterate-comment:v1 begin id=cm_1 author=jonas created=2026-07-28T10:00:00Z -->",
         "#### Jonas · 2026-07-28 10:00 UTC",
         "",
         "Note.",
-        "<!-- task-comment:v1 end id=cm_1 -->",
+        "<!-- iterate-comment:v1 end id=cm_1 -->",
         "",
-        "<!-- task-thread:v1 end id=th_1 -->",
+        "<!-- iterate-thread:v1 end id=th_1 -->",
         "",
       ),
     );
@@ -250,21 +270,21 @@ describe("addThread", () => {
         "",
         "The retry loop masks the real failure.",
         "",
-        "<!-- task-discussions:v1 -->",
+        "<!-- iterate-annotations:v1 -->",
         "",
         "## Discussion",
         "",
-        "<!-- task-thread:v1 begin id=th_1 status=open -->",
+        "<!-- iterate-thread:v1 begin id=th_1 status=open -->",
         '<a id="thread-th_1"></a>',
         "### T1 · Open",
         "",
-        "<!-- task-comment:v1 begin id=cm_1 author=jonas created=2026-07-28T10:00:00Z -->",
+        "<!-- iterate-comment:v1 begin id=cm_1 author=jonas created=2026-07-28T10:00:00Z -->",
         "#### Jonas · 2026-07-28 10:00 UTC",
         "",
         "Same flake?",
-        "<!-- task-comment:v1 end id=cm_1 -->",
+        "<!-- iterate-comment:v1 end id=cm_1 -->",
         "",
-        "<!-- task-thread:v1 end id=th_1 -->",
+        "<!-- iterate-thread:v1 end id=th_1 -->",
         "",
       ).replace(/\n/g, "\r\n"),
     );
@@ -290,17 +310,17 @@ describe("addComment", () => {
     expect(result.commentId).toBe("cm_2");
     expect(result.raw).toBe(
       base.raw.replace(
-        md("<!-- task-comment:v1 end id=cm_1 -->", "", "<!-- task-thread:v1 end id=th_1 -->"),
+        md("<!-- iterate-comment:v1 end id=cm_1 -->", "", "<!-- iterate-thread:v1 end id=th_1 -->"),
         md(
-          "<!-- task-comment:v1 end id=cm_1 -->",
+          "<!-- iterate-comment:v1 end id=cm_1 -->",
           "",
-          "<!-- task-comment:v1 begin id=cm_2 author=sam created=2026-07-28T11:15:00Z in-reply-to=cm_1 -->",
+          "<!-- iterate-comment:v1 begin id=cm_2 author=sam created=2026-07-28T11:15:00Z in-reply-to=cm_1 -->",
           "#### sam · 2026-07-28 11:15 UTC",
           "",
           "A reply.",
-          "<!-- task-comment:v1 end id=cm_2 -->",
+          "<!-- iterate-comment:v1 end id=cm_2 -->",
           "",
-          "<!-- task-thread:v1 end id=th_1 -->",
+          "<!-- iterate-thread:v1 end id=th_1 -->",
         ),
       ),
     );
@@ -321,8 +341,8 @@ describe("setThreadStatus", () => {
     expect(result.raw).toBe(
       base.raw
         .replace(
-          "<!-- task-thread:v1 begin id=th_1 status=open -->",
-          "<!-- task-thread:v1 begin id=th_1 status=resolved -->",
+          "<!-- iterate-thread:v1 begin id=th_1 status=open -->",
+          "<!-- iterate-thread:v1 begin id=th_1 status=resolved -->",
         )
         .replace("### T1 · Open", "### T1 · Resolved"),
     );
@@ -348,12 +368,12 @@ describe("setThreadStatus", () => {
 
   test("thread without a heading only touches the sentinel", () => {
     const content = md(
-      "<!-- task-discussions:v1 -->",
-      "<!-- task-thread:v1 begin id=th_a status=open -->",
-      "<!-- task-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
+      "<!-- iterate-annotations:v1 -->",
+      "<!-- iterate-thread:v1 begin id=th_a status=open -->",
+      "<!-- iterate-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
       "Hi.",
-      "<!-- task-comment:v1 end id=cm_a -->",
-      "<!-- task-thread:v1 end id=th_a -->",
+      "<!-- iterate-comment:v1 end id=cm_a -->",
+      "<!-- iterate-thread:v1 end id=th_a -->",
       "",
     );
     const result = setThreadStatus(structured(content), "th_a", "resolved");
@@ -386,11 +406,11 @@ describe("editComment", () => {
 
   test("fills an empty comment body", () => {
     const content = md(
-      "<!-- task-discussions:v1 -->",
-      "<!-- task-thread:v1 begin id=th_a status=open -->",
-      "<!-- task-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
-      "<!-- task-comment:v1 end id=cm_a -->",
-      "<!-- task-thread:v1 end id=th_a -->",
+      "<!-- iterate-annotations:v1 -->",
+      "<!-- iterate-thread:v1 begin id=th_a status=open -->",
+      "<!-- iterate-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
+      "<!-- iterate-comment:v1 end id=cm_a -->",
+      "<!-- iterate-thread:v1 end id=th_a -->",
       "",
     );
     const result = editComment(structured(content), "cm_a", "Now with text.");
@@ -409,7 +429,7 @@ describe("editComment", () => {
       modifiedAt: "2026-07-29T09:00:00Z",
     });
     expect(stamped.raw).toContain(
-      "<!-- task-comment:v1 begin id=cm_1 author=jonas created=2026-07-28T10:00:00Z modified=2026-07-29T09:00:00Z -->",
+      "<!-- iterate-comment:v1 begin id=cm_1 author=jonas created=2026-07-28T10:00:00Z modified=2026-07-29T09:00:00Z -->",
     );
     expect(stamped.doc.discussion?.threads[0]?.comments[0]?.modifiedAt).toBe(
       "2026-07-29T09:00:00Z",
@@ -442,22 +462,22 @@ describe("deleteComment", () => {
   const THREADED = md(
     "# T",
     "",
-    "<!-- task-discussions:v1 -->",
+    "<!-- iterate-annotations:v1 -->",
     "",
     "## Discussion",
     "",
-    "<!-- task-thread:v1 begin id=th_a status=open -->",
+    "<!-- iterate-thread:v1 begin id=th_a status=open -->",
     "### T1 · Open",
     "",
-    "<!-- task-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
+    "<!-- iterate-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
     "Root comment.",
-    "<!-- task-comment:v1 end id=cm_a -->",
+    "<!-- iterate-comment:v1 end id=cm_a -->",
     "",
-    "<!-- task-comment:v1 begin id=cm_b author=sam created=2026-07-28T09:00:00Z in-reply-to=cm_a -->",
+    "<!-- iterate-comment:v1 begin id=cm_b author=sam created=2026-07-28T09:00:00Z in-reply-to=cm_a -->",
     "A reply.",
-    "<!-- task-comment:v1 end id=cm_b -->",
+    "<!-- iterate-comment:v1 end id=cm_b -->",
     "",
-    "<!-- task-thread:v1 end id=th_a -->",
+    "<!-- iterate-thread:v1 end id=th_a -->",
     "",
   );
 
@@ -466,9 +486,9 @@ describe("deleteComment", () => {
     expect(result.raw).toBe(
       THREADED.replace(
         md(
-          "<!-- task-comment:v1 begin id=cm_b author=sam created=2026-07-28T09:00:00Z in-reply-to=cm_a -->",
+          "<!-- iterate-comment:v1 begin id=cm_b author=sam created=2026-07-28T09:00:00Z in-reply-to=cm_a -->",
           "A reply.",
-          "<!-- task-comment:v1 end id=cm_b -->",
+          "<!-- iterate-comment:v1 end id=cm_b -->",
           "",
           "",
         ),
@@ -483,8 +503,8 @@ describe("deleteComment", () => {
     const result = deleteComment(structured(THREADED), "cm_a");
     expect(result.raw).toBe(
       THREADED.replace(
-        "<!-- task-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
-        "<!-- task-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z deleted=true -->",
+        "<!-- iterate-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z -->",
+        "<!-- iterate-comment:v1 begin id=cm_a author=lee created=2026-07-28T08:30:00Z deleted=true -->",
       ).replace("Root comment.", "*Deleted.*"),
     );
     expectMinimalDiff(THREADED, result);
@@ -556,17 +576,17 @@ describe("removeThread", () => {
     expect(result.raw).toBe(
       second.raw.replace(
         md(
-          "<!-- task-thread:v1 begin id=th_1 status=open -->",
+          "<!-- iterate-thread:v1 begin id=th_1 status=open -->",
           '<a id="thread-th_1"></a>',
           "### T1 · Open",
           "",
-          "<!-- task-comment:v1 begin id=cm_1 author=jonas created=2026-07-28T10:00:00Z -->",
+          "<!-- iterate-comment:v1 begin id=cm_1 author=jonas created=2026-07-28T10:00:00Z -->",
           "#### Jonas · 2026-07-28 10:00 UTC",
           "",
           "First.",
-          "<!-- task-comment:v1 end id=cm_1 -->",
+          "<!-- iterate-comment:v1 end id=cm_1 -->",
           "",
-          "<!-- task-thread:v1 end id=th_1 -->",
+          "<!-- iterate-thread:v1 end id=th_1 -->",
           "",
           "",
         ),
@@ -611,7 +631,7 @@ describe("setThreadAnchor", () => {
     const result = setThreadAnchor(base.doc, "th_1", {
       quote: { exact: "--strange--", prefix: "A ", suffix: " token.\n" },
     });
-    const anchorLine = result.raw.split("\n").find((l) => l.startsWith("<!-- task-anchor:v1"));
+    const anchorLine = result.raw.split("\n").find((l) => l.startsWith("<!-- iterate-anchor:v1"));
     expect(anchorLine).toBeDefined();
     expect(anchorLine?.includes("--strange--")).toBe(false);
     expect(result.doc.discussion?.threads[0]?.anchor?.selector.quote.exact).toBe("--strange--");
@@ -649,7 +669,7 @@ describe("edit errors", () => {
       name: "body containing a sentinel line",
       code: "invalid-body",
       run: (doc: StructuredDocument) =>
-        addThread(doc, { ...WHO, body: "ok\n<!-- task-comment:v1 end id=x -->" }),
+        addThread(doc, { ...WHO, body: "ok\n<!-- iterate-comment:v1 end id=x -->" }),
     },
     {
       name: "invalid thread id",

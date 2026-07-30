@@ -1,5 +1,6 @@
 ---
 id: typescript/explain-type-cast
+severity: error
 files:
   [
     "**/*.{ts,tsx,mts,cts}",

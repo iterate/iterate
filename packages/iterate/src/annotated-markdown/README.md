@@ -6,7 +6,7 @@ of the same file between paired HTML-comment sentinels. One task, one file,
 readable in any editor and renderer, no database or sidecar.
 
 Implements the design in the config repo's
-`tasks/2026-07-28-markdown-native-task-comments.md` (option A: paired
+`tasks/2026-07-28-markdown-native-iterate-comments.md` (option A: paired
 HTML-comment sentinels around visible markdown).
 
 ```md
@@ -19,30 +19,30 @@ state: in-progress
 
 Publishing must durably enqueue invalidation before returning. [T1](#thread-th_01K…)
 
-<!-- task-discussions:v1 -->
+<!-- iterate-annotations:v1 -->
 
 ## Discussion
 
-<!-- task-thread:v1 begin id=th_01K… status=open -->
+<!-- iterate-thread:v1 begin id=th_01K… status=open -->
 
 <a id="thread-th_01K…"></a>
 
 ### T1 · Open
 
-<!-- task-anchor:v1 {"selector":[{"type":"TextQuoteSelector","exact":"durably enqueue","prefix":"must ","suffix":" invalidation"},{"type":"TextPositionSelector","start":58,"end":73}]} -->
+<!-- iterate-anchor:v1 {"selector":[{"type":"TextQuoteSelector","exact":"durably enqueue","prefix":"must ","suffix":" invalidation"},{"type":"TextPositionSelector","start":58,"end":73}]} -->
 
-<!-- task-comment:v1 begin id=cm_01K… author=lee created=2026-07-28T08:30:00Z -->
+<!-- iterate-comment:v1 begin id=cm_01K… author=lee created=2026-07-28T08:30:00Z -->
 
 #### Lee · 2026-07-28 08:30 UTC
 
 Does "durably enqueue" require the queue write to finish?
 
-<!-- task-comment:v1 end id=cm_01K… -->
+<!-- iterate-comment:v1 end id=cm_01K… -->
 
-<!-- task-thread:v1 end id=th_01K… -->
+<!-- iterate-thread:v1 end id=th_01K… -->
 ```
 
-## Grammar (task-discussions/v1, normative)
+## Grammar (iterate-annotations/v1, normative)
 
 A document is, in order: an optional UTF-8 BOM, optional front matter, a body,
 and an optional discussion store that runs to the end of the file.
@@ -58,16 +58,16 @@ closes is fatal.
 **Sentinels** are recognized only when a line starts at column 0 with
 `<!-- task-` and are parsed strictly:
 
-- `<!-- task-discussions:v1 -->` — opens the store; everything after it
+- `<!-- iterate-annotations:v1 -->` — opens the store; everything after it
   belongs to the store. At most one per file.
-- `<!-- task-thread:v1 begin id=<id> status=open|resolved -->` …
-  `<!-- task-thread:v1 end id=<id> -->` — a thread block. Only legal at store
+- `<!-- iterate-thread:v1 begin id=<id> status=open|resolved -->` …
+  `<!-- iterate-thread:v1 end id=<id> -->` — a thread block. Only legal at store
   level; ids on both boundaries must match.
-- `<!-- task-comment:v1 begin id=<id> author=<token> created=<iso-utc>
+- `<!-- iterate-comment:v1 begin id=<id> author=<token> created=<iso-utc>
 [modified=<iso-utc>] [in-reply-to=<id>] [deleted=true] -->` …
-  `<!-- task-comment:v1 end id=<id> -->` — a comment block inside a thread.
+  `<!-- iterate-comment:v1 end id=<id> -->` — a comment block inside a thread.
   `modified` is the last-edit instant; `editComment` stamps it when asked.
-- `<!-- task-anchor:v1 <json> -->` — at most one per thread, before the first
+- `<!-- iterate-anchor:v1 <json> -->` — at most one per thread, before the first
   comment: a W3C Web Annotation selector list
   `{"selector":[{"type":"TextQuoteSelector","exact","prefix?","suffix?"},
 {"type":"TextPositionSelector","start","end"}?]}` — exactly one
@@ -156,6 +156,6 @@ Comment text may not contain a line starting with `<!-- task-` at column 0
   it. The store sentinel's version gates the discussion grammar instead.
 - `raw` is a JS string (UTF-16 code units), not `Uint8Array`; callers own
   decoding. Text with unpaired surrogates is rejected as plain.
-- The anchor selector lives on its own `task-anchor:v1` sentinel line rather
+- The anchor selector lives on its own `iterate-anchor:v1` sentinel line rather
   than as an attribute of the thread-begin sentinel, keeping identity and
   positioning separately editable.

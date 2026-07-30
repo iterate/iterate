@@ -133,6 +133,17 @@ function makeTasksWorkspace(): WorkspaceConfig {
   };
 }
 
+function makeDocsWorkspace(): WorkspaceConfig {
+  return {
+    entry: ["vite.config.ts", "vitest.config.ts", "src/worker.ts!", "scripts/**/*.ts"],
+    project: ["src/**/*.{ts,tsx}!", "scripts/**/*.ts", "!dist/**!", "!dist-package/**!"],
+    vite: false,
+    // tailwindcss backs @tailwindcss/vite and the shared UI stylesheet.
+    // `cloudflare:workers` parses as the "cloudflare" package.
+    ignoreDependencies: ["cloudflare", "tailwindcss"],
+  };
+}
+
 function makeCloudflareTanStackAppWorkspace(workerEnvShim: string): WorkspaceConfig {
   return {
     entry: ["vite.config.ts", "scripts/router.ts", "scripts/**/*.ts", "src/worker.ts!"],
@@ -196,6 +207,14 @@ function makeSharedWorkspace(): WorkspaceConfig {
   };
 }
 
+function makeWorkspaceDocumentsWorkspace(): WorkspaceConfig {
+  return {
+    // package.json's subpath export map is the public entry surface.
+    entry: ["src/**/*.test.ts"],
+    project: ["src/**/*.{ts,tsx}"],
+  };
+}
+
 const config: KnipConfig = {
   // Keep the config honest in CI/local runs: if Knip thinks our patterns or
   // workspace setup drifted, fail instead of silently warning.
@@ -226,10 +245,12 @@ const config: KnipConfig = {
     "!apps/tanstack",
     "!apps/kit",
     "!apps/tasks",
+    "!apps/docs",
     "packages/*",
     "!packages/shared",
     "!packages/ui",
     "!packages/iterate",
+    "!packages/workspace-documents",
   ],
   ignoreIssues: {
     "apps/os/e2e/test-support/app-config-env.ts": ["files", "exports"],
@@ -245,6 +266,7 @@ const config: KnipConfig = {
     "apps/tanstack/src/router.tsx": ["exports"],
     "apps/kit/src/router.tsx": ["exports"],
     "apps/tasks/src/router.tsx": ["exports"],
+    "apps/docs/src/router.tsx": ["exports"],
   },
   workspaces: {
     "apps/semaphore": makeSemaphoreCloudflareAppWorkspace("./src/lib/worker-env.d.ts"),
@@ -253,9 +275,11 @@ const config: KnipConfig = {
     "apps/tanstack": makeTanstackTodoWorkspace(),
     "apps/kit": makeKitWorkspace(),
     "apps/tasks": makeTasksWorkspace(),
+    "apps/docs": makeDocsWorkspace(),
     "packages/shared": makeSharedWorkspace(),
     "packages/ui": makeUiWorkspace(),
     "packages/iterate": makeIterateCliWorkspace(),
+    "packages/workspace-documents": makeWorkspaceDocumentsWorkspace(),
   },
 };
 

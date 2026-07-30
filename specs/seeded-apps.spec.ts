@@ -7,6 +7,7 @@ import {
   startEmailOtpSignIn,
   uniqueSignupEmail,
 } from "./test-support/email-otp-signup.ts";
+import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
 // The seeded config repo's example apps genuinely serve after a project is
@@ -48,7 +49,7 @@ test("the seeded todo app authenticates a real project member", async ({
 }, testInfo) => {
   test.setTimeout(E2E_HEAVY_TEST_TIMEOUT_MS);
   test.skip(
-    !(await startEmailOtpSignIn(page)),
+    !(await startEmailOtpSignIn(page, testInfo)),
     "Email OTP sign-in is disabled for this deployment (APP_CONFIG_EMAIL_OTP_ENABLED on auth / APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED on OS).",
   );
 
@@ -124,6 +125,133 @@ test("the seeded todo app authenticates a real project member", async ({
   await page.getByRole("checkbox", { checked: true, name: `Mark ${todoTitle} not done` }).waitFor();
 });
 
+test("review a workspace document in the seeded Docs app", async ({ baseURL, page }, testInfo) => {
+  test.setTimeout(E2E_HEAVY_TEST_TIMEOUT_MS);
+  test.skip(
+    !(await startEmailOtpSignIn(page, testInfo)),
+    "Email OTP sign-in is disabled for this deployment (APP_CONFIG_EMAIL_OTP_ENABLED on auth / APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED on OS).",
+  );
+
+  const slug = uniqueFixtureSlug("docs-app-review");
+  await signUpWithEmailOtp(page, {
+    email: uniqueSignupEmail("docs-app-review"),
+    projectSlug: slug,
+    testInfo,
+  });
+  await spinnerWaiter.settings.run({ disabled: true }, async () => {
+    await page.getByPlaceholder("Message this agent").waitFor({ timeout: 60_000 });
+  });
+
+  const workspacePath = "/workspaces/agents/reviewer";
+  const documentPath = "/reviews/launch-review.md";
+  using itx = await connectAdminItx(baseURL!);
+  using project = itx.projects.get(slug);
+  using workspace = project.workspaces.get(workspacePath);
+  await workspace.create({});
+  await workspace.writeFile(
+    documentPath,
+    [
+      "---",
+      "status: draft",
+      "owner: Product",
+      "---",
+      "",
+      "# Docs review walkthrough",
+      "",
+      "Review a document directly in its agent workspace.",
+      "",
+      "## Ready for review",
+      "",
+      "- [x] Workspace deep links",
+      "- [ ] Review the launch copy",
+      "- [ ] Confirm the rollout owner",
+      "",
+      "## Review focus",
+      "",
+      "Make review decisions directly in the workspace file.",
+      "",
+    ].join("\n"),
+  );
+  await project.kv.set("docs-app-origin", docsOriginForBaseUrl(baseURL!));
+
+  const docsUrl = new URL(appUrl("docs", slug, baseURL!));
+  docsUrl.searchParams.set("workspace", workspacePath);
+  docsUrl.searchParams.set("path", documentPath);
+  await page.goto(docsUrl.toString());
+  await page.getByRole("heading", { name: "Sign in to iterate" }).waitFor({ timeout: 120_000 });
+  await page.getByText("This app is available to project members.").waitFor();
+  await page.getByRole("link", { name: "Continue with iterate" }).click({ timeout: 30_000 });
+
+  await spinnerWaiter.settings.run({ disabled: true }, async () => {
+    await page
+      .locator("header")
+      .getByRole("heading", { name: "Docs review walkthrough" })
+      .waitFor({ timeout: 120_000 });
+  });
+  await page.getByText(/^live · v\d+$/).waitFor({ timeout: 30_000 });
+  // The PR walkthrough is about reviewing the document, not account
+  // provisioning and cold-start setup that this end-to-end proof also covers.
+  page.videoMode?.setStartTime();
+
+  // A task-list checkbox is part of its list row, not a detached line above
+  // the copy. This geometric assertion protects the exact rendering failure
+  // that made the first Docs screenshots hard to scan.
+  const checklistItem = page.locator("li[data-task]").filter({ hasText: "Review the launch copy" });
+  const checkboxBox = await checklistItem.locator('input[type="checkbox"]').boundingBox();
+  const labelBox = await checklistItem
+    .getByText("Review the launch copy", { exact: true })
+    .boundingBox();
+  expect(checkboxBox).not.toBeNull();
+  expect(labelBox).not.toBeNull();
+  expect(
+    Math.abs(checkboxBox!.y + checkboxBox!.height / 2 - (labelBox!.y + labelBox!.height / 2)),
+  ).toBeLessThan(5);
+
+  await page.getByRole("button", { name: "Source" }).click();
+  const editor = page.locator(".cm-content");
+  await editor.waitFor();
+  await editor.click();
+  // Select-all + ArrowRight parks the cursor at the end on macOS and Linux;
+  // Cmd/Ctrl+End is not a consistent CodeMirror binding across both.
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.type("\n\nReviewed in Docs.");
+  await editor.getByText("Reviewed in Docs.", { exact: true }).waitFor({ timeout: 10_000 });
+  await page.getByRole("button", { name: "Preview" }).click();
+  await page
+    .locator("div.cursor-text")
+    .getByText("Reviewed in Docs.", { exact: true })
+    .waitFor({ timeout: 10_000 });
+
+  await page.getByRole("button", { name: "Comment on document" }).click();
+  await page
+    .getByPlaceholder("Comment on the entire document…")
+    .fill("Please add a short owner summary before sharing.");
+  await page.getByRole("button", { name: "Add document comment" }).click();
+  const commentsPanel = page.getByRole("complementary");
+  await commentsPanel
+    .getByText("Please add a short owner summary before sharing.", { exact: true })
+    .waitFor();
+  await commentsPanel.getByText("Whole document", { exact: true }).waitFor();
+
+  const reviewSentence = page
+    .locator("div.cursor-text")
+    .getByText("Make review decisions directly in the workspace file.", { exact: true });
+  await reviewSentence.selectText();
+  await reviewSentence.dispatchEvent("mouseup");
+  const selectionCommentButton = page.getByRole("button", { name: "Comment", exact: true });
+  await selectionCommentButton.waitFor({ timeout: 10_000 });
+  await selectionCommentButton.click();
+  await page
+    .getByPlaceholder("Comment on the selection…")
+    .fill("Can we make this promise more concrete?");
+  await page.getByRole("button", { name: "Comment", exact: true }).click();
+  await commentsPanel
+    .getByText("Can we make this promise more concrete?", { exact: true })
+    .waitFor();
+  await commentsPanel.getByText("Selected text", { exact: true }).waitFor();
+});
+
 /**
  * App hosts are `<app>--<project>.<base>`, one origin per app. Locally the
  * base is the dev server's `.localhost` port (Chromium resolves `*.localhost`
@@ -141,4 +269,15 @@ function appUrl(appSlug: string, projectSlug: string, baseURL: string) {
   const previewMatch = /^os\.(iterate-preview-\d+)\.com$/.exec(base.hostname);
   const projectBase = configuredBase || (previewMatch ? `${previewMatch[1]}.app` : base.hostname);
   return `${base.protocol}//${appSlug}--${projectSlug}.${projectBase}/`;
+}
+
+function docsOriginForBaseUrl(baseURL: string): string {
+  const override = process.env.DOCS_APP_ORIGIN?.trim();
+  if (override) return override.replace(/\/+$/, "");
+  const previewMatch = /^os\.iterate-preview-(\d+)\.com$/.exec(new URL(baseURL).hostname);
+  if (previewMatch) {
+    return `https://docs-preview-${previewMatch[1]}.iterate-dev-preview.workers.dev`;
+  }
+  if (new URL(baseURL).hostname === "os.iterate.com") return "https://docs.iterate.workers.dev";
+  throw new Error("DOCS_APP_ORIGIN is required when running the Docs app spec outside preview.");
 }

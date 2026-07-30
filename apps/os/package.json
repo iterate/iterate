@@ -49,6 +49,7 @@
     "@iterate-com/shared": "workspace:*",
     "@iterate-com/typm": "workspace:*",
     "@iterate-com/ui": "workspace:*",
+    "@iterate-com/workspace-documents": "workspace:*",
     "@journeyapps/wa-sqlite": "^1.7.0",
     "@mmkal/jsonata": "^2.2.1",
     "@modelcontextprotocol/client": "2.0.0-beta.1",
@@ -96,6 +97,7 @@
   "devDependencies": {
     "@cloudflare/vite-plugin": "catalog:cloudflare",
     "@cloudflare/workers-types": "catalog:cloudflare",
+    "@iterate-com/docs": "workspace:*",
     "@microsoft/tui-test": "0.0.4",
     "@octokit/webhooks": "^14.2.0",
     "@posthog/rollup-plugin": "^1.4.7",

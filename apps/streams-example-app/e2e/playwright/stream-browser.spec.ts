@@ -91,10 +91,14 @@ test("sidebar stream gate pauses and resumes ordinary appends", async ({ page })
   await expect(eventMeta(page, "events.iterate.com/stream/paused").first()).toBeVisible();
 
   // Ordinary appends are rejected while the gate is paused.
-  await appendComposerEvent(page, {
-    type: "events.iterate.com/debug/playwright-paused-rejected",
-    payload: { streamPath, value: crypto.randomUUID() },
-  });
+  await appendComposerEvent(
+    page,
+    {
+      type: "events.iterate.com/debug/playwright-paused-rejected",
+      payload: { streamPath, value: crypto.randomUUID() },
+    },
+    "error",
+  );
   await expect(page.getByTestId("composer-state").first()).toHaveText("error");
   await expect(eventMeta(page, "events.iterate.com/debug/playwright-paused-rejected")).toHaveCount(
     0,
@@ -414,12 +418,9 @@ test("split view can mount the same stream twice and display appends", async ({ 
   await expect(eventMeta(page, type)).toHaveCount(2);
 });
 
-// Covers the original writer role requirement across browser tabs. Closing the elected writer
-// must release the lock, promote the reader, reconnect, and keep future appends live.
-test("two browser tabs update and hand off writer role after the writer closes", async ({
-  context,
-  page,
-}) => {
+// Dedicated simultaneous cold-bootstrap contract: two tabs racing from an empty local database
+// must converge on exactly one writer and one reader, share events, and hand off cleanly.
+test("simultaneous cold tabs converge and hand off the writer role", async ({ context, page }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
   const otherPage = await context.newPage();
 
@@ -432,8 +433,13 @@ test("two browser tabs update and hand off writer role after the writer closes",
     expect(eventMeta(otherPage, "events.iterate.com/stream/created").first()).toBeVisible(),
   ]);
 
-  const type = "events.iterate.com/debug/playwright-two-tabs";
-  await appendComposerEvent(page, {
+  const writer = (await isWriter(page)) ? page : otherPage;
+  const reader = writer === page ? otherPage : page;
+  await expect(writer.getByTestId("database-role")).toHaveText("writer");
+  await expect(reader.getByTestId("database-role")).toHaveText("reader");
+
+  const type = "events.iterate.com/debug/playwright-simultaneous-cold-tabs";
+  await appendComposerEvent(reader, {
     type,
     payload: { streamPath, value: crypto.randomUUID() },
   });
@@ -443,9 +449,6 @@ test("two browser tabs update and hand off writer role after the writer closes",
     expect(eventMeta(otherPage, type).first()).toBeVisible(),
   ]);
 
-  const writer = (await isWriter(page)) ? page : otherPage;
-  const reader = writer === page ? otherPage : page;
-  await expect(reader.getByTestId("database-role")).toContainText(/reader|writer/);
   await writer.close();
   await expect(reader.getByTestId("database-role")).toHaveText("writer");
 
@@ -994,27 +997,26 @@ test("killing the stream DO mid-blast loses no appends and duplicates none", asy
     .toBe(insertedCount);
 });
 
-// Same guarantee from a READER tab: appends ride the reader's own connection (no
-// writer role required), survive a mid-blast DO kill, and both tabs' databases contain
-// the exact same count.
-test("two tabs: reader blast survives a DO kill and both databases contain every event", async ({
+// Same guarantee from an established READER tab: appends ride the reader's own connection
+// (no writer role required), survive a mid-blast DO kill, and both tabs' databases contain
+// the exact same count. Cold writer election is intentionally outside this contract; the
+// simultaneous-cold-tabs test above owns that independent race.
+test("established reader blast survives a DO kill and both databases contain every event", async ({
   context,
   page,
 }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
-  const otherPage = await context.newPage();
-  await Promise.all([
-    page.goto(streamRoute({ path: streamPath })),
-    otherPage.goto(streamRoute({ path: streamPath })),
-  ]);
-  await Promise.all([
-    expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible(),
-    expect(eventMeta(otherPage, "events.iterate.com/stream/created").first()).toBeVisible(),
-  ]);
+  await page.goto(streamRoute({ path: streamPath }));
+  await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
+  await expect(page.getByTestId("database-role")).toHaveText("writer");
 
-  const writer = (await isWriter(page)) ? page : otherPage;
-  const reader = writer === page ? otherPage : page;
-  await expect(reader.getByTestId("database-role")).toContainText(/reader|writer/);
+  const otherPage = await context.newPage();
+  await otherPage.goto(streamRoute({ path: streamPath }));
+  await expect(eventMeta(otherPage, "events.iterate.com/stream/created").first()).toBeVisible();
+  await expect(otherPage.getByTestId("database-role")).toHaveText("reader");
+
+  const writer = page;
+  const reader = otherPage;
 
   const insertedCount = 2000;
   await reader.getByLabel("Count").fill(String(insertedCount));
@@ -1203,12 +1205,21 @@ function eventRowByOffset(scope: Page | Locator, offset: number) {
   return scope.locator(`[data-testid='event-meta'][data-event-offset='${offset}']`);
 }
 
-async function appendComposerEvent(scope: Page | Locator, event: unknown) {
-  await scope
-    .getByLabel("Event JSON")
-    .first()
-    .fill(JSON.stringify(event, null, 2));
-  await scope.getByRole("button", { name: "Append event" }).first().click();
+async function appendComposerEvent(
+  scope: Page | Locator,
+  event: unknown,
+  expectedState: "appended" | "error" = "appended",
+) {
+  const composer = scope.getByTestId("stream-composer").first();
+  await composer.getByLabel("Event JSON").fill(JSON.stringify(event, null, 2));
+  await composer.getByRole("button", { name: "Append event" }).click();
+
+  // appendBatch owns bounded, idempotent recovery for a tagged Durable Object
+  // reset. Synchronize on this operation instead of racing a downstream event
+  // assertion; terminal application errors remain immediate failures.
+  const terminalState = composer.getByTestId("composer-state");
+  await expect(terminalState).toHaveText(/^(?:appended|error)$/, { timeout: 45_000 });
+  expect(await terminalState.textContent()).toBe(expectedState);
 }
 
 function splitPane(page: Page, streamPath: string) {

@@ -1,5 +1,6 @@
 ---
 id: structure/validate-unknown-shapes
+severity: error
 files:
   [
     "**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}",

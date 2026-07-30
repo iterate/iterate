@@ -1464,6 +1464,49 @@ describe("StreamProcessorRunner caught-up processing (delivery.caughtUp)", () =>
     });
   });
 
+  it("lets a scan-owning source advance a filtered gap without an unfiltered self-pull", async () => {
+    const journal = makeJournal();
+    const requested = journal.seed({ type: REQUESTED, payload: { id: "a" } });
+    journal.seed({ type: NOISE, payload: {} });
+
+    const headCalls: { open: string[]; event: number | null }[] = [];
+    const harness = makeHarness({
+      journal,
+      hooks: {
+        onHead: (args) => {
+          headCalls.push({ open: [...args.state.open], event: args.event?.offset ?? null });
+        },
+      },
+    });
+    const { processEventBatch } = await harness.runner.openEventBatchCallback(undefined, {
+      sourceScansAllEvents: true,
+    });
+
+    await processEventBatch({
+      streamId: TEST_STREAM_ID,
+      events: [requested],
+      scannedAfterOffset: 0,
+      scannedThroughOffset: 1,
+      streamMaxOffset: 2,
+    });
+    await tick();
+
+    // The runner has not read the raw NOISE row behind the configured source
+    // filter. It waits for the source's explicit scan-progress frame.
+    expect(harness.store.record?.processing.acknowledgedThroughOffset).toBe(1);
+    expect(headCalls).toEqual([]);
+
+    await processEventBatch({
+      streamId: TEST_STREAM_ID,
+      events: [],
+      scannedAfterOffset: 1,
+      scannedThroughOffset: 2,
+      streamMaxOffset: 2,
+    });
+    expect(harness.store.record?.processing.acknowledgedThroughOffset).toBe(2);
+    expect(headCalls).toEqual([{ open: ["a"], event: null }]);
+  });
+
   it("runs blockProcessorWhile registrations in strict FIFO order — fold-derived work lands after per-event work", async () => {
     // The head event registers TWO blockers in one `processEvent` body: a
     // per-event append first, a fold-derived append second. Registration
@@ -1657,6 +1700,24 @@ describe("StreamProcessorRunner.waitUntilEvent", () => {
     await expect(harness.runner.waitUntilEvent({ offset: 99, timeoutMs: 5 })).rejects.toThrow(
       /timed out/,
     );
+  });
+
+  it("predicate form remains pending until a matching future delivery is acknowledged", async () => {
+    const harness = makeHarness();
+    let settled = false;
+    const waiting = harness.runner.waitUntilEvent({
+      predicate: (event) => event.type === REQUESTED && event.payload?.id === "match",
+      timeoutMs: 500,
+    });
+    waiting.finally(() => (settled = true)).catch(() => undefined);
+
+    await tick();
+    expect(settled).toBe(false);
+
+    harness.journal.seed({ type: REQUESTED, payload: { id: "match" } });
+    await harness.deliverBatches([harness.journal.rows().slice()]);
+    await expect(waiting).resolves.toBeUndefined();
+    expect(settled).toBe(true);
   });
 
   it("offset form reaches an already-appended event by SELF-PULL — read-your-writes never depends on push delivery", async () => {

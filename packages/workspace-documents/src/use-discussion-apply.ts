@@ -2,7 +2,7 @@ import { useState } from "react";
 import { parseAnnotatedMarkdown } from "iterate/annotated-markdown";
 import type { StructuredDocument } from "iterate/annotated-markdown";
 
-/** An edit against the parsed document; returns the next raw source. */
+/** An annotation edit against the parsed document; returns the next raw source. */
 export type DiscussionOp = (doc: StructuredDocument) => { raw: string };
 
 /**

@@ -139,6 +139,17 @@ const MAX_FAILING_EVENT_SKIPS_SINCE_LAST_SUCCESS = 3;
  */
 const DELIVERY_BATCH_LIMIT = 1000;
 
+/**
+ * Hosted processors can turn one event into arbitrary Durable Object and
+ * external work. Give each matching event its own acknowledgement boundary so
+ * a slow event cannot make already-processed siblings time out and replay.
+ * Matching work is deliberately one-at-a-time. The separate scan limit keeps
+ * reconstructing and filtering a noisy source from filling the source Durable
+ * Object's memory before that one-event boundary can help.
+ */
+const HOSTED_CALLBACK_EVENT_LIMIT = 1;
+const HOSTED_SCAN_EVENT_LIMIT = 100;
+
 /** Soft cap on a delivery batch's payload bytes (large events shrink the batch). */
 const DELIVERY_BATCH_BYTE_LIMIT = 1024 * 1024;
 
@@ -1512,6 +1523,44 @@ function connectionError(error: unknown): string {
   return boundedErrorMessage(error) ?? "unknown error";
 }
 
+function deliveryErrorDiagnostics(error: unknown): {
+  errorName: string;
+  errorMessage: string;
+  itxCallId?: string;
+  cloudflareErrorReference?: string;
+} {
+  const errorMessage = connectionError(error);
+  let errorName = "NonErrorThrowable";
+  let itxCallId: string | undefined;
+  try {
+    if (typeof error === "object" && error !== null) {
+      const candidateName: unknown = Reflect.get(error, "name");
+      const candidateItxCallId: unknown = Reflect.get(error, "itxCallId");
+      if (typeof candidateName === "string" && candidateName.length > 0) {
+        errorName = candidateName.slice(0, 200);
+      }
+      if (
+        typeof candidateItxCallId === "string" &&
+        candidateItxCallId.length > 0 &&
+        candidateItxCallId.length <= 200
+      ) {
+        itxCallId = candidateItxCallId;
+      }
+    }
+  } catch {
+    // A hostile remote throwable must not break the failure/retry transition.
+  }
+  const cloudflareErrorReference = /\breference\s*=\s*([a-z0-9]{8,128})\b/iu.exec(
+    errorMessage,
+  )?.[1];
+  return {
+    errorName,
+    errorMessage,
+    ...(itxCallId === undefined ? {} : { itxCallId }),
+    ...(cloudflareErrorReference === undefined ? {} : { cloudflareErrorReference }),
+  };
+}
+
 /**
  * Runtime state machine for session callbacks and hosted-processor callbacks.
  *
@@ -1651,7 +1700,35 @@ export class StreamConnections {
     ) {
       return;
     }
-    const details = { connectionKey, errorMessage: connectionError(error), source };
+    const state = this.#hooks.coreState();
+    const pendingDeliveryStartedAtMs = connection.pendingDeliveryStartedAtMs();
+    const pendingDeliveryDeadlineAtMs = connection.pendingDeliveryDeadlineAtMs();
+    const processorAnnouncement = connection.openedBy?.processor?.announcement;
+    const details = {
+      connectionKey,
+      source,
+      ...deliveryErrorDiagnostics(error),
+      projectId: state.projectId,
+      streamPath: state.path,
+      streamId: state.streamId,
+      configuredAtOffset: expectedDelivery.configuredAtOffset,
+      cursorChangedAtOffset: expectedDelivery.cursorChangedAtOffset,
+      connectionGeneration: expectedDelivery.connectionGeneration,
+      deliveredThroughOffset: connection.deliveredThroughOffset,
+      streamMaxOffset: state.maxOffset,
+      ...(pendingDeliveryStartedAtMs === null
+        ? {}
+        : { pendingDeliveryStartedAt: new Date(pendingDeliveryStartedAtMs).toISOString() }),
+      ...(pendingDeliveryDeadlineAtMs === null
+        ? {}
+        : { pendingDeliveryDeadlineAt: new Date(pendingDeliveryDeadlineAtMs).toISOString() }),
+      ...(processorAnnouncement === undefined
+        ? {}
+        : {
+            processorSlug: processorAnnouncement.slug,
+            processorContractVersion: processorAnnouncement.version,
+          }),
+    };
     if (error instanceof EventFilterEvaluationError) {
       console.info("stream hosted callback filter condition failed; backing off", details);
     } else if (source === "rpc-broken" || isDurableObjectLifecycleError(error)) {
@@ -1903,7 +1980,7 @@ export class StreamConnections {
             const readEvents = this.#hooks.readBatch(
               deliveredThroughOffset,
               Number.MAX_SAFE_INTEGER,
-              DELIVERY_BATCH_LIMIT,
+              kind === "hosted" ? HOSTED_SCAN_EVENT_LIMIT : DELIVERY_BATCH_LIMIT,
             );
             const lastOffset = readEvents.at(-1)?.event.offset;
             if (lastOffset === undefined) {
@@ -1919,10 +1996,21 @@ export class StreamConnections {
                       (entry) =>
                         entry.event.ephemeral !== true || entry.event.offset > openedAtOffset,
                     );
-              const delivered =
+              const matched =
                 args.filter === undefined
                   ? visible
                   : visible.filter((entry) => args.filter!.matches(entry.event));
+              const delivered =
+                kind === "hosted" ? matched.slice(0, HOSTED_CALLBACK_EVENT_LIMIT) : matched;
+              // If more matching hosted work remains in the scanned window,
+              // stop at the last event actually handed to the callback. The
+              // next acknowledged batch resumes immediately after it; all
+              // preceding non-matches have still been skipped durably.
+              const lastDeliveredOffset = delivered.at(-1)?.event.offset;
+              deliveredThroughOffset =
+                delivered.length < matched.length && lastDeliveredOffset !== undefined
+                  ? lastDeliveredOffset
+                  : lastOffset;
               events = delivered.map((entry) => entry.event);
               deliveredBytes = delivered.reduce((sum, entry) => sum + entry.byteLength, 0);
             }
@@ -2138,6 +2226,11 @@ function parseWakeDeliveryResult(
   return {
     outcome: "error",
     error: Object.assign(error, {
+      ...(typeof serialized.itxCallId === "string" &&
+      serialized.itxCallId.length > 0 &&
+      serialized.itxCallId.length <= 200
+        ? { itxCallId: serialized.itxCallId }
+        : {}),
       ...(serialized.durableObjectReset === true ? { durableObjectReset: true } : {}),
       ...(serialized.overloaded === true ? { overloaded: true } : {}),
       ...(serialized.retryable === true ? { retryable: true } : {}),

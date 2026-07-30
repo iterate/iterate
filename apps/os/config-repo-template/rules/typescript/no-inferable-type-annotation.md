@@ -1,5 +1,6 @@
 ---
 id: typescript/no-inferable-type-annotation
+severity: error
 files:
   [
     "**/*.{ts,tsx,mts,cts}",

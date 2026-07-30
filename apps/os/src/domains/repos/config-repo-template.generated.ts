@@ -188,6 +188,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  \"type\": \"module\",\n" +
       "  \"description\": \"Iterate project worker and packaged full-stack apps.\",\n" +
       "  \"dependencies\": {\n" +
+      "    \"@iterate-com/docs\": \"https://pkg.pr.new/iterate/iterate/@iterate-com/docs@main\",\n" +
       "    \"iterate\": \"https://pkg.pr.new/iterate/iterate/iterate@main\",\n" +
       "    \"react\": \"19.2.4\",\n" +
       "    \"react-dom\": \"19.2.4\",\n" +
@@ -206,6 +207,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
     content:
       "---\n" +
       "id: structure/no-small-single-use-helper\n" +
+      "severity: error\n" +
       "files:\n" +
       "  [\n" +
       "    \"**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}\",\n" +
@@ -223,6 +225,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
     content:
       "---\n" +
       "id: typescript/explain-type-cast\n" +
+      "severity: error\n" +
       "files:\n" +
       "  [\n" +
       "    \"**/*.{ts,tsx,mts,cts}\",\n" +
@@ -240,6 +243,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
     content:
       "---\n" +
       "id: typescript/no-inferable-type-annotation\n" +
+      "severity: error\n" +
       "files:\n" +
       "  [\n" +
       "    \"**/*.{ts,tsx,mts,cts}\",\n" +
@@ -274,6 +278,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
   {
     path: "worker.ts",
     content:
+      "import { DocsApp } from \"@iterate-com/docs\";\n" +
       "import { GithubAiLinter } from \"iterate/starter-apps/github-ai-linter\";\n" +
       "import { GuestbookApp } from \"iterate/starter-apps/guestbook\";\n" +
       "import { IterateWorkerEntrypoint, type StreamEvent } from \"iterate/sdk\";\n" +
@@ -301,8 +306,20 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      repoPath: \"/repos/config\",\n" +
       "    },\n" +
       "  });\n" +
+      "  #docsApp = DocsApp.create(this.env, {\n" +
+      "    auth: { policy: \"project-member\" },\n" +
+      "    proxy: {\n" +
+      "      origin: \"https://docs.iterate.workers.dev\",\n" +
+      "      originOverrideKvKey: \"docs-app-origin\",\n" +
+      "    },\n" +
+      "  });\n" +
       "  #guestbookApp = GuestbookApp.create(this.env);\n" +
       "  #todoApp = TodoApp.create(this.env);\n" +
+      "\n" +
+      "  /** Agent-callable Docs helpers, including `itx.worker.docs.link({ workspace, path })`. */\n" +
+      "  get docs() {\n" +
+      "    return this.#docsApp.rpc;\n" +
+      "  }\n" +
       "\n" +
       "  // The base class delivers committed events on ANY stream here at least once and in\n" +
       "  // per-stream order.\n" +
@@ -381,6 +398,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        }),\n" +
       "      );\n" +
       "    }\n" +
+      "    if (app === \"docs\") {\n" +
+      "      return this.#docsApp.fetch(req);\n" +
+      "    }\n" +
       "    if (app) return new Response(`unknown app: ${app}`, { status: 404 });\n" +
       "\n" +
       "    const url = new URL(req.url);\n" +
@@ -397,6 +417,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "                <li><a href=\"${appUrl(\"todo\")}\">todo</a> (LiveState + Cap'n Web, project members only)</li>\n" +
       "                <li><a href=\"${appUrl(\"guestbook\")}\">guestbook</a> (stream processor reduce on /guestbook, public)</li>\n" +
       "                <li><a href=\"${appUrl(\"tasks\")}\">tasks</a> (collaborative task board over tasks/, project members only)</li>\n" +
+      "                <li><a href=\"${appUrl(\"docs\")}\">docs</a> (direct workspace document review, project members only)</li>\n" +
       "              </ul>\n" +
       "              <p>Edit worker.ts in the project repo to change this.</p>\n" +
       "            </main>\n" +

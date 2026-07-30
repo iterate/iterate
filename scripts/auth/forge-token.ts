@@ -12,13 +12,15 @@ import {
  * must authenticate against a relying-party worker (os, semaphore).
  *
  * Auth signs JWTs with the private half from Doppler
- * (AUTH_FORGE_PRIVATE_JWK), and relying-party deploys trust its derived public
- * half. This signs with that same key fully offline, with no auth worker call.
+ * (AUTH_FORGE_ES256_PRIVATE_JWK), and relying-party deploys trust its derived
+ * public half. This signs with that same key fully offline, with no auth
+ * worker call. The algorithm is read from the JWK's `alg`, so it follows the
+ * key (ES256).
  */
 
 /** Inputs for one forge-signed access token (the bearer credential relying parties verify). */
 export interface ForgeAccessTokenInput {
-  /** The forge private JWK as its JSON string (Doppler AUTH_FORGE_PRIVATE_JWK). */
+  /** The forge private JWK as its JSON string (Doppler AUTH_FORGE_ES256_PRIVATE_JWK). */
   forgePrivateJwk: string;
   /** Token issuer — the env's auth issuer, e.g. https://auth.iterate.com/api/auth */
   issuer: string;

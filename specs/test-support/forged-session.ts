@@ -28,8 +28,8 @@ const OsPlaywrightAuthEnv = z.object({
   APP_CONFIG_ITERATE_AUTH__CLIENT_ID: z.string().min(1),
   /** Auth issuer used for both forged access and id tokens. */
   APP_CONFIG_ITERATE_AUTH__ISSUER: z.url(),
-  /** Private half of the Auth signing key whose public half OS trusts. */
-  AUTH_FORGE_PRIVATE_JWK: z
+  /** Private half of the ES256 Auth signing key whose public half OS trusts. */
+  AUTH_FORGE_ES256_PRIVATE_JWK: z
     .string()
     .min(1)
     .refine((value) => {
@@ -262,7 +262,7 @@ async function loadOsPlaywrightAuthConfig(): Promise<OsPlaywrightAuthConfig> {
   return {
     adminApiSecret: env.APP_CONFIG_ADMIN_API_SECRET,
     clientId: env.APP_CONFIG_ITERATE_AUTH__CLIENT_ID,
-    forgePrivateJwk: env.AUTH_FORGE_PRIVATE_JWK,
+    forgePrivateJwk: env.AUTH_FORGE_ES256_PRIVATE_JWK,
     issuer: env.APP_CONFIG_ITERATE_AUTH__ISSUER,
   };
 }

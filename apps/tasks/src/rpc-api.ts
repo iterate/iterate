@@ -1,7 +1,12 @@
 import { RpcTarget } from "capnweb";
 import { getServerByName } from "partyserver";
+import {
+  ProjectDial,
+  projectCredentialAddress,
+  readCookie,
+  tokenClaims,
+} from "@iterate-com/workspace-documents/server";
 import type { AppEnv } from "./env.ts";
-import { ProjectDial } from "./checkout-do.ts";
 import type { CommitResult, TaskChangeSummary } from "./state.ts";
 import type {
   CheckoutIndexEntry,
@@ -68,13 +73,18 @@ export class TasksApiRoot extends RpcTarget implements TasksApi {
 
   async authenticate(credential?: string | ProjectCredential): Promise<TasksProject> {
     const resolved = this.#resolve(credential);
-    const projectId =
-      resolved.type === "project-secret" ? resolved.projectId : projectIdClaim(resolved.token);
-    const dial = new ProjectDial(this.#env.OS_BASE_URL, projectId, resolved);
+    const dial = new ProjectDial(
+      this.#env.OS_BASE_URL,
+      projectCredentialAddress(resolved),
+      resolved,
+    );
+    let projectId: string;
     try {
       // Verify by use: the vessel keeps no secrets, so a cheap authenticated
-      // read against the claimed project is the whole check.
-      await dial.withProject((project) => project.repos.list());
+      // identity read against the claimed project is the whole check. Keep
+      // the canonical id for Durable Object names even when the caller used
+      // the preferred slug-addressed project-secret.
+      projectId = (await dial.withProject((project) => project.identity())).projectId;
     } catch (error) {
       dial.close();
       throw new Error(`authentication failed: ${errorText(error)}`);
@@ -88,7 +98,8 @@ export class TasksApiRoot extends RpcTarget implements TasksApi {
     }
     if (credential !== undefined && typeof credential === "object" && credential !== null) {
       if (credential.type === "project-app-session" && credential.token) return credential;
-      if (credential.type === "project-secret" && credential.projectId && credential.secret) {
+      if (credential.type === "project-secret" && credential.secret) {
+        projectCredentialAddress(credential);
         return credential;
       }
       throw new Error("unsupported credential — expected project-app-session or project-secret");
@@ -583,45 +594,6 @@ class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
   }
 }
 
-/**
- * The projectId claim, read (unverified) from the JWT payload purely to know
- * which project to dial — authenticate() then proves the token against that
- * very project, so a forged claim just fails the dial. Padding restored
- * before atob because workerd's atob is strict.
- */
-function projectIdClaim(token: string): string {
-  const claims = tokenClaims(token);
-  if (typeof claims.projectId === "string" && claims.projectId !== "") {
-    return claims.projectId;
-  }
-  throw new Error("session token is not a project-app-session JWT");
-}
-
-function tokenClaims(token: string): Record<string, unknown> {
-  const parts = token.split(".");
-  if (parts.length === 3) {
-    const body = parts[1]!.replace(/-/g, "+").replace(/_/g, "/");
-    try {
-      const claims: unknown = JSON.parse(atob(body + "=".repeat((4 - (body.length % 4)) % 4)));
-      if (typeof claims === "object" && claims !== null) {
-        return claims as Record<string, unknown>;
-      }
-    } catch {
-      // malformed payload — fall through to the empty record
-    }
-  }
-  return {};
-}
-
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function readCookie(request: Request, name: string): string | undefined {
-  const header = request.headers.get("cookie") ?? "";
-  for (const part of header.split(";")) {
-    const [key, ...rest] = part.trim().split("=");
-    if (key === name) return rest.join("=");
-  }
-  return undefined;
 }

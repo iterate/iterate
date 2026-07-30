@@ -169,6 +169,25 @@ describe("selection → source", () => {
     expect(body.slice(range!.start, range!.end)).toBe("right cell");
   });
 
+  test("a task-list label stays inline with its checkbox and maps exactly", () => {
+    const body = "- [x] Review the plan\n";
+    const { root } = mount(body);
+    const task = root.querySelector("li[data-task]");
+    expect(task?.children[0]?.tagName).toBe("INPUT");
+    expect(task?.children[1]?.tagName).toBe("SPAN");
+    expect(task?.querySelector(":scope > p")).toBeNull();
+
+    const projection = buildProjection(root);
+    const point = domPointAt(root, "Review the plan");
+    const range = projection.domRangeToSource({
+      startContainer: point.node,
+      startOffset: point.offset,
+      endContainer: point.node,
+      endOffset: point.offset + "Review the plan".length,
+    });
+    expect(body.slice(range!.start, range!.end)).toBe("Review the plan");
+  });
+
   test("unicode text (emoji) keeps UTF-16 offsets aligned", () => {
     const body = "Ship 🚀 tomorrow, not today.\n";
     const { root } = mount(body);

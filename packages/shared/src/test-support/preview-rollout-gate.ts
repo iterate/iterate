@@ -29,9 +29,9 @@ export function resolvePreviewRolloutWaitMs(input: {
 }
 
 /**
- * Wait only at the operation that first creates project-backed Durable
- * Objects. Browser startup, authentication, and unrelated tests remain free to
- * overlap Cloudflare's global code propagation window.
+ * Wait at the earliest operation that requires the freshly deployed app to be
+ * settled. Most callers can overlap browser and authentication setup, while a
+ * flow whose first navigation can observe the parked predecessor waits there.
  */
 export async function waitForPreviewRolloutBeforeProjectCreation(input?: {
   beforeWait?: (waitMs: number) => void | Promise<void>;

@@ -138,7 +138,7 @@ importers:
         version: 2.2.3
       knip:
         specifier: ^6.0.5
-        version: 6.0.5
+        version: 6.0.5(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)
       lint-staged:
         specifier: ^16.2.7
         version: 16.3.2
@@ -174,7 +174,7 @@ importers:
     dependencies:
       '@better-auth/oauth-provider':
         specifier: ^1.6.9
-        version: 1.6.9(patch_hash=e05b6e0e968dd85c546197511b6b7bdeaf9f4449572e4a143d90d5d31008fb40)(@better-auth/core@1.6.9(@better-auth/utils@0.4.0)(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(better-call@1.3.5(zod@4.3.6))(jose@6.2.2)(kysely@0.28.16)(nanostores@1.1.1))(@better-auth/utils@0.4.0)(@better-fetch/fetch@1.1.21)(better-auth@1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.167.5(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(mysql2@3.18.2(@types/node@26.1.1))(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.0.15)(vue@3.5.30(typescript@6.0.3)))(better-call@1.3.5(zod@4.3.6))
+        version: 1.6.9(patch_hash=e05b6e0e968dd85c546197511b6b7bdeaf9f4449572e4a143d90d5d31008fb40)(@better-auth/core@1.6.9(@better-auth/utils@0.4.0)(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(better-call@1.3.5(zod@4.3.6))(jose@6.2.2)(kysely@0.28.16)(nanostores@1.1.1))(@better-auth/utils@0.4.0)(@better-fetch/fetch@1.1.21)(better-auth@1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.167.5(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(mysql2@3.18.2(@types/node@26.1.1))(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.0.15)(vue@3.5.30(typescript@5.9.3)))(better-call@1.3.5(zod@4.3.6))
       '@iterate-com/auth-contract':
         specifier: workspace:*
         version: link:../auth-contract
@@ -204,10 +204,10 @@ importers:
         version: 1.167.5(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
       auth:
         specifier: ^1.6.9
-        version: 1.6.9(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.167.5(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(better-call@1.3.5(zod@4.3.6))(jose@6.2.2)(kysely@0.28.16)(mysql2@3.18.2(@types/node@26.1.1))(nanostores@1.1.1)(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.0.15)(vue@3.5.30(typescript@6.0.3))
+        version: 1.6.9(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.167.5(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(better-call@1.3.5(zod@4.3.6))(jose@6.2.2)(kysely@0.28.16)(mysql2@3.18.2(@types/node@26.1.1))(nanostores@1.1.1)(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.0.15)(vue@3.5.30(typescript@5.9.3))
       better-auth:
         specifier: ^1.6.9
-        version: 1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.167.5(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(mysql2@3.18.2(@types/node@26.1.1))(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.0.15)(vue@3.5.30(typescript@6.0.3))
+        version: 1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.167.5(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(mysql2@3.18.2(@types/node@26.1.1))(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.0.15)(vue@3.5.30(typescript@5.9.3))
       hono:
         specifier: ^4.12.8
         version: 4.12.15
@@ -225,7 +225,7 @@ importers:
         version: 19.2.7(react@19.2.7)
       sqlfu:
         specifier: 0.1.1
-        version: 0.1.1(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@6.0.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@6.0.3)))(better-auth@1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.167.5(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(mysql2@3.18.2(@types/node@26.1.1))(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.0.15)(vue@3.5.30(typescript@6.0.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@6.0.3))(ws@8.19.0)
+        version: 0.1.1(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(better-auth@1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.167.5(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(mysql2@3.18.2(@types/node@26.1.1))(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.0.15)(vue@3.5.30(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(ws@8.19.0)
       tailwindcss:
         specifier: ^4.3.2
         version: 4.3.2
@@ -262,13 +262,13 @@ importers:
         version: 4.20260701.0
       trpc-cli:
         specifier: 0.15.1
-        version: 0.15.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@6.0.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@6.0.3)))(effect@3.19.19)(valibot@1.2.0(typescript@6.0.3))(zod@4.3.6)
+        version: 0.15.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
       vite:
         specifier: ^8.0.0
         version: 8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
       vitest:
         specifier: 4.0.15
-        version: 4.0.15(@opentelemetry/api@1.9.0)(@types/node@26.1.1)(@vitest/browser-playwright@4.0.15)(@vitest/ui@4.0.15)(jiti@2.7.0)(jsdom@27.4.0(@noble/hashes@2.2.0))(lightningcss@1.32.0)(msw@2.13.3(@types/node@26.1.1)(typescript@6.0.3))(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
+        version: 4.0.15(@opentelemetry/api@1.9.0)(@types/node@26.1.1)(@vitest/browser-playwright@4.0.15)(@vitest/ui@4.0.15)(jiti@2.7.0)(jsdom@27.4.0(@noble/hashes@2.2.0))(lightningcss@1.32.0)(msw@2.13.3(@types/node@26.1.1)(typescript@5.9.3))(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
       wrangler:
         specifier: 4.107.0
         version: 4.107.0(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))
@@ -337,6 +337,78 @@ importers:
       vite:
         specifier: ^8.0.0
         version: 8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
+      wrangler:
+        specifier: 4.107.0
+        version: 4.107.0(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))
+
+  apps/docs:
+    devDependencies:
+      '@cloudflare/vite-plugin':
+        specifier: catalog:cloudflare
+        version: 1.43.0(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260701.1)(wrangler@4.107.0(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2)))
+      '@cloudflare/workers-types':
+        specifier: catalog:cloudflare
+        version: 4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2)
+      '@iterate-com/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
+      '@iterate-com/workspace-documents':
+        specifier: workspace:*
+        version: link:../../packages/workspace-documents
+      '@tailwindcss/vite':
+        specifier: ^4.3.2
+        version: 4.3.2(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
+      '@tanstack/react-router':
+        specifier: ^1.170.10
+        version: 1.170.15(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@tanstack/react-start':
+        specifier: ^1.168.18
+        version: 1.168.25(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
+      '@types/node':
+        specifier: ^24.12.4
+        version: 24.12.4
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      '@vitejs/plugin-react':
+        specifier: ^6.0.2
+        version: 6.0.2(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.0)(@babel/plugin-transform-runtime@7.29.7(@babel/core@7.29.0))(@babel/runtime@7.28.6)(rolldown@1.1.0)(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(babel-plugin-react-compiler@1.0.0)(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
+      capnweb:
+        specifier: npm:@iterate-com/capnweb@0.10.0
+        version: '@iterate-com/capnweb@0.10.0'
+      iterate:
+        specifier: workspace:*
+        version: link:../../packages/iterate
+      lucide-react:
+        specifier: ^0.553.0
+        version: 0.553.0(@types/react@19.2.17)(react@19.2.7)
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      tailwindcss:
+        specifier: ^4.3.2
+        version: 4.3.2
+      trpc-cli:
+        specifier: 0.15.1
+        version: 0.15.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.4.3)
+      tsx:
+        specifier: ^4.20.6
+        version: 4.21.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vite:
+        specifier: ^8.0.16
+        version: 8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
+      vitest:
+        specifier: ^4.1.10
+        version: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.12.4)(jsdom@27.4.0(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@24.12.4)(typescript@5.9.3))(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
       wrangler:
         specifier: 4.107.0
         version: 4.107.0(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))
@@ -661,6 +733,9 @@ importers:
       '@iterate-com/ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      '@iterate-com/workspace-documents':
+        specifier: workspace:*
+        version: link:../../packages/workspace-documents
       '@journeyapps/wa-sqlite':
         specifier: ^1.7.0
         version: 1.7.0(patch_hash=628f45a8b65f5811216d637fb5cc4584db8f69a125d1ae417c4e49bc38ebca83)
@@ -797,6 +872,9 @@ importers:
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
         version: 4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2)
+      '@iterate-com/docs':
+        specifier: workspace:*
+        version: link:../docs
       '@microsoft/tui-test':
         specifier: 0.0.4
         version: 0.0.4(@swc/helpers@0.5.19)
@@ -1050,7 +1128,7 @@ importers:
         version: 4.3.2
       trpc-cli:
         specifier: 0.15.1
-        version: 0.15.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@6.0.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@6.0.3)))(effect@3.19.19)(valibot@1.2.0(typescript@6.0.3))(zod@4.4.3)
+        version: 0.15.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.4.3)
       tsx:
         specifier: ^4.20.6
         version: 4.21.0
@@ -1062,7 +1140,7 @@ importers:
         version: 8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
       vitest:
         specifier: ^4.1.7
-        version: 4.1.8(@opentelemetry/api@1.9.0)(@types/node@24.12.4)(@vitest/browser-playwright@4.1.8)(jsdom@27.4.0(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@24.12.4)(typescript@6.0.3))(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
+        version: 4.1.8(@opentelemetry/api@1.9.0)(@types/node@24.12.4)(@vitest/browser-playwright@4.1.8)(jsdom@27.4.0(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@24.12.4)(typescript@5.9.3))(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
       wrangler:
         specifier: 4.107.0
         version: 4.107.0(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))
@@ -1089,7 +1167,7 @@ importers:
         version: 19.2.7(react@19.2.7)
       sqlfu:
         specifier: 0.1.1
-        version: 0.1.1(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@6.0.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@6.0.3)))(better-auth@1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.168.25(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(mysql2@3.18.2(@types/node@24.12.4))(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.12.4)(jsdom@27.4.0(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@24.12.4)(typescript@6.0.3))(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(vue@3.5.30(typescript@6.0.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@6.0.3))(ws@8.19.0)
+        version: 0.1.1(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(better-auth@1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.168.25(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(mysql2@3.18.2(@types/node@24.12.4))(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.12.4)(jsdom@27.4.0(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@24.12.4)(typescript@5.9.3))(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(vue@3.5.30(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(ws@8.19.0)
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: catalog:cloudflare
@@ -1130,9 +1208,6 @@ importers:
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
         version: 4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2)
-      '@codemirror/collab':
-        specifier: ^6.1.1
-        version: 6.1.1
       '@codemirror/commands':
         specifier: ^6.10.4
         version: 6.10.4
@@ -1148,6 +1223,9 @@ importers:
       '@iterate-com/ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      '@iterate-com/workspace-documents':
+        specifier: workspace:*
+        version: link:../../packages/workspace-documents
       '@tailwindcss/vite':
         specifier: ^4.3.2
         version: 4.3.2(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
@@ -1564,6 +1642,58 @@ importers:
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
+
+  packages/workspace-documents:
+    dependencies:
+      '@codemirror/collab':
+        specifier: ^6.1.1
+        version: 6.1.1
+      '@codemirror/commands':
+        specifier: ^6.10.4
+        version: 6.10.4
+      '@codemirror/lang-html':
+        specifier: ^6.4.11
+        version: 6.4.11
+      '@codemirror/lang-markdown':
+        specifier: ^6.5.0
+        version: 6.5.0
+      '@codemirror/state':
+        specifier: ^6.7.1
+        version: 6.7.1
+      '@codemirror/view':
+        specifier: ^6.43.6
+        version: 6.43.6
+      '@iterate-com/ui':
+        specifier: workspace:*
+        version: link:../ui
+      capnweb:
+        specifier: npm:@iterate-com/capnweb@0.10.0
+        version: '@iterate-com/capnweb@0.10.0'
+      iterate:
+        specifier: workspace:*
+        version: link:../iterate
+      lucide-react:
+        specifier: ^0.553.0
+        version: 0.553.0(@types/react@19.2.17)(react@19.2.7)
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: catalog:cloudflare
+        version: 4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vite:
+        specifier: ^8.0.16
+        version: 8.0.16(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
+      vitest:
+        specifier: ^4.1.10
+        version: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@26.1.1)(jsdom@27.4.0(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@26.1.1)(typescript@5.9.3))(vite@8.0.16(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
 
   scripts:
     dependencies:
@@ -13669,7 +13799,7 @@ snapshots:
     dependencies:
       '@jsdevtools/ono': 7.1.3
       '@types/json-schema': 7.0.15
-      js-yaml: 4.3.0
+      js-yaml: 4.1.1
 
   '@asamuzakjp/css-color@4.1.2':
     dependencies:
@@ -13792,7 +13922,7 @@ snapshots:
       '@babel/helper-optimise-call-expression': 7.27.1
       '@babel/helper-replace-supers': 7.28.6(@babel/core@7.29.0)
       '@babel/helper-skip-transparent-expression-wrappers': 7.27.1
-      '@babel/traverse': 7.29.7
+      '@babel/traverse': 7.29.0
       semver: 6.3.1
     transitivePeerDependencies:
       - supports-color
@@ -13947,7 +14077,7 @@ snapshots:
   '@babel/helpers@7.28.6':
     dependencies:
       '@babel/template': 7.28.6
-      '@babel/types': 7.29.7
+      '@babel/types': 7.29.0
 
   '@babel/highlight@7.25.9':
     dependencies:
@@ -14290,7 +14420,7 @@ snapshots:
       '@babel/helper-module-imports': 7.28.6
       '@babel/helper-plugin-utils': 7.28.6
       '@babel/plugin-syntax-jsx': 7.28.6(@babel/core@7.29.0)
-      '@babel/types': 7.29.7
+      '@babel/types': 7.29.0
     transitivePeerDependencies:
       - supports-color
 
@@ -14383,9 +14513,9 @@ snapshots:
 
   '@babel/template@7.28.6':
     dependencies:
-      '@babel/code-frame': 7.29.7
-      '@babel/parser': 7.29.7
-      '@babel/types': 7.29.7
+      '@babel/code-frame': 7.29.0
+      '@babel/parser': 7.29.0
+      '@babel/types': 7.29.0
 
   '@babel/template@7.29.7':
     dependencies:
@@ -14488,12 +14618,12 @@ snapshots:
       '@better-auth/core': 1.6.9(@better-auth/utils@0.4.0)(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(better-call@1.3.5(zod@4.3.6))(jose@6.2.2)(kysely@0.28.16)(nanostores@1.1.1)
       '@better-auth/utils': 0.4.0
 
-  '@better-auth/oauth-provider@1.6.9(patch_hash=e05b6e0e968dd85c546197511b6b7bdeaf9f4449572e4a143d90d5d31008fb40)(@better-auth/core@1.6.9(@better-auth/utils@0.4.0)(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(better-call@1.3.5(zod@4.3.6))(jose@6.2.2)(kysely@0.28.16)(nanostores@1.1.1))(@better-auth/utils@0.4.0)(@better-fetch/fetch@1.1.21)(better-auth@1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.167.5(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(mysql2@3.18.2(@types/node@26.1.1))(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.0.15)(vue@3.5.30(typescript@6.0.3)))(better-call@1.3.5(zod@4.3.6))':
+  '@better-auth/oauth-provider@1.6.9(patch_hash=e05b6e0e968dd85c546197511b6b7bdeaf9f4449572e4a143d90d5d31008fb40)(@better-auth/core@1.6.9(@better-auth/utils@0.4.0)(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(better-call@1.3.5(zod@4.3.6))(jose@6.2.2)(kysely@0.28.16)(nanostores@1.1.1))(@better-auth/utils@0.4.0)(@better-fetch/fetch@1.1.21)(better-auth@1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.167.5(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(mysql2@3.18.2(@types/node@26.1.1))(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.0.15)(vue@3.5.30(typescript@5.9.3)))(better-call@1.3.5(zod@4.3.6))':
     dependencies:
       '@better-auth/core': 1.6.9(@better-auth/utils@0.4.0)(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(better-call@1.3.5(zod@4.3.6))(jose@6.2.2)(kysely@0.28.16)(nanostores@1.1.1)
       '@better-auth/utils': 0.4.0
       '@better-fetch/fetch': 1.1.21
-      better-auth: 1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.167.5(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(mysql2@3.18.2(@types/node@26.1.1))(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.0.15)(vue@3.5.30(typescript@6.0.3))
+      better-auth: 1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.167.5(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(mysql2@3.18.2(@types/node@26.1.1))(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.0.15)(vue@3.5.30(typescript@5.9.3))
       better-call: 1.3.5(zod@4.3.6)
       jose: 6.2.2
       zod: 4.3.6
@@ -15375,7 +15505,7 @@ snapshots:
 
   '@expo/json-file@10.2.0':
     dependencies:
-      '@babel/code-frame': 7.29.7
+      '@babel/code-frame': 7.29.0
       json5: 2.2.3
 
   '@expo/json-file@11.0.1':
@@ -17148,9 +17278,12 @@ snapshots:
   '@oxc-parser/binding-openharmony-arm64@0.120.0':
     optional: true
 
-  '@oxc-parser/binding-wasm32-wasi@0.120.0':
+  '@oxc-parser/binding-wasm32-wasi@0.120.0(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)':
     dependencies:
-      '@napi-rs/wasm-runtime': 1.1.1
+      '@napi-rs/wasm-runtime': 1.1.4(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)
+    transitivePeerDependencies:
+      - '@emnapi/core'
+      - '@emnapi/runtime'
     optional: true
 
   '@oxc-parser/binding-win32-arm64-msvc@0.120.0':
@@ -18819,7 +18952,7 @@ snapshots:
     dependencies:
       '@tanstack/devtools-event-client': 0.4.3
       '@tanstack/pacer-lite': 0.1.1
-      '@tanstack/store': 0.9.3
+      '@tanstack/store': 0.9.2
 
   '@tanstack/form-core@1.28.5':
     dependencies:
@@ -19266,7 +19399,7 @@ snapshots:
       '@babel/plugin-syntax-typescript': 7.28.6(@babel/core@7.29.0)
       '@babel/template': 7.28.6
       '@babel/traverse': 7.29.0
-      '@babel/types': 7.29.7
+      '@babel/types': 7.29.0
       '@tanstack/router-core': 1.168.3
       '@tanstack/router-generator': 1.166.17
       '@tanstack/router-utils': 1.161.6
@@ -19607,11 +19740,6 @@ snapshots:
       typescript: 5.9.3
     optional: true
 
-  '@trpc/server@11.12.0(typescript@6.0.3)':
-    dependencies:
-      typescript: 6.0.3
-    optional: true
-
   '@tybys/wasm-util@0.10.1':
     dependencies:
       tslib: 2.8.1
@@ -19633,12 +19761,12 @@ snapshots:
 
   '@types/babel__template@7.4.4':
     dependencies:
-      '@babel/parser': 7.29.7
-      '@babel/types': 7.29.7
+      '@babel/parser': 7.29.0
+      '@babel/types': 7.29.0
 
   '@types/babel__traverse@7.28.0':
     dependencies:
-      '@babel/types': 7.29.7
+      '@babel/types': 7.29.0
 
   '@types/chai@5.2.3':
     dependencies:
@@ -20054,11 +20182,6 @@ snapshots:
       valibot: 1.2.0(typescript@5.9.3)
     optional: true
 
-  '@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@6.0.3))':
-    dependencies:
-      valibot: 1.2.0(typescript@6.0.3)
-    optional: true
-
   '@valtown/codemirror-ts@2.3.1(@codemirror/autocomplete@6.20.1)(@codemirror/lint@6.9.5)(@codemirror/state@6.7.1)(@codemirror/view@6.43.6)(@typescript/vfs@1.6.4(typescript@5.9.3))(typescript@5.9.3)':
     dependencies:
       '@codemirror/autocomplete': 6.20.1
@@ -20130,10 +20253,10 @@ snapshots:
       - vite
     optional: true
 
-  '@vitest/browser-playwright@4.0.15(msw@2.13.3(@types/node@26.1.1)(typescript@5.9.3))(playwright@1.60.0)(vite@7.3.1(@types/node@26.1.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.0.15)':
+  '@vitest/browser-playwright@4.0.15(msw@2.13.3(@types/node@26.1.1)(typescript@5.9.3))(playwright@1.60.0)(vite@8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.0.15)':
     dependencies:
-      '@vitest/browser': 4.0.15(msw@2.13.3(@types/node@26.1.1)(typescript@5.9.3))(vite@7.3.1(@types/node@26.1.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.0.15)
-      '@vitest/mocker': 4.0.15(msw@2.13.3(@types/node@26.1.1)(typescript@5.9.3))(vite@7.3.1(@types/node@26.1.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
+      '@vitest/browser': 4.0.15(msw@2.13.3(@types/node@26.1.1)(typescript@5.9.3))(vite@8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.0.15)
+      '@vitest/mocker': 4.0.15(msw@2.13.3(@types/node@26.1.1)(typescript@5.9.3))(vite@8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
       playwright: 1.60.0
       tinyrainbow: 3.1.0
       vitest: 4.0.15(@opentelemetry/api@1.9.0)(@types/node@26.1.1)(@vitest/browser-playwright@4.0.15)(@vitest/ui@4.0.15)(jiti@2.7.0)(jsdom@27.4.0(@noble/hashes@2.2.0))(lightningcss@1.32.0)(msw@2.13.3(@types/node@26.1.1)(typescript@5.9.3))(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
@@ -20144,27 +20267,13 @@ snapshots:
       - vite
     optional: true
 
-  '@vitest/browser-playwright@4.0.15(msw@2.13.3(@types/node@26.1.1)(typescript@6.0.3))(playwright@1.60.0)(vite@8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.0.15)':
+  '@vitest/browser-playwright@4.1.8(msw@2.13.3(@types/node@24.12.4)(typescript@5.9.3))(playwright@1.60.0)(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.1.8)':
     dependencies:
-      '@vitest/browser': 4.0.15(msw@2.13.3(@types/node@26.1.1)(typescript@6.0.3))(vite@8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.0.15)
-      '@vitest/mocker': 4.0.15(msw@2.13.3(@types/node@26.1.1)(typescript@6.0.3))(vite@8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
+      '@vitest/browser': 4.1.8(msw@2.13.3(@types/node@24.12.4)(typescript@5.9.3))(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.1.8)
+      '@vitest/mocker': 4.1.8(msw@2.13.3(@types/node@24.12.4)(typescript@5.9.3))(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
       playwright: 1.60.0
       tinyrainbow: 3.1.0
-      vitest: 4.0.15(@opentelemetry/api@1.9.0)(@types/node@26.1.1)(@vitest/browser-playwright@4.0.15)(@vitest/ui@4.0.15)(jiti@2.7.0)(jsdom@27.4.0(@noble/hashes@2.2.0))(lightningcss@1.32.0)(msw@2.13.3(@types/node@26.1.1)(typescript@6.0.3))(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
-    transitivePeerDependencies:
-      - bufferutil
-      - msw
-      - utf-8-validate
-      - vite
-    optional: true
-
-  '@vitest/browser-playwright@4.1.8(msw@2.13.3(@types/node@24.12.4)(typescript@6.0.3))(playwright@1.60.0)(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.1.8)':
-    dependencies:
-      '@vitest/browser': 4.1.8(msw@2.13.3(@types/node@24.12.4)(typescript@6.0.3))(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.1.8)
-      '@vitest/mocker': 4.1.8(msw@2.13.3(@types/node@24.12.4)(typescript@6.0.3))(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
-      playwright: 1.60.0
-      tinyrainbow: 3.1.0
-      vitest: 4.1.8(@opentelemetry/api@1.9.0)(@types/node@24.12.4)(@vitest/browser-playwright@4.1.8)(jsdom@27.4.0(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@24.12.4)(typescript@6.0.3))(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
+      vitest: 4.1.8(@opentelemetry/api@1.9.0)(@types/node@24.12.4)(@vitest/browser-playwright@4.1.8)(jsdom@27.4.0(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@24.12.4)(typescript@5.9.3))(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
     transitivePeerDependencies:
       - bufferutil
       - msw
@@ -20264,9 +20373,9 @@ snapshots:
       - vite
     optional: true
 
-  '@vitest/browser@4.0.15(msw@2.13.3(@types/node@26.1.1)(typescript@5.9.3))(vite@7.3.1(@types/node@26.1.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.0.15)':
+  '@vitest/browser@4.0.15(msw@2.13.3(@types/node@26.1.1)(typescript@5.9.3))(vite@8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.0.15)':
     dependencies:
-      '@vitest/mocker': 4.0.15(msw@2.13.3(@types/node@26.1.1)(typescript@5.9.3))(vite@7.3.1(@types/node@26.1.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
+      '@vitest/mocker': 4.0.15(msw@2.13.3(@types/node@26.1.1)(typescript@5.9.3))(vite@8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
       '@vitest/utils': 4.0.15
       magic-string: 0.30.21
       pixelmatch: 7.1.0
@@ -20282,34 +20391,16 @@ snapshots:
       - vite
     optional: true
 
-  '@vitest/browser@4.0.15(msw@2.13.3(@types/node@26.1.1)(typescript@6.0.3))(vite@8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.0.15)':
-    dependencies:
-      '@vitest/mocker': 4.0.15(msw@2.13.3(@types/node@26.1.1)(typescript@6.0.3))(vite@8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
-      '@vitest/utils': 4.0.15
-      magic-string: 0.30.21
-      pixelmatch: 7.1.0
-      pngjs: 7.0.0
-      sirv: 3.0.2
-      tinyrainbow: 3.1.0
-      vitest: 4.0.15(@opentelemetry/api@1.9.0)(@types/node@26.1.1)(@vitest/browser-playwright@4.0.15)(@vitest/ui@4.0.15)(jiti@2.7.0)(jsdom@27.4.0(@noble/hashes@2.2.0))(lightningcss@1.32.0)(msw@2.13.3(@types/node@26.1.1)(typescript@6.0.3))(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
-      ws: 8.19.0
-    transitivePeerDependencies:
-      - bufferutil
-      - msw
-      - utf-8-validate
-      - vite
-    optional: true
-
-  '@vitest/browser@4.1.8(msw@2.13.3(@types/node@24.12.4)(typescript@6.0.3))(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.1.8)':
+  '@vitest/browser@4.1.8(msw@2.13.3(@types/node@24.12.4)(typescript@5.9.3))(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.1.8)':
     dependencies:
       '@blazediff/core': 1.9.1
-      '@vitest/mocker': 4.1.8(msw@2.13.3(@types/node@24.12.4)(typescript@6.0.3))(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
+      '@vitest/mocker': 4.1.8(msw@2.13.3(@types/node@24.12.4)(typescript@5.9.3))(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
       '@vitest/utils': 4.1.8
       magic-string: 0.30.21
       pngjs: 7.0.0
       sirv: 3.0.2
       tinyrainbow: 3.1.0
-      vitest: 4.1.8(@opentelemetry/api@1.9.0)(@types/node@24.12.4)(@vitest/browser-playwright@4.1.8)(jsdom@27.4.0(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@24.12.4)(typescript@6.0.3))(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
+      vitest: 4.1.8(@opentelemetry/api@1.9.0)(@types/node@24.12.4)(@vitest/browser-playwright@4.1.8)(jsdom@27.4.0(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@24.12.4)(typescript@5.9.3))(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
       ws: 8.19.0
     transitivePeerDependencies:
       - bufferutil
@@ -20463,22 +20554,13 @@ snapshots:
       msw: 2.13.3(@types/node@26.1.1)(typescript@5.9.3)
       vite: 7.3.1(@types/node@26.1.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
 
-  '@vitest/mocker@4.0.15(msw@2.13.3(@types/node@26.1.1)(typescript@6.0.3))(vite@7.3.1(@types/node@26.1.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))':
+  '@vitest/mocker@4.0.15(msw@2.13.3(@types/node@26.1.1)(typescript@5.9.3))(vite@8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))':
     dependencies:
       '@vitest/spy': 4.0.15
       estree-walker: 3.0.3
       magic-string: 0.30.21
     optionalDependencies:
-      msw: 2.13.3(@types/node@26.1.1)(typescript@6.0.3)
-      vite: 7.3.1(@types/node@26.1.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
-
-  '@vitest/mocker@4.0.15(msw@2.13.3(@types/node@26.1.1)(typescript@6.0.3))(vite@8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))':
-    dependencies:
-      '@vitest/spy': 4.0.15
-      estree-walker: 3.0.3
-      magic-string: 0.30.21
-    optionalDependencies:
-      msw: 2.13.3(@types/node@26.1.1)(typescript@6.0.3)
+      msw: 2.13.3(@types/node@26.1.1)(typescript@5.9.3)
       vite: 8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
     optional: true
 
@@ -20491,15 +20573,14 @@ snapshots:
       msw: 2.13.3(@types/node@24.12.4)(typescript@5.9.3)
       vite: 8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
 
-  '@vitest/mocker@4.1.10(msw@2.13.3(@types/node@24.12.4)(typescript@6.0.3))(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))':
+  '@vitest/mocker@4.1.10(msw@2.13.3(@types/node@26.1.1)(typescript@5.9.3))(vite@8.0.16(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))':
     dependencies:
       '@vitest/spy': 4.1.10
       estree-walker: 3.0.3
       magic-string: 0.30.21
     optionalDependencies:
-      msw: 2.13.3(@types/node@24.12.4)(typescript@6.0.3)
-      vite: 8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
-    optional: true
+      msw: 2.13.3(@types/node@26.1.1)(typescript@5.9.3)
+      vite: 8.0.16(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
 
   '@vitest/mocker@4.1.5(msw@2.13.3(@types/node@25.3.3)(typescript@5.9.3))(vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))':
     dependencies:
@@ -20510,13 +20591,13 @@ snapshots:
       msw: 2.13.3(@types/node@25.3.3)(typescript@5.9.3)
       vite: 7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
 
-  '@vitest/mocker@4.1.8(msw@2.13.3(@types/node@24.12.4)(typescript@6.0.3))(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))':
+  '@vitest/mocker@4.1.8(msw@2.13.3(@types/node@24.12.4)(typescript@5.9.3))(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))':
     dependencies:
       '@vitest/spy': 4.1.8
       estree-walker: 3.0.3
       magic-string: 0.30.21
     optionalDependencies:
-      msw: 2.13.3(@types/node@24.12.4)(typescript@6.0.3)
+      msw: 2.13.3(@types/node@24.12.4)(typescript@5.9.3)
       vite: 8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
 
   '@vitest/mocker@4.1.8(msw@2.13.3(@types/node@25.6.0)(typescript@5.9.3))(vite@8.0.16(@types/node@25.6.0)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))':
@@ -20635,7 +20716,7 @@ snapshots:
       sirv: 3.0.2
       tinyglobby: 0.2.17
       tinyrainbow: 3.1.0
-      vitest: 4.0.15(@opentelemetry/api@1.9.0)(@types/node@26.1.1)(@vitest/browser-playwright@4.0.15)(@vitest/ui@4.0.15)(jiti@2.7.0)(jsdom@27.4.0(@noble/hashes@2.2.0))(lightningcss@1.32.0)(msw@2.13.3(@types/node@26.1.1)(typescript@6.0.3))(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
+      vitest: 4.0.15(@opentelemetry/api@1.9.0)(@types/node@26.1.1)(@vitest/browser-playwright@4.0.15)(@vitest/ui@4.0.15)(jiti@2.7.0)(jsdom@27.4.0(@noble/hashes@2.2.0))(lightningcss@1.32.0)(msw@2.13.3(@types/node@26.1.1)(typescript@5.9.3))(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
     optional: true
 
   '@vitest/utils@4.0.15':
@@ -20719,13 +20800,6 @@ snapshots:
       '@vue/compiler-ssr': 3.5.30
       '@vue/shared': 3.5.30
       vue: 3.5.30(typescript@5.9.3)
-    optional: true
-
-  '@vue/server-renderer@3.5.30(vue@3.5.30(typescript@6.0.3))':
-    dependencies:
-      '@vue/compiler-ssr': 3.5.30
-      '@vue/shared': 3.5.30
-      vue: 3.5.30(typescript@6.0.3)
     optional: true
 
   '@vue/shared@3.5.30':
@@ -20985,7 +21059,7 @@ snapshots:
 
   atob-lite@2.0.0: {}
 
-  auth@1.6.9(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.167.5(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(better-call@1.3.5(zod@4.3.6))(jose@6.2.2)(kysely@0.28.16)(mysql2@3.18.2(@types/node@26.1.1))(nanostores@1.1.1)(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.0.15)(vue@3.5.30(typescript@6.0.3)):
+  auth@1.6.9(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.167.5(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(better-call@1.3.5(zod@4.3.6))(jose@6.2.2)(kysely@0.28.16)(mysql2@3.18.2(@types/node@26.1.1))(nanostores@1.1.1)(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.0.15)(vue@3.5.30(typescript@5.9.3)):
     dependencies:
       '@babel/core': 7.29.0
       '@babel/preset-react': 7.28.5(@babel/core@7.29.0)
@@ -20995,7 +21069,7 @@ snapshots:
       '@better-auth/utils': 0.4.0
       '@clack/prompts': 0.11.0
       '@mrleebo/prisma-ast': 0.13.1
-      better-auth: 1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.167.5(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(mysql2@3.18.2(@types/node@26.1.1))(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.0.15)(vue@3.5.30(typescript@6.0.3))
+      better-auth: 1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.167.5(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(mysql2@3.18.2(@types/node@26.1.1))(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.0.15)(vue@3.5.30(typescript@5.9.3))
       c12: 3.3.4
       chalk: 5.6.2
       commander: 12.1.0
@@ -21203,7 +21277,7 @@ snapshots:
 
   best-effort-json-parser@1.5.1: {}
 
-  better-auth@1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.167.5(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(mysql2@3.18.2(@types/node@26.1.1))(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.0.15)(vue@3.5.30(typescript@6.0.3)):
+  better-auth@1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.167.5(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(mysql2@3.18.2(@types/node@26.1.1))(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.0.15)(vue@3.5.30(typescript@5.9.3)):
     dependencies:
       '@better-auth/core': 1.6.9(@better-auth/utils@0.4.0)(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(better-call@1.3.5(zod@4.3.6))(jose@6.2.2)(kysely@0.28.16)(nanostores@1.1.1)
       '@better-auth/kysely-adapter': 1.6.9(@better-auth/core@1.6.9(@better-auth/utils@0.4.0)(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(better-call@1.3.5(zod@4.3.6))(jose@6.2.2)(kysely@0.28.16)(nanostores@1.1.1))(@better-auth/utils@0.4.0)(kysely@0.28.16)
@@ -21228,8 +21302,8 @@ snapshots:
       react: 19.2.7
       react-dom: 19.2.7(react@19.2.7)
       solid-js: 1.9.11
-      vitest: 4.0.15(@opentelemetry/api@1.9.0)(@types/node@26.1.1)(@vitest/browser-playwright@4.0.15)(@vitest/ui@4.0.15)(jiti@2.7.0)(jsdom@27.4.0(@noble/hashes@2.2.0))(lightningcss@1.32.0)(msw@2.13.3(@types/node@26.1.1)(typescript@6.0.3))(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
-      vue: 3.5.30(typescript@6.0.3)
+      vitest: 4.0.15(@opentelemetry/api@1.9.0)(@types/node@26.1.1)(@vitest/browser-playwright@4.0.15)(@vitest/ui@4.0.15)(jiti@2.7.0)(jsdom@27.4.0(@noble/hashes@2.2.0))(lightningcss@1.32.0)(msw@2.13.3(@types/node@26.1.1)(typescript@5.9.3))(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
+      vue: 3.5.30(typescript@5.9.3)
     transitivePeerDependencies:
       - '@cloudflare/workers-types'
       - '@opentelemetry/api'
@@ -21298,7 +21372,7 @@ snapshots:
       - '@opentelemetry/api'
     optional: true
 
-  better-auth@1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.168.25(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(mysql2@3.18.2(@types/node@24.12.4))(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.12.4)(jsdom@27.4.0(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@24.12.4)(typescript@6.0.3))(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(vue@3.5.30(typescript@6.0.3)):
+  better-auth@1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.168.25(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(mysql2@3.18.2(@types/node@24.12.4))(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.12.4)(jsdom@27.4.0(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@24.12.4)(typescript@5.9.3))(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(vue@3.5.30(typescript@5.9.3)):
     dependencies:
       '@better-auth/core': 1.6.9(@better-auth/utils@0.4.0)(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(better-call@1.3.5(zod@4.3.6))(jose@6.2.2)(kysely@0.28.16)(nanostores@1.1.1)
       '@better-auth/kysely-adapter': 1.6.9(@better-auth/core@1.6.9(@better-auth/utils@0.4.0)(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(better-call@1.3.5(zod@4.3.6))(jose@6.2.2)(kysely@0.28.16)(nanostores@1.1.1))(@better-auth/utils@0.4.0)(kysely@0.28.16)
@@ -21323,8 +21397,8 @@ snapshots:
       react: 19.2.7
       react-dom: 19.2.7(react@19.2.7)
       solid-js: 1.9.11
-      vitest: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.12.4)(jsdom@27.4.0(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@24.12.4)(typescript@6.0.3))(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
-      vue: 3.5.30(typescript@6.0.3)
+      vitest: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.12.4)(jsdom@27.4.0(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@24.12.4)(typescript@5.9.3))(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
+      vue: 3.5.30(typescript@5.9.3)
     transitivePeerDependencies:
       - '@cloudflare/workers-types'
       - '@opentelemetry/api'
@@ -24027,7 +24101,7 @@ snapshots:
 
   jest-message-util@29.7.0:
     dependencies:
-      '@babel/code-frame': 7.29.7
+      '@babel/code-frame': 7.29.0
       '@jest/types': 29.6.3
       '@types/stack-utils': 2.0.3
       chalk: 4.1.2
@@ -24185,7 +24259,7 @@ snapshots:
 
   kleur@4.1.5: {}
 
-  knip@6.0.5:
+  knip@6.0.5(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0):
     dependencies:
       '@nodelib/fs.walk': 1.2.8
       fast-glob: 3.3.3
@@ -24193,7 +24267,7 @@ snapshots:
       get-tsconfig: 4.13.7
       jiti: 2.6.1
       minimist: 1.2.8
-      oxc-parser: 0.120.0
+      oxc-parser: 0.120.0(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)
       oxc-resolver: 11.19.1
       picocolors: 1.1.1
       picomatch: 4.0.3
@@ -24202,6 +24276,9 @@ snapshots:
       unbash: 2.2.0
       yaml: 2.8.3
       zod: 4.3.6
+    transitivePeerDependencies:
+      - '@emnapi/core'
+      - '@emnapi/runtime'
 
   kysely@0.28.16: {}
 
@@ -24957,7 +25034,7 @@ snapshots:
 
   metro@0.83.7:
     dependencies:
-      '@babel/code-frame': 7.29.7
+      '@babel/code-frame': 7.29.0
       '@babel/core': 7.29.0
       '@babel/generator': 7.29.7
       '@babel/parser': 7.29.7
@@ -25387,32 +25464,6 @@ snapshots:
       - '@types/node'
     optional: true
 
-  msw@2.13.3(@types/node@24.12.4)(typescript@6.0.3):
-    dependencies:
-      '@inquirer/confirm': 5.1.21(@types/node@24.12.4)
-      '@mswjs/interceptors': 0.41.9
-      '@open-draft/deferred-promise': 2.2.0
-      '@types/statuses': 2.0.6
-      cookie: 1.1.1
-      graphql: 16.14.2
-      headers-polyfill: 4.0.3
-      is-node-process: 1.2.0
-      outvariant: 1.4.3
-      path-to-regexp: 6.3.0
-      picocolors: 1.1.1
-      rettime: 0.11.11
-      statuses: 2.0.2
-      strict-event-emitter: 0.5.1
-      tough-cookie: 6.0.2
-      type-fest: 5.8.0
-      until-async: 3.0.2
-      yargs: 17.7.3
-    optionalDependencies:
-      typescript: 6.0.3
-    transitivePeerDependencies:
-      - '@types/node'
-    optional: true
-
   msw@2.13.3(@types/node@25.3.3)(typescript@5.9.3):
     dependencies:
       '@inquirer/confirm': 5.1.21(@types/node@25.3.3)
@@ -25827,7 +25878,7 @@ snapshots:
       object-keys: 1.1.1
       safe-push-apply: 1.0.0
 
-  oxc-parser@0.120.0:
+  oxc-parser@0.120.0(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0):
     dependencies:
       '@oxc-project/types': 0.120.0
     optionalDependencies:
@@ -25847,10 +25898,13 @@ snapshots:
       '@oxc-parser/binding-linux-x64-gnu': 0.120.0
       '@oxc-parser/binding-linux-x64-musl': 0.120.0
       '@oxc-parser/binding-openharmony-arm64': 0.120.0
-      '@oxc-parser/binding-wasm32-wasi': 0.120.0
+      '@oxc-parser/binding-wasm32-wasi': 0.120.0(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)
       '@oxc-parser/binding-win32-arm64-msvc': 0.120.0
       '@oxc-parser/binding-win32-ia32-msvc': 0.120.0
       '@oxc-parser/binding-win32-x64-msvc': 0.120.0
+    transitivePeerDependencies:
+      - '@emnapi/core'
+      - '@emnapi/runtime'
 
   oxc-resolver@11.19.1:
     optionalDependencies:
@@ -26026,7 +26080,7 @@ snapshots:
   partyserver@0.4.1(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2)):
     dependencies:
       '@cloudflare/workers-types': 4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2)
-      nanoid: 5.1.7
+      nanoid: 5.1.16
 
   partyserver@0.5.8(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2)):
     dependencies:
@@ -26879,7 +26933,7 @@ snapshots:
     dependencies:
       '@babel/generator': 8.0.0-rc.6
       '@babel/helper-validator-identifier': 8.0.0-rc.6
-      '@babel/parser': 7.29.7
+      '@babel/parser': 7.29.0
       ast-kit: 3.0.0-beta.1
       birpc: 4.0.0
       dts-resolver: 3.0.0(oxc-resolver@11.19.1)
@@ -27380,6 +27434,24 @@ snapshots:
   sql-escaper@1.4.0:
     optional: true
 
+  sqlfu@0.1.1(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(better-auth@1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.167.5(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(mysql2@3.18.2(@types/node@26.1.1))(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.0.15)(vue@3.5.30(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(ws@8.19.0):
+    dependencies:
+      '@clack/prompts': 1.2.0
+      '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+      trpc-cli: 0.14.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
+      zod: 4.3.6
+    optionalDependencies:
+      better-auth: 1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.167.5(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(mysql2@3.18.2(@types/node@26.1.1))(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.0.15)(vue@3.5.30(typescript@5.9.3))
+      effect: 3.19.19
+    transitivePeerDependencies:
+      - '@opentelemetry/api'
+      - '@trpc/server'
+      - '@valibot/to-json-schema'
+      - crossws
+      - fastify
+      - valibot
+      - ws
+
   sqlfu@0.1.1(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(better-auth@1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.168.25(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@7.3.1(@types/node@22.19.13)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(mysql2@3.18.2(@types/node@22.19.13))(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.0.15)(vue@3.5.30(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(ws@8.19.0):
     dependencies:
       '@clack/prompts': 1.2.0
@@ -27416,6 +27488,24 @@ snapshots:
       - valibot
       - ws
 
+  sqlfu@0.1.1(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(better-auth@1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.168.25(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(mysql2@3.18.2(@types/node@24.12.4))(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.12.4)(jsdom@27.4.0(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@24.12.4)(typescript@5.9.3))(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(vue@3.5.30(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(ws@8.19.0):
+    dependencies:
+      '@clack/prompts': 1.2.0
+      '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+      trpc-cli: 0.14.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
+      zod: 4.3.6
+    optionalDependencies:
+      better-auth: 1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.168.25(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(mysql2@3.18.2(@types/node@24.12.4))(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.12.4)(jsdom@27.4.0(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@24.12.4)(typescript@5.9.3))(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(vue@3.5.30(typescript@5.9.3))
+      effect: 3.19.19
+    transitivePeerDependencies:
+      - '@opentelemetry/api'
+      - '@trpc/server'
+      - '@valibot/to-json-schema'
+      - crossws
+      - fastify
+      - valibot
+      - ws
+
   sqlfu@0.1.1(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(better-auth@1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.168.25(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(mysql2@3.18.2(@types/node@25.6.0))(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.1.8)(vue@3.5.30(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(ws@8.19.0):
     dependencies:
       '@clack/prompts': 1.2.0
@@ -27424,42 +27514,6 @@ snapshots:
       zod: 4.3.6
     optionalDependencies:
       better-auth: 1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.168.25(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(mysql2@3.18.2(@types/node@25.6.0))(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.1.8)(vue@3.5.30(typescript@5.9.3))
-      effect: 3.19.19
-    transitivePeerDependencies:
-      - '@opentelemetry/api'
-      - '@trpc/server'
-      - '@valibot/to-json-schema'
-      - crossws
-      - fastify
-      - valibot
-      - ws
-
-  sqlfu@0.1.1(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@6.0.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@6.0.3)))(better-auth@1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.167.5(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(mysql2@3.18.2(@types/node@26.1.1))(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.0.15)(vue@3.5.30(typescript@6.0.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@6.0.3))(ws@8.19.0):
-    dependencies:
-      '@clack/prompts': 1.2.0
-      '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
-      trpc-cli: 0.14.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@6.0.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@6.0.3)))(effect@3.19.19)(valibot@1.2.0(typescript@6.0.3))(zod@4.3.6)
-      zod: 4.3.6
-    optionalDependencies:
-      better-auth: 1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.167.5(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(mysql2@3.18.2(@types/node@26.1.1))(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.0.15)(vue@3.5.30(typescript@6.0.3))
-      effect: 3.19.19
-    transitivePeerDependencies:
-      - '@opentelemetry/api'
-      - '@trpc/server'
-      - '@valibot/to-json-schema'
-      - crossws
-      - fastify
-      - valibot
-      - ws
-
-  sqlfu@0.1.1(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@6.0.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@6.0.3)))(better-auth@1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.168.25(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(mysql2@3.18.2(@types/node@24.12.4))(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.12.4)(jsdom@27.4.0(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@24.12.4)(typescript@6.0.3))(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(vue@3.5.30(typescript@6.0.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@6.0.3))(ws@8.19.0):
-    dependencies:
-      '@clack/prompts': 1.2.0
-      '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
-      trpc-cli: 0.14.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@6.0.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@6.0.3)))(effect@3.19.19)(valibot@1.2.0(typescript@6.0.3))(zod@4.3.6)
-      zod: 4.3.6
-    optionalDependencies:
-      better-auth: 1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.168.25(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(mysql2@3.18.2(@types/node@24.12.4))(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.12.4)(jsdom@27.4.0(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@24.12.4)(typescript@6.0.3))(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(vue@3.5.30(typescript@6.0.3))
       effect: 3.19.19
     transitivePeerDependencies:
       - '@opentelemetry/api'
@@ -27811,17 +27865,6 @@ snapshots:
       valibot: 1.2.0(typescript@5.9.3)
       zod: 4.4.3
 
-  trpc-cli@0.14.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@6.0.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@6.0.3)))(effect@3.19.19)(valibot@1.2.0(typescript@6.0.3))(zod@4.3.6):
-    dependencies:
-      commander: 14.0.3
-    optionalDependencies:
-      '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
-      '@trpc/server': 11.12.0(typescript@6.0.3)
-      '@valibot/to-json-schema': 1.5.0(valibot@1.2.0(typescript@6.0.3))
-      effect: 3.19.19
-      valibot: 1.2.0(typescript@6.0.3)
-      zod: 4.3.6
-
   trpc-cli@0.15.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6):
     dependencies:
       commander: 14.0.3
@@ -27842,28 +27885,6 @@ snapshots:
       '@valibot/to-json-schema': 1.5.0(valibot@1.2.0(typescript@5.9.3))
       effect: 3.19.19
       valibot: 1.2.0(typescript@5.9.3)
-      zod: 4.4.3
-
-  trpc-cli@0.15.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@6.0.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@6.0.3)))(effect@3.19.19)(valibot@1.2.0(typescript@6.0.3))(zod@4.3.6):
-    dependencies:
-      commander: 14.0.3
-    optionalDependencies:
-      '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
-      '@trpc/server': 11.12.0(typescript@6.0.3)
-      '@valibot/to-json-schema': 1.5.0(valibot@1.2.0(typescript@6.0.3))
-      effect: 3.19.19
-      valibot: 1.2.0(typescript@6.0.3)
-      zod: 4.3.6
-
-  trpc-cli@0.15.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@6.0.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@6.0.3)))(effect@3.19.19)(valibot@1.2.0(typescript@6.0.3))(zod@4.4.3):
-    dependencies:
-      commander: 14.0.3
-    optionalDependencies:
-      '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
-      '@trpc/server': 11.12.0(typescript@6.0.3)
-      '@valibot/to-json-schema': 1.5.0(valibot@1.2.0(typescript@6.0.3))
-      effect: 3.19.19
-      valibot: 1.2.0(typescript@6.0.3)
       zod: 4.4.3
 
   ts-api-utils@2.4.0(typescript@5.9.3):
@@ -28180,11 +28201,6 @@ snapshots:
   valibot@1.2.0(typescript@5.9.3):
     optionalDependencies:
       typescript: 5.9.3
-    optional: true
-
-  valibot@1.2.0(typescript@6.0.3):
-    optionalDependencies:
-      typescript: 6.0.3
     optional: true
 
   valid-url@1.0.9: {}
@@ -28527,48 +28543,7 @@ snapshots:
     optionalDependencies:
       '@opentelemetry/api': 1.9.0
       '@types/node': 26.1.1
-      '@vitest/browser-playwright': 4.0.15(msw@2.13.3(@types/node@26.1.1)(typescript@5.9.3))(playwright@1.60.0)(vite@7.3.1(@types/node@26.1.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.0.15)
-      '@vitest/ui': 4.0.15(vitest@4.0.15)
-      jsdom: 27.4.0(@noble/hashes@2.2.0)
-    transitivePeerDependencies:
-      - jiti
-      - less
-      - lightningcss
-      - msw
-      - sass
-      - sass-embedded
-      - stylus
-      - sugarss
-      - terser
-      - tsx
-      - yaml
-
-  vitest@4.0.15(@opentelemetry/api@1.9.0)(@types/node@26.1.1)(@vitest/browser-playwright@4.0.15)(@vitest/ui@4.0.15)(jiti@2.7.0)(jsdom@27.4.0(@noble/hashes@2.2.0))(lightningcss@1.32.0)(msw@2.13.3(@types/node@26.1.1)(typescript@6.0.3))(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3):
-    dependencies:
-      '@vitest/expect': 4.0.15
-      '@vitest/mocker': 4.0.15(msw@2.13.3(@types/node@26.1.1)(typescript@6.0.3))(vite@7.3.1(@types/node@26.1.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
-      '@vitest/pretty-format': 4.0.15
-      '@vitest/runner': 4.0.15
-      '@vitest/snapshot': 4.0.15
-      '@vitest/spy': 4.0.15
-      '@vitest/utils': 4.0.15
-      es-module-lexer: 1.7.0
-      expect-type: 1.3.0
-      magic-string: 0.30.21
-      obug: 2.1.1
-      pathe: 2.0.3
-      picomatch: 4.0.4
-      std-env: 3.10.0
-      tinybench: 2.9.0
-      tinyexec: 1.2.4
-      tinyglobby: 0.2.17
-      tinyrainbow: 3.1.0
-      vite: 7.3.1(@types/node@26.1.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
-      why-is-node-running: 2.3.0
-    optionalDependencies:
-      '@opentelemetry/api': 1.9.0
-      '@types/node': 26.1.1
-      '@vitest/browser-playwright': 4.0.15(msw@2.13.3(@types/node@26.1.1)(typescript@6.0.3))(playwright@1.60.0)(vite@8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.0.15)
+      '@vitest/browser-playwright': 4.0.15(msw@2.13.3(@types/node@26.1.1)(typescript@5.9.3))(playwright@1.60.0)(vite@8.0.9(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.0.15)
       '@vitest/ui': 4.0.15(vitest@4.0.15)
       jsdom: 27.4.0(@noble/hashes@2.2.0)
     transitivePeerDependencies:
@@ -28613,10 +28588,10 @@ snapshots:
     transitivePeerDependencies:
       - msw
 
-  vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.12.4)(jsdom@27.4.0(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@24.12.4)(typescript@6.0.3))(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)):
+  vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@26.1.1)(jsdom@27.4.0(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@26.1.1)(typescript@5.9.3))(vite@8.0.16(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)):
     dependencies:
       '@vitest/expect': 4.1.10
-      '@vitest/mocker': 4.1.10(msw@2.13.3(@types/node@24.12.4)(typescript@6.0.3))(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
+      '@vitest/mocker': 4.1.10(msw@2.13.3(@types/node@26.1.1)(typescript@5.9.3))(vite@8.0.16(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
       '@vitest/pretty-format': 4.1.10
       '@vitest/runner': 4.1.10
       '@vitest/snapshot': 4.1.10
@@ -28633,15 +28608,14 @@ snapshots:
       tinyexec: 1.2.4
       tinyglobby: 0.2.17
       tinyrainbow: 3.1.0
-      vite: 8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
+      vite: 8.0.16(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
       why-is-node-running: 2.3.0
     optionalDependencies:
       '@opentelemetry/api': 1.9.0
-      '@types/node': 24.12.4
+      '@types/node': 26.1.1
       jsdom: 27.4.0(@noble/hashes@2.2.0)
     transitivePeerDependencies:
       - msw
-    optional: true
 
   vitest@4.1.5(@opentelemetry/api@1.9.0)(@types/node@25.3.3)(jsdom@27.4.0(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@25.3.3)(typescript@5.9.3))(vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)):
     dependencies:
@@ -28672,10 +28646,10 @@ snapshots:
     transitivePeerDependencies:
       - msw
 
-  vitest@4.1.8(@opentelemetry/api@1.9.0)(@types/node@24.12.4)(@vitest/browser-playwright@4.1.8)(jsdom@27.4.0(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@24.12.4)(typescript@6.0.3))(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)):
+  vitest@4.1.8(@opentelemetry/api@1.9.0)(@types/node@24.12.4)(@vitest/browser-playwright@4.1.8)(jsdom@27.4.0(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@24.12.4)(typescript@5.9.3))(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)):
     dependencies:
       '@vitest/expect': 4.1.8
-      '@vitest/mocker': 4.1.8(msw@2.13.3(@types/node@24.12.4)(typescript@6.0.3))(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
+      '@vitest/mocker': 4.1.8(msw@2.13.3(@types/node@24.12.4)(typescript@5.9.3))(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
       '@vitest/pretty-format': 4.1.8
       '@vitest/runner': 4.1.8
       '@vitest/snapshot': 4.1.8
@@ -28697,7 +28671,7 @@ snapshots:
     optionalDependencies:
       '@opentelemetry/api': 1.9.0
       '@types/node': 24.12.4
-      '@vitest/browser-playwright': 4.1.8(msw@2.13.3(@types/node@24.12.4)(typescript@6.0.3))(playwright@1.60.0)(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.1.8)
+      '@vitest/browser-playwright': 4.1.8(msw@2.13.3(@types/node@24.12.4)(typescript@5.9.3))(playwright@1.60.0)(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.1.8)
       jsdom: 27.4.0(@noble/hashes@2.2.0)
     transitivePeerDependencies:
       - msw
@@ -28850,17 +28824,6 @@ snapshots:
       '@vue/shared': 3.5.30
     optionalDependencies:
       typescript: 5.9.3
-    optional: true
-
-  vue@3.5.30(typescript@6.0.3):
-    dependencies:
-      '@vue/compiler-dom': 3.5.30
-      '@vue/compiler-sfc': 3.5.30
-      '@vue/runtime-dom': 3.5.30
-      '@vue/server-renderer': 3.5.30(vue@3.5.30(typescript@6.0.3))
-      '@vue/shared': 3.5.30
-    optionalDependencies:
-      typescript: 6.0.3
     optional: true
 
   w3c-keyname@2.2.8: {}

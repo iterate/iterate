@@ -1,100 +1,74 @@
-import type { ItxBinding, Project, StreamEvent } from "../../sdk.ts";
+import type { ItxBinding, StreamEvent } from "../../sdk.ts";
 import {
-  handleGithubPullRequestWebhook,
-  loadLinkedGithubRepos,
-  type LinkedGithubRepo,
-} from "./review-bot.ts";
-import { loadGithubAiLinterRules, type GithubAiLinterRuleSource } from "./rules.ts";
+  REVIEW_BOT_SUBSCRIPTION_KEY,
+  reviewBotSubscriptionEvent,
+  type GithubAiLinterConfig,
+} from "./worker-ref.ts";
 
-export type GithubAiLinterConfig = {
-  policyVersion: string;
-  rules: GithubAiLinterRuleSource;
-};
+export type { GithubAiLinterConfig } from "./worker-ref.ts";
 
 export const GithubAiLinter = {
   create(env: { ITX: ItxBinding }, config: GithubAiLinterConfig) {
-    let linkedRepos: LinkedGithubRepo[] | undefined;
     return {
       async processEvent(event: StreamEvent) {
+        const linkedConnection =
+          event.type === "events.iterate.com/repo/github-link-configured"
+            ? event.payload?.connection
+            : undefined;
         if (
-          event.type !== "events.iterate.com/github/webhook-received" &&
+          event.type === "events.iterate.com/repo/github-link-configured" &&
+          (typeof linkedConnection !== "string" || linkedConnection.length === 0)
+        ) {
+          return;
+        }
+        if (
           event.type !== "events.iterate.com/repo/github-link-configured" &&
-          event.type !== "events.iterate.com/repo/github-unlinked"
+          (event.type !== "events.iterate.com/project/worker-updated" || event.path !== "/")
         ) {
           return;
         }
-        if (
-          event.type === "events.iterate.com/github/webhook-received" &&
-          event.source?.copiedFrom !== undefined
-        ) {
-          return;
-        }
-        if (event.type === "events.iterate.com/repo/github-unlinked") {
-          linkedRepos = undefined;
-          return;
-        }
-        if (
-          event.type === "events.iterate.com/github/webhook-received" &&
-          !mightWakePullRequestAgent(event)
-        ) {
-          return;
-        }
+
         using itx = await env.ITX.get();
-        if (event.type === "events.iterate.com/repo/github-link-configured") {
-          linkedRepos = undefined;
-          const connection = event.payload?.connection;
-          if (typeof connection === "string" && connection.length > 0) {
-            await retireHostedReviewBot(itx, connection);
-          }
-          return;
+        let connections: string[];
+        if (typeof linkedConnection === "string") {
+          connections = [linkedConnection];
+        } else {
+          const repos = await itx.repos.list();
+          const links = await Promise.all(
+            repos.map(
+              async ({ path }) => (await itx.repos.get(path).processor.snapshot()).state.github,
+            ),
+          );
+          connections = links.flatMap((link) => (link === null ? [] : [link.connection]));
         }
-        await handleGithubPullRequestWebhook(itx, event, {
-          loadLinkedRepos: async () => (linkedRepos ??= await loadLinkedGithubRepos(itx)),
-          loadRules: () => loadGithubAiLinterRules(itx, config.rules),
-          policyVersion: config.policyVersion,
-        });
+        await Promise.all(
+          [...new Set(connections)].map(async (connection) => {
+            const connectionStream = itx.streams.get(`/integrations/github/${connection}`);
+            const runtime = await connectionStream.runtimeState();
+            const existingCondition =
+              runtime.coreProcessorState.subscriptions.outbound.byKey[REVIEW_BOT_SUBSCRIPTION_KEY]
+                ?.configuration.filter?.jsonataCondition;
+            // Both the original cutoff-only condition and the narrowed
+            // condition start with this durable boundary. Keep accepting the
+            // old shape so the first config refresh upgrades in place without
+            // skipping webhooks which arrived since installation.
+            const existingCutoffMatch = existingCondition?.match(/^offset > ([0-9]+)(?:\s|$)/);
+            const existingCutoff = existingCutoffMatch ? Number(existingCutoffMatch[1]) : null;
+
+            // First configuration deliberately starts at the current head: a
+            // semantic project restore must not replay historical webhooks.
+            // Later config-worker updates preserve that boundary so a refresh
+            // cannot skip webhooks that arrived since the bot was installed.
+            const startAfterOffset =
+              existingCutoff !== null && Number.isSafeInteger(existingCutoff)
+                ? existingCutoff
+                : runtime.coreProcessorState.maxOffset;
+            await connectionStream.append(
+              await reviewBotSubscriptionEvent(event, connection, config, startAfterOffset),
+            );
+          }),
+        );
       },
     };
   },
 };
-
-function mightWakePullRequestAgent(event: StreamEvent): boolean {
-  // The platform created this envelope after signature verification. This
-  // deliberately stays a loose prefilter; the handler below performs the
-  // complete authorization and payload validation after an ITX session opens.
-  const webhook = event.payload as
-    | {
-        associations?: { mentionedUsers?: unknown[] };
-        body?: { action?: unknown };
-        delivery?: { name?: unknown };
-      }
-    | undefined;
-  const name = webhook?.delivery?.name;
-  const action = webhook?.body?.action;
-  return (
-    (name === "pull_request" &&
-      (action === "opened" || action === "ready_for_review" || action === "synchronize")) ||
-    ((name === "issue_comment" ||
-      name === "pull_request_review" ||
-      name === "pull_request_review_comment") &&
-      (webhook?.associations?.mentionedUsers?.length ?? 0) > 0)
-  );
-}
-
-async function retireHostedReviewBot(itx: Project, connection: string): Promise<void> {
-  const stream = itx.streams.get(`/integrations/github/${connection}`);
-  const state = await stream.runtimeState();
-  if (
-    state.coreProcessorState.subscriptions.outbound.byKey["app-review-bot#review-bot"] === undefined
-  ) {
-    return;
-  }
-  await stream.append({
-    type: "events.iterate.com/stream/subscription-removed",
-    idempotencyKey: "github-ai-linter:retire-hosted-review-bot:v1",
-    payload: {
-      subscriptionKey: "app-review-bot#review-bot",
-      reason: "requested",
-    },
-  });
-}
