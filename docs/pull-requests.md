@@ -59,7 +59,7 @@ body on its own line with blank lines above and below.
 
 Spec recordings: `VIDEO_MODE=1 pnpm spec -g <name>`. Ship
 `video-rendered.webm` (dead air sped up, pointer annotations) — `video.webm`
-is the raw capture.
+is the raw capture. Note that video mode depends on "middlewright" which is somewhat experimental and also maintained by us. If there are issues with it they typically need to be fixed upstream. we can use pkg-pr-new releases and publish to npm will be done manually later. 
 
 Verify the player rendered:
 
