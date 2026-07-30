@@ -254,3 +254,20 @@ and the flat `ProjectEntrypoint` (streamAppend/aiRun/setSecret…); the promised
 - 46 tests green. **LIVE** on `da-verify.shiterate.com`: streams (2 events via the tree), secrets+egress
   (X-Project + X-Platform substituted), ai.run → "Blue" — all through the nested tree, pipelined over the
   loopback. `/api` capnweb `Project` exposes the identical tree (same class; covered by construction).
+
+### Security follow-ups (post-D-A) ✅ DONE + LIVE
+
+Closed two of the deferred R8 items:
+
+1. **Optional origin-pin for PROJECT secrets** (egress.ts): `secrets.set(name, value, allowedOrigins?)`.
+   Stored as `{value, allowedOrigins?}` (legacy bare strings still resolve = unrestricted). A pinned secret
+   substitutes at egress ONLY for an allow-listed destination — a script can't exfiltrate it elsewhere.
+   Unpinned = substitutes anywhere (the project's own footgun; the R8 auth gate stops an anonymous
+   attacker acting AS the project). 3 unit tests.
+2. **`create_project` write-authority gate**: walled + anonymous ⇒ refused (same `scriptingAllowed` rule
+   as the scripting facade; consolidated). The authenticated "emerge with a project" flow is unaffected.
+   **LIVE:** anonymous create on walled selfhost → "create requires authentication on a walled deployment".
+   48 tests green; egress regression-checked live.
+   **Still open (bigger, documented in morning-brief):** secrets plaintext in KV (want encryption/Secret DO);
+   KV meter races (DO-backed — overlaps deferred D-D); exec cache key content-digest; and the deeper
+   `auth`-directory org-membership check on create (needs an auth RPC).

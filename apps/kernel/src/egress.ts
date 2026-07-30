@@ -29,15 +29,36 @@ export type SecretsKV = {
   get(key: string): Promise<string | null>;
   put(key: string, value: string): Promise<void>;
 };
+// A stored project secret. `allowedOrigins` is OPTIONAL (security follow-up R8): declare it to origin-pin
+// the secret (it substitutes only for those destinations — a script can't exfiltrate it elsewhere);
+// omit it for an unrestricted secret (the project's own footgun, but not a cross-tenant leak — the R8
+// auth gate already stops an anonymous attacker acting AS the project). Bare strings (legacy) = unrestricted.
+type StoredProjectSecret = { value: string; allowedOrigins?: string[] };
+function parseStored(raw: string | null): StoredProjectSecret | null {
+  if (raw === null) return null;
+  try {
+    const p = JSON.parse(raw);
+    if (p && typeof p === "object" && typeof p.value === "string") return p as StoredProjectSecret;
+  } catch {
+    /* not JSON — a legacy bare-string value */
+  }
+  return { value: raw };
+}
 export function projectSecrets(kv: SecretsKV | undefined, projectId: string) {
   const key = (name: string) => `secret:${projectId}:${name}`;
   return {
-    async set(name: string, value: string): Promise<void> {
+    async set(name: string, value: string, allowedOrigins?: string[]): Promise<void> {
       if (!kv) throw new Error("no SECRETS_KV bound — cannot store project secrets");
-      await kv.put(key(name), value);
+      await kv.put(key(name), JSON.stringify({ value, allowedOrigins }));
     },
-    async resolve(name: string): Promise<string | null> {
-      return kv ? kv.get(key(name)) : null;
+    // Resolve for a destination `origin`: an origin-pinned secret substitutes only for an allow-listed
+    // destination (else null → the placeholder is left intact, exactly like platform secrets).
+    async resolve(name: string, origin: string): Promise<string | null> {
+      if (!kv) return null;
+      const s = parseStored(await kv.get(key(name)));
+      if (s === null) return null;
+      if (s.allowedOrigins && !s.allowedOrigins.includes(origin)) return null; // pinned, not allowed
+      return s.value;
     },
   };
 }
@@ -102,15 +123,18 @@ export async function controlPlaneEgress(
   return fetch(new Request(substituted, { redirect: "manual" }));
 }
 
-// The PROJECT egress door: substitute the project's own secrets, then chain into the control-plane door.
+// The PROJECT egress door: substitute the project's own secrets (origin-aware — a pinned project secret
+// only substitutes for an allow-listed destination), then chain into the control-plane door.
 export async function projectEgress(
   request: Request,
-  projSecrets: { resolve(name: string): Promise<string | null> },
+  projSecrets: { resolve(name: string, origin: string): Promise<string | null> },
   platform: PlatformSecret[],
   meter?: (name: string) => void,
 ): Promise<Response> {
-  const substituted = await substituteHeaderSecrets(request, new Set(["project"]), (_s, name) =>
-    projSecrets.resolve(name),
+  const substituted = await substituteHeaderSecrets(
+    request,
+    new Set(["project"]),
+    (_s, name, origin) => projSecrets.resolve(name, origin),
   );
   return controlPlaneEgress(substituted, platform, meter);
 }

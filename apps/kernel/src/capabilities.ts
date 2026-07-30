@@ -85,8 +85,10 @@ class Secrets extends RpcTarget {
   ) {
     super();
   }
-  set(name: string, value: string): Promise<void> {
-    return projectSecrets(this.kv, this.projectId).set(name, value);
+  // `allowedOrigins` (optional) origin-pins the secret — it then substitutes at egress ONLY for those
+  // destinations (anti-exfiltration for the project's own secret; R8 follow-up). Omit for unrestricted.
+  set(name: string, value: string, allowedOrigins?: string[]): Promise<void> {
+    return projectSecrets(this.kv, this.projectId).set(name, value, allowedOrigins);
   }
 }
 

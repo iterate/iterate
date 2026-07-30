@@ -530,9 +530,20 @@ async function handleMcp(
     routingFor(cfg, env),
     env,
   );
+  // WRITE-AUTHORITY gate (R8 follow-up): creating a project is a write. On a WALLED deployment an
+  // anonymous `/mcp` caller (a host Access doesn't front) must NOT create projects (spam / cross-tenant
+  // rows); wide-open (no wall — LAN/Pi) allows it by design. Same rule as scripting. The authenticated
+  // "emerge with a project" flow (ADR 0029) is unaffected — a walled caller is authenticated post-wall.
+  // (Deeper: the `auth` multi-tenant directory should also verify org membership on create — needs an
+  // auth RPC; tracked as a follow-up.)
+  const writeAllowed = scriptingAllowed({
+    walled: cfg.wall !== undefined,
+    authenticated: caller.credentials.length > 0,
+  });
   const projects: McpProjects = {
     list: () => collection.list(),
     async create(slug, organizationSlug) {
+      if (!writeAllowed) throw new Error("create requires authentication on a walled deployment");
       const created = await (
         await collection.get(slug)
       ).create(organizationSlug ? { organizationSlug } : {});
@@ -572,16 +583,13 @@ async function handleMcp(
   // Cloudflare Access doesn't front (Access binds app hostnames; a headless /mcp path gets no SSO
   // redirect) → the caller is anonymous. Refuse scripting for an anonymous caller whenever a wall is
   // configured; on a truly wide-open deployment (no wall — LAN/Pi, open by design) scripting stays on.
-  // (For the multi-tenant `auth` directory, resolve()/get() already membership-gates per project.)
-  const allow = scriptingAllowed({
-    walled: cfg.wall !== undefined,
-    authenticated: caller.credentials.length > 0,
-  });
+  // (For the multi-tenant `auth` directory, resolve()/get() already membership-gates per project.) Same
+  // `writeAllowed` rule as create — both are write authority that must not ride public reachability.
   return handleMcpRequest(
     request,
     projects,
     { name: "iterate-kernel", version: "0.1.0" },
-    allow ? scripting : undefined,
+    writeAllowed ? scripting : undefined,
   );
 }
 

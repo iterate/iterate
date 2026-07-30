@@ -123,4 +123,29 @@ describe("projectEgress — the two-level chain", () => {
     expect(calls[0].headers.a).toBe("{{secret:platform:echo}}"); // NOT resolved by the project store
     vi.unstubAllGlobals();
   });
+
+  test("an ORIGIN-PINNED project secret only substitutes for an allow-listed destination (R8 follow-up)", async () => {
+    const kv = mockKV();
+    const proj = projectSecrets(kv, "proj1");
+    await proj.set("k", "PINNED", ["https://ok.com"]); // pinned to ok.com
+
+    const ok = captureFetch();
+    await projectEgress(req("https://ok.com/x", { a: "{{secret:project:k}}" }), proj, []);
+    expect(ok[0].headers.a).toBe("PINNED"); // allowed origin => substitutes
+    vi.unstubAllGlobals();
+
+    const evil = captureFetch();
+    await projectEgress(req("https://evil.com/x", { a: "{{secret:project:k}}" }), proj, []);
+    expect(evil[0].headers.a).toBe("{{secret:project:k}}"); // pinned, not allowed => left intact
+    vi.unstubAllGlobals();
+  });
+
+  test("an unpinned project secret substitutes anywhere (default; the project's own footgun)", async () => {
+    const proj = projectSecrets(mockKV(), "proj1");
+    await proj.set("k", "OPEN"); // no allowedOrigins
+    const calls = captureFetch();
+    await projectEgress(req("https://anywhere.com/x", { a: "{{secret:project:k}}" }), proj, []);
+    expect(calls[0].headers.a).toBe("OPEN");
+    vi.unstubAllGlobals();
+  });
 });
