@@ -53,6 +53,11 @@ function Dashboard() {
   const [createResult, setCreateResult] = useState<unknown>(null);
   return (
     <main>
+      {/* Cloudflare Access logout: hitting /cdn-cgi/access/logout on this Access-fronted host clears the
+          session (no incognito needed). Harmless on wide-open deployments (no Access => just 404s). */}
+      <p style={{ textAlign: "right", margin: 0 }}>
+        <a href="/cdn-cgi/access/logout">Log out</a>
+      </p>
       <h1>OS dashboard</h1>
       <p>
         A separately-deployed <b>TanStack Start</b> app, reverse-proxied behind an iterate project
