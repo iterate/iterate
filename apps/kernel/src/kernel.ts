@@ -12,6 +12,7 @@ import {
 } from "./directory.ts";
 import { routingFor, type RouteConfig, type Routing } from "./routing.ts";
 import { handleMcpRequest, type McpProjects } from "./mcp.ts";
+import { projectEgress, projectSecrets, type PlatformSecret } from "./egress.ts";
 
 // ---------------------------------------------------------------------------
 // The iterate kernel — clean-room, pure-play.
@@ -49,6 +50,9 @@ interface Env {
   // runtime to point a custom domain / single self-host domain at a project. Absent => config-only
   // routes (AppConfig.routes) + the `<slug>.<hostBase>` convention.
   ROUTING_KV?: KVNamespace;
+  // Per-project secret store (`secret:<projectId>:<name>`) + best-effort platform meter counters
+  // (`meter:platform:<name>`). Write-only from userspace; resolved at the egress door (egress.ts).
+  SECRETS_KV?: KVNamespace;
   // HS256 signing secret for project-app-session tokens (the narrow, project-scoped grant the front
   // door mints for a project app — review #3). Absent => that lane is simply off. The demo value lives
   // in wrangler vars; a real deployment supplies it as a Doppler-backed secret, not a committed var.
@@ -79,6 +83,10 @@ type AppConfig = {
   // BEFORE the `<slug>.<hostBase>` convention, so a custom domain or a single-project self-host (one
   // domain, no wildcard) needs no wildcard cert — just an entry here (or in ROUTING_KV). ADR 0020/0025.
   routes?: RouteConfig;
+  // First-party / platform secrets (the ITERATE-PRODUCT layer, ADR 0030): keys iterate holds and lets
+  // projects use, substituted at the control-plane egress door, origin-pinned + metered. Absent/empty =>
+  // a generic control plane (self-host) with no first-party secrets. Each: {name, value, allowedOrigins}.
+  platformSecrets?: PlatformSecret[];
 };
 function appConfigFrom(env: Env): AppConfig {
   try {
@@ -346,11 +354,32 @@ export class ProjectEntrypoint extends WorkerEntrypoint<Env, ProjectProps> {
   whoami(): ProjectProps {
     return this.ctx.props;
   }
-  // globalOutbound: THE one egress door. Stays a first-class `fetch` (so WebSocket upgrades work).
-  // review #7: rules / secret-substitution / approval / metering belong HERE — this cut proves the
-  // choke point (workerd routes every sandbox fetch/connect through this method), not yet the policy.
+  // Store one of THIS project's own secrets (write-only from userspace — never read back; referenced in
+  // egress via `{{secret:project:<name>}}`). projectId comes from the unforgeable prop.
+  async setSecret(name: string, value: string): Promise<void> {
+    await projectSecrets(this.env.SECRETS_KV, this.ctx.props.projectId).set(name, value);
+  }
+  // globalOutbound: THE one egress door (review #7). Now a TWO-LEVEL chained door (egress.ts): substitute
+  // the project's own secrets, then the control-plane door substitutes platform secrets (origin-pinned +
+  // metered) and hits the internet. Stays a first-class `fetch` so WebSocket upgrades work.
   async fetch(request: Request): Promise<Response> {
-    return fetch(request);
+    const cfg = appConfigFrom(this.env);
+    const proj = projectSecrets(this.env.SECRETS_KV, this.ctx.props.projectId);
+    const meterKv = this.env.SECRETS_KV;
+    const meter = meterKv
+      ? (name: string) => {
+          // Best-effort usage counter (KV read-modify-write races under load — a DO-backed meter is the
+          // real fix; fine for the spike). The BILLING hook: this is where "what the customer owes" accrues.
+          this.ctx.waitUntil(
+            (async () => {
+              const k = `meter:platform:${name}`;
+              const n = Number((await meterKv.get(k)) ?? "0") + 1;
+              await meterKv.put(k, String(n));
+            })(),
+          );
+        }
+      : undefined;
+    return projectEgress(request, proj, cfg.platformSecrets ?? [], meter);
   }
 }
 

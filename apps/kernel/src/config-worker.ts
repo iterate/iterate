@@ -50,6 +50,26 @@ export default {
       });
     }
 
+    // Egress + secret-substitution proof (used by the e2e/live test). Userspace only ever writes
+    // PLACEHOLDERS; the egress door(s) substitute. We set one project secret, then fetch an external
+    // echo with three placeholders and return what the target RECEIVED — proving: platform secret
+    // substituted (origin-pinned), project secret substituted, and an unknown/unpinned token left intact.
+    if (url.pathname === "/__egress") {
+      const target = url.searchParams.get("target") || "https://httpbin.org/headers";
+      await env.ITX.setSecret("myproj", "PROJ-SECRET-123"); // write-only; we never read it back
+      const res = await fetch(target, {
+        headers: {
+          "x-platform": "Bearer {{secret:platform:echo}}", // substituted at the CONTROL-PLANE door
+          "x-project": "{{secret:project:myproj}}", // substituted at the PROJECT door
+          "x-unresolved": "{{secret:platform:nope}}", // unknown platform secret => left intact
+        },
+      });
+      return new Response(await res.text(), {
+        status: res.status,
+        headers: { "content-type": "application/json; charset=utf-8" },
+      });
+    }
+
     // Every app this worker serves is the project's OWN (default public site + any named apps it adds).
     // The dashboard never reaches here — the kernel reserved it.
     return publicSite(who.projectId, caller, url.host);

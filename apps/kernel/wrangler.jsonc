@@ -50,9 +50,13 @@
         { "binding": "DIRECTORY_KV", "id": "402ac6e2e34f45d38d171abb630d434d" },
         // The ingress routing table (ADR 0020/0025). Same namespace, `route:` keys (vs `project:`).
         { "binding": "ROUTING_KV", "id": "402ac6e2e34f45d38d171abb630d434d" },
+        // Per-project secrets + platform meters (egress.ts). Same namespace, `secret:`/`meter:` keys.
+        { "binding": "SECRETS_KV", "id": "402ac6e2e34f45d38d171abb630d434d" },
       ],
       "vars": {
-        "APP_CONFIG": "{\"hostBase\":\"shiterate.com\",\"wall\":{\"header\":\"cf-access-jwt-assertion\",\"jwksUrl\":\"https://iterate-com.cloudflareaccess.com/cdn-cgi/access/certs\",\"issuer\":\"https://iterate-com.cloudflareaccess.com\",\"audience\":\"f87852346c14aa744c6f25ae8ebc6e8c92fbffb11dd710b12c950c9ee1984b28\"},\"directory\":{\"provider\":\"kv\"}}",
+        // platformSecrets = the ITERATE-PRODUCT layer (ADR 0030): a demo first-party `echo` key iterate
+        // holds, origin-pinned to httpbin (the live egress-proof target), substituted at the CP door.
+        "APP_CONFIG": "{\"hostBase\":\"shiterate.com\",\"wall\":{\"header\":\"cf-access-jwt-assertion\",\"jwksUrl\":\"https://iterate-com.cloudflareaccess.com/cdn-cgi/access/certs\",\"issuer\":\"https://iterate-com.cloudflareaccess.com\",\"audience\":\"f87852346c14aa744c6f25ae8ebc6e8c92fbffb11dd710b12c950c9ee1984b28\"},\"directory\":{\"provider\":\"kv\"},\"platformSecrets\":[{\"name\":\"echo\",\"value\":\"PLATFORM-KEY-abc123\",\"allowedOrigins\":[\"https://httpbin.org\"]}]}",
         "OS_DASHBOARD_ORIGIN": "https://kernel-mini-os.iterate.workers.dev",
         "PROJECT_APP_SESSION_SECRET": "872df450ac06f2761a5c629349804d7648dfc9e840c7d0b8ed58d657e9c44c73",
       },
@@ -71,6 +75,7 @@
         { "binding": "DIRECTORY_KV", "id": "402ac6e2e34f45d38d171abb630d434d" },
         // The ingress routing table (ADR 0020/0025). Same namespace, `route:` keys (vs `project:`).
         { "binding": "ROUTING_KV", "id": "402ac6e2e34f45d38d171abb630d434d" },
+        { "binding": "SECRETS_KV", "id": "402ac6e2e34f45d38d171abb630d434d" },
       ],
       "vars": {
         "APP_CONFIG": "{\"directory\":{\"provider\":\"kv\"}}",
