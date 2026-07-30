@@ -2628,7 +2628,7 @@ const previewReadinessRequestTimeoutMs = 10_000;
 const defaultPreviewReadyUrlPath = "/api/__internal/health";
 const defaultPreviewDeployConcurrency = 5;
 const ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE = "environment-config-lease" as const;
-const PREVIEW_STACK_RESOURCE_TYPE = "preview-stack" as const;
+const PREVIEW_STACK_RESOURCE_TYPE = "preview-stack";
 // auth/preview root inherits these from auth/dev when it doesn't already carry
 // its own value. All are canonical APP_CONFIG_* names (the AppConfig port,
 // #1594); the pre-port legacy flat names are gone from every auth config.
