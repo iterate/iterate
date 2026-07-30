@@ -70,3 +70,12 @@ export type ItxExample = {
 };
 
 export { ITX_EXAMPLES } from "./examples.generated.ts";
+
+/** The run-script envelope every server-side runtime uses: the entry's body
+ * with the call's vars serialized inline (see the CapabilityHost contract).
+ * Lives with the catalogue so every runner — the e2e matrix, the mobile
+ * Examples screen's server round-trip, and chat's `/example` slash command —
+ * provably runs the SAME envelope. */
+export function runScriptEnvelope(code: string, vars: Record<string, unknown>): string {
+  return `async (itx) => {\nconst vars = ${JSON.stringify(vars)};\n${code}\n}`;
+}

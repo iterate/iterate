@@ -5,16 +5,10 @@
 // concurrency blasts, incident repros, malformed input — use itxScript()
 // instead and are never catalogue entries.
 
-import { ITX_EXAMPLES } from "../../src/itx/examples.ts";
+import { ITX_EXAMPLES, runScriptEnvelope } from "../../src/itx/examples.ts";
 import type { RunScriptHost } from "./itx-script-builder.ts";
 
-/** The run-script envelope every server-side runtime uses: the entry's body
- * with the call's vars serialized inline (see the CapabilityHost contract).
- * Shared with the examples matrix so the matrix proves the exact envelope
- * tests get from {@link runExample}. */
-export function runScriptEnvelope(code: string, vars: Record<string, unknown>): string {
-  return `async (itx) => {\nconst vars = ${JSON.stringify(vars)};\n${code}\n}`;
-}
+export { runScriptEnvelope };
 
 /** Execute a catalogue example by id through `capabilityHost.runScript`. */
 export async function runExample(

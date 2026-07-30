@@ -187,9 +187,9 @@ export const envs = {
     authDbId: "bd115332-9515-4bbf-96d5-f041e628bcf9",
   }),
   preview_5: previewSlot(5, {
-    projectDirectoryKvId: "a0f87dc67b39465bb9c00bd05587eadc",
-    workerBuildCacheKvId: "34f27e888b6243189e42a0ea5a93291f",
-    authDbId: "f8542574-48e3-4374-910f-3186293137f0",
+    projectDirectoryKvId: "3757821220854587ae92231688119d86",
+    workerBuildCacheKvId: "d006c8418cd14779957cd63db8c9063b",
+    authDbId: "c3ecc175-3bc2-4d78-ae89-733de3863563",
   }),
   preview_6: previewSlot(6, {
     projectDirectoryKvId: "e414e68c13e1471a8a3c41f5e50136e4",
@@ -257,8 +257,8 @@ export const envs = {
     authDbId: "2f61f8f0-b16a-4d53-89ef-b75b2982452c",
   }),
   preview_19: previewSlot(19, {
-    projectDirectoryKvId: "916fa97c2ec84067997012702f242646",
-    workerBuildCacheKvId: "a22450ba186a40549cfe2cff29079aca",
+    projectDirectoryKvId: "7d77673aae074ee593e308a4fcb01f07",
+    workerBuildCacheKvId: "75c6150b88a346f9a5f582b5b9943be8",
     authDbId: "42efe1e4-194f-4c61-8e62-810ec35fbf43",
   }),
 } satisfies Record<string, DeployedEnv>;
@@ -382,7 +382,7 @@ export const semaphoreEnvs = {
   preview_2: semaphorePreviewSlot(2, "711994bd-4faa-42f0-80ac-fc292d68569d"),
   preview_3: semaphorePreviewSlot(3, "17493958-1589-4a2c-a280-0a55bc11a92c"),
   preview_4: semaphorePreviewSlot(4, "f61083ef-23b5-4201-8731-8d3d46ebfeaa"),
-  preview_5: semaphorePreviewSlot(5, "eea19312-34e2-4e5c-be19-fe6929636544"),
+  preview_5: semaphorePreviewSlot(5, "25c934d2-cf2e-41b2-be33-3e8348d96365"),
   preview_6: semaphorePreviewSlot(6, "eff27a10-2f52-4077-9372-05dcf1c77ccd"),
   preview_7: semaphorePreviewSlot(7, "f4b1b641-71bd-4952-8726-3c2c543383fe"),
   preview_8: semaphorePreviewSlot(8, "77af433e-c870-43a6-be8e-1d2452feb23d"),
@@ -396,7 +396,7 @@ export const semaphoreEnvs = {
   preview_16: semaphorePreviewSlot(16, "69bd6563-c889-484e-ada3-d0e3f94021b9"),
   preview_17: semaphorePreviewSlot(17, "8fc3a6ff-f42b-4215-b6e5-aaacba27b82c"),
   preview_18: semaphorePreviewSlot(18, "c8762bd2-f4d0-4207-b038-0c03a83aabed"),
-  preview_19: semaphorePreviewSlot(19, "d1eab1d5-8a03-46b7-9c43-73b10f6133e0"),
+  preview_19: semaphorePreviewSlot(19, "84bc6ce0-ef76-43b6-8fc0-19cc4e0a6db0"),
 } satisfies Record<EnvName, SemaphoreEnv>;
 
 /**

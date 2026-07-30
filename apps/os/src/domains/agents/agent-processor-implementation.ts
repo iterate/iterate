@@ -18,6 +18,7 @@ import {
   type AgentProcessorState,
 } from "./agent-processor-contract.ts";
 import { deriveAgentRuntime, foldAgentSummaryUpdated } from "./agent-presence.ts";
+import { resolveSlashCommand, SLASH_COMMAND_EXECUTION_PREFIX } from "./slash-commands.ts";
 import {
   extractChunkText,
   jsonCompatible,
@@ -195,6 +196,37 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
             ]),
           );
         }
+        // SLASH COMMANDS — a user message that resolves to a known command
+        // runs as a codemode script with this agent's provenance instead of
+        // triggering an LLM turn (contextTriggerSource skips it via the SAME
+        // pure resolver, so processor and reduce can never disagree). Checked
+        // BEFORE the interrupt: a command is a side-band action, not
+        // conversation — it must neither cancel an in-flight turn nor be
+        // swallowed by the interrupt path's early return. Blocked per-event
+        // consequence with the assistant-script path's discipline:
+        // deterministic body (expiry anchored to the event, never `now`) so
+        // an at-least-once redelivery dedupes on the key, race-tolerant for
+        // a config change between deliveries. Non-resolving "/..." text falls
+        // through to the model untouched.
+        if (payload.role === "user") {
+          const slashCommand = resolveSlashCommand(payload.content);
+          if (slashCommand !== null) {
+            blockProcessorWhile(() =>
+              this.#appendUnlessLostIdempotencyRace(append, [
+                {
+                  type: "events.iterate.com/capability-host/script-run-requested",
+                  payload: {
+                    code: slashCommand.code,
+                    executionId: `${SLASH_COMMAND_EXECUTION_PREFIX}${event.offset}`,
+                    expiresAt: Date.parse(event.createdAt) + state.config.llmRequestExpiryMs,
+                  },
+                  idempotencyKey: this.idempotencyKey(`slash-command@${event.offset}`),
+                },
+              ]),
+            );
+            break;
+          }
+        }
         // INTERRUPT — cancellation is a property of new input, never a
         // free-standing command. Abort whatever this incarnation is running
         // and settle the open request as cancelled, carrying the streamed
@@ -325,7 +357,12 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       }
       case "events.iterate.com/capability-host/script-run-settled": {
         const { executionId, settlement } = event.payload;
-        if (!executionId.startsWith("agent-output:")) break;
+        if (
+          !executionId.startsWith("agent-output:") &&
+          !executionId.startsWith(SLASH_COMMAND_EXECUTION_PREFIX)
+        ) {
+          break;
+        }
         // Per-event render (blocked): the settlement is delivered once, and a
         // lost render would silently drop the script's result from the
         // conversation. Rendering may first spill an oversized result into
@@ -1299,7 +1336,12 @@ function reduceAgentEventCore(input: {
               },
       };
     case "events.iterate.com/capability-host/script-run-requested":
-      if (!event.payload.executionId.startsWith("agent-output:")) return state;
+      if (
+        !event.payload.executionId.startsWith("agent-output:") &&
+        !event.payload.executionId.startsWith(SLASH_COMMAND_EXECUTION_PREFIX)
+      ) {
+        return state;
+      }
       if (state.activeScriptExecutionIds.includes(event.payload.executionId)) return state;
       return {
         ...state,
@@ -1359,7 +1401,12 @@ function reduceAgentEvents(events: readonly StreamEvent[]): AgentProcessorState 
 function contextTriggerSource(payload: AgentContextAddedPayload): "external" | "agent-loop" | null {
   if (payload.role === "system" || payload.role === "assistant") return null;
   if (payload.llmRequestPolicy.behaviour === "dont-trigger-request") return null;
-  if (payload.role === "user") return "external";
+  if (payload.role === "user") {
+    // A resolving slash command runs deterministically (the processor's
+    // event handler appends the script request from the SAME pure resolver)
+    // — the model's turn comes later, driven by the script result's render.
+    return resolveSlashCommand(payload.content) === null ? "external" : null;
+  }
   const actorType = payload.actor?.type;
   return actorType === undefined || actorType === "agent" || actorType === "script"
     ? "agent-loop"
@@ -1372,7 +1419,10 @@ function contextTriggerSource(payload: AgentContextAddedPayload): "external" | "
 function contextClearsWaitingFor(payload: AgentContextAddedPayload): boolean {
   if (payload.role !== "user" && payload.role !== "developer") return false;
   if (payload.llmRequestPolicy.behaviour === "dont-trigger-request") return false;
-  if (payload.role === "user") return true;
+  // A resolving slash command is a side-band action, not an answer — the
+  // agent is still waiting for the human's actual reply (same pure resolver
+  // as contextTriggerSource, so the two derivations can never disagree).
+  if (payload.role === "user") return resolveSlashCommand(payload.content) === null;
   return payload.actor !== undefined && payload.actor.type !== "script";
 }
 
