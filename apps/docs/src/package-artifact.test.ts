@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, test } from "vitest";
 
-test("the published package contains only the config bridge", async () => {
+test("the published package contains only the Docs config capability", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "iterate-docs-package-"));
   await using _cleanup = {
     async [Symbol.asyncDispose]() {
@@ -53,5 +53,6 @@ test("the published package contains only the config bridge", async () => {
     ["-xOzf", archive, "package/dist-package/config-bridge.js"],
     { encoding: "utf8" },
   );
-  expect(javascript).not.toMatch(/\b(?:import|require)\b/);
+  expect(javascript).toContain('from "cloudflare:workers"');
+  expect(javascript).not.toContain("require(");
 });

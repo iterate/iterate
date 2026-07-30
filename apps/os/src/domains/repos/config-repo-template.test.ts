@@ -53,6 +53,7 @@ test("template ships packaged apps behind a thin router", () => {
   // compile the two Guestbook source-upgrade bridges once before the packaged
   // app removes their WAKE subscription.
   expect(templatePackageJson.dependencies).toMatchObject({
+    "@iterate-com/docs": expect.any(String),
     iterate: expect.any(String),
     react: expect.any(String),
     zod: expect.any(String),
@@ -212,11 +213,15 @@ test("template gets the platform sdk from iterate/sdk, not a committed snapshot"
   expect(templateFile("worker.ts")).toContain('from "iterate/starter-apps/github-ai-linter"');
   expect(templateFile("worker.ts")).toContain('from "iterate/starter-apps/guestbook"');
   expect(templateFile("worker.ts")).toContain('from "iterate/starter-apps/todo"');
+  expect(templateFile("worker.ts")).toContain('from "@iterate-com/docs"');
+  expect(templateFile("worker.ts")).toContain("get docs()");
+  expect(templateFile("worker.ts")).toContain("return this.#docsApp.rpc");
 
   const templatePackageJson = JSON.parse(templateFile("package.json")) as {
     dependencies: Record<string, string>;
   };
   expect(templatePackageJson.dependencies).toMatchObject({
+    "@iterate-com/docs": "https://pkg.pr.new/iterate/iterate/@iterate-com/docs@main",
     iterate: "https://pkg.pr.new/iterate/iterate/iterate@main",
   });
 });

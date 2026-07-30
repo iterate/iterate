@@ -11,9 +11,10 @@ import {
 describe("preview package prerequisite", () => {
   it("derives the URLs to await from the template's pkg.pr.new specs", () => {
     const sha = "f".repeat(40);
-    // Name-agnostic: whatever iterate/iterate packages the template declares
-    // are awaited at their pinned URLs — today that is exactly `iterate`.
+    // Name-agnostic: every iterate/iterate package the template declares is
+    // awaited at its pinned URL before preview deployment starts.
     expect(previewPackageSpecsToAwait(sha)).toEqual([
+      `https://pkg.pr.new/iterate/iterate/@iterate-com/docs@${sha}`,
       `https://pkg.pr.new/iterate/iterate/iterate@${sha}`,
     ]);
   });

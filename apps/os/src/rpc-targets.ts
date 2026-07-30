@@ -5821,6 +5821,29 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   }
 
   /**
+   * Canonical URL for one named app on this project's platform hostname.
+   * The deployment config keeps links on the matching production, preview,
+   * or localhost environment.
+   */
+  async appUrl(appSlug: string): Promise<string> {
+    const identity = await this.identity();
+    const config = parseConfig(env);
+    const projectUrl = buildProjectWorkerUrl({
+      projectSlug: identity.slug,
+      projectHostnameBases: config.projectHostnameBases,
+      ...(config.baseUrl === undefined ? {} : { appBaseUrl: config.baseUrl }),
+    });
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(appSlug) || projectUrl === null) {
+      throw new Error(
+        `Cannot build app URL for ${JSON.stringify(appSlug)} in project ${JSON.stringify(identity.slug)}.`,
+      );
+    }
+    const url = new URL(projectUrl);
+    url.hostname = `${appSlug}--${url.hostname}`;
+    return url.origin;
+  }
+
+  /**
    * Admin-only project-seed repair for a platform-owned apex that already
    * reaches this worker through Worker routes. Primes the routing directory,
    * records the hostname in the small project catalog, and waits for it.
