@@ -58,13 +58,57 @@ export function reduceChatEvents(events: StreamEvent[]): ChatThread {
   return { messages, working: lastUserOffset > lastAssistantOffset, maxOffset };
 }
 
+// The agent-maintained status vocabulary (AGENT_SUMMARY_INSTRUCTION in
+// apps/os/src/domains/agents/agent-defaults.ts): partial updates where an
+// omitted field is preserved and an explicit null clears — the same
+// semantics the dashboard's summary projections fold.
+export const SUMMARY_UPDATED_TYPE = "events.iterate.com/agent/summary-updated";
+export const SCRIPT_RUN_SETTLED_TYPE = "events.iterate.com/capability-host/script-run-settled";
+
+export type ThreadContext =
+  | { kind: "status"; title: string | null; activity: string | null }
+  | { kind: "message"; role: "user" | "assistant"; text: string };
+
 /**
- * The thread's last visible message at or before `offset` — what the thread
- * was doing when, say, an approval batch was born. Text is collapsed to one
- * line; messages with no visible text are skipped (they'd render as an empty
- * context line). Null when nothing visible had happened yet.
+ * What the thread was doing when one script run's approval batch was born.
+ * Primary answer: the agent-maintained status, folded through the run's own
+ * settlement — a status the script sets just before its held fetch counts
+ * (it lands AFTER the run-requested offset), while a later turn's status
+ * (after this run settled) does not. An unsettled run has no upper bound:
+ * whatever status it is writing is still its own. Threads that never set a
+ * status fall back to the last visible message at or before the run request;
+ * an empty thread yields null.
  */
-export function lastVisibleMessageAtOrBefore(
+export function threadContextForScriptRun(
+  events: StreamEvent[],
+  run: { scriptRunRequestedEventOffset: number; executionId: string },
+): ThreadContext | null {
+  const ordered = [...events].sort((a, b) => a.offset - b.offset);
+  const settle = ordered.find(
+    (event) =>
+      event.type === SCRIPT_RUN_SETTLED_TYPE &&
+      (event.payload as { executionId?: string } | undefined)?.executionId === run.executionId,
+  );
+  const statusBound = settle === undefined ? Infinity : settle.offset;
+  let title: string | null = null;
+  let activity: string | null = null;
+  for (const event of ordered) {
+    if (event.type !== SUMMARY_UPDATED_TYPE || event.offset > statusBound) continue;
+    const payload = (event.payload || {}) as { title?: string | null; activity?: string | null };
+    if (payload.title !== undefined) title = payload.title || null;
+    if (payload.activity !== undefined) activity = payload.activity || null;
+  }
+  if (title !== null || activity !== null) return { kind: "status", title, activity };
+  const message = lastVisibleMessageAtOrBefore(ordered, run.scriptRunRequestedEventOffset);
+  return message === null ? null : { kind: "message", ...message };
+}
+
+/**
+ * The thread's last visible message at or before `offset` — the statusless
+ * thread's fallback context. Text is collapsed to one line; messages with no
+ * visible text are skipped (they'd render as an empty context line).
+ */
+function lastVisibleMessageAtOrBefore(
   events: StreamEvent[],
   offset: number,
 ): { role: "user" | "assistant"; text: string } | null {

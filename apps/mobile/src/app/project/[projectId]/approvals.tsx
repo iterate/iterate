@@ -45,7 +45,9 @@ import {
 } from "../../../lib/approvals.ts";
 import {
   ASSISTANT_MESSAGE_TYPE,
-  lastVisibleMessageAtOrBefore,
+  SCRIPT_RUN_SETTLED_TYPE,
+  SUMMARY_UPDATED_TYPE,
+  threadContextForScriptRun,
   USER_MESSAGE_TYPE,
 } from "../../../lib/chat.ts";
 import { getProjectItx } from "../../../lib/itx.ts";
@@ -375,9 +377,10 @@ function BatchCard({
       streamContext.streamPath.startsWith("/agents/") ? (
         <ThreadContextLine
           baseUrl={baseUrl}
-          offsetBound={streamContext.scriptRunRequestedEventOffset}
+          executionId={streamContext.executionId}
           projectId={projectId}
           projectSlug={projectSlug}
+          scriptRunRequestedEventOffset={streamContext.scriptRunRequestedEventOffset}
           streamPath={streamContext.streamPath}
         />
       ) : null}
@@ -539,51 +542,61 @@ function BatchCard({
 }
 
 /**
- * "What was this run even doing?" — the agent thread's last visible message
- * at the moment the batch was born, pinned to the card so the queue and
+ * "What was this run even doing?" — the thread's agent-maintained STATUS as
+ * of this script run (threadContextForScriptRun folds `agent/summary-updated`
+ * through the run's own settlement), pinned to the card so the queue and
  * history read without opening each thread. A snapshot deliberately, not live
- * status: it is derived from immutable history at the script-run offset, so
- * it works identically for open and settled batches. The line renders
- * immediately with the thread name (tap = open the thread) and grows the
- * message once the one-shot fetch lands; a slow or failed fetch never blocks
- * the card.
+ * status: the fold is bounded by immutable history, so it works identically
+ * for open and settled batches. The status renders IN FULL (it wraps — a
+ * clipped status answers nothing); only the statusless-thread fallback (the
+ * last visible message, often a long command) is one-lined. The line renders
+ * immediately with the thread name (tap = open the thread) and grows once
+ * the one-shot fetch lands; a slow or failed fetch never blocks the card.
  */
 function ThreadContextLine({
   baseUrl,
-  offsetBound,
+  executionId,
   projectId,
   projectSlug,
+  scriptRunRequestedEventOffset,
   streamPath,
 }: {
   baseUrl: string;
-  offsetBound: number;
+  executionId: string;
   projectId: string;
   projectSlug: string;
+  scriptRunRequestedEventOffset: number;
   streamPath: string;
 }) {
   const context = useQuery({
-    queryKey: ["approval-thread-context", baseUrl, projectId, streamPath, offsetBound],
+    queryKey: ["approval-thread-context", baseUrl, projectId, streamPath, executionId],
     queryFn: async () => {
       const project = await getProjectItx(baseUrl, projectId);
       const stream = project.streams.get(streamPath);
-      // Page the whole bounded window: a busy thread can hold more visible
-      // messages than one getEvents page, and only the LAST one matters.
+      // Page the whole thread (no beforeOffset: the run's settle event and
+      // the status the script itself set land AFTER the run request) — a
+      // busy thread can exceed one getEvents page.
       const events: StreamEvent[] = [];
       let cursor = 0;
       while (true) {
         const page = await stream.getEvents({
           afterOffset: cursor,
-          beforeOffset: offsetBound + 1, // exclusive bound — at-or-before the script run
-          eventTypes: [USER_MESSAGE_TYPE, ASSISTANT_MESSAGE_TYPE],
+          eventTypes: [
+            SUMMARY_UPDATED_TYPE,
+            SCRIPT_RUN_SETTLED_TYPE,
+            USER_MESSAGE_TYPE,
+            ASSISTANT_MESSAGE_TYPE,
+          ],
         });
         if (page.length === 0) break;
         events.push(...page);
         cursor = page.at(-1)!.offset;
       }
-      return lastVisibleMessageAtOrBefore(events, offsetBound);
+      return threadContextForScriptRun(events, { scriptRunRequestedEventOffset, executionId });
     },
     staleTime: Infinity,
   });
+  const threadName = streamPath.replace(/^\/agents\//, "");
   return (
     <Pressable
       accessibilityRole="link"
@@ -595,12 +608,19 @@ function ThreadContextLine({
       }
       style={styles.threadContext}
     >
-      <Text numberOfLines={1} style={styles.threadContextText}>
-        <Text style={styles.threadContextName}>{streamPath.replace(/^\/agents\//, "")}</Text>
-        {context.data
-          ? ` · ${context.data.role === "user" ? "you" : "agent"}: ${context.data.text}`
-          : ""}
-      </Text>
+      {context.data?.kind === "status" ? (
+        <Text style={styles.threadContextText}>
+          <Text style={styles.threadContextName}>{threadName}</Text>
+          {` · ${[context.data.title, context.data.activity].filter(Boolean).join(" — ")}`}
+        </Text>
+      ) : (
+        <Text numberOfLines={1} style={styles.threadContextText}>
+          <Text style={styles.threadContextName}>{threadName}</Text>
+          {context.data?.kind === "message"
+            ? ` · ${context.data.role === "user" ? "you" : "agent"}: ${context.data.text}`
+            : ""}
+        </Text>
+      )}
     </Pressable>
   );
 }
