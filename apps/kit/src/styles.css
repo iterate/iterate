@@ -1,0 +1,9 @@
+@import "@iterate-com/ui/globals.css";
+
+@source "./**/*.{ts,tsx}";
+
+@layer base {
+  body {
+    @apply min-h-svh bg-background;
+  }
+}

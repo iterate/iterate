@@ -1,0 +1,982 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kit + ESPHome: devices as streams</title>
+  <style>
+    :root {
+      --background: oklch(0.97 0.005 260);
+      --foreground: oklch(0.18 0.02 260);
+      --card: oklch(1 0 0);
+      --card-foreground: oklch(0.18 0.02 260);
+      --primary: oklch(0.50 0.25 280);
+      --primary-foreground: oklch(1 0 0);
+      --secondary: oklch(0.50 0.18 180);
+      --secondary-foreground: oklch(1 0 0);
+      --muted: oklch(0.92 0.01 260);
+      --muted-foreground: oklch(0.40 0.02 260);
+      --accent: oklch(0.60 0.22 50);
+      --accent-foreground: oklch(0.18 0.02 260);
+      --destructive: oklch(0.50 0.25 25);
+      --destructive-foreground: oklch(1 0 0);
+      --success: oklch(0.45 0.20 150);
+      --success-foreground: oklch(1 0 0);
+      --warning: oklch(0.55 0.18 85);
+      --warning-foreground: oklch(0.18 0.02 260);
+      --border: oklch(0.88 0.01 260);
+      --input: oklch(0.92 0.01 260);
+      --ring: oklch(0.50 0.25 280);
+      --code-bg: oklch(0.92 0.01 260);
+      --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+      --font-mono: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+      --font-display: ui-serif, Georgia, "Times New Roman", serif;
+      --radius: 0.625rem;
+    }
+
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: var(--font-sans);
+      background: var(--background);
+      color: var(--foreground);
+      line-height: 1.65;
+      font-size: 15px;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: var(--primary); text-underline-offset: 3px; }
+    p { max-width: 72ch; }
+    ul { padding-left: 20px; }
+    li + li { margin-top: 7px; }
+    strong { font-weight: 650; }
+    .container { max-width: 1100px; margin: 0 auto; padding: 64px 24px 96px; }
+    .eyebrow, .prompt-label, .section-number, .stat-label, .tag, .badge,
+    .code-label, .diagram-caption, .decide-with, .mini-label {
+      font-family: var(--font-mono);
+    }
+    .eyebrow {
+      font-size: 0.72rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted-foreground);
+    }
+    header h1 {
+      font-family: var(--font-display);
+      font-size: clamp(2.3rem, 6vw, 4rem);
+      font-weight: 500;
+      margin: 10px 0 18px;
+      line-height: 1.05;
+      max-width: 850px;
+    }
+    .lede {
+      font-size: 1.15rem;
+      line-height: 1.55;
+      max-width: 800px;
+      color: var(--muted-foreground);
+      margin-bottom: 28px;
+    }
+    .prompt-box {
+      background: var(--muted);
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px 24px;
+    }
+    .prompt-label, .mini-label {
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted-foreground);
+      display: block;
+      margin-bottom: 5px;
+    }
+    .prompt-box p { color: var(--muted-foreground); line-height: 1.55; }
+    .summary-strip {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 16px;
+      margin: 32px 0;
+    }
+    .stat-card {
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px;
+      text-align: center;
+      background: var(--card);
+    }
+    .stat-value {
+      font-family: var(--font-display);
+      font-size: 1.55rem;
+      line-height: 1.15;
+      font-weight: 500;
+      display: block;
+    }
+    .stat-label {
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted-foreground);
+      margin-top: 7px;
+      display: block;
+    }
+    section { margin-top: 72px; }
+    .section-header {
+      display: flex;
+      align-items: baseline;
+      gap: 16px;
+      margin-bottom: 26px;
+      padding-bottom: 9px;
+      border-bottom: 1.5px solid var(--border);
+    }
+    .section-number { font-size: 0.75rem; font-weight: 600; color: var(--primary); }
+    .section-header h2, h3 {
+      font-family: var(--font-display);
+      font-weight: 500;
+    }
+    .section-header h2 { font-size: 1.55rem; }
+    h3 { font-size: 1.15rem; margin-bottom: 7px; }
+    .verdict {
+      border-left: 4px solid var(--success);
+      background: color-mix(in oklab, var(--success) 7%, var(--card));
+      border-radius: 0 var(--radius) var(--radius) 0;
+      padding: 24px 28px;
+      font-size: 1.06rem;
+    }
+    .verdict p + p { margin-top: 12px; }
+    .two-col, .three-col {
+      display: grid;
+      gap: 20px;
+    }
+    .two-col { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .three-col { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .card {
+      background: var(--card);
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+    }
+    .card p, .card li { color: var(--muted-foreground); font-size: 0.92rem; }
+    .card.recommended { border-color: var(--primary); }
+    .card.warning { border-color: var(--warning); }
+    .tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 13px; }
+    .tag {
+      font-size: 0.68rem;
+      padding: 3px 8px;
+      border-radius: calc(var(--radius) - 4px);
+      background: var(--muted);
+      color: var(--muted-foreground);
+    }
+    .tag.highlight {
+      background: color-mix(in oklab, var(--primary) 12%, transparent);
+      color: var(--primary);
+    }
+    .diagram-panel {
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      margin: 24px 0;
+      background: var(--card);
+      overflow-x: auto;
+    }
+    .diagram-panel svg { min-width: 820px; }
+    .diagram-caption {
+      font-size: 0.72rem;
+      color: var(--muted-foreground);
+      display: block;
+      margin-top: 10px;
+      text-align: center;
+    }
+    .code-panel {
+      background: var(--code-bg);
+      border-radius: var(--radius);
+      padding: 22px;
+      overflow-x: auto;
+      margin: 18px 0;
+      border: 1.5px solid var(--border);
+    }
+    .code-label {
+      font-size: 0.7rem;
+      color: var(--muted-foreground);
+      display: block;
+      margin-bottom: 9px;
+    }
+    .code-panel pre {
+      font-family: var(--font-mono);
+      font-size: 0.82rem;
+      line-height: 1.6;
+      color: var(--foreground);
+    }
+    .kw { color: var(--primary); }
+    .str { color: var(--success); }
+    .cm { color: var(--muted-foreground); font-style: italic; }
+    .fn { color: var(--accent); }
+    .matrix, .risk-grid {
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      background: var(--card);
+    }
+    .matrix-row {
+      display: grid;
+      grid-template-columns: 1.15fr 1fr 1.7fr;
+      gap: 20px;
+      padding: 15px 20px;
+      border-bottom: 1px solid var(--border);
+      align-items: start;
+    }
+    .matrix-row:last-child, .risk-row:last-child { border-bottom: none; }
+    .matrix-row.header {
+      background: var(--muted);
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted-foreground);
+    }
+    .matrix-row div:nth-child(2), .matrix-row div:nth-child(3) {
+      font-size: 0.9rem;
+      color: var(--muted-foreground);
+    }
+    .badge {
+      font-size: 0.66rem;
+      font-weight: 650;
+      padding: 3px 8px;
+      border-radius: calc(var(--radius) - 4px);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      white-space: nowrap;
+    }
+    .badge.high { background: color-mix(in oklab, var(--destructive) 15%, transparent); color: var(--destructive); }
+    .badge.med { background: color-mix(in oklab, var(--warning) 15%, transparent); color: var(--warning); }
+    .badge.low, .badge.good { background: color-mix(in oklab, var(--success) 15%, transparent); color: var(--success); }
+    .risk-row {
+      display: grid;
+      grid-template-columns: 1.2fr auto 1.7fr;
+      gap: 22px;
+      padding: 16px 20px;
+      align-items: center;
+      border-bottom: 1px solid var(--border);
+    }
+    .risk-name { font-weight: 550; }
+    .risk-mitigation { font-size: 0.9rem; color: var(--muted-foreground); }
+    .milestones { display: flex; flex-direction: column; }
+    .milestone {
+      display: grid;
+      grid-template-columns: 120px 28px 1fr;
+      gap: 0 18px;
+    }
+    .milestone .when {
+      text-align: right;
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      color: var(--muted-foreground);
+      padding-top: 4px;
+    }
+    .dot-col { display: flex; flex-direction: column; align-items: center; }
+    .dot {
+      width: 14px; height: 14px; border-radius: 50%;
+      background: var(--card); border: 3px solid var(--primary); flex-shrink: 0;
+    }
+    .dot.done { background: var(--success); border-color: var(--success); }
+    .line { width: 2px; flex: 1; background: var(--border); margin: 4px 0; }
+    .milestone:last-child .line { display: none; }
+    .milestone .body { padding-bottom: 38px; }
+    .milestone .body p { color: var(--muted-foreground); font-size: 0.9rem; }
+    .callout {
+      border-left: 3px solid var(--primary);
+      padding: 17px 22px;
+      margin: 15px 0;
+      background: var(--card);
+      border-radius: 0 var(--radius) var(--radius) 0;
+    }
+    .callout p { font-size: 0.91rem; color: var(--muted-foreground); }
+    .decide-with {
+      font-size: 0.7rem;
+      color: var(--primary);
+      font-weight: 500;
+      display: block;
+      margin-top: 8px;
+    }
+    .footnotes {
+      font-size: 0.85rem;
+      color: var(--muted-foreground);
+    }
+    .footnotes li + li { margin-top: 10px; }
+    @media (max-width: 800px) {
+      .summary-strip, .two-col, .three-col { grid-template-columns: 1fr; }
+      .matrix-row { grid-template-columns: 1fr; gap: 5px; }
+      .risk-row { grid-template-columns: 1fr auto; }
+      .risk-mitigation { grid-column: 1 / -1; }
+      .milestone { grid-template-columns: 80px 22px 1fr; gap: 0 12px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="container">
+    <header>
+      <span class="eyebrow">Architecture proposal · Iterate Kit · ESPHome</span>
+      <h1>Make an ESPHome device part of Iterate with one YAML block</h1>
+      <p class="lede">
+        Represent each physical device as one durable stream under
+        <code>/kit/&lt;device-id&gt;</code>, add a live capability while it is online,
+        and keep high-bandwidth media on a separate negotiated channel.
+      </p>
+      <div class="prompt-box">
+        <span class="prompt-label">Brief</span>
+        <p>
+          Research how sensors, buttons, actuators, displays, audio devices, and unusual ESP32
+          hardware can connect directly to an Iterate deployment over an outbound WebSocket.
+          The preferred user experience is a YAML-only ESPHome configuration change, with
+          secure enrollment, durable events, callable capabilities, and useful offline behavior.
+        </p>
+      </div>
+      <div class="summary-strip">
+        <div class="stat-card"><span class="stat-value">1 block</span><span class="stat-label">Desired YAML UX</span></div>
+        <div class="stat-card"><span class="stat-value">1 stream</span><span class="stat-label">Per device</span></div>
+        <div class="stat-card"><span class="stat-value">1 WSS</span><span class="stat-label">Control plane</span></div>
+        <div class="stat-card"><span class="stat-value">2 modes</span><span class="stat-label">Direct + gateway</span></div>
+      </div>
+    </header>
+
+    <section>
+      <div class="section-header"><span class="section-number">01</span><h2>Answer first</h2></div>
+      <div class="verdict">
+        <p>
+          <strong>Yes: YAML-only enablement is a realistic primary product shape.</strong>
+          An ESPHome <code>external_components</code> entry can fetch an Iterate component,
+          and an <code>iterate_kit:</code> block can register that component with ESPHome’s
+          entity registry. ESPHome then compiles and flashes the resulting firmware through its
+          normal workflow; users do not write or patch C++.
+        </p>
+        <p>
+          The important qualification is that the YAML change still causes a firmware rebuild.
+          A device whose already-flashed firmware does not contain Iterate code cannot suddenly
+          initiate an Iterate WebSocket. The only broadly viable <em>no-reflash</em> path is a
+          LAN gateway that connects to an existing ESPHome Native API or MQTT endpoint and
+          represents it upstream.
+        </p>
+      </div>
+      <div class="three-col" style="margin-top:20px">
+        <div class="card recommended">
+          <h3>Direct, YAML-enabled</h3>
+          <p>Recommended. Add our external component to any compatible ESP32 ESPHome YAML, compile, flash, and enroll.</p>
+          <div class="tags"><span class="tag highlight">primary</span><span class="tag">outbound WSS</span><span class="tag">no LAN server</span></div>
+        </div>
+        <div class="card">
+          <h3>Gateway, no device reflash</h3>
+          <p>A small always-on bridge speaks ESPHome Native API or MQTT locally and Kit upstream. Useful for adopted devices.</p>
+          <div class="tags"><span class="tag">secondary</span><span class="tag">LAN dependency</span></div>
+        </div>
+        <div class="card warning">
+          <h3>Stock firmware, direct cloud</h3>
+          <p>Not generally possible. The firmware must already contain a compatible cloud client and credential-enrollment path.</p>
+          <div class="tags"><span class="tag">vendor-specific only</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-header"><span class="section-number">02</span><h2>Recommended architecture</h2></div>
+      <p>
+        The device should authenticate into a narrow <strong>Kit device session</strong>, not
+        receive a full project capability. The session binds one credential to one project and
+        one canonical device path, translates bounded device messages into stream operations,
+        and exposes only the verbs a device needs.
+      </p>
+      <div class="diagram-panel">
+        <svg viewBox="0 0 1020 460" xmlns="http://www.w3.org/2000/svg" style="width:100%">
+          <style>
+            .b { fill:var(--card);stroke:var(--border);stroke-width:1.5 }
+            .n { fill:color-mix(in oklab,var(--primary) 8%,transparent);stroke:var(--primary);stroke-width:1.7 }
+            .s { fill:color-mix(in oklab,var(--success) 8%,transparent);stroke:var(--success);stroke-width:1.7 }
+            .w { fill:color-mix(in oklab,var(--warning) 9%,transparent);stroke:var(--warning);stroke-width:1.5 }
+            .t { font-family:var(--font-sans);font-size:14px;font-weight:650;fill:var(--foreground) }
+            .st { font-family:var(--font-mono);font-size:10.5px;fill:var(--muted-foreground) }
+            .e { stroke:var(--muted-foreground);stroke-width:1.6;fill:none }
+            .ep { stroke:var(--primary);stroke-width:1.7;fill:none }
+            .es { stroke:var(--success);stroke-width:1.7;fill:none }
+            .el { font-family:var(--font-mono);font-size:9.5px;fill:var(--muted-foreground) }
+          </style>
+          <defs>
+            <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--muted-foreground)"/></marker>
+            <marker id="ap" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--primary)"/></marker>
+            <marker id="as" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--success)"/></marker>
+          </defs>
+
+          <rect x="20" y="55" width="175" height="205" rx="12" class="b"/>
+          <text x="107" y="82" text-anchor="middle" class="t">ESPHome runtime</text>
+          <text x="40" y="112" class="st">sensor / binary_sensor</text>
+          <text x="40" y="138" class="st">switch / light / cover</text>
+          <text x="40" y="164" class="st">button / select / number</text>
+          <text x="40" y="190" class="st">display / event / media</text>
+          <text x="40" y="225" class="st">Controller callbacks +</text>
+          <text x="40" y="242" class="st">App entity enumeration</text>
+
+          <rect x="250" y="55" width="190" height="205" rx="12" class="n"/>
+          <text x="345" y="82" text-anchor="middle" class="t">iterate_kit component</text>
+          <text x="270" y="112" class="st">entity manifest</text>
+          <text x="270" y="138" class="st">state coalescing</text>
+          <text x="270" y="164" class="st">command dispatch</text>
+          <text x="270" y="190" class="st">bounded queues</text>
+          <text x="270" y="216" class="st">device capability</text>
+          <text x="270" y="242" class="st">credential storage</text>
+
+          <line x1="195" y1="157" x2="250" y2="157" class="ep" marker-end="url(#ap)"/>
+          <text x="222" y="147" text-anchor="middle" class="el">local C++</text>
+
+          <rect x="510" y="70" width="190" height="120" rx="12" class="n"/>
+          <text x="605" y="98" text-anchor="middle" class="t">KitDeviceSession</text>
+          <text x="530" y="126" class="st">authenticate + announce</text>
+          <text x="530" y="150" class="st">append + receive commands</text>
+          <text x="530" y="174" class="st">mount + open media</text>
+
+          <line x1="440" y1="130" x2="510" y2="130" class="ep" marker-end="url(#ap)"/>
+          <text x="475" y="119" text-anchor="middle" class="el">WSS /api</text>
+          <path d="M510 164 C482 164 472 190 440 190" class="ep" stroke-dasharray="5 4" marker-end="url(#ap)"/>
+          <text x="473" y="208" text-anchor="middle" class="el">commands</text>
+
+          <rect x="775" y="30" width="215" height="110" rx="12" class="s"/>
+          <text x="882" y="58" text-anchor="middle" class="t">/kit/&lt;device-id&gt;</text>
+          <text x="795" y="86" class="st">durable events + activities</text>
+          <text x="795" y="110" class="st">desired + observed state</text>
+          <text x="795" y="128" class="st">replay / audit / processors</text>
+          <line x1="700" y1="105" x2="775" y2="105" class="es" marker-end="url(#as)"/>
+
+          <rect x="775" y="175" width="215" height="95" rx="12" class="b"/>
+          <text x="882" y="203" text-anchor="middle" class="t">kit.&lt;device-id&gt;</text>
+          <text x="795" y="231" class="st">live capability while online</text>
+          <text x="795" y="253" class="st">fast-path calls / discovery</text>
+          <line x1="700" y1="168" x2="775" y2="218" class="e" marker-end="url(#a)"/>
+
+          <rect x="510" y="315" width="190" height="92" rx="12" class="w"/>
+          <text x="605" y="344" text-anchor="middle" class="t">Media session</text>
+          <text x="530" y="372" class="st">PCM / camera / bulk bytes</text>
+          <text x="530" y="394" class="st">separate bounded socket</text>
+          <path d="M345 260 L345 361 L510 361" class="e" stroke-dasharray="5 4" marker-end="url(#a)"/>
+          <line x1="700" y1="361" x2="775" y2="361" class="e" marker-end="url(#a)"/>
+
+          <rect x="775" y="315" width="215" height="92" rx="12" class="b"/>
+          <text x="882" y="344" text-anchor="middle" class="t">Media proxy / storage</text>
+          <text x="795" y="372" class="st">short-lived negotiated access</text>
+          <text x="795" y="394" class="st">stream stores lifecycle only</text>
+        </svg>
+        <span class="diagram-caption">Durable truth and live reachability share a semantic address but have different lifetimes.</span>
+      </div>
+      <div class="two-col">
+        <div class="card">
+          <h3>Why not expose the raw Stream API?</h3>
+          <ul>
+            <li>Generic replay batches can be much larger than the device’s fixed control-message and JSON-token budgets.</li>
+            <li>The current project credential grants access to the whole project, not one device path.</li>
+            <li>Server-side translation lets the wire protocol stay stable while Iterate’s internal Stream API evolves.</li>
+            <li>The facade can enforce event size, types, command TTL, entity IDs, and per-device rate limits.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>Why keep the live capability?</h3>
+          <ul>
+            <li>It advertises what this exact device can do right now.</li>
+            <li>It supports low-latency interactive calls while the socket is alive.</li>
+            <li>It is naturally revoked when the device session disconnects.</li>
+            <li>Meaningful requests and outcomes still go to the durable stream, avoiding ambiguous RPC-only side effects.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-header"><span class="section-number">03</span><h2>The YAML-only experience</h2></div>
+      <p>
+        ESPHome external components are normal components with YAML validation and code generation.
+        The Iterate component can register as a controller, enumerate the application’s entities,
+        subscribe to their updates, and dispatch incoming commands through the same public entity
+        APIs used by ESPHome’s own API server.
+      </p>
+      <div class="code-panel">
+        <span class="code-label">living-room-dial.yaml</span>
+        <pre><code><span class="kw">external_components</span>:
+  - <span class="fn">source</span>: <span class="str">github://iterate/iterate@kit-v0.1</span>
+    <span class="fn">components</span>: [<span class="str">iterate_kit</span>]
+
+<span class="kw">iterate_kit</span>:
+  <span class="fn">deployment</span>: <span class="str">https://os.iterate.com</span>  <span class="cm"># production can become the default</span>
+  <span class="fn">entities</span>:
+    <span class="fn">include</span>: <span class="str">all</span>
+    <span class="fn">exclude</span>:
+      - <span class="str">wifi_signal</span>
+      - <span class="str">uptime</span>
+  <span class="fn">telemetry</span>:
+    <span class="fn">sensor_min_interval</span>: <span class="str">5s</span>
+    <span class="fn">send_on_change</span>: <span class="kw">true</span>
+
+<span class="cm"># Existing ESPHome entities remain ordinary ESPHome YAML.</span>
+<span class="kw">sensor</span>:
+  - <span class="fn">platform</span>: <span class="str">bme680</span>
+    <span class="fn">temperature</span>:
+      <span class="fn">name</span>: <span class="str">Room temperature</span></code></pre>
+      </div>
+      <div class="two-col">
+        <div class="card recommended">
+          <h3>What the component should infer</h3>
+          <ul>
+            <li>Entity IDs, kinds, units, classes, and supported traits.</li>
+            <li>State callbacks for sensors and stateful actuators.</li>
+            <li>Command adapters for switches, lights, covers, fans, climate, numbers, selects, locks, and buttons.</li>
+            <li>A chunked manifest so large devices stay within the bounded C peer’s message limits.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>What enrollment should decide</h3>
+          <ul>
+            <li>The Iterate deployment and project.</li>
+            <li>The server-issued immutable device ID.</li>
+            <li>The user-facing name and canonical <code>/kit/&lt;device-id&gt;</code> path.</li>
+            <li>The exact per-device authority. Firmware must not choose an arbitrary project path after authentication.</li>
+          </ul>
+        </div>
+      </div>
+      <div class="callout">
+        <h3>A naming trap worth making explicit</h3>
+        <p>
+          In ESPHome, a <code>button</code> is normally a stateless command target—something a
+          client presses. A physical GPIO push-button is usually represented as a
+          <code>binary_sensor</code> or an event source. The bridge should preserve this
+          distinction rather than flattening both into “button.”
+        </p>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-header"><span class="section-number">04</span><h2>Stream and activity model</h2></div>
+      <p>
+        Use one stream per device, not one stream per entity. One stream gives a total order across
+        physical inputs, requested actions, observed state, connectivity, and firmware changes.
+        High-volume media and exceptional telemetry can be split later without fragmenting the
+        device’s ordinary history.
+      </p>
+      <div class="code-panel">
+        <span class="code-label">Suggested event vocabulary</span>
+        <pre><code><span class="str">kit/device-announced</span>          <span class="cm"># firmware, model, manifest version</span>
+<span class="str">kit/entity-manifest-chunk</span>      <span class="cm"># bounded entity/trait descriptions</span>
+<span class="str">kit/entity-state-observed</span>      <span class="cm"># sensor or actuator state</span>
+<span class="str">kit/entity-event-observed</span>      <span class="cm"># press, gesture, RFID tag, motion event</span>
+<span class="str">kit/activity-requested</span>         <span class="cm"># durable intent + idempotency key + TTL</span>
+<span class="str">kit/activity-started</span>           <span class="cm"># device accepted work</span>
+<span class="str">kit/activity-progressed</span>        <span class="cm"># optional, bounded/coalesced</span>
+<span class="str">kit/activity-succeeded</span>         <span class="cm"># terminal result + observed state</span>
+<span class="str">kit/activity-failed</span>            <span class="cm"># classified durable explanation</span>
+<span class="str">kit/media-session-opened</span>       <span class="cm"># negotiation metadata, never PCM bytes</span>
+<span class="str">kit/device-diagnostics</span>         <span class="cm"># queue high-water, loss, reconnect reason</span></code></pre>
+      </div>
+      <div class="three-col">
+        <div class="card">
+          <h3>State-setting commands</h3>
+          <p>
+            Prefer desired state plus observed state: “light should be 40%” is safely
+            reconcilable after reconnect.
+          </p>
+        </div>
+        <div class="card">
+          <h3>Impulse commands</h3>
+          <p>
+            “Dispense,” “press,” and “unlock” require an idempotency key, TTL, bounded processed-ID
+            memory, and an explicit terminal outcome. Exactly-once physical effects cannot be
+            guaranteed across a crash at the actuation boundary.
+          </p>
+        </div>
+        <div class="card">
+          <h3>Realtime activities</h3>
+          <p>
+            “Start listening” or “tap camera” is a durable request that negotiates a short-lived
+            media session. The bytes travel elsewhere; lifecycle and failure remain auditable.
+          </p>
+        </div>
+      </div>
+      <div class="callout">
+        <h3>Backpressure must be semantic</h3>
+        <p>
+          Never grow an offline queue indefinitely. Coalesce replaceable sensor/state samples,
+          preserve important transitions where capacity permits, and append an explicit loss
+          diagnostic after reconnect. Server-side commands remain durable until consumed, expired,
+          or cancelled.
+        </p>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-header"><span class="section-number">05</span><h2>Enrollment and authentication</h2></div>
+      <p>
+        OAuth’s Device Authorization Grant is the right human-interaction pattern: a device with
+        limited input shows a code and a user completes authorization on a phone or laptop.
+        However, a normal user access token is the wrong final device identity. Enrollment should
+        mint a revocable credential bound to one device record, project, and stream path.
+      </p>
+      <div class="diagram-panel">
+        <svg viewBox="0 0 1000 330" xmlns="http://www.w3.org/2000/svg" style="width:100%">
+          <style>
+            .b { fill:var(--card);stroke:var(--border);stroke-width:1.5 }
+            .n { fill:color-mix(in oklab,var(--primary) 8%,transparent);stroke:var(--primary);stroke-width:1.6 }
+            .s { fill:color-mix(in oklab,var(--success) 8%,transparent);stroke:var(--success);stroke-width:1.6 }
+            .t { font-family:var(--font-sans);font-size:13px;font-weight:650;fill:var(--foreground) }
+            .st { font-family:var(--font-mono);font-size:10px;fill:var(--muted-foreground) }
+            .e { stroke:var(--muted-foreground);stroke-width:1.5;fill:none }
+            .ep { stroke:var(--primary);stroke-width:1.5;fill:none }
+            .el { font-family:var(--font-mono);font-size:9.5px;fill:var(--muted-foreground) }
+          </style>
+          <defs>
+            <marker id="ea" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--muted-foreground)"/></marker>
+            <marker id="eap" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--primary)"/></marker>
+          </defs>
+          <rect x="20" y="100" width="170" height="82" rx="10" class="n"/>
+          <text x="105" y="130" text-anchor="middle" class="t">ESPHome device</text>
+          <text x="105" y="153" text-anchor="middle" class="st">generates key + asks for code</text>
+          <text x="105" y="169" text-anchor="middle" class="st">no project authority yet</text>
+
+          <rect x="300" y="100" width="180" height="82" rx="10" class="b"/>
+          <text x="390" y="130" text-anchor="middle" class="t">Enrollment service</text>
+          <text x="390" y="153" text-anchor="middle" class="st">short-lived device/user code</text>
+          <text x="390" y="169" text-anchor="middle" class="st">pending public key</text>
+
+          <line x1="190" y1="130" x2="300" y2="130" class="e" marker-end="url(#ea)"/>
+          <text x="245" y="120" text-anchor="middle" class="el">outbound HTTPS/WSS</text>
+          <line x1="300" y1="157" x2="190" y2="157" class="ep" stroke-dasharray="5 4" marker-end="url(#eap)"/>
+          <text x="245" y="175" text-anchor="middle" class="el">ABCD-EFGH</text>
+
+          <rect x="300" y="235" width="180" height="72" rx="10" class="b"/>
+          <text x="390" y="263" text-anchor="middle" class="t">User’s browser</text>
+          <text x="390" y="285" text-anchor="middle" class="st">sign in · project · device name</text>
+          <line x1="390" y1="235" x2="390" y2="182" class="ep" marker-end="url(#eap)"/>
+          <text x="402" y="214" class="el">approve</text>
+
+          <rect x="610" y="100" width="175" height="82" rx="10" class="s"/>
+          <text x="697" y="130" text-anchor="middle" class="t">Device record</text>
+          <text x="697" y="153" text-anchor="middle" class="st">project + device ID + path</text>
+          <text x="697" y="169" text-anchor="middle" class="st">public key + status + policy</text>
+          <line x1="480" y1="141" x2="610" y2="141" class="e" marker-end="url(#ea)"/>
+
+          <rect x="835" y="100" width="145" height="82" rx="10" class="n"/>
+          <text x="907" y="130" text-anchor="middle" class="t">Kit session</text>
+          <text x="907" y="153" text-anchor="middle" class="st">challenge proof</text>
+          <text x="907" y="169" text-anchor="middle" class="st">attenuated authority</text>
+          <line x1="785" y1="141" x2="835" y2="141" class="e" marker-end="url(#ea)"/>
+          <path d="M907 182 C907 260 697 260 697 182" class="ep" stroke-dasharray="5 4" marker-end="url(#eap)"/>
+          <text x="802" y="278" text-anchor="middle" class="el">reconnect / revoke / rotate</text>
+        </svg>
+        <span class="diagram-caption">Use device flow for consent; issue device authority, not an enduring user session.</span>
+      </div>
+      <div class="two-col">
+        <div class="card">
+          <h3>Recommended credential</h3>
+          <p>
+            Generate a per-device keypair and authenticate by proving possession of the private
+            key. Store it using ESP-IDF secure storage where the board and product posture permit.
+            A random per-device secret is an acceptable simpler first version if it is hashed
+            server-side, independently revocable, and never a project-wide key.
+          </p>
+        </div>
+        <div class="card">
+          <h3>Provisioning surfaces</h3>
+          <p>
+            A display can show the code. A headless device can expose it through serial logs,
+            the browser flasher, or a local provisioning page. ESPHome’s Improv/provisioning
+            components can continue handling Wi-Fi; Kit enrollment begins after internet access
+            exists.
+          </p>
+        </div>
+      </div>
+      <div class="callout">
+        <h3>What can be reused today</h3>
+        <p>
+          The auth app already installs a device-authorization plugin with an eight-character
+          user code, 15-minute expiry, and five-second poll interval. It currently admits only
+          the <code>iterate-cli</code> client and does not choose a project or device path.
+          Reuse the interaction and storage primitives, but create Kit-specific consent and
+          device-credential issuance.
+        </p>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-header"><span class="section-number">06</span><h2>What the branch already proves—and what it does not</h2></div>
+      <div class="matrix">
+        <div class="matrix-row header"><div>Area</div><div>Current branch</div><div>Remaining product work</div></div>
+        <div class="matrix-row">
+          <div><strong>Bounded Cap’n Web peer</strong></div>
+          <div><span class="badge good">Strong base</span></div>
+          <div>Bidirectional calls, exported capabilities, fixed tables, and bounded bytes exist. Cap’n Web stream/pipe/Blob streaming is deliberately unsupported, so bulk media stays separate.</div>
+        </div>
+        <div class="matrix-row">
+          <div><strong>Device capability</strong></div>
+          <div><span class="badge good">Working slice</span></div>
+          <div>The M5StickS3 mounts a live capability at hard-coded <code>kit.m5sticks3</code>. Generalize it to an entity-derived capability and server-assigned device ID.</div>
+        </div>
+        <div class="matrix-row">
+          <div><strong>Durable events</strong></div>
+          <div><span class="badge med">Placeholder</span></div>
+          <div>Physical events currently log <code>would_post_to_stream</code>. Implement the Kit session append protocol, event schema, dedupe, replay cursor, and device stream processor.</div>
+        </div>
+        <div class="matrix-row">
+          <div><strong>Authentication</strong></div>
+          <div><span class="badge high">Unsafe final shape</span></div>
+          <div>The flashed config contains a long-lived project API key. Replace with device enrollment and path-bound authority before treating devices as a product surface.</div>
+        </div>
+        <div class="matrix-row">
+          <div><strong>Configuration</strong></div>
+          <div><span class="badge med">Kit-specific</span></div>
+          <div>The raw config partition stores Wi-Fi, deployment, project, and project key, but not a device ID/path. ESPHome should use its own codegen and preferences/NVS integration instead of assuming this partition layout.</div>
+        </div>
+        <div class="matrix-row">
+          <div><strong>WebSocket transport</strong></div>
+          <div><span class="badge med">Promising, not field-ready</span></div>
+          <div>The new single-owner design is appropriate, but the branch’s own transport audit records live severity-1 mid-frame stall and too-fast restart defects. Close those before endurance claims.</div>
+        </div>
+        <div class="matrix-row">
+          <div><strong>ESPHome integration</strong></div>
+          <div><span class="badge med">One adapter missing</span></div>
+          <div>Package the portable Kit core and ESP-IDF platform code as an external component; bind ESPHome’s controller/entity APIs; add codegen, YAML validation, and a compatibility fixture matrix.</div>
+        </div>
+      </div>
+      <div class="verdict" style="margin-top:22px;border-left-color:var(--primary);background:color-mix(in oklab,var(--primary) 7%,var(--card))">
+        <p>
+          <strong>Distance assessment:</strong> this is not a firmware rewrite. A direct-cloud
+          proof of concept is one meaningful integration layer away: ESPHome adapter +
+          bounded device-session protocol. A trustworthy “works across ESPHome” product is
+          substantially further because enrollment, authority attenuation, activity semantics,
+          reconnect behavior, telemetry policy, OTA, and board compatibility are product layers,
+          not wrapper glue.
+        </p>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-header"><span class="section-number">07</span><h2>Compatibility boundary</h2></div>
+      <div class="matrix">
+        <div class="matrix-row header"><div>Device class</div><div>Initial support</div><div>Why</div></div>
+        <div class="matrix-row">
+          <div><strong>ESP32 + ESPHome + ESP-IDF</strong></div>
+          <div><span class="badge good">First target</span></div>
+          <div>Best match for the current platform transport; ESPHome currently defaults ESP32 builds to ESP-IDF.</div>
+        </div>
+        <div class="matrix-row">
+          <div><strong>ESP32 + Arduino framework</strong></div>
+          <div><span class="badge med">Second target</span></div>
+          <div>Same ESPHome entity adapter, but transport/TLS dependencies and resource behavior need a dedicated platform build.</div>
+        </div>
+        <div class="matrix-row">
+          <div><strong>ESP8266, RP2040, LibreTiny, NRF52</strong></div>
+          <div><span class="badge high">Not “free”</span></div>
+          <div>The portable core helps, but every family needs a network/TLS/storage adapter and a measured memory budget. Some have no suitable direct internet stack.</div>
+        </div>
+        <div class="matrix-row">
+          <div><strong>Deep-sleep battery sensors</strong></div>
+          <div><span class="badge high">Different runtime</span></div>
+          <div>A permanently connected WebSocket contradicts deep sleep. Add connect→publish→poll-window→sleep semantics, or use a powered gateway.</div>
+        </div>
+        <div class="matrix-row">
+          <div><strong>Already-flashed Native API devices</strong></div>
+          <div><span class="badge med">Gateway mode</span></div>
+          <div>Can be represented without reflashing if an authenticated LAN bridge owns the ESPHome connection and the Kit session.</div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-header"><span class="section-number">08</span><h2>Implementation sequence</h2></div>
+      <div class="milestones">
+        <div class="milestone">
+          <div class="when">Foundation</div>
+          <div class="dot-col"><span class="dot done"></span><span class="line"></span></div>
+          <div class="body">
+            <h3>Keep the bounded peer, transport-independent core, and dual control/media lanes</h3>
+            <p>The branch already establishes these constraints. Close the known receive/backpressure defects rather than redesigning the upper layers around them.</p>
+          </div>
+        </div>
+        <div class="milestone">
+          <div class="when">Protocol</div>
+          <div class="dot-col"><span class="dot"></span><span class="line"></span></div>
+          <div class="body">
+            <h3>Define KitDeviceSession and the device-stream event contract</h3>
+            <p>Path-bound authentication, bounded manifest chunks, append batches, command delivery with cursor/TTL, live capability mount, diagnostics, and media negotiation.</p>
+            <div class="tags"><span class="tag highlight">vertical slice</span><span class="tag">sensor</span><span class="tag">switch</span><span class="tag">physical button</span></div>
+          </div>
+        </div>
+        <div class="milestone">
+          <div class="when">ESPHome</div>
+          <div class="dot-col"><span class="dot"></span><span class="line"></span></div>
+          <div class="body">
+            <h3>Ship the external component with a small first trait set</h3>
+            <p>Enumerate entities, register controller callbacks, map incoming calls, and prove resource bounds on representative ESP32-S3 and classic ESP32 boards. Expand entity domains only after each mapping has honest semantics.</p>
+          </div>
+        </div>
+        <div class="milestone">
+          <div class="when">Enrollment</div>
+          <div class="dot-col"><span class="dot"></span><span class="line"></span></div>
+          <div class="body">
+            <h3>Make first boot safe and YAML-only</h3>
+            <p>Device-code consent, project/name selection, per-device credentials, secure storage, rotation/revocation, factory reset, and installer/serial/headless code display.</p>
+          </div>
+        </div>
+        <div class="milestone">
+          <div class="when">Activities</div>
+          <div class="dot-col"><span class="dot"></span><span class="line"></span></div>
+          <div class="body">
+            <h3>Add durable action state machines and richer capabilities</h3>
+            <p>Desired/observed reconciliation, impulse idempotency, cancellation, progress, offline expiry, and typed live discovery.</p>
+          </div>
+        </div>
+        <div class="milestone">
+          <div class="when">Reach</div>
+          <div class="dot-col"><span class="dot"></span></div>
+          <div class="body">
+            <h3>Add media, sleepy-device, gateway, and non-ESP32 modes deliberately</h3>
+            <p>Each is a distinct runtime profile with separate acceptance criteria; none should be hidden behind “any ESPHome device.”</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-header"><span class="section-number">09</span><h2>Best experimental devices</h2></div>
+      <div class="two-col">
+        <div class="card recommended">
+          <span class="mini-label">Best all-round protocol demo</span>
+          <h3>M5Stack Dial v1.1</h3>
+          <p>
+            Rotary encoder, round touch display, RFID, buzzer, RTC, and a physical button.
+            It exercises input events, observed state, remote rendering, commands, and a rich
+            live capability without making audio the first dependency.
+          </p>
+        </div>
+        <div class="card">
+          <span class="mini-label">Best high-cardinality input demo</span>
+          <h3>M5Stack Cardputer Adv</h3>
+          <p>
+            A 56-key keyboard, display, microphone, speaker, IMU, IR emitter, and expansion ports.
+            It is excellent for keyboard event bursts, screen capabilities, activity sessions,
+            and eventual audio—but has a larger board-specific integration surface.
+          </p>
+        </div>
+        <div class="card">
+          <span class="mini-label">Best media boundary demo</span>
+          <h3>M5Stack Atom Echo / Voice</h3>
+          <p>
+            Tiny microphone, speaker, RGB, and button hardware. It proves that activity lifecycle
+            belongs on the device stream while PCM uses a separate negotiated socket. Its tighter
+            memory budget is a useful constraint test.
+          </p>
+        </div>
+        <div class="card">
+          <span class="mini-label">Best telemetry-policy demo</span>
+          <h3>ESP32-S3 + LD2410 mmWave radar</h3>
+          <p>
+            Presence, distance/energy values, and adjustable gates create enough data to force
+            honest sampling, coalescing, and trait-driven commands. ESPHome has an official LD2410
+            component, so the experiment tests the bridge rather than a custom sensor driver.
+          </p>
+        </div>
+        <div class="card">
+          <span class="mini-label">Best assumption-breaker</span>
+          <h3>Deep-sleep e-paper or soil sensor</h3>
+          <p>
+            It intentionally violates the permanent-WebSocket assumption. Use it to design the
+            publish/poll/sleep profile and prove that “offline” is not misclassified as a defect
+            when sleep is explicit policy.
+          </p>
+        </div>
+        <div class="card">
+          <span class="mini-label">Existing branch continuity</span>
+          <h3>M5StickS3 / StackChan</h3>
+          <p>
+            Continue the current capability, display, push-to-talk, and simulator work as the
+            firmware transport proving ground, while the Dial becomes the clean ESPHome entity
+            bridge demo.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-header"><span class="section-number">10</span><h2>Release-blocking risks</h2></div>
+      <div class="risk-grid">
+        <div class="risk-row"><div class="risk-name">Project-wide key on every device</div><div><span class="badge high">High</span></div><div class="risk-mitigation">Per-device enrollment, credential, revocation, and a server-created attenuated Kit authority root.</div></div>
+        <div class="risk-row"><div class="risk-name">Generic stream batch exceeds embedded bounds</div><div><span class="badge high">High</span></div><div class="risk-mitigation">KitDeviceSession with explicit message/event limits, manifest chunking, one-way bounded command batches, and oversize rejection.</div></div>
+        <div class="risk-row"><div class="risk-name">Ambiguous physical side effects after reconnect</div><div><span class="badge high">High</span></div><div class="risk-mitigation">Classify desired-state versus impulse commands; require idempotency, TTL, and durable terminal outcomes; document where exactly-once is impossible.</div></div>
+        <div class="risk-row"><div class="risk-name">High-rate telemetry becomes write amplification</div><div><span class="badge med">Medium</span></div><div class="risk-mitigation">Per-trait default sampling, send-on-change thresholds, bounded batching, state coalescing, and explicit loss metrics.</div></div>
+        <div class="risk-row"><div class="risk-name">Known WebSocket stall/restart defects</div><div><span class="badge high">High</span></div><div class="risk-mitigation">Close the branch audit’s mid-frame and time-unit defects; add the receive classifier seam and field-shaped RF endurance evidence.</div></div>
+        <div class="risk-row"><div class="risk-name">“Any ESPHome” hides platform differences</div><div><span class="badge med">Medium</span></div><div class="risk-mitigation">Publish an explicit compatibility matrix and resource ledger. Start ESP32/ESP-IDF; add platforms one measured adapter at a time.</div></div>
+        <div class="risk-row"><div class="risk-name">Device path changes break identity</div><div><span class="badge med">Medium</span></div><div class="risk-mitigation">Use an immutable server device ID as the authority/storage key; treat friendly name or alias changes as metadata, not credential scope changes.</div></div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-header"><span class="section-number">11</span><h2>Decisions to annotate</h2></div>
+      <div class="callout">
+        <h3>Should gateway/no-reflash support be part of the first product?</h3>
+        <p>Recommendation: no. Design the device-stream contract so a future gateway can implement the same KitDeviceSession, but ship the YAML-enabled direct client first.</p>
+        <span class="decide-with">Decide with: product + platform</span>
+      </div>
+      <div class="callout">
+        <h3>One stream per device, or substream per entity?</h3>
+        <p>Recommendation: one device stream. Use entity IDs inside events; split only named high-volume channels whose retention and processing genuinely differ.</p>
+        <span class="decide-with">Decide with: streams owners</span>
+      </div>
+      <div class="callout">
+        <h3>Public-key device identity or random device secret first?</h3>
+        <p>Recommendation: design the server record for public keys, but allow a per-device random secret for the earliest internal vertical slice. Never reuse the project API key.</p>
+        <span class="decide-with">Decide with: auth + firmware</span>
+      </div>
+      <div class="callout">
+        <h3>How should an explicitly sleeping device appear?</h3>
+        <p>Recommendation: enrollment declares a runtime profile. “Sleeping until…” is modeled state with a deadline, not an unexplained disconnect and not a permanently online capability.</p>
+        <span class="decide-with">Decide with: Kit protocol owners</span>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-header"><span class="section-number">12</span><h2>Evidence and source notes</h2></div>
+      <ol class="footnotes">
+        <li>
+          ESPHome’s documented extension mechanism is
+          <a href="https://esphome.io/components/external_components/">external components</a>;
+          its developer documentation describes the component
+          <a href="https://developers.esphome.io/architecture/components/">validation, code-generation, and lifecycle architecture</a>.
+        </li>
+        <li>
+          ESPHome’s distribution guidance explicitly supports secret-free templates and Improv/captive-portal Wi-Fi setup:
+          <a href="https://esphome.io/guides/creators/">Sharing ESPHome devices</a> and
+          <a href="https://esphome.io/components/provisioning/">Provisioning</a>.
+        </li>
+        <li>
+          OAuth 2.0 Device Authorization is designed for internet-connected, input-constrained devices that ask the user to authorize on a second device:
+          <a href="https://datatracker.ietf.org/doc/html/rfc8628">RFC 8628</a>.
+        </li>
+        <li>
+          Espressif recommends secure boot, per-device flash-encryption keys, encrypted NVS for device-specific data, and authenticated encrypted communication:
+          <a href="https://docs.espressif.com/projects/esp-idf/en/stable/esp32h2/security/security.html">ESP-IDF Security Overview</a>.
+        </li>
+        <li>
+          Hardware references:
+          <a href="https://shop.m5stack.com/products/m5stack-dial-v1-1">M5Stack Dial v1.1</a>,
+          <a href="https://shop.m5stack.com/products/m5stack-cardputer-adv-version-esp32-s3">Cardputer Adv</a>,
+          <a href="https://shop.m5stack.com/products/atom-echo-smart-speaker-dev-kit">Atom Echo/Voice</a>, and
+          <a href="https://esphome.io/components/sensor/ld2410/">ESPHome LD2410</a>.
+        </li>
+        <li>
+          Branch evidence inspected:
+          <code>apps/kit/README.md</code>,
+          <code>firmware/components/core/src/itx_mount.c</code>,
+          <code>firmware/targets/m5sticks3/main/main.cpp</code>,
+          <code>firmware/vendor/capnweb/README.md</code>,
+          <code>apps/os/src/auth.ts</code>,
+          <code>apps/os/src/rpc-targets.ts</code>, and
+          <code>apps/auth/src/server/auth-plugins.ts</code>.
+        </li>
+        <li>
+          Upstream ESPHome source was inspected at its entity application registry,
+          controller registry, API server command adapters, and ESP32 framework configuration—not only from public marketing documentation.
+        </li>
+      </ol>
+    </section>
+  </main>
+</body>
+</html>

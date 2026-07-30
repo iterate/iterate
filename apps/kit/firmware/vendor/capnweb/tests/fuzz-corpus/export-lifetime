@@ -1,0 +1,7 @@
+["push",["pipeline",0,["capability"],[]]]
+["pull",1]
+["push",["pipeline",1,["child"],[]]]
+["pull",2]
+["release",-1,1]
+["release",1,1]
+["release",2,1]
