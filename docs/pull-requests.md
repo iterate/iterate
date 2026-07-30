@@ -28,7 +28,7 @@ A reviewer should know where to spend attention before opening the diff.
 
 ## Media in the PR body
 
-Include screenshots or short videos whenever visual review helps.
+Include screenshots or short videos whenever visual review helps. reviewers often have no idea the "why" of a change. Even for bugs, before/after videos prove that the problem was real and was fixed. We also like videos because they prove that real code paths were exercised.
 
 **Relative paths do not render in PR descriptions.**
 
