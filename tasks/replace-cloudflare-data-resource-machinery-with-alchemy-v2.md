@@ -157,9 +157,9 @@ The main code movement is:
   one typed Distilled teardown module, and the required container bootstrap;
 - use only the generated root lockfile.
 
-The PR's +3,722 net headline is mostly generated dependency metadata: the root
+The PR's +4,106 net headline is mostly generated dependency metadata: the root
 lock accounts for +2,658 net lines. Excluding the lock and this task record,
-application, workflow, and documentation changes are +830 net while replacing
+application, workflow, and documentation changes are +1,215 net while replacing
 the old reset/recovery system and adding the lifecycle API plus dashboard.
 
 ## Proof and rollout
