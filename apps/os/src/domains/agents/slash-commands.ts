@@ -81,7 +81,10 @@ export function resolveSlashCommand(content: string): ResolvedSlashCommand | nul
       !code.includes("\n") &&
       !code.includes(";") &&
       !/^(const|let|var|return|if|for|while|throw|try|switch|do)\b/.test(code);
-    const body = singleExpression ? `return (${code});` : code;
+    // Closing paren on its OWN line: a trailing `// note` on the expression
+    // must not comment it out (and `//` inside a URL string makes detecting
+    // comments non-trivial, so the newline handles every case).
+    const body = singleExpression ? `return (${code}\n);` : code;
     return { command: "script", code: `async (itx) => {\n${body}\n}` };
   }
 

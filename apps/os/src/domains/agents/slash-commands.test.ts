@@ -4,7 +4,14 @@ import { resolveSlashCommand } from "./slash-commands.ts";
 test("/script wraps a single expression with an implicit return", () => {
   const resolved = resolveSlashCommand("/script await itx.__describe()");
   expect(resolved).toMatchObject({ command: "script" });
-  expect(resolved!.code).toBe("async (itx) => {\nreturn (await itx.__describe());\n}");
+  expect(resolved!.code).toBe("async (itx) => {\nreturn (await itx.__describe()\n);\n}");
+});
+
+test("/script return wrap survives a trailing line comment", () => {
+  // The closing paren lives on its own line, so `// note` cannot eat it.
+  expect(resolveSlashCommand("/script await itx.__describe() // sanity check")!.code).toBe(
+    "async (itx) => {\nreturn (await itx.__describe() // sanity check\n);\n}",
+  );
 });
 
 test("/script runs statement-shaped code verbatim, stripping a markdown fence", () => {
