@@ -15,7 +15,12 @@
 // people legitimately type paths and fractions, and the model gracefully
 // explains a typo'd slug where a hard error would dead-end the thread.
 
+import { z } from "zod";
 import { ITX_EXAMPLES, runScriptEnvelope } from "../../itx/examples.ts";
+
+/** `/example` vars must be a plain JSON object of overrides — arrays,
+ * primitives, and null fall through to the LLM like any other non-command. */
+const exampleVarsSchema = z.record(z.string(), z.unknown());
 
 type ResolvedSlashCommand = {
   /** Which command matched — recorded on nothing, useful for tests/logs. */
@@ -42,9 +47,9 @@ export function resolveSlashCommand(content: string): ResolvedSlashCommand | nul
     let vars: Record<string, unknown> = {};
     if (rest!.trim() !== "") {
       try {
-        const parsed: unknown = JSON.parse(rest!.trim());
-        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
-        vars = parsed as Record<string, unknown>;
+        const parsed = exampleVarsSchema.safeParse(JSON.parse(rest!.trim()));
+        if (!parsed.success) return null;
+        vars = parsed.data;
       } catch {
         return null;
       }
@@ -61,12 +66,13 @@ export function resolveSlashCommand(content: string): ResolvedSlashCommand | nul
     if (code === "") return null;
     // A single expression gets an implicit `return` so `/script await
     // itx.whatever()` answers with the value; anything statement-shaped
-    // (semicolons, braces, multiple lines, declarations) runs verbatim and
+    // (semicolons, braces, multiple lines, statement keywords — anything
+    // where `return (...)` would be wrong or invalid) runs verbatim and
     // returns whatever it explicitly returns.
     const singleExpression =
       !code.includes("\n") &&
       !code.includes(";") &&
-      !/^(const|let|var|return|if|for|while)\b/.test(code);
+      !/^(const|let|var|return|if|for|while|throw|try|switch|do)\b/.test(code);
     const body = singleExpression ? `return (${code});` : code;
     return { command: "script", code: `async (itx) => {\n${body}\n}` };
   }

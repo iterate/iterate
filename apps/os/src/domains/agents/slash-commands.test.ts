@@ -16,6 +16,17 @@ test("/script runs statement-shaped code verbatim, stripping a markdown fence", 
   );
 });
 
+test("/script never return-wraps statement keywords, even on one line", () => {
+  // `return (throw …)` is a parse error — one-line throw/try/switch/do must
+  // run verbatim like the other statement forms.
+  expect(resolveSlashCommand('/script throw new Error("boom")')!.code).toBe(
+    'async (itx) => {\nthrow new Error("boom")\n}',
+  );
+  expect(resolveSlashCommand("/script try { risky() } catch {}")!.code).toBe(
+    "async (itx) => {\ntry { risky() } catch {}\n}",
+  );
+});
+
 test("/example resolves a catalogue slug into the shared run-script envelope", () => {
   const resolved = resolveSlashCommand('/example whoami {"who":"me"}');
   expect(resolved).toMatchObject({ command: "example" });
