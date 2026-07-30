@@ -60,10 +60,9 @@ export class NotificationProcessor extends StreamProcessor<NotificationProcessor
               audience: { kind: "project" },
               title: event.payload.requests.length === 1 ? "Approval needed" : "Approvals needed",
               body: approvalPushBody(event.payload.requests),
-              destination:
-                agentPath === null
-                  ? { kind: "approvals", approvalRequestEventOffset: event.offset }
-                  : { kind: "agent-chat", path: agentPath },
+              destination: agentPath
+                ? { kind: "agent-chat", path: agentPath }
+                : { kind: "approvals", approvalRequestEventOffset: event.offset },
               expiresAt: Date.parse(event.payload.expiresAt),
             },
           }),
