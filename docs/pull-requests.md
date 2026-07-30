@@ -57,9 +57,6 @@ works), wait for the inserted `user-attachments` URL, then clear the comment
 WITHOUT submitting — the asset is already permanent. Put the bare URL in the
 body on its own line with blank lines above and below.
 
-Keep clips small: re-encode (`ffmpeg -vf scale=960 -crf 30`), strip audio,
-convert webm → mp4.
-
 Spec recordings: `VIDEO_MODE=1 pnpm spec -g <name>`. Ship
 `video-rendered.webm` (dead air sped up, pointer annotations) — `video.webm`
 is the raw capture.
