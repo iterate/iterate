@@ -81,6 +81,10 @@ export function effectiveWorkspaceMounts(
     mounts[path] = { policy: "commit-to-main", repoPath: path };
   }
   for (const [path, overlay] of Object.entries(overlays)) {
+    // "/" is never a mount — the workspace root is the project namespace.
+    // The doors reject it, but a raw-appended (or pre-derivation legacy)
+    // overlay must not revive a root mount in the live table either.
+    if (path === "/") continue;
     const merged = { ...mounts[path], ...overlay };
     if (merged.policy === undefined || merged.repoPath === undefined) continue;
     mounts[path] = { policy: merged.policy, repoPath: merged.repoPath };

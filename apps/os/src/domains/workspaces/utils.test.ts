@@ -95,6 +95,19 @@ describe("effectiveWorkspaceMounts", () => {
       "/repos/config": { policy: "commit-to-main", repoPath: "/repos/config" },
     });
   });
+
+  test('a complete "/" overlay never revives a root mount', () => {
+    // The doors reject "/", but a raw-appended (or legacy) overlay reduces
+    // tolerantly — the derivation must still keep the root out of the live
+    // table, or the abolished root mount returns through the back door.
+    expect(
+      effectiveWorkspaceMounts(["/repos/config"], {
+        "/": { policy: "commit-to-main", repoPath: "/repos/config" },
+      }),
+    ).toEqual({
+      "/repos/config": { policy: "commit-to-main", repoPath: "/repos/config" },
+    });
+  });
 });
 
 describe("normalizeWorkspacePath", () => {

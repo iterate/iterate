@@ -104,6 +104,14 @@ export function requireDocumentPath(value: string): string {
   if (!/\.(?:html?|markdown|md)$/i.test(path)) {
     throw new Error("document path must end in .md, .markdown, .html, or .htm");
   }
+  // An ABSOLUTE document path must be a fully qualified stream path — the
+  // only places a workspace can actually read or write. A bare "/review.md"
+  // would validate here and then dead-end on the workspace's write guard.
+  if (path.startsWith("/") && !path.startsWith("/workspaces/") && !path.startsWith("/repos/")) {
+    throw new Error(
+      'an absolute document path must be fully qualified (under "/workspaces/" or "/repos/"); use a relative path to target the workspace\'s own directory',
+    );
+  }
   return path;
 }
 

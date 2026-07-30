@@ -49,6 +49,10 @@ describe("Docs deep-link paths", () => {
     "a//b.md",
     "/folder/",
     "folder/",
+    // Absolute paths must be fully qualified stream paths — a bare
+    // "/review.md" would dead-end on the workspace write guard later.
+    "/review.md",
+    "/notes/review.md",
   ])("rejects unsupported document path %s", (path) => {
     expect(() => requireDocumentPath(path)).toThrow();
   });
