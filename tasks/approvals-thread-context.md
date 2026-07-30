@@ -60,6 +60,11 @@ doing?" should be answerable without opening the thread.
       without the line, no spinner-blocking — _line renders immediately with
       just the tappable thread name; the message text is appended only when
       the fetch resolves; no pending/error branches block the card_
+- [x] Playwright coverage + video (Misha's review ask on #2372) — _the
+      mobile approvals spec now visits the approvals screen after both lanes
+      settle, asserts the context line's text on both history cards, and taps
+      it back into the thread; 3 consecutive passes; VIDEO_MODE recording
+      captured for the PR body_
 - [x] `pnpm typecheck && pnpm lint && pnpm knip && pnpm test`; PR hygiene —
       _all four green from the worktree root_
 
@@ -89,5 +94,14 @@ doing?" should be answerable without opening the thread.
   one-shot fetch lands. Slow/failed fetch = name-only line, never a spinner.
 - Helper collapses whitespace to one line and skips blank messages — a
   visible message with no visible text would render an empty context line.
-- No playwright spec (per spec): the derivation is unit-tested, the wiring is
-  a plain react-query read.
+- ~~No playwright spec (per spec): the derivation is unit-tested, the wiring
+  is a plain react-query read.~~ Misha asked for visible proof on the PR, so
+  `specs/mobile/approvals.spec.ts` grew a final act: back out of the thread,
+  drawer → Approvals, assert both settled cards' context lines
+  (`<thread name> · you: /script const burst…`), tap one, land back in the
+  thread. Two determinism fixes surfaced while writing it: (1) lane 1's
+  narration is awaited before lane 2's command so the reject batch's context
+  snapshot is always the command message; (2) that wait polls the protocol,
+  not the DOM — the live activity card streams the script's code expanded,
+  which contains the same "approve-me outcomes:" literal as the narration
+  (getByText hit a strict-mode violation on exactly that).
