@@ -12,16 +12,20 @@
  */
 import { execFileSync, spawnSync } from "node:child_process";
 import { createAuthContractClient } from "@iterate-com/auth-contract";
+import { z } from "zod";
 import { envManagerEnv } from "../../../envs.ts";
 
-type SeedOAuthClientSpec = {
-  clientId: string;
-  clientSecret: string;
-  clientName: string;
-  redirectURIs: string[];
-  referenceId?: string;
-  skipConsent?: boolean;
-};
+const SeedOAuthClientSpec = z.object({
+  clientId: z.string().min(1),
+  clientSecret: z.string().min(16),
+  clientName: z.string().min(1),
+  redirectURIs: z.array(z.url()).min(1),
+  referenceId: z.string().min(1).optional(),
+  skipConsent: z.boolean().optional(),
+});
+type SeedOAuthClientSpec = z.infer<typeof SeedOAuthClientSpec>;
+
+const SeedOAuthClients = z.array(SeedOAuthClientSpec);
 
 const serviceToken = process.env.APP_CONFIG_SERVICE_AUTH_TOKEN?.trim();
 if (!serviceToken) {
@@ -99,7 +103,7 @@ function setDopplerSecrets(project: string, config: string, secrets: Record<stri
 
 function upsertAuthSeedOAuthClient(client: SeedOAuthClientSpec) {
   const raw = getDopplerSecret("auth", "prd", "AUTH_SEED_OAUTH_CLIENTS");
-  const clients: SeedOAuthClientSpec[] = raw ? (JSON.parse(raw) as SeedOAuthClientSpec[]) : [];
+  const clients = raw ? SeedOAuthClients.parse(JSON.parse(raw)) : [];
   const index = clients.findIndex(
     (candidate) =>
       candidate.referenceId === client.referenceId || candidate.clientId === client.clientId,

@@ -205,7 +205,7 @@ from your machine, and when you need a public callback URL. Doppler/Cloudflare/d
 - [OS app](apps/os/AGENTS.md)
 - [Kit device installer](apps/kit/README.md)
 - [Auth app](apps/auth/README.md) — public OIDC/oRPC plus OS-only Workers RPC for the org/project directory
-- [Environment manager](apps/env-manager/README.md) — Alchemy resource graph, per-preview Durable Objects, dashboard, and CLI
+- [Environment manager](apps/env-manager/README.md) — Alchemy resource graph, per-environment Durable Objects, dashboard, and CLI
 - [itx](apps/os/src/README.md) — the `/api/itx` surface and its public contract (`types.ts`)
 - [OS worker topology](apps/os/docs/worker-topology.md)
 - [OS architecture & operations](apps/os/docs/architecture-and-operations.md)

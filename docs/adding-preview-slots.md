@@ -2,6 +2,9 @@
 
 This runbook adds one or more PR-preview slots. It was exercised while adding
 `preview_10`–`preview_19`; examples for the next rehearsal use `SLOT=20`.
+Slots 10–17 are claimable. Slots 18 and 19 are intentionally absent from
+Semaphore and unattended GC so operators can use them for destructive
+environment-manager lifecycle proof.
 
 The important rule is simple: do not add a Semaphore lease until the slot has
 been provisioned, deployed, and tested. A lease makes the slot available to CI;
@@ -112,7 +115,8 @@ The order is:
 8. Upgrade Slack to the full manifest and verify its URLs. Add the two Google
    OAuth redirect URIs. Verify the GitHub App through its API.
 9. Present the ledger and obtain separate approval for the production
-   Semaphore lease write.
+   Semaphore lease write for claimable slots only. Keep lifecycle-proof slots
+   such as 18 and 19 absent.
 10. Add the `preview` label to a draft canary whose body contains exactly
     `preview_environment=preview-20`, then prove deploy, e2e, one real
     Google/GitHub/Slack round trip, and cleanup. Remove the label after cleanup
@@ -239,10 +243,10 @@ Do not create `_shared/preview_11`–`preview_19`. App configs inherit shared
 Cloudflare credentials from their project-level `preview` root, which inherits
 `_shared/preview`. `_shared/preview_10` is old residue, not a template.
 
-After approval, create the two configs the provisioner does not create:
+After approval, create the three configs the provisioner does not create:
 
 ```bash
-for project in os dummy-petshop; do
+for project in os docs dummy-petshop; do
   for n in $(seq 10 19); do
     config="preview_$n"
     doppler configs get "$config" --project "$project" --json >/dev/null 2>&1 ||
@@ -456,6 +460,7 @@ for n in $(seq 10 19); do
   target_env="preview_$n"
   pnpm infra deploy --env "$target_env"
   pnpm --dir apps/auth run deploy --env "$target_env"
+  pnpm --dir apps/docs run deploy --env "$target_env"
   pnpm --dir apps/dummy-petshop run deploy --env "$target_env"
   pnpm --dir apps/semaphore run deploy --env "$target_env"
   pnpm --dir apps/streams-example-app run deploy --env "$target_env"
@@ -530,8 +535,11 @@ doppler run --project _shared --config prd -- pnpm preview status
 doppler run --project _shared --config prd -- pnpm preview reconcile
 ```
 
-Stop unless `status` reports nineteen slots and `reconcile` reports zero
-issues.
+Stop unless `status` reports the claimable inventory from
+`claimablePreviewEnvironmentSlotNumbers` and `reconcile` reports zero issues.
+That is seventeen slots for the current 1–17 fleet; after the rehearsal adds
+claimable `preview_20`, it is eighteen. Reserved lifecycle-proof slots 18 and
+19 are deployed but intentionally absent from Semaphore.
 
 Slot handover attempts its atomic Durable Object retirement before looking at
 other Workers. Cloudflare rejects the retirement and names every Worker whose
@@ -553,13 +561,15 @@ preview_environment=preview-20
 ```
 
 Markdown examples and comments do not count. The directive selects a slot but
-does not make a draft eligible; the label does that. For a fleet sweep, pin,
-run, and clean one new slot at a time:
+does not make a draft eligible; the label does that. For a claimable-fleet
+sweep, pin, run, and clean one new slot at a time. Reserved lifecycle-proof
+slots are exercised directly through env-manager and must not be inserted into
+Semaphore:
 
 ```bash
 PR=<canary-pr-number>
 
-for n in $(seq 10 19); do
+for n in $(seq 10 17); do
   doppler run --project _shared --config prd -- \
     pnpm preview assign --pull-request-number "$PR" --slot "$n"
 
@@ -585,7 +595,7 @@ project-worker readiness failures are not normal background noise; retain the
 event window and investigate or explicitly track them before declaring the
 expansion complete.
 
-Close the canary only after all ten slots have passed. Run `status` and
+Close the canary only after every claimable slot has passed. Run `status` and
 `reconcile` once more. If the canary is a real work PR rather than a disposable
 one, remove its `preview` label after cleanup instead of closing it; otherwise
 the next preview dispatch can claim another slot for the still-eligible draft.
@@ -595,18 +605,18 @@ the next preview dispatch can claim another slot for the still-eligible draft.
 Keep this ledger in the expansion PR. `created` is not `verified`; mark the
 cell only after reading the state back from the owning system.
 
-| Slot | Domains | Doppler | Alchemy + second apply | GitHub | Slack | Five apps | Lease | Lifecycle |
-| ---- | ------- | ------- | ---------------------- | ------ | ----- | --------- | ----- | --------- |
-| 10   | ☐       | ☐       | ☐                      | ☐      | ☐     | ☐         | ☐     | ☐         |
-| 11   | ☐       | ☐       | ☐                      | ☐      | ☐     | ☐         | ☐     | ☐         |
-| 12   | ☐       | ☐       | ☐                      | ☐      | ☐     | ☐         | ☐     | ☐         |
-| 13   | ☐       | ☐       | ☐                      | ☐      | ☐     | ☐         | ☐     | ☐         |
-| 14   | ☐       | ☐       | ☐                      | ☐      | ☐     | ☐         | ☐     | ☐         |
-| 15   | ☐       | ☐       | ☐                      | ☐      | ☐     | ☐         | ☐     | ☐         |
-| 16   | ☐       | ☐       | ☐                      | ☐      | ☐     | ☐         | ☐     | ☐         |
-| 17   | ☐       | ☐       | ☐                      | ☐      | ☐     | ☐         | ☐     | ☐         |
-| 18   | ☐       | ☐       | ☐                      | ☐      | ☐     | ☐         | ☐     | ☐         |
-| 19   | ☐       | ☐       | ☐                      | ☐      | ☐     | ☐         | ☐     | ☐         |
+| Slot | Domains | Doppler | Alchemy + second apply | GitHub | Slack | Six apps | Lease    | Lifecycle |
+| ---- | ------- | ------- | ---------------------- | ------ | ----- | -------- | -------- | --------- |
+| 10   | ☐       | ☐       | ☐                      | ☐      | ☐     | ☐        | ☐        | ☐         |
+| 11   | ☐       | ☐       | ☐                      | ☐      | ☐     | ☐        | ☐        | ☐         |
+| 12   | ☐       | ☐       | ☐                      | ☐      | ☐     | ☐        | ☐        | ☐         |
+| 13   | ☐       | ☐       | ☐                      | ☐      | ☐     | ☐        | ☐        | ☐         |
+| 14   | ☐       | ☐       | ☐                      | ☐      | ☐     | ☐        | ☐        | ☐         |
+| 15   | ☐       | ☐       | ☐                      | ☐      | ☐     | ☐        | ☐        | ☐         |
+| 16   | ☐       | ☐       | ☐                      | ☐      | ☐     | ☐        | ☐        | ☐         |
+| 17   | ☐       | ☐       | ☐                      | ☐      | ☐     | ☐        | ☐        | ☐         |
+| 18   | ☐       | ☐       | ☐                      | ☐      | ☐     | ☐        | reserved | ☐         |
+| 19   | ☐       | ☐       | ☐                      | ☐      | ☐     | ☐        | reserved | ☐         |
 
 Before resuming, rerun the planning inventory and compare it with this ledger.
 If the systems disagree, trust the read-back and investigate. Never “finish” a

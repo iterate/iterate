@@ -333,8 +333,10 @@ To expand the fleet rather than use an existing slot, see
 
 Each preview slot N is a complete, isolated stack on the dev/preview
 Cloudflare account: `os.iterate-preview-N.com`, `auth.iterate-preview-N.com`,
-and `<proj-slug>.iterate-preview-N.app`. There are currently nineteen
-`preview-<n>` slots, leased via semaphore (`environment-config-lease`).
+and `<proj-slug>.iterate-preview-N.app`. There are currently nineteen deployed
+`preview-<n>` slots. Seventeen are leased via Semaphore
+(`environment-config-lease`); `preview-18` and `preview-19` are reserved for
+destructive env-manager lifecycle proof and are not claimable or swept by GC.
 
 ### The lease model: one slot per PR, for the PR's whole life
 
@@ -350,7 +352,7 @@ invariants:
   environment lease is released. See
   **[Preview resource GC](preview-resource-gc.md)**.
 - **Draft PRs don't claim a slot unless they ask.** Drafts are the default
-  for agent-opened PRs, and nineteen slots don't survive a busy night of them. A
+  for agent-opened PRs, and seventeen claimable slots don't survive a busy night of them. A
   draft asks by wearing the `preview` label (durable — previews then behave
   as for a ready PR), being marked ready for review, or a one-shot explicit
   run (dispatching the `Cloudflare Previews` workflow, or
@@ -365,7 +367,7 @@ invariants:
   the answer is "not that one". So a stale PR's cleanup can never destroy
   another PR's preview, e2e never runs against someone else's deployment, and
   nothing steals a live lease without a human `--force`.
-- **Contention queues instead of exploding.** When all nineteen slots are leased,
+- **Contention queues instead of exploding.** When all seventeen claimable slots are leased,
   `preview deploy` waits in line (logging who holds what every few minutes)
   for up to 6 minutes before failing with the full holder table and
   remediation steps. `PREVIEW_SLOT_WAIT_MS=0` makes it fail fast.
@@ -375,7 +377,7 @@ invariants:
 - **Everything is attributable and visible.** `pnpm preview status` shows
   each slot's holder, PR open/closed state, idle/orphaned verdict, open
   preview-eligible PRs without a slot, and reclaim commands when the fleet
-  is full for a reason other than "nineteen open PRs". The semaphore UI at
+  is full for a reason other than "seventeen open PRs". The semaphore UI at
   semaphore.iterate.com shows the same live leases; every lease transition
   (acquired/renewed/evicted/expired/force-released) is logged as an event in
   the coordinator. Exceptional states — waiting for a slot, no slot
@@ -501,36 +503,30 @@ redeploy (the next `preview deploy` re-lands them on the new slot). If the
 requested slot is leased, assign names the holder and refuses without
 `--force`. A GitHub token comes from `GITHUB_TOKEN` or a logged-in `gh` CLI.
 
-### Story 4: a manual slot for experiments
+### Story 4: inspect a slot manually
 
-Lease a slot under your own name first — that is what stops PR previews from
-deploying over you and PR cleanups from destroying your work:
+`preview acquire` is an inspection lease only. It stops PR previews from
+deploying over the slot while you inspect or explicitly destroy its current
+state, but it does not create an Alchemy stack or a preview deployment record:
 
 ```bash
 doppler run --project _shared --config prd -- pnpm preview status              # who holds what
 doppler run --project _shared --config prd -- pnpm preview acquire --slot 9    # lease it (3h default, --hours N)
 # → prints leaseId + the matching release command
 # if preview-9 is taken you'll be told who holds it; --force evicts them (their
-# deployment gets clobbered by whatever you deploy next — only for stale holds)
+# deployment may be destroyed by the next tenant — only for stale holds)
 
-# Deploy concurrently; both derive the same signing key from Doppler:
-(cd apps/auth && pnpm run deploy --env preview_9) &
-(cd apps/os   && pnpm run deploy --env preview_9) &
-wait
-
-# Point a browser at it (same org-claims requirement as local dev — see
-# "Acting as users" above; bare --admin lands on the auth login page):
-doppler run --project os --config preview_9 -- pnpm auth:mint --admin --browser-url
-
-# Release when done. You don't need to destroy the environment: the slot's
-# next holder does that on entry. Do it yourself only if the data should not linger:
+# Destroy only when the data must not linger:
 pnpm infra destroy --env preview_9  # optional
 doppler run --project _shared --config prd -- pnpm preview release --slot 9 --lease-id <leaseId>
 ```
 
-Deploying to `preview_N` **without** holding the lease bypasses the whole
-protection model — the slot's rightful holder will deploy over you, and their
-cleanup may destroy your worker.
+For an actual deployment experiment, use a PR and the `preview assign` plus
+`preview deploy`/`preview run` commands in Stories 2–3. That path records the
+stack, applies Alchemy before generating Wrangler configs, deploys Auth before
+Workers that bind to it on a fresh slot, and makes cleanup/GC ownership
+unambiguous. Raw app deploys after `preview acquire` bypass those invariants and
+are unsupported.
 
 ### Story 5: all slots are taken / something is stuck
 

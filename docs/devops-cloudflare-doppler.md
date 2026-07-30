@@ -28,23 +28,27 @@ secrets. Each app keeps its small imperative deployment scripts:
 Small apps skip pieces they don't need (tunnels has a hand-written,
 committed wrangler.jsonc and no generator; streams-example-app has no
 secrets). Generated configs and Alchemy manifests are gitignored; review
-`envs.ts` and `apps/env-manager/alchemy.run.ts`.
+`envs.ts` and
+`apps/env-manager/src/alchemy/environment-resources.ts`.
 
 `apps/env-manager` is a normal root workspace and uses the root lockfile.
 Alchemy, Effect, Wrangler, and the app are therefore installed and upgraded as
 one dependency graph; there is no nested package or second lockfile.
 
-For preview stages, `pnpm infra` calls the deployed environment-manager Worker.
-One named Durable Object per slot runs the Alchemy graph and persists Alchemy
-state in its own SQLite storage. The CLI atomically writes the returned IDs to
+`pnpm infra` calls the deployed environment-manager Worker for every compiled
+stage. One named Durable Object per environment runs the Alchemy graph and
+persists Alchemy state in its own SQLite storage. The CLI atomically writes the
+returned IDs to
 `apps/env-manager/.alchemy/output/<stage>/cloudflare-resources.json` for the
-checkout's Wrangler generators. Production and `dev_global` run the same graph
-locally with Alchemy's Cloudflare state provider; production lifecycle remains
-an explicit local operator/CI action.
+checkout's Wrangler generators. The singleton manager lives in the preview
+account and receives preview and production account tokens through separate
+Cloudflare Secrets Store bindings.
 
 The Cloudflare resource lifecycle is deliberately fresh-stack-only. There is
-no resource import/adoption, Alchemy state reconstruction, committed fallback
-ID, or compatibility mode. Normal deploy and destroy require Alchemy's
+no repository-owned resource import/adoption, Alchemy state reconstruction,
+committed fallback ID, or compatibility mode. Alchemy's unmodified providers
+retain their native deterministic-name reconciliation for an interrupted
+create during an ordinary apply. Normal deploy and destroy require Alchemy's
 persisted state. If that state is lost, stop: explicit operator cleanup must
 remove the abandoned environment before a new stack is created; repository
 code does not infer or import it.
@@ -69,10 +73,10 @@ accepts only an explicit `--env`.
   Cloudflare credential sets. There are exactly three: `_shared/dev`,
   `_shared/preview`, `_shared/prd`. Never override `CLOUDFLARE_ACCOUNT_ID`
   or `CLOUDFLARE_API_TOKEN` in app or branch configs.
-- The Cloudflare API tokens must include account-level **Secrets Store Write**.
-  Alchemy's official remote state store keeps its bearer token and encryption
-  key in Cloudflare Secrets Store; without that permission even the first
-  `pnpm infra deploy` fails before creating D1, KV, or R2.
+- The operator credential used to provision env-manager's Cloudflare API-token
+  secrets needs account-level **Secrets Store Write**. Normal lifecycle calls
+  use those bound secrets; Alchemy state itself lives in the environment's
+  Durable Object SQLite database.
 - Put values in the highest config that is correct (shared root → app
   project → branch config). Do not use Doppler personal configs; use named
   shared configs such as `dev_jonas`.
@@ -106,9 +110,13 @@ environment in dependency order:
 
 1. Container applications attached to the OS Worker's Durable Object
    namespaces, verified absent before their namespaces disappear.
-2. All eight stack-dependent Workers with Cloudflare's `force=true` API. This
-   is the supported whole-namespace Durable Object teardown: the scripts' DO
-   namespaces, instances, storage, and alarms are deleted with them.
+2. All eight stack-dependent Workers. For each Worker, the manager discovers
+   owned Durable Object classes from both its bindings and instantiated
+   namespaces, uploads a no-DO stub whose declarative exports mark every owned
+   class `state: "deleted"`, then deletes the script with `force=true`.
+   Workers and namespaces are verified absent afterward. (`force=true` alone
+   removes bindings, but not Durable Object classes or storage; legacy
+   migrations are invalid once a Worker uses declarative exports.)
    Production-only `kiterate` and `tunnels-prd` are independent services, not
    members of this stack, and remain live.
 3. Every repository in the OS Artifacts namespace, after no Worker can create
@@ -118,11 +126,11 @@ environment in dependency order:
 4. The Alchemy stack: two D1 databases, two KV namespaces, two R2 buckets,
    state, and generated output.
 
-The next preview acquisition runs `pnpm infra deploy` and gets a fresh stack
-through that slot's environment Durable Object before app deploys recreate the
-Workers. Auth then reruns migrations and re-seeds its OAuth clients using the
-existing `AUTH_SEED_OAUTH_CLIENTS` lifecycle. A production recreation must
-also restore Semaphore's preview-slot inventory:
+The next automated preview deploy runs `pnpm infra deploy` and gets a fresh
+stack through that slot's environment Durable Object before app deploys
+recreate the Workers. Auth then reruns migrations and re-seeds its OAuth
+clients using the existing `AUTH_SEED_OAUTH_CLIENTS` lifecycle. A production
+recreation must also restore Semaphore's preview-slot inventory:
 
 ```bash
 doppler run --project semaphore --config prd -- \
@@ -131,10 +139,13 @@ doppler run --project semaphore --config prd -- \
 
 Routes and create-only DNS records are reattached by normal deployment.
 
-Production requires `--yes-i-mean-prd`. Destroying production or migrating an
-existing fleet remains an explicit operator action; a code merge is not
-permission to erase live environments. Quiesce automatic deploys before the
-merge that introduces the Alchemy-backed push workflows. The all-at-once
+Production destroy is dashboard-only and requires a production Iterate Auth
+browser session at the Worker boundary. Forge-signed bearer tokens available
+to CI can deploy/check production but cannot destroy it. Destroying production
+or migrating an existing fleet remains an explicit operator action; a code
+merge is not permission to erase live environments. Quiesce automatic deploys
+before the merge that introduces the Alchemy-backed push workflows. Destroy
+an environment before removing its stage from `envs.ts`; the all-at-once
 migration destroys every environment and recreates each stack from empty.
 
 ## Bringing up a new environment

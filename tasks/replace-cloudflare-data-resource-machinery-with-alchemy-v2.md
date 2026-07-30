@@ -26,9 +26,11 @@ bindings, Durable Object classes, Browser Rendering, dynamic loaders, named
 entrypoints, routes, containers, migrations, and secrets.
 
 This is an all-at-once replacement. We will destroy every environment and
-recreate it from empty. The repository deliberately contains no import,
-adoption, missing-state reconstruction, legacy ID fallback, compatibility
-branch, or Alchemy patch.
+recreate it from empty. The repository deliberately contains no application
+code for import, adoption, missing-state reconstruction, legacy ID fallback,
+compatibility branches, or Alchemy patches. Unmodified Alchemy providers keep
+their native deterministic-name reconciliation for interrupted creates during
+an ordinary apply.
 
 ## Implementation
 
@@ -37,17 +39,18 @@ branch, or Alchemy patch.
 1. `apps/env-manager/src/alchemy/environment-resources.ts` defines the shared
    graph. `dev_global` contains only Auth D1; platform stages contain all six
    resources.
-2. Local applies atomically write
+2. Every apply runs inside the deployed environment manager's named,
+   per-stage Durable Object. The same object stores its Alchemy state in
+   SQLite, serializes lifecycle operations, and returns validated output to a
+   thin local CLI. The CLI atomically writes
    `apps/env-manager/.alchemy/output/<stage>/cloudflare-resources.json`.
-   Preview applies run inside a per-stage Durable Object and the CLI
-   materializes the returned, validated output to that same checkout-local
-   path.
 3. `scripts/lib/alchemy-resources.ts` validates the manifest kind and every
    generated binding identity before any config generator can use the output.
 4. `envs.ts` contains stable Worker names and hostnames, never physical D1/KV
    IDs or R2 bucket names.
-5. Preview workflows call the deployed environment manager; production and
-   `dev_global` run the same graph locally before app deploys fan out.
+5. Preview, production, and Auth-only `dev_global` all call the same deployed
+   graph. The manager itself always runs in the preview account and uses
+   account-specific Cloudflare tokens from Secrets Store.
 
 ### Whole-environment teardown
 
@@ -56,10 +59,13 @@ It is explicit, idempotent, and ordered:
 
 1. Delete and verify every container application attached to the OS Worker's
    Durable Object namespaces.
-2. Force-delete the eight stage Workers: OS, its two compiler sidecars, Auth,
-   Semaphore, Docs, dummy Petshop, and streams example. Cloudflare's supported
-   `force=true` Worker deletion also deletes each script's Durable Object
-   namespaces, instances, storage, and alarms. Verify both Workers and
+2. Delete the eight stage Workers: OS, its two compiler sidecars, Auth,
+   Semaphore, Docs, dummy Petshop, and streams example. For each Worker,
+   discover owned Durable Object classes from instantiated namespaces and
+   script bindings, upload a no-DO stub whose declarative exports mark every
+   owned class `state: "deleted"`, then delete the script with `force=true`.
+   (`force=true` alone does not delete DO classes, and Workers using
+   declarative exports reject legacy migrations.) Verify both Workers and
    namespaces are absent.
 3. Drain the cursor-paginated repositories in `${osWorkerName}-repos` after no
    Worker can create more, then verify the Artifacts namespace is empty.
@@ -70,7 +76,9 @@ It is explicit, idempotent, and ordered:
 4. Destroy the Alchemy stack and remove its generated manifest.
 
 `dev_global` runs the same path for its single Auth Worker and Auth D1.
-Production additionally requires `--yes-i-mean-prd`.
+Production destroy is dashboard-only and the Worker requires a production
+Iterate Auth browser session, so forge-signed CI bearer tokens cannot invoke
+the destructive lane.
 
 This replaces the parked-worker/tombstone reset, adoption guards, retired
 queue/secret migrations, per-app erasers, and the reset-before-destroy
@@ -111,17 +119,27 @@ build/package machinery. Keep the retained upstream artifact until npm's
 `next` release includes the fixes; the package URL does not have a separate
 SRI, but it is not a local fork or an expiring PR artifact.
 
-Alchemy stays in a nested, independently locked workspace. Folding it into
-the root lock was tested: it reduced raw lockfile lines but rewrote hundreds
-of unrelated application peer resolutions. The isolated 3,335-line generated
-lock has more lines and much less application risk.
+`apps/env-manager` is a normal root workspace and uses the repository's one
+root `pnpm-lock.yaml`. There is no nested workspace or Alchemy lockfile. The
+large positive raw diff is mostly pnpm's generated resolution changes from
+adding Alchemy, Effect 4, TanStack Start, and their build tooling to that shared
+dependency graph.
 
 Latest Alchemy main adds Worker-side capabilities that do not improve the
-D1/KV/R2 boundary. Wrangler's experimental provisioning remains create-only.
-Verified against Wrangler 4.115.0 and workers-sdk main on 2026-07-30, its
-experimental typed `cloudflare.config.ts` direction is not ready here:
-containers, auxiliary Vite Workers, configurable filenames/`--config`, and
-D1 `migrations_dir` remain blockers. Revisit typed config when those are
+D1/KV/R2 boundary, and its newer commit package was not available from
+`pkg.ing` when checked. Alchemy's current root Cloudflare export also brings
+Node/Bun compatibility imports into a Worker bundle; the provider and
+credential services needed here have no granular public package export. Keep
+`nodejs_compat`, prove the actual deployed bundle, and remove it when Alchemy
+publishes a Worker-safe granular entry point rather than carrying a local
+packaging patch.
+
+Wrangler's experimental provisioning remains create-only. Verified against
+Wrangler 4.116.0 and workers-sdk main on 2026-07-30, the newest typed
+`defineSettings` direction is not ready here: upgrading beyond 4.107 also
+forces a repository-wide Workers Types v5 transition, while containers,
+auxiliary Vite Workers, configurable filenames/`--config`, and D1
+`migrations_dir` remain blockers. Revisit typed config when those are
 first-class; do not add an adapter layer now.
 
 ## Complexity
@@ -134,18 +152,19 @@ The main code movement is:
 
 - delete the 703-line DO reset, 425-line reset tests, parked Worker, per-app
   erasers, and retired deployment shims;
-- add one ~120-line Alchemy stack, one strict manifest reader, one root CLI,
-  one focused Wrangler-resource destroy helper, and the required container
-  bootstrap;
-- keep the generated 3,335-line isolated Alchemy lock.
+- add a 76-line Alchemy graph, its Effect/SQLite execution boundary, one strict
+  manifest reader, a thin remote CLI, the environment manager dashboard/DO,
+  one typed Distilled teardown module, and the required container bootstrap;
+- use only the generated root lockfile.
 
-The PR's positive line count is therefore generated dependency metadata.
-Excluding that lock and this task record, the implementation is substantially
-net-negative.
+The PR's +3,722 net headline is mostly generated dependency metadata: the root
+lock accounts for +2,658 net lines. Excluding the lock and this task record,
+application, workflow, and documentation changes are +830 net while replacing
+the old reset/recovery system and adding the lifecycle API plus dashboard.
 
 ## Proof and rollout
 
-Use `preview_5` as the disposable proof stage:
+Use reserved `preview_18` and `preview_19` as disposable proof stages:
 
 1. Destroy the stage and prove all Workers, DO namespaces, container apps,
    Artifact repos, D1, KV, and R2 resources are absent.
@@ -159,16 +178,32 @@ Use `preview_5` as the disposable proof stage:
 
 For rollout, quiesce automatic deploys, explicitly nuke all deployed
 environments, discard prototype state out of band, then recreate and redeploy
-the fleet. A merge is not permission to erase production.
+the fleet. A merge is not permission to erase production. After the fleet is
+healthy, restore and verify the production lease inventory:
 
-Live proof on `preview_5` after granting Secrets Store Write:
+```bash
+doppler run --project semaphore --config prd -- \
+  pnpm --dir apps/semaphore seed:environment-config-leases
+doppler run --project _shared --config prd -- pnpm preview status
+doppler run --project _shared --config prd -- pnpm preview reconcile
+```
+
+`status` must report the intended claimable inventory and `reconcile` must
+report zero issues before preview automation is re-enabled. `preview-18` and
+`preview-19` remain absent from that inventory because they are reserved for
+destructive lifecycle proof.
+
+Earlier prototype proof on `preview_5` after granting Secrets Store Write:
 
 - eight stable no-op applies averaged 4.92s;
 - four resource creates averaged 12.36s and four destroys averaged 19.70s;
 - two complete fresh fleet deploys took 223.00s and 200.86s;
 - two complete environment destroys took 29.60s and 33.28s;
-- both destroys left zero matching Workers, DO namespaces, container apps,
-  Artifact repos, D1 databases, KV namespaces, and R2 buckets;
+- both destroys left zero matching Workers, container apps, Artifact repos, D1
+  databases, KV namespaces, and R2 buckets. A later first-party Distilled
+  source audit caught the incorrect assumption that `force=true` alone deletes
+  DO classes; final proof must use declarative deleted-class exports and
+  require zero matching namespaces;
 - no 429 or rate-limit backoff occurred. One first-cycle Wrangler asset upload
   retried successfully; the second full cycle had no upload retry.
 
@@ -180,7 +215,8 @@ control-plane failure.
 
 ## Acceptance criteria
 
-- [x] No Alchemy patch, adoption/import, dual-read, or legacy resource config.
+- [x] No Alchemy patch, application-level adoption/import, dual-read, or legacy
+      resource config.
 - [x] `envs.ts` contains no D1/KV/R2 physical identifiers.
 - [x] Wrangler config generation consumes one strict Alchemy manifest.
 - [x] Local `wrangler dev` remains normal.
@@ -188,9 +224,9 @@ control-plane failure.
 - [x] One destroy command owns Artifacts repos, containers, Workers/DOs, and
       the Alchemy stack.
 - [x] Claude Fable Max and Codex GPT-5.6 Sol Max reviews incorporated.
-- [x] Live create, repeat apply, full Worker deploy/smoke, repeated
-      destroy/recreate, and post-destroy absence proven.
-- [x] Preview e2e proven by CI on the final pushed revision.
+- [ ] Live create, repeat apply, full Worker deploy/smoke, repeated
+      destroy/recreate, and post-destroy absence proven on the final code.
+- [ ] Preview e2e proven by CI on the final pushed revision.
 - [x] Alchemy comes from its retained, upstream-built exact-commit package;
       direct Git consumption and the older npm prerelease were rejected with
       documented reasons.

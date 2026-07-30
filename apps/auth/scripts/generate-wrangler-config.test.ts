@@ -5,6 +5,7 @@ import { DERIVED_SECRETS, envShapedVars, wranglerConfig } from "./generate-wrang
 
 const deployedConfig = wranglerConfig("preview_1", {
   kind: "auth",
+  stage: "preview_1",
   authDbId: "test-auth-db",
 });
 

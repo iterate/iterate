@@ -1,32 +1,28 @@
 import * as Cloudflare from "alchemy/Cloudflare";
+import type { InputProps } from "alchemy/Input";
 import * as Effect from "effect/Effect";
-
-export const makeAuthResources = (stage: string) =>
-  Effect.gen(function* () {
-    const physicalStage = stage.replaceAll("_", "-");
-    const authDb = yield* Cloudflare.D1.Database("AuthDatabase", {
-      name: `iterate-${physicalStage}-auth`,
-    });
-    return {
-      kind: "auth" as const,
-      authDbId: authDb.databaseId,
-    };
-  });
+import type { CompiledEnvironment } from "../environments.ts";
+import type { AlchemyResources } from "../state.ts";
 
 /**
- * The complete Alchemy-owned part of one platform environment.
- *
- * This graph has no runtime policy: no filesystem, credentials, state store,
- * CLI, or Durable Object. The normal local Alchemy entrypoint and the
- * Environment Durable Object compile this exact Effect with different layers.
+ * The complete Alchemy-owned graph for one deployed environment.
  */
-export const makeEnvironmentResources = (stage: string) =>
+export const makeEnvironmentResources = (environment: CompiledEnvironment) =>
   Effect.gen(function* () {
-    const physicalStage = stage.replaceAll("_", "-");
-    const isPreview = stage.startsWith("preview_");
+    const physicalStage = environment.stage.replaceAll("_", "-");
     const authDb = yield* Cloudflare.D1.Database("AuthDatabase", {
       name: `iterate-${physicalStage}-auth`,
     });
+
+    if (environment.kind === "auth") {
+      return {
+        kind: "auth",
+        stage: environment.stage,
+        authDbId: authDb.databaseId,
+      } satisfies InputProps<Extract<AlchemyResources, { kind: "auth" }>>;
+    }
+
+    const isPreview = environment.stage.startsWith("preview_");
     const projectDirectory = yield* Cloudflare.KV.Namespace("ProjectDirectory", {
       title: `iterate-${physicalStage}-project-directory`,
     });
@@ -61,12 +57,13 @@ export const makeEnvironmentResources = (stage: string) =>
     });
 
     return {
-      kind: "platform" as const,
+      kind: "platform",
+      stage: environment.stage,
       authDbId: authDb.databaseId,
       projectDirectoryKvId: projectDirectory.namespaceId,
       workerBuildCacheKvId: workerBuildCache.namespaceId,
       semaphoreDbId: semaphoreDb.databaseId,
       filesBucketName: files.bucketName,
       sandboxesBucketName: sandboxes.bucketName,
-    };
+    } satisfies InputProps<Extract<AlchemyResources, { kind: "platform" }>>;
   });

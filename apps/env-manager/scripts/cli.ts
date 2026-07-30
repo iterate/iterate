@@ -8,24 +8,13 @@ import * as Path from "effect/Path";
 import * as ChildProcess from "effect/unstable/process/ChildProcess";
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner";
 import { z } from "zod";
-import {
-  authEnvs,
-  docsEnvs,
-  dummyPetshopEnvs,
-  envManagerEnv,
-  envs,
-  streamsExampleEnvs,
-} from "../../../envs.ts";
+import { envManagerEnv } from "../../../envs.ts";
 import { mintForgedAccessToken } from "../../../scripts/auth/forge-token.ts";
-import { makeCloudflareControlPlane } from "../src/cloudflare-control-plane.ts";
-import { isCompiledPreviewStage } from "../src/environments.ts";
-import { EnvironmentState, type EnvironmentApi, type PreviewStage } from "../src/state.ts";
+import { isCompiledEnvironmentStage } from "../src/environments.ts";
+import { EnvironmentState, type EnvironmentApi, type EnvironmentStage } from "../src/state.ts";
 
 const DopplerSecrets = z.looseObject({
   AUTH_FORGE_ES256_PRIVATE_JWK: z.string().optional(),
-  CLOUDFLARE_ACCOUNT_ID: z.string(),
-  CLOUDFLARE_API_TOKEN: z.string(),
-  ENV_MANAGER_API_TOKEN: z.string().optional(),
 });
 
 function runPlatformEffect<A, E>(effect: Effect.Effect<A, E, NodeServices.NodeServices>) {
@@ -61,66 +50,8 @@ const loadDopplerSecrets = Effect.fn("envManager.loadDopplerSecrets")(function* 
   });
 });
 
-const runLocalAlchemy = Effect.fn("envManager.runLocalAlchemy")(function* (input: {
-  operation: "deploy" | "destroy";
-  stage: string;
-}) {
-  const environment = Object.values(authEnvs).find(
-    (candidate) => candidate.dopplerConfig === input.stage,
-  );
-  if (environment === undefined) {
-    return yield* Effect.fail(new Error(`Unknown deployed environment ${input.stage}.`));
-  }
-
-  const secrets = yield* loadDopplerSecrets("auth", input.stage);
-  if (secrets.CLOUDFLARE_ACCOUNT_ID !== environment.cloudflareAccountId) {
-    return yield* Effect.fail(
-      new Error(
-        `Doppler auth/${input.stage} targets ${secrets.CLOUDFLARE_ACCOUNT_ID}; ` +
-          `envs.ts requires ${environment.cloudflareAccountId}.`,
-      ),
-    );
-  }
-
-  const fileSystem = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const appRoot = yield* path.fromFileUrl(new URL("..", import.meta.url));
-  const outputPath = path.join(
-    appRoot,
-    ".alchemy",
-    "output",
-    input.stage,
-    "cloudflare-resources.json",
-  );
-  yield* fileSystem.remove(outputPath, { force: true });
-
-  const spawner = yield* ChildProcessSpawner;
-  const exitCode = yield* spawner.exitCode(
-    ChildProcess.make(
-      "pnpm",
-      ["exec", "alchemy", input.operation, "alchemy.run.ts", "--stage", input.stage, "--yes"],
-      {
-        cwd: appRoot,
-        env: {
-          CLOUDFLARE_ACCOUNT_ID: secrets.CLOUDFLARE_ACCOUNT_ID,
-          CLOUDFLARE_API_TOKEN: secrets.CLOUDFLARE_API_TOKEN,
-        },
-        extendEnv: true,
-        stdin: "inherit",
-        stdout: "inherit",
-        stderr: "inherit",
-      },
-    ),
-  );
-  if (exitCode !== 0) {
-    return yield* Effect.fail(
-      new Error(`Alchemy ${input.operation} for ${input.stage} exited with ${exitCode}.`),
-    );
-  }
-});
-
-const removeLocalResourceManifest = Effect.fn("envManager.removeLocalResourceManifest")(function* (
-  stage: string,
+const removeResourceManifest = Effect.fn("envManager.removeResourceManifest")(function* (
+  stage: EnvironmentStage,
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -131,31 +62,31 @@ const removeLocalResourceManifest = Effect.fn("envManager.removeLocalResourceMan
   );
 });
 
-const writeLocalResourceManifest = Effect.fn("envManager.writeLocalResourceManifest")(
-  function* (input: { resources: EnvironmentState["resources"]; stage: string }) {
-    if (input.resources === undefined) {
-      return yield* Effect.fail(
-        new Error(`Environment manager returned no resources for ${input.stage}.`),
-      );
-    }
-    const fileSystem = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const appRoot = yield* path.fromFileUrl(new URL("..", import.meta.url));
-    const directory = path.join(appRoot, ".alchemy", "output", input.stage);
-    yield* fileSystem.makeDirectory(directory, { recursive: true });
-    const temporary = yield* fileSystem.makeTempFileScoped({ directory });
-    yield* fileSystem.writeFileString(temporary, `${JSON.stringify(input.resources, null, 2)}\n`);
-    yield* fileSystem.rename(temporary, path.join(directory, "cloudflare-resources.json"));
-  },
-);
+const writeResourceManifest = Effect.fn("envManager.writeResourceManifest")(function* (input: {
+  resources: EnvironmentState["resources"];
+  stage: EnvironmentStage;
+}) {
+  if (input.resources === undefined) {
+    return yield* Effect.fail(
+      new Error(`Environment manager returned no resources for ${input.stage}.`),
+    );
+  }
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const appRoot = yield* path.fromFileUrl(new URL("..", import.meta.url));
+  const directory = path.join(appRoot, ".alchemy", "output", input.stage);
+  yield* fileSystem.makeDirectory(directory, { recursive: true });
+  const temporary = yield* fileSystem.makeTempFileScoped({ directory });
+  yield* fileSystem.writeFileString(temporary, `${JSON.stringify(input.resources, null, 2)}\n`);
+  yield* fileSystem.rename(temporary, path.join(directory, "cloudflare-resources.json"));
+});
 
 async function managerBearerToken(): Promise<string> {
   const explicit = process.env.ENV_MANAGER_API_TOKEN?.trim();
   if (explicit) return explicit;
 
-  const inheritedForgeKey = process.env.AUTH_FORGE_ES256_PRIVATE_JWK?.trim();
   const forgeKey =
-    inheritedForgeKey ??
+    process.env.AUTH_FORGE_ES256_PRIVATE_JWK?.trim() ??
     (await runPlatformEffect(loadDopplerSecrets("_shared", envManagerEnv.dopplerConfig)))
       .AUTH_FORGE_ES256_PRIVATE_JWK;
   if (forgeKey === undefined) {
@@ -173,7 +104,14 @@ async function managerBearerToken(): Promise<string> {
   });
 }
 
-async function connect(stage: PreviewStage): Promise<{
+function environmentStage(value: string): EnvironmentStage {
+  if (!isCompiledEnvironmentStage(value)) {
+    throw new Error(`Environment ${value} is not compiled into env-manager.`);
+  }
+  return value;
+}
+
+async function connect(stage: EnvironmentStage): Promise<{
   api: RpcStub<EnvironmentApi>;
   close: () => void;
 }> {
@@ -200,8 +138,8 @@ async function connect(stage: PreviewStage): Promise<{
     socket.once("open", onOpen);
   });
 
-  // Cap'n Web accepts the browser WebSocket interface; ws implements that
-  // interface but deliberately does not declare the DOM event-handler fields.
+  // `ws` implements the browser WebSocket contract Cap'n Web consumes but
+  // deliberately omits its DOM event-handler declarations.
   const api = newWebSocketRpcSession<EnvironmentApi>(
     socket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
   );
@@ -214,15 +152,8 @@ async function connect(stage: PreviewStage): Promise<{
   };
 }
 
-function previewStage(value: string): PreviewStage {
-  if (!isCompiledPreviewStage(value)) {
-    throw new Error(`Environment ${value} is not a compiled preview slot.`);
-  }
-  return value;
-}
-
-async function withRemoteEnvironment(
-  stage: PreviewStage,
+async function withEnvironment(
+  stage: EnvironmentStage,
   operation: (api: RpcStub<EnvironmentApi>) => Promise<void | EnvironmentState>,
 ): Promise<EnvironmentState> {
   const connection = await connect(stage);
@@ -234,106 +165,38 @@ async function withRemoteEnvironment(
   }
 }
 
-async function destroyLocalWranglerEnvironment(stage: string) {
-  const platformEnvironment = Object.values(envs).find(
-    (environment) => environment.dopplerConfig === stage,
-  );
-  const authEnvironment = Object.values(authEnvs).find(
-    (environment) => environment.dopplerConfig === stage,
-  );
-  if (platformEnvironment === undefined && authEnvironment === undefined) {
-    throw new Error(`Unknown deployed environment ${stage}.`);
-  }
-
-  const project = platformEnvironment === undefined ? "auth" : "os";
-  const secrets = await runPlatformEffect(loadDopplerSecrets(project, stage));
-  const expectedAccountId =
-    platformEnvironment?.cloudflareAccountId ?? authEnvironment?.cloudflareAccountId;
-  if (secrets.CLOUDFLARE_ACCOUNT_ID !== expectedAccountId) {
-    throw new Error(
-      `Doppler ${project}/${stage} targets ${secrets.CLOUDFLARE_ACCOUNT_ID}; ` +
-        `envs.ts requires ${expectedAccountId}.`,
-    );
-  }
-  const controlPlane = makeCloudflareControlPlane({
-    accountId: secrets.CLOUDFLARE_ACCOUNT_ID,
-    apiToken: secrets.CLOUDFLARE_API_TOKEN,
-  });
-
-  if (platformEnvironment === undefined) {
-    if (authEnvironment === undefined) {
-      throw new Error(`Unknown Auth environment ${stage}.`);
-    }
-    await controlPlane.destroyWranglerEnvironment({
-      workerNames: [authEnvironment.authWorkerName],
-    });
-    return;
-  }
-
-  const supportingWorkerNames = [docsEnvs, dummyPetshopEnvs, streamsExampleEnvs].map(
-    (environments) => {
-      const environment = Object.values(environments).find(
-        (candidate) => candidate.dopplerConfig === stage,
-      );
-      if (environment === undefined) {
-        throw new Error(`No supporting Worker environment exists for ${stage}.`);
-      }
-      return environment.workerName;
-    },
-  );
-  await controlPlane.destroyWranglerEnvironment({
-    osWorkerName: platformEnvironment.osWorkerName,
-    workerNames: [
-      platformEnvironment.osWorkerName,
-      `${platformEnvironment.osWorkerName}-typechecker`,
-      `${platformEnvironment.osWorkerName}-worker-bundler`,
-      platformEnvironment.semaphoreWorkerName,
-      ...supportingWorkerNames,
-      ...(authEnvironment === undefined ? [] : [authEnvironment.authWorkerName]),
-    ],
-  });
-}
-
-/** Create or converge one environment. Preview slots run in their Durable Object; production runs locally. */
+/** Create or converge one environment and write its Wrangler input manifest. */
 export async function deploy(options: { env: string }) {
-  if (isCompiledPreviewStage(options.env)) {
-    await runPlatformEffect(removeLocalResourceManifest(options.env));
-    const state = await withRemoteEnvironment(options.env, (api) => api.deploy());
-    await runPlatformEffect(
-      writeLocalResourceManifest({
-        resources: state.resources,
-        stage: options.env,
-      }).pipe(Effect.scoped),
-    );
-    return state;
-  }
-  await runPlatformEffect(runLocalAlchemy({ operation: "deploy", stage: options.env }));
-  return { stage: options.env, lifecycle: "ready" };
+  const stage = environmentStage(options.env);
+  await runPlatformEffect(removeResourceManifest(stage));
+  const state = await withEnvironment(stage, (api) => api.deploy());
+  await runPlatformEffect(
+    writeResourceManifest({ resources: state.resources, stage }).pipe(Effect.scoped),
+  );
+  return state;
 }
 
-/** Verify all six Alchemy-owned resources for a preview slot. */
+/** Verify all Alchemy-owned resources for an environment. */
 export async function check(options: { env: string }) {
-  return await withRemoteEnvironment(previewStage(options.env), (api) => api.check());
+  return await withEnvironment(environmentStage(options.env), (api) => api.check());
 }
 
-/** Read the durable, live-published state for a preview slot. */
+/** Read the durable, live-published state for an environment. */
 export async function status(options: { env: string }) {
-  return await withRemoteEnvironment(previewStage(options.env), (api) => api.status());
+  return await withEnvironment(environmentStage(options.env), (api) => api.status());
 }
 
-/** Destroy all Wrangler and Alchemy resources for an environment. */
-export async function destroy(options: { env: string; yesIMeanPrd?: boolean }) {
-  if (isCompiledPreviewStage(options.env)) {
-    const state = await withRemoteEnvironment(options.env, (api) => api.destroy());
-    await runPlatformEffect(removeLocalResourceManifest(options.env));
-    return state;
+/** Destroy a non-production environment, including its Workers and Durable Object data. */
+export async function destroy(options: { env: string }) {
+  const stage = environmentStage(options.env);
+  if (stage === "prd") {
+    throw new Error(
+      "Production destruction requires an authenticated browser session; use the environment-manager dashboard.",
+    );
   }
-  if (options.env === "prd" && options.yesIMeanPrd !== true) {
-    throw new Error("Refusing to destroy production without --yes-i-mean-prd.");
-  }
-  await destroyLocalWranglerEnvironment(options.env);
-  await runPlatformEffect(runLocalAlchemy({ operation: "destroy", stage: options.env }));
-  return { stage: options.env, lifecycle: "empty" };
+  const state = await withEnvironment(stage, (api) => api.destroy(stage));
+  await runPlatformEffect(removeResourceManifest(stage));
+  return state;
 }
 
 void createCli({ ...import.meta, name: "env-manager" }).run({

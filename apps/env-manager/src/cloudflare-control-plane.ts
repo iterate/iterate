@@ -1,262 +1,387 @@
-import { z } from "zod";
+import { API, NotFound, T, type DefaultErrors } from "@distilled.cloud/cloudflare";
+import * as Containers from "@distilled.cloud/cloudflare/containers";
+import * as Credentials from "@distilled.cloud/cloudflare/Credentials";
+import * as D1 from "@distilled.cloud/cloudflare/d1";
+import * as DurableObjects from "@distilled.cloud/cloudflare/durable-objects";
+import * as KV from "@distilled.cloud/cloudflare/kv";
+import * as R2 from "@distilled.cloud/cloudflare/r2";
+import * as Workers from "@distilled.cloud/cloudflare/workers";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
+import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
+import type * as HttpClient from "effect/unstable/http/HttpClient";
 
-const APIEnvelope = z.object({
-  success: z.boolean(),
-  result: z.unknown().optional(),
-  errors: z
-    .array(z.object({ code: z.number().optional(), message: z.string().optional() }))
-    .default([]),
-});
-const WorkerScript = z.object({ id: z.string() });
-const DurableObjectNamespace = z.object({
-  id: z.string(),
-  script: z.string().nullable(),
-});
-const ContainerApplication = z.object({
-  durable_objects: z.object({ namespace_id: z.string().optional() }).optional(),
-  id: z.string(),
-  name: z.string(),
-});
-const ArtifactRepository = z.object({ name: z.string() });
-
-const RETRY_DELAYS_MS = [500, 1_000, 2_000, 4_000, 5_000, 5_000, 5_000, 5_000];
 const ARTIFACT_DELETE_CONCURRENCY = 10;
 const ARTIFACT_REPOSITORY_PAGE_SIZE = 50;
+const DELETED_WORKER_COMPATIBILITY_DATE = "2026-07-30";
+const DELETED_WORKER_MODULE = new File(
+  [
+    "export default { async fetch() { return new Response('Environment deleted', { status: 410 }); } };",
+  ],
+  "worker.js",
+  { type: "application/javascript+module" },
+);
 
-class CloudflareApiError extends Error {
-  constructor(
-    readonly status: number,
-    message: string,
-  ) {
-    super(message);
-    this.name = "CloudflareApiError";
-  }
-}
+// The Artifacts control-plane endpoints are not in Cloudflare's OpenAPI
+// document yet, so Distilled cannot generate these two operations. Defining
+// them through Distilled's API builder still gives them the same credentials,
+// transport, response decoding, typed errors, and bounded retry machinery.
+const ListArtifactRepositoriesRequest = Schema.Struct({
+  accountId: Schema.String.pipe(T.HttpPath("account_id")),
+  namespace: Schema.String.pipe(T.HttpPath("namespace")),
+  perPage: Schema.optional(Schema.Number).pipe(T.HttpQuery("per_page")),
+}).pipe(
+  T.Http({
+    method: "GET",
+    path: "/accounts/{account_id}/artifacts/namespaces/{namespace}/repos",
+  }),
+);
+const ArtifactRepository = Schema.Struct({ name: Schema.String });
+const ListArtifactRepositoriesResponse = Schema.Array(ArtifactRepository).pipe(
+  T.ResponsePath("result"),
+);
+const listArtifactRepositories: API.OperationMethod<
+  Readonly<{ accountId: string; namespace: string; perPage?: number }>,
+  ReadonlyArray<Readonly<{ name: string }>>,
+  NotFound,
+  Credentials.Credentials
+> = API.make(() => ({
+  input: ListArtifactRepositoriesRequest,
+  output: ListArtifactRepositoriesResponse,
+  errors: [NotFound],
+}));
 
-function formatErrors(errors: z.infer<typeof APIEnvelope>["errors"]): string {
-  return errors
-    .map(({ code, message }) => [code, message].filter((value) => value !== undefined).join(": "))
-    .join("; ");
-}
+const DeleteArtifactRepositoryRequest = Schema.Struct({
+  accountId: Schema.String.pipe(T.HttpPath("account_id")),
+  namespace: Schema.String.pipe(T.HttpPath("namespace")),
+  repository: Schema.String.pipe(T.HttpPath("repository")),
+}).pipe(
+  T.Http({
+    method: "DELETE",
+    path: "/accounts/{account_id}/artifacts/namespaces/{namespace}/repos/{repository}",
+  }),
+);
+const DeleteArtifactRepositoryResponse = Schema.Unknown.pipe(T.ResponsePath("result"));
+const deleteArtifactRepository: API.OperationMethod<
+  Readonly<{ accountId: string; namespace: string; repository: string }>,
+  unknown,
+  NotFound,
+  Credentials.Credentials
+> = API.make(() => ({
+  input: DeleteArtifactRepositoryRequest,
+  output: DeleteArtifactRepositoryResponse,
+  errors: [NotFound],
+}));
+
+const WorkerUploadFile = Schema.declare(
+  (input): input is File => typeof File !== "undefined" && input instanceof File,
+  { identifier: "File", description: "A Worker module upload" },
+);
+const DeleteDurableObjectClassesRequest = Schema.Struct({
+  accountId: Schema.String.pipe(T.HttpPath("account_id")),
+  scriptName: Schema.String.pipe(T.HttpPath("scriptName")),
+  metadata: Schema.Unknown,
+  files: Schema.Array(WorkerUploadFile.pipe(T.HttpFormDataFile())),
+}).pipe(
+  T.Http({
+    method: "PUT",
+    path: "/accounts/{account_id}/workers/scripts/{scriptName}",
+    contentType: "multipart",
+  }),
+);
+const DeleteDurableObjectClassesResponse = Schema.Unknown.pipe(T.ResponsePath("result"));
+const deleteDurableObjectClasses: API.OperationMethod<
+  Readonly<{
+    accountId: string;
+    scriptName: string;
+    metadata: unknown;
+    files: readonly File[];
+  }>,
+  unknown,
+  DefaultErrors,
+  Credentials.Credentials
+> = API.make(() => ({
+  input: DeleteDurableObjectClassesRequest,
+  output: DeleteDurableObjectClassesResponse,
+  errors: [],
+}));
 
 export function makeCloudflareControlPlane(input: { accountId: string; apiToken: string }) {
-  const request = async (path: string, init?: RequestInit): Promise<unknown> => {
-    const url = `https://api.cloudflare.com/client/v4/accounts/${input.accountId}${path}`;
-    for (let attempt = 0; ; attempt += 1) {
-      const response = await fetch(url, {
-        ...init,
-        headers: {
-          authorization: `Bearer ${input.apiToken}`,
-          ...(init?.headers ?? {}),
-        },
-      });
-      const envelope = APIEnvelope.parse(await response.json());
-      if (response.ok && envelope.success) return envelope.result;
+  const cloudflareApi = Layer.mergeAll(
+    Credentials.fromApiToken({ apiToken: input.apiToken }),
+    FetchHttpClient.layer,
+    Layer.succeed(FetchHttpClient.Fetch, globalThis.fetch),
+  );
+  const run = <A, E>(
+    program: Effect.Effect<A, E, Credentials.Credentials | HttpClient.HttpClient>,
+  ) => Effect.runPromise(Effect.scoped(program.pipe(Effect.provide(cloudflareApi))));
 
-      const error = new CloudflareApiError(
-        response.status,
-        `Cloudflare ${init?.method ?? "GET"} ${path} failed (${response.status}): ${
-          formatErrors(envelope.errors) || response.statusText
-        }`,
-      );
-      const delay = RETRY_DELAYS_MS[attempt];
-      if ((response.status !== 429 && response.status < 500) || delay === undefined) throw error;
-      await new Promise((resolve) => setTimeout(resolve, delay * (0.8 + Math.random() * 0.4)));
-    }
-  };
+  const listWorkerScripts = () =>
+    Workers.listScripts.items({ accountId: input.accountId }).pipe(Stream.runCollect);
 
-  const deleteIfPresent = async (path: string): Promise<boolean> => {
-    try {
-      await request(path, { method: "DELETE" });
-      return true;
-    } catch (error) {
-      if (error instanceof CloudflareApiError && error.status === 404) return false;
-      throw error;
-    }
-  };
+  const listDurableObjectNamespaces = () =>
+    DurableObjects.listNamespaces
+      .items({ accountId: input.accountId, perPage: 100 })
+      .pipe(Stream.runCollect);
 
-  const exists = async (path: string): Promise<boolean> => {
-    try {
-      await request(path);
-      return true;
-    } catch (error) {
-      if (error instanceof CloudflareApiError && error.status === 404) return false;
-      throw error;
-    }
-  };
+  const listArtifactRepositoryPage = (namespace: string) =>
+    listArtifactRepositories({
+      accountId: input.accountId,
+      namespace,
+      perPage: ARTIFACT_REPOSITORY_PAGE_SIZE,
+    }).pipe(Effect.catchTag("NotFound", () => Effect.succeed([])));
 
-  const listDurableObjectNamespaces = async () => {
-    const namespaces: z.infer<typeof DurableObjectNamespace>[] = [];
-    for (let page = 1; ; page += 1) {
-      const batch = z
-        .array(DurableObjectNamespace)
-        .parse(await request(`/workers/durable_objects/namespaces?per_page=100&page=${page}`));
-      namespaces.push(...batch);
-      if (batch.length < 100) return namespaces;
-    }
-  };
+  const destroyArtifactRepositories = (namespace: string) =>
+    Effect.gen(function* () {
+      for (;;) {
+        const repositories = yield* listArtifactRepositoryPage(namespace);
+        if (repositories.length === 0) return;
 
-  const listArtifactRepositoryPage = async (namespace: string) => {
-    const path = `/artifacts/namespaces/${encodeURIComponent(namespace)}/repos`;
-    try {
-      return z
-        .array(ArtifactRepository)
-        .parse(await request(`${path}?per_page=${ARTIFACT_REPOSITORY_PAGE_SIZE}`));
-    } catch (error) {
-      if (error instanceof CloudflareApiError && error.status === 404) return [];
-      throw error;
-    }
-  };
-
-  const destroyArtifactRepositories = async (namespace: string) => {
-    const path = `/artifacts/namespaces/${encodeURIComponent(namespace)}/repos`;
-    for (;;) {
-      const repositories = await listArtifactRepositoryPage(namespace);
-      if (repositories.length === 0) return;
-      let deleted = 0;
-      for (let index = 0; index < repositories.length; index += ARTIFACT_DELETE_CONCURRENCY) {
-        const batch = repositories.slice(index, index + ARTIFACT_DELETE_CONCURRENCY);
-        await Promise.all(
-          batch.map(async ({ name }) => {
-            if (await deleteIfPresent(`${path}/${encodeURIComponent(name)}`)) deleted += 1;
-          }),
+        const deleted = yield* Effect.forEach(
+          repositories,
+          ({ name }) =>
+            deleteArtifactRepository({
+              accountId: input.accountId,
+              namespace,
+              repository: name,
+            }).pipe(
+              Effect.as(true),
+              Effect.catchTag("NotFound", () => Effect.succeed(false)),
+            ),
+          { concurrency: ARTIFACT_DELETE_CONCURRENCY },
         );
-      }
-      if (deleted === 0) {
-        const remaining = await listArtifactRepositoryPage(namespace);
+        if (deleted.some(Boolean)) continue;
+
+        const remaining = yield* listArtifactRepositoryPage(namespace);
         if (remaining.length === 0) return;
-        throw new Error(
-          `Artifacts cleanup made no progress for ${namespace}; Cloudflare still lists: ${remaining
-            .map(({ name }) => name)
-            .join(", ")}`,
+        return yield* Effect.fail(
+          new Error(
+            `Artifacts cleanup made no progress for ${namespace}; Cloudflare still lists: ${remaining
+              .map(({ name }) => name)
+              .join(", ")}`,
+          ),
         );
       }
-    }
-  };
-
-  const destroyContainerApplications = async (workerName: string) => {
-    const namespaceIds = new Set(
-      (await listDurableObjectNamespaces())
-        .filter(({ script }) => script === workerName)
-        .map(({ id }) => id),
-    );
-    const applications = z
-      .array(ContainerApplication)
-      .parse(await request("/containers/applications"));
-    const owned = applications.filter(({ durable_objects }) => {
-      const namespaceId = durable_objects?.namespace_id;
-      return namespaceId !== undefined && namespaceIds.has(namespaceId);
     });
-    for (const application of owned) {
-      await deleteIfPresent(`/containers/applications/${encodeURIComponent(application.id)}`);
-    }
-    const remaining = z
-      .array(ContainerApplication)
-      .parse(await request("/containers/applications"))
-      .filter(({ durable_objects }) => {
-        const namespaceId = durable_objects?.namespace_id;
+
+  const destroyContainerApplications = (workerName: string) =>
+    Effect.gen(function* () {
+      const namespaceIds = new Set(
+        (yield* listDurableObjectNamespaces()).flatMap(({ id, script }) =>
+          id && script === workerName ? [id] : [],
+        ),
+      );
+      const applications = yield* Containers.listContainerApplications({
+        accountId: input.accountId,
+      });
+      const owned = applications.filter(({ durableObjects }) => {
+        const namespaceId = durableObjects?.namespaceId;
         return namespaceId !== undefined && namespaceIds.has(namespaceId);
       });
-    if (remaining.length > 0) {
-      throw new Error(
-        `Container applications remain for ${workerName}: ${remaining
-          .map(({ name }) => name)
-          .join(", ")}`,
-      );
-    }
-  };
-
-  return {
-    async assertResourcesExist(resources: {
-      authDbId: string;
-      projectDirectoryKvId: string;
-      workerBuildCacheKvId: string;
-      semaphoreDbId: string;
-      filesBucketName: string;
-      sandboxesBucketName: string;
-    }) {
-      const checks = [
-        ["auth D1", `/d1/database/${encodeURIComponent(resources.authDbId)}`],
-        [
-          "project-directory KV",
-          `/storage/kv/namespaces/${encodeURIComponent(resources.projectDirectoryKvId)}`,
-        ],
-        [
-          "worker-build-cache KV",
-          `/storage/kv/namespaces/${encodeURIComponent(resources.workerBuildCacheKvId)}`,
-        ],
-        ["semaphore D1", `/d1/database/${encodeURIComponent(resources.semaphoreDbId)}`],
-        ["files R2", `/r2/buckets/${encodeURIComponent(resources.filesBucketName)}`],
-        ["sandboxes R2", `/r2/buckets/${encodeURIComponent(resources.sandboxesBucketName)}`],
-      ] as const;
-      const results = await Promise.all(
-        checks.map(async ([label, path]) => ({ label, present: await exists(path) })),
-      );
-      const missing = results.filter(({ present }) => !present).map(({ label }) => label);
-      if (missing.length > 0) {
-        throw new Error(`Cloudflare resources are missing: ${missing.join(", ")}`);
-      }
-    },
-
-    async destroyWranglerEnvironment(
-      input: {
-        osWorkerName?: string;
-      } & (
-        | { previewSlot: number; workerNames?: never }
-        | { previewSlot?: never; workerNames: string[] }
-      ),
-    ) {
-      let workerNames: string[];
-      if ("previewSlot" in input) {
-        const previewWorkerPattern = new RegExp(`(?:^|-)preview-${input.previewSlot}(?:-|$)`);
-        workerNames = z
-          .array(WorkerScript)
-          .parse(await request("/workers/scripts"))
-          .filter(({ id }) => previewWorkerPattern.test(id))
-          .map(({ id }) => id);
-      } else {
-        workerNames = input.workerNames;
+      for (const application of owned) {
+        yield* Containers.deleteContainerApplication({
+          accountId: input.accountId,
+          applicationId: application.id,
+        }).pipe(Effect.catchTag("ContainerApplicationNotFound", () => Effect.void));
       }
 
-      if (input.osWorkerName !== undefined) {
-        await destroyContainerApplications(input.osWorkerName);
-      }
-
-      // Worker deletion intentionally stays sequential. These control-plane
-      // calls are rate-limited per API user and force deletion also removes
-      // every Durable Object namespace, instance, alarm, and storage row.
-      for (const workerName of workerNames) {
-        await deleteIfPresent(`/workers/scripts/${encodeURIComponent(workerName)}?force=true`);
-      }
-
-      const targetWorkers = new Set(workerNames);
-      const remainingWorkers = z
-        .array(WorkerScript)
-        .parse(await request("/workers/scripts"))
-        .filter(({ id }) => targetWorkers.has(id));
-      const remainingNamespaces = (await listDurableObjectNamespaces()).filter(
-        ({ script }) => script !== null && targetWorkers.has(script),
-      );
-      if (remainingWorkers.length > 0 || remainingNamespaces.length > 0) {
-        throw new Error(
-          [
-            remainingWorkers.length > 0
-              ? `Workers remain: ${remainingWorkers.map(({ id }) => id).join(", ")}`
-              : undefined,
-            remainingNamespaces.length > 0
-              ? `Durable Object namespaces remain for: ${[
-                  ...new Set(remainingNamespaces.map(({ script }) => script)),
-                ].join(", ")}`
-              : undefined,
-          ]
-            .filter((message) => message !== undefined)
-            .join("; "),
+      const remaining = (yield* Containers.listContainerApplications({
+        accountId: input.accountId,
+      })).filter(({ durableObjects }) => {
+        const namespaceId = durableObjects?.namespaceId;
+        return namespaceId !== undefined && namespaceIds.has(namespaceId);
+      });
+      if (remaining.length > 0) {
+        return yield* Effect.fail(
+          new Error(
+            `Container applications remain for ${workerName}: ${remaining
+              .map(({ name }) => name)
+              .join(", ")}`,
+          ),
         );
       }
+    });
 
-      if (input.osWorkerName !== undefined) {
-        await destroyArtifactRepositories(`${input.osWorkerName}-repos`);
+  const destroyWorker = (
+    workerName: string,
+    namespaceClasses: ReadonlyMap<string, ReadonlySet<string>>,
+  ) =>
+    Effect.gen(function* () {
+      const classes = new Set(namespaceClasses.get(workerName));
+      const settings = yield* Workers.getScriptScriptAndVersionSetting({
+        accountId: input.accountId,
+        scriptName: workerName,
+      }).pipe(Effect.catchTag("WorkerNotFound", () => Effect.succeed(undefined)));
+      for (const binding of settings?.bindings ?? []) {
+        if (
+          binding.type === "durable_object_namespace" &&
+          typeof binding.className === "string" &&
+          (!binding.scriptName || binding.scriptName === workerName)
+        ) {
+          classes.add(binding.className);
+        }
       }
+
+      // `force=true` removes bindings but not owned Durable Object classes.
+      // These Workers already use declarative exports, where legacy migrations
+      // are forbidden. Replace every owned class with a deleted tombstone first;
+      // replacing the module also stops application alarms during teardown. If
+      // the script disappeared during a partial teardown, this creates the
+      // minimal dummy Worker needed to retire its still-owned namespaces.
+      if (classes.size > 0) {
+        yield* deleteDurableObjectClasses({
+          accountId: input.accountId,
+          scriptName: workerName,
+          metadata: {
+            main_module: DELETED_WORKER_MODULE.name,
+            compatibility_date: settings?.compatibilityDate ?? DELETED_WORKER_COMPATIBILITY_DATE,
+            compatibility_flags: settings?.compatibilityFlags ?? undefined,
+            bindings: [],
+            exports: Object.fromEntries(
+              [...classes].map((className) => [
+                className,
+                { type: "durable-object", state: "deleted" },
+              ]),
+            ),
+          },
+          files: [DELETED_WORKER_MODULE],
+        });
+      }
+
+      yield* Workers.deleteScript({
+        accountId: input.accountId,
+        scriptName: workerName,
+        force: true,
+      }).pipe(Effect.catchTag("WorkerNotFound", () => Effect.void));
+    });
+
+  return {
+    assertResourcesExist(
+      resources:
+        | { kind: "auth"; authDbId: string; stage: string }
+        | {
+            kind: "platform";
+            stage: string;
+            authDbId: string;
+            projectDirectoryKvId: string;
+            workerBuildCacheKvId: string;
+            semaphoreDbId: string;
+            filesBucketName: string;
+            sandboxesBucketName: string;
+          },
+      workerNames: readonly string[],
+    ) {
+      return run(
+        Effect.gen(function* () {
+          const [databases, namespaces, { buckets }, workers] = yield* Effect.all(
+            [
+              D1.listDatabases.items({ accountId: input.accountId }).pipe(Stream.runCollect),
+              KV.listNamespaces.items({ accountId: input.accountId }).pipe(Stream.runCollect),
+              R2.listBuckets({ accountId: input.accountId, perPage: 1_000 }),
+              listWorkerScripts(),
+            ],
+            { concurrency: "unbounded" },
+          );
+          const databaseIds = new Set(databases.map(({ uuid }) => uuid));
+          const namespaceIds = new Set(namespaces.map(({ id }) => id));
+          const bucketNames = new Set((buckets ?? []).map(({ name }) => name));
+          const deployedWorkerNames = new Set(workers.map(({ id }) => id));
+          const expected: Array<readonly [label: string, present: boolean]> = [
+            ["auth D1", databaseIds.has(resources.authDbId)],
+          ];
+          if (resources.kind === "platform") {
+            expected.push(
+              ["project-directory KV", namespaceIds.has(resources.projectDirectoryKvId)],
+              ["worker-build-cache KV", namespaceIds.has(resources.workerBuildCacheKvId)],
+              ["semaphore D1", databaseIds.has(resources.semaphoreDbId)],
+              ["files R2", bucketNames.has(resources.filesBucketName)],
+              ["sandboxes R2", bucketNames.has(resources.sandboxesBucketName)],
+            );
+          }
+          const missing = [
+            ...expected.filter(([, present]) => !present).map(([label]) => label),
+            ...workerNames
+              .filter((workerName) => !deployedWorkerNames.has(workerName))
+              .map((workerName) => `Worker ${workerName}`),
+          ];
+          if (missing.length > 0) {
+            return yield* Effect.fail(
+              new Error(`Cloudflare resources are missing: ${missing.join(", ")}`),
+            );
+          }
+        }),
+      );
+    },
+
+    destroyWranglerResources(destroyInput: {
+      workerNames: readonly string[];
+      osWorkerName?: string;
+    }) {
+      return run(
+        Effect.gen(function* () {
+          if (destroyInput.osWorkerName !== undefined) {
+            yield* destroyContainerApplications(destroyInput.osWorkerName);
+          }
+
+          const namespaceClasses = new Map<string, Set<string>>();
+          for (const namespace of yield* listDurableObjectNamespaces()) {
+            if (namespace.script && namespace.class) {
+              const classes = namespaceClasses.get(namespace.script) ?? new Set<string>();
+              classes.add(namespace.class);
+              namespaceClasses.set(namespace.script, classes);
+            }
+          }
+
+          // Keep Worker teardown sequential because this endpoint is
+          // rate-limited per API user.
+          for (const workerName of destroyInput.workerNames) {
+            yield* destroyWorker(workerName, namespaceClasses);
+          }
+
+          const targets = new Set(destroyInput.workerNames);
+          const [remainingWorkers, remainingNamespaces] = yield* Effect.all(
+            [
+              listWorkerScripts().pipe(
+                Effect.map((workers) =>
+                  workers.filter(({ id }) => typeof id === "string" && targets.has(id)),
+                ),
+              ),
+              listDurableObjectNamespaces().pipe(
+                Effect.map((namespaces) =>
+                  namespaces.filter(
+                    ({ script }) => typeof script === "string" && targets.has(script),
+                  ),
+                ),
+              ),
+            ],
+            { concurrency: "unbounded" },
+          );
+          if (remainingWorkers.length > 0 || remainingNamespaces.length > 0) {
+            return yield* Effect.fail(
+              new Error(
+                [
+                  remainingWorkers.length > 0
+                    ? `Workers remain: ${remainingWorkers.map(({ id }) => id).join(", ")}`
+                    : undefined,
+                  remainingNamespaces.length > 0
+                    ? `Durable Object namespaces remain for: ${[
+                        ...new Set(remainingNamespaces.map(({ script }) => script)),
+                      ].join(", ")}`
+                    : undefined,
+                ]
+                  .filter((message) => message !== undefined)
+                  .join("; "),
+              ),
+            );
+          }
+
+          if (destroyInput.osWorkerName !== undefined) {
+            yield* destroyArtifactRepositories(`${destroyInput.osWorkerName}-repos`);
+          }
+        }),
+      );
     },
   };
 }

@@ -14,6 +14,7 @@ import {
 
 const alchemyResources = (stage: "prd" | "preview_6") => ({
   kind: "platform" as const,
+  stage,
   authDbId: `${stage}-auth-db`,
   projectDirectoryKvId: `${stage}-project-directory`,
   workerBuildCacheKvId: `${stage}-worker-build-cache`,

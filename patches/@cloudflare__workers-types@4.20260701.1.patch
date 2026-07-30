@@ -27,7 +27,7 @@ index 34b437b9a52ec81f315eef29966b50800aea78cd..70bb19a6561689a6696b2107ae252f8e
    readonly props: Props;
    readonly id: DurableObjectId;
    readonly storage: DurableObjectStorage;
-@@ -14362,7 +14362,17 @@ declare namespace Rpc {
+@@ -14425,7 +14425,17 @@ declare namespace Rpc {
      ? Promise<Stub<R>> & Provider<R>
      : R extends Serializable<R>
        ? Promise<Stubify<R> & MaybeDisposable<R>> & MaybeProvider<R>
@@ -75,7 +75,7 @@ index 08b9d00263acd4618f8b59bc98378de7ac61fb2d..08c74cf5eabc21cbf0f4d5dc9e7b424a
    readonly props: Props;
    readonly id: DurableObjectId;
    readonly storage: DurableObjectStorage;
-@@ -14333,7 +14333,17 @@ export declare namespace Rpc {
+@@ -14399,7 +14399,17 @@ export declare namespace Rpc {
      ? Promise<Stub<R>> & Provider<R>
      : R extends Serializable<R>
        ? Promise<Stubify<R> & MaybeDisposable<R>> & MaybeProvider<R>

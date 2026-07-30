@@ -25,7 +25,7 @@ function LandingPage() {
         <div className="space-y-2">
           <h1 className="text-lg font-medium tracking-tight">Environment manager</h1>
           <p className="text-sm text-muted-foreground">
-            Create, inspect, and completely destroy Iterate preview environments.
+            Create, inspect, and completely destroy Iterate deployed environments.
           </p>
         </div>
         <Button

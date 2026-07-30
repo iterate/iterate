@@ -83,10 +83,15 @@ code via `wrangler deploy --secrets-file`.
 | `pnpm ensure-resources --env X`   | create-only DNS and inbound Email Routing setup                                                     |
 | `pnpm infra destroy --env X`      | delete Artifact repos, container apps, Workers/DO namespaces, then the Alchemy D1/KV/R2 stack       |
 
-Normal deploys are upserts. Full environment teardown force-deletes each
-Worker; Cloudflare deletes that Worker's Durable Object namespaces, instances,
-storage, and alarms at the same time. The next deployment recreates routes and
-Workers from the generated config.
+Normal deploys are upserts. Full environment teardown first replaces each
+Worker with a 410 stub whose declarative exports mark every owned Durable
+Object class from Cloudflare's namespace inventory and script bindings
+`state: "deleted"`, then force-deletes the Worker and verifies that both the
+script and namespaces are absent. If a partial teardown already removed the
+script, the same upload briefly recreates a minimal Worker so its orphaned
+namespaces can be retired. (`force=true` alone does not delete Durable Object
+classes or storage.)
+The next deployment recreates routes and Workers from the generated config.
 
 ## Notes
 

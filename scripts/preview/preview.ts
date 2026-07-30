@@ -14,6 +14,8 @@ import {
   docsEnvs,
   dummyPetshopEnvs,
   envs,
+  claimablePreviewEnvironmentSlotNumbers,
+  envManagerOnlyPreviewEnvironmentSlotNumbers,
   previewEnvironmentSlotNumbers,
   semaphoreEnvs,
   streamsExampleEnvs,
@@ -1599,6 +1601,11 @@ type PreviewStackForGc = {
   dopplerConfig: string;
 };
 
+type PreviewStackGcSelection = {
+  candidates: PreviewStackForGc[];
+  failures: Array<{ slug: string; error: Error }>;
+};
+
 /**
  * Pure selection for {@link gc}: every durably recorded preview stack whose
  * environment lease is available or expired. The stack record is the cleanup
@@ -1613,31 +1620,52 @@ function selectPreviewStacksForGc(
     slug: string;
   }>,
   now: number,
-): PreviewStackForGc[] {
+): PreviewStackGcSelection {
   const leasesBySlug = new Map(leases.map((lease) => [lease.slug, lease]));
-  return stacks.flatMap((stack) => {
+  const reservedSlugs = new Set(
+    envManagerOnlyPreviewEnvironmentSlotNumbers.map((slot) => `preview-${slot}`),
+  );
+  const candidates: PreviewStackForGc[] = [];
+  const failures: PreviewStackGcSelection["failures"] = [];
+  for (const stack of stacks) {
+    // Slots reserved for destructive env-manager testing are deliberately
+    // outside Semaphore's lease inventory and its unattended GC.
+    if (reservedSlugs.has(stack.slug)) continue;
     const inventory = environmentConfigLeaseInventory.find(({ slug }) => slug === stack.slug);
     if (!inventory) {
-      throw new Error(`GC found a stack record for unknown preview slot ${stack.slug}.`);
+      failures.push({
+        slug: stack.slug,
+        error: new Error(`GC found a stack record for unknown preview slot ${stack.slug}.`),
+      });
+      continue;
     }
     const lease = leasesBySlug.get(stack.slug);
     if (!lease) {
-      throw new Error(`GC found no environment lease inventory for recorded stack ${stack.slug}.`);
+      failures.push({
+        slug: stack.slug,
+        error: new Error(
+          `GC found no environment lease inventory for recorded stack ${stack.slug}.`,
+        ),
+      });
+      continue;
     }
     if (lease.leaseState === "leased" && lease.leasedUntil === null) {
-      throw new Error(`GC found leased stack ${stack.slug} without an expiry.`);
+      failures.push({
+        slug: stack.slug,
+        error: new Error(`GC found leased stack ${stack.slug} without an expiry.`),
+      });
+      continue;
     }
     if (lease.leaseState === "leased" && lease.leasedUntil !== null && lease.leasedUntil > now) {
-      return [];
+      continue;
     }
-    return [
-      {
-        slug: stack.slug,
-        holder: lease.holder ?? null,
-        dopplerConfig: inventory.data.dopplerConfig,
-      },
-    ];
-  });
+    candidates.push({
+      slug: stack.slug,
+      holder: lease.holder ?? null,
+      dopplerConfig: inventory.data.dopplerConfig,
+    });
+  }
+  return { candidates, failures };
 }
 
 /** Report what would be destroyed without touching anything, or hold length. */
@@ -1665,7 +1693,8 @@ export async function gc(options: GcOptions = {}) {
     semaphore.list({ type: PREVIEW_STACK_RESOURCE_TYPE }),
     semaphore.list({ type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE }),
   ]);
-  const candidates = selectPreviewStacksForGc(stacks, leases, now);
+  const selection = selectPreviewStacksForGc(stacks, leases, now);
+  const { candidates } = selection;
   const holdMs = (options.holdMinutes ?? 30) * 60_000;
   const destroyEnvironment = makePreviewEnvironmentDestroyer(runtime);
 
@@ -1676,12 +1705,21 @@ export async function gc(options: GcOptions = {}) {
       | "destroyed"
       | "destroy-failed"
       | "release-failed"
+      | "selection-failed"
       | "skipped"
       | "would-destroy";
     holder: string | null;
     error?: string;
   }> = [];
-  const failures: unknown[] = [];
+  const failures: unknown[] = selection.failures.map(({ error }) => error);
+  for (const { slug, error } of selection.failures) {
+    outcomes.push({
+      slug,
+      action: "selection-failed",
+      holder: null,
+      error: formatPreviewErrorMessage(error),
+    });
+  }
   for (const slot of candidates) {
     if (options.dryRun) {
       outcomes.push({ slug: slot.slug, action: "would-destroy", holder: slot.holder });
@@ -2780,15 +2818,17 @@ type EnvironmentConfigLeaseInventoryItem = {
   data: EnvironmentConfigLeaseResourceData;
 };
 
-export const environmentConfigLeaseInventory = previewEnvironmentSlotNumbers.map((leaseNumber) => {
-  return {
-    type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
-    slug: `preview-${leaseNumber}`,
-    data: {
-      dopplerConfig: `preview_${leaseNumber}`,
-    },
-  };
-}) satisfies EnvironmentConfigLeaseInventoryItem[];
+export const environmentConfigLeaseInventory = claimablePreviewEnvironmentSlotNumbers.map(
+  (leaseNumber) => {
+    return {
+      type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+      slug: `preview-${leaseNumber}`,
+      data: {
+        dopplerConfig: `preview_${leaseNumber}`,
+      },
+    };
+  },
+) satisfies EnvironmentConfigLeaseInventoryItem[];
 
 const previewEnvironmentSlugs = environmentConfigLeaseInventory.map((resource) => resource.slug);
 
@@ -4971,13 +5011,7 @@ async function classifyEnvironmentConfigLeases(input: {
       return {
         slug: resource.slug,
         verdict,
-        // What `destroyEnvironment` needs to wipe the slot. Falls back to the
-        // slug-derived config (preview-3 → preview_3) for slots that have
-        // never been leased and so carry no data payload yet.
-        dopplerConfig:
-          typeof resource.data.dopplerConfig === "string" && resource.data.dopplerConfig.trim()
-            ? resource.data.dopplerConfig.trim()
-            : resource.slug.replaceAll("-", "_"),
+        dopplerConfig: parseEnvironmentConfigLeaseData(resource.data).dopplerConfig,
         holder,
         pullRequestUrl: holderPullRequestUrl(holder),
         pullRequestState: holderPullRequestState,
@@ -5003,13 +5037,13 @@ function parsePullRequestHolder(holder: string | null | undefined) {
  * Destroy a just-acquired environment before it is handed to the caller, giving the
  * lease back on failure. Returns true when the slot is clean and ours.
  *
- * This runs on EVERY handover — plain acquire included, not just reclaims —
- * so slot cleanliness is an invariant of entry rather than an assumption
- * about how the previous tenant exited. Every exit path that skips the
- * cleanup destroy (failed cleanup + lease expiry, `release --force`, a run
- * cancelled mid-claim) becomes harmless: whoever picks the slot up next
- * destroys it first. A failed destroy releases the lease; the durable stack
- * record stays queued for GC and the next tenant repeats the destroy.
+ * This runs on every automated tenant handover, so slot cleanliness is an
+ * invariant of entry rather than an assumption about how the previous tenant
+ * exited. Every exit path that skips the cleanup destroy (failed cleanup +
+ * lease expiry, `release --force`, a run cancelled mid-claim) becomes
+ * harmless: whoever picks the slot up next destroys it first. A failed destroy
+ * releases the lease; the durable stack record stays queued for GC. Failure
+ * to release is a separate ownership failure and is never hidden.
  */
 async function destroyAcquiredEnvironmentOrReleaseLease(input: {
   destroyEnvironment: DestroyPreviewEnvironment;
@@ -5032,13 +5066,25 @@ async function destroyAcquiredEnvironmentOrReleaseLease(input: {
     logPreview(
       `destroy failed on just-acquired ${input.lease.slug} — giving the lease back while its stack record remains queued for GC: ${error instanceof Error ? error.message : String(error)}`,
     );
-    await input.semaphore
-      .release({ type: input.lease.type, slug: input.lease.slug, leaseId: input.lease.leaseId })
-      .catch((releaseError: unknown) => {
-        logPreview(
-          `failed to release ${input.lease.slug} after the failed destroy (the lease expires on its own and the stack record remains): ${releaseError instanceof Error ? releaseError.message : String(releaseError)}`,
-        );
+    let released: { released: boolean };
+    try {
+      released = await input.semaphore.release({
+        type: input.lease.type,
+        slug: input.lease.slug,
+        leaseId: input.lease.leaseId,
       });
+    } catch (releaseError) {
+      throw new AggregateError(
+        [error, releaseError],
+        `Destroying ${input.lease.slug} failed, and releasing its lease also failed.`,
+      );
+    }
+    if (!released.released) {
+      throw new AggregateError(
+        [error],
+        `Destroying ${input.lease.slug} failed, and its lease could not be released because ownership changed.`,
+      );
+    }
     return false;
   }
 }
@@ -5062,15 +5108,10 @@ async function acquireAnyEnvironmentConfigLease(input: {
 }) {
   const deadline = Date.now() + input.waitTotalMs;
   let attempt = 0;
-  // Slots whose destroy already failed this run. A free-but-undestroyable slot
-  // comes straight back from the semaphore after we release it, so without
-  // a pause the loop hot-cycles the same broken slot (observed 2026-07-09:
-  // three unerasable slots, ~6s per lap, 150+ laps burning the entire wait
-  // budget while spamming the log). A repeat failure means the slot needs a
-  // human/agent — pause to let other slots free up instead of thrashing, and
-  // say so once.
-  const destroyFailuresBySlug = new Map<string, number>();
-  const brokenSlotPauseMs = 30_000;
+  // A failed handover identifies a broken slot for this invocation. Exclude it
+  // from later acquires so another free slot can make progress without retry
+  // loops or control-plane spam.
+  const failedSlugs = new Set<string>();
 
   for (;;) {
     attempt += 1;
@@ -5079,8 +5120,14 @@ async function acquireAnyEnvironmentConfigLease(input: {
     // any long-poll; later attempts queue on the semaphore in 5-minute polls.
     const waitMs = attempt === 1 ? 0 : Math.max(0, Math.min(slotWaitPerAttemptMs, remainingMs));
     try {
+      const allowedSlugs = previewEnvironmentSlugs.filter((slug) => !failedSlugs.has(slug));
+      if (allowedSlugs.length === 0) {
+        throw new Error(
+          `Could not hand ${input.holder} a clean slot: every eligible preview slot failed destruction during this run (${[...failedSlugs].join(", ")}).`,
+        );
+      }
       const acquired = await input.semaphore.acquire({
-        allowedSlugs: previewEnvironmentSlugs,
+        allowedSlugs,
         type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
         leaseMs: input.leaseMs,
         waitMs,
@@ -5102,19 +5149,8 @@ async function acquireAnyEnvironmentConfigLease(input: {
           `Could not hand ${input.holder} a clean slot: destroying ${acquired.slug} kept failing and the ${formatDurationMs(input.waitTotalMs)} wait budget is spent.`,
         );
       }
-      const destroyFailures = (destroyFailuresBySlug.get(acquired.slug) ?? 0) + 1;
-      destroyFailuresBySlug.set(acquired.slug, destroyFailures);
-      if (destroyFailures === 2) {
-        logPreview(
-          `${acquired.slug} failed destroy twice — it needs repair. ` +
-            `Pausing ${brokenSlotPauseMs / 1000}s between further attempts instead of hot-cycling it.`,
-        );
-      }
-      if (destroyFailures >= 2) {
-        await new Promise((res) =>
-          setTimeout(res, Math.min(brokenSlotPauseMs, Math.max(0, deadline - Date.now()))),
-        );
-      }
+      failedSlugs.add(acquired.slug);
+      logPreview(`${acquired.slug} failed destroy — excluding it from this acquisition run.`);
       continue;
     } catch (error) {
       if (!isNoSlotAvailableError(error)) {

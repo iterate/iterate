@@ -121,15 +121,6 @@ export const FindResourceInput = z.object({
   slug: semaphoreKeySchema,
 });
 
-const legacyPreviewAllowedSlugs = Array.from({ length: 9 }, (_, index) => `preview-${index + 1}`);
-
-function applyLegacyPreviewAllowedSlugs<T extends { type: string; allowedSlugs?: string[] }>(
-  input: T,
-): T {
-  if (input.type !== "environment-config-lease" || input.allowedSlugs) return input;
-  return { ...input, allowedSlugs: [...legacyPreviewAllowedSlugs] };
-}
-
 const AcquireResourceInputBase = z.object({
   type: semaphoreKeySchema,
   leaseMs: semaphoreLeaseMsSchema,
@@ -137,25 +128,21 @@ const AcquireResourceInputBase = z.object({
   holder: semaphoreHolderSchema.optional(),
   allowedSlugs: allowedSlugsSchema.optional(),
 });
-export const AcquireResourceInput = AcquireResourceInputBase.transform(
-  applyLegacyPreviewAllowedSlugs,
-);
+export const AcquireResourceInput = AcquireResourceInputBase;
 
-export const AcquireSpecificResourceInput = z
-  .object({
-    type: semaphoreKeySchema,
-    slug: semaphoreKeySchema,
-    leaseMs: semaphoreLeaseMsSchema,
-    holder: semaphoreHolderSchema.optional(),
-    allowedSlugs: allowedSlugsSchema.optional(),
-    /**
-     * Evict any active lease on the slug before acquiring. The eviction is
-     * recorded (event `evicted`, with the previous holder). Only pass this on an
-     * explicit human `--force`; automation must never steal a held resource.
-     */
-    force: z.boolean().optional(),
-  })
-  .transform(applyLegacyPreviewAllowedSlugs);
+export const AcquireSpecificResourceInput = z.object({
+  type: semaphoreKeySchema,
+  slug: semaphoreKeySchema,
+  leaseMs: semaphoreLeaseMsSchema,
+  holder: semaphoreHolderSchema.optional(),
+  allowedSlugs: allowedSlugsSchema.optional(),
+  /**
+   * Evict any active lease on the slug before acquiring. The eviction is
+   * recorded (event `evicted`, with the previous holder). Only pass this on an
+   * explicit human `--force`; automation must never steal a held resource.
+   */
+  force: z.boolean().optional(),
+});
 
 export const RenewResourceLeaseInput = z.object({
   type: AcquireResourceInputBase.shape.type,

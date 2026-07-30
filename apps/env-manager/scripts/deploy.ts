@@ -10,7 +10,7 @@ const REQUIRED_SECRETS = [
   "APP_CONFIG_ITERATE_AUTH__CLIENT_ID",
   "APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET",
   "APP_CONFIG_ITERATE_AUTH__JWKS",
-] as const;
+];
 
 /** Deploy the one env-manager Worker. Its `prd` Doppler config targets the preview account. */
 export default async function deploy(options: { env?: "prd" } = {}) {

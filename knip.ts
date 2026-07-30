@@ -62,7 +62,6 @@ function makeEnvironmentManagerWorkspace(): WorkspaceConfig {
     ...base,
     entry: [
       ...(base.entry ?? []).filter((entry) => entry !== "scripts/router.ts"),
-      "alchemy.run.ts",
       "cloudflare.config.ts",
     ],
   };

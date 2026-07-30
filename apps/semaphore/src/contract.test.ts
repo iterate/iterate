@@ -1,27 +1,6 @@
 import { expect, it } from "vitest";
 import { AcquireResourceInput } from "./contract.ts";
 
-it("keeps older preview clients inside the original nine slots", () => {
-  expect(
-    AcquireResourceInput.parse({
-      type: "environment-config-lease",
-      leaseMs: 60_000,
-    }),
-  ).toMatchObject({
-    allowedSlugs: [
-      "preview-1",
-      "preview-2",
-      "preview-3",
-      "preview-4",
-      "preview-5",
-      "preview-6",
-      "preview-7",
-      "preview-8",
-      "preview-9",
-    ],
-  });
-});
-
 it("rejects duplicate allowed slugs", () => {
   expect(
     AcquireResourceInput.safeParse({

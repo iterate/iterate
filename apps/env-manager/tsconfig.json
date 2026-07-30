@@ -19,5 +19,11 @@
     "lib": ["ES2024", "DOM", "DOM.Iterable"],
     "types": ["@cloudflare/workers-types", "node", "vite/client"]
   },
-  "include": ["alchemy.run.ts", "scripts/**/*.ts", "src/**/*.ts", "src/**/*.tsx", "vite.config.ts"]
+  "include": [
+    "scripts/**/*.ts",
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "vite.config.ts",
+    "worker-configuration.d.ts"
+  ]
 }

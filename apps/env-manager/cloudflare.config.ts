@@ -33,7 +33,12 @@ export default defineWorker({
       workerName: envManagerEnv.workerName,
       exportName: "EnvironmentDurableObject",
     }),
-    CLOUDFLARE_API_TOKEN: bindings.secretsStoreSecret(envManagerEnv.cloudflareApiTokenSecret),
+    PREVIEW_CLOUDFLARE_API_TOKEN: bindings.secretsStoreSecret(
+      envManagerEnv.cloudflareApiTokenSecrets.preview,
+    ),
+    PRODUCTION_CLOUDFLARE_API_TOKEN: bindings.secretsStoreSecret(
+      envManagerEnv.cloudflareApiTokenSecrets.production,
+    ),
   },
   exports: {
     EnvironmentDurableObject: exports.durableObject({ storage: "sqlite" }),

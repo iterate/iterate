@@ -16,12 +16,17 @@ on:
       - .depot/workflows/deploy-os.yml
       - .depot/workflows/deploy-auth.yml
       - envs.ts
-      - apps/env-manager/alchemy.run.ts
+      - apps/env-manager/cloudflare.config.ts
       - apps/env-manager/scripts/cli.ts
+      - apps/env-manager/scripts/deploy.ts
       - apps/env-manager/src/alchemy/**
       - apps/env-manager/src/cloudflare-control-plane.ts
+      - apps/env-manager/src/config.ts
+      - apps/env-manager/src/env.ts
+      - apps/env-manager/src/environment-durable-object.ts
       - apps/env-manager/src/environments.ts
       - apps/env-manager/src/state.ts
+      - apps/env-manager/src/worker.ts
       - package.json
       - pnpm-lock.yaml
       - pnpm-workspace.yaml
@@ -58,6 +63,11 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
       - name: Reconcile dependencies (baked)
         run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Deploy environment-manager control plane
+        working-directory: apps/env-manager
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: doppler run --project env-manager --config prd -- pnpm run-script deploy
       - name: Provision Cloudflare data resources
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}

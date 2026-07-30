@@ -182,12 +182,26 @@ export function previewEnvironmentSlotNumber(env: Pick<DeployedEnv, "dopplerConf
   return Number(match[1]);
 }
 
-/** Preview slot numbers used by provisioning and the Semaphore lease inventory. */
+/** Every preview slot compiled into deploy tooling and env-manager. */
 export const previewEnvironmentSlotNumbers = deployedPreviewEnvs.map(previewEnvironmentSlotNumber);
+
+/**
+ * Slots 18 and 19 are destructive env-manager proving grounds. They are real
+ * environments, but Semaphore must never lease them to a PR.
+ */
+export const envManagerOnlyPreviewEnvironmentSlotNumbers = [18, 19];
+const envManagerOnlyPreviewSlots = new Set(envManagerOnlyPreviewEnvironmentSlotNumbers);
+
+/** Preview slots Semaphore may lease to PRs. */
+export const claimablePreviewEnvironmentSlotNumbers = previewEnvironmentSlotNumbers.filter(
+  (slot) => !envManagerOnlyPreviewSlots.has(slot),
+);
 
 function mapDeployedPreviewEnvs<Value>(
   mapEnv: (env: (typeof deployedPreviewEnvs)[number]) => Value,
 ): Record<PreviewEnvName, Value> {
+  // deployedPreviewEnvs is the canonical exhaustive PreviewEnvName inventory,
+  // and each dopplerConfig is unique, so fromEntries preserves every key once.
   return Object.fromEntries(
     deployedPreviewEnvs.map((env) => [env.dopplerConfig, mapEnv(env)]),
   ) as Record<PreviewEnvName, Value>;
@@ -281,11 +295,17 @@ export const envManagerEnv = {
   workerName: "env-manager",
   baseUrl: "https://envs.iterate-dev.com",
   authBaseUrl: "https://auth.iterate.com",
-  cloudflareApiTokenSecret: {
-    storeId: "fb2ef5d0ecb641acb909d3dab1dddc01",
-    secretName: "ENV_MANAGER_CLOUDFLARE_API_TOKEN",
+  cloudflareApiTokenSecrets: {
+    preview: {
+      storeId: "fb2ef5d0ecb641acb909d3dab1dddc01",
+      secretName: "ENV_MANAGER_PREVIEW_CLOUDFLARE_API_TOKEN",
+    },
+    production: {
+      storeId: "fb2ef5d0ecb641acb909d3dab1dddc01",
+      secretName: "ENV_MANAGER_PRODUCTION_CLOUDFLARE_API_TOKEN",
+    },
   },
-} as const;
+};
 
 /**
  * apps/kit — the browser device installer. Production only: it intentionally

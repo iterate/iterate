@@ -1,4 +1,3 @@
-import { Retry } from "@distilled.cloud/cloudflare";
 import * as Credentials from "@distilled.cloud/cloudflare/Credentials";
 import * as Apply from "alchemy/Apply";
 import { Cli, type CLIService } from "alchemy/Cli/Cli";
@@ -7,63 +6,17 @@ import * as Plan from "alchemy/Plan";
 import * as Provider from "alchemy/Provider";
 import * as Stack from "alchemy/Stack";
 import { Stage } from "alchemy/Stage";
-import * as Duration from "effect/Duration";
 import type * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
-import { pipe } from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
-import * as Ref from "effect/Ref";
-import * as Schedule from "effect/Schedule";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
-import { EnvironmentResources, type ResourceProgress } from "../state.ts";
+import type { CompiledEnvironment } from "../environments.ts";
+import { AlchemyResources, type ResourceProgress } from "../state.ts";
 import { makeEnvironmentResources } from "./environment-resources.ts";
 import { makeSqliteAlchemyState } from "./sqlite-state.ts";
 
 const STACK_NAME = "IterateDataResources";
-
-/**
- * Alchemy's normal bounded Cloudflare policy, retained for the long-lived
- * control plane. It retries SDK-classified transient failures plus the three
- * misleading Cloudflare auth responses Alchemy itself classifies as transient.
- */
-const cloudflareRetry: Retry.Factory = (lastError) => {
-  const defaults = Retry.makeDefault(lastError);
-  return {
-    while: (error) => defaults.while?.(error) === true || isMisleadinglyTaggedTransient(error),
-    schedule: Schedule.max([
-      pipe(
-        Schedule.exponential(Duration.millis(250), 2),
-        Schedule.modifyDelay(
-          Effect.fn(function* ({ duration }) {
-            const error = yield* Ref.get(lastError);
-            if (
-              (error as { _tag?: unknown } | null)?._tag === "TooManyRequests" &&
-              Duration.toMillis(duration) < 500
-            ) {
-              return 500;
-            }
-            return Duration.toMillis(duration);
-          }),
-        ),
-        Retry.capped(Duration.seconds(5)),
-        Retry.jittered,
-      ),
-      Schedule.recurs(8),
-    ]),
-  };
-};
-
-function isMisleadinglyTaggedTransient(error: unknown): boolean {
-  if (typeof error !== "object" || error === null) return false;
-  const tag = (error as { _tag?: unknown })._tag;
-  const message = (error as { message?: unknown }).message;
-  if (typeof message !== "string") return false;
-  if (tag === "Forbidden" && /internal error|unable to authenticate request/i.test(message)) {
-    return true;
-  }
-  return (tag === "Forbidden" || tag === "Unauthorized") && /authentication error/i.test(message);
-}
 
 function makeProviders(input: { accountId: string; apiToken: string }) {
   const providerServices = Layer.mergeAll(
@@ -74,15 +27,14 @@ function makeProviders(input: { accountId: string; apiToken: string }) {
   const cloudflareApi = Layer.mergeAll(
     Credentials.fromApiToken({ apiToken: input.apiToken }),
     FetchHttpClient.layer,
-    Layer.succeed(Retry.Retry, cloudflareRetry),
     Layer.succeed(
       Cloudflare.CloudflareEnvironment,
       Effect.succeed({
-        type: "apiToken" as const,
+        type: "apiToken",
         apiToken: Redacted.make(input.apiToken),
         accountId: input.accountId,
-        source: { type: "env" as const },
-      }),
+        source: { type: "env" },
+      } satisfies Effect.Success<(typeof Cloudflare.CloudflareEnvironment)["Service"]>),
     ),
   );
 
@@ -123,16 +75,17 @@ function makeCli(onProgress: (progress: ResourceProgress) => void): Layer.Layer<
 }
 
 function compileEnvironmentStack(input: {
+  environment: CompiledEnvironment;
   providers: ReturnType<typeof makeProviders>;
-  stage: string;
   state: ReturnType<typeof makeSqliteAlchemyState>;
-}): Effect.Effect<Stack.CompiledStack<EnvironmentResources>, Config.ConfigError, Stage> {
+}): Effect.Effect<Stack.CompiledStack<AlchemyResources>, Config.ConfigError, Stage> {
   // Stack.make currently advertises every possible StackServices dependency,
   // even when the supplied graph and layers require none of them. Alchemy's
   // own low-level tests use the same boundary while that upstream typing is
-  // being corrected. This graph is deliberately limited to D1/KV/R2.
+  // being corrected:
+  // https://github.com/alchemy-run/alchemy/blob/cd6671e297375282104ba81ec6dcb6347ab7a0fd/packages/alchemy/test/action.test.ts#L54-L68
   // @ts-expect-error upstream Stack.make requirement inference is intentionally broad
-  return makeEnvironmentResources(input.stage).pipe(
+  return makeEnvironmentResources(input.environment).pipe(
     Stack.make({
       name: STACK_NAME,
       providers: input.providers,
@@ -144,14 +97,18 @@ function compileEnvironmentStack(input: {
 export async function runEnvironmentAlchemy(input: {
   accountId: string;
   apiToken: string;
+  environment: CompiledEnvironment;
   operation: "deploy" | "destroy";
-  sql: SqlStorage;
-  stage: string;
+  storage: DurableObjectStorage;
   onProgress: (progress: ResourceProgress) => void;
-}): Promise<EnvironmentResources | undefined> {
-  const state = makeSqliteAlchemyState(input.sql);
+}): Promise<AlchemyResources | undefined> {
+  const state = makeSqliteAlchemyState(input.storage);
   const providers = makeProviders(input);
-  const program = compileEnvironmentStack({ providers, stage: input.stage, state }).pipe(
+  const program = compileEnvironmentStack({
+    environment: input.environment,
+    providers,
+    state,
+  }).pipe(
     Effect.flatMap((compiled) => {
       if (input.operation === "destroy") {
         return Plan.destroy(compiled).pipe(
@@ -164,10 +121,10 @@ export async function runEnvironmentAlchemy(input: {
         Effect.provide(compiled.services),
       );
     }),
-    Effect.provide(Layer.succeed(Stage, input.stage)),
+    Effect.provide(Layer.succeed(Stage, input.environment.stage)),
     Effect.provide(makeCli(input.onProgress)),
   );
 
-  const output = await Effect.runPromise(program);
-  return output === undefined ? undefined : EnvironmentResources.parse(output);
+  const output = await Effect.runPromise(Effect.scoped(program));
+  return output === undefined ? undefined : AlchemyResources.parse(output);
 }

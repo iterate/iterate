@@ -84,6 +84,14 @@ preview_environment=preview-17
   ).toBe("preview-17");
 });
 
+test("Semaphore cannot lease env-manager proving slots", () => {
+  expect(environmentConfigLeaseInventory.map(({ slug }) => slug)).not.toContain("preview-18");
+  expect(environmentConfigLeaseInventory.map(({ slug }) => slug)).not.toContain("preview-19");
+  expect(() => resolveRequestedPreviewEnvironment("preview_environment=preview-18")).toThrow(
+    /Unknown preview_environment preview-18/,
+  );
+});
+
 test("a preview environment directive must be unique and name configured inventory", () => {
   expect(resolveRequestedPreviewEnvironment("No environment preference.")).toBeNull();
   expect(() => resolveRequestedPreviewEnvironment("preview_environment=preview-99")).toThrow(
@@ -2362,6 +2370,53 @@ describe("acquireAnyEnvironmentConfigLease", () => {
       }),
     ).rejects.toThrow("UNAUTHORIZED");
   });
+
+  test("excludes a slot after one failed destroy and hands over another clean slot", async () => {
+    const acquire = vi
+      .fn()
+      .mockResolvedValueOnce(fakeLease({ slug: "preview-2", data: { dopplerConfig: "preview_2" } }))
+      .mockResolvedValueOnce(
+        fakeLease({ slug: "preview-3", data: { dopplerConfig: "preview_3" } }),
+      );
+    const destroyEnvironment = vi.fn(async ({ slug }: { slug: string }) => {
+      if (slug === "preview-2") throw new Error("Cloudflare teardown failed");
+    });
+    const semaphore = fakeSemaphore({ acquire });
+
+    await expect(
+      acquireAnyEnvironmentConfigLease({
+        destroyEnvironment,
+        semaphore,
+        holder: "pr-1600",
+        leaseMs: 1000,
+        waitTotalMs: 60_000,
+      }),
+    ).resolves.toMatchObject({ slug: "preview-3" });
+
+    expect(semaphore.release).toHaveBeenCalledOnce();
+    expect(acquire.mock.calls[0]?.[0].allowedSlugs).toContain("preview-2");
+    expect(acquire.mock.calls[1]?.[0].allowedSlugs).not.toContain("preview-2");
+  });
+
+  test("surfaces lease-release failure after a failed destroy", async () => {
+    const semaphore = fakeSemaphore({
+      release: vi.fn(async () => {
+        throw new Error("semaphore release failed");
+      }),
+    });
+
+    await expect(
+      acquireAnyEnvironmentConfigLease({
+        destroyEnvironment: async () => {
+          throw new Error("Cloudflare teardown failed");
+        },
+        semaphore,
+        holder: "pr-1600",
+        leaseMs: 1000,
+        waitTotalMs: 60_000,
+      }),
+    ).rejects.toThrow("releasing its lease also failed");
+  });
 });
 
 describe("adoptLeaseHeldBySemaphore", () => {
@@ -2726,26 +2781,42 @@ describe("preview stack GC selection", () => {
       now,
     );
 
-    expect(selected).toEqual([
-      { dopplerConfig: "preview_2", holder: "pr-2", slug: "preview-2" },
-      { dopplerConfig: "preview_3", holder: null, slug: "preview-3" },
-    ]);
+    expect(selected).toEqual({
+      candidates: [
+        { dopplerConfig: "preview_2", holder: "pr-2", slug: "preview-2" },
+        { dopplerConfig: "preview_3", holder: null, slug: "preview-3" },
+      ],
+      failures: [],
+    });
   });
 
-  test("rejects a stack record outside the canonical preview inventory", () => {
-    expect(() =>
-      selectPreviewStacksForGc(
-        [{ slug: "preview-99" }],
-        [{ slug: "preview-99", leaseState: "available", leasedUntil: null, holder: null }],
-        now,
-      ),
-    ).toThrow("unknown preview slot preview-99");
-  });
-
-  test("rejects a recorded stack without lease inventory", () => {
-    expect(() => selectPreviewStacksForGc([{ slug: "preview-2" }], [], now)).toThrow(
-      "no environment lease inventory",
+  test("reports a stack record outside the inventory without blocking valid stacks", () => {
+    const selected = selectPreviewStacksForGc(
+      [{ slug: "preview-99" }, { slug: "preview-2" }],
+      [
+        { slug: "preview-99", leaseState: "available", leasedUntil: null, holder: null },
+        { slug: "preview-2", leaseState: "available", leasedUntil: null, holder: null },
+      ],
+      now,
     );
+
+    expect(selected.candidates).toEqual([
+      { dopplerConfig: "preview_2", holder: null, slug: "preview-2" },
+    ]);
+    expect(selected.failures).toHaveLength(1);
+    expect(selected.failures[0]?.error.message).toContain("unknown preview slot preview-99");
+  });
+
+  test("reports a recorded stack without lease inventory", () => {
+    const selected = selectPreviewStacksForGc([{ slug: "preview-2" }], [], now);
+    expect(selected.candidates).toEqual([]);
+    expect(selected.failures[0]?.error.message).toContain("no environment lease inventory");
+  });
+
+  test("leaves env-manager proving slots outside unattended GC", () => {
+    expect(
+      selectPreviewStacksForGc([{ slug: "preview-18" }, { slug: "preview-19" }], [], now),
+    ).toEqual({ candidates: [], failures: [] });
   });
 });
 

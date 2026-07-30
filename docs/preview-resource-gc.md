@@ -6,11 +6,14 @@ see [Dev environments](dev-environments.md); this doc is the "why".
 
 ## The principle: teardown failure never pins a lease
 
-There are nineteen preview **slots**. Each environment is disposable:
-acquisition destroys its Workers and Alchemy stack, then recreates both before
-deployment. The one upstream exception is container class creation, handled by
-a small first-deploy bootstrap before Wrangler takes over. A slot is leased to
-one PR at a time through the [semaphore](../apps/semaphore); a PR's deploy and
+There are nineteen deployed preview **slots**. Seventeen are leased to PRs
+through [Semaphore](../apps/semaphore); `preview-18` and `preview-19` are
+reserved for destructive env-manager lifecycle proof and are deliberately
+outside unattended GC. Each claimable environment is disposable: a tenant
+handover or unknown-provenance acquisition destroys its Workers and Alchemy
+stack, then recreates both before deployment. A same-PR renewal or retake stays
+incremental. The one upstream exception is container class creation, handled
+by a small first-deploy bootstrap before Wrangler takes over. A PR's deploy and
 e2e renew the lease, and closing the PR releases it.
 
 The bug this design fixes: cleanup used to release the lease only after every
@@ -30,12 +33,12 @@ deploying.
 
 ## What full teardown removes
 
-| Concern                                                                                                                    | Reaped by                                                                                          | When                                                   |
-| -------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| Orphaned **compute** — Durable Object scheduler alarms keep firing agent turns (real LLM spend) against destroyed projects | force-delete each environment Worker, which also deletes all of its DO namespaces and data         | cleanup / destroy on handover / GC backstop            |
-| Container applications and Artifact repos                                                                                  | explicit Cloudflare API deletion and verification before their owning Worker/data stack disappears | cleanup / destroy-on-acquire / GC backstop             |
-| **R2 storage** — itx.files + sandbox backups                                                                               | Alchemy destroy empties/deletes the buckets; lifecycle rules bound abandoned data before teardown  | cleanup / destroy-on-acquire; otherwise 3h after write |
-| **D1 / KV**                                                                                                                | Alchemy destroys the whole databases/namespaces                                                    | cleanup / destroy-on-acquire                           |
+| Concern                                                                                                                    | Reaped by                                                                                                                         | When                                                   |
+| -------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| Orphaned **compute** — Durable Object scheduler alarms keep firing agent turns (real LLM spend) against destroyed projects | reconcile every owned DO class to a declarative `state: "deleted"` export, then force-delete and verify the Worker and namespaces | cleanup / destroy on handover / GC backstop            |
+| Container applications and Artifact repos                                                                                  | explicit Cloudflare API deletion and verification before their owning Worker/data stack disappears                                | cleanup / destroy-on-acquire / GC backstop             |
+| **R2 storage** — itx.files + sandbox backups                                                                               | Alchemy destroy empties/deletes the buckets; lifecycle rules bound abandoned data before teardown                                 | cleanup / destroy-on-acquire; otherwise 3h after write |
+| **D1 / KV**                                                                                                                | Alchemy destroys the whole databases/namespaces                                                                                   | cleanup / destroy-on-acquire                           |
 
 The old machinery issued per-item R2 deletes. Alchemy deletes in batches, and
 the lifecycle rules bound how many abandoned objects can accumulate before a
@@ -121,7 +124,7 @@ interval; a persistent failure remains recorded and keeps each sweep red.
 | ---------------------------------- | ------------------------------------------------------- |
 | D1/KV/R2 stack and lifecycle rules | `apps/env-manager/src/alchemy/environment-resources.ts` |
 | Preview lifecycle and destruction  | `apps/env-manager/src/environment-durable-object.ts`    |
-| Local production lifecycle         | `apps/env-manager/scripts/cli.ts`                       |
+| Local CLI for the remote lifecycle | `apps/env-manager/scripts/cli.ts`                       |
 | Lease TTL, stack records, and `gc` | `scripts/preview/preview.ts`                            |
 | The scheduled sweep                | `.depot/workflows/cloudflare-preview-gc.yml`            |
 | PR-close cleanup (the fast path)   | `.depot/workflows/cloudflare-preview-cleanup.yml`       |

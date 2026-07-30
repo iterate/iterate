@@ -1,32 +1,38 @@
 import { DurableObject } from "cloudflare:workers";
 import { RpcTarget, newWorkersRpcResponse } from "capnweb";
 import { LiveState, LiveStateRpcTarget } from "iterate/sdk/capnweb";
-import { envManagerEnv } from "../../../envs.ts";
 import { runEnvironmentAlchemy } from "./alchemy/worker-runtime.ts";
 import { makeCloudflareControlPlane } from "./cloudflare-control-plane.ts";
-import { getPreviewEnvironment, isCompiledPreviewStage } from "./environments.ts";
+import {
+  getEnvironment,
+  isCompiledEnvironmentStage,
+  type CompiledEnvironment,
+} from "./environments.ts";
 import type { Env } from "./env.ts";
 import {
+  assertEnvironmentDestroyAllowed,
   EnvironmentState,
+  parsePersistedEnvironmentState,
+  recoverInterruptedEnvironmentState,
   type EnvironmentApi,
-  type PreviewStage,
+  type EnvironmentStage,
   type ResourceProgress,
 } from "./state.ts";
 
 export class EnvironmentDurableObject extends DurableObject<Env> {
-  readonly #stage: PreviewStage;
+  readonly #environment: CompiledEnvironment;
+  readonly #stage: EnvironmentStage;
   readonly #live: LiveState<EnvironmentState>;
   #operation: Promise<void> | undefined;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     const stage = ctx.id.name;
-    if (stage === undefined || !isCompiledPreviewStage(stage)) {
-      throw new Error(
-        `Environment Durable Object requires a compiled preview stage, got ${stage}.`,
-      );
+    if (stage === undefined || !isCompiledEnvironmentStage(stage)) {
+      throw new Error(`Environment Durable Object requires a compiled stage, got ${stage}.`);
     }
     this.#stage = stage;
+    this.#environment = getEnvironment(stage);
     ctx.storage.sql.exec(`
       create table if not exists environment_state (
         singleton integer primary key check (singleton = 1),
@@ -36,11 +42,13 @@ export class EnvironmentDurableObject extends DurableObject<Env> {
     const persisted = ctx.storage.sql
       .exec<{ value: string }>("select value from environment_state where singleton = 1")
       .toArray()[0];
-    const state =
+    const persistedState: EnvironmentState =
       persisted === undefined
-        ? { stage, lifecycle: "empty" as const, progress: [] }
-        : EnvironmentState.parse(JSON.parse(persisted.value) as unknown);
+        ? { stage, lifecycle: "empty", progress: [] }
+        : parsePersistedEnvironmentState(persisted.value, stage);
+    const state = recoverInterruptedEnvironmentState(persistedState, new Date().toISOString());
     this.#live = new LiveState(state);
+    if (persisted !== undefined) this.#setState(state);
   }
 
   #setState(state: EnvironmentState): void {
@@ -98,6 +106,7 @@ export class EnvironmentDurableObject extends DurableObject<Env> {
         this.#operation = undefined;
       });
     this.#operation = running;
+    this.ctx.waitUntil(running);
     return running;
   }
 
@@ -106,6 +115,12 @@ export class EnvironmentDurableObject extends DurableObject<Env> {
       ...current,
       progress: [...current.progress.filter(({ id }) => id !== progress.id), progress],
     }));
+  }
+
+  async #apiToken(): Promise<string> {
+    return this.#environment.account === "production"
+      ? await this.env.PRODUCTION_CLOUDFLARE_API_TOKEN.get()
+      : await this.env.PREVIEW_CLOUDFLARE_API_TOKEN.get();
   }
 
   liveState(): LiveStateRpcTarget<EnvironmentState> {
@@ -118,13 +133,13 @@ export class EnvironmentDurableObject extends DurableObject<Env> {
 
   deploy(): Promise<void> {
     return this.#run("deploying", async () => {
-      const apiToken = await this.env.CLOUDFLARE_API_TOKEN.get();
+      const apiToken = await this.#apiToken();
       const resources = await runEnvironmentAlchemy({
-        accountId: envManagerEnv.cloudflareAccountId,
+        accountId: this.#environment.accountId,
         apiToken,
+        environment: this.#environment,
         operation: "deploy",
-        sql: this.ctx.storage.sql,
-        stage: this.#stage,
+        storage: this.ctx.storage,
         onProgress: (progress) => this.#publishProgress(progress),
       });
       if (resources === undefined) {
@@ -134,24 +149,28 @@ export class EnvironmentDurableObject extends DurableObject<Env> {
     });
   }
 
-  destroy(): Promise<void> {
+  destroy(confirmation: EnvironmentStage, allowProductionDestroy: boolean): Promise<void> {
+    assertEnvironmentDestroyAllowed({
+      browserSession: allowProductionDestroy,
+      confirmation,
+      stage: this.#stage,
+    });
     return this.#run("destroying", async () => {
-      const apiToken = await this.env.CLOUDFLARE_API_TOKEN.get();
-      const environment = getPreviewEnvironment(this.#stage);
-      const cloudflare = makeCloudflareControlPlane({
-        accountId: envManagerEnv.cloudflareAccountId,
+      const apiToken = await this.#apiToken();
+      await makeCloudflareControlPlane({
+        accountId: this.#environment.accountId,
         apiToken,
-      });
-      await cloudflare.destroyWranglerEnvironment({
-        osWorkerName: environment.osWorkerName,
-        previewSlot: environment.slot,
+      }).destroyWranglerResources({
+        workerNames: this.#environment.workerNames,
+        osWorkerName:
+          this.#environment.kind === "platform" ? this.#environment.osWorkerName : undefined,
       });
       await runEnvironmentAlchemy({
-        accountId: envManagerEnv.cloudflareAccountId,
+        accountId: this.#environment.accountId,
         apiToken,
+        environment: this.#environment,
         operation: "destroy",
-        sql: this.ctx.storage.sql,
-        stage: this.#stage,
+        storage: this.ctx.storage,
         onProgress: (progress) => this.#publishProgress(progress),
       });
       this.#updateState((current) => ({ ...current, resources: undefined }));
@@ -161,22 +180,33 @@ export class EnvironmentDurableObject extends DurableObject<Env> {
   check(): Promise<void> {
     return this.#run("checking", async () => {
       const resources = this.#live.getState().resources;
-      if (resources === undefined) return;
-      const apiToken = await this.env.CLOUDFLARE_API_TOKEN.get();
+      if (resources === undefined) {
+        throw new Error(`${this.#stage} has no deployed Alchemy resource manifest.`);
+      }
+      const apiToken = await this.#apiToken();
       await makeCloudflareControlPlane({
-        accountId: envManagerEnv.cloudflareAccountId,
+        accountId: this.#environment.accountId,
         apiToken,
-      }).assertResourcesExist(resources);
+      }).assertResourcesExist(resources, this.#environment.workerNames);
     });
   }
 
   override fetch(request: Request): Response | Promise<Response> {
-    return newWorkersRpcResponse(request, new EnvironmentSession(this));
+    return newWorkersRpcResponse(
+      request,
+      new EnvironmentSession(
+        this,
+        request.headers.get("x-iterate-env-manager-browser-session") === "1",
+      ),
+    );
   }
 }
 
 class EnvironmentSession extends RpcTarget implements EnvironmentApi {
-  constructor(private readonly environment: EnvironmentDurableObject) {
+  constructor(
+    private readonly environment: EnvironmentDurableObject,
+    private readonly browserSession: boolean,
+  ) {
     super();
   }
 
@@ -192,8 +222,8 @@ class EnvironmentSession extends RpcTarget implements EnvironmentApi {
     await this.environment.deploy();
   }
 
-  async destroy(): Promise<void> {
-    await this.environment.destroy();
+  async destroy(confirmation: EnvironmentStage): Promise<void> {
+    await this.environment.destroy(confirmation, this.browserSession);
   }
 
   async check(): Promise<void> {

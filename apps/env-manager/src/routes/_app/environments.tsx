@@ -17,11 +17,11 @@ import {
 } from "@iterate-com/ui/components/card";
 import { Skeleton } from "@iterate-com/ui/components/skeleton";
 import { Spinner } from "@iterate-com/ui/components/spinner";
-import { previewEnvironments } from "~/environments.ts";
+import { environments, type CompiledEnvironment } from "~/environments.ts";
 import type {
+  AlchemyResources,
   EnvironmentApi,
   EnvironmentLifecycle,
-  EnvironmentResources,
   EnvironmentState,
 } from "~/state.ts";
 
@@ -35,22 +35,21 @@ function EnvironmentsPage() {
   return (
     <section className="space-y-6">
       <div className="space-y-1">
-        <h1 className="text-2xl font-semibold tracking-tight">Preview environments</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Environments</h1>
         <p className="max-w-3xl text-sm text-muted-foreground">
-          Each slot is one Alchemy stack supervised by its own Durable Object. Destroy removes the
-          complete Wrangler environment before removing its D1, KV, and R2 resources.
+          Each environment is one Alchemy data stack supervised by its own Durable Object. Wrangler
+          deploys the application Workers; complete destroy removes those Workers and their Durable
+          Object data before deleting the environment&apos;s D1, KV, and R2.
         </p>
       </div>
       <div className="grid gap-4 lg:grid-cols-2">
-        {previewEnvironments.map((environment) => (
+        {environments.map((environment) => (
           <EnvironmentConnection key={environment.stage} environment={environment} />
         ))}
       </div>
     </section>
   );
 }
-
-type CompiledEnvironment = (typeof previewEnvironments)[number];
 
 function EnvironmentConnection({ environment }: { environment: CompiledEnvironment }) {
   const makeConnection = useCallback(() => {
@@ -102,7 +101,7 @@ function EnvironmentCard({ environment }: { environment: CompiledEnvironment }) 
       <CardHeader>
         <CardTitle className="font-mono">{environment.stage}</CardTitle>
         <CardDescription>
-          Slot {environment.slot} ·{" "}
+          {environment.kind === "platform" ? "Platform" : "Auth"} ·{" "}
           <a
             href={environment.baseUrl}
             target="_blank"
@@ -166,7 +165,16 @@ function EnvironmentCard({ environment }: { environment: CompiledEnvironment }) 
           variant="destructive"
           disabled={api === undefined || operating}
           onClick={() => {
-            if (api !== undefined) void run("destroy", () => api.destroy());
+            const confirmed =
+              environment.stage === "prd"
+                ? window.prompt("This permanently destroys production. Type prd to continue.") ===
+                  "prd"
+                : window.confirm(
+                    `Completely destroy ${environment.stage}, including its Workers, Durable Object data, D1, KV, and R2?`,
+                  );
+            if (api !== undefined && confirmed) {
+              void run("destroy", () => api.destroy(environment.stage));
+            }
           }}
           className="ml-auto"
         >
@@ -214,23 +222,26 @@ function EnvironmentSkeleton() {
   );
 }
 
-function ResourceSummary({ resources }: { resources: EnvironmentResources | undefined }) {
+function ResourceSummary({ resources }: { resources: AlchemyResources | undefined }) {
   if (resources === undefined) {
     return (
       <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
-        This slot has no provisioned Alchemy resources.
+        This environment has no provisioned Alchemy resources.
       </p>
     );
   }
 
-  const rows = [
-    ["Auth D1", resources.authDbId],
-    ["Semaphore D1", resources.semaphoreDbId],
-    ["Project KV", resources.projectDirectoryKvId],
-    ["Build cache KV", resources.workerBuildCacheKvId],
-    ["Files R2", resources.filesBucketName],
-    ["Sandboxes R2", resources.sandboxesBucketName],
-  ];
+  const rows =
+    resources.kind === "auth"
+      ? [["Auth D1", resources.authDbId]]
+      : [
+          ["Auth D1", resources.authDbId],
+          ["Semaphore D1", resources.semaphoreDbId],
+          ["Project KV", resources.projectDirectoryKvId],
+          ["Build cache KV", resources.workerBuildCacheKvId],
+          ["Files R2", resources.filesBucketName],
+          ["Sandboxes R2", resources.sandboxesBucketName],
+        ];
 
   return (
     <dl className="grid gap-x-4 gap-y-2 text-xs sm:grid-cols-[auto_1fr]">
@@ -251,7 +262,7 @@ function ProgressSummary({ state }: { state: EnvironmentState }) {
   if (latest.length === 0) {
     return (
       <p className="text-xs text-muted-foreground">
-        No resource operation has run since this slot state was created.
+        No resource operation has run since this environment state was created.
       </p>
     );
   }

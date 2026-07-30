@@ -43,7 +43,7 @@ export function writeGeneratedWranglerConfig(input: {
 // CLOUDFLARE_ENV (deploy.ts does this for you).
 //
 // Regenerate:      pnpm gen:wrangler   (vite dev/build do it automatically)
-// Change an env:   edit envs.ts or apps/env-manager/alchemy.run.ts, not this file
+// Change an env:   edit envs.ts or apps/env-manager/src/alchemy/environment-resources.ts
 // How it all fits: docs/devops-cloudflare-doppler.md${input.extraDocs ? `, ${input.extraDocs}` : ""}
 `;
   const rendered = header + JSON.stringify(input.config, null, 2) + "\n";

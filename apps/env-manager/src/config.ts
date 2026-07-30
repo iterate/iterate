@@ -18,10 +18,12 @@ export const AppConfig = z.object({
 
 export type AppConfig = z.output<typeof AppConfig>;
 
+const AppConfigEnvironment = z.record(z.string(), z.unknown());
+
 export function parseConfig(env: unknown): AppConfig {
   return parseAppConfigFromEnv({
     configSchema: AppConfig,
     prefix: "APP_CONFIG_",
-    env: env as Record<string, unknown>,
+    env: AppConfigEnvironment.parse(env),
   });
 }

@@ -13,7 +13,15 @@ export function alchemyResourcesPath(stage: string) {
 
 export function loadAlchemyResources(stage: string) {
   try {
-    return AlchemyResources.parse(JSON.parse(readFileSync(alchemyResourcesPath(stage), "utf8")));
+    const resources = AlchemyResources.parse(
+      JSON.parse(readFileSync(alchemyResourcesPath(stage), "utf8")),
+    );
+    if (resources.stage !== stage) {
+      throw new Error(
+        `Alchemy output stage ${JSON.stringify(resources.stage)} does not match ${JSON.stringify(stage)}.`,
+      );
+    }
+    return resources;
   } catch (error) {
     throw new Error(
       `No valid Alchemy output for ${stage}. Run "pnpm infra deploy --env ${stage}" first.`,
