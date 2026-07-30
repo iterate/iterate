@@ -13,13 +13,9 @@ import {
 import { routingFor, type RouteConfig, type Routing } from "./routing.ts";
 import { handleMcpRequest, type McpProjects, type McpScripting } from "./mcp.ts";
 import { capabilityRegistry, execScriptInProject, scriptingAllowed } from "./dynamic.ts";
-import {
-  controlPlaneEgress,
-  projectEgress,
-  projectSecrets,
-  type PlatformSecret,
-} from "./egress.ts";
-import { StreamDurableObject, type StreamEvent, type StreamEventInput } from "./stream-do.ts";
+import { projectEgress, projectSecrets, type PlatformSecret } from "./egress.ts";
+import { StreamDurableObject } from "./stream-do.ts";
+import { makeMeter, ProjectCapabilities } from "./capabilities.ts";
 
 // Re-export DO classes so the Worker Loader main module exposes them (wrangler `durable_objects` +
 // `migrations` reference them by class name).
@@ -263,6 +259,7 @@ class Project extends RpcTarget {
       | { projectId: string }
       | { prospectiveSlug: string; caller: Caller; directory: Directory },
     private readonly routing: Routing,
+    private readonly env: Env,
   ) {
     super();
   }
@@ -274,6 +271,26 @@ class Project extends RpcTarget {
     }
     return this.state.projectId;
   }
+  // THE ONE capability tree (D-A) — the same `ProjectCapabilities` the loopback `env.ITX` exposes.
+  // `project.streams.get(path).append()`, `project.secrets.set()`, `project.ai.run()`. Only on an EXISTING
+  // project (the getter reads `this.projectId`, which throws for a prospective handle).
+  #caps(): ProjectCapabilities {
+    return new ProjectCapabilities(
+      this.env,
+      appConfigFrom(this.env),
+      this.projectId,
+      makeMeter(this.env.SECRETS_KV),
+    );
+  }
+  get streams() {
+    return this.#caps().streams;
+  }
+  get secrets() {
+    return this.#caps().secrets;
+  }
+  get ai() {
+    return this.#caps().ai;
+  }
   // Register (birth) a prospective slug. The directory authority owns the write — auth-prd (hosted)
   // or the local KV registry (self-host) — so the SAME call works in both modes; only config differs.
   async create(args: { organizationSlug?: string; projectId?: string } = {}): Promise<Project> {
@@ -284,7 +301,7 @@ class Project extends RpcTarget {
       ...args,
     });
     if (!result.ok) throw new Error(result.reason);
-    return new Project({ projectId: result.project.slug }, this.routing);
+    return new Project({ projectId: result.project.slug }, this.routing, this.env);
   }
   // Point a custom hostname at THIS project — writes the routing table (`route:<host>`), so a custom
   // domain or a single-project self-host domain resolves here (ADR 0020/0025). Needs ROUTING_KV; config
@@ -305,6 +322,7 @@ class ProjectCollection extends RpcTarget {
     private readonly caller: Caller,
     private readonly directory: Directory,
     private readonly routing: Routing,
+    private readonly env: Env,
   ) {
     super();
   }
@@ -319,9 +337,9 @@ class ProjectCollection extends RpcTarget {
         (c) => c.format === "project-app-session" && c.projectId === project,
       )
     )
-      return new Project({ projectId: project }, this.routing);
+      return new Project({ projectId: project }, this.routing, this.env);
     const access = await this.directory.access(this.caller, project);
-    if (access.ok) return new Project({ projectId: project }, this.routing);
+    if (access.ok) return new Project({ projectId: project }, this.routing, this.env);
     if (!access.exists)
       return new Project(
         {
@@ -330,6 +348,7 @@ class ProjectCollection extends RpcTarget {
           directory: this.directory,
         },
         this.routing,
+        this.env,
       );
     throw new Error(access.reason); // exists, but you're not a member
   }
@@ -345,6 +364,7 @@ class Session extends RpcTarget {
     private readonly resolvedCaller: Caller,
     private readonly directory: Directory,
     private readonly routing: Routing,
+    private readonly env: Env,
   ) {
     super();
   }
@@ -353,7 +373,7 @@ class Session extends RpcTarget {
     return published(this.resolvedCaller);
   }
   get projects(): ProjectCollection {
-    return new ProjectCollection(this.resolvedCaller, this.directory, this.routing);
+    return new ProjectCollection(this.resolvedCaller, this.directory, this.routing, this.env);
   }
 }
 
@@ -371,89 +391,57 @@ class Os extends RpcTarget {
   }
   async authenticate(credentials?: Credentials): Promise<Session> {
     const caller = await resolveCaller(credentials, this.request, this.cfg, this.env);
-    return new Session(caller, directoryFor(this.cfg, this.env), routingFor(this.cfg, this.env));
+    return new Session(
+      caller,
+      directoryFor(this.cfg, this.env),
+      routingFor(this.cfg, this.env),
+      this.env,
+    );
   }
 }
 
-// The ONE thing bound as both env.ITX (capabilities) and globalOutbound (the egress door). This is
-// the in-worker face of the same capability surface as Project/ProjectApi above; it stays a
-// WorkerEntrypoint because a loopback binding + globalOutbound require it. The per-request caller
-// rides to the config worker as the stamped header (the §17 seam — review #9).
+// The in-worker face of the ONE project capability tree — bound as both `env.ITX` (capabilities) and
+// `globalOutbound` (the egress door). It stays a WorkerEntrypoint ONLY because a loopback binding +
+// globalOutbound require a real `Fetcher.fetch` (D-A). Everything else is the SAME `ProjectCapabilities`
+// tree the capnweb `Project` exposes: `env.ITX.streams.get(path).append()`, `.secrets.set()`, `.ai.run()`
+// — one authored surface, promise-pipelined over the loopback. The per-request caller rides to the config
+// worker as the stamped header (review #9).
 export class ProjectEntrypoint extends WorkerEntrypoint<Env, ProjectProps> {
   // Stable capability data (projectId). NOT the caller — that rides per-request (the stamped header).
   whoami(): ProjectProps {
     return this.ctx.props;
   }
-  // Store one of THIS project's own secrets (write-only from userspace — never read back; referenced in
-  // egress via `{{secret:project:<name>}}`). projectId comes from the unforgeable prop.
-  async setSecret(name: string, value: string): Promise<void> {
-    await projectSecrets(this.env.SECRETS_KV, this.ctx.props.projectId).set(name, value);
+  // THE capability tree (identical to the capnweb `Project`'s), scoped to THIS project via the unforgeable
+  // projectId prop. `env.ITX.streams` / `.secrets` / `.ai`.
+  #caps(): ProjectCapabilities {
+    return new ProjectCapabilities(
+      this.env,
+      appConfigFrom(this.env),
+      this.ctx.props.projectId,
+      makeMeter(this.env.SECRETS_KV),
+    );
   }
-  // The durable log, scoped to THIS project (the DO name derives from the unforgeable projectId prop, so
-  // a project can never reach another's streams). Canonical contract (D-B): append a `StreamEventInput`,
-  // get the committed `StreamEvent` (with offset/createdAt/path); read(afterOffset) replays events since.
-  // A `type` string is accepted as shorthand and wrapped into a minimal input for ergonomics.
-  async streamAppend(path: string, input: StreamEventInput | string): Promise<StreamEvent> {
-    const ev: StreamEventInput = typeof input === "string" ? { type: input, payload: {} } : input;
-    return this.#stream(path).append(ev);
+  get streams() {
+    return this.#caps().streams;
   }
-  async streamRead(path: string, afterOffset = 0): Promise<StreamEvent[]> {
-    return this.#stream(path).read(afterOffset);
+  get secrets() {
+    return this.#caps().secrets;
   }
-  #stream(path: string) {
-    const ns = this.env.STREAM_DO;
-    if (!ns) throw new Error("no STREAM_DO bound — streams unavailable in this deployment");
-    return ns.getByName(`${this.ctx.props.projectId}::${path}`);
+  get ai() {
+    return this.#caps().ai;
   }
-  // The BILLING hook: best-effort platform-secret usage counter (KV read-modify-write races under load —
-  // a DO-backed meter is the real fix). This is where "what the customer owes" accrues. Shared by the
-  // egress door and the remote-sourced `ai` capability (both are metered first-party-secret egress).
-  #meter(): ((name: string) => void) | undefined {
-    const kv = this.env.SECRETS_KV;
-    if (!kv) return undefined;
-    return (name: string) =>
-      this.ctx.waitUntil(
-        (async () => {
-          const k = `meter:platform:${name}`;
-          await kv.put(k, String(Number((await kv.get(k)) ?? "0") + 1));
-        })(),
-      );
-  }
-  // globalOutbound: THE one egress door (review #7). Now a TWO-LEVEL chained door (egress.ts): substitute
-  // the project's own secrets, then the control-plane door substitutes platform secrets (origin-pinned +
-  // metered) and hits the internet. Stays a first-class `fetch` so WebSocket upgrades work.
+  // globalOutbound: THE one egress door (review #7) — the ONLY thing that must stay a real `Fetcher.fetch`
+  // (WS upgrades need the literal method). A TWO-LEVEL chained door (egress.ts): substitute the project's
+  // own secrets, then the control-plane door substitutes platform secrets (origin-pinned + metered).
   async fetch(request: Request): Promise<Response> {
     const cfg = appConfigFrom(this.env);
     const proj = projectSecrets(this.env.SECRETS_KV, this.ctx.props.projectId);
-    return projectEgress(request, proj, cfg.product?.platformSecrets ?? [], this.#meter());
-  }
-  // The `ai` capability, PER-CAPABILITY SOURCED (ADR M3). `local` => this account's Workers AI binding.
-  // `remote` => a metered first-party endpoint reached through the CONTROL-PLANE egress door with a
-  // platform secret — the elegant unification: remote-sourcing a capability == egress + a first-party key.
-  async aiRun(prompt: string): Promise<string> {
-    const cfg = appConfigFrom(this.env);
-    const ai = cfg.ai ?? { source: "local" };
-    if (ai.source === "local") {
-      if (!this.env.AI)
-        throw new Error("no AI binding — bind Workers AI or configure ai.source=remote");
-      const r = (await this.env.AI.run(ai.model ?? "@cf/meta/llama-3.2-1b-instruct", {
-        prompt,
-        max_tokens: 16,
-      })) as { response?: string };
-      return r.response ?? JSON.stringify(r);
-    }
-    // remote: dispatch to the configured endpoint with a platform-secret placeholder — substituted +
-    // metered at the control-plane door (origin-pinned to the endpoint). The project never sees the key.
-    const req = new Request(ai.endpoint, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer {{secret:platform:${ai.secretName}}}`,
-      },
-      body: JSON.stringify({ model: ai.model, prompt }),
-    });
-    const res = await controlPlaneEgress(req, cfg.product?.platformSecrets ?? [], this.#meter());
-    return res.text();
+    return projectEgress(
+      request,
+      proj,
+      cfg.product?.platformSecrets ?? [],
+      makeMeter(this.env.SECRETS_KV),
+    );
   }
 }
 
@@ -536,7 +524,12 @@ async function handleMcp(
   ctx: ExecutionContext,
 ): Promise<Response> {
   const caller = await resolveAmbientCaller(request, cfg, env);
-  const collection = new ProjectCollection(caller, directoryFor(cfg, env), routingFor(cfg, env));
+  const collection = new ProjectCollection(
+    caller,
+    directoryFor(cfg, env),
+    routingFor(cfg, env),
+    env,
+  );
   const projects: McpProjects = {
     list: () => collection.list(),
     async create(slug, organizationSlug) {

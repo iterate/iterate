@@ -56,7 +56,7 @@ export default {
     // substituted (origin-pinned), project secret substituted, and an unknown/unpinned token left intact.
     if (url.pathname === "/__egress") {
       const target = url.searchParams.get("target") || "https://httpbin.org/headers";
-      await env.ITX.setSecret("myproj", "PROJ-SECRET-123"); // write-only; we never read it back
+      await env.ITX.secrets.set("myproj", "PROJ-SECRET-123"); // the ONE tree (D-A); write-only
       const res = await fetch(target, {
         headers: {
           "x-platform": "Bearer {{secret:platform:echo}}", // substituted at the CONTROL-PLANE door
@@ -79,14 +79,15 @@ export default {
       const idem = url.searchParams.get("idem"); // optional idempotency key (proves dedup)
       try {
         if (append) {
-          const ev = await env.ITX.streamAppend(path, {
+          // The ONE tree (D-A): env.ITX.streams.get(path).append(input) — promise-pipelined over loopback.
+          const ev = await env.ITX.streams.get(path).append({
             type: append,
             payload: { at: Date.now() },
             ...(idem ? { idempotencyKey: idem } : {}),
           });
           return Response.json({ appended: append, offset: ev.offset });
         }
-        const events = await env.ITX.streamRead(path, 0);
+        const events = await env.ITX.streams.get(path).read(0);
         return Response.json({ path, count: events.length, events });
       } catch (e) {
         return Response.json({ error: String(e && e.message ? e.message : e) }, { status: 500 });
@@ -98,7 +99,7 @@ export default {
     if (url.pathname === "/__ai") {
       const prompt = url.searchParams.get("prompt") || "say hello in one word";
       try {
-        const out = await env.ITX.aiRun(prompt);
+        const out = await env.ITX.ai.run(prompt); // the ONE tree (D-A)
         return Response.json({ prompt, out });
       } catch (e) {
         return Response.json({ error: String(e && e.message ? e.message : e) }, { status: 500 });

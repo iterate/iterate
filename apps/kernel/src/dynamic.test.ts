@@ -30,7 +30,7 @@ describe("dynamic capability registry", () => {
 
   test("a dynamic capability can NEVER shadow a builtin (event-shadowing rule)", async () => {
     const reg = capabilityRegistry(mockKV(), "p");
-    for (const builtin of ["whoami", "fetch", "aiRun", "streamAppend"]) {
+    for (const builtin of ["whoami", "fetch", "streams", "secrets", "ai"]) {
       expect(BUILTIN_CAPABILITY_NAMES.has(builtin)).toBe(true);
       await expect(reg.provide(builtin, "async()=>1")).rejects.toThrow(/builtin/);
     }

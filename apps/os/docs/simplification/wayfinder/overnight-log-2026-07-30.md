@@ -233,3 +233,24 @@ metadata,source)`.
   _interface_ is now the real one; only _delivery_ is stubbed — future migration is a drop-in, not a rewrite.
 - 46 tests green (added idempotency-dedup e2e). **LIVE** on `db-verify.shiterate.com`: offsets [1,2]
   monotonic; `idem=KEY9` twice → same offset 1, count stays 1; ISO createdAt + path present.
+
+### D-A — Unify the two project surfaces into ONE nested capability tree ✅ DONE + LIVE
+
+Before: two disjoint surfaces — the capnweb `Project` (control verbs only: projectId/create/mapHostname)
+and the flat `ProjectEntrypoint` (streamAppend/aiRun/setSecret…); the promised tree was never built.
+
+- **New `capabilities.ts`**: `ProjectCapabilities` (RpcTarget) with getters `streams`/`secrets`/`ai` →
+  `StreamHandle`(append/read) · `Secrets`(set) · `AiCapability`(run). capnweb's RpcTarget IS the
+  cloudflare:workers one, so the SAME class tree serves both transports; nested getters promise-pipeline.
+  Standalone `makeMeter(kv)` (floats the KV write — no ExecutionContext needed, so one meter serves both
+  paths).
+- Wired into BOTH doors: the capnweb `Project` gained `get streams/secrets/ai` (threaded `env` through
+  Os→Session→ProjectCollection→Project); `ProjectEntrypoint` reduced to `whoami` + the egress-door `fetch`
+  (the ONLY thing that must stay a real Fetcher.fetch — WS upgrades) + the same three getters. Flat
+  `streamAppend/streamRead/setSecret/aiRun` DELETED.
+- `BUILTIN_CAPABILITY_NAMES` now the tree's top-level members (whoami/fetch/streams/secrets/ai) — closer
+  to derivable-from-the-tree (the hand-mirror shrinks). config-worker uses `env.ITX.streams.get(path)
+.append()` / `.secrets.set()` / `.ai.run()`.
+- 46 tests green. **LIVE** on `da-verify.shiterate.com`: streams (2 events via the tree), secrets+egress
+  (X-Project + X-Platform substituted), ai.run → "Blue" — all through the nested tree, pipelined over the
+  loopback. `/api` capnweb `Project` exposes the identical tree (same class; covered by construction).

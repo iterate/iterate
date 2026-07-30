@@ -19,18 +19,10 @@ export function scriptingAllowed(opts: { walled: boolean; authenticated: boolean
   return opts.authenticated || !opts.walled;
 }
 
-// Names the ITX tree already owns — a dynamic capability may not take one (builtins always win).
-export const BUILTIN_CAPABILITY_NAMES = new Set([
-  "whoami",
-  "fetch",
-  "setSecret",
-  "streamAppend",
-  "streamRead",
-  "aiRun",
-  "provideCapability",
-  "invokeCapability",
-  "execScript",
-]);
+// Names the ITX tree already owns — a dynamic capability may not take one (builtins always win). These
+// are the top-level members of the ONE capability tree (D-A): whoami + the egress door + the capability
+// getters (streams/secrets/ai). A dynamic capability mounts a NEW name, never one of these.
+export const BUILTIN_CAPABILITY_NAMES = new Set(["whoami", "fetch", "streams", "secrets", "ai"]);
 
 function hash(s: string): string {
   let h = 5381;
