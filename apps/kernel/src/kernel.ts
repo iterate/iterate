@@ -19,7 +19,7 @@ import {
   projectSecrets,
   type PlatformSecret,
 } from "./egress.ts";
-import { StreamDurableObject, type StreamEvent } from "./stream-do.ts";
+import { StreamDurableObject, type StreamEvent, type StreamEventInput } from "./stream-do.ts";
 
 // Re-export DO classes so the Worker Loader main module exposes them (wrangler `durable_objects` +
 // `migrations` reference them by class name).
@@ -390,12 +390,15 @@ export class ProjectEntrypoint extends WorkerEntrypoint<Env, ProjectProps> {
     await projectSecrets(this.env.SECRETS_KV, this.ctx.props.projectId).set(name, value);
   }
   // The durable log, scoped to THIS project (the DO name derives from the unforgeable projectId prop, so
-  // a project can never reach another's streams). append -> seq; read(fromSeq) -> events since.
-  async streamAppend(path: string, type: string, data: unknown): Promise<number> {
-    return this.#stream(path).append(type, data);
+  // a project can never reach another's streams). Canonical contract (D-B): append a `StreamEventInput`,
+  // get the committed `StreamEvent` (with offset/createdAt/path); read(afterOffset) replays events since.
+  // A `type` string is accepted as shorthand and wrapped into a minimal input for ergonomics.
+  async streamAppend(path: string, input: StreamEventInput | string): Promise<StreamEvent> {
+    const ev: StreamEventInput = typeof input === "string" ? { type: input, payload: {} } : input;
+    return this.#stream(path).append(ev);
   }
-  async streamRead(path: string, fromSeq = 0): Promise<StreamEvent[]> {
-    return this.#stream(path).read(fromSeq);
+  async streamRead(path: string, afterOffset = 0): Promise<StreamEvent[]> {
+    return this.#stream(path).read(afterOffset);
   }
   #stream(path: string) {
     const ns = this.env.STREAM_DO;

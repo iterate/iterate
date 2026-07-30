@@ -76,10 +76,15 @@ export default {
     if (url.pathname === "/__stream") {
       const path = url.searchParams.get("path") || "main";
       const append = url.searchParams.get("append");
+      const idem = url.searchParams.get("idem"); // optional idempotency key (proves dedup)
       try {
         if (append) {
-          const seq = await env.ITX.streamAppend(path, append, { at: Date.now() });
-          return Response.json({ appended: append, seq });
+          const ev = await env.ITX.streamAppend(path, {
+            type: append,
+            payload: { at: Date.now() },
+            ...(idem ? { idempotencyKey: idem } : {}),
+          });
+          return Response.json({ appended: append, offset: ev.offset });
         }
         const events = await env.ITX.streamRead(path, 0);
         return Response.json({ path, count: events.length, events });

@@ -213,3 +213,23 @@ Moved `platformSecrets` from top-level into `AppConfig.product` (grows to hold i
 The seam is now a boundary: **"generic control plane" = config with no `product` key.** Refs updated to
 `cfg.product?.platformSecrets`. selfhost APP_CONFIG nests it under `product`. 45 tests green; live-verified
 on `dc-verify.shiterate.com/__egress` — platform secret still substitutes from `product.platformSecrets`.
+
+### D-B — Adopt apps/os's canonical stream contract ✅ DONE + LIVE
+
+**Import spike result:** the storage _engine_ (`StreamEventLog`) lives in apps/os (not exported from the
+`iterate` package) — NOT importable into the pure-play kernel. BUT the **contract types** (`StreamEvent`,
+`StreamEventInput`, `StreamOffsetConflictError`) ARE exported from `iterate/processors` and import cleanly
+(type-only ⇒ zero runtime dep, kernel stays pure-play). So the right move: adopt the CANONICAL contract
+type directly and implement storage against it — better than copying stream-storage.ts.
+
+- Added `iterate` (workspace) as a type-only dep; dropped `sqlfu` (unused — engine not imported).
+- `stream-do.ts` rewritten: `append(input: StreamEventInput) -> StreamEvent` with **offset** (autoincrement,
+  survives eviction via `sqlite_sequence` — the `highestAssignedOffset` semantics), **idempotencyKey**
+  (UNIQUE — re-append returns the committed event, no new row/offset), **ephemeral** (`true|undefined`),
+  ISO-string `createdAt`, `path`. Table `events(offset,type,created_at,idempotency_key,ephemeral,payload,
+metadata,source)`.
+- **Deliberately stubbed** (the delivery spine): subscription cursors / park-resume / obligations /
+  reduce-fold / offset-conflict CAS. `read(afterOffset)` is poll-based replay. The kernel's stream
+  _interface_ is now the real one; only _delivery_ is stubbed — future migration is a drop-in, not a rewrite.
+- 46 tests green (added idempotency-dedup e2e). **LIVE** on `db-verify.shiterate.com`: offsets [1,2]
+  monotonic; `idem=KEY9` twice → same offset 1, count stays 1; ISO createdAt + path present.

@@ -11,7 +11,8 @@
   },
   "dependencies": {
     "capnweb": "npm:@iterate-com/capnweb@^0.10.0",
-    "jose": "^5.10.0"
+    "jose": "^5.10.0",
+    "iterate": "workspace:*"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260621.1",

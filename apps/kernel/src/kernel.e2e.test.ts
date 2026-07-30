@@ -190,15 +190,27 @@ describe("kernel", () => {
     const p = "e2e-" + Date.now(); // test-only; Date is fine here (not a workflow)
     const a1 = await hit("alice.example.com", `/__stream?path=${p}&append=hello`);
     const a2 = await hit("alice.example.com", `/__stream?path=${p}&append=world`);
-    expect(a2.body.seq).toBe(a1.body.seq + 1); // monotonic, persisted across requests
+    expect(a2.body.offset).toBe(a1.body.offset + 1); // monotonic offsets, persisted across requests
 
     const read = await hit("alice.example.com", `/__stream?path=${p}`);
     expect(read.body.count).toBe(2);
     expect(read.body.events.map((e: { type: string }) => e.type)).toEqual(["hello", "world"]);
+    // committed events carry the canonical contract shape (offset/createdAt/path)
+    expect(read.body.events[0].offset).toBe(a1.body.offset);
+    expect(read.body.events[0].path).toBe(p);
 
     // A DIFFERENT project's SAME path is isolated (its own DO instance — the DO name includes projectId).
     const bob = await hit("bob.example.com", `/__stream?path=${p}`);
     expect(bob.body.count).toBe(0);
+  });
+
+  test("streams: idempotencyKey dedups (the canonical contract, D-B)", async () => {
+    const p = "idem-" + Date.now();
+    const first = await hit("alice.example.com", `/__stream?path=${p}&append=x&idem=k1`);
+    const again = await hit("alice.example.com", `/__stream?path=${p}&append=x&idem=k1`);
+    expect(again.body.offset).toBe(first.body.offset); // same offset — no second row
+    const read = await hit("alice.example.com", `/__stream?path=${p}`);
+    expect(read.body.count).toBe(1); // deduped
   });
 
   test("only <slug>.<hostBase> resolves — stray hosts are a 404 (no arbitrary projects)", async () => {
