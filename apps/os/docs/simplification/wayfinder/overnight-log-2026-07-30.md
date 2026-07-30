@@ -289,3 +289,16 @@ service-bound) with live parity proofs — not as an end-of-run big-bang.**
 `coherence.shiterate.com`: ingress+confinement (seenBindings:["ITX"]) · egress (X-Project+X-Platform via
 the tree) · streams (idempotency dedup, offset 1, via the tree) · ai ("Green", via the tree) · /mcp read
 tools present + scripting/create gated (walled+anon). 48 tests green, typecheck clean, prod untouched.
+
+### Two-worker split STEP 1 — name the runner interface in-worker ✅ DONE + LIVE
+
+`ProjectRunner extends WorkerEntrypoint<Env>` (`serve` + `runScript`) — the two `ctx.exports`+`env.LOADER`-
+coupled operations, now behind a named interface the CP reaches via **`dialRunner(ctx)`** (the one
+chokepoint; loopback today, service-binding/capnweb in step 2 — one line changes). **Key experiment
+PASSED: `this.ctx.exports.ProjectEntrypoint({props})` works INSIDE a WorkerEntrypoint** (the runner mints
+its own ITX loopback) — so step 2's physical split is a binding swap, not a rewrite. Gotchas found:
+`ctx.exports.<E>(options)` needs an Options arg even with no props (pass `{}`); Request/Response cross the
+loopback stub by value. LIVE parity on `split1.shiterate.com` (confinement/streams/egress/ai all via
+`ProjectRunner.serve`); 48 tests green. `capabilities(projectId)` is the remaining interface method for
+step 2 (the `/api` tree; built inline today, moves to the runner when it owns the env). Details:
+two-worker-split-assessment.md.

@@ -18,7 +18,8 @@ import { StreamDurableObject } from "./stream-do.ts";
 import { makeMeter, ProjectCapabilities } from "./capabilities.ts";
 
 // Re-export DO classes so the Worker Loader main module exposes them (wrangler `durable_objects` +
-// `migrations` reference them by class name).
+// `migrations` reference them by class name). `ProjectEntrypoint` + `ProjectRunner` are exported below
+// (accessed via `ctx.exports` loopbacks — no wrangler binding needed).
 export { StreamDurableObject } from "./stream-do.ts";
 
 // ---------------------------------------------------------------------------
@@ -445,6 +446,82 @@ export class ProjectEntrypoint extends WorkerEntrypoint<Env, ProjectProps> {
   }
 }
 
+// ---- THE PROJECT RUNNER (two-worker split, step 1) ----
+// A NAMED interface for the two project-scoped operations that are coupled to `ctx.exports` + `env.LOADER`
+// (and therefore MUST move together into a separate runner worker in step 2 — see
+// wayfinder/two-worker-split-assessment.md): loading + serving the confined config worker, and running an
+// ad-hoc script. Today it is a CO-LOCATED loopback entrypoint the control plane reaches via
+// `ctx.exports.ProjectRunner()` — no behavior change. In step 2 it becomes a separate worker the control
+// plane service-binds (same account) or dials over capnweb (cross-account); the INTERFACE is unchanged.
+//
+// Step 1's load-bearing experiment: prove `this.ctx.exports.ProjectEntrypoint({props})` works INSIDE a
+// WorkerEntrypoint (the runner must mint the per-project ITX loopback itself — in step 2 it's the runner
+// worker's OWN export). If this works co-located, the physical split is a binding swap.
+export class ProjectRunner extends WorkerEntrypoint<Env> {
+  #makeEntry() {
+    // ctx.exports on a WorkerEntrypoint's context — the step-1 experiment. Untyped without `wrangler
+    // types` (review #15); one explained cast.
+    return (
+      this.ctx as unknown as {
+        exports: { ProjectEntrypoint(o: { props: ProjectProps }): Fetcher };
+      }
+    ).exports.ProjectEntrypoint;
+  }
+  // Load + serve the confined config worker for `projectId`, serving app `app`. The control plane has
+  // already resolved ingress + wall + directory and passes the non-secret published caller (JSON) to stamp.
+  async serve(
+    request: Request,
+    projectId: string,
+    app: string,
+    callerHeader: string,
+  ): Promise<Response> {
+    const projectEntry = this.#makeEntry()({ props: { projectId } });
+    const worker = this.env.LOADER.get(`project:${projectId}:${CONFIG_HASH}`, () => ({
+      compatibilityDate: "2026-07-01",
+      mainModule: "config.js",
+      modules: { "config.js": CONFIG_WORKER_SOURCE },
+      env: { ITX: projectEntry }, // the config worker sees ONLY the itx capability — the confinement
+      globalOutbound: projectEntry, // same object => the egress door shares the capability context
+    }));
+    const headers = new Headers(request.headers);
+    headers.delete(CALLER_HEADER);
+    headers.delete(APP_HEADER);
+    headers.delete(APP_SESSION_HEADER);
+    headers.set(CALLER_HEADER, callerHeader);
+    headers.set(APP_HEADER, app);
+    return worker.getEntrypoint().fetch(new Request(request, { headers }));
+  }
+  // Run an ad-hoc script against a project's ITX tree, confined (the os `exec_typescript` model). The CP
+  // has already membership-gated + write-gated; the runner owns the loader + the ProjectEntrypoint mint.
+  async runScript(projectId: string, code: string, args: unknown): Promise<unknown> {
+    return execScriptInProject({
+      code,
+      projectId,
+      args,
+      loader: this.env.LOADER,
+      makeEntry: this.#makeEntry(),
+    });
+  }
+}
+
+// The runner's control-plane-facing interface (what the CP calls, whatever the transport).
+type RunnerStub = {
+  serve(request: Request, projectId: string, app: string, callerHeader: string): Promise<Response>;
+  runScript(projectId: string, code: string, args: unknown): Promise<unknown>;
+};
+
+// THE ONE CHOKEPOINT for reaching the project runner ("the dial"). Today: a co-located loopback
+// (`ctx.exports.ProjectRunner()`). In step 2 this is the ONLY line that changes — to a service binding
+// (`env.RUNNER`, same account) or a capnweb-dialed remote stub (cross-account). Everything upstream is
+// transport-agnostic.
+function dialRunner(ctx: ExecutionContext): RunnerStub {
+  // `ctx.exports.<Entrypoint>(options)` — the loopback calling convention requires an Options object even
+  // when the entrypoint takes no props (mirrors `ProjectEntrypoint({ props })`). Empty options here.
+  return (
+    ctx as unknown as { exports: { ProjectRunner(o: object): RunnerStub } }
+  ).exports.ProjectRunner({});
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const cfg = appConfigFrom(env);
@@ -482,35 +559,11 @@ export default {
 
     const caller = await resolveAmbientCaller(request, cfg, env);
 
-    // ONE props-scoped entrypoint, bound as BOTH the capability tree and the egress door (review #8).
-    // Props ({projectId}) are invisible + unforgeable to the config worker — that IS the confinement.
-    // review #15: ctx.exports is experimental and untyped without `wrangler types`; one explained cast.
-    // review #12: capturing this stub in the loader's warm `env` is the CF-sanctioned pattern.
-    const { ProjectEntrypoint: makeEntry } = (
-      ctx as unknown as { exports: { ProjectEntrypoint(o: { props: ProjectProps }): Fetcher } }
-    ).exports;
-    const projectEntry = makeEntry({ props: { projectId } });
-
-    const worker = env.LOADER.get(`project:${projectId}:${CONFIG_HASH}`, () => ({
-      compatibilityDate: "2026-07-01",
-      mainModule: "config.js",
-      modules: { "config.js": CONFIG_WORKER_SOURCE },
-      // The config worker sees ONLY the itx capability — that IS the confinement. (It no longer serves
-      // the dashboard, so it needs no vessel origin.)
-      env: { ITX: projectEntry },
-      globalOutbound: projectEntry, // same object => the door shares the project's capability context
-    }));
-
-    // Per-request context rides as TRUSTED headers the kernel is the only writer of (strip incoming
-    // forgery, then set): the non-secret caller (review #3) and which APP the hostname selected —
-    // `<app>--<slug>` picked it; the config worker serves that app.
-    const headers = new Headers(request.headers);
-    headers.delete(CALLER_HEADER);
-    headers.delete(APP_HEADER);
-    headers.delete(APP_SESSION_HEADER);
-    headers.set(CALLER_HEADER, JSON.stringify(published(caller)));
-    headers.set(APP_HEADER, app);
-    return worker.getEntrypoint().fetch(new Request(request, { headers }));
+    // Hand off to the PROJECT RUNNER (two-worker split, step 1): the control plane has resolved ingress +
+    // wall + directory; the runner owns the loader + the confined config worker. Today a co-located loopback
+    // (`ctx.exports.ProjectRunner()`); in step 2 a service-bound / capnweb-dialed separate worker — same
+    // call. The non-secret published caller rides as a JSON arg the runner stamps as the trusted header.
+    return dialRunner(ctx).serve(request, projectId, app, JSON.stringify(published(caller)));
   },
 };
 
@@ -551,17 +604,14 @@ async function handleMcp(
     },
     get: async (slug) => (await collection.get(slug)).projectId,
   };
-  // Scripting facade — control-plane-driven exec + dynamic capabilities (the os `exec_typescript` model).
-  // Uses ctx.exports.ProjectEntrypoint (the same confinement mint as the config worker) + env.LOADER.
-  // Every op resolves the project through the directory first (membership gate).
-  const makeEntry = (
-    ctx as unknown as { exports: { ProjectEntrypoint(o: { props: ProjectProps }): Fetcher } }
-  ).exports.ProjectEntrypoint;
+  // Scripting facade — exec runs on the RUNNER (via `dialRunner`, split step 1); capability provide/list
+  // are directory-adjacent KV (control-plane-side). Every op resolves the project through the directory
+  // first (membership gate); `provide`/`invoke` also honor the write gate.
+  const runner = dialRunner(ctx);
   const resolve = async (slug: string) => (await collection.get(slug)).projectId;
   const scripting: McpScripting = {
     async runScript(slug, code, args) {
-      const projectId = await resolve(slug);
-      return execScriptInProject({ code, projectId, args, loader: env.LOADER, makeEntry });
+      return runner.runScript(await resolve(slug), code, args);
     },
     async provideCapability(slug, name, code) {
       const projectId = await resolve(slug);
@@ -571,7 +621,7 @@ async function handleMcp(
       const projectId = await resolve(slug);
       const code = await capabilityRegistry(env.SECRETS_KV, projectId).code(name);
       if (code === null) throw new Error(`no such capability '${name}'`);
-      return execScriptInProject({ code, projectId, args, loader: env.LOADER, makeEntry });
+      return runner.runScript(projectId, code, args);
     },
     async listCapabilities(slug) {
       const projectId = await resolve(slug);

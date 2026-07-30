@@ -4,6 +4,37 @@ Directive: "assess/implement the two-worker split if still warranted." **Assessm
 next DELIBERATE step, but NOT as a safe autonomous big-bang right now.** Below is why, and the concrete
 plan to execute it deliberately. Grounded in the current `kernel.ts` after D-C/D-B/D-A + security.
 
+## ✅ STEP 1 DONE + PROVEN LIVE (2026-07-31) — the runner interface is named in-worker
+
+Implemented `ProjectRunner extends WorkerEntrypoint<Env>` with `serve(request, projectId, app,
+callerHeader)` + `runScript(projectId, code, args)` — the two operations coupled to `ctx.exports` +
+`env.LOADER`. The control plane now reaches it through **`dialRunner(ctx)`** — the ONE chokepoint ("the
+dial"): today `ctx.exports.ProjectRunner({})` (co-located loopback); in step 2 the ONLY line that changes
+(→ `env.RUNNER` service binding, or a capnweb-dialed remote stub). No behavior change.
+
+**The load-bearing experiment PASSED:** `this.ctx.exports.ProjectEntrypoint({props})` **works inside a
+`WorkerEntrypoint`** — the runner mints its own per-project ITX loopback. (This was THE unknown; it's why
+exec was kept at the kernel level overnight.) In step 2 the runner worker mints its OWN `ProjectEntrypoint`
+export the same way, so the physical split is now a **binding swap at `dialRunner`**, not a rewrite.
+
+Two calling-convention facts discovered: (1) `ctx.exports.<Entrypoint>(options)` requires an Options object
+even with no props — pass `{}`. (2) Passing a `Request` and returning a `Response` across the loopback stub
+works (workers-RPC / the capnweb fork pass Request/Response by value).
+
+**Proven LIVE** on `kernel-selfhost` (`split1.shiterate.com`): public site + confinement
+(`seenBindings:["ITX"]`), streams (offset 1), egress (X-Project + X-Platform), ai ("Blue") — all served
+_through_ `ProjectRunner.serve`. runScript-via-runner covered by the wide-open e2e (scripting is auth-gated
+on walled selfhost). 48 tests green, typecheck clean, prod untouched.
+
+**Remaining runner interface method for step 2:** `capabilities(projectId) → ProjectCapabilities` (the
+`/api` tree access) — today the capnweb `Project` builds `ProjectCapabilities` inline from `env` (no
+`ctx.exports`/loader), so it's not the hard part; in step 2, when the runner owns the DO/KV/AI env,
+`Project.#caps()` calls `runner.capabilities(projectId)` instead. Noted, not needed for step 1.
+
+---
+
+## Original assessment (below) — the plan step 1 just started executing
+
 ## What the split is (ADR 0017)
 
 Peel the **control plane** (ingress · wall · directory · routing · `/api` front · `/mcp` · dashboard
