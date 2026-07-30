@@ -26,8 +26,6 @@ Substantive PRs get a **risk map** section:
 
 A reviewer should know where to spend attention before opening the diff.
 
-Session id at the bottom.
-
 ## Media in the PR body
 
 Include screenshots or short videos whenever visual review helps.
