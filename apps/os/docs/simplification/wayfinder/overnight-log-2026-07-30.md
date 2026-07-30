@@ -105,13 +105,33 @@ optimization, deferred — NOT needed to prove streams work across deployments. 
 repos.)
 
 **Platform gotcha discovered (cost ~2 deploys):** wrangler **named environments do NOT inherit top-level
-`durable_objects` / `migrations`** (nor kv/secrets/worker_loaders — that's why they're repeated per-env).
+`durable_objects` / `migrations`** (nor kv/secrets/worker*loaders — that's why they're repeated per-env).
 The DO was bound top-level but absent in `env.selfhost`, so `env.STREAM_DO` was undefined at runtime
 ("no STREAM_DO bound") while local unstable_dev (which uses the top-level-ish test config) worked. Fix:
 repeat `durable_objects` + `migrations` in EVERY env block (selfhost/dev/personal + wrangler.test.jsonc).
-_(Worth a memory: "wrangler named-env configs inherit almost nothing — repeat every binding block.")_
+*(Worth a memory: "wrangler named-env configs inherit almost nothing — repeat every binding block.")\_
 
 **Proven:** 1 e2e test (append persists across requests + per-project isolation) + **LIVE** on
 `kernel-selfhost`: `stream-demo2.shiterate.com/__stream` appended 5 events across many separate HTTP
 requests → read back `count:5, seqs:[1,2,3,4,5]` (monotonic, durable across requests AND a redeploy).
 37 tests green. Note: subscribe is poll-based (read fromSeq); WebSocket fan-out deferred (not needed yet).
+
+### R3 — AI as a PER-CAPABILITY-SOURCED capability ✅ DONE + PROVEN LIVE
+
+**Built** `ProjectEntrypoint.aiRun(prompt)` + `AppConfig.ai` sourcing knob:
+
+- `ai.source: "local"` → the project worker's own `env.AI` (Workers AI, its account).
+- `ai.source: "remote"` → dispatch to a configured endpoint with `authorization: Bearer
+{{secret:platform:<name>}}` **through `controlPlaneEgress`** — substituted + origin-pinned + metered.
+
+**The elegant unification (the key architectural finding tonight):** _remote-sourcing a capability IS
+egress through the control plane with a first-party secret._ AI-remote, Exa, Parallel, any metered
+first-party API — all the SAME mechanism (R1's control-plane door). So "per-capability sourcing" (M3) and
+"first-party metered secrets" (R9) are not two features — they're one: **a capability's `remote` source is
+a metered platform-secret egress.** This collapses two roadmap items into one door. Storage-shaped caps
+(streams/repos) stay local (follow the project worker); service-shaped caps (ai/search/…) get the knob.
+
+**Proven:** LOCAL live on `ai-demo.shiterate.com/__ai` → real Workers AI returned "Blue". REMOTE branch is
+`controlPlaneEgress` — already proven LIVE in R1 (substitution + origin-pin + meter), so covered by
+construction. `config-worker /__ai` drives it. 37 tests green (no new unit test — remote path shares R1's
+tested door; noted as a small gap). Self-host default committed as `ai.source=local` (your own AI).

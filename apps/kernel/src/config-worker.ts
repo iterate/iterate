@@ -88,6 +88,18 @@ export default {
       }
     }
 
+    // AI capability proof — per-capability sourcing (ADR M3). The SAME userspace call resolves to a
+    // local Workers AI binding or a metered remote endpoint, by deployment config; userspace can't tell.
+    if (url.pathname === "/__ai") {
+      const prompt = url.searchParams.get("prompt") || "say hello in one word";
+      try {
+        const out = await env.ITX.aiRun(prompt);
+        return Response.json({ prompt, out });
+      } catch (e) {
+        return Response.json({ error: String(e && e.message ? e.message : e) }, { status: 500 });
+      }
+    }
+
     // Every app this worker serves is the project's OWN (default public site + any named apps it adds).
     // The dashboard never reaches here — the kernel reserved it.
     return publicSite(who.projectId, caller, url.host);

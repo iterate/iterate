@@ -12,7 +12,12 @@ import {
 } from "./directory.ts";
 import { routingFor, type RouteConfig, type Routing } from "./routing.ts";
 import { handleMcpRequest, type McpProjects } from "./mcp.ts";
-import { projectEgress, projectSecrets, type PlatformSecret } from "./egress.ts";
+import {
+  controlPlaneEgress,
+  projectEgress,
+  projectSecrets,
+  type PlatformSecret,
+} from "./egress.ts";
 import { StreamDurableObject, type StreamEvent } from "./stream-do.ts";
 
 // Re-export DO classes so the Worker Loader main module exposes them (wrangler `durable_objects` +
@@ -61,6 +66,9 @@ interface Env {
   // The durable log — one DO instance per (projectId, path), addressed by name (stream-do.ts). The first
   // real runtime capability; a project reaches only its own streams (name derives from the projectId prop).
   STREAM_DO?: DurableObjectNamespace<StreamDurableObject>;
+  // Workers AI (this account's) — the `local` source for the `ai` capability. Absent => only `remote`
+  // sourcing works (metered first-party AI through the control plane).
+  AI?: Ai;
   // HS256 signing secret for project-app-session tokens (the narrow, project-scoped grant the front
   // door mints for a project app — review #3). Absent => that lane is simply off. The demo value lives
   // in wrangler vars; a real deployment supplies it as a Doppler-backed secret, not a committed var.
@@ -95,6 +103,14 @@ type AppConfig = {
   // projects use, substituted at the control-plane egress door, origin-pinned + metered. Absent/empty =>
   // a generic control plane (self-host) with no first-party secrets. Each: {name, value, allowedOrigins}.
   platformSecrets?: PlatformSecret[];
+  // Per-capability SOURCING (ADR/M3), shown for `ai`: this capability resolves to a DIFFERENT backend by
+  // config. `local` = the project worker's own `env.AI` (Workers AI, its account). `remote` = a metered
+  // first-party endpoint reached THROUGH the control-plane egress door with a platform secret — i.e.
+  // "remote-sourcing a capability" IS "egress through the control plane with a first-party key". Unset =>
+  // local. The artifacts binding would carry the same knob.
+  ai?:
+    | { source: "local"; model?: string }
+    | { source: "remote"; endpoint: string; secretName: string; model?: string };
 };
 function appConfigFrom(env: Env): AppConfig {
   try {
@@ -380,27 +396,55 @@ export class ProjectEntrypoint extends WorkerEntrypoint<Env, ProjectProps> {
     if (!ns) throw new Error("no STREAM_DO bound — streams unavailable in this deployment");
     return ns.getByName(`${this.ctx.props.projectId}::${path}`);
   }
+  // The BILLING hook: best-effort platform-secret usage counter (KV read-modify-write races under load —
+  // a DO-backed meter is the real fix). This is where "what the customer owes" accrues. Shared by the
+  // egress door and the remote-sourced `ai` capability (both are metered first-party-secret egress).
+  #meter(): ((name: string) => void) | undefined {
+    const kv = this.env.SECRETS_KV;
+    if (!kv) return undefined;
+    return (name: string) =>
+      this.ctx.waitUntil(
+        (async () => {
+          const k = `meter:platform:${name}`;
+          await kv.put(k, String(Number((await kv.get(k)) ?? "0") + 1));
+        })(),
+      );
+  }
   // globalOutbound: THE one egress door (review #7). Now a TWO-LEVEL chained door (egress.ts): substitute
   // the project's own secrets, then the control-plane door substitutes platform secrets (origin-pinned +
   // metered) and hits the internet. Stays a first-class `fetch` so WebSocket upgrades work.
   async fetch(request: Request): Promise<Response> {
     const cfg = appConfigFrom(this.env);
     const proj = projectSecrets(this.env.SECRETS_KV, this.ctx.props.projectId);
-    const meterKv = this.env.SECRETS_KV;
-    const meter = meterKv
-      ? (name: string) => {
-          // Best-effort usage counter (KV read-modify-write races under load — a DO-backed meter is the
-          // real fix; fine for the spike). The BILLING hook: this is where "what the customer owes" accrues.
-          this.ctx.waitUntil(
-            (async () => {
-              const k = `meter:platform:${name}`;
-              const n = Number((await meterKv.get(k)) ?? "0") + 1;
-              await meterKv.put(k, String(n));
-            })(),
-          );
-        }
-      : undefined;
-    return projectEgress(request, proj, cfg.platformSecrets ?? [], meter);
+    return projectEgress(request, proj, cfg.platformSecrets ?? [], this.#meter());
+  }
+  // The `ai` capability, PER-CAPABILITY SOURCED (ADR M3). `local` => this account's Workers AI binding.
+  // `remote` => a metered first-party endpoint reached through the CONTROL-PLANE egress door with a
+  // platform secret — the elegant unification: remote-sourcing a capability == egress + a first-party key.
+  async aiRun(prompt: string): Promise<string> {
+    const cfg = appConfigFrom(this.env);
+    const ai = cfg.ai ?? { source: "local" };
+    if (ai.source === "local") {
+      if (!this.env.AI)
+        throw new Error("no AI binding — bind Workers AI or configure ai.source=remote");
+      const r = (await this.env.AI.run(ai.model ?? "@cf/meta/llama-3.2-1b-instruct", {
+        prompt,
+        max_tokens: 16,
+      })) as { response?: string };
+      return r.response ?? JSON.stringify(r);
+    }
+    // remote: dispatch to the configured endpoint with a platform-secret placeholder — substituted +
+    // metered at the control-plane door (origin-pinned to the endpoint). The project never sees the key.
+    const req = new Request(ai.endpoint, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer {{secret:platform:${ai.secretName}}}`,
+      },
+      body: JSON.stringify({ model: ai.model, prompt }),
+    });
+    const res = await controlPlaneEgress(req, cfg.platformSecrets ?? [], this.#meter());
+    return res.text();
   }
 }
 
