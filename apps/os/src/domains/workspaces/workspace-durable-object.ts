@@ -627,7 +627,7 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
   /** Attributed tracked changes since the last commit (redline segments). */
   async collabChanges(path: string) {
     await this.#assertCreated();
-    return this.#collab.changes(path);
+    return this.#collab.changes(this.#resolvePath(path));
   }
 
   // Board-level viewer presence: who has the BOARD open (sheet or not),
