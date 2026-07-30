@@ -20,7 +20,7 @@ import { ITX_EXAMPLES, runScriptEnvelope } from "../../itx/examples.ts";
 
 /** `/example` vars must be a plain JSON object of overrides — arrays,
  * primitives, and null fall through to the LLM like any other non-command. */
-const exampleVarsSchema = z.record(z.string(), z.unknown());
+const ExampleVars = z.record(z.string(), z.unknown());
 
 type ResolvedSlashCommand = {
   /** Which command matched — recorded on nothing, useful for tests/logs. */
@@ -47,7 +47,7 @@ export function resolveSlashCommand(content: string): ResolvedSlashCommand | nul
     let vars: Record<string, unknown> = {};
     if (rest!.trim() !== "") {
       try {
-        const parsed = exampleVarsSchema.safeParse(JSON.parse(rest!.trim()));
+        const parsed = ExampleVars.safeParse(JSON.parse(rest!.trim()));
         if (!parsed.success) return null;
         vars = parsed.data;
       } catch {
