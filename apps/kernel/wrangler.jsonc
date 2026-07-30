@@ -8,6 +8,11 @@
   // Pure-play: NO nodejs_compat (workerd/miniflare/Raspberry-Pi portability).
   "worker_loaders": [{ "binding": "LOADER" }],
 
+  // The durable log (stream-do.ts) — the first real runtime capability. Top-level so every env inherits
+  // it; SQLite-backed. One instance per (projectId, path).
+  "durable_objects": { "bindings": [{ "name": "STREAM_DO", "class_name": "StreamDurableObject" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["StreamDurableObject"] }],
+
   // ============================================================================================
   // The kernel is the SAME code in every deployment; only APP_CONFIG differs. Two independent knobs:
   //   • wall      — identity. OMIT it => WIDE OPEN (users don't exist; put your own Caddy/tunnel in
@@ -46,6 +51,10 @@
     "selfhost": {
       "name": "kernel-selfhost",
       "worker_loaders": [{ "binding": "LOADER" }],
+      "durable_objects": {
+        "bindings": [{ "name": "STREAM_DO", "class_name": "StreamDurableObject" }],
+      },
+      "migrations": [{ "tag": "v1", "new_sqlite_classes": ["StreamDurableObject"] }],
       "kv_namespaces": [
         { "binding": "DIRECTORY_KV", "id": "402ac6e2e34f45d38d171abb630d434d" },
         // The ingress routing table (ADR 0020/0025). Same namespace, `route:` keys (vs `project:`).
@@ -71,6 +80,10 @@
     "dev": {
       "name": "kernel-dev",
       "worker_loaders": [{ "binding": "LOADER" }],
+      "durable_objects": {
+        "bindings": [{ "name": "STREAM_DO", "class_name": "StreamDurableObject" }],
+      },
+      "migrations": [{ "tag": "v1", "new_sqlite_classes": ["StreamDurableObject"] }],
       "kv_namespaces": [
         { "binding": "DIRECTORY_KV", "id": "402ac6e2e34f45d38d171abb630d434d" },
         // The ingress routing table (ADR 0020/0025). Same namespace, `route:` keys (vs `project:`).
@@ -91,6 +104,10 @@
       "account_id": "05958bb7b57a2ac7eb5d3906fd3cf8bb",
       "workers_dev": true,
       "worker_loaders": [{ "binding": "LOADER" }],
+      "durable_objects": {
+        "bindings": [{ "name": "STREAM_DO", "class_name": "StreamDurableObject" }],
+      },
+      "migrations": [{ "tag": "v1", "new_sqlite_classes": ["StreamDurableObject"] }],
       "kv_namespaces": [
         { "binding": "DIRECTORY_KV", "id": "82100d0688cf4ef3801f42ec5dcd2027" },
         { "binding": "ROUTING_KV", "id": "82100d0688cf4ef3801f42ec5dcd2027" },

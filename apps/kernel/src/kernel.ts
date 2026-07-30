@@ -13,6 +13,11 @@ import {
 import { routingFor, type RouteConfig, type Routing } from "./routing.ts";
 import { handleMcpRequest, type McpProjects } from "./mcp.ts";
 import { projectEgress, projectSecrets, type PlatformSecret } from "./egress.ts";
+import { StreamDurableObject, type StreamEvent } from "./stream-do.ts";
+
+// Re-export DO classes so the Worker Loader main module exposes them (wrangler `durable_objects` +
+// `migrations` reference them by class name).
+export { StreamDurableObject } from "./stream-do.ts";
 
 // ---------------------------------------------------------------------------
 // The iterate kernel — clean-room, pure-play.
@@ -53,6 +58,9 @@ interface Env {
   // Per-project secret store (`secret:<projectId>:<name>`) + best-effort platform meter counters
   // (`meter:platform:<name>`). Write-only from userspace; resolved at the egress door (egress.ts).
   SECRETS_KV?: KVNamespace;
+  // The durable log — one DO instance per (projectId, path), addressed by name (stream-do.ts). The first
+  // real runtime capability; a project reaches only its own streams (name derives from the projectId prop).
+  STREAM_DO?: DurableObjectNamespace<StreamDurableObject>;
   // HS256 signing secret for project-app-session tokens (the narrow, project-scoped grant the front
   // door mints for a project app — review #3). Absent => that lane is simply off. The demo value lives
   // in wrangler vars; a real deployment supplies it as a Doppler-backed secret, not a committed var.
@@ -358,6 +366,19 @@ export class ProjectEntrypoint extends WorkerEntrypoint<Env, ProjectProps> {
   // egress via `{{secret:project:<name>}}`). projectId comes from the unforgeable prop.
   async setSecret(name: string, value: string): Promise<void> {
     await projectSecrets(this.env.SECRETS_KV, this.ctx.props.projectId).set(name, value);
+  }
+  // The durable log, scoped to THIS project (the DO name derives from the unforgeable projectId prop, so
+  // a project can never reach another's streams). append -> seq; read(fromSeq) -> events since.
+  async streamAppend(path: string, type: string, data: unknown): Promise<number> {
+    return this.#stream(path).append(type, data);
+  }
+  async streamRead(path: string, fromSeq = 0): Promise<StreamEvent[]> {
+    return this.#stream(path).read(fromSeq);
+  }
+  #stream(path: string) {
+    const ns = this.env.STREAM_DO;
+    if (!ns) throw new Error("no STREAM_DO bound — streams unavailable in this deployment");
+    return ns.getByName(`${this.ctx.props.projectId}::${path}`);
   }
   // globalOutbound: THE one egress door (review #7). Now a TWO-LEVEL chained door (egress.ts): substitute
   // the project's own secrets, then the control-plane door substitutes platform secrets (origin-pinned +

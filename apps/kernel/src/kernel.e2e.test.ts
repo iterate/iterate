@@ -128,6 +128,25 @@ describe("kernel", () => {
     expect(a.body.result.tools.length).toBe(b.body.result.tools.length);
   });
 
+  test("streams: the durable log persists across requests (real ITX.streams, kills processEvent stub)", async () => {
+    // Append two events through the confined config worker's ITX binding, then read them back in a
+    // SEPARATE request — proving durability (SQLite DO survives between requests) + per-project scoping.
+    const a1 = await hit("alice.example.com", "/__stream?append=hello");
+    expect(a1.body.seq).toBe(1);
+    const a2 = await hit("alice.example.com", "/__stream?append=world");
+    expect(a2.body.seq).toBe(2); // monotonic seq, persisted
+
+    const read = await hit("alice.example.com", "/__stream");
+    expect(read.body.count).toBe(2);
+    expect(read.body.events.map((e: { type: string }) => e.type)).toEqual(["hello", "world"]);
+
+    // A DIFFERENT project's stream is isolated (its own DO instance — empty).
+    const bob = await hit("bob.example.com", "/__stream");
+    // bob isn't in the local directory, but the public site + streams don't gate on membership here;
+    // the DO name derives from the projectId prop, so bob's "main" stream is a distinct, empty log.
+    expect(bob.body.count).toBe(0);
+  });
+
   test("only <slug>.<hostBase> resolves — stray hosts are a 404 (no arbitrary projects)", async () => {
     expect((await worker.fetch("http://127.0.0.1/")).status).toBe(404); // no base match
     expect((await hit("alice.evil.com")).status).toBe(404); // review #14: wrong base is not a project

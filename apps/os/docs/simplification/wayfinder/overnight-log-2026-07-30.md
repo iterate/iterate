@@ -87,3 +87,31 @@ postman-echo (platform token NOT leaked); **meter counter = 1** (only the substi
 
 **Limitations logged:** KV meter is best-effort (read-modify-write races → a DO-backed meter is the real
 fix); secrets are plaintext in KV (a real deploy wants encryption / a Secret DO like apps/os).
+
+### R2 — Streams: the durable log ✅ DONE + PROVEN LIVE
+
+**Built** `src/stream-do.ts` — `StreamDurableObject` (SQLite append-only log, ~40 lines): `append(type,
+data) -> seq`, `read(fromSeq) -> events[]`, `count()`. One DO instance per `(projectId, path)`, addressed
+by name `<projectId>::<path>` from the unforgeable projectId prop (a project can't reach another's streams).
+Exposed via `ProjectEntrypoint.streamAppend/streamRead` (the confined config-worker path); `config-worker`
+`/__stream` drives the proof. Kills the `processEvent` stub's emptiness — there's now real storage.
+
+**Import decision (answers Jonas's "hopefully import from apps/os"):** the apps/os `StreamDurableObject`
+CANNOT import into the pure-play kernel (welded to `rpc-targets.ts` — confirmed in reuse-feasibility.md).
+Its storage ENGINE (`stream-storage.ts`) _is_ clean but importing it drags `sqlfu` + the `iterate`
+workspace package into the dependency-free pure-play kernel. **Decision: a ~40-line native SQLite DO proves
+the topology (the actual goal) and keeps the kernel dep-free.** Engine reuse is a migration-time
+optimization, deferred — NOT needed to prove streams work across deployments. (Same call will apply to
+repos.)
+
+**Platform gotcha discovered (cost ~2 deploys):** wrangler **named environments do NOT inherit top-level
+`durable_objects` / `migrations`** (nor kv/secrets/worker_loaders — that's why they're repeated per-env).
+The DO was bound top-level but absent in `env.selfhost`, so `env.STREAM_DO` was undefined at runtime
+("no STREAM_DO bound") while local unstable_dev (which uses the top-level-ish test config) worked. Fix:
+repeat `durable_objects` + `migrations` in EVERY env block (selfhost/dev/personal + wrangler.test.jsonc).
+_(Worth a memory: "wrangler named-env configs inherit almost nothing — repeat every binding block.")_
+
+**Proven:** 1 e2e test (append persists across requests + per-project isolation) + **LIVE** on
+`kernel-selfhost`: `stream-demo2.shiterate.com/__stream` appended 5 events across many separate HTTP
+requests → read back `count:5, seqs:[1,2,3,4,5]` (monotonic, durable across requests AND a redeploy).
+37 tests green. Note: subscribe is poll-based (read fromSeq); WebSocket fan-out deferred (not needed yet).

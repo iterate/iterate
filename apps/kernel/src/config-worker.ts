@@ -70,6 +70,24 @@ export default {
       });
     }
 
+    // Durable-log proof (used by the e2e/live test). Append events then read them back — proving a real
+    // per-project durable stream through the confined ITX binding (the processEvent stub is now real
+    // storage underneath). ?append=TYPE appends; otherwise reads the whole log.
+    if (url.pathname === "/__stream") {
+      const path = url.searchParams.get("path") || "main";
+      const append = url.searchParams.get("append");
+      try {
+        if (append) {
+          const seq = await env.ITX.streamAppend(path, append, { at: Date.now() });
+          return Response.json({ appended: append, seq });
+        }
+        const events = await env.ITX.streamRead(path, 0);
+        return Response.json({ path, count: events.length, events });
+      } catch (e) {
+        return Response.json({ error: String(e && e.message ? e.message : e) }, { status: 500 });
+      }
+    }
+
     // Every app this worker serves is the project's OWN (default public site + any named apps it adds).
     // The dashboard never reaches here — the kernel reserved it.
     return publicSite(who.projectId, caller, url.host);
