@@ -12,7 +12,9 @@ import { defineProcessorContract } from "iterate/processors";
 
 export const NotificationIntentContract = defineProcessorContract({
   slug: "notification-intent",
-  version: "0.1.0",
+  // 0.2.0: optional top-level approvalRequestEventOffset (the suppression
+  // handle for approval-batch intents on every destination kind).
+  version: "0.2.0",
   description:
     "Channel-neutral project notification intent vocabulary, shared by producers (the " +
     "notification processor) and delivery channels (device push). A contract dependency, " +
@@ -25,6 +27,20 @@ export const NotificationIntentContract = defineProcessorContract({
         "audience to concrete recipients and journal their own delivery outcomes on their own " +
         "streams; the intent carries no channel detail at all.",
       payloadSchema: z.strictObject({
+        approvalRequestEventOffset: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .meta({
+            description:
+              "Set when the intent notifies about ONE held approval batch, whatever the " +
+              "destination: the offset of its project/human-approval-requested event on the " +
+              "project root stream. Top-level (not only inside the approvals destination) " +
+              "because delivery channels match project/approval-presented claims against it — " +
+              "a client already showing the batch suppresses the pending push — and agent-chat " +
+              "destinations carry no batch identity of their own.",
+          }),
         audience: z
           .strictObject({
             kind: z

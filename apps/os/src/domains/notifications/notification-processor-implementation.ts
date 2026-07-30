@@ -57,6 +57,10 @@ export class NotificationProcessor extends StreamProcessor<NotificationProcessor
             type: "events.iterate.com/notification/requested",
             idempotencyKey: this.idempotencyKey("approval-requested", event),
             payload: {
+              // Top-level on BOTH destination kinds: the suppression handle a
+              // project/approval-presented claim matches against (the
+              // agent-chat destination carries no batch identity of its own).
+              approvalRequestEventOffset: event.offset,
               audience: { kind: "project" },
               title: event.payload.requests.length === 1 ? "Approval needed" : "Approvals needed",
               body: approvalPushBody(event.payload.requests),
