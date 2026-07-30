@@ -70,8 +70,10 @@ async function destroyArtifactRepositories(ctx: CfContext, namespace: string) {
       );
     }
     if (deleted === 0) {
+      const remaining = await listArtifactRepositoryPage(ctx, namespace);
+      if (remaining.length === 0) break;
       throw new Error(
-        `Artifacts cleanup made no progress for ${namespace}; Cloudflare still lists: ${repositories
+        `Artifacts cleanup made no progress for ${namespace}; Cloudflare still lists: ${remaining
           .map(({ name }) => name)
           .join(", ")}`,
       );

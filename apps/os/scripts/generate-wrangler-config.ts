@@ -244,6 +244,8 @@ function workerBindings(input: {
   authRemote?: boolean;
   kvId?: string;
   workerBuildCacheKvId?: string;
+  filesBucketName: string;
+  sandboxesBucketName: string;
   /** Which SANDBOX_MAX_INSTANCES column to apply — deploy-time memory quota
    * is validated per account, and previews share one account. */
   sandboxCaps?: "preview" | "production";
@@ -257,7 +259,7 @@ function workerBindings(input: {
       // the env verbatim (BACKUP_BUCKET_NAME, CLOUDFLARE_R2_ACCOUNT_ID);
       // the R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY presigning secrets ride in
       // from Doppler (OPTIONAL_SECRETS).
-      BACKUP_BUCKET_NAME: `${input.workerName}-sandboxes`,
+      BACKUP_BUCKET_NAME: input.sandboxesBucketName,
       CLOUDFLARE_R2_ACCOUNT_ID: input.accountId,
       // Sandbox DO↔container control-plane transport. HTTP is still the SDK
       // default in 0.12.3 but is removed from SDK releases after 2026-07-09
@@ -334,11 +336,11 @@ function workerBindings(input: {
     r2_buckets: [
       {
         binding: "BACKUP_BUCKET",
-        bucket_name: `${input.workerName}-sandboxes`,
+        bucket_name: input.sandboxesBucketName,
       },
       {
         binding: "FILES_BUCKET",
-        bucket_name: `${input.workerName}-files`,
+        bucket_name: input.filesBucketName,
       },
     ],
     // Email Service send binding for itx.email. Sender authorization is
@@ -418,7 +420,7 @@ function routes(env: DeployedEnv) {
 function envBlock(
   envName: string,
   env: DeployedEnv,
-  resources = loadPlatformAlchemyResources(envName, env.cloudflareAccountId),
+  resources = loadPlatformAlchemyResources(envName),
 ) {
   const isProduction = env.osWorkerName === "os-prd";
   const bindings = workerBindings({
@@ -427,6 +429,8 @@ function envBlock(
     authWorkerName: env.authWorkerName,
     kvId: resources.projectDirectoryKvId,
     workerBuildCacheKvId: resources.workerBuildCacheKvId,
+    filesBucketName: resources.filesBucketName,
+    sandboxesBucketName: resources.sandboxesBucketName,
     sandboxCaps: isProduction ? "production" : "preview",
   });
   return {
@@ -490,6 +494,8 @@ function localDevBindings() {
   const bindings = workerBindings({
     workerName: "os",
     accountId: PREVIEW_AND_DEV_ACCOUNT_ID,
+    filesBucketName: "os-files",
+    sandboxesBucketName: "os-sandboxes",
     ...authBinding,
   });
   const localAuthJwks = localDevAuthJwks({

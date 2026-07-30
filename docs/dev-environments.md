@@ -342,13 +342,13 @@ invariants:
 
 - **A PR keeps its slot from first deploy until the PR closes.** Every
   `preview deploy` / `preview test` run renews the lease for 3h; closing the
-  PR tears the apps down and releases it. Lease expiry is the safety valve for
+  PR destroys the environment and releases it. Lease expiry is the safety valve for
   abandoned PRs (no pushes for >3h) — kept short because a leased slot costs us
   for its Cloudflare resources, and a deploy/e2e cycle is only minutes so an
   active PR never lapses mid-run. A lapsed lease is reclaimed by the scheduled
-  GC sweep — see **[Preview resource GC](preview-resource-gc.md)** for how
-  teardown is decoupled from releasing the slot (and how disposable data
-  expires 3h after last use).
+  GC sweep — see **[Preview resource GC](preview-resource-gc.md)** for why a
+  destroy failure cannot pin the lease (and how disposable data expires 3h
+  after last use).
 - **Draft PRs don't claim a slot unless they ask.** Drafts are the default
   for agent-opened PRs, and nineteen slots don't survive a busy night of them. A
   draft asks by wearing the `preview` label (durable — previews then behave
@@ -370,10 +370,8 @@ invariants:
   for up to 6 minutes before failing with the full holder table and
   remediation steps. `PREVIEW_SLOT_WAIT_MS=0` makes it fail fast.
 - **Freed slots rest as long as possible.** Acquiring "any slot" hands out
-  the least-recently-released one (never-used slots first). A freed slot
-  often still carries its previous holder's deployment, so resting it
-  maximizes the chance a lapsed PR retakes its own slot instead of finding
-  someone else on it.
+  the least-recently-released one (never-used slots first), spreading fleet
+  churn evenly.
 - **Everything is attributable and visible.** `pnpm preview status` shows
   each slot's holder, PR open/closed state, idle/orphaned verdict, open
   preview-eligible PRs without a slot, and reclaim commands when the fleet
@@ -429,20 +427,18 @@ Diff selection may reuse an unchanged app's exact recorded Worker deployment,
 but never its test result: every triggered PR head reruns every recorded app's
 e2e suite, and a run with no runnable deployment fails instead of reporting a
 green `deploy + e2e` check.
-Closing or merging the PR runs `pnpm preview cleanup`, which destroys the
-PR's apps (for os that means erasing the slot's data — auth D1 and
-project-directory KV) and releases the slot — after verifying the PR still
-holds it.
+Closing or merging the PR runs `pnpm preview cleanup`, which verifies that the
+PR still owns the lease, destroys the slot's Workers, Durable Object storage,
+Artifacts repositories, containers, D1/KV/R2 stack, and then releases it.
 
 Slot cleanliness is an **invariant of entry**, not a promise about exits:
-every handover — a fresh acquire, an adopted lease, a reclaim, an
-`assign`ed slot — erases the slot's data before the new holder gets it. So
-even when an exit path skips the cleanup erase (failed cleanup followed by
-lease expiry, `release --force`, a run cancelled mid-claim), the next tenant
-never sees the previous one's data; they just pay the ~half-minute wipe on
-their first deploy to that slot. The one deliberate exception is manual
-`preview acquire` (Story 4): it parks a slot without wiping it, so you can
-lease a slot precisely to inspect what's on it.
+every deployment handover — a fresh acquire, resumed lease, reclaim, or
+`assign`ed slot — destroys the environment before the new holder deploys. So
+even when an exit path's destroy fails (`release --force`, lease expiry, or a
+run cancelled mid-claim), the next tenant never sees the previous one's data.
+The deliberate exception is manual `preview acquire` (Story 4): it only leases
+a slot, so an operator can inspect its current state before choosing to deploy
+or destroy it.
 
 ### Story 2: run what CI runs, locally
 
@@ -559,17 +555,17 @@ doppler run --project _shared --config prd -- pnpm preview reconcile  # leases v
 ```
 
 `reclaim --slot --force` takes the slot under a temporary lease of its own,
-**erases its data**, then returns it to the pool clean — the previous holder's
-projects, agents and schedules are gone, which is the point. If the erase
+**destroys the environment**, then returns it to the pool clean — the previous
+holder's Workers, storage, projects, agents, and schedules are gone. If destroy
 fails, the temporary lease stays in place (the slot shows as held by
 `reclaim-<you>`) rather than a dirty slot going back in the pool.
 
 Automation never force-reclaims a live lease, including one whose PR is
 closed. That lets close-triggered cleanup remain the sole owner until it has
-finished erasing and releases the slot; another PR can queue but cannot deploy
-or erase concurrently. A failed cleanup leaves the lease visible until it
-expires or an operator verifies the lifecycle is stopped and runs the explicit
-`reclaim --slot N --force` path.
+finished destroying and releases the slot; another PR can queue but cannot
+deploy or destroy concurrently. Cleanup releases after a failed destroy so the
+next acquire can retry from scratch; `reclaim --slot N --force` is the explicit
+operator path when automation itself has stopped.
 
 `--force` (on `acquire`, `release`, and `reclaim`) is the only way to take any
 live lease from its holder. Every eviction logs an

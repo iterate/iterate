@@ -4,7 +4,7 @@ How preview environments reclaim their Cloudflare resources, and the design
 ideas behind it. For the day-to-day operator view (statuses, reclaim commands),
 see [Dev environments](dev-environments.md); this doc is the "why".
 
-## The principle: releasing a slot never waits on teardown
+## The principle: teardown failure never pins a lease
 
 There are nineteen preview **slots**. Each environment is disposable:
 acquisition destroys its Workers and Alchemy stack, then recreates both before
@@ -13,21 +13,19 @@ a small first-deploy bootstrap before Wrangler takes over. A slot is leased to
 one PR at a time through the [semaphore](../apps/semaphore); a PR's deploy and
 e2e renew the lease, and closing the PR releases it.
 
-The bug this design fixes: teardown used to be **on the critical path of
-releasing the slot**. Cleanup erased the slot's data, and only then released
-the lease. When the erase hit a Cloudflare rate limit (HTTP 429) it bailed
-before releasing — and renewed the lease for another day. The slot looked
-"leased" by a long-closed PR, the fleet filled up with these orphans, and open
-PRs couldn't get a preview. (Observed 2026-07-15: 4 of 9 slots held by
-closed/merged PRs.)
+The bug this design fixes: cleanup used to release the lease only after every
+resource deletion succeeded. When deletion hit a Cloudflare rate limit (HTTP
+429), cleanup bailed before releasing and renewed the lease for another day.
+The slot looked "leased" by a long-closed PR, the fleet filled with these
+orphans, and open PRs could not get a preview. (Observed 2026-07-15: 4 of 9
+slots held by closed/merged PRs.)
 
-So the rule is: **the lease is the load-bearing outcome, not the teardown.**
-The slot must free the instant a PR closes or its lease lapses; reclaiming the
-resources is a separate, lazy, rate-limited job.
+Cleanup still attempts the full destroy while it owns the lease, which prevents
+a new tenant racing with deletion. The rule is that **destroy success is not a
+precondition for release**: cleanup reports the failure, releases the lease,
+and the next acquire destroys again before deploying.
 
-## Two speeds of teardown
-
-Teardown splits by what it costs to leave running:
+## What full teardown removes
 
 | Concern                                                                                                                 | Reaped by                                                                                          | When                                                   |
 | ----------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
@@ -36,9 +34,9 @@ Teardown splits by what it costs to leave running:
 | **R2 storage** — itx.files + sandbox backups                                                                            | Alchemy destroy empties/deletes the buckets; lifecycle rules bound abandoned data before teardown  | cleanup / destroy-on-acquire; otherwise 3h after write |
 | **D1 / KV**                                                                                                             | Alchemy destroys the whole databases/namespaces                                                    | cleanup / destroy-on-acquire                           |
 
-The expensive, rate-limit-prone operations were the **per-item** R2 deletes.
-Everything else is one or a few bounded calls. Moving R2 to lifecycle rules
-keeps cleanup within the account-wide control-plane budget.
+The old machinery issued per-item R2 deletes. Alchemy deletes in batches, and
+the lifecycle rules bound how many abandoned objects can accumulate before a
+later destroy.
 
 ## Everything disposable expires 3 hours after last use
 
@@ -49,10 +47,10 @@ One TTL governs it: **3 hours**.
   whose PR hasn't deployed/tested for 3h has an expired lease and is reclaimed.
   A deploy/e2e cycle is minutes, so an active PR never lapses mid-run; a PR that
   goes quiet stops costing us within ~3h instead of a full day.
-- **R2 lifecycle** on the preview `-files` and `-sandboxes`
-  (`backups/`) buckets: objects are deleted 3h after they're written. The
-  Alchemy stack declares these rules for preview slots. Production keeps files
-  forever and sandbox backups for 90 days.
+- **R2 lifecycle** on the preview files and sandboxes buckets: objects are
+  deleted 3h after they're written. The Alchemy stack declares these rules for
+  preview slots; only sandbox objects are limited to the `backups/` prefix.
+  Production keeps files forever and sandbox backups for 90 days.
 - **Sandboxes**: containers already sleep after ~10 min idle
   (`onActivityExpired` snapshots then destroys the container). The 3h backup
   expiry finishes the job — a preview sandbox not used for 3h loses its backup,
@@ -91,10 +89,10 @@ It runs sequentially (naturally rate-limited) and is idempotent — safe to run
 as often as we like. `pnpm preview gc --dry-run` reports the plan without
 touching anything.
 
-The fast path (PR-close cleanup) still does the prompt DO-compute kill, so the
-GC is a **backstop** for what cleanup missed: a lease that expired because a PR
-went quiet, or a slot whose cleanup itself failed. Worst-case orphaned LLM spend
-is therefore one cron interval, and only in the failure case.
+PR-close cleanup attempts the same whole-environment destroy, so the GC is a
+**backstop** for a lease that expired because a PR went quiet or for a cleanup
+destroy that failed. Worst-case orphaned LLM spend is therefore one cron
+interval, and only in the failure case.
 
 ## Self-healing invariants
 

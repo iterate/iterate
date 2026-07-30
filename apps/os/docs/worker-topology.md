@@ -63,7 +63,7 @@ Everything is declared in two places:
 
 - [`envs.ts`](../../../envs.ts) (repo root) — the typed map of deployed
   environments: hostnames, worker names, and Cloudflare account.
-- `wrangler.jsonc` — generated from envs.ts plus Alchemy's D1/KV manifest
+- `wrangler.jsonc` — generated from envs.ts plus Alchemy's data-resource manifest
   (gitignored; vite.config.ts regenerates it before every dev/build,
   `pnpm gen:wrangler` by hand). Top level is local dev; each env gets a
   flattened block selected at build time via `CLOUDFLARE_ENV`. Its header

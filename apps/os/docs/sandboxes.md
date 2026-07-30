@@ -121,9 +121,9 @@ hung off the SDK's own lifecycle hooks:
   `backups/` prefix, set by the Alchemy stack. An expired workspace degrades
   to an empty one.
 
-Plumbing: **one bucket per env**, `${osWorkerName}-sandboxes`, created by
-Alchemy and bound by Wrangler as `BACKUP_BUCKET` — that exact binding name is
-the SDK's contract, as are the `BACKUP_BUCKET_NAME` /
+Plumbing: **one Alchemy-managed bucket per env**, bound by Wrangler as
+`BACKUP_BUCKET` — that exact binding name is the SDK's contract, as are the
+Alchemy-supplied `BACKUP_BUCKET_NAME` /
 `CLOUDFLARE_R2_ACCOUNT_ID` vars and the `R2_ACCESS_KEY_ID` /
 `R2_SECRET_ACCESS_KEY` presigning secrets. The secrets are optional and select
 the transfer mode: **with** them the SDK presigns

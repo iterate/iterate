@@ -54,7 +54,7 @@ export function deploy(options: { env: string }) {
   }
 }
 
-/** Destroy one complete environment: Wrangler resources first, then its Alchemy stack. */
+/** Destroy one Alchemy-backed platform environment: Wrangler resources first, then its stack. */
 export async function destroy(options: { env: string; yesIMeanPrd?: boolean }) {
   const platformEnvironment = Object.values(envs).find(
     (environment) => environment.dopplerConfig === options.env,

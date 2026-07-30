@@ -101,31 +101,23 @@ const LOCAL_DEV_VARS = {
 const ENV_SHAPED_KEYS = ["APP_CONFIG_AUTH_APP_ORIGIN"];
 
 /** The auth D1 binding; `migrations_dir` feeds `wrangler d1 migrations apply` in deploy.ts. */
-function d1Bindings(input: { workerName: string; databaseId: string }) {
+function d1Bindings(databaseId: string) {
   return [
     {
       binding: "DB",
-      database_name: `${input.workerName}-auth-db`,
-      database_id: input.databaseId,
+      database_id: databaseId,
       migrations_dir: "./src/server/db/migrations",
     },
   ];
 }
 
-function envBlock(
-  name: string,
-  env: AuthDeployedEnv,
-  resources = loadAlchemyResources(name, env.cloudflareAccountId),
-) {
+function envBlock(name: string, env: AuthDeployedEnv, resources = loadAlchemyResources(name)) {
   const authHost = new URL(env.authBaseUrl).hostname;
   return {
     name: env.authWorkerName,
     account_id: env.cloudflareAccountId,
     routes: [{ pattern: `${authHost}/*`, zone_name: authHost.split(".").slice(1).join(".") }],
-    d1_databases: d1Bindings({
-      workerName: env.authWorkerName,
-      databaseId: resources.authDbId,
-    }),
+    d1_databases: d1Bindings(resources.authDbId),
     send_email: sendEmailBindings,
     vars: envShapedVars(env),
     // Derived values do not exist until deploy.ts computes them after secret
@@ -163,7 +155,7 @@ const baseConfig = {
     run_worker_first: ["/api/*"],
   },
   // Local dev has no real database; miniflare only needs a stable id.
-  d1_databases: d1Bindings({ workerName: "auth-dev", databaseId: LOCAL_DEV_AUTH_DB_ID }),
+  d1_databases: d1Bindings(LOCAL_DEV_AUTH_DB_ID),
   send_email: sendEmailBindings,
   vars: LOCAL_DEV_VARS,
   // Local dev loads the origin from process.env like any other secret

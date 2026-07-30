@@ -14,12 +14,12 @@ import {
 
 const alchemyResources = (stage: "prd" | "preview_6") => ({
   kind: "platform" as const,
-  stage,
-  accountId: envs[stage].cloudflareAccountId,
   authDbId: `${stage}-auth-db`,
   projectDirectoryKvId: `${stage}-project-directory`,
   workerBuildCacheKvId: `${stage}-worker-build-cache`,
   semaphoreDbId: `${stage}-semaphore-db`,
+  filesBucketName: `${stage}-alchemy-files`,
+  sandboxesBucketName: `${stage}-alchemy-sandboxes`,
 });
 const config = {
   ...wranglerConfig(),
@@ -108,6 +108,21 @@ it("binds the os worker to its own env's worker-bundler sidecar", () => {
     const sidecarNames = Object.values(workerBundlerConfig.env).map((sidecar) => sidecar.name);
     expect(sidecarNames, envName).toContain(bundler?.service);
   }
+});
+
+it("uses Alchemy's returned R2 names for every deployed bucket reference", () => {
+  const preview = config.env.preview_6;
+  expect(preview.vars.BACKUP_BUCKET_NAME).toBe("preview_6-alchemy-sandboxes");
+  expect(preview.r2_buckets).toEqual([
+    {
+      binding: "BACKUP_BUCKET",
+      bucket_name: "preview_6-alchemy-sandboxes",
+    },
+    {
+      binding: "FILES_BUCKET",
+      bucket_name: "preview_6-alchemy-files",
+    },
+  ]);
 });
 
 it("binds every deployed OS worker to the matching auth worker's default entrypoint", () => {

@@ -5,8 +5,8 @@ Monorepo for Iterate's Cloudflare Workers platform. **`apps/os`** is the main ap
 ## Environments
 
 - The root `envs.ts` is the typed map of every deployed environment
-  (hostnames, worker names, accounts); Alchemy supplies generated D1/KV
-  identifiers, and Doppler supplies secrets, one config per env (`prd`,
+  (hostnames, worker names, accounts); Alchemy supplies generated D1/KV/R2
+  binding identities, and Doppler supplies secrets, one config per env (`prd`,
   `preview_N`; `dev`/`dev_<you>` are fully local and never deploy).
 - Each app deploys with its own small scripts: `pnpm run deploy --env <name>`
   (build → wrangler deploy with atomic secrets → smoke) and

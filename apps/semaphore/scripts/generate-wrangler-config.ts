@@ -78,11 +78,7 @@ function workerBindings(input: { resourcesDbId: string }) {
   };
 }
 
-function envBlock(
-  name: string,
-  env: SemaphoreEnv,
-  resources = loadPlatformAlchemyResources(name, env.cloudflareAccountId),
-) {
+function envBlock(name: string, env: SemaphoreEnv, resources = loadPlatformAlchemyResources(name)) {
   const host = new URL(env.baseUrl).hostname;
   return {
     name: env.workerName,

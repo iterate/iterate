@@ -1187,13 +1187,13 @@ export async function cleanup(options: PullRequestCommandOptions = {}) {
 
   // Exit-code contract (the only consumer is the cleanup workflow's
   // red/green — nothing gates on it): exit non-zero ONLY when the lease
-  // RELEASE failed, because a held lease leaks the slot for 24h and starves
-  // the fleet. A failed teardown/erase alone exits zero with a loud warning:
+  // RELEASE failed, because a held lease leaks the slot until expiry and
+  // constrains the fleet. A failed teardown/erase alone exits zero with a loud warning:
   // the lease was released, the fleet is healthy, and the dirty slot
   // self-heals — every acquire erases on entry (eraseAcquiredSlotOrGiveItBack).
   if (!result.ok) {
     throw new Error(
-      "Failed to release the preview slot lease — it leaks until its 24h expiry. Re-run cleanup, or free it with `pnpm preview release --slot <N> --force`.",
+      "Failed to release the preview slot lease — it leaks until expiry. Re-run cleanup, or free it with `pnpm preview release --slot <N> --force`.",
     );
   }
   if (result.teardownFailed) {
@@ -4122,7 +4122,7 @@ async function cleanupPreviewForPullRequest(
   // the teardown. A failed teardown/erase leaves only slot-local dirt, and
   // dirt is self-healing — every acquire erases the slot before handing it
   // out (see eraseAcquiredSlotOrGiveItBack) — but a lease that is never
-  // released leaks until its 24h expiry and starves the 9-slot fleet
+  // released leaks until expiry and constrains the fleet
   // (2026-07-14: a Cloudflare API 429 failed cleanup for the
   // merged pr-1950; the old code bailed before releasing and pr-1988 waited
   // 360s for a slot that never came). So: always release; `ok: false` now
@@ -4161,8 +4161,8 @@ async function cleanupPreviewForPullRequest(
 /**
  * Release cleanup's lease whether or not teardown succeeded, loudly flagging
  * the dirty-slot case. Returns `ok: false` only when the release call itself
- * failed — that is the one outcome where the lease actually leaks (until its
- * 24h expiry); a teardown failure alone is not a leak because the next
+ * failed — that is the one outcome where the lease actually leaks until
+ * expiry; a teardown failure alone is not a leak because the next
  * acquire erases the slot on entry (eraseAcquiredSlotOrGiveItBack).
  */
 async function releaseLeaseDespiteTeardownFailure(input: {
@@ -4189,7 +4189,7 @@ async function releaseLeaseDespiteTeardownFailure(input: {
     return { ok: true, released: released.released };
   } catch (error) {
     logPreview(
-      `FAILED to release the lease on ${input.lease.slug} — it leaks until its 24h expiry (free it with \`pnpm preview release --slot ${input.lease.slug} --force\` or re-run cleanup): ${error instanceof Error ? error.message : String(error)}`,
+      `FAILED to release the lease on ${input.lease.slug} — it leaks until expiry (free it with \`pnpm preview release --slot ${input.lease.slug} --force\` or re-run cleanup): ${error instanceof Error ? error.message : String(error)}`,
     );
     return { ok: false, released: false };
   }
@@ -4664,8 +4664,8 @@ type PreviewDiagnosisOpenPullRequest = {
 
 /**
  * Draft PRs only claim a slot when they opt in (same policy as deploy). Used
- * by `preview status` so "9 open PRs" is not compared apples-to-oranges with
- * the 9-slot fleet.
+ * by `preview status` so open PR demand is not compared apples-to-oranges
+ * with the available fleet.
  */
 function pullRequestWouldClaimPreviewSlot(pullRequest: {
   isDraft: boolean;
@@ -4889,7 +4889,7 @@ function parsePullRequestHolder(holder: string | null | undefined) {
  * This runs on EVERY handover — plain acquire included, not just reclaims —
  * so slot cleanliness is an invariant of entry rather than an assumption
  * about how the previous tenant exited. Every exit path that skips the
- * cleanup erase (failed cleanup + 24h lease expiry, `release --force`, a run
+ * cleanup erase (failed cleanup + lease expiry, `release --force`, a run
  * cancelled mid-claim) becomes harmless: whoever picks the slot up next
  * wipes it first. A failed erase releases the lease rather than handing out
  * a dirty slot, and the released slot is safe back in the pool because its

@@ -16,10 +16,10 @@ independent data resources:
 - project-directory and worker-build-cache KV namespaces;
 - files and sandboxes R2 buckets, including their lifecycle rules.
 
-Alchemy emits the four generated D1/KV identifiers to one strict JSON
-manifest. The existing config generators combine that manifest with `envs.ts`
-and emit ordinary gitignored `wrangler.jsonc`. Local `wrangler dev`, Vite,
-build, and deploy remain normal Wrangler workflows.
+Alchemy emits the generated binding identities (D1/KV IDs and R2 bucket names)
+to one strict JSON manifest. The existing config generators combine that
+manifest with `envs.ts` and emit ordinary gitignored `wrangler.jsonc`. Local
+`wrangler dev`, Vite, build, and deploy remain normal Wrangler workflows.
 
 Wrangler continues to own everything coupled to a Worker: Worker scripts,
 bindings, Durable Object classes, Browser Rendering, dynamic loaders, named
@@ -39,9 +39,10 @@ branch, or Alchemy patch.
 2. A small Alchemy Action atomically writes
    `infra/output/<stage>/cloudflare-resources.json` only after a successful
    apply.
-3. `scripts/lib/alchemy-resources.ts` validates kind, stage, account, and every
-   identifier before any config generator can use the output.
-4. `envs.ts` contains stable names and hostnames, never physical D1/KV IDs.
+3. `scripts/lib/alchemy-resources.ts` validates the manifest kind and every
+   generated binding identity before any config generator can use the output.
+4. `envs.ts` contains stable Worker names and hostnames, never physical D1/KV
+   IDs or R2 bucket names.
 5. Preview and production workflows apply the stack once before app deploys
    fan out.
 
@@ -114,9 +115,10 @@ lock has more lines and much less application risk.
 
 Latest Alchemy main adds Worker-side capabilities that do not improve the
 D1/KV/R2 boundary. Wrangler's experimental provisioning remains create-only.
-Its experimental typed `cloudflare.config.ts` direction is not ready here:
-containers, auxiliary Vite Workers, configurable filenames, and D1
-`migrations_dir` remain blockers. Revisit typed config when those are
+Verified against Wrangler 4.115.0 and workers-sdk main on 2026-07-30, its
+experimental typed `cloudflare.config.ts` direction is not ready here:
+containers, auxiliary Vite Workers, configurable filenames/`--config`, and
+D1 `migrations_dir` remain blockers. Revisit typed config when those are
 first-class; do not add an adapter layer now.
 
 ## Complexity

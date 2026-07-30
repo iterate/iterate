@@ -116,7 +116,9 @@ Deploys are wrangler-native, driven by the root `envs.ts` (see
 - `pnpm ensure-resources --env preview_9` — create the Semaphore DNS record
 
 **CAUTION:** `semaphore-prd`'s `ResourceCoordinator` Durable Object holds the
-live preview-slot lease state for the whole fleet. Always deploy over it;
-never delete the worker or erase its storage. Semaphore has no data-erasure
-command; its preview e2e generates per-run-unique resource types and
-self-cleans.
+live preview-slot lease state for the whole fleet. Ordinary deploys must
+preserve it. Delete it only as part of an explicitly approved whole-production
+recreation through the guarded root `pnpm infra destroy`; after redeploying,
+run `seed:environment-config-leases` to restore the preview-slot inventory.
+Semaphore has no app-local data-erasure command; its preview e2e generates
+per-run-unique resource types and self-cleans.

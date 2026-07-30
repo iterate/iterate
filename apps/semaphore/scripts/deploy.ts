@@ -18,8 +18,9 @@
  *      is actually serving.
  *
  * CAUTION: semaphore-prd's ResourceCoordinator DO holds the LIVE preview-slot
- * lease state for the whole fleet. Always deploy over it — never delete the
- * worker or erase its Durable Object storage.
+ * lease state for the whole fleet. Ordinary deploys must preserve it. Delete
+ * it only through the explicitly guarded whole-environment destroy workflow;
+ * a production recreation must reseed the environment-config lease inventory.
  */
 import { fileURLToPath } from "node:url";
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";

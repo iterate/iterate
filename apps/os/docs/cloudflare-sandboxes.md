@@ -36,7 +36,7 @@ Cloudflare's primitives like this:
 | Container image                | `sandbox/Dockerfile` → stock `cloudflare/sandbox:0.12.3`     | a one-line FROM; one image shared by every class                                                                                 |
 | Cloudflare "applications"      | `os-<env>-sandbox<type>durableobject-<config>`               | one container app per class — the id you pass to `wrangler containers instances`                                                 |
 | Instances                      | one per live sandbox (per DO id)                             | torn down (with a `/workspace` snapshot) on `sleep()` or `sleepAfter` idle                                                       |
-| Persistent storage             | R2 bucket `os-<env>-sandboxes`, binding `BACKUP_BUCKET`      | one bucket per env; each sandbox is a `/{projectId}{path}` prefix (backup/restore, see [Sandboxes](./sandboxes.md))              |
+| Persistent storage             | Alchemy-managed R2 bucket, binding `BACKUP_BUCKET`           | one bucket per env; each sandbox is a `/{projectId}{path}` prefix (backup/restore, see [Sandboxes](./sandboxes.md))              |
 
 Key consequences:
 

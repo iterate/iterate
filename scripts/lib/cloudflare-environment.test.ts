@@ -154,7 +154,30 @@ describe("destroyWranglerEnvironment", () => {
     ]);
   });
 
-  it("fails instead of looping when listed Artifact repos are already absent", async () => {
+  it("accepts Artifact repos removed by a concurrent destroyer", async () => {
+    let lists = 0;
+    const cf = async <T = unknown>(path: string, init?: RequestInit): Promise<T> => {
+      if (path.startsWith("/artifacts/namespaces/os-preview-1-repos/repos?")) {
+        lists += 1;
+        return (lists === 1 ? [{ name: "stale-repository" }] : []) as T;
+      }
+      if (path.startsWith("/artifacts/namespaces/os-preview-1-repos/repos/")) {
+        throw new CloudflareApiError(init?.method ?? "GET", path, 404, []);
+      }
+      return [] as T;
+    };
+
+    await expect(
+      destroyWranglerEnvironment({
+        ctx: { cf },
+        osWorkerName: "os-preview-1",
+        workerNames: ["os-preview-1"],
+      }),
+    ).resolves.toBeUndefined();
+    expect(lists).toBe(2);
+  });
+
+  it("fails instead of looping when Artifact repository listing remains stale", async () => {
     const cf = async <T = unknown>(path: string, init?: RequestInit): Promise<T> => {
       if (path.startsWith("/artifacts/namespaces/os-preview-1-repos/repos?")) {
         return [{ name: "stale-repository" }] as T;

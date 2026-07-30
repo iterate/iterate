@@ -7,9 +7,8 @@ sources of truth:
   per app: hostnames, worker names, and Cloudflare account. Non-secret,
   committed, reviewed. Read it before asking "what is preview_3".
 - **Alchemy v2** — one stateful stack per deployed environment owns D1, KV,
-  R2, and their lifecycle rules. Its generated manifest supplies D1/KV IDs to
-  the Wrangler config generators; R2 bindings use deterministic worker-based
-  names.
+  R2, and their lifecycle rules. Its generated manifest supplies every
+  Wrangler binding identity: D1/KV IDs and R2 bucket names.
 - **Doppler** — secrets only. One config per env per app (`prd`,
   `preview_N`, plus fully-local `dev`/`dev_<user>` that never deploy).
 
@@ -37,10 +36,9 @@ lock before deploy or destroy; the root lockfile contains no Alchemy packages.
 
 The lifecycle is deliberately fresh-stack-only. There is no repository import,
 adoption, state reconstruction, committed fallback ID, or compatibility mode.
-Alchemy's providers can silently reuse same-name objects after create
-collisions, so a destructive cutover must prove those names absent before the
-first apply. If a stack's state is lost or irreparably inconsistent, destroy
-that named environment's data resources and recreate it.
+Normal deploy and destroy require Alchemy's persisted state. If that state is
+lost, stop: explicit operator cleanup must remove the abandoned environment
+before a new stack is created; repository code does not infer or import it.
 
 ## Environment selection is explicit
 
@@ -93,14 +91,16 @@ the app's own zod schema before uploading anything.
 
 ## Destroying an environment
 
-`pnpm infra destroy --env <name>` deletes the whole environment in dependency
-order:
+`pnpm infra destroy --env <name>` deletes the Alchemy-backed platform
+environment in dependency order:
 
 1. Container applications attached to the OS Worker's Durable Object
    namespaces, verified absent before their namespaces disappear.
-2. All seven environment Workers with Cloudflare's `force=true` API. This is
-   the supported whole-namespace Durable Object teardown: the scripts' DO
+2. All eight stack-dependent Workers with Cloudflare's `force=true` API. This
+   is the supported whole-namespace Durable Object teardown: the scripts' DO
    namespaces, instances, storage, and alarms are deleted with them.
+   Production-only `kiterate` and `tunnels-prd` are independent services, not
+   members of this stack, and remain live.
 3. Every repository in the OS Artifacts namespace, after no Worker can create
    more. Cloudflare has no Artifacts-namespace delete API, so the command
    drains the cursor-paginated repo listing and verifies the implicit namespace
@@ -110,8 +110,15 @@ order:
 
 The next preview acquisition runs `pnpm infra deploy` and gets a fresh stack
 before app deploys recreate the Workers. Auth then reruns migrations and
-re-seeds its OAuth clients. Routes and create-only DNS records are reattached
-by normal deployment.
+re-seeds its OAuth clients. A production recreation must also restore
+Semaphore's preview-slot inventory:
+
+```bash
+doppler run --project semaphore --config prd -- \
+  pnpm --dir apps/semaphore seed:environment-config-leases
+```
+
+Routes and create-only DNS records are reattached by normal deployment.
 
 Production requires `--yes-i-mean-prd`. Destroying production or migrating an
 existing fleet remains an explicit operator action; a code merge is not

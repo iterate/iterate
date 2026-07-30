@@ -128,8 +128,8 @@ export interface Env {
    * ephemeral — a sandbox that sleeps loses its filesystem — so the sandbox
    * Durable Object snapshots `/workspace` to this R2 bucket on idle and
    * restores it on the next start (the Sandbox SDK's backup/restore:
-   * https://developers.cloudflare.com/sandbox/guides/backup-restore/). One
-   * bucket per env (`${WORKER_SELF}-sandboxes`). The binding MUST be named
+   * https://developers.cloudflare.com/sandbox/guides/backup-restore/). The
+   * Alchemy data stack supplies one bucket per env. The binding MUST be named
    * `BACKUP_BUCKET` — the SDK reads it from the env by that exact name.
    */
   BACKUP_BUCKET: R2Bucket;
@@ -156,8 +156,8 @@ export interface Env {
    * Project file storage backing `itx.files` and agent file attachments
    * (domains/files/project-files.ts). Keys follow the durable-object name
    * convention `{projectId}.iterate{path}`; bytes are served publicly through
-   * HMAC-signed URLs on the reserved `iterate-files` platform app. One bucket
-   * per env (`${WORKER_SELF}-files`), created by the Alchemy data stack.
+   * HMAC-signed URLs on the reserved `iterate-files` platform app. The Alchemy
+   * data stack supplies one bucket per env.
    */
   FILES_BUCKET: R2Bucket;
   /**
