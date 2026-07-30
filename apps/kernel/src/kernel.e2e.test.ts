@@ -129,21 +129,20 @@ describe("kernel", () => {
   });
 
   test("streams: the durable log persists across requests (real ITX.streams, kills processEvent stub)", async () => {
-    // Append two events through the confined config worker's ITX binding, then read them back in a
-    // SEPARATE request — proving durability (SQLite DO survives between requests) + per-project scoping.
-    const a1 = await hit("alice.example.com", "/__stream?append=hello");
-    expect(a1.body.seq).toBe(1);
-    const a2 = await hit("alice.example.com", "/__stream?append=world");
-    expect(a2.body.seq).toBe(2); // monotonic seq, persisted
+    // Use a distinct stream path so this is independent of any state persisted by earlier runs (miniflare
+    // keeps DO SQLite on disk between `vitest run`s). Append two events, read them back in a SEPARATE
+    // request — proving durability + monotonic seq. (path chosen fresh via the loop index below.)
+    const p = "e2e-" + Date.now(); // test-only; Date is fine here (not a workflow)
+    const a1 = await hit("alice.example.com", `/__stream?path=${p}&append=hello`);
+    const a2 = await hit("alice.example.com", `/__stream?path=${p}&append=world`);
+    expect(a2.body.seq).toBe(a1.body.seq + 1); // monotonic, persisted across requests
 
-    const read = await hit("alice.example.com", "/__stream");
+    const read = await hit("alice.example.com", `/__stream?path=${p}`);
     expect(read.body.count).toBe(2);
     expect(read.body.events.map((e: { type: string }) => e.type)).toEqual(["hello", "world"]);
 
-    // A DIFFERENT project's stream is isolated (its own DO instance — empty).
-    const bob = await hit("bob.example.com", "/__stream");
-    // bob isn't in the local directory, but the public site + streams don't gate on membership here;
-    // the DO name derives from the projectId prop, so bob's "main" stream is a distinct, empty log.
+    // A DIFFERENT project's SAME path is isolated (its own DO instance — the DO name includes projectId).
+    const bob = await hit("bob.example.com", `/__stream?path=${p}`);
     expect(bob.body.count).toBe(0);
   });
 
