@@ -96,7 +96,7 @@ expandable raw JSON view. Two operator actions run against the coordinator:
 
 - **Release** (leased slots) — confirm-gated; evicts the current lease.
 - **Claim for PR…** (available slots) — records a `pr-<n>` holder with the
-  standard 24h preview lease, the dashboard equivalent of
+  standard 3h preview lease, the dashboard equivalent of
   `pnpm preview acquire`. Claiming marks ownership so CI will not deploy
   over the slot; deploying to it remains the PR flow's job.
 

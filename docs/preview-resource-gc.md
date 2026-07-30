@@ -22,31 +22,32 @@ slots held by closed/merged PRs.)
 
 Cleanup still attempts the full destroy while it owns the lease, which prevents
 a new tenant racing with deletion. The rule is that **destroy success is not a
-precondition for release**: cleanup reports the failure, releases the lease,
-and the next acquire destroys again before deploying.
+precondition for release**. A separate durable `preview-stack` record exists
+before provisioning begins and is deleted only after a final destroy succeeds.
+Cleanup reports a failure and releases the environment lease, but the record
+keeps the stack queued for hourly GC. The next acquire also destroys before
+deploying.
 
 ## What full teardown removes
 
-| Concern                                                                                                                 | Reaped by                                                                                          | When                                                   |
-| ----------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| Orphaned **compute** — Durable Object scheduler alarms keep firing agent turns (real LLM spend) against erased projects | force-delete each environment Worker, which also deletes all of its DO namespaces and data         | cleanup / destroy-on-acquire / GC backstop             |
-| Container applications and Artifact repos                                                                               | explicit Cloudflare API deletion and verification before their owning Worker/data stack disappears | cleanup / destroy-on-acquire / GC backstop             |
-| **R2 storage** — itx.files + sandbox backups                                                                            | Alchemy destroy empties/deletes the buckets; lifecycle rules bound abandoned data before teardown  | cleanup / destroy-on-acquire; otherwise 3h after write |
-| **D1 / KV**                                                                                                             | Alchemy destroys the whole databases/namespaces                                                    | cleanup / destroy-on-acquire                           |
+| Concern                                                                                                                    | Reaped by                                                                                          | When                                                   |
+| -------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| Orphaned **compute** — Durable Object scheduler alarms keep firing agent turns (real LLM spend) against destroyed projects | force-delete each environment Worker, which also deletes all of its DO namespaces and data         | cleanup / destroy on handover / GC backstop            |
+| Container applications and Artifact repos                                                                                  | explicit Cloudflare API deletion and verification before their owning Worker/data stack disappears | cleanup / destroy-on-acquire / GC backstop             |
+| **R2 storage** — itx.files + sandbox backups                                                                               | Alchemy destroy empties/deletes the buckets; lifecycle rules bound abandoned data before teardown  | cleanup / destroy-on-acquire; otherwise 3h after write |
+| **D1 / KV**                                                                                                                | Alchemy destroys the whole databases/namespaces                                                    | cleanup / destroy-on-acquire                           |
 
 The old machinery issued per-item R2 deletes. Alchemy deletes in batches, and
 the lifecycle rules bound how many abandoned objects can accumulate before a
 later destroy.
 
-## Everything disposable expires 3 hours after last use
+## Live tenancy expires 3 hours after last use
 
 Preview data is synthetic and previews churn, so retention is a pure cost knob.
-One TTL governs it: **3 hours**.
 
 - **Lease TTL** (`defaultPreviewLeaseMs`, `scripts/preview/preview.ts`): a slot
-  whose PR hasn't deployed/tested for 3h has an expired lease and is reclaimed.
-  A deploy/e2e cycle is minutes, so an active PR never lapses mid-run; a PR that
-  goes quiet stops costing us within ~3h instead of a full day.
+  whose PR has not deployed/tested for 3h has no live tenant. A deploy/e2e
+  cycle is minutes, so an active PR does not lapse mid-run.
 - **R2 lifecycle** on the preview files and sandboxes buckets: objects are
   deleted 3h after they're written. The Alchemy stack declares these rules for
   preview slots; only sandbox objects are limited to the `backups/` prefix.
@@ -59,56 +60,67 @@ One TTL governs it: **3 hours**.
   preview the R2 rule deletes them first. This divergence is deliberate and
   preview-only.)
 
-## The two phases
+## The two pieces of state
 
-### Phase 1 — every preview lease expires
+### Environment leases protect live tenants
 
 There is no immortal preview lease. PR leases renew to 3h and lapse when the PR
 stops renewing; manual `preview acquire` defaults to 3h; every leased slot
-carries a `leasedUntil`. Lease expiry is the single signal the GC acts on.
+carries a `leasedUntil`. GC never force-acquires this lease.
 
-### Phase 2 — the GC sweep reclaims expired leases
+### Stack records preserve cleanup obligations
+
+`preview-stack/<slot>` exists for the whole lifetime of a possibly-present
+Cloudflare stack. Preview tooling creates it before destroy/provision starts and
+deletes it only after `pnpm infra destroy` succeeds. It therefore survives a
+cancelled deploy, partial Alchemy apply, failed PR-close cleanup, and lease
+release. It is not a second ownership system: the environment lease alone says
+who may use the slot.
+
+## The GC sweep
 
 A scheduled Depot workflow (`.depot/workflows/cloudflare-preview-gc.yml`, hourly)
 runs `pnpm preview gc`, which:
 
-1. Lists every slot and selects those whose lease is **leased but past its
-   expiry** (`selectExpiredLeasesForGc`). An expired lease means no live tenant,
-   so the whole slot is fair game. (Available slots are cleaned by their next
-   acquirer's destroy-on-acquire, not here.)
+1. Lists durable stack records and environment leases. It selects recorded
+   stacks whose lease is available or expired (`selectPreviewStacksForGc`).
 2. For each, takes it under a fresh lease with a **non-force** acquire. This is
    the entire race story: a non-force acquire succeeds _only if the slot is
    genuinely free_. If a new PR grabbed the slot between the snapshot and the
-   take, the acquire returns null and the sweep skips it — that PR's own
-   destroy-on-acquire will clean it. No verdict logic, no stealing.
-3. Destroys the slot with `pnpm infra destroy`, then releases it. A failure
-   releases the slot anyway — its next taker destroys first, so a
-   half-destroyed slot is self-healing and must never be parked out of the pool.
+   take, the sweep skips it. No verdict logic and no stealing.
+3. Destroys the slot with `pnpm infra destroy`, deletes the stack record, then
+   releases the environment lease. A failed destroy keeps the record and still
+   releases the lease, so the next hourly sweep retries.
 
 It runs sequentially (naturally rate-limited) and is idempotent — safe to run
 as often as we like. `pnpm preview gc --dry-run` reports the plan without
-touching anything.
+touching anything. It attempts every eligible record, then exits non-zero if
+any acquire, destroy, record deletion, or release failed; durable retry does
+not turn a failed sweep green.
 
 PR-close cleanup attempts the same whole-environment destroy, so the GC is a
-**backstop** for a lease that expired because a PR went quiet or for a cleanup
-destroy that failed. Worst-case orphaned LLM spend is therefore one cron
-interval, and only in the failure case.
+**backstop** for a PR that went quiet, a cancelled deployment, or a cleanup
+destroy that failed. The next automated attempt begins within one cron
+interval; a persistent failure remains recorded and keeps each sweep red.
 
 ## Self-healing invariants
 
-- **Destroy-on-acquire**: every acquire destroys the slot before handing it out
-  (`eraseAcquiredSlotOrGiveItBack`), so any teardown that's skipped, deferred,
-  or half-finished is harmless — the next tenant wipes first.
+- **Destroy on tenant handover**: a new tenant or an
+  unknown-provenance acquired slot is destroyed before deployment
+  (`destroyAcquiredEnvironmentOrReleaseLease`). A same-PR continuous/re-taken
+  recorded slot stays incremental; manual `preview acquire` only leases.
+- **Durable cleanup obligation**: lease release cannot make a possibly-present
+  stack invisible to GC.
 - **Non-force GC acquire**: the sweep can never take a live tenant's slot.
 - **Fresh-stack handover**: no data object or physical identifier is adopted
   by the next tenant. Destroy/recreate is the recovery path.
 
 ## Where things live
 
-| Thing                                       | File                                              |
-| ------------------------------------------- | ------------------------------------------------- |
-| D1/KV/R2 stack and lifecycle rules          | `infra/alchemy.run.ts`                            |
-| Whole-environment destruction               | `scripts/cloudflare-infrastructure.ts`            |
-| Lease TTL, `gc`, `selectExpiredLeasesForGc` | `scripts/preview/preview.ts`                      |
-| The scheduled sweep                         | `.depot/workflows/cloudflare-preview-gc.yml`      |
-| PR-close cleanup (the fast path)            | `.depot/workflows/cloudflare-preview-cleanup.yml` |
+| Thing                              | File                                              |
+| ---------------------------------- | ------------------------------------------------- |
+| D1/KV/R2 stack and lifecycle rules | `infra/alchemy.run.ts`                            |
+| Whole-environment destruction      | `scripts/cloudflare-infrastructure.ts`            |
+| Lease TTL, stack records, and `gc` | `scripts/preview/preview.ts`                      |
+| The scheduled sweep                | `.depot/workflows/cloudflare-preview-gc.yml`      |
+| PR-close cleanup (the fast path)   | `.depot/workflows/cloudflare-preview-cleanup.yml` |

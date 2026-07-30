@@ -5,7 +5,7 @@ This runbook adds one or more PR-preview slots. It was exercised while adding
 
 The important rule is simple: do not add a Semaphore lease until the slot has
 been provisioned, deployed, and tested. A lease makes the slot available to CI;
-from then on, any eligible PR may claim and erase it.
+from then on, any eligible PR may claim it and destroy/recreate its environment.
 
 ## The safest automation model
 
@@ -84,7 +84,7 @@ pnpm preview expand activate --plan expansion.json
 plan, require the hash of the reviewed plan, run sequentially, and resume from
 verified checkpoints. Domain registration would additionally require the
 approved price ceiling in the plan. `activate` would remain separate because
-adding production Semaphore leases changes who can use and erase the slots.
+adding production Semaphore leases changes who can use and destroy the slots.
 
 The command should call the existing provisioners rather than reimplement
 them. Its value is durable state, precondition checks, direct secret piping,
@@ -100,13 +100,15 @@ The order is:
 
 1. Add `preview_20` to `envs.ts`; no physical resource IDs are committed.
 2. Confirm both zones, provider names, capacity, prices, and the exact writes.
-3. Create the five Doppler configs and provision Auth without `--rotate`.
+3. Create the Doppler configs for OS, Auth, Docs, Semaphore, Streams Example,
+   and Dummy Petshop; provision Auth without `--rotate`.
 4. Create the dedicated GitHub App and Slack bootstrap app.
-5. Run every create-only Cloudflare ensure, record the returned IDs, then run
-   every ensure again and require no changes.
+5. Apply the Alchemy stack, run create-only Worker-adjacent ensures, generate
+   every Wrangler config from the manifest, then repeat and require no changes.
 6. Test and merge the repository change. A merge deploys production; it does
    not deploy the new preview slot.
-7. Deploy the five preview apps from current `main`.
+7. Deploy OS, Auth, Docs, Semaphore, Streams Example, and Dummy Petshop from
+   current `main`.
 8. Upgrade Slack to the full manifest and verify its URLs. Add the two Google
    OAuth redirect URIs. Verify the GitHub App through its API.
 9. Present the ledger and obtain separate approval for the production
@@ -121,13 +123,13 @@ the point of failure before retrying the slot.
 
 ## What one slot contains
 
-| Layer         | Per-slot state                                                                                                                               |
-| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| Repository    | Stable environment names/hosts/accounts; derived Auth, Docs, Streams, Dummy Petshop, OAuth-audience, mobile, and lease projections           |
-| Doppler       | `preview_N` in `os`, `auth`, `docs`, `semaphore`, `streams-example-app`, and `dummy-petshop`                                                 |
-| Cloudflare    | Two zones, eight Workers, two D1 databases, two KV namespaces, two R2 buckets, one Queue, DNS, routes, six container apps, and email routing |
-| External apps | One GitHub App and one Slack app for full integration parity                                                                                 |
-| Lease fleet   | One production Semaphore `environment-config-lease` resource                                                                                 |
+| Layer         | Per-slot state                                                                                                                     |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Repository    | Stable environment names/hosts/accounts; derived Auth, Docs, Streams, Dummy Petshop, OAuth-audience, mobile, and lease projections |
+| Doppler       | `preview_N` in `os`, `auth`, `docs`, `semaphore`, `streams-example-app`, and `dummy-petshop`                                       |
+| Cloudflare    | Two zones, eight Workers, two D1 databases, two KV namespaces, two R2 buckets, DNS, routes, six container apps, and email routing  |
+| External apps | One GitHub App and one Slack app for full integration parity                                                                       |
+| Lease fleet   | One production Semaphore `environment-config-lease` resource                                                                       |
 
 The eight Workers are OS, its typechecker and worker-bundler sidecars, Auth,
 Docs, Semaphore, Streams, and Dummy Petshop. OS deploys six sandbox container
@@ -144,7 +146,7 @@ doppler run --project _shared --config prd -- pnpm preview status
 doppler run --project _shared --config prd -- pnpm preview reconcile
 ```
 
-`reconcile` checks existing Semaphore entries, five Doppler configs, and two
+`reconcile` checks existing Semaphore entries, the six app Doppler configs, and two
 active zones. It does not check `envs.ts`, secret shape, deployed Workers,
 resource IDs, integration apps, or end-to-end health.
 
@@ -165,10 +167,10 @@ Recheck; live state wins over this note.
 
 ### Capacity
 
-Ten slots currently add 70 Workers, 20 D1 databases, 20 KV namespaces, 20 R2
-buckets, and 10 Queues. The 2026-07-20 preview account held 123 Workers, 27 D1
-databases, 18 KV namespaces, 29 R2 buckets, and 11 Queues before expansion.
-Some are retired objects, which explains differences from slot-count maths.
+Ten slots currently add 80 Workers, 20 D1 databases, 20 KV namespaces, and 20
+R2 buckets. The 2026-07-20 preview account held 123 Workers, 27 D1 databases,
+18 KV namespaces, and 29 R2 buckets before expansion. Some are retired
+objects, which explains differences from slot-count maths.
 
 The current caps reserve 67 GiB memory, 15.25 vCPU, and 180 GB disk per slot.
 Nineteen slots reserve 1,273 GiB, 289.75 vCPU, and 3,420 GB. Recalculate from
@@ -179,8 +181,7 @@ References: [Workers](https://developers.cloudflare.com/workers/platform/limits/
 [Containers](https://developers.cloudflare.com/containers/platform-details/limits/),
 [D1](https://developers.cloudflare.com/d1/platform/limits/),
 [KV](https://developers.cloudflare.com/kv/platform/limits/),
-[R2](https://developers.cloudflare.com/r2/platform/limits/), and
-[Queues](https://developers.cloudflare.com/queues/platform/limits/).
+[R2](https://developers.cloudflare.com/r2/platform/limits/).
 
 ## 1. Teach the repository about slots 10–19
 
@@ -511,7 +512,7 @@ disposable OS project. Provider dashboard state is insufficient:
 Use project-scoped admin claims when minting the browser session for a
 disposable project. Strip terminal colour codes before copying a printed mint
 URL; ANSI bytes inside the query string corrupt it. Do not print provider
-tokens. Disconnect or let normal preview cleanup erase the project connections
+tokens. Disconnect or let normal preview cleanup destroy the project connections
 after retaining only non-secret evidence.
 
 ## 8. Approve and add Semaphore leases
@@ -538,7 +539,7 @@ wide settings scan: concurrent preview handovers multiplied that scan across
 roughly 183 Workers, made every chunk receive a 120-second `Retry-After`, and
 could not fit inside CI even after a five-minute cooldown. An unclassified
 retirement failure remains fatal, so this optimisation does not bypass the
-handover erase.
+handover destroy.
 
 ## 9. Prove the normal lifecycle
 
@@ -570,9 +571,10 @@ done
 
 After each slot, inspect the managed PR table, CI logs, Cloudflare traces, and
 `pnpm preview status`. An unexplained error, skipped Slack test, unhealthy
-storage shard, unreleased lease, or mismatched final state fails the slot. Do
-not keep feeding work to a sick slot; leave it unavailable and record the
-reason until automatic health quarantine exists.
+storage shard, unreleased lease, or mismatched final state fails the slot.
+Cleanup still releases the tenant lease; its durable stack record remains,
+every failed GC run stays red, and operators must repair a persistent destroy
+failure before trusting that slot again.
 
 Classify error-level telemetry rather than treating green checks as the final
 barrier. Intentional failure-path tests must be identifiable as such. Durable

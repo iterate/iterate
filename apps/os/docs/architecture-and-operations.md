@@ -197,8 +197,9 @@ It requires `APP_CONFIG_SERVICE_AUTH_TOKEN` (run through Doppler for the auth pr
 
 ## Deployment
 
-The generated `wrangler.jsonc` (from the root `envs.ts`) defines the
-deployment: a single worker ([worker-topology.md](./worker-topology.md))
+The generated `wrangler.jsonc` (from root `envs.ts` plus the environment's
+Alchemy resource manifest) defines the deployment: a single worker
+([worker-topology.md](./worker-topology.md))
 carrying every Durable Object class same-script, the `PROJECT_DIRECTORY` and
 `WORKER_BUILD_CACHE` KV namespaces, the Worker Loader, the Workers AI
 binding, Cloudflare Artifacts for repos, and routes for the app base URL,

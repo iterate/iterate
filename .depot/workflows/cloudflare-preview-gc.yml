@@ -1,14 +1,15 @@
 # Cloudflare Preview GC — the scheduled backstop for the preview resource
 # lifecycle (see docs/preview-resource-gc.md). PR-close cleanup attempts a full
-# destroy, but releases the lease even if destroy fails; this sweep reclaims a
-# lease that expired because a PR went quiet or its cleanup runner stopped
-# before releasing it. It is idempotent and safe to run as often as we like:
-# `pnpm preview gc` only touches slots whose
-# lease has already expired, takes each under a NON-force lease (so it can never
-# steal a live tenant's slot), destroys it, and releases it.
+# destroy, but releases the environment lease even if destroy fails. A durable
+# preview-stack record exists before provisioning and remains until verified
+# destroy, so lease release cannot hide unfinished cleanup. This sweep selects
+# recorded stacks without a live tenant, takes each under a NON-force lease
+# (so it can never steal a live slot), destroys it, deletes the record, and
+# releases the lease.
 #
-# Lease expiry is the only signal — no GitHub token needed. This sweep resets
-# Durable Objects, destroys the slot's Alchemy stack, and releases the lease.
+# No GitHub token is needed. The stack record is the cleanup obligation; lease
+# state only answers whether it is safe to act now. Every failed operation
+# leaves the workflow red, and failed destroy keeps the record for the next run.
 #
 # Depot registers automatic triggers when this file is on the default branch —
 # branch-only changes to the `on:` block do not take effect until merged.
@@ -19,13 +20,13 @@ name: Cloudflare Preview GC (Depot CI)
 
 on:
   # Hourly, offset off the top of the hour to avoid contending with deploys.
-  # The lease TTL is 3h, so an abandoned slot is reclaimed within ~1h of expiry.
+  # Abandoned and failed-cleanup stacks get another bounded attempt each hour.
   schedule:
     - cron: "23 * * * *"
   workflow_dispatch:
     inputs:
       dry-run:
-        description: Report what would be reclaimed without erasing anything
+        description: Report what would be destroyed without changing anything
         type: boolean
         default: false
 

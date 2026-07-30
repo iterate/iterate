@@ -9,7 +9,15 @@ document defines the critical-path model and the rules that keep it fast.
 
 ## Critical-path model
 
-The preview lifecycle has two barriers:
+Warm same-PR runs and fresh handovers have different prefixes:
+
+- **Warm same-slot:** renew the lease, apply the existing Alchemy stack, then
+  deploy only affected apps.
+- **Fresh handover:** take a free slot, destroy the previous whole environment,
+  apply a fresh Alchemy stack, then deploy the full fleet because D1/KV/R2
+  identities changed.
+
+After that prefix, the lifecycle has two parallel barriers:
 
 1. Start every selected app deployment together; wait until every deployment
    and readiness check finishes.
@@ -24,7 +32,8 @@ Vitest wait for the same absolute boundary. The clock normally finishes under
 Playwright's longer critical path. Therefore, healthy wall time should approach:
 
 ```text
-pickup + setup + slowest deploy + slowest test lane + reporting
+pickup + lease claim + optional whole-environment destroy + Alchemy apply
+  + slowest app deploy + slowest test lane + reporting
 ```
 
 It must not approach the sum of app deployments, app test suites, or OS

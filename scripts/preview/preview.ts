@@ -161,7 +161,7 @@ type TestTargetOptions = PullRequestCommandOptions & {
 
 /**
  * Run one OS Vitest file or Playwright spec against an already-deployed PR
- * preview. This renews the existing lease but never deploys, erases data, or
+ * preview. This renews the existing lease but never deploys, destroys, or
  * marks the app's full preview suite green.
  */
 export async function testTarget(options: TestTargetOptions) {
@@ -285,7 +285,7 @@ export async function testTarget(options: TestTargetOptions) {
   }
 
   logPreview(
-    `target tests finished: ${passed}/${selection.repeat} passed, ${failures.length} failed, ${retries} retries; deployment was reused without deploy or erase`,
+    `target tests finished: ${passed}/${selection.repeat} passed, ${failures.length} failed, ${retries} retries; deployment was reused without deploy or destroy`,
   );
   if (failures.length > 0) {
     throw new Error(
@@ -525,7 +525,7 @@ async function deployPreviewApps({
     const recordedSlug = current.state.environmentConfigLease?.slug ?? null;
     leaseClaim = requestedEnvironment
       ? await assignEnvironmentConfigLease({
-          eraseSlotData: makePreviewSlotDataEraser(runtime),
+          destroyEnvironment: makePreviewEnvironmentDestroyer(runtime),
           holder,
           leaseMs: defaultPreviewLeaseMs,
           recordedSlug,
@@ -533,7 +533,7 @@ async function deployPreviewApps({
           wantedSlug: requestedEnvironment,
         })
       : await claimEnvironmentConfigLease({
-          eraseSlotData: makePreviewSlotDataEraser(runtime),
+          destroyEnvironment: makePreviewEnvironmentDestroyer(runtime),
           holder,
           leaseMs: defaultPreviewLeaseMs,
           // Surface the wait in the PR body the moment every slot is busy, not
@@ -559,9 +559,18 @@ async function deployPreviewApps({
     throw error;
   }
   const environmentConfigLease = leaseClaim.lease;
+  // Fresh handovers record the stack before destroying whatever was here.
+  // Repeat the idempotent check immediately before every provision too: once
+  // Cloudflare mutation starts, GC must have a durable cleanup obligation
+  // even if this process is cancelled or Alchemy only partially applies.
+  await ensurePreviewStackRecord({
+    dopplerConfig: environmentConfigLease.dopplerConfig,
+    semaphore,
+    slug: environmentConfigLease.slug,
+  });
   // A handed-over slot has just had its whole Alchemy stack destroyed. Recreating it
   // gives D1/KV/R2 new identities, so every Worker must regenerate its config.
-  // The signal is explicit because a lapsed lease can reclaim and erase the
+  // The signal is explicit because a lapsed lease can reclaim and destroy the
   // same slug. An uninterrupted same-stack deploy remains incremental.
   const previousSlug = current.state.environmentConfigLease?.slug ?? null;
   const appsToDeploy = leaseClaim.stackWasDestroyed
@@ -1188,9 +1197,9 @@ export async function cleanup(options: PullRequestCommandOptions = {}) {
   // Exit-code contract (the only consumer is the cleanup workflow's
   // red/green — nothing gates on it): exit non-zero ONLY when the lease
   // RELEASE failed, because a held lease leaks the slot until expiry and
-  // constrains the fleet. A failed teardown/erase alone exits zero with a loud warning:
-  // the lease was released, the fleet is healthy, and the dirty slot
-  // self-heals — every acquire erases on entry (eraseAcquiredSlotOrGiveItBack).
+  // constrains the fleet. A failed teardown alone exits zero with a loud
+  // warning: the lease was released, the stack remains durably queued for
+  // hourly GC, and every acquire destroys it before reuse.
   if (!result.ok) {
     throw new Error(
       "Failed to release the preview slot lease — it leaks until expiry. Re-run cleanup, or free it with `pnpm preview release --slot <N> --force`.",
@@ -1198,7 +1207,7 @@ export async function cleanup(options: PullRequestCommandOptions = {}) {
   }
   if (result.teardownFailed) {
     logPreview(
-      "cleanup exits 0 despite the failed teardown: the lease was released (fleet healthy) and the dirty slot is erased by its next acquire",
+      "cleanup exits 0 despite the failed teardown: the lease was released and the recorded stack remains queued for hourly GC",
     );
   }
 
@@ -1231,7 +1240,7 @@ export async function assign(options: AssignOptions = {}) {
 
   const current = await readCloudflarePreviewState(context);
   const result = await assignEnvironmentConfigLease({
-    eraseSlotData: makePreviewSlotDataEraser(runtime),
+    destroyEnvironment: makePreviewEnvironmentDestroyer(runtime),
     force: options.force,
     holder,
     leaseMs: defaultPreviewLeaseMs,
@@ -1421,8 +1430,9 @@ export async function acquire(options: AcquireOptions) {
 
 /**
  * Release a preview slot lease. Pass the lease id from `preview acquire`, or --force to release someone else's (stale) lease.
- * Does NOT erase the slot's data — that's safe, because every acquire erases
- * on entry. Use `preview reclaim --slot N` to take back AND wipe in one step.
+ * Does NOT destroy the environment. Its durable stack record remains for GC,
+ * and a later tenant destroys before deployment. Use `preview reclaim --slot
+ * N` to take back and destroy immediately.
  */
 type ReleaseOptions = {
   /** Preview slot: a number (9) or slug (preview-9 / preview_9). */
@@ -1543,14 +1553,13 @@ export async function reclaim(options: ReclaimOptions = {}) {
   requireExplicitReclaimForce(slot, options.force);
 
   logPreview(
-    `reclaiming ${slug} from ${slot.holder ?? "unknown holder"} (${slot.verdict}${slot.lastUsedAgo ? `, last used ${slot.lastUsedAgo}` : ""}) — erasing its data before returning it to the pool`,
+    `reclaiming ${slug} from ${slot.holder ?? "unknown holder"} (${slot.verdict}${slot.lastUsedAgo ? `, last used ${slot.lastUsedAgo}` : ""}) — destroying its environment before returning it to the pool`,
   );
-  // Take the slot under OUR OWN fresh lease before erasing. The old holder's
-  // lease could expire mid-erase (the verdict is a snapshot), and destroying
+  // Take the slot under OUR OWN fresh lease before destroying. The old holder's
+  // lease could expire mid-destroy (the verdict is a snapshot), and destroying
   // data on a slot another PR just acquired would wreck an innocent tenant —
-  // a fresh lease parks the slot for the whole wipe. An erase failure leaves
-  // that lease in place (parked and visible in this report) and throws
-  // rather than returning a dirty slot to the pool.
+  // a fresh lease parks the slot for the whole operation. A destroy failure
+  // leaves that lease in place (parked and visible in this report) and throws.
   const holder = `reclaim-${userInfo().username}`;
   const taken = await semaphore.acquireSpecific({
     allowedSlugs: previewEnvironmentSlugs,
@@ -1563,7 +1572,12 @@ export async function reclaim(options: ReclaimOptions = {}) {
   if (!taken) {
     throw new Error(`Could not take ${slug} from ${slot.holder ?? "its holder"} — retry.`);
   }
-  await makePreviewSlotDataEraser(runtime)({ dopplerConfig: slot.dopplerConfig, slug });
+  await destroyPreviewStackAndDeleteRecord({
+    destroyEnvironment: makePreviewEnvironmentDestroyer(runtime),
+    dopplerConfig: slot.dopplerConfig,
+    semaphore,
+    slug,
+  });
   const result = await semaphore.release({
     slug,
     type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
@@ -1571,106 +1585,127 @@ export async function reclaim(options: ReclaimOptions = {}) {
   });
   return {
     released: result.released,
-    erased: true,
+    destroyed: true,
     slug,
     reclaimedFrom: slot.holder,
     verdict: slot.verdict,
   };
 }
 
-/** A slot whose lease has passed its expiry — a GC sweep candidate. */
-type ExpiredLeaseForGc = {
+/** A recorded stack with no live tenant — a GC sweep candidate. */
+type PreviewStackForGc = {
   slug: string;
   holder: string | null;
   dopplerConfig: string;
-  leasedUntil: number;
 };
 
 /**
- * Pure selection for {@link gc}: the slots whose lease is leased but past its
- * expiry. Lease expiry is the sole GC signal — an expired lease means no live
- * tenant, so the whole slot is fair game (available slots are cleaned by their
- * next acquirer, not here). See docs/preview-resource-gc.md.
+ * Pure selection for {@link gc}: every durably recorded preview stack whose
+ * environment lease is available or expired. The stack record is the cleanup
+ * obligation; the lease only determines whether it is safe to act now.
  */
-function selectExpiredLeasesForGc(
-  resources: ReadonlyArray<{
-    data: Record<string, unknown>;
+function selectPreviewStacksForGc(
+  stacks: ReadonlyArray<{ slug: string }>,
+  leases: ReadonlyArray<{
     holder?: string | null;
     leaseState: "available" | "leased";
     leasedUntil: number | null;
     slug: string;
   }>,
   now: number,
-): ExpiredLeaseForGc[] {
-  const expired: ExpiredLeaseForGc[] = [];
-  for (const resource of resources) {
-    if (resource.leaseState !== "leased" || resource.leasedUntil === null) continue;
-    if (resource.leasedUntil > now) continue;
-    expired.push({
-      slug: resource.slug,
-      holder: resource.holder ?? null,
-      // Same fallback classifyEnvironmentConfigLeases uses: the slug-derived
-      // config (preview-3 → preview_3) for a slot with no data payload yet.
-      dopplerConfig:
-        typeof resource.data.dopplerConfig === "string" && resource.data.dopplerConfig.trim()
-          ? resource.data.dopplerConfig.trim()
-          : resource.slug.replaceAll("-", "_"),
-      leasedUntil: resource.leasedUntil,
-    });
-  }
-  return expired;
+): PreviewStackForGc[] {
+  const leasesBySlug = new Map(leases.map((lease) => [lease.slug, lease]));
+  return stacks.flatMap((stack) => {
+    const inventory = environmentConfigLeaseInventory.find(({ slug }) => slug === stack.slug);
+    if (!inventory) {
+      throw new Error(`GC found a stack record for unknown preview slot ${stack.slug}.`);
+    }
+    const lease = leasesBySlug.get(stack.slug);
+    if (!lease) {
+      throw new Error(`GC found no environment lease inventory for recorded stack ${stack.slug}.`);
+    }
+    if (lease.leaseState === "leased" && lease.leasedUntil === null) {
+      throw new Error(`GC found leased stack ${stack.slug} without an expiry.`);
+    }
+    if (lease.leaseState === "leased" && lease.leasedUntil !== null && lease.leasedUntil > now) {
+      return [];
+    }
+    return [
+      {
+        slug: stack.slug,
+        holder: lease.holder ?? null,
+        dopplerConfig: inventory.data.dopplerConfig,
+      },
+    ];
+  });
 }
 
-/** Report what would be reclaimed without touching anything, or hold length. */
+/** Report what would be destroyed without touching anything, or hold length. */
 type GcOptions = {
-  /** Print the plan without acquiring, erasing, or releasing anything. */
+  /** Print the plan without acquiring, destroying, or releasing anything. */
   dryRun?: boolean;
-  /** Minutes to hold each slot while erasing it (default 30). */
+  /** Minutes to hold each slot while destroying it (default 30). */
   holdMinutes?: number;
 };
 
 /**
- * Garbage-collect preview slots whose lease has expired: for each, take it
- * under a fresh lease, erase its data, and release it — unattended and
- * rate-limited (runs sequentially). This is the lazy half of the model in
- * docs/preview-resource-gc.md: releasing a slot never waits on teardown, and
- * this scheduled sweep (the Cloudflare Preview GC Depot cron) reclaims whatever
- * the fast path — PR-close cleanup — did not.
+ * Garbage-collect every recorded preview stack without a live tenant: for
+ * each, take its environment lease, destroy it, delete its durable stack
+ * record, and release it — unattended and sequential.
  *
- * Lease expiry is the ONLY signal; the take is a NON-force acquire, which
- * succeeds only while the slot is genuinely free. So if a PR re-leased the slot
- * between our snapshot and the take, the acquire returns null and we skip it
- * (that PR's own erase-on-acquire cleans it) — no race, no verdict logic. An
- * erase failure still releases the slot: its next taker erases first, so a
- * half-wiped slot is self-healing and must not be parked out of the pool.
+ * The take is non-force, so a tenant that acquired or renewed after the
+ * snapshot cannot be destroyed. A failed destroy leaves the stack record for
+ * the next hourly sweep but still releases the environment lease.
  */
 export async function gc(options: GcOptions = {}) {
   const runtime = createPreviewRuntime();
   const semaphore = runtime.createPreviewSemaphoreResourceClient();
   const now = Date.now();
-  const resources = await semaphore.list({ type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE });
-  const expired = selectExpiredLeasesForGc(resources, now);
+  const [stacks, leases] = await Promise.all([
+    semaphore.list({ type: PREVIEW_STACK_RESOURCE_TYPE }),
+    semaphore.list({ type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE }),
+  ]);
+  const candidates = selectPreviewStacksForGc(stacks, leases, now);
   const holdMs = (options.holdMinutes ?? 30) * 60_000;
-  const eraseSlotData = makePreviewSlotDataEraser(runtime);
+  const destroyEnvironment = makePreviewEnvironmentDestroyer(runtime);
 
   const outcomes: Array<{
     slug: string;
-    action: "reclaimed" | "skipped" | "erase-failed" | "would-reclaim";
+    action:
+      | "acquire-failed"
+      | "destroyed"
+      | "destroy-failed"
+      | "release-failed"
+      | "skipped"
+      | "would-destroy";
     holder: string | null;
     error?: string;
   }> = [];
-  for (const slot of expired) {
+  const failures: unknown[] = [];
+  for (const slot of candidates) {
     if (options.dryRun) {
-      outcomes.push({ slug: slot.slug, action: "would-reclaim", holder: slot.holder });
+      outcomes.push({ slug: slot.slug, action: "would-destroy", holder: slot.holder });
       continue;
     }
-    const taken = await semaphore.acquireSpecific({
-      allowedSlugs: previewEnvironmentSlugs,
-      type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
-      slug: slot.slug,
-      leaseMs: holdMs,
-      holder: "gc",
-    });
+    let taken: PreviewSemaphoreLease | null;
+    try {
+      taken = await semaphore.acquireSpecific({
+        allowedSlugs: previewEnvironmentSlugs,
+        type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+        slug: slot.slug,
+        leaseMs: holdMs,
+        holder: "gc",
+      });
+    } catch (error) {
+      failures.push(error);
+      outcomes.push({
+        slug: slot.slug,
+        action: "acquire-failed",
+        holder: slot.holder,
+        error: formatPreviewErrorMessage(error),
+      });
+      continue;
+    }
     if (!taken) {
       logPreview(`gc: ${slot.slug} was re-leased since the snapshot — leaving it to its tenant`);
       outcomes.push({ slug: slot.slug, action: "skipped", holder: slot.holder });
@@ -1678,41 +1713,63 @@ export async function gc(options: GcOptions = {}) {
     }
     try {
       logPreview(
-        `gc: reclaiming ${slot.slug} — lease from ${slot.holder ?? "unknown"} expired ${formatDurationMs(now - slot.leasedUntil)} ago; erasing`,
+        `gc: destroying recorded stack ${slot.slug}${slot.holder ? ` after ${slot.holder}'s lease expired` : ""}`,
       );
-      await eraseSlotData({ dopplerConfig: slot.dopplerConfig, slug: slot.slug });
-      outcomes.push({ slug: slot.slug, action: "reclaimed", holder: slot.holder });
+      await destroyPreviewStackAndDeleteRecord({
+        destroyEnvironment,
+        dopplerConfig: slot.dopplerConfig,
+        semaphore,
+        slug: slot.slug,
+      });
+      outcomes.push({ slug: slot.slug, action: "destroyed", holder: slot.holder });
     } catch (error) {
       logPreview(
-        `gc: erase failed for ${slot.slug}; releasing it for its next taker to re-erase: ${error instanceof Error ? error.message : String(error)}`,
+        `gc: destroy failed for ${slot.slug}; keeping its stack record for the next sweep: ${error instanceof Error ? error.message : String(error)}`,
       );
+      failures.push(error);
       outcomes.push({
         slug: slot.slug,
-        action: "erase-failed",
+        action: "destroy-failed",
         holder: slot.holder,
-        error: error instanceof Error ? error.message : String(error),
+        error: formatPreviewErrorMessage(error),
       });
-    } finally {
+    }
+    try {
       await semaphore.release({
         slug: slot.slug,
         type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
         leaseId: taken.leaseId,
       });
+    } catch (error) {
+      failures.push(error);
+      outcomes.push({
+        slug: slot.slug,
+        action: "release-failed",
+        holder: slot.holder,
+        error: formatPreviewErrorMessage(error),
+      });
     }
   }
 
-  const reclaimedCount = outcomes.filter((outcome) => outcome.action === "reclaimed").length;
+  const destroyedCount = outcomes.filter((outcome) => outcome.action === "destroyed").length;
   logPreview(
-    `gc: ${expired.length} slot(s) past lease expiry, ${reclaimedCount} reclaimed${options.dryRun ? " (dry-run — nothing erased)" : ""}`,
+    `gc: ${stacks.length} recorded stack(s), ${candidates.length} without a live tenant, ${destroyedCount} destroyed${options.dryRun ? " (dry-run — nothing destroyed)" : ""}`,
   );
-  return {
+  const result = {
     checkedAt: new Date(now).toISOString(),
-    leaseTtlHours: defaultPreviewLeaseMs / 3_600_000,
     dryRun: options.dryRun ?? false,
-    expiredCount: expired.length,
-    reclaimedCount,
+    recordedCount: stacks.length,
+    candidateCount: candidates.length,
+    destroyedCount,
     outcomes,
   };
+  if (failures.length > 0) {
+    throw new AggregateError(
+      failures,
+      `Preview GC left ${failures.length} failed operation(s); durable stack records remain for retry.`,
+    );
+  }
+  return result;
 }
 
 /**
@@ -2365,7 +2422,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     appPath: "apps/semaphore",
     deployCommandArgs: ["pnpm", "run-script", "deploy"],
     // Semaphore's preview e2e generates per-run-unique resource types and
-    // self-cleans; there is nothing slot-scoped to erase on release.
+    // self-cleans; there is nothing app-specific to destroy on release.
     dopplerProject: "semaphore",
     resolvePreviewAppConfig: (dopplerConfig) => {
       const environment = requirePreviewEnvironment("semaphore", dopplerConfig, semaphoreEnvs);
@@ -2571,6 +2628,7 @@ const previewReadinessRequestTimeoutMs = 10_000;
 const defaultPreviewReadyUrlPath = "/api/__internal/health";
 const defaultPreviewDeployConcurrency = 5;
 const ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE = "environment-config-lease" as const;
+const PREVIEW_STACK_RESOURCE_TYPE = "preview-stack" as const;
 // auth/preview root inherits these from auth/dev when it doesn't already carry
 // its own value. All are canonical APP_CONFIG_* names (the AppConfig port,
 // #1594); the pre-port legacy flat names are gone from every auth config.
@@ -2798,6 +2856,7 @@ type PreviewSemaphoreLease = {
 };
 
 export type PreviewSemaphoreResourceClient = {
+  add: (input: { data: Record<string, unknown>; slug: string; type: string }) => Promise<unknown>;
   acquire: (input: {
     allowedSlugs: string[];
     holder?: string;
@@ -2816,6 +2875,7 @@ export type PreviewSemaphoreResourceClient = {
   release: (input: { force?: boolean; leaseId?: string; slug: string; type: string }) => Promise<{
     released: boolean;
   }>;
+  delete: (input: { slug: string; type: string }) => Promise<{ deleted: boolean }>;
   list: (input: { type: string }) => Promise<
     Array<{
       data: Record<string, unknown>;
@@ -2923,12 +2983,14 @@ function createPreviewSemaphoreResourceClient(
   });
 
   return {
+    add: ({ data, slug, type }) => semaphore.resources.add({ data, slug, type }),
     acquire: ({ allowedSlugs, holder, leaseMs, type, waitMs }) =>
       semaphore.resources.acquire({ allowedSlugs, holder, leaseMs, type, waitMs }),
     acquireSpecific: ({ allowedSlugs, force, holder, leaseMs, slug, type }) =>
       semaphore.resources.acquireSpecific({ allowedSlugs, force, holder, leaseMs, slug, type }),
     release: ({ force, leaseId, slug, type }) =>
       semaphore.resources.release({ force, leaseId, slug, type }),
+    delete: ({ slug, type }) => semaphore.resources.delete({ slug, type }),
     list: ({ type }) => semaphore.resources.list({ type }),
   };
 }
@@ -2992,6 +3054,60 @@ function parseEnvironmentConfigLeaseData(
   return {
     dopplerConfig: data.dopplerConfig.trim(),
   };
+}
+
+/**
+ * Durable cleanup obligation for a preview stack. It is created before any
+ * destroy/provision boundary and removed only after a final destroy succeeds.
+ * A live environment lease keeps GC away; releasing that lease never loses
+ * the obligation.
+ */
+async function ensurePreviewStackRecord(input: {
+  dopplerConfig: string;
+  semaphore: PreviewSemaphoreResourceClient;
+  slug: string;
+}) {
+  const existing = await input.semaphore.list({ type: PREVIEW_STACK_RESOURCE_TYPE });
+  if (existing.some(({ slug }) => slug === input.slug)) return;
+
+  try {
+    await input.semaphore.add({
+      type: PREVIEW_STACK_RESOURCE_TYPE,
+      slug: input.slug,
+      data: { dopplerConfig: input.dopplerConfig },
+    });
+  } catch (addError) {
+    // A concurrent lifecycle command may have inserted the same idempotency
+    // record after our list. Confirm that outcome rather than depending on a
+    // particular client error shape.
+    try {
+      const afterConflict = await input.semaphore.list({ type: PREVIEW_STACK_RESOURCE_TYPE });
+      if (afterConflict.some(({ slug }) => slug === input.slug)) return;
+    } catch (verificationError) {
+      throw new AggregateError(
+        [addError, verificationError],
+        `Could not record cleanup ownership for ${input.slug}.`,
+      );
+    }
+    throw addError;
+  }
+}
+
+async function destroyPreviewStackAndDeleteRecord(input: {
+  destroyEnvironment: DestroyPreviewEnvironment;
+  dopplerConfig: string;
+  semaphore: PreviewSemaphoreResourceClient;
+  slug: string;
+}) {
+  await ensurePreviewStackRecord(input);
+  await input.destroyEnvironment({
+    dopplerConfig: input.dopplerConfig,
+    slug: input.slug,
+  });
+  await input.semaphore.delete({
+    type: PREVIEW_STACK_RESOURCE_TYPE,
+    slug: input.slug,
+  });
 }
 
 function isSameResourceData(
@@ -4032,7 +4148,7 @@ async function cleanupPreviewForPullRequest(
       semaphore,
     })) ??
     // A lapsed-but-free recorded slot still carries this PR's deployment;
-    // take it back (non-force) so the teardown can erase it.
+    // take it back (non-force) so the teardown can destroy it.
     (await retakeRecordedSlotIfFree({
       holder,
       leaseMs: defaultPreviewLeaseMs,
@@ -4087,8 +4203,10 @@ async function cleanupPreviewForPullRequest(
   let cleanupFailure: unknown;
   let teardownOk = true;
   try {
-    await makePreviewSlotDataEraser(params)({
+    await destroyPreviewStackAndDeleteRecord({
+      destroyEnvironment: makePreviewEnvironmentDestroyer(params),
       dopplerConfig: environmentConfigLease.dopplerConfig,
+      semaphore,
       slug: environmentConfigLease.slug,
     });
   } catch (error) {
@@ -4119,10 +4237,10 @@ async function cleanupPreviewForPullRequest(
   );
 
   // Cleanup's contract: RELEASING THE LEASE is the load-bearing outcome, not
-  // the teardown. A failed teardown/erase leaves only slot-local dirt, and
-  // dirt is self-healing — every acquire erases the slot before handing it
-  // out (see eraseAcquiredSlotOrGiveItBack) — but a lease that is never
-  // released leaks until expiry and constrains the fleet
+  // the teardown. The durable preview-stack record remains until a final
+  // destroy succeeds, so the hourly GC can retry without keeping this
+  // environment lease occupied. A lease that is never released leaks until
+  // expiry and constrains the fleet
   // (2026-07-14: a Cloudflare API 429 failed cleanup for the
   // merged pr-1950; the old code bailed before releasing and pr-1988 waited
   // 360s for a slot that never came). So: always release; `ok: false` now
@@ -4147,7 +4265,7 @@ async function cleanupPreviewForPullRequest(
     environmentConfigLease: null,
     notice: teardownOk
       ? state.notice
-      : `Teardown failed but the lease was released; ${environmentConfigLease.slug} is left dirty and its next acquire erases it before use. (preview cleanup at ${new Date().toISOString()})`,
+      : `Teardown failed but the lease was released; ${environmentConfigLease.slug} remains durably queued for hourly GC and its next acquire still destroys it before use. (preview cleanup at ${new Date().toISOString()})`,
   }));
 
   return {
@@ -4160,10 +4278,10 @@ async function cleanupPreviewForPullRequest(
 
 /**
  * Release cleanup's lease whether or not teardown succeeded, loudly flagging
- * the dirty-slot case. Returns `ok: false` only when the release call itself
+ * the failed-destroy case. Returns `ok: false` only when the release call itself
  * failed — that is the one outcome where the lease actually leaks until
- * expiry; a teardown failure alone is not a leak because the next
- * acquire erases the slot on entry (eraseAcquiredSlotOrGiveItBack).
+ * expiry. A teardown failure leaves a durable preview-stack record for GC and
+ * the next acquire also destroys the stack on entry.
  */
 async function releaseLeaseDespiteTeardownFailure(input: {
   lease: { type: string; slug: string; leaseId: string };
@@ -4172,7 +4290,7 @@ async function releaseLeaseDespiteTeardownFailure(input: {
 }): Promise<{ ok: boolean; released: boolean }> {
   if (!input.teardownOk) {
     logPreview(
-      `teardown FAILED on ${input.lease.slug} — releasing the lease anyway and leaving the slot dirty; its next acquire erases it before use (see eraseAcquiredSlotOrGiveItBack)`,
+      `teardown FAILED on ${input.lease.slug} — releasing the lease; its durable stack record remains queued for hourly GC`,
     );
   }
   try {
@@ -4302,7 +4420,7 @@ async function deployPreviewApp(input: {
   ) {
     // The record alone is not proof the worker still answers — this app may
     // be selected precisely because the not-serving sweep found it dead
-    // (selectRecordedGreenAppsNotServing), e.g. after a slot erase. Skip only
+    // (selectRecordedGreenAppsNotServing), e.g. after a stack destroy. Skip only
     // when every readiness URL answers right now.
     const reuseProofStartedAt = Date.now();
     const reuseProofPassed = (
@@ -4456,21 +4574,21 @@ async function runPreviewDeployCommand(input: {
 }
 
 /**
- * Erase a preview slot's user data before handing the slot to a new holder.
+ * Destroy a preview environment before handing the slot to a new holder.
  * Reclaim paths MUST run this: a reclaim only ever happens because the
- * previous holder's cleanup — which normally erases on the way out — failed
- * or never ran, so a reclaimed slot is dirty by definition. Deploying over
- * stale identity data breaks the next tenant (observed 2026-07-07 on
+ * previous holder's cleanup — which normally destroys on the way out — failed
+ * or never ran. Deploying over stale identity data breaks the next tenant
+ * (observed 2026-07-07 on
  * preview-5: 208 orphaned project-directory KV keys against an empty auth D1
  * → every itx project lookup answered "KV GET failed: 500").
  */
-type EraseSlotData = (input: { dopplerConfig: string; slug: string }) => Promise<void>;
+type DestroyPreviewEnvironment = (input: { dopplerConfig: string; slug: string }) => Promise<void>;
 
-function makePreviewSlotDataEraser(runtime: {
+function makePreviewEnvironmentDestroyer(runtime: {
   commandEnvironment: NodeJS.ProcessEnv;
   repositoryRoot: string;
   signal?: AbortSignal;
-}): EraseSlotData {
+}): DestroyPreviewEnvironment {
   return async ({ dopplerConfig, slug }) => {
     const startedAt = Date.now();
     logPreview(`destroying ${slug} before handover (environment ${dopplerConfig})`);
@@ -4854,7 +4972,7 @@ async function classifyEnvironmentConfigLeases(input: {
       return {
         slug: resource.slug,
         verdict,
-        // What `eraseSlotData` needs to wipe the slot. Falls back to the
+        // What `destroyEnvironment` needs to wipe the slot. Falls back to the
         // slug-derived config (preview-3 → preview_3) for slots that have
         // never been leased and so carry no data payload yet.
         dopplerConfig:
@@ -4883,38 +5001,43 @@ function parsePullRequestHolder(holder: string | null | undefined) {
 }
 
 /**
- * Erase a just-acquired slot before it is handed to the caller, giving the
+ * Destroy a just-acquired environment before it is handed to the caller, giving the
  * lease back on failure. Returns true when the slot is clean and ours.
  *
  * This runs on EVERY handover — plain acquire included, not just reclaims —
  * so slot cleanliness is an invariant of entry rather than an assumption
  * about how the previous tenant exited. Every exit path that skips the
- * cleanup erase (failed cleanup + lease expiry, `release --force`, a run
+ * cleanup destroy (failed cleanup + lease expiry, `release --force`, a run
  * cancelled mid-claim) becomes harmless: whoever picks the slot up next
- * wipes it first. A failed erase releases the lease rather than handing out
- * a dirty slot, and the released slot is safe back in the pool because its
- * next taker runs this same erase.
+ * destroys it first. A failed destroy releases the lease; the durable stack
+ * record stays queued for GC and the next tenant repeats the destroy.
  */
-async function eraseAcquiredSlotOrGiveItBack(input: {
-  eraseSlotData: EraseSlotData;
+async function destroyAcquiredEnvironmentOrReleaseLease(input: {
+  destroyEnvironment: DestroyPreviewEnvironment;
   lease: { data: Record<string, unknown>; leaseId: string; slug: string; type: string };
   semaphore: PreviewSemaphoreResourceClient;
 }) {
   try {
-    await input.eraseSlotData({
-      dopplerConfig: parseEnvironmentConfigLeaseData(input.lease.data).dopplerConfig,
+    const leaseData = parseEnvironmentConfigLeaseData(input.lease.data);
+    await ensurePreviewStackRecord({
+      dopplerConfig: leaseData.dopplerConfig,
+      semaphore: input.semaphore,
+      slug: input.lease.slug,
+    });
+    await input.destroyEnvironment({
+      dopplerConfig: leaseData.dopplerConfig,
       slug: input.lease.slug,
     });
     return true;
   } catch (error) {
     logPreview(
-      `erase failed on just-acquired ${input.lease.slug} — giving the lease back (the next taker erases before use): ${error instanceof Error ? error.message : String(error)}`,
+      `destroy failed on just-acquired ${input.lease.slug} — giving the lease back while its stack record remains queued for GC: ${error instanceof Error ? error.message : String(error)}`,
     );
     await input.semaphore
       .release({ type: input.lease.type, slug: input.lease.slug, leaseId: input.lease.leaseId })
       .catch((releaseError: unknown) => {
         logPreview(
-          `failed to release ${input.lease.slug} after the failed erase (it will expire on its own, and its next taker still erases first): ${releaseError instanceof Error ? releaseError.message : String(releaseError)}`,
+          `failed to release ${input.lease.slug} after the failed destroy (the lease expires on its own and the stack record remains): ${releaseError instanceof Error ? releaseError.message : String(releaseError)}`,
         );
       });
     return false;
@@ -4925,14 +5048,14 @@ async function eraseAcquiredSlotOrGiveItBack(input: {
  * Acquire any free slot, queueing (via semaphore long-poll) while all slots
  * are leased. Automation never force-acquires a held slot: a close-triggered
  * cleanup owns its lease until teardown finishes and releases it, which keeps
- * another PR from erasing or deploying into that slot concurrently. Every
- * handed-out slot is erased first (see eraseAcquiredSlotOrGiveItBack). Fails
+ * another PR from destroying or deploying into that slot concurrently. Every
+ * handed-over slot is destroyed first (see destroyAcquiredEnvironmentOrReleaseLease). Fails
  * with the full holder table and remediation steps once `waitTotalMs` elapses.
  */
 async function acquireAnyEnvironmentConfigLease(input: {
   semaphore: PreviewSemaphoreResourceClient;
-  /** Required so no acquire path can hand out a slot without wiping it. */
-  eraseSlotData: EraseSlotData;
+  /** Required so no acquire path can hand over a slot without destroying it. */
+  destroyEnvironment: DestroyPreviewEnvironment;
   holder: string;
   leaseMs: number;
   onFirstWait?: (holderTable: string) => Promise<void>;
@@ -4940,14 +5063,14 @@ async function acquireAnyEnvironmentConfigLease(input: {
 }) {
   const deadline = Date.now() + input.waitTotalMs;
   let attempt = 0;
-  // Slots whose erase already failed this run. A free-but-unerasable slot
+  // Slots whose destroy already failed this run. A free-but-undestroyable slot
   // comes straight back from the semaphore after we release it, so without
   // a pause the loop hot-cycles the same broken slot (observed 2026-07-09:
   // three unerasable slots, ~6s per lap, 150+ laps burning the entire wait
   // budget while spamming the log). A repeat failure means the slot needs a
   // human/agent — pause to let other slots free up instead of thrashing, and
   // say so once.
-  const eraseFailuresBySlug = new Map<string, number>();
+  const destroyFailuresBySlug = new Map<string, number>();
   const brokenSlotPauseMs = 30_000;
 
   for (;;) {
@@ -4965,30 +5088,30 @@ async function acquireAnyEnvironmentConfigLease(input: {
         holder: input.holder,
       });
       if (
-        await eraseAcquiredSlotOrGiveItBack({
-          eraseSlotData: input.eraseSlotData,
+        await destroyAcquiredEnvironmentOrReleaseLease({
+          destroyEnvironment: input.destroyEnvironment,
           lease: acquired,
           semaphore: input.semaphore,
         })
       ) {
         return acquired;
       }
-      // Bound the acquire→failed-erase→release cycle: without this check the
+      // Bound the acquire→failed-destroy→release cycle: without this check the
       // loop would spin on a free-but-unerasable slot past the wait budget.
       if (Date.now() >= deadline) {
         throw new Error(
-          `Could not hand ${input.holder} a clean slot: erasing ${acquired.slug} kept failing and the ${formatDurationMs(input.waitTotalMs)} wait budget is spent.`,
+          `Could not hand ${input.holder} a clean slot: destroying ${acquired.slug} kept failing and the ${formatDurationMs(input.waitTotalMs)} wait budget is spent.`,
         );
       }
-      const eraseFailures = (eraseFailuresBySlug.get(acquired.slug) ?? 0) + 1;
-      eraseFailuresBySlug.set(acquired.slug, eraseFailures);
-      if (eraseFailures === 2) {
+      const destroyFailures = (destroyFailuresBySlug.get(acquired.slug) ?? 0) + 1;
+      destroyFailuresBySlug.set(acquired.slug, destroyFailures);
+      if (destroyFailures === 2) {
         logPreview(
           `${acquired.slug} failed destroy twice — it needs repair. ` +
             `Pausing ${brokenSlotPauseMs / 1000}s between further attempts instead of hot-cycling it.`,
         );
       }
-      if (eraseFailures >= 2) {
+      if (destroyFailures >= 2) {
         await new Promise((res) =>
           setTimeout(res, Math.min(brokenSlotPauseMs, Math.max(0, deadline - Date.now()))),
         );
@@ -5045,16 +5168,16 @@ async function acquireAnyEnvironmentConfigLease(input: {
  *    doubles as the renewal, so no stored leaseId is ever consulted. The PR
  *    body's recorded slug is only a data-provenance hint here: an adopted
  *    slot that IS the recorded one carries this PR's own deployment and is
- *    never wiped; any other adopted slot has unknown provenance (the run
- *    that acquired it died before recording — possibly mid-erase) and is
- *    erased before handover.
+ *    never destroyed; any other adopted slot has unknown provenance (the run
+ *    that acquired it died before recording — possibly mid-destroy) and is
+ *    destroyed before handover.
  * 2. Re-take the recorded slot when its lease lapsed but nobody else claimed
  *    it — slot affinity keeps a lapsed PR on its own deployment instead of
  *    forcing a full redeploy elsewhere.
  * 3. Otherwise queue for any free slot.
  */
 async function claimEnvironmentConfigLease(input: {
-  eraseSlotData: EraseSlotData;
+  destroyEnvironment: DestroyPreviewEnvironment;
   holder: string;
   leaseMs: number;
   onFirstWait?: (holderTable: string) => Promise<void>;
@@ -5068,8 +5191,8 @@ async function claimEnvironmentConfigLease(input: {
     leaseMs: input.leaseMs,
     onAdopted: async (lease) => {
       if (lease.slug === input.recordedSlug) return true;
-      adoptedStackWasDestroyed = await eraseAcquiredSlotOrGiveItBack({
-        eraseSlotData: input.eraseSlotData,
+      adoptedStackWasDestroyed = await destroyAcquiredEnvironmentOrReleaseLease({
+        destroyEnvironment: input.destroyEnvironment,
         lease,
         semaphore: input.semaphore,
       });
@@ -5094,7 +5217,7 @@ async function claimEnvironmentConfigLease(input: {
 
   const lease = await acquireAnyEnvironmentConfigLease({
     semaphore: input.semaphore,
-    eraseSlotData: input.eraseSlotData,
+    destroyEnvironment: input.destroyEnvironment,
     holder: input.holder,
     leaseMs: input.leaseMs,
     onFirstWait: input.onFirstWait,
@@ -5114,7 +5237,7 @@ async function claimEnvironmentConfigLease(input: {
  * comes from the semaphore; the recorded slug is only an affinity hint.
  */
 async function assignEnvironmentConfigLease(input: {
-  eraseSlotData: EraseSlotData;
+  destroyEnvironment: DestroyPreviewEnvironment;
   force?: boolean;
   holder: string;
   leaseMs: number;
@@ -5135,8 +5258,8 @@ async function assignEnvironmentConfigLease(input: {
       leaseMs: input.leaseMs,
       onAdopted: async (lease) => {
         if (lease.slug === input.recordedSlug) return true;
-        heldStackWasDestroyed = await eraseAcquiredSlotOrGiveItBack({
-          eraseSlotData: input.eraseSlotData,
+        heldStackWasDestroyed = await destroyAcquiredEnvironmentOrReleaseLease({
+          destroyEnvironment: input.destroyEnvironment,
           lease,
           semaphore: input.semaphore,
         });
@@ -5215,14 +5338,14 @@ async function assignEnvironmentConfigLease(input: {
       }
       // Same entry invariant as every other handover — this also covers a
       // --force eviction, where the acquired slot holds the evicted PR's data.
-      const clean = await eraseAcquiredSlotOrGiveItBack({
-        eraseSlotData: input.eraseSlotData,
+      const clean = await destroyAcquiredEnvironmentOrReleaseLease({
+        destroyEnvironment: input.destroyEnvironment,
         lease: acquired,
         semaphore: input.semaphore,
       });
       if (!clean) {
         throw new Error(
-          `Erasing ${acquired.slug} failed, so its lease was given back rather than assigning a dirty slot. Retry, or pick another slot.`,
+          `Destroying ${acquired.slug} failed, so its lease was given back rather than assigning it. Retry, or pick another slot.`,
         );
       }
       lease = toEnvironmentConfigLease(acquired);
@@ -5253,7 +5376,7 @@ async function assignEnvironmentConfigLease(input: {
     lease = toEnvironmentConfigLease(
       await acquireAnyEnvironmentConfigLease({
         semaphore: input.semaphore,
-        eraseSlotData: input.eraseSlotData,
+        destroyEnvironment: input.destroyEnvironment,
         holder: input.holder,
         leaseMs: input.leaseMs,
         waitTotalMs: 0,
@@ -5325,7 +5448,7 @@ async function listSlotsLeasedToHolder(semaphore: PreviewSemaphoreResourceClient
  * recorded in the PR body, so a holder never accumulates a second slot
  * (preferSlug wins; extra holds expire on their own).
  *
- * onAdopted is a per-lease ready check (deploy erases unknown-provenance
+ * onAdopted is a per-lease ready check (deploy destroys unknown-provenance
  * slots there); returning false moves on to the holder's next slot, if any.
  */
 async function adoptLeaseHeldBySemaphore(input: {
@@ -5369,7 +5492,7 @@ async function adoptLeaseHeldBySemaphore(input: {
  * take it back. Non-force, so the semaphore still arbitrates — a slot someone
  * else holds returns null and the caller refuses or moves elsewhere; the
  * recorded slug is only a hint about where to look, never authority. No
- * erase: the deployment on the slot is this PR's own.
+ * destroy: the deployment on the slot is this PR's own.
  */
 async function retakeRecordedSlotIfFree(input: {
   holder: string;
@@ -5600,7 +5723,7 @@ async function probePreviewAppServingOnce(url: URL): Promise<{ ok: boolean; deta
  * redeployed either; auth had to be redeployed by hand. Probing each green
  * app's readiness URL once makes destroy + re-run self-healing: the missing
  * app fails its probe, joins the retry selection, and pulls its dependencies
- * (auth, whose OAuth-client seed lives in the wiped D1) along via
+ * (auth, whose OAuth-client seed lives in the destroyed D1) along via
  * expandPreviewDependencies.
  */
 async function selectRecordedGreenAppsNotServing(params: {
@@ -5632,7 +5755,7 @@ async function selectRecordedGreenAppsNotServing(params: {
     }
     if (probeFailures.length > 0) {
       logPreview(
-        `app ${app.slug} selected: recorded ${entry.status} but not actually serving (${probeFailures.join("; ")}) — the slot was likely erased since that deploy`,
+        `app ${app.slug} selected: recorded ${entry.status} but not actually serving (${probeFailures.join("; ")}) — the environment was likely destroyed since that deploy`,
       );
       notServing.push(app.slug);
     }
@@ -6168,6 +6291,8 @@ export const previewInternals = {
   describeLostSlotOwnership,
   describePreviewSlotChange,
   diagnosePreviewFleetCapacity,
+  destroyPreviewStackAndDeleteRecord,
+  ensurePreviewStackRecord,
   evaluateCloudflareZoneCheck,
   holderPullRequestUrl,
   pullRequestHolder,
@@ -6175,7 +6300,7 @@ export const previewInternals = {
   requireExplicitReclaimForce,
   retakeRecordedSlotIfFree,
   resolveSlotWaitTotalMs,
-  selectExpiredLeasesForGc,
+  selectPreviewStacksForGc,
   expandPreviewDependencies,
   orderPreviewDeployBatches,
   parseLastDeployedWorkerVersionId,

@@ -34,11 +34,12 @@ secrets). Generated configs and Alchemy manifests are gitignored; review
 application resolutions. The `pnpm infra` command installs that exact nested
 lock before deploy or destroy; the root lockfile contains no Alchemy packages.
 
-The lifecycle is deliberately fresh-stack-only. There is no repository import,
-adoption, state reconstruction, committed fallback ID, or compatibility mode.
-Normal deploy and destroy require Alchemy's persisted state. If that state is
-lost, stop: explicit operator cleanup must remove the abandoned environment
-before a new stack is created; repository code does not infer or import it.
+The Cloudflare resource lifecycle is deliberately fresh-stack-only. There is
+no resource import/adoption, Alchemy state reconstruction, committed fallback
+ID, or compatibility mode. Normal deploy and destroy require Alchemy's
+persisted state. If that state is lost, stop: explicit operator cleanup must
+remove the abandoned environment before a new stack is created; repository
+code does not infer or import it.
 
 ## Environment selection is explicit
 

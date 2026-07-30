@@ -36,9 +36,12 @@ signal. "Unavoidable error spam" is not a category.
   `preview_N`; `dev`/`dev_<you>` are fully local and never deploy).
 - Each app deploys with its own small scripts: `pnpm run deploy --env <name>`
   (build → wrangler deploy with atomic secrets → smoke) and
-  `ensure-resources`. `pnpm infra destroy --env <name>` deletes the complete
-  environment before a fresh-stack recreation.
+  `ensure-resources`. `pnpm infra destroy --env <name>` deletes disposable
+  Workers/DOs, containers, Artifacts, and the Alchemy data stack before
+  recreation; stable DNS and inbound-email scaffolding remain.
 - Details: [DevOps: Cloudflare And Doppler](docs/devops-cloudflare-doppler.md).
+- Cleanup model:
+  [Preview resource garbage collection](docs/preview-resource-gc.md).
 
 ## Talking to OS
 
@@ -174,7 +177,7 @@ from your machine, and when you need a public callback URL. Doppler/Cloudflare/d
 - [Coding style](docs/coding-style.md)
 - [Depot CI](docs/depot-ci.md) — workflow editing, Depot CLI commands, monitoring/wait loops, logs, dispatch, metrics, secrets, and gotchas
 - [CLI scripts](docs/cli-scripts.md) — how to write normal TypeScript scripts and expose them as CLIs
-- [Preview CI performance](docs/ci-preview-performance.md) — how the preview deploy+e2e check stays ~2-3 min, the budget guardrail, and how to keep it fast without raising cost
+- [Preview CI performance](docs/ci-preview-performance.md) — warm incremental versus fresh-handover critical paths, the budget guardrail, and how to keep both fast without raising cost
 - [CI and test telemetry](docs/ci-test-telemetry.md) — one PostHog model and health-checked dashboards for Vitest/Playwright/Node tests, failures, retries, phases, GitHub Actions, Depot, and review bots
 - [TypeScript conventions](docs/typescript-conventions.md)
 - [Frontend development](docs/frontend-development.md) — the apps/os programming model: one capnweb capability tree over one WebSocket, the thin itx hooks (`useIterateSession`/`useItx`, `useItxQuery`/`useIterateSessionQuery`, `useLiveState`), and LiveView-style live state from Durable Objects
@@ -187,7 +190,7 @@ from your machine, and when you need a public callback URL. Doppler/Cloudflare/d
 - [Vitest patterns](docs/vitest-patterns.md)
 - [Domain objects & stream processors](docs/domain-objects-and-stream-processors.md)
 - [Writing & testing stream processors](docs/writing-stream-processors.md) — side-effect guarantees, the obligation/reconciler pattern, eviction recovery, staleness policy, and the node test harness
-- [Playwright specs](./spec/AGENTS.md) - instructions for agents writing playwright tests
+- [Playwright specs](./specs/AGENTS.md) - instructions for agents writing playwright tests
 
 ### Tasks & agent docs
 

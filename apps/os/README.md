@@ -189,9 +189,10 @@ Project-scoped and platform-wide operator browser sessions are documented in
 - `src/config.ts` — the `AppConfig` runtime config schema.
 - `src/routes/_app` — authenticated app routes; `src/start.ts` installs the
   auth-worker request middleware.
-- `wrangler.jsonc` — the deployment config, generated from the root
-  `envs.ts` by `scripts/generate-wrangler-config.ts` (one worker, all DO
-  classes; see docs/worker-topology.md). Deploys: `pnpm run deploy --env <name>`.
+- `wrangler.jsonc` — the deployment config, generated from root `envs.ts` plus
+  the environment's Alchemy resource manifest by
+  `scripts/generate-wrangler-config.ts` (one worker, all DO classes; see
+  docs/worker-topology.md). Deploys: `pnpm run deploy --env <name>`.
 
 ## History
 

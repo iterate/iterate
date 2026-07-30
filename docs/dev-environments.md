@@ -8,8 +8,10 @@ Every deployed environment is an entry in the root **`envs.ts`** (hostnames,
 worker names, and accounts), an Alchemy-generated data-resource manifest, plus
 a Doppler config of the same name carrying its secrets.
 `pnpm run deploy --env prd` deploys production, `--env preview_N` a preview
-slot; `dev` runs a fully-local server and never deploys. Scripts never branch
-on environment names; envs.ts + the manifest + the config supply everything.
+slot; `dev` runs a fully-local server and never deploys. Target selection is
+always explicit and validated; envs.ts + the manifest + the config supply the
+environment. Preview retention and production destruction guards are explicit
+stage policies.
 
 Local dev is **fully local**: D1/DOs run in miniflare inside your worktree's
 `.wrangler/`, the server listens on a random free port at
@@ -343,12 +345,10 @@ invariants:
 - **A PR keeps its slot from first deploy until the PR closes.** Every
   `preview deploy` / `preview test` run renews the lease for 3h; closing the
   PR destroys the environment and releases it. Lease expiry is the safety valve for
-  abandoned PRs (no pushes for >3h) — kept short because a leased slot costs us
-  for its Cloudflare resources, and a deploy/e2e cycle is only minutes so an
-  active PR never lapses mid-run. A lapsed lease is reclaimed by the scheduled
-  GC sweep — see **[Preview resource GC](preview-resource-gc.md)** for why a
-  destroy failure cannot pin the lease (and how disposable data expires 3h
-  after last use).
+  abandoned PRs (no pushes for >3h). A durable stack record remains until
+  verified destroy, so the scheduled GC still sees failed cleanup after the
+  environment lease is released. See
+  **[Preview resource GC](preview-resource-gc.md)**.
 - **Draft PRs don't claim a slot unless they ask.** Drafts are the default
   for agent-opened PRs, and nineteen slots don't survive a busy night of them. A
   draft asks by wearing the `preview` label (durable — previews then behave
@@ -387,8 +387,8 @@ invariants:
   doppler run --project _shared --config prd -- pnpm preview status
   # Free an orphaned/idle slot after checking no cleanup is mid-flight:
   pnpm preview reclaim --slot preview-4 --force
-  # Reclaim every slot whose lease has expired (what the hourly GC cron runs;
-  # --dry-run to preview). Never touches a live lease.
+  # Show recorded stacks without a live tenant (what hourly GC destroys).
+  # The real sweep takes each lease non-force, so it never touches a live slot.
   doppler run --project _shared --config prd -- pnpm preview gc --dry-run
   ```
 
@@ -431,14 +431,13 @@ Closing or merging the PR runs `pnpm preview cleanup`, which verifies that the
 PR still owns the lease, destroys the slot's Workers, Durable Object storage,
 Artifacts repositories, containers, D1/KV/R2 stack, and then releases it.
 
-Slot cleanliness is an **invariant of entry**, not a promise about exits:
-every deployment handover — a fresh acquire, resumed lease, reclaim, or
-`assign`ed slot — destroys the environment before the new holder deploys. So
-even when an exit path's destroy fails (`release --force`, lease expiry, or a
-run cancelled mid-claim), the next tenant never sees the previous one's data.
-The deliberate exception is manual `preview acquire` (Story 4): it only leases
-a slot, so an operator can inspect its current state before choosing to deploy
-or destroy it.
+Slot cleanliness is an **invariant of tenant handover**, not a promise about
+exits. A new tenant or an unknown-provenance acquired slot is destroyed before
+deployment. The same PR's continuously held or still-free recorded slot is
+renewed/re-taken without destruction, preserving incremental deploys. This is
+lease continuity, not Cloudflare resource adoption or Alchemy state
+reconstruction. Manual `preview acquire` (Story 4) only leases a slot so an
+operator can inspect its current state before choosing to deploy or destroy it.
 
 ### Story 2: run what CI runs, locally
 
@@ -458,7 +457,7 @@ semaphore), so a local run renews (never fights) the slot CI claimed for the
 same PR.
 
 For a focused flake hunt, reuse the exact OS deployment and run one test file
-repeatedly without deploying, erasing the slot, or changing the PR's recorded
+repeatedly without deploying, destroying the environment, or changing the PR's recorded
 full-suite result:
 
 ```bash
@@ -558,13 +557,14 @@ doppler run --project _shared --config prd -- pnpm preview reconcile  # leases v
 **destroys the environment**, then returns it to the pool clean — the previous
 holder's Workers, storage, projects, agents, and schedules are gone. If destroy
 fails, the temporary lease stays in place (the slot shows as held by
-`reclaim-<you>`) rather than a dirty slot going back in the pool.
+`reclaim-<you>`) so an operator resolves it before another tenant can race it.
 
 Automation never force-reclaims a live lease, including one whose PR is
 closed. That lets close-triggered cleanup remain the sole owner until it has
 finished destroying and releases the slot; another PR can queue but cannot
-deploy or destroy concurrently. Cleanup releases after a failed destroy so the
-next acquire can retry from scratch; `reclaim --slot N --force` is the explicit
+deploy or destroy concurrently. Cleanup releases after a failed destroy while
+the durable stack record remains queued for hourly GC; the next tenant also
+destroys before deployment. `reclaim --slot N --force` is the explicit
 operator path when automation itself has stopped.
 
 `--force` (on `acquire`, `release`, and `reclaim`) is the only way to take any
