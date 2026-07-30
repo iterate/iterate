@@ -32,12 +32,12 @@ describe("DocsApp", () => {
 
     const response = await app.fetch(
       new Request(
-        "https://docs--demo.iterate.app/?workspace=%2Fworkspaces%2Fagents%2Freviewer&path=%2Fplan.md",
+        "https://docs--demo.iterate.app/?workspace=%2Fworkspaces%2Fagents%2Freviewer&path=plan.md",
       ),
     );
 
     await expect(response.text()).resolves.toBe(
-      "https://docs.iterate.workers.dev/?workspace=%2Fworkspaces%2Fagents%2Freviewer&path=%2Fplan.md",
+      "https://docs.iterate.workers.dev/?workspace=%2Fworkspaces%2Fagents%2Freviewer&path=plan.md",
     );
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(dispose).toHaveBeenCalledOnce();
@@ -97,10 +97,10 @@ describe("DocsApp", () => {
     await expect(
       app.rpc.link({
         workspace: "/workspaces/agents/reviewer",
-        path: "/reviews/launch plan.md",
+        path: "reviews/launch plan.md",
       }),
     ).resolves.toBe(
-      "https://docs--demo.iterate-preview-3.app/?workspace=%2Fworkspaces%2Fagents%2Freviewer&path=%2Freviews%2Flaunch+plan.md",
+      "https://docs--demo.iterate-preview-3.app/?workspace=%2Fworkspaces%2Fagents%2Freviewer&path=reviews%2Flaunch+plan.md",
     );
     expect(appUrl).toHaveBeenCalledWith("docs");
     expect(dispose).toHaveBeenCalledOnce();

@@ -171,6 +171,9 @@ const SURFACE_GAPS: Record<string, string> = {
   "ai-generate-video": "same run<T> constraint as ai-generate-text; the body reads result.video",
   "cf-browser-markdown":
     "browser.quickAction() returns the action-shaped unknown; markdown is a string per entry",
+  "parallel-search-and-research":
+    "itx.parallel is an OpenApiRpc (object): operationIds are discovered lazily from Parallel's " +
+    "spec and only exist at runtime; the method shapes are declared per entry in examples-source.ts",
 };
 
 function mount(path: string[], types: string): CapabilityDescription {

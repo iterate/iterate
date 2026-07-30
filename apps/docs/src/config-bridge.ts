@@ -39,8 +39,12 @@ export class DocsAppRpcTarget extends RpcTarget {
 
   /** Build a review URL for one Markdown or HTML workspace file. */
   async link(input: DocsLinkInput): Promise<string> {
-    if (!input.workspace.startsWith("/workspaces/") || !input.path.startsWith("/")) {
-      throw new Error("Docs links require absolute workspace and document paths.");
+    // The document path may be relative (Docs resolves it against the
+    // workspace) or a fully qualified stream path.
+    if (!input.workspace.startsWith("/workspaces/") || input.path === "") {
+      throw new Error(
+        "Docs links require an absolute /workspaces/ path and a non-empty document path.",
+      );
     }
     const itx = await this.#env.ITX.get();
     try {

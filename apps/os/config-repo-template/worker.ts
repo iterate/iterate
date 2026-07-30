@@ -41,10 +41,60 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     return this.#docsApp.rpc;
   }
 
+  /**
+   * STANDING AGENT CONTEXT — the pattern to copy for any always-on knowledge.
+   *
+   * Every agent in this project carries the config repo's AGENTS.md as a
+   * keyed context item: appended at agent birth, and re-appended to EVERY
+   * agent whenever a config-repo commit lands (the keyed slot supersedes, so
+   * each agent sees exactly the current version). The idempotency key carries
+   * a content hash, so unchanged files and redeliveries dedupe to nothing,
+   * and dont-trigger-request means this never wakes an agent by itself.
+   * This content rides every LLM request of every agent — keep AGENTS.md lean.
+   */
+  async #syncAgentsMdContext(agentPaths: string[]): Promise<void> {
+    if (agentPaths.length === 0) return;
+    const itx = await this.itx;
+    const file = await itx.repo.readFile({ path: "AGENTS.md" });
+    if (file === null) return;
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(file.content));
+    const hash = [...new Uint8Array(digest).slice(0, 8)]
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+    for (const path of agentPaths) {
+      await itx.agents.get(path).append({
+        type: "events.iterate.com/agents/context-added",
+        idempotencyKey: `iterate/config/agents-md:${hash}`,
+        payload: {
+          content: `Project AGENTS.md (auto-injected from /repos/config/AGENTS.md — commit updates there to teach every agent):\n\n${file.content}`,
+          key: "config/agents-md",
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
+          role: "developer",
+        },
+      });
+    }
+  }
+
   // The base class delivers committed events on ANY stream here at least once and in
   // per-stream order.
   protected override async processEvent(event: StreamEvent): Promise<void> {
     switch (event.type) {
+      case "events.iterate.com/agent/created": {
+        // The birth event on the agent's own stream (copies carry
+        // source.copiedFrom and must not re-target the collection stream).
+        if (event.source?.copiedFrom !== undefined) break;
+        await this.#syncAgentsMdContext([event.path]);
+        break;
+      }
+      case "events.iterate.com/repo/commit-completed": {
+        // Any config-repo commit MAY have changed AGENTS.md — the content
+        // hash in the idempotency key turns the ones that didn't into no-ops.
+        if (event.path !== "/repos/config") break;
+        const itx = await this.itx;
+        const agents = await itx.agents.list();
+        await this.#syncAgentsMdContext(agents.map((agent) => agent.path));
+        break;
+      }
       case "events.iterate.com/project/heartbeat-triggered": {
         if (event.path !== "/") break;
         console.log("Project heartbeat fired", { scheduleKey: event.payload?.scheduleKey });

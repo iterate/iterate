@@ -426,9 +426,9 @@ return {
   },
   {
     id: "workspace-edit-and-push",
-    title: "Edit files in a workspace, then commit them to main",
+    title: "Edit repo files in a workspace, then commit them to main",
     description:
-      'A workspace is a mount-routed, copy-on-write filesystem in a Durable Object (no container, no clone, always warm) — the fastest place for multi-step file reading and editing. Address it with itx.workspaces.get("/workspaces/<name>"), then call handle.create({ mounts? }) explicitly; addressing alone never births it. By default the config repo is mounted at "/", so reads see its latest main until a local write shadows a path. Changes stay private until git.commit({ message }) — which commits ONE mount\'s changes straight to that repo\'s MAIN branch (the project worker/website redeploys automatically; no branches, no push step) and clears just that subtree. More repos mount into the tree via configure({ config: { mounts } }); commits never span mounts (pass { scope } when several are dirty).',
+      "A workspace is your private working copy of the project's one path namespace — a mount-routed, copy-on-write filesystem in a Durable Object (no container, no clone, always warm). Address it with itx.workspaces.get(\"/workspaces/<name>\"), then call handle.create({}) explicitly; addressing alone never births it. Every project repo is mounted at its own /repos/** path (the config repo at \"/repos/config\"; freshly created repos just appear), so reads see each repo's latest main until a local write shadows a path. Changes stay private until git.commit({ message, scope }) — which commits ONE repo's changes straight to ITS main branch (config-repo commits redeploy the project worker/website automatically; no branches, no push step) and clears just that subtree. scope names the repo mount and is required when several are dirty. Files under the workspace's OWN path are private scratch, never committable; relative paths resolve there.",
     context: "project",
     runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
     code: `
@@ -437,24 +437,27 @@ return {
 const workspace = itx.workspaces.get(vars.workspacePath ?? "/workspaces/example");
 await workspace.create({});
 
-// Reads fall through to the repo's latest main until shadowed by a write.
-// Paths are absolute; "/" is the repo root.
-const readme = await workspace.readFile("/README.md");
+// Reads fall through to each repo's latest main until shadowed by a
+// write. Paths are fully qualified: mount path = repo stream path.
+const readme = await workspace.readFile("/repos/config/README.md");
 
 // Write and edit freely — the overlay is a private working tree.
-await workspace.writeFile("/notes/workspace-example.md", "status: draft\\n");
+await workspace.writeFile("/repos/config/notes/workspace-example.md", "status: draft\\n");
 const edited = await workspace.edit({
-  path: "/notes/workspace-example.md",
+  path: "/repos/config/notes/workspace-example.md",
   oldString: "status: draft",
   newString: "status: reviewed",
 });
 
-// What changed (grouped by owning mount), then one call ships it:
-// commit() lands the changes on the mounted repo's MAIN branch — the
-// project worker/website redeploys automatically (no add/push dance,
-// .gitignored files are skipped; scope is optional with one dirty mount).
+// What changed (grouped by owning repo mount), then one call ships it:
+// commit() lands the changes on that repo's MAIN branch — the project
+// worker/website redeploys automatically (no add/push dance,
+// .gitignored files are skipped; scope picks the repo to commit).
 const status = await workspace.git.status();
-const committed = await workspace.git.commit({ message: "Workspace example note" });
+const committed = await workspace.git.commit({
+  message: "Workspace example note",
+  scope: "/repos/config",
+});
 
 return {
   readmePresent: readme !== null,
@@ -470,26 +473,29 @@ return {
     id: "workspace-files-transfer",
     title: "Move bytes between itx.files and a workspace",
     description:
-      "itx.files (R2-backed project file storage: uploads, attachments, signed URLs) and workspaces (repo checkouts) compose through bytes: files.get(path).bytes() → workspace.writeFileBytes pulls a stored file into the checkout; workspace.readFileBytes → files.get(path).put({ data, contentType }) publishes a checkout file to storage (e.g. to mint a signed URL). Gotcha: files.put string data must be base64 — encode plain text with new TextEncoder().encode(text).",
+      "itx.files (R2-backed project file storage: uploads, attachments, signed URLs) and workspaces (private working copies of the project namespace) compose through bytes: files.get(path).bytes() → workspace.writeFileBytes pulls a stored file into the workspace's own scratch directory; workspace.readFileBytes on a mounted repo path → files.get(path).put({ data, contentType }) publishes a repo file to storage (e.g. to mint a signed URL). Gotcha: files.put string data must be base64 — encode plain text with new TextEncoder().encode(text).",
     context: "project",
     runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
     code: `
-const workspace = itx.workspaces.get(vars.workspacePath ?? "/workspaces/example");
+const workspacePath = vars.workspacePath ?? "/workspaces/example";
+const workspace = itx.workspaces.get(workspacePath);
 await workspace.create({});
 
-// files -> workspace: pull a stored file into the checkout. put() string data
-// must be base64, so encode plain text as bytes instead.
+// files -> workspace: pull a stored file into the workspace's OWN
+// directory (private scratch, under no repo mount, never committed).
+// put() string data must be base64, so encode plain text as bytes.
 await itx.files.get("/examples/transfer.txt").put({
   data: new TextEncoder().encode(vars.note ?? "born in itx.files"),
   contentType: "text/plain",
 });
 const stored = await itx.files.get("/examples/transfer.txt").bytes();
-await workspace.writeFileBytes("/imported/transfer.txt", stored);
-const inWorkspace = await workspace.readFile("/imported/transfer.txt");
+await workspace.writeFileBytes(workspacePath + "/imported/transfer.txt", stored);
+const inWorkspace = await workspace.readFile(workspacePath + "/imported/transfer.txt");
 
-// workspace -> files: publish a checkout file (here the seeded package.json)
-// to project file storage and mint a shareable signed URL.
-const packageJsonBytes = await workspace.readFileBytes("/package.json");
+// workspace -> files: publish a repo file (the config repo's seeded
+// package.json, mounted at its /repos/** path) to project file storage
+// and mint a shareable signed URL.
+const packageJsonBytes = await workspace.readFileBytes("/repos/config/package.json");
 const published = await itx.files.get("/examples/package-from-workspace.json").put({
   data: packageJsonBytes,
   contentType: "application/json",
@@ -507,7 +513,7 @@ return {
     id: "repo-commit-files",
     title: "Commit files into the config repo",
     description:
-      "Every project has a git-backed repo (itx.repo is the one at path '/'). commitFiles writes a batch of changes as one commit — this is how agents keep durable notes, and how the project worker at worker.ts gets updated (repo-sourced workers are late-bound: the next call sees the new commit).",
+      "Every project has a git-backed config repo (itx.repo — shorthand for the repo at /repos/config). commitFiles writes a batch of repo-relative changes as one commit — this is how agents keep durable notes, and how the project worker at worker.ts gets updated (repo-sourced workers are late-bound: the next call sees the new commit).",
     context: "project",
     runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
     code: `
@@ -1252,6 +1258,100 @@ await repo.commitFiles({
 // echo of the mirror pushes themselves.
 const state = await repo.processor.snapshot();
 return { link, github: state.state.github, lastGithubPush: state.state.lastGithubPush };
+`.trim(),
+  },
+  {
+    id: "repo-import-public",
+    e2eProven: false,
+    title: "Clone a public GitHub repo — including iterate's own source",
+    description:
+      'create({ type: "github-public", owner, repo, depth? }) has Cloudflare Artifacts clone a public GitHub repository directly — no transfer through the Worker and NO connection needed. The clone then lives at its /repos/** path and is mounted into EVERY workspace automatically, readable like any other files. The platform\'s own source works exactly this way: clone github.com/iterate/iterate once and browse "/repos/iterate/..." from any workspace. Pass a connection to also link the repo (webhook ingestion + sync); a plain clone can be linked later with linkGithub and refreshed with syncFromGithub. External service — interactive-only.',
+    context: "project",
+    runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
+    code: `
+// The /repos/** path IS the identity — and the mount point every
+// workspace sees. depth: 1 skips history for a fast clone.
+const path = vars.path ?? "/repos/iterate";
+const repo = itx.repos.get(path);
+await repo.create({
+  type: "github-public",
+  owner: vars.owner ?? "iterate",
+  repo: vars.repo ?? "iterate",
+  depth: 1,
+});
+
+// The clone is an ordinary repo: list and read it directly...
+const files = await repo.listFiles();
+
+// ...or through any workspace, where it appears at its own path.
+const workspace = itx.workspaces.get("/workspaces/example");
+await workspace.create({});
+const readme = await workspace.readFile(path + "/README.md");
+
+return {
+  fileCount: files.paths.length,
+  readmePreview: readme === null ? null : readme.slice(0, 120),
+};
+`.trim(),
+  },
+  {
+    id: "parallel-search-and-research",
+    e2eProven: false,
+    title: "Web research through Parallel: one-call search, deep research runs",
+    description:
+      "itx.parallel is a pre-connected client for parallel.ai using iterate's platform API key — methods are the spec's operationIds, discovered lazily (__describe() lists them all). v1_search_v1_search_post({ search_queries, objective, mode }) is ONE-call web research: several queries fan out server-side and ranked excerpts come back together — usually better than chaining browser fetches. For DEEP research, create a task run with tasks_runs_post_v1_tasks_runs_post({ input, processor }) and fetch its result with tasks_runs_result_get_v1_tasks_runs__run_id__result_get({ run_id, timeout }) — the result call long-polls; for runs longer than one script turn, return the run_id and fetch the result next turn. External service — interactive-only.",
+    context: "project",
+    runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
+    code: `
+// One-call search: several queries fan out server-side, ranked
+// excerpts come back in one response.
+const search = await itx.parallel.v1_search_v1_search_post({
+  objective: vars.objective ?? "What is Cloudflare Workers?",
+  search_queries: ["Cloudflare Workers", "Cloudflare Workers runtime"],
+  mode: "turbo",
+  max_chars_total: 4000,
+});
+if (!vars.deep) {
+  return { search };
+}
+
+// Deep research: a task run works the question for minutes and returns
+// a structured answer. Kick it off, then long-poll the result — or
+// return the run_id and fetch it on your next turn.
+const run = await itx.parallel.tasks_runs_post_v1_tasks_runs_post({
+  input: vars.objective ?? "Summarize the Cloudflare Workers pricing model.",
+  processor: "base",
+});
+const result = await itx.parallel.tasks_runs_result_get_v1_tasks_runs__run_id__result_get({
+  run_id: run.run_id,
+  timeout: 240,
+});
+return { search, run_id: run.run_id, result };
+`.trim(),
+  },
+  {
+    id: "use-project-skill",
+    title: 'Find and follow a project skill ("use the <name> skill")',
+    description:
+      'Skills are per-project instruction files in the config repo at .agents/skills/<name>/SKILL.md. When asked to "use the <name> skill", list them through any workspace, read the matching one, and follow its instructions as part of your task. Writing a NEW skill is just committing a SKILL.md under that directory — which this example does first, so the discovery loop is complete.',
+    context: "project",
+    runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
+    code: `
+const workspace = itx.workspaces.get(vars.workspacePath ?? "/workspaces/example");
+await workspace.create({});
+
+// Author a skill (any agent can teach the project a new one): one
+// SKILL.md under its own folder, committed to the config repo.
+const skill = vars.skill ?? "greeting";
+const skillPath = "/repos/config/.agents/skills/" + skill + "/SKILL.md";
+await workspace.writeFile(skillPath, "# " + skill + " skill\\n\\nGreet warmly, by name.\\n");
+await workspace.git.commit({ message: "Add " + skill + " skill", scope: "/repos/config" });
+
+// Discovery: every skill is one SKILL.md under its own folder.
+const skillFiles = await workspace.glob("/repos/config/.agents/skills/*/SKILL.md");
+const instructions = await workspace.readFile(skillPath);
+
+return { skillFiles, instructions };
 `.trim(),
   },
   {

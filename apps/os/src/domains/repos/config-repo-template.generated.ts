@@ -15,6 +15,12 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "such as `GithubAiLinter`, `GuestbookApp`, and `TodoApp`; project-owned app source\n" +
       "lives under `apps/`, and the packaged linter reads editable policy from `rules/`.\n" +
       "\n" +
+      "This file is also the project's `AGENTS.md`: `worker.ts` injects its contents\n" +
+      "into every agent's context automatically (at agent birth and again on every\n" +
+      "config-repo commit — see `#syncAgentsMdContext`). Write stable project facts\n" +
+      "here and every agent learns them; keep it lean, because it rides every LLM\n" +
+      "request of every agent.\n" +
+      "\n" +
       "## Project lifecycle hooks\n" +
       "\n" +
       "The `processEvent` switch in `worker.ts` exposes the lifecycle events. Each\n" +
@@ -103,6 +109,12 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "default project worker (`fetch` plus `processEvent`). It declares packaged apps\n" +
       "such as `GithubAiLinter`, `GuestbookApp`, and `TodoApp`; project-owned app source\n" +
       "lives under `apps/`, and the packaged linter reads editable policy from `rules/`.\n" +
+      "\n" +
+      "This file is also the project's `AGENTS.md`: `worker.ts` injects its contents\n" +
+      "into every agent's context automatically (at agent birth and again on every\n" +
+      "config-repo commit — see `#syncAgentsMdContext`). Write stable project facts\n" +
+      "here and every agent learns them; keep it lean, because it rides every LLM\n" +
+      "request of every agent.\n" +
       "\n" +
       "## Project lifecycle hooks\n" +
       "\n" +
@@ -321,10 +333,60 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    return this.#docsApp.rpc;\n" +
       "  }\n" +
       "\n" +
+      "  /**\n" +
+      "   * STANDING AGENT CONTEXT — the pattern to copy for any always-on knowledge.\n" +
+      "   *\n" +
+      "   * Every agent in this project carries the config repo's AGENTS.md as a\n" +
+      "   * keyed context item: appended at agent birth, and re-appended to EVERY\n" +
+      "   * agent whenever a config-repo commit lands (the keyed slot supersedes, so\n" +
+      "   * each agent sees exactly the current version). The idempotency key carries\n" +
+      "   * a content hash, so unchanged files and redeliveries dedupe to nothing,\n" +
+      "   * and dont-trigger-request means this never wakes an agent by itself.\n" +
+      "   * This content rides every LLM request of every agent — keep AGENTS.md lean.\n" +
+      "   */\n" +
+      "  async #syncAgentsMdContext(agentPaths: string[]): Promise<void> {\n" +
+      "    if (agentPaths.length === 0) return;\n" +
+      "    const itx = await this.itx;\n" +
+      "    const file = await itx.repo.readFile({ path: \"AGENTS.md\" });\n" +
+      "    if (file === null) return;\n" +
+      "    const digest = await crypto.subtle.digest(\"SHA-256\", new TextEncoder().encode(file.content));\n" +
+      "    const hash = [...new Uint8Array(digest).slice(0, 8)]\n" +
+      "      .map((byte) => byte.toString(16).padStart(2, \"0\"))\n" +
+      "      .join(\"\");\n" +
+      "    for (const path of agentPaths) {\n" +
+      "      await itx.agents.get(path).append({\n" +
+      "        type: \"events.iterate.com/agents/context-added\",\n" +
+      "        idempotencyKey: `iterate/config/agents-md:${hash}`,\n" +
+      "        payload: {\n" +
+      "          content: `Project AGENTS.md (auto-injected from /repos/config/AGENTS.md — commit updates there to teach every agent):\\n\\n${file.content}`,\n" +
+      "          key: \"config/agents-md\",\n" +
+      "          llmRequestPolicy: { behaviour: \"dont-trigger-request\" },\n" +
+      "          role: \"developer\",\n" +
+      "        },\n" +
+      "      });\n" +
+      "    }\n" +
+      "  }\n" +
+      "\n" +
       "  // The base class delivers committed events on ANY stream here at least once and in\n" +
       "  // per-stream order.\n" +
       "  protected override async processEvent(event: StreamEvent): Promise<void> {\n" +
       "    switch (event.type) {\n" +
+      "      case \"events.iterate.com/agent/created\": {\n" +
+      "        // The birth event on the agent's own stream (copies carry\n" +
+      "        // source.copiedFrom and must not re-target the collection stream).\n" +
+      "        if (event.source?.copiedFrom !== undefined) break;\n" +
+      "        await this.#syncAgentsMdContext([event.path]);\n" +
+      "        break;\n" +
+      "      }\n" +
+      "      case \"events.iterate.com/repo/commit-completed\": {\n" +
+      "        // Any config-repo commit MAY have changed AGENTS.md — the content\n" +
+      "        // hash in the idempotency key turns the ones that didn't into no-ops.\n" +
+      "        if (event.path !== \"/repos/config\") break;\n" +
+      "        const itx = await this.itx;\n" +
+      "        const agents = await itx.agents.list();\n" +
+      "        await this.#syncAgentsMdContext(agents.map((agent) => agent.path));\n" +
+      "        break;\n" +
+      "      }\n" +
       "      case \"events.iterate.com/project/heartbeat-triggered\": {\n" +
       "        if (event.path !== \"/\") break;\n" +
       "        console.log(\"Project heartbeat fired\", { scheduleKey: event.payload?.scheduleKey });\n" +

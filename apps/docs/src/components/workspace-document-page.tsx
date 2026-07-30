@@ -154,9 +154,15 @@ export function WorkspaceDocumentPage({
             </span>
           </div>
           <p className="truncate font-mono text-[11px] text-muted-foreground">
-            {workspacePath.replace(/^\/workspaces\//, "")}
-            <span className="px-1.5 text-border">/</span>
-            {path.replace(/^\/+/, "")}
+            {loaded.snapshot.path.startsWith(`${workspacePath}/`) ? (
+              <>
+                {workspacePath.replace(/^\/workspaces\//, "")}
+                <span className="px-1.5 text-border">/</span>
+                {loaded.snapshot.path.slice(workspacePath.length + 1)}
+              </>
+            ) : (
+              loaded.snapshot.path
+            )}
           </p>
         </div>
         <div className="ml-auto flex items-center gap-1.5">

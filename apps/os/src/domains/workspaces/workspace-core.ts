@@ -76,9 +76,11 @@ type WorkspaceCoreOptions = {
   /** Durable synchronous kv for the whiteout map. */
   kv: WorkspaceKv;
   /**
-   * The mount table (mount path → mount), from the workspace's folded
-   * processor state. A thunk evaluated per operation, so a `configured` event
-   * is visible to the very next read without any cache invalidation here.
+   * The EFFECTIVE mount table (mount path → mount): the derived default
+   * (every project repo at its own /repos/** path) merged with the
+   * workspace's stored overlays. A thunk evaluated per operation, so a
+   * `configured` event or a freshly created repo is visible to the very next
+   * read without any cache invalidation here.
    */
   mounts: () => Promise<Record<string, WorkspaceMount>>;
   /**
@@ -86,6 +88,14 @@ type WorkspaceCoreOptions = {
    * re-derived per call, never held across them.
    */
   repo: (repoPath: string) => MountRepoAccess;
+  /**
+   * The workspace's own directory — its stream path (e.g.
+   * `/workspaces/agents/foo`). The ONLY subtree where unmounted private
+   * files may be written; everything else is either a mounted repo or not
+   * writable at all, so a typo'd path fails loudly instead of silently
+   * becoming stray scratch.
+   */
+  scratchRoot: string;
   /** The local layer: this workspace's own private virtual filesystem. */
   workspace: Workspace;
 };
@@ -109,12 +119,14 @@ export class WorkspaceCore {
   readonly #kv: WorkspaceKv;
   readonly #mounts: () => Promise<Record<string, WorkspaceMount>>;
   readonly #repo: (repoPath: string) => MountRepoAccess;
+  readonly #scratchRoot: string;
   readonly #workspace: Workspace;
 
   constructor(options: WorkspaceCoreOptions) {
     this.#kv = options.kv;
     this.#mounts = options.mounts;
     this.#repo = options.repo;
+    this.#scratchRoot = resolveAbsolutePath(options.scratchRoot);
     this.#workspace = options.workspace;
   }
 
@@ -130,8 +142,7 @@ export class WorkspaceCore {
   /** A mount's file paths at HEAD, spelled as absolute workspace paths. */
   async #mountFilePaths(mountPath: string, mount: WorkspaceMount): Promise<string[]> {
     const { paths } = await this.#repo(mount.repoPath).listFiles();
-    const prefix = mountPath === "/" ? "" : mountPath;
-    return paths.map((path) => `${prefix}/${path}`);
+    return paths.map((path) => `${mountPath}/${path}`);
   }
 
   // -- whiteouts ---------------------------------------------------------------
@@ -189,16 +200,56 @@ export class WorkspaceCore {
     return this.#serializeWrite(work);
   }
 
+  /** The write guard's public face — doors that will write LATER (a collab
+   * session's flush) pre-check here, so a doomed flush can never wedge a
+   * settle barrier on an unwritable path. */
+  assertWritable(path: string): Promise<void> {
+    return this.#assertWritable(path);
+  }
+
   // `.git` is reserved anywhere in the tree: mounts are repo checkouts in
   // spirit, and a local `.git` segment could shadow platform-managed plumbing
   // for some future git consumer.
-  #assertWritablePath(path: string): void {
+  #assertPlatformWritablePath(path: string): void {
     const resolved = resolveAbsolutePath(path);
     if (resolved === "/" || resolved.split("/").includes(".git")) {
       throw new Error(
         `Workspace path is not writable: "${path}" (the root and .git segments are platform-managed).`,
       );
     }
+  }
+
+  /**
+   * THE write guard, judged against the live mount table from inside the
+   * write chain (a queued configure cannot slip a mount under a write between
+   * guard and mutation):
+   *
+   * - `.git` segments and `/` are platform-managed everywhere.
+   * - Mount points and their virtual ancestors are DIRECTORIES: a local file
+   *   there would collide with the mounted subtree (and a mount-point file
+   *   would commit as an empty repo path).
+   * - A path inside a mounted repo is writable (the write is a private
+   *   shadow; the mount's POLICY gates commit, not the overlay).
+   * - A path under the workspace's own directory (its stream path) is private
+   *   scratch — always writable, never committable.
+   * - Everything else is rejected loudly: an unmounted absolute path is
+   *   almost always a typo (a repo that does not exist, another workspace's
+   *   directory), and silently accepting it would strand the caller's work.
+   */
+  async #assertWritable(path: string): Promise<void> {
+    this.#assertPlatformWritablePath(path);
+    const resolved = resolveAbsolutePath(path);
+    const mounts = await this.#mounts();
+    if (isVirtualDirectoryPath(mounts, resolved)) {
+      throw new Error(
+        `Workspace path is not writable: "${path}" is a mount point or a directory containing one.`,
+      );
+    }
+    if (routeMount(mounts, resolved) !== null) return;
+    if (resolved.startsWith(`${this.#scratchRoot}/`)) return;
+    throw new Error(
+      `Workspace path is not writable: "${path}". Private files live under your workspace directory ("${this.#scratchRoot}/..."; relative paths resolve there), repo files under a mounted repo path (${summarizeMountPoints(mounts)}).`,
+    );
   }
 
   // -- filesystem ----------------------------------------------------------------
@@ -331,44 +382,29 @@ export class WorkspaceCore {
   }
 
   async writeFile(path: string, content: string): Promise<void> {
-    this.#assertWritablePath(path);
     return this.#serializeWrite(async () => {
       // Inside the chain: a queued configure cannot slip a mount point under
       // this write between guard and mutation.
-      await this.#assertNotMountPoint(path);
+      await this.#assertWritable(path);
       await this.#workspace.writeFile(path, content);
       this.#clearWhiteout(path);
     });
   }
 
   async writeFileBytes(path: string, data: Uint8Array): Promise<void> {
-    this.#assertWritablePath(path);
     return this.#serializeWrite(async () => {
-      await this.#assertNotMountPoint(path);
+      await this.#assertWritable(path);
       await this.#workspace.writeFileBytes(path, data);
       this.#clearWhiteout(path);
     });
   }
 
-  /** Mount points — and every virtual ancestor directory leading to one —
-   * are DIRECTORIES: a local file there would collide with the mounted
-   * subtree (and a mount-point file would commit as an empty repo path). */
-  async #assertNotMountPoint(path: string): Promise<void> {
-    if (resolveAbsolutePath(path) === "/") return;
-    if (isVirtualDirectoryPath(await this.#mounts(), path)) {
-      throw new Error(
-        `Workspace path is not writable: "${path}" is a mount point or a directory containing one.`,
-      );
-    }
-  }
-
   async edit(input: EditWorkspaceFileInput): Promise<EditWorkspaceFileResult> {
-    this.#assertWritablePath(input.path);
     if (typeof input.oldString !== "string" || input.oldString === "") {
       throw new Error("edit oldString must be a non-empty string.");
     }
     return this.#serializeWrite(async () => {
-      await this.#assertNotMountPoint(input.path);
+      await this.#assertWritable(input.path);
       // Copy-up: editing a mount file materializes the edited copy locally.
       const content = await this.readFile(input.path);
       if (content === null) {
@@ -395,12 +431,11 @@ export class WorkspaceCore {
   }
 
   async deleteFile(path: string): Promise<boolean> {
-    this.#assertWritablePath(path);
     return this.#serializeWrite(async () => {
       // Inside the chain (writeFile's rule): a virtual directory cannot be
       // deleted — a whiteout at a mount's ancestor would claim a path both
       // gone and populated by the mounted subtree beneath it.
-      await this.#assertNotMountPoint(path);
+      await this.#assertWritable(path);
       // An already-masked path has nothing mount-side left to hide: deleting
       // it again must NOT touch the existing whiteout (retracting it would
       // resurrect the mount file). Only a local copy — visible above an
@@ -476,7 +511,7 @@ export class WorkspaceCore {
 
   /** Un-pin one path: drop the local copy/deletions so it follows its mount again. */
   async revert(path: string): Promise<void> {
-    this.#assertWritablePath(path);
+    this.#assertPlatformWritablePath(path);
     return this.#serializeWrite(async () => {
       if (await this.#workspace.exists(path)) {
         await this.#workspace.rm(path, { force: true, recursive: true });
@@ -532,7 +567,6 @@ export class WorkspaceCore {
     const localSet = new Set(localFiles);
     for (const key of Object.keys(next)) {
       const mountPath = resolveAbsolutePath(key);
-      if (mountPath === "/") continue;
       // A local file at the mount point or any ancestor segment of it makes
       // the mount path unreachable as a directory.
       const segments = mountPath.slice(1).split("/");
@@ -600,6 +634,13 @@ export class WorkspaceCore {
     mountPath: string,
   ): Promise<{ changes: WorkspaceChange[]; localPaths: string[]; staleWhiteouts: string[] }> {
     const owned = grouped.localByMount.get(mountPath)!;
+    // A CLEAN mount (no local shadows, no whiteouts) classifies to nothing
+    // without a repo listing — with every project repo mounted, status and
+    // commit inference must not pay one listFiles per repo just to learn
+    // that untouched mounts are untouched.
+    if (owned.length === 0 && grouped.whiteoutsByMount.get(mountPath)!.length === 0) {
+      return { changes: [], localPaths: [], staleWhiteouts: [] };
+    }
     const ownedSet = new Set(owned);
     const localPaths = await this.#publishableLocalPaths(mountPath, owned);
     const mountFiles = await this.#mountFilePaths(mountPath, snapshot.mounts[mountPath]!);
@@ -629,9 +670,9 @@ export class WorkspaceCore {
    * repo-relative paths (ignore rules never cross a mount boundary). Local
    * reads only — cheap enough for commit's dirty inference too. */
   async #publishableLocalPaths(mountPath: string, owned: string[]): Promise<string[]> {
-    const fromRel = (rel: string) => (mountPath === "/" ? rel : `${mountPath}${rel}`);
+    const fromRel = (rel: string) => `${mountPath}${rel}`;
     const publishableRel = await filterPublishablePaths({
-      paths: owned.map((path) => (mountPath === "/" ? path : path.slice(mountPath.length))),
+      paths: owned.map((path) => path.slice(mountPath.length)),
       readFile: (rel) => this.#workspace.readFile(fromRel(rel)),
     });
     return publishableRel.map(fromRel);
@@ -715,11 +756,11 @@ export class WorkspaceCore {
       let mountPath: string;
       if (input.scope === undefined) {
         // Inferred WITHOUT repo listings: any mount holding a PUBLISHABLE
-        // local file or a whiteout may have changes — .gitignored files (an
-        // agent's spilled script results live under "/") never nominate a
-        // mount, so they cannot fabricate span errors. (A stale whiteout can
-        // still nominate a mount that classification then proves clean —
-        // that fails loudly below instead of silently guessing another.)
+        // local file or a whiteout may have changes — .gitignored files
+        // never nominate a mount, so they cannot fabricate span errors. (A
+        // stale whiteout can still nominate a mount that classification then
+        // proves clean — that fails loudly below instead of silently
+        // guessing another.)
         const dirty: string[] = [];
         for (const path of snapshot.mountPaths) {
           const publishable =
@@ -770,8 +811,7 @@ export class WorkspaceCore {
         throw new Error(`Nothing to commit — no changes under the mount at "${mountPath}".`);
       }
 
-      const toRepoPath = (path: string) =>
-        mountPath === "/" ? path.slice(1) : path.slice(mountPath.length + 1);
+      const toRepoPath = (path: string) => path.slice(mountPath.length + 1);
       const repoChanges: RepoFileChange[] = [];
       for (const path of localPaths) {
         const bytes = await this.#workspace.readFileBytes(path);
@@ -808,7 +848,7 @@ export class WorkspaceCore {
       return {
         branch: result.branch,
         changedPaths: result.changedPaths
-          .map((path) => `${mountPath === "/" ? "" : mountPath}/${path.replace(/^\//, "")}`)
+          .map((path) => `${mountPath}/${path.replace(/^\//, "")}`)
           .sort(),
         commitOid: result.commitOid,
         mount: mountPath,
@@ -897,6 +937,14 @@ export function reRoutedPaths(
   });
 }
 
+/** A short, stable rendering of the table's mount points for error text. */
+function summarizeMountPoints(mounts: Record<string, WorkspaceMount>): string {
+  const points = Object.keys(mounts).sort();
+  const shown = points.slice(0, 5).map((point) => `"${point}"`);
+  const rest = points.length - shown.length;
+  return `${shown.join(", ")}${rest > 0 ? ` and ${rest} more` : ""}`;
+}
+
 export function routeMount(
   mounts: Record<string, WorkspaceMount>,
   path: string,
@@ -905,8 +953,10 @@ export function routeMount(
   let best: { mount: WorkspaceMount; mountPath: string } | null = null;
   for (const [key, mount] of Object.entries(mounts)) {
     const mountPath = resolveAbsolutePath(key);
-    const owns =
-      mountPath === "/" || resolved === mountPath || resolved.startsWith(`${mountPath}/`);
+    // A "/" mount owns nothing: the workspace root is the project namespace,
+    // never a repo checkout (the doors reject "/" mounts; a raw-appended one
+    // reduces to a harmless dead entry).
+    const owns = resolved === mountPath || resolved.startsWith(`${mountPath}/`);
     if (!owns) continue;
     if (best === null || mountPath.length > best.mountPath.length) best = { mount, mountPath };
   }
@@ -914,7 +964,9 @@ export function routeMount(
   if (resolved === best.mountPath) {
     return { mount: best.mount, mountPath: best.mountPath, repoRelativePath: "" };
   }
-  const repoRelativePath =
-    best.mountPath === "/" ? resolved.slice(1) : resolved.slice(best.mountPath.length + 1);
-  return { mount: best.mount, mountPath: best.mountPath, repoRelativePath };
+  return {
+    mount: best.mount,
+    mountPath: best.mountPath,
+    repoRelativePath: resolved.slice(best.mountPath.length + 1),
+  };
 }

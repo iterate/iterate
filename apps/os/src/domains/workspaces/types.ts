@@ -12,6 +12,21 @@ export type WorkspaceChange = {
   path: string;
 };
 
+/**
+ * The workspace's LIVE configuration: the effective mount table that routes
+ * reads and commits — every project repo at its own /repos/** stream path
+ * (commit-to-main), with the workspace's stored overlay deviations merged in.
+ */
+export type WorkspaceEffectiveConfig = {
+  mounts: Record<
+    string,
+    {
+      policy: "commit-to-main" | "read-only";
+      repoPath: string;
+    }
+  >;
+};
+
 /** Per-mount changes plus the unmounted local scratch (never committable). */
 export type WorkspaceStatus = {
   mounts: {

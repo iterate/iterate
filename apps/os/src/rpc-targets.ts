@@ -366,14 +366,14 @@ import type {
   EditWorkspaceFileResult,
   WorkspaceCommitInput,
   WorkspaceCommitResult,
+  WorkspaceEffectiveConfig,
   WorkspaceGitLogEntry,
   WorkspaceGitLogInput,
   WorkspaceStatus,
 } from "./domains/workspaces/types.ts";
 import type {
-  WorkspaceConfig,
   WorkspaceConfigPatch,
-  WorkspaceMount,
+  WorkspaceMountOverlay,
   WorkspaceProcessorState,
 } from "./domains/workspaces/workspace-processor-contract.ts";
 import type { CollabPresenceFlat } from "./domains/workspaces/collab-host.ts";
@@ -2064,7 +2064,7 @@ class WorkspaceCollectionRpcTarget extends IterateRpcTarget<"WorkspaceCollection
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        'Event-sourced, mount-routed workspaces. get("/workspaces/<name>") returns a handle without creating anything; call handle.create({ mounts? }) once before use. Birth always mounts the config repo at "/" with commit-to-main policy; supplied mounts are committed atomically as an initial configured patch on top. An agent\'s own workspace is its agent path under the prefix (what itx.workspace resolves to).',
+        'Event-sourced, mount-routed workspaces. get("/workspaces/<name>") returns a handle without creating anything; call handle.create({ mounts? }) once before use. Every project repo is mounted at its own /repos/** path automatically (commit-to-main); supplied mounts are overlay DEVIATIONS committed atomically as an initial configured patch. An agent\'s own workspace is its agent path under the prefix (what itx.workspace resolves to).',
       children: {
         get: "A possibly nonexistent workspace handle; call get(path).create({ mounts? }) before use.",
       },
@@ -2088,27 +2088,30 @@ class WorkspaceCollectionRpcTarget extends IterateRpcTarget<"WorkspaceCollection
 }
 
 /**
- * One durable workspace: an event-sourced, mount-routed private filesystem.
- * Its mount table (getConfig/configure) maps repos into the tree: reads under
- * a mount fall through to that repo's main at HEAD, writes land in a private
- * copy-on-write local layer (large files spill to R2 transparently), and
- * `git.commit({ scope })` turns ONE mount's changes into one commit on that
- * repo's main (honoring the mount's policy). Paths outside every mount are
- * private scratch. The `.git` name is reserved (platform-managed).
+ * One durable workspace: an event-sourced, mount-routed private working copy
+ * of the project's one path namespace. Every project repo is mounted at its
+ * own `/repos/**` stream path (derived from the project repo list — a fresh
+ * repo just appears); reads under a mount fall through to that repo's main at
+ * HEAD, writes land in a private copy-on-write local layer (large files spill
+ * to R2 transparently), and `git.commit({ scope })` turns ONE mount's changes
+ * into one commit on that repo's main (honoring the mount's policy). Private
+ * files live only under the workspace's own path (relative paths resolve
+ * there); writes anywhere else error. The `.git` name is reserved
+ * (platform-managed).
  */
 class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
   async __describe(): Promise<Description> {
     return describeNode({
-      instructions: `A workspace at "${this.props.path}" (event-sourced, mount-routed). Its mount table (getConfig/configure) maps repos into the tree — by default the config repo is mounted at "/", so reads see the repo's latest main until a local write shadows a path. Writes stay in a private overlay; git.commit({ message, scope? }) commits ONE mount's changes to that repo's main (read-only mounts reject commits; scope is optional when one mount is dirty). Paths outside every mount are private scratch.`,
+      instructions: `A workspace at "${this.props.path}" — your private working copy of the project's one path namespace. Every project repo is mounted at its own /repos/** path automatically (reads track that repo's latest main until a local write shadows a path; a freshly created repo just appears). Private files live under the workspace's own directory ("${this.props.path}/..."; relative paths resolve there) — writable anywhere under it, never committable. Writes under a mounted repo stay in a private overlay until git.commit({ message, scope? }) commits ONE mount's changes to that repo's main (read-only mounts reject commits; scope is required when more than one mount is dirty). Writes anywhere else error loudly.`,
       children: {
         create:
-          "Create this workspace with the default config-repo root mount plus any supplied mounts; waits through the atomic birth batch and returns this handle.",
+          "Create this workspace (every project repo is auto-mounted at its /repos/** path; optional mounts are overlay deviations); waits through the atomic birth batch and returns this handle.",
         configure:
-          "Patch configuration ({ config: { mounts } }) — deep-merged per mount point: unknown keys add mounts, partial values edit one mount, null removes one. Appends workspace/configured.",
+          'Patch mount overlays ({ config: { mounts } }) — deep-merged per mount point: unknown keys add mounts, partial values deviate a derived mount\'s fields (e.g. policy: "read-only"), null clears the overlay (the derived default returns). Appends workspace/configured.',
         deleteFile: "Delete one file (whiteouts a mount copy; false when it did not exist).",
         edit: "Replace an exact string in one file (copies a mount file up first); private until committed.",
         exists: "Whether a path exists in the merged view.",
-        getConfig: "The folded configuration (birth certificate + configured patches).",
+        getConfig: "The live EFFECTIVE mount table (derived default merged with overlays).",
         collab:
           "Collaborative session lane: open(path) / push(batch) / wait(path, epoch, afterVersion) / changes(path) — live rebase-model editing plus attributed redlines.",
         git: "Per-mount git surface: status (changes grouped by mount), commit ({ message, scope? }), log ({ scope? }).",
@@ -2154,9 +2157,11 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
     });
   }
 
-  /** Explicitly create this workspace and wait through its complete birth batch. */
+  /** Explicitly create this workspace and wait through its complete birth
+   * batch. Optional `mounts` are overlay DEVIATIONS from the derived table
+   * (every project repo at its own /repos/** path). */
   async create(
-    input: { mounts?: Record<string, WorkspaceMount> } = {},
+    input: { mounts?: Record<string, WorkspaceMountOverlay> } = {},
   ): Promise<WorkspaceRpcTarget> {
     const committed = await this.#stream.append(
       ...workspaceCreationEvents({
@@ -2191,13 +2196,15 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
     });
   }
 
-  /** The folded configuration (birth certificate + configured patches). */
-  getConfig(): Promise<WorkspaceConfig> {
+  /** The live configuration: the EFFECTIVE mount table (every project repo
+   * at its own /repos/** path, with stored overlay deviations merged in). */
+  getConfig(): Promise<WorkspaceEffectiveConfig> {
     return this.#read("getConfig", () => this.durableObjectStub.getConfig());
   }
 
-  /** Patch configuration — deep-merged per mount point; null removes a mount (appends workspace/configured). */
-  configure(input: { config: WorkspaceConfigPatch }): Promise<WorkspaceConfig> {
+  /** Patch mount overlays — deep-merged per mount point; null clears one
+   * back to the derived default (appends workspace/configured). */
+  configure(input: { config: WorkspaceConfigPatch }): Promise<WorkspaceEffectiveConfig> {
     return this.durableObjectStub.configure(input);
   }
 
@@ -5480,7 +5487,7 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   worker: "The default repo-backed project worker.",
   workers: "Dynamic worker refs: get(ref).",
   workspaces:
-    'Event-sourced, mount-routed workspaces by path: get("/workspaces/<name>") returns a possibly nonexistent handle; handle.create({ mounts? }) commits the atomic birth batch. git.commit({ scope? }) commits per mount. An agent\'s own workspace is itx.workspace.',
+    "Event-sourced, mount-routed workspaces by path: get(\"/workspaces/<name>\") returns a possibly nonexistent handle; handle.create({}) commits the atomic birth batch. Every project repo is auto-mounted at its own /repos/** path; private files live under the workspace's own path. git.commit({ scope? }) commits per mount. An agent's own workspace is itx.workspace.",
 };
 
 type ExistingProjectRpcTargetProps = {
@@ -6525,7 +6532,9 @@ export function deploymentItxForInternal(props: { auth: ItxAuth; ctx: CfExecutio
   return new SessionRpcTarget(props);
 }
 
-async function projectProcessorState(projectId: string) {
+/** The project stream's reduced state (repo catalog, worker builds, …) — also
+ * the workspace Durable Object's source for the derived mount table. */
+export async function projectProcessorState(projectId: string) {
   const project = env.PROJECT.getByName(DurableObjectNameCodec.stringify({ path: "/", projectId }));
   try {
     const processor = await project.processor;

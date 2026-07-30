@@ -919,15 +919,17 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "Workspace",
     kind: "interface",
     sourceText:
-      "/**\n * One durable workspace: an event-sourced, mount-routed private filesystem.\n * Its mount table (getConfig/configure) maps repos into the tree: reads under\n * a mount fall through to that repo's main at HEAD, writes land in a private\n * copy-on-write local layer (large files spill to R2 transparently), and\n * `git.commit({ scope })` turns ONE mount's changes into one commit on that\n * repo's main (honoring the mount's policy). Paths outside every mount are\n * private scratch. The `.git` name is reserved (platform-managed).\n */\nexport interface Workspace {\n  __describe(): Promise<Description>;\n  /** Explicitly create this workspace and wait through its complete birth batch. */\n  create(input: { mounts?: Record<string, WorkspaceMount> }): Promise<Workspace>;\n  whoami(): Promise<string>;\n  /** Restart the workspace's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  /** The workspace stream processor (snapshot/state). */\n  processor: StreamProcessorRpc<WorkspaceProcessorState>;\n  /** The folded configuration (birth certificate + configured patches). */\n  getConfig(): Promise<WorkspaceConfig>;\n  /** Patch configuration — deep-merged per mount point; null removes a mount (appends workspace/configured). */\n  configure(input: { config: WorkspaceConfigPatch }): Promise<WorkspaceConfig>;\n  /** One file's contents from the merged view (overlay, then owning mount at HEAD); null when missing. */\n  readFile(path: string): Promise<string | null>;\n  /** The collaborative session lane (rebase model, no Yjs) — workspace.collab. */\n  collab: WorkspaceCollab;\n  /** A path's mount content at HEAD — the base uncommitted work diffs against. */\n  readBase(path: string): Promise<string | null>;\n  /** Batched file reads (board seeds): one RPC, missing paths map to null. */\n  readFiles(paths: string[]): Promise<Record<string, string | null>>;\n  /** One file's raw bytes from the merged view; null when missing. */\n  readFileBytes(path: string): Promise<Uint8Array | null>;\n  /** Whether a path exists in the merged view. */\n  exists(path: string): Promise<boolean>;\n  /** Write one file into the private overlay. */\n  writeFile(path: string, content: string): Promise<void>;\n  /** Write raw bytes to one file in the private overlay. */\n  writeFileBytes(path: string, data: Uint8Array): Promise<void>;\n  /** Replace an exact string in one file (copies a mount file up first). */\n  edit(input: EditWorkspaceFileInput): Promise<EditWorkspaceFileResult>;\n  /** Delete one file (whiteouts a mount copy; false when it did not exist). */\n  deleteFile(path: string): Promise<boolean>;\n  /** Every file path in the merged view (local layer + every mount at HEAD, sorted). */\n  listAllFiles(): Promise<string[]>;\n  /** Merged file paths matching a glob pattern. */\n  glob(pattern: string): Promise<string[]>;\n  /** Wipe the local layer and deletions — back to a pristine view of the mounts. Uncommitted work is LOST. */\n  reset(): Promise<void>;\n  /** Un-pin ONE path: drop the local copy/deletion so it follows its mount again. */\n  revert(path: string): Promise<void>;\n  /** Per-mount git surface. */\n  git: WorkspaceGit;\n}",
-    summary: "One durable workspace: an event-sourced, mount-routed private filesystem.",
+      "/**\n * One durable workspace: an event-sourced, mount-routed private working copy\n * of the project's one path namespace. Every project repo is mounted at its\n * own `/repos/**` stream path (derived from the project repo list — a fresh\n * repo just appears); reads under a mount fall through to that repo's main at\n * HEAD, writes land in a private copy-on-write local layer (large files spill\n * to R2 transparently), and `git.commit({ scope })` turns ONE mount's changes\n * into one commit on that repo's main (honoring the mount's policy). Private\n * files live only under the workspace's own path (relative paths resolve\n * there); writes anywhere else error. The `.git` name is reserved\n * (platform-managed).\n */\nexport interface Workspace {\n  __describe(): Promise<Description>;\n  /** Explicitly create this workspace and wait through its complete birth\n   * batch. Optional `mounts` are overlay DEVIATIONS from the derived table\n   * (every project repo at its own /repos/** path). */\n  create(input: { mounts?: Record<string, WorkspaceMountOverlay> }): Promise<Workspace>;\n  whoami(): Promise<string>;\n  /** Restart the workspace's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  /** The workspace stream processor (snapshot/state). */\n  processor: StreamProcessorRpc<WorkspaceProcessorState>;\n  /** The live configuration: the EFFECTIVE mount table (every project repo\n   * at its own /repos/** path, with stored overlay deviations merged in). */\n  getConfig(): Promise<WorkspaceEffectiveConfig>;\n  /** Patch mount overlays — deep-merged per mount point; null clears one\n   * back to the derived default (appends workspace/configured). */\n  configure(input: { config: WorkspaceConfigPatch }): Promise<WorkspaceEffectiveConfig>;\n  /** One file's contents from the merged view (overlay, then owning mount at HEAD); null when missing. */\n  readFile(path: string): Promise<string | null>;\n  /** The collaborative session lane (rebase model, no Yjs) — workspace.collab. */\n  collab: WorkspaceCollab;\n  /** A path's mount content at HEAD — the base uncommitted work diffs against. */\n  readBase(path: string): Promise<string | null>;\n  /** Batched file reads (board seeds): one RPC, missing paths map to null. */\n  readFiles(paths: string[]): Promise<Record<string, string | null>>;\n  /** One file's raw bytes from the merged view; null when missing. */\n  readFileBytes(path: string): Promise<Uint8Array | null>;\n  /** Whether a path exists in the merged view. */\n  exists(path: string): Promise<boolean>;\n  /** Write one file into the private overlay. */\n  writeFile(path: string, content: string): Promise<void>;\n  /** Write raw bytes to one file in the private overlay. */\n  writeFileBytes(path: string, data: Uint8Array): Promise<void>;\n  /** Replace an exact string in one file (copies a mount file up first). */\n  edit(input: EditWorkspaceFileInput): Promise<EditWorkspaceFileResult>;\n  /** Delete one file (whiteouts a mount copy; false when it did not exist). */\n  deleteFile(path: string): Promise<boolean>;\n  /** Every file path in the merged view (local layer + every mount at HEAD, sorted). */\n  listAllFiles(): Promise<string[]>;\n  /** Merged file paths matching a glob pattern. */\n  glob(pattern: string): Promise<string[]>;\n  /** Wipe the local layer and deletions — back to a pristine view of the mounts. Uncommitted work is LOST. */\n  reset(): Promise<void>;\n  /** Un-pin ONE path: drop the local copy/deletion so it follows its mount again. */\n  revert(path: string): Promise<void>;\n  /** Per-mount git surface. */\n  git: WorkspaceGit;\n}",
+    summary:
+      "One durable workspace: an event-sourced, mount-routed private working copy of the project's one path namespace.",
     memberSummaries: {
       create: "Explicitly create this workspace and wait through its complete birth batch.",
       kill: "Restart the workspace's server-side object; the next request boots it fresh.",
       processor: "The workspace stream processor (snapshot/state).",
-      getConfig: "The folded configuration (birth certificate + configured patches).",
+      getConfig:
+        "The live configuration: the EFFECTIVE mount table (every project repo at its own /repos/** path, with stored overlay deviations merged in).",
       configure:
-        "Patch configuration — deep-merged per mount point; null removes a mount (appends workspace/configured).",
+        "Patch mount overlays — deep-merged per mount point; null clears one back to the derived default (appends workspace/configured).",
       readFile:
         "One file's contents from the merged view (overlay, then owning mount at HEAD); null when missing.",
       collab: "The collaborative session lane (rebase model, no Yjs) — workspace.collab.",
@@ -948,10 +950,10 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     },
     referencedTypeNames: [
       "Description",
-      "WorkspaceMount",
+      "WorkspaceMountOverlay",
       "StreamProcessorRpc",
       "WorkspaceProcessorState",
-      "WorkspaceConfig",
+      "WorkspaceEffectiveConfig",
       "WorkspaceConfigPatch",
       "WorkspaceCollab",
       "EditWorkspaceFileInput",
@@ -1753,7 +1755,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "RepoCreateInput",
     kind: "typeAlias",
     sourceText:
-      '/** The `repos/create-requested` payload — the creation saga\'s durable intent. */\nexport type RepoCreateInput =\n  | { type: "empty" }\n  | { type: "github-private"; connection: string; owner: string; repo: string }\n  | {\n      type: "github-public";\n      connection: string;\n      depth?: number | undefined;\n      owner: string;\n      repo: string;\n    };',
+      '/** The `repos/create-requested` payload — the creation saga\'s durable intent. */\nexport type RepoCreateInput =\n  | { type: "empty" }\n  | { type: "github-private"; connection: string; owner: string; repo: string }\n  | {\n      type: "github-public";\n      connection?: string | undefined;\n      depth?: number | undefined;\n      owner: string;\n      repo: string;\n    };',
     summary: "The `repos/create-requested` payload — the creation saga's durable intent.",
     memberSummaries: {},
     referencedTypeNames: [],
@@ -1847,7 +1849,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "RepoProcessorState",
     kind: "typeAlias",
     sourceText:
-      '/**\n * The repo processor\'s reduced state, inferred from the contract\'s\n * `stateSchema` — the one definition of the shape.\n */\nexport type RepoProcessorState = {\n  createRequest:\n    | { type: "empty" }\n    | { type: "github-private"; connection: string; owner: string; repo: string }\n    | {\n        type: "github-public";\n        connection: string;\n        depth?: number | undefined;\n        owner: string;\n        repo: string;\n      }\n    | null;\n  createFailure: {\n    error: string;\n    request:\n      | { type: "empty" }\n      | { type: "github-private"; connection: string; owner: string; repo: string }\n      | {\n          type: "github-public";\n          connection: string;\n          depth?: number | undefined;\n          owner: string;\n          repo: string;\n        };\n  } | null;\n  birthCertificate: {\n    request:\n      | { type: "empty" }\n      | { type: "github-private"; connection: string; owner: string; repo: string }\n      | {\n          type: "github-public";\n          connection: string;\n          depth?: number | undefined;\n          owner: string;\n          repo: string;\n        };\n    artifactName: string;\n    defaultBranch: string;\n    remote: string;\n  } | null;\n  artifactName: string | null;\n  defaultBranch: string | null;\n  github: {\n    connection: string;\n    installationId: string;\n    owner: string;\n    repo: string;\n    repositoryId: number;\n  } | null;\n  githubImport: {\n    branch: string;\n    requestId: string;\n    requestedCommitOid: string;\n    status: "requested" | "started";\n  } | null;\n  initialized: boolean;\n  lastGithubPush: {\n    at: string;\n    branch: string;\n    commitOid: string | null;\n    error: string | null;\n    ok: boolean;\n  } | null;\n  remote: string | null;\n};',
+      '/**\n * The repo processor\'s reduced state, inferred from the contract\'s\n * `stateSchema` — the one definition of the shape.\n */\nexport type RepoProcessorState = {\n  createRequest:\n    | { type: "empty" }\n    | { type: "github-private"; connection: string; owner: string; repo: string }\n    | {\n        type: "github-public";\n        connection?: string | undefined;\n        depth?: number | undefined;\n        owner: string;\n        repo: string;\n      }\n    | null;\n  createFailure: {\n    error: string;\n    request:\n      | { type: "empty" }\n      | { type: "github-private"; connection: string; owner: string; repo: string }\n      | {\n          type: "github-public";\n          connection?: string | undefined;\n          depth?: number | undefined;\n          owner: string;\n          repo: string;\n        };\n  } | null;\n  birthCertificate: {\n    request:\n      | { type: "empty" }\n      | { type: "github-private"; connection: string; owner: string; repo: string }\n      | {\n          type: "github-public";\n          connection?: string | undefined;\n          depth?: number | undefined;\n          owner: string;\n          repo: string;\n        };\n    artifactName: string;\n    defaultBranch: string;\n    remote: string;\n  } | null;\n  artifactName: string | null;\n  defaultBranch: string | null;\n  github: {\n    connection: string;\n    installationId: string;\n    owner: string;\n    repo: string;\n    repositoryId: number;\n  } | null;\n  githubImport: {\n    branch: string;\n    requestId: string;\n    requestedCommitOid: string;\n    status: "requested" | "started";\n  } | null;\n  initialized: boolean;\n  lastGithubPush: {\n    at: string;\n    branch: string;\n    commitOid: string | null;\n    error: string | null;\n    ok: boolean;\n  } | null;\n  remote: string | null;\n};',
     summary:
       "The repo processor's reduced state, inferred from the contract's `stateSchema` — the one definition of the shape.",
     memberSummaries: {},
@@ -2273,11 +2275,11 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: ["DynamicWorkerRefBase"],
   },
   {
-    name: "WorkspaceMount",
+    name: "WorkspaceMountOverlay",
     kind: "typeAlias",
     sourceText:
-      '/** One repo mount: the repo a workspace subtree reads from and its commit policy. */\nexport type WorkspaceMount = WorkspaceConfig["mounts"][string];',
-    summary: "One repo mount: the repo a workspace subtree reads from and its commit policy.",
+      '/** One stored overlay: the fields it deviates from (or adds over) the derived table. */\nexport type WorkspaceMountOverlay = WorkspaceConfig["mounts"][string];',
+    summary: "One stored overlay: the fields it deviates from (or adds over) the derived table.",
     memberSummaries: {},
     referencedTypeNames: ["WorkspaceConfig"],
   },
@@ -2285,26 +2287,27 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "WorkspaceProcessorState",
     kind: "typeAlias",
     sourceText:
-      '/** The workspace processor\'s reduced state: birth certificate plus the merged config. */\nexport type WorkspaceProcessorState = {\n  birthCertificate: {\n    config: {\n      mounts: Record<string, { policy: "commit-to-main" | "read-only"; repoPath: string }>;\n    };\n  } | null;\n  config: { mounts: Record<string, { policy: "commit-to-main" | "read-only"; repoPath: string }> };\n};',
-    summary: "The workspace processor's reduced state: birth certificate plus the merged config.",
+      '/** The workspace processor\'s reduced state: existence plus the merged overlays. */\nexport type WorkspaceProcessorState = {\n  birthCertificate: { [x: string]: unknown } | null;\n  config: {\n    mounts: Record<\n      string,\n      { policy?: "commit-to-main" | "read-only" | undefined; repoPath?: string | undefined }\n    >;\n  };\n};',
+    summary: "The workspace processor's reduced state: existence plus the merged overlays.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
   {
-    name: "WorkspaceConfig",
+    name: "WorkspaceEffectiveConfig",
     kind: "typeAlias",
     sourceText:
-      '/** A workspace\'s complete configuration: the mount table, keyed by mount path. */\nexport type WorkspaceConfig = WorkspaceProcessorState["config"];',
-    summary: "A workspace's complete configuration: the mount table, keyed by mount path.",
+      '/**\n * The workspace\'s LIVE configuration: the effective mount table that routes\n * reads and commits — every project repo at its own /repos/** stream path\n * (commit-to-main), with the workspace\'s stored overlay deviations merged in.\n */\nexport type WorkspaceEffectiveConfig = {\n  mounts: Record<\n    string,\n    {\n      policy: "commit-to-main" | "read-only";\n      repoPath: string;\n    }\n  >;\n};',
+    summary:
+      "The workspace's LIVE configuration: the effective mount table that routes reads and commits — every project repo at its own /repos/** stream path (commit-to-main), with the workspace's stored overlay deviations merged in.",
     memberSummaries: {},
-    referencedTypeNames: ["WorkspaceProcessorState"],
+    referencedTypeNames: [],
   },
   {
     name: "WorkspaceConfigPatch",
     kind: "typeAlias",
     sourceText:
-      '/** A configuration patch: deep-merged per mount point; null unmounts.\n * (Spelled as one z.output<> reference — not an indexed access over it — so\n * the itx-api generator expands it structurally instead of copying the\n * expression verbatim into the generated public API.) */\nexport type WorkspaceConfigPatch = {\n  mounts?:\n    | Record<\n        string,\n        {\n          policy?: "commit-to-main" | "read-only" | undefined;\n          repoPath?: string | undefined;\n        } | null\n      >\n    | undefined;\n};',
-    summary: "A configuration patch: deep-merged per mount point; null unmounts.",
+      '/** A configuration patch: deep-merged per mount point; null clears an overlay.\n * (Spelled as one z.output<> reference — not an indexed access over it — so\n * the itx-api generator expands it structurally instead of copying the\n * expression verbatim into the generated public API.) */\nexport type WorkspaceConfigPatch = {\n  mounts?:\n    | Record<\n        string,\n        {\n          policy?: "commit-to-main" | "read-only" | undefined;\n          repoPath?: string | undefined;\n        } | null\n      >\n    | undefined;\n};',
+    summary: "A configuration patch: deep-merged per mount point; null clears an overlay.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -2478,6 +2481,15 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "Fields shared by every dynamic worker ref (stateless and stateful): the itx scope `path` the worker binds to and the declarative `source` it is built from.",
     memberSummaries: {},
     referencedTypeNames: ["DynamicWorkerSource"],
+  },
+  {
+    name: "WorkspaceConfig",
+    kind: "typeAlias",
+    sourceText:
+      '/** A workspace\'s stored configuration: the mount OVERLAY table, keyed by mount path. */\nexport type WorkspaceConfig = WorkspaceProcessorState["config"];',
+    summary: "A workspace's stored configuration: the mount OVERLAY table, keyed by mount path.",
+    memberSummaries: {},
+    referencedTypeNames: ["WorkspaceProcessorState"],
   },
   {
     name: "CollabPresence",
