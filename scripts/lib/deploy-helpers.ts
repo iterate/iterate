@@ -478,8 +478,10 @@ export async function ensureProxiedDnsRecord(
     console.warn(`⚠ no zone for ${host} in this account — create the zone first, then re-run`);
     return;
   }
+  // per_page must exceed the records a routed apex accumulates (A plus Email
+  // Routing MX/TXT can pass 5, which trips the paginate guard in cfV4).
   const existing = await ctx.cfV4<unknown[]>(
-    `/zones/${zone.id}/dns_records?name=${encodeURIComponent(host)}&per_page=5`,
+    `/zones/${zone.id}/dns_records?name=${encodeURIComponent(host)}&per_page=50`,
   );
   if (existing.length > 0) {
     console.log(`DNS record for ${host} exists`);
