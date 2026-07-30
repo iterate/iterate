@@ -17,24 +17,30 @@ const POLL_MS = 3500;
 
 /** ONE key form for everything the board holds: repo-relative, no leading
  * slash — the same shape the Yjs lane's task paths and isTaskFilePath use.
- * The platform returns absolute paths from glob/status; writes go back
- * absolute. Mixing forms silently splits sessions and misses badges. */
+ * The vessel already strips the repo mount prefix from everything it
+ * returns; this guard drops stray leading slashes so mixed forms can't
+ * silently split sessions or miss badges. */
 export function boardKey(path: string): string {
   return path.replace(/^\/+/, "");
 }
 
 type WorkspaceStatusShape = {
-  mounts?: { changes?: { change: string; path: string }[] }[];
+  mounts?: { changes?: { change: string; path: string }[]; path?: string }[];
 };
 
-export function changeMap(status: unknown): Map<string, TaskChangeStatus> {
+/** status() is workspace-wide — every project repo is a mount — but this
+ * board is ONE repo: only the matching mount's changes count, and their
+ * fully qualified paths become repo-relative board keys. */
+export function changeMap(status: unknown, repoPath: string): Map<string, TaskChangeStatus> {
   const map = new Map<string, TaskChangeStatus>();
   for (const mount of (status as WorkspaceStatusShape).mounts ?? []) {
+    if (mount.path !== repoPath) continue;
     for (const entry of mount.changes ?? []) {
-      if (!isTaskFilePath(entry.path)) continue;
+      const key = boardKey(entry.path.slice(repoPath.length));
+      if (!isTaskFilePath(key)) continue;
       const kind =
         entry.change === "added" ? "added" : entry.change === "deleted" ? "deleted" : "modified";
-      map.set(boardKey(entry.path), kind);
+      map.set(key, kind);
     }
   }
   return map;
@@ -52,7 +58,7 @@ export function useWorkspaceBoard(checkoutId: string, repoPath: string) {
   const generation = useRef(0);
 
   const lane = useCallback(
-    <T,>(operation: (ws: TasksWorkspace) => Promise<T>) =>
+    <T>(operation: (ws: TasksWorkspace) => Promise<T>) =>
       withProject((project) =>
         operation(
           (project as { workspace(c: string, r?: string): unknown }).workspace(
@@ -72,8 +78,10 @@ export function useWorkspaceBoard(checkoutId: string, repoPath: string) {
     void Promise.all([lane((ws) => ws.files()), lane((ws) => ws.status())])
       .then(([seeded, status]) => {
         if (generation.current !== mine) return;
-        setFiles(Object.fromEntries(Object.entries(seeded).map(([path, c]) => [boardKey(path), c])));
-        setChanges(changeMap(status));
+        setFiles(
+          Object.fromEntries(Object.entries(seeded).map(([path, c]) => [boardKey(path), c])),
+        );
+        setChanges(changeMap(status, repoPath));
       })
       .catch((cause: unknown) => {
         if (generation.current !== mine) return;
@@ -82,7 +90,7 @@ export function useWorkspaceBoard(checkoutId: string, repoPath: string) {
     return () => {
       generation.current++;
     };
-  }, [lane]);
+  }, [lane, repoPath]);
 
   // Liveness: the collab VERSION map is the change cursor — a path whose
   // head advanced gets refetched even when its status kind is unchanged
@@ -133,13 +141,11 @@ export function useWorkspaceBoard(checkoutId: string, repoPath: string) {
             );
           }
           if (board !== null && generation.current === mine) {
-            setBoardClients(
-              Object.entries(board).map(([clientId, name]) => ({ clientId, name })),
-            );
+            setBoardClients(Object.entries(board).map(([clientId, name]) => ({ clientId, name })));
           }
           if (generation.current !== mine) return;
           const changes = changesRef.current;
-          const next = status === null ? changes : changeMap(status);
+          const next = status === null ? changes : changeMap(status, repoPath);
           const versions = Object.fromEntries(
             Object.entries(rawVersions).map(([path, version]) => [boardKey(path), version]),
           );
@@ -162,7 +168,8 @@ export function useWorkspaceBoard(checkoutId: string, repoPath: string) {
           }
           const fetched = await Promise.all(
             [...moved].map(
-              async (path) => [boardKey(path), await lane((ws) => ws.read(`/${boardKey(path)}`))] as const,
+              async (path) =>
+                [boardKey(path), await lane((ws) => ws.read(`/${boardKey(path)}`))] as const,
             ),
           );
           if (generation.current !== mine) return;
@@ -192,7 +199,7 @@ export function useWorkspaceBoard(checkoutId: string, repoPath: string) {
         );
     }, POLL_MS);
     return () => clearInterval(timer);
-  }, [lane]);
+  }, [lane, repoPath]);
 
   // Board-viewer heartbeat: announce on join (and every 25s — the server
   // ages entries at 45s), clear on leave. Identity via whoami; the clientId
@@ -201,7 +208,13 @@ export function useWorkspaceBoard(checkoutId: string, repoPath: string) {
     let stopped = false;
     let timer: ReturnType<typeof setInterval> | null = null;
     let clientId: string | null = null;
-    void withProject((project) => (project as { whoami(): Promise<{ name: string | null; email: string | null; userId: string | null }> }).whoami())
+    void withProject((project) =>
+      (
+        project as {
+          whoami(): Promise<{ name: string | null; email: string | null; userId: string | null }>;
+        }
+      ).whoami(),
+    )
       .then((me) => {
         if (stopped) return;
         const name = me.name ?? me.email ?? me.userId ?? "someone";
@@ -213,8 +226,7 @@ export function useWorkspaceBoard(checkoutId: string, repoPath: string) {
             .slice(0, 24) || "someone";
         clientId = `u-${slug}-${Math.random().toString(36).slice(2, 8)}`;
         setSelf({ clientId, name });
-        const announce = () =>
-          void lane((ws) => ws.boardPresent(clientId!, name)).catch(() => {});
+        const announce = () => void lane((ws) => ws.boardPresent(clientId!, name)).catch(() => {});
         announce();
         timer = setInterval(announce, 25_000);
       })
@@ -253,7 +265,7 @@ export function useWorkspaceBoard(checkoutId: string, repoPath: string) {
   /** Roll one path's optimistic files+changes state back to what a failed
    * RPC left behind on the server (shared by write and delete). */
   /** Run one mutation RPC with the in-flight counter held. */
-  const tracked = useCallback(async <T,>(work: Promise<T>): Promise<T> => {
+  const tracked = useCallback(async <T>(work: Promise<T>): Promise<T> => {
     pendingMutations.current++;
     try {
       return await work;
@@ -378,10 +390,7 @@ export function useWorkspaceBoard(checkoutId: string, repoPath: string) {
   }, []);
 
   /** One file's merged-view content (the live head when a session is open). */
-  const readTask = useCallback(
-    (path: string) => lane((ws) => ws.read(`/${path}`)),
-    [lane],
-  );
+  const readTask = useCallback((path: string) => lane((ws) => ws.read(`/${path}`)), [lane]);
 
   /**
    * Rename: NOTHING moves locally until the write RPC lands — the open
@@ -433,29 +442,29 @@ export function useWorkspaceBoard(checkoutId: string, repoPath: string) {
       // that window must not resurrect it beside the new card.
       pendingMutations.current++;
       try {
-      await onWritten?.();
-      try {
-        const final = await lane((ws) => ws.read(`/${fromPath}`));
-        if (final !== null && final !== baseline) {
-          const carried = carry(final);
-          if (carried !== content) {
-            await lane((ws) => ws.write(`/${toPath}`, carried));
-            mutationEpoch.current++;
-            setFiles((current) =>
-              current === null ? current : { ...current, [toPath]: carried },
-            );
+        await onWritten?.();
+        try {
+          const final = await lane((ws) => ws.read(`/${fromPath}`));
+          if (final !== null && final !== baseline) {
+            const carried = carry(final);
+            if (carried !== content) {
+              await lane((ws) => ws.write(`/${toPath}`, carried));
+              mutationEpoch.current++;
+              setFiles((current) =>
+                current === null ? current : { ...current, [toPath]: carried },
+              );
+            }
           }
+        } catch {
+          // The carry is best-effort; the source still gets deleted below.
         }
-      } catch {
-        // The carry is best-effort; the source still gets deleted below.
-      }
-      try {
-        await lane((ws) => ws.delete(`/${fromPath}`));
-        mutationEpoch.current++; // a poll mid-delete read fromPath alive
-      } catch {
-        // The delete failed — the server still HAS the source; the next
-        // poll re-showing it is truthful reconciliation.
-      }
+        try {
+          await lane((ws) => ws.delete(`/${fromPath}`));
+          mutationEpoch.current++; // a poll mid-delete read fromPath alive
+        } catch {
+          // The delete failed — the server still HAS the source; the next
+          // poll re-showing it is truthful reconciliation.
+        }
       } finally {
         pendingMutations.current--;
       }
@@ -515,13 +524,10 @@ export function useWorkspaceBoard(checkoutId: string, repoPath: string) {
   );
 
   /** True only when EVERY revert landed. */
-  const discardAll = useCallback(
-    async (): Promise<boolean> => {
-      const results = await Promise.all([...changes.keys()].map((path) => revertTask(path)));
-      return results.every(Boolean);
-    },
-    [changes, revertTask],
-  );
+  const discardAll = useCallback(async (): Promise<boolean> => {
+    const results = await Promise.all([...changes.keys()].map((path) => revertTask(path)));
+    return results.every(Boolean);
+  }, [changes, revertTask]);
 
   const commit = useCallback(
     async (message: string) => {
@@ -537,10 +543,10 @@ export function useWorkspaceBoard(checkoutId: string, repoPath: string) {
       // Same key normalization as the seed — mixed-shape keys would orphan
       // badges and duplicate cards after the first commit.
       setFiles(Object.fromEntries(Object.entries(seeded).map(([path, c]) => [boardKey(path), c])));
-      setChanges(changeMap(status));
+      setChanges(changeMap(status, repoPath));
       return result;
     },
-    [lane],
+    [lane, repoPath],
   );
 
   const subscribeEvents = useCallback(

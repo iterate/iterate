@@ -160,14 +160,22 @@ class TasksProjectApi extends RpcTarget implements TasksProject {
     if (!isCheckoutId(checkoutId) || normalized === null) {
       throw new Error("bad checkout id or repo path");
     }
-    return new TasksCheckoutApi(this.#env, this.#projectId, this.#credential, checkoutId, normalized);
+    return new TasksCheckoutApi(
+      this.#env,
+      this.#projectId,
+      this.#credential,
+      checkoutId,
+      normalized,
+    );
   }
 
   /**
    * The checkout AS a platform workspace (PoC hop (a): browser → vessel
-   * `/api` → workspace DO). `/workspaces/tasks/<checkoutId>` mounts the
-   * checkout's repo at `/` and is created lazily on first use; one capability
-   * carries both the collab session lane and the board lane.
+   * `/api` → workspace DO). Every project repo is auto-mounted at its own
+   * `/repos/**` path; this capability scopes itself to ONE of them — it is
+   * the single place board-lane repo-relative paths meet the mount prefix.
+   * Created lazily on first use; one capability carries both the collab
+   * session lane and the board lane.
    */
   workspace(checkoutId: string, repoPath: string = DEFAULT_REPO_PATH): TasksWorkspaceApi {
     const normalized = normalizeRepoPath(repoPath);
@@ -277,9 +285,9 @@ class TasksCheckoutApi extends RpcTarget implements TasksCheckout {
  * `iterate` client types predate it, so the shape is asserted locally —
  * capnweb stubs are Proxies, so unknown properties resolve at runtime. */
 type WorkspaceStub = {
-  create(input: {
-    mounts?: Record<string, { policy: string; repoPath: string }>;
-  }): Promise<unknown>;
+  // Mounts are not create's business: every project repo is derived onto its
+  // own /repos/** path, and mounting at "/" is rejected.
+  create(input: object): Promise<unknown>;
   collab: {
     open(path: string): Promise<CollabOpened>;
     push(input: {
@@ -317,8 +325,10 @@ type WorkspaceStub = {
   revert(path: string): Promise<void>;
   git: {
     status(): Promise<unknown>;
-    commit(input: { message: string }): Promise<unknown>;
-    log(input?: { limit?: number }): Promise<unknown>;
+    // scope names the mount to operate on — required in practice now that
+    // every project repo is a mount (log always, commit whenever >1 dirty).
+    commit(input: { message: string; scope: string }): Promise<unknown>;
+    log(input: { limit?: number; scope: string }): Promise<unknown>;
   };
 };
 
@@ -329,6 +339,12 @@ type WorkspaceStub = {
  * session wire and the board (files/status/commit — the overlay IS the diff,
  * no base snapshot anywhere; live sessions settle inside the workspace's own
  * barriers).
+ *
+ * Path contract: the collab lane (open/push/wait/present/changes) speaks
+ * fully qualified `/repos/**` paths — a session's identity is its platform
+ * path, shared with agents. Every other path crosses this class repo-relative
+ * (leading slash optional); #qualified/#repoRelative are the ONLY join between
+ * board keys and the mount prefix.
  */
 class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
   readonly #env: AppEnv;
@@ -376,6 +392,18 @@ class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
     return `/workspaces/tasks/${this.#checkoutId}~${repoSlug}`;
   }
 
+  /** Board-lane paths → the platform's mount-qualified form. */
+  #qualified(path: string): string {
+    return `${this.#repoPath}/${path.replace(/^\/+/, "")}`;
+  }
+
+  /** Inverse of #qualified, and the visibility filter: platform paths
+   * outside this capability's repo mount return null. */
+  #repoRelative(path: string): string | null {
+    const prefix = `${this.#repoPath}/`;
+    return path.startsWith(prefix) ? path.slice(prefix.length) : null;
+  }
+
   async #withWorkspace<T>(operation: (ws: WorkspaceStub) => Promise<T>): Promise<T> {
     return this.#dial.withProject(async (project) => {
       const workspaces = (
@@ -397,9 +425,9 @@ class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
         }
         // Concurrent first-touchers may race create: tolerate its failure and
         // retry the operation regardless — ITS error is the one that matters.
-        await ws
-          .create({ mounts: { "/": { policy: "commit-to-main", repoPath: this.#repoPath } } })
-          .catch(() => undefined);
+        // The repo mount is not passed: creation derives every project repo
+        // onto its own /repos/** path.
+        await ws.create({}).catch(() => undefined);
         // Proven by USE: only a successful retry marks the workspace created —
         // a transient create failure must not wedge this held capability.
         const result = await operation(ws);
@@ -415,7 +443,7 @@ class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
   }
 
   readBase(filePath: string): Promise<string | null> {
-    return this.#withWorkspace((ws) => ws.readBase(filePath));
+    return this.#withWorkspace((ws) => ws.readBase(this.#qualified(filePath)));
   }
 
   changes(filePath: string): Promise<CollabChanges> {
@@ -453,17 +481,30 @@ class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
   }
 
   versions(): Promise<Record<string, number>> {
-    return this.#withWorkspace((ws) => ws.collab.versions());
+    // Sessions are keyed by their fully qualified platform paths; the board's
+    // change cursor wants repo-relative keys, and sessions under other repos'
+    // mounts are invisible through this capability.
+    return this.#withWorkspace(async (ws) => {
+      const versions = await ws.collab.versions();
+      return Object.fromEntries(
+        Object.entries(versions).flatMap(([path, version]) => {
+          const key = this.#repoRelative(path);
+          return key === null ? [] : [[key, version]];
+        }),
+      );
+    });
   }
 
   async presenceSummary(): Promise<Record<string, string[]>> {
     // The platform hop speaks index-matched flat arrays (generator-legal);
-    // the browser keeps the natural Record shape.
+    // the browser keeps the natural Record shape, keyed repo-relative like
+    // versions() — carets in other repos' mounts stay out of this board.
     const flat = await this.#withWorkspace((ws) => ws.collab.presenceSummary());
     const summary: Record<string, string[]> = {};
     flat.paths.forEach((path, index) => {
       const clientId = flat.clientIds[index];
-      if (clientId !== undefined) (summary[path] ??= []).push(clientId);
+      const key = this.#repoRelative(path);
+      if (clientId !== undefined && key !== null) (summary[key] ??= []).push(clientId);
     });
     return summary;
   }
@@ -481,7 +522,8 @@ class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
     // A REAL workspace call: on a fresh checkout it throws the
     // missing-workspace error, which is what makes #withWorkspace lazily
     // create it — so the stream (and its birth events) exist to read.
-    await this.#withWorkspace((ws) => ws.exists("/"));
+    // Probed at the repo mount: "/" is no path in any workspace now.
+    await this.#withWorkspace((ws) => ws.exists(this.#repoPath));
     const events = (await this.#dial.withProject(async (project) => {
       const streams = (
         project as unknown as {
@@ -512,7 +554,7 @@ class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
     afterOffset = 0,
   ): Promise<{ ping?(): Promise<boolean> | boolean; unsubscribe(): void }> {
     // A real call (see events()) so lazy creation actually runs.
-    await this.#withWorkspace((ws) => ws.exists("/"));
+    await this.#withWorkspace((ws) => ws.exists(this.#repoPath));
     return this.#dial.withProject(async (project) => {
       const streams = (
         project as unknown as {
@@ -533,7 +575,10 @@ class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
    * overloads the DO). */
   async files(): Promise<Record<string, string>> {
     return this.#withWorkspace(async (ws) => {
-      const paths = await ws.glob("**/tasks/**/*.md");
+      // Anchored under the repo mount: a relative pattern globs the
+      // workspace's private scratch, and other repos' mounts are not this
+      // board's business.
+      const paths = await ws.glob(`${this.#repoPath}/**/tasks/**/*.md`);
       // Batched platform calls for the whole set — per-file reads through
       // this chain collapse at thousands of tasks. The platform caps one
       // readFiles call at 10,000 paths, so boards beyond that read in
@@ -550,32 +595,33 @@ class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
         );
         for (const part of pair) Object.assign(contents, part);
       }
-      // Keys leave here repo-relative (no leading slash) — one shape for
-      // every consumer; reads/writes prepend the platform slash themselves.
+      // Keys leave here repo-relative (no mount prefix, no leading slash) —
+      // one shape for every consumer; qualification is this class's job.
       // Null reads (vanished between glob and read, transient failure) are
       // SKIPPED, never seeded as phantom empty cards.
       return Object.fromEntries(
-        Object.entries(contents).flatMap(([path, content]) =>
-          content === null ? [] : [[path.replace(/^\/+/, ""), content]],
-        ),
+        Object.entries(contents).flatMap(([path, content]) => {
+          const key = this.#repoRelative(path);
+          return content === null || key === null ? [] : [[key, content]];
+        }),
       );
     });
   }
 
   read(path: string): Promise<string | null> {
-    return this.#withWorkspace((ws) => ws.readFile(path));
+    return this.#withWorkspace((ws) => ws.readFile(this.#qualified(path)));
   }
 
   write(path: string, content: string): Promise<void> {
-    return this.#withWorkspace((ws) => ws.writeFile(path, content));
+    return this.#withWorkspace((ws) => ws.writeFile(this.#qualified(path), content));
   }
 
   delete(path: string): Promise<boolean> {
-    return this.#withWorkspace((ws) => ws.deleteFile(path));
+    return this.#withWorkspace((ws) => ws.deleteFile(this.#qualified(path)));
   }
 
   revert(path: string): Promise<void> {
-    return this.#withWorkspace((ws) => ws.revert(path));
+    return this.#withWorkspace((ws) => ws.revert(this.#qualified(path)));
   }
 
   status(): Promise<unknown> {
@@ -583,14 +629,18 @@ class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
   }
 
   async commit(message: string): Promise<unknown> {
-    const result = await this.#withWorkspace((ws) => ws.git.commit({ message }));
+    // scope pins the commit to this capability's mount — commits never span
+    // mounts, and every project repo is one now.
+    const result = await this.#withWorkspace((ws) =>
+      ws.git.commit({ message, scope: this.#repoPath }),
+    );
     const commitOid = (result as { commitOid?: unknown } | null)?.commitOid;
     this.#announce(typeof commitOid === "string" ? commitOid : undefined);
     return result;
   }
 
   log(limit = 5): Promise<unknown> {
-    return this.#withWorkspace((ws) => ws.git.log({ limit }));
+    return this.#withWorkspace((ws) => ws.git.log({ limit, scope: this.#repoPath }));
   }
 }
 

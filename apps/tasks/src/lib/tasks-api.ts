@@ -91,6 +91,13 @@ export type WorkspaceStreamEvent = {
   type: string;
 };
 
+/**
+ * Path contract: the collab lane inherited from WorkspaceDocumentLane
+ * (open/changes/push/wait/present) speaks fully qualified `/repos/**` paths —
+ * a session's identity is its platform path, shared with agents. Every other
+ * path here is repo-relative (leading slash optional); the vessel qualifies
+ * it against the capability's repo mount and returns repo-relative keys.
+ */
 export interface TasksWorkspace extends WorkspaceDocumentLane {
   /** The mount content at HEAD — what uncommitted work diffs against. */
   readBase(filePath: string): Promise<string | null>;
@@ -120,6 +127,8 @@ export interface TasksWorkspace extends WorkspaceDocumentLane {
   /** Back to the mount's version: restore a delete, drop an add, undo edits. */
   revert(path: string): Promise<void>;
   // Git passthroughs stay platform-shaped; the pinned client predates them.
+  // status() is workspace-wide (one entry per mounted repo) — consumers pick
+  // their mount; commit/log are already scoped to the capability's repo.
   status(): Promise<unknown>;
   commit(message: string): Promise<unknown>;
   log(limit?: number): Promise<unknown>;
