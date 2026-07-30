@@ -101,10 +101,11 @@ jobs:
     runs-on:
       size: 16x64
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
-    # Hard backstop on one attempt. Each parallel sub-lane retains its own
-    # tighter watchdog; this outer bound catches setup, deploy, and reporting
-    # runaways while leaving enough time to preserve failure artifacts.
-    timeout-minutes: 20
+    # Hard backstop on one attempt. A fresh handover must sometimes drain
+    # tens of thousands of runtime-created Artifacts repositories under
+    # Cloudflare's account API limit before the ordinary deploy/test critical
+    # path begins. Each test lane retains its much tighter watchdog.
+    timeout-minutes: 360
     concurrency:
       group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number || inputs.pull-request-number }}
       cancel-in-progress: false

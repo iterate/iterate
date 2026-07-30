@@ -1,8 +1,12 @@
 # Preview CI performance
 
 The **Cloudflare Previews** check deploys every affected app to one leased
-preview slot and runs its deployed e2e coverage. Its target is **under 3m30s
-end-to-end**. The 20-minute workflow timeout is only a runaway backstop.
+preview slot and runs its deployed e2e coverage. Its ordinary target is **under
+3m30s end-to-end**. A fresh handover can have an additional data-dependent
+prefix: Cloudflare exposes no Artifacts namespace delete, so env-manager must
+delete every runtime-created repository under the account API rate limit. The
+six-hour workflow timeout accommodates even a pathological first cleanup; it is
+still only a runaway backstop for the ordinary deploy and test lanes.
 
 For workflow commands, logs, and metrics, see [Depot CI](depot-ci.md). This
 document defines the critical-path model and the rules that keep it fast.

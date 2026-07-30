@@ -12,7 +12,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import type * as HttpClient from "effect/unstable/http/HttpClient";
-import type { AlchemyResources } from "./state.ts";
+import type { AlchemyResources, ResourceProgress } from "./state.ts";
 
 const ARTIFACT_DELETE_CONCURRENCY = 10;
 const ARTIFACT_REPOSITORY_PAGE_SIZE = 200;
@@ -135,6 +135,7 @@ const deleteDurableObjectClasses: API.OperationMethod<
 export function makeCloudflareControlPlane(input: {
   accountId: string;
   apiToken: string;
+  onProgress?: (progress: ResourceProgress) => void;
   signal?: AbortSignal;
 }) {
   const cloudflareApi = Layer.mergeAll(
@@ -172,6 +173,13 @@ export function makeCloudflareControlPlane(input: {
   const destroyArtifactRepositories = (namespace: string) =>
     Effect.gen(function* () {
       const repositories = yield* listArtifactRepositoriesInNamespace(namespace);
+      let deleted = 0;
+      input.onProgress?.({
+        id: "wrangler-artifacts",
+        type: "Cloudflare Artifacts",
+        status: "deleting",
+        message: `Deleting ${repositories.length} repositories from ${namespace}.`,
+      });
       yield* Effect.forEach(
         repositories,
         ({ name }) =>
@@ -179,7 +187,22 @@ export function makeCloudflareControlPlane(input: {
             accountId: input.accountId,
             namespace,
             repository: name,
-          }).pipe(Effect.catchTag("NotFound", () => Effect.void)),
+          }).pipe(
+            Effect.catchTag("NotFound", () => Effect.void),
+            Effect.tap(() =>
+              Effect.sync(() => {
+                deleted += 1;
+                if (deleted % 100 === 0 || deleted === repositories.length) {
+                  input.onProgress?.({
+                    id: "wrangler-artifacts",
+                    type: "Cloudflare Artifacts",
+                    status: "deleting",
+                    message: `Deleted ${deleted}/${repositories.length} repositories from ${namespace}.`,
+                  });
+                }
+              }),
+            ),
+          ),
         { concurrency: ARTIFACT_DELETE_CONCURRENCY },
       );
 
@@ -193,6 +216,12 @@ export function makeCloudflareControlPlane(input: {
           ),
         );
       }
+      input.onProgress?.({
+        id: "wrangler-artifacts",
+        type: "Cloudflare Artifacts",
+        status: "deleted",
+        message: `Deleted every repository from ${namespace}.`,
+      });
     });
 
   const destroyContainerApplications = (workerName: string) =>
@@ -337,7 +366,17 @@ export function makeCloudflareControlPlane(input: {
       return run(
         Effect.gen(function* () {
           if (destroyInput.osWorkerName !== undefined) {
+            input.onProgress?.({
+              id: "wrangler-containers",
+              type: "Wrangler containers",
+              status: "deleting",
+            });
             yield* destroyContainerApplications(destroyInput.osWorkerName);
+            input.onProgress?.({
+              id: "wrangler-containers",
+              type: "Wrangler containers",
+              status: "deleted",
+            });
           }
 
           const namespaceClasses = new Map<string, Set<string>>();
@@ -351,7 +390,13 @@ export function makeCloudflareControlPlane(input: {
 
           // Keep Worker teardown sequential because this endpoint is
           // rate-limited per API user.
-          for (const workerName of destroyInput.workerNames) {
+          for (const [index, workerName] of destroyInput.workerNames.entries()) {
+            input.onProgress?.({
+              id: "wrangler-workers",
+              type: "Wrangler Workers",
+              status: "deleting",
+              message: `Deleting ${index + 1}/${destroyInput.workerNames.length}: ${workerName}.`,
+            });
             yield* destroyWorker(workerName, namespaceClasses);
           }
 
@@ -391,6 +436,12 @@ export function makeCloudflareControlPlane(input: {
               ),
             );
           }
+          input.onProgress?.({
+            id: "wrangler-workers",
+            type: "Wrangler Workers",
+            status: "deleted",
+            message: `Deleted ${destroyInput.workerNames.length} Workers and their Durable Object namespaces.`,
+          });
 
           if (destroyInput.osWorkerName !== undefined) {
             yield* destroyArtifactRepositories(`${destroyInput.osWorkerName}-repos`);

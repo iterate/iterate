@@ -246,6 +246,7 @@ describe("Cloudflare control plane", () => {
 
   it("cursor-paginates Artifact repos and deletes each one exactly once", async () => {
     let firstPageReads = 0;
+    const onProgress = vi.fn();
     const fetch = vi.fn<typeof globalThis.fetch>((request, init) => {
       const url = new URL(String(request));
       const method = request instanceof Request ? request.method : init?.method;
@@ -288,6 +289,7 @@ describe("Cloudflare control plane", () => {
       makeCloudflareControlPlane({
         accountId: "account-id",
         apiToken: "api-token",
+        onProgress,
       }).destroyWranglerResources({
         workerNames: [],
         osWorkerName: "os-worker",
@@ -315,6 +317,30 @@ describe("Cloudflare control plane", () => {
         .map(({ pathname }) => pathname.split("/").at(-1))
         .sort(),
     ).toEqual(["one", "three", "two"]);
+    expect(
+      onProgress.mock.calls
+        .map(([progress]) => progress)
+        .filter(({ id }) => id === "wrangler-artifacts"),
+    ).toEqual([
+      {
+        id: "wrangler-artifacts",
+        type: "Cloudflare Artifacts",
+        status: "deleting",
+        message: "Deleting 3 repositories from os-worker-repos.",
+      },
+      {
+        id: "wrangler-artifacts",
+        type: "Cloudflare Artifacts",
+        status: "deleting",
+        message: "Deleted 3/3 repositories from os-worker-repos.",
+      },
+      {
+        id: "wrangler-artifacts",
+        type: "Cloudflare Artifacts",
+        status: "deleted",
+        message: "Deleted every repository from os-worker-repos.",
+      },
+    ]);
   });
 
   it("interrupts in-flight Cloudflare work when its ownership fence is aborted", async () => {

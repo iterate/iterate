@@ -231,6 +231,7 @@ export class EnvironmentDurableObject extends DurableObject<Env> {
         await makeCloudflareControlPlane({
           accountId: this.#environment.accountId,
           apiToken,
+          onProgress: (progress) => this.#publishProgress(progress),
           signal,
         }).destroyWranglerResources({
           workerNames: this.#environment.workerNames,

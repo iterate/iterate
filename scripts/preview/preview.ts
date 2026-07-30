@@ -5348,12 +5348,33 @@ async function assignEnvironmentConfigLease(input: {
   previousLeaseReleased: boolean;
   stackWasDestroyed: boolean;
 }> {
-  let heldLease = await renewRecordedEnvironmentConfigLease({
-    holder: input.holder,
-    leaseMs: input.leaseMs,
-    recordedLease: input.recordedLease,
-    semaphore: input.semaphore,
-  });
+  const unrecordedHeldSlots =
+    input.force && input.wantedSlug && !input.recordedLease
+      ? await listSlotsLeasedToHolder(input.semaphore, input.holder)
+      : [];
+  if (
+    unrecordedHeldSlots.length > 1 ||
+    (unrecordedHeldSlots.length === 1 && unrecordedHeldSlots[0]?.slug !== input.wantedSlug)
+  ) {
+    throw new Error(
+      `Semaphore attributes an unrecorded preview lease to ${input.holder} outside the requested slot. Refusing to create another lease; explicitly release or reclaim the old slot first.`,
+    );
+  }
+
+  // `--force <same-slot>` is the explicit recovery path for a lease that
+  // Semaphore still holds but whose token was never recorded (for example,
+  // when CI is killed immediately after acquisition). Reissuing the lease and
+  // destroying the environment is safe; treating holder text as continuity is
+  // not. Other unrecorded holds remain errors above.
+  let heldLease =
+    unrecordedHeldSlots.length === 1
+      ? null
+      : await renewRecordedEnvironmentConfigLease({
+          holder: input.holder,
+          leaseMs: input.leaseMs,
+          recordedLease: input.recordedLease,
+          semaphore: input.semaphore,
+        });
   let heldStackWasDestroyed = false;
   if (!heldLease) {
     heldLease = await takeAndCleanRecordedSlotIfFree({

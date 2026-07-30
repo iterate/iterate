@@ -1050,7 +1050,7 @@ describe("preview test commands", () => {
     ) as { jobs: { preview: { "timeout-minutes": number } } };
     // This is a diagnostic backstop, not the expected duration. Individual
     // lanes retain tighter watchdogs and only tests own retries.
-    expect(workflow.jobs.preview["timeout-minutes"]).toBe(20);
+    expect(workflow.jobs.preview["timeout-minutes"]).toBe(360);
   });
 });
 
@@ -3252,10 +3252,14 @@ describe("assignEnvironmentConfigLease", () => {
     const acquireSpecific = vi.fn(async () =>
       fakeLease({ slug: "preview-5", data: { dopplerConfig: "preview_5" } }),
     );
-    const semaphore = fakeSemaphore({ acquireSpecific });
+    const destroyEnvironment = vi.fn(async () => {});
+    const semaphore = fakeSemaphore({
+      acquireSpecific,
+      list: vi.fn(async () => [leasedResource("preview-5", "pr-1600")]),
+    });
 
     const result = await assignEnvironmentConfigLease({
-      destroyEnvironment: noopDestroyPreviewEnvironment,
+      destroyEnvironment,
       force: true,
       holder: "pr-1600",
       leaseMs: 1000,
@@ -3266,6 +3270,28 @@ describe("assignEnvironmentConfigLease", () => {
 
     expect(result.outcome).toBe("assigned");
     expect(acquireSpecific).toHaveBeenCalledWith(expect.objectContaining({ force: true }));
+    expect(destroyEnvironment).toHaveBeenCalledOnce();
+  });
+
+  test("refuses a forced assignment while the PR has another unrecorded lease", async () => {
+    const acquireSpecific = vi.fn(async () => fakeLease({ slug: "preview-5" }));
+    const semaphore = fakeSemaphore({
+      acquireSpecific,
+      list: vi.fn(async () => [leasedResource("preview-2", "pr-1600")]),
+    });
+
+    await expect(
+      assignEnvironmentConfigLease({
+        destroyEnvironment: noopDestroyPreviewEnvironment,
+        force: true,
+        holder: "pr-1600",
+        leaseMs: 1000,
+        recordedLease: null,
+        semaphore,
+        wantedSlug: "preview-5",
+      }),
+    ).rejects.toThrow(/outside the requested slot/);
+    expect(acquireSpecific).not.toHaveBeenCalled();
   });
 
   test("destroys the wanted environment on handover — including a --force eviction", async () => {

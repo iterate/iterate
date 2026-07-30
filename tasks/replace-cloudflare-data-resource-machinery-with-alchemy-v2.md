@@ -226,6 +226,36 @@ environment, current code has no writer for that binding, and live checks found
 the name absent from all twenty OS Doppler configs, all 56 deployed preview OS
 Workers, and `os-prd`.
 
+### Post-push lifecycle run: high-cardinality Artifacts cleanup
+
+The first full PR run on `c1350b4` found a real watchdog mismatch rather than an
+Alchemy hang. Handover of `preview_7` spent the workflow's entire 20-minute
+limit deleting runtime-created repositories from `os-preview-7-repos`;
+Workers Observability recorded 3,126 distinct `DELETE` responses, all HTTP 202,
+and zero HTTP 429s before Depot cancelled the job.
+
+This cleanup cannot be collapsed into an Alchemy namespace delete. Both the
+pinned/current Alchemy `Cloudflare.Artifacts.Namespace` implementation and
+Wrangler `origin/main` model namespaces as implicit: Cloudflare creates one on
+the first repository write, exposes namespace list/get, and exposes deletion
+only per repository. The deletion concurrency remains ten. The observed rate,
+roughly 870 calls per five minutes, stays below Cloudflare's documented
+1,200-per-five-minute cumulative Client API limit and leaves budget for Worker,
+DO, container, D1, KV, and R2 calls; increasing concurrency would trade a
+bounded data-dependent prefix for account-wide 429s.
+
+The recovery run then exposed the true cardinality after its initial listing:
+53,143 repositories remained in `os-preview-7-repos`. At the deliberately safe
+deletion rate that is a roughly 4.5-hour one-time drain, so a 60-minute limit
+would merely move the same unexplained cancellation. The workflow backstop is
+six hours while individual deploy/test watchdogs remain unchanged. Env-manager
+publishes Worker, container, and Artifacts
+teardown progress into the existing lifecycle state, including repository
+totals and each 100 completions, so a long destroy is explicitly classified
+instead of presenting an empty `destroying` state. This is progress
+observability only: Alchemy SQLite remains the sole durable resource manifest,
+and env-manager remains the sole cleanup-obligation authority.
+
 ## Proof and rollout
 
 Use reserved `preview_18` and `preview_19` as disposable proof stages:
