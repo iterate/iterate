@@ -135,3 +135,40 @@ a metered platform-secret egress.** This collapses two roadmap items into one do
 `controlPlaneEgress` — already proven LIVE in R1 (substitution + origin-pin + meter), so covered by
 construction. `config-worker /__ai` drives it. 37 tests green (no new unit test — remote path shares R1's
 tested door; noted as a small gap). Self-host default committed as `ai.source=local` (your own AI).
+
+### R4 — Script execution + dynamic capabilities ✅ DONE + PROVEN LIVE (both official tools)
+
+**Built** `src/dynamic.ts` + 4 new MCP tools (control-plane-driven, the os `exec_typescript` model):
+
+- `execScriptInProject` — runs an arbitrary `async (itx,args) => …` string CONFINED, via the SAME Worker
+  Loader that runs the config worker (only `env.ITX` + the egress door bound). Dynamic workers + script
+  execution fall straight out of the loader we already had.
+- `capabilityRegistry` — `provide(name, code)` / `code(name)` / `list()` over KV
+  (`capability:<projectId>:<name>`). **Event-shadowing rule enforced:** `provide` rejects any
+  `BUILTIN_CAPABILITY_NAMES` — a dynamic capability can never shadow a builtin (ADR config- vs
+  event-shadowing).
+- MCP tools: `run_script`, `provide_capability`, `invoke_capability`, `list_capabilities` — advertised
+  only when the deployment passes a scripting facade. Wired in `handleMcp` using `ctx.exports.
+ProjectEntrypoint` (the confinement mint) + `env.LOADER`; every op resolves the project through the
+  directory first (membership gate).
+
+**Decisions:**
+
+- **Script execution lives on the CONTROL PLANE (MCP), not inside the project worker** — it needs
+  `ctx.exports` + the loader (kernel-level), and "run code across projects" is a control-plane power. Same
+  reasoning as MCP itself (ADR 0022). A project's OWN config worker is already dynamic code; `run_script`
+  is the _ad-hoc_ version driven from outside.
+- **Dynamic capability = a stored script + the exec path.** `invoke` = load code from the registry, run it
+  via `execScriptInProject`. Minimal, and it reuses exec entirely. (apps/os's capability host adds
+  prefix-resolution + mounts; deferred — not needed to prove the idea.)
+- **Confinement is identical to the config worker** — a run_script script sees only `env.ITX`; it can call
+  streams/ai/secrets through it but touches no raw binding.
+
+**Proven:** 2 unit tests (registry round-trip + builtin-shadow rejection) + 3 e2e (run_script→whoami,
+provide→invoke add=5, scripting tools in tools/list) + **LIVE** on `kernel-selfhost`:
+
+- direct: `run_script async (itx)=>itx.whoami()` → `{projectId:"exec-demo"}`; `invoke add(7,8)` → `15`.
+- **official MCP Inspector CLI**: `run_script` → `{pid:"exec-demo", sum:42}`.
+- **Claude CLI** (`--mcp-config`): drove `run_script` → `itx.streamAppend('cli-log',…)` → **seq 1** — ties
+  Claude CLI → MCP → script exec → confined ITX → the R2 durable log, all live in one call.
+  42 tests green.

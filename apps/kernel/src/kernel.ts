@@ -11,7 +11,8 @@ import {
   type DirectoryConfig,
 } from "./directory.ts";
 import { routingFor, type RouteConfig, type Routing } from "./routing.ts";
-import { handleMcpRequest, type McpProjects } from "./mcp.ts";
+import { handleMcpRequest, type McpProjects, type McpScripting } from "./mcp.ts";
+import { capabilityRegistry, execScriptInProject } from "./dynamic.ts";
 import {
   controlPlaneEgress,
   projectEgress,
@@ -455,7 +456,7 @@ export default {
     // `/mcp` — the control-plane MCP surface, a SIBLING to `/api` (ADR 0022). Headless + deployment-wide
     // (no project host needed), so it resolves BEFORE ingress: same wall auth + directory as `/api`,
     // MCP protocol instead of capnweb. (The clean home for both is the control plane's own front door.)
-    if (url.pathname === "/mcp") return handleMcp(request, cfg, env);
+    if (url.pathname === "/mcp") return handleMcp(request, cfg, env, ctx);
     // The ROUTING TABLE resolves the host FIRST (config routes, then ROUTING_KV), then the
     // `<slug>.<hostBase>` convention as the zero-config fallback (ADR 0020/0025). A custom domain or a
     // single-project self-host (one domain, no wildcard base) resolves purely via a routing entry.
@@ -520,7 +521,12 @@ export default {
 // The `/mcp` handler — build the caller's Session (SAME wall auth + directory as `/api`) and adapt its
 // project collection to the MCP tool surface (list/create/get). MCP is a protocol adapter over the same
 // front desk the capnweb tree exposes (ADR 0022) — not a second backend.
-async function handleMcp(request: Request, cfg: AppConfig, env: Env): Promise<Response> {
+async function handleMcp(
+  request: Request,
+  cfg: AppConfig,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
   const caller = await resolveAmbientCaller(request, cfg, env);
   const collection = new ProjectCollection(caller, directoryFor(cfg, env), routingFor(cfg, env));
   const projects: McpProjects = {
@@ -533,7 +539,39 @@ async function handleMcp(request: Request, cfg: AppConfig, env: Env): Promise<Re
     },
     get: async (slug) => (await collection.get(slug)).projectId,
   };
-  return handleMcpRequest(request, projects, { name: "iterate-kernel", version: "0.1.0" });
+  // Scripting facade — control-plane-driven exec + dynamic capabilities (the os `exec_typescript` model).
+  // Uses ctx.exports.ProjectEntrypoint (the same confinement mint as the config worker) + env.LOADER.
+  // Every op resolves the project through the directory first (membership gate).
+  const makeEntry = (
+    ctx as unknown as { exports: { ProjectEntrypoint(o: { props: ProjectProps }): Fetcher } }
+  ).exports.ProjectEntrypoint;
+  const resolve = async (slug: string) => (await collection.get(slug)).projectId;
+  const scripting: McpScripting = {
+    async runScript(slug, code, args) {
+      const projectId = await resolve(slug);
+      return execScriptInProject({ code, projectId, args, loader: env.LOADER, makeEntry });
+    },
+    async provideCapability(slug, name, code) {
+      const projectId = await resolve(slug);
+      await capabilityRegistry(env.SECRETS_KV, projectId).provide(name, code);
+    },
+    async invokeCapability(slug, name, args) {
+      const projectId = await resolve(slug);
+      const code = await capabilityRegistry(env.SECRETS_KV, projectId).code(name);
+      if (code === null) throw new Error(`no such capability '${name}'`);
+      return execScriptInProject({ code, projectId, args, loader: env.LOADER, makeEntry });
+    },
+    async listCapabilities(slug) {
+      const projectId = await resolve(slug);
+      return capabilityRegistry(env.SECRETS_KV, projectId).list();
+    },
+  };
+  return handleMcpRequest(
+    request,
+    projects,
+    { name: "iterate-kernel", version: "0.1.0" },
+    scripting,
+  );
 }
 
 // Serve the kernel-reserved dashboard (control plane): mint a narrow project-app-session so the vessel

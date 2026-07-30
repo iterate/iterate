@@ -7,6 +7,7 @@
   "worker_loaders": [{ "binding": "LOADER" }],
   "durable_objects": { "bindings": [{ "name": "STREAM_DO", "class_name": "StreamDurableObject" }] },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["StreamDurableObject"] }],
+  "kv_namespaces": [{ "binding": "SECRETS_KV", "id": "test-secrets" }],
   // hostBase example.com so <slug>.example.com resolves; NO wall — INSECURE_STUB_AUTH enables the
   // forgeable `Bearer session:<who>` stub wall for the e2e ONLY (review #1) — no real config sets it.
   "vars": {

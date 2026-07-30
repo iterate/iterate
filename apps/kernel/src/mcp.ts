@@ -17,6 +17,15 @@ export interface McpProjects {
   get(slug: string): Promise<string>; // -> projectId (throws if prospective / not a member)
 }
 
+// Script-execution + dynamic-capability operations (the os `exec_typescript` model, control-plane-driven).
+// Optional — a generic control plane may not expose scripting. All scoped to a project the caller resolved.
+export interface McpScripting {
+  runScript(projectId: string, code: string, args?: unknown): Promise<unknown>;
+  provideCapability(projectId: string, name: string, code: string): Promise<void>;
+  invokeCapability(projectId: string, name: string, args?: unknown): Promise<unknown>;
+  listCapabilities(projectId: string): Promise<string[]>;
+}
+
 type JsonRpcId = string | number | null;
 type JsonRpcRequest = {
   jsonrpc: "2.0";
@@ -62,6 +71,67 @@ const TOOLS = [
   },
 ] as const;
 
+// Scripting tools — only advertised when the deployment provides a scripting facade.
+const SCRIPTING_TOOLS = [
+  {
+    name: "run_script",
+    description:
+      "Run an async script `itx => …` (or `(itx,args) => …`) against a project's ITX tree, confined. Returns its result.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project: { type: "string", description: "project slug" },
+        code: {
+          type: "string",
+          description: "an async function expression, e.g. `async (itx) => await itx.whoami()`",
+        },
+        args: { description: "optional JSON args passed as the 2nd parameter" },
+      },
+      required: ["project", "code"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "provide_capability",
+    description:
+      "Register a named dynamic capability (a stored `(itx,args) => …` script) on a project. Cannot shadow a builtin.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project: { type: "string" },
+        name: { type: "string" },
+        code: { type: "string" },
+      },
+      required: ["project", "name", "code"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "invoke_capability",
+    description: "Invoke a previously-provided dynamic capability by name, with optional args.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project: { type: "string" },
+        name: { type: "string" },
+        args: {},
+      },
+      required: ["project", "name"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "list_capabilities",
+    description: "List the dynamic capabilities provided on a project.",
+    inputSchema: {
+      type: "object",
+      properties: { project: { type: "string" } },
+      required: ["project"],
+      additionalProperties: false,
+    },
+  },
+] as const;
+
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
     status,
@@ -81,6 +151,7 @@ export async function handleMcpRequest(
   request: Request,
   projects: McpProjects,
   serverInfo: { name: string; version: string },
+  scripting?: McpScripting,
 ): Promise<Response> {
   // Streamable HTTP: the server→client SSE stream is optional; we're stateless, so GET has nothing to open.
   if (request.method !== "POST") return json({ error: "POST JSON-RPC to /mcp" }, 405);
@@ -107,10 +178,11 @@ export async function handleMcpRequest(
     case "ping":
       return rpcResult(id, {});
     case "tools/list":
-      return rpcResult(id, { tools: TOOLS });
+      return rpcResult(id, { tools: scripting ? [...TOOLS, ...SCRIPTING_TOOLS] : TOOLS });
     case "tools/call": {
       const name = msg.params?.name as string | undefined;
       const args = (msg.params?.arguments ?? {}) as Record<string, unknown>;
+      const asJson = (v: unknown) => (typeof v === "string" ? v : JSON.stringify(v, null, 2));
       try {
         if (name === "list_projects") {
           const list = await projects.list();
@@ -131,6 +203,30 @@ export async function handleMcpRequest(
         if (name === "get_project") {
           const projectId = await projects.get(String(args.slug ?? ""));
           return rpcResult(id, toolText(projectId));
+        }
+        if (scripting && name === "run_script") {
+          const out = await scripting.runScript(String(args.project), String(args.code), args.args);
+          return rpcResult(id, toolText(asJson(out)));
+        }
+        if (scripting && name === "provide_capability") {
+          await scripting.provideCapability(
+            String(args.project),
+            String(args.name),
+            String(args.code),
+          );
+          return rpcResult(id, toolText(`provided capability '${args.name}'`));
+        }
+        if (scripting && name === "invoke_capability") {
+          const out = await scripting.invokeCapability(
+            String(args.project),
+            String(args.name),
+            args.args,
+          );
+          return rpcResult(id, toolText(asJson(out)));
+        }
+        if (scripting && name === "list_capabilities") {
+          const list = await scripting.listCapabilities(String(args.project));
+          return rpcResult(id, toolText(list.length ? list.join("\n") : "(none)"));
         }
         return rpcResult(id, toolText(`unknown tool '${name}'`, true));
       } catch (e) {

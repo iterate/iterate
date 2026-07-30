@@ -102,7 +102,9 @@ describe("kernel", () => {
 
     const tools = await mcp({ jsonrpc: "2.0", id: 2, method: "tools/list" });
     const names = tools.body.result.tools.map((t: { name: string }) => t.name);
-    expect(names).toEqual(["list_projects", "create_project", "get_project"]);
+    expect(names).toEqual(
+      expect.arrayContaining(["list_projects", "create_project", "get_project"]),
+    );
   });
 
   test("/mcp tools/call list_projects goes through the directory (the test config knows 'alice')", async () => {
@@ -117,6 +119,56 @@ describe("kernel", () => {
     expect(got.status).toBe(200);
     expect(got.body.result.content[0].text).toBe("alice"); // resolved via the directory
     expect(got.body.result.isError).toBeFalsy();
+  });
+
+  test("scripting: run_script executes arbitrary code against the ITX tree, confined", async () => {
+    // The os `exec_typescript` model: hand `itx => …` to MCP, it runs confined with only env.ITX.
+    const r = await mcp({
+      jsonrpc: "2.0",
+      id: 10,
+      method: "tools/call",
+      params: {
+        name: "run_script",
+        arguments: { project: "alice", code: "async (itx) => await itx.whoami()" },
+      },
+    });
+    const out = JSON.parse(r.body.result.content[0].text);
+    expect(out.ok).toBe(true);
+    expect(out.out.projectId).toBe("alice"); // the script ran with alice's ITX and returned its whoami
+  });
+
+  test("scripting: provide_capability then invoke_capability (dynamic capabilities)", async () => {
+    const provide = await mcp({
+      jsonrpc: "2.0",
+      id: 11,
+      method: "tools/call",
+      params: {
+        name: "provide_capability",
+        arguments: { project: "alice", name: "add", code: "async (itx, args) => args.a + args.b" },
+      },
+    });
+    expect(provide.body.result.isError).toBeFalsy();
+
+    const invoke = await mcp({
+      jsonrpc: "2.0",
+      id: 12,
+      method: "tools/call",
+      params: {
+        name: "invoke_capability",
+        arguments: { project: "alice", name: "add", args: { a: 2, b: 3 } },
+      },
+    });
+    const out = JSON.parse(invoke.body.result.content[0].text);
+    expect(out.ok).toBe(true);
+    expect(out.out).toBe(5); // the dynamic capability ran and computed 2+3
+  });
+
+  test("scripting tools appear in tools/list (scripting facade present)", async () => {
+    const tools = await mcp({ jsonrpc: "2.0", id: 13, method: "tools/list" });
+    const names = tools.body.result.tools.map((t: { name: string }) => t.name);
+    expect(names).toContain("run_script");
+    expect(names).toContain("provide_capability");
+    expect(names).toContain("invoke_capability");
   });
 
   test("/mcp is deployment-wide — same answer regardless of which host reaches it", async () => {
