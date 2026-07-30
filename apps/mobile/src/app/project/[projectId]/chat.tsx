@@ -357,8 +357,9 @@ function FeedList({
       contentContainerStyle={{ padding: spacing.md, gap: spacing.sm }}
       ListHeaderComponent={
         // Inverted list: the "header" renders at the visual bottom — held
-        // approval dialogs for THIS thread sit under the working row, right
-        // where the human is already looking.
+        // approval dialogs for THIS thread sit at the thread's bottom edge
+        // (above the transient working row), right where the human is
+        // already looking.
         <View style={styles.bottomStack}>
           {approvals}
           {sendPending || (feed.working && feed.live?.steps.length === 0) ? (
