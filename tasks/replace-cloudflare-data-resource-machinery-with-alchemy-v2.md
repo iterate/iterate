@@ -216,6 +216,16 @@ new resource. The fail-closed local invalidation fixes the actionable bug;
 cross-worktree operation serialization belongs to the deployment lease/workflow,
 not a manifest generation counter.
 
+### Post-push review: retired OS secret
+
+Cursor correctly found stale Auth documentation claiming every OS deploy still
+asserted and removed `APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN`; that prose was
+deleted. Restoring the retired-secret deploy path was rejected as legacy
+rollout machinery: this PR's accepted rollout destroys/recreates every
+environment, current code has no writer for that binding, and live checks found
+the name absent from all twenty OS Doppler configs, all 56 deployed preview OS
+Workers, and `os-prd`.
+
 ## Proof and rollout
 
 Use reserved `preview_18` and `preview_19` as disposable proof stages:

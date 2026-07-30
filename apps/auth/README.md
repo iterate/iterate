@@ -278,28 +278,16 @@ the same even when the requested Git ref differs.
 worker. Do not add a second production job: independent workflows can race
 Alchemy applies or leave OS bound to an incompatible revision.
 
-Every OS deploy now treats the removed
-`APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN` as a forbidden invariant. Before any
-sidecar or OS version is uploaded, it fails unless the resolved Doppler config
-and the current Worker's secret bindings both omit that name. This check is
-deliberately non-mutating: an operator must remove resurrected credential state
-explicitly and then retry. After deployment, OS forces a fresh project-host
-lookup through `AUTH`; the random slug bypasses KV and in-isolate negative
-caches, and the probe requires OS's exact JSON 404 body, so an edge-level 404
-cannot produce a false green.
+After deployment, OS forces a fresh project-host lookup through `AUTH`; the
+random slug bypasses KV and in-isolate negative caches, and the probe requires
+OS's exact JSON 404 body, so an edge-level 404 cannot produce a false green.
 
-The one-release preview-fleet cutover completed on 2026-07-14. All nine slots
-deployed Auth before OS, passed fresh RPC lookup probes, and finished with the
-retired OS token absent from both the live Worker bindings and Doppler. The
-temporary fleet workflow and global concurrency gate were removed after that
-verification. Normal preview deploy and cleanup jobs are again serialized per
-PR, and ordinary slot acquisition never force-evicts another lifecycle's
-lease. The preview CI workflow retains `scripts/preview/deployment-epoch` as a
-pre-deploy floor: a stale PR branch fails before Auth can be rolled back and
-must rebase. A direct manual deployment from an old checkout bypasses that CI
-guard and is unsupported; operators must deploy previews from current `main`.
-Config provisioning and OAuth-client sync do not mutate forbidden credential
-state.
+Normal preview deploy and cleanup jobs are serialized per PR, and ordinary slot
+acquisition never force-evicts another lifecycle's lease. The preview CI
+workflow retains `scripts/preview/deployment-epoch` as a pre-deploy floor: a
+stale PR branch fails before Auth can be rolled back and must rebase. A direct
+manual deployment from an old checkout bypasses that CI guard and is
+unsupported; operators must deploy previews from current `main`.
 
 The coordinated workflow sets `ALLOW_REMOTE_PRODUCTION_AUTH_RPC=1` while
 generating OS's complete Wrangler config. A manual production OS deployment
