@@ -1,3 +1,4 @@
+import { DocsApp } from "@iterate-com/docs";
 import { GithubAiLinter } from "iterate/starter-apps/github-ai-linter";
 import { GuestbookApp } from "iterate/starter-apps/guestbook";
 import { IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
@@ -25,12 +26,61 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       repoPath: "/repos/config",
     },
   });
+  #docsApp = DocsApp.create(this.env, {
+    auth: { policy: "project-member" },
+    proxy: {
+      origin: "https://docs.iterate.workers.dev",
+      originOverrideKvKey: "docs-app-origin",
+    },
+  });
   #guestbookApp = GuestbookApp.create(this.env);
   #todoApp = TodoApp.create(this.env);
+
+  /** Agent-callable Docs helpers, including `itx.worker.docs.link({ workspace, path })`. */
+  get docs() {
+    return this.#docsApp.rpc;
+  }
 
   // The base class delivers committed events on ANY stream here at least once and in
   // per-stream order.
   protected override async processEvent(event: StreamEvent): Promise<void> {
+    switch (event.type) {
+      case "events.iterate.com/project/heartbeat-triggered": {
+        if (event.path !== "/") break;
+        console.log("Project heartbeat fired", { scheduleKey: event.payload?.scheduleKey });
+        // Write arbitrary periodic work against itx here:
+        // const itx = await this.itx;
+        break;
+      }
+      case "events.iterate.com/stream/woken": {
+        if (event.path !== "/") break;
+        // Write arbitrary project-stream wake work against itx here:
+        // const itx = await this.itx;
+        break;
+      }
+      case "events.iterate.com/project/worker-updated": {
+        if (event.path !== "/") break;
+        // The platform appends this only after the current config worker has
+        // built, loaded, and answered. Put arbitrary idempotent ITX calls
+        // directly in this case.
+        const itx = await this.itx;
+        await itx.scheduler.set({
+          key: "iterate/config/heartbeat/every-15-minutes",
+          recurrence: { every: 15 * 60 },
+          script: `async (itx, schedule, trigger) => {
+            await itx.streams.get("/").append({
+              type: "events.iterate.com/project/heartbeat-triggered",
+              idempotencyKey: "iterate/config/heartbeat:" + trigger.executionId,
+              payload: { scheduleKey: schedule.key },
+            });
+          }`,
+        });
+        break;
+      }
+      default:
+        break;
+    }
+
     await this.#aiLintApp.processEvent(event);
     await this.#guestbookApp.processEvent(event);
   }
@@ -38,7 +88,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
   async fetch(req: Request): Promise<Response> {
     const app = req.headers.get("x-iterate-app");
     if (app === "todo") {
-      using itx = await this.env.ITX.get();
+      const itx = await this.itx;
       const authResponse = await itx.auth.get({ policy: "project-member" }).fetch(req);
       if (authResponse) return authResponse;
       return this.#todoApp.fetch(req);
@@ -51,7 +101,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       // tasks board (github.com/iterate/tasks), which authenticates each
       // visitor back to os.iterate.com. The kv knob targets a dev tunnel
       // while developing the tasks app itself.
-      using itx = await this.env.ITX.get();
+      const itx = await this.itx;
       const denied = await itx.auth.get({ policy: "project-member" }).fetch(req);
       if (denied) return denied;
       const tasksUrl = new URL(req.url);
@@ -67,6 +117,9 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
           redirect: "manual",
         }),
       );
+    }
+    if (app === "docs") {
+      return this.#docsApp.fetch(req);
     }
     if (app) return new Response(`unknown app: ${app}`, { status: 404 });
 
@@ -84,6 +137,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
                 <li><a href="${appUrl("todo")}">todo</a> (LiveState + Cap'n Web, project members only)</li>
                 <li><a href="${appUrl("guestbook")}">guestbook</a> (stream processor reduce on /guestbook, public)</li>
                 <li><a href="${appUrl("tasks")}">tasks</a> (collaborative task board over tasks/, project members only)</li>
+                <li><a href="${appUrl("docs")}">docs</a> (direct workspace document review, project members only)</li>
               </ul>
               <p>Edit worker.ts in the project repo to change this.</p>
             </main>

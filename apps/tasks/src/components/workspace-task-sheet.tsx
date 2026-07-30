@@ -39,6 +39,11 @@ const WorkspaceTaskPreview = lazy(() =>
     default: module.WorkspaceTaskPreview,
   })),
 );
+const TaskComments = lazy(() =>
+  import("./task-comments.tsx").then((module) => ({
+    default: module.TaskComments,
+  })),
+);
 
 /**
  * The task detail sheet on the WORKSPACE lane: the shared collab-editor
@@ -58,6 +63,8 @@ export function WorkspaceTaskSheet({
   redline,
   liveSource,
   editorApiRef,
+  commentIdentity,
+  onApplyTransform,
   onLiveContent,
   onChangeState,
   onChangeLabels,
@@ -82,6 +89,11 @@ export function WorkspaceTaskSheet({
   /** Live document text when a session is open (Preview must not lag). */
   liveSource?: () => string | null;
   editorApiRef?: { current: import("../lib/collab-editor-api.ts").CollabEditorApi | null };
+  /** Who authors discussion comments (null → comments are read-only). */
+  commentIdentity: import("./task-comments.tsx").CommentIdentity | null;
+  /** Route a whole-file transform to the live editor or the write lane;
+   * resolves whether it landed (the write lane can roll back). */
+  onApplyTransform: (transform: (source: string) => string) => Promise<boolean>;
   onLiveContent: (path: string, content: string) => void;
   onChangeState: (state: string) => void;
   onChangeLabels: (labels: string[]) => void;
@@ -110,6 +122,8 @@ export function WorkspaceTaskSheet({
             redline={redline}
             liveSource={liveSource}
             editorApiRef={editorApiRef}
+            commentIdentity={commentIdentity}
+            onApplyTransform={onApplyTransform}
             onLiveContent={onLiveContent}
             onChangeState={onChangeState}
             onChangeLabels={onChangeLabels}
@@ -136,6 +150,8 @@ function SheetBody({
   redline,
   liveSource,
   editorApiRef,
+  commentIdentity,
+  onApplyTransform,
   onLiveContent,
   onChangeState,
   onChangeLabels,
@@ -160,6 +176,11 @@ function SheetBody({
   /** Live document text when a session is open (Preview must not lag). */
   liveSource?: () => string | null;
   editorApiRef?: { current: import("../lib/collab-editor-api.ts").CollabEditorApi | null };
+  /** Who authors discussion comments (null → comments are read-only). */
+  commentIdentity: import("./task-comments.tsx").CommentIdentity | null;
+  /** Route a whole-file transform to the live editor or the write lane;
+   * resolves whether it landed (the write lane can roll back). */
+  onApplyTransform: (transform: (source: string) => string) => Promise<boolean>;
   onLiveContent: (path: string, content: string) => void;
   onChangeState: (state: string) => void;
   onChangeLabels: (labels: string[]) => void;
@@ -169,6 +190,8 @@ function SheetBody({
   onRequestClose: () => void;
 }) {
   const [status, setStatus] = useState("connecting…");
+  // One selection shared by the preview's highlights and the comments strip.
+  const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   // The path is editable in place; SheetBody is keyed by task.path, so a
   // successful rename remounts with the fresh path and clean state.
   const [pathDraft, setPathDraft] = useState(task.path);
@@ -316,7 +339,14 @@ function SheetBody({
       </div>
         <TabsContent value="preview" className="flex min-h-0 flex-1 flex-col">
           <Suspense fallback={<p className="p-4 text-sm text-muted-foreground">Rendering…</p>}>
-            <WorkspaceTaskPreview source={liveSource?.() ?? task.source} />
+            <WorkspaceTaskPreview
+              source={liveSource?.() ?? task.source}
+              identity={commentIdentity}
+              busy={status === "connecting…"}
+              onTransform={onApplyTransform}
+              selectedThreadId={selectedThreadId}
+              onSelectThread={setSelectedThreadId}
+            />
           </Suspense>
         </TabsContent>
         <TabsContent value="editor" keepMounted className="flex min-h-0 flex-1 flex-col data-[hidden]:hidden">
@@ -327,6 +357,7 @@ function SheetBody({
           key={editorEpoch ?? 0}
           checkoutId={checkoutId}
           repoPath={repoPath}
+          displayName={commentIdentity?.authorDisplay ?? commentIdentity?.author}
           path={task.path}
           redline={redline ?? true}
           focusHeadline={focusHeadline}
@@ -338,6 +369,21 @@ function SheetBody({
       </Suspense>
         </TabsContent>
       </Tabs>
+      <div className="flex max-h-[45%] shrink-0 flex-col border-t">
+        <Suspense fallback={null}>
+          <TaskComments
+            source={liveSource?.() ?? task.source}
+            identity={commentIdentity}
+            // While the editor is attaching, a transform would fall through
+            // to the raw write lane — which the arriving session then
+            // overwrites with its older snapshot, dropping the comment.
+            busy={status === "connecting…"}
+            onTransform={onApplyTransform}
+            selectedThreadId={selectedThreadId}
+            onSelectThread={setSelectedThreadId}
+          />
+        </Suspense>
+      </div>
     </div>
   );
 }

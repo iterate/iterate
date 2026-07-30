@@ -172,23 +172,29 @@ type RegistryEntry = {
   runner: StreamProcessorRunner<any>;
 };
 
+const WakeDeliveryThrowableFields = z.object({
+  durableObjectReset: z.unknown().optional(),
+  itxCallId: z.unknown().optional(),
+  message: z.unknown().optional(),
+  name: z.unknown().optional(),
+  overloaded: z.unknown().optional(),
+  retryable: z.unknown().optional(),
+});
+
 function serializeWakeDeliveryError(error: unknown): StreamWakeDeliveryError {
-  const candidate =
-    typeof error === "object" && error !== null
-      ? (error as {
-          durableObjectReset?: unknown;
-          message?: unknown;
-          name?: unknown;
-          overloaded?: unknown;
-          retryable?: unknown;
-        })
-      : undefined;
+  const parsed = WakeDeliveryThrowableFields.safeParse(error);
+  const candidate = parsed.success ? parsed.data : undefined;
   return {
     name: typeof candidate?.name === "string" ? candidate.name : "Error",
     message:
       typeof candidate?.message === "string"
         ? candidate.message
         : String(error) || "unknown delivery failure",
+    ...(typeof candidate?.itxCallId === "string" &&
+    candidate.itxCallId.length > 0 &&
+    candidate.itxCallId.length <= 200
+      ? { itxCallId: candidate.itxCallId }
+      : {}),
     ...(candidate?.durableObjectReset === true ? { durableObjectReset: true as const } : {}),
     ...(candidate?.overloaded === true ? { overloaded: true as const } : {}),
     ...(candidate?.retryable === true ? { retryable: true as const } : {}),
@@ -643,18 +649,22 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
       if (!z.uuid().safeParse(args.stream.streamId).success) {
         throw new Error(`wakeStreamProcessor streamId must be a UUID`);
       }
-      // The runner owns all frame semantics: serialization, offset dedupe,
-      // whole-attempt keepalive, and the trailing unfiltered catch-up. The
-      // registry adds only the transport boundary: the stream's callback call
-      // returns immediately, while this DO reports the eventual attempt
-      // outcome through the batch's independent one-shot capability.
+      // The runner owns frame serialization, offset dedupe, and whole-attempt
+      // keepalive. The hosted source owns catch-up: it scans every raw offset
+      // and sends empty frames for configured-filter gaps, so an unfiltered
+      // runner pull would bypass that filter. The registry otherwise adds only
+      // the transport boundary: the stream's callback call returns
+      // immediately, while this DO reports the eventual attempt outcome
+      // through the batch's independent one-shot capability.
       //
       // That separation is load-bearing. Processor blockers routinely append
       // back to the same stream that delivered them. Returning `attempt` from
       // this RPC makes the stream pull a result that cannot settle until the
       // nested append reaches the stream again — a cyclic actor-drain tree
       // that workerd can retain until idle teardown.
-      const opened = await entry.runner.openEventBatchCallback(args.stream.streamId);
+      const opened = await entry.runner.openEventBatchCallback(args.stream.streamId, {
+        sourceScansAllEvents: true,
+      });
       const processEventBatch = (batch: StreamWakeEventBatch) => {
         const { reportDeliveryResult, ...frame } = batch;
         if (

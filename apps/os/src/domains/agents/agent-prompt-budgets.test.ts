@@ -63,6 +63,16 @@ test(`the default prompt stays under ${DEFAULT_PROMPT_TOKEN_CEILING} tokens`, ()
   );
 });
 
+test("the default prompt teaches agents to share workspace files through Docs", () => {
+  expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain(
+    'itx.worker.docs.link({ workspace: "/workspaces/agents/you", path: "/review.md" })',
+  );
+  expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("Comments and Markdown edits write directly");
+  expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain(
+    "This is not `itx.docs`, which searches API documentation.",
+  );
+});
+
 test("every agent prompt teaches the summary turn lifecycle and append event", () => {
   expect(AGENT_SUMMARY_INSTRUCTION.length).toBeLessThanOrEqual(1_200);
   expect(AGENT_SUMMARY_INSTRUCTION).toContain("FIRST TURN:");

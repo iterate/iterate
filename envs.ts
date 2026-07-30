@@ -7,8 +7,9 @@
  * them (D1, KV). Everything here is non-secret and reviewed like any other
  * code; secrets live in Doppler (one config per env per app, named below).
  *
- * Each app has its own map (envs/os, authEnvs, semaphoreEnvs, tunnelsEnvs,
- * streamsExampleEnvs, dummyPetshopEnvs) because apps deploy to different
+ * Each app has its own map (envs/os, authEnvs, semaphoreEnvs, kitEnvs,
+ * tunnelsEnvs, streamsExampleEnvs, dummyPetshopEnvs, docsEnvs) because apps
+ * deploy to different
  * subsets of environments — forcing them into one record would mean optional
  * fields that lie. Hostnames follow conventions (`previewSlot(n)` derives them);
  * resource IDs are Cloudflare-assigned and must be spelled out.
@@ -258,7 +259,7 @@ export const envs = {
   preview_19: previewSlot(19, {
     projectDirectoryKvId: "916fa97c2ec84067997012702f242646",
     workerBuildCacheKvId: "a22450ba186a40549cfe2cff29079aca",
-    authDbId: "f9facd1f-0699-4766-8aa4-b00c7a59ff34",
+    authDbId: "42efe1e4-194f-4c61-8e62-810ec35fbf43",
   }),
 } satisfies Record<string, DeployedEnv>;
 
@@ -399,6 +400,29 @@ export const semaphoreEnvs = {
 } satisfies Record<EnvName, SemaphoreEnv>;
 
 /**
+ * apps/kit — the browser device installer. Production only: it intentionally
+ * has no preview fleet and owns no stateful Cloudflare resources.
+ */
+export interface KitEnv {
+  cloudflareAccountId: string;
+  /** Doppler config (project `kit`) supplying deploy credentials. */
+  dopplerConfig: string;
+  workerName: string;
+  baseUrl: string;
+}
+
+export const kitEnvs = {
+  prd: {
+    cloudflareAccountId: PRD_ACCOUNT_ID,
+    dopplerConfig: "prd",
+    // The production account's workers.dev subdomain is `iterate`, making
+    // this worker available at kiterate.iterate.workers.dev as well.
+    workerName: "kiterate",
+    baseUrl: "https://k.iterate.com",
+  },
+} satisfies Record<string, KitEnv>;
+
+/**
  * apps/tunnels — the captun gateway. prd only; dev tunnels ride prd.
  * No per-env resources (one DO class, no D1/KV), so its checked-in
  * wrangler.jsonc is hand-written rather than generated.
@@ -499,3 +523,43 @@ export const streamsExampleEnvs = {
   },
   ...mapDeployedPreviewEnvs((env) => streamsExamplePreviewSlot(previewEnvironmentSlotNumber(env))),
 } satisfies Record<EnvName, StreamsExampleEnv>;
+
+/**
+ * apps/docs — the stateless workspace-document vessel. Project-facing
+ * traffic arrives through each project's `docs--<slug>` config-worker proxy;
+ * these workers.dev origins are the independently deployed upstreams.
+ *
+ * Docs owns no storage. All document content and annotations remain in the
+ * OS workspace selected by the deep link.
+ */
+export interface DocsEnv {
+  cloudflareAccountId: string;
+  /** Doppler config (project `docs`) supplying deploy credentials. */
+  dopplerConfig: string;
+  workerName: string;
+  /** Direct vessel origin used by the project config-worker proxy. */
+  baseUrl: string;
+  /** OS deployment that owns the workspaces this vessel addresses. */
+  osBaseUrl: string;
+}
+
+function docsPreviewSlot(n: number): DocsEnv {
+  return {
+    cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
+    dopplerConfig: `preview_${n}`,
+    workerName: `docs-preview-${n}`,
+    baseUrl: `https://docs-preview-${n}.iterate-dev-preview.workers.dev`,
+    osBaseUrl: `https://os.iterate-preview-${n}.com`,
+  };
+}
+
+export const docsEnvs = {
+  prd: {
+    cloudflareAccountId: PRD_ACCOUNT_ID,
+    dopplerConfig: "prd",
+    workerName: "docs",
+    baseUrl: "https://docs.iterate.workers.dev",
+    osBaseUrl: "https://os.iterate.com",
+  },
+  ...mapDeployedPreviewEnvs((env) => docsPreviewSlot(previewEnvironmentSlotNumber(env))),
+} satisfies Record<EnvName, DocsEnv>;

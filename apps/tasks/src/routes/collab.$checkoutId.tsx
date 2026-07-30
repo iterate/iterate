@@ -2,8 +2,10 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { EditorView, keymap, lineNumbers } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
-import { useCollabEditor } from "../lib/use-collab-editor.ts";
+import { useCollabEditor } from "@iterate-com/workspace-documents/collab";
+import type { WorkspaceDocumentTransport } from "@iterate-com/workspace-documents/types";
 import { DEFAULT_REPO_PATH, normalizeRepoPath } from "../lib/checkout-shared.ts";
+import { withProject, withProjectOnce } from "../lib/use-checkout.ts";
 
 /**
  * PoC page for the no-Yjs collab lane: one file, one CodeMirror editor over
@@ -22,6 +24,16 @@ export const Route = createFileRoute("/collab/$checkoutId")({
 function CollabPage() {
   const { checkoutId } = Route.useParams();
   const search = Route.useSearch();
+  const repoPath = normalizeRepoPath(search.repo) ?? DEFAULT_REPO_PATH;
+  const transport = useMemo<WorkspaceDocumentTransport>(
+    () => ({
+      run: (operation) =>
+        withProject((project) => operation(project.workspace(checkoutId, repoPath))),
+      runOnce: (operation) =>
+        withProjectOnce((project) => operation(project.workspace(checkoutId, repoPath))),
+    }),
+    [checkoutId, repoPath],
+  );
   const [redline, setRedline] = useState(true);
   const extensions = useMemo(
     () => [
@@ -33,11 +45,10 @@ function CollabPage() {
     [],
   );
   const editor = useCollabEditor({
-    checkoutId,
     extensions,
-    path: search.path.replace(/^\/+/, ""),
+    path: search.path,
     redline,
-    repoPath: normalizeRepoPath(search.repo) ?? DEFAULT_REPO_PATH,
+    transport,
   });
 
   return (

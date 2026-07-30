@@ -16,6 +16,7 @@ test("Project repos, workers, runScript, and dynamic worker refs compose", async
     .get(`dynamic-worker-${crypto.randomUUID().slice(0, 8)}`)
     .create({});
   const description = await project.__describe();
+  using root = project.streams.get("/");
 
   // The seeded root worker routes via x-iterate-app (static homepage
   // otherwise); an unknown selection echoes back in the 404 body, giving the
@@ -37,6 +38,7 @@ test("Project repos, workers, runScript, and dynamic worker refs compose", async
     worker: "404 unknown app: script-probe",
   });
 
+  const rootOffsetBeforeCommit = (await root.runtimeState()).coreProcessorState.maxOffset;
   const commit = await project.repo.commitFiles({
     changes: [
       {
@@ -89,6 +91,17 @@ test("Project repos, workers, runScript, and dynamic worker refs compose", async
     noChanges: false,
   });
   expect(commit.commitOid).toMatch(/^[0-9a-f]{40}$/);
+  expect(
+    await root.waitForEvent({
+      afterOffset: rootOffsetBeforeCommit,
+      eventTypes: ["events.iterate.com/project/worker-updated"],
+      predicate: (event) => event.payload?.commitOid === commit.commitOid,
+      timeoutMs: 180_000,
+    }),
+  ).toMatchObject({
+    payload: { commitOid: commit.commitOid },
+    type: "events.iterate.com/project/worker-updated",
+  });
   // @ts-expect-error - dynamic project worker method from committed source
   expect(await project.worker.someMethod()).toEqual({
     projectId: description.projectId,

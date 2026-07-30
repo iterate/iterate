@@ -66,7 +66,7 @@ export function GuestbookClient() {
             workers, which takes over a second on a fresh deployment. Real
             users need the progress cue — and it is the visible-progress
             contract the e2e spinner policy extends its waits on. */}
-        <button disabled={api == null || signing} type="submit">
+        <button data-spinner={signing || undefined} disabled={api == null || signing} type="submit">
           {signing ? "Signing…" : "Sign guestbook"}
         </button>
       </form>

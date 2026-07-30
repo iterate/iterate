@@ -618,7 +618,9 @@ export abstract class StreamProcessor<
     // never loop back here, so they are not timed. A sibling retains rows
     // across deletion/recreation of the source path, so its committed key
     // includes the source lifetime; offset 1 from A and offset 1 from B are
-    // different causes and must both be able to land.
+    // different causes and must both be able to land. Idempotency keys are
+    // retry identities, not semantic entity identities: readers determine
+    // meaning from event types or reduced processor state, never key spelling.
     if (args.targetPath !== this.path) {
       events = events.map((event) =>
         event.idempotencyKey === undefined

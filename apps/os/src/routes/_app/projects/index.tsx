@@ -254,9 +254,13 @@ function ProjectsTable({
 }
 
 function ProjectNameCell({ project }: { project: ProjectListEntry }) {
+  const inspectable =
+    project.deploymentStatus === "created" ||
+    project.deploymentStatus === "creating" ||
+    project.deploymentStatus === "failed";
   return (
     <div className="min-w-0 space-y-0.5">
-      {project.deploymentStatus === "ready" ? (
+      {inspectable ? (
         <Link
           to="/projects/$projectSlug"
           params={{ projectSlug: project.slug }}
@@ -275,8 +279,12 @@ function ProjectNameCell({ project }: { project: ProjectListEntry }) {
 
 function ProjectStatusCell({ project }: { project: ProjectListEntry }) {
   switch (project.deploymentStatus) {
-    case "ready":
-      return <Badge>Ready</Badge>;
+    case "created":
+      return <Badge>Created</Badge>;
+    case "creating":
+      return <Badge variant="secondary">Creating</Badge>;
+    case "failed":
+      return <Badge variant="destructive">Creation failed</Badge>;
     case "missing":
       return <Badge variant="secondary">Not set up in this deployment</Badge>;
     case "unknown":
@@ -302,7 +310,11 @@ function ProjectActionsCell({
     );
   }
 
-  if (project.deploymentStatus === "ready") {
+  if (
+    project.deploymentStatus === "created" ||
+    project.deploymentStatus === "creating" ||
+    project.deploymentStatus === "failed"
+  ) {
     return (
       <div className="flex justify-end gap-2">
         <Button
@@ -314,7 +326,7 @@ function ProjectActionsCell({
             <Link to="/projects/$projectSlug" params={{ projectSlug: project.slug }} search={{}} />
           }
         >
-          Open
+          {project.deploymentStatus === "failed" ? "Inspect" : "Open"}
         </Button>
       </div>
     );

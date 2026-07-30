@@ -11,7 +11,7 @@
  */
 import { createHmac } from "node:crypto";
 import { createServer } from "node:http";
-import { describe, expect, test } from "vitest";
+import { beforeAll, describe, expect, test } from "vitest";
 import { listenOnFetchSafePort } from "@iterate-com/shared/test-support/fetch-safe-port";
 import { seedPets } from "./pets.ts";
 import { randomSealKey } from "./seal.ts";
@@ -75,6 +75,16 @@ async function generateAppKeys(): Promise<{ privateKey: CryptoKey; publicKeyPem:
   };
 }
 
+type AppKeys = Awaited<ReturnType<typeof generateAppKeys>>;
+
+let appKeys: AppKeys;
+let attackerKeys: AppKeys;
+
+beforeAll(async () => {
+  // RSA generation dominates this suite and every test only reads the keys.
+  [appKeys, attackerKeys] = await Promise.all([generateAppKeys(), generateAppKeys()]);
+}, 30_000);
+
 /**
  * Sign an App JWT the SAME way the OS side's secrets `sign()` does: RS256 over
  * the ASCII `header.payload`, signature base64url, joined `header.payload.sig`.
@@ -107,7 +117,7 @@ function appJwtClaims(
 describe("GitHub App installation-token minting", () => {
   test("a signed App JWT exchanges for an installation token that works on the API", async () => {
     const shop = makeShop();
-    const { privateKey, publicKeyPem } = await generateAppKeys();
+    const { privateKey, publicKeyPem } = appKeys;
 
     // Register ONLY the public key against the seeded installation.
     const registered = await shop("/__backdoor/apps", postJson({ publicKeyPem }));
@@ -141,7 +151,7 @@ describe("GitHub App installation-token minting", () => {
 
   test("registering a distinct app id + installation id mints a token naming them", async () => {
     const shop = makeShop();
-    const { privateKey, publicKeyPem } = await generateAppKeys();
+    const { privateKey, publicKeyPem } = appKeys;
     const created = await shop(
       "/__backdoor/apps",
       postJson({ appId: "app-42", installationId: "install-42", publicKeyPem }),
@@ -160,11 +170,10 @@ describe("GitHub App installation-token minting", () => {
 
   test("a JWT signed by a different key than the registered one is rejected 401", async () => {
     const shop = makeShop();
-    const { publicKeyPem } = await generateAppKeys();
+    const { publicKeyPem } = appKeys;
     await shop("/__backdoor/apps", postJson({ publicKeyPem }));
 
-    const attacker = await generateAppKeys();
-    const jwt = await signAppJwt(attacker.privateKey, appJwtClaims(DEFAULT_APP_ID));
+    const jwt = await signAppJwt(attackerKeys.privateKey, appJwtClaims(DEFAULT_APP_ID));
     const response = await mintInstallationToken(shop, DEFAULT_INSTALLATION_ID, jwt);
     expect(response.status).toBe(401);
     expect(await response.json()).toMatchObject({
@@ -175,7 +184,7 @@ describe("GitHub App installation-token minting", () => {
 
   test("an expired App JWT is rejected 401", async () => {
     const shop = makeShop();
-    const { privateKey, publicKeyPem } = await generateAppKeys();
+    const { privateKey, publicKeyPem } = appKeys;
     await shop("/__backdoor/apps", postJson({ publicKeyPem }));
 
     const jwt = await signAppJwt(
@@ -192,7 +201,7 @@ describe("GitHub App installation-token minting", () => {
 
   test("a JWT whose iss is not the app id is rejected 401", async () => {
     const shop = makeShop();
-    const { privateKey, publicKeyPem } = await generateAppKeys();
+    const { privateKey, publicKeyPem } = appKeys;
     await shop("/__backdoor/apps", postJson({ publicKeyPem }));
 
     const jwt = await signAppJwt(
@@ -209,7 +218,7 @@ describe("GitHub App installation-token minting", () => {
 
   test("the seeded installation is keyless until a key is registered; unknown ids 401", async () => {
     const shop = makeShop();
-    const { privateKey } = await generateAppKeys();
+    const { privateKey } = appKeys;
     const jwt = await signAppJwt(privateKey, appJwtClaims(DEFAULT_APP_ID));
 
     // No key registered yet → keyless installation → 401.
@@ -223,7 +232,7 @@ describe("GitHub App installation-token minting", () => {
 
   test("a missing or malformed Authorization JWT is rejected 401", async () => {
     const shop = makeShop();
-    const { publicKeyPem } = await generateAppKeys();
+    const { publicKeyPem } = appKeys;
     await shop("/__backdoor/apps", postJson({ publicKeyPem }));
 
     const noAuth = await shop(`/app/installations/${DEFAULT_INSTALLATION_ID}/access_tokens`, {
@@ -269,7 +278,7 @@ describe("GitHub App installation webhooks", () => {
 
   test("echo mode returns a body signed with the app's webhookSecret (OS verifies this)", async () => {
     const shop = makeShop();
-    const { publicKeyPem } = await generateAppKeys();
+    const { publicKeyPem } = appKeys;
     await shop("/__backdoor/apps", postJson({ publicKeyPem, webhookSecret: "wh-secret-123" }));
 
     const fired = await (
@@ -289,7 +298,7 @@ describe("GitHub App installation webhooks", () => {
 
   test("badSignature deliveries do not verify against the webhookSecret", async () => {
     const shop = makeShop();
-    const { publicKeyPem } = await generateAppKeys();
+    const { publicKeyPem } = appKeys;
     await shop("/__backdoor/apps", postJson({ publicKeyPem, webhookSecret: "wh-secret-123" }));
 
     const fired = await (
@@ -300,7 +309,7 @@ describe("GitHub App installation webhooks", () => {
 
   test("deliver mode POSTs the x-hub-signature-256 header (GitHub shape) a receiver verifies", async () => {
     const shop = makeShop();
-    const { publicKeyPem } = await generateAppKeys();
+    const { publicKeyPem } = appKeys;
     await shop("/__backdoor/apps", postJson({ publicKeyPem, webhookSecret: "wh-secret-123" }));
     const receiver = await startReceiver();
     try {

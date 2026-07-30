@@ -188,7 +188,7 @@ ensures two OAuth clients (web + MCP/CLI) via the auth contract's
 `APP_CONFIG_ITERATE_AUTH__*` OAuth/client values back to Doppler. It does not
 write `APP_CONFIG_ITERATE_AUTH__JWKS`: generated local config and deployed OS
 derive the public JWKS directly from the environment's Doppler-owned
-`AUTH_FORGE_PRIVATE_JWK`. Auth signs with the private half; OS receives only
+`AUTH_FORGE_ES256_PRIVATE_JWK`. Auth signs with the private half; OS receives only
 the public half and never fetches Auth during deploy or verification.
 
 It requires `APP_CONFIG_SERVICE_AUTH_TOKEN` (run through Doppler for the auth project).

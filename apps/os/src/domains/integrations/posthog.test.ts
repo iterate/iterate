@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { StreamDeliveryBatch } from "iterate/processors";
 import type { StreamEvent } from "iterate/processors";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
+import { internalStreamId } from "../streams/stream-delivery-utils.ts";
 import {
   capturePosthogStreamEventBatch,
   POSTHOG_STREAM_EVENT_MAX_JSON_BYTES,
@@ -225,10 +226,11 @@ describe("first-party PostHog stream integration", () => {
       type: "events.iterate.com/project/created",
       path: "/",
       offset: 4,
-      idempotencyKey: "project-created:prj_123",
+      idempotencyKey: internalStreamId("project-creation-terminal", "prj_123", "created"),
       metadata: undefined,
       source: undefined,
       payload: {
+        createRequestedAtOffset: 1,
         config: {
           creatorEmail: "owner@example.com",
           onboardingActive: true,

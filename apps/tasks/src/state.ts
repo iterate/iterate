@@ -17,6 +17,9 @@ export type TaskCard = {
   /** True when the file HAS a frontmatter block but its YAML fails to
    * parse — the file is then treated as plain text (no state/tags). */
   frontmatterError: boolean;
+  /** Non-deleted comments in the file's discussion store (0 when the store
+   * is absent or the file fails the strict annotated-markdown parse). */
+  commentCount: number;
 };
 
 /** The canonical Kanban columns, in board order. Custom states get their own column after these. */

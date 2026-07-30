@@ -1,4 +1,4 @@
-import type { StreamEvent, StreamEventInput } from "iterate/processors";
+import type { StreamEvent, StreamEventInput, StreamEventReadInput } from "iterate/processors";
 import type { CapabilityHost } from "../../itx-api.generated.ts";
 import { isStreamWaitTimeoutError } from "../streams/stream-unavailable.ts";
 import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
@@ -24,6 +24,7 @@ export type CapabilityHostScriptStream = {
   getEvent(
     input: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },
   ): Promise<StreamEvent | undefined>;
+  getEvents(input: StreamEventReadInput): Promise<StreamEvent[]>;
   waitForEvent(input: {
     afterOffset?: number;
     eventTypes?: readonly string[];
@@ -46,19 +47,19 @@ export async function runCapabilityHostScript(input: {
   command: RunScriptCommand;
   now?: () => number;
   path: string;
-  projectId: string;
   stream: CapabilityHostScriptStream;
 }): Promise<Awaited<ReturnType<CapabilityHost["runScript"]>>> {
-  const { command, path, projectId, stream } = input;
+  const { command, path, stream } = input;
   const now = input.now ?? Date.now;
   if (now() >= command.expiresAt) {
     throw new Error(`Script execution "${command.executionId}" expired before it was requested.`);
   }
 
-  const created = await stream.getEvent({
-    idempotencyKey: `capability-host/created:${projectId}:${path}`,
+  const [created] = await stream.getEvents({
+    eventTypes: [CREATED],
+    limit: 1,
   });
-  if (created?.type !== CREATED) {
+  if (created === undefined) {
     throw new Error(`capability host at ${path} has not been created`);
   }
 

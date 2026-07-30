@@ -331,7 +331,7 @@ describe("StreamEventSender hosted processor delivery", () => {
     await h.settle();
 
     expect(h.wakeCalls).toHaveLength(1);
-    expect(attemptedOffsets).toEqual([[2, 3]]);
+    expect(attemptedOffsets).toEqual([[2]]);
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
       acknowledgedOffset: 3,
       attempt: 1,
@@ -1753,6 +1753,7 @@ async function flushMicrotasks() {
 function connectionsHarness(
   options: {
     events?: StreamEvent[];
+    readBatch?: ConstructorParameters<typeof StreamConnections>[0]["hooks"]["readBatch"];
     onAppend?: (args: {
       connections: StreamConnections;
       state: CoreProcessorState;
@@ -1794,11 +1795,13 @@ function connectionsHarness(
     idleTeardownMs: 60_000,
     hooks: {
       // Force several batches so the test can observe the one-at-a-time gate.
-      readBatch: (afterOffset) =>
-        events
-          .filter((event) => event.offset > afterOffset)
-          .slice(0, 1)
-          .map((event) => ({ event, byteLength: JSON.stringify(event).length })),
+      readBatch:
+        options.readBatch ??
+        ((afterOffset) =>
+          events
+            .filter((event) => event.offset > afterOffset)
+            .slice(0, 1)
+            .map((event) => ({ event, byteLength: JSON.stringify(event).length }))),
       coreState: () => state,
       store,
       appendDeliveryEvent: (event) => {
@@ -1984,8 +1987,17 @@ describe("StreamConnections hosted delivery watchdog", () => {
       "stream durable callback unavailable; backing off before waking it again",
       {
         connectionKey: "processor",
-        errorMessage: "transport closed",
         source: "rpc-broken",
+        errorName: "Error",
+        errorMessage: "transport closed",
+        projectId: "project",
+        streamPath: "/source",
+        streamId: "11111111-1111-4111-8111-111111111111",
+        configuredAtOffset: 12,
+        cursorChangedAtOffset: 12,
+        connectionGeneration: 7,
+        deliveredThroughOffset: 0,
+        streamMaxOffset: 3,
       },
     );
     expect(errorLog).not.toHaveBeenCalled();
@@ -2104,15 +2116,72 @@ describe("StreamConnections hosted delivery watchdog", () => {
     expect(disposed).not.toHaveBeenCalled();
   });
 
+  it("gives each matching hosted event an acknowledgement boundary without rescanning non-matches", async () => {
+    const events = [
+      streamEvent(1, "events.example.com/ignored"),
+      streamEvent(2, "events.example.com/matched"),
+      streamEvent(3, "events.example.com/matched"),
+      streamEvent(4, "events.example.com/ignored"),
+    ];
+    const readLimits: number[] = [];
+    const h = connectionsHarness({
+      events,
+      readBatch: (afterOffset, beforeOffset, limit) => {
+        readLimits.push(limit);
+        return events
+          .filter((event) => event.offset > afterOffset && event.offset < beforeOffset)
+          .slice(0, limit)
+          .map((event) => ({ event, byteLength: JSON.stringify(event).length }));
+      },
+    });
+    const calls: DeliveryCall[] = [];
+    const connection = h.connections.openHosted({
+      connectionKey: "processor",
+      expectedHostedDelivery: h.expectedDelivery,
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+      filter: compileEventFilter({ eventTypes: ["events.example.com/matched"] }),
+    });
+
+    connection.sendQueued();
+    expect(calls[0]!.batch).toMatchObject({
+      scannedAfterOffset: 0,
+      scannedThroughOffset: 2,
+    });
+    expect(calls[0]!.batch.events.map((event) => event.offset)).toEqual([2]);
+
+    calls[0]!.report("ok");
+    await flushMicrotasks();
+    expect(calls[1]!.batch).toMatchObject({
+      scannedAfterOffset: 2,
+      scannedThroughOffset: 4,
+    });
+    expect(calls[1]!.batch.events.map((event) => event.offset)).toEqual([3]);
+    expect(readLimits).toEqual([100, 100]);
+  });
+
   it("turns a live callback timeout into a counted failure and ignores its late result", async () => {
     const h = connectionsHarness();
     const calls: DeliveryCall[] = [];
     const disposed = vi.fn();
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const connection = h.connections.openHosted({
       connectionKey: "processor",
       expectedHostedDelivery: h.expectedDelivery,
       processEventBatch: recordingProcessEventBatch(calls, disposed),
       replayAfterOffset: 0,
+      openedBy: {
+        processor: {
+          announcement: {
+            slug: "test-processor",
+            version: "1.0.0",
+            description: "Test processor",
+            consumes: [],
+            emits: [],
+            ownedEvents: [],
+          },
+        },
+      },
     });
     connection.sendQueued();
     expect(calls).toHaveLength(1);
@@ -2129,11 +2198,74 @@ describe("StreamConnections hosted delivery watchdog", () => {
     expect(connection.isLive()).toBe(false);
     expect(disposed).toHaveBeenCalledTimes(1);
     expect(h.durableDeliveryWakes).toHaveBeenCalledTimes(1);
+    expect(errorLog).toHaveBeenCalledWith(
+      "stream durable callback failed; backing off before waking it again",
+      {
+        connectionKey: "processor",
+        source: "delivery",
+        errorName: "Error",
+        errorMessage: `hosted processor batch acknowledgement timed out after ${DEFAULT_DELIVERY_TIMEOUT_MS}ms`,
+        projectId: "project",
+        streamPath: "/source",
+        streamId: "11111111-1111-4111-8111-111111111111",
+        configuredAtOffset: 12,
+        cursorChangedAtOffset: 12,
+        connectionGeneration: 7,
+        deliveredThroughOffset: 1,
+        streamMaxOffset: 3,
+        pendingDeliveryStartedAt: "1970-01-01T00:00:01.000Z",
+        pendingDeliveryDeadlineAt: "1970-01-01T00:00:21.000Z",
+        processorSlug: "test-processor",
+        processorContractVersion: "1.0.0",
+      },
+    );
 
     calls[0]!.report("ok");
     await flushMicrotasks();
     expect(calls).toHaveLength(1);
     expect(h.deliveryFailures).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps ITX and Cloudflare references when a hosted processor reports an opaque failure", async () => {
+    const h = connectionsHarness();
+    const calls: DeliveryCall[] = [];
+    const warnLog = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const connection = h.connections.openHosted({
+      connectionKey: "processor",
+      expectedHostedDelivery: h.expectedDelivery,
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+    });
+    connection.sendQueued();
+
+    (calls[0]!.batch as StreamWakeEventBatch).reportDeliveryResult({
+      outcome: "error",
+      error: {
+        name: "Error",
+        message:
+          "Internal error in Durable Object storage caused object to be reset; reference = h9ikm3iuo9v4aofff54akrbo",
+        itxCallId: "log_0123456789abcdef0123456789abcdef",
+        retryable: true,
+      },
+    });
+
+    expect(warnLog).toHaveBeenCalledWith(
+      "stream durable callback unavailable; backing off before waking it again",
+      expect.objectContaining({
+        connectionKey: "processor",
+        source: "delivery",
+        errorName: "Error",
+        itxCallId: "log_0123456789abcdef0123456789abcdef",
+        cloudflareErrorReference: "h9ikm3iuo9v4aofff54akrbo",
+      }),
+    );
+    expect(h.deliveryFailures).toHaveBeenCalledOnce();
+    expect(h.store.get("processor")).toMatchObject({
+      attempt: 1,
+      inFlightDeadlineAt: null,
+      inFlightConnectionGeneration: null,
+    });
+    expect(connection.isLive()).toBe(false);
   });
 
   it("idle teardown never acknowledges a batch that has not completed", () => {

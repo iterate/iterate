@@ -2,7 +2,7 @@
  * Goal coverage: an agent uses itx tools. Deterministic version of the
  * Playwright chat spec — drive an agent over itx, instruct it to run a script
  * that appends a proof event, and assert the full codemode loop on the stream:
- * llm request → output → capability-host/script-run-requested/completed → proof
+ * llm request → output → capability-host/script-run-requested/settled → proof
  * event on the target stream → visible web reply.
  */
 import { test } from "vitest";
@@ -25,7 +25,7 @@ test(
     const marker = crypto.randomUUID().slice(0, 8);
     // Full codemode loop (LLM → script → reply) routinely exceeds the 45s ask
     // default under preview load; wait with the same ceiling as the test.
-    await agent.ask({
+    const reply = await agent.ask({
       message: [
         `Run a script that appends one event of type ${PROOF_TYPE} with payload`,
         `{ "marker": "${marker}" } to the stream ${PROOF_STREAM} via`,
@@ -58,11 +58,29 @@ test(
       },
     );
 
-    const agentEvents = await agent.stream.getEvents({ limit: 500 });
-    const types = agentEvents.map((event) => event.type.replace("events.iterate.com/", ""));
-    expect(types).toContain("capability-host/script-run-requested");
-    expect(types).toContain("capability-host/script-run-settled");
-    expect(types).toContain("agents/web-message-sent");
+    const requested = await agent.stream.waitForEvent({
+      afterOffset: 0,
+      eventTypes: ["events.iterate.com/capability-host/script-run-requested"],
+      predicate: (event) =>
+        typeof event.payload?.code === "string" && event.payload.code.includes(marker),
+      timeoutMs: 30_000,
+    });
+    expect(requested.payload?.executionId).toEqual(expect.any(String));
+
+    // The script's target-stream append can become visible before the agent
+    // stream records its settlement. Synchronize on this execution rather
+    // than treating an immediate stream snapshot as the completion boundary.
+    const settled = await agent.stream.waitForEvent({
+      afterOffset: requested.offset,
+      eventTypes: ["events.iterate.com/capability-host/script-run-settled"],
+      predicate: (event) => event.payload?.executionId === requested.payload?.executionId,
+      timeoutMs: 30_000,
+    });
+    expect(settled.payload).toMatchObject({
+      executionId: requested.payload?.executionId,
+      settlement: { status: "succeeded" },
+    });
+    expect(reply).toMatchObject({ type: "events.iterate.com/agents/web-message-sent" });
   },
 );
 

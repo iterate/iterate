@@ -11,6 +11,7 @@ import { z } from "zod";
 import { createSemaphoreClient } from "../../apps/semaphore/src/contract.ts";
 import {
   authEnvs,
+  docsEnvs,
   dummyPetshopEnvs,
   envs,
   previewEnvironmentSlotNumbers,
@@ -1777,6 +1778,7 @@ function resolveProvisionAuthPreviewSlotNumbers(input: {
 
 export const CloudflarePreviewAppSlug = z.enum([
   "os",
+  "docs",
   "semaphore",
   "auth",
   "streams-example-app",
@@ -1901,6 +1903,7 @@ const osTuiRetryTelemetryFile = "/tmp/os-preview-tui-retries.json";
 /** Same contract for the streams-example-app lane's vitest sub-lane. */
 const streamsExampleVitestRetryTelemetryFile =
   "/tmp/os-preview-streams-example-vitest-retries.json";
+const docsVitestTelemetryFile = "/tmp/docs-preview-vitest-results.json";
 const authVitestTelemetryFile = "/tmp/auth-preview-vitest-results.json";
 const semaphoreVitestTelemetryFile = "/tmp/semaphore-preview-vitest-results.json";
 const dummyPetshopVitestTelemetryFile = "/tmp/dummy-petshop-preview-vitest-results.json";
@@ -2062,10 +2065,14 @@ function announceRetryTelemetry(slug: string, summary: PreviewRetrySummary) {
   if (!rendered) {
     return;
   }
-  const level = summary.retried.length >= 4 ? "warning" : "notice";
+  const retryStillFailed = summary.retried.some((record) => !record.passedAfterRetry);
+  const level = retryStillFailed || summary.retried.length >= 4 ? "warning" : "notice";
+  const outcome = retryStillFailed
+    ? "At least one listed retry still failed; the test command's final exit code remains authoritative for this run."
+    : "Every listed retry passed; retry telemetry does not override the test command's final exit code.";
   console.log(
-    `::${level} title=Preview e2e retries::${slug}: ${rendered}. The retry passed and does not fail ` +
-      `this run; quarantine recurring or pathologically slow unrelated flakes per docs/testing.md.`,
+    `::${level} title=Preview e2e retries::${slug}: ${rendered}. ${outcome} ` +
+      "Quarantine recurring or pathologically slow unrelated flakes per docs/testing.md.",
   );
 }
 
@@ -2207,10 +2214,11 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "apps/dummy-petshop/**",
       "apps/os/src/domains/streams/**",
     ],
-    // OS binds auth's RPC entrypoint, and its integration e2e uses dummy
-    // Petshop. Co-select both; every deploy starts concurrently and OS derives
-    // Auth's public signing key directly from Doppler.
-    previewDependencies: ["auth", "dummy-petshop"],
+    // OS binds auth's RPC entrypoint, its root Playwright suite reviews a
+    // workspace document through Docs, and its integration e2e uses dummy
+    // Petshop. Co-select all three; every deploy starts concurrently and OS
+    // derives Auth's public signing key directly from Doppler.
+    previewDependencies: ["auth", "docs", "dummy-petshop"],
     // Tests pin wrangler's immutable edge version explicitly.
     previewDeployBudgetMs: 90_000,
     previewTestBudgetMs: 100_000,
@@ -2305,6 +2313,42 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       // TUI is currently an explicit no-op skip and produces no test report.
       return combineTestSummaries([smoke, vitest, specs]);
     },
+  },
+  docs: {
+    slug: "docs",
+    displayName: "Docs",
+    appPath: "apps/docs",
+    deployCommandArgs: ["pnpm", "run-script", "deploy"],
+    destroyCommandArgs: ["pnpm", "run-script", "destroy"],
+    dopplerProject: "docs",
+    resolvePreviewAppConfig: (dopplerConfig) => {
+      const environment = requirePreviewEnvironment("docs", dopplerConfig, docsEnvs);
+      return { baseUrl: environment.baseUrl, workerName: environment.workerName };
+    },
+    paths: ["apps/docs/**", "packages/workspace-documents/**", "packages/iterate/**"],
+    // The vessel reads and writes workspace files through the OS deployment
+    // for the same slot. Co-select OS so a Docs preview never reviews a
+    // different revision of the workspace API.
+    previewDependencies: ["os"],
+    previewReadyUrlPath: "/healthz",
+    previewReadyWorkerVersion: true,
+    previewTestBaseUrlEnvVar: "DOCS_BASE_URL",
+    previewTestArtifactSources: [previewVitestArtifactSource("@iterate-com/docs")],
+    previewTestCommandArgs: [
+      "bash",
+      "-c",
+      [
+        "set -euo pipefail",
+        `rm -f ${docsVitestTelemetryFile}`,
+        'test "$(curl --fail --silent --show-error "$DOCS_BASE_URL/healthz")" = "ok"',
+        'curl --fail --silent --show-error "$DOCS_BASE_URL/" | grep --fixed-strings "Open a workspace document" >/dev/null',
+        `TEST_TELEMETRY_KIND=e2e TEST_TELEMETRY_LANE=vitest TEST_TELEMETRY_WORKSPACE=@iterate-com/docs TEST_TELEMETRY_ARTIFACT_FILE=${docsVitestTelemetryFile} pnpm test`,
+      ].join("; "),
+    ],
+    collectTestTelemetry: async () =>
+      readTestTelemetryLane("docs vitest lane", () =>
+        readCanonicalTestTelemetry(docsVitestTelemetryFile, "vitest"),
+      ),
   },
   semaphore: {
     slug: "semaphore",
@@ -3698,9 +3742,13 @@ function previewProvisionedIntegrationSecrets() {
 }
 
 async function ensureAuthPreviewConfigs(input: { rotate: boolean; slots: number[] }) {
-  const authSigningPrivateJwk = getDopplerSecret("_shared", "preview", "AUTH_FORGE_PRIVATE_JWK");
+  const authSigningPrivateJwk = getDopplerSecret(
+    "_shared",
+    "preview",
+    "AUTH_FORGE_ES256_PRIVATE_JWK",
+  );
   if (!authSigningPrivateJwk) {
-    throw new Error("_shared/preview is missing AUTH_FORGE_PRIVATE_JWK");
+    throw new Error("_shared/preview is missing AUTH_FORGE_ES256_PRIVATE_JWK");
   }
 
   // This is deliberately inherited, not copied: every app's preview
@@ -3708,10 +3756,10 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean; slots: number[
   // of truth. Fail closed if that topology has drifted instead of writing a
   // second app-local copy that could later shadow the shared key.
   for (const project of ["auth", "os", "semaphore", "streams-example-app"]) {
-    const effectiveKey = getDopplerSecret(project, "preview", "AUTH_FORGE_PRIVATE_JWK");
+    const effectiveKey = getDopplerSecret(project, "preview", "AUTH_FORGE_ES256_PRIVATE_JWK");
     if (effectiveKey !== authSigningPrivateJwk) {
       throw new Error(
-        `${project}/preview must inherit AUTH_FORGE_PRIVATE_JWK from _shared/preview`,
+        `${project}/preview must inherit AUTH_FORGE_ES256_PRIVATE_JWK from _shared/preview`,
       );
     }
   }
@@ -6147,6 +6195,7 @@ function resolvePreviewCompareBaseSha(params: {
 export const previewInternals = {
   ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
   acquireAnyEnvironmentConfigLease,
+  announceRetryTelemetry,
   adoptLeaseHeldBySemaphore,
   assignEnvironmentConfigLease,
   claimEnvironmentConfigLease,

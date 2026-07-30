@@ -37,17 +37,17 @@ import { isRepoNotSeededError, isRetryableArtifactsInfrastructureError } from ".
  * terminal fact is journaled and the durable obligation remains open for
  * redelivery/revival.
  *
- * Commit facts come from ONE source: the Cloudflare Artifacts event queue.
- * Each `repo/cloudflare-artifact-event-received` push on the default branch
- * is projected into the in-memory branch-head cache (including ref
- * DELETIONS, which produce no commit facts but must still evict a warm head)
- * and, when it carries a commit, normalized into `repo/commit-completed`,
- * idempotency-keyed on the (before, after, branch) coordinates — per-event
- * `blockProcessorWhile` work: each fact derives from an event that is
- * delivered once, so a dropped append would lose it forever, and the stable
- * keys collapse redeliveries. The default branch is known from the moment
- * create-requested reduces (every creation mode targets main), so a push
- * racing the terminal certificate still lands its facts.
+ * Every default-branch advance becomes one `repo/commit-completed` fact.
+ * OS-owned writes append it directly from the Repo Durable Object's durable
+ * outbox. External Git pushes arrive as
+ * `repo/cloudflare-artifact-event-received`: each push is projected into
+ * branch-head authority (including ref DELETIONS, which produce no commit
+ * facts but must still evict a warm head) and, when it carries a commit,
+ * normalized into that same fact. Both paths use the (before, after, branch)
+ * idempotency key, so a later queue observation of an OS write deduplicates.
+ * The default branch is known from the moment create-requested reduces (every
+ * creation mode targets main), so a push racing the terminal certificate
+ * still lands its facts.
  *
  * GitHub is an ingress lane, not a second source of commit facts. A
  * received `github/webhook-received` push delivery — source-checked

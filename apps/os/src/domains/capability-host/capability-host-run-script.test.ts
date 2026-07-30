@@ -10,12 +10,22 @@ import {
 
 const PROJECT_ID = "prj_test";
 const PATH = "/agents/test";
+const SOURCE_STREAM_ID = "11111111-1111-4111-8111-111111111111";
 const SCRIPT_REQUESTED = "events.iterate.com/capability-host/script-run-requested";
 const SCRIPT_SETTLED = "events.iterate.com/capability-host/script-run-settled";
 
 async function bornStream() {
   const stream = new MemoryStream(PATH);
-  await stream.append(...capabilityHostCreationEvents({ path: PATH, projectId: PROJECT_ID }));
+  const creation = capabilityHostCreationEvents({ path: PATH, projectId: PROJECT_ID }).map(
+    (event) =>
+      event.idempotencyKey === undefined
+        ? event
+        : {
+            ...event,
+            idempotencyKey: `${event.idempotencyKey}@source-stream:${SOURCE_STREAM_ID}`,
+          },
+  );
+  await stream.append(...creation);
   return stream;
 }
 
@@ -33,6 +43,7 @@ function settleBeforeRequestAcknowledgement(
 ): CapabilityHostScriptStream {
   return {
     getEvent: (input) => stream.getEvent(input),
+    getEvents: (input) => stream.getEvents(input),
     waitForEvent: (input) => stream.waitForEvent(input),
     append: async (...inputs: StreamEventInput[]) => {
       const committed = await stream.append(...inputs);
@@ -60,7 +71,6 @@ describe("runCapabilityHostScript", () => {
         command: command(now),
         now: () => now,
         path: PATH,
-        projectId: PROJECT_ID,
         stream: settleBeforeRequestAcknowledgement(stream, {
           status: "succeeded",
           result: 42,
@@ -84,7 +94,6 @@ describe("runCapabilityHostScript", () => {
         command: command(startedAt),
         now,
         path: PATH,
-        projectId: PROJECT_ID,
         stream: settleBeforeRequestAcknowledgement(stream, {
           status: "succeeded",
           result: 42,
@@ -102,7 +111,6 @@ describe("runCapabilityHostScript", () => {
       command: command(now),
       now: () => now,
       path: PATH,
-      projectId: PROJECT_ID,
       stream,
     });
     await vi.waitFor(() => {
@@ -138,7 +146,6 @@ describe("runCapabilityHostScript", () => {
         command: command(now),
         now: () => now,
         path: PATH,
-        projectId: PROJECT_ID,
         stream,
       }),
     ).rejects.toThrow(`capability host at ${PATH} has not been created`);

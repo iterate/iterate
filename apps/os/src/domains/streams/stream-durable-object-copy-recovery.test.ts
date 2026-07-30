@@ -15,6 +15,7 @@ import {
 } from "./core-processor-contract.ts";
 import { MAX_CORE_PROCESSOR_STATE_BYTES } from "./core-processor.ts";
 import { StreamDurableObject } from "./stream-durable-object.ts";
+import { internalStreamId } from "./stream-delivery-utils.ts";
 
 const PROJECT_ID = "prj_copy_recovery";
 const SOURCE_PATH = "/";
@@ -267,6 +268,55 @@ describe("StreamDurableObject stream-ID-guarded append", () => {
         type: MATCHING_EVENT_TYPE,
         payload: { id: "current-lifetime" },
       });
+    } finally {
+      context.close();
+    }
+  });
+
+  it("fences a platform-only append to the observed stream lifetime", async () => {
+    const context = durableObjectContext(streamName("/guarded-platform-append"));
+    const env = {
+      STREAM: {
+        getByName() {
+          return {
+            async appendCoreEvent(event: StreamEventInput): Promise<StreamEvent> {
+              return {
+                ...event,
+                path: "/",
+                offset: 1,
+                createdAt: "2026-07-21T12:00:00.000Z",
+              } as StreamEvent;
+            },
+          };
+        },
+      },
+    } as unknown as Env;
+    const stream = new StreamDurableObject(context.ctx, env);
+    await context.settle();
+
+    try {
+      const observed = stream.getEventPage();
+      const event = {
+        type: "events.iterate.com/project/created",
+        idempotencyKey: internalStreamId("project-creation-terminal", PROJECT_ID, "created"),
+        payload: {},
+      };
+      expect(() =>
+        stream.appendCoreEventsIfStreamId({
+          streamId: "22222222-2222-4222-8222-222222222222",
+          events: [event],
+        }),
+      ).toThrow(/stream ID changed.*append rejected/);
+
+      expect(
+        stream.appendCoreEventsIfStreamId({
+          streamId: observed.streamId,
+          events: [event],
+        }),
+      ).toMatchObject([{ type: event.type, idempotencyKey: event.idempotencyKey }]);
+      expect(() => stream.append(event)).toThrow(
+        "iterate-internal idempotency keys are platform-authored",
+      );
     } finally {
       context.close();
     }
