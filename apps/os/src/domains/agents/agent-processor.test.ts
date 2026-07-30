@@ -1808,7 +1808,7 @@ describe("AgentProcessor slash commands", () => {
         (event.payload as { content?: string }).content?.startsWith("/script"),
       )!.offset;
     expect(scriptRequests[0]!.payload).toMatchObject({
-      code: "async (itx) => {\nreturn (await itx.__describe());\n}",
+      code: "async (itx) => {\nreturn (await itx.__describe()\n);\n}",
       executionId: `slash-command:${commandOffset}`,
     });
     // The command IS the action — the model's turn comes later, from the
