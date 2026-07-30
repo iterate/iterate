@@ -1,0 +1,77 @@
+#ifndef ITERATE_KIT_DEVICES_STACKCHAN_H
+#define ITERATE_KIT_DEVICES_STACKCHAN_H
+
+#include "iterate/kit/capabilities/camera.h"
+#include "iterate/kit/capabilities/leds.h"
+#include "iterate/kit/capabilities/metrics.h"
+#include "iterate/kit/capabilities/screen.h"
+#include "iterate/kit/capabilities/servos.h"
+#include "iterate/kit/device.h"
+#include "iterate/kit/peer.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+enum {
+  /* Fixed composition keeps peer routing and device RAM statically bounded. */
+  ITERATE_KIT_STACKCHAN_MODULE_COUNT = 5,
+};
+
+/**
+ * StackChan profile dependencies. Drivers and all storage reachable through
+ * `metrics` are borrowed for the device lifetime. This layer performs no board
+ * I/O or allocation; the platform owns camera/display/servo/LED tasking and
+ * must serialize synchronous capability calls on the peer owner task.
+ */
+struct iterate_kit_stackchan_options {
+  struct iterate_kit_screen_driver screen;
+  char *screen_url_scratch;
+  size_t screen_url_scratch_size;
+  struct iterate_kit_servo_driver servos;
+  struct iterate_kit_led_driver leds;
+  struct iterate_kit_camera_driver camera;
+  size_t maximum_photo_bytes;
+  struct iterate_kit_metrics_options metrics;
+};
+
+struct iterate_kit_stackchan {
+  /*
+   * Generic modules are embedded so the library can support another ESP board
+   * by composing a different profile without copying camera/screen/RPC logic.
+   */
+  struct iterate_kit_peer peer;
+  struct iterate_kit_module modules[ITERATE_KIT_STACKCHAN_MODULE_COUNT];
+  struct iterate_kit_screen screen;
+  struct iterate_kit_servos servos;
+  struct iterate_kit_leds leds;
+  struct iterate_kit_camera camera;
+  struct iterate_kit_metrics metrics;
+};
+
+extern const struct iterate_kit_device_manifest
+    iterate_kit_stackchan_manifest;
+
+/**
+ * Assembles all five generic modules after hardware drivers/storage are ready.
+ * No module is exposed on error; initialization itself performs no hardware
+ * I/O and allocates nothing.
+ */
+enum capnweb_status iterate_kit_stackchan_init(
+    struct iterate_kit_stackchan *device,
+    const struct iterate_kit_stackchan_options *options);
+struct capnweb_capability iterate_kit_stackchan_capability(
+    struct iterate_kit_stackchan *device);
+/** Polls subscription/module state using monotonic milliseconds. */
+struct iterate_kit_poll_result iterate_kit_stackchan_poll(
+    struct iterate_kit_stackchan *device, uint64_t now_ms);
+struct iterate_kit_poll_result iterate_kit_stackchan_close(
+    struct iterate_kit_stackchan *device);
+struct iterate_kit_device iterate_kit_stackchan_device(
+    struct iterate_kit_stackchan *device);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif

@@ -1,0 +1,31 @@
+idf_component_register(
+  SRCS
+    "src/audio.c"
+    "src/configuration.c"
+    "src/cpu_usage.c"
+    "src/device_events.c"
+    "src/itx_connection.c"
+    "src/itx_mount.c"
+    "src/pcm_lane.c"
+    "src/pcm_peer_delivery_guard.c"
+    "src/pcm_uplink_conductor.c"
+    "src/pcm_uplink_sender.c"
+    "src/pcm_websocket.c"
+    "src/peer.c"
+    "src/retry_gate.c"
+    "src/runtime_diagnostics.c"
+    "src/spsc_ring.c"
+    "src/websocket_frame_writer.c"
+    "src/websocket_rx.c"
+    "src/websocket_tx.c"
+    "src/websocket_text.c"
+  INCLUDE_DIRS "include"
+  REQUIRES capnweb
+)
+target_compile_features(${COMPONENT_LIB} PUBLIC c_std_99)
+target_compile_options(${COMPONENT_LIB} PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+)

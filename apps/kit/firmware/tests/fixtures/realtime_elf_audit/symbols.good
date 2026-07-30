@@ -1,0 +1,11 @@
+40080000 g     F .iram0.text 00000020 iterate::kit::M5StickS3DirectI2sOps::onSent(i2s_event_data_t const*)
+40080020 g     F .iram0.text 00000020 iterate::kit::M5StickS3DirectI2sOps::onSendQueueOverflow(i2s_event_data_t const*)
+40080040 g     F .iram0.text 00000020 iterate::kit::M5StickS3DirectI2sOps::notifyOwnerFromIsr()
+40080060 l     F .iram0.text 00000020 (anonymous namespace)::sentThunk(void*, i2s_event_data_t*)
+40080080 l     F .iram0.text 00000020 (anonymous namespace)::overflowThunk(void*, i2s_event_data_t*)
+400800a0 l     F .iram0.text 00000020 (anonymous namespace)::incrementOverflow(std::atomic<unsigned int>&)
+400800c0 g     F .iram0.text 00000020 esp_timer_get_time
+400800e0 g     F .iram0.text 00000020 vTaskGenericNotifyGiveFromISR
+40080100 g     F .iram0.text 00000020 __atomic_compare_exchange_4
+40080120 g     F .iram0.text 00000020 __atomic_fetch_add_4
+3fca0000 l     O .dram0.bss 00015ac0 (anonymous namespace)::runtime

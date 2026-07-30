@@ -1,0 +1,8 @@
+# ESP-IDF resolves these from the pinned dependencies.lock. Checking the
+# expanded third-party trees in would turn a two-test compatibility rig into a
+# vendored copy of Catch2 and make upstream provenance much harder to audit.
+managed_components/
+
+# sdkconfig is the generated merge of sdkconfig.defaults and the selected IDF.
+# The defaults are the reviewed input; each isolated build recreates this file.
+sdkconfig

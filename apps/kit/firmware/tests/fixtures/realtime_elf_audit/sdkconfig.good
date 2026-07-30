@@ -1,0 +1,5 @@
+# These are the two independent guarantees the callback graph relies on:
+# I2S itself is cache-safe, and 32-bit atomics cannot fall through to a helper
+# whose storage or implementation depends on cache-backed PSRAM.
+CONFIG_I2S_ISR_IRAM_SAFE=y
+CONFIG_STDATOMIC_S32C1I_SPIRAM_WORKAROUND=y

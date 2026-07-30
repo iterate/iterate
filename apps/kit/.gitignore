@@ -1,0 +1,7 @@
+dist/
+node_modules/
+.wrangler/
+public/firmware/
+wrangler.jsonc
+.build/
+firmware/build-*/
