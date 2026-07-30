@@ -1792,7 +1792,88 @@ describe("AgentProcessor stream facts", () => {
 // Summary + presence
 // =============================================================================
 
+describe("AgentProcessor slash commands", () => {
+  it("a resolving /script runs deterministically and triggers NO model turn", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("/script await itx.__describe()")],
+      ["advanceTime", 10_000], // would close the turn debounce if a turn were owed
+    );
+
+    const scriptRequests = h.events("events.iterate.com/capability-host/script-run-requested");
+    expect(scriptRequests).toHaveLength(1);
+    const commandOffset = h
+      .events(CONTEXT_ADDED)
+      .find((event) =>
+        (event.payload as { content?: string }).content?.startsWith("/script"),
+      )!.offset;
+    expect(scriptRequests[0]!.payload).toMatchObject({
+      code: "async (itx) => {\nreturn (await itx.__describe()\n);\n}",
+      executionId: `slash-command:${commandOffset}`,
+    });
+    // The command IS the action — the model's turn comes later, from the
+    // script result's render, not from the command message.
+    expect(h.llm.calls).toHaveLength(0);
+    expect(h.events(REQUESTED)).toHaveLength(0);
+  });
+
+  it("a /script mid-turn runs as a side-band action: no interrupt, no lost command", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("Hello there")],
+      ["advanceTime", 10_000], // open the turn — the LLM call is now in flight
+    );
+    expect(h.state().openRequest).not.toBeNull();
+
+    await h.play([
+      "append",
+      userMessage("/script await itx.__describe()", { behaviour: "interrupt-current-request" }),
+    ]);
+
+    // The command ran; the in-flight turn was NOT cancelled by it.
+    expect(h.events("events.iterate.com/capability-host/script-run-requested")).toHaveLength(1);
+    expect(h.state().openRequest).not.toBeNull();
+    expect(
+      h
+        .events(SETTLED)
+        .filter(
+          (event) =>
+            (event.payload as { result: { status: string } }).result.status === "cancelled",
+        ),
+    ).toHaveLength(0);
+  });
+
+  it("a non-resolving /example (bad slug) falls through to an ordinary model turn", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("/example not-a-real-slug")],
+      ["advanceTime", 10_000],
+    );
+
+    expect(h.events("events.iterate.com/capability-host/script-run-requested")).toHaveLength(0);
+    expect(h.llm.calls).toHaveLength(1);
+    expect(h.llm.calls[0]!.messages.at(-2)?.content).toContain("/example not-a-real-slug");
+  });
+});
+
 describe("AgentProcessor summary", () => {
+  it("a resolving slash command is a side-band action and does not retire the wait", async () => {
+    const h = makeAgentHarness();
+    await h.play([
+      "append",
+      ...NEW_AGENT_EVENTS,
+      {
+        type: "events.iterate.com/agent/summary-updated",
+        payload: { waitingFor: "user_input" },
+      },
+      userMessage("/script await itx.__describe()"),
+    ]);
+    // The command ran (script requested) but the agent still awaits a real
+    // answer — no clear was appended.
+    expect(h.state().summary.waitingFor).toBe("user_input");
+    expect(h.events("events.iterate.com/agent/summary-updated")).toHaveLength(1);
+  });
+
   it("folds summary updates, and a qualifying wake conditionally clears only a wait it followed", async () => {
     const h = makeAgentHarness();
     await h.play([

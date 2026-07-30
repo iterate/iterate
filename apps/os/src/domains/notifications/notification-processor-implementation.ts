@@ -41,6 +41,17 @@ export class NotificationProcessor extends StreamProcessor<NotificationProcessor
     const { event, append, blockProcessorWhile } = args;
     switch (event?.type) {
       case "events.iterate.com/project/human-approval-requested": {
+        // A batch born of an agent thread's run deep-links to THAT thread —
+        // the in-thread dialog is the better approval surface, and the
+        // approvals screen remains reachable as the queue/history view.
+        // Everything else (scope holds, non-agent scripts) keeps the
+        // approvals-screen destination.
+        const streamContext = event.payload.streamContext;
+        const agentPath =
+          streamContext?.kind === "script-execution" &&
+          streamContext.streamPath.startsWith("/agents/")
+            ? streamContext.streamPath
+            : null;
         blockProcessorWhile(() =>
           append({
             type: "events.iterate.com/notification/requested",
@@ -49,10 +60,9 @@ export class NotificationProcessor extends StreamProcessor<NotificationProcessor
               audience: { kind: "project" },
               title: event.payload.requests.length === 1 ? "Approval needed" : "Approvals needed",
               body: approvalPushBody(event.payload.requests),
-              destination: {
-                kind: "approvals",
-                approvalRequestEventOffset: event.offset,
-              },
+              destination: agentPath
+                ? { kind: "agent-chat", path: agentPath }
+                : { kind: "approvals", approvalRequestEventOffset: event.offset },
               expiresAt: Date.parse(event.payload.expiresAt),
             },
           }),
