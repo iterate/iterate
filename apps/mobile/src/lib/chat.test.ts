@@ -2,6 +2,7 @@ import { expect, test } from "vitest";
 import type { StreamEvent } from "iterate/sdk/itx/react";
 import {
   ASSISTANT_MESSAGE_TYPE,
+  lastVisibleMessageAtOrBefore,
   mergeEventsByOffset,
   newMobileAgentPath,
   reduceChatEvents,
@@ -52,6 +53,52 @@ test("merge dedupes overlapping offsets and keeps order", () => {
   const liveBatch = [assistantMessage(2, "b"), userMessage(3, "c")];
   const merged = mergeEventsByOffset(initial, liveBatch);
   expect(merged.map((e) => e.offset)).toEqual([1, 2, 3]);
+});
+
+test("last visible message before the offset wins over earlier ones", () => {
+  const context = lastVisibleMessageAtOrBefore(
+    [
+      userMessage(1, "add a healthcheck endpoint"),
+      assistantMessage(3, "On it — writing the handler now."),
+      activity(5, "events.iterate.com/capability-host/script-run-requested"),
+      assistantMessage(8, "Done — /health returns 200 now."),
+    ],
+    5,
+  );
+  expect(context).toMatchObject({ role: "assistant", text: "On it — writing the handler now." });
+});
+
+test("only messages after the offset means no context", () => {
+  const context = lastVisibleMessageAtOrBefore([assistantMessage(9, "all done")], 5);
+  expect(context).toEqual(null);
+});
+
+test("empty thread has no context", () => {
+  expect(lastVisibleMessageAtOrBefore([], 5)).toEqual(null);
+});
+
+test("a message exactly at the offset counts", () => {
+  const context = lastVisibleMessageAtOrBefore(
+    [userMessage(2, "old ask"), userMessage(5, "send the invoice email")],
+    5,
+  );
+  expect(context).toMatchObject({ role: "user", text: "send the invoice email" });
+});
+
+test("a user message can be the context too", () => {
+  const context = lastVisibleMessageAtOrBefore(
+    [assistantMessage(1, "what should I do?"), userMessage(4, "email the report to finance")],
+    10,
+  );
+  expect(context).toMatchObject({ role: "user", text: "email the report to finance" });
+});
+
+test("context text collapses to one line and blank messages are skipped", () => {
+  const context = lastVisibleMessageAtOrBefore(
+    [userMessage(1, "fix the deploy\n\nthen tell me"), assistantMessage(2, "  \n  ")],
+    5,
+  );
+  expect(context).toMatchObject({ role: "user", text: "fix the deploy then tell me" });
 });
 
 test("mobile agent paths follow the web slug convention under the mobile channel", () => {

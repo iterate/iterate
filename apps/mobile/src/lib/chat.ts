@@ -59,6 +59,26 @@ export function reduceChatEvents(events: StreamEvent[]): ChatThread {
 }
 
 /**
+ * The thread's last visible message at or before `offset` — what the thread
+ * was doing when, say, an approval batch was born. Text is collapsed to one
+ * line; messages with no visible text are skipped (they'd render as an empty
+ * context line). Null when nothing visible had happened yet.
+ */
+export function lastVisibleMessageAtOrBefore(
+  events: StreamEvent[],
+  offset: number,
+): { role: "user" | "assistant"; text: string } | null {
+  let best: ChatMessage | null = null;
+  for (const message of reduceChatEvents(events).messages) {
+    if (message.offset > offset) continue;
+    const text = message.text.replace(/\s+/g, " ").trim();
+    if (text === "") continue;
+    if (best === null || message.offset > best.offset) best = { ...message, text };
+  }
+  return best === null ? null : { role: best.role, text: best.text };
+}
+
+/**
  * Merge a live batch into the events already held, deduping by offset (a
  * replayAfterOffset subscription can overlap the initial page read) and
  * keeping offset order.
