@@ -108,9 +108,9 @@ grilling:
       `/example` + `/script`; unknown commands fall through; unit tests _slash-commands.ts (pure resolver shared by processEvent + contextTriggerSource, so a resolving command runs deterministically and triggers no model turn); runScriptEnvelope moved into the examples catalogue; resolver unit tests + two harness lanes_
 - [x] Mobile chat: in-thread approval dialog (open batches for this thread),
       approve/reject with reason, reusing the approvals lib _components/in-thread-approval.tsx rendered at the inverted list's visual bottom; shares the approvals screen's query key; reject-reason prompt moved to lib/reject-reason.ts_
-- [ ] Approvals screen: thread-status-at-request-time context line
+- ~~Approvals screen: thread-status-at-request-time context line~~ _split out to `tasks/approvals-thread-context.md` after #2339 merged_
 - [x] Notification intent: agent-thread destination for thread-scoped batches _notification processor emits {kind: "agent-chat", path} for batches with /agents/ script provenance; approvals destination remains for scope holds_
-- [ ] Push suppression: seen-claim + grace window in the delivery layer
+- ~~Push suppression: seen-claim + grace window in the delivery layer~~ _split out to `tasks/approval-push-suppression.md` after #2339 merged_
 - [x] Mobile routing: thread deep-link focuses the in-thread dialog _agent-chat routing already lands on the chat screen, which now renders every open batch for the thread — no focusing param needed_
 - [x] Expiry/pre-approve: design notes written (above), explicitly no code
 - [x] Spec: rewrite around a slash command from the chat composer; fresh

@@ -57,6 +57,9 @@ describe("NotificationProcessor approval intents", () => {
       type: "events.iterate.com/notification/requested",
       idempotencyKey: "notification/approval-requested@/:2",
       payload: {
+        // Top-level batch identity: the suppression handle every destination
+        // kind carries (approval-presented claims match against it).
+        approvalRequestEventOffset: 2,
         audience: { kind: "project" },
         title: "Approval needed",
         body: "POST api.stripe.com is waiting for approval.",
@@ -103,6 +106,9 @@ describe("NotificationProcessor approval intents", () => {
     expect(h.events(INTENT)[0]).toMatchObject({
       idempotencyKey: "notification/approval-requested@/:2",
       payload: {
+        // The agent-chat destination has no batch identity of its own, so the
+        // top-level suppression handle matters most HERE.
+        approvalRequestEventOffset: 2,
         audience: { kind: "project" },
         title: "Approvals needed",
         body: "Script run waiting: 3 requests (2x gmail.googleapis.com, 1x api.stripe.com)",

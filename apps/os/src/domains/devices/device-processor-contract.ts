@@ -19,16 +19,21 @@
 import { z } from "zod";
 import { defineProcessorContract } from "iterate/processors";
 import { NotificationIntentContract } from "../notifications/notification-intent-contract.ts";
+import { ApprovalPresentedEvents } from "../projects/approval-presented-contract.ts";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 
 export const DeviceProcessorContract = defineProcessorContract({
   slug: "device",
-  // 0.4.0: pushTokenSecretPath + pushTokenSecretUpdatedOffset merged into one
-  // nullable pushTokenSecret object (always set/cleared together); the bump
-  // refolds persisted reduction caches into the new shape.
-  version: "0.4.0",
+  // 0.5.0: approval-push suppression — obligations carry requestedAt /
+  // approvalRequestEventOffset / presentedAt, config gains approvalGraceMs,
+  // and the settlement union gains `suppressed`; the bump refolds persisted
+  // reduction caches into the new shape.
+  version: "0.5.0",
   description: "One enrolled installation and its durable push-notification obligations.",
-  processorDeps: [CoreProcessorContract, NotificationIntentContract],
+  // ApprovalPresentedEvents is a standalone catalog, not a contract: the
+  // project contract owns the claim event but already imports THIS module, so
+  // the shared definition lives in its own file to break the cycle.
+  processorDeps: [CoreProcessorContract, NotificationIntentContract, ApprovalPresentedEvents],
   stateSchema: z.object({
     birthCertificate: deviceBirthCertificateSchema()
       .nullable()
@@ -64,11 +69,24 @@ export const DeviceProcessorContract = defineProcessorContract({
               "uncertain. 24 hours because that is Expo's receipt retention window — past " +
               "it the outcome is permanently unknowable.",
           }),
+        approvalGraceMs: z
+          .number()
+          .int()
+          .positive()
+          .default(1_500)
+          .meta({
+            description:
+              "How long an approval-batch obligation waits before its attempt may start, " +
+              "giving a client already showing the batch time to append its " +
+              "project/approval-presented claim. ~1.5s: long enough for a foregrounded app's " +
+              "claim to arrive, short enough that a genuinely absent user barely notices the " +
+              "extra latency.",
+          }),
       })
       .prefault({})
       .meta({
         description:
-          "Receipt-polling knobs, every value defaulted by the schema (no configured event " +
+          "Delivery-timing knobs, every value defaulted by the schema (no configured event " +
           "— nothing here needs runtime configuration yet).",
       }),
     pushTokenSecret: z
@@ -127,6 +145,27 @@ export const DeviceProcessorContract = defineProcessorContract({
         z.string(),
         deviceNotificationRequestSchema()
           .extend({
+            requestedAt: z
+              .number()
+              .int()
+              .positive()
+              .meta({
+                description:
+                  "Epoch ms the requesting event committed (its createdAt) — anchors the " +
+                  "approval grace window (requestedAt + config.approvalGraceMs).",
+              }),
+            presentedAt: z
+              .number()
+              .int()
+              .positive()
+              .optional()
+              .meta({
+                description:
+                  "Epoch ms a matching project/approval-presented claim reduced while the " +
+                  "obligation was still `requested` — the user is already looking at the " +
+                  "batch, so the send pass settles it `suppressed` instead of attempting. " +
+                  "Never set after an attempt starts: a late claim is a no-op.",
+              }),
             status: z.enum(["requested", "started", "ticketed"]).meta({
               description:
                 "The obligation's phase: requested (no attempt yet) → started " +
@@ -280,6 +319,14 @@ export const DeviceProcessorContract = defineProcessorContract({
               }),
             }),
             z.strictObject({
+              kind: z.literal("suppressed").meta({
+                description:
+                  "A project/approval-presented claim arrived inside the approval grace " +
+                  "window: the user is already looking at the batch in an app, so the push " +
+                  "was deliberately never attempted.",
+              }),
+            }),
+            z.strictObject({
               kind: z.literal("uncertain").meta({
                 description:
                   "The truth is unknowable and the push was deliberately NOT retried (it " +
@@ -364,6 +411,11 @@ export const DeviceProcessorContract = defineProcessorContract({
     // lanes configure. It reduces into the same obligation slot as a direct
     // device request.
     "events.iterate.com/notification/requested",
+    // The suppression claim (owned by the project contract, defined in the
+    // shared ApprovalPresentedEvents catalog), copied by the same
+    // subscription: it marks matching still-`requested` obligations so the
+    // send pass settles them `suppressed` instead of attempting.
+    "events.iterate.com/project/approval-presented",
     "events.iterate.com/device/push-token-updated",
     "events.iterate.com/device/revoked",
     "events.iterate.com/device/notification-attempt-started",
@@ -464,6 +516,19 @@ function deviceBirthCertificateSchema() {
  */
 function deviceNotificationRequestSchema() {
   return z.strictObject({
+    approvalRequestEventOffset: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .meta({
+        description:
+          "Set when the notification is about ONE held approval batch: the offset of its " +
+          "project/human-approval-requested event on the project root stream. Mirrors the " +
+          "intent's top-level field (both doors fill the same state slot), and it is what a " +
+          "project/approval-presented claim matches against — such obligations wait " +
+          "config.approvalGraceMs before any attempt, so a claim can suppress the push.",
+      }),
     body: z
       .string()
       .trim()

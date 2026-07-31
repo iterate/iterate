@@ -28,6 +28,7 @@ import { SchedulerProcessorContract } from "../scheduler/scheduler-processor-con
 import { DeviceProcessorContract } from "../devices/device-processor-contract.ts";
 import { NotificationLifecycleContract } from "../notifications/notification-lifecycle-contract.ts";
 import { internalStreamId } from "../streams/stream-delivery-utils.ts";
+import { ApprovalPresentedEvents } from "./approval-presented-contract.ts";
 import { StreamContext } from "./stream-context.ts";
 
 export const ProjectProcessorContract = defineProcessorContract({
@@ -448,6 +449,13 @@ export const ProjectProcessorContract = defineProcessorContract({
           .meta({ description: "Delivery failure, when the released request never got a status." }),
       }),
     },
+    // The push-suppression claim ("the user is already looking at this
+    // batch"). Owned here so the root stream's approval vocabulary stays in
+    // one contract; the definition itself lives in a standalone catalog
+    // (approval-presented-contract.ts) because the device contract must
+    // consume it and cannot import this module back (this module imports the
+    // device contract).
+    ...ApprovalPresentedEvents,
   },
   consumes: [
     "*",

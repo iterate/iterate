@@ -52,6 +52,8 @@ export class DeviceDurableObject extends DurableObject<Env> {
       clearPushToken: (input) =>
         this.#serializeCredentialUpdate(() => this.#clearPushTokenSecret(input)),
       getReceipt: getExpoPushReceipt,
+      repointApprovalGraceAlarm: (atMs) =>
+        this.#registry.setAlarmSlice("device-approval-grace", atMs),
       repointReceiptAlarm: (atMs) => this.#registry.setAlarmSlice("device-receipts", atMs),
       send: async ({
         notification,
@@ -85,12 +87,18 @@ export class DeviceDurableObject extends DurableObject<Env> {
 
   async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
     await this.#registry.handleAlarm(alarmInfo);
+    // The shared alarm may fire for any slice — run both handlers; each is
+    // idempotent and re-derives its own next fire time from the state.
     try {
       await this.#registry.catchUp(DeviceProcessorContract.slug);
       await this.#deviceProcessor.checkReceipts(this.#reads.currentState);
+      await this.#deviceProcessor.releaseApprovalGraces(() => this.#reads.currentState);
       await this.#registry.catchUp(DeviceProcessorContract.slug);
     } catch (error) {
+      // Cloudflare retries a throwing alarm only a bounded number of times; a
+      // prolonged outage must not strand due work with no armed alarm.
       await this.#registry.setAlarmSlice("device-receipts", Date.now() + 60_000);
+      await this.#registry.setAlarmSlice("device-approval-grace", Date.now() + 60_000);
       throw error;
     }
   }

@@ -27,6 +27,7 @@ export const EVENT = {
   settled: "events.iterate.com/project/human-approval-settled",
   keyAdded: "events.iterate.com/project/human-approval-key-added",
   keyRevoked: "events.iterate.com/project/human-approval-key-revoked",
+  presented: "events.iterate.com/project/approval-presented",
 } as const;
 
 export type RequestedPayload = HumanApprovalRequestedPayload;
