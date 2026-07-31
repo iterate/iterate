@@ -11,14 +11,15 @@ set(CAPNWEB_BUILD_FUZZER OFF CACHE BOOL "" FORCE)
 add_subdirectory(vendor/capnweb)
 
 add_library(iterate-kit-core STATIC
+  components/core/src/aec_capture_bridge.c
   components/core/src/audio.c
   components/core/src/configuration.c
   components/core/src/cpu_usage.c
   components/core/src/device_events.c
   components/core/src/itx_connection.c
   components/core/src/itx_mount.c
+  components/core/src/pcm_clock_playback.c
   components/core/src/pcm_lane.c
-  components/core/src/pcm_peer_delivery_guard.c
   components/core/src/pcm_uplink_conductor.c
   components/core/src/pcm_uplink_sender.c
   components/core/src/pcm_websocket.c
@@ -44,7 +45,10 @@ target_compile_options(iterate-kit-core PRIVATE
 target_link_libraries(iterate-kit-core PUBLIC capnweb)
 
 add_library(iterate-kit-capabilities STATIC
+  components/capabilities/src/callback_budget.c
+  components/capabilities/src/conversation.c
   components/capabilities/src/camera.c
+  components/capabilities/src/device_event_stream.c
   components/capabilities/src/leds.c
   components/capabilities/src/metrics.c
   components/capabilities/src/push_to_talk.c
@@ -188,6 +192,40 @@ target_compile_options(iterate-kit-audio-test PRIVATE
 )
 target_link_libraries(iterate-kit-audio-test PRIVATE iterate-kit-core)
 add_test(NAME iterate-kit-audio-test COMMAND iterate-kit-audio-test)
+
+add_executable(iterate-kit-aec-capture-bridge-test
+  tests/aec_capture_bridge_test.c
+)
+target_compile_features(
+  iterate-kit-aec-capture-bridge-test PRIVATE c_std_99)
+target_compile_options(iterate-kit-aec-capture-bridge-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+)
+target_link_libraries(
+  iterate-kit-aec-capture-bridge-test PRIVATE iterate-kit-core)
+add_test(
+  NAME iterate-kit-aec-capture-bridge-test
+  COMMAND iterate-kit-aec-capture-bridge-test)
+
+add_executable(iterate-kit-pcm-clock-playback-test
+  tests/pcm_clock_playback_test.c
+)
+target_compile_features(
+  iterate-kit-pcm-clock-playback-test PRIVATE c_std_99)
+target_compile_options(iterate-kit-pcm-clock-playback-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+)
+target_link_libraries(
+  iterate-kit-pcm-clock-playback-test PRIVATE iterate-kit-core)
+add_test(
+  NAME iterate-kit-pcm-clock-playback-test
+  COMMAND iterate-kit-pcm-clock-playback-test)
 
 add_executable(iterate-kit-device-events-test
   tests/device_events_test.c
@@ -506,6 +544,25 @@ add_test(
   COMMAND iterate-kit-configuration-test
 )
 
+add_executable(iterate-kit-capnweb-oneway-call-test
+  tests/capnweb_oneway_call_test.c
+)
+target_compile_features(
+  iterate-kit-capnweb-oneway-call-test PRIVATE c_std_99)
+target_compile_options(iterate-kit-capnweb-oneway-call-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+)
+target_link_libraries(
+  iterate-kit-capnweb-oneway-call-test PRIVATE iterate-kit-core
+)
+add_test(
+  NAME iterate-kit-capnweb-oneway-call-test
+  COMMAND iterate-kit-capnweb-oneway-call-test
+)
+
 add_executable(iterate-kit-itx-mount-test
   tests/itx_mount_test.c
 )
@@ -719,27 +776,6 @@ target_link_libraries(
 add_test(
   NAME iterate-kit-pcm-realtime-fault-harness-test
   COMMAND iterate-kit-pcm-realtime-fault-harness-test
-)
-
-add_executable(iterate-kit-pcm-peer-delivery-guard-test
-  tests/pcm_peer_delivery_guard_test.c
-)
-target_compile_features(
-  iterate-kit-pcm-peer-delivery-guard-test PRIVATE c_std_99)
-target_compile_options(
-  iterate-kit-pcm-peer-delivery-guard-test PRIVATE
-  -Wall
-  -Wextra
-  -Werror
-  -Wpedantic
-)
-target_link_libraries(
-  iterate-kit-pcm-peer-delivery-guard-test
-  PRIVATE iterate-kit-core
-)
-add_test(
-  NAME iterate-kit-pcm-peer-delivery-guard-test
-  COMMAND iterate-kit-pcm-peer-delivery-guard-test
 )
 
 add_executable(iterate-kit-websocket-frame-writer-test

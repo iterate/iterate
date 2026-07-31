@@ -202,6 +202,89 @@ enum capnweb_status capnweb_session_call(
       context);
 }
 
+static void oneway_completion_never_called(
+    void *context, const struct capnweb_result *result) {
+  (void)context;
+  (void)result;
+}
+
+enum capnweb_status capnweb_session_call_oneway_path(
+    struct capnweb_session *session,
+    struct capnweb_remote_capability capability,
+    const char *const *path,
+    size_t path_count,
+    const char *arguments,
+    size_t arguments_length) {
+  struct capnweb_import *import_entry;
+  struct capnweb_writer writer;
+  char target_text[32];
+  char import_text[32];
+  size_t target_length;
+  size_t import_length;
+  size_t index;
+  enum capnweb_status status;
+
+  if (session == NULL ||
+      capability.id > 0 ||
+      arguments == NULL ||
+      !arguments_are_array(arguments, arguments_length) ||
+      !path_is_valid(path, path_count)) {
+    return CAPNWEB_E_INVALID_ARGUMENT;
+  }
+  if (session->state != CAPNWEB_SESSION_OPEN) {
+    return session->terminal_status;
+  }
+  if (session->sending) {
+    return CAPNWEB_E_STATE;
+  }
+  if (!capnweb_format_id(
+      capability.id, target_text, &target_length)) {
+    return CAPNWEB_E_LIMIT;
+  }
+  /*
+   * The import is allocated only to advance the strictly sequential id
+   * counter the peer mirrors; its slot is freed before this function
+   * returns, whatever the outcome, because no resolution will ever arrive.
+   */
+  import_entry = capnweb_session_allocate_import(
+      session, oneway_completion_never_called, NULL);
+  if (import_entry == NULL) {
+    return CAPNWEB_E_LIMIT;
+  }
+  if (!capnweb_format_id(
+      import_entry->id, import_text, &import_length)) {
+    memset(import_entry, 0, sizeof(*import_entry));
+    return CAPNWEB_E_LIMIT;
+  }
+
+  status = capnweb_session_start_message(session, &writer);
+  if (status != CAPNWEB_OK) {
+    memset(import_entry, 0, sizeof(*import_entry));
+    return status;
+  }
+  capnweb_writer_write_c_string(&writer, "[\"push\",[\"pipeline\",");
+  capnweb_writer_write(&writer, target_text, target_length);
+  capnweb_writer_write_c_string(&writer, ",[");
+  for (index = 0U; index < path_count; ++index) {
+    if (index > 0U) {
+      capnweb_writer_write(&writer, ",", 1U);
+    }
+    capnweb_writer_write_quoted(&writer, path[index]);
+  }
+  capnweb_writer_write_c_string(&writer, "],");
+  capnweb_writer_write(&writer, arguments, arguments_length);
+  capnweb_writer_write_c_string(&writer, "]]");
+  status = capnweb_session_finish_message(session, &writer);
+  if (status != CAPNWEB_OK) {
+    memset(import_entry, 0, sizeof(*import_entry));
+    return status;
+  }
+
+  status = capnweb_session_send_release(session, import_entry->id);
+  memset(import_entry, 0, sizeof(*import_entry));
+  return status;
+}
+
 enum capnweb_status capnweb_session_release_remote(
     struct capnweb_session *session,
     struct capnweb_remote_capability capability) {

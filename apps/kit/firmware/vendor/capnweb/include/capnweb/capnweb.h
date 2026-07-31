@@ -310,6 +310,17 @@ bool capnweb_value_array_at(
     const struct capnweb_value *value,
     size_t index,
     struct capnweb_value *element);
+/**
+ * Borrows the element array from a Cap'n Web array expression.
+ *
+ * On the wire an application array is `[ [item, ...] ]`, which distinguishes
+ * it from protocol reference expressions such as `["export", id]`. Raw JSON
+ * traversal deliberately preserves that encoding; use this helper at an
+ * application boundary that expects an evaluated array value.
+ */
+bool capnweb_value_get_expression_array(
+    const struct capnweb_value *value,
+    struct capnweb_value *elements);
 bool capnweb_value_object_get(
     const struct capnweb_value *value,
     const char *key,
@@ -413,6 +424,27 @@ enum capnweb_status capnweb_session_call_expressions(
     size_t argument_count,
     capnweb_completion_fn completion,
     void *context);
+
+/**
+ * Fire-and-forget call: pushes the pipeline expression and immediately
+ * releases the result import instead of pulling it, so the peer never
+ * serializes a resolution back. The import id is still allocated (ids are
+ * implicit and strictly sequential on the wire) but its slot is freed before
+ * this returns, so one-way calls do not consume import capacity.
+ *
+ * This is the only sustainable shape for high-frequency appends (e.g. 50/s
+ * PCM frames): a pulled append would echo the committed events — payload
+ * included — back into the bounded inbox and token budget on every call.
+ * Errors the peer would have reported in the resolution are lost by design;
+ * pair a low-rate pulled call on the same target as the health probe.
+ */
+enum capnweb_status capnweb_session_call_oneway_path(
+    struct capnweb_session *session,
+    struct capnweb_remote_capability capability,
+    const char *const *path,
+    size_t path_count,
+    const char *arguments,
+    size_t arguments_length);
 
 /**
  * Transfers one owner of capability to session on success. The returned handle
