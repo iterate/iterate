@@ -8,6 +8,22 @@ not deleted.
 
 ---
 
+## 0031 — Self-host burns ONE hostname: a reserved control-plane host overrides slug interpretation
+
+Full self-host should need only **one** domain, not two. The ingress adds a **reserved control-plane
+host** (config: e.g. `controlPlaneHost: "iterate.yourdomain.com"`, or a reserved label like `iterate`/`os`
+under `hostBase`). Ingress resolves it **first**: if the request host matches the control-plane host, serve
+the **control plane** (the console UI + `/api` + `/mcp`) — and do **not** interpret that host as a
+`<slug>` project. Every other host falls through to the existing routing table + `<slug>.<hostBase>`
+convention (ADR 0020/0025). So one domain does everything:
+
+- `iterate.yourdomain.com` → the control-plane console (create/list projects, `/api`, `/mcp`)
+- `<slug>.yourdomain.com` → each project's public site
+- `dashboard--<slug>.yourdomain.com` → each project's kernel-reserved dashboard
+  One base domain + one wildcard cert; no second domain to burn. This is the concrete answer to the
+  two-worker split's "`/api`+`/mcp` want the CP's own hostname" (step 3) — that host is just a reserved
+  label on the same base, not a separate domain. _(Jonas.)_
+
 ## 0024 — Naming: "kernel project entrypoint" vs "userspace project entrypoint"; retire "runner"
 
 Two entrypoints need distinct names. The trusted, kernel-owned `ProjectWorkerEntrypoint` that mints the
