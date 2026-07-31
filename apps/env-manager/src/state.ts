@@ -130,6 +130,29 @@ export function assertEnvironmentDestroyAllowed(input: {
   }
 }
 
+function isInterruptedEnvironmentDestroy(state: EnvironmentState): boolean {
+  return (
+    state.lifecycle === "failed" &&
+    state.operationId !== undefined &&
+    state.operationFinishedAt !== undefined &&
+    state.lastError === ENVIRONMENT_DESTROY_RESTARTED_ERROR
+  );
+}
+
+export function assertEnvironmentOperationAllowed(
+  state: EnvironmentState,
+  lifecycle: "checking" | "deploying" | "destroying",
+): void {
+  if (
+    lifecycle !== "destroying" &&
+    (state.lifecycle === "destroying" || isInterruptedEnvironmentDestroy(state))
+  ) {
+    throw new Error(
+      `${state.stage} has a partial destroy to complete before another lifecycle operation may start.`,
+    );
+  }
+}
+
 const interruptedLifecycles = new Set<EnvironmentLifecycle>([
   "checking",
   "deploying",
@@ -158,11 +181,7 @@ export function wasEnvironmentDestroyInterrupted(
   state: EnvironmentState,
   operationId: string,
 ): boolean {
-  return (
-    state.lifecycle === "failed" &&
-    state.operationId === operationId &&
-    state.lastError === ENVIRONMENT_DESTROY_RESTARTED_ERROR
-  );
+  return isInterruptedEnvironmentDestroy(state) && state.operationId === operationId;
 }
 
 export type EnvironmentApi = {

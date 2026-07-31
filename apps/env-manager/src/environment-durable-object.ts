@@ -12,6 +12,7 @@ import {
 import type { Env } from "./env.ts";
 import {
   assertEnvironmentDestroyAllowed,
+  assertEnvironmentOperationAllowed,
   EnvironmentState,
   AlchemyResources,
   parsePersistedEnvironmentState,
@@ -112,11 +113,7 @@ export class EnvironmentDurableObject extends DurableObject<Env> {
         `${this.#stage} is already ${this.#live.getState().lifecycle}; concurrent lifecycle operations are refused.`,
       );
     }
-    if (this.#live.getState().lifecycle === "destroying" && lifecycle !== "destroying") {
-      throw new Error(
-        `${this.#stage} has a partial destroy to complete before another lifecycle operation may start.`,
-      );
-    }
+    assertEnvironmentOperationAllowed(this.#live.getState(), lifecycle);
     const startedAt = new Date().toISOString();
     this.#setState({
       ...this.#live.getState(),

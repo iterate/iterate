@@ -249,6 +249,13 @@ Two final-head findings were confirmed and reduced:
   classifies that exact request as a manager restart. Regression tests prove
   exact restart continuation, rejection of an unrelated operation, and
   cancellation of the exact active operation on lease loss.
+- The recovered restart classification was durable, but the server blocked
+  deploy/check only while the lifecycle was literally `destroying`. Recovery
+  changes that lifecycle to `failed`, leaving a race before the destroy client
+  reconnects. One state-machine assertion now treats that exact classified
+  failure as the same cleanup fence: only another destroy may start until it
+  converges. Unrelated destroy failures remain ordinary failures and do not
+  acquire this fence.
 
 ### Post-push lifecycle run: high-cardinality Artifacts cleanup
 

@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
   AlchemyResources,
   assertEnvironmentDestroyAllowed,
+  assertEnvironmentOperationAllowed,
   EnvironmentResources,
   parsePersistedEnvironmentState,
   persistedEnvironmentState,
@@ -145,6 +146,13 @@ describe("durable environment lifecycle", () => {
     });
     expect(wasEnvironmentDestroyInterrupted(state, "destroy-1")).toBe(true);
     expect(wasEnvironmentDestroyInterrupted(state, "destroy-2")).toBe(false);
+    expect(() => assertEnvironmentOperationAllowed(state, "deploying")).toThrow(
+      "partial destroy to complete",
+    );
+    expect(() => assertEnvironmentOperationAllowed(state, "checking")).toThrow(
+      "partial destroy to complete",
+    );
+    expect(() => assertEnvironmentOperationAllowed(state, "destroying")).not.toThrow();
     expect(
       wasEnvironmentDestroyInterrupted(
         {
@@ -154,6 +162,15 @@ describe("durable environment lifecycle", () => {
         "destroy-1",
       ),
     ).toBe(false);
+    expect(() =>
+      assertEnvironmentOperationAllowed(
+        {
+          ...state,
+          lastError: "Cloudflare rejected one resource deletion.",
+        },
+        "deploying",
+      ),
+    ).not.toThrow();
   });
 
   test("does not classify another interrupted lifecycle as resumable destruction", () => {
@@ -190,5 +207,14 @@ describe("durable environment lifecycle", () => {
     } satisfies PersistedEnvironmentState;
 
     expect(recoverInterruptedEnvironmentState(state, "2026-07-30T12:02:00.000Z")).toEqual(state);
+    expect(() =>
+      assertEnvironmentOperationAllowed(
+        {
+          ...state,
+          resources: previewResources,
+        },
+        "checking",
+      ),
+    ).toThrow("partial destroy to complete");
   });
 });
