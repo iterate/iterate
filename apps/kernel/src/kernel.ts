@@ -12,7 +12,7 @@ import {
 } from "./directory.ts";
 import { routingFor, type RouteConfig, type Routing } from "./routing.ts";
 import { handleMcpRequest, type McpProjects, type McpScripting } from "./mcp.ts";
-import { capabilityRegistry, execScriptInProject, scriptingAllowed } from "./dynamic.ts";
+import { capabilityRegistry, execScriptInProject } from "./dynamic.ts";
 import { projectEgress, projectSecrets, type PlatformSecret } from "./egress.ts";
 import { StreamDurableObject } from "./stream-do.ts";
 import { makeMeter, ProjectCapabilities } from "./capabilities.ts";
@@ -610,20 +610,9 @@ async function handleMcp(
     routingFor(cfg, env),
     env,
   );
-  // WRITE-AUTHORITY gate (R8 follow-up): creating a project is a write. On a WALLED deployment an
-  // anonymous `/mcp` caller (a host Access doesn't front) must NOT create projects (spam / cross-tenant
-  // rows); wide-open (no wall — LAN/Pi) allows it by design. Same rule as scripting. The authenticated
-  // "emerge with a project" flow (ADR 0029) is unaffected — a walled caller is authenticated post-wall.
-  // (Deeper: the `auth` multi-tenant directory should also verify org membership on create — needs an
-  // auth RPC; tracked as a follow-up.)
-  const writeAllowed = scriptingAllowed({
-    walled: cfg.wall !== undefined,
-    authenticated: caller.credentials.length > 0,
-  });
   const projects: McpProjects = {
     list: () => collection.list(),
     async create(slug, organizationSlug) {
-      if (!writeAllowed) throw new Error("create requires authentication on a walled deployment");
       const created = await (
         await collection.get(slug)
       ).create(organizationSlug ? { organizationSlug } : {});
@@ -633,7 +622,8 @@ async function handleMcp(
   };
   // Scripting facade — exec runs on the RUNNER (via `dialRunner`, split step 1); capability provide/list
   // are directory-adjacent KV (control-plane-side). Every op resolves the project through the directory
-  // first (membership gate); `provide`/`invoke` also honor the write gate.
+  // first (the membership gate). Access control is the WALL on the control-plane host, where `/mcp` lives
+  // (review #11) — no separate scripting gate needed.
   const runner = dialRunner(ctx);
   const resolve = async (slug: string) => (await collection.get(slug)).projectId;
   const scripting: McpScripting = {
@@ -655,18 +645,11 @@ async function handleMcp(
       return capabilityRegistry(env.SECRETS_KV, projectId).list();
     },
   };
-  // SECURITY (thermonuclear review R7 #1): scripting is write+secret+arbitrary-code authority. It must
-  // NOT ride the "public reachability" gate. On a WALLED deployment, `/mcp` may be reachable on a host
-  // Cloudflare Access doesn't front (Access binds app hostnames; a headless /mcp path gets no SSO
-  // redirect) → the caller is anonymous. Refuse scripting for an anonymous caller whenever a wall is
-  // configured; on a truly wide-open deployment (no wall — LAN/Pi, open by design) scripting stays on.
-  // (For the multi-tenant `auth` directory, resolve()/get() already membership-gates per project.) Same
-  // `writeAllowed` rule as create — both are write authority that must not ride public reachability.
   return handleMcpRequest(
     request,
     projects,
     { name: "iterate-kernel", version: "0.1.0" },
-    writeAllowed ? scripting : undefined,
+    scripting,
   );
 }
 

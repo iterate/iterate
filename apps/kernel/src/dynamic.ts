@@ -11,14 +11,6 @@
 //    provide rejects any name in the builtin set. (Config-shadowing a builtin is a separate, trusted path.)
 // ---------------------------------------------------------------------------
 
-// SECURITY gate for the MCP scripting facade (thermonuclear review R7 #1). Scripting = write + secret +
-// arbitrary-code authority; it must NOT ride "public reachability". On a WALLED deployment an anonymous
-// caller (e.g. hitting /mcp on a host Access doesn't front) is refused. Wide-open (no wall — LAN/Pi) is
-// on by design. For the multi-tenant `auth` directory, per-project membership is gated separately.
-export function scriptingAllowed(opts: { walled: boolean; authenticated: boolean }): boolean {
-  return opts.authenticated || !opts.walled;
-}
-
 // Names the ITX tree already owns — a dynamic capability may not take one (builtins always win). These
 // are the top-level members of the ONE capability tree (D-A): whoami + the egress door + the capability
 // getters (streams/secrets/ai). A dynamic capability mounts a NEW name, never one of these.

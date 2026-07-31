@@ -193,12 +193,14 @@ chosen, and a code sketch.
   structurally: `/api` + `/mcp` answer ONLY on the control-plane host** (`onControlPlaneHost` in
   `kernel.ts`); on a project host they're just paths the config worker serves. Proven live
   (`iterate.shiterate.com/mcp` works; `alice.shiterate.com/mcp` reaches the project, not the MCP server).
-- **Defense-in-depth (belt-and-suspenders now, not the only line):** `scriptingAllowed({ walled,
-authenticated })` still withholds the scripting façade + `create_project` for a walled+anonymous caller
-  (in case a CP host is misconfigured without Access in front). Plus **optional** `allowedOrigins` on
-  project secrets (opt-in origin-pin) and `redirect:"manual"` at the egress door (a pinned origin can't 302
-  a secret away).
-- **Code:** the host gate in `kernel.ts`; `scriptingAllowed(...)`; `secrets.set(name, value, allowedOrigins?)`.
+- **No scripting gate — DELETED (Jonas: "no belt-and-suspenders, no complexity").** An earlier
+  `scriptingAllowed(walled, authenticated)` gate on the scripting façade + `create_project` was **removed**:
+  redundant once `/mcp` is control-plane-host-only (the wall on that host IS the access control), and
+  exactly the kind of "a bit wrong, now reduce it" code to delete. Net: less code, one clear defense (the
+  host + its wall), not two.
+- **Kept (genuinely useful, not redundant):** **optional** `allowedOrigins` on project secrets (opt-in
+  origin-pin) and `redirect:"manual"` at the egress door (a pinned origin can't 302 a secret away).
+- **Code:** the host gate in `kernel.ts`; `secrets.set(name, value, allowedOrigins?)`.
 
 ### Reserved control-plane host (ADR 0031) — one hostname for self-host
 
@@ -364,24 +366,44 @@ worker the control plane binds — `env.PRODUCT`. Here's the design (from a focu
 - **This lines up with the two-worker split:** the product worker is the _third_ worker (CP · runner ·
   product); "many small workers" (your point in §8-review below) is where this is all heading anyway.
 
-### VERIFIED constraint: `env.ITX.<dynamic>` does NOT work — dynamic capabilities need an explicit accessor
+### Dynamic capabilities: dotted access `itx.<name>` (the apps/os way) — NOT `invoke`
 
-You flagged: "we'll have dynamic capabilities from Durable Objects, and you can't call `env.iterate.<random
-method that doesn't exist>` — verify whether a WorkerEntrypoint can return a proxy." **Spiked it on real
-workerd. Result:**
+You flagged: "we'll have dynamic capabilities from DOs; you can't call `env.iterate.<random method that
+doesn't exist>`; verify. And we don't want `env.itx.invoke` — look at what apps/os does; we want
+`env.itx.get` or `env.project.itx` as a getter." Verified against apps/os — here's the accurate picture
+(it corrects an over-strong claim from a first spike):
 
-- `env.ITX.whoami()` (declared method) ✅ · `env.ITX.streams.get(...)` (declared getter → nested) ✅
-- **`env.ITX.banana()` (undeclared) ❌ →** _"The RPC receiver does not implement the method 'banana'."_ A
-  returned Proxy does **not** help — the workers-RPC / capnweb layer enumerates declared methods; there is
-  no catch-all across the RPC boundary.
-- **Requirement, therefore:** dynamic capabilities (provided by a project's DO at runtime) MUST be reached
-  via an **explicit** accessor — `env.ITX.invoke("banana", args)` (or `env.ITX.capability("banana")`) — a
-  _declared_ method that takes the capability name as data. This mirrors apps/os's
-  `invokeCapability(path, args)` + `resolveLongestPrefix`. **You cannot do `env.ITX.banana`.** (This makes
-  the D-A getter tree a _fixed_ builtin surface — `streams`/`secrets`/`ai` — with dynamic capabilities
-  hanging off an `invoke`/`capability` method, NOT off arbitrary property names. The current
-  `provide/invokeCapability` at the MCP layer already follows this; userspace-facing `env.ITX.invoke` is the
-  piece to add when userspace needs dynamic caps.)
+**The userspace syntax IS plain dotted member access, exactly like a builtin:**
+
+```ts
+using itx = await env.ITX.get(); // the root handle (a stub to the server-side ITX RpcTarget)
+await itx.streams.get(path).append(e); // builtin — declared getter
+await itx.answer.ultimate(); // a DYNAMICALLY-mounted capability — same dotted syntax
+```
+
+You never write `itx.invoke(...)`. Dotted access **lowers to** a single `invokeCapability({path, args})` on
+the scope's capability host — but that's the wire primitive, invisible to userspace (apps/os
+`utils.ts` `createInvokeCapabilityPathProxy`).
+
+**Why it works (reconciling the first spike):** my earlier spike used a _plain_ `WorkerEntrypoint`, which
+rejects undeclared methods over RPC — hence the false "must use invoke" conclusion. apps/os's ITX surface
+is an **`RpcTarget` with a prototype-chain hop** (`installPrototypeInvokeCapabilityFallback`,
+`domains/itx/utils.ts:338`): it splices a proxied hop between the class prototype and its parent, so
+**declared members win, and an unknown root falls through to the hop** which conjures the dispatcher. The
+crux: **the ITX tree lives in the SERVER isolate, not userspace** — `env.ITX.get()` returns a stub, and
+when userspace evaluates `itx.answer.ultimate()`, workerd/capnweb traverses the property chain
+**server-side**, where the hop resolves the dynamic name. (A plain WorkerEntrypoint has no hop → my spike
+failed; an RpcTarget-with-hop makes `itx.<dynamic>` genuinely work. Note: the hop must be a _prototype
+splice_, not an instance Proxy — workerd's pipeline classifier rejects proxied results, per
+cloudflare/workerd#6873.)
+
+**Requirement for the kernel (a change from what the D-A section implied):** the ITX surface userspace
+sees should be reached via **`env.ITX.get()` returning an `RpcTarget` with the prototype-chain hop**, so
+userspace does `itx.streams…` (builtin) and `itx.<mountedName>…` (dynamic) with ONE uniform dotted syntax —
+no `invoke`, no `env.ITX.banana` on a hop-less entrypoint. Today the kernel exposes builtins as getters on
+a plain WorkerEntrypoint (no hop) — fine for the fixed builtins, but **the hop is the piece to add when
+userspace needs dynamic capabilities**. (There's no `itx.get(path)` for dynamic mounts in apps/os — `.get()`
+is only on typed collections like `itx.workers.get(ref)`; dynamic mounts are reached by their name.)
 
 ### D-B streams — "fine for now, but eventually import & use the SAME stream" (noted)
 
