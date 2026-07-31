@@ -1,0 +1,26 @@
+{
+  "name": "control-plane",
+  "private": true,
+  "type": "module",
+  "description": "Control plane worker — login + session + directory (D1/sqlfu) + OAuth 2.1 AS (via @cloudflare/workers-oauth-provider) + console + /api + /mcp. The front desk. See docs/simplification/wayfinder/auth-worker-design.md.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "sqlfu:generate": "sqlfu generate",
+    "sqlfu:migrate": "sqlfu migrate",
+    "sqlfu:check": "sqlfu check all"
+  },
+  "dependencies": {
+    "@cloudflare/workers-oauth-provider": "^0.8.3",
+    "sqlfu": "0.1.1"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260621.1",
+    "miniflare": "catalog:cloudflare",
+    "typescript": "^5.9.3",
+    "vitest": "4.0.15",
+    "wrangler": "4.107.0"
+  }
+}

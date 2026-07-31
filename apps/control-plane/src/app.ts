@@ -45,8 +45,8 @@ async function ambientIdentity(request: Request, env: Env): Promise<Session | nu
       env.ACCESS_EMAIL_HEADER ?? "cf-access-authenticated-user-email",
     );
     if (!email) return null;
-    const user = await directory(env.DIRECTORY_KV).upsertUser(email);
-    return { sub: user.sub, email: user.email, iat: 0 };
+    const user = await directory(env.DB).upsertUser(email);
+    return { sub: user.id, email: user.email, iat: 0 };
   }
   return null;
 }
@@ -68,7 +68,7 @@ ${note ? `<p>${esc(note)}</p>` : ""}
 }
 
 async function home(request: Request, env: Env, session: Session): Promise<Response> {
-  const projects = await directory(env.DIRECTORY_KV).listProjects(session.sub);
+  const projects = await directory(env.DB).listProjects(session.sub);
   const list = projects.length
     ? `<ul>${projects.map((p) => `<li>${esc(p.slug)}</li>`).join("")}</ul>`
     : `<p class="muted">No projects yet.</p>`;
@@ -130,9 +130,9 @@ export const app: Handler = {
       const email = String(form.get("email") ?? "").trim();
       const next = String(form.get("next") ?? "/");
       if (!email) return page("Sign in", loginForm(next, "Enter an email."));
-      const user = await directory(env.DIRECTORY_KV).upsertUser(email);
+      const user = await directory(env.DB).upsertUser(email);
       const cookie = await setSessionCookie(
-        { sub: user.sub, email: user.email, iat: Math.floor(Date.now() / 1000) },
+        { sub: user.id, email: user.email, iat: Math.floor(Date.now() / 1000) },
         env.SESSION_SECRET,
       );
       return new Response(null, {
@@ -162,7 +162,7 @@ export const app: Handler = {
         .trim()
         .toLowerCase()
         .replace(/[^a-z0-9-]/g, "-");
-      if (slug) await directory(env.DIRECTORY_KV).createProject(session.sub, slug);
+      if (slug) await directory(env.DB).createProject(session.sub, slug);
       return new Response(null, { status: 302, headers: { location: "/" } });
     }
 

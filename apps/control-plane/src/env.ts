@@ -12,8 +12,8 @@ export type LoginMode = "email" | "access" | "open";
 export interface Env {
   /** Provider-owned store: grants, tokens, DCR clients. Required by @cloudflare/workers-oauth-provider. */
   OAUTH_KV: KVNamespace;
-  /** Our store: users → orgs → projects → devices. The auth worker IS the directory (design §8). */
-  DIRECTORY_KV: KVNamespace;
+  /** The directory: users/projects/memberships/routes/api_keys. Strongly consistent (D1/sqlfu, design §2a). */
+  DB: D1Database;
   /** HMAC secret for the session cookie. Doppler-backed in a real deploy; a committed demo value here. */
   SESSION_SECRET: string;
   /** Login backend. Defaults to `email`. */

@@ -1,0 +1,34 @@
+{
+  "name": "control-plane",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-01",
+  // CIMD fetches remote client_id metadata docs; the provider requires global_fetch_strictly_public to
+  // prove the fetch is to a strictly-public URL (SSRF guard). nodejs_compat is for sqlfu's runtime client
+  // (the D1 binding adapter is node-free, but sqlfu's barrel export pulls lazy node: paths — see the merge
+  // notes). The control plane is the "rich" worker; the project worker stays pure-play.
+  "compatibility_flags": ["global_fetch_strictly_public", "nodejs_compat"],
+  // iterate (prd) POC account — same as the project worker. Never touches the production apps/os deployment.
+  "account_id": "04b3b57291ef2626c6a8daa9d47065a7",
+  "workers_dev": true,
+
+  // The directory — strongly-consistent, relational (users/projects/memberships/routes/api_keys).
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "control-plane-directory",
+      "database_id": "fb3502bf-da4c-42e7-8e70-6f75765f7a4d",
+    },
+  ],
+
+  "kv_namespaces": [
+    // Provider-owned: grants, access/refresh tokens, DCR clients. Required binding name.
+    { "binding": "OAUTH_KV", "id": "b8efbdc3253840fa95331a80efbeb03d" },
+  ],
+
+  "vars": {
+    // Login backend: "email" (become the entered user) · "access" (read Cf-Access header) · "open" (anon).
+    "LOGIN_MODE": "email",
+    // DEMO session-signing secret. A real deploy supplies this as a Doppler-backed secret, not a var.
+    "SESSION_SECRET": "b3f1c0a7d2e94f6581ac37bde90f24a15c68d7e3049fba21c5e6d8790a1b2c3d",
+  },
+}
