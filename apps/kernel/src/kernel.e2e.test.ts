@@ -87,15 +87,46 @@ describe("kernel", () => {
   async function mcp(body: unknown, host = "alice.example.com") {
     const res = await worker.fetch(`http://${host}/mcp`, {
       method: "POST",
-      headers: { host, "content-type": "application/json", accept: "application/json" },
+      // MCP Streamable HTTP requires the client to accept BOTH json and the SSE stream (spec-compliant;
+      // the official library enforces it — real clients like the Inspector/Claude CLI send this).
+      headers: {
+        host,
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+      },
       body: JSON.stringify(body),
     });
-    const text = await res.text();
-    return { status: res.status, body: text ? JSON.parse(text) : null };
+    const raw = await res.text();
+    // The official MCP library frames the JSON-RPC response as SSE (`event: message\ndata: {…}`) for the
+    // 2025-06-18 protocol; real clients (Inspector/Claude CLI) parse this. Extract the `data:` payload.
+    const ct = res.headers.get("content-type") ?? "";
+    let json: unknown = null;
+    if (raw) {
+      if (ct.includes("text/event-stream")) {
+        const data = raw
+          .split("\n")
+          .filter((l) => l.startsWith("data:"))
+          .map((l) => l.slice(5).trim())
+          .join("");
+        json = data ? JSON.parse(data) : null;
+      } else {
+        json = JSON.parse(raw);
+      }
+    }
+    return { status: res.status, body: json as any };
   }
 
   test("/mcp initialize + tools/list — the control-plane MCP sibling to /api", async () => {
-    const init = await mcp({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+    const init = await mcp({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: { name: "e2e", version: "1" },
+      },
+    });
     expect(init.status).toBe(200);
     expect(init.body.result.serverInfo.name).toBe("iterate-kernel");
     expect(init.body.result.protocolVersion).toBeTruthy();

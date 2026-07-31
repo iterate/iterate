@@ -388,6 +388,9 @@ importers:
 
   apps/kernel:
     dependencies:
+      '@modelcontextprotocol/server':
+        specifier: 2.0.0
+        version: 2.0.0
       capnweb:
         specifier: npm:@iterate-com/capnweb@0.10.0
         version: '@iterate-com/capnweb@0.10.0'
@@ -3887,6 +3890,10 @@ packages:
     resolution: {integrity: sha512-1YbnguKN7OFGA/lmCtgIthyE5d+j7dvu7hJld+f0mKrM0YAV4Q8TG80RBto+qyupxhHjTMEWItHu7cQlAmVtyA==}
     engines: {node: '>=20'}
 
+  '@modelcontextprotocol/core@2.0.0':
+    resolution: {integrity: sha512-pJCEwGG7Lfr/+PQp9ZTwKXNeO5wzbfKL7H3MYpCorM4oFBoQrdjnBgEoqG+RjhsvS1FKrDbKux+M1HhlnGWqcA==}
+    engines: {node: '>=20'}
+
   '@modelcontextprotocol/sdk@1.29.0':
     resolution: {integrity: sha512-zo37mZA9hJWpULgkRpowewez1y6ML5GsXJPY8FI0tBBCd77HEvza4jDqRKOXgHNn867PVGCyTdzqpz0izu5ZjQ==}
     engines: {node: '>=18'}
@@ -3896,6 +3903,10 @@ packages:
     peerDependenciesMeta:
       '@cfworker/json-schema':
         optional: true
+
+  '@modelcontextprotocol/server@2.0.0':
+    resolution: {integrity: sha512-YhHWdHfpFMQfd0prsEnxKeS3Qz3ytIGmsS0sth4KDjnacIT7hxk6hXHkJ9KysxlkvTM+WZAtQbbcUhdoP4Hvtw==}
+    engines: {node: '>=20'}
 
   '@modelcontextprotocol/server@2.0.0-beta.1':
     resolution: {integrity: sha512-83scKauajX9fWbSIC4NBYdnvXajH+cqvX8QqsrPH0XNgqtMmym1kWucMO7YyNkrBD9C7/R+FRCmkjC9kgEKXlQ==}
@@ -16557,6 +16568,10 @@ snapshots:
       pkce-challenge: 5.0.1
       zod: 4.3.6
 
+  '@modelcontextprotocol/core@2.0.0':
+    dependencies:
+      zod: 4.3.6
+
   '@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.3.6)':
     dependencies:
       '@hono/node-server': 1.19.10(hono@4.12.15)
@@ -16580,6 +16595,11 @@ snapshots:
       '@cfworker/json-schema': 4.1.1
     transitivePeerDependencies:
       - supports-color
+
+  '@modelcontextprotocol/server@2.0.0':
+    dependencies:
+      '@modelcontextprotocol/core': 2.0.0
+      zod: 4.3.6
 
   '@modelcontextprotocol/server@2.0.0-beta.1':
     dependencies:

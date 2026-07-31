@@ -10,9 +10,10 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@modelcontextprotocol/server": "2.0.0",
     "capnweb": "npm:@iterate-com/capnweb@^0.10.0",
-    "jose": "^5.10.0",
-    "iterate": "workspace:*"
+    "iterate": "workspace:*",
+    "jose": "^5.10.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260621.1",
