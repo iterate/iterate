@@ -1,4 +1,5 @@
 import { DocsApp } from "@iterate-com/docs";
+import { TasksApp } from "@iterate-com/tasks";
 import { GithubAiLinter } from "iterate/starter-apps/github-ai-linter";
 import { GuestbookApp } from "iterate/starter-apps/guestbook";
 import { IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
@@ -33,12 +34,24 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       originOverrideKvKey: "docs-app-origin",
     },
   });
+  #tasksApp = TasksApp.create(this.env, {
+    auth: { policy: "project-member" },
+    proxy: {
+      origin: "https://tasks.iterate.workers.dev",
+      originOverrideKvKey: "tasks-app-origin",
+    },
+  });
   #guestbookApp = GuestbookApp.create(this.env);
   #todoApp = TodoApp.create(this.env);
 
   /** Agent-callable Docs helpers, including `itx.worker.docs.link({ workspace, path })`. */
   get docs() {
     return this.#docsApp.rpc;
+  }
+
+  /** Agent-callable Tasks helpers, including `itx.worker.tasks.link({ workspace, repo, task? })`. */
+  get tasks() {
+    return this.#tasksApp.rpc;
   }
 
   /**
@@ -174,26 +187,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       return this.#guestbookApp.fetch(req);
     }
     if (app === "tasks") {
-      // Member-gated reverse proxy (pages, assets, WebSockets) to the hosted
-      // tasks board (github.com/iterate/tasks), which authenticates each
-      // visitor back to os.iterate.com. The kv knob targets a dev tunnel
-      // while developing the tasks app itself.
-      const itx = await this.itx;
-      const denied = await itx.auth.get({ policy: "project-member" }).fetch(req);
-      if (denied) return denied;
-      const tasksUrl = new URL(req.url);
-      tasksUrl.protocol = "https:";
-      const origin = await itx.kv.get("tasks-app-origin");
-      tasksUrl.host =
-        typeof origin === "string" && origin !== "" ? origin : "tasks.iterate.workers.dev";
-      return fetch(
-        new Request(tasksUrl, {
-          method: req.method,
-          headers: req.headers,
-          body: req.body,
-          redirect: "manual",
-        }),
-      );
+      return this.#tasksApp.fetch(req);
     }
     if (app === "docs") {
       return this.#docsApp.fetch(req);

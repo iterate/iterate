@@ -10,28 +10,20 @@
   "compatibility_date": "2026-06-17",
   "compatibility_flags": ["nodejs_compat"],
   "exports": {
-    // (The TasksBoardDurableObject tombstone that used to sit here is fully
-    // reconciled — the 2026-07-23 deploy reported no namespace remains.)
+    // Tombstones: the Yjs checkout DO and its index, retired by the
+    // workspace-lens consolidation — boards live on platform workspaces and
+    // the sidebar lists them from the platform's stream catalog. Both DOs
+    // were disposable by contract (committed state lives in git; the index
+    // was a convenience surface). Remove the tombstones once a deploy
+    // reports the namespaces reconciled (as TasksBoardDurableObject was).
     "TasksCheckoutDurableObject": {
       "type": "durable-object",
-      "storage": "sqlite",
+      "state": "deleted",
     },
     "TasksCheckoutIndexDurableObject": {
       "type": "durable-object",
-      "storage": "sqlite",
+      "state": "deleted",
     },
-  },
-  "durable_objects": {
-    "bindings": [
-      {
-        "name": "CHECKOUT",
-        "class_name": "TasksCheckoutDurableObject",
-      },
-      {
-        "name": "INDEX",
-        "class_name": "TasksCheckoutIndexDurableObject",
-      },
-    ],
   },
   "vars": {
     "OS_BASE_URL": "https://os.iterate.com",

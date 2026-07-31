@@ -222,6 +222,92 @@ test("a malformed KV override fails instead of sending project traffic to it", a
   );
 });
 
+test("builds an environment-correct board link for a workspace", async () => {
+  let requestedSlug: string | undefined;
+  let disposed = false;
+  const app = TasksApp.create(
+    {
+      ITX: {
+        async get() {
+          return {
+            [Symbol.dispose]() {
+              disposed = true;
+            },
+            async appUrl(slug: string) {
+              requestedSlug = slug;
+              return "https://tasks--demo.iterate.app/";
+            },
+            auth: {
+              get() {
+                return { async fetch() {} };
+              },
+            },
+            kv: {
+              async get() {
+                return null;
+              },
+            },
+          };
+        },
+      },
+    } as any,
+    {
+      auth: { policy: "project-member" },
+      proxy: {
+        origin: "https://tasks.iterate.workers.dev",
+        originOverrideKvKey: "tasks-app-origin",
+      },
+    },
+  );
+
+  await expect(
+    app.rpc.link({
+      repo: "/repos/config",
+      task: "tasks/plan.md",
+      workspace: "/workspaces/agents/you",
+    }),
+  ).resolves.toBe(
+    "https://tasks--demo.iterate.app/w?workspace=%2Fworkspaces%2Fagents%2Fyou&repo=%2Frepos%2Fconfig&task=tasks%2Fplan.md",
+  );
+  expect(requestedSlug).toBe("tasks");
+  expect(disposed).toBe(true);
+
+  await expect(
+    app.rpc.link({ repo: "/repos/config", workspace: "/workspaces/agents/you" }),
+  ).resolves.toBe(
+    "https://tasks--demo.iterate.app/w?workspace=%2Fworkspaces%2Fagents%2Fyou&repo=%2Frepos%2Fconfig",
+  );
+});
+
+test.each([
+  { repo: "/repos/config", workspace: "/repos/config" },
+  { repo: "/repos/config", workspace: "/workspaces/" },
+  { repo: "/repos/config", workspace: "/workspaces/agents/../you" },
+  { repo: "/repos", workspace: "/workspaces/agents/you" },
+  { repo: "repos/config", workspace: "/workspaces/agents/you" },
+  { repo: "/repos/config", task: "notes.md", workspace: "/workspaces/agents/you" },
+  { repo: "/repos/config", task: "/repos/config/tasks/plan.md", workspace: "/workspaces/agents/you" },
+  { repo: "/repos/config", task: "tasks/plan.txt", workspace: "/workspaces/agents/you" },
+])("refuses to mint a link the board would reject (%j)", async (input) => {
+  const app = TasksApp.create(
+    {
+      ITX: {
+        async get() {
+          throw new Error("validation must fail before any platform call");
+        },
+      },
+    } as any,
+    {
+      auth: { policy: "project-member" },
+      proxy: {
+        origin: "https://tasks.iterate.workers.dev",
+        originOverrideKvKey: "tasks-app-origin",
+      },
+    },
+  );
+  await expect(app.rpc.link(input)).rejects.toThrow();
+});
+
 test("a non-string KV override fails instead of silently using the configured origin", async () => {
   const app = TasksApp.create(
     {

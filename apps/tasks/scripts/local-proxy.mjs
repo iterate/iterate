@@ -1,7 +1,7 @@
 // Local stand-in for the config-worker proxy: forwards http://localhost:<port>
 // to a tasks vessel (local port OR a deployed https origin), stamping the
 // trusted project header + auth cookie the vessel expects. Handles WebSocket
-// upgrades (both /yjs and /api lanes need them).
+// upgrades (the /api capnweb lane needs them).
 // Usage: node scripts/local-proxy.mjs <listenPort> <targetOrigin> <projectId> <token>
 //   targetOrigin: 5199 | http://localhost:5199 | https://tasks-collab-preview.iterate.workers.dev
 import http from "node:http";

@@ -203,6 +203,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  \"description\": \"Iterate project worker and packaged full-stack apps.\",\n" +
       "  \"dependencies\": {\n" +
       "    \"@iterate-com/docs\": \"https://pkg.pr.new/iterate/iterate/@iterate-com/docs@main\",\n" +
+      "    \"@iterate-com/tasks\": \"https://pkg.pr.new/iterate/iterate/@iterate-com/tasks@main\",\n" +
       "    \"iterate\": \"https://pkg.pr.new/iterate/iterate/iterate@main\",\n" +
       "    \"react\": \"19.2.4\",\n" +
       "    \"react-dom\": \"19.2.4\",\n" +
@@ -293,6 +294,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
     path: "worker.ts",
     content:
       "import { DocsApp } from \"@iterate-com/docs\";\n" +
+      "import { TasksApp } from \"@iterate-com/tasks\";\n" +
       "import { GithubAiLinter } from \"iterate/starter-apps/github-ai-linter\";\n" +
       "import { GuestbookApp } from \"iterate/starter-apps/guestbook\";\n" +
       "import { IterateWorkerEntrypoint, type StreamEvent } from \"iterate/sdk\";\n" +
@@ -327,12 +329,24 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      originOverrideKvKey: \"docs-app-origin\",\n" +
       "    },\n" +
       "  });\n" +
+      "  #tasksApp = TasksApp.create(this.env, {\n" +
+      "    auth: { policy: \"project-member\" },\n" +
+      "    proxy: {\n" +
+      "      origin: \"https://tasks.iterate.workers.dev\",\n" +
+      "      originOverrideKvKey: \"tasks-app-origin\",\n" +
+      "    },\n" +
+      "  });\n" +
       "  #guestbookApp = GuestbookApp.create(this.env);\n" +
       "  #todoApp = TodoApp.create(this.env);\n" +
       "\n" +
       "  /** Agent-callable Docs helpers, including `itx.worker.docs.link({ workspace, path })`. */\n" +
       "  get docs() {\n" +
       "    return this.#docsApp.rpc;\n" +
+      "  }\n" +
+      "\n" +
+      "  /** Agent-callable Tasks helpers, including `itx.worker.tasks.link({ workspace, repo, task? })`. */\n" +
+      "  get tasks() {\n" +
+      "    return this.#tasksApp.rpc;\n" +
       "  }\n" +
       "\n" +
       "  /**\n" +
@@ -468,26 +482,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      return this.#guestbookApp.fetch(req);\n" +
       "    }\n" +
       "    if (app === \"tasks\") {\n" +
-      "      // Member-gated reverse proxy (pages, assets, WebSockets) to the hosted\n" +
-      "      // tasks board (github.com/iterate/tasks), which authenticates each\n" +
-      "      // visitor back to os.iterate.com. The kv knob targets a dev tunnel\n" +
-      "      // while developing the tasks app itself.\n" +
-      "      const itx = await this.itx;\n" +
-      "      const denied = await itx.auth.get({ policy: \"project-member\" }).fetch(req);\n" +
-      "      if (denied) return denied;\n" +
-      "      const tasksUrl = new URL(req.url);\n" +
-      "      tasksUrl.protocol = \"https:\";\n" +
-      "      const origin = await itx.kv.get(\"tasks-app-origin\");\n" +
-      "      tasksUrl.host =\n" +
-      "        typeof origin === \"string\" && origin !== \"\" ? origin : \"tasks.iterate.workers.dev\";\n" +
-      "      return fetch(\n" +
-      "        new Request(tasksUrl, {\n" +
-      "          method: req.method,\n" +
-      "          headers: req.headers,\n" +
-      "          body: req.body,\n" +
-      "          redirect: \"manual\",\n" +
-      "        }),\n" +
-      "      );\n" +
+      "      return this.#tasksApp.fetch(req);\n" +
       "    }\n" +
       "    if (app === \"docs\") {\n" +
       "      return this.#docsApp.fetch(req);\n" +

@@ -1,14 +1,6 @@
 import { useContext, useRef, useState, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
-import {
-  CheckIcon,
-  FolderTreeIcon,
-  LinkIcon,
-  ListFilterIcon,
-  MoreHorizontalIcon,
-  TagIcon,
-  XIcon,
-} from "lucide-react";
+import { CheckIcon, LinkIcon, ListFilterIcon, MoreHorizontalIcon, XIcon } from "lucide-react";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -31,14 +23,9 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/compone
 import { ProjectLabelContext } from "../lib/project-label.ts";
 import type { RowField } from "../lib/board-model.ts";
 
-/** project › repo › checkout — the header's orientation line. */
-export function CheckoutBreadcrumbs({
-  repoPath,
-  checkoutId,
-}: {
-  repoPath?: string;
-  checkoutId?: string;
-}) {
+/** project › repo › board — the header's orientation line. `label` is the
+ * board id for the app's own boards, the workspace path for a lens. */
+export function CheckoutBreadcrumbs({ repoPath, label }: { repoPath?: string; label?: string }) {
   const projectLabel = useContext(ProjectLabelContext);
   return (
     <Breadcrumb className="min-w-0">
@@ -52,11 +39,11 @@ export function CheckoutBreadcrumbs({
             <BreadcrumbItem className="font-mono">{repoPath}</BreadcrumbItem>
           </>
         )}
-        {checkoutId === undefined ? null : (
+        {label === undefined ? null : (
           <>
             <BreadcrumbSeparator />
             <BreadcrumbItem>
-              <BreadcrumbPage className="truncate font-mono">{checkoutId}</BreadcrumbPage>
+              <BreadcrumbPage className="truncate font-mono">{label}</BreadcrumbPage>
             </BreadcrumbItem>
           </>
         )}
@@ -163,61 +150,6 @@ export function FilterControl({
         </div>
       </PopoverContent>
     </Popover>
-  );
-}
-
-const GROUP_LABELS: Record<string, string> = {
-  folder: "Grouped by folder",
-  label: "Grouped by tag",
-  none: "No grouping",
-};
-
-/** Grouping as an icon dropdown: folder rows, tag rows, or flat. */
-export function GroupControl({
-  value,
-  onChange,
-}: {
-  value: RowField;
-  onChange: (value: RowField) => void;
-}) {
-  return (
-    <DropdownMenu>
-      <WithTooltip label={GROUP_LABELS[value ?? "none"]!}>
-        <DropdownMenuTrigger
-          render={
-            <Button
-              variant={value === null ? "outline" : "secondary"}
-              size="sm"
-              className={ICON_BUTTON}
-              aria-label="Board grouping"
-            />
-          }
-        >
-          {value === "label" ? (
-            <TagIcon aria-hidden className="size-3.5" />
-          ) : (
-            <FolderTreeIcon aria-hidden className="size-3.5" />
-          )}
-        </DropdownMenuTrigger>
-      </WithTooltip>
-      <DropdownMenuContent align="end">
-        <DropdownMenuCheckboxItem checked={value === null} onCheckedChange={() => onChange(null)}>
-          No grouping
-        </DropdownMenuCheckboxItem>
-        <DropdownMenuCheckboxItem
-          checked={value === "folder"}
-          onCheckedChange={() => onChange("folder")}
-        >
-          Group by folder
-        </DropdownMenuCheckboxItem>
-        <DropdownMenuCheckboxItem
-          checked={value === "label"}
-          onCheckedChange={() => onChange("label")}
-        >
-          Group by tag
-        </DropdownMenuCheckboxItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }
 

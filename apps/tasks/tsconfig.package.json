@@ -9,7 +9,8 @@
     "declaration": true,
     "rootDir": "src",
     "outDir": "dist-package",
-    "lib": ["ES2024", "DOM"]
+    "lib": ["ES2024", "DOM", "ESNext.Disposable"],
+    "types": ["@cloudflare/workers-types"]
   },
   "include": ["src/config-bridge.ts"]
 }

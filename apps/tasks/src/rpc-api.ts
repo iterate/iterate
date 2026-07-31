@@ -1,5 +1,4 @@
 import { RpcTarget } from "capnweb";
-import { getServerByName } from "partyserver";
 import {
   ProjectDial,
   projectCredentialAddress,
@@ -7,18 +6,15 @@ import {
   tokenClaims,
 } from "@iterate-com/workspace-documents/server";
 import type { AppEnv } from "./env.ts";
-import type { CommitResult, TaskChangeSummary } from "./state.ts";
 import type {
-  CheckoutIndexEntry,
-  CheckoutSnapshot,
   CollabAcceptResult,
   CollabChanges,
   CollabOpened,
   CollabWaitResult,
   ProjectCredential,
+  WorkspaceListEntry,
   WorkspaceStreamEvent,
   TasksApi,
-  TasksCheckout,
   TasksProject,
   TasksUser,
   TasksWorkspace,
@@ -28,35 +24,19 @@ import {
   checkoutWorkspacePath,
   isCheckoutId,
   normalizeRepoPath,
+  parseBoardWorkspacePath,
 } from "./lib/checkout-shared.ts";
+import { requireWorkspacePath } from "./config-bridge.ts";
+import {
+  parseTaskCard,
+  setTaskCardAgent,
+  setTaskCardState,
+  taskAgentPath,
+  taskAssignmentInstructions,
+  taskColumnState,
+} from "./tasks-model.ts";
 
 const AUTH_COOKIE = "iterate-project-auth";
-
-/**
- * The checkout DO's plain-data RPC surface (native workerd RPC on the stub —
- * a capnweb stub is a Proxy and cannot cross this hop, so only strings and
- * JSON shapes do; per-user platform access travels as the token itself).
- */
-type CheckoutStubOps = {
-  ensureSeeded(credential: ProjectCredential, projectId: string, repoPath: string): Promise<void>;
-  filesSnapshot(): Promise<CheckoutSnapshot>;
-  readFile(path: string): Promise<string | null>;
-  applyWrite(path: string, content: string | null): Promise<void>;
-  changesSummary(): Promise<TaskChangeSummary[]>;
-  commitDoc(
-    credential: ProjectCredential,
-    projectId: string,
-    repoPath: string,
-    message: string,
-  ): Promise<CommitResult>;
-  generateMessageDoc(credential: ProjectCredential, projectId: string): Promise<string>;
-  assignAgentDoc(
-    credential: ProjectCredential,
-    projectId: string,
-    repoPath: string,
-    taskPath: string,
-  ): Promise<{ agentPath: string }>;
-};
 
 /**
  * The capability handed to every connection on `/api` — one method,
@@ -94,7 +74,7 @@ export class TasksApiRoot extends RpcTarget implements TasksApi {
       dial.close();
       throw new Error(`authentication failed: ${errorText(error)}`);
     }
-    return new TasksProjectApi(this.#env, dial, projectId, resolved);
+    return new TasksProjectApi(dial, projectId, resolved);
   }
 
   #resolve(credential?: string | ProjectCredential): ProjectCredential {
@@ -117,14 +97,12 @@ export class TasksApiRoot extends RpcTarget implements TasksApi {
 }
 
 class TasksProjectApi extends RpcTarget implements TasksProject {
-  readonly #env: AppEnv;
   readonly #dial: ProjectDial;
   readonly #projectId: string;
   readonly #credential: ProjectCredential;
 
-  constructor(env: AppEnv, dial: ProjectDial, projectId: string, credential: ProjectCredential) {
+  constructor(dial: ProjectDial, projectId: string, credential: ProjectCredential) {
     super();
-    this.#env = env;
     this.#dial = dial;
     this.#projectId = projectId;
     this.#credential = credential;
@@ -156,133 +134,79 @@ class TasksProjectApi extends RpcTarget implements TasksProject {
     return repos.map((repo) => repo.path).sort();
   }
 
-  async checkouts(): Promise<CheckoutIndexEntry[]> {
-    return this.#env.INDEX.getByName(this.#projectId).list();
-  }
-
-  checkout(checkoutId: string, repoPath: string = DEFAULT_REPO_PATH): TasksCheckout {
-    const normalized = normalizeRepoPath(repoPath);
-    if (!isCheckoutId(checkoutId) || normalized === null) {
-      throw new Error("bad checkout id or repo path");
-    }
-    return new TasksCheckoutApi(
-      this.#env,
-      this.#projectId,
-      this.#credential,
-      checkoutId,
-      normalized,
-    );
+  /**
+   * Every workspace stream in the project, newest first — the picker's list.
+   * The platform's stream catalog is the source of truth (the sidebar's old
+   * checkout-index DO is retired): board workspaces parse back into their
+   * (checkoutId, repoPath) address; everything else (agent workspaces, ...)
+   * lists as a plain path a lens can open as a guest.
+   *
+   * Ancestor pruning: every stream announces itself to every ancestor path,
+   * so a nested agent workspace (/workspaces/agents/repos/config/pr/21)
+   * drags phantom ancestor STREAMS into the catalog that were never created
+   * as workspaces. An entry that is a strict path-prefix of another entry
+   * is such an ancestor today (nothing nests real workspaces), so it is
+   * dropped rather than offered as a dead lens. The honest fix is a real
+   * platform `workspaces.list()` fed by `workspace/created` — follow-up in
+   * tasks/workspace-lenses-consolidation.md.
+   */
+  async workspaces(): Promise<WorkspaceListEntry[]> {
+    const streams = (await this.#dial.withProject(async (project) => {
+      const catalog = (
+        project as unknown as {
+          streams: { list(): Promise<{ createdAt: string; path: string }[]> };
+        }
+      ).streams;
+      return catalog.list();
+    })) as { createdAt: string; path: string }[];
+    const candidates = streams.filter((stream) => stream.path.startsWith("/workspaces/"));
+    const paths = candidates.map((stream) => stream.path);
+    return candidates
+      .filter((stream) => !paths.some((other) => other.startsWith(`${stream.path}/`)))
+      .map((stream) => ({
+        path: stream.path,
+        createdAt: stream.createdAt,
+        board: parseBoardWorkspacePath(stream.path),
+      }))
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   }
 
   /**
-   * The checkout AS a platform workspace (PoC hop (a): browser → vessel
-   * `/api` → workspace DO). Every project repo is auto-mounted at its own
-   * `/repos/**` path; this capability scopes itself to ONE of them — it is
-   * the single place board-lane repo-relative paths meet the mount prefix.
-   * Created lazily on first use; one capability carries both the collab
-   * session lane and the board lane.
+   * A board on the tasks app's own workspace naming: the workspace path is
+   * derived from (checkoutId, repoPath) and lazily created on first use —
+   * opening a fresh board id IS how a new board workspace is born.
    */
   workspace(checkoutId: string, repoPath: string = DEFAULT_REPO_PATH): TasksWorkspaceApi {
     const normalized = normalizeRepoPath(repoPath);
     if (!isCheckoutId(checkoutId) || normalized === null) {
       throw new Error("bad checkout id or repo path");
     }
-    return new TasksWorkspaceApi(this.#env, this.#projectId, this.#dial, checkoutId, normalized);
+    return new TasksWorkspaceApi(
+      this.#dial,
+      checkoutWorkspacePath(checkoutId, normalized),
+      normalized,
+      { lazyCreate: true },
+    );
+  }
+
+  /**
+   * A board lens on an EXISTING workspace, addressed by its platform path —
+   * the Docs app's plain-`get` posture: no lazy creation, no side effects;
+   * a missing workspace surfaces the platform's own error. Workspaces
+   * outside the tasks app's /workspaces/tasks/ namespace are someone else's
+   * (an agent's, mid-thought): the capability serves reads, comments, and
+   * edits there, but refuses the owner acts (commit, assignAgent).
+   */
+  workspaceAt(workspacePath: string, repoPath: string = DEFAULT_REPO_PATH): TasksWorkspaceApi {
+    const normalized = normalizeRepoPath(repoPath);
+    if (normalized === null) throw new Error("bad repo path");
+    return new TasksWorkspaceApi(this.#dial, requireWorkspacePath(workspacePath), normalized, {
+      lazyCreate: false,
+    });
   }
 
   [Symbol.dispose](): void {
     this.#dial.close();
-  }
-}
-
-/**
- * One checkout, as a capability. Every method lazily makes sure the DO is
- * seeded first (agents may reach a checkout before any browser has), then
- * forwards to the DO's plain-data RPC methods — mutations land in the live
- * Y.Doc, so connected collaborators see agent edits keystroke-for-keystroke
- * with their own.
- */
-class TasksCheckoutApi extends RpcTarget implements TasksCheckout {
-  readonly #env: AppEnv;
-  readonly #projectId: string;
-  readonly #credential: ProjectCredential;
-  readonly #checkoutId: string;
-  readonly #repoPath: string;
-  #stub: Promise<CheckoutStubOps> | null = null;
-  #seeded: Promise<void> | null = null;
-
-  constructor(
-    env: AppEnv,
-    projectId: string,
-    credential: ProjectCredential,
-    checkoutId: string,
-    repoPath: string,
-  ) {
-    super();
-    this.#env = env;
-    this.#projectId = projectId;
-    this.#credential = credential;
-    this.#checkoutId = checkoutId;
-    this.#repoPath = repoPath;
-  }
-
-  async files(): Promise<CheckoutSnapshot> {
-    return (await this.#ready()).filesSnapshot();
-  }
-
-  async read(path: string): Promise<string | null> {
-    return (await this.#ready()).readFile(path);
-  }
-
-  async write(path: string, content: string): Promise<void> {
-    return (await this.#ready()).applyWrite(path, content);
-  }
-
-  async delete(path: string): Promise<void> {
-    return (await this.#ready()).applyWrite(path, null);
-  }
-
-  async changes(): Promise<TaskChangeSummary[]> {
-    return (await this.#ready()).changesSummary();
-  }
-
-  async commit(message: string): Promise<CommitResult> {
-    const stub = await this.#ready();
-    return stub.commitDoc(this.#credential, this.#projectId, this.#repoPath, message);
-  }
-
-  async generateMessage(): Promise<string> {
-    const stub = await this.#ready();
-    return stub.generateMessageDoc(this.#credential, this.#projectId);
-  }
-
-  async assignAgent(path: string): Promise<{ agentPath: string }> {
-    const stub = await this.#ready();
-    return stub.assignAgentDoc(this.#credential, this.#projectId, this.#repoPath, path);
-  }
-
-  #do(): Promise<CheckoutStubOps> {
-    // getServerByName (not plain getByName) so partyserver's onStart — which
-    // loads the persisted doc — has completed before any method runs.
-    this.#stub ??= getServerByName(
-      this.#env.CHECKOUT as unknown as Parameters<typeof getServerByName>[0],
-      `${this.#projectId}:${this.#repoPath}:${this.#checkoutId}`,
-    ).then((stub) => stub as unknown as CheckoutStubOps);
-    return this.#stub;
-  }
-
-  async #ready(): Promise<CheckoutStubOps> {
-    const stub = await this.#do();
-    if (this.#seeded === null) {
-      this.#seeded = stub
-        .ensureSeeded(this.#credential, this.#projectId, this.#repoPath)
-        .catch((error: unknown) => {
-          this.#seeded = null;
-          throw error;
-        });
-    }
-    await this.#seeded;
-    return stub;
   }
 }
 
@@ -337,13 +261,19 @@ type WorkspaceStub = {
   };
 };
 
+/** The agent surface assignAgent touches (same pinned-client caveat). */
+type AgentStub = {
+  create(): Promise<unknown>;
+  message(text: string): Promise<unknown>;
+  processor: { snapshot(): Promise<{ state?: { birthCertificate?: unknown } }> };
+};
+
 /**
- * The checkout AS a platform workspace, forwarded over the vessel's live
- * dial. Stateless beyond the dial (versions/epochs live in the workspace DO),
- * lazily created on first use, and carrying both lanes: the collaborative
- * session wire and the board (files/status/commit — the overlay IS the diff,
- * no base snapshot anywhere; live sessions settle inside the workspace's own
- * barriers).
+ * One workspace as a board capability, forwarded over the vessel's live
+ * dial. Stateless beyond the dial (versions/epochs live in the workspace
+ * DO), and carrying both lanes: the collaborative session wire and the
+ * board (files/status/commit — the overlay IS the diff, no base snapshot
+ * anywhere; live sessions settle inside the workspace's own barriers).
  *
  * Path contract: the collab lane (open/push/wait/present/changes) speaks
  * fully qualified `/repos/**` paths — a session's identity is its platform
@@ -352,48 +282,25 @@ type WorkspaceStub = {
  * board keys and the mount prefix.
  */
 class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
-  readonly #env: AppEnv;
-  readonly #projectId: string;
   readonly #dial: ProjectDial;
-  readonly #checkoutId: string;
+  readonly #workspacePath: string;
   readonly #repoPath: string;
+  /** Boards on the tasks app's own naming are created on first use; a lens
+   * addressed at an arbitrary workspace path never creates (plain get). */
+  readonly #lazyCreate: boolean;
   #created = false;
-  #indexed = false;
 
   constructor(
-    env: AppEnv,
-    projectId: string,
     dial: ProjectDial,
-    checkoutId: string,
+    workspacePath: string,
     repoPath: string,
+    posture: { lazyCreate: boolean },
   ) {
     super();
-    this.#env = env;
-    this.#projectId = projectId;
     this.#dial = dial;
-    this.#checkoutId = checkoutId;
+    this.#workspacePath = workspacePath;
     this.#repoPath = repoPath;
-  }
-
-  /**
-   * The sidebar and home page list checkouts from the index DO — a checkout
-   * that never announces itself does not exist for navigation. Announce on
-   * first successful use (once per capability) and on every commit (bumps
-   * recency + records the commit). Fire-and-forget: the index is a
-   * convenience surface and must never fail a real operation.
-   */
-  #announce(baseCommit?: string): void {
-    if (baseCommit === undefined) {
-      if (this.#indexed) return;
-      this.#indexed = true;
-    }
-    void this.#env.INDEX.getByName(this.#projectId)
-      .record({ repoPath: this.#repoPath, checkoutId: this.#checkoutId, baseCommit })
-      .catch(() => undefined);
-  }
-
-  get #workspacePath(): string {
-    return checkoutWorkspacePath(this.#checkoutId, this.#repoPath);
+    this.#lazyCreate = posture.lazyCreate;
   }
 
   /** Board-lane paths → the platform's mount-qualified form. */
@@ -408,23 +315,42 @@ class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
     return path.startsWith(prefix) ? path.slice(prefix.length) : null;
   }
 
+  /**
+   * Publishing is the workspace OWNER's act. The tasks app owns only its own
+   * /workspaces/tasks/ naming (boards, shared by every project member); a
+   * lens on any other workspace is a guest — it reads, comments, and edits,
+   * but a commit would publish the mount's ENTIRE dirty set (the owning
+   * agent's uncommitted work included), so the owner acts are refused here.
+   */
+  #assertOwnerAct(operation: string): void {
+    if (!this.#workspacePath.startsWith("/workspaces/tasks/")) {
+      throw new Error(
+        `${operation} is the workspace owner's act — this board is a guest lens on ${this.#workspacePath}; ask the workspace's owner (its agent) to publish`,
+      );
+    }
+  }
+
   async #withWorkspace<T>(operation: (ws: WorkspaceStub) => Promise<T>): Promise<T> {
     return this.#dial.withProject(async (project) => {
       const workspaces = (
         project as unknown as { workspaces: { get(path: string): WorkspaceStub } }
       ).workspaces;
-      // The workspace identity ENCODES the repo (see checkoutWorkspacePath):
-      // the same checkout id against a different repository can never bind
-      // to (and edit) the first repository's workspace.
+      // For boards the workspace identity ENCODES the repo (see
+      // checkoutWorkspacePath): the same checkout id against a different
+      // repository can never bind to (and edit) the first repository's
+      // workspace.
       const ws = workspaces.get(this.#workspacePath);
       try {
-        const result = await operation(ws);
-        this.#announce();
-        return result;
+        return await operation(ws);
       } catch (error) {
-        // Only the workspace-missing error (exact platform phrasing) triggers
-        // lazy creation — a file-level "does not exist" must surface as-is.
-        if (this.#created || !/workspace "[^"]+" does not exist/.test(errorText(error))) {
+        // Only the workspace-missing error (exact platform phrasing) on a
+        // lazily-creating board triggers creation — a file-level "does not
+        // exist" (and ANY error on a plain-get lens) must surface as-is.
+        if (
+          !this.#lazyCreate ||
+          this.#created ||
+          !/workspace "[^"]+" does not exist/.test(errorText(error))
+        ) {
           throw error;
         }
         // Concurrent first-touchers may race create: tolerate its failure and
@@ -436,7 +362,6 @@ class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
         // a transient create failure must not wedge this held capability.
         const result = await operation(ws);
         this.#created = true;
-        this.#announce();
         return result;
       }
     });
@@ -523,7 +448,7 @@ class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
 
   /** The newest page of the workspace's stream events, newest first. */
   async events(limit = 50): Promise<WorkspaceStreamEvent[]> {
-    // A REAL workspace call: on a fresh checkout it throws the
+    // A REAL workspace call: on a fresh board it throws the
     // missing-workspace error, which is what makes #withWorkspace lazily
     // create it — so the stream (and its birth events) exist to read.
     // Probed at the repo mount: "/" is no path in any workspace now.
@@ -633,18 +558,48 @@ class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
   }
 
   async commit(message: string): Promise<unknown> {
+    this.#assertOwnerAct("commit");
     // scope pins the commit to this capability's mount — commits never span
     // mounts, and every project repo is one now.
-    const result = await this.#withWorkspace((ws) =>
-      ws.git.commit({ message, scope: this.#repoPath }),
-    );
-    const commitOid = (result as { commitOid?: unknown } | null)?.commitOid;
-    this.#announce(typeof commitOid === "string" ? commitOid : undefined);
-    return result;
+    return this.#withWorkspace((ws) => ws.git.commit({ message, scope: this.#repoPath }));
   }
 
   log(limit = 5): Promise<unknown> {
     return this.#withWorkspace((ws) => ws.git.log({ limit, scope: this.#repoPath }));
+  }
+
+  /**
+   * Assign an agent to one task, the apps/os way: frontmatter first
+   * (`state: in-progress` + `agent:`, visible to every collaborator through
+   * the live workspace), then ONE commit so a born agent always finds its
+   * durable assignment at HEAD, then birth-if-needed and the kickoff brief.
+   * Commits the mount, so it is an owner act like commit itself.
+   */
+  async assignAgent(path: string): Promise<{ agentPath: string }> {
+    this.#assertOwnerAct("assignAgent");
+    const source = await this.#withWorkspace((ws) => ws.readFile(this.#qualified(path)));
+    if (source === null) throw new Error(`${path} does not exist in this workspace`);
+    const card = parseTaskCard(path, source);
+    if (card.agent !== null) return { agentPath: card.agent };
+    const agentPath = taskAgentPath(this.#repoPath, path);
+    const staged =
+      taskColumnState(card.state) === "in-progress"
+        ? source
+        : setTaskCardState(source, "in-progress");
+    const content = setTaskCardAgent(staged, agentPath);
+    await this.#withWorkspace(async (ws) => {
+      await ws.writeFile(this.#qualified(path), content);
+      await ws.git.commit({ message: `Assign task: ${card.title}`, scope: this.#repoPath });
+    });
+    await this.#dial.withProject(async (project) => {
+      const agent = (
+        project as unknown as { agents: { get(path: string): AgentStub } }
+      ).agents.get(agentPath);
+      const snapshot = await agent.processor.snapshot();
+      if ((snapshot.state?.birthCertificate ?? null) === null) await agent.create();
+      await agent.message(taskAssignmentInstructions(this.#repoPath, path));
+    });
+    return { agentPath };
   }
 }
 

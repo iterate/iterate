@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TaskChangeStatus, TaskChangeSummary } from "../state.ts";
 import { isTaskFilePath, parseTaskCard } from "../tasks-model.ts";
-import { withProject } from "./use-checkout.ts";
+import { withProject, workspaceFor } from "./project-rpc.ts";
 import type { TasksWorkspace, WorkspaceStreamEvent } from "./tasks-api.ts";
+import type { BoardAddress } from "./checkout-shared.ts";
 import { changeAfterDelete, changeAfterWrite, toBoardTask, type BoardTask } from "./board-model.ts";
 
 /**
@@ -46,7 +47,8 @@ export function changeMap(status: unknown, repoPath: string): Map<string, TaskCh
   return map;
 }
 
-export function useWorkspaceBoard(checkoutId: string, repoPath: string) {
+export function useWorkspaceBoard(address: BoardAddress) {
+  const { checkoutId, workspacePath, repoPath } = address;
   const [files, setFiles] = useState<Record<string, string> | null>(null);
   const [changes, setChanges] = useState<Map<string, TaskChangeStatus>>(new Map());
   // Fresh caret presence per path — "who has this card open" (clientIds).
@@ -60,14 +62,9 @@ export function useWorkspaceBoard(checkoutId: string, repoPath: string) {
   const lane = useCallback(
     <T>(operation: (ws: TasksWorkspace) => Promise<T>) =>
       withProject((project) =>
-        operation(
-          (project as { workspace(c: string, r?: string): unknown }).workspace(
-            checkoutId,
-            repoPath,
-          ) as TasksWorkspace,
-        ),
+        operation(workspaceFor(project, { checkoutId, workspacePath, repoPath })),
       ),
-    [checkoutId, repoPath],
+    [checkoutId, workspacePath, repoPath],
   );
 
   // Initial seed: the whole task file set + dirty state, in parallel.
@@ -529,24 +526,30 @@ export function useWorkspaceBoard(checkoutId: string, repoPath: string) {
     return results.every(Boolean);
   }, [changes, revertTask]);
 
+  /** Full reseed (files + status) — the fresh truth after a server-side
+   * mutation outside the board's own lanes (a commit, an agent assignment).
+   * The epoch bumps ensure a poll that started mid-mutation can't wipe it. */
+  const refresh = useCallback(async (): Promise<void> => {
+    mutationEpoch.current++;
+    const [seeded, status] = await Promise.all([
+      lane((ws) => ws.files()),
+      lane((ws) => ws.status()),
+    ]);
+    mutationEpoch.current++;
+    // Same key normalization as the seed — mixed-shape keys would orphan
+    // badges and duplicate cards after the first commit.
+    setFiles(Object.fromEntries(Object.entries(seeded).map(([path, c]) => [boardKey(path), c])));
+    setChanges(changeMap(status, repoPath));
+  }, [lane, repoPath]);
+
   const commit = useCallback(
     async (message: string) => {
       mutationEpoch.current++;
       const result = await lane((ws) => ws.commit(message));
-      const [seeded, status] = await Promise.all([
-        lane((ws) => ws.files()),
-        lane((ws) => ws.status()),
-      ]);
-      // The refetch is the fresh truth; bump again so a poll that started
-      // mid-commit can't wipe the post-commit clean state.
-      mutationEpoch.current++;
-      // Same key normalization as the seed — mixed-shape keys would orphan
-      // badges and duplicate cards after the first commit.
-      setFiles(Object.fromEntries(Object.entries(seeded).map(([path, c]) => [boardKey(path), c])));
-      setChanges(changeMap(status, repoPath));
+      await refresh();
       return result;
     },
-    [lane, repoPath],
+    [lane, refresh],
   );
 
   const subscribeEvents = useCallback(
@@ -565,6 +568,7 @@ export function useWorkspaceBoard(checkoutId: string, repoPath: string) {
     discardAll,
     error,
     files,
+    refresh,
     subscribeEvents,
     ready: files !== null,
     readTask,

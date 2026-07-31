@@ -1,5 +1,5 @@
 import { lazy, Suspense, useState } from "react";
-import { RotateCcwIcon, Trash2Icon } from "lucide-react";
+import { BotIcon, RotateCcwIcon, Trash2Icon } from "lucide-react";
 import { Input } from "@iterate-com/ui/components/input";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@iterate-com/ui/components/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
@@ -24,6 +24,7 @@ import {
 } from "@iterate-com/ui/components/alert-dialog";
 import { stateLabel, type BoardTask } from "../lib/board-model.ts";
 import type { TaskChangeStatus } from "../state.ts";
+import type { BoardAddress } from "../lib/checkout-shared.ts";
 import { projectSlug } from "../lib/project-label.ts";
 import { TaskStateIcon } from "./board.tsx";
 import { TagPicker } from "./tag-picker.tsx";
@@ -52,8 +53,8 @@ const TaskComments = lazy(() =>
  */
 export function WorkspaceTaskSheet({
   task,
-  checkoutId,
-  repoPath,
+  address,
+  guest,
   columns,
   allTags,
   changeStatus,
@@ -65,6 +66,7 @@ export function WorkspaceTaskSheet({
   editorApiRef,
   commentIdentity,
   onApplyTransform,
+  onAssignAgent,
   onLiveContent,
   onChangeState,
   onChangeLabels,
@@ -73,8 +75,9 @@ export function WorkspaceTaskSheet({
   onClose,
 }: {
   task: BoardTask | null;
-  checkoutId: string;
-  repoPath: string;
+  address: BoardAddress;
+  /** Guest lens: reads, comments, and edits — owner acts stay hidden. */
+  guest: boolean;
   columns: string[];
   allTags: string[];
   changeStatus: TaskChangeStatus | undefined;
@@ -94,6 +97,8 @@ export function WorkspaceTaskSheet({
   /** Route a whole-file transform to the live editor or the write lane;
    * resolves whether it landed (the write lane can roll back). */
   onApplyTransform: (transform: (source: string) => string) => Promise<boolean>;
+  /** Owner act (commits the mount) — absent for guests. */
+  onAssignAgent?: () => Promise<void>;
   onLiveContent: (path: string, content: string) => void;
   onChangeState: (state: string) => void;
   onChangeLabels: (labels: string[]) => void;
@@ -111,8 +116,8 @@ export function WorkspaceTaskSheet({
           <SheetBody
             key={task.path}
             task={task}
-            checkoutId={checkoutId}
-            repoPath={repoPath}
+            address={address}
+            guest={guest}
             columns={columns}
             allTags={allTags}
             changeStatus={changeStatus}
@@ -124,6 +129,7 @@ export function WorkspaceTaskSheet({
             editorApiRef={editorApiRef}
             commentIdentity={commentIdentity}
             onApplyTransform={onApplyTransform}
+            onAssignAgent={onAssignAgent}
             onLiveContent={onLiveContent}
             onChangeState={onChangeState}
             onChangeLabels={onChangeLabels}
@@ -139,8 +145,8 @@ export function WorkspaceTaskSheet({
 
 function SheetBody({
   task,
-  checkoutId,
-  repoPath,
+  address,
+  guest,
   columns,
   allTags,
   changeStatus,
@@ -152,6 +158,7 @@ function SheetBody({
   editorApiRef,
   commentIdentity,
   onApplyTransform,
+  onAssignAgent,
   onLiveContent,
   onChangeState,
   onChangeLabels,
@@ -160,8 +167,8 @@ function SheetBody({
   onRequestClose,
 }: {
   task: BoardTask;
-  checkoutId: string;
-  repoPath: string;
+  address: BoardAddress;
+  guest: boolean;
   columns: string[];
   allTags: string[];
   changeStatus: TaskChangeStatus | undefined;
@@ -181,6 +188,8 @@ function SheetBody({
   /** Route a whole-file transform to the live editor or the write lane;
    * resolves whether it landed (the write lane can roll back). */
   onApplyTransform: (transform: (source: string) => string) => Promise<boolean>;
+  /** Owner act (commits the mount) — absent for guests. */
+  onAssignAgent?: () => Promise<void>;
   onLiveContent: (path: string, content: string) => void;
   onChangeState: (state: string) => void;
   onChangeLabels: (labels: string[]) => void;
@@ -190,6 +199,7 @@ function SheetBody({
   onRequestClose: () => void;
 }) {
   const [status, setStatus] = useState("connecting…");
+  const [assigning, setAssigning] = useState(false);
   // One selection shared by the preview's highlights and the comments strip.
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   // The path is editable in place; SheetBody is keyed by task.path, so a
@@ -262,6 +272,19 @@ function SheetBody({
             )}
           </p>
         )}
+        {task.agent !== null && (
+          <p className="text-xs text-muted-foreground">
+            assigned to{" "}
+            <a
+              className="font-mono underline underline-offset-2 hover:text-foreground"
+              href={`https://os.iterate.com/projects/${projectSlug()}/agents/streams${task.agent}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              {task.agent}
+            </a>
+          </p>
+        )}
       </SheetHeader>
       <Tabs defaultValue="editor" className="flex min-h-0 flex-1 flex-col gap-0">
       <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-2 border-b px-4 py-1.5">
@@ -289,6 +312,22 @@ function SheetBody({
         <TagPicker value={task.labels} options={allTags} onChange={onChangeLabels} />
         <div className="ml-auto flex items-center gap-1">
           <span className="font-mono text-[11px] text-muted-foreground">{status}</span>
+          {task.agent === null && !guest && onAssignAgent !== undefined && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-muted-foreground"
+              title="Assign an agent (sets in-progress, commits, and briefs it)"
+              disabled={assigning}
+              onClick={() => {
+                setAssigning(true);
+                void onAssignAgent().finally(() => setAssigning(false));
+              }}
+            >
+              <BotIcon aria-hidden className="size-3.5" />
+              {assigning ? "Assigning…" : "Assign agent"}
+            </Button>
+          )}
           {changeStatus === undefined ? null : (
             <Button
               variant="ghost"
@@ -355,8 +394,7 @@ function SheetBody({
       >
         <WorkspaceTaskEditor
           key={editorEpoch ?? 0}
-          checkoutId={checkoutId}
-          repoPath={repoPath}
+          address={address}
           displayName={commentIdentity?.authorDisplay ?? commentIdentity?.author}
           path={task.path}
           redline={redline ?? true}

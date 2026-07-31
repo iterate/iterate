@@ -1,33 +1,34 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { ClockIcon, FolderGit2Icon, Loader2Icon, PlusIcon } from "lucide-react";
+import { ClockIcon, FolderGit2Icon, Loader2Icon, PlusIcon, TelescopeIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { newCheckoutId } from "../lib/checkout-shared.ts";
-import { listCheckouts, listRepos } from "../lib/use-checkout.ts";
-import type { CheckoutIndexEntry } from "../lib/tasks-api.ts";
+import { listRepos, listWorkspaces } from "../lib/project-rpc.ts";
+import type { WorkspaceListEntry } from "../lib/tasks-api.ts";
 import { CheckoutBreadcrumbs } from "../components/checkout-header.tsx";
 
 export const Route = createFileRoute("/")({ component: Home });
 
 /**
- * Home is the real navigation surface: repos as cards, each listing its
- * checkouts newest-activity-first with relative timestamps, each carrying a
- * prominent "New checkout" call to action. Nothing actionable renders until
- * the lists are actually known — a spinner, never a premature empty state.
+ * Home is the workspace picker: repos as cards, each listing its board
+ * workspaces newest-first with a prominent "New board" call to action, and
+ * below them every OTHER workspace in the project (agents', mostly) — each
+ * openable as a guest lens. Nothing actionable renders until the lists are
+ * actually known — a spinner, never a premature empty state.
  */
 function Home() {
   const navigate = useNavigate();
   const [repos, setRepos] = useState<string[]>([]);
-  const [checkouts, setCheckouts] = useState<CheckoutIndexEntry[]>([]);
+  const [workspaces, setWorkspaces] = useState<WorkspaceListEntry[]>([]);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    void Promise.allSettled([listRepos(), listCheckouts()]).then(([repoResult, indexResult]) => {
+    void Promise.allSettled([listRepos(), listWorkspaces()]).then(([repoResult, listResult]) => {
       if (cancelled) return;
       if (repoResult.status === "fulfilled") setRepos(repoResult.value);
-      if (indexResult.status === "fulfilled") setCheckouts(indexResult.value);
+      if (listResult.status === "fulfilled") setWorkspaces(listResult.value);
       setLoaded(true);
     });
     return () => {
@@ -35,13 +36,15 @@ function Home() {
     };
   }, []);
 
-  const openNewCheckout = (repoPath: string) => {
+  const openNewBoard = (repoPath: string) => {
     void navigate({
       to: "/w/$checkoutId",
       params: { checkoutId: newCheckoutId() },
       search: { group: "folder", q: "", repo: repoPath, task: "" },
     });
   };
+
+  const others = workspaces.filter((entry) => entry.board === null);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -60,12 +63,13 @@ function Home() {
             <div>
               <h1 className="text-xl font-semibold tracking-tight">Task boards</h1>
               <p className="mt-1 text-sm text-muted-foreground">
-                A checkout is a shared working copy of a repo&rsquo;s tasks — everyone on its link
-                edits together, live. Committing flushes the changes to git.
+                A board is a shared workspace over a repo&rsquo;s task files — everyone on its
+                link edits together, live. Committing publishes the changes to the repo&rsquo;s
+                main branch.
               </p>
             </div>
             {repos.map((repoPath) => {
-              const entries = checkouts.filter((entry) => entry.repoPath === repoPath);
+              const entries = workspaces.filter((entry) => entry.board?.repoPath === repoPath);
               return (
                 <section key={repoPath} className="rounded-xl border bg-background shadow-xs">
                   <div className="flex items-center justify-between gap-3 border-b px-5 py-4">
@@ -77,30 +81,32 @@ function Home() {
                         </h2>
                         <p className="text-xs text-muted-foreground">
                           {entries.length === 0
-                            ? "No checkouts yet"
-                            : `${entries.length} checkout${entries.length === 1 ? "" : "s"}`}
+                            ? "No boards yet"
+                            : `${entries.length} board${entries.length === 1 ? "" : "s"}`}
                         </p>
                       </div>
                     </div>
-                    <Button onClick={() => openNewCheckout(repoPath)}>
+                    <Button onClick={() => openNewBoard(repoPath)}>
                       <PlusIcon aria-hidden className="size-4" />
-                      Create new checkout
+                      New board
                     </Button>
                   </div>
                   {entries.length === 0 ? null : (
                     <ul className="divide-y">
                       {entries.map((entry) => (
-                        <li key={entry.checkoutId}>
+                        <li key={entry.path}>
                           <Link
                             to="/w/$checkoutId"
-                            params={{ checkoutId: entry.checkoutId }}
+                            params={{ checkoutId: entry.board!.checkoutId }}
                             search={{ group: "folder", q: "", repo: repoPath, task: "" }}
                             className="flex items-center justify-between gap-3 px-5 py-3 transition-colors hover:bg-muted/50"
                           >
-                            <span className="truncate font-mono text-sm">{entry.checkoutId}</span>
+                            <span className="truncate font-mono text-sm">
+                              {entry.board!.checkoutId}
+                            </span>
                             <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
                               <ClockIcon aria-hidden className="size-3.5" />
-                              {relativeTimeLong(entry.lastSeenAt)}
+                              {relativeTimeLong(entry.createdAt)}
                             </span>
                           </Link>
                         </li>
@@ -110,6 +116,43 @@ function Home() {
                 </section>
               );
             })}
+            {others.length === 0 ? null : (
+              <section className="rounded-xl border bg-background shadow-xs">
+                <div className="flex items-center gap-2.5 border-b px-5 py-4">
+                  <TelescopeIcon aria-hidden className="size-5 text-muted-foreground" />
+                  <div className="min-w-0">
+                    <h2 className="truncate text-sm font-semibold">Other workspaces</h2>
+                    <p className="text-xs text-muted-foreground">
+                      Agents&rsquo; (and other) workspaces — open one as a guest lens: read,
+                      comment, and edit; publishing stays the owner&rsquo;s act.
+                    </p>
+                  </div>
+                </div>
+                <ul className="divide-y">
+                  {others.map((entry) => (
+                    <li key={entry.path}>
+                      <Link
+                        to="/w"
+                        search={{
+                          group: "folder",
+                          q: "",
+                          repo: "",
+                          task: "",
+                          workspace: entry.path,
+                        }}
+                        className="flex items-center justify-between gap-3 px-5 py-3 transition-colors hover:bg-muted/50"
+                      >
+                        <span className="truncate font-mono text-sm">{entry.path}</span>
+                        <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+                          <ClockIcon aria-hidden className="size-3.5" />
+                          {relativeTimeLong(entry.createdAt)}
+                        </span>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
           </div>
         </div>
       )}
@@ -117,8 +160,9 @@ function Home() {
   );
 }
 
-function relativeTimeLong(timestamp: number): string {
-  if (timestamp <= 0) return "just now";
+function relativeTimeLong(createdAt: string): string {
+  const timestamp = Date.parse(createdAt);
+  if (Number.isNaN(timestamp) || timestamp <= 0) return "just now";
   const seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000));
   if (seconds < 60) return "just now";
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;

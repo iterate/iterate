@@ -10,13 +10,17 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as WIndexRouteImport } from './routes/w.index'
 import { Route as WCheckoutIdRouteImport } from './routes/w.$checkoutId'
-import { Route as CollabCheckoutIdRouteImport } from './routes/collab.$checkoutId'
-import { Route as CCheckoutIdRouteImport } from './routes/c.$checkoutId'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const WIndexRoute = WIndexRouteImport.update({
+  id: '/w/',
+  path: '/w/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const WCheckoutIdRoute = WCheckoutIdRouteImport.update({
@@ -24,54 +28,35 @@ const WCheckoutIdRoute = WCheckoutIdRouteImport.update({
   path: '/w/$checkoutId',
   getParentRoute: () => rootRouteImport,
 } as any)
-const CollabCheckoutIdRoute = CollabCheckoutIdRouteImport.update({
-  id: '/collab/$checkoutId',
-  path: '/collab/$checkoutId',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const CCheckoutIdRoute = CCheckoutIdRouteImport.update({
-  id: '/c/$checkoutId',
-  path: '/c/$checkoutId',
-  getParentRoute: () => rootRouteImport,
-} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/c/$checkoutId': typeof CCheckoutIdRoute
-  '/collab/$checkoutId': typeof CollabCheckoutIdRoute
   '/w/$checkoutId': typeof WCheckoutIdRoute
+  '/w/': typeof WIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/c/$checkoutId': typeof CCheckoutIdRoute
-  '/collab/$checkoutId': typeof CollabCheckoutIdRoute
   '/w/$checkoutId': typeof WCheckoutIdRoute
+  '/w': typeof WIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/c/$checkoutId': typeof CCheckoutIdRoute
-  '/collab/$checkoutId': typeof CollabCheckoutIdRoute
   '/w/$checkoutId': typeof WCheckoutIdRoute
+  '/w/': typeof WIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/c/$checkoutId' | '/collab/$checkoutId' | '/w/$checkoutId'
+  fullPaths: '/' | '/w/$checkoutId' | '/w/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/c/$checkoutId' | '/collab/$checkoutId' | '/w/$checkoutId'
-  id:
-    | '__root__'
-    | '/'
-    | '/c/$checkoutId'
-    | '/collab/$checkoutId'
-    | '/w/$checkoutId'
+  to: '/' | '/w/$checkoutId' | '/w'
+  id: '__root__' | '/' | '/w/$checkoutId' | '/w/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  CCheckoutIdRoute: typeof CCheckoutIdRoute
-  CollabCheckoutIdRoute: typeof CollabCheckoutIdRoute
   WCheckoutIdRoute: typeof WCheckoutIdRoute
+  WIndexRoute: typeof WIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -83,6 +68,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/w/': {
+      id: '/w/'
+      path: '/w'
+      fullPath: '/w/'
+      preLoaderRoute: typeof WIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/w/$checkoutId': {
       id: '/w/$checkoutId'
       path: '/w/$checkoutId'
@@ -90,28 +82,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof WCheckoutIdRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/collab/$checkoutId': {
-      id: '/collab/$checkoutId'
-      path: '/collab/$checkoutId'
-      fullPath: '/collab/$checkoutId'
-      preLoaderRoute: typeof CollabCheckoutIdRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/c/$checkoutId': {
-      id: '/c/$checkoutId'
-      path: '/c/$checkoutId'
-      fullPath: '/c/$checkoutId'
-      preLoaderRoute: typeof CCheckoutIdRouteImport
-      parentRoute: typeof rootRouteImport
-    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  CCheckoutIdRoute: CCheckoutIdRoute,
-  CollabCheckoutIdRoute: CollabCheckoutIdRoute,
   WCheckoutIdRoute: WCheckoutIdRoute,
+  WIndexRoute: WIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

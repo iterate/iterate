@@ -1,13 +1,13 @@
 # iterate tasks
 
-A Kanban board over the `tasks/` folder of any iterate project's config repo —
-deployed as a **stateless vessel** at `tasks.iterate.workers.dev` (deployed
-manually with `pnpm run deploy` from this directory; not part of the envs.ts
-fleet, no routes of its own). Imported from the standalone
-[iterate/tasks](https://github.com/iterate/tasks) repo. It never
-holds project secrets or user sessions of its own. Every useful request
-arrives through a reverse proxy in the project's `/repos/config` worker on a
-host like `tasks--<slug>.iterate.app`.
+A Kanban board over the `tasks/**/*.md` files of any repo in an iterate
+project — deployed as a **stateless vessel** at `tasks.iterate.workers.dev`
+(deployed manually with `pnpm run deploy` from this directory; not part of
+the envs.ts fleet, no routes of its own). Originally imported from the
+standalone [iterate/tasks](https://github.com/iterate/tasks) repo. It never
+holds project secrets, user sessions, or data of its own. Every useful
+request arrives through a reverse proxy in the project's `/repos/config`
+worker on a host like `tasks--<slug>.iterate.app`.
 
 Per connection the vessel:
 
@@ -15,35 +15,40 @@ Per connection the vessel:
    `iterate-project-auth` cookie (forwarded by the proxy).
 2. Opens a Cap'n Web WebSocket to `os.iterate.com/api` and authenticates with
    `{ type: "project-app-session", token }`.
-3. Reads/writes `tasks/` markdown in `/repos/config` via `listTaskFiles` /
-   `commitFiles` — the git history of the config repo *is* the board's
-   history, attributed to the connected user.
+3. Forwards every read and write to a platform **workspace** — the project's
+   one path namespace, privately overlaid: every repo is mounted at its own
+   `/repos/**` path, and uncommitted board edits are that workspace's
+   overlay. Commits land on the repo's main via `git.commit({ scope })`,
+   attributed to the connected user.
 
-The board is a **collaborative checkout**: loading `/` creates one and
-redirects to its shareable `/c/<checkout-id>` URL. A checkout is a
-[y-partyserver](https://github.com/cloudflare/partykit) `YServer` Durable
-Object (named `<projectId>:<checkoutId>`) holding an in-DO working copy of
-the repo's task files as one Yjs doc — a `files` map of path → `Y.Text`
-plus a `meta` map with the base commit it was seeded from at first join.
-Everyone on the link edits the same doc over the stock y-protocols
-WebSocket wire (`/api/checkout/<id>`): drags, adds, deletes, and each
-keystroke in the CodeMirror task editor sync live, with presence chips and
-named, colored remote cursors (y-codemirror.next + awareness). The doc
-persists as one update blob in DO storage (debounced `onSave`), so a
-checkout survives eviction.
+The board is a **lens on a workspace**, addressed two ways:
 
-Changed cards wear an A/M mark against the base commit, pending deletions
-stay visible (and reversible) in a strip above the board, and the Commit
-button — or a 60s idle autosave — POSTs to the DO, which flushes the doc's
-diff against base as ONE `commitFiles` batch attributed to the poster:
-typed message, AI-generated one (`/generate-message` via `ai.run`), or a
-deterministic summary. The new base syncs back through the doc, clearing
-everyone's marks. External commits to the repo are ignored while a checkout
-lives — start a fresh checkout to pick up a new HEAD.
+- `/w/<board-id>?repo=/repos/<name>` — the app's own boards. The board id
+  plus repo derive a workspace path under `/workspaces/tasks/`, lazily
+  created on first use; everyone on the link shares it.
+- `/w?workspace=/workspaces/…&repo=/repos/<name>` — a lens on an EXISTING
+  workspace, plain `get` (nothing is created). This is the deep-link form
+  agents mint with `itx.worker.tasks.link({ workspace, repo, task? })`.
+  Outside the app's own `/workspaces/tasks/` naming the board is a
+  **guest**: read, comment, and edit — never Commit or Discard all (a
+  commit would publish the mount's entire dirty set, discard would wipe the
+  owning agent's uncommitted work). Publishing stays the workspace owner's
+  act.
 
-There is no pairing form, no OIDC client, and no capability door. The only
-DO state is the Yjs blob; auth is per-join and per-op (the token is
-verified by using it against the platform).
+Board reads seed from `glob` + batched `readFiles`; `git.status()` IS the
+diff (changed cards wear A/M marks, pending deletions stay reversible in a
+strip above the board); the detail editor is the platform's collaborative
+session (rebase model, redlines), shared keystroke-for-keystroke with
+agents editing the same workspace. The Commit button turns the mount's
+dirty set into ONE commit on that repo's main. The sidebar and home page
+list workspaces from the platform's stream catalog — board workspaces
+parse back into their (board id, repo) address; agents' workspaces appear
+as guest lenses.
+
+There is no pairing form, no OIDC client, no capability door, and no
+storage: the old Yjs checkout Durable Object and its index DO are
+tombstoned in `wrangler.jsonc`. Auth is per-connection and per-op (the
+token is verified by using it against the platform).
 
 ## Task comments
 
@@ -96,12 +101,12 @@ redirects, request bodies, and WebSocket upgrades. Then open
 member gate; the board UI is this app at `/`.
 
 Drag cards, add tasks, click a card to edit its markdown together —
-everyone on the checkout link sees the same board, each other's chips, and
+everyone on the board link sees the same board, each other's chips, and
 each other's cursors in the editor. Commit from the Commit button (the ▾
-panel reviews the change set, writes an AI commit message, or discards
-everything), or let the 60s idle autosave commit with a generated summary.
-A checkout is pinned to the base commit it was seeded from; `/` always
-starts a fresh one from HEAD.
+panel reviews the change set, writes a commit message, or discards
+everything), or opt into the 60s idle auto-commit. Reads float at each
+repo's HEAD (the workspace overlay carries only your uncommitted changes);
+Home starts a fresh board or opens any existing workspace.
 
 Hitting `tasks.iterate.workers.dev` directly serves only a landing page with
 the same proxy snippet — no project context, no board.
@@ -121,7 +126,7 @@ Point it at a local os dev server (`http://localhost:<port>`) to run fully
 local instead. Either way the vessel does not mint sessions: requests need
 the `x-itx-project-id` header and a valid `iterate-project-auth` cookie
 stamped on them (a project's proxy does this; headless, use
-`scripts/probe-board-authed.mjs`).
+`scripts/probe-board.mjs`).
 
 ## Developing against a live project
 
@@ -159,12 +164,10 @@ Know before you dogfood:
   routes *every* member's traffic — including their session cookies — to
   your laptop while it is set. Per-user routing sends only your own sessions
   to the tunnel; everyone else stays on the deployed vessel.
-- **Commits are real.** The board's 60s idle autosave turns test drags into
-  actual commits on the project's config repo, attributed to you. Revertable
-  via git, but be conscious of it on a production project.
-- **Live agents orphan local edits.** The board re-reads HEAD every 30s; a
-  HEAD moved by an agent or another member discards your uncommitted
-  working-tree edits (by design — see above).
+- **Commits are real.** A board commit lands on the project's actual repo,
+  attributed to you (and the 60s auto-commit, when you opt in, commits on
+  its own). Revertable via git, but be conscious of it on a production
+  project.
 - **The tunnel exposes vite dev, not project data.** Direct hits on the
   tunnel get only the landing page, and a forged project header without a
   valid cookie dies at os. What is public is the dev server itself (this

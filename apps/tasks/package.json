@@ -41,7 +41,6 @@
     "prepack": "pnpm build:package"
   },
   "devDependencies": {
-    "@codemirror/commands": "^6.10.4",
     "@codemirror/state": "^6.7.1",
     "@codemirror/view": "^6.43.6",
     "@cloudflare/vite-plugin": "catalog:cloudflare",
@@ -60,19 +59,14 @@
     "captun": "https://github.com/iterate/captun/releases/download/v0.0.3-websocket.6aa1207/captun-0.0.3.tgz",
     "iterate": "workspace:*",
     "lucide-react": "^0.553.0",
-    "partyserver": "^0.5.8",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "y-codemirror.next": "^0.3.5",
-    "y-partyserver": "^2.2.0",
-    "y-protocols": "^1.0.7",
     "yaml": "^2.8.0",
     "tailwindcss": "^4.3.2",
     "typescript": "^5.9.2",
     "vite": "^8.0.16",
     "vitest": "^4.1.10",
     "wrangler": "catalog:cloudflare",
-    "ws": "^8.21.1",
-    "yjs": "^13.6.31"
+    "ws": "^8.21.1"
   }
 }
