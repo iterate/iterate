@@ -2,7 +2,7 @@
 
 This started as the two-worker-split assessment; expanded (per Jonas) into a full catch-up: what the
 kernel is now, an architecture outline, a code breakdown, what was considered & discarded, and the split
-itself. Read §1–§4 for the catch-up; §5 onward is the split.
+itself. Read §1–§6 for the catch-up + architecture; §7 is the split itself.
 
 ---
 
@@ -15,40 +15,46 @@ iterate model — the "simplest possible version" — living on branch `wip/kern
 runs in Jonas's personal account on `*.mispwoso.com`. Production `apps/os` is untouched throughout.
 
 **The core idea.** ONE worker that: routes a hostname → a project, optionally verifies who you are at a
-**wall**, and hands a **confined config worker** (userspace, run via Cloudflare Worker Loader) a single
-capability — `env.ITX` — plus one **egress door**. Everything the project touches (streams, secrets, AI,
-the outside world) goes through that door. Hosted vs. self-host is **config only** (`APP_CONFIG`).
+**wall** (`auth-wall.ts`), and hands a **confined config worker** (userspace, run via Cloudflare Worker
+Loader) a single capability — `env.ITX` — plus one **egress door**. Everything the project touches
+(streams, secrets, AI, the outside world) goes through that door. Hosted vs. self-host is **config only**
+(`APP_CONFIG`).
+
+**Deployed workers (same bundle, config-only differences):**
+
+| worker            | CF account            | hostnames                                                                                                                 | config (wall · directory)                                        |
+| ----------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `kernel-selfhost` | prd `04b3…`           | `iterate.shiterate.com` (control plane) · `*.shiterate.com` (projects) · `niterate.com`→bob (standing custom-domain demo) | Access + email-OTP · kv                                          |
+| `kernel`          | prd `04b3…`           | `*.templestein.iterate2.app` · workers.dev                                                                                | Access + auth.iterate.com · auth                                 |
+| `kernel-personal` | **personal `05958…`** | `*.mispwoso.com` · workers.dev                                                                                            | none (wide-open) · kv                                            |
+| `kernel-mini-os`  | prd `04b3…`           | `kernel-mini-os.…workers.dev`                                                                                             | — (the dashboard _vessel_, a TanStack Start app; not the kernel) |
+| `kernel-dev`      | local only            | `*.localhost:<port>` (`pnpm dev`)                                                                                         | none · kv                                                        |
 
 **Recent sequence (all built + proven live, each committed):**
 
 - **Routing table** — hostname→project via config + KV, before the `<slug>.<hostBase>` convention.
-- **`/mcp`** — a control-plane MCP surface, sibling to `/api` (list/create/reach projects; proven via the
-  official MCP Inspector CLI _and_ the Claude CLI).
-- **R1 egress** — two-level door + `{{secret:…}}` substitution: the **project** door (its own secrets) →
-  the **control-plane** door (first-party/"platform" secrets, origin-pinned + metered). This door is the
-  concrete seam between a _generic_ control plane and the _iterate product_.
-- **R2 streams** — a durable-log Durable Object (append/read).
-- **R3 ai** — AI as a per-capability-sourced capability (local `env.AI` vs a metered remote). Key finding:
+- **`/mcp`** — control-plane MCP surface, sibling to `/api` (list/create/reach projects). Now on the
+  official `@modelcontextprotocol/server` library (proven via the MCP Inspector CLI _and_ the Claude CLI).
+- **egress + secrets** — `itx.secrets` write + placeholder substitution at the egress door (the apps/os
+  `getSecret("…")` model): the project door substitutes the project's own secrets; the control-plane door
+  substitutes first-party/"platform" secrets (origin-pinned + metered).
+- **streams** — a durable-log Durable Object on the **canonical apps/os contract** (`StreamEventInput` →
+  offset + idempotency + ephemeral; delivery spine stubbed).
+- **ai** — AI as a per-capability-sourced capability (local `env.AI` vs a metered remote). Finding:
   _remote-sourcing a capability == egress through the control plane with a first-party key_ — so
   per-capability sourcing and first-party metered secrets are **one mechanism**.
-- **R4 script exec + dynamic capabilities** — MCP `run_script`/`provide`/`invoke`, confined via the loader.
-- **Thermonuclear reviews (3 adversarial agents)** → **fixed a critical live hole** (anonymous callers
+- **script exec + dynamic capabilities** — MCP `run_script`/`provide`/`invoke`, confined via the loader
+  (the apps/os `exec_typescript` model).
+- **thermonuclear reviews (3 adversarial agents)** → **fixed a critical live hole** (anonymous callers
   could run code in any project on non-`auth` deployments — now gated).
-- **D-C** — grouped the product config under `AppConfig.product` (the iterate-product boundary is now a
-  key, not a convention).
-- **D-B** — adopted apps/os's **canonical stream contract** (`StreamEventInput`/`StreamEvent` from
-  `iterate/processors`, type-only import): offset + idempotency + ephemeral. Delivery spine stubbed.
-- **D-A** — **unified the two project surfaces** into one nested capability tree
-  (`project.streams.get(path)` / `.secrets` / `.ai`) shared by the capnweb `Project` and the loopback
-  `ProjectEntrypoint`.
-- **Security follow-ups** — optional origin-pin for project secrets; gated `create_project`.
-- **Two-worker split, step 1** — named the runner interface in-worker (this doc, §5+).
+- **D-C · D-B · D-A · security · reserved-host** — see §4 for full subsections (options, problem, code).
+- **two-worker split, step 1** — named the runner interface in-worker (§5+).
 
-~48 tests green throughout; typecheck clean; nothing merged.
+~55 tests green throughout; typecheck clean; nothing merged.
 
 ---
 
-## 2. Architecture outline (current — one worker, two logical roles)
+## 2. Architecture outline (current — one worker, two logical parts)
 
 ```
                     Cloudflare edge (one Worker: kernel-selfhost / kernel / kernel-personal)
@@ -61,8 +67,8 @@ the outside world) goes through that door. Hosted vs. self-host is **config only
      │   5. dashboard-- → serveDashboard (reverse-proxy to the vessel)                        │
      │   6. else        → dialRunner(ctx).serve(...)  ─────────────┐                          │
      └────────────────────────────────────────────────────────────┼──────────────────────────┘
-   CONTROL-PLANE role                                              │  PROJECT-RUNNER role
-   · wall.ts        verify injected JWT (or wide open)             ▼
+   CONTROL-PLANE part                                              │  PROJECT-RUNNER part
+   · auth-wall.ts   verify injected JWT (or wide open)             ▼
    · directory.ts   which projects + membership (open/kv/auth)   ProjectRunner (WorkerEntrypoint)
    · routing.ts     hostname → project (config + KV)               · serve()     load+serve config worker
    · Os/Session/    the /api capnweb tree front desk               · runScript() exec, confined
@@ -80,7 +86,7 @@ the outside world) goes through that door. Hosted vs. self-host is **config only
    KV: DIRECTORY_KV · ROUTING_KV · SECRETS_KV (+ meter counters)
 ```
 
-**The two logical roles** (one physical worker today; the split peels the CP off):
+**The two logical parts** (one physical worker today; the split peels the CP off):
 
 - **Control plane** — knows _many_ projects: ingress, wall, directory, routing, `/api` front, `/mcp`,
   the egress door's control-plane half, dashboard proxy. Holds no project data.
@@ -93,7 +99,119 @@ too, loopback). See `topologies-and-axes.md`.
 
 ---
 
-## 3. Code breakdown (apps/kernel, LOC; ~30–40% is explanatory comment)
+## 3. The auth path — how `itx.projects.list()` / `itx.project.get()` know what you can access
+
+**Short answer to "does the wall swap a small JWT for a bigger one?": No.** The wall (`auth-wall.ts`) only
+**verifies** the JWT an ingress proxy (Cloudflare Access) injected — it reads identity (`sub` / `email`),
+nothing more. It never mints or enlarges a token. "What projects can I reach" is **not** carried in a
+JWT — it's resolved, per call, by the **directory**. `itx.projects.list()` / `.get()` are plain ITX/RPC
+calls, not tokens.
+
+**The exact code path** (capnweb over `/api`, or the in-worker loopback — same tree):
+
+```
+client → /api → Os.authenticate(creds)         kernel.ts  — verifies the wall JWT (or anonymous)
+              → Session(caller, directory)      kernel.ts  — identity baked in once
+              → session.projects                kernel.ts  — ProjectCollection(caller, directory)
+              → .list()  / .get(slug)           kernel.ts  — delegates to ↓
+              → directory.list(caller)          directory.ts  ← THE authority (pluggable)
+                directory.access(caller, slug)
+```
+
+- **Where the code lives:** the tree (`Os`/`Session`/`ProjectCollection`) is `kernel.ts`; the authority is
+  `directory.ts`. The caller is `{ credentials: [...] }` — the verified wall JWT decoded for `sub`/`email`.
+- **How it knows access — depends on the `directory` provider (config):**
+  - `open` — everything reachable (zero-config).
+  - `kv` / `local` (single-tenant self-host) — existence only; a project you name exists, no per-user
+    membership (you're on your own LAN; that's the model).
+  - `auth.iterate.com` (multi-tenant) — the real membership check: `grantsFor(auth, caller)` decodes the
+    caller's verified JWT for `custom.sub` (auth's user id, mapped in by Access) or falls back to the
+    verified `email`, then calls **`env.AUTH.getUserGrants({userId})`** (or `getUserGrantsByEmail`) over a
+    **same-account service binding** to the auth worker. The **auth worker (auth.iterate.com) is the source
+    of truth** for which projects/orgs a user has — not a claim in the JWT.
+
+So: the JWT proves _who you are_; the directory (→ the auth worker, in multi-tenant) answers _what you can
+reach_, freshly, on every `list`/`get`. No token enlargement, no stale grants baked into a cookie.
+
+**Future `itx.organisations` (or any new authority-backed collection) — same shape, no new token:** add an
+`organisations` getter on `Session` returning an `OrganisationCollection` (mirroring `ProjectCollection`),
+backed by a new directory method that (for the `auth` provider) calls a new AuthWorker RPC, e.g.
+`env.AUTH.getUserOrganizations({userId})`. It reads the same verified caller, asks the same authority. The
+pattern is: **`Session.<thing>` → a Collection RpcTarget → the directory → (multi-tenant) an AuthWorker RPC
+over the service binding.** Nothing rides in the JWT except identity.
+
+---
+
+## 4. The recent changes explained (problem · options · code)
+
+Written because Jonas wasn't in the room for these. Each: the problem, the options weighed, what was
+chosen, and a code sketch.
+
+### D-C — group the iterate-product config under `AppConfig.product`
+
+- **Problem:** which config makes a control plane "the iterate product" (first-party keys, billing,
+  integrations) vs. a generic/self-host one? It was scattered (top-level `platformSecrets`), so the
+  boundary was a convention, not a thing.
+- **Options:** (a) leave it scattered + document; (b) a boolean `isIterateProduct` flag; (c) **group all
+  product config under one `product` key**. Chose (c) — the _presence_ of the key IS the boundary.
+- **Code:** `AppConfig.product?: { platformSecrets?: PlatformSecret[] }` (grows to hold integrations +
+  billing). "Generic control plane" = literally `!cfg.product`. Egress reads `cfg.product?.platformSecrets`.
+
+### D-B — adopt apps/os's canonical stream contract (don't reinvent it)
+
+- **Problem:** the kernel's first stream DO had a made-up shape (`{seq,ts,type,data}`). apps/os's real
+  streams have offsets, idempotency, ephemeral, reduce/deliver — building on a fake shape means a rewrite
+  at migration.
+- **Options:** (a) keep the toy shape; (b) **import the apps/os storage engine** (`StreamEventLog`); (c)
+  **import the contract TYPES only** and implement storage. Spiked (b): the engine lives in apps/os (not
+  the `iterate` package) and drags `sqlfu` + workspace deps into the pure-play kernel — rejected. Chose
+  (c): `import type { StreamEventInput, StreamEvent } from "iterate/processors"` (type-only ⇒ zero runtime
+  dep) and ~140 lines of SQLite storage against it.
+- **Code:** `append(input: StreamEventInput): StreamEvent` with `offset` (SQLite autoincrement, eviction-
+  safe via `sqlite_sequence`), `idempotencyKey` UNIQUE (re-append returns the committed event), `ephemeral`,
+  ISO `createdAt`. Delivery spine (subscription cursors, reduce/fold, offset-CAS) **stubbed** — the
+  _interface_ is real, only _delivery_ is deferred, so the future migration is a drop-in.
+
+### D-A — unify the two project surfaces into one capability tree
+
+- **Problem:** there were TWO disjoint surfaces — the capnweb `Project` (only `create`/`mapHostname`) and a
+  flat `ProjectEntrypoint` (`streamAppend`/`aiRun`/`setSecret`…). The promised nested tree was never built;
+  the two didn't even overlap.
+- **Options:** (a) keep both + a hand-maintained mirror; (b) **one nested `RpcTarget` tree** shared by both
+  doors. Chose (b) — capnweb's `RpcTarget` IS `cloudflare:workers`', so one class tree serves both
+  transports (promise-pipelined over the loopback).
+- **Code:** `capabilities.ts` `ProjectCapabilities` with getters `streams` / `secrets` / `ai`. Both the
+  capnweb `Project` and the loopback `ProjectEntrypoint` expose it. `ProjectEntrypoint` shrank to
+  `whoami` + the egress-door `fetch` + those getters. Userspace now writes
+  `env.ITX.streams.get(path).append(input)` / `.secrets.set()` / `.ai.run()`.
+
+### Security follow-ups (from the thermonuclear reviews)
+
+- **Problem:** on a WALLED deployment, `/mcp` can be reached on a host Cloudflare Access doesn't front →
+  an anonymous internet caller could `run_script` / `create_project` in any project. Also project secrets
+  substituted for any destination (a script could exfiltrate its own key).
+- **Options:** gate at the directory (too coarse — kv is single-tenant by design) vs. **gate the write
+  surface**. Chose: `scriptingAllowed({ walled, authenticated })` — walled + anonymous ⇒ scripting/create
+  withheld; wide-open (LAN/Pi) stays on. Plus **optional** `allowedOrigins` on project secrets (opt-in
+  origin-pin), and `redirect:"manual"` at the egress door (a pinned origin can't 302 a secret away).
+- **Code:** `scriptingAllowed(...)` gates both the scripting façade and `create_project`;
+  `secrets.set(name, value, allowedOrigins?)`.
+
+### Reserved control-plane host (ADR 0031) — one hostname for self-host
+
+- **Problem:** every subdomain was interpreted as a project slug, so the control-plane console + a
+  custom-domain scheme seemed to need extra domains.
+- **Options:** (a) a second domain for the console; (b) **a reserved control-plane host** resolved before
+  the slug convention. Chose (b).
+- **Code:** `AppConfig.controlPlaneHost` (e.g. `iterate.shiterate.com`) → served as the console, not a
+  project; `/api`+`/mcp` are host-agnostic so they answer there too. Custom domains: a route on a custom
+  apex (`bob.com`→bob) also serves `docs.bob.com` as bob's `docs` app (one level). Proven live via worker
+  routes + the KV table (`niterate.com`→bob). From the worker's view, self-host worker-routes and
+  iterate-hosted Cloudflare-for-SaaS look identical — same `Host → {projectId, app}` lookup.
+
+---
+
+## 5. Code breakdown (apps/kernel, LOC; ~30–40% is explanatory comment)
 
 | component                | file                     |        LOC | what it is                                                                                                                                               |
 | ------------------------ | ------------------------ | ---------: | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -107,7 +225,7 @@ too, loopback). See `topologies-and-axes.md`.
 | dynamic                  | `dynamic.ts`             |        108 | script execution + dynamic-capability registry + the scripting security gate                                                                             |
 | project-app-session      | `project-app-session.ts` |         98 | the narrow, 15-min, per-project on-behalf-of token                                                                                                       |
 | routing                  | `routing.ts`             |         69 | hostname→project table (config + KV)                                                                                                                     |
-| wall                     | `wall.ts`                |         47 | identity: verify an injected JWT, or wide-open                                                                                                           |
+| wall                     | `auth-wall.ts`           |         47 | identity: verify an injected JWT, or wide-open                                                                                                           |
 | **src total (non-test)** |                          | **~2,020** |                                                                                                                                                          |
 | tests                    | `*.test.ts` × 6          |       ~670 | unit + a real-workerd e2e (`kernel.e2e.test.ts`, 221)                                                                                                    |
 | dashboard vessel         | `mini-apps/os/**`        |       ~274 | the separately-deployed dashboard app (a TanStack Start remote app)                                                                                      |
@@ -122,7 +240,7 @@ in). The whole clean-room kernel is ~2,000 — the simplification is real, not c
 
 ---
 
-## 4. Considered and discarded (the forks that shaped this)
+## 6. Considered and discarded (the forks that shaped this)
 
 - **One identical bundle + a `role` knob** (control-plane/runner/both) — _discarded._ Byte-identical only
   helps frequently-invoked workers; some workers are necessarily large (ESBuild-in-a-worker), and the
@@ -149,7 +267,7 @@ in). The whole clean-room kernel is ~2,000 — the simplification is real, not c
 
 ---
 
-## 5. The two-worker split
+## 7. The two-worker split
 
 ## ✅ STEP 1 DONE + PROVEN LIVE (2026-07-31) — the runner interface is named in-worker
 
