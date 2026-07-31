@@ -39,11 +39,14 @@ export interface MicSourceOptions {
 export class MicSource extends EventEmitter {
   /** Wall time (performance.now) when the last non-silence synthetic frame was emitted. */
   utteranceEndAt: number | null = null;
+  /** One entry per drained synthetic utterance (performance.now at last speech frame). */
+  utteranceEnds: number[] = [];
   /** When true, frames are emitted as silence instead of mic/synthetic content. */
   muted = false;
   private stopped = false;
   private timer: NodeJS.Timeout | undefined;
   private proc: ChildProcess | undefined;
+  private reservoir = Buffer.alloc(0);
 
   constructor(private options: MicSourceOptions = {}) {
     super();
@@ -54,11 +57,14 @@ export class MicSource extends EventEmitter {
     else this.startReal();
   }
 
+  /** Queue more synthetic speech (barge-in tests inject a second utterance mid-call). */
+  inject(pcm: Buffer, preSilenceMs = 0) {
+    const pre = Buffer.alloc((BYTES_PER_SEC * preSilenceMs) / 1000);
+    this.reservoir = Buffer.concat([this.reservoir, pre, pcm]);
+  }
+
   private startSynthetic(pcmPath: string) {
-    const pcm = fs.readFileSync(pcmPath);
-    const pre = Buffer.alloc((BYTES_PER_SEC * (this.options.preSilenceMs ?? 200)) / 1000);
-    const speech = Buffer.concat([pre, pcm]);
-    let offset = 0;
+    this.inject(fs.readFileSync(pcmPath), this.options.preSilenceMs ?? 200);
     const t0 = performance.now();
     let tick = 0;
     const loop = () => {
@@ -66,14 +72,17 @@ export class MicSource extends EventEmitter {
       // Catch-up loop so timer drift never changes the audio clock.
       while ((tick + 1) * FRAME_MS <= performance.now() - t0 + FRAME_MS / 2) {
         let frame: Buffer;
-        if (offset < speech.length) {
-          const slice = speech.subarray(offset, offset + FRAME_BYTES);
+        if (this.reservoir.length > 0) {
+          const slice = this.reservoir.subarray(0, FRAME_BYTES);
           frame =
             slice.length === FRAME_BYTES
               ? Buffer.from(slice)
               : Buffer.concat([slice, Buffer.alloc(FRAME_BYTES - slice.length)]);
-          offset += FRAME_BYTES;
-          if (offset >= speech.length) this.utteranceEndAt = performance.now();
+          this.reservoir = this.reservoir.subarray(slice.length);
+          if (this.reservoir.length === 0) {
+            this.utteranceEndAt = performance.now();
+            this.utteranceEnds.push(this.utteranceEndAt);
+          }
         } else {
           frame = Buffer.alloc(FRAME_BYTES);
         }
