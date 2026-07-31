@@ -1,4 +1,4 @@
-import { exportJWK, generateKeyPair } from "jose";
+import { decodeJwt, exportJWK, generateKeyPair } from "jose";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { semaphoreEnvs } from "../../envs.ts";
 import { createSemaphoreTokenProvider } from "./semaphore-token.ts";
@@ -28,5 +28,6 @@ describe("createSemaphoreTokenProvider", () => {
     const refreshed = await provider();
 
     expect(refreshed).not.toBe(first);
+    expect(decodeJwt(refreshed).iat).toBeGreaterThan(decodeJwt(first).iat ?? 0);
   });
 });

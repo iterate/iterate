@@ -7,6 +7,7 @@ import {
   persistedEnvironmentState,
   reconcileEnvironmentState,
   recoverInterruptedEnvironmentState,
+  wasEnvironmentDestroyInterrupted,
   type PersistedEnvironmentState,
 } from "./state.ts";
 
@@ -123,24 +124,54 @@ describe("durable environment lifecycle", () => {
   });
 
   test("turns an operation interrupted by eviction or deployment into a durable failure", () => {
-    expect(
-      recoverInterruptedEnvironmentState(
-        {
-          stage: "preview_18",
-          lifecycle: "destroying",
-          operationStartedAt: "2026-07-30T12:00:00.000Z",
-          progress: [],
-        },
-        "2026-07-30T12:01:00.000Z",
-      ),
-    ).toEqual({
+    const state = recoverInterruptedEnvironmentState(
+      {
+        stage: "preview_18",
+        lifecycle: "destroying",
+        operationId: "destroy-1",
+        operationStartedAt: "2026-07-30T12:00:00.000Z",
+        progress: [],
+      },
+      "2026-07-30T12:01:00.000Z",
+    );
+    expect(state).toEqual({
       stage: "preview_18",
       lifecycle: "failed",
+      operationId: "destroy-1",
       operationStartedAt: "2026-07-30T12:00:00.000Z",
       operationFinishedAt: "2026-07-30T12:01:00.000Z",
       lastError: "Environment manager restarted while destroying; retry the operation.",
       progress: [],
     });
+    expect(wasEnvironmentDestroyInterrupted(state, "destroy-1")).toBe(true);
+    expect(wasEnvironmentDestroyInterrupted(state, "destroy-2")).toBe(false);
+    expect(
+      wasEnvironmentDestroyInterrupted(
+        {
+          ...state,
+          lastError: "Cloudflare rejected one resource deletion.",
+        },
+        "destroy-1",
+      ),
+    ).toBe(false);
+  });
+
+  test("does not classify another interrupted lifecycle as resumable destruction", () => {
+    expect(
+      wasEnvironmentDestroyInterrupted(
+        recoverInterruptedEnvironmentState(
+          {
+            stage: "preview_18",
+            lifecycle: "deploying",
+            operationId: "deploy-1",
+            operationStartedAt: "2026-07-30T12:00:00.000Z",
+            progress: [],
+          },
+          "2026-07-30T12:01:00.000Z",
+        ),
+        "deploy-1",
+      ),
+    ).toBe(false);
   });
 
   test("preserves an explicitly completed partial destroy batch across restarts", () => {

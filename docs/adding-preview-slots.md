@@ -299,8 +299,8 @@ This invalidates existing preview project-app sessions. Never remove a child
 override before `_shared/preview` is present and inherited by that child.
 
 Do not run `pnpm auth:sync-clients`. That older command can point every target
-at the Auth config wrapping the command; it is not the isolated preview-stack
-provisioner.
+at the Auth config wrapping the command; it is not the per-slot secret rotation
+procedure above.
 
 ## 4. Create integration apps
 

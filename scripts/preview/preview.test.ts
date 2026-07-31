@@ -2133,7 +2133,7 @@ describe("claimEnvironmentConfigLease", () => {
       renew,
     });
 
-    const { lease, stackWasDestroyed } = await claimEnvironmentConfigLease({
+    const { lease, environmentWasDestroyed } = await claimEnvironmentConfigLease({
       destroyEnvironment,
       holder: "pr-1600",
       leaseMs: 1000,
@@ -2152,7 +2152,7 @@ describe("claimEnvironmentConfigLease", () => {
     );
     expect(semaphore.acquire).not.toHaveBeenCalled();
     expect(destroyEnvironment).not.toHaveBeenCalled();
-    expect(stackWasDestroyed).toBe(false);
+    expect(environmentWasDestroyed).toBe(false);
   });
 
   test("rejects untracked duplicate leases instead of guessing from holder text", async () => {
@@ -2194,7 +2194,7 @@ describe("claimEnvironmentConfigLease", () => {
       renew,
     });
 
-    const { lease, stackWasDestroyed } = await claimEnvironmentConfigLease({
+    const { lease, environmentWasDestroyed } = await claimEnvironmentConfigLease({
       destroyEnvironment: noopDestroyPreviewEnvironment,
       holder: "pr-1600",
       leaseMs: 1000,
@@ -2210,7 +2210,7 @@ describe("claimEnvironmentConfigLease", () => {
     );
     expect(acquireSpecific).toHaveBeenCalledWith(expect.not.objectContaining({ force: true }));
     expect(semaphore.acquire).not.toHaveBeenCalled();
-    expect(stackWasDestroyed).toBe(true);
+    expect(environmentWasDestroyed).toBe(true);
   });
 
   test("moves to a fresh slot when someone else now holds the recorded one", async () => {
@@ -2228,7 +2228,7 @@ describe("claimEnvironmentConfigLease", () => {
       renew,
     });
 
-    const { lease, stackWasDestroyed } = await claimEnvironmentConfigLease({
+    const { lease, environmentWasDestroyed } = await claimEnvironmentConfigLease({
       destroyEnvironment: noopDestroyPreviewEnvironment,
       holder: "pr-1600",
       leaseMs: 1000,
@@ -2245,10 +2245,10 @@ describe("claimEnvironmentConfigLease", () => {
         holder: "pr-1600",
       }),
     );
-    expect(stackWasDestroyed).toBe(true);
+    expect(environmentWasDestroyed).toBe(true);
   });
 
-  test("reports a destroyed stack when a fresh acquire returns the recorded slug", async () => {
+  test("reports a destroyed environment when a fresh acquire returns the recorded slug", async () => {
     const destroyEnvironment = vi.fn(async () => {});
     const renew = vi
       .fn()
@@ -2262,7 +2262,7 @@ describe("claimEnvironmentConfigLease", () => {
       renew,
     });
 
-    const { lease, stackWasDestroyed } = await claimEnvironmentConfigLease({
+    const { lease, environmentWasDestroyed } = await claimEnvironmentConfigLease({
       destroyEnvironment,
       holder: "pr-1600",
       leaseMs: 1000,
@@ -2272,7 +2272,7 @@ describe("claimEnvironmentConfigLease", () => {
     });
 
     expect(lease.slug).toBe("preview-2");
-    expect(stackWasDestroyed).toBe(true);
+    expect(environmentWasDestroyed).toBe(true);
     expect(destroyEnvironment).toHaveBeenCalledOnce();
   });
 
@@ -2945,6 +2945,26 @@ describe("lease ownership during acquire", () => {
     expect(renew).toHaveBeenCalledTimes(2);
   });
 
+  test("exposes an exact renewal check for every destructive phase boundary", async () => {
+    const destructivePhase = vi.fn();
+    const semaphore = fakeSemaphore();
+
+    await withLeaseFence({
+      lease: fakeLease(),
+      leaseMs: 3_000,
+      semaphore,
+      operation: async (_signal, verifyOwnership) => {
+        await verifyOwnership();
+        destructivePhase();
+      },
+    });
+
+    expect(semaphore.renew).toHaveBeenCalledTimes(3);
+    expect(semaphore.renew.mock.invocationCallOrder[1]).toBeLessThan(
+      destructivePhase.mock.invocationCallOrder[0] as number,
+    );
+  });
+
   test("rejects a mismatched renewal response as control-plane drift", async () => {
     const semaphore = fakeSemaphore({
       renew: vi.fn(async () => fakeLease({ leaseId: crypto.randomUUID() })),
@@ -3173,7 +3193,7 @@ describe("assignEnvironmentConfigLease", () => {
     expect(result.outcome).toBe("assigned");
     expect(result.lease.slug).toBe("preview-2");
     expect(result.changedFromSlug).toBeNull();
-    expect(result.stackWasDestroyed).toBe(true);
+    expect(result.environmentWasDestroyed).toBe(true);
   });
 
   test("explains who holds a requested slot instead of taking it without --force", async () => {

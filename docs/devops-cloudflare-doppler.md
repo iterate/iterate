@@ -44,6 +44,11 @@ checkout's Wrangler generators. The singleton manager lives in the preview
 account and receives preview and production account tokens through separate
 Cloudflare Secrets Store bindings.
 
+Every supported deployed-environment path runs `pnpm infra deploy` immediately
+before Wrangler config generation. A checkout's JSON file is disposable input,
+not remote state: after destroying the environment from another checkout,
+refresh it with `pnpm infra deploy` before invoking Wrangler there.
+
 The Cloudflare resource lifecycle is deliberately fresh-stack-only. There is
 no repository-owned resource import/adoption, Alchemy state reconstruction,
 committed fallback ID, or compatibility mode. Alchemy's unmodified providers

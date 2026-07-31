@@ -518,7 +518,7 @@ async function deployPreviewApps({
 
   let leaseClaim: {
     lease: EnvironmentConfigLease;
-    stackWasDestroyed: boolean;
+    environmentWasDestroyed: boolean;
   };
   try {
     const recordedLease = current.state.environmentConfigLease;
@@ -563,10 +563,10 @@ async function deployPreviewApps({
   // The signal is explicit because a lapsed lease can reclaim and destroy the
   // same slug. An uninterrupted same-stack deploy remains incremental.
   const previousSlug = current.state.environmentConfigLease?.slug ?? null;
-  const appsToDeploy = leaseClaim.stackWasDestroyed
+  const appsToDeploy = leaseClaim.environmentWasDestroyed
     ? Object.values(cloudflarePreviewApps)
     : selectedApps;
-  if (leaseClaim.stackWasDestroyed) {
+  if (leaseClaim.environmentWasDestroyed) {
     logPreview(
       `${environmentConfigLease.slug} data stack was recreated: redeploying the full fleet against its fresh resource IDs`,
     );
@@ -1232,7 +1232,7 @@ export async function assign(options: AssignOptions = {}) {
   // Anything but a kept/renewed lease breaks continuous ownership: even a
   // re-acquisition of the SAME slug means someone else may have deployed over
   // this PR's apps in the interim, so recorded deployments cannot be trusted.
-  const needsRedeploy = result.stackWasDestroyed || result.outcome !== "kept";
+  const needsRedeploy = result.environmentWasDestroyed || result.outcome !== "kept";
   const redeployMessage = result.changedFromSlug
     ? `Slot reassigned from ${result.changedFromSlug} to ${result.lease.slug}; run preview deploy to redeploy here.`
     : `Slot ${result.lease.slug} was re-acquired after this PR's lease lapsed — previous deployments there may have been replaced. Run preview deploy to redeploy.`;
@@ -1761,7 +1761,7 @@ export async function gc(options: GcOptions = {}) {
         leaseMs: holdMs,
         semaphore,
         signal: runtime.signal,
-        operation: async (signal) => {
+        operation: async (signal, verifyOwnership) => {
           const current = await runtime.readEnvironmentState(environmentStage(slot.dopplerConfig));
           if (current.lifecycle === "empty") {
             alreadyEmpty = true;
@@ -1771,6 +1771,7 @@ export async function gc(options: GcOptions = {}) {
             dopplerConfig: slot.dopplerConfig,
             signal,
             slug: slot.slug,
+            verifyOwnership,
           });
         },
       });
@@ -4606,12 +4607,13 @@ type DestroyPreviewEnvironment = (input: {
   dopplerConfig: string;
   signal?: AbortSignal;
   slug: string;
+  verifyOwnership?: () => Promise<void>;
 }) => Promise<void>;
 
 function makePreviewEnvironmentDestroyer(runtime: {
   signal?: AbortSignal;
 }): DestroyPreviewEnvironment {
-  return async ({ dopplerConfig, signal, slug }) => {
+  return async ({ dopplerConfig, signal, slug, verifyOwnership }) => {
     const startedAt = Date.now();
     logPreview(`destroying ${slug} before handover (environment ${dopplerConfig})`);
     await destroyManagedEnvironment(
@@ -4619,6 +4621,7 @@ function makePreviewEnvironmentDestroyer(runtime: {
       runtime.signal && signal
         ? AbortSignal.any([runtime.signal, signal])
         : (signal ?? runtime.signal),
+      verifyOwnership,
     );
     logPreview(`destroyed ${slug} (${formatDurationMs(Date.now() - startedAt)})`);
   };
@@ -4627,7 +4630,7 @@ function makePreviewEnvironmentDestroyer(runtime: {
 async function withLeaseFence<A>(input: {
   lease: { leaseId: string; slug: string; type: string };
   leaseMs: number;
-  operation: (signal: AbortSignal) => Promise<A>;
+  operation: (signal: AbortSignal, verifyOwnership: () => Promise<void>) => Promise<A>;
   renewEveryMs?: number;
   semaphore: PreviewSemaphoreResourceClient;
   signal?: AbortSignal;
@@ -4685,7 +4688,9 @@ async function withLeaseFence<A>(input: {
   }, renewalIntervalMs);
 
   try {
-    const result = await input.operation(operationSignal);
+    const result = await input.operation(operationSignal, async () => {
+      await renew();
+    });
     if (renewalFailure !== undefined) throw renewalFailure;
     // Fence completion too: callers may release only an uninterrupted lease.
     await renew();
@@ -4708,11 +4713,12 @@ async function destroyEnvironmentUnderLease(input: {
     leaseMs: input.leaseMs,
     semaphore: input.semaphore,
     signal: input.signal,
-    operation: async (signal) => {
+    operation: async (signal, verifyOwnership) => {
       await input.destroyEnvironment({
         dopplerConfig: input.dopplerConfig,
         signal,
         slug: input.lease.slug,
+        verifyOwnership,
       });
     },
   });
@@ -5297,7 +5303,7 @@ async function claimEnvironmentConfigLease(input: {
     semaphore: input.semaphore,
   });
   if (renewed) {
-    return { lease: renewed, stackWasDestroyed: false };
+    return { lease: renewed, environmentWasDestroyed: false };
   }
 
   const retaken = await takeAndCleanRecordedSlotIfFree({
@@ -5308,7 +5314,7 @@ async function claimEnvironmentConfigLease(input: {
     semaphore: input.semaphore,
   });
   if (retaken) {
-    return { lease: retaken, stackWasDestroyed: true };
+    return { lease: retaken, environmentWasDestroyed: true };
   }
 
   const lease = await acquireAnyEnvironmentConfigLease({
@@ -5322,7 +5328,7 @@ async function claimEnvironmentConfigLease(input: {
   logPreview(
     `lease acquired: ${lease.slug} held by ${input.holder} until ${formatUntil(lease.expiresAt)}`,
   );
-  return { lease: toEnvironmentConfigLease(lease), stackWasDestroyed: true };
+  return { lease: toEnvironmentConfigLease(lease), environmentWasDestroyed: true };
 }
 
 /**
@@ -5346,7 +5352,7 @@ async function assignEnvironmentConfigLease(input: {
   outcome: "kept" | "assigned" | "moved";
   changedFromSlug: string | null;
   previousLeaseReleased: boolean;
-  stackWasDestroyed: boolean;
+  environmentWasDestroyed: boolean;
 }> {
   const unrecordedHeldSlots =
     input.force && input.wantedSlug && !input.recordedLease
@@ -5375,7 +5381,7 @@ async function assignEnvironmentConfigLease(input: {
           recordedLease: input.recordedLease,
           semaphore: input.semaphore,
         });
-  let heldStackWasDestroyed = false;
+  let heldEnvironmentWasDestroyed = false;
   if (!heldLease) {
     heldLease = await takeAndCleanRecordedSlotIfFree({
       destroyEnvironment: input.destroyEnvironment,
@@ -5384,7 +5390,7 @@ async function assignEnvironmentConfigLease(input: {
       recordedSlug: input.recordedLease?.slug ?? null,
       semaphore: input.semaphore,
     });
-    heldStackWasDestroyed = heldLease !== null;
+    heldEnvironmentWasDestroyed = heldLease !== null;
   }
   if (heldLease && (!input.wantedSlug || input.wantedSlug === heldLease.slug)) {
     return {
@@ -5392,7 +5398,7 @@ async function assignEnvironmentConfigLease(input: {
       outcome: "kept",
       changedFromSlug: null,
       previousLeaseReleased: false,
-      stackWasDestroyed: heldStackWasDestroyed,
+      environmentWasDestroyed: heldEnvironmentWasDestroyed,
     };
   }
 
@@ -5521,7 +5527,7 @@ async function assignEnvironmentConfigLease(input: {
     outcome: heldLease ? "moved" : "assigned",
     changedFromSlug: previousSlug && previousSlug !== lease.slug ? previousSlug : null,
     previousLeaseReleased,
-    stackWasDestroyed: true,
+    environmentWasDestroyed: true,
   };
 }
 

@@ -11,6 +11,7 @@ import { isCompiledEnvironmentStage } from "../src/environments.ts";
 import {
   EnvironmentState,
   MAX_ENVIRONMENT_DESTROY_BATCHES,
+  wasEnvironmentDestroyInterrupted,
   type EnvironmentApi,
   type EnvironmentStage,
 } from "../src/state.ts";
@@ -157,47 +158,54 @@ async function destroyEnvironmentBatch(
     signal?.throwIfAborted();
     const remote = connection.api.destroy(stage, operationId);
     let complete: boolean;
-    if (signal === undefined) {
-      complete = await remote;
-    } else {
-      let onAbort: (() => void) | undefined;
-      const aborted = new Promise<unknown>((resolve) => {
-        onAbort = () => resolve(signal.reason ?? new Error("Environment destroy aborted."));
-        signal.addEventListener("abort", onAbort, { once: true });
-      });
-      try {
-        const first = await Promise.race([
-          remote.then((remoteComplete) => ({
-            kind: "completed" as const,
-            complete: remoteComplete,
-          })),
-          aborted.then((reason) => ({ kind: "aborted" as const, reason })),
-        ]);
-        if (first.kind === "aborted") {
-          let cancelled: boolean;
-          try {
-            cancelled = await connection.api.cancel(operationId);
-          } catch (cause) {
+    try {
+      if (signal === undefined) {
+        complete = await remote;
+      } else {
+        let onAbort: (() => void) | undefined;
+        const aborted = new Promise<unknown>((resolve) => {
+          onAbort = () => resolve(signal.reason ?? new Error("Environment destroy aborted."));
+          signal.addEventListener("abort", onAbort, { once: true });
+        });
+        try {
+          const first = await Promise.race([
+            remote.then((remoteComplete) => ({
+              kind: "completed" as const,
+              complete: remoteComplete,
+            })),
+            aborted.then((reason) => ({ kind: "aborted" as const, reason })),
+          ]);
+          if (first.kind === "aborted") {
+            let cancelled: boolean;
+            try {
+              cancelled = await connection.api.cancel(operationId);
+            } catch (cause) {
+              await remote.catch(() => undefined);
+              throw new AggregateError(
+                [first.reason, cause],
+                `Destroying ${stage} lost its lease fence and the manager cancellation call failed.`,
+              );
+            }
+            if (!cancelled) {
+              await remote.catch(() => undefined);
+              throw new Error(
+                `Destroying ${stage} lost its lease fence, but operation ${operationId} was no longer active.`,
+                { cause: first.reason },
+              );
+            }
             await remote.catch(() => undefined);
-            throw new AggregateError(
-              [first.reason, cause],
-              `Destroying ${stage} lost its lease fence and the manager cancellation call failed.`,
-            );
+            throw first.reason;
           }
-          if (!cancelled) {
-            await remote.catch(() => undefined);
-            throw new Error(
-              `Destroying ${stage} lost its lease fence, but operation ${operationId} was no longer active.`,
-              { cause: first.reason },
-            );
-          }
-          await remote.catch(() => undefined);
-          throw first.reason;
+          complete = first.complete;
+        } finally {
+          if (onAbort) signal.removeEventListener("abort", onAbort);
         }
-        complete = first.complete;
-      } finally {
-        if (onAbort) signal.removeEventListener("abort", onAbort);
       }
+    } catch (cause) {
+      signal?.throwIfAborted();
+      const state = await readEnvironmentState(stage);
+      if (wasEnvironmentDestroyInterrupted(state, operationId)) return false;
+      throw cause;
     }
     if (!complete) {
       const state = EnvironmentState.parse(await connection.api.status());
@@ -217,13 +225,17 @@ async function destroyEnvironmentBatch(
  * Destroy through bounded manager operations while keeping caller
  * cancellation attached to the currently active exact operation id. Closing
  * the Cap'n Web connection after every successful batch keeps each Durable
- * Object request far below Cloudflare's request lifetime.
+ * Object request far below Cloudflare's request lifetime. Lease-fenced callers
+ * provide an exact ownership check before every destructive batch.
  */
 export async function destroyEnvironment(
   stage: EnvironmentStage,
   signal?: AbortSignal,
+  verifyOwnership?: () => Promise<void>,
 ): Promise<EnvironmentState> {
   for (let batch = 1; batch <= MAX_ENVIRONMENT_DESTROY_BATCHES; batch += 1) {
+    signal?.throwIfAborted();
+    await verifyOwnership?.();
     if (await destroyEnvironmentBatch(stage, signal)) {
       const state = await readEnvironmentState(stage);
       if (state.lifecycle !== "empty") {

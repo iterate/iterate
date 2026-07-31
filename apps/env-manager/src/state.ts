@@ -4,6 +4,8 @@ import { z } from "zod";
 export type EnvironmentStage = "prd" | "dev_global" | `preview_${number}`;
 
 export const MAX_ENVIRONMENT_DESTROY_BATCHES = 100;
+export const ENVIRONMENT_DESTROY_RESTARTED_ERROR =
+  "Environment manager restarted while destroying; retry the operation.";
 
 export const EnvironmentStage = z.custom<EnvironmentStage>(
   (value) =>
@@ -59,6 +61,7 @@ export type AlchemyResources = z.infer<typeof AlchemyResources>;
 export const PersistedEnvironmentState = z.strictObject({
   stage: EnvironmentStage,
   lifecycle: EnvironmentLifecycle,
+  operationId: z.string().optional(),
   operationStartedAt: z.string().optional(),
   operationFinishedAt: z.string().optional(),
   lastError: z.string().optional(),
@@ -144,8 +147,22 @@ export function recoverInterruptedEnvironmentState(
     ...state,
     lifecycle: "failed",
     operationFinishedAt: recoveredAt,
-    lastError: `Environment manager restarted while ${state.lifecycle}; retry the operation.`,
+    lastError:
+      state.lifecycle === "destroying"
+        ? ENVIRONMENT_DESTROY_RESTARTED_ERROR
+        : `Environment manager restarted while ${state.lifecycle}; retry the operation.`,
   };
+}
+
+export function wasEnvironmentDestroyInterrupted(
+  state: EnvironmentState,
+  operationId: string,
+): boolean {
+  return (
+    state.lifecycle === "failed" &&
+    state.operationId === operationId &&
+    state.lastError === ENVIRONMENT_DESTROY_RESTARTED_ERROR
+  );
 }
 
 export type EnvironmentApi = {

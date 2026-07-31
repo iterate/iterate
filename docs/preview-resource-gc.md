@@ -6,7 +6,7 @@ see [Dev environments](dev-environments.md); this doc is the "why".
 
 ## The principle: teardown failure never pins a lease
 
-There are nineteen deployed preview **slots**. Seventeen are leased to PRs
+There are nineteen compiled preview **slots**. Seventeen are leased to PRs
 through [Semaphore](../apps/semaphore); `preview-18` and `preview-19` are
 reserved for destructive env-manager lifecycle proof and are deliberately
 outside unattended GC. Each claimable environment is disposable: every tenant
@@ -100,10 +100,11 @@ runs `pnpm preview gc`, which:
    genuinely free_. If a new PR grabbed the slot between the snapshot and the
    take, the sweep skips it. It then re-reads manager status under the lease.
 3. Continuously renews the exact token while the environment-manager Durable
-   Object destroys the environment. Renewal loss cancels that exact remote
-   operation, and ownership is verified again before completion is accepted.
-   A failed destroy leaves manager state non-empty/failed and still releases
-   the lease, so the next hourly sweep retries.
+   Object destroys the environment. It renews again before every bounded
+   destructive batch; renewal loss cancels that exact remote operation, and
+   ownership is verified again before completion is accepted. A failed destroy
+   leaves manager state non-empty/failed and still releases the lease, so the
+   next hourly sweep retries.
 
 It runs sequentially (naturally rate-limited) and is idempotent — safe to run
 as often as we like. `pnpm preview gc --dry-run` reports the plan without

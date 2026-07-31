@@ -271,13 +271,16 @@ export function makeCloudflareControlPlane(input: {
   const destroyWorker = (
     workerName: string,
     namespaceClasses: ReadonlyMap<string, ReadonlySet<string>>,
+    workerExists: boolean,
   ) =>
     Effect.gen(function* () {
       const classes = new Set(namespaceClasses.get(workerName));
-      const settings = yield* Workers.getScriptScriptAndVersionSetting({
-        accountId: input.accountId,
-        scriptName: workerName,
-      }).pipe(Effect.catchTag("WorkerNotFound", () => Effect.succeed(undefined)));
+      const settings = workerExists
+        ? yield* Workers.getScriptScriptAndVersionSetting({
+            accountId: input.accountId,
+            scriptName: workerName,
+          }).pipe(Effect.catchTag("WorkerNotFound", () => Effect.succeed(undefined)))
+        : undefined;
       for (const binding of settings?.bindings ?? []) {
         if (
           binding.type === "durable_object_namespace" &&
@@ -385,25 +388,31 @@ export function makeCloudflareControlPlane(input: {
             });
           }
 
+          const [namespaces, workers] = yield* Effect.all(
+            [listDurableObjectNamespaces(), listWorkerScripts()],
+            { concurrency: "unbounded" },
+          );
           const namespaceClasses = new Map<string, Set<string>>();
-          for (const namespace of yield* listDurableObjectNamespaces()) {
+          for (const namespace of namespaces) {
             if (namespace.script && namespace.class) {
               const classes = namespaceClasses.get(namespace.script) ?? new Set<string>();
               classes.add(namespace.class);
               namespaceClasses.set(namespace.script, classes);
             }
           }
+          const workerNames = new Set(workers.flatMap(({ id }) => (id ? [id] : [])));
 
           // Keep Worker teardown sequential because this endpoint is
           // rate-limited per API user.
           for (const [index, workerName] of destroyInput.workerNames.entries()) {
+            if (!workerNames.has(workerName) && !namespaceClasses.has(workerName)) continue;
             input.onProgress?.({
               id: "wrangler-workers",
               type: "Wrangler Workers",
               status: "deleting",
               message: `Deleting ${index + 1}/${destroyInput.workerNames.length}: ${workerName}.`,
             });
-            yield* destroyWorker(workerName, namespaceClasses);
+            yield* destroyWorker(workerName, namespaceClasses, workerNames.has(workerName));
           }
 
           const targets = new Set(destroyInput.workerNames);

@@ -121,6 +121,7 @@ export class EnvironmentDurableObject extends DurableObject<Env> {
     this.#setState({
       ...this.#live.getState(),
       lifecycle,
+      operationId,
       operationStartedAt: startedAt,
       operationFinishedAt: undefined,
       lastError: undefined,

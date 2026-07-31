@@ -435,9 +435,10 @@ Artifacts repositories, containers, D1/KV/R2 stack, and then releases it.
 
 Slot cleanliness is an **invariant of tenant handover**, not a promise about
 exits. A new tenant or an unknown-provenance acquired slot is destroyed before
-deployment. The same PR's continuously held or still-free recorded slot is
-renewed/re-taken without destruction, preserving incremental deploys. This is
-lease continuity, not Cloudflare resource adoption or Alchemy state
+deployment. Only the same PR's exact, continuously held lease token is renewed
+without destruction, preserving incremental deploys. A recorded slot re-taken
+after any ownership gap is destroyed before reuse, even if it remained free.
+This is lease continuity, not Cloudflare resource adoption or Alchemy state
 reconstruction. Manual `preview acquire` (Story 4) only leases a slot so an
 operator can inspect its current state before choosing to deploy or destroy it.
 

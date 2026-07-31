@@ -8,6 +8,7 @@ afterEach(() => {
 describe("Cloudflare control plane", () => {
   it("deletes only the compiled Workers and waits for each deletion", async () => {
     const firstDeletion = Promise.withResolvers<Response>();
+    let workerLists = 0;
     const fetch = vi.fn<typeof globalThis.fetch>((request) => {
       const url = new URL(String(request));
       if (url.pathname.endsWith("/workers/durable_objects/namespaces")) {
@@ -24,6 +25,16 @@ describe("Cloudflare control plane", () => {
           Response.json({
             success: true,
             result: { bindings: [] },
+            errors: [],
+          }),
+        );
+      }
+      if (url.pathname.endsWith("/workers/scripts")) {
+        workerLists += 1;
+        return Promise.resolve(
+          Response.json({
+            success: true,
+            result: workerLists === 1 ? [{ id: "worker-one" }, { id: "worker-two" }] : [],
             errors: [],
           }),
         );
@@ -48,8 +59,18 @@ describe("Cloudflare control plane", () => {
       accountId: "account-id",
       apiToken: "api-token",
     }).destroyWranglerResources({ workerNames: ["worker-one", "worker-two"] });
-    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(3));
-    expect(String(fetch.mock.calls[2]?.[0])).toContain("/workers/scripts/worker-one?force=true");
+    await vi.waitFor(() =>
+      expect(
+        fetch.mock.calls.some(([request]) =>
+          String(request).includes("/workers/scripts/worker-one?force=true"),
+        ),
+      ).toBe(true),
+    );
+    expect(
+      fetch.mock.calls.some(([request]) =>
+        String(request).includes("/workers/scripts/worker-two?force=true"),
+      ),
+    ).toBe(false);
 
     firstDeletion.resolve(
       Response.json({
@@ -61,21 +82,26 @@ describe("Cloudflare control plane", () => {
     await expect(destroyed).resolves.toBe(true);
 
     const requests = fetch.mock.calls.map(([request]) => new URL(String(request)));
-    expect(requests.map(({ pathname }) => pathname)).toEqual([
-      "/client/v4/accounts/account-id/workers/durable_objects/namespaces",
+    expect(
+      requests
+        .filter(({ pathname }) => pathname.includes("/workers/scripts/worker-"))
+        .map(({ pathname }) => pathname),
+    ).toEqual([
       "/client/v4/accounts/account-id/workers/scripts/worker-one/settings",
       "/client/v4/accounts/account-id/workers/scripts/worker-one",
       "/client/v4/accounts/account-id/workers/scripts/worker-two/settings",
       "/client/v4/accounts/account-id/workers/scripts/worker-two",
-      "/client/v4/accounts/account-id/workers/scripts",
-      "/client/v4/accounts/account-id/workers/durable_objects/namespaces",
     ]);
-    expect(requests[2]?.searchParams.get("force")).toBe("true");
-    expect(requests[4]?.searchParams.get("force")).toBe("true");
+    expect(
+      requests
+        .filter(({ pathname }) => /^.*\/workers\/scripts\/worker-(?:one|two)$/.test(pathname))
+        .map(({ searchParams }) => searchParams.get("force")),
+    ).toEqual(["true", "true"]);
   });
 
   it("deletes owned Durable Object classes before deleting their Worker", async () => {
     let namespaceLists = 0;
+    let workerLists = 0;
     const fetch = vi.fn<typeof globalThis.fetch>((request, init) => {
       const url = new URL(String(request));
       const method = request instanceof Request ? request.method : init?.method;
@@ -112,6 +138,16 @@ describe("Cloudflare control plane", () => {
                 },
               ],
             },
+            errors: [],
+          }),
+        );
+      }
+      if (url.pathname.endsWith("/workers/scripts")) {
+        workerLists += 1;
+        return Promise.resolve(
+          Response.json({
+            success: true,
+            result: workerLists === 1 ? [{ id: "worker-one" }] : [],
             errors: [],
           }),
         );
@@ -171,17 +207,15 @@ describe("Cloudflare control plane", () => {
       },
     ]);
 
-    const requests = fetch.mock.calls.map(([request]) => new URL(String(request)));
-    expect(requests.map(({ pathname }) => pathname)).toEqual([
-      "/client/v4/accounts/account-id/workers/durable_objects/namespaces",
-      "/client/v4/accounts/account-id/workers/durable_objects/namespaces",
+    const workerRequests = fetch.mock.calls
+      .map(([request]) => new URL(String(request)))
+      .filter(({ pathname }) => pathname.includes("/workers/scripts/worker-one"));
+    expect(workerRequests.map(({ pathname }) => pathname)).toEqual([
       "/client/v4/accounts/account-id/workers/scripts/worker-one/settings",
       "/client/v4/accounts/account-id/workers/scripts/worker-one",
       "/client/v4/accounts/account-id/workers/scripts/worker-one",
-      "/client/v4/accounts/account-id/workers/scripts",
-      "/client/v4/accounts/account-id/workers/durable_objects/namespaces",
     ]);
-    expect(requests[4]?.searchParams.get("force")).toBe("true");
+    expect(workerRequests.at(-1)?.searchParams.get("force")).toBe("true");
   });
 
   it("recreates a missing Worker long enough to retire its orphaned namespace", async () => {
@@ -242,6 +276,43 @@ describe("Cloudflare control plane", () => {
       compatibility_date: "2026-07-30",
       exports: { Orphaned: { type: "durable-object", state: "deleted" } },
     });
+    expect(
+      fetch.mock.calls.some(([request]) => new URL(String(request)).pathname.endsWith("/settings")),
+    ).toBe(false);
+  });
+
+  it("does not re-delete Workers already absent during a later Artifact batch", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>((request, init) => {
+      const url = new URL(String(request));
+      const method = request instanceof Request ? request.method : init?.method;
+      return Promise.resolve(
+        Response.json({
+          success: true,
+          result:
+            method === "GET" && url.pathname.endsWith("/artifacts/namespaces/os-repos/repos")
+              ? []
+              : [],
+          errors: [],
+        }),
+      );
+    });
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(
+      makeCloudflareControlPlane({
+        accountId: "account-id",
+        apiToken: "api-token",
+      }).destroyWranglerResources({
+        workerNames: ["worker-one", "worker-two"],
+        osWorkerName: "os",
+      }),
+    ).resolves.toBe(true);
+
+    expect(
+      fetch.mock.calls.filter(([request]) =>
+        new URL(String(request)).pathname.includes("/workers/scripts/worker-"),
+      ),
+    ).toHaveLength(0);
   });
 
   it("cursor-paginates Artifact repos and deletes each one exactly once", async () => {

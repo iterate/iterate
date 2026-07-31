@@ -203,6 +203,12 @@ generation check was rejected as a separate false solution.
    ephemeral Wrangler input. Cloudflare teardown consumes the canonical
    `AlchemyResources` type instead of a hand-copied union.
 
+The README-linked documentation audit found one stale sentence claiming that a
+still-free recorded slot could be re-taken without destruction. The docs now
+match the code: only exact uninterrupted-token renewal preserves a deployment;
+every ownership gap destroys before reuse. Obsolete `preview-stack` wording in
+the slot guide was also removed.
+
 ### Rejected addition: manifest generation/freshness handshake
 
 A manager generation embedded in local JSON would add a second comparison
@@ -269,11 +275,41 @@ persists `destroying` with `operationFinishedAt`; no repository list, count, or
 cursor is persisted. The CLI and dashboard close the Cap'n Web session after
 each batch and open a new one for the next batch. An interrupted batch remains
 `failed`; a caller/lease abort cancels only its exact operation; at most 100
-batches may run in one command. This is bounded continuation, not an automatic
-retry: every next batch follows an explicitly successful partial result and
+batches may run in one command. The sole additional continuation case is the
+manager's exact durable `restarted while destroying` classification. It
+rechecks caller cancellation and renews the exact Semaphore token before every
+new destructive batch; every other error propagates. Every continuation
 re-inventories Cloudflare. Alchemy SQLite remains the sole durable resource
 manifest, Cloudflare remains the canonical Wrangler-resource inventory, and
 env-manager remains the sole cleanup-obligation authority.
+
+The first bounded recovery then exposed a separate one-hour credential
+boundary. Ten batches settled successfully, but both clients had memoized
+their forge-minted one-hour admin bearer. The next manager connection and the
+Semaphore renewal returned 401; renewal loss cancelled exact manager operation
+`6310cfaa-3fa4-4fce-8922-a70dca682e46`, which settled `failed`, and the failed
+release left the lease visibly parked. This was an authentication defect, not
+an ownership gap disguised as success. Semaphore now forge-mints on every API
+request, while the manager client caches only the Doppler forge key and mints
+for each WebSocket connection. A regression test advances beyond the token TTL
+and proves a fresh credential is returned. Explicit pre-minted token overrides
+remain caller-owned. Recovery re-acquired the same slot through the explicit
+force lane, treated the new lease token as an ownership gap, and resumed from
+fresh Cloudflare inventory.
+
+The next recovery run proved why that one restart classification must be
+continuable. After ten more complete batches and 900 deletions in the eleventh,
+Cloudflare terminated the Durable Object's WebSocket with
+`This script has been upgraded` (trace
+`3fecea4b5badbbca9a8e2844797a03b5`). The request still ran Worker version
+`4454aa48…`; Cloudflare's deployment inventory showed that version had been
+unchanged since 21:41:37Z, more than two hours earlier. This was therefore the
+documented Durable Object runtime/placement shutdown case, not a hidden deploy.
+The old client failed closed, released its exact lease, and left the manager
+durably `failed`. The final client continues only that exact recovered-destroy
+state for the same operation ID, never a transport status, error substring,
+resource failure, old restart record, or lease abort, and the existing
+100-operation ceiling still bounds it.
 
 ## Proof and rollout
 

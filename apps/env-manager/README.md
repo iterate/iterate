@@ -39,8 +39,12 @@ their native deterministic-name reconciliation for interrupted creates.
 Artifact drains run as explicit batches of at most 1,000 repositories. The
 client reconnects after each successful partial result; the Durable Object
 retains a settled `destroying` lifecycle and refuses deploy/check until destroy
-converges. Cloudflare inventory, not a stored cursor or repository count, is
-the checkpoint for every batch.
+converges. Cloudflare may also restart a Durable Object and terminate its
+WebSocket. The manager durably distinguishes that exact interruption from a
+resource failure; the client may continue only that classified destroy for the
+same operation ID, within the same hard 100-batch limit and after a fresh
+exact-token fence check before each batch. Cloudflare inventory, not a stored
+cursor or repository count, is the checkpoint for every batch.
 
 ## Commands
 
