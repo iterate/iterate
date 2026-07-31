@@ -17,9 +17,9 @@ import {
 } from "@iterate-com/ui/components/card";
 import { Skeleton } from "@iterate-com/ui/components/skeleton";
 import { Spinner } from "@iterate-com/ui/components/spinner";
+import { destroyEnvironmentInBatches } from "~/destroy-environment-client.ts";
 import { environments, type CompiledEnvironment } from "~/environments.ts";
 import {
-  MAX_ENVIRONMENT_DESTROY_BATCHES,
   type AlchemyResources,
   type EnvironmentApi,
   type EnvironmentLifecycle,
@@ -59,18 +59,17 @@ function environmentWebSocketUrl(stage: string): string {
   return endpoint.toString();
 }
 
-async function destroyEnvironmentInBatches(stage: EnvironmentStage): Promise<void> {
-  for (let batch = 1; batch <= MAX_ENVIRONMENT_DESTROY_BATCHES; batch += 1) {
-    const api = newWebSocketRpcSession<EnvironmentApi>(environmentWebSocketUrl(stage));
-    try {
-      if (await api.destroy(stage)) return;
-    } finally {
-      api[Symbol.dispose]?.();
-    }
-  }
-  throw new Error(
-    `Destroying ${stage} did not converge after ${MAX_ENVIRONMENT_DESTROY_BATCHES} bounded batches; canonical Cloudflare inventory still contains resources.`,
-  );
+async function destroyEnvironmentFromDashboard(stage: EnvironmentStage): Promise<void> {
+  await destroyEnvironmentInBatches({
+    stage,
+    connect: () => {
+      const api = newWebSocketRpcSession<EnvironmentApi>(environmentWebSocketUrl(stage));
+      return {
+        api,
+        close: () => api[Symbol.dispose]?.(),
+      };
+    },
+  });
 }
 
 function EnvironmentConnection({ environment }: { environment: CompiledEnvironment }) {
@@ -199,7 +198,7 @@ function EnvironmentCard({ environment }: { environment: CompiledEnvironment }) 
                     `Completely destroy ${environment.stage}, including its Workers, Durable Object data, D1, KV, and R2?`,
                   );
             if (api !== undefined && confirmed) {
-              void run("destroy", () => destroyEnvironmentInBatches(environment.stage));
+              void run("destroy", () => destroyEnvironmentFromDashboard(environment.stage));
             }
           }}
           className="ml-auto"

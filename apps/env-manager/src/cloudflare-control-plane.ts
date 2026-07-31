@@ -325,22 +325,20 @@ export function makeCloudflareControlPlane(input: {
     });
 
   return {
-    assertResourcesExist(resources: AlchemyResources, workerNames: readonly string[]) {
+    assertAlchemyResourcesExist(resources: AlchemyResources) {
       return run(
         Effect.gen(function* () {
-          const [databases, namespaces, { buckets }, workers] = yield* Effect.all(
+          const [databases, namespaces, { buckets }] = yield* Effect.all(
             [
               D1.listDatabases.items({ accountId: input.accountId }).pipe(Stream.runCollect),
               KV.listNamespaces.items({ accountId: input.accountId }).pipe(Stream.runCollect),
               R2.listBuckets({ accountId: input.accountId, perPage: 1_000 }),
-              listWorkerScripts(),
             ],
             { concurrency: "unbounded" },
           );
           const databaseIds = new Set(databases.map(({ uuid }) => uuid));
           const namespaceIds = new Set(namespaces.map(({ id }) => id));
           const bucketNames = new Set((buckets ?? []).map(({ name }) => name));
-          const deployedWorkerNames = new Set(workers.map(({ id }) => id));
           const expected: Array<readonly [label: string, present: boolean]> = [
             ["auth D1", databaseIds.has(resources.authDbId)],
           ];
@@ -353,12 +351,7 @@ export function makeCloudflareControlPlane(input: {
               ["sandboxes R2", bucketNames.has(resources.sandboxesBucketName)],
             );
           }
-          const missing = [
-            ...expected.filter(([, present]) => !present).map(([label]) => label),
-            ...workerNames
-              .filter((workerName) => !deployedWorkerNames.has(workerName))
-              .map((workerName) => `Worker ${workerName}`),
-          ];
+          const missing = expected.filter(([, present]) => !present).map(([label]) => label);
           if (missing.length > 0) {
             return yield* Effect.fail(
               new Error(`Cloudflare resources are missing: ${missing.join(", ")}`),

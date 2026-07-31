@@ -278,7 +278,7 @@ export class EnvironmentDurableObject extends DurableObject<Env> {
         accountId: this.#environment.accountId,
         apiToken,
         signal,
-      }).assertResourcesExist(resources, this.#environment.workerNames);
+      }).assertAlchemyResourcesExist(resources);
       return true;
     }).then(() => undefined);
   }

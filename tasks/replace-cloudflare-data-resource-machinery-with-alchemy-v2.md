@@ -233,6 +233,23 @@ environment, current code has no writer for that binding, and live checks found
 the name absent from all twenty OS Doppler configs, all 56 deployed preview OS
 Workers, and `os-prd`.
 
+### Final Bugbot review
+
+Two final-head findings were confirmed and reduced:
+
+- `infra check` promises to verify the Alchemy-owned D1/KV/R2 stack, but its
+  control-plane helper also required every Wrangler Worker. The helper is now
+  explicitly named `assertAlchemyResourcesExist` and no longer lists or checks
+  Workers. A freshly provisioned data stack is therefore healthy before the
+  independently owned Worker rollout.
+- Dashboard destroy did not share the CLI's exact-operation restart
+  classification. The bounded destroy client is now one browser-safe module
+  used by both callers. Every batch supplies an exact operation ID; a dropped
+  session opens a fresh connection and continues only if durable state
+  classifies that exact request as a manager restart. Regression tests prove
+  exact restart continuation, rejection of an unrelated operation, and
+  cancellation of the exact active operation on lease loss.
+
 ### Post-push lifecycle run: high-cardinality Artifacts cleanup
 
 The first full PR run on `c1350b4` found a real watchdog mismatch rather than an
@@ -307,9 +324,10 @@ unchanged since 21:41:37Z, more than two hours earlier. This was therefore the
 documented Durable Object runtime/placement shutdown case, not a hidden deploy.
 The old client failed closed, released its exact lease, and left the manager
 durably `failed`. The final client continues only that exact recovered-destroy
-state for the same operation ID, never a transport status, error substring,
-resource failure, old restart record, or lease abort, and the existing
-100-operation ceiling still bounds it.
+state matching the failed request's operation ID, never a transport status,
+error substring, resource failure, old restart record, or lease abort. It then
+starts a fresh bounded operation from canonical inventory, and the existing
+100-operation ceiling still bounds the command.
 
 A subsequent production-shaped drain crossed both clients' original one-hour
 bearer lifetime without interruption. The original process opened manager
@@ -434,10 +452,9 @@ passed its health smoke. On that build:
 - Fresh Alchemy creation took 6.19s. The exact no-op apply took 1.68s and
   retained byte-identical SHA-256
   `5b94bb5466fa3c2627ae148976aab950d03f71029da7bd133be08735ac95ec8f`
-  plus identical D1/KV IDs. A whole-environment check then correctly named the
-  eight absent Wrangler Workers because this reserved-slot step intentionally
-  provisioned only the Alchemy stack; full Worker-inclusive proof belongs to
-  preview CI.
+  plus identical D1/KV IDs. The Alchemy-stack check passed while this
+  reserved-slot step intentionally left Wrangler Workers absent;
+  Worker-inclusive proof belongs to preview CI.
 - Destroy after that create took 12.33s and a repeat-empty destroy took 11.09s.
   Both settled `empty` and the local manifest remained absent.
 - The repeat-empty run exposed inaccurate progress wording: it verified eight
