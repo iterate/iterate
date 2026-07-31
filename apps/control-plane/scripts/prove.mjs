@@ -3,7 +3,8 @@
 // org+project CREATED AT /authorize; token; MCP whoami reflecting that project; and the API-key path.
 import crypto from "node:crypto";
 
-const BASE = "http://localhost:8787";
+const BASE = process.env.BASE || "http://localhost:8787";
+const USE_CIMD = BASE.startsWith("https"); // CIMD needs an HTTPS client_id; local http falls back to DCR
 const REDIRECT = "http://localhost:8976/callback";
 const RESOURCE = `${BASE}/mcp`;
 const EMAIL = `alice+${Date.now()}@example.com`;
@@ -39,21 +40,32 @@ const asMeta = await (await fetch(`${BASE}/.well-known/oauth-authorization-serve
 ok(asMeta.code_challenge_methods_supported?.includes("S256"), "AS metadata advertises PKCE S256");
 ok(asMeta.client_id_metadata_document_supported === true, "AS metadata advertises CIMD support");
 
-// 3. DCR register a public client (spec-sanctioned fallback for the local http proof)
-const reg = await (
-  await fetch(`${BASE}/register`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      client_name: "Proof MCP Client",
-      redirect_uris: [REDIRECT],
-      token_endpoint_auth_method: "none",
-      grant_types: ["authorization_code", "refresh_token"],
-      response_types: ["code"],
-    }),
-  })
-).json();
-ok(!!reg.client_id, `DCR registered a client (${reg.client_id})`);
+// 3. Obtain a client_id. HTTPS → CIMD (client_id IS the metadata-doc URL, no registration). http → DCR.
+let clientId;
+if (USE_CIMD) {
+  clientId = `${BASE}/cimd-test-client`;
+  const doc = await (await fetch(clientId)).json();
+  ok(
+    doc.client_id === clientId && doc.redirect_uris?.includes(REDIRECT),
+    `CIMD client_id is a self-describing URL (${clientId})`,
+  );
+} else {
+  const reg = await (
+    await fetch(`${BASE}/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        client_name: "Proof MCP Client",
+        redirect_uris: [REDIRECT],
+        token_endpoint_auth_method: "none",
+        grant_types: ["authorization_code", "refresh_token"],
+        response_types: ["code"],
+      }),
+    })
+  ).json();
+  clientId = reg.client_id;
+  ok(!!clientId, `DCR registered a client (${clientId})`);
+}
 
 // 4. PKCE
 const verifier = b64url(crypto.randomBytes(32));
@@ -62,7 +74,7 @@ const challenge = b64url(crypto.createHash("sha256").update(verifier).digest());
 // 5. GET /authorize (with session) → consent page should offer to create a project
 const authQuery = new URLSearchParams({
   response_type: "code",
-  client_id: reg.client_id,
+  client_id: clientId,
   redirect_uri: REDIRECT,
   code_challenge: challenge,
   code_challenge_method: "S256",
@@ -100,7 +112,7 @@ const tokRes = await fetch(`${BASE}/token`, {
     grant_type: "authorization_code",
     code,
     redirect_uri: REDIRECT,
-    client_id: reg.client_id,
+    client_id: clientId,
     code_verifier: verifier,
     resource: RESOURCE,
   }),
