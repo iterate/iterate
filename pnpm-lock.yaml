@@ -1214,9 +1214,6 @@ importers:
       '@codemirror/state':
         specifier: ^6.7.1
         version: 6.7.1
-      '@codemirror/view':
-        specifier: ^6.43.6
-        version: 6.43.6
       '@dnd-kit/react':
         specifier: ^0.5.0
         version: 0.5.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
