@@ -435,7 +435,9 @@ describe("stream capnweb protocol", () => {
     using first = await stream.stream.openConnection({
       processEventBatch: (batch) => callbackA.processEventBatch(batch),
     });
-    using second = await stream.stream.openConnection({
+    // Held only to keep the second connection open; keys are read from
+    // runtime state below.
+    using _second = await stream.stream.openConnection({
       processEventBatch: (batch) => callbackB.processEventBatch(batch),
     });
 
