@@ -15,8 +15,17 @@ import {
   CardHeader,
   CardTitle,
 } from "@iterate-com/ui/components/card";
+import { Separator } from "@iterate-com/ui/components/separator";
 import { Skeleton } from "@iterate-com/ui/components/skeleton";
 import { Spinner } from "@iterate-com/ui/components/spinner";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@iterate-com/ui/components/table";
 import { destroyEnvironmentInBatches } from "~/destroy-environment-client.ts";
 import { environments, type CompiledEnvironment } from "~/environments.ts";
 import {
@@ -35,8 +44,8 @@ export const Route = createFileRoute("/_app/environments")({
 
 function EnvironmentsPage() {
   return (
-    <section className="space-y-6">
-      <div className="space-y-1">
+    <section className="flex flex-col gap-6">
+      <div className="flex flex-col gap-1">
         <h1 className="text-2xl font-semibold tracking-tight">Environments</h1>
         <p className="max-w-3xl text-sm text-muted-foreground">
           Each environment is one Alchemy data stack supervised by its own Durable Object. Wrangler
@@ -44,7 +53,7 @@ function EnvironmentsPage() {
           Object data before deleting the environment&apos;s D1, KV, and R2.
         </p>
       </div>
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid gap-4 2xl:grid-cols-2">
         {environments.map((environment) => (
           <EnvironmentConnection key={environment.stage} environment={environment} />
         ))}
@@ -102,8 +111,6 @@ function EnvironmentCard({ environment }: { environment: CompiledEnvironment }) 
       state?.lifecycle === "deploying" ||
       state?.lifecycle === "destroying") &&
       state.operationFinishedAt === undefined);
-  const error = actionError ?? live.error ?? state?.lastError;
-
   const run = async (operation: PendingOperation, action: () => Promise<void>) => {
     setActionError(undefined);
     setPending(operation);
@@ -136,19 +143,42 @@ function EnvironmentCard({ environment }: { environment: CompiledEnvironment }) 
           <LifecycleBadge lifecycle={state?.lifecycle} liveStatus={live.status} />
         </CardAction>
       </CardHeader>
-      <CardContent className="space-y-4">
-        {error ? (
+      <CardContent className="flex flex-col gap-5">
+        {actionError ? (
           <Alert variant="destructive">
             <AlertCircle />
-            <AlertTitle>Environment operation failed</AlertTitle>
-            <AlertDescription className="break-words">{error}</AlertDescription>
+            <AlertTitle>Dashboard action failed</AlertTitle>
+            <AlertDescription className="break-words">{actionError}</AlertDescription>
+          </Alert>
+        ) : null}
+        {live.error ? (
+          <Alert variant="destructive">
+            <AlertCircle />
+            <AlertTitle>Live connection failed</AlertTitle>
+            <AlertDescription className="break-words">{live.error}</AlertDescription>
+          </Alert>
+        ) : null}
+        {state?.lastError ? (
+          <Alert variant="destructive">
+            <AlertCircle />
+            <AlertTitle>Last environment operation failed</AlertTitle>
+            <AlertDescription className="break-words">{state.lastError}</AlertDescription>
           </Alert>
         ) : null}
         {state === undefined ? (
           <EnvironmentSkeleton />
         ) : (
           <>
+            <DestroyStatus state={state} />
+            <EnvironmentDetails
+              environment={environment}
+              state={state}
+              liveStatus={live.status}
+              dashboardRequest={pending}
+            />
+            <Separator />
             <ResourceSummary resources={state.resources} />
+            <Separator />
             <ProgressSummary state={state} />
           </>
         )}
@@ -239,7 +269,7 @@ function LifecycleBadge({
 
 function EnvironmentSkeleton() {
   return (
-    <div className="space-y-3" aria-label="Loading environment state">
+    <div className="flex flex-col gap-3" aria-label="Loading environment state">
       <Skeleton className="h-4 w-2/3" />
       <Skeleton className="h-4 w-full" />
       <Skeleton className="h-4 w-5/6" />
@@ -247,19 +277,138 @@ function EnvironmentSkeleton() {
   );
 }
 
+function DestroyStatus({ state }: { state: EnvironmentState }) {
+  if (state.lifecycle !== "destroying") return null;
+
+  const batchFinished = state.operationFinishedAt !== undefined;
+  return (
+    <Alert>
+      <Trash2 />
+      <AlertTitle>
+        {batchFinished
+          ? "Cleanup remains after this destroy batch"
+          : "Complete destroy in progress"}
+      </AlertTitle>
+      <AlertDescription>
+        {batchFinished
+          ? "Resume Destroy completely to run the next bounded batch. Deploy and check remain blocked until the canonical Alchemy output is empty."
+          : "Deploy and check are blocked while this bounded batch runs. Preview automation keeps its Semaphore lease fenced until environment-manager reports an empty stack."}
+      </AlertDescription>
+    </Alert>
+  );
+}
+
+function EnvironmentDetails({
+  environment,
+  state,
+  liveStatus,
+  dashboardRequest,
+}: {
+  environment: CompiledEnvironment;
+  state: EnvironmentState;
+  liveStatus: string;
+  dashboardRequest: PendingOperation | undefined;
+}) {
+  const startedAt = state.operationStartedAt && Date.parse(state.operationStartedAt);
+  const finishedAt = state.operationFinishedAt && Date.parse(state.operationFinishedAt);
+  const duration =
+    typeof startedAt === "number" &&
+    Number.isFinite(startedAt) &&
+    typeof finishedAt === "number" &&
+    Number.isFinite(finishedAt)
+      ? `${(finishedAt - startedAt).toLocaleString()}ms`
+      : state.operationStartedAt !== undefined && state.operationFinishedAt === undefined
+        ? "In progress"
+        : "Not recorded";
+  const inventory = [
+    ["Stage", environment.stage],
+    ["Kind", environment.kind],
+    ["Cloudflare account", environment.account],
+    ["Account ID", environment.accountId],
+    ["Base URL", environment.baseUrl],
+    ...(environment.kind === "platform" ? [["OS Worker", environment.osWorkerName]] : []),
+    [
+      `Managed Workers (${environment.workerNames.length.toLocaleString()})`,
+      environment.workerNames.join("\n"),
+    ],
+  ];
+  const operation = [
+    ["State stage", state.stage],
+    ["Connection", liveStatus],
+    ["Dashboard request", dashboardRequest ?? "Idle"],
+    ["Lifecycle", state.lifecycle],
+    ["Operation ID", state.operationId ?? "Not recorded"],
+    ["Started", state.operationStartedAt ?? "Not recorded"],
+    ["Finished", state.operationFinishedAt ?? "Not recorded"],
+    ["Duration", duration],
+    ["Progress records", state.progress.length.toLocaleString()],
+    ["Last error", state.lastError ?? "None"],
+  ];
+
+  return (
+    <div className="grid gap-5 md:grid-cols-2">
+      <DetailList
+        title="Compiled inventory"
+        description="Non-secret deployment topology from envs.ts"
+        rows={inventory}
+      />
+      <DetailList
+        title="Durable Object state"
+        description="Canonical lifecycle state streamed over Cap'n Web"
+        rows={operation}
+      />
+    </div>
+  );
+}
+
+function DetailList({
+  title,
+  description,
+  rows,
+}: {
+  title: string;
+  description: string;
+  rows: string[][];
+}) {
+  return (
+    <section className="flex min-w-0 flex-col gap-2">
+      <div>
+        <h3 className="text-sm font-medium">{title}</h3>
+        <p className="text-xs text-muted-foreground">{description}</p>
+      </div>
+      <dl className="grid gap-x-4 gap-y-2 text-xs sm:grid-cols-[auto_1fr]">
+        {rows.map(([label, value]) => (
+          <div key={label} className="contents">
+            <dt className="text-muted-foreground">{label}</dt>
+            <dd className="break-all font-mono whitespace-pre-wrap">{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  );
+}
+
 function ResourceSummary({ resources }: { resources: AlchemyResources | undefined }) {
   if (resources === undefined) {
     return (
-      <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
-        This environment has no provisioned Alchemy resources.
-      </p>
+      <DetailList
+        title="Alchemy output"
+        description="Canonical resource manifest read directly from the Alchemy state store"
+        rows={[["Resources", "No D1, KV, or R2 identifiers are provisioned"]]}
+      />
     );
   }
 
   const rows =
     resources.kind === "auth"
-      ? [["Auth D1", resources.authDbId]]
+      ? [
+          ["Output kind", resources.kind],
+          ["Output stage", resources.stage],
+          ["Auth D1", resources.authDbId],
+        ]
       : [
+          ["Output kind", resources.kind],
+          ["Output stage", resources.stage],
           ["Auth D1", resources.authDbId],
           ["Semaphore D1", resources.semaphoreDbId],
           ["Project KV", resources.projectDirectoryKvId],
@@ -269,37 +418,62 @@ function ResourceSummary({ resources }: { resources: AlchemyResources | undefine
         ];
 
   return (
-    <dl className="grid gap-x-4 gap-y-2 text-xs sm:grid-cols-[auto_1fr]">
-      {rows.map(([label, value]) => (
-        <div key={label} className="contents">
-          <dt className="text-muted-foreground">{label}</dt>
-          <dd className="truncate font-mono" title={value}>
-            {value}
-          </dd>
-        </div>
-      ))}
-    </dl>
+    <DetailList
+      title="Alchemy output"
+      description="Canonical resource manifest read directly from the Alchemy state store"
+      rows={rows}
+    />
   );
 }
 
 function ProgressSummary({ state }: { state: EnvironmentState }) {
-  const latest = state.progress.slice(-4);
-  if (latest.length === 0) {
+  if (state.progress.length === 0) {
     return (
-      <p className="text-xs text-muted-foreground">
-        No resource operation has run since this environment state was created.
-      </p>
+      <DetailList
+        title="Operation progress"
+        description="Every record published by the current or most recent operation"
+        rows={[["Records", "No resource operation has published progress"]]}
+      />
     );
   }
 
   return (
-    <div className="space-y-2 border-t pt-3">
-      {latest.map((progress) => (
-        <div key={progress.id} className="flex items-start justify-between gap-3 text-xs">
-          <span className="min-w-0 truncate font-mono">{progress.type}</span>
-          <span className="shrink-0 text-muted-foreground">{progress.status}</span>
-        </div>
-      ))}
-    </div>
+    <section className="flex min-w-0 flex-col gap-2" aria-label="Operation progress">
+      <div>
+        <h3 className="text-sm font-medium">Operation progress</h3>
+        <p className="text-xs text-muted-foreground">
+          Every progress record published by the current or most recent operation
+        </p>
+      </div>
+      <Table>
+        <TableHeader>
+          <TableRow className="hover:bg-transparent">
+            <TableHead>Resource</TableHead>
+            <TableHead>Status</TableHead>
+            <TableHead>Detail</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {state.progress.map((progress) => (
+            <TableRow key={progress.id} className="hover:bg-transparent">
+              <TableCell className="w-48 py-2 align-top whitespace-normal">
+                <div className="flex flex-col gap-0.5">
+                  <span className="break-all font-mono text-xs font-medium">{progress.type}</span>
+                  <span className="break-all font-mono text-xs text-muted-foreground">
+                    {progress.id}
+                  </span>
+                </div>
+              </TableCell>
+              <TableCell className="w-24 py-2 align-top">
+                <Badge variant="outline">{progress.status}</Badge>
+              </TableCell>
+              <TableCell className="py-2 align-top text-xs whitespace-normal text-muted-foreground">
+                {progress.message ?? "No detail message"}
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </section>
   );
 }
