@@ -1,0 +1,21 @@
+{
+  "name": "kernel-auth",
+  "private": true,
+  "type": "module",
+  "description": "Clean-room auth worker — session login + directory + OAuth 2.1 AS (via @cloudflare/workers-oauth-provider) for the MCP/device edge. See docs/simplification/wayfinder/auth-worker-design.md.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@cloudflare/workers-oauth-provider": "^0.8.3"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260621.1",
+    "typescript": "^5.9.3",
+    "vitest": "4.0.15",
+    "wrangler": "4.107.0"
+  }
+}

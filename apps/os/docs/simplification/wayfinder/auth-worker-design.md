@@ -56,6 +56,62 @@ The calling worker picks by request shape (a browser page vs `/api`/`/mcp` or an
 worker gave it** — that's the "partial fetch." This is what replaces `auth-wall.ts` (verify-a-JWT) and the
 kernel's whole `directory.ts` provider switch.
 
+## 2a. Credentials, `/api` authorization, and API keys — the whole boundary
+
+There are exactly **three credential kinds**, and every one of them resolves to the **same thing**: an
+**actor + a set of grants**, where a grant is `{ projectId, scopes[] }`. This is the unifying model —
+there is no separate "API-key subsystem," no separate "OAuth subsystem." One actor+grants shape, minted
+three ways.
+
+| credential             | who carries it                           | minted by                                     | scoped to                             | validated by                     |
+| ---------------------- | ---------------------------------------- | --------------------------------------------- | ------------------------------------- | -------------------------------- |
+| **session cookie**     | first-party browser                      | `/login`                                      | the human's full directory membership | our `session.ts` (HMAC)          |
+| **API key / PAT**      | a program (CLI, CI, integration, device) | the console (a human picks projects + scopes) | exactly those projects/scopes         | our lookup (hashed key → grants) |
+| **OAuth access token** | an external MCP/OAuth client             | the AS after `/authorize` consent             | the project(s) approved at the picker | the provider (OAUTH_KV)          |
+
+Two library facts pin the shape (verified in `@cloudflare/workers-oauth-provider` 0.8.3):
+
+- **`resolveExternalToken(token, request, env) → { props, audience }`** is the provider's PAT/API-key hook:
+  any `Authorization: Bearer` that is _not_ a provider-issued OAuth token falls through to this callback,
+  which validates it and returns the very same `ctx.props`. **API keys are first-class bearer credentials
+  on any protected route, for free.**
+- There is **no manual "validate this token" helper** — the provider only validates tokens on `apiRoute`s.
+  So a route is either a bearer-validated apiRoute, or it's session-land in the default handler. That fork
+  decides `/api`.
+
+### How `/api` authorization works
+
+`/api` (itx) accepts **two** credential kinds, resolved in the default handler — _not_ as an OAuth
+apiRoute, because we want OAuth to stay strictly at the MCP/external edge (that discipline is what keeps us
+out of the app/os client zoo):
+
+- **From the browser** — the **session cookie** (same-origin; works for both SSR loaders/actions and
+  client-side fetch). No token, no OAuth.
+- **From a program** — an **API key** as `Authorization: Bearer …` (hashed-lookup → actor+grants).
+
+OAuth access tokens are **not** accepted at `/api` — they exist only for `/mcp`. So `/api` = "session **or**
+API key," `/mcp` = "OAuth token **or** API key (via `resolveExternalToken`)." One API-key validator, reused
+in both places.
+
+### Who enforces what (the clean split)
+
+- **The auth worker RESOLVES**: credential → `{ actor, grants }`. It answers _who are you, and what were
+  you granted._
+- **The itx / control-plane layer ENFORCES per call**: is the target `projectId` in `grants`, and is the
+  `scope` sufficient? It answers _is THIS call allowed._
+
+The auth worker never needs to know what an itx capability does; the control plane never validates a
+credential. That boundary is the whole point.
+
+### API keys, concretely
+
+A directory record `apikey:<sha256(key)> → { actor, grants:[{projectId,scopes}], label, createdAt }` — we
+store a **hash**, never the raw key (cf. Better Auth hashed-token storage). Minted in the console by a
+human with a session (the project picker again — "which projects can this key touch?"), **revocable**
+(delete the record) and **listable** (the console shows them next to OAuth grants via
+`listUserGrants`/`revokeGrant`). Presented as a bearer, hashed, looked up, resolved to props. Same grant
+model as everything else.
+
 ## 3. Config modes = the login backend (not a kernel knob)
 
 The auth worker has ONE knob for _how a human proves who they are_:
@@ -85,9 +141,9 @@ token to this MCP server so it can't be replayed elsewhere).
 **Client identity — CIMD, not DCR (the "new way" Jonas meant).** The live default is **OAuth Client ID
 Metadata Documents** (`draft-ietf-oauth-client-id-metadata-document-00`, adopted Oct 2025). The
 `client_id` is itself an **HTTPS URL** pointing at a JSON metadata doc (`client_id`, `client_name`,
-`redirect_uris`). The auth worker, on seeing a URL `client_id`, **fetches + validates** it (client_id must
+`redirect_uris`). The auth worker, on seeing a URL `client_id`, **fetches + validates** it (client*id must
 equal the URL exactly; redirect_uris must match; **SSRF-guard the fetch**; cache per HTTP headers). **No
-`/register`, no client store** — this is _simpler_ for a mini auth worker. Advertise
+`/register`, no client store** — this is \_simpler* for a mini auth worker. Advertise
 `"client_id_metadata_document_supported": true` in the AS metadata. DCR (RFC 7591) is demoted **SHOULD→MAY**
 — a fallback only; we can skip it. Priority order: pre-registration → CIMD → DCR → prompt.
 
