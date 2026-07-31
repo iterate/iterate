@@ -78,10 +78,17 @@ export function threadContextForScriptRun(
   events: StreamEvent[],
   run: { executionId: string },
 ): { title: string | null; activity: string | null } | null {
+  // StreamEvent.payload is over-the-wire JSON (`any`): the event-type
+  // discriminator selects the vocabulary, but TypeScript cannot narrow
+  // payload from `type`, so both reads below cast to the field subset they
+  // touch and runtime-guard each field — the same pattern as
+  // approvals.ts's indexApprovalEvents at this boundary.
   const ordered = [...events].sort((a, b) => a.offset - b.offset);
   const settle = ordered.find(
     (event) =>
       event.type === SCRIPT_RUN_SETTLED_TYPE &&
+      // Equality against the known executionId makes a malformed payload
+      // harmless: it simply never matches, leaving the fold unbounded.
       (event.payload as { executionId?: string } | undefined)?.executionId === run.executionId,
   );
   const statusBound = settle === undefined ? Infinity : settle.offset;
@@ -89,9 +96,13 @@ export function threadContextForScriptRun(
   let activity: string | null = null;
   for (const event of ordered) {
     if (event.type !== SUMMARY_UPDATED_TYPE || event.offset > statusBound) continue;
-    const payload = (event.payload || {}) as { title?: string | null; activity?: string | null };
-    if (payload.title !== undefined) title = payload.title || null;
-    if (payload.activity !== undefined) activity = payload.activity || null;
+    const payload = (event.payload || {}) as { title?: unknown; activity?: unknown };
+    // Per field: a string sets ("" clears via ||), an explicit null clears,
+    // anything else — absent or malformed — preserves the standing value.
+    if (typeof payload.title === "string" || payload.title === null) title = payload.title || null;
+    if (typeof payload.activity === "string" || payload.activity === null) {
+      activity = payload.activity || null;
+    }
   }
   return title !== null || activity !== null ? { title, activity } : null;
 }
