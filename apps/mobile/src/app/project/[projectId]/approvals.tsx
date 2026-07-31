@@ -44,11 +44,9 @@ import {
   type Verdict,
 } from "../../../lib/approvals.ts";
 import {
-  ASSISTANT_MESSAGE_TYPE,
   SCRIPT_RUN_SETTLED_TYPE,
   SUMMARY_UPDATED_TYPE,
   threadContextForScriptRun,
-  USER_MESSAGE_TYPE,
 } from "../../../lib/chat.ts";
 import { getProjectItx } from "../../../lib/itx.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
@@ -380,7 +378,6 @@ function BatchCard({
           executionId={streamContext.executionId}
           projectId={projectId}
           projectSlug={projectSlug}
-          scriptRunRequestedEventOffset={streamContext.scriptRunRequestedEventOffset}
           streamPath={streamContext.streamPath}
         />
       ) : null}
@@ -548,24 +545,21 @@ function BatchCard({
  * history read without opening each thread. A snapshot deliberately, not live
  * status: the fold is bounded by immutable history, so it works identically
  * for open and settled batches. The status renders IN FULL (it wraps — a
- * clipped status answers nothing); only the statusless-thread fallback (the
- * last visible message, often a long command) is one-lined. The line renders
- * immediately with the thread name (tap = open the thread) and grows once
- * the one-shot fetch lands; a slow or failed fetch never blocks the card.
+ * clipped status answers nothing) and taps through to the thread. Statusless
+ * threads render no line at all — same as while the one-shot fetch is
+ * pending or failed, which is what keeps the card spinner-free.
  */
 function ThreadContextLine({
   baseUrl,
   executionId,
   projectId,
   projectSlug,
-  scriptRunRequestedEventOffset,
   streamPath,
 }: {
   baseUrl: string;
   executionId: string;
   projectId: string;
   projectSlug: string;
-  scriptRunRequestedEventOffset: number;
   streamPath: string;
 }) {
   const context = useQuery({
@@ -573,30 +567,26 @@ function ThreadContextLine({
     queryFn: async () => {
       const project = await getProjectItx(baseUrl, projectId);
       const stream = project.streams.get(streamPath);
-      // Page the whole thread (no beforeOffset: the run's settle event and
-      // the status the script itself set land AFTER the run request) — a
-      // busy thread can exceed one getEvents page.
+      // Summary events are sparse (a handful per turn), and getEvents
+      // filters by type in SQL before applying its page limit — so even a
+      // very long thread reads as one small page; the loop is only for the
+      // pathological >500-status thread.
       const events: StreamEvent[] = [];
       let cursor = 0;
       while (true) {
         const page = await stream.getEvents({
           afterOffset: cursor,
-          eventTypes: [
-            SUMMARY_UPDATED_TYPE,
-            SCRIPT_RUN_SETTLED_TYPE,
-            USER_MESSAGE_TYPE,
-            ASSISTANT_MESSAGE_TYPE,
-          ],
+          eventTypes: [SUMMARY_UPDATED_TYPE, SCRIPT_RUN_SETTLED_TYPE],
         });
         if (page.length === 0) break;
         events.push(...page);
         cursor = page.at(-1)!.offset;
       }
-      return threadContextForScriptRun(events, { scriptRunRequestedEventOffset, executionId });
+      return threadContextForScriptRun(events, { executionId });
     },
     staleTime: Infinity,
   });
-  const threadName = streamPath.replace(/^\/agents\//, "");
+  if (!context.data) return null;
   return (
     <Pressable
       accessibilityRole="link"
@@ -608,19 +598,10 @@ function ThreadContextLine({
       }
       style={styles.threadContext}
     >
-      {context.data?.kind === "status" ? (
-        <Text style={styles.threadContextText}>
-          <Text style={styles.threadContextName}>{threadName}</Text>
-          {` · ${[context.data.title, context.data.activity].filter(Boolean).join(" — ")}`}
-        </Text>
-      ) : (
-        <Text numberOfLines={1} style={styles.threadContextText}>
-          <Text style={styles.threadContextName}>{threadName}</Text>
-          {context.data?.kind === "message"
-            ? ` · ${context.data.role === "user" ? "you" : "agent"}: ${context.data.text}`
-            : ""}
-        </Text>
-      )}
+      <Text style={styles.threadContextText}>
+        <Text style={styles.threadContextName}>{streamPath.replace(/^\/agents\//, "")}</Text>
+        {` · ${[context.data.title, context.data.activity].filter(Boolean).join(" — ")}`}
+      </Text>
     </Pressable>
   );
 }

@@ -65,24 +65,19 @@ export function reduceChatEvents(events: StreamEvent[]): ChatThread {
 export const SUMMARY_UPDATED_TYPE = "events.iterate.com/agent/summary-updated";
 export const SCRIPT_RUN_SETTLED_TYPE = "events.iterate.com/capability-host/script-run-settled";
 
-export type ThreadContext =
-  | { kind: "status"; title: string | null; activity: string | null }
-  | { kind: "message"; role: "user" | "assistant"; text: string };
-
 /**
- * What the thread was doing when one script run's approval batch was born.
- * Primary answer: the agent-maintained status, folded through the run's own
- * settlement — a status the script sets just before its held fetch counts
- * (it lands AFTER the run-requested offset), while a later turn's status
- * (after this run settled) does not. An unsettled run has no upper bound:
- * whatever status it is writing is still its own. Threads that never set a
- * status fall back to the last visible message at or before the run request;
- * an empty thread yields null.
+ * The thread's agent-maintained status as of one script run: summary-updated
+ * events folded through the run's own settlement. A status the script sets
+ * just before its held fetch counts (it lands AFTER the run-requested
+ * offset); a later turn's status (after this run settled) does not; an
+ * unsettled run has no upper bound — whatever status it is writing is still
+ * its own. Null when no status field was ever set: statusless threads get no
+ * context line at all, deliberately.
  */
 export function threadContextForScriptRun(
   events: StreamEvent[],
-  run: { scriptRunRequestedEventOffset: number; executionId: string },
-): ThreadContext | null {
+  run: { executionId: string },
+): { title: string | null; activity: string | null } | null {
   const ordered = [...events].sort((a, b) => a.offset - b.offset);
   const settle = ordered.find(
     (event) =>
@@ -98,28 +93,7 @@ export function threadContextForScriptRun(
     if (payload.title !== undefined) title = payload.title || null;
     if (payload.activity !== undefined) activity = payload.activity || null;
   }
-  if (title !== null || activity !== null) return { kind: "status", title, activity };
-  const message = lastVisibleMessageAtOrBefore(ordered, run.scriptRunRequestedEventOffset);
-  return message === null ? null : { kind: "message", ...message };
-}
-
-/**
- * The thread's last visible message at or before `offset` — the statusless
- * thread's fallback context. Text is collapsed to one line; messages with no
- * visible text are skipped (they'd render as an empty context line).
- */
-function lastVisibleMessageAtOrBefore(
-  events: StreamEvent[],
-  offset: number,
-): { role: "user" | "assistant"; text: string } | null {
-  let best: ChatMessage | null = null;
-  for (const message of reduceChatEvents(events).messages) {
-    if (message.offset > offset) continue;
-    const text = message.text.replace(/\s+/g, " ").trim();
-    if (text === "") continue;
-    if (best === null || message.offset > best.offset) best = { ...message, text };
-  }
-  return best === null ? null : { role: best.role, text: best.text };
+  return title !== null || activity !== null ? { title, activity } : null;
 }
 
 /**

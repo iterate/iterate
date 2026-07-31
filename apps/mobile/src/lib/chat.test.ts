@@ -57,21 +57,34 @@ test("merge dedupes overlapping offsets and keeps order", () => {
   expect(merged.map((e) => e.offset)).toEqual([1, 2, 3]);
 });
 
-test("a status the script sets after its run request still counts as this run's context", () => {
+test("setStatus then a held fetch: the status shows while the run is still parked, unsettled", () => {
+  // Misha's sanity check: `setStatus("foo"); fetch(...)` with the fetch held
+  // at the egress door — no settlement exists yet, so the fold has no upper
+  // bound and the run's own freshly written status is its context.
   const context = threadContextForScriptRun(
     [
       userMessage(1, "chase the refunds"),
       activity(2, "events.iterate.com/capability-host/script-run-requested"),
       summaryUpdated(3, { title: "Refund sweep", activity: "Emailing customers about refunds" }),
-      scriptRunSettled(6, "run-a"),
     ],
-    { scriptRunRequestedEventOffset: 2, executionId: "run-a" },
+    { executionId: "run-a" },
   );
   expect(context).toEqual({
-    kind: "status",
     title: "Refund sweep",
     activity: "Emailing customers about refunds",
   });
+});
+
+test("another run's settlement does not bound this run's fold", () => {
+  const context = threadContextForScriptRun(
+    [
+      activity(2, "events.iterate.com/capability-host/script-run-requested"),
+      scriptRunSettled(3, "some-other-run"),
+      summaryUpdated(4, { title: "Refund sweep", activity: "Emailing customers" }),
+    ],
+    { executionId: "run-a" },
+  );
+  expect(context).toMatchObject({ title: "Refund sweep" });
 });
 
 test("a later turn's status is not this run's context — the run's settlement bounds the fold", () => {
@@ -82,13 +95,9 @@ test("a later turn's status is not this run's context — the run's settlement b
       scriptRunSettled(4, "run-a"),
       summaryUpdated(7, { title: "Invoice chase", activity: "Chasing invoices" }),
     ],
-    { scriptRunRequestedEventOffset: 2, executionId: "run-a" },
+    { executionId: "run-a" },
   );
-  expect(context).toEqual({
-    kind: "status",
-    title: "Refund sweep",
-    activity: "Emailing customers",
-  });
+  expect(context).toEqual({ title: "Refund sweep", activity: "Emailing customers" });
 });
 
 test("status fields fold independently: an activity-only update keeps the standing title", () => {
@@ -97,10 +106,9 @@ test("status fields fold independently: an activity-only update keeps the standi
       summaryUpdated(1, { title: "Refund sweep", activity: "Starting work" }),
       summaryUpdated(3, { activity: "Emailing customers about refunds" }),
     ],
-    { scriptRunRequestedEventOffset: 2, executionId: "run-a" },
+    { executionId: "run-a" },
   );
   expect(context).toEqual({
-    kind: "status",
     title: "Refund sweep",
     activity: "Emailing customers about refunds",
   });
@@ -112,65 +120,19 @@ test("an explicit null clears a status field, matching the summary vocabulary", 
       summaryUpdated(1, { title: "Refund sweep", activity: "Starting work" }),
       summaryUpdated(2, { title: null }),
     ],
-    { scriptRunRequestedEventOffset: 3, executionId: "run-a" },
+    { executionId: "run-a" },
   );
-  expect(context).toEqual({ kind: "status", title: null, activity: "Starting work" });
+  expect(context).toEqual({ title: null, activity: "Starting work" });
 });
 
-test("an unsettled run's freshly written status is still its own", () => {
-  const context = threadContextForScriptRun(
-    [
-      activity(2, "events.iterate.com/capability-host/script-run-requested"),
-      summaryUpdated(3, { title: "Refund sweep", activity: "Emailing customers" }),
-      scriptRunSettled(4, "some-other-run"),
-    ],
-    { scriptRunRequestedEventOffset: 2, executionId: "run-a" },
-  );
-  expect(context).toMatchObject({ kind: "status", title: "Refund sweep" });
-});
-
-test("statusless thread falls back to the last visible message at or before the run request", () => {
-  const context = threadContextForScriptRun(
-    [
-      userMessage(1, "add a healthcheck endpoint"),
-      assistantMessage(3, "On it — writing the handler now."),
-      assistantMessage(8, "Done — /health returns 200 now."),
-    ],
-    { scriptRunRequestedEventOffset: 5, executionId: "run-a" },
-  );
-  expect(context).toEqual({
-    kind: "message",
-    role: "assistant",
-    text: "On it — writing the handler now.",
-  });
-});
-
-test("fallback: a message exactly at the run-request offset counts, user role included", () => {
-  const context = threadContextForScriptRun(
-    [userMessage(2, "old ask"), userMessage(5, "send the invoice email")],
-    { scriptRunRequestedEventOffset: 5, executionId: "run-a" },
-  );
-  expect(context).toEqual({ kind: "message", role: "user", text: "send the invoice email" });
-});
-
-test("fallback text collapses to one line and blank messages are skipped", () => {
-  const context = threadContextForScriptRun(
-    [userMessage(1, "fix the deploy\n\nthen tell me"), assistantMessage(2, "  \n  ")],
-    { scriptRunRequestedEventOffset: 5, executionId: "run-a" },
-  );
-  expect(context).toEqual({ kind: "message", role: "user", text: "fix the deploy then tell me" });
-});
-
-test("no status and only messages after the run request means no context; empty thread too", () => {
+test("no status means no context — messages are not a fallback; empty thread too", () => {
   expect(
-    threadContextForScriptRun([assistantMessage(9, "all done")], {
-      scriptRunRequestedEventOffset: 5,
-      executionId: "run-a",
-    }),
+    threadContextForScriptRun(
+      [userMessage(1, "add a healthcheck endpoint"), assistantMessage(3, "On it.")],
+      { executionId: "run-a" },
+    ),
   ).toEqual(null);
-  expect(
-    threadContextForScriptRun([], { scriptRunRequestedEventOffset: 5, executionId: "run-a" }),
-  ).toEqual(null);
+  expect(threadContextForScriptRun([], { executionId: "run-a" })).toEqual(null);
 });
 
 test("mobile agent paths follow the web slug convention under the mobile channel", () => {
