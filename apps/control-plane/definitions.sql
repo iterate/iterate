@@ -1,6 +1,10 @@
--- The control-plane directory. The one authoritative store of "who exists, which projects exist, who can
--- access what, and where ingress goes." Strongly consistent (D1) — no KV list() lag. The OAuth provider
+-- The control-plane directory. The one authoritative store of "who exists, which orgs/projects exist, who
+-- can access what, and where ingress goes." Strongly consistent (D1) — no KV list() lag. The OAuth provider
 -- keeps its own OAUTH_KV (tokens/grants/clients); this D1 is OURS (design §2a + §8).
+--
+-- Org-centric (like apps/os): users belong to orgs, projects belong to orgs, access is org membership.
+-- This is what makes "create an org + project during MCP /authorize" (ADR 0029, emerge-with-a-project)
+-- a first-class flow rather than a bolt-on.
 
 create table users (
   id text primary key,            -- user:<lowercased-email>
@@ -8,24 +12,31 @@ create table users (
   created_at text not null default current_timestamp
 );
 
-create table projects (
-  id text primary key,            -- project id (slug-derived for now)
-  slug text not null unique,
+create table orgs (
+  id text primary key,            -- org id
+  name text not null,
   created_at text not null default current_timestamp
 );
 
--- Who can access which project, and as what. THIS is the "membership" that was only ever real in the
--- auth.iterate.com provider before — now first-class and local.
-create table memberships (
-  project_id text not null references projects(id),
+-- Who belongs to which org, and as what. THIS is "who can access what" — access to a project is
+-- membership in its org.
+create table org_members (
+  org_id text not null references orgs(id),
   user_id text not null references users(id),
   role text not null default 'member',   -- 'owner' | 'member'
   created_at text not null default current_timestamp,
-  primary key (project_id, user_id)
+  primary key (org_id, user_id)
+);
+
+create table projects (
+  id text primary key,            -- project id (slug-derived for now)
+  slug text not null unique,
+  org_id text not null references orgs(id),
+  created_at text not null default current_timestamp
 );
 
 -- Ingress routes are a PROPERTY OF A PROJECT: a project owns 0..n hostnames. Hostname -> project routing
--- is a reverse lookup here (replacing the kernel's routing.ts config/KV). Custom domains = just more rows.
+-- is a reverse lookup here (replacing the kernel's routing.ts). Custom domains = just more rows.
 create table routes (
   host text primary key,          -- e.g. myproj.example.com  (the ingress hostname)
   project_id text not null references projects(id),
@@ -41,5 +52,6 @@ create table api_keys (
   created_at text not null default current_timestamp
 );
 
-create index idx_memberships_user on memberships (user_id, project_id);
+create index idx_org_members_user on org_members (user_id, org_id);
+create index idx_projects_org on projects (org_id);
 create index idx_routes_project on routes (project_id);

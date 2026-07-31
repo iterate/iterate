@@ -1,7 +1,6 @@
 -- Control-plane directory queries — the single source of vanilla SQL for the control plane.
 -- sqlfu best practice: one named query per statement (`/** @name x */`), `:named` bind params, explicit
--- column lists (no SELECT *). `sqlfu generate` types these into sql/.generated/ and the worker calls them
--- as `await queryName(createD1Client(env.DB), params)`. Schema lives in ../definitions.sql.
+-- column lists (no SELECT *). `sqlfu generate` types these into sql/.generated/. Schema: ../definitions.sql.
 
 -- ── Users ────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -13,31 +12,45 @@ RETURNING id, email;
 /** @name getUserByEmail */
 SELECT id, email FROM users WHERE email = :email;
 
+-- ── Orgs + membership (access to a project = membership in its org) ───────────────────────────────────
+
+/** @name createOrg */
+INSERT INTO orgs (id, name) VALUES (:id, :name)
+RETURNING id, name;
+
+/** @name addOrgMember */
+INSERT INTO org_members (org_id, user_id, role) VALUES (:orgId, :userId, :role)
+ON CONFLICT(org_id, user_id) DO NOTHING;
+
+/** @name listOrgsForUser */
+SELECT o.id, o.name, m.role
+FROM orgs o
+JOIN org_members m ON m.org_id = o.id
+WHERE m.user_id = :userId
+ORDER BY o.name ASC;
+
 -- ── Projects ─────────────────────────────────────────────────────────────────────────────────────────
 
 /** @name createProject */
-INSERT INTO projects (id, slug) VALUES (:id, :slug)
+INSERT INTO projects (id, slug, org_id) VALUES (:id, :slug, :orgId)
 ON CONFLICT(slug) DO NOTHING
-RETURNING id, slug;
+RETURNING id, slug, org_id;
 
 /** @name getProjectBySlug */
-SELECT id, slug FROM projects WHERE slug = :slug;
-
--- ── Memberships (who can access which project) ───────────────────────────────────────────────────────
-
-/** @name addMembership */
-INSERT INTO memberships (project_id, user_id, role) VALUES (:projectId, :userId, :role)
-ON CONFLICT(project_id, user_id) DO NOTHING;
+SELECT id, slug, org_id FROM projects WHERE slug = :slug;
 
 /** @name listProjectsForUser */
-SELECT p.id, p.slug, m.role
+SELECT p.id, p.slug, p.org_id, m.role
 FROM projects p
-JOIN memberships m ON m.project_id = p.id
+JOIN org_members m ON m.org_id = p.org_id
 WHERE m.user_id = :userId
 ORDER BY p.slug ASC;
 
-/** @name checkMembership */
-SELECT role FROM memberships WHERE project_id = :projectId AND user_id = :userId;
+/** @name checkProjectAccess */
+SELECT m.role
+FROM projects p
+JOIN org_members m ON m.org_id = p.org_id
+WHERE p.id = :projectId AND m.user_id = :userId;
 
 -- ── Routes (ingress hostnames owned by a project) ────────────────────────────────────────────────────
 
@@ -51,7 +64,7 @@ ON CONFLICT(host) DO UPDATE SET project_id = excluded.project_id, app = excluded
 /** @name listRoutesForProject */
 SELECT host, app FROM routes WHERE project_id = :projectId ORDER BY host ASC;
 
--- ── API keys (bearer credentials scoped to projects; store the hash, never the raw key) ───────────────
+-- ── API keys (bearer creds scoped to projects; store the hash, never the raw key) ─────────────────────
 
 /** @name insertApiKey */
 INSERT INTO api_keys (hash, user_id, label, grants) VALUES (:hash, :userId, :label, :grants);

@@ -57,95 +57,190 @@ export namespace getUserByEmail {
   };
 }
 
+const createOrgSql = `
+INSERT INTO orgs (id, name) VALUES (?, ?)
+RETURNING id, name;
+`.trim();
+const createOrgQuery = (params: createOrg.Params) => ({
+  name: "createOrg",
+  sql: createOrgSql,
+  args: [params.id, params.name],
+});
+
+export const createOrg = Object.assign(
+  async function createOrg(client: Client, params: createOrg.Params): Promise<createOrg.Result> {
+    const rows = await client.all<createOrg.Result>(createOrgQuery(params));
+    return rows[0];
+  },
+  { sql: createOrgSql, query: createOrgQuery },
+);
+
+export namespace createOrg {
+  export type Params = {
+    id: string;
+    name: string;
+  };
+  export type Result = {
+    id: string;
+    name: string;
+  };
+}
+
+const addOrgMemberSql = `
+INSERT INTO org_members (org_id, user_id, role) VALUES (?, ?, ?)
+ON CONFLICT(org_id, user_id) DO NOTHING;
+`.trim();
+const addOrgMemberQuery = (params: addOrgMember.Params) => ({
+  name: "addOrgMember",
+  sql: addOrgMemberSql,
+  args: [params.orgId, params.userId, params.role],
+});
+
+export const addOrgMember = Object.assign(
+  async function addOrgMember(client: Client, params: addOrgMember.Params) {
+    return client.run(addOrgMemberQuery(params));
+  },
+  { sql: addOrgMemberSql, query: addOrgMemberQuery },
+);
+
+export namespace addOrgMember {
+  export type Params = {
+    orgId: string;
+    userId: string;
+    role: string;
+  };
+}
+
+const listOrgsForUserSql = `
+SELECT o.id, o.name, m.role
+FROM orgs o
+JOIN org_members m ON m.org_id = o.id
+WHERE m.user_id = ?
+ORDER BY o.name ASC;
+`.trim();
+const listOrgsForUserQuery = (params: listOrgsForUser.Params) => ({
+  name: "listOrgsForUser",
+  sql: listOrgsForUserSql,
+  args: [params.userId],
+});
+
+export const listOrgsForUser = Object.assign(
+  async function listOrgsForUser(
+    client: Client,
+    params: listOrgsForUser.Params,
+  ): Promise<listOrgsForUser.Result[]> {
+    return client.all<listOrgsForUser.Result>(listOrgsForUserQuery(params));
+  },
+  { sql: listOrgsForUserSql, query: listOrgsForUserQuery },
+);
+
+export namespace listOrgsForUser {
+  export type Params = {
+    userId: string;
+  };
+  export type Result = {
+    id: string;
+    name: string;
+    role: string;
+  };
+}
+
 const createProjectSql = `
-INSERT INTO projects (id, slug) VALUES (?, ?)
+INSERT INTO projects (id, slug, org_id) VALUES (?, ?, ?)
 ON CONFLICT(slug) DO NOTHING
-RETURNING id, slug;
+RETURNING id, slug, org_id;
 `.trim();
 const createProjectQuery = (params: createProject.Params) => ({
   name: "createProject",
   sql: createProjectSql,
-  args: [params.id, params.slug],
+  args: [params.id, params.slug, params.orgId],
 });
+
+function createProjectMapResult(row: createProject.RawResult): createProject.Result {
+  return {
+    id: row.id,
+    slug: row.slug,
+    orgId: row.org_id,
+  };
+}
 
 export const createProject = Object.assign(
   async function createProject(
     client: Client,
     params: createProject.Params,
   ): Promise<createProject.Result> {
-    const rows = await client.all<createProject.Result>(createProjectQuery(params));
-    return rows[0];
+    const rows = await client.all<createProject.RawResult>(createProjectQuery(params));
+    return createProjectMapResult(rows[0]!);
   },
-  { sql: createProjectSql, query: createProjectQuery },
+  { sql: createProjectSql, query: createProjectQuery, mapResult: createProjectMapResult },
 );
 
 export namespace createProject {
   export type Params = {
     id: string;
     slug: string;
+    orgId: string;
+  };
+  export type RawResult = {
+    id: string;
+    slug: string;
+    org_id: string;
   };
   export type Result = {
     id: string;
     slug: string;
+    orgId: string;
   };
 }
 
-const getProjectBySlugSql = `SELECT id, slug FROM projects WHERE slug = ?;`;
+const getProjectBySlugSql = `
+SELECT id, slug, org_id FROM projects WHERE slug = ?;
+`.trim();
 const getProjectBySlugQuery = (params: getProjectBySlug.Params) => ({
   name: "getProjectBySlug",
   sql: getProjectBySlugSql,
   args: [params.slug],
 });
 
+function getProjectBySlugMapResult(row: getProjectBySlug.RawResult): getProjectBySlug.Result {
+  return {
+    id: row.id,
+    slug: row.slug,
+    orgId: row.org_id,
+  };
+}
+
 export const getProjectBySlug = Object.assign(
   async function getProjectBySlug(
     client: Client,
     params: getProjectBySlug.Params,
   ): Promise<getProjectBySlug.Result[]> {
-    return client.all<getProjectBySlug.Result>(getProjectBySlugQuery(params));
+    const rows = await client.all<getProjectBySlug.RawResult>(getProjectBySlugQuery(params));
+    return rows.map(getProjectBySlugMapResult);
   },
-  { sql: getProjectBySlugSql, query: getProjectBySlugQuery },
+  { sql: getProjectBySlugSql, query: getProjectBySlugQuery, mapResult: getProjectBySlugMapResult },
 );
 
 export namespace getProjectBySlug {
   export type Params = {
     slug: string;
   };
+  export type RawResult = {
+    id: string;
+    slug: string;
+    org_id: string;
+  };
   export type Result = {
     id: string;
     slug: string;
-  };
-}
-
-const addMembershipSql = `
-INSERT INTO memberships (project_id, user_id, role) VALUES (?, ?, ?)
-ON CONFLICT(project_id, user_id) DO NOTHING;
-`.trim();
-const addMembershipQuery = (params: addMembership.Params) => ({
-  name: "addMembership",
-  sql: addMembershipSql,
-  args: [params.projectId, params.userId, params.role],
-});
-
-export const addMembership = Object.assign(
-  async function addMembership(client: Client, params: addMembership.Params) {
-    return client.run(addMembershipQuery(params));
-  },
-  { sql: addMembershipSql, query: addMembershipQuery },
-);
-
-export namespace addMembership {
-  export type Params = {
-    projectId: string;
-    userId: string;
-    role: string;
+    orgId: string;
   };
 }
 
 const listProjectsForUserSql = `
-SELECT p.id, p.slug, m.role
+SELECT p.id, p.slug, p.org_id, m.role
 FROM projects p
-JOIN memberships m ON m.project_id = p.id
+JOIN org_members m ON m.org_id = p.org_id
 WHERE m.user_id = ?
 ORDER BY p.slug ASC;
 `.trim();
@@ -155,48 +250,73 @@ const listProjectsForUserQuery = (params: listProjectsForUser.Params) => ({
   args: [params.userId],
 });
 
+function listProjectsForUserMapResult(
+  row: listProjectsForUser.RawResult,
+): listProjectsForUser.Result {
+  return {
+    id: row.id,
+    slug: row.slug,
+    orgId: row.org_id,
+    role: row.role,
+  };
+}
+
 export const listProjectsForUser = Object.assign(
   async function listProjectsForUser(
     client: Client,
     params: listProjectsForUser.Params,
   ): Promise<listProjectsForUser.Result[]> {
-    return client.all<listProjectsForUser.Result>(listProjectsForUserQuery(params));
+    const rows = await client.all<listProjectsForUser.RawResult>(listProjectsForUserQuery(params));
+    return rows.map(listProjectsForUserMapResult);
   },
-  { sql: listProjectsForUserSql, query: listProjectsForUserQuery },
+  {
+    sql: listProjectsForUserSql,
+    query: listProjectsForUserQuery,
+    mapResult: listProjectsForUserMapResult,
+  },
 );
 
 export namespace listProjectsForUser {
   export type Params = {
     userId: string;
   };
+  export type RawResult = {
+    id: string;
+    slug: string;
+    org_id: string;
+    role: string;
+  };
   export type Result = {
     id: string;
     slug: string;
+    orgId: string;
     role: string;
   };
 }
 
-const checkMembershipSql = `
-SELECT role FROM memberships WHERE project_id = ? AND user_id = ?;
+const checkProjectAccessSql = `
+SELECT m.role
+FROM projects p
+JOIN org_members m ON m.org_id = p.org_id
+WHERE p.id = ? AND m.user_id = ?;
 `.trim();
-const checkMembershipQuery = (params: checkMembership.Params) => ({
-  name: "checkMembership",
-  sql: checkMembershipSql,
+const checkProjectAccessQuery = (params: checkProjectAccess.Params) => ({
+  name: "checkProjectAccess",
+  sql: checkProjectAccessSql,
   args: [params.projectId, params.userId],
 });
 
-export const checkMembership = Object.assign(
-  async function checkMembership(
+export const checkProjectAccess = Object.assign(
+  async function checkProjectAccess(
     client: Client,
-    params: checkMembership.Params,
-  ): Promise<checkMembership.Result | null> {
-    const rows = await client.all<checkMembership.Result>(checkMembershipQuery(params));
-    return rows.length > 0 ? rows[0] : null;
+    params: checkProjectAccess.Params,
+  ): Promise<checkProjectAccess.Result[]> {
+    return client.all<checkProjectAccess.Result>(checkProjectAccessQuery(params));
   },
-  { sql: checkMembershipSql, query: checkMembershipQuery },
+  { sql: checkProjectAccessSql, query: checkProjectAccessQuery },
 );
 
-export namespace checkMembership {
+export namespace checkProjectAccess {
   export type Params = {
     projectId: string;
     userId: string;

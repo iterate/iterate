@@ -219,3 +219,20 @@ code), then 2 (the MCP-auth correctness Jonas flagged).
 - **Session store vs directory store** — same DO/KV or separate? Lean: one store, two record types.
 - **Wide-open + OAuth**: in wide-open mode, does `/authorize` auto-approve a single anonymous identity, or
   is MCP-in-wide-open just tokenless? Lean: wide-open ⇒ `/mcp` needs no token (the Pi case).
+
+## 11. Agenda — userspace app auth as a capability (`itx.auth.fetch`)
+
+A project's own app (running in the **project config worker**, the dynamic worker) must be able to choose
+whether it's protected. Expose the same forward-auth "partial fetch" (§2) as an **itx capability the
+dynamic worker invokes** — `itx.auth.fetch(request)` — returning identity, or a response (login page / 401)
+to hand straight back. Modes the app selects:
+
+- **public** — everyone can access; no gate. (The initial default.)
+- **project-members-only** — only users with access to THIS project (session or token → membership check
+  against the project's org, i.e. `directory.access`).
+- **bring-your-own** — the app does its own auth (Clerk, etc.); `itx.auth` stays out of the way.
+
+This is the _userspace face_ of §2's `gate()`/`verifyToken()`: the control plane's forward-auth, dialable
+from project code. To think through: how the choice is expressed (declarative config on the app vs an
+explicit `itx.auth.fetch` call at the top of the handler) and how it reads in each topology
+(hosted / self-host / wide-open). Related: [[auth-worker-design]] §2, §3.

@@ -9,16 +9,23 @@ export type ApiKeysRow = {
   created_at: string;
 };
 
-export type MembershipsRow = {
-  project_id: string;
+export type OrgMembersRow = {
+  org_id: string;
   user_id: string;
   role: string;
+  created_at: string;
+};
+
+export type OrgsRow = {
+  id: string;
+  name: string;
   created_at: string;
 };
 
 export type ProjectsRow = {
   id: string;
   slug: string;
+  org_id: string;
   created_at: string;
 };
 
