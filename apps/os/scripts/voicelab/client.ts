@@ -51,6 +51,8 @@ export interface ClientOptions extends VoicelabConnectOptions {
    * userspace VoiceBridge DO instead of relying on a running node bridge.
    */
   workerUrl?: string;
+  /** Soak mode: re-speak the same utterance after each answer until --turns is reached. */
+  repeatSay?: boolean;
 }
 
 export async function client(options: ClientOptions) {
@@ -69,6 +71,8 @@ export async function client(options: ClientOptions) {
   }
   // Pre-synthesize the barge-in utterance: `say` is slow and must not stall the call.
   const say2Pcm = options.say2 ? fs.readFileSync(synthesizeUtterance(options.say2)) : null;
+  const repeatPcm =
+    options.repeatSay && syntheticPcmPath ? fs.readFileSync(syntheticPcmPath) : null;
 
   using itx = await connectProject(options);
   using stream = itx.streams.get(streamPath);
@@ -214,6 +218,8 @@ export async function client(options: ClientOptions) {
         if (turnsTarget > 0 && turnsDone >= turnsTarget && !finishRequested) {
           finishRequested = true;
           setTimeout(() => done?.(), Math.max(500, playout.depthMs() + 300));
+        } else if (options.repeatSay && repeatPcm && turnsDone < turnsTarget) {
+          setTimeout(() => mic.inject(repeatPcm), Math.max(800, playout.depthMs() + 400));
         }
         break;
       }
