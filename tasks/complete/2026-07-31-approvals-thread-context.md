@@ -156,3 +156,20 @@ doing?" should be answerable without opening the thread.
     the batch is held.
   - Video NOT re-recorded: the happy path it shows (full status on both
     cards, deep-link tap) is unchanged by the fallback removal.
+- Review-bot fixes after ready-for-review:
+  - AI-linter explain-type-cast threads: the two payload casts in
+    `threadContextForScriptRun` got the approvals.ts treatment (cast to the
+    field subset touched + per-field runtime guards; no schemas — mobile
+    keeps zod out of this boundary). Settle lookup is equality against a
+    known executionId (malformed = never matches); title/activity accept
+    string-or-null only, so malformed fields preserve rather than clear.
+  - Bugbot "premature null cached forever": agents Promise.all the status
+    append with the work, so the card's fetch can run before the status
+    lands. `threadContextForScriptRun` now returns `{ settled, status }` —
+    settled (the run's own settle event was in view) closes the fold window
+    and makes the result immutable. The query caches forever only then;
+    unsettled results get staleTime/refetchInterval of 5s until settlement.
+    Unit test pins provisional null (unsettled) vs immutable null (settled).
+    The spec cannot pin this race deterministically (its scripts await the
+    status append before the burst, and the screen is visited only after
+    settlement), so the conditional staleness is the fix, unforced.
