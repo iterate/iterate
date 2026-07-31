@@ -27,6 +27,7 @@ add_library(iterate-kit-core STATIC
   components/core/src/retry_gate.c
   components/core/src/runtime_diagnostics.c
   components/core/src/spsc_ring.c
+  components/core/src/voicelab_stream.c
   components/core/src/websocket_frame_writer.c
   components/core/src/websocket_rx.c
   components/core/src/websocket_tx.c
@@ -542,6 +543,25 @@ target_link_libraries(
 add_test(
   NAME iterate-kit-configuration-test
   COMMAND iterate-kit-configuration-test
+)
+
+add_executable(iterate-kit-voicelab-stream-test
+  tests/voicelab_stream_test.c
+)
+target_compile_features(
+  iterate-kit-voicelab-stream-test PRIVATE c_std_99)
+target_compile_options(iterate-kit-voicelab-stream-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+)
+target_link_libraries(
+  iterate-kit-voicelab-stream-test PRIVATE iterate-kit-core
+)
+add_test(
+  NAME iterate-kit-voicelab-stream-test
+  COMMAND iterate-kit-voicelab-stream-test
 )
 
 add_executable(iterate-kit-capnweb-oneway-call-test
