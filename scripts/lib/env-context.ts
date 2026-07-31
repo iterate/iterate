@@ -14,16 +14,20 @@ export interface DeployableEnv {
 
 /** Structured Cloudflare API failure so callers can handle specific statuses without parsing text. */
 export class CloudflareApiError extends Error {
-  constructor(
-    readonly method: string,
-    readonly path: string,
-    readonly status: number,
-    readonly details: unknown,
-  ) {
+  readonly method: string;
+  readonly path: string;
+  readonly status: number;
+  readonly details: unknown;
+
+  constructor(method: string, path: string, status: number, details: unknown) {
     super(
       `Cloudflare API ${method} ${path} failed (${status}): ${String(JSON.stringify(details) ?? details).slice(0, 500)}`,
     );
     this.name = "CloudflareApiError";
+    this.method = method;
+    this.path = path;
+    this.status = status;
+    this.details = details;
   }
 }
 
