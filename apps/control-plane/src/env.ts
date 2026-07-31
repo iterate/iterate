@@ -20,6 +20,10 @@ export interface Env {
   LOGIN_MODE?: LoginMode;
   /** Header carrying the verified email when LOGIN_MODE=access (e.g. `cf-access-authenticated-user-email`). */
   ACCESS_EMAIL_HEADER?: string;
+  /** The project worker's base URL — where resolved project ingress is dialed (topology: HTTP dial). */
+  PROJECT_WORKER_URL?: string;
+  /** Shared secret presented to the project worker on the HTTP dial (must match its RUNNER_DIAL_SECRET). */
+  RUNNER_DIAL_SECRET?: string;
   /** Injected by the provider — the OAuth helper surface (parseAuthRequest / completeAuthorization / …). */
   OAUTH_PROVIDER: OAuthHelpers;
 }

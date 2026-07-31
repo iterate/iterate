@@ -9,6 +9,7 @@ import type { Env, Handler, LoginMode } from "./env.ts";
 import { Os } from "./api.ts";
 import { directory } from "./directory.ts";
 import { sha256hex } from "./hash.ts";
+import { dialProjectWorker, resolveHost } from "./ingress.ts";
 import { clearSessionCookie, currentSession, setSessionCookie, type Session } from "./session.ts";
 
 const esc = (s: string) =>
@@ -249,6 +250,37 @@ export const app: Handler = {
     // §2a): OAuth stays at /mcp. Os.authenticate() reads the cookie/bearer against the D1 directory.
     if (url.pathname === "/api") {
       return newWorkersRpcResponse(request, new Os(request, env));
+    }
+
+    // PROJECT INGRESS. In a real deploy the control plane fronts project HOSTs (`<slug>.<base>`), resolves
+    // host→projectId via the routes table, and dials the project worker. On single-host workers.dev we
+    // demonstrate the same path via `/__ingress?host=<host>&path=<p>`: resolve the host, then dial. This
+    // proves directory-driven routing + the cross-account HTTP dial end to end.
+    if (url.pathname === "/__ingress") {
+      const host = url.searchParams.get("host");
+      if (!host) return new Response("missing ?host\n", { status: 400 });
+      const resolved = await resolveHost(host, env);
+      if (!resolved) return new Response(`no project for host '${host}'\n`, { status: 404 });
+      const caller = session
+        ? { credentials: [{ format: "session", issuer: "control-plane", email: session.email }] }
+        : { credentials: [] };
+      return dialProjectWorker(
+        env,
+        resolved.projectId,
+        resolved.app,
+        url.searchParams.get("path") ?? "/",
+        caller,
+      );
+    }
+
+    // Register a route (map a hostname to a project) — the human twin of capnweb project.mapHostname.
+    if (url.pathname === "/routes" && request.method === "POST") {
+      if (!session) return new Response(null, { status: 302, headers: { location: "/" } });
+      const form = await request.formData();
+      const host = String(form.get("host") ?? "").trim();
+      const projectId = String(form.get("projectId") ?? "").trim();
+      if (host && projectId) await dir.upsertRoute(host, projectId, String(form.get("app") ?? ""));
+      return new Response(null, { status: 302, headers: { location: "/" } });
     }
 
     // CIMD client metadata doc — a real public URL usable as an OAuth `client_id` (design §4). Its own URL

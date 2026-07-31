@@ -30,5 +30,10 @@
     "LOGIN_MODE": "email",
     // DEMO session-signing secret. A real deploy supplies this as a Doppler-backed secret, not a var.
     "SESSION_SECRET": "b3f1c0a7d2e94f6581ac37bde90f24a15c68d7e3049fba21c5e6d8790a1b2c3d",
+    // The project worker (the runner) this control plane dials for project execution. HTTP + shared secret,
+    // so the project worker can live in a SEPARATE Cloudflare account (topology 4). Secret must match the
+    // project worker's RUNNER_DIAL_SECRET.
+    "PROJECT_WORKER_URL": "https://project-worker.iterate.workers.dev",
+    "RUNNER_DIAL_SECRET": "dial_9f3c1a7be0d24856b1f0a2c3d4e5f6079a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d",
   },
 }
