@@ -78,10 +78,16 @@ export async function openResilientConnection(
     currentBatches++;
     const fresh = batch.events.filter((event) => event.offset > lastSeenOffset);
     stats.dedupedEvents += batch.events.length - fresh.length;
-    if (fresh.length > 0) {
+    // The scan cursor (not just delivered events) advances the dedupe/replay
+    // cursor: the initial batch every connection receives on open carries the
+    // head offset even when it delivers zero events. Overlapping generations
+    // scan the same log with the same filter, so a monotonic max is sound.
+    if (typeof batch.scannedThroughOffset === "number") {
+      lastSeenOffset = Math.max(lastSeenOffset, batch.scannedThroughOffset);
+    } else if (fresh.length > 0) {
       lastSeenOffset = fresh[fresh.length - 1]!.offset;
-      options.onEvents(fresh, batch);
     }
+    if (fresh.length > 0) options.onEvents(fresh, batch);
     if (currentBatches >= recycleAfterBatches && !opening && !closed) {
       stats.proactiveRecycles++;
       note(`proactive recycle after ${currentBatches} batches`);
@@ -108,10 +114,6 @@ export async function openResilientConnection(
       current = next;
       currentBatches = 0;
       lastBatchAt = Date.now();
-      // NOTE: handle.streamMaxOffset is typed but does not materialize as a
-      // number across the wire — never use it. The offset cursor advances
-      // only from delivered events; until the first one, reopens start at
-      // head (correct for ephemeral traffic).
       previous?.close();
     } catch (error) {
       note(`reopen failed: ${error instanceof Error ? error.message : String(error)}`);

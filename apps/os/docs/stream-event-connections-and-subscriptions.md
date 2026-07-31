@@ -83,9 +83,10 @@ is expected), dedupe the brief overlap by event offset, and pass
 `replayAfterOffset` so durable control-plane events survive the seam
 (ephemeral rows are correctly lost). A working reference with the budget
 numbers tuned is `apps/os/scripts/voicelab/resilient.ts`; with it, 2-minute
-50 events/s runs deliver 6000/6000 with no duplicates. One trap: the
-handle's `streamMaxOffset` does not materialize as a number across the wire
-— advance the offset cursor only from delivered events.
+50 events/s runs deliver 6000/6000 with no duplicates. Seed the cursor from
+the batches themselves (`scannedThroughOffset` / `streamMaxOffset`): every
+connection receives an initial, possibly empty batch on open, and the handle
+is a pure capability that carries no data properties.
 
 ### Replay durable rows, then stay connected
 

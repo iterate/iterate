@@ -1987,10 +1987,10 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "StreamConnectionHandle",
     kind: "typeAlias",
     sourceText:
-      "/**\n * Live handle returned by `Stream.openConnection`.\n *\n * `ping()` reports liveness: `true` while\n * the connection is still open on the live stream, `false` after it closed\n * (replaced, delivery failure, or explicit close); it rejects when the stream's\n * Durable Object incarnation is gone. Either non-`true` outcome means the\n * owner should open another connection.\n */\nexport type StreamConnectionHandle = Disposable & {\n  /** Stable identity of this live connection. */\n  connectionKey: ConnectionKey;\n  /** The stream's max offset when the connection opened. */\n  streamMaxOffset: number;\n  ping(): boolean | Promise<boolean>;\n  /** Close this connection; safe to call more than once. */\n  close(): void;\n};",
+      "/**\n * Live handle returned by `Stream.openConnection`.\n *\n * `ping()` reports liveness: `true` while\n * the connection is still open on the live stream, `false` after it closed\n * (replaced, delivery failure, or explicit close); it rejects when the stream's\n * Durable Object incarnation is gone. Either non-`true` outcome means the\n * owner should open another connection.\n *\n * The handle is a pure capability: it carries no data properties, because\n * data on a capability does not materialize across the RPC wire. Connection\n * facts arrive in the delivery batches instead — every connection receives\n * an initial (possibly empty) batch immediately on open, and its\n * `streamMaxOffset` / `scannedThroughOffset` are the offsets to seed a\n * resume cursor from.\n */\nexport type StreamConnectionHandle = Disposable & {\n  ping(): boolean | Promise<boolean>;\n  /** Close this connection; safe to call more than once. */\n  close(): void;\n};",
     summary: "Live handle returned by `Stream.openConnection`.",
     memberSummaries: {},
-    referencedTypeNames: ["ConnectionKey"],
+    referencedTypeNames: [],
   },
   {
     name: "CommittedSubscriptionConfiguredEvent",
@@ -2392,15 +2392,6 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "/**\n * The mutual ping's reply half: the responder echoes `t0` and reports when it\n * received the request (`t1`) and sent the reply (`t2`) on ITS clock.\n * `rtt = (t3 - t0) - (t2 - t1)` excludes responder processing time, and\n * `((t1 - t0) + (t2 - t3)) / 2` estimates the responder−requester clock\n * offset (see stream-runtime-metrics.pingRoundTrip). Purely observational:\n * ping failures drop the sample and never affect delivery or liveness.\n */\nexport type StreamPingReply = { t0: number; t1: number; t2: number };",
     summary:
       "The mutual ping's reply half: the responder echoes `t0` and reports when it received the request (`t1`) and sent the reply (`t2`) on ITS clock.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "ConnectionKey",
-    kind: "typeAlias",
-    sourceText:
-      "/** Stable identity for one live connection to a processEventBatch callback. */\nexport type ConnectionKey = string;",
-    summary: "Stable identity for one live connection to a processEventBatch callback.",
     memberSummaries: {},
     referencedTypeNames: [],
   },

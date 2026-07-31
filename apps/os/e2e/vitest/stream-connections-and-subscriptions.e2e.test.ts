@@ -617,7 +617,7 @@ test("callback capabilities cross the worker proxy and disappear with their sess
         },
       },
     });
-    expect(await handle.connectionKey).toBe(connectionKey);
+    expect(await handle.ping()).toBe(true);
 
     await waitForCondition(
       async () => {
@@ -3239,7 +3239,8 @@ async function openAndCloseConnection(
 ): Promise<void> {
   const handle = await stream.openConnection(args);
   try {
-    await handle.connectionKey;
+    // Round-trip barrier: the open is fully live once the capability answers.
+    await handle.ping();
   } finally {
     await handle.close();
     disposeRpc(handle);

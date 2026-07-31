@@ -509,12 +509,15 @@ export type GetProcessorRuntimeState = () => ProcessorRuntimeState | Promise<Pro
  * (replaced, delivery failure, or explicit close); it rejects when the stream's
  * Durable Object incarnation is gone. Either non-`true` outcome means the
  * owner should open another connection.
+ *
+ * The handle is a pure capability: it carries no data properties, because
+ * data on a capability does not materialize across the RPC wire. Connection
+ * facts arrive in the delivery batches instead — every connection receives
+ * an initial (possibly empty) batch immediately on open, and its
+ * `streamMaxOffset` / `scannedThroughOffset` are the offsets to seed a
+ * resume cursor from.
  */
 export type StreamConnectionHandle = Disposable & {
-  /** Stable identity of this live connection. */
-  connectionKey: ConnectionKey;
-  /** The stream's max offset when the connection opened. */
-  streamMaxOffset: number;
   ping(): boolean | Promise<boolean>;
   /** Close this connection; safe to call more than once. */
   close(): void;
