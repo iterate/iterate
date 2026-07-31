@@ -101,28 +101,21 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     const agentPath = decodeURIComponent(new URL(page.url()).searchParams.get("path")!);
     // The script narrates its own outcome (success or error) and returns
     // nothing — an undefined settlement result appends no context, so no
-    // model turn follows. The thread stays 100% deterministic.
-    const burstCommand = (marker: string) =>
-      `/script const burst = async () => { const responses = await Promise.all(Array.from({length: 3}, (_, index) => fetch(${JSON.stringify(echo.url)} + "?${marker}=" + index, {method: "POST", body: "${marker} " + index}))); const outcomes = await Promise.all(responses.map(async (response) => ({status: response.status, body: await response.json()}))); return "${marker} outcomes: " + JSON.stringify(outcomes); }; await itx.chat.sendMessage(await burst().catch(String));`;
+    // model turn follows. The thread stays 100% deterministic. Before the
+    // burst, the script maintains the agent status exactly the way a real
+    // agent turn would (AGENT_SUMMARY_INSTRUCTION): summary-updated appends,
+    // fields updating independently — the status the approvals screen pins
+    // to this batch's card.
+    const burstCommand = (marker: string, statusUpdates: object[]) =>
+      `/script ${statusUpdates
+        .map(
+          (update) =>
+            `await itx.agent.append({ type: "events.iterate.com/agent/summary-updated", payload: ${JSON.stringify(update)} }); `,
+        )
+        .join(
+          "",
+        )}const burst = async () => { const responses = await Promise.all(Array.from({length: 3}, (_, index) => fetch(${JSON.stringify(echo.url)} + "?${marker}=" + index, {method: "POST", body: "${marker} " + index}))); const outcomes = await Promise.all(responses.map(async (response) => ({status: response.status, body: await response.json()}))); return "${marker} outcomes: " + JSON.stringify(outcomes); }; await itx.chat.sendMessage(await burst().catch(String));`;
 
-    // Approve lane: the command runs deterministically (no model turn), the
-    // burst parks as one batch, and the dialog appears in-thread while the
-    // working indicator honestly spins — no spinner-waiter escapes needed.
-    await sendChatMessage(page, burstCommand("approve-me"));
-    await waitForBatchCardButton(page, "Approve all 3 (Face ID)");
-    await decideBatch(page, "Approve all 3 (Face ID)", (dialog) => dialog.accept());
-
-    // Reject lane: same shape, typed reason. The first dialog left the open
-    // set on approval; the second batch gets its own.
-    const reason = "wrong recipient — use the staging address";
-    await sendChatMessage(page, burstCommand("reject-me"));
-    await waitForBatchCardButton(page, "Reject all");
-    await decideBatch(page, "Reject all", (dialog) => dialog.accept(reason));
-
-    // ── Asserted from the protocol: each script narrated its outcomes into
-    // the thread — the approved burst with 200s, the rejected one with 403s
-    // whose bodies carry the human's reason verbatim (the cue an agent would
-    // read to retry differently).
     const readOutcomeMessages = async () =>
       (
         await itx.streams.get(agentPath).getEvents({
@@ -131,6 +124,54 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
       )
         .map((event) => (event.payload as { message: string }).message)
         .filter((message) => message.includes(" outcomes: "));
+
+    // Approve lane: the command runs deterministically (no model turn), the
+    // burst parks as one batch, and the dialog appears in-thread while the
+    // working indicator honestly spins — no spinner-waiter escapes needed.
+    await sendChatMessage(
+      page,
+      burstCommand("approve-me", [
+        { title: "Refund sweep", activity: "Emailing 3 customers about order refunds" },
+      ]),
+    );
+    await waitForBatchCardButton(page, "Approve all 3 (Face ID)");
+    await decideBatch(page, "Approve all 3 (Face ID)", (dialog) => dialog.accept());
+
+    // Run 1 must SETTLE before lane 2's command goes in: the settle event
+    // is the upper bound of batch 1's thread-context fold (asserted on the
+    // approvals screen below), so lane 2's status appends must land after
+    // it. Settlement also implies run 1's narration already appended — the
+    // script sends it before returning.
+    await expect
+      .poll(
+        async () =>
+          (
+            await itx.streams.get(agentPath).getEvents({
+              eventTypes: ["events.iterate.com/capability-host/script-run-settled"],
+            })
+          ).length,
+        { timeout: 60_000 },
+      )
+      .toBe(1);
+
+    // Reject lane: same shape, typed reason, and a two-append status story —
+    // the first append sets title + activity, then an activity-only update
+    // as the phase changes (the fold must keep the standing title).
+    const reason = "wrong recipient — use the staging address";
+    await sendChatMessage(
+      page,
+      burstCommand("reject-me", [
+        { title: "Invoice chase", activity: "Preparing payment reminders" },
+        { activity: "Requesting payment for 3 overdue invoices" },
+      ]),
+    );
+    await waitForBatchCardButton(page, "Reject all");
+    await decideBatch(page, "Reject all", (dialog) => dialog.accept(reason));
+
+    // ── Asserted from the protocol: each script narrated its outcomes into
+    // the thread — the approved burst with 200s, the rejected one with 403s
+    // whose bodies carry the human's reason verbatim (the cue an agent would
+    // read to retry differently).
     await expect
       .poll(async () => (await readOutcomeMessages()).length, { timeout: 60_000 })
       .toBe(2);
@@ -154,6 +195,44 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
       eventTypes: ["events.iterate.com/agent/llm-request-requested"],
     });
     expect(llmRequests).toEqual([]);
+
+    // ── The context travels to the approvals screen: both settled batches
+    // are history rows now, and each card wears the thread's STATUS at the
+    // time of its run — thread name + the agent-maintained title/activity,
+    // shown IN FULL — so "what was this run even doing?" reads without
+    // opening the thread. Scoped disables throughout: screen transitions and
+    // the context line's one-shot fetch resolve between spinners, the same
+    // frame-gap reason as waitForBatchCardButton.
+    await page.goBack(); // chat → chat list: browser history IS the app's back stack on web
+    await spinnerWaiter.settings.run({ disabled: true }, async () => {
+      await page.getByLabel("Open project menu").click({ timeout: 30_000 });
+      await page.getByRole("button", { name: "Approvals" }).click({ timeout: 15_000 });
+    });
+    const threadName = agentPath.replace(/^\/agents\//, "");
+    // The line is a link (tap = open the thread), one per card, each unique
+    // by its lane's status title. Full-text equality, not substring: a
+    // clipped status is the bug this assertion exists to catch. The reject
+    // card also proves the fold — the standing title joined with the LATER
+    // activity-only update.
+    const approveContext = page.getByRole("link", { name: /Refund sweep/ });
+    const rejectContext = page.getByRole("link", { name: /Invoice chase/ });
+    await spinnerWaiter.settings.run({ disabled: true }, async () => {
+      await approveContext.waitFor({ timeout: 30_000 });
+      await rejectContext.waitFor({ timeout: 30_000 });
+    });
+    expect(await approveContext.textContent()).toBe(
+      `${threadName} · Refund sweep — Emailing 3 customers about order refunds`,
+    );
+    expect(await rejectContext.textContent()).toBe(
+      `${threadName} · Invoice chase — Requesting payment for 3 overdue invoices`,
+    );
+
+    // Tapping the line deep-links back into the thread it snapshotted.
+    await spinnerWaiter.settings.run({ disabled: true }, async () => {
+      await approveContext.click({ timeout: 15_000 });
+      await page.getByPlaceholder("Message").waitFor({ timeout: 30_000 });
+    });
+    expect(decodeURIComponent(new URL(page.url()).searchParams.get("path")!)).toBe(agentPath);
   } finally {
     await echo.close();
   }

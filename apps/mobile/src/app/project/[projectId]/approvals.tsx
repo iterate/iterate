@@ -8,6 +8,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { router, Stack, useLocalSearchParams } from "expo-router";
+import type { StreamEvent } from "iterate/sdk/itx/react";
 import { useMemo } from "react";
 import {
   ActivityIndicator,
@@ -42,6 +43,11 @@ import {
   type ResolvedBatch,
   type Verdict,
 } from "../../../lib/approvals.ts";
+import {
+  SCRIPT_RUN_SETTLED_TYPE,
+  SUMMARY_UPDATED_TYPE,
+  threadContextForScriptRun,
+} from "../../../lib/chat.ts";
 import { getProjectItx } from "../../../lib/itx.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
 import { getServerBaseUrl } from "../../../lib/storage.ts";
@@ -365,6 +371,16 @@ function BatchCard({
         <Text style={styles.method}>{headline}</Text>
       )}
       {single ? null : <Text style={styles.groupHosts}>{hostBreakdown(payload.requests)}</Text>}
+      {streamContext?.kind === "script-execution" &&
+      streamContext.streamPath.startsWith("/agents/") ? (
+        <ThreadContextLine
+          baseUrl={baseUrl}
+          executionId={streamContext.executionId}
+          projectId={projectId}
+          projectSlug={projectSlug}
+          streamPath={streamContext.streamPath}
+        />
+      ) : null}
       {resolved?.reason ? (
         <Text style={styles.rejectReason}>Rejected because: {resolved.reason}</Text>
       ) : null}
@@ -519,6 +535,81 @@ function BatchCard({
         </>
       ) : null}
     </View>
+  );
+}
+
+/**
+ * "What was this run even doing?" — the thread's agent-maintained STATUS as
+ * of this script run (threadContextForScriptRun folds `agent/summary-updated`
+ * through the run's own settlement), pinned to the card so the queue and
+ * history read without opening each thread. A snapshot deliberately, not live
+ * status: the fold is bounded by immutable history, so it works identically
+ * for open and settled batches. The status renders IN FULL (it wraps — a
+ * clipped status answers nothing) and taps through to the thread. Statusless
+ * threads render no line at all — same as while the one-shot fetch is
+ * pending or failed, which is what keeps the card spinner-free.
+ */
+function ThreadContextLine({
+  baseUrl,
+  executionId,
+  projectId,
+  projectSlug,
+  streamPath,
+}: {
+  baseUrl: string;
+  executionId: string;
+  projectId: string;
+  projectSlug: string;
+  streamPath: string;
+}) {
+  const context = useQuery({
+    queryKey: ["approval-thread-context", baseUrl, projectId, streamPath, executionId],
+    queryFn: async () => {
+      const project = await getProjectItx(baseUrl, projectId);
+      const stream = project.streams.get(streamPath);
+      // Summary events are sparse (a handful per turn), and getEvents
+      // filters by type in SQL before applying its page limit — so even a
+      // very long thread reads as one small page; the loop is only for the
+      // pathological >500-status thread.
+      const events: StreamEvent[] = [];
+      let cursor = 0;
+      while (true) {
+        const page = await stream.getEvents({
+          afterOffset: cursor,
+          eventTypes: [SUMMARY_UPDATED_TYPE, SCRIPT_RUN_SETTLED_TYPE],
+        });
+        if (page.length === 0) break;
+        events.push(...page);
+        cursor = page.at(-1)!.offset;
+      }
+      return threadContextForScriptRun(events, { executionId });
+    },
+    // Cache forever only once the fold window is CLOSED (the run's settle
+    // event was in view) — then the result, status or null, is immutable.
+    // Before that it is provisional: agents Promise.all their status append
+    // with the work itself, so a held approval can render this card before
+    // the status lands; a forever-cached premature null would never heal.
+    staleTime: (query) => (query.state.data?.settled ? Infinity : 5_000),
+    refetchInterval: (query) => (query.state.data?.settled ? false : 5_000),
+  });
+  const status = context.data?.status;
+  if (!status) return null;
+  return (
+    <Pressable
+      accessibilityRole="link"
+      onPress={() =>
+        router.push({
+          pathname: "/project/[projectId]/chat",
+          params: { path: streamPath, projectId, slug: projectSlug },
+        })
+      }
+      style={styles.threadContext}
+    >
+      <Text style={styles.threadContextText}>
+        <Text style={styles.threadContextName}>{streamPath.replace(/^\/agents\//, "")}</Text>
+        {` · ${[status.title, status.activity].filter(Boolean).join(" — ")}`}
+      </Text>
+    </Pressable>
   );
 }
 
@@ -692,6 +783,9 @@ const styles = StyleSheet.create({
     lineHeight: 17,
     padding: spacing.sm,
   },
+  threadContext: { justifyContent: "center", minHeight: 24 },
+  threadContextText: { color: colors.textMuted, fontSize: 12 },
+  threadContextName: { color: colors.accent, fontWeight: "600" },
   sourceHeader: { alignItems: "center", flexDirection: "row", gap: spacing.sm },
   sourceCopy: { flex: 1, gap: 2 },
   detailLabel: {
