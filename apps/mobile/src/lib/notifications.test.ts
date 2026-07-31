@@ -46,7 +46,7 @@ test("a copied approval intent's whole lifecycle: pending → sending → sent �
   ).toMatchObject({ status: { kind: "delivered", label: "Delivered" } });
 });
 
-test("a suppressed settlement reads as 'you were already looking'", () => {
+test("a suppressed settlement reads as 'already on screen'", () => {
   const rows = deriveDeviceNotifications([
     intentRequested(2, { title: "Approval needed" }),
     settled(3, 2, { kind: "suppressed" }),
@@ -54,7 +54,7 @@ test("a suppressed settlement reads as 'you were already looking'", () => {
   expect(rows).toMatchObject([
     {
       requestOffset: 2,
-      status: { kind: "suppressed", label: "Skipped — you were already looking" },
+      status: { kind: "suppressed", label: "Skipped — already on screen" },
     },
   ]);
 });

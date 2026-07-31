@@ -12,7 +12,7 @@ top-level, the claim event exists on the root stream, devices grace-delay
 approval pushes and settle them `suppressed` on a claim, the DO grace alarm
 nudges the send when no claim comes, and the mobile in-thread card appends
 the claim. Scope grew mid-review (Misha): a mobile **Notifications view**
-(past notifications with statuses incl. "you were already looking", deep
+(past notifications with statuses incl. "already on screen", deep
 links per row) — built, with a comparison playwright spec (3 consecutive
 local passes) and a rendered comparison video handed to the orchestrator.
 Remaining: final full-suite gate + CI. See the implementation log for
@@ -102,7 +102,7 @@ Scope added after review (Misha, on the PR):
 
 - [x] Mobile Notifications view: flat newest-first list of every past
       notification for this device with a human status per row (Sent /
-      Delivered / "Skipped — you were already looking" / Expired / Send
+      Delivered / "Skipped — already on screen" / Expired / Send
       failed / …) and an in-app deep link per row
       _`apps/mobile/src/app/project/[projectId]/notifications.tsx` + pure
       reducer `lib/notifications.ts` (unit-tested); drawer entry next to
@@ -119,7 +119,7 @@ Scope added after review (Misha, on the PR):
 - [x] Comparison video (`VIDEO_MODE=1`), `video-rendered.webm` handed to the
       orchestrator for the PR body
       _20s webm; final frame shows both rows side by side ("Send failed" vs
-      the accent-colored "Skipped — you were already looking")_
+      the accent-colored "Skipped — already on screen")_
 - [ ] `pnpm typecheck && pnpm lint && pnpm knip && pnpm test`; PR hygiene
 
 ## Out of scope
@@ -187,3 +187,19 @@ Notifications view + spec (the added scope):
   still-open batch card, whose claim fires after the push already went out.
 - Spec gotcha: project slugs must not contain "notifications" — Playwright's
   getByText substring-matches header titles.
+
+Review round 2 (video feedback, comment 5140442265):
+
+- **"Cut-off drawer" root cause**: a spec/video artifact, not a product bug.
+  Playwright pressed the drawer item ~60% into the 180ms slide-in (the press
+  works mid-slide), and middlewright's video-mode freezes the click-moment
+  screenshot while it draws its synthetic pointer — so the rendered video
+  showed a half-open drawer for a long beat. Verified product-side with a
+  settled screenshot at the exact spec viewport (390x844): the panel rests at
+  translateX(0), nothing clipped. Fix: the spec now polls the drawer item's
+  bounding box until it stops moving before pressing.
+- **Status copy rework**: terminal statuses read past-tense, no second
+  person. "Skipped — you were already looking" → "Skipped — already on
+  screen"; everything else already read fine (Sent / Delivered / Send failed
+  / Expired before sending / Not sent — notifications were off / Delivery
+  unknown); in-flight stays present ("Waiting to send", "Sending").

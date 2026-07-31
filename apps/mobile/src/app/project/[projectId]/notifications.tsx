@@ -1,5 +1,5 @@
 // Every notification this device was ever asked to show, newest first, with
-// where it got to — including "Skipped — you were already looking", the
+// where it got to — including "Skipped — already on screen", the
 // suppression the in-thread approval claim produces. The list reads THIS
 // device's own stream (the device processor journals the whole obligation
 // there) and stays live, so a push settling while the screen is open updates

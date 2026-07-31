@@ -2,7 +2,7 @@
 // events. The device processor journals the whole obligation there: the
 // requesting event (a direct device request or a copied project intent) opens
 // a row, attempt/ticket facts advance it, and the terminal settled fact fixes
-// its outcome — including `suppressed`, the "you were already looking at it"
+// its outcome — including `suppressed`, the "already on screen"
 // status the in-thread approval claim produces. Pure reduction, same shape as
 // chat.ts/approvals.ts: the screen derives rows from its live query data.
 
@@ -93,7 +93,7 @@ function settledStatus(outcome: { kind?: string } | undefined): DeviceNotificati
     case "accepted-by-push-service":
       return { kind: "delivered", label: "Delivered" };
     case "suppressed":
-      return { kind: "suppressed", label: "Skipped — you were already looking" };
+      return { kind: "suppressed", label: "Skipped — already on screen" };
     case "expired":
       return { kind: "expired", label: "Expired before sending" };
     case "device-unavailable":

@@ -4,7 +4,7 @@
 // parks. Lane one — the user is sitting IN the agent thread when the batch
 // arrives: the in-thread dialog renders, appends its `project/approval-presented`
 // claim inside the device processor's grace window, and the pending push dies
-// with the `suppressed` outcome ("Skipped — you were already looking"). Lane
+// with the `suppressed` outcome ("Skipped — already on screen"). Lane
 // two — the user is on the Notifications view (pointedly NOT the thread):
 // nothing claims the batch, the grace window lapses, and the push goes out.
 //
@@ -120,9 +120,28 @@ test("the approval push is suppressed in the watched thread and sent when you're
     // interrupted whoever was reading the thread.
     await page.goBack();
     await page.getByLabel("Open project menu").click();
-    await page.getByRole("button", { name: "Notifications" }).click();
+    // The drawer slides in over ~180ms and the press works mid-slide — but
+    // clicking then bakes a half-open drawer into the recording (video-mode
+    // freezes the click-moment screenshot under its synthetic pointer, which
+    // reads as a clipped drawer to a reviewer). The product is fine: given a
+    // beat, the panel settles at translateX(0) at this exact viewport. Wait
+    // for the item to stop moving before pressing.
+    const notificationsItem = page.getByRole("button", { name: "Notifications" });
+    await notificationsItem.waitFor({ timeout: 10_000 });
+    await expect
+      .poll(
+        async () => {
+          const before = (await notificationsItem.boundingBox())!.x;
+          await page.waitForTimeout(120);
+          const after = (await notificationsItem.boundingBox())!.x;
+          return after - before;
+        },
+        { timeout: 5_000 },
+      )
+      .toBe(0);
+    await notificationsItem.click();
     await spinnerWaiter.settings.run({ disabled: true }, () =>
-      page.getByText("Skipped — you were already looking").waitFor({ timeout: 30_000 }),
+      page.getByText("Skipped — already on screen").waitFor({ timeout: 30_000 }),
     );
 
     // ── Lane two: the user stays HERE while a different thread's batch
@@ -135,7 +154,7 @@ test("the approval push is suppressed in the watched thread and sent when you're
       page.getByText("Send failed").waitFor({ timeout: 30_000 }),
     );
     // Both lanes journaled side by side — the comparison this spec exists for.
-    await page.getByText("Skipped — you were already looking").waitFor({ timeout: 5_000 });
+    await page.getByText("Skipped — already on screen").waitFor({ timeout: 5_000 });
 
     // ── The row's deep link: tapping the sent push's row lands in the thread
     // that caused it, exactly where tapping the real push would go. (The
