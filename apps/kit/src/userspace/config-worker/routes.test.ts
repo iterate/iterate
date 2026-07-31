@@ -3,6 +3,7 @@ import {
   authenticateProjectBearer,
   handleKitVoiceRequest,
   loadProjectBearerCredential,
+  readKitDeviceIdentity,
   type KitVoiceRouteDependencies,
 } from "./routes.ts";
 
@@ -80,6 +81,31 @@ describe("kit voice userspace routes", () => {
           async () => ({ projectId: "prj_expected", projectToken: "project-key" }),
         ),
       ).resolves.toBeNull();
+    }
+  });
+
+  test("requires one namespace-safe firmware device identity on PCM", () => {
+    expect(
+      readKitDeviceIdentity(
+        new Request("https://kit.invalid/pcm", {
+          headers: { "x-iterate-kit-device-id": "stackchan" },
+        }),
+      ),
+    ).toBe("stackchan");
+
+    for (const value of [
+      null,
+      "",
+      "-stackchan",
+      "stackchan-",
+      "StackChan",
+      "stack/chan",
+      "stack chan",
+      "a".repeat(64),
+    ]) {
+      const headers = new Headers();
+      if (value !== null) headers.set("x-iterate-kit-device-id", value);
+      expect(readKitDeviceIdentity(new Request("https://kit.invalid/pcm", { headers }))).toBeNull();
     }
   });
 

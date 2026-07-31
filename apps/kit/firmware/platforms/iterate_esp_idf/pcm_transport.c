@@ -272,22 +272,46 @@ static bool valid_header_token(const char *value) {
   return true;
 }
 
+static bool valid_device_id(const char *value) {
+  const unsigned char *cursor =
+      (const unsigned char *)value;
+  size_t length = 0U;
+  if (value == NULL || *value == '\0' || *value == '-') {
+    return false;
+  }
+  for (; *cursor != '\0'; ++cursor) {
+    if (!((*cursor >= 'a' && *cursor <= 'z') ||
+          (*cursor >= '0' && *cursor <= '9') ||
+          *cursor == '-')) {
+      return false;
+    }
+    ++length;
+    if (length >= ITERATE_KIT_ESP_IDF_PCM_DEVICE_ID_CAPACITY) {
+      return false;
+    }
+  }
+  return cursor[-1] != '-';
+}
+
 static bool build_auth_headers(
     struct iterate_kit_esp_idf_pcm_transport *transport) {
   const struct iterate_kit_configuration *configuration =
       transport->options.configuration;
   int written;
   if (!valid_header_token(configuration->project_id) ||
-      !valid_header_token(configuration->project_api_key)) {
+      !valid_header_token(configuration->project_api_key) ||
+      !valid_device_id(transport->options.device_id)) {
     return false;
   }
   written = snprintf(
       transport->auth_headers,
       sizeof(transport->auth_headers),
       "Authorization: Bearer %s\r\n"
-      "X-Iterate-Project-ID: %s\r\n",
+      "X-Iterate-Project-ID: %s\r\n"
+      "X-Iterate-Kit-Device-ID: %s\r\n",
       configuration->project_api_key,
-      configuration->project_id);
+      configuration->project_id,
+      transport->options.device_id);
   return written > 0 &&
       (size_t)written < sizeof(transport->auth_headers);
 }
@@ -710,6 +734,7 @@ enum iterate_kit_status iterate_kit_esp_idf_pcm_transport_prepare(
   if (transport == NULL ||
       options == NULL ||
       options->configuration == NULL ||
+      !valid_device_id(options->device_id) ||
       options->lane == NULL ||
       options->downlink_generation_barrier == NULL ||
       !options->lane->initialized) {

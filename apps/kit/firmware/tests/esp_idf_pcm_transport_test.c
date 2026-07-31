@@ -80,7 +80,8 @@ static enum iterate_kit_status generation_barrier(
   return ITERATE_KIT_OK;
 }
 
-static void fixture_init(struct fixture *fixture) {
+static void fixture_init_for_device(
+    struct fixture *fixture, const char *device_id) {
   struct iterate_kit_esp_idf_pcm_transport_options options;
   memset(fixture, 0, sizeof(*fixture));
   iterate_kit_fake_pcm_websocket_reset();
@@ -110,6 +111,7 @@ static void fixture_init(struct fixture *fixture) {
       &fixture->downlink) == ITERATE_KIT_OK);
   options = (struct iterate_kit_esp_idf_pcm_transport_options){
     .configuration = &fixture->configuration,
+    .device_id = device_id,
     .lane = &fixture->lane,
     .downlink_generation_barrier = generation_barrier,
     .downlink_generation_barrier_context = fixture,
@@ -124,6 +126,77 @@ static void fixture_init(struct fixture *fixture) {
   CHECK(strcmp(
       fixture->transport.websocket_url,
       "wss://voice.example.invalid/pcm") == 0);
+  CHECK(strcmp(
+      fixture->transport.auth_headers,
+      "Authorization: Bearer itxk_host_test\r\n"
+      "X-Iterate-Project-ID: prj_host_test\r\n"
+      "X-Iterate-Kit-Device-ID: stackchan\r\n") == 0);
+}
+
+static void fixture_init(struct fixture *fixture) {
+  fixture_init_for_device(fixture, "stackchan");
+}
+
+/*
+ * The userspace worker uses this authenticated, firmware-owned slug for both
+ * the Cap'n Web path (`kit.<slug>`) and the raw provider-event stream
+ * (`/devices/<slug>`). Accepting separators or whitespace would let a corrupt
+ * image escape those namespaces; silently omitting it would misattribute a
+ * StackChan run to the Stick. Reject both at prepare time, before Wi-Fi/TLS.
+ */
+static void device_identity_is_required_and_namespace_safe(void) {
+  struct fixture fixture;
+  const char *invalid_ids[] = {
+    NULL,
+    "",
+    "-stackchan",
+    "stackchan-",
+    "StackChan",
+    "stack/chan",
+    "stack chan",
+  };
+  size_t index;
+
+  for (index = 0U;
+       index < sizeof(invalid_ids) / sizeof(invalid_ids[0]);
+       ++index) {
+    struct iterate_kit_esp_idf_pcm_transport_options options;
+    memset(&fixture, 0, sizeof(fixture));
+    fixture.configuration = (struct iterate_kit_configuration){
+      .wifi_ssid = "host-test-network",
+      .wifi_password = "host-test-password",
+      .os_base_url = "https://example.invalid",
+      .pcm_base_url = "https://voice.example.invalid",
+      .project_id = "prj_host_test",
+      .project_api_key = "itxk_host_test",
+    };
+    CHECK(iterate_kit_spsc_ring_init(
+        &fixture.uplink,
+        fixture.uplink_storage,
+        sizeof(fixture.uplink_storage[0]),
+        SLOT_COUNT,
+        fixture.uplink_lengths) == ITERATE_KIT_OK);
+    CHECK(iterate_kit_spsc_ring_init(
+        &fixture.downlink,
+        fixture.downlink_storage,
+        sizeof(fixture.downlink_storage[0]),
+        SLOT_COUNT,
+        fixture.downlink_lengths) == ITERATE_KIT_OK);
+    CHECK(iterate_kit_pcm_lane_init(
+        &fixture.lane,
+        &fixture.uplink,
+        &fixture.downlink) == ITERATE_KIT_OK);
+    options = (struct iterate_kit_esp_idf_pcm_transport_options){
+      .configuration = &fixture.configuration,
+      .device_id = invalid_ids[index],
+      .lane = &fixture.lane,
+      .downlink_generation_barrier = generation_barrier,
+      .downlink_generation_barrier_context = &fixture,
+    };
+    CHECK(iterate_kit_esp_idf_pcm_transport_prepare(
+        &fixture.transport, &options) ==
+        ITERATE_KIT_INVALID_ARGUMENT);
+  }
 }
 
 static bool wait_for_generation(
@@ -512,6 +585,7 @@ static void conversation_stop_is_requested_without_blocking_the_owner(void) {
 }
 
 int main(void) {
+  device_identity_is_required_and_namespace_safe();
   production_tls_handshake_has_a_safe_stack_envelope();
   conversation_stop_is_requested_without_blocking_the_owner();
   fresh_downlink_waits_for_generation_acceptance();

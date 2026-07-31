@@ -2,9 +2,14 @@ import { describe, expect, test, vi } from "vitest";
 import {
   KIT_PROVIDER_EVENT_STREAM_EVENT_TYPE,
   ProviderEventStreamJournal,
+  kitDeviceEventStreamPath,
 } from "./provider-event-stream.ts";
 
 describe("Grok non-PCM event stream journal", () => {
+  test("keeps each authenticated device's provider evidence in its own stream", () => {
+    expect(kitDeviceEventStreamPath("m5sticks3")).toBe("/devices/m5sticks3");
+    expect(kitDeviceEventStreamPath("stackchan")).toBe("/devices/stackchan");
+  });
   test("appends the exact provider frame with its session and ordering coordinates", async () => {
     /*
      * This is the durable harness seam: an operator must be able to read what

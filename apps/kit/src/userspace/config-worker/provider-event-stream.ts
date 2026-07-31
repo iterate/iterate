@@ -1,7 +1,12 @@
 import type { StreamEventInput } from "iterate/sdk";
 import type { ProviderNonPcmEvent } from "./pcm-proxy.ts";
 
-export const KIT_DEVICE_EVENT_STREAM_PATH = "/devices/m5sticks3";
+export function kitDeviceEventStreamPath(deviceId: string): `/devices/${string}` {
+  return `/devices/${deviceId}`;
+}
+
+/** Backwards-compatible name used by the retained Stick proof reader. */
+export const KIT_DEVICE_EVENT_STREAM_PATH = kitDeviceEventStreamPath("m5sticks3");
 export const KIT_PROVIDER_EVENT_STREAM_EVENT_TYPE = "events.iterate.com/kit/provider-event";
 
 const maximumPendingEvents = 64;

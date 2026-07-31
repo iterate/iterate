@@ -1063,6 +1063,7 @@ bool initialiseConnection(Runtime &state) {
   iterate_kit_esp_idf_pcm_transport_options
       pcmTransportOptions{};
   pcmTransportOptions.configuration = &state.configuration;
+  pcmTransportOptions.device_id = "m5sticks3";
   pcmTransportOptions.lane = &state.pcmLane;
   pcmTransportOptions.downlink_generation_barrier =
       downlinkGenerationBarrier;

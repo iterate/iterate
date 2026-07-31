@@ -1,4 +1,5 @@
 export type KitVoiceMode = "grok" | "tone";
+export const KIT_DEVICE_ID_HEADER = "x-iterate-kit-device-id";
 
 export interface KitVoiceRouteDependencies {
   handlePcm(request: Request): Promise<Response>;
@@ -84,6 +85,22 @@ export async function authenticateProjectBearer(
     return null;
   }
   return { projectId: credential.projectId };
+}
+
+/**
+ * Reads the firmware-owned identity used beneath both `kit` and `devices`.
+ *
+ * Authentication remains project-scoped; this value selects only a child of
+ * those two fixed namespaces. Requiring the same conservative slug grammar on
+ * both sides prevents path ambiguity and, more importantly, prevents missing
+ * identity from silently recording one board's physical evidence as another.
+ */
+export function readKitDeviceIdentity(request: Request): string | null {
+  const deviceId = request.headers.get(KIT_DEVICE_ID_HEADER);
+  if (deviceId === null || !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(deviceId)) {
+    return null;
+  }
+  return deviceId;
 }
 
 function sameAsciiSecret(candidate: string, expected: string): boolean {

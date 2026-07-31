@@ -2,8 +2,6 @@ import type { ProviderFunctionCall } from "./pcm-proxy.ts";
 
 type DeviceColour = "green" | "red";
 
-const devicePath = ["kit", "m5sticks3"] as const;
-
 /**
  * Executes the deliberately tiny tool authority offered to Grok.
  *
@@ -18,16 +16,24 @@ export async function executeM5StickS3Tool(
   project: DeviceToolProject,
   call: ProviderFunctionCall,
 ): Promise<{ colour: DeviceColour; ok: true }> {
+  return await executeKitDeviceTool(project, call, "m5sticks3");
+}
+
+export async function executeKitDeviceTool(
+  project: DeviceToolProject,
+  call: ProviderFunctionCall,
+  deviceId: string,
+): Promise<{ colour: DeviceColour; ok: true }> {
   if (call.name !== "changeColour") {
     throw new Error(`Unsupported device tool: ${call.name.slice(0, 128)}`);
   }
   const colour = parseColourArguments(call.arguments);
   const acknowledged = await project.capabilityHosts.get("/").invokeCapability({
     args: [colour],
-    path: [...devicePath, "changeColour"],
+    path: ["kit", deviceId, "changeColour"],
   });
   if (acknowledged !== true) {
-    throw new Error("The M5StickS3 did not acknowledge the display colour change.");
+    throw new Error(`The ${deviceId} device did not acknowledge the display colour change.`);
   }
   return { colour, ok: true };
 }

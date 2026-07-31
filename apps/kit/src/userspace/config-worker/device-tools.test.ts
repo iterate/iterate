@@ -1,7 +1,25 @@
 import { describe, expect, test, vi } from "vitest";
-import { executeM5StickS3Tool } from "./device-tools.ts";
+import { executeKitDeviceTool, executeM5StickS3Tool } from "./device-tools.ts";
 
 describe("M5StickS3 userspace device tools", () => {
+  test("uses the authenticated device slug rather than a Stick-only worker fork", async () => {
+    const invokeCapability = vi.fn(async () => true);
+    await expect(
+      executeKitDeviceTool(
+        { capabilityHosts: { get: () => ({ invokeCapability }) } },
+        {
+          arguments: '{"colour":"red"}',
+          callId: "call_stackchan",
+          name: "changeColour",
+        },
+        "stackchan",
+      ),
+    ).resolves.toEqual({ colour: "red", ok: true });
+    expect(invokeCapability).toHaveBeenCalledWith({
+      args: ["red"],
+      path: ["kit", "stackchan", "changeColour"],
+    });
+  });
   test("routes Grok's validated colour choice through the project-root env.ITX capability", async () => {
     /*
      * The voice provider must not learn a second device protocol. This fake is

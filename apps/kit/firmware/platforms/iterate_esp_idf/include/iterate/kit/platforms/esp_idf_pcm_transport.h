@@ -35,9 +35,17 @@ enum {
   ITERATE_KIT_ESP_IDF_PCM_NETWORK_TASK_STACK_BYTES =
       ITERATE_KIT_ESP_IDF_WEBSOCKET_TLS_OWNER_STACK_BYTES,
   ITERATE_KIT_ESP_IDF_PCM_NETWORK_TASK_MINIMUM_HEADROOM_BYTES = 512,
+  /*
+   * Device ids are capability/stream path segments, not display names. The
+   * bound includes NUL and matches the userspace validator; keeping it here
+   * prevents a target from smuggling an arbitrary header-sized path into a
+   * transport object whose RAM is otherwise fixed at compile time.
+   */
+  ITERATE_KIT_ESP_IDF_PCM_DEVICE_ID_CAPACITY = 64,
   ITERATE_KIT_ESP_IDF_PCM_AUTH_HEADERS_CAPACITY =
       ITERATE_KIT_PROJECT_API_KEY_CAPACITY +
-      ITERATE_KIT_PROJECT_ID_CAPACITY + 64,
+      ITERATE_KIT_PROJECT_ID_CAPACITY +
+      ITERATE_KIT_ESP_IDF_PCM_DEVICE_ID_CAPACITY + 96,
 };
 
 enum iterate_kit_esp_idf_pcm_transport_state {
@@ -56,6 +64,14 @@ struct iterate_kit_esp_idf_pcm_transport_options {
    * network task can run.
    */
   const struct iterate_kit_configuration *configuration;
+  /*
+   * Firmware-owned slug advertised only after project authentication. The
+   * userspace owner derives `kit.<slug>` and `/devices/<slug>` from it so one
+   * shared PCM implementation cannot accidentally subscribe to or label a
+   * different board's capability. Borrowed for prepare() only; the resulting
+   * header is copied into transport-owned storage.
+   */
+  const char *device_id;
   struct iterate_kit_pcm_lane *lane;
   /*
    * A socket generation is not safe merely because the application ring was

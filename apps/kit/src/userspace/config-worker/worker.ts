@@ -7,7 +7,7 @@ import {
   subscribePcmBridgeToDeviceEvents,
 } from "./device-events.ts";
 import { DeviceMetricsSessionTracker, type DeviceMetricsSessionMetrics } from "./device-metrics.ts";
-import { executeM5StickS3Tool } from "./device-tools.ts";
+import { executeKitDeviceTool } from "./device-tools.ts";
 import {
   ITERATE_KIT_PCM_SAMPLE_RATE_HZ,
   ITERATE_KIT_PCM_SUBPROTOCOL,
@@ -17,8 +17,8 @@ import {
   type PcmSessionMetrics,
 } from "./pcm-proxy.ts";
 import {
-  KIT_DEVICE_EVENT_STREAM_PATH,
   ProviderEventStreamJournal,
+  kitDeviceEventStreamPath,
   type ProviderEventStreamMetrics,
 } from "./provider-event-stream.ts";
 import { connectDeterministicTone, connectGrokRealtimeVoice } from "./providers.ts";
@@ -26,6 +26,7 @@ import {
   authenticateProjectBearer,
   handleKitVoiceRequest,
   loadProjectBearerCredential,
+  readKitDeviceIdentity,
   type KitVoiceMode,
 } from "./routes.ts";
 const PCM_MODE_KEY = "kit-pcm-mode";
@@ -37,6 +38,7 @@ interface ActivePcmSession {
   closeProjectSession(): void;
   deviceEvents: DeviceEventSessionMetricsTracker;
   deviceMetrics: DeviceMetricsSessionTracker;
+  deviceId: string;
   deviceEventSubscriptionAttempts: number;
   deviceEventSubscriptionFailures: number;
   mode: KitVoiceMode;
@@ -51,6 +53,7 @@ interface ActivePcmSession {
 interface ClosedPcmSessionReport extends PcmSessionMetrics {
   deviceEvents: DeviceEventSessionMetrics;
   deviceMetrics: DeviceMetricsSessionMetrics;
+  deviceId: string;
   deviceEventSubscriptionAttempts: number;
   deviceEventSubscriptionFailures: number;
   endedAtMs: number;
@@ -124,6 +127,7 @@ export class KitVoiceWorker extends IterateDurableObject {
     return {
       ...active.bridge.metrics(),
       deviceEvents: active.deviceEvents.metrics(),
+      deviceId: active.deviceId,
       deviceMetrics: active.deviceMetrics.metrics(),
       deviceEventSubscriptionAttempts: active.deviceEventSubscriptionAttempts,
       deviceEventSubscriptionFailures: active.deviceEventSubscriptionFailures,
@@ -160,6 +164,10 @@ export class KitVoiceWorker extends IterateDurableObject {
         status: 401,
       });
     }
+    const deviceId = readKitDeviceIdentity(request);
+    if (deviceId === null) {
+      return new Response("A valid Iterate Kit device identity is required.", { status: 400 });
+    }
 
     const mode = await this.#readMode();
     let provider: WebSocket;
@@ -191,14 +199,15 @@ export class KitVoiceWorker extends IterateDurableObject {
     const client = pair[0];
     const server = pair[1];
     server.accept();
-    const sessionId = `${authenticated.projectId}:${crypto.randomUUID()}`;
+    const sessionId = `${authenticated.projectId}:${deviceId}:${crypto.randomUUID()}`;
     /*
      * Provider evidence uses its own short ITX sessions and a bounded journal.
      * It must never borrow the retained device-callback session below: stream
      * latency or failure is diagnostic loss, not permission to stall PTT or
      * make Cap'n Web callback ownership compete with PCM-adjacent controls.
      */
-    const providerEventStream = itxProjectStream(this.env, KIT_DEVICE_EVENT_STREAM_PATH);
+    const providerEventStreamPath = kitDeviceEventStreamPath(deviceId);
+    const providerEventStream = itxProjectStream(this.env, providerEventStreamPath);
     const providerEvents = new ProviderEventStreamJournal({
       append: async (...events) => {
         await providerEventStream.append(...events);
@@ -207,7 +216,7 @@ export class KitVoiceWorker extends IterateDurableObject {
         this.#log(diagnostic.code, diagnostic.severity, {
           ...diagnostic.detail,
           sessionId,
-          streamPath: KIT_DEVICE_EVENT_STREAM_PATH,
+          streamPath: providerEventStreamPath,
         });
       },
       waitUntil: (promise) => this.ctx.waitUntil(promise),
@@ -218,7 +227,8 @@ export class KitVoiceWorker extends IterateDurableObject {
       maximumSocketBufferedBytes: PCM_SOCKET_BACKLOG_LIMIT_BYTES,
       onDiagnostic: (diagnostic) => this.#onPcmDiagnostic(diagnostic),
       onProviderEvent: (event) => providerEvents.observe(event, sessionId),
-      onProviderFunctionCall: (call) => this.#executeProviderFunctionCall(call, sessionId),
+      onProviderFunctionCall: (call) =>
+        this.#executeProviderFunctionCall(call, sessionId, deviceId),
       onProviderUnavailable: () => {
         if (active !== undefined) this.#ensureProvider(active, "provider-unavailable");
       },
@@ -240,6 +250,7 @@ export class KitVoiceWorker extends IterateDurableObject {
       bridge,
       closeProjectSession,
       deviceEvents,
+      deviceId,
       deviceMetrics,
       deviceEventSubscriptionAttempts: 0,
       deviceEventSubscriptionFailures: 0,
@@ -297,12 +308,17 @@ export class KitVoiceWorker extends IterateDurableObject {
     });
   }
 
-  #executeProviderFunctionCall(call: ProviderFunctionCall, sessionId: string): Promise<unknown> {
+  #executeProviderFunctionCall(
+    call: ProviderFunctionCall,
+    sessionId: string,
+    deviceId: string,
+  ): Promise<unknown> {
     const execution = (async () => {
       using project = await this.env.ITX.get();
-      const result = await executeM5StickS3Tool(project, call);
+      const result = await executeKitDeviceTool(project, call, deviceId);
       this.#log("device-tool-completed", "info", {
         callId: call.callId,
+        deviceId,
         name: call.name,
         result,
         sessionId,
@@ -441,9 +457,11 @@ export class KitVoiceWorker extends IterateDurableObject {
       {
         subscribeToEvents: async (callback) => {
           /*
-           * The Stick mounts `kit.m5sticks3` on the project root. Address the
-           * root host explicitly rather than making this app's `/kit/` scoped
-           * host fallback an accidental part of the device contract.
+           * Every board mounts `kit.<firmware-owned-device-id>` on the project
+           * root. Address that root explicitly rather than making this app's
+           * `/kit/` scoped host fallback an accidental part of the contract.
+           * The identity arrived in the authenticated PCM handshake, so a
+           * StackChan session cannot accidentally control or journal a Stick.
            */
           await project.capabilityHosts.get("/").invokeCapability({
             args: [
@@ -461,7 +479,7 @@ export class KitVoiceWorker extends IterateDurableObject {
                 callback(event);
               },
             ],
-            path: ["kit", "m5sticks3", "subscribeToEvents"],
+            path: ["kit", active.deviceId, "subscribeToEvents"],
           });
         },
       },
@@ -500,7 +518,7 @@ export class KitVoiceWorker extends IterateDurableObject {
           });
         },
       ],
-      path: ["kit", "m5sticks3", "subscribeToMetrics"],
+      path: ["kit", active.deviceId, "subscribeToMetrics"],
     });
   }
 
@@ -551,6 +569,7 @@ export class KitVoiceWorker extends IterateDurableObject {
       ...active.bridge.metrics(),
       deviceEvents: active.deviceEvents.metrics(),
       deviceMetrics: active.deviceMetrics.metrics(),
+      deviceId: active.deviceId,
       deviceEventSubscriptionAttempts: active.deviceEventSubscriptionAttempts,
       deviceEventSubscriptionFailures: active.deviceEventSubscriptionFailures,
       endedAtMs: Date.now(),
