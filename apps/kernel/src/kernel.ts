@@ -600,6 +600,14 @@ async function serveControlPlane(request: Request, cfg: AppConfig, env: Env): Pr
       const result = await directory.create(caller, { slug, organizationSlug });
       if (!result.ok)
         return html(consolePage(base, await safeList(directory, caller), result.reason), 400);
+      // SUCCESS — render directly (NOT a redirect) with the new project MERGED into the list. `kv.list()`
+      // is eventually consistent (a fresh list may not show the just-written key for a few seconds), so
+      // merging gives immediate feedback — otherwise it looks like "nothing happened". Re-submitting on
+      // refresh is harmless: create is idempotent (an existing slug just returns it).
+      const merged = [
+        ...new Set([...(await safeList(directory, caller)), result.project.slug]),
+      ].sort();
+      return html(consolePage(base, merged, undefined, `created '${result.project.slug}'`));
     }
     return new Response(null, { status: 303, headers: { location: "/" } });
   }
@@ -616,7 +624,7 @@ async function safeList(directory: Directory, caller: Caller): Promise<string[]>
   }
 }
 
-function consolePage(base: string, projects: string[], error?: string): string {
+function consolePage(base: string, projects: string[], error?: string, notice?: string): string {
   const rows = projects.length
     ? projects
         .map(
@@ -631,6 +639,7 @@ function consolePage(base: string, projects: string[], error?: string): string {
     `<h1>iterate control plane</h1>` +
     `<p><small>Projects live at <code>&lt;slug&gt;.${esc(base)}</code>. This is the console; ` +
     `<code>/api</code> (capnweb) and <code>/mcp</code> (MCP) expose the same list/create.</small></p>` +
+    (notice ? `<p style="color:#080">✓ ${esc(notice)}</p>` : ``) +
     (error ? `<p style="color:#c00">⚠ ${esc(error)}</p>` : ``) +
     `<h2>projects</h2><ul>${rows}</ul>` +
     `<h2>create a project</h2>` +
