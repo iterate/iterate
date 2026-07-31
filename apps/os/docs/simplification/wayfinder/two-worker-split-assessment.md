@@ -2,7 +2,7 @@
 
 This started as the two-worker-split assessment; expanded (per Jonas) into a full catch-up: what the
 kernel is now, an architecture outline, a code breakdown, what was considered & discarded, and the split
-itself. Read §1–§6 for the catch-up + architecture; §7 is the split itself.
+itself. Read §1–§7 for the catch-up + architecture + review answers; §8 is the split itself.
 
 ---
 
@@ -69,12 +69,12 @@ Loader) a single capability — `env.ITX` — plus one **egress door**. Everythi
      └────────────────────────────────────────────────────────────┼──────────────────────────┘
    CONTROL-PLANE part                                              │  PROJECT-RUNNER part
    · auth-wall.ts   verify injected JWT (or wide open)             ▼
-   · directory.ts   which projects + membership (open/kv/auth)   ProjectRunner (WorkerEntrypoint)
+   · directory.ts   which projects + membership (open/kv/auth)   class ProjectRunner (WorkerEntrypoint)
    · routing.ts     hostname → project (config + KV)               · serve()     load+serve config worker
-   · Os/Session/    the /api capnweb tree front desk               · runScript() exec, confined
-     ProjectCollection (wall+directory gate)                       └── mints ProjectEntrypoint (loopback)
-   · handleMcp      MCP tools over the directory + scripting             │
-   · serveDashboard reverse-proxy the dashboard vessel                   ▼
+   · classes Os→Session→ProjectCollection (the /api tree,          · runScript() exec, confined
+     wall+directory gate)                                          └── mints ProjectEntrypoint (loopback)
+   · handleMcp()    MCP tools over the directory + scripting            │
+   · serveDashboard() reverse-proxy the dashboard vessel               ▼
                                                               ProjectEntrypoint (WorkerEntrypoint)
    the capnweb Project and ProjectEntrypoint BOTH expose ───────▶ · whoami · fetch (THE egress door)
    the SAME ProjectCapabilities tree (D-A):                       · streams / secrets / ai  (getters)
@@ -89,7 +89,7 @@ Loader) a single capability — `env.ITX` — plus one **egress door**. Everythi
 **The two logical parts** (one physical worker today; the split peels the CP off):
 
 - **Control plane** — knows _many_ projects: ingress, wall, directory, routing, `/api` front, `/mcp`,
-  the egress door's control-plane half, dashboard proxy. Holds no project data.
+  the egress door's control-plane half, dashboard proxy. Holds no project data (and, as a hard goal, no customer data at all — §7 / the split §8).
 - **Project runner** — knows _one_ project at a time: `ProjectRunner` (serve + runScript), the
   `ProjectEntrypoint` (the ITX face + the egress door), the Durable Objects, and the capability tree.
 
@@ -187,15 +187,18 @@ chosen, and a code sketch.
 
 ### Security follow-ups (from the thermonuclear reviews)
 
-- **Problem:** on a WALLED deployment, `/mcp` can be reached on a host Cloudflare Access doesn't front →
-  an anonymous internet caller could `run_script` / `create_project` in any project. Also project secrets
-  substituted for any destination (a script could exfiltrate its own key).
-- **Options:** gate at the directory (too coarse — kv is single-tenant by design) vs. **gate the write
-  surface**. Chose: `scriptingAllowed({ walled, authenticated })` — walled + anonymous ⇒ scripting/create
-  withheld; wide-open (LAN/Pi) stays on. Plus **optional** `allowedOrigins` on project secrets (opt-in
-  origin-pin), and `redirect:"manual"` at the egress door (a pinned origin can't 302 a secret away).
-- **Code:** `scriptingAllowed(...)` gates both the scripting façade and `create_project`;
-  `secrets.set(name, value, allowedOrigins?)`.
+- **Root cause (Jonas, review):** the _real_ bug was ingress — `/api` and `/mcp` were shadowed on EVERY
+  hostname routing to the worker, including project public hosts. That's what let an anonymous internet
+  caller reach `/mcp` (→ `run_script`/`create_project`) on a host Cloudflare Access doesn't front. **Fixed
+  structurally: `/api` + `/mcp` answer ONLY on the control-plane host** (`onControlPlaneHost` in
+  `kernel.ts`); on a project host they're just paths the config worker serves. Proven live
+  (`iterate.shiterate.com/mcp` works; `alice.shiterate.com/mcp` reaches the project, not the MCP server).
+- **Defense-in-depth (belt-and-suspenders now, not the only line):** `scriptingAllowed({ walled,
+authenticated })` still withholds the scripting façade + `create_project` for a walled+anonymous caller
+  (in case a CP host is misconfigured without Access in front). Plus **optional** `allowedOrigins` on
+  project secrets (opt-in origin-pin) and `redirect:"manual"` at the egress door (a pinned origin can't 302
+  a secret away).
+- **Code:** the host gate in `kernel.ts`; `scriptingAllowed(...)`; `secrets.set(name, value, allowedOrigins?)`.
 
 ### Reserved control-plane host (ADR 0031) — one hostname for self-host
 
@@ -255,9 +258,9 @@ in). The whole clean-room kernel is ~2,000 — the simplification is real, not c
 - **A big-bang two-worker split now** — _discarded (risk)._ Traded proven single-worker coherence for a
   half-tested cross-worker RPC surface at the end of an autonomous run. Did the **named-interface seam**
   (step 1) instead, which de-risks the real split to a one-line binding swap.
-- **`/mcp` as a path reserved on project hostnames** (like `/api` today) — _discarded._ MCP is a
-  **control-plane** surface (it creates projects, operates across them); it's a sibling to `/api`, and
-  wants the control plane's own host (see the new ADR 0031 — a reserved host on the same base domain).
+- **`/mcp` (and `/api`) as paths shadowed on EVERY hostname** — _discarded (review)._ They're
+  **control-plane** surfaces; shadowing them on project hosts was the root of the anonymous-`/mcp` hole.
+  Now served ONLY on the control-plane host; on a project host they're plain userspace paths.
 - **Fold secrets + capabilities + the meter into the stream DO** ("everything is the log", D-D) —
   _deferred, not discarded._ Powerful (the meter becomes "count of egress events", the racy KV meter
   vanishes) but a bigger bet; parked at Jonas's instruction.
@@ -267,7 +270,130 @@ in). The whole clean-room kernel is ~2,000 — the simplification is real, not c
 
 ---
 
-## 7. The two-worker split
+## 7. Review answers + open design questions
+
+Answers to Jonas's doc-review questions, plus two things they surfaced (the iterate-product-as-a-worker
+design, and a verified constraint on dynamic capabilities).
+
+### `ai` is not really like `streams`/`secrets` — it's an ENV binding, which is a form of platform secret
+
+Agreed with your framing. `streams` and `secrets` are the project's **own data** (its DOs / its KV rows)
+— storage that follows the project. `ai` is different: `env.AI` is a **platform binding** (Workers AI, an
+account-level resource). In the sourcing model that's exactly a **first-party/platform secret** — "give me
+AI from _somewhere_" — which is why `ai.source: "remote"` collapses into the control-plane egress door
+(remote-source == egress + a first-party key). So: `ai` could even be pure userspace (a project brings its
+own key and calls an LLM through its own egress) — it's only "interesting" _because_ it's commonly a
+platform binding the control plane provides. Storage-shaped (streams/secrets/repos) = the project's;
+service-shaped (ai/search/browser) = sourced, often from the platform. That distinction is real and worth
+keeping.
+
+### What is `caller`? Could it grow tracing/context?
+
+`caller` is currently `{ credentials: Credential[] }` — the verified identity for this request (the wall
+JWT decoded, or a project-app-session, or empty=anonymous). It is **request context**, and yes — it's the
+natural home to grow. Adding `traceparent`/`tracestate` (W3C trace context), a request id, or a "call
+colour"/tenant tag would live right here and ride the same path the caller already rides (stamped as
+`x-iterate-*` headers to the config worker; carried in the capnweb session). Recommend keeping it a small
+typed context object (`{ credentials, trace?, requestId? }`) rather than smuggling these into the JWT.
+
+### Sidebar: what is `sub`? (OAuth/OIDC)
+
+`sub` = "subject" — the **stable unique id of the authenticated user** inside a JWT (OIDC standard claim).
+When Cloudflare Access fronts a request, it injects a JWT whose `sub` is **Cloudflare's** user id (not
+auth.iterate.com's). Access can also copy custom claims from the upstream IdP into a `custom` object — we
+map auth.iterate.com's own user id into `custom.sub`. So the kernel prefers `custom.sub` (auth's id) and
+falls back to the verified `email`. `sub` is just "who you are, stably"; `email` is the human-readable
+fallback. Neither says anything about _what you can access_ — that's the directory's job (§3).
+
+### How does `directory` get injected into `Session(caller, directory)`? And how does Access+auth interact?
+
+`directory` is built per request by **`directoryFor(cfg, env)`** (in `directory.ts`) from `APP_CONFIG`'s
+`directory.provider` — `open` / `local` / `kv` / `auth.iterate.com`. `Os.authenticate()` calls
+`directoryFor(cfg, env)` and hands the result to `Session`. So the authority is **pluggable via config**:
+flip `directory.provider` and the same `session.projects.list()` code resolves against a different backend.
+
+The Access + auth.iterate.com interaction, concretely (the hosted/`auth` provider):
+
+1. A browser hits `iterate.…com`; **Cloudflare Access** intercepts, runs the login against **auth.iterate.com
+   as the IdP** (OIDC), and on success injects a signed `Cf-Access-Jwt-Assertion` header.
+2. The kernel's wall (`auth-wall.ts`) **verifies** that JWT against Access's public keys (JWKS) + audience.
+   It reads identity (`custom.sub` = auth's user id, or `email`). It does NOT enlarge the token.
+3. `session.projects.list()` → `directory.access/list(caller)` → (auth provider) `grantsFor(auth, caller)`
+   → **`env.AUTH.getUserGrants({ userId })`** over a same-account service binding to the auth worker.
+   **auth.iterate.com is the source of truth** for which projects/orgs that user has.
+   So the Access JWT is used only to _identify_ you; the kernel then _asks_ auth (via the service binding)
+   what you can reach. The two are separate: Access = "who are you" (front door), auth worker = "what do you
+   have" (directory authority).
+
+> **Caveat — don't front iterate-hosted-at-scale with Cloudflare Access.** Access is priced/modeled for a
+> **bounded, admin-curated population** (Zero Trust seats; allow-lists of email domains/groups) — great for
+> a self-hosting company's own team, wrong for a public product with thousands of self-serve users (per-seat
+> cost, no consumer signup flow). Because the wall is **pluggable** ("wall or nothing"), this is a
+> wall-_choice_ fix, not an architecture change: **iterate-hosted → the wall is auth.iterate.com issuing its
+> own JWT** (consumer auth, self-serve, no per-seat cost), which the kernel verifies exactly the same way;
+> **self-host (bounded team) → Access/OIDC proxy is fine**; **wide-open → no wall.** One open item before
+> committing the hosted swap: the MCP machine/agent auth lane was proven via Access's Managed-OAuth-for-MCP,
+> so hosted needs an equivalent MCP-OAuth path through auth.iterate.com. _(Flagged from a review; verify.)_
+
+### The iterate-product as a SEPARATE worker (you asked me to explore this)
+
+Today the product layer is config (`AppConfig.product.platformSecrets`). You proposed making it a separate
+worker the control plane binds — `env.PRODUCT`. Here's the design (from a focused exploration):
+
+- **The binding:** one optional `env.PRODUCT` service binding on the control plane. Absent ⇒ generic/self-
+  host; present ⇒ the iterate hosted product. It's **bidirectional but narrow** (only two edges cross):
+  - **Outbound (product → CP → project):** the egress door's secret resolver already takes a
+    `resolve(scope, name, origin) → value|null` callback (`egress.ts`). The product worker just _becomes
+    that resolver_: `env.PRODUCT.egressSecret(name, origin)` (origin-pin + the key vault move behind the
+    binding). `itx.ai`'s `remote` source is the same call — remote-sourcing a capability == egress + a
+    first-party key. Self-host (no `PRODUCT`) ⇒ `ai` falls back to `local`.
+  - **Inbound (internet → product → CP):** the product worker owns the Slack/GitHub OAuth apps + webhook
+    URLs (first-party secrets that never touch the CP). It verifies the webhook, maps it to a `projectId`,
+    and calls **into** the CP with the **born project-secret key** (the per-project API key a remote app
+    already uses) — e.g. `env.CONTROL_PLANE.deliver(projectId, bornKey, event)`. So the product needs its
+    own back-binding to the CP.
+- **Sidecar, not a front.** You noted it "almost wraps the control plane again." Two models: (a) **sidecar**
+  — product sits beside the CP, CP calls out for capabilities, product calls back in for webhooks; (b)
+  **front** — all ingress lands on product which decorates + forwards. **Recommend sidecar** — the
+  bidirectionality is real but _narrow_ (one resolver callback out, one `deliver` call in); a front would
+  route the 99% of traffic that touches no first-party thing through the product for nothing, re-growing the
+  fat front the split dissolves. Trade-off: the born-key auth on `deliver` must be rock-solid (product is now
+  an authenticated CP client).
+- **The payoff you wanted:** "the main difference is a single config setting pointing at a worker binding."
+  Exactly — deploy iterate-hosted _with_ `env.PRODUCT`; deploy self-host _without_ it. Same generic CP.
+- **This lines up with the two-worker split:** the product worker is the _third_ worker (CP · runner ·
+  product); "many small workers" (your point in §8-review below) is where this is all heading anyway.
+
+### VERIFIED constraint: `env.ITX.<dynamic>` does NOT work — dynamic capabilities need an explicit accessor
+
+You flagged: "we'll have dynamic capabilities from Durable Objects, and you can't call `env.iterate.<random
+method that doesn't exist>` — verify whether a WorkerEntrypoint can return a proxy." **Spiked it on real
+workerd. Result:**
+
+- `env.ITX.whoami()` (declared method) ✅ · `env.ITX.streams.get(...)` (declared getter → nested) ✅
+- **`env.ITX.banana()` (undeclared) ❌ →** _"The RPC receiver does not implement the method 'banana'."_ A
+  returned Proxy does **not** help — the workers-RPC / capnweb layer enumerates declared methods; there is
+  no catch-all across the RPC boundary.
+- **Requirement, therefore:** dynamic capabilities (provided by a project's DO at runtime) MUST be reached
+  via an **explicit** accessor — `env.ITX.invoke("banana", args)` (or `env.ITX.capability("banana")`) — a
+  _declared_ method that takes the capability name as data. This mirrors apps/os's
+  `invokeCapability(path, args)` + `resolveLongestPrefix`. **You cannot do `env.ITX.banana`.** (This makes
+  the D-A getter tree a _fixed_ builtin surface — `streams`/`secrets`/`ai` — with dynamic capabilities
+  hanging off an `invoke`/`capability` method, NOT off arbitrary property names. The current
+  `provide/invokeCapability` at the MCP layer already follows this; userspace-facing `env.ITX.invoke` is the
+  piece to add when userspace needs dynamic caps.)
+
+### D-B streams — "fine for now, but eventually import & use the SAME stream" (noted)
+
+Agreed and recorded. The current native stream DO uses the canonical _contract_ but a fresh _implementation_.
+The end state is importing and running apps/os's actual `StreamDurableObject` (processors, delivery spine,
+obligations). That likely means **relaxing the no-node-compat rule** for the runner worker (the engine pulls
+`sqlfu` + workspace deps). Since the runner is a separate worker (the split), it can carry node-compat while
+the control plane stays pure-play. Parked until the streams re-implementation has budget.
+
+---
+
+## 8. The two-worker split
 
 ## ✅ STEP 1 DONE + PROVEN LIVE (2026-07-31) — the runner interface is named in-worker
 
@@ -306,6 +432,72 @@ Peel the **control plane** (ingress · wall · directory · routing · `/api` fr
 proxy · webhook ingress) off from the **project runner** (the `ProjectWorkerEntrypoint` + `env.LOADER`
 
 - the DOs + serving the confined config worker + the `ProjectCapabilities` tree).
+
+## What the split actually BUYS us (Jonas: "I need to understand this — it adds self-host complexity")
+
+Fair — for a self-hoster, two workers is marginally more to deploy than one. Honest accounting:
+
+**It's already inevitable for other reasons.** We want **many small workers** (SOA) regardless: the dynamic
+worker builder (ESBuild-in-a-worker) is huge and must be its own worker; the iterate-product layer wants to
+be its own worker (§7); AI/sandbox/browser capabilities are separate. So "one monolith" was never the end
+state — the CP/runner split is one instance of a decomposition that's happening anyway. Given that, the
+question isn't "one vs two" but "where are the seams" — and CP/runner is a clean one.
+
+**What it buys (in rough priority):**
+
+1. **Cross-account / BYO-Cloudflare-account** — the whole self-hosting lattice. The CP (ours) reaches a
+   runner in _your_ account over capnweb. Impossible in one worker (loopback is same-account). This is the
+   product reason.
+2. **A truly data-free control plane** (#4 below) — if the CP holds no customer data, a customer can bring
+   their own account for the runner and iterate never stores their bytes. The split is what makes "CP holds
+   only metadata" enforceable rather than aspirational.
+3. **A stable runner API** (#4 below) — once the runner is reached over a defined RPC/HTTP contract, anyone
+   (even a Rust reimplementation) can build a project runner that plugs into our control plane.
+4. **Independent scaling/deploy/isolation** — the runner (heavy: loader, DOs, AI) scales and fails
+   independently of the thin CP.
+
+**What it costs:** one more worker + one binding to configure; a defined CP↔runner interface (which we get
+for free-ish because D-A already made the capability tree one serializable `RpcTarget`). For a single-box
+self-hoster who wants _simple_, the "collapsed" mode (CP+runner co-located, one deploy) stays available —
+the split is about _enabling_ the distributed modes, not _forcing_ them.
+
+## Can the control plane hold TRULY no customer data? And could a Rust runner plug in? (#4)
+
+**Goal (Jonas): the CP holds only metadata — not Slack/GitHub webhook bodies, not project data — so people
+can bring their own Cloudflare account and iterate never stores their bytes.** This is achievable and worth
+making a hard rule:
+
+- **Project data** (streams, secrets, repos, files) already lives in the _runner's_ DOs/KV — move the runner
+  to the customer's account and their data is in their account, full stop.
+- **Webhook bodies** (the one leak): today first-party webhook ingress would land on the CP. The fix is the
+  **product worker** (§7) owns webhook ingress and **immediately forwards** the body to the runner (via
+  `deliver(projectId, bornKey, event)`) — the CP/product retains only _routing metadata_ (which
+  installation → which project), never the payload, or at most a short-TTL buffer. **Rule: the control
+  plane persists routing tables + directory rows + nothing customer-shaped.** (This is ADR 0006/R7 —
+  "iterate is the HTTP edge, never the store" — made concrete.)
+
+**The project-runner API contract (so a Rust/anything reimplementation can plug in):** the runner is
+whatever answers this interface behind the CP — the CP doesn't care what language/runtime implements it,
+only that it speaks the contract. Two options:
+
+- **Option A — Workers-RPC / capnweb (same-account or cross-account):** the runner is a WorkerEntrypoint (or
+  a capnweb endpoint) exposing:
+  - `serve(request, projectId, app, caller) → Response` — HTTP for a project's app (loads/runs userspace).
+  - `authenticate(props) → ProjectCapabilities` — the ITX tree (streams/secrets/ai/…) as an RPC stub.
+  - `runScript(projectId, code, args) → result` — ad-hoc exec.
+    A non-JS runner can't be a _loopback_ WorkerEntrypoint, but it CAN be a capnweb endpoint over WebSocket —
+    which is exactly the cross-account transport. So **a Rust runner exposes a capnweb server implementing
+    `serve`/`authenticate`/`runScript`**, and the CP dials it identically to a JS runner in another account.
+- **Option B — plain HTTP + a narrow JSON contract** (if capnweb-in-Rust is too much): the runner is any
+  HTTPS service the CP forwards to, with a small header/JSON protocol for `serve` (the CP proxies the
+  request + stamps the caller) and a JSON-RPC surface for the ITX capabilities. Less elegant (no capability
+  stubs / pipelining) but language-agnostic and dead simple.
+
+**Recommendation:** define the contract as **capnweb (Option A)** — it's the same interface the JS runner
+already exposes, so cross-account + BYO-runtime fall out of one definition; offer the **HTTP/JSON subset
+(Option B)** as the "I don't want to implement capnweb" fallback. Either way, the requirement to state
+plainly: **the project runner is defined by an INTERFACE, not an implementation — anyone can build one that
+runs behind our control plane, and the control plane holds no customer data.**
 
 ## The hard constraint that shapes everything (verified in code)
 
