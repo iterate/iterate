@@ -376,6 +376,8 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
       workspacePath: `/workspaces/examples/skill-${marker}`,
     }),
     assert: (result, ctx, expect) => {
+      // The example script returns this literal object shape after reading
+      // the skill; the assertions below are the runtime guard.
       const typed = result as { instructions: string | null; skillFiles: string[] };
       expect(typed.skillFiles).toContain(
         `/repos/config/.agents/skills/greeting-${ctx.marker}/SKILL.md`,

@@ -813,16 +813,15 @@ export class WorkspaceCore {
         throw new Error(`Nothing to commit — no changes under the mount at "${mountPath}".`);
       }
 
-      const toRepoPath = (path: string) => path.slice(mountPath.length + 1);
       const repoChanges: RepoFileChange[] = [];
       for (const path of localPaths) {
         const bytes = await this.#workspace.readFileBytes(path);
         if (bytes === null) continue;
-        repoChanges.push({ path: toRepoPath(path), ...encodeRepoContent(bytes) });
+        repoChanges.push({ path: path.slice(mountPath.length + 1), ...encodeRepoContent(bytes) });
       }
       for (const change of changes) {
         if (change.change === "deleted") {
-          repoChanges.push({ delete: true, path: toRepoPath(change.path) });
+          repoChanges.push({ delete: true, path: change.path.slice(mountPath.length + 1) });
         }
       }
 
