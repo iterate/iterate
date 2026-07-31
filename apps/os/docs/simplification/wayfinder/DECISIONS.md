@@ -8,6 +8,31 @@ not deleted.
 
 ---
 
+## 0034 — Project worker (the runner) is a separate worker; control plane dials it (service binding OR HTTP)
+
+The two-worker split is realized: **control plane worker** (front desk — login/session/directory/OAuth
+AS/console/`/api`/`/mcp`/ingress routing) + **project worker** (runner — loads + serves a project's confined
+config worker via Worker Loader; NO directory, NO auth). The control plane resolves host→projectId from its
+D1 directory, then **dials** the runner: a **service binding** (`env.RUNNER.serve(...)`) same-account, or
+**HTTP `POST /serve` + a shared secret** cross-account (service bindings don't cross CF accounts — this is
+what makes the "project worker in a separate account" topology real). One behavior (`serveConfigWorker`),
+two transports. Proven deployed end-to-end (`prove-twoworker.mjs` 7/7): the config worker runs confined
+(`seenBindings=["ITX"]`) with the caller identity stamped through. `apps/project-worker` is pure-play; the
+kernel's fuller `ProjectCapabilities` (streams/secrets/ai/egress) fold in behind the same `ProjectEntrypoint`.
+Supersedes the kernel's co-located `dialRunner` loopback. See wayfinder/deployment-topologies.md.
+
+## 0033 — Directory on D1/sqlfu, org-centric, apps/auth id+slug model (globally-unique slugs)
+
+The control plane's directory is **D1 + sqlfu** (strongly consistent — no KV `list()` lag, which caused the
+console bug; relational — memberships/routes want joins), not KV. Model mirrors **apps/auth**: users belong
+to **orgs** (`org_<hex>` id + own slug) via `org_members`; projects (`prj_<hex>` id, **distinct from slug**)
+belong to an org; **project slugs are GLOBALLY unique** (a slug taken in any org is taken), not per-org.
+Access to a project = membership in its org. Ingress **routes are a property of a project** (host→project
+rows), replacing the kernel's `routing.ts`. API keys are hashed rows with project grants. This is the one
+directory implementation — it replaces ADR 0004's provider switch entirely. Schema: control-plane
+`definitions.sql`; queries: one `sql/queries.sql` (sqlfu best practice). Needs `nodejs_compat` (sqlfu's
+barrel export) — the control plane is the "rich" worker; the project worker stays pure-play.
+
 ## 0032 — One always-deployed auth worker = login + session + directory + OAuth AS (supersedes 0003, 0004)
 
 Stop reinventing `wall` + `directory` in the kernel. **Always deploy one small auth worker** (hosted AND

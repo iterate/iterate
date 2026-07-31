@@ -5,11 +5,22 @@ different config. This is the "maximum clear" map, with what's proven and what's
 
 ## The pieces (same everywhere)
 
-| piece                                           | what it is                                                                                            | changes per topology?                                |
-| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| **control plane worker** (`apps/control-plane`) | the front desk: login + session + **directory (D1/sqlfu)** + OAuth 2.1 AS + console + `/api` + `/mcp` | only its **config** (login mode, control-plane host) |
-| **project worker** (`apps/kernel` → renaming)   | the runner: hostname→project routing + executes project code (Worker Loader)                          | can move to a **separate CF account**                |
-| **project config worker**                       | the per-project **dynamic** worker the project worker loads (the project's own app/code)              | it's user code                                       |
+| piece                                           | what it is                                                                                                              | changes per topology?                                |
+| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| **control plane worker** (`apps/control-plane`) | the front desk: login + session + **directory (D1/sqlfu)** + OAuth 2.1 AS + console + `/api` + `/mcp` + ingress routing | only its **config** (login mode, control-plane host) |
+| **project worker** (`apps/project-worker`)      | the runner: loads + serves a project's confined config worker (Worker Loader). NO directory, NO auth.                   | can move to a **separate CF account**                |
+| **project config worker**                       | the per-project **dynamic** worker the project worker loads (the project's own app/code)                                | it's user code                                       |
+
+**The dial (control plane → project worker)** has two transports, one behavior:
+
+- **same account** → a service binding: `env.RUNNER.serve(request, projectId, app, caller)`.
+- **cross account** → HTTP: `POST /serve` with a shared secret + `x-iterate-*` headers. Service bindings
+  don't cross Cloudflare accounts, so this is what makes topology 4 real. Both proven; the HTTP path is
+  deployed and tested (`scripts/prove-twoworker.mjs`).
+
+(`apps/kernel` was the prior _monolithic_ prototype — one worker doing everything. control-plane +
+project-worker are the realized two-worker split; the kernel remains as the reference the split was carved
+from, its `directory.ts`/`routing.ts`/`auth-wall.ts` now superseded by the control plane's D1 directory.)
 
 The **one human-auth knob** is `LOGIN_MODE` on the control plane worker (proven, all three):
 
@@ -64,18 +75,28 @@ binding.
 
 ## Proof status at a glance
 
-| topology               | login            | MCP (CIMD)       | org+project @authorize | API key | project execution              |
-| ---------------------- | ---------------- | ---------------- | ---------------------- | ------- | ------------------------------ |
-| 1 self-host one-domain | ✅ email         | ✅ deployed      | ✅                     | ✅      | ⧗ Phase 6                      |
-| 2 hosted (Access)      | ✅ access-header | ✅ (same AS)     | ✅ (same AS)           | ✅      | ⧗ Phase 6                      |
-| 3 wide-open            | ✅ open/anon     | ◐ tokenless TODO | n/a                    | ✅      | ⧗ Phase 6                      |
-| 4 separate account     | ✅ (any mode)    | ✅ (same AS)     | ✅                     | ✅      | ○ cross-account dial (Phase 6) |
+| topology               | login            | MCP (CIMD)   | org+project @authorize | API key | project execution                         |
+| ---------------------- | ---------------- | ------------ | ---------------------- | ------- | ----------------------------------------- |
+| 1 self-host one-domain | ✅ email         | ✅ deployed  | ✅                     | ✅      | ✅ deployed (control plane→runner)        |
+| 2 hosted (Access)      | ✅ access-header | ✅ (same AS) | ✅ (same AS)           | ✅      | ✅ (same dial)                            |
+| 3 wide-open            | ✅ open/anon     | ✅ tokenless | n/a                    | ✅      | ✅ (same dial)                            |
+| 4 separate account     | ✅ (any mode)    | ✅ (same AS) | ✅                     | ✅      | ✅ HTTP dial proven (cross-account shape) |
 
-## What's left (Phase 6)
+Proofs (all deployed): `prove.mjs` 13/13 (login/OAuth/CIMD/MCP/org+project@authorize/API key),
+`prove-api.mjs` 4/4 (capnweb /api), `prove-twoworker.mjs` 7/7 (host→project resolve → HTTP dial →
+confined config worker). 24 assertions, green on live workers.dev.
 
-1. Move the capnweb `Os` `/api` root + console off the project worker into the control plane; point
-   `Os.authenticate()`'s `resolveCaller` at the D1 directory; delete the kernel's `directory.ts`/`routing.ts`.
-2. Strip `apps/kernel` to the **project worker** (routing + runner) and deploy it alongside the control
-   plane; prove hostname→project routing + `/api` + project execution.
-3. Wire "wide-open ⇒ `/mcp` tokenless".
-4. The separate-account HTTP dial + a cross-account proof.
+## What's left (follow-ups, not blockers)
+
+The two-worker split is realized and proven. Remaining polish:
+
+1. **Fold the kernel's fuller capabilities into the project worker** — the config worker's ITX currently
+   exposes only `whoami`; the kernel's `ProjectCapabilities` (streams/secrets/ai) + the two-level egress
+   door are already proven there and drop in behind the same `ProjectEntrypoint`.
+2. **Real project-host ingress** — today the control plane fronts project hosts via `/__ingress?host=`;
+   with a wildcard route / custom domains it fronts `<slug>.<base>` directly (same `resolveHost`+dial).
+3. **Same-account transport** — swap the HTTP dial for the `env.RUNNER` service binding when co-located
+   (`ProjectRunner.serve` is already written; it's a binding config, not a code change).
+4. **Console: use `/api` + routes UI** — the console's project/route management can move onto the capnweb
+   `/api` instead of bespoke form POSTs.
+5. **`itx.auth.fetch`** — userspace app auth as a capability (design §11).
