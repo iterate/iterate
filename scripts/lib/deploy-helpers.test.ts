@@ -100,10 +100,9 @@ describe("runCloudflareCommandWith429Retry", () => {
 });
 
 describe("smokeResponse", () => {
-  it("passes request headers and can require an exact response body", async () => {
+  it("can require an exact response body rather than trusting the status alone", async () => {
     const fetchMock = vi.fn(async () => Response.json({ error: "not found" }, { status: 404 }));
     vi.stubGlobal("fetch", fetchMock);
-    const headers = { "CF-Access-Client-Id": "test-client" };
 
     await expect(
       smokeResponse(
@@ -113,13 +112,9 @@ describe("smokeResponse", () => {
           return response.status === 404 && body.error === "not found";
         },
         "auth Workers RPC",
-        headers,
       ),
     ).resolves.toBeUndefined();
 
-    expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
-      "https://auth-rpc-smoke.example.test/",
-      expect.objectContaining({ headers }),
-    );
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 });

@@ -154,13 +154,8 @@ async function runStreamingCaptured(
  * A success at attempt 12 costs nothing extra; giving up early fails the
  * whole deploy+e2e job, whose retry costs ~5 minutes.
  */
-export async function smoke(
-  url: string,
-  ok: (status: number) => boolean,
-  label: string,
-  headers?: Record<string, string>,
-) {
-  await smokeResponse(url, (response) => ok(response.status), label, headers);
+export async function smoke(url: string, ok: (status: number) => boolean, label: string) {
+  await smokeResponse(url, (response) => ok(response.status), label);
 }
 
 /**
@@ -172,12 +167,10 @@ export async function smokeResponse(
   url: string,
   ok: (response: Response) => boolean | Promise<boolean>,
   label: string,
-  headers?: Record<string, string>,
 ) {
   for (let attempt = 1; attempt <= 18; attempt++) {
     try {
       const response = await fetch(url, {
-        headers,
         redirect: "manual",
         signal: AbortSignal.timeout(15_000),
       });

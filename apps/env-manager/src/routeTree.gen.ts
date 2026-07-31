@@ -15,10 +15,16 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as NotAnAdminRouteImport } from './routes/not-an-admin'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AppEnvironmentsRouteImport } from './routes/_app/environments'
 
+const NotAnAdminRoute = NotAnAdminRouteImport.update({
+  id: '/not-an-admin',
+  path: '/not-an-admin',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AppRoute = AppRouteImport.update({
   id: '/_app',
   getParentRoute: () => rootRouteImport,
@@ -36,33 +42,44 @@ const AppEnvironmentsRoute = AppEnvironmentsRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/not-an-admin': typeof NotAnAdminRoute
   '/environments': typeof AppEnvironmentsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/not-an-admin': typeof NotAnAdminRoute
   '/environments': typeof AppEnvironmentsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/_app': typeof AppRouteWithChildren
+  '/not-an-admin': typeof NotAnAdminRoute
   '/_app/environments': typeof AppEnvironmentsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/environments'
+  fullPaths: '/' | '/not-an-admin' | '/environments'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/environments'
-  id: '__root__' | '/' | '/_app' | '/_app/environments'
+  to: '/' | '/not-an-admin' | '/environments'
+  id: '__root__' | '/' | '/_app' | '/not-an-admin' | '/_app/environments'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AppRoute: typeof AppRouteWithChildren
+  NotAnAdminRoute: typeof NotAnAdminRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/not-an-admin': {
+      id: '/not-an-admin'
+      path: '/not-an-admin'
+      fullPath: '/not-an-admin'
+      preLoaderRoute: typeof NotAnAdminRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_app': {
       id: '/_app'
       path: ''
@@ -100,16 +117,18 @@ const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AppRoute: AppRouteWithChildren,
+  NotAnAdminRoute: NotAnAdminRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
 
 import type { getRouter } from './router.tsx'
-import type { createStart } from '@tanstack/react-start'
+import type { startInstance } from './start.ts'
 declare module '@tanstack/react-start' {
   interface Register {
     ssr: true
     router: Awaited<ReturnType<typeof getRouter>>
+    config: Awaited<ReturnType<typeof startInstance.getOptions>>
   }
 }

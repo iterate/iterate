@@ -2,8 +2,7 @@
 
 `apps/env-manager` is the control plane for every deployed environment. It is a
 TanStack Start Worker deployed to the preview Cloudflare account at
-`envs.iterate-dev.com`. Cloudflare Access protects that hostname and uses
-production Iterate Auth as its OIDC identity provider.
+`envs.iterate-dev.com`, with a dashboard protected by production Iterate Auth.
 
 ## Programming model
 
@@ -61,10 +60,11 @@ pnpm infra deploy --env prd
 ```
 
 Production destroy is intentionally dashboard-only. The Worker requires a
-human Cloudflare Access session; the Access service token used by the CLI can
-deploy and check production but cannot destroy it.
+production Iterate Auth browser session at the server boundary; the
+forge-signed bearer available to CI can deploy and check production but cannot
+destroy it.
 
-The Worker itself remains an ordinary Wrangler deployment:
+The Worker itself deploys with:
 
 ```bash
 pnpm --dir apps/env-manager run deploy
@@ -72,25 +72,20 @@ pnpm --dir apps/env-manager run deploy
 
 It always targets the preview Cloudflare account even though its Doppler
 configuration is named `prd`. Its typed config disables `workers.dev`, so the
-Access-protected custom hostname is the only public route.
+custom hostname is the only public route.
 
-## Cloudflare Access
+## Auth client
 
-The small `access.alchemy.ts` stack owns the account-level Access OIDC provider,
-admin policy, CLI service token/policy, and application. It does not deploy the
-Worker. Bootstrap or repair it in two explicit steps:
+Environment manager uses the repository's existing production OAuth-client
+seed/sync lifecycle; Auth itself has no special env-manager path. Provision or
+repair its relying-party client with:
 
 ```bash
 doppler run --project auth --config prd -- \
   pnpm --dir apps/env-manager sync-auth-client
-
-doppler run --project env-manager --config prd -- \
-  pnpm --dir apps/env-manager access:deploy
 ```
 
-The first command uses Auth's existing seed/sync path to create the one
-Cloudflare Access OAuth client, stores its credentials in `env-manager/prd`,
-and mirrors it into `auth/prd`'s `AUTH_SEED_OAUTH_CLIENTS`. The Alchemy stack
-then configures Access and writes the generated service-token credentials back
-to `env-manager/prd` for the CLI and authenticated deploy smoke. Routine Worker
-deploys remain `wrangler deploy` and do not reconcile the Access stack.
+The script ensures the client through Auth's existing internal API, stores the
+credentials in `env-manager/prd`, and upserts the same entry into
+`auth/prd`'s `AUTH_SEED_OAUTH_CLIENTS` so normal Auth deployments recreate it
+after a database reset.

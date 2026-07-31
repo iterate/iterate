@@ -43,9 +43,7 @@ returned IDs to
 checkout's Wrangler generators. The singleton manager lives in the preview
 account and receives preview and production account tokens through separate
 Cloudflare Secrets Store bindings. Its Worker uses the same Wrangler pipeline
-as every other app. A separate small Alchemy stack owns only the account-level
-Cloudflare Access application, OIDC provider, policies, and CLI service token
-around its custom hostname.
+as every other app.
 
 Every supported deployed-environment path runs `pnpm infra deploy` immediately
 before Wrangler config generation. A checkout's JSON file is disposable input,
@@ -150,14 +148,14 @@ doppler run --project semaphore --config prd -- \
 
 Routes and create-only DNS records are reattached by normal deployment.
 
-Production destroy is dashboard-only and requires a human Cloudflare Access
-session. The Access service token used by the CLI can deploy/check production
-but cannot destroy it. Destroying production or migrating an existing fleet
-remains an explicit operator action; a code merge is not permission to erase
-live environments. Quiesce automatic deploys before the merge that introduces
-the Alchemy-backed push workflows. Destroy an environment before removing its
-stage from `envs.ts`; the all-at-once migration destroys every environment and
-recreates each stack from empty.
+Production destroy is dashboard-only and requires a production Iterate Auth
+browser session at the Worker boundary. Forge-signed bearer tokens available
+to CI can deploy/check production but cannot destroy it. Destroying production
+or migrating an existing fleet remains an explicit operator action; a code
+merge is not permission to erase live environments. Quiesce automatic deploys
+before the merge that introduces the Alchemy-backed push workflows. Destroy an
+environment before removing its stage from `envs.ts`; the all-at-once migration
+destroys every environment and recreates each stack from empty.
 
 ## Bringing up a new environment
 
@@ -183,27 +181,22 @@ cover only the shared Cloudflare resource/deploy skeleton.
    serialized `Deploy Cloudflare Platform` workflow. The OS deploy also
    requires the post-upload inbound-email catch-all to reconcile.
 
-## Environment-manager Access boundary
+## Environment-manager authentication
 
 The singleton environment-manager Worker is deployed in the preview account
-with `workers.dev` disabled. Cloudflare Access protects
-`https://envs.iterate-dev.com` and uses `https://auth.iterate.com` as a generic
-OIDC provider. Auth keeps its existing OAuth-client seed/sync dance:
+but signs users in through `https://auth.iterate.com`. It deliberately uses the
+same OAuth-client dance as the existing production relying parties: run
 
 ```bash
 doppler run --project auth --config prd -- \
   pnpm --dir apps/env-manager sync-auth-client
-
-doppler run --project env-manager --config prd -- \
-  pnpm --dir apps/env-manager access:deploy
 ```
 
-The first command ensures Access's OAuth client through Auth's internal API,
-writes its ID and secret to `env-manager/prd`, and mirrors it into
-`auth/prd`'s `AUTH_SEED_OAUTH_CLIENTS`. The second deploys only the account-level
-Access resources and stores the generated CLI service-token credentials in
-`env-manager/prd`. Normal Auth deployment continues to seed the declarative
-client list; normal env-manager deployment remains a plain Wrangler deploy.
+to ensure the client through Auth's internal API, write its ID and secret to
+`env-manager/prd`, and mirror it into `auth/prd`'s
+`AUTH_SEED_OAUTH_CLIENTS`. Normal Auth deployment continues to seed that
+declarative list. No static client ID or alternate Auth behavior is compiled
+into env-manager.
 
 ## Cloudflare accounts
 

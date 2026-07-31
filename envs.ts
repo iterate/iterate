@@ -284,9 +284,10 @@ export const semaphoreEnvs = {
 /**
  * apps/env-manager — the singleton control plane for the preview fleet.
  *
- * It lives in the dev/preview account with the resources it manages. Cloudflare
- * Access protects its only public hostname and uses production Auth as its OIDC
- * identity provider.
+ * It lives in the dev/preview account with the resources it manages, while
+ * authenticating through production Auth. Its OAuth client credentials remain
+ * Doppler-owned and use the same seed/sync lifecycle as every other relying
+ * party.
  */
 export const envManagerEnv = {
   cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
@@ -294,7 +295,6 @@ export const envManagerEnv = {
   workerName: "env-manager",
   baseUrl: "https://envs.iterate-dev.com",
   authBaseUrl: "https://auth.iterate.com",
-  accessTeamDomain: "iterate-dev-preview.cloudflareaccess.com",
   cloudflareApiTokenSecrets: {
     preview: {
       storeId: "fb2ef5d0ecb641acb909d3dab1dddc01",
