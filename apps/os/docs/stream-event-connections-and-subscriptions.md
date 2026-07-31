@@ -67,6 +67,26 @@ The open callback exists in runtime state. The stream appends
 `connection-opened` and usually `connection-closed` audit events, but it does
 not append `subscription-configured`.
 
+### High-frequency consumers must recycle their connection
+
+Measured on a deployed preview (2026-07-31, realtime-audio experiments):
+delivery to one live callback **stops silently after ~1000–1300 pushed
+batches** — the worker invocation carrying the callback leg runs out of
+subrequest budget. Appends keep succeeding, the socket stays healthy, no
+close event fires, and a Stream DO storage reset kills the callback the same
+silent way. At 50 events/s that is ~25 seconds of delivery per connection.
+
+Any consumer taking sustained event flow (voice/PCM frames, telemetry) must
+recycle make-before-break: open a successor connection under a new key
+before the budget runs out (and whenever delivery goes quiet while traffic
+is expected), dedupe the brief overlap by event offset, and pass
+`replayAfterOffset` so durable control-plane events survive the seam
+(ephemeral rows are correctly lost). A working reference with the budget
+numbers tuned is `apps/os/scripts/voicelab/resilient.ts`; with it, 2-minute
+50 events/s runs deliver 6000/6000 with no duplicates. One trap: the
+handle's `streamMaxOffset` does not materialize as a number across the wire
+— advance the offset cursor only from delivered events.
+
 ### Replay durable rows, then stay connected
 
 ```ts
