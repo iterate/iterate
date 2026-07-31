@@ -14,6 +14,7 @@ import process from "node:process";
 import { MicSource, PlayoutBuffer, percentiles, BYTES_PER_SEC } from "./audio.ts";
 import { connectProject, type VoicelabConnectOptions } from "./connect.ts";
 import { createImpairment, parseImpairSpec } from "./impair.ts";
+import { openResilientConnection } from "./resilient.ts";
 
 /** Options for `pnpm cli voicelab client`. */
 export interface ClientOptions extends VoicelabConnectOptions {
@@ -100,7 +101,7 @@ export async function client(options: ClientOptions) {
     });
   };
 
-  using connection = await stream.openConnection({
+  const connection = await openResilientConnection(stream, {
     connectionKey: `voicelab-client-${callId}`,
     eventTypes: [
       "voicelab/spk-frame",
@@ -108,10 +109,11 @@ export async function client(options: ClientOptions) {
       "voicelab/pong",
       "voicelab/call-accepted",
     ],
-    processEventBatch: (batch) => {
+    quietMs: 4000,
+    onEvents: (events) => {
       impair.rx(() => {
         const now = Date.now();
-        for (const event of batch.events) {
+        for (const event of events) {
           const payload = event.payload as Record<string, unknown>;
           switch (event.type) {
             case "voicelab/call-accepted":
@@ -273,6 +275,7 @@ export async function client(options: ClientOptions) {
   playout.stop();
   fireAppend({ type: "voicelab/call-ended", payload: { callId, reason: "client done" } });
   await new Promise((resolve) => setTimeout(resolve, 300));
+  connection.close();
 
   const utteranceEnd = mic.utteranceEnds[0] ?? mic.utteranceEndAt;
   const summary = {
@@ -302,13 +305,13 @@ export async function client(options: ClientOptions) {
     ...(bargeInAt === null
       ? {}
       : { bargeIn: { reactionMs: bargeInReactionMs, droppedMs: bargeInDrops } }),
+    connection: connection.stats(),
     appendErrors,
     ...(firstAppendError === undefined ? {} : { firstAppendError }),
     userTranscript,
     assistantTranscript: assistantTranscript.trim(),
   };
   console.log(JSON.stringify(summary, null, 2));
-  connection.close();
   process.exit(summary.appendErrors > 0 ? 2 : 0);
 }
 

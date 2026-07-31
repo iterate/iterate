@@ -9,6 +9,7 @@
 import crypto from "node:crypto";
 import { percentiles } from "./audio.ts";
 import { connectProject, type VoicelabConnectOptions } from "./connect.ts";
+import { openResilientConnection } from "./resilient.ts";
 
 /** Options for `pnpm cli voicelab bench`. */
 export interface BenchOptions extends VoicelabConnectOptions {
@@ -45,14 +46,17 @@ export async function bench(options: BenchOptions) {
   const batchSizes: number[] = [];
   const stalls: { fromSeq: number; gapMs: number; at: number }[] = [];
 
+  let sending = true;
   using subStream = sub.streams.get(path);
-  using connection = await subStream.openConnection({
+  const connection = await openResilientConnection(subStream, {
     connectionKey: `voicelab-bench-${crypto.randomUUID().slice(0, 8)}`,
     eventTypes: ["voicelab/bench-frame"],
-    processEventBatch: (batch) => {
+    quietMs: 1500,
+    trafficExpected: () => sending,
+    onEvents: (events, batch) => {
       const now = Date.now();
       batchSizes.push(batch.events.length);
-      for (const event of batch.events) {
+      for (const event of events) {
         const payload = event.payload as { seq: number; t: number };
         if (recvBySeq.has(payload.seq)) {
           dupes++;
@@ -114,6 +118,7 @@ export async function bench(options: BenchOptions) {
   }
 
   // Grace period for stragglers.
+  sending = false;
   await new Promise((resolve) => setTimeout(resolve, 5000));
   connection.close();
 
@@ -143,6 +148,7 @@ export async function bench(options: BenchOptions) {
     appendAckMs: percentiles(ackLatency),
     deliveryBatchSizes: percentiles(batchSizes),
     stalls,
+    connection: connection.stats(),
   };
   console.log(JSON.stringify(summary, null, 2));
   process.exit(summary.lost > 0 || summary.appendErrors > 0 || stalls.length > 0 ? 2 : 0);

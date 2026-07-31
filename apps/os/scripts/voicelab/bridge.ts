@@ -14,6 +14,7 @@ import process from "node:process";
 import { percentiles } from "./audio.ts";
 import { connectProject, type VoicelabConnectOptions } from "./connect.ts";
 import { GrokClient } from "./grok.ts";
+import { openResilientConnection } from "./resilient.ts";
 
 /** Options for `pnpm cli voicelab bridge`. */
 export interface BridgeOptions extends VoicelabConnectOptions {
@@ -124,7 +125,7 @@ export async function bridge(options: BridgeOptions) {
     client.on("close", (code: number) => endCall(`grok socket closed (${code})`));
   };
 
-  using connection = await stream.openConnection({
+  const connection = await openResilientConnection(stream, {
     connectionKey: `voicelab-bridge-${crypto.randomUUID().slice(0, 8)}`,
     eventTypes: [
       "voicelab/mic-frame",
@@ -132,9 +133,13 @@ export async function bridge(options: BridgeOptions) {
       "voicelab/call-ended",
       "voicelab/ping",
     ],
-    processEventBatch: (batch) => {
+    quietMs: 4000,
+    // Pings flow every 2s during a call; when idle, silence is expected and
+    // reopen churn would only pollute the stream with connection facts.
+    trafficExpected: () => callId !== null,
+    onEvents: (events) => {
       let micInBatch = 0;
-      for (const event of batch.events) {
+      for (const event of events) {
         const payload = event.payload as Record<string, unknown>;
         switch (event.type) {
           case "voicelab/mic-frame": {
@@ -173,6 +178,7 @@ export async function bridge(options: BridgeOptions) {
           spkFrames,
           micOneWayMs: percentiles(micOneWay),
           micEventsPerBatch: percentiles(micBatchSizes),
+          connection: connection.stats(),
           appendErrors,
           ...(firstAppendError === undefined ? {} : { firstAppendError }),
         },
