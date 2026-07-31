@@ -23,6 +23,10 @@ import {
   type CompletedProviderToolCall,
   type ProductionGrokProviderEvent,
 } from "../src/device/production-grok-provider-events.ts";
+import {
+  parseProductionGrokCliOptions,
+  type PttAuthority,
+} from "../src/device/production-grok-cli-options.ts";
 import { assessPhysicalSpeechTranscription } from "../src/device/physical-speech-transcription.ts";
 import { parseKitControlDiagnostics } from "../src/device/kit-control-diagnostics.ts";
 import { MacOsPcm16Capture } from "../src/device/macos-pcm16-capture.ts";
@@ -52,17 +56,11 @@ import {
   type PcmSessionMetrics,
 } from "../src/userspace/config-worker/pcm-proxy.ts";
 import {
-  KIT_DEVICE_EVENT_STREAM_PATH,
   KIT_PROVIDER_EVENT_STREAM_EVENT_TYPE,
+  kitDeviceEventStreamPath,
   type ProviderEventStreamMetrics,
 } from "../src/userspace/config-worker/provider-event-stream.ts";
 
-const defaultProjectId = "prj_65441737530642949cadaf7fe399368b";
-const defaultProjectSlug = "kit-stick-vertical-proof";
-const defaultBaseUrl = "https://os.iterate.com";
-const defaultWorkerHost = "kit--kit-stick-vertical-proof.iterate.app";
-const defaultDeviceHost = "192.168.0.21";
-const devicePath = ["kit", "m5sticks3"] as const;
 const physicalPressTimeoutMs = 5 * 60_000;
 const physicalReleaseTimeoutMs = 30_000;
 const responseTimeoutMs = 90_000;
@@ -70,8 +68,6 @@ const ambientDurationMs = 1_000;
 const responseAnalysisGuardMs = 400;
 const provisionalRelativeAmbientMultiplier = 2.5;
 const executeFile = promisify(execFile);
-
-type PttAuthority = "physical" | "remote";
 
 interface ProductionPcmMetrics extends PcmSessionMetrics {
   deviceEvents: DeviceEventSessionMetrics;
@@ -82,28 +78,6 @@ interface ProductionPcmMetrics extends PcmSessionMetrics {
 
 interface KitVoiceProofWorker {
   pcmMetrics(): Promise<ProductionPcmMetrics | null>;
-}
-
-interface ProductionGrokCliOptions {
-  acousticInput?: string;
-  baseUrl: string;
-  deviceHost: string;
-  ffmpegExecutable?: string;
-  outputDirectory: string;
-  projectApiKey: string;
-  projectId: string;
-  projectSlug: string;
-  pttAuthority: PttAuthority;
-  sayExecutable: string;
-  soxExecutable?: string;
-  workerHost: string;
-  xaiApiKey: string;
-}
-
-interface DigitalAssessment {
-  deltas: Record<string, number>;
-  passed: boolean;
-  reasons: string[];
 }
 
 /**
@@ -122,7 +96,9 @@ export async function proveProductionM5StickS3Grok(
   args: readonly string[],
   environment: Readonly<Record<string, string | undefined>>,
 ) {
-  const options = parseOptions(args, environment);
+  const options = parseProductionGrokCliOptions(args, environment);
+  const devicePath = ["kit", options.deviceId] as const;
+  const providerEventStreamPath = kitDeviceEventStreamPath(options.deviceId);
   const routerHost = await discoverDarwinDefaultGateway();
   const runName = new Date().toISOString().replaceAll(/[:.]/gu, "-");
   const runRoot = join(options.outputDirectory, runName);
@@ -168,7 +144,7 @@ export async function proveProductionM5StickS3Grok(
     (await root.invokeCapability({ args: invokeArgs, path: [...path] })) as Value;
   const readDiagnostics = async (): Promise<KitControlDiagnostics> =>
     parseKitControlDiagnostics(await invoke([...devicePath, "getDiagnostics"]));
-  const providerEventStream = project.streams.get(KIT_DEVICE_EVENT_STREAM_PATH);
+  const providerEventStream = project.streams.get(providerEventStreamPath);
   const providerEventStart = await providerEventStream.getEventPage({
     afterOffset: Number.MAX_SAFE_INTEGER,
     eventTypes: [KIT_PROVIDER_EVENT_STREAM_EVENT_TYPE],
@@ -432,6 +408,7 @@ export async function proveProductionM5StickS3Grok(
           limit: 500,
         }),
         terminalWorker.sessionId,
+        options.deviceId,
       );
       try {
         completedProviderOutputTranscript(candidate);
@@ -526,6 +503,7 @@ export async function proveProductionM5StickS3Grok(
               limit: 500,
             }),
             baselineWorker.sessionId,
+            options.deviceId,
           );
         } catch (error) {
           failureSnapshotErrors.push(`providerEventStream: ${errorMessage(error)}`);
@@ -614,6 +592,11 @@ export async function proveProductionM5StickS3Grok(
         responseMarker,
       },
       deviceDiagnostics: failureDiagnosticsSnapshot,
+      deviceRoute: {
+        deviceId: options.deviceId,
+        eventStreamPath: providerEventStreamPath,
+        mountPath: devicePath,
+      },
       error: serializeError(runFailure ?? new Error("The physical capture did not complete.")),
       lifecycle: {
         directRedAcknowledged,
@@ -824,6 +807,7 @@ export async function proveProductionM5StickS3Grok(
     createdAt: new Date().toISOString(),
     device: {
       host: options.deviceHost,
+      id: options.deviceId,
       mountPath: devicePath,
     },
     digital: {
@@ -862,7 +846,7 @@ export async function proveProductionM5StickS3Grok(
     providerEvents: {
       events: providerEventEvidence,
       eventType: KIT_PROVIDER_EVENT_STREAM_EVENT_TYPE,
-      streamPath: KIT_DEVICE_EVENT_STREAM_PATH,
+      streamPath: providerEventStreamPath,
       toolCall: providerToolCallEvidence,
     },
     pttAuthority: {
@@ -881,6 +865,12 @@ export async function proveProductionM5StickS3Grok(
     passed,
     recordingPath: completedCapture.artifactPath,
   };
+}
+
+interface DigitalAssessment {
+  deltas: Record<string, number>;
+  passed: boolean;
+  reasons: string[];
 }
 
 function assessDigitalRun(input: {
@@ -1157,59 +1147,6 @@ async function waitForWorkerIdle(worker: KitVoiceProofWorker, timeoutMs: number)
     await delay(100);
   }
   throw new Error("Timed out waiting for the prior deployed PCM generation to close.");
-}
-
-function parseOptions(
-  args: readonly string[],
-  environment: Readonly<Record<string, string | undefined>>,
-): ProductionGrokCliOptions {
-  let baseUrl = defaultBaseUrl;
-  let deviceHost = defaultDeviceHost;
-  let outputDirectory = fileURLToPath(
-    new URL("../evidence/m5sticks3-production-grok", import.meta.url),
-  );
-  let projectId = environment.ITERATE_KIT_PROJECT_ID?.trim() || defaultProjectId;
-  let projectSlug = defaultProjectSlug;
-  let pttAuthority: PttAuthority = "physical";
-  let workerHost = defaultWorkerHost;
-  for (let index = 0; index < args.length; index += 1) {
-    const flag = args[index];
-    const value = () => {
-      const selected = args[++index]?.trim();
-      if (!selected) throw new Error(`${flag} requires a value.`);
-      return selected;
-    };
-    if (flag === "--remote-ptt") pttAuthority = "remote";
-    else if (flag === "--project-id") projectId = value();
-    else if (flag === "--project-slug") projectSlug = value();
-    else if (flag === "--base-url") baseUrl = value();
-    else if (flag === "--worker-host") workerHost = value();
-    else if (flag === "--device-host") deviceHost = value();
-    else if (flag === "--output-directory") outputDirectory = value();
-    else throw new Error(`Unknown option: ${flag}`);
-  }
-  const projectApiKey = environment.ITERATE_KIT_PROJECT_API_KEY?.trim() ?? "";
-  if (!projectApiKey) throw new Error("ITERATE_KIT_PROJECT_API_KEY is required.");
-  const xaiApiKey = environment.XAI_API_KEY?.trim() ?? "";
-  if (!xaiApiKey) throw new Error("XAI_API_KEY is required for the independent acoustic oracle.");
-  if (!/^prj_[A-Za-z0-9_-]+$/u.test(projectId)) {
-    throw new Error("--project-id must be a prj_ project ID.");
-  }
-  return {
-    acousticInput: environment.ITERATE_KIT_ACOUSTIC_INPUT?.trim() || undefined,
-    baseUrl: new URL(baseUrl).origin,
-    deviceHost,
-    ffmpegExecutable: environment.ITERATE_KIT_FFMPEG?.trim() || undefined,
-    outputDirectory,
-    projectApiKey,
-    projectId,
-    projectSlug,
-    pttAuthority,
-    sayExecutable: environment.ITERATE_KIT_SAY?.trim() || "/usr/bin/say",
-    soxExecutable: environment.ITERATE_KIT_SOX?.trim() || undefined,
-    workerHost,
-    xaiApiKey,
-  };
 }
 
 async function writeExclusiveJson(path: string, value: unknown) {

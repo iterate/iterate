@@ -1,3 +1,5 @@
+import { isKitDeviceId } from "./device-id.ts";
+
 export type KitVoiceMode = "grok" | "tone";
 export const KIT_DEVICE_ID_HEADER = "x-iterate-kit-device-id";
 
@@ -97,7 +99,7 @@ export async function authenticateProjectBearer(
  */
 export function readKitDeviceIdentity(request: Request): string | null {
   const deviceId = request.headers.get(KIT_DEVICE_ID_HEADER);
-  if (deviceId === null || !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(deviceId)) {
+  if (deviceId === null || !isKitDeviceId(deviceId)) {
     return null;
   }
   return deviceId;

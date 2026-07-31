@@ -41,7 +41,16 @@ async function createBuildFixture(overrides: Record<string, unknown> = {}) {
   await mkdir(join(directory, "bootloader"));
   await mkdir(join(directory, "partition_table"));
   await writeFile(join(directory, "bootloader", "bootloader.bin"), Uint8Array.of(1, 2));
-  await writeFile(join(directory, "partition_table", "partition-table.bin"), Uint8Array.of(3, 4));
+  const partitionTable = new Uint8Array(96).fill(0xff);
+  const view = new DataView(partitionTable.buffer);
+  view.setUint16(0, 0x50aa, true);
+  view.setUint8(2, 0x40);
+  view.setUint8(3, 0);
+  view.setUint32(4, 0x11_0000, true);
+  view.setUint32(8, 4096, true);
+  partitionTable.fill(0, 12, 28);
+  partitionTable.set(new TextEncoder().encode("iterate_kit"), 12);
+  await writeFile(join(directory, "partition_table", "partition-table.bin"), partitionTable);
   await writeFile(join(directory, "iterate-kit-m5sticks3.bin"), Uint8Array.of(5, 6));
   await writeFile(
     join(directory, "flasher_args.json"),
@@ -79,6 +88,22 @@ describe("prepareLocalEspIdfFlashPlan", () => {
     ]);
     expect(new TextDecoder().decode(plan.parts[3]!.data.slice(0, 8))).toBe("ITERKIT1");
     expect(plan.parts[3]!.data).toHaveLength(4096);
+  });
+
+  it("derives the provisioning region from the compiled partition table", async () => {
+    const buildDirectory = await createBuildFixture();
+
+    const plan = await prepareLocalEspIdfFlashPlan({
+      buildDirectory,
+      configuration,
+      device,
+    });
+
+    expect(plan.parts.at(-1)).toMatchObject({
+      address: 0x11_0000,
+      label: "iterate-kit/v1 configuration",
+    });
+    expect(plan.parts.at(-1)?.data).toHaveLength(4096);
   });
 
   it("rejects a build for a different ESP family", async () => {

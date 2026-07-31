@@ -1,12 +1,17 @@
 import type { StreamEventInput } from "iterate/sdk";
+import { isKitDeviceId } from "./device-id.ts";
 import type { ProviderNonPcmEvent } from "./pcm-proxy.ts";
 
 export function kitDeviceEventStreamPath(deviceId: string): `/devices/${string}` {
+  if (!isKitDeviceId(deviceId)) {
+    throw new Error(`Invalid Iterate Kit device id: ${JSON.stringify(deviceId)}.`);
+  }
   return `/devices/${deviceId}`;
 }
 
 /** Backwards-compatible name used by the retained Stick proof reader. */
-export const KIT_DEVICE_EVENT_STREAM_PATH = kitDeviceEventStreamPath("m5sticks3");
+export const DEFAULT_KIT_DEVICE_ID = "m5sticks3";
+export const KIT_DEVICE_EVENT_STREAM_PATH = kitDeviceEventStreamPath(DEFAULT_KIT_DEVICE_ID);
 export const KIT_PROVIDER_EVENT_STREAM_EVENT_TYPE = "events.iterate.com/kit/provider-event";
 
 const maximumPendingEvents = 64;
@@ -168,7 +173,10 @@ export class ProviderEventStreamJournal {
         this.#appendFailures += 1;
         this.#droppedEvents += dropped.length;
         this.#pendingRawBytes = 0;
-        this.#lastAppendError = errorMessage(error).slice(0, 256);
+        this.#lastAppendError = (error instanceof Error ? error.message : String(error)).slice(
+          0,
+          256,
+        );
         this.#onDiagnostic({
           code: "provider-event-stream-append-failed",
           detail: {
@@ -186,8 +194,4 @@ export class ProviderEventStreamJournal {
       this.#lastAppendedSequence = batch.at(-1)?.sequence ?? this.#lastAppendedSequence;
     }
   }
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

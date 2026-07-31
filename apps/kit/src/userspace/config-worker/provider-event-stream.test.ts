@@ -1,5 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 import {
+  DEFAULT_KIT_DEVICE_ID,
+  KIT_DEVICE_EVENT_STREAM_PATH,
   KIT_PROVIDER_EVENT_STREAM_EVENT_TYPE,
   ProviderEventStreamJournal,
   kitDeviceEventStreamPath,
@@ -7,9 +9,24 @@ import {
 
 describe("Grok non-PCM event stream journal", () => {
   test("keeps each authenticated device's provider evidence in its own stream", () => {
+    expect(DEFAULT_KIT_DEVICE_ID).toBe("m5sticks3");
+    expect(KIT_DEVICE_EVENT_STREAM_PATH).toBe("/devices/m5sticks3");
     expect(kitDeviceEventStreamPath("m5sticks3")).toBe("/devices/m5sticks3");
     expect(kitDeviceEventStreamPath("stackchan")).toBe("/devices/stackchan");
   });
+
+  test.each(["", "StackChan", "-stackchan", "stackchan-", "stack/chan", "a".repeat(64)])(
+    "rejects ambiguous device identity %j before constructing a stream path",
+    (deviceId) => {
+      /*
+       * The device identity selects both an RPC child and a durable evidence
+       * stream. Accepting a slash, an empty segment, or a second spelling here
+       * would let a CLI read evidence from a path the authenticated worker can
+       * never own, or silently attribute one board's run to another.
+       */
+      expect(() => kitDeviceEventStreamPath(deviceId)).toThrow("device id");
+    },
+  );
   test("appends the exact provider frame with its session and ordering coordinates", async () => {
     /*
      * This is the durable harness seam: an operator must be able to read what

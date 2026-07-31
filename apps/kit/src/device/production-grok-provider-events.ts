@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { KIT_PROVIDER_EVENT_STREAM_EVENT_TYPE } from "../userspace/config-worker/provider-event-stream.ts";
+import {
+  DEFAULT_KIT_DEVICE_ID,
+  KIT_PROVIDER_EVENT_STREAM_EVENT_TYPE,
+  kitDeviceEventStreamPath,
+} from "../userspace/config-worker/provider-event-stream.ts";
 
 const StreamEventEnvelope = z.object({
   createdAt: z.string(),
@@ -57,10 +61,20 @@ export interface ProductionGrokProviderEvent {
 export function parseProductionGrokProviderEvents(
   value: unknown,
   sessionId: string,
+  deviceId = DEFAULT_KIT_DEVICE_ID,
 ): ProductionGrokProviderEvent[] {
   const envelopes = z.array(StreamEventEnvelope).parse(value);
+  const streamPath = kitDeviceEventStreamPath(deviceId);
   const selected = envelopes
-    .filter((event) => event.type === KIT_PROVIDER_EVENT_STREAM_EVENT_TYPE)
+    /*
+     * Path is the ownership boundary; session id is only a generation key
+     * inside that boundary. Filter before parsing payloads so corrupt or
+     * schema-incompatible evidence from another board cannot invalidate the
+     * selected device's otherwise complete physical run.
+     */
+    .filter(
+      (event) => event.path === streamPath && event.type === KIT_PROVIDER_EVENT_STREAM_EVENT_TYPE,
+    )
     .map((event) => ({
       ...ProviderEventPayload.parse(event.payload),
       createdAt: event.createdAt,

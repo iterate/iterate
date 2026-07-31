@@ -18,7 +18,7 @@ interface LocalPart {
 export async function prepareLocalEspIdfFlashPlan(input: {
   buildDirectory: string;
   configuration: DeviceConfiguration;
-  configurationPartition: {
+  configurationPartition?: {
     offset: number;
     size: number;
   };
@@ -52,9 +52,19 @@ export async function prepareLocalEspIdfFlashPlan(input: {
     }),
   );
   const bytesByDescriptor = new Map(parts.map((part) => [part.descriptor, part.bytes] as const));
+  let configurationPartition = input.configurationPartition;
+  if (!configurationPartition) {
+    const partitionTable = parts.find((part) =>
+      part.descriptor.fileName.endsWith("partition_table/partition-table.bin"),
+    );
+    if (!partitionTable) {
+      throw new Error("ESP-IDF build does not include its compiled partition table.");
+    }
+    configurationPartition = findCompiledPartition(partitionTable.bytes, "iterate_kit");
+  }
   const release: EspSerialFlashInput = {
     artifact: {
-      configurationPartition: input.configurationPartition,
+      configurationPartition,
       parts: parts.map((part) => part.descriptor),
     },
   };
@@ -71,6 +81,50 @@ export async function prepareLocalEspIdfFlashPlan(input: {
       return bytes;
     },
   });
+}
+
+/**
+ * ESP-IDF's compiled partition table is the flash authority. Reading the
+ * provisioning region from that binary prevents a target-specific TypeScript
+ * constant from silently drifting away from the image that will actually boot.
+ * Each normal entry is a fixed 32-byte packed `esp_partition_info_t`; the
+ * 0xffff erased marker and 0xebeb MD5 trailer terminate normal entries.
+ */
+function findCompiledPartition(bytes: Uint8Array, requestedLabel: string) {
+  const entryBytes = 32;
+  const magic = 0x50aa;
+  const md5Magic = 0xebeb;
+  const decoder = new TextDecoder();
+  let result: { offset: number; size: number } | undefined;
+
+  for (let start = 0; start + entryBytes <= bytes.byteLength; start += entryBytes) {
+    const entry = bytes.subarray(start, start + entryBytes);
+    const view = new DataView(entry.buffer, entry.byteOffset, entry.byteLength);
+    const entryMagic = view.getUint16(0, true);
+    if (entryMagic === 0xffff || entryMagic === md5Magic) break;
+    if (entryMagic !== magic) {
+      throw new Error(`ESP-IDF partition table has invalid magic at byte ${start}.`);
+    }
+
+    const rawLabel = entry.subarray(12, 28);
+    const terminator = rawLabel.indexOf(0);
+    const label = decoder.decode(terminator < 0 ? rawLabel : rawLabel.subarray(0, terminator));
+    if (label !== requestedLabel) continue;
+    if (result) {
+      throw new Error(`ESP-IDF partition table contains duplicate ${requestedLabel} entries.`);
+    }
+    const offset = view.getUint32(4, true);
+    const size = view.getUint32(8, true);
+    if (size === 0) {
+      throw new Error(`ESP-IDF partition ${requestedLabel} has zero size.`);
+    }
+    result = { offset, size };
+  }
+
+  if (!result) {
+    throw new Error(`ESP-IDF partition table does not contain ${requestedLabel}.`);
+  }
+  return result;
 }
 
 async function readFlasherMetadata(buildDirectory: string) {

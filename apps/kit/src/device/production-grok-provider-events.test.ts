@@ -54,6 +54,19 @@ describe("production Grok provider event evidence", () => {
         },
         type: KIT_PROVIDER_EVENT_STREAM_EVENT_TYPE,
       },
+      {
+        createdAt: "2026-07-31T22:00:00.000Z",
+        offset: 42,
+        path: "/devices/stackchan",
+        payload: {
+          providerType: "error",
+          raw: '{"type":"error","error":{"message":"another board"}}',
+          receivedAtMs: 1_600,
+          sequence: 1,
+          sessionId: "current",
+        },
+        type: KIT_PROVIDER_EVENT_STREAM_EVENT_TYPE,
+      },
     ];
 
     expect(parseProductionGrokProviderEvents(events, "current")).toEqual([
@@ -76,6 +89,57 @@ describe("production Grok provider event evidence", () => {
         sessionId: "current",
       },
     ]);
+  });
+
+  test("isolates an explicit device path while retaining every raw event class losslessly", () => {
+    /*
+     * Session ids are normally generation-specific, but they are not a
+     * device-routing primitive. A restored fixture, copied evidence page, or
+     * future session-id regression can contain the same value on two streams.
+     * The reader must select `/devices/<device>` first and only then validate
+     * that stream's payloads, so an unrelated board cannot poison this proof.
+     */
+    const rawBySequence = [
+      '{ "type": "session.created", "session": {"id":"grok-stackchan"} }',
+      '{"type":"conversation.item.input_audio_transcription.completed","transcript":"hello stack chan"}',
+      '{"type":"response.function_call_arguments.done","name":"moveServos","call_id":"call_7","arguments":"{\\"x\\":3}"}',
+      '{"type":"error","error":{"code":"provider_warning","message":"retained exactly"}}',
+    ];
+    const providerTypes = [
+      "session.created",
+      "conversation.item.input_audio_transcription.completed",
+      "response.function_call_arguments.done",
+      "error",
+    ];
+    const selected = rawBySequence.map((raw, index) => ({
+      createdAt: `2026-08-01T00:00:0${index}.000Z`,
+      offset: 104 - index,
+      path: "/devices/stackchan",
+      payload: {
+        providerType: providerTypes[index],
+        raw,
+        receivedAtMs: 10_000 + index,
+        sequence: index + 1,
+        sessionId: "shared-session",
+      },
+      type: KIT_PROVIDER_EVENT_STREAM_EVENT_TYPE,
+    }));
+    const events = [
+      ...selected.toReversed(),
+      {
+        createdAt: "2026-08-01T00:00:00.000Z",
+        offset: 99,
+        path: "/devices/m5sticks3",
+        payload: { raw: 42, sessionId: "shared-session" },
+        type: KIT_PROVIDER_EVENT_STREAM_EVENT_TYPE,
+      },
+    ];
+
+    const retained = parseProductionGrokProviderEvents(events, "shared-session", "stackchan");
+
+    expect(retained.map((event) => event.providerType)).toEqual(providerTypes);
+    expect(retained.map((event) => event.raw)).toEqual(rawBySequence);
+    expect(retained.map((event) => event.sequence)).toEqual([1, 2, 3, 4]);
   });
 
   test("extracts the completed spoken transcript from the exact raw frame", () => {

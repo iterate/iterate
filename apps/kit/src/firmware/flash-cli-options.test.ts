@@ -13,6 +13,8 @@ describe("parseLocalFlashCliOptions", () => {
         "--",
         "--port",
         "/dev/cu.usbmodem101",
+        "--device",
+        "stackchan",
         "--wifi-ssid",
         "studio",
         "--project-id",
@@ -31,6 +33,7 @@ describe("parseLocalFlashCliOptions", () => {
 
     expect(options).toEqual({
       buildDirectory: "/repo/apps/kit/.build/custom",
+      deviceId: "stackchan",
       configuration: {
         schemaVersion: 1,
         wifi: { ssid: "studio", password: "wifi-secret" },
@@ -44,6 +47,33 @@ describe("parseLocalFlashCliOptions", () => {
       dryRun: true,
       port: "/dev/cu.usbmodem101",
     });
+  });
+
+  it("defaults to the Stick while allowing another catalog target to select its own build", () => {
+    const defaultOptions = parseLocalFlashCliOptions(
+      ["--port", "/dev/cu.usbmodem101", "--wifi-ssid", "studio", "--project-id", "prj_voice_lab"],
+      environment,
+      "/repo/apps/kit",
+    );
+    expect(defaultOptions.deviceId).toBe("m5sticks3");
+    expect(defaultOptions.buildDirectory).toBe("/repo/apps/kit/.build/m5sticks3");
+
+    const stackChanOptions = parseLocalFlashCliOptions(
+      [
+        "--device",
+        "stackchan",
+        "--port",
+        "/dev/cu.usbmodem102",
+        "--wifi-ssid",
+        "studio",
+        "--project-id",
+        "prj_voice_lab",
+      ],
+      environment,
+      "/repo/apps/kit",
+    );
+    expect(stackChanOptions.deviceId).toBe("stackchan");
+    expect(stackChanOptions.buildDirectory).toBe("/repo/apps/kit/.build/stackchan");
   });
 
   it("rejects secret command-line flags so credentials do not enter shell history", () => {

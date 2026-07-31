@@ -1,9 +1,11 @@
 import { resolve } from "node:path";
+import { DEFAULT_DEVICE_ID } from "./catalog.ts";
 import { normalizeOsBaseUrl, type DeviceConfiguration } from "./config-image.ts";
 
 export interface LocalFlashCliOptions {
   buildDirectory: string;
   configuration: DeviceConfiguration;
+  deviceId: string;
   dryRun: boolean;
   port: string;
 }
@@ -19,6 +21,7 @@ export function parseLocalFlashCliOptions(
     baseUrl?: string;
     pcmBaseUrl?: string;
     buildDirectory?: string;
+    deviceId?: string;
     port?: string;
     projectId?: string;
     wifiSsid?: string;
@@ -47,6 +50,9 @@ export function parseLocalFlashCliOptions(
         break;
       case "--build-directory":
         setOnce(values, "buildDirectory", value, option);
+        break;
+      case "--device":
+        setOnce(values, "deviceId", value, option);
         break;
       case "--port":
         setOnce(values, "port", value, option);
@@ -89,9 +95,10 @@ export function parseLocalFlashCliOptions(
   const requiredWifiPassword = present(wifiPassword);
   const requiredProjectId = present(projectId);
   const requiredProjectApiKey = present(projectApiKey);
+  const deviceId = values.deviceId ?? DEFAULT_DEVICE_ID;
 
   return {
-    buildDirectory: resolve(workingDirectory, values.buildDirectory ?? ".build/m5sticks3"),
+    buildDirectory: resolve(workingDirectory, values.buildDirectory ?? `.build/${deviceId}`),
     configuration: {
       schemaVersion: 1,
       wifi: {
@@ -113,6 +120,7 @@ export function parseLocalFlashCliOptions(
         projectApiKey: requiredProjectApiKey,
       },
     },
+    deviceId,
     dryRun,
     port: requiredPort,
   };
@@ -130,6 +138,7 @@ function setOnce<
     baseUrl?: string;
     pcmBaseUrl?: string;
     buildDirectory?: string;
+    deviceId?: string;
     port?: string;
     projectId?: string;
     wifiSsid?: string;
@@ -139,6 +148,7 @@ function setOnce<
     baseUrl?: string;
     pcmBaseUrl?: string;
     buildDirectory?: string;
+    deviceId?: string;
     port?: string;
     projectId?: string;
     wifiSsid?: string;

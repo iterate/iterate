@@ -122,6 +122,22 @@ pnpm firmware:flash -- \
   --project-id prj_...
 ```
 
+Select another catalog target through the same implementation and point it at
+that target's ESP-IDF build, for example:
+
+```bash
+pnpm firmware:flash -- \
+  --device stackchan \
+  --build-directory firmware/targets/stackchan/build \
+  --port /dev/cu.usbmodemNNN \
+  --wifi-ssid ... \
+  --project-id prj_...
+```
+
+For local builds, the flasher finds `iterate_kit` in the compiled partition
+table. This makes the firmware image—not a duplicated per-device offset in the
+CLI—the authority for where provisioning data is written.
+
 Use `--dry-run` to validate and print offsets and byte counts without opening
 the serial port. Secret values are accepted only through environment variables
 and are never printed or placed in esptool arguments.
