@@ -7,13 +7,13 @@ size: small
 
 ## Status summary
 
-Implemented, then reworked after Misha's review: the context line now shows
+Implemented, then reworked twice on Misha's review: the context line shows
 the thread's agent-maintained STATUS (`agent/summary-updated`, folded by
-`threadContextForScriptRun` in `apps/mobile/src/lib/chat.ts`) in full, with
-the last visible message only as a statusless-thread fallback. Tappable line
-on every agent-born batch card, queue and history alike; the spec asserts
-the full status text and the deep-link. Nothing outstanding beyond PR
-review. Split out of #2339's task
+`threadContextForScriptRun` in `apps/mobile/src/lib/chat.ts`) in full —
+no fallback: statusless threads get no line (round 3 dropped the
+last-message fallback entirely). Tappable line on agent-born batch cards,
+queue and history alike; the spec asserts the full status text and the
+deep-link. Nothing outstanding beyond PR review. Split out of #2339's task
 (`tasks/complete/2026-07-30-in-thread-approvals.md` › "thread-status line"),
 which made the approvals screen mostly a cross-thread queue + history view.
 
@@ -74,6 +74,12 @@ doing?" should be answerable without opening the thread.
       (wraps, never clipped); the spec's scripts set status like a real agent
       turn and the screen act asserts both cards' full text by equality;
       video re-recorded_
+- [x] Simplify (Misha, round 3): no status, no line — _last-message fallback
+      and name-only form deleted (`lastVisibleMessageAtOrBefore` gone); the
+      fetch narrows to summary-updated + script-run-settled, which getEvents
+      filters in SQL before the page limit, so the read is O(status events);
+      unit test pins the setStatus-then-held-fetch shape (unsettled run →
+      status shows)_
 - [x] `pnpm typecheck && pnpm lint && pnpm knip && pnpm test`; PR hygiene —
       _all four green from the worktree root_
 
@@ -131,3 +137,22 @@ doing?" should be answerable without opening the thread.
   - The spec's inter-lane guard became "run 1 settled" (was "narration
     landed"): settlement closes batch 1's fold window, so lane 2's status
     appends can never leak into the approve card's context.
+- Round-3 simplify (Misha: "fallback is null — just don't show anything if
+  there's no status", plus an efficiency question):
+  - Fallback deleted. `threadContextForScriptRun` returns
+    `{ title, activity } | null`; the card renders no line for statusless
+    threads, and while the fetch is pending or failed — one render form.
+  - Efficiency answer (verified in `stream-storage.ts` `getRangeSized`): the
+    `eventTypes` filter is applied in SQL inside the page subquery, BEFORE
+    `limit`, and event bodies are only joined for selected offsets — so a
+    filtered read never burns pages on skipped events. Narrowed to the two
+    status-fold types, the read is O(status events) per thread: one ~empty
+    page for any realistic thread. The only linear-in-thread cost is
+    SQLite's internal metadata index walk inside the DO — no RPC, no bodies.
+    Not RBAR.
+  - Misha's sanity check confirmed and pinned by unit test: `setStatus(...);
+    fetch(...)` with the fetch parked at the door → no settlement yet → the
+    fold has no upper bound and the run's own status shows on the card while
+    the batch is held.
+  - Video NOT re-recorded: the happy path it shows (full status on both
+    cards, deep-link tap) is unchanged by the fallback removal.
