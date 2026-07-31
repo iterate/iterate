@@ -4,7 +4,9 @@
 // spot — the "emerge with a project during MCP auth" flow, ADR 0029). No first-party surface is ever an
 // OAuth client; they all just carry the session cookie.
 
+import { newWorkersRpcResponse } from "capnweb";
 import type { Env, Handler, LoginMode } from "./env.ts";
+import { Os } from "./api.ts";
 import { directory } from "./directory.ts";
 import { sha256hex } from "./hash.ts";
 import { clearSessionCookie, currentSession, setSessionCookie, type Session } from "./session.ts";
@@ -241,6 +243,12 @@ export const app: Handler = {
         await dir.createProject(org.id, slug);
       }
       return new Response(null, { status: 302, headers: { location: "/" } });
+    }
+
+    // The capnweb /api — the control plane's typed API (sibling of /mcp). Session-or-API-key auth (design
+    // §2a): OAuth stays at /mcp. Os.authenticate() reads the cookie/bearer against the D1 directory.
+    if (url.pathname === "/api") {
+      return newWorkersRpcResponse(request, new Os(request, env));
     }
 
     // CIMD client metadata doc — a real public URL usable as an OAuth `client_id` (design §4). Its own URL

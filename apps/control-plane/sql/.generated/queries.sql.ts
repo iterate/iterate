@@ -58,13 +58,13 @@ export namespace getUserByEmail {
 }
 
 const createOrgSql = `
-INSERT INTO orgs (id, name) VALUES (?, ?)
-RETURNING id, name;
+INSERT INTO orgs (id, name, slug) VALUES (?, ?, ?)
+RETURNING id, name, slug;
 `.trim();
 const createOrgQuery = (params: createOrg.Params) => ({
   name: "createOrg",
   sql: createOrgSql,
-  args: [params.id, params.name],
+  args: [params.id, params.name, params.slug],
 });
 
 export const createOrg = Object.assign(
@@ -79,10 +79,12 @@ export namespace createOrg {
   export type Params = {
     id: string;
     name: string;
+    slug: string;
   };
   export type Result = {
     id: string;
     name: string;
+    slug: string;
   };
 }
 
@@ -112,7 +114,7 @@ export namespace addOrgMember {
 }
 
 const listOrgsForUserSql = `
-SELECT o.id, o.name, m.role
+SELECT o.id, o.name, o.slug, m.role
 FROM orgs o
 JOIN org_members m ON m.org_id = o.id
 WHERE m.user_id = ?
@@ -141,6 +143,7 @@ export namespace listOrgsForUser {
   export type Result = {
     id: string;
     name: string;
+    slug: string;
     role: string;
   };
 }

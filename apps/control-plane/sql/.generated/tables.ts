@@ -19,6 +19,7 @@ export type OrgMembersRow = {
 export type OrgsRow = {
   id: string;
   name: string;
+  slug: string;
   created_at: string;
 };
 

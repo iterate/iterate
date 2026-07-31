@@ -18,14 +18,16 @@ import {
   upsertRoute,
   upsertUser,
 } from "../sql/.generated/index.ts";
+import { newOrgId, newProjectId, slugify } from "./ids.ts";
 
 export interface User {
-  id: string; // user:<lowercased-email>
+  id: string; // user_<lowercased-email>
   email: string;
 }
 export interface Org {
-  id: string;
+  id: string; // org_<hex>
   name: string;
+  slug: string;
   role?: string;
 }
 export interface Project {
@@ -52,52 +54,64 @@ export function directory(db: D1Database) {
       return { id: row.id, email: row.email };
     },
 
-    /** Create an org and make the creator its owner. */
-    async createOrg(userId: string, name: string): Promise<Org> {
-      const org = await createOrg(client, { id: `org_${crypto.randomUUID()}`, name });
+    /** Create an org (minted org_ id + a globally-unique slug) and make the creator its owner. */
+    async createOrg(userId: string, name: string, slug: string): Promise<Org> {
+      const org = await createOrg(client, { id: newOrgId(), name, slug: slugify(slug) });
       await addOrgMember(client, { orgId: org.id, userId, role: "owner" });
-      return { id: org.id, name: org.name, role: "owner" };
+      return { id: org.id, name: org.name, slug: org.slug, role: "owner" };
     },
 
     /** Orgs the user belongs to. */
     async listOrgs(userId: string): Promise<Org[]> {
       const rows = await listOrgsForUser(client, { userId });
-      return rows.map((r) => ({ id: r.id, name: r.name, role: r.role }));
+      return rows.map((r) => ({ id: r.id, name: r.name, slug: r.slug, role: r.role }));
     },
 
-    /** Create a project inside an org (idempotent on slug). */
+    /**
+     * Create a project inside an org. Mints a `prj_` id distinct from the slug; the slug is GLOBALLY
+     * unique (mirrors apps/auth) — a slug already taken in ANY org throws "already taken". Idempotent
+     * within the same org.
+     */
     async createProject(orgId: string, slug: string): Promise<Project> {
-      await createProject(client, { id: slug, slug, orgId }); // ON CONFLICT DO NOTHING
-      const found = await getProjectBySlug(client, { slug });
-      const p = found[0];
-      if (!p) throw new Error(`failed to create project '${slug}'`);
+      const s = slugify(slug);
+      await createProject(client, { id: newProjectId(), slug: s, orgId }); // ON CONFLICT(slug) DO NOTHING
+      const p = (await getProjectBySlug(client, { slug: s }))[0];
+      if (!p) throw new Error(`failed to create project '${s}'`);
+      if (p.orgId !== orgId) throw new Error(`project slug '${s}' is already taken`);
       return { id: p.id, slug: p.slug, orgId: p.orgId };
     },
 
     /**
      * Emerge with an org + project in one shot — the "create org + project during MCP /authorize" flow
-     * (ADR 0029). Creates the org, makes the caller its owner, and creates the project inside it.
+     * (ADR 0029). The org's slug is the project slug (globally unique, so the org slug is unique too).
      */
     async emerge(
       userId: string,
       orgName: string,
       slug: string,
     ): Promise<{ org: Org; project: Project }> {
-      const org = await dir.createOrg(userId, orgName);
-      const project = await dir.createProject(org.id, slug);
+      const s = slugify(slug);
+      const org = await dir.createOrg(userId, orgName, s);
+      const project = await dir.createProject(org.id, s);
       return { org, project };
     },
 
     /** Ensure the user has at least one org; returns their first (creating a personal one if none). */
     async ensureOrg(userId: string, email: string): Promise<Org> {
       const orgs = await dir.listOrgs(userId);
-      return orgs[0] ?? dir.createOrg(userId, `${email}'s org`);
+      return orgs[0] ?? dir.createOrg(userId, `${email}'s org`, slugify(email));
     },
 
     /** Projects the user can reach (member of the owning org), with their role. */
     async listProjects(userId: string): Promise<Project[]> {
       const rows = await listProjectsForUser(client, { userId });
       return rows.map((r) => ({ id: r.id, slug: r.slug, orgId: r.orgId, role: r.role }));
+    },
+
+    /** Resolve a project by slug (id + org), or null. */
+    async getBySlug(slug: string): Promise<Project | null> {
+      const p = (await getProjectBySlug(client, { slug }))[0];
+      return p ? { id: p.id, slug: p.slug, orgId: p.orgId } : null;
     },
 
     /** Authorize a user against a project — membership in the project's org. */

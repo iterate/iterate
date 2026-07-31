@@ -13,8 +13,9 @@ create table users (
 );
 
 create table orgs (
-  id text primary key,            -- org id
+  id text primary key,            -- org_<hex>  (minted, distinct from slug — mirrors apps/auth)
   name text not null,
+  slug text not null unique,      -- globally-unique org slug
   created_at text not null default current_timestamp
 );
 
@@ -29,8 +30,8 @@ create table org_members (
 );
 
 create table projects (
-  id text primary key,            -- project id (slug-derived for now)
-  slug text not null unique,
+  id text primary key,            -- prj_<hex>  (minted, distinct from slug — mirrors apps/auth)
+  slug text not null unique,      -- GLOBALLY unique (not per-org) — a slug taken in any org is taken
   org_id text not null references orgs(id),
   created_at text not null default current_timestamp
 );

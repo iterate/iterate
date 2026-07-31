@@ -154,14 +154,15 @@ try {
   whoJson = JSON.parse(whoText);
 } catch {}
 ok(whoJson.email === EMAIL.toLowerCase(), `MCP whoami identifies the user (${whoJson.email})`);
+const prjId = whoJson.projectId;
 ok(
-  whoJson.projectId === SLUG,
-  `MCP token is scoped to the org+project CREATED at /authorize (projectId=${whoJson.projectId})`,
+  /^prj_[a-f0-9]{32}$/.test(prjId),
+  `MCP token scoped to a MINTED project id, distinct from slug (${prjId})`,
 );
 const listed = await mcp(tok.access_token, "tools/call", { name: "list_projects", arguments: {} });
 ok(
   (listed.result?.content?.[0]?.text ?? "").includes(SLUG),
-  "MCP list_projects shows the new project",
+  `MCP list_projects shows the project by its globally-unique slug (${SLUG})`,
 );
 
 // 9. API-key path: mint a key scoped to the project, use it as a bearer on /mcp
@@ -169,7 +170,7 @@ const keyPage = await (
   await fetch(`${BASE}/apikeys`, {
     method: "POST",
     headers: { cookie, "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ projectId: SLUG, label: "cli" }),
+    body: new URLSearchParams({ projectId: prjId, label: "cli" }),
   })
 ).text();
 const rawKey = (keyPage.match(/<code>(key_[a-f0-9]+)<\/code>/) || [])[1];
@@ -180,7 +181,7 @@ try {
   whoKeyJson = JSON.parse(whoKey.result?.content?.[0]?.text ?? "");
 } catch {}
 ok(
-  whoKeyJson.grants?.[0]?.projectId === SLUG,
+  whoKeyJson.grants?.[0]?.projectId === prjId,
   `API key authenticates /mcp with project grant (${whoKeyJson.grants?.[0]?.projectId})`,
 );
 

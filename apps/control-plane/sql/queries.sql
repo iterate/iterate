@@ -15,15 +15,15 @@ SELECT id, email FROM users WHERE email = :email;
 -- ── Orgs + membership (access to a project = membership in its org) ───────────────────────────────────
 
 /** @name createOrg */
-INSERT INTO orgs (id, name) VALUES (:id, :name)
-RETURNING id, name;
+INSERT INTO orgs (id, name, slug) VALUES (:id, :name, :slug)
+RETURNING id, name, slug;
 
 /** @name addOrgMember */
 INSERT INTO org_members (org_id, user_id, role) VALUES (:orgId, :userId, :role)
 ON CONFLICT(org_id, user_id) DO NOTHING;
 
 /** @name listOrgsForUser */
-SELECT o.id, o.name, m.role
+SELECT o.id, o.name, o.slug, m.role
 FROM orgs o
 JOIN org_members m ON m.org_id = o.id
 WHERE m.user_id = :userId
