@@ -1551,27 +1551,34 @@ export interface Secret {
 }
 
 /**
- * One durable workspace: an event-sourced, mount-routed private filesystem.
- * Its mount table (getConfig/configure) maps repos into the tree: reads under
- * a mount fall through to that repo's main at HEAD, writes land in a private
- * copy-on-write local layer (large files spill to R2 transparently), and
- * `git.commit({ scope })` turns ONE mount's changes into one commit on that
- * repo's main (honoring the mount's policy). Paths outside every mount are
- * private scratch. The `.git` name is reserved (platform-managed).
+ * One durable workspace: an event-sourced, mount-routed private working copy
+ * of the project's one path namespace. Every project repo is mounted at its
+ * own `/repos/**` stream path (derived from the project repo list — a fresh
+ * repo just appears); reads under a mount fall through to that repo's main at
+ * HEAD, writes land in a private copy-on-write local layer (large files spill
+ * to R2 transparently), and `git.commit({ scope })` turns ONE mount's changes
+ * into one commit on that repo's main (honoring the mount's policy). Private
+ * files live only under the workspace's own path (relative paths resolve
+ * there); writes anywhere else error. The `.git` name is reserved
+ * (platform-managed).
  */
 export interface Workspace {
   __describe(): Promise<Description>;
-  /** Explicitly create this workspace and wait through its complete birth batch. */
-  create(input: { mounts?: Record<string, WorkspaceMount> }): Promise<Workspace>;
+  /** Explicitly create this workspace and wait through its complete birth
+   * batch. Optional `mounts` are overlay DEVIATIONS from the derived table
+   * (every project repo at its own /repos/** path). */
+  create(input: { mounts?: Record<string, WorkspaceMountOverlay> }): Promise<Workspace>;
   whoami(): Promise<string>;
   /** Restart the workspace's server-side object; the next request boots it fresh. */
   kill(): Promise<void>;
   /** The workspace stream processor (snapshot/state). */
   processor: StreamProcessorRpc<WorkspaceProcessorState>;
-  /** The folded configuration (birth certificate + configured patches). */
-  getConfig(): Promise<WorkspaceConfig>;
-  /** Patch configuration — deep-merged per mount point; null removes a mount (appends workspace/configured). */
-  configure(input: { config: WorkspaceConfigPatch }): Promise<WorkspaceConfig>;
+  /** The live configuration: the EFFECTIVE mount table (every project repo
+   * at its own /repos/** path, with stored overlay deviations merged in). */
+  getConfig(): Promise<WorkspaceEffectiveConfig>;
+  /** Patch mount overlays — deep-merged per mount point; null clears one
+   * back to the derived default (appends workspace/configured). */
+  configure(input: { config: WorkspaceConfigPatch }): Promise<WorkspaceEffectiveConfig>;
   /** One file's contents from the merged view (overlay, then owning mount at HEAD); null when missing. */
   readFile(path: string): Promise<string | null>;
   /** The collaborative session lane (rebase model, no Yjs) — workspace.collab. */
@@ -3163,7 +3170,7 @@ export type RepoCreateInput =
   | { type: "github-private"; connection: string; owner: string; repo: string }
   | {
       type: "github-public";
-      connection: string;
+      connection?: string | undefined;
       depth?: number | undefined;
       owner: string;
       repo: string;
@@ -3258,7 +3265,7 @@ export type RepoProcessorState = {
     | { type: "github-private"; connection: string; owner: string; repo: string }
     | {
         type: "github-public";
-        connection: string;
+        connection?: string | undefined;
         depth?: number | undefined;
         owner: string;
         repo: string;
@@ -3271,7 +3278,7 @@ export type RepoProcessorState = {
       | { type: "github-private"; connection: string; owner: string; repo: string }
       | {
           type: "github-public";
-          connection: string;
+          connection?: string | undefined;
           depth?: number | undefined;
           owner: string;
           repo: string;
@@ -3283,7 +3290,7 @@ export type RepoProcessorState = {
       | { type: "github-private"; connection: string; owner: string; repo: string }
       | {
           type: "github-public";
-          connection: string;
+          connection?: string | undefined;
           depth?: number | undefined;
           owner: string;
           repo: string;
@@ -4106,23 +4113,36 @@ export type StatefulDynamicWorkerRef = DynamicWorkerRefBase & {
   durableWorkerKey: string;
 };
 
-/** One repo mount: the repo a workspace subtree reads from and its commit policy. */
-export type WorkspaceMount = WorkspaceConfig["mounts"][string];
+/** One stored overlay: the fields it deviates from (or adds over) the derived table. */
+export type WorkspaceMountOverlay = WorkspaceConfig["mounts"][string];
 
-/** The workspace processor's reduced state: birth certificate plus the merged config. */
+/** The workspace processor's reduced state: existence plus the merged overlays. */
 export type WorkspaceProcessorState = {
-  birthCertificate: {
-    config: {
-      mounts: Record<string, { policy: "commit-to-main" | "read-only"; repoPath: string }>;
-    };
-  } | null;
-  config: { mounts: Record<string, { policy: "commit-to-main" | "read-only"; repoPath: string }> };
+  birthCertificate: { [x: string]: unknown } | null;
+  config: {
+    mounts: Record<
+      string,
+      { policy?: "commit-to-main" | "read-only" | undefined; repoPath?: string | undefined }
+    >;
+  };
 };
 
-/** A workspace's complete configuration: the mount table, keyed by mount path. */
-export type WorkspaceConfig = WorkspaceProcessorState["config"];
+/**
+ * The workspace's LIVE configuration: the effective mount table that routes
+ * reads and commits — every project repo at its own /repos/** stream path
+ * (commit-to-main), with the workspace's stored overlay deviations merged in.
+ */
+export type WorkspaceEffectiveConfig = {
+  mounts: Record<
+    string,
+    {
+      policy: "commit-to-main" | "read-only";
+      repoPath: string;
+    }
+  >;
+};
 
-/** A configuration patch: deep-merged per mount point; null unmounts.
+/** A configuration patch: deep-merged per mount point; null clears an overlay.
  * (Spelled as one z.output<> reference — not an indexed access over it — so
  * the itx-api generator expands it structurally instead of copying the
  * expression verbatim into the generated public API.) */
@@ -4430,6 +4450,9 @@ export type DynamicWorkerRefBase = {
   path: string;
   source: DynamicWorkerSource;
 };
+
+/** A workspace's stored configuration: the mount OVERLAY table, keyed by mount path. */
+export type WorkspaceConfig = WorkspaceProcessorState["config"];
 
 /** Ephemeral cursor presence for one session: who has a caret where, in the
  * sender's head coordinates. In-memory only — an eviction loses it and

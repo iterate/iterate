@@ -325,7 +325,7 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     assert: (result, _ctx, expect) => {
       expect(result).toMatchObject({
         readmePresent: true,
-        edited: { occurrenceCount: 1, path: "/notes/workspace-example.md" },
+        edited: { occurrenceCount: 1, path: "/repos/config/notes/workspace-example.md" },
       });
       const typed = result as {
         commitOid: string;
@@ -336,12 +336,13 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
       // #1831: commits land straight on the mounted repo's default branch —
       // there is no per-workspace branch. #2095: status groups changes by
       // owning mount, and the commit names the mount it was scoped to.
+      // Post-namespace-unification: mount path = repo stream path, verbatim.
       expect(typed.committedTo).toMatch(/^\S+$/);
       expect(typed.commitOid).toMatch(/^[0-9a-f]{40}$/);
-      expect(typed.committedMount).toBe("/");
-      const rootMount = typed.status.mounts.find((mount) => mount.path === "/");
-      expect(rootMount?.changes.map((change) => change.path)).toContain(
-        "/notes/workspace-example.md",
+      expect(typed.committedMount).toBe("/repos/config");
+      const configMount = typed.status.mounts.find((mount) => mount.path === "/repos/config");
+      expect(configMount?.changes.map((change) => change.path)).toContain(
+        "/repos/config/notes/workspace-example.md",
       );
     },
   },
@@ -363,6 +364,25 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
       });
       expect((result as { published: { size: number } }).published.size).toBeGreaterThan(0);
       expect((result as { urlHost: string }).urlHost).toContain("iterate-files--");
+    },
+  },
+  "use-project-skill": {
+    // A marker-salted skill name keeps pooled-project reuse additive; the
+    // config-repo commit lane needs the same cold-tail budget as
+    // workspace-edit-and-push.
+    completionTimeoutMs: 120_000,
+    vars: ({ marker }) => ({
+      skill: `greeting-${marker}`,
+      workspacePath: `/workspaces/examples/skill-${marker}`,
+    }),
+    assert: (result, ctx, expect) => {
+      // The example script returns this literal object shape after reading
+      // the skill; the assertions below are the runtime guard.
+      const typed = result as { instructions: string | null; skillFiles: string[] };
+      expect(typed.skillFiles).toContain(
+        `/repos/config/.agents/skills/greeting-${ctx.marker}/SKILL.md`,
+      );
+      expect(typed.instructions).toContain("Greet warmly");
     },
   },
   "repo-commit-files": {

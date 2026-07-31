@@ -42,7 +42,7 @@ export function WorkspaceTaskEditor({
       transport={transport}
       displayName={displayName}
       path={path}
-      workspacePath={`/${path}`}
+      workspacePath={`${repoPath}/${path}`}
       redline={redline}
       emptyPlaceholder="Write the task as Markdown…"
       focusHeadline={focusHeadline}

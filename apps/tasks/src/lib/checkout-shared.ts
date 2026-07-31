@@ -31,7 +31,11 @@ export type CollaboratorInfo = {
 };
 
 /** All API-lane writes share the DO's doc client, so agents wear one identity. */
-export const AGENT_COLLABORATOR: CollaboratorInfo = { agent: true, color: "#8b5cf6", name: "agent" };
+export const AGENT_COLLABORATOR: CollaboratorInfo = {
+  agent: true,
+  color: "#8b5cf6",
+  name: "agent",
+};
 
 function checkoutCollaboratorsMap(doc: Y.Doc): Y.Map<CollaboratorInfo> {
   return doc.getMap<CollaboratorInfo>("collaborators");
@@ -157,6 +161,29 @@ export function normalizeRepoPath(value: string | null | undefined): string | nu
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(segment)) return null;
   }
   return value;
+}
+
+/**
+ * The checkout's platform workspace stream path — the workspace identity
+ * ENCODES the repo, so the same checkout id against a different repository
+ * can never bind to the first repository's workspace. The human-readable
+ * slug alone is NOT injective ("/repos/a/b" and "/repos/a--b" both slug to
+ * "repos--a--b"); a short repoPath hash disambiguates. FNV-1a, not SHA-256:
+ * the route component builds this path during render, and WebCrypto digests
+ * are async-only.
+ */
+export function checkoutWorkspacePath(checkoutId: string, repoPath: string): string {
+  const slug = repoPath.replace(/^\/+/, "").replaceAll("/", "--");
+  return `/workspaces/tasks/${checkoutId}~${slug}-${fnv1a32Hex(repoPath)}`;
+}
+
+/** 32-bit FNV-1a as 8 lowercase hex chars. */
+function fnv1a32Hex(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index++) {
+    hash = Math.imul(hash ^ value.charCodeAt(index), 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
 /** Shareable checkout id: date-time prefix for humans, random tail for uniqueness. */

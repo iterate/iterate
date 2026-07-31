@@ -280,8 +280,19 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
       request.type === "github-public"
         ? await this.deps.importPublicGithubArtifact(request)
         : await this.deps.createEmptyArtifact();
-    await this.deps.linkGithub(request);
-    if (request.type === "github-private") await this.deps.syncPrivateGithub();
+    // A public import without a connection is a plain clone: Artifacts pulls
+    // the public URL unauthenticated, and nothing links — linkGithub remains
+    // the explicit later verb for webhook ingestion and sync.
+    if (request.type === "github-private") {
+      await this.deps.linkGithub(request);
+      await this.deps.syncPrivateGithub();
+    } else if (request.connection !== undefined) {
+      await this.deps.linkGithub({
+        connection: request.connection,
+        owner: request.owner,
+        repo: request.repo,
+      });
+    }
     return artifact;
   }
 

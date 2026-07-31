@@ -1039,8 +1039,11 @@ describe("AgentProcessor script execution", () => {
   it("spills an oversized script result to a workspace file and references it; small results stay inline", async () => {
     const written: { path: string; content: string }[] = [];
     const h = makeAgentHarness(undefined, {
+      // The host dep writes relative to the agent's own workspace directory
+      // and answers with the fully-qualified path it wrote.
       writeWorkspaceFile: async (input) => {
         written.push(input);
+        return { absolutePath: `/workspaces/agents/main/${input.path}` };
       },
     });
     await h.play(
@@ -1068,19 +1071,21 @@ describe("AgentProcessor script execution", () => {
       },
     ]);
 
-    // The .gitignore seed plus the spill file itself, under /script-results.
+    // ONE write: the spill file itself, at a workspace-relative path under
+    // script-results/ (private scratch — no .gitignore seeding needed).
     expect(written).toMatchObject([
-      { path: "/script-results/.gitignore", content: "*\n" },
       {
-        path: expect.stringMatching(/^\/script-results\/agent-output-\d+\.txt$/),
+        path: expect.stringMatching(/^script-results\/agent-output-\d+\.txt$/),
         content: bigText,
       },
     ]);
     const rendered = h
       .state()
       .contextItems.find((item) => item.payload.content.startsWith("Your script returned:"));
-    expect(rendered!.payload.content).toContain("saved in your workspace at");
-    expect(rendered!.payload.content).toContain("/script-results/");
+    // The notice names exactly the fully-qualified path the dep answered with.
+    expect(rendered!.payload.content).toContain(
+      `saved in your workspace at "/workspaces/agents/main/${written[0]!.path}"`,
+    );
     // Raw string result: no json fence label, no JSON escaping.
     expect(rendered!.payload.content).not.toContain("```json");
 
@@ -1219,6 +1224,7 @@ describe("AgentProcessor script execution", () => {
     const h = makeAgentHarness(undefined, {
       writeWorkspaceFile: async (input) => {
         written.push(input);
+        return { absolutePath: `/workspaces/agents/main/${input.path}` };
       },
     });
     await h.play(
@@ -1249,19 +1255,21 @@ describe("AgentProcessor script execution", () => {
     // The full result spills as pretty-printed .json (strings spill as .txt).
     const spilled = JSON.stringify(result, null, 2);
     expect(written).toMatchObject([
-      { path: "/script-results/.gitignore", content: "*\n" },
       {
-        path: expect.stringMatching(/^\/script-results\/agent-output-\d+\.json$/),
+        path: expect.stringMatching(/^script-results\/agent-output-\d+\.json$/),
         content: spilled,
       },
     ]);
-    // The rendered item: a bounded preview plus the paste-ready read recipe.
+    // The rendered item: a bounded preview plus the paste-ready read recipe,
+    // both naming the fully-qualified path the dep answered with.
     const rendered = h
       .state()
       .contextItems.find((item) => item.payload.content.startsWith("Your script returned"));
-    expect(rendered!.payload.content).toContain("saved in your workspace at");
     expect(rendered!.payload.content).toContain(
-      'JSON.parse(await itx.workspace.readFile("/script-results/',
+      `saved in your workspace at "/workspaces/agents/main/${written[0]!.path}"`,
+    );
+    expect(rendered!.payload.content).toContain(
+      'JSON.parse(await itx.workspace.readFile("/workspaces/agents/main/script-results/',
     );
     expect(rendered!.payload.content).toContain(
       `showing the first 100 of ${spilled.length.toLocaleString("en-US")} chars`,

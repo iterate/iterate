@@ -14,6 +14,7 @@ import type {
   CollabOpened,
   CollabWaitResult,
 } from "@iterate-com/workspace-documents/types";
+import { requireDocumentPath, requireWorkspacePath } from "./config-bridge.ts";
 import type { AppEnv } from "./env.ts";
 import type {
   DocsApi,
@@ -120,11 +121,11 @@ class DocsWorkspaceApi extends RpcTarget implements DocsWorkspace {
   }
 
   async inspect(rawPath: string): Promise<WorkspaceDocumentSnapshot> {
-    const path = requireDocumentPath(rawPath);
+    const path = resolveDocumentPath(this.#workspacePath, rawPath);
     return this.#withWorkspace(async (workspace) => {
       const content = await workspace.readFile(path);
       if (content === null) {
-        throw new Error(`document "${path}" does not exist in ${this.#workspacePath}`);
+        throw new Error(`document "${path}" does not exist`);
       }
       return {
         content,
@@ -136,12 +137,12 @@ class DocsWorkspaceApi extends RpcTarget implements DocsWorkspace {
   }
 
   async open(rawPath: string): Promise<CollabOpened> {
-    const path = requireDocumentPath(rawPath);
+    const path = resolveDocumentPath(this.#workspacePath, rawPath);
     return this.#withExistingDocument(path, (workspace) => workspace.collab.open(path));
   }
 
   async changes(rawPath: string): Promise<CollabChanges> {
-    const path = requireDocumentPath(rawPath);
+    const path = resolveDocumentPath(this.#workspacePath, rawPath);
     return this.#withWorkspace((workspace) => workspace.collab.changes(path));
   }
 
@@ -152,7 +153,7 @@ class DocsWorkspaceApi extends RpcTarget implements DocsWorkspace {
     ops: { changes: unknown; clientSeq: number }[];
     path: string;
   }): Promise<CollabAcceptResult> {
-    const path = requireDocumentPath(input.path);
+    const path = resolveDocumentPath(this.#workspacePath, input.path);
     return this.#withWorkspace((workspace) => workspace.collab.push({ ...input, path }));
   }
 
@@ -163,7 +164,7 @@ class DocsWorkspaceApi extends RpcTarget implements DocsWorkspace {
     clientId?: string,
     afterPresence?: number,
   ): Promise<CollabWaitResult> {
-    const path = requireDocumentPath(rawPath);
+    const path = resolveDocumentPath(this.#workspacePath, rawPath);
     return this.#withWorkspace((workspace) =>
       workspace.collab.wait(path, epoch, afterVersion, clientId, afterPresence),
     );
@@ -174,7 +175,7 @@ class DocsWorkspaceApi extends RpcTarget implements DocsWorkspace {
     clientId: string,
     selection: { anchor: number; head: number } | null,
   ): Promise<void> {
-    const path = requireDocumentPath(rawPath);
+    const path = resolveDocumentPath(this.#workspacePath, rawPath);
     return this.#withWorkspace((workspace) => workspace.collab.present(path, clientId, selection));
   }
 
@@ -184,7 +185,7 @@ class DocsWorkspaceApi extends RpcTarget implements DocsWorkspace {
   ): Promise<T> {
     return this.#withWorkspace(async (workspace) => {
       if ((await workspace.readFile(path)) === null) {
-        throw new Error(`document "${path}" does not exist in ${this.#workspacePath}`);
+        throw new Error(`document "${path}" does not exist`);
       }
       return operation(workspace);
     });
@@ -232,42 +233,10 @@ type WorkspaceDocumentStub = {
   };
 };
 
-export function requireWorkspacePath(value: string): string {
-  return requireCanonicalPath(value, {
-    description: "workspace path",
-    prefix: "/workspaces/",
-  });
-}
-
-export function requireDocumentPath(value: string): string {
-  const path = requireCanonicalPath(value, {
-    description: "document path",
-    prefix: "/",
-  });
-  if (!/\.(?:html?|markdown|md)$/i.test(path)) {
-    throw new Error("document path must end in .md, .markdown, .html, or .htm");
-  }
-  return path;
-}
-
-function requireCanonicalPath(
-  value: string,
-  options: { description: string; prefix: string },
-): string {
-  if (
-    !value.startsWith(options.prefix) ||
-    value.length > 2048 ||
-    value.includes("\\") ||
-    value.includes("\0") ||
-    value.endsWith("/")
-  ) {
-    throw new Error(`invalid ${options.description}: ${JSON.stringify(value)}`);
-  }
-  const segments = value.slice(1).split("/");
-  if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
-    throw new Error(`invalid ${options.description}: ${JSON.stringify(value)}`);
-  }
-  return value;
+/** Relative document paths join onto the workspace's own stream path; absolute paths are used verbatim. */
+export function resolveDocumentPath(workspacePath: string, value: string): string {
+  const path = requireDocumentPath(value);
+  return path.startsWith("/") ? path : `${workspacePath}/${path}`;
 }
 
 function stringClaim(value: unknown): string | null {

@@ -90,8 +90,8 @@ import {
  * the model believes everything it wrote will run. The host's settlement
  * renders back as developer context (truncated at
  * `config.scriptResultHistoryLimit`; the full text of an oversized result
- * spills into the agent's own workspace under /script-results when the host
- * can write files there). The agent also mirrors its own visible web-chat
+ * spills into the agent's own workspace directory under script-results/ when
+ * the host can write files there). The agent also mirrors its own visible web-chat
  * messages (`agents/web-message-sent`) into assistant history so the model
  * sees what it sent, and clears an agent-authored "waiting for input"
  * summary when a qualifying wake arrives (the conditional clear only clears
@@ -1054,10 +1054,12 @@ export type AgentLlmTransport = (args: {
  * - `resolveModelFileUrl` remints a short-lived, immutable URL for a project
  *   file immediately before a model request. Production hosts provide it;
  *   bare tests without it retain the stored attachment URL.
- * - `writeWorkspaceFile` writes one file into THIS agent's own workspace (the
- *   same checkout `itx.workspace` resolves to) so oversized script results
- *   can spill to a file the model pages through with plain TypeScript.
- *   Optional: without it, oversized results fall back to inline truncation.
+ * - `writeWorkspaceFile` writes one file into THIS agent's own workspace
+ *   directory (the filesystem `itx.workspace` resolves to; the given path is
+ *   relative to that directory) so oversized script results can spill to a
+ *   file the model pages through with plain TypeScript. Returns the
+ *   fully-qualified workspace path it wrote. Optional: without it, oversized
+ *   results fall back to inline truncation.
  * - `callLlm` overrides the whole Workers AI path when provided — the test
  *   seam (see AgentLlmTransport).
  * - `now`/`sleep`: injectable clock — virtual time in tests, real time in
@@ -1067,7 +1069,10 @@ export type AgentProcessorDeps = {
   ai?: WorkersAiBinding;
   cloudflareAiGatewayTransport?: () => CloudflareAiGatewayTransport;
   resolveModelFileUrl?: (file: AgentFileAttachment) => Promise<string>;
-  writeWorkspaceFile?: (input: { content: string; path: string }) => Promise<void>;
+  writeWorkspaceFile?: (input: {
+    content: string;
+    path: string;
+  }) => Promise<{ absolutePath: string }>;
   callLlm?: AgentLlmTransport;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -1882,28 +1887,25 @@ function truncateScriptResult(text: string, historyLimit: number): string {
 }
 
 /**
- * Where oversized script results land inside the agent's workspace checkout:
- * scratch files for the model to page through with itx.workspace, never meant
- * to be committed. One file per execution, so replays overwrite idempotently.
- * Size is no concern — workspace files past the inline threshold are stored
- * in R2 transparently.
+ * Where oversized script results land, relative to the agent's own workspace
+ * directory: private scratch files for the model to page through with
+ * itx.workspace, under no mount and therefore never committable. One file per
+ * execution, so replays overwrite idempotently. Size is no concern —
+ * workspace files past the inline threshold are stored in R2 transparently.
  */
-const SCRIPT_RESULT_SPILL_DIR = "/script-results";
+const SCRIPT_RESULT_SPILL_DIR = "script-results";
 
-/** Writes the full result text into the agent's workspace; returns its path. */
+/** Writes the full result text into the agent's workspace directory; returns
+ * the fully-qualified workspace path. */
 async function spillScriptResult(input: {
   executionId: string;
   extension: "json" | "txt";
   text: string;
   writeWorkspaceFile: NonNullable<AgentProcessorDeps["writeWorkspaceFile"]>;
 }): Promise<string> {
-  // Workspace publishes commit every non-ignored local file — without this
-  // nested ignore every spill would ride along into workspace snapshot
-  // commits (the overlay publish honors .gitignore).
-  await input.writeWorkspaceFile({ content: "*\n", path: `${SCRIPT_RESULT_SPILL_DIR}/.gitignore` });
   const path = `${SCRIPT_RESULT_SPILL_DIR}/${input.executionId.replace(/[^A-Za-z0-9._-]+/g, "-")}.${input.extension}`;
-  await input.writeWorkspaceFile({ content: input.text, path });
-  return path;
+  const written = await input.writeWorkspaceFile({ content: input.text, path });
+  return written.absolutePath;
 }
 
 /**

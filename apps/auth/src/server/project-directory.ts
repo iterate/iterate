@@ -150,6 +150,12 @@ export async function listProjectsForUser(
   }));
 }
 
+/**
+ * Membership OR platform-admin role. Admin-lane projects (created through the
+ * deployment admin secret) have no row in this directory at all — the access
+ * query anchors on the user so the admin role still carries for them; plain
+ * members always need both the project row and an organization membership.
+ */
 export async function userCanAccessProject(
   rawInput: { projectId: string; userId: string },
   client: DB,

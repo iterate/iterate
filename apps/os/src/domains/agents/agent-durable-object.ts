@@ -79,17 +79,20 @@ export class AgentDurableObject extends DurableObject<Env> {
           path: file.path,
           projectId: this.#name.projectId,
         }),
-      // Oversized script results spill into the agent's OWN workspace (the
-      // same filesystem itx.workspace resolves to), so the model can page
-      // through the file instead of blowing its context window. The first
-      // write on a fresh workspace births it (default mount table).
-      writeWorkspaceFile: ({ content, path }) =>
-        this.env.WORKSPACE_V2.getByName(
+      // Oversized script results spill into the agent's OWN workspace
+      // directory (private scratch under its stream path — never committable),
+      // so the model can page through the file instead of blowing its context
+      // window. The workspace was explicitly created at agent birth.
+      writeWorkspaceFile: async ({ content, path }) => {
+        const absolutePath = `${agentWorkspacePath(this.#name.path)}/${path}`;
+        await this.env.WORKSPACE_V2.getByName(
           DurableObjectNameCodec.stringify({
             path: agentWorkspacePath(this.#name.path),
             projectId: this.#name.projectId,
           }),
-        ).writeFile(path, content),
+        ).writeFile(absolutePath, content);
+        return { absolutePath };
+      },
     }),
     { recovery: true },
   );
