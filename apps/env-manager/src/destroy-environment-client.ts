@@ -87,6 +87,10 @@ async function destroyEnvironmentBatch(
     } catch (cause) {
       signal?.throwIfAborted();
       const state = await readEnvironmentState(connect);
+      if (state.operationId === operationId && state.operationFinishedAt !== undefined) {
+        if (state.lifecycle === "empty") return true;
+        if (state.lifecycle === "destroying") return false;
+      }
       if (wasEnvironmentDestroyInterrupted(state, operationId)) return false;
       throw cause;
     }
