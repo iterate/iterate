@@ -213,6 +213,37 @@ describe("kernel", () => {
     expect(read.body.count).toBe(1); // deduped
   });
 
+  test("the reserved control-plane host serves the CONSOLE, not a project (ADR 0031)", async () => {
+    // `iterate.example.com` is controlPlaneHost => the console, and NOT interpreted as a project named
+    // `iterate`. `/api` still answers on it (host-agnostic). A normal `<slug>.example.com` still serves.
+    const cp = await hit("iterate.example.com", "/");
+    expect(cp.status).toBe(200);
+    expect(String(cp.body)).toContain("control plane"); // the console landing
+    expect(String(cp.body)).not.toContain("public website"); // NOT a project config worker
+
+    const api = await worker.fetch("http://iterate.example.com/api", {
+      headers: { host: "iterate.example.com" },
+    });
+    expect(api.status).not.toBe(404); // /api answers on the CP host too
+
+    const project = await hit("alice.example.com"); // a real project still resolves by the convention
+    expect(String(project.body)).toContain("public website");
+  });
+
+  test("a custom apex + its subdomain-as-app route to the project (ADR 0031)", async () => {
+    // `bobco.test -> alice` (a custom apex). The apex is alice's default app; `docs.bobco.test` is alice's
+    // `docs` app — proven by the stamped x-iterate-app the confined config worker echoes at /__debug.
+    const apex = await hit("bobco.test", "/__debug");
+    expect(apex.status).toBe(200);
+    expect(apex.body.projectId).toBe("alice");
+    expect(apex.body.app).toBe(""); // apex = default app
+
+    const sub = await hit("docs.bobco.test", "/__debug");
+    expect(sub.status).toBe(200);
+    expect(sub.body.projectId).toBe("alice");
+    expect(sub.body.app).toBe("docs"); // subdomain = app
+  });
+
   test("only <slug>.<hostBase> resolves — stray hosts are a 404 (no arbitrary projects)", async () => {
     expect((await worker.fetch("http://127.0.0.1/")).status).toBe(404); // no base match
     expect((await hit("alice.evil.com")).status).toBe(404); // review #14: wrong base is not a project

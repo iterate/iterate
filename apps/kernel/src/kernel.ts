@@ -2,7 +2,7 @@ import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 import { newWorkersRpcResponse } from "capnweb";
 import { decodeJwt } from "jose";
 import { CONFIG_WORKER_SOURCE } from "./config-worker.ts";
-import { wallVerifier, type WallConfig } from "./wall.ts";
+import { wallVerifier, type WallConfig } from "./auth-wall.ts";
 import { mintProjectAppSession, verifyProjectAppSessionToken } from "./project-app-session.ts";
 import {
   directoryFor,
@@ -91,6 +91,10 @@ type AppConfig = {
   // The domain projects live under, e.g. "templestein.iterate2.app". Ingress requires
   // `<slug>.<hostBase>` (review #14) so a stray host can't manufacture a project.
   hostBase?: string;
+  // A RESERVED control-plane host (ADR 0031), e.g. "iterate.shiterate.com". Ingress resolves it FIRST and
+  // serves the CONTROL PLANE (the console + `/api` + `/mcp`) — it is NOT interpreted as a `<slug>` project.
+  // So full self-host burns ONE domain: `iterate.<base>` = control plane, `<slug>.<base>` = projects.
+  controlPlaneHost?: string;
   wall?: WallConfig; // unset => WIDE OPEN (every caller anonymous); set => verify the wall's ingress JWT
   directory?: DirectoryConfig; // unset => "open" (every project reachable by anyone)
   // Static ingress routes (the config input to the routing table): `host -> {projectId, app}`. Consulted
@@ -530,22 +534,28 @@ export default {
     // (no project host needed), so it resolves BEFORE ingress: same wall auth + directory as `/api`,
     // MCP protocol instead of capnweb. (The clean home for both is the control plane's own front door.)
     if (url.pathname === "/mcp") return handleMcp(request, cfg, env, ctx);
-    // The ROUTING TABLE resolves the host FIRST (config routes, then ROUTING_KV), then the
-    // `<slug>.<hostBase>` convention as the zero-config fallback (ADR 0020/0025). A custom domain or a
-    // single-project self-host (one domain, no wildcard base) resolves purely via a routing entry.
+
+    // `/api` — the capnweb front desk (review #6): authenticate() -> session -> projects.get(id).
+    // Deployment-wide, HOST-AGNOSTIC (like /mcp) — it resolves BEFORE ingress so it also answers on the
+    // control-plane host. `newWorkersRpcResponse` serves the WebSocket upgrade + HTTP batch; auth + the
+    // membership check happen lazily inside the tree.
+    if (url.pathname === "/api") {
+      return newWorkersRpcResponse(request, new Os(request, cfg, env));
+    }
+
+    // The RESERVED CONTROL-PLANE HOST (ADR 0031) is resolved BEFORE the project convention: if the request
+    // host is `cfg.controlPlaneHost`, this is the control plane's console (create/list projects) — NOT a
+    // project named after the label. `/api` + `/mcp` above already answer here; other paths get the console.
+    if (cfg.controlPlaneHost && url.hostname === cfg.controlPlaneHost) {
+      return serveControlPlane(url.hostname);
+    }
+
+    // The ROUTING TABLE resolves the host (config routes, then ROUTING_KV — incl. custom-domain
+    // subdomains-as-apps, ADR 0031), then the `<slug>.<hostBase>` convention as the zero-config fallback.
     const ingress =
       (await routingFor(cfg, env).lookup(url.hostname)) ?? resolveIngress(request, cfg.hostBase);
     if (!ingress) return new Response("no project for host\n", { status: 404 });
     const { projectId, app } = ingress;
-
-    // `/api` — the OS front desk over capnweb (review #6): authenticate() -> session ->
-    // projects.get(id). Deployment-wide, not project-scoped by hostname; the hostname only decides
-    // which project's web app is SERVED below. `newWorkersRpcResponse` serves both the WebSocket
-    // upgrade and HTTP batch, returned from a method literally named `fetch` — the only place
-    // Cloudflare permits a WS upgrade. Auth + the membership check happen lazily inside the tree.
-    if (url.pathname === "/api") {
-      return newWorkersRpcResponse(request, new Os(request, cfg, env));
-    }
 
     // The DASHBOARD is a KERNEL-RESERVED app — the CONTROL PLANE. Like `/api`, the kernel serves it
     // DIRECTLY and never runs the config worker. That's the whole point: the dashboard is the surface
@@ -566,6 +576,23 @@ export default {
     return dialRunner(ctx).serve(request, projectId, app, JSON.stringify(published(caller)));
   },
 };
+
+// The reserved control-plane host's console (ADR 0031). A deployment-wide surface (create/list projects),
+// NOT a project. `/api` + `/mcp` already answer on this host; this is the human landing. Minimal for now —
+// the full control-plane web app (create/list via the /api tree) is the "console" in the two-web-apps
+// split. The point proven here: this host OVERRIDES slug interpretation.
+function serveControlPlane(host: string): Response {
+  return new Response(
+    `<!doctype html><meta charset=utf-8><title>iterate control plane</title>` +
+      `<body style="font:16px system-ui;max-width:40rem;margin:3rem auto">` +
+      `<h1>iterate control plane</h1>` +
+      `<p>This is the <b>control plane</b> at <code>${host}</code> — the deployment-wide console, not a ` +
+      `project. Create/list projects via <code>/api</code> (capnweb) or <code>/mcp</code> (MCP).</p>` +
+      `<p><small>Projects live at <code>&lt;slug&gt;.${host.split(".").slice(1).join(".")}</code>; ` +
+      `custom domains route via the control-plane routing table.</small></p>`,
+    { headers: { "content-type": "text/html; charset=utf-8" } },
+  );
+}
 
 // The `/mcp` handler — build the caller's Session (SAME wall auth + directory as `/api`) and adapt its
 // project collection to the MCP tool surface (list/create/get). MCP is a protocol adapter over the same

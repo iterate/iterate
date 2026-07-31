@@ -13,7 +13,7 @@
   "vars": {
     // `routes` = the config input to the ingress routing table (ADR 0020/0025): myapp.test (NOT under
     // the hostBase) resolves to project alice purely via routing — the custom-domain / single-self-host path.
-    "APP_CONFIG": "{\"hostBase\":\"example.com\",\"directory\":{\"provider\":\"local\",\"projects\":[\"alice\"]},\"routes\":{\"myapp.test\":{\"projectId\":\"alice\"}}}",
+    "APP_CONFIG": "{\"hostBase\":\"example.com\",\"controlPlaneHost\":\"iterate.example.com\",\"directory\":{\"provider\":\"local\",\"projects\":[\"alice\"]},\"routes\":{\"myapp.test\":{\"projectId\":\"alice\"},\"bobco.test\":{\"projectId\":\"alice\"}}}",
     "INSECURE_STUB_AUTH": "1",
     "PROJECT_APP_SESSION_SECRET": "test-project-app-session-secret",
   },

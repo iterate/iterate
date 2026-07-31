@@ -16,7 +16,9 @@ describe("routing — config + KV, config wins", () => {
   test("config routes resolve (app defaults to the public app)", async () => {
     const r = routingFor({ routes: { "example.com": { projectId: "alice" } } }, {});
     expect(await r.lookup("example.com")).toEqual({ projectId: "alice", app: "" });
-    expect(await r.lookup("admin.example.com")).toBeNull(); // not declared
+    // admin.example.com now resolves as the `admin` app of the example.com apex (ADR 0031 — tested in the
+    // custom-domain suite below); an UNREGISTERED host is what returns null.
+    expect(await r.lookup("nope.org")).toBeNull();
   });
 
   test("config routes carry an explicit app", async () => {
@@ -55,5 +57,37 @@ describe("routing — dynamic KV map/unmap", () => {
   test("map is read-only without a KV binding (config routes only)", async () => {
     const r = routingFor({ routes: { "example.com": { projectId: "alice" } } }, {});
     await expect(r.map("new.com", { projectId: "alice", app: "" })).rejects.toThrow(/read-only/);
+  });
+});
+
+describe("routing — custom-domain subdomains-as-apps (ADR 0031)", () => {
+  test("a custom apex serves its subdomains as apps", async () => {
+    const r = routingFor({ routes: { "bob.com": { projectId: "bob" } } }, {});
+    expect(await r.lookup("bob.com")).toEqual({ projectId: "bob", app: "" }); // apex = default app
+    expect(await r.lookup("docs.bob.com")).toEqual({ projectId: "bob", app: "docs" }); // subdomain = app
+    expect(await r.lookup("blog.bob.com")).toEqual({ projectId: "bob", app: "blog" });
+  });
+
+  test("an exact subdomain route wins over the parent-derived app", async () => {
+    const r = routingFor(
+      { routes: { "bob.com": { projectId: "bob" }, "docs.bob.com": { projectId: "otherproj" } } },
+      {},
+    );
+    expect(await r.lookup("docs.bob.com")).toEqual({ projectId: "otherproj", app: "" });
+  });
+
+  test("a subdomain of a NON-registered host does not resolve (falls through to the convention)", async () => {
+    const r = routingFor({ routes: { "bob.com": { projectId: "bob" } } }, {});
+    expect(await r.lookup("docs.alice.com")).toBeNull(); // alice.com not registered
+  });
+
+  test("only ONE level of subdomain-as-app (deeper names don't resolve)", async () => {
+    const r = routingFor({ routes: { "bob.com": { projectId: "bob" } } }, {});
+    expect(await r.lookup("a.docs.bob.com")).toBeNull(); // parent `docs.bob.com` isn't registered
+  });
+
+  test("a parent that is itself an APP route does not lend subdomains (only apex → apps)", async () => {
+    const r = routingFor({ routes: { "x.com": { projectId: "p", app: "admin" } } }, {});
+    expect(await r.lookup("docs.x.com")).toBeNull(); // x.com maps to an app, not a project apex
   });
 });

@@ -10,6 +10,14 @@
 // Ingress consults routing BEFORE the `<slug>.<hostBase>` convention (kernel.ts `resolveIngress`), so a
 // custom domain (`example.com`) or a single-project self-host (one domain, no wildcard base) works with
 // NO wildcard cert — you just need one routing entry. The convention remains the zero-config fallback.
+//
+// CUSTOM-DOMAIN SUBDOMAINS-AS-APPS (ADR 0031): a route on a custom APEX also serves its one-level
+// subdomains as APPS. If `bob.com -> {projectId:bob}`, then `bob.com` is bob's default app and
+// `docs.bob.com` is bob's `docs` app. (Under the wildcard base you instead write `docs--bob.<base>`,
+// because everything there is ONE label under a single wildcard cert; a real custom domain can use real
+// dotted subdomains.) From the worker's view both are just a `Host -> {projectId, app}` lookup — the
+// Cloudflare plumbing (self-host worker routes vs iterate-hosted Cloudflare-for-SaaS custom hostnames)
+// differs, the code does not.
 // ---------------------------------------------------------------------------
 
 // A hostname resolves to a project and one of its apps ("" = the default/public app; "dashboard" = the
@@ -43,14 +51,29 @@ export function routingFor(
 ): Routing {
   const staticRoutes = cfg.routes ?? {};
   const kv = env.ROUTING_KV;
+  // Resolve ONE host exactly (config first, then KV). null => not a registered route.
+  const exact = async (h: string): Promise<Route | null> => {
+    const s = staticRoutes[h];
+    if (s) return { projectId: s.projectId, app: s.app ?? "" };
+    if (kv) {
+      const raw = await kv.get(routeKey(h));
+      if (raw) return JSON.parse(raw) as Route;
+    }
+    return null;
+  };
   return {
     async lookup(host) {
       const h = host.toLowerCase();
-      const s = staticRoutes[h];
-      if (s) return { projectId: s.projectId, app: s.app ?? "" };
-      if (kv) {
-        const raw = await kv.get(routeKey(h));
-        if (raw) return JSON.parse(raw) as Route;
+      // 1. exact route (the custom apex, or a directly-registered subdomain).
+      const hit = await exact(h);
+      if (hit) return hit;
+      // 2. custom-domain subdomain-as-app: strip the leftmost label; if the PARENT is a registered custom
+      //    apex, the stripped label is the app. `docs.bob.com` -> parent `bob.com` (bob) + app `docs`.
+      const dot = h.indexOf(".");
+      if (dot > 0) {
+        const label = h.slice(0, dot);
+        const parent = await exact(h.slice(dot + 1));
+        if (parent && parent.app === "") return { projectId: parent.projectId, app: label };
       }
       return null;
     },
