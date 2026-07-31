@@ -4,7 +4,7 @@ import { z } from "zod";
 export type EnvironmentStage = "prd" | "dev_global" | `preview_${number}`;
 
 export const MAX_ENVIRONMENT_DESTROY_BATCHES = 100;
-export const ENVIRONMENT_DESTROY_RESTARTED_ERROR =
+const ENVIRONMENT_DESTROY_RESTARTED_ERROR =
   "Environment manager restarted while destroying; retry the operation.";
 
 export const EnvironmentStage = z.custom<EnvironmentStage>(
