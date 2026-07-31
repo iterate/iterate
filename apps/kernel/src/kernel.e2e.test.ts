@@ -72,19 +72,25 @@ describe("kernel", () => {
     expect(dbg.body.seenBindings).toEqual(["ITX"]);
   });
 
-  test("/api is a kernel-owned capnweb route — intercepted here, not proxied to the config worker", async () => {
-    // The real transport is a WebSocket (proven live against prd). A plain GET still reaches the
-    // kernel's capnweb handler: NOT a 404, and NOT the config-worker landing.
-    const res = await worker.fetch("http://alice.example.com/api", {
-      headers: { host: "alice.example.com" },
+  test("/api answers on the CONTROL-PLANE host, NOT on project hosts (review — no path shadowing)", async () => {
+    // On the control-plane host it's the kernel's capnweb front desk (a plain GET reaches the handler:
+    // not 404, not the config-worker landing).
+    const cp = await worker.fetch("http://iterate.example.com/api", {
+      headers: { host: "iterate.example.com" },
     });
-    expect(res.status).not.toBe(404);
-    expect(await res.text()).not.toContain("iterate project"); // didn't fall through to the landing
+    expect(cp.status).not.toBe(404);
+    expect(await cp.text()).not.toContain("iterate project");
+
+    // On a PROJECT host `/api` is NOT stolen by the kernel — it's just a path the config worker serves
+    // (here the config worker returns its public site for any unknown path, so `/api` reaches userspace).
+    const proj = await hit("alice.example.com", "/api");
+    expect(proj.status).toBe(200);
+    expect(String(proj.body)).toContain("public website"); // the config worker handled it, not the kernel
   });
 
-  // /mcp — the control-plane MCP surface, a sibling to /api (ADR 0022). Deployment-wide (no project
-  // host), so it works on ANY host reaching the worker. Stateless Streamable HTTP JSON-RPC.
-  async function mcp(body: unknown, host = "alice.example.com") {
+  // /mcp — a CONTROL-PLANE surface, sibling to /api. Answers ONLY on the control-plane host (review),
+  // never shadowed on project hostnames. Stateless Streamable HTTP JSON-RPC.
+  async function mcp(body: unknown, host = "iterate.example.com") {
     const res = await worker.fetch(`http://${host}/mcp`, {
       method: "POST",
       // MCP Streamable HTTP requires the client to accept BOTH json and the SSE stream (spec-compliant;
@@ -205,13 +211,23 @@ describe("kernel", () => {
     expect(names).toContain("invoke_capability");
   });
 
-  test("/mcp is deployment-wide — same answer regardless of which host reaches it", async () => {
-    const a = await mcp({ jsonrpc: "2.0", id: 4, method: "tools/list" }, "alice.example.com");
-    const b = await mcp(
-      { jsonrpc: "2.0", id: 4, method: "tools/list" },
-      "dashboard--alice.example.com",
-    );
-    expect(a.body.result.tools.length).toBe(b.body.result.tools.length);
+  test("/mcp is NOT shadowed on project hosts — only the control-plane host (review)", async () => {
+    // On a PROJECT host, POST /mcp is just a path the config worker serves (public site), NOT the MCP
+    // server. This is what structurally closes the "anonymous /mcp on a project host" hole.
+    const proj = await worker.fetch("http://alice.example.com/mcp", {
+      method: "POST",
+      headers: {
+        host: "alice.example.com",
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+    expect(await proj.text()).toContain("public website"); // reached the config worker, not the MCP server
+
+    // On the control-plane host it IS the MCP server.
+    const cp = await mcp({ jsonrpc: "2.0", id: 1, method: "tools/list" }, "iterate.example.com");
+    expect(cp.body.result.tools.map((t: { name: string }) => t.name)).toContain("list_projects");
   });
 
   test("streams: the durable log persists across requests (real ITX.streams, kills processEvent stub)", async () => {

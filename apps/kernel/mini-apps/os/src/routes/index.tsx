@@ -16,12 +16,20 @@ const itxContextAtSsr = createServerFn({ method: "GET" }).handler(async () => {
   const projectId = getRequestHeader("x-iterate-project-id") ?? null;
   const callerRaw = getRequestHeader("x-iterate-caller");
   const appSession = getRequestHeader("x-iterate-app-session") || null; // the narrow project token
+  // Where to dial `/api` (a CONTROL-PLANE surface — no longer shadowed on this dashboard host). The kernel
+  // stamps the control-plane host when one is configured; otherwise `/api` still answers same-origin.
+  const controlPlaneHost = getRequestHeader("x-iterate-control-plane-host") || null;
   if (!projectId) {
     return {
       note: "no project context — open this behind a project, e.g. https://alice.<domain>/",
     };
   }
-  return { projectId, caller: callerRaw ? (JSON.parse(callerRaw) as Caller) : null, appSession };
+  return {
+    projectId,
+    caller: callerRaw ? (JSON.parse(callerRaw) as Caller) : null,
+    appSession,
+    controlPlaneHost,
+  };
 });
 
 export const Route = createFileRoute("/")({
@@ -47,6 +55,7 @@ interface OsStub {
 function Dashboard() {
   const { ssrItx } = Route.useLoaderData();
   const appSession = "appSession" in ssrItx ? ssrItx.appSession : null;
+  const controlPlaneHost = "controlPlaneHost" in ssrItx ? ssrItx.controlPlaneHost : null;
   const [clientItx, setClientItx] = useState<unknown>(null);
   const [newSlug, setNewSlug] = useState("kernel-poc");
   const [orgSlug, setOrgSlug] = useState("");
@@ -74,17 +83,21 @@ function Dashboard() {
         )}
       </pre>
       <h2>a live capnweb /api call from the rendered client app</h2>
-      {/* Real capnweb over a same-origin WebSocket: browser -> project host -> kernel `/api`, the OS
-          front desk. We authenticate() with the NARROW project-app-session the front door minted
-          (review #3) — the app acts AS the user, scoped to THIS project, holding none of the user's
-          session. Then projects.get(thisSlug), which that grant already covers. With no session we dial
-          with whatever the ingress WALL says (or anonymous, wide open) and the DIRECTORY gates us — if
-          you're not a member it throws, and we show that: gating you can see. */}
+      {/* Real capnweb over a WebSocket to the CONTROL-PLANE host's `/api` — the OS front desk. `/api` is a
+          control-plane surface, no longer shadowed on this dashboard host (review), so we dial the
+          stamped control-plane host (cross-origin; capnweb's response is CORS-open, and auth rides in the
+          authenticate() body, not a cookie). If no control-plane host was stamped (simple/dev deploys
+          where `/api` answers everywhere), we fall back to same-origin. We authenticate() with the NARROW
+          project-app-session the front door minted (review #3) — the app acts AS the user, scoped to THIS
+          project. Then projects.get(thisSlug), which that grant covers; the DIRECTORY gates non-members. */}
       <button
         type="button"
         onClick={async () => {
           const { newWebSocketRpcSession } = await import("capnweb");
-          const wsUrl = window.location.origin.replace(/^http/, "ws") + "/api";
+          const apiOrigin = controlPlaneHost
+            ? `${window.location.protocol}//${controlPlaneHost}`
+            : window.location.origin;
+          const wsUrl = apiOrigin.replace(/^http/, "ws") + "/api";
           // The project slug is the label after any `<app>--` app prefix: `dashboard--alice` -> `alice`.
           const firstLabel = window.location.hostname.split(".")[0];
           const slug = firstLabel.includes("--") ? firstLabel.split("--")[1]! : firstLabel;

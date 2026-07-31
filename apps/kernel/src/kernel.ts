@@ -530,24 +530,24 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const cfg = appConfigFrom(env);
     const url = new URL(request.url);
-    // `/mcp` — the control-plane MCP surface, a SIBLING to `/api` (ADR 0022). Headless + deployment-wide
-    // (no project host needed), so it resolves BEFORE ingress: same wall auth + directory as `/api`,
-    // MCP protocol instead of capnweb. (The clean home for both is the control plane's own front door.)
-    if (url.pathname === "/mcp") return handleMcp(request, cfg, env, ctx);
 
-    // `/api` — the capnweb front desk (review #6): authenticate() -> session -> projects.get(id).
-    // Deployment-wide, HOST-AGNOSTIC (like /mcp) — it resolves BEFORE ingress so it also answers on the
-    // control-plane host. `newWorkersRpcResponse` serves the WebSocket upgrade + HTTP batch; auth + the
-    // membership check happen lazily inside the tree.
-    if (url.pathname === "/api") {
-      return newWorkersRpcResponse(request, new Os(request, cfg, env));
-    }
-
-    // The RESERVED CONTROL-PLANE HOST (ADR 0031) is resolved BEFORE the project convention: if the request
-    // host is `cfg.controlPlaneHost`, this is the control plane's console (create/list projects) — NOT a
-    // project named after the label. `/api` + `/mcp` above already answer here; other paths get the console.
-    if (cfg.controlPlaneHost && url.hostname === cfg.controlPlaneHost) {
-      return serveControlPlane(url.hostname);
+    // `/api` (capnweb) + `/mcp` (MCP) are CONTROL-PLANE surfaces — they answer ONLY on the control-plane
+    // host, NEVER shadowed on project hostnames (ADR 0031 + review). A project's OWN `/api`/`/mcp` path is
+    // just userspace served by its config worker; the kernel must not steal it. When NO `controlPlaneHost`
+    // is configured (dev / simple single-purpose deploys), the whole deployment IS the control plane, so
+    // they answer on any host. This is what closes the "anonymous /mcp on a project host" hole structurally.
+    const onControlPlaneHost =
+      cfg.controlPlaneHost === undefined || url.hostname === cfg.controlPlaneHost;
+    if (onControlPlaneHost) {
+      if (url.pathname === "/mcp") return handleMcp(request, cfg, env, ctx);
+      if (url.pathname === "/api") {
+        return newWorkersRpcResponse(request, new Os(request, cfg, env));
+      }
+      // Any other path on the reserved control-plane host is the console (create/list projects) — NOT a
+      // project named after the host label. (Only reached when controlPlaneHost is explicitly set.)
+      if (cfg.controlPlaneHost && url.hostname === cfg.controlPlaneHost) {
+        return serveControlPlane(url.hostname);
+      }
     }
 
     // The ROUTING TABLE resolves the host (config routes, then ROUTING_KV — incl. custom-domain
@@ -717,6 +717,11 @@ async function serveDashboard(
   proxied.headers.set(CALLER_HEADER, JSON.stringify(published(caller)));
   proxied.headers.set("x-iterate-project-id", projectId);
   proxied.headers.set("x-iterate-project-host", host);
+  // Where the vessel should dial `/api` (a CONTROL-PLANE surface, no longer shadowed on this dashboard
+  // host — review). If a controlPlaneHost is configured, the vessel dials it cross-origin (capnweb WS is
+  // CORS-open; auth rides in the authenticate() body, not a cookie). Else same-origin still works.
+  if (cfg.controlPlaneHost)
+    proxied.headers.set("x-iterate-control-plane-host", cfg.controlPlaneHost);
   if (appSession !== undefined) proxied.headers.set(APP_SESSION_HEADER, appSession);
   return fetch(proxied);
 }
