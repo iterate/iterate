@@ -1,5 +1,5 @@
 import { STATUS_CODES, createServer, type IncomingMessage } from "node:http";
-import type { Socket } from "node:net";
+import { isIPv4, type Socket } from "node:net";
 import { performance } from "node:perf_hooks";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, type RawData, type WebSocket as NodeWebSocket } from "ws";
@@ -22,7 +22,23 @@ export interface LocalFetchWebSocketServerOptions extends FetchHandler {
   host: string;
   maximumBufferedBytes?: number;
   onBridgeClosed?: (metrics: LocalFetchWebSocketBridgeMetrics) => void;
+  onBridgeOpened?: (event: LocalFetchWebSocketBridgeOpenEvent) => void;
   port?: number;
+}
+
+/**
+ * One instantaneous notice that a real device-facing TCP upgrade succeeded.
+ *
+ * The server retains no open-event history. The physical harness can decide
+ * whether to retain this identity, while the high-rate bridge remains free of
+ * another queue or per-frame observation path.
+ */
+export interface LocalFetchWebSocketBridgeOpenEvent {
+  endpoint: string;
+  protocol: string;
+  remoteAddress: string | undefined;
+  remotePort: number | undefined;
+  startedAtMonotonicMs: number;
 }
 
 /**
@@ -98,6 +114,7 @@ export class LocalFetchWebSocketServer {
   readonly #httpServer;
   readonly #maximumBufferedBytes: number;
   readonly #onBridgeClosed: LocalFetchWebSocketServerOptions["onBridgeClosed"];
+  readonly #onBridgeOpened: LocalFetchWebSocketServerOptions["onBridgeOpened"];
   readonly #sockets = new Set<NodeWebSocket>();
   readonly #webSocketServer: WebSocketServer;
   readonly baseUrl: string;
@@ -110,6 +127,7 @@ export class LocalFetchWebSocketServer {
     httpServer: ReturnType<typeof createServer>;
     maximumBufferedBytes: number;
     onBridgeClosed: LocalFetchWebSocketServerOptions["onBridgeClosed"];
+    onBridgeOpened: LocalFetchWebSocketServerOptions["onBridgeOpened"];
     webSocketServer: WebSocketServer;
   }) {
     this.baseUrl = options.baseUrl;
@@ -118,6 +136,7 @@ export class LocalFetchWebSocketServer {
     this.#httpServer = options.httpServer;
     this.#maximumBufferedBytes = options.maximumBufferedBytes;
     this.#onBridgeClosed = options.onBridgeClosed;
+    this.#onBridgeOpened = options.onBridgeOpened;
     this.#webSocketServer = options.webSocketServer;
   }
 
@@ -176,6 +195,7 @@ export class LocalFetchWebSocketServer {
       httpServer,
       maximumBufferedBytes,
       onBridgeClosed: options.onBridgeClosed,
+      onBridgeOpened: options.onBridgeOpened,
       webSocketServer,
     });
     httpServer.on("upgrade", (request, socket, head) => {
@@ -257,6 +277,18 @@ export class LocalFetchWebSocketServer {
     this.#sockets.add(nodeSocket);
     let closed = false;
     const startedAt = performance.now();
+    /*
+     * Fire before installing or releasing either traffic path. Address
+     * discovery therefore describes the connection which will carry PCM, not
+     * a later probe which may race a reconnect. No copy is retained here.
+     */
+    this.#onBridgeOpened?.({
+      endpoint,
+      protocol,
+      remoteAddress: normalizeTcpRemoteAddress(tcpSocket.remoteAddress),
+      remotePort: tcpSocket.remotePort,
+      startedAtMonotonicMs: startedAt,
+    });
     let deviceSocketMaximumBufferedBytes = 0;
     let deviceSocketMaximumPayloadBytesInFlight = 0;
     let deviceSocketMaximumSendCallbackLatencyMs = 0;
@@ -616,6 +648,15 @@ function rawDataText(data: RawData) {
   if (Array.isArray(data)) return Buffer.concat(data).toString("utf8");
   if (data instanceof ArrayBuffer) return Buffer.from(data).toString("utf8");
   return data.toString("utf8");
+}
+
+function normalizeTcpRemoteAddress(remoteAddress: string | undefined) {
+  if (!remoteAddress) return undefined;
+  const ipv4MappedPrefix = "::ffff:";
+  const mappedAddress = remoteAddress.toLowerCase().startsWith(ipv4MappedPrefix)
+    ? remoteAddress.slice(ipv4MappedPrefix.length)
+    : "";
+  return isIPv4(mappedAddress) ? mappedAddress : remoteAddress;
 }
 
 function closeNodeSocket(socket: NodeWebSocket, tcpSocket: Socket, code: number, reason: string) {

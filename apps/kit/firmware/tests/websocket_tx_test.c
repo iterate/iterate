@@ -238,55 +238,6 @@ static void newest_pending_pong_replaces_the_older_payload(void) {
 }
 
 /*
- * The peer-delivery guard can park its own ping while a partial PCM frame owns
- * the wire. If the server then sends a keepalive ping, dropping the required
- * reply pong can make a healthy but lagged connection fail the server's
- * liveness timeout. Keep both bounded obligations and send the peer response
- * first; allocating a general unbounded control queue is unnecessary.
- */
-static void reply_pong_survives_a_parked_client_ping(void) {
-  static const uint8_t client_ping[] = {0x11U};
-  static const uint8_t reply_pong[] = {0x22U};
-  static const uint8_t expected[] = {
-    0x8aU, 0x81U,
-    0x01U, 0x02U, 0x03U, 0x04U,
-    0x23U,
-    0x89U, 0x81U,
-    0x05U, 0x06U, 0x07U, 0x08U,
-    0x14U,
-  };
-  uint8_t storage[16];
-  uint8_t next_random = 1U;
-  struct fake_raw_writer raw = {
-    .maximum_write = sizeof(raw.bytes),
-  };
-  struct iterate_kit_websocket_tx tx;
-
-  initialize(
-      &tx,
-      storage,
-      sizeof(storage),
-      &raw,
-      &next_random);
-  CHECK(iterate_kit_websocket_tx_queue_control(
-      &tx,
-      ITERATE_KIT_WEBSOCKET_PING,
-      client_ping,
-      sizeof(client_ping)) == ITERATE_KIT_OK);
-  CHECK(iterate_kit_websocket_tx_queue_control(
-      &tx,
-      ITERATE_KIT_WEBSOCKET_PONG,
-      reply_pong,
-      sizeof(reply_pong)) == ITERATE_KIT_OK);
-  CHECK(iterate_kit_websocket_tx_poll_control(&tx) ==
-      ITERATE_KIT_WEBSOCKET_TX_SENT);
-  CHECK(iterate_kit_websocket_tx_poll_control(&tx) ==
-      ITERATE_KIT_WEBSOCKET_TX_SENT);
-  CHECK(raw.byte_count == sizeof(expected));
-  CHECK(memcmp(raw.bytes, expected, sizeof(expected)) == 0);
-}
-
-/*
  * Once local policy has decided to close a generation, a not-yet-started PONG
  * cannot make that generation useful again. CLOSE must replace the pending
  * reply so shutdown is bounded and no stale audio remains trusted while a
@@ -427,7 +378,7 @@ static void pending_wire_bytes_track_partial_data_and_control(
 
   CHECK(iterate_kit_websocket_tx_queue_control(
       &tx,
-      ITERATE_KIT_WEBSOCKET_PING,
+      ITERATE_KIT_WEBSOCKET_PONG,
       ping_payload,
       sizeof(ping_payload)) == ITERATE_KIT_OK);
   iterate_kit_websocket_tx_metrics(&tx, &metrics);
@@ -471,7 +422,6 @@ int main(void) {
   partial_writes_and_would_block_resume_one_frame();
   pong_waits_until_the_pcm_frame_boundary();
   newest_pending_pong_replaces_the_older_payload();
-  reply_pong_survives_a_parked_client_ping();
   close_replaces_a_pending_pong();
   close_waits_behind_an_active_control_frame();
   pending_wire_bytes_track_partial_data_and_control();

@@ -1,6 +1,8 @@
 #ifndef ITERATE_KIT_DEVICES_M5STICKS3_H
 #define ITERATE_KIT_DEVICES_M5STICKS3_H
 
+#include "iterate/kit/capabilities/device_event_stream.h"
+#include "iterate/kit/capabilities/conversation.h"
 #include "iterate/kit/capabilities/metrics.h"
 #include "iterate/kit/capabilities/push_to_talk.h"
 #include "iterate/kit/capabilities/screen.h"
@@ -18,7 +20,7 @@ enum {
    * per poll so a burst of physical/remote edges cannot starve Cap'n Web or
    * audio progress; remaining accepted events stay in the bounded queue.
    */
-  ITERATE_KIT_M5STICKS3_MODULE_COUNT = 4,
+  ITERATE_KIT_M5STICKS3_MODULE_COUNT = 6,
   ITERATE_KIT_M5STICKS3_EVENTS_PER_POLL = 4,
 };
 
@@ -40,7 +42,13 @@ struct iterate_kit_m5sticks3_options {
   struct iterate_kit_audio_options audio;
   struct iterate_kit_device_event *event_storage;
   size_t event_capacity;
+  struct iterate_kit_device_event_stream_options event_stream;
   struct iterate_kit_device_event_observer event_observer;
+  /*
+   * Maximum remote callbacks across every module, derived from the target
+   * control-ring burst proof. This is concurrency, not subscriber count.
+   */
+  size_t maximum_in_flight_callbacks;
 };
 
 struct iterate_kit_m5sticks3 {
@@ -55,7 +63,19 @@ struct iterate_kit_m5sticks3 {
   struct iterate_kit_metrics metrics;
   struct iterate_kit_audio_controller audio;
   struct iterate_kit_device_event_queue events;
+  struct iterate_kit_callback_budget callback_budget;
+  struct iterate_kit_device_event_stream event_stream;
+  struct iterate_kit_conversation conversation;
   struct iterate_kit_push_to_talk push_to_talk;
+  /*
+   * The profile owns the composition observer so every physical/remote edge
+   * reaches the Cap'n Web stream before the optional board-specific observer.
+   * Keeping the outer hook preserves diagnostic logging without asking the
+   * platform to manually fan out correctness-critical state.
+   */
+  struct iterate_kit_device_event_observer event_observer;
+  /* Call/socket intent is separate from the microphone's held state. */
+  bool conversation_active;
 };
 
 extern const struct iterate_kit_device_manifest
@@ -85,6 +105,12 @@ struct iterate_kit_device iterate_kit_m5sticks3_device(
  * Queues one local or remote edge; success proves local queue acceptance only.
  * It does not prove capture started or any PCM reached the peer.
  */
+enum iterate_kit_status iterate_kit_m5sticks3_publish_conversation(
+    struct iterate_kit_m5sticks3 *device,
+    bool active,
+    enum iterate_kit_device_event_source source);
+bool iterate_kit_m5sticks3_is_conversation_active(
+    const struct iterate_kit_m5sticks3 *device);
 enum iterate_kit_status iterate_kit_m5sticks3_publish_push_to_talk(
     struct iterate_kit_m5sticks3 *device,
     bool active,

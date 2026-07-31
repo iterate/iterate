@@ -19,10 +19,17 @@ extern "C" {
  * ownership stay outside this module because their RAM and latency constraints
  * differ radically between an M5Stick and StackChan.
  */
+enum iterate_kit_screen_colour {
+  ITERATE_KIT_SCREEN_RED = 0,
+  ITERATE_KIT_SCREEN_GREEN = 1,
+};
+
 struct iterate_kit_screen_driver {
   void *context;
   enum iterate_kit_status (*render_png)(
       void *context, const char *url, size_t url_length);
+  enum iterate_kit_status (*change_colour)(
+      void *context, enum iterate_kit_screen_colour colour);
 };
 
 struct iterate_kit_screen {

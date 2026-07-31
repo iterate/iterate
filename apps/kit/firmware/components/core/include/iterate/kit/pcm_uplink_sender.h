@@ -89,11 +89,12 @@ struct iterate_kit_pcm_uplink_sender_metrics {
  * Boundary event from one sender poll. transport_accepted means the complete
  * WebSocket frame entered the local transport; it does not claim peer receipt.
  *
- * This event exists instead of coupling the sender to a particular peer-proof
- * mechanism. The ESP-IDF adapter feeds it into the delivery guard, while host
- * tests can observe the exact same production boundary. Keeping both
- * timestamps also prevents a future refactor from quietly substituting poll
- * time for microphone completion time in freshness calculations.
+ * Keeping this event separate from aggregate metrics lets the conductor update
+ * its cross-core policy-time floor at the exact local acceptance boundary.
+ * It must not be fed into a PONG-based credit scheme: local socket acceptance
+ * and hop-level control replies prove neither proxy nor provider receipt.
+ * Keeping both timestamps also prevents a future refactor from quietly
+ * substituting poll time for microphone completion time in freshness policy.
  */
 struct iterate_kit_pcm_uplink_sender_event {
   uint64_t capture_completed_at_ms;

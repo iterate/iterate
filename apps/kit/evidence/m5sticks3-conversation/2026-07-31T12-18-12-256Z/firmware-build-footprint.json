@@ -1,0 +1,35 @@
+{
+  "appPartitionBytes": 2097152,
+  "binaryBytes": 1150208,
+  "binaryHexBytes": "0x118d00",
+  "bootloaderBytes": 20784,
+  "buildArtifact": "firmware/targets/m5sticks3/build/iterate-kit-m5sticks3.bin",
+  "buildArtifactObservedAt": "2026-07-31T12:20:24Z",
+  "buildArtifactTimestamp": "2026-07-31T12:12:20+01:00",
+  "idfImageBytesExcludingPadding": 1150090,
+  "memory": {
+    "diram": {
+      "remainingBytes": 102329,
+      "totalBytes": 341760,
+      "usedBytes": 239431,
+      "usedPercent": 70.06
+    },
+    "flashCodeBytes": 797504,
+    "flashDataBytes": 236240,
+    "iram": {
+      "remainingBytes": 1,
+      "totalBytes": 16384,
+      "usedBytes": 16383,
+      "usedPercent": 99.99
+    },
+    "rtcFast": {
+      "remainingBytes": 8140,
+      "totalBytes": 8192,
+      "usedBytes": 52,
+      "usedPercent": 0.63
+    }
+  },
+  "partitionFreeBytes": 947968,
+  "partitionFreePercentReportedByIdf": 45,
+  "sourceCommand": "idf.py -B build size"
+}

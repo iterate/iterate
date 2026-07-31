@@ -21,6 +21,7 @@ const configuration: DeviceConfiguration = {
   wifi: { ssid: "studio", password: "secret" },
   iterate: {
     baseUrl: "https://os.iterate.com",
+    pcmBaseUrl: "https://kit--voice-lab.iterate.app",
     projectId: "prj_voice_lab",
     projectApiKey: "itxk_test",
   },

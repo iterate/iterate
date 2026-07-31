@@ -1,0 +1,250 @@
+{
+  "acoustic": {
+    "analysis": {
+      "activeWindowCount": 780,
+      "amplitudeCoefficientOfVariation": 0.04272457132423375,
+      "amplitudeStepP99Decibels": 0.19921875,
+      "maximumAmplitudeStepDecibels": 0.36007510697996703,
+      "excludedCoherentWindowCount": 0,
+      "expectedDurationMs": 2000,
+      "gapCount": 0,
+      "longestInternalGapMs": 0,
+      "maximumBufferedAudioBytes": 66016,
+      "maximumPhaseStepErrorRadians": 0.06162693898707605,
+      "medianToneAmplitude": 328,
+      "medianPhaseStepRadians": -0.0003834951969712286,
+      "missingToneMs": 47.5,
+      "observedEndMs": 3040,
+      "observedSpanMs": 1952.5,
+      "observedStartMs": 1087.5,
+      "phaseDiscontinuityCount": 0,
+      "phaseDiscontinuityThresholdRadians": 0.1,
+      "phaseStepSpanMs": 5,
+      "sampleRateHz": 48000,
+      "toneFrequencyHz": 1000,
+      "toneWindowRatio": 1,
+      "totalDurationMs": 3968,
+      "windowDurationMs": 5,
+      "windowStepMs": 2.5
+    },
+    "assessment": {
+      "passed": true,
+      "reasons": []
+    },
+    "capture": {
+      "artifactPath": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/m5sticks3-production-tone/2026-07-31T06-36-02-456Z/iterate-kit-acoustic-S7G5LB/microphone.pcm16le",
+      "capturedByteLength": 380928,
+      "capturedSampleCount": 190464,
+      "sampleRateHz": 48000,
+      "captureProvenance": {
+        "input": {
+          "avFoundationSpecifier": ":0",
+          "displayName": "MacBook Pro Microphone",
+          "stableId": "BuiltInMicrophoneDevice",
+          "verification": "host-resolved-coreaudio-uid"
+        },
+        "processing": {
+          "activeMicrophoneMode": "standard",
+          "preferredMicrophoneMode": "standard",
+          "verification": "host-resolved-avfoundation-microphone-mode"
+        },
+        "recorder": {
+          "arguments": [
+            "-q",
+            "-t",
+            "coreaudio",
+            "MacBook Pro Microphone",
+            "-t",
+            "raw",
+            "-L",
+            "-c",
+            "1",
+            "-r",
+            "48000",
+            "-b",
+            "16",
+            "-e",
+            "signed-integer",
+            "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/m5sticks3-production-tone/2026-07-31T06-36-02-456Z/iterate-kit-acoustic-S7G5LB/microphone.pcm16le"
+          ],
+          "executable": "/opt/homebrew/bin/sox",
+          "version": "/opt/homebrew/bin/sox:      SoX v"
+        }
+      }
+    },
+    "marker": {
+      "artifactPath": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/m5sticks3-production-tone/2026-07-31T06-36-02-456Z/iterate-kit-acoustic-S7G5LB/microphone.pcm16le",
+      "capturedByteLength": 73728,
+      "capturedSampleCount": 36864,
+      "sampleRateHz": 48000
+    },
+    "retainedArtifact": {
+      "byteLength": 380928,
+      "maximumBufferedAudioBytes": 65536,
+      "sha256": "8fb89524b946f5c009f35bedcecdbda99fcb2717de2803820718b4856bf01962"
+    }
+  },
+  "createdAt": "2026-07-31T06:36:09.698Z",
+  "device": {
+    "host": "192.168.0.21",
+    "mountPath": ["kit", "m5sticks3"]
+  },
+  "network": {
+    "artifactPath": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/m5sticks3-production-tone/2026-07-31T06-36-02-456Z/iterate-kit-acoustic-S7G5LB/network.json",
+    "classification": "valid",
+    "reasons": []
+  },
+  "passed": true,
+  "playback": {
+    "assessment": {
+      "deltas": {
+        "downlinkAccepted": 100,
+        "endOfStreamMarkersConsumed": 1,
+        "endOfStreamResponses": 1,
+        "playbackCompleted": 100,
+        "playbackSubmitted": 100
+      },
+      "passed": true,
+      "reasons": []
+    },
+    "baseline": {
+      "schemaVersion": 5,
+      "sequence": 151,
+      "producedAtMs": 2469450,
+      "downlinkAccepted": 1364,
+      "playback": {
+        "submitted": 1306,
+        "completed": 1299,
+        "generationFramesFlushed": 36,
+        "freshnessFramesDropped": 23,
+        "partialPrebufferFramesDropped": 0,
+        "underrunFramesFlushed": 0,
+        "underrunIncidents": 5,
+        "underrunSilenceFramesSubmitted": 69,
+        "underrunSilenceFramesCompleted": 63,
+        "underrunSilenceFramesRetired": 6,
+        "underrunLateFramesDropped": 6,
+        "dmaDeadlineMissIncidents": 0,
+        "freshnessIncidents": 1,
+        "partialPrebufferIncidents": 0,
+        "endOfStreamMarkersConsumed": 13,
+        "endOfStreamResponses": 13,
+        "endOfStreamSilenceDescriptors": 39,
+        "endOfStreamPaddingDescriptorsCompleted": 0,
+        "driverQueueOverflowIncidents": 0,
+        "driverFailures": 0,
+        "driverStopFailures": 0,
+        "fatalFramesFlushed": 0,
+        "writeBackpressureIncidents": 0,
+        "writeBackpressureDestructiveResets": 0,
+        "writeBackpressureFramesDropped": 0,
+        "invalidFrames": 0,
+        "stateErrors": 0,
+        "ownerClockRegressions": 0,
+        "receiveToDmaStartSamples": 1299,
+        "maximumReceiveToDmaStartMs": 192,
+        "downlinkInterarrivalSamples": 1347,
+        "maximumDownlinkInterarrivalMs": 223,
+        "maximumEofToSuccessfulRefillUs": 40549,
+        "maximumWriteCallDurationUs": 93,
+        "minimumReuseLeadAtSuccessfulRefillUs": 19451
+      },
+      "runtime": {
+        "audioOwnerStackHeadroomBytes": 6644,
+        "mainStackHeadroomBytes": 2272,
+        "controlNetworkStackHeadroomBytes": 4488,
+        "pcmNetworkStackHeadroomBytes": 4520,
+        "freeInternalHeapBytes": 55755,
+        "minimumFreeInternalHeapBytes": 26059,
+        "freeDmaHeapBytes": 55755,
+        "minimumFreeDmaHeapBytes": 26059,
+        "largestFreeInternalHeapBlockBytes": 31744,
+        "largestFreeDmaBlockBytes": 31744,
+        "generationFenceAcknowledgementTimeouts": 0,
+        "lifecycleAcknowledgementTimeouts": 0,
+        "controlNetworkStackExhaustions": 0,
+        "pcmNetworkStackExhaustions": 0,
+        "pcmReceiveCalls": 485854,
+        "pcmReceiveChunks": 2905,
+        "controlNetworkMaximumWorkCycles": 1308243180,
+        "pcmNetworkMaximumWorkCycles": 1315131167,
+        "cpuPermille": 155
+      }
+    },
+    "terminal": {
+      "schemaVersion": 5,
+      "sequence": 158,
+      "producedAtMs": 2473470,
+      "downlinkAccepted": 1464,
+      "playback": {
+        "submitted": 1406,
+        "completed": 1399,
+        "generationFramesFlushed": 36,
+        "freshnessFramesDropped": 23,
+        "partialPrebufferFramesDropped": 0,
+        "underrunFramesFlushed": 0,
+        "underrunIncidents": 5,
+        "underrunSilenceFramesSubmitted": 69,
+        "underrunSilenceFramesCompleted": 63,
+        "underrunSilenceFramesRetired": 6,
+        "underrunLateFramesDropped": 6,
+        "dmaDeadlineMissIncidents": 0,
+        "freshnessIncidents": 1,
+        "partialPrebufferIncidents": 0,
+        "endOfStreamMarkersConsumed": 14,
+        "endOfStreamResponses": 14,
+        "endOfStreamSilenceDescriptors": 42,
+        "endOfStreamPaddingDescriptorsCompleted": 0,
+        "driverQueueOverflowIncidents": 0,
+        "driverFailures": 0,
+        "driverStopFailures": 0,
+        "fatalFramesFlushed": 0,
+        "writeBackpressureIncidents": 0,
+        "writeBackpressureDestructiveResets": 0,
+        "writeBackpressureFramesDropped": 0,
+        "invalidFrames": 0,
+        "stateErrors": 0,
+        "ownerClockRegressions": 0,
+        "receiveToDmaStartSamples": 1399,
+        "maximumReceiveToDmaStartMs": 192,
+        "downlinkInterarrivalSamples": 1446,
+        "maximumDownlinkInterarrivalMs": 223,
+        "maximumEofToSuccessfulRefillUs": 40549,
+        "maximumWriteCallDurationUs": 93,
+        "minimumReuseLeadAtSuccessfulRefillUs": 19451
+      },
+      "runtime": {
+        "audioOwnerStackHeadroomBytes": 6644,
+        "mainStackHeadroomBytes": 2272,
+        "controlNetworkStackHeadroomBytes": 4488,
+        "pcmNetworkStackHeadroomBytes": 4520,
+        "freeInternalHeapBytes": 55755,
+        "minimumFreeInternalHeapBytes": 26059,
+        "freeDmaHeapBytes": 55755,
+        "minimumFreeDmaHeapBytes": 26059,
+        "largestFreeInternalHeapBlockBytes": 31744,
+        "largestFreeDmaBlockBytes": 31744,
+        "generationFenceAcknowledgementTimeouts": 0,
+        "lifecycleAcknowledgementTimeouts": 0,
+        "controlNetworkStackExhaustions": 0,
+        "pcmNetworkStackExhaustions": 0,
+        "pcmReceiveCalls": 486809,
+        "pcmReceiveChunks": 3013,
+        "controlNetworkMaximumWorkCycles": 1308243180,
+        "pcmNetworkMaximumWorkCycles": 1315131167,
+        "cpuPermille": 230
+      }
+    }
+  },
+  "project": {
+    "baseUrl": "https://os.iterate.com",
+    "id": "prj_65441737530642949cadaf7fe399368b",
+    "slug": "kit-stick-vertical-proof",
+    "workerHost": "kit--kit-stick-vertical-proof.iterate.app"
+  },
+  "remoteEvents": {
+    "started": true,
+    "stopped": true
+  },
+  "schemaVersion": 1
+}

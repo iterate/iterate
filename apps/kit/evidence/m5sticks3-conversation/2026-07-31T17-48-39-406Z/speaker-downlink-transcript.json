@@ -1,0 +1,89 @@
+{
+  "text": " Hi there, lantern. You asked me to remember the code word, lantern. Why did the engineer break up with their partner? Too many variables in the relationship.",
+  "segments": [
+    {
+      "id": 0,
+      "seek": 0,
+      "start": 0.0,
+      "end": 1.3,
+      "text": " Hi there, lantern.",
+      "tokens": [50365, 2421, 456, 11, 34031, 13, 50458],
+      "temperature": 0,
+      "avg_logprob": -0.21448083150954472,
+      "compression_ratio": 1.3083333333333333,
+      "no_speech_prob": 9.40601069254754e-12,
+      "words": [
+        { "word": " Hi", "start": 0.0, "end": 0.26, "probability": 0.7177734375 },
+        { "word": " there,", "start": 0.26, "end": 0.64, "probability": 0.9169921875 },
+        { "word": " lantern.", "start": 0.94, "end": 1.3, "probability": 0.4140625 }
+      ]
+    },
+    {
+      "id": 1,
+      "seek": 0,
+      "start": 1.78,
+      "end": 4.34,
+      "text": " You asked me to remember the code word, lantern.",
+      "tokens": [50458, 509, 2351, 385, 281, 1604, 264, 3089, 1349, 11, 34031, 13, 50610],
+      "temperature": 0,
+      "avg_logprob": -0.21448083150954472,
+      "compression_ratio": 1.3083333333333333,
+      "no_speech_prob": 9.40601069254754e-12,
+      "words": [
+        { "word": " You", "start": 1.78, "end": 1.98, "probability": 0.9833984375 },
+        { "word": " asked", "start": 1.98, "end": 2.3, "probability": 0.8720703125 },
+        { "word": " me", "start": 2.3, "end": 2.46, "probability": 0.998046875 },
+        { "word": " to", "start": 2.46, "end": 2.6, "probability": 0.998046875 },
+        { "word": " remember", "start": 2.6, "end": 2.96, "probability": 0.99853515625 },
+        { "word": " the", "start": 2.96, "end": 3.14, "probability": 0.99658203125 },
+        { "word": " code", "start": 3.14, "end": 3.46, "probability": 0.7724609375 },
+        { "word": " word,", "start": 3.46, "end": 3.78, "probability": 0.986328125 },
+        { "word": " lantern.", "start": 3.9, "end": 4.34, "probability": 0.8173828125 }
+      ]
+    },
+    {
+      "id": 2,
+      "seek": 0,
+      "start": 4.88,
+      "end": 7.3,
+      "text": " Why did the engineer break up with their partner?",
+      "tokens": [50610, 1545, 630, 264, 11403, 1821, 493, 365, 641, 4975, 30, 50757],
+      "temperature": 0,
+      "avg_logprob": -0.21448083150954472,
+      "compression_ratio": 1.3083333333333333,
+      "no_speech_prob": 9.40601069254754e-12,
+      "words": [
+        { "word": " Why", "start": 4.88, "end": 5.08, "probability": 0.9921875 },
+        { "word": " did", "start": 5.08, "end": 5.26, "probability": 0.99853515625 },
+        { "word": " the", "start": 5.26, "end": 5.4, "probability": 0.99560546875 },
+        { "word": " engineer", "start": 5.4, "end": 5.84, "probability": 0.97265625 },
+        { "word": " break", "start": 5.84, "end": 6.32, "probability": 0.96435546875 },
+        { "word": " up", "start": 6.32, "end": 6.5, "probability": 0.99462890625 },
+        { "word": " with", "start": 6.5, "end": 6.66, "probability": 0.99853515625 },
+        { "word": " their", "start": 6.66, "end": 6.84, "probability": 0.98876953125 },
+        { "word": " partner?", "start": 6.84, "end": 7.3, "probability": 0.99853515625 }
+      ]
+    },
+    {
+      "id": 3,
+      "seek": 0,
+      "start": 7.62,
+      "end": 9.76,
+      "text": " Too many variables in the relationship.",
+      "tokens": [50757, 11395, 867, 9102, 294, 264, 2480, 13, 50877],
+      "temperature": 0,
+      "avg_logprob": -0.21448083150954472,
+      "compression_ratio": 1.3083333333333333,
+      "no_speech_prob": 9.40601069254754e-12,
+      "words": [
+        { "word": " Too", "start": 7.62, "end": 8.0, "probability": 0.986328125 },
+        { "word": " many", "start": 8.0, "end": 8.24, "probability": 0.9990234375 },
+        { "word": " variables", "start": 8.24, "end": 8.88, "probability": 0.99853515625 },
+        { "word": " in", "start": 8.88, "end": 9.16, "probability": 0.99755859375 },
+        { "word": " the", "start": 9.16, "end": 9.26, "probability": 0.99755859375 },
+        { "word": " relationship.", "start": 9.26, "end": 9.76, "probability": 0.998046875 }
+      ]
+    }
+  ],
+  "language": "en"
+}

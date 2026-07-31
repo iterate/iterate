@@ -41,6 +41,45 @@ static struct iterate_kit_poll_result poll_capnweb(
   return result;
 }
 
+static enum iterate_kit_status reserve_callback_budget(
+    struct iterate_kit_metrics *metrics,
+    struct iterate_kit_metrics_subscription *subscription) {
+  enum iterate_kit_status status;
+  if (metrics->options.callback_budget == NULL) {
+    return ITERATE_KIT_OK;
+  }
+  status = iterate_kit_callback_budget_acquire(
+      metrics->options.callback_budget);
+  if (status == ITERATE_KIT_OK) {
+    subscription->callback_budget_reserved = true;
+  }
+  return status;
+}
+
+static bool release_callback_budget(
+    struct iterate_kit_metrics *metrics,
+    struct iterate_kit_metrics_subscription *subscription) {
+  if (!subscription->callback_budget_reserved) {
+    return true;
+  }
+  subscription->callback_budget_reserved = false;
+  if (metrics->options.callback_budget == NULL ||
+      iterate_kit_callback_budget_release(
+          metrics->options.callback_budget) != ITERATE_KIT_OK) {
+    /*
+     * Budget underflow is profile accounting corruption. Preserve it as a
+     * module failure instead of allowing the next poll to exceed the transport
+     * burst that the device proved safe.
+     */
+    metrics->pending_result = (struct iterate_kit_poll_result){
+      ITERATE_KIT_POLL_DRIVER_ERROR,
+      CAPNWEB_OK,
+    };
+    return false;
+  }
+  return true;
+}
+
 static struct capnweb_expression integer_expression(int64_t value) {
   struct capnweb_expression expression = {0};
   expression.kind = CAPNWEB_EXPRESSION_INT64;
@@ -79,8 +118,8 @@ struct metrics_expression_workspace {
     struct capnweb_expression values[4];
     struct capnweb_object_field fields[4];
     struct capnweb_expression object;
-  } buffer_values[6];
-  struct capnweb_object_field buffer_fields[6];
+  } buffer_values[5];
+  struct capnweb_object_field buffer_fields[5];
   struct capnweb_expression buffers_object;
   struct capnweb_object_field audio_fields[6];
   struct capnweb_expression audio_object;
@@ -259,7 +298,6 @@ static bool build_buffers_expression(
   const struct iterate_kit_buffer_metrics *const metrics[] = {
     &sample->audio.buffers.uplink_application,
     &sample->audio.buffers.websocket_transmitter,
-    &sample->audio.buffers.peer_unconfirmed,
     &sample->audio.buffers.lwip_send,
     &sample->audio.buffers.tls_egress,
     &sample->audio.buffers.wifi_egress,
@@ -268,7 +306,6 @@ static bool build_buffers_expression(
     {"uplinkApplication", sizeof("uplinkApplication") - 1U},
     {"websocketTransmitter",
      sizeof("websocketTransmitter") - 1U},
-    {"peerUnconfirmed", sizeof("peerUnconfirmed") - 1U},
     {"lwipSend", sizeof("lwipSend") - 1U},
     {"tlsEgress", sizeof("tlsEgress") - 1U},
     {"wifiEgress", sizeof("wifiEgress") - 1U},
@@ -969,6 +1006,8 @@ static enum capnweb_status get_diagnostics(
   enum iterate_kit_status sample_status;
   enum capnweb_status reply_status;
   int length;
+  int network_length;
+  size_t remaining;
   if (metrics == NULL || call == NULL || reply == NULL) {
     return CAPNWEB_E_INVALID_ARGUMENT;
   }
@@ -1050,7 +1089,7 @@ static enum capnweb_status get_diagnostics(
       ",\"messagesConsumed\":%" PRIu32
       ",\"producerBackpressure\":%" PRIu32
       ",\"highWaterSlots\":%" PRIu32
-      ",\"currentSlots\":%" PRIu32 "}}}",
+      ",\"currentSlots\":%" PRIu32 "}}",
       diagnostics->schema_version,
       diagnostics->produced_at_ms,
       diagnostics->websocket_start_attempts,
@@ -1100,6 +1139,57 @@ static enum capnweb_status get_diagnostics(
         reply, "Error", "control diagnostics snapshot exceeded its budget");
   }
 
+  /*
+   * Keep the established control object's formatter untouched apart from its
+   * final root brace, then append the schema-v3 sibling. This makes review of
+   * the recovery contract mechanical and avoids duplicating a long format
+   * string solely because RSSI is optional.
+   *
+   * The AP-info lookup's presence bit controls whether the numeric field
+   * exists at all. A sentinel such as 0 or INT32_MIN is still a valid JSON
+   * number and would be indistinguishable from measured evidence to clients.
+   */
+  remaining =
+      metrics->options.diagnostics_expression_capacity - (size_t)length;
+  if (diagnostics->network.has_wifi_rssi_dbm) {
+    network_length = snprintf(
+        metrics->options.diagnostics_expression_buffer + length,
+        remaining,
+        ",\"network\":{\"wifiConnected\":%s"
+        ",\"wifiRssiDbm\":%" PRId32
+        ",\"pcmWebsocketConnections\":%" PRIu32
+        ",\"pcmWebsocketDisconnects\":%" PRIu32
+        ",\"pcmWebsocketErrors\":%" PRIu32 "}}",
+        diagnostics->network.wifi_connected ? "true" : "false",
+        diagnostics->network.wifi_rssi_dbm,
+        diagnostics->network.pcm_websocket_connections,
+        diagnostics->network.pcm_websocket_disconnects,
+        diagnostics->network.pcm_websocket_errors);
+  } else {
+    network_length = snprintf(
+        metrics->options.diagnostics_expression_buffer + length,
+        remaining,
+        ",\"network\":{\"wifiConnected\":%s"
+        ",\"pcmWebsocketConnections\":%" PRIu32
+        ",\"pcmWebsocketDisconnects\":%" PRIu32
+        ",\"pcmWebsocketErrors\":%" PRIu32 "}}",
+        diagnostics->network.wifi_connected ? "true" : "false",
+        diagnostics->network.pcm_websocket_connections,
+        diagnostics->network.pcm_websocket_disconnects,
+        diagnostics->network.pcm_websocket_errors);
+  }
+  if (network_length <= 0 ||
+      (size_t)network_length >= remaining) {
+    /*
+     * As with the control prefix, truncation is a firmware/schema defect.
+     * Reject the whole snapshot: a syntactically valid prefix without network
+     * evidence would violate schema v3 more dangerously than a visible error.
+     */
+    return capnweb_reply_set_error(
+        reply, "Error", "control diagnostics snapshot exceeded its budget");
+  }
+  length += network_length;
+
   metrics->diagnostics_reply_in_flight = true;
   reply_status = capnweb_reply_set_borrowed_expression(
       reply,
@@ -1124,6 +1214,7 @@ static void delivery_complete(
   }
   metrics = subscription->owner;
   subscription->call_in_flight = false;
+  (void)release_callback_budget(metrics, subscription);
   if (result->kind == CAPNWEB_RESULT_VALUE) {
     return;
   }
@@ -1215,12 +1306,29 @@ static struct iterate_kit_poll_result poll(
     struct iterate_kit_metrics_subscription *subscription =
         &metrics->options.subscriptions[index];
     const struct capnweb_expression *root;
+    enum iterate_kit_status budget_status;
     enum capnweb_status status;
     if (!subscription->occupied || subscription->call_in_flight) {
       continue;
     }
+    budget_status = reserve_callback_budget(metrics, subscription);
+    if (budget_status == ITERATE_KIT_BACKPRESSURE) {
+      /*
+       * Another callback-producing module owns the complete safe wire burst.
+       * Metrics are latest-state data, so waiting for a later poll is both
+       * lossless in meaning and cheaper than queueing an obsolete sample.
+       */
+      continue;
+    }
+    if (budget_status != ITERATE_KIT_OK) {
+      return (struct iterate_kit_poll_result){
+        ITERATE_KIT_POLL_DRIVER_ERROR,
+        CAPNWEB_OK,
+      };
+    }
     if (subscription->view == ITERATE_KIT_METRICS_GENERAL) {
       if (!build_metrics_expression(&sample, &workspace.general)) {
+        (void)release_callback_budget(metrics, subscription);
         const struct iterate_kit_poll_result result = {
           ITERATE_KIT_POLL_DRIVER_ERROR,
           CAPNWEB_OK,
@@ -1231,6 +1339,7 @@ static struct iterate_kit_poll_result poll(
     } else if (subscription->view == ITERATE_KIT_METRICS_PLAYBACK) {
       if (!build_playback_metrics_expression(
               &sample, &workspace.playback)) {
+        (void)release_callback_budget(metrics, subscription);
         const struct iterate_kit_poll_result result = {
           ITERATE_KIT_POLL_DRIVER_ERROR,
           CAPNWEB_OK,
@@ -1244,6 +1353,7 @@ static struct iterate_kit_poll_result poll(
        * the default schema. Falling back to general metrics could let a
        * detailed acceptance subscriber continue on incomplete evidence.
        */
+      (void)release_callback_budget(metrics, subscription);
       const struct iterate_kit_poll_result result = {
         ITERATE_KIT_POLL_DRIVER_ERROR,
         CAPNWEB_OK,
@@ -1265,6 +1375,7 @@ static struct iterate_kit_poll_result poll(
         delivery_complete,
         subscription);
     if (status != CAPNWEB_OK) {
+      (void)release_callback_budget(metrics, subscription);
       return poll_capnweb(status);
     }
     subscription->call_in_flight = true;
@@ -1309,6 +1420,7 @@ static struct iterate_kit_poll_result close_metrics(void *context) {
         result = poll_capnweb(status);
       }
     }
+    (void)release_callback_budget(metrics, subscription);
     memset(subscription, 0, sizeof(*subscription));
   }
   metrics->initialized = false;
@@ -1326,6 +1438,7 @@ static void session_ended(void *context) {
        ++index) {
     struct iterate_kit_metrics_subscription *subscription =
         &metrics->options.subscriptions[index];
+    (void)release_callback_budget(metrics, subscription);
     memset(subscription, 0, sizeof(*subscription));
     subscription->owner = metrics;
   }

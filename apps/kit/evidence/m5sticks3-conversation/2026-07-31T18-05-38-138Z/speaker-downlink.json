@@ -1,0 +1,92 @@
+{
+  "text": " Hello there. You asked me to remember the code word lantern. Why did the engineer break up with their partner? Too many variables in the relationship. Engineer. Lantern engineers light up the world with innovation. Three, two, one, lantern. Keep innovating with joy, engineer. Lantern, goodbye.",
+  "segments": [
+    {
+      "id": 0,
+      "seek": 0,
+      "start": 0.0,
+      "end": 3.42,
+      "text": " Hello there. You asked me to remember the code word lantern.",
+      "tokens": [
+        50365, 2425, 456, 13, 509, 2351, 385, 281, 1604, 264, 3089, 1349, 34031, 13, 50536
+      ],
+      "temperature": 0,
+      "avg_logprob": -0.24885114034016928,
+      "compression_ratio": 1.5978260869565217,
+      "no_speech_prob": 2.9863476275204803e-11
+    },
+    {
+      "id": 1,
+      "seek": 0,
+      "start": 3.92,
+      "end": 6.36,
+      "text": " Why did the engineer break up with their partner?",
+      "tokens": [50561, 1545, 630, 264, 11403, 1821, 493, 365, 641, 4975, 30, 50683],
+      "temperature": 0,
+      "avg_logprob": -0.24885114034016928,
+      "compression_ratio": 1.5978260869565217,
+      "no_speech_prob": 2.9863476275204803e-11
+    },
+    {
+      "id": 2,
+      "seek": 0,
+      "start": 6.96,
+      "end": 8.9,
+      "text": " Too many variables in the relationship.",
+      "tokens": [50713, 11395, 867, 9102, 294, 264, 2480, 13, 50810],
+      "temperature": 0,
+      "avg_logprob": -0.24885114034016928,
+      "compression_ratio": 1.5978260869565217,
+      "no_speech_prob": 2.9863476275204803e-11
+    },
+    {
+      "id": 3,
+      "seek": 0,
+      "start": 9.38,
+      "end": 13.22,
+      "text": " Engineer. Lantern engineers light up the world with innovation.",
+      "tokens": [50834, 15808, 13, 17482, 2231, 11955, 1442, 493, 264, 1002, 365, 8504, 13, 51026],
+      "temperature": 0,
+      "avg_logprob": -0.24885114034016928,
+      "compression_ratio": 1.5978260869565217,
+      "no_speech_prob": 2.9863476275204803e-11
+    },
+    {
+      "id": 4,
+      "seek": 0,
+      "start": 13.700000000000001,
+      "end": 16.04,
+      "text": " Three, two, one, lantern.",
+      "tokens": [51050, 6244, 11, 732, 11, 472, 11, 34031, 13, 51167],
+      "temperature": 0,
+      "avg_logprob": -0.24885114034016928,
+      "compression_ratio": 1.5978260869565217,
+      "no_speech_prob": 2.9863476275204803e-11
+    },
+    {
+      "id": 5,
+      "seek": 0,
+      "start": 16.44,
+      "end": 18.44,
+      "text": " Keep innovating with joy, engineer.",
+      "tokens": [51187, 5527, 5083, 990, 365, 6258, 11, 11403, 13, 51287],
+      "temperature": 0,
+      "avg_logprob": -0.24885114034016928,
+      "compression_ratio": 1.5978260869565217,
+      "no_speech_prob": 2.9863476275204803e-11
+    },
+    {
+      "id": 6,
+      "seek": 0,
+      "start": 18.84,
+      "end": 19.76,
+      "text": " Lantern, goodbye.",
+      "tokens": [51307, 17482, 2231, 11, 12084, 13, 51353],
+      "temperature": 0,
+      "avg_logprob": -0.24885114034016928,
+      "compression_ratio": 1.5978260869565217,
+      "no_speech_prob": 2.9863476275204803e-11
+    }
+  ],
+  "language": "en"
+}

@@ -103,13 +103,13 @@ static void bounded_queue_never_waits_or_retries_failed_events(void) {
   assert(
       iterate_kit_device_event_publish(
           &fixture.queue,
-          ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STOPPED,
+          ITERATE_KIT_DEVICE_EVENT_CONVERSATION_ENDED,
           ITERATE_KIT_DEVICE_EVENT_SOURCE_REMOTE) ==
       ITERATE_KIT_OK);
   assert(
       iterate_kit_device_event_publish(
           &fixture.queue,
-          ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STARTED,
+          ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED,
           ITERATE_KIT_DEVICE_EVENT_SOURCE_REMOTE) ==
       ITERATE_KIT_BACKPRESSURE);
 
@@ -178,6 +178,10 @@ static void invalid_events_are_rejected_without_entering_the_queue(void) {
       iterate_kit_device_event_type_name(
           ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STARTED),
       "pushToTalk.started") == 0);
+  assert(strcmp(
+      iterate_kit_device_event_type_name(
+          ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED),
+      "conversation.started") == 0);
   assert(strcmp(
       iterate_kit_device_event_source_name(
           ITERATE_KIT_DEVICE_EVENT_SOURCE_REMOTE),

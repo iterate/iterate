@@ -15,6 +15,20 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+/*
+ * ESP-IDF's public Wi-Fi header deliberately contains C flexible/zero-length
+ * arrays. Keep -Wpedantic for our target while treating that SDK boundary as
+ * the extension-bearing system interface it is; disabling the warning for the
+ * entire component would also hide accidental non-portable constructs here.
+ */
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
+#endif
+#include "esp_wifi.h"
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -61,6 +75,13 @@ constexpr std::size_t importCapacity = 8U;
 constexpr std::size_t tokenCapacity = 64U;
 constexpr std::size_t outputCapacity = 128U;
 constexpr std::size_t subscriptionCapacity = 2U;
+/*
+ * Subscription count is an API/resource limit; callback concurrency is a
+ * transport limit shared across modules. Keeping them separate lets two
+ * metrics observers remain registered while an urgent event waits for or
+ * claims one of the two wire-safe callback slots.
+ */
+constexpr std::size_t callbackConcurrency = 2U;
 constexpr std::size_t diagnosticsExpressionCapacity =
     ITERATE_KIT_METRICS_DIAGNOSTICS_EXPRESSION_CAPACITY;
 /*
@@ -75,15 +96,23 @@ constexpr std::size_t screenUrlCapacity = 513U;
  */
 constexpr std::size_t eventCapacity = 8U;
 /*
+ * Processed button state must survive an ordinary control-socket round trip
+ * without blocking capture. Matching the local event queue's eight entries
+ * covers one complete accepted burst plus the subscription snapshot. If the
+ * remote callback remains slow beyond that, the stream coalesces to the newest
+ * state and exposes a sequence gap instead of growing a delayed control FIFO.
+ */
+constexpr std::size_t eventNotificationCapacity = 8U;
+/*
  * Control traffic is asymmetric in ownership, but both directions need one
- * measured burst of reserve. The outbox needs eight because metrics are polled
- * before inbound RPC: two subscriptions may each emit one push plus one pull,
+ * measured burst of reserve. The outbox needs eight because the shared
+ * admission budget permits two callback calls, each emitting push plus pull,
  * after which the same pass may consume four inbound pulls whose resolutions
  * also need storage. The previous four-slot outbox failed that valid overlap
  * on hardware even though both WebSocket directions stayed live.
  *
- * The inbox also needs eight. A subscription callback returns resolve+release,
- * so two subscribers can contribute four incoming messages at the same tick.
+ * The inbox also needs eight. A callback returns resolve+release, so two
+ * admitted callbacks can contribute four incoming messages at the same tick.
  * One strictly single-flight remote call can concurrently contribute its push
  * and pull plus the prior call's release. The physical 20 Hz rig filled the
  * old four-slot inbox after 51.7 seconds and correctly—but unnecessarily—
@@ -160,7 +189,7 @@ static_assert(
     "SPSC control slot counts must be powers of two");
 static_assert(
     controlInboxSlotCount >=
-        subscriptionCapacity * 2U +
+        callbackConcurrency * 2U +
             controlRemoteCallLifecycleMessages,
     /*
      * Each subscription response contributes resolve+release, while the one
@@ -171,7 +200,7 @@ static_assert(
     "control inbox must cover one maximum peer burst");
 static_assert(
     controlOutboxSlotCount >=
-        subscriptionCapacity * 2U + controlMessagesPerPoll,
+        callbackConcurrency * 2U + controlMessagesPerPoll,
     /*
      * A due callback owns a push and pull until the peer resolves it. Reserve
      * those messages before admitting the configured maximum inbound work, so
@@ -179,6 +208,10 @@ static_assert(
      * preceded it in the same application-owner pass.
      */
     "control outbox must cover one maximum owner-loop burst");
+static_assert(
+    (eventNotificationCapacity &
+     (eventNotificationCapacity - 1U)) == 0U,
+    "device event notification capacity must be a power of two");
 static_assert(
     (pcmUplinkSlotCount & (pcmUplinkSlotCount - 1U)) == 0U,
     "PCM uplink slot count must be a power of two");
@@ -209,6 +242,8 @@ struct Runtime {
   iterate_kit_metrics_subscription
       subscriptions[subscriptionCapacity]{};
   iterate_kit_device_event eventStorage[eventCapacity]{};
+  iterate_kit_device_event_notification
+      eventNotifications[eventNotificationCapacity]{};
   /*
    * Control rings cross application, ESP callback, and network task boundaries
    * with one producer/consumer each. Storage/length arrays are inline so the
@@ -268,7 +303,7 @@ struct Runtime {
    */
   std::uint32_t playbackMetricsSequence = 0U;
   bool pcmTransportStarted = false;
-  bool pcmTransportStartAttempted = false;
+  bool pcmTransportStartAttemptedForConversation = false;
 };
 
 Runtime runtime;
@@ -508,16 +543,15 @@ iterate_kit_status sampleRuntimeMetrics(
           pcm.uplink_last_restart_frames_discarded);
   sample->audio.downlink.received =
       saturatingMetricValue(pcm.lane.downlink_frames_accepted);
-  std::uint32_t downlinkDropped = saturatingMetricValue(
-      pcm.lane.downlink.producer_backpressure);
   /*
-   * The lane owns the canonical count for frames removed at a generation
-   * boundary. The ESP transport initiates that purge but must not count the
-   * same frames again; the earlier double count made one physically lost frame
-   * look like two unrelated failures.
+   * A generation boundary intentionally destroys obsolete assistant speech;
+   * `playback.generationFramesFlushed` below owns that exact conservation
+   * ledger, including frames still in the lane. Reporting the same expected
+   * barge-in as `downlink.dropped` would turn a healthy interruption into a
+   * transport fault and violate the rule that error telemetry contains only
+   * defects. Producer backpressure remains a real unplanned downlink loss.
    */
-  sample->audio.downlink.dropped = addMetricValue(
-      downlinkDropped, pcm.lane.downlink_frames_discarded);
+  sample->audio.downlink.dropped = saturatingMetricValue(pcm.lane.downlink.producer_backpressure);
   sample->audio.downlink.depth =
       saturatingMetricValue(pcm.lane.downlink.current_slots);
   sample->audio.downlink.high_water =
@@ -573,8 +607,6 @@ iterate_kit_status sampleRuntimeMetrics(
       pcm.buffers.uplink_application;
   sample->audio.buffers.websocket_transmitter =
       pcm.buffers.websocket_transmitter;
-  sample->audio.buffers.peer_unconfirmed =
-      pcm.buffers.peer_unconfirmed;
   sample->audio.buffers.lwip_send =
       pcm.buffers.lwip_send;
   sample->audio.buffers.tls_egress =
@@ -793,7 +825,7 @@ iterate_kit_status sampleRuntimeMetrics(
    */
   auto &diagnostics = sample->control_diagnostics;
   sample->has_control_diagnostics = true;
-  diagnostics.schema_version = 2U;
+  diagnostics.schema_version = 3U;
   diagnostics.produced_at_ms = sample->uptime_ms;
   diagnostics.websocket_start_attempts =
       control.websocket_start_attempts;
@@ -864,6 +896,27 @@ iterate_kit_status sampleRuntimeMetrics(
       control.control_outbox.high_water_slots;
   diagnostics.control_outbox.current_slots =
       control.control_outbox.current_slots;
+  diagnostics.network.wifi_connected = control.wifi_connected;
+  diagnostics.network.pcm_websocket_connections =
+      pcm.websocket_connections;
+  diagnostics.network.pcm_websocket_disconnects =
+      pcm.websocket_disconnects;
+  diagnostics.network.pcm_websocket_errors =
+      pcm.websocket_errors;
+  /*
+   * AP info is sampled here on the low-rate application/diagnostics path, never
+   * in the PCM network or audio-owner tasks. A roam can make this lookup fail
+   * even while the transport's association flag has not changed; in that case
+   * absence is the only honest RSSI evidence. The platform baseline cleared
+   * the whole sample above, so a failed lookup cannot leak the prior second's
+   * value.
+   */
+  wifi_ap_record_t accessPoint{};
+  if (esp_wifi_sta_get_ap_info(&accessPoint) == ESP_OK) {
+    diagnostics.network.has_wifi_rssi_dbm = true;
+    diagnostics.network.wifi_rssi_dbm =
+        static_cast<std::int32_t>(accessPoint.rssi);
+  }
   return ITERATE_KIT_OK;
 }
 
@@ -957,6 +1010,7 @@ bool initialiseDevice(Runtime &state) {
       1000U,
       state.diagnosticsExpression,
       sizeof(state.diagnosticsExpression),
+      nullptr,
     },
     {
       ITERATE_KIT_AUDIO_PUSH_TO_TALK,
@@ -971,9 +1025,21 @@ bool initialiseDevice(Runtime &state) {
     state.eventStorage,
     eventCapacity,
     {
+      &state.connection.session,
+      state.eventNotifications,
+      eventNotificationCapacity,
+      nullptr,
+    },
+    {
       &state,
       observeDeviceEvent,
     },
+    /*
+     * Each callback owns push+pull outbound and may return resolve+release.
+     * Two concurrent callbacks consume four messages per direction, leaving
+     * the remainder of each eight-slot ring for the proven bounded RPC burst.
+     */
+    callbackConcurrency,
   };
   return iterate_kit_m5sticks3_init(
              &state.device, &options) == CAPNWEB_OK;
@@ -1102,11 +1168,14 @@ extern "C" void app_main(void) {
 
   ESP_LOGI(
       tag,
-      "runtime ready: static_bytes=%u event_bytes=%u control_bytes=%u "
+      "runtime ready: static_bytes=%u event_bytes=%u "
+      "event_delivery_bytes=%u control_bytes=%u "
       "pcm_ring_bytes=%u platform_bytes=%u control_transport_bytes=%u "
       "pcm_transport_bytes=%u",
       static_cast<unsigned int>(sizeof(runtime)),
       static_cast<unsigned int>(sizeof(runtime.eventStorage)),
+      static_cast<unsigned int>(
+          sizeof(runtime.eventNotifications)),
       static_cast<unsigned int>(
           sizeof(runtime.controlInboxStorage) +
           sizeof(runtime.controlOutboxStorage)),
@@ -1123,33 +1192,46 @@ extern "C" void app_main(void) {
    */
   for (;;) {
     /*
-     * Each operation below is independently bounded. Device polling (including
-     * push-to-talk capture) comes first so capability/control bursts cannot
-     * delay a ready microphone frame. Downlink notifications wake the
+     * Each operation below is independently bounded. Local button edges enter
+     * the device queue before its bounded poll so capture reacts in this loop,
+     * ahead of capability/control bursts. Downlink notifications wake the
      * dedicated audio owner directly; the PCM task has a separate uplink
      * notification. This loop's 10 ms timeout is control-plane liveness and a
      * yield for ESP-IDF idle housekeeping, not the speaker service cadence.
      */
     runtime.platform.update();
-    const auto nowMicroseconds = esp_timer_get_time();
-    const iterate_kit_poll_result devicePoll =
-        iterate_kit_m5sticks3_poll(
-            &runtime.device,
-            static_cast<std::uint64_t>(nowMicroseconds / 1000));
-    if (devicePoll.status != ITERATE_KIT_POLL_OK) {
-      ESP_LOGE(
-          tag,
-          "device poll failed: status=%d capnweb=%d",
-          static_cast<int>(devicePoll.status),
-          static_cast<int>(devicePoll.capnweb_status));
+    if (runtime.platform.takeButtonBPress()) {
+      /*
+       * Button B (the small top button on StickS3) owns call lifetime. It is
+       * deliberately edge-triggered: a press toggles one conversation, while
+       * holding it cannot oscillate the socket state as M5Unified is polled.
+       * Remote tests publish through the same event dispatcher, so the
+       * physical control is not a privileged second implementation.
+       */
+      const bool nextConversationActive =
+          !iterate_kit_m5sticks3_is_conversation_active(
+              &runtime.device);
+      const iterate_kit_status status =
+          iterate_kit_m5sticks3_publish_conversation(
+              &runtime.device,
+              nextConversationActive,
+              ITERATE_KIT_DEVICE_EVENT_SOURCE_PHYSICAL);
+      if (status != ITERATE_KIT_OK) {
+        ESP_LOGE(
+            tag,
+            "physical conversation publish failed: %d",
+            static_cast<int>(status));
+      }
     }
 
     bool pressed = false;
     if (runtime.platform.takeButtonAChange(&pressed)) {
       /*
-       * Physical and remote push-to-talk enter the same event dispatcher. The
-       * source tag is metadata, not a separate audio path, which lets host
-       * tests trigger the exact hold/release lifecycle without hardware.
+       * Button A (the front face) is a level, not a toggle: capture begins
+       * while held and the release commits the turn. Publishing B before A
+       * makes a simultaneous call-start/hold sample deterministic. Physical
+       * and remote PTT enter the same dispatcher so tests exercise the exact
+       * audio state machine used by the GPIO.
        */
       const iterate_kit_status status =
           iterate_kit_m5sticks3_publish_push_to_talk(
@@ -1162,6 +1244,19 @@ extern "C" void app_main(void) {
             "physical push-to-talk publish failed: %d",
             static_cast<int>(status));
       }
+    }
+
+    const auto nowMicroseconds = esp_timer_get_time();
+    const iterate_kit_poll_result devicePoll =
+        iterate_kit_m5sticks3_poll(
+            &runtime.device,
+            static_cast<std::uint64_t>(nowMicroseconds / 1000));
+    if (devicePoll.status != ITERATE_KIT_POLL_OK) {
+      ESP_LOGE(
+          tag,
+          "device poll failed: status=%d capnweb=%d",
+          static_cast<int>(devicePoll.status),
+          static_cast<int>(devicePoll.capnweb_status));
     }
 
     const iterate_kit_status transportPoll =
@@ -1187,16 +1282,83 @@ extern "C" void app_main(void) {
       runtime.lastTransportState = runtime.transport.state;
     }
 
-    if (!runtime.pcmTransportStartAttempted &&
+    const bool conversationActive =
+        iterate_kit_m5sticks3_is_conversation_active(
+            &runtime.device);
+    if (runtime.pcmTransportStarted &&
+        runtime.pcmTransport.state ==
+            ITERATE_KIT_ESP_IDF_PCM_STOPPING) {
+      /*
+       * Reap an earlier hang-up even if the user has already started a new
+       * conversation. Static FreeRTOS task storage cannot be reused until the
+       * old owner acknowledges exit; once it does, the active conversation is
+       * allowed one fresh start below instead of remaining wedged forever.
+       */
+      const iterate_kit_status stopStatus =
+          iterate_kit_esp_idf_pcm_transport_finish_stop(
+              &runtime.pcmTransport);
+      if (stopStatus == ITERATE_KIT_OK) {
+        runtime.pcmTransportStarted = false;
+        runtime.pcmTransportStartAttemptedForConversation = false;
+        ESP_LOGI(tag, "pcm conversation stopped");
+      } else if (stopStatus != ITERATE_KIT_UNAVAILABLE) {
+        ESP_LOGE(
+            tag,
+            "pcm conversation stop failed: status=%d platform=%ld",
+            static_cast<int>(stopStatus),
+            static_cast<long>(
+                runtime.pcmTransport.last_platform_error));
+      }
+    } else if (!conversationActive && runtime.pcmTransportStarted) {
+      /*
+       * Interactive hang-up may arrive while DNS, TLS, or a socket read owns
+       * the network task. Waiting for that task here would stall GPIO and
+       * capability polling, so stop is a two-phase reconciliation. Admission
+       * and playback have already been revoked by the conversation event;
+       * this loop merely observes when the static network owner has exited.
+       */
+      iterate_kit_status stopStatus =
+          iterate_kit_esp_idf_pcm_transport_request_stop(
+              &runtime.pcmTransport);
+      if (stopStatus == ITERATE_KIT_OK) {
+        stopStatus = iterate_kit_esp_idf_pcm_transport_finish_stop(
+            &runtime.pcmTransport);
+      }
+      if (stopStatus == ITERATE_KIT_OK) {
+        runtime.pcmTransportStarted = false;
+        runtime.pcmTransportStartAttemptedForConversation = false;
+        ESP_LOGI(tag, "pcm conversation stopped");
+      } else if (stopStatus != ITERATE_KIT_UNAVAILABLE) {
+        ESP_LOGE(
+            tag,
+            "pcm conversation stop failed: status=%d platform=%ld",
+            static_cast<int>(stopStatus),
+            static_cast<long>(
+                runtime.pcmTransport.last_platform_error));
+      }
+    } else if (!conversationActive) {
+      /*
+       * A failed connect is retried only after a deliberate new top-button
+       * conversation. This prevents an outage from turning the 10 ms owner
+       * loop into a connection storm while still giving the user an explicit
+       * recovery action.
+       */
+      runtime.pcmTransportStartAttemptedForConversation = false;
+    }
+
+    if (conversationActive &&
+        !runtime.pcmTransportStarted &&
+        !runtime.pcmTransportStartAttemptedForConversation &&
         runtime.transport.state == ITERATE_KIT_ESP_IDF_ITX_READY) {
       /*
-       * The sockets remain separate, but the MVP starts PCM only after the
-       * authenticated capability mount proves project credentials/config are
-       * usable. Attempt once: the PCM transport owns its subsequent reconnect
-       * policy, while a synchronous repeated start loop here could consume
-       * every main-task interval during an outage.
+       * The sockets remain separate. A top-button call starts PCM only after
+       * the authenticated Cap'n Web mount proves the device configuration,
+       * but a later control reconnect does not tear down a healthy voice
+       * socket. Attempt exactly once per conversation; the PCM transport owns
+       * bounded reconnects after start, and hang-up/start is the explicit
+       * retry boundary for an initial connect failure.
        */
-      runtime.pcmTransportStartAttempted = true;
+      runtime.pcmTransportStartAttemptedForConversation = true;
       const iterate_kit_status startStatus =
           iterate_kit_esp_idf_pcm_transport_start(
               &runtime.pcmTransport);
@@ -1211,7 +1373,9 @@ extern "C" void app_main(void) {
                 runtime.pcmTransport.last_platform_error));
       }
     }
-    if (runtime.pcmTransportStarted) {
+    if (runtime.pcmTransportStarted &&
+        runtime.pcmTransport.state !=
+            ITERATE_KIT_ESP_IDF_PCM_STOPPING) {
       const iterate_kit_status pcmTransportPoll =
           iterate_kit_esp_idf_pcm_transport_poll(
               &runtime.pcmTransport);

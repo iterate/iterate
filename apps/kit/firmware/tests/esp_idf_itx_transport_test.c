@@ -643,6 +643,7 @@ static void queued_failures_count_once_per_generation(void) {
  * cannot quietly reintroduce a second lifecycle owner.
  */
 static void taskless_open_publishes_one_clean_generation(void) {
+  struct iterate_kit_esp_idf_itx_transport_metrics metrics;
   struct fixture fixture;
   fixture_init(&fixture);
 
@@ -659,6 +660,15 @@ static void taskless_open_publishes_one_clean_generation(void) {
       __atomic_load_n(
           &fixture.transport.socket_generation,
           __ATOMIC_ACQUIRE) == 1U);
+  /*
+   * The retained diagnostics sampler must not infer station association from
+   * WebSocket success: they are separate lifecycle facts and can diverge
+   * during reconnect. Prove the public race-free snapshot carries the current
+   * station flag which the one-shot network object consumes.
+   */
+  iterate_kit_esp_idf_itx_transport_metrics(
+      &fixture.transport, &metrics);
+  assert(metrics.wifi_connected);
   resolve_mount(&fixture, 10);
   fixture_finish(&fixture);
 }
@@ -941,7 +951,22 @@ static void socket_generation_exhaustion_is_fatal_and_bounded(void) {
   fixture_finish(&fixture);
 }
 
+/*
+ * A local ws:// fixture never enters mbedTLS, so it previously declared a
+ * 3072-byte task healthy while the freshly flashed production device crossed
+ * its canary during P-384 certificate verification. The handshake happens on
+ * this task before a high-water metric can be emitted. Preserve the incident-
+ * derived 8 KiB starting envelope here; physical post-connect headroom is the
+ * evidence that may later justify reducing it, not a host-only happy path.
+ */
+static void production_tls_handshake_has_a_safe_stack_envelope(void) {
+  assert(
+      ITERATE_KIT_ESP_IDF_NETWORK_TASK_STACK_BYTES >=
+      8192U);
+}
+
 int main(void) {
+  production_tls_handshake_has_a_safe_stack_envelope();
   oversized_message_recovers_on_a_fresh_generation();
   direct_receive_error_retains_errno_across_reconnect();
   pre_ready_failures_retain_exponential_retry_pacing();

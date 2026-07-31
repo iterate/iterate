@@ -239,6 +239,14 @@ class M5StickS3DirectAudioOwner {
       generationFenceAcknowledgementTimeouts_{};
   BoundedEventCounter
       lifecycleAcknowledgementTimeouts_{};
+  /*
+   * Physical PTT stops I2S before its event can cross Cap'n Web and cancel the
+   * provider. The owner discards the few obsolete frames which can arrive in
+   * that causal gap while capture owns the pins. They are expected generation
+   * loss—not transport faults—but must still join exact played-or-flushed
+   * accounting. Owner-local storage avoids an atomic on the 20 ms path.
+   */
+  BoundedEventCounter suspendedFramesFlushed_{};
 
   std::atomic<std::int32_t> publishedStatus_{
       ITERATE_KIT_UNAVAILABLE};

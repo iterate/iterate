@@ -1,5 +1,8 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
+import { mkdir, mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -14,6 +17,10 @@ import {
   computeDualCarrierPrbs31Pcm16SourceIdentity,
   createDualCarrierPrbs31Challenge,
 } from "../src/device/acoustic-prbs31-challenge.ts";
+import {
+  observeAutonomousVoiceFrameTiming,
+  type AutonomousVoiceTurnTiming,
+} from "../src/device/autonomous-voice-timing.ts";
 import {
   assessBoundedCapabilityChurn,
   BoundedCapabilityChurn,
@@ -33,14 +40,20 @@ import {
   assessDeviceRuntimeMetrics,
   devicePlaybackCompleted,
   devicePlaybackFramesCompleted,
+  devicePlaybackResponseCompleted,
+  deviceInterruptedVoiceSequenceCompleted,
   deviceUplinkStreaming,
-  deviceVoiceRoundTripCompleted,
+  deviceVoiceTurnCompleted,
   parseKitMetricsCallback,
   parseDeviceRuntimeLogLine,
   type DeviceRuntimeLogObservation,
   type DeviceRuntimeMetrics,
 } from "../src/device/device-runtime-log.ts";
-import { LocalFetchWebSocketServer } from "../src/device/local-fetch-websocket-server.ts";
+import {
+  LocalFetchWebSocketServer,
+  type LocalFetchWebSocketBridgeMetrics,
+  type LocalFetchWebSocketBridgeOpenEvent,
+} from "../src/device/local-fetch-websocket-server.ts";
 import {
   LocalDevicePeerServer,
   type LocalDevicePeerServerOptions,
@@ -51,7 +64,26 @@ import {
   parseKitPlaybackMetrics,
 } from "../src/device/kit-playback-metrics.ts";
 import { parseKitControlDiagnostics } from "../src/device/kit-control-diagnostics.ts";
-import { MacOsPcm16Capture } from "../src/device/macos-pcm16-capture.ts";
+import {
+  MacOsPcm16Capture,
+  type CompletedPcm16Capture,
+} from "../src/device/macos-pcm16-capture.ts";
+import {
+  PcmConversationRecorder,
+  type PcmConversationRecordingSummary,
+} from "../src/device/pcm-conversation-recorder.ts";
+import {
+  buildPhysicalNetworkRunArtifact,
+  type PhysicalNetworkMonitorCapture,
+  type PhysicalNetworkBridgeEvidence,
+  PhysicalNetworkRunMonitor,
+  writePhysicalNetworkRunArtifact,
+} from "../src/device/physical-network-run.ts";
+import {
+  discoverDarwinDefaultGateway,
+  measureRemoteDnsAndTlsConnect,
+  warmPhysicalNetworkReachability,
+} from "../src/device/physical-network-reachability.ts";
 import { assessPlaybackCounterPolicy } from "../src/device/playback-counter-policy.ts";
 import { assessPlaybackRecoveryAcoustics } from "../src/device/playback-recovery-acoustic-policy.ts";
 import {
@@ -74,6 +106,10 @@ import { DeterministicPcmPrbs31Provider } from "../src/voice/deterministic-pcm-p
 import { DeterministicPcmToneProvider } from "../src/voice/deterministic-pcm-tone-provider.ts";
 import type { DevicePcmSocketClose } from "../src/voice/device-pcm-proxy.ts";
 import { connectGrokRealtimeVoice } from "../src/voice/grok-realtime-voice.ts";
+import {
+  subscribePcmBridgeToDeviceEvents,
+  type DeviceEvent,
+} from "../src/userspace/config-worker/device-events.ts";
 import { flashLocalM5StickS3 } from "./flash.ts";
 
 const executeFile = promisify(execFile);
@@ -82,13 +118,25 @@ const pcmFrameDurationMs = 20;
 const deterministicToneFrequencyHz = 997;
 const acousticCaptureTailMs = 500;
 const voiceResponseTimeoutMs = 30_000;
-
-interface AcousticCaptureMarker {
-  capturedSampleCount: number;
-  hostMonotonicMs: number;
-  phase: string;
-  sampleRateHz: number;
-}
+/*
+ * The Stick can safely hold only its existing eight-frame lead, but Grok's
+ * measured WebSocket packet cadence has included a 203.28 ms source gap. Keep
+ * 640 ms of already-generated audio at the userspace boundary before starting
+ * a response, then drip-feed the device at the media cadence. This costs only
+ * 20 KiB inside the proxy's already-allocated 256 KiB reservoir and does not
+ * increase ESP RAM, device queue depth, or permission to replay stale audio.
+ */
+const deviceClockedSourceStartupFrames = 32;
+const autonomousVoicePrompts = [
+  "We are testing a conversation. Reply with a short greeting and remember the code word lantern.",
+  "What code word did I ask you to remember? Reply in one short sentence.",
+  "Tell me a short joke about engineers in one sentence.",
+  "What profession was the joke about? Reply with only the profession.",
+  "Combine the remembered code word and that profession in one short sentence.",
+  "Count down from three, then say the remembered code word.",
+  "Give that profession one cheerful piece of advice in one short sentence.",
+  "Finish this test by saying the code word and goodbye in one short sentence.",
+] as const;
 
 const usage = `Usage:
   pnpm device:e2e -- --port /dev/cu.usbmodem101 --wifi-ssid <name> \\
@@ -106,6 +154,12 @@ Harness options:
   --mount-timeout-ms <ms>       Boot and mount deadline (default: 90000)
   --remote-hold-ms <ms>         Remote push-to-talk hold (default: 500)
   --voice                       Route Stick PCM through real Grok and inject a spoken prompt
+  --remote-voice-turns <1..20>  Run that many unattended PTT turns on one Grok session
+  --remote-interruption-proof   Interrupt a live Grok reply, then prove a fresh PTT reply
+  --network-device-host <host>  Stick LAN address for tunnel-aligned reachability evidence
+  --physical-voice-turns <1..20>
+                                Drive a finite Grok conversation from physical Button A events;
+                                the Stick speaks both ready and completed boundaries
   --grok-playback-only          Ask Grok by text and prove only Grok-to-speaker audio
   --tone-playback-only          Send a known tone through the complete provider-to-speaker lane
   --prbs31-playback-only        Send a run-keyed acoustic source that identifies lost intervals
@@ -138,12 +192,22 @@ Optional environment:
   ITERATE_KIT_PYTHON
   ITERATE_KIT_ACOUSTIC_INPUT     AVFoundation selector used to verify CoreAudio input (default: :0)
   ITERATE_KIT_ACOUSTIC_OUTPUT_DIRECTORY
+  ITERATE_KIT_NETWORK_EVIDENCE_OUTPUT_DIRECTORY
+  ITERATE_KIT_NETWORK_DEVICE_HOST
+  ITERATE_KIT_PCM_RECORDING_OUTPUT_DIRECTORY
   ITERATE_KIT_PLAYBACK_ENDURANCE_OUTPUT_DIRECTORY
   ITERATE_KIT_FFMPEG             default: /opt/homebrew/bin/ffmpeg
   ITERATE_KIT_SOX                CoreAudio recorder (default: /opt/homebrew/bin/sox)
   ITERATE_KIT_SERIAL_DIAGNOSTICS set to 1 to attach the USB serial fallback
   ITERATE_KIT_SAY                default: /usr/bin/say
   ITERATE_KIT_VOICE_PHRASE`;
+
+interface AcousticCaptureMarker {
+  capturedSampleCount: number;
+  hostMonotonicMs: number;
+  phase: string;
+  sampleRateHz: number;
+}
 
 export async function runDeviceE2e(
   args: readonly string[],
@@ -227,6 +291,125 @@ export async function runDeviceE2e(
             durationMs: options.playbackDurationMs,
           })
         : undefined;
+  const recordsAutonomousVoiceConversation =
+    options.voice &&
+    options.physicalVoiceTurns === undefined &&
+    !options.grokPlaybackOnly &&
+    options.deterministicPlayback === undefined &&
+    !options.playbackEndurance;
+  const conversationOutputDirectory =
+    options.physicalVoiceTurns !== undefined || recordsAutonomousVoiceConversation
+      ? environment.ITERATE_KIT_PCM_RECORDING_OUTPUT_DIRECTORY?.trim() ||
+        join(
+          workingDirectory,
+          "evidence",
+          "m5sticks3-conversation",
+          new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-"),
+        )
+      : undefined;
+  const conversationRecorder = conversationOutputDirectory
+    ? await PcmConversationRecorder.create({
+        frameBytes: pcmFrameBytes,
+        outputDirectory: conversationOutputDirectory,
+        sampleRateHz: 16_000,
+      })
+    : undefined;
+  let conversationRecorderClosed = false;
+  let physicalConversationStarts = 0;
+  let physicalConversationStops = 0;
+  let providerResponsesDone = 0;
+  const providerResponseOutcomes: Array<{
+    id: string | null;
+    observedAtMonotonicMs: number;
+    status: string | null;
+  }> = [];
+  let downlinkResponsesCompleted = 0;
+  let microphoneUplinkFramesObserved = 0;
+  let speakerDownlinkFramesObserved = 0;
+  const providerResponseDoneAtMonotonicMs: number[] = [];
+  const downlinkResponseCompletedAtMonotonicMs: number[] = [];
+  let activeAutonomousTurn: AutonomousVoiceTurnTiming | undefined;
+  let physicalConversationProviderResponseBaseline = 0;
+  let physicalConversationDownlinkResponseBaseline = 0;
+  let pendingVoiceProgress:
+    | {
+        downlinkTarget: number;
+        providerTarget: number;
+        resolve(): void;
+      }
+    | undefined;
+  const resolvePendingVoiceProgress = () => {
+    if (
+      pendingVoiceProgress &&
+      providerResponsesDone >= pendingVoiceProgress.providerTarget &&
+      downlinkResponsesCompleted >= pendingVoiceProgress.downlinkTarget
+    ) {
+      pendingVoiceProgress.resolve();
+    }
+  };
+  const waitForVoiceProgress = async (options: {
+    downlinkTarget: number;
+    message: string;
+    providerTarget: number;
+  }) => {
+    if (pendingVoiceProgress) {
+      throw new Error("Only one spoken device cue may be awaited at a time.");
+    }
+    if (
+      providerResponsesDone >= options.providerTarget &&
+      downlinkResponsesCompleted >= options.downlinkTarget
+    ) {
+      return;
+    }
+    const completed = Promise.withResolvers<void>();
+    pendingVoiceProgress = {
+      downlinkTarget: options.downlinkTarget,
+      providerTarget: options.providerTarget,
+      resolve: completed.resolve,
+    };
+    try {
+      await runtimeProbe.race(
+        withTimeout(completed.promise, voiceResponseTimeoutMs, options.message),
+      );
+    } finally {
+      pendingVoiceProgress = undefined;
+    }
+  };
+  const waitForObservedState = async (
+    predicate: () => boolean,
+    timeoutMs: number,
+    message: string,
+  ) => {
+    /*
+     * Frame/provider observations are synchronous callbacks on this process's
+     * WebSocket event loop. A one-shot Promise would need a second mutable
+     * waiter protocol beside the existing response waiter; a bounded 5 ms host
+     * poll keeps that test-only coordination simple and never runs on the ESP
+     * or in the PCM send path.
+     */
+    await runtimeProbe.race(
+      withTimeout(
+        (async () => {
+          while (!predicate()) await delay(5);
+        })(),
+        timeoutMs,
+        message,
+      ),
+    );
+  };
+  const physicalConversationComplete = Promise.withResolvers<void>();
+  const maybeCompletePhysicalConversation = () => {
+    if (
+      options.physicalVoiceTurns !== undefined &&
+      physicalConversationStops >= options.physicalVoiceTurns &&
+      providerResponsesDone - physicalConversationProviderResponseBaseline >=
+        options.physicalVoiceTurns &&
+      downlinkResponsesCompleted - physicalConversationDownlinkResponseBaseline >=
+        options.physicalVoiceTurns
+    ) {
+      physicalConversationComplete.resolve();
+    }
+  };
   let activeAcousticCapture: MacOsPcm16Capture | undefined;
   const acousticMarkerTasks = new Set<Promise<AcousticCaptureMarker | undefined>>();
   const recordAcousticMarker = (phase: string) => {
@@ -275,6 +458,33 @@ export async function runDeviceE2e(
     ? {
         connectVoiceProvider,
         onVoiceFailure: (reason) => runtimeProbe.fail(new Error(`PCM proxy failure: ${reason}`)),
+        onDownlinkResponseComplete: (observedAtMonotonicMs) => {
+          downlinkResponsesCompleted += 1;
+          downlinkResponseCompletedAtMonotonicMs.push(observedAtMonotonicMs);
+          conversationRecorder?.recordEvent("speaker-downlink.completed", {
+            proxyObservedAtMonotonicMs: observedAtMonotonicMs,
+            response: downlinkResponsesCompleted,
+          });
+          console.log(`speaker_downlink_completed response=${downlinkResponsesCompleted}`);
+          resolvePendingVoiceProgress();
+          maybeCompletePhysicalConversation();
+        },
+        onPcmFrame: (frame) => {
+          const autonomousTurn = activeAutonomousTurn;
+          if (frame.direction === "microphone-uplink") {
+            microphoneUplinkFramesObserved += 1;
+          } else {
+            speakerDownlinkFramesObserved += 1;
+          }
+          if (autonomousTurn) {
+            observeAutonomousVoiceFrameTiming(
+              autonomousTurn,
+              frame.direction,
+              frame.observedAtMonotonicMs,
+            );
+          }
+          conversationRecorder?.observeFrame(frame);
+        },
         onVoiceSocketClose: (close) => {
           /*
            * A prior physical failure produced 127 ms of sound and then only a
@@ -297,27 +507,75 @@ export async function runDeviceE2e(
         },
         onVoiceProviderEvent: (event) => {
           console.log(`would_post_to_stream event=${event.type} frame=${event.raw}`);
+          conversationRecorder?.recordEvent("provider.event", {
+            raw: event.raw,
+            turn: activeAutonomousTurn?.turn ?? null,
+            type: event.type,
+          });
           if (event.type === "response.created" || event.type === "response.done") {
             void recordAcousticMarker(`provider.${event.type}`);
+          }
+          if (event.type === "response.created" && activeAutonomousTurn) {
+            activeAutonomousTurn.providerResponseCreatedAtMonotonicMs = performance.now();
           }
           if (event.type === "error") {
             runtimeProbe.fail(
               new Error(`The voice provider returned an error event: ${event.raw}`),
             );
           } else if (event.type === "response.done") {
+            const decoded = JSON.parse(event.raw) as {
+              response?: { id?: unknown; status?: unknown };
+            };
+            providerResponseOutcomes.push({
+              id: typeof decoded.response?.id === "string" ? decoded.response.id : null,
+              observedAtMonotonicMs: performance.now(),
+              status: typeof decoded.response?.status === "string" ? decoded.response.status : null,
+            });
+            providerResponsesDone += 1;
+            providerResponseDoneAtMonotonicMs.push(performance.now());
+            conversationRecorder?.recordEvent("provider.response.done", {
+              response: providerResponsesDone,
+            });
             providerResponseDone.resolve();
+            resolvePendingVoiceProgress();
+            maybeCompletePhysicalConversation();
           }
         },
+        pcmDeviceClockedInitialBurstFrames:
+          options.downlinkDeliveryMode === "device-clocked"
+            ? (options.deviceClockedStartupFrames ?? 8)
+            : undefined,
         pcmDownlinkDeliveryMode: options.downlinkDeliveryMode,
         pcmFrameBytes,
         pcmInputMode: "push-to-talk",
-        pcmMinimumDownlinkStartupFrames: options.deviceClockedStartupFrames,
+        pcmMinimumDownlinkStartupFrames:
+          options.downlinkDeliveryMode === "device-clocked"
+            ? deviceClockedSourceStartupFrames
+            : undefined,
       }
     : undefined;
   const server = new LocalDevicePeerServer(peer, voiceServerOptions);
+  const maximumRetainedBridgeEvents = 64;
+  const bridgeOpenEvents: LocalFetchWebSocketBridgeOpenEvent[] = [];
+  const bridgeCloseEvents: Array<{
+    closedAtMonotonicMs: number;
+    metrics: LocalFetchWebSocketBridgeMetrics;
+  }> = [];
+  let bridgeHistoryTruncated = false;
+  let latestCapabilityMetrics: DeviceRuntimeMetrics | undefined;
   let directLanServer: LocalFetchWebSocketServer | undefined;
   let serialMonitor: PythonSerialMonitor | undefined;
   let tunnel: CaptunTunnel | undefined;
+  let autonomousAcousticCapture: MacOsPcm16Capture | undefined;
+  let autonomousAcousticRecording: CompletedPcm16Capture | undefined;
+  let autonomousFinalVoiceMetrics: DeviceRuntimeMetrics | undefined;
+  let autonomousNetworkBaseline: DeviceRuntimeMetrics | undefined;
+  let autonomousNetworkCapture: PhysicalNetworkMonitorCapture | undefined;
+  let autonomousNetworkMonitor: PhysicalNetworkRunMonitor | undefined;
+  let autonomousNetworkMeasurement: ReturnType<typeof measureRemoteDnsAndTlsConnect> | undefined;
+  let autonomousNetworkArtifactPath: string | undefined;
+  let autonomousRunPassed = false;
+  let terminalRunError: unknown;
 
   try {
     let peerBaseUrl: string;
@@ -338,7 +596,23 @@ export async function runDeviceE2e(
          * independent of playback duration.
          */
         onBridgeClosed: (metrics) => {
+          if (bridgeCloseEvents.length === maximumRetainedBridgeEvents) {
+            bridgeCloseEvents.shift();
+            bridgeHistoryTruncated = true;
+          }
+          bridgeCloseEvents.push({
+            closedAtMonotonicMs: performance.now(),
+            metrics,
+          });
           console.log(`direct_lan_bridge_metrics=${JSON.stringify(metrics)}`);
+        },
+        onBridgeOpened: (event) => {
+          if (bridgeOpenEvents.length === maximumRetainedBridgeEvents) {
+            bridgeOpenEvents.shift();
+            bridgeHistoryTruncated = true;
+          }
+          bridgeOpenEvents.push(event);
+          console.log(`direct_lan_bridge_open=${JSON.stringify(event)}`);
         },
         port: options.directLanPort,
       });
@@ -451,7 +725,8 @@ export async function runDeviceE2e(
       `device_mounted path=${mounted.path.join(".")} capabilities=${Object.keys(description.children).join(",")}`,
     );
     await mounted.device.subscribeToMetrics((metrics) => {
-      runtimeProbe.observeCapabilityMetrics(metrics);
+      latestCapabilityMetrics =
+        runtimeProbe.observeCapabilityMetrics(metrics) ?? latestCapabilityMetrics;
       if (environment.ITERATE_KIT_VERBOSE_METRICS === "1") {
         /*
          * The capability callback already paid the device-side cost of one
@@ -531,7 +806,7 @@ export async function runDeviceE2e(
       );
       return;
     }
-    if (options.voice) {
+    if (voiceServerOptions) {
       await runtimeProbe.race(
         withTimeout(
           pcmSessionReady.promise,
@@ -541,9 +816,375 @@ export async function runDeviceE2e(
       );
     }
     console.log(
-      `device_transports_ready control=ready pcm=${options.voice ? "ready" : "not-required"}`,
+      `device_transports_ready control=ready pcm=${voiceServerOptions ? "ready" : "not-required"}`,
     );
     console.log(`capability_runtime_metrics=${JSON.stringify(firstCapabilityMetrics)}`);
+
+    if (options.physicalVoiceTurns !== undefined) {
+      const expectedPhysicalVoiceTurns = options.physicalVoiceTurns;
+      if (!conversationRecorder || !conversationOutputDirectory) {
+        throw new Error("Physical conversation started without its PCM recorder.");
+      }
+      let acceptingPhysicalTurns = false;
+      let acousticCapture: MacOsPcm16Capture | undefined;
+      let acousticCaptureFinished = false;
+      let acousticRecording: CompletedPcm16Capture | undefined;
+      let audioRunError: unknown;
+      let audioRunPassed = false;
+      let finalVoiceMetrics: DeviceRuntimeMetrics | undefined;
+      let networkCapture: PhysicalNetworkMonitorCapture | undefined;
+      let networkMonitor: PhysicalNetworkRunMonitor | undefined;
+      const networkArtifactPath = join(
+        conversationOutputDirectory,
+        "physical-network-validity.json",
+      );
+      let recording: PcmConversationRecordingSummary | undefined;
+      const bridgeOperations = new Set<Promise<void>>();
+      const retainRunError = (error: unknown, message: string) => {
+        audioRunError =
+          audioRunError === undefined ? error : new AggregateError([audioRunError, error], message);
+      };
+      const trackBridgeOperation = (operation: Promise<boolean>, event: string) => {
+        let tracked: Promise<void>;
+        tracked = operation
+          .then((accepted) => {
+            if (!accepted) {
+              runtimeProbe.fail(new Error(`Userspace rejected physical ${event}.`));
+            }
+          })
+          .catch((error: unknown) => {
+            runtimeProbe.fail(
+              new Error(`Userspace failed physical ${event}.`, {
+                cause: error,
+              }),
+            );
+          })
+          .finally(() => bridgeOperations.delete(tracked));
+        bridgeOperations.add(tracked);
+      };
+      const recordPhysicalEvent = (event: DeviceEvent) => {
+        if (event.snapshot === true || event.source !== "physical") return;
+        if (!acceptingPhysicalTurns) {
+          conversationRecorder.recordEvent("physical-event.ignored", {
+            sequence: event.sequence,
+            source: event.source,
+            type: event.type,
+          });
+          console.log(`physical_voice_event_ignored type=${event.type} reason=not-armed`);
+          return;
+        }
+        if (event.type === "pushToTalk.started") {
+          physicalConversationStarts += 1;
+          if (physicalConversationStarts > expectedPhysicalVoiceTurns) {
+            runtimeProbe.fail(
+              new Error(
+                `Received unexpected physical turn ${physicalConversationStarts}; ` +
+                  `this run requested ${options.physicalVoiceTurns}.`,
+              ),
+            );
+            return;
+          }
+          conversationRecorder.recordEvent(event.type, {
+            sequence: event.sequence,
+            source: event.source,
+            turn: physicalConversationStarts,
+          });
+          console.log(`physical_voice_turn_started turn=${physicalConversationStarts}`);
+        } else if (event.type === "pushToTalk.stopped") {
+          physicalConversationStops += 1;
+          conversationRecorder.recordEvent(event.type, {
+            sequence: event.sequence,
+            source: event.source,
+            turn: physicalConversationStops,
+          });
+          console.log(`physical_voice_turn_stopped turn=${physicalConversationStops}`);
+          maybeCompletePhysicalConversation();
+        }
+      };
+      const speakThroughStick = async (label: string, exactText: string) => {
+        const providerTarget = providerResponsesDone + 1;
+        const downlinkTarget = downlinkResponsesCompleted + 1;
+        const playbackBaseline = latestCapabilityMetrics ?? firstCapabilityMetrics;
+        const speakerFrameBaseline = speakerDownlinkFramesObserved;
+        conversationRecorder.recordEvent("operator-cue.started", { exactText, label });
+        if (!(await server.requestVoiceText(`Say exactly: ${exactText}`))) {
+          throw new Error(`The userspace bridge rejected the ${label} spoken cue.`);
+        }
+        await waitForVoiceProgress({
+          downlinkTarget,
+          message: `Timed out waiting for the ${label} spoken cue from Grok.`,
+          providerTarget,
+        });
+        const expectedSpeakerFrames = speakerDownlinkFramesObserved - speakerFrameBaseline;
+        if (expectedSpeakerFrames <= 0) {
+          throw new Error(`The ${label} spoken cue completed without a PCM frame.`);
+        }
+        const metrics = await runtimeProbe.race(
+          withTimeout(
+            runtimeProbe.waitForMetrics("capability", (candidate) =>
+              devicePlaybackResponseCompleted(playbackBaseline, candidate, expectedSpeakerFrames),
+            ),
+            voiceResponseTimeoutMs,
+            `Timed out waiting for the ${label} cue to drain from the Stick speaker.`,
+          ),
+        );
+        console.log(
+          `voice_frame_conservation phase=${label} expected=${expectedSpeakerFrames} ` +
+            `host_observed=${speakerDownlinkFramesObserved - speakerFrameBaseline} device=exact`,
+        );
+        conversationRecorder.recordEvent("operator-cue.completed", { exactText, label });
+        return metrics;
+      };
+      const captureNetworkEvidence = async () => {
+        if (!networkMonitor || networkCapture) return;
+        networkCapture = await networkMonitor.capture();
+      };
+      try {
+        acousticCapture = await MacOsPcm16Capture.start({
+          identityFfmpegExecutable: environment.ITERATE_KIT_FFMPEG,
+          input: environment.ITERATE_KIT_ACOUSTIC_INPUT,
+          outputDirectory: conversationOutputDirectory,
+          recorderExecutable: environment.ITERATE_KIT_SOX,
+        });
+        activeAcousticCapture = acousticCapture;
+        console.log(
+          `conversation_acoustic_capture_ready path=${acousticCapture.artifactPath} ` +
+            `sample_rate_hz=${acousticCapture.sampleRateHz}`,
+        );
+        if (options.directLanHost) {
+          const pcmOpen = bridgeOpenEvents.findLast((event) => event.endpoint === "/pcm");
+          const remoteAddress = pcmOpen?.remoteAddress;
+          if (!remoteAddress) {
+            throw new Error(
+              "The PCM bridge opened without a device address; exact network attribution is impossible.",
+            );
+          }
+          const deviceHost = normalizeSocketHost(remoteAddress);
+          const routerHost = await discoverDarwinDefaultGateway();
+          networkMonitor = new PhysicalNetworkRunMonitor({
+            deviceHost,
+            diagnostics: async () =>
+              parseKitControlDiagnostics(await mounted.device.getDiagnostics()),
+            routerHost,
+            workerHost: options.directLanHost,
+          });
+          networkMonitor.start();
+          console.log(
+            `physical_network_monitor_started device=${deviceHost} router=${routerHost} ` +
+              `worker=${options.directLanHost} artifact=${networkArtifactPath}`,
+          );
+        } else {
+          console.log(
+            "physical_network_monitor_unavailable reason=device-address-hidden-by-tunnel",
+          );
+        }
+        await subscribePcmBridgeToDeviceEvents(
+          mounted.device,
+          {
+            inputStarted() {
+              if (acceptingPhysicalTurns) {
+                trackBridgeOperation(server.inputStarted(), "pushToTalk.started");
+              }
+              return true;
+            },
+            inputStopped() {
+              if (acceptingPhysicalTurns) {
+                trackBridgeOperation(server.inputStopped(), "pushToTalk.stopped");
+              }
+              return true;
+            },
+          },
+          (diagnostic) => {
+            runtimeProbe.fail(
+              new Error(`Physical device event subscription failed: ${JSON.stringify(diagnostic)}`),
+            );
+          },
+          recordPhysicalEvent,
+        );
+
+        /*
+         * The human operator is beside the device, not watching this process.
+         * A console-only instruction previously caused an apparent fourth-turn
+         * audio failure after the finite three-turn harness had already torn
+         * down. Put both lifecycle boundaries through the device speaker so a
+         * missing reply cannot be confused with an invisible test boundary.
+         */
+        await speakThroughStick("attention", "Attention; the voice test is about to begin.");
+        await speakThroughStick(
+          "ready",
+          `Ready for ${expectedPhysicalVoiceTurns} ${
+            expectedPhysicalVoiceTurns === 1 ? "turn" : "turns"
+          }; hold the button, speak, then release.`,
+        );
+        const conversationPlaybackBaseline = structuredClone(
+          latestCapabilityMetrics ?? firstCapabilityMetrics,
+        );
+        const conversationSpeakerFrameBaseline = speakerDownlinkFramesObserved;
+        physicalConversationProviderResponseBaseline = providerResponsesDone;
+        physicalConversationDownlinkResponseBaseline = downlinkResponsesCompleted;
+        acceptingPhysicalTurns = true;
+        conversationRecorder.recordEvent("conversation.started", {
+          expectedTurns: expectedPhysicalVoiceTurns,
+          transport: options.directLanHost ? "direct-lan" : "captun",
+        });
+        console.log(
+          `physical_conversation_ready turns=${expectedPhysicalVoiceTurns} ` +
+            "recording=enabled instruction=spoken-through-stick",
+        );
+        await runtimeProbe.race(
+          withTimeout(
+            physicalConversationComplete.promise,
+            10 * 60_000,
+            `Timed out waiting for ${expectedPhysicalVoiceTurns} physical voice turns.`,
+          ),
+        );
+        acceptingPhysicalTurns = false;
+        await Promise.all(bridgeOperations);
+        const expectedConversationSpeakerFrames =
+          speakerDownlinkFramesObserved - conversationSpeakerFrameBaseline;
+        if (expectedConversationSpeakerFrames <= 0) {
+          throw new Error("The physical conversation completed without a speaker PCM frame.");
+        }
+        finalVoiceMetrics = await runtimeProbe.race(
+          withTimeout(
+            runtimeProbe.waitForMetrics("capability", (metrics) =>
+              devicePlaybackResponseCompleted(
+                conversationPlaybackBaseline,
+                metrics,
+                expectedConversationSpeakerFrames,
+              ),
+            ),
+            voiceResponseTimeoutMs,
+            "Timed out waiting for exact physical-conversation frame conservation through the Stick speaker.",
+          ),
+        );
+        console.log(
+          `voice_frame_conservation phase=physical-conversation ` +
+            `expected=${expectedConversationSpeakerFrames} ` +
+            `host_observed=${speakerDownlinkFramesObserved - conversationSpeakerFrameBaseline} ` +
+            "device=exact",
+        );
+        const conversationDownlinkResponsesCompleted =
+          downlinkResponsesCompleted - physicalConversationDownlinkResponseBaseline;
+        const conversationProviderResponsesDone =
+          providerResponsesDone - physicalConversationProviderResponseBaseline;
+        finalVoiceMetrics = await speakThroughStick("complete", "Test complete; you can stop now.");
+        conversationRecorder.recordEvent("conversation.completed", {
+          downlinkResponsesCompleted: conversationDownlinkResponsesCompleted,
+          providerResponsesDone: conversationProviderResponsesDone,
+          turns: physicalConversationStops,
+        });
+        await delay(acousticCaptureTailMs);
+        await Promise.all(acousticMarkerTasks);
+        acousticRecording = await acousticCapture.stop();
+        acousticCaptureFinished = true;
+        activeAcousticCapture = undefined;
+        console.log(
+          `conversation_acoustic_capture=${JSON.stringify({
+            artifactPath: acousticRecording.artifactPath,
+            capturedByteLength: acousticRecording.capturedByteLength,
+            capturedSampleCount: acousticRecording.capturedSampleCount,
+            captureProvenance: acousticRecording.captureProvenance,
+            sampleRateHz: acousticRecording.sampleRateHz,
+          })}`,
+        );
+        audioRunPassed = true;
+      } catch (error) {
+        retainRunError(error, "The physical conversation failed more than once.");
+      } finally {
+        acceptingPhysicalTurns = false;
+        if (acousticCapture && !acousticCaptureFinished) {
+          try {
+            await Promise.all(acousticMarkerTasks);
+            acousticRecording = await acousticCapture.stop();
+            acousticCaptureFinished = true;
+            activeAcousticCapture = undefined;
+            console.log(
+              `conversation_acoustic_capture_preserved path=${acousticRecording.artifactPath} ` +
+                `samples=${acousticRecording.capturedSampleCount}`,
+            );
+          } catch (error) {
+            retainRunError(
+              error,
+              "The physical conversation and its acoustic recorder both failed.",
+            );
+          }
+        }
+        if (networkMonitor && !networkCapture) {
+          try {
+            await captureNetworkEvidence();
+          } catch (error) {
+            retainRunError(
+              error,
+              "The physical conversation and its terminal network capture both failed.",
+            );
+          }
+        }
+        try {
+          recording = await conversationRecorder.close();
+          conversationRecorderClosed = true;
+          console.log(`pcm_conversation_recording=${JSON.stringify(recording)}`);
+        } catch (error) {
+          retainRunError(error, "The physical conversation and its recorder both failed.");
+        }
+      }
+      if (recording && !recording.complete) {
+        retainRunError(
+          new Error(`PCM conversation recording was incomplete: ${recording.failure}.`),
+          "The physical conversation and its recorder both failed.",
+        );
+      }
+      if (networkCapture) {
+        const artifact = buildPhysicalNetworkRunArtifact({
+          ...networkCapture,
+          audio: {
+            failure:
+              audioRunError === undefined
+                ? null
+                : audioRunError instanceof Error
+                  ? audioRunError.message
+                  : String(audioRunError),
+            passed: audioRunPassed && recording?.complete === true,
+          },
+          pcmEvidence: {
+            bridgeEvidence: snapshotPhysicalNetworkBridgeEvidence({
+              closeEvents: bridgeCloseEvents,
+              historyTruncated: bridgeHistoryTruncated,
+              openEvents: bridgeOpenEvents,
+            }),
+            kind: "local-bridge",
+            progress: physicalNetworkProgress(firstCapabilityMetrics, finalVoiceMetrics),
+          },
+        });
+        await writePhysicalNetworkRunArtifact(networkArtifactPath, artifact);
+        console.log(
+          `physical_network_validity=${JSON.stringify({
+            artifactPath: networkArtifactPath,
+            classification: artifact.classification,
+            reasons: artifact.network.reasons,
+            verdict: artifact.network.verdict,
+          })}`,
+        );
+        if (audioRunError === undefined && artifact.classification !== "valid") {
+          audioRunError = new Error(
+            `Physical conversation completed, but its network evidence was ` +
+              `${artifact.classification}. See ${networkArtifactPath}.`,
+          );
+        }
+      }
+      if (audioRunError !== undefined) throw audioRunError;
+      if (!recording || !finalVoiceMetrics) {
+        throw new Error("Physical conversation ended without complete terminal evidence.");
+      }
+      console.log(`capability_voice_metrics=${JSON.stringify(finalVoiceMetrics)}`);
+      console.log(
+        `device_conversation_passed physical=true turns=${expectedPhysicalVoiceTurns} ` +
+          `provider=grok recording=${recording.outputDirectory} ` +
+          `acoustic=${acousticRecording?.artifactPath ?? "not-captured"} ` +
+          `network=${networkCapture ? "valid" : "not-captured"}`,
+      );
+      return;
+    }
 
     if (options.grokPlaybackOnly || options.deterministicPlayback) {
       const provider = options.deterministicPlayback
@@ -565,6 +1206,11 @@ export async function runDeviceE2e(
       let recoveryProofAssessment:
         | Extract<PlaybackRecoveryProofAssessment, { kind: "healthy" }>
         | undefined;
+      let audioRunError: unknown;
+      let audioRunPassed = false;
+      let networkCapture: PhysicalNetworkMonitorCapture | undefined;
+      let networkMonitor: PhysicalNetworkRunMonitor | undefined;
+      let networkArtifactPath: string | undefined;
       const controlChurn =
         options.controlChurnHz === undefined
           ? undefined
@@ -662,7 +1308,49 @@ export async function runDeviceE2e(
           );
         }
       }
+      const captureNetworkEvidence = async () => {
+        if (!networkMonitor || networkCapture) return;
+        networkCapture = await networkMonitor.capture();
+      };
       try {
+        if (options.directLanHost) {
+          const pcmOpen = bridgeOpenEvents.findLast((event) => event.endpoint === "/pcm");
+          const remoteAddress = pcmOpen?.remoteAddress;
+          if (!remoteAddress) {
+            throw new Error(
+              "The PCM bridge opened without a device address; exact network attribution is impossible.",
+            );
+          }
+          const deviceHost = normalizeSocketHost(remoteAddress);
+          const routerHost = await discoverDarwinDefaultGateway();
+          networkArtifactPath = await createPhysicalNetworkArtifactPath({
+            acousticArtifactPath: acousticCapture?.artifactPath,
+            outputRoot: environment.ITERATE_KIT_NETWORK_EVIDENCE_OUTPUT_DIRECTORY,
+          });
+          networkMonitor = new PhysicalNetworkRunMonitor({
+            deviceHost,
+            diagnostics: async () =>
+              parseKitControlDiagnostics(await mounted.device.getDiagnostics()),
+            routerHost,
+            workerHost: options.directLanHost,
+          });
+          networkMonitor.start();
+          console.log(
+            `physical_network_monitor_started device=${deviceHost} router=${routerHost} ` +
+              `worker=${options.directLanHost} artifact=${networkArtifactPath}`,
+          );
+        } else {
+          /*
+           * Captun does not expose the device-side TCP peer address to this
+           * process. Calling that interval network-valid would invent a
+           * reachability lane. Production userspace gets its own worker-side
+           * socket/DNS observations; this local harness only makes a verdict
+           * when the direct-LAN bridge supplies all three real hosts.
+           */
+          console.log(
+            "physical_network_monitor_unavailable reason=device-address-hidden-by-tunnel",
+          );
+        }
         if (controlChurn) {
           controlChurn.start();
           console.log(
@@ -774,6 +1462,13 @@ export async function runDeviceE2e(
           const recording = await acousticCapture.stop();
           acousticCaptureFinished = true;
           activeAcousticCapture = undefined;
+          /*
+           * Stop network sampling at the physical recording boundary. The
+           * waveform analyzers below can do seconds of disk/CPU work, but that
+           * offline work neither caused nor witnessed the audible interval and
+           * must not dilute its Wi-Fi/socket classification.
+           */
+          await captureNetworkEvidence();
           const result = acousticChallenge
             ? (() => {
                 const analysis = analyzeDualCarrierPrbs31Pcm16Artifact({
@@ -868,13 +1563,24 @@ export async function runDeviceE2e(
             );
           }
         }
-        console.log(
-          `device_playback_pipeline_observed provider=${provider} ` +
-            `evidence=provider-events+capability-metrics ` +
-            `acoustic=${acousticCapture ? "passed" : "external"}`,
-        );
-        return;
+        await captureNetworkEvidence();
+        audioRunPassed = true;
+      } catch (error) {
+        audioRunError = error;
       } finally {
+        if (networkMonitor && !networkCapture) {
+          try {
+            await captureNetworkEvidence();
+          } catch (error) {
+            audioRunError =
+              audioRunError === undefined
+                ? error
+                : new AggregateError(
+                    [audioRunError, error],
+                    "The physical audio run and its terminal network capture both failed.",
+                  );
+          }
+        }
         if (controlChurn && !controlChurnSummary) {
           try {
             await stopControlChurn(false);
@@ -896,130 +1602,564 @@ export async function runDeviceE2e(
           }
         }
       }
+      if (networkCapture && networkArtifactPath) {
+        const artifact = buildPhysicalNetworkRunArtifact({
+          ...networkCapture,
+          audio: {
+            failure:
+              audioRunError === undefined
+                ? null
+                : audioRunError instanceof Error
+                  ? audioRunError.message
+                  : String(audioRunError),
+            passed: audioRunPassed,
+          },
+          pcmEvidence: {
+            bridgeEvidence: snapshotPhysicalNetworkBridgeEvidence({
+              closeEvents: bridgeCloseEvents,
+              historyTruncated: bridgeHistoryTruncated,
+              openEvents: bridgeOpenEvents,
+            }),
+            kind: "local-bridge",
+            progress: physicalNetworkProgress(firstCapabilityMetrics, latestCapabilityMetrics),
+          },
+        });
+        await writePhysicalNetworkRunArtifact(networkArtifactPath, artifact);
+        console.log(
+          `physical_network_validity=${JSON.stringify({
+            artifactPath: networkArtifactPath,
+            classification: artifact.classification,
+            reasons: artifact.network.reasons,
+            verdict: artifact.network.verdict,
+          })}`,
+        );
+        if (audioRunError === undefined && artifact.classification !== "valid") {
+          audioRunError = new Error(
+            `Physical audio completed, but its network evidence was ${artifact.classification}. ` +
+              `See ${networkArtifactPath}.`,
+          );
+        }
+      }
+      if (audioRunError !== undefined) throw audioRunError;
+      console.log(
+        `device_playback_pipeline_observed provider=${provider} ` +
+          `evidence=provider-events+capability-metrics ` +
+          `acoustic=${acousticCapture ? "passed" : "external"} ` +
+          `network=${networkCapture ? "valid" : "not-captured"}`,
+      );
+      return;
     }
 
-    const remoteStartedLog = serialMonitor
-      ? runtimeProbe.waitForDeviceEvent("pushToTalk.started", "remote")
-      : undefined;
-    const started = await runtimeProbe.race(mounted.device.pushToTalk.start());
-    if (!started) {
-      throw new Error("Remote push-to-talk start was not accepted.");
+    if (recordsAutonomousVoiceConversation) {
+      if (!conversationRecorder || !conversationOutputDirectory) {
+        throw new Error("Autonomous voice proof started without its PCM recorder.");
+      }
+      /*
+       * Start the host microphone before the remote PTT edge. This recording
+       * is an independent physical witness: the two exact PCM files prove the
+       * digital lanes, while this artifact lets a later transcription or
+       * waveform judge establish what actually left the Stick speaker. The
+       * recorder writes to disk and never enters the firmware/audio queues.
+       */
+      autonomousAcousticCapture = await MacOsPcm16Capture.start({
+        identityFfmpegExecutable: environment.ITERATE_KIT_FFMPEG,
+        input: environment.ITERATE_KIT_ACOUSTIC_INPUT,
+        outputDirectory: conversationOutputDirectory,
+        recorderExecutable: environment.ITERATE_KIT_SOX,
+      });
+      activeAcousticCapture = autonomousAcousticCapture;
+      console.log(
+        `conversation_acoustic_capture_ready path=${autonomousAcousticCapture.artifactPath} ` +
+          `sample_rate_hz=${autonomousAcousticCapture.sampleRateHz}`,
+      );
+      autonomousNetworkBaseline = structuredClone(
+        latestCapabilityMetrics ?? firstCapabilityMetrics,
+      );
+      let deviceHost = options.networkDeviceHost;
+      if (options.directLanHost) {
+        const pcmOpen = bridgeOpenEvents.findLast((event) => event.endpoint === "/pcm");
+        const remoteAddress = pcmOpen?.remoteAddress;
+        if (!remoteAddress) {
+          throw new Error(
+            "The PCM bridge opened without a device address; exact network attribution is impossible.",
+          );
+        }
+        deviceHost = normalizeSocketHost(remoteAddress);
+      }
+      if (deviceHost) {
+        const routerHost = await discoverDarwinDefaultGateway();
+        const workerHost = options.directLanHost ?? new URL(peerBaseUrl).hostname;
+        /*
+         * `--no-flash` reads the settings partition and resets the ESP. Its
+         * outbound WebSockets can be established before this Mac refreshes its
+         * ARP entry for the station, which made two otherwise exact runs fail
+         * on only the first host-originated ping. Warm that setup-only path,
+         * then open a new interval whose first and every subsequent probe keep
+         * the original strict thresholds. These attempts are retained in the
+         * conversation timeline; none are deleted from measured evidence.
+         */
+        const networkPreflight = await warmPhysicalNetworkReachability(deviceHost);
+        conversationRecorder.recordEvent("physical-network.preflight", {
+          attempts: networkPreflight.attempts,
+          maximumHealthyRttMs: networkPreflight.maximumHealthyRttMs,
+          passed: networkPreflight.passed,
+          requiredConsecutiveHealthyReplies: networkPreflight.requiredConsecutiveHealthyReplies,
+        });
+        console.log(`physical_network_preflight=${JSON.stringify(networkPreflight)}`);
+        if (!networkPreflight.passed) {
+          throw new Error(
+            `The device did not pass bounded post-mount reachability warm-up at ${deviceHost}.`,
+          );
+        }
+        autonomousNetworkArtifactPath = join(
+          conversationOutputDirectory,
+          "physical-network-validity.json",
+        );
+        autonomousNetworkMonitor = new PhysicalNetworkRunMonitor({
+          deviceHost,
+          diagnostics: async () =>
+            parseKitControlDiagnostics(await mounted.device.getDiagnostics()),
+          routerHost,
+          workerHost,
+        });
+        autonomousNetworkMonitor.start();
+        if (!options.directLanHost) {
+          /*
+           * Start the public-origin DNS/TLS observation inside the same
+           * interval as the reachability and device samplers. Captun hides the
+           * device address at its fetch boundary, but it must not hide whether
+           * the exact public origin was resolvable and connectable while the
+           * conversation was being judged.
+           */
+          autonomousNetworkMeasurement = measureRemoteDnsAndTlsConnect(workerHost);
+        }
+        console.log(
+          `physical_network_monitor_started device=${deviceHost} router=${routerHost} ` +
+            `worker=${workerHost} artifact=${autonomousNetworkArtifactPath}`,
+        );
+      } else {
+        console.log("physical_network_monitor_unavailable reason=device-host-not-provided");
+      }
+      conversationRecorder.recordEvent("autonomous-conversation.started", {
+        input: "macos-say-through-device-microphone",
+        mode: options.remoteInterruptionProof ? "interruption" : "sequential",
+        transport: options.directLanHost ? "direct-lan" : "captun",
+        turns: options.remoteInterruptionProof ? 2 : (options.remoteVoiceTurns ?? 1),
+      });
     }
-    if (remoteStartedLog) {
-      await runtimeProbe.race(
+
+    if (options.remoteInterruptionProof) {
+      const sequenceBaseline = structuredClone(latestCapabilityMetrics ?? firstCapabilityMetrics);
+      const microphoneFrameBaseline = microphoneUplinkFramesObserved;
+      const speakerFrameBaseline = speakerDownlinkFramesObserved;
+      const providerResponseBaseline = providerResponsesDone;
+      const downlinkResponseBaseline = downlinkResponsesCompleted;
+      const firstTiming: AutonomousVoiceTurnTiming = { turn: 1 };
+      activeAutonomousTurn = firstTiming;
+      conversationRecorder?.recordEvent("autonomous-interruption.started", {
+        baseline: sequenceBaseline,
+        providerResponseBaseline,
+      });
+
+      const firstStarted = await runtimeProbe.race(mounted.device.pushToTalk.start());
+      if (!firstStarted || !(await server.inputStarted())) {
+        throw new Error("The first interruption-proof PTT epoch was not accepted.");
+      }
+      const firstPttStartedAtMonotonicMs = performance.now();
+      console.log("remote_event=pushToTalk.started accepted=true phase=interrupted-response");
+      const longReplyPrompt =
+        "Recite the numbers one through twenty slowly, with a short pause between each number. " +
+        "Do not stop early.";
+      conversationRecorder?.recordEvent("autonomous-turn.prompt", {
+        phrase: longReplyPrompt,
+        turn: 1,
+      });
+      await executeFile(environment.ITERATE_KIT_SAY ?? "/usr/bin/say", [longReplyPrompt]);
+      const firstHeldUplinkMetrics = await runtimeProbe.race(
         withTimeout(
-          remoteStartedLog,
+          runtimeProbe.waitForMetrics("capability", (metrics) =>
+            deviceUplinkStreaming(sequenceBaseline, metrics),
+          ),
           5_000,
-          "The device accepted remote push-to-talk start but did not process its semantic event.",
+          "The first interruption-proof microphone epoch did not stream while held.",
         ),
       );
-    }
-    if (options.voice && !(await server.inputStarted())) {
-      throw new Error("The PCM proxy did not accept the push-to-talk start event.");
-    }
-    console.log("remote_event=pushToTalk.started accepted=true");
-    let stopped = false;
-    try {
-      if (options.voice) {
-        const phrase =
-          environment.ITERATE_KIT_VOICE_PHRASE ??
-          "Please reply by saying Iterate device audio works.";
-        console.log("voice_prompt_injection_started source=macos-say");
-        await executeFile(environment.ITERATE_KIT_SAY ?? "/usr/bin/say", [phrase]);
-        console.log("voice_prompt_injection_complete");
-        const firstHeldUplinkMetrics = await runtimeProbe.race(
-          withTimeout(
-            runtimeProbe.waitForMetrics("capability", (metrics) =>
-              deviceUplinkStreaming(firstCapabilityMetrics, metrics),
-            ),
-            5_000,
-            "Microphone frames did not reach Grok while push-to-talk remained held.",
-          ),
-        );
-        const continuingHeldUplinkMetrics = await runtimeProbe.race(
-          withTimeout(
-            runtimeProbe.waitForMetrics("capability", (metrics) =>
-              deviceUplinkStreaming(firstHeldUplinkMetrics, metrics),
-            ),
-            5_000,
-            "Microphone frames stopped reaching Grok before push-to-talk release.",
-          ),
-        );
-        console.log(`capability_uplink_while_held=${JSON.stringify(continuingHeldUplinkMetrics)}`);
-      }
       await delay(options.remoteHoldMs);
-      const remoteStoppedLog = serialMonitor
-        ? runtimeProbe.waitForDeviceEvent("pushToTalk.stopped", "remote")
+      const firstStopped = await runtimeProbe.race(mounted.device.pushToTalk.stop());
+      if (!firstStopped || !(await server.inputStopped())) {
+        throw new Error("The first interruption-proof PTT release was not accepted.");
+      }
+      const firstPttStoppedAtMonotonicMs = performance.now();
+      console.log("remote_event=pushToTalk.stopped accepted=true phase=interrupted-response");
+
+      /*
+       * Interrupt only after a meaningful prefix has crossed the real device
+       * socket. Twenty frames are 400 ms of speech; with the eight-frame device
+       * lead this guarantees an audible prefix while keeping the stale suffix
+       * small. Waiting for response.done would test a second turn, not barge-in.
+       */
+      const minimumFirstReplyFrames = 20;
+      await waitForObservedState(
+        () => speakerDownlinkFramesObserved - speakerFrameBaseline >= minimumFirstReplyFrames,
+        voiceResponseTimeoutMs,
+        "Grok did not emit enough live reply PCM to exercise interruption.",
+      );
+      await delay(120);
+      const firstReplyFramesAtInterruption = speakerDownlinkFramesObserved - speakerFrameBaseline;
+      const interruptionRequestedAtMonotonicMs = performance.now();
+      const secondTiming: AutonomousVoiceTurnTiming = { turn: 2 };
+      activeAutonomousTurn = secondTiming;
+
+      /*
+       * Preserve the physical causal order: the device stops I2S and starts
+       * capture before its semantic edge can tell userspace to cancel Grok.
+       * Firmware continuously classifies any PCM crossing that narrow gap as
+       * generation-flushed, so this remote proof exercises the same ordering
+       * as Button A rather than a friendlier server-first shortcut.
+       */
+      const secondStarted = await runtimeProbe.race(mounted.device.pushToTalk.start());
+      const deviceInterruptionAcceptedAtMonotonicMs = performance.now();
+      if (!secondStarted || !(await server.inputStarted())) {
+        throw new Error("The live Grok reply did not accept the interrupting PTT edge.");
+      }
+      const interruptionDeviceRpcMs =
+        deviceInterruptionAcceptedAtMonotonicMs - interruptionRequestedAtMonotonicMs;
+      if (interruptionDeviceRpcMs > 1_000) {
+        throw new Error(
+          `The device took ${interruptionDeviceRpcMs.toFixed(1)} ms to stop stale playback; ` +
+            "the bounded interruption limit is 1000 ms.",
+        );
+      }
+      conversationRecorder?.recordEvent("autonomous-interruption.edge", {
+        deviceRpcMs: interruptionDeviceRpcMs,
+        firstReplyFramesAtInterruption,
+        requestedAtMonotonicMs: interruptionRequestedAtMonotonicMs,
+      });
+      console.log(
+        `voice_interruption_edge device_rpc_ms=${interruptionDeviceRpcMs.toFixed(3)} ` +
+          `speaker_frames_before_interrupt=${firstReplyFramesAtInterruption}`,
+      );
+
+      await waitForObservedState(
+        () => providerResponsesDone >= providerResponseBaseline + 1,
+        voiceResponseTimeoutMs,
+        "Grok did not acknowledge cancellation of the interrupted response.",
+      );
+      const interruptedOutcome = providerResponseOutcomes[providerResponseBaseline];
+      if (
+        !interruptedOutcome ||
+        !["canceled", "cancelled"].includes(interruptedOutcome.status ?? "")
+      ) {
+        throw new Error(
+          `The interrupted Grok response ended as ${interruptedOutcome?.status ?? "unknown"}; ` +
+            "expected an explicit canceled status.",
+        );
+      }
+
+      const recoveryPrompt =
+        "The previous answer was interrupted. Reply exactly: interruption successful.";
+      conversationRecorder?.recordEvent("autonomous-turn.prompt", {
+        phrase: recoveryPrompt,
+        turn: 2,
+      });
+      await executeFile(environment.ITERATE_KIT_SAY ?? "/usr/bin/say", [recoveryPrompt]);
+      const secondHeldUplinkMetrics = await runtimeProbe.race(
+        withTimeout(
+          runtimeProbe.waitForMetrics("capability", (metrics) =>
+            deviceUplinkStreaming(firstHeldUplinkMetrics, metrics),
+          ),
+          5_000,
+          "Microphone PCM did not remain live after interrupting the old reply.",
+        ),
+      );
+      await delay(options.remoteHoldMs);
+      const secondStopped = await runtimeProbe.race(mounted.device.pushToTalk.stop());
+      if (!secondStopped || !(await server.inputStopped())) {
+        throw new Error("The post-interruption PTT release was not accepted.");
+      }
+      const secondPttStoppedAtMonotonicMs = performance.now();
+      console.log("remote_event=pushToTalk.stopped accepted=true phase=fresh-response");
+
+      await waitForVoiceProgress({
+        downlinkTarget: downlinkResponseBaseline + 1,
+        message: "Timed out waiting for the fresh Grok response after interruption.",
+        providerTarget: providerResponseBaseline + 2,
+      });
+      const expectedMicrophoneFrames = microphoneUplinkFramesObserved - microphoneFrameBaseline;
+      const expectedSpeakerFrames = speakerDownlinkFramesObserved - speakerFrameBaseline;
+      const finalMetrics = await runtimeProbe.race(
+        withTimeout(
+          runtimeProbe.waitForMetrics("capability", (metrics) =>
+            deviceInterruptedVoiceSequenceCompleted(sequenceBaseline, metrics, {
+              microphoneFrames: expectedMicrophoneFrames,
+              speakerFrames: expectedSpeakerFrames,
+            }),
+          ),
+          voiceResponseTimeoutMs,
+          "The interrupted sequence did not close its exact played-or-flushed frame ledger.",
+        ),
+      );
+      autonomousFinalVoiceMetrics = finalMetrics;
+      const freshOutcome = providerResponseOutcomes[providerResponseBaseline + 1];
+      if (freshOutcome?.status !== "completed") {
+        throw new Error(
+          `The fresh post-interruption Grok response ended as ${freshOutcome?.status ?? "unknown"}.`,
+        );
+      }
+      const firstSpeakerAtMonotonicMs = firstTiming.firstSpeakerFrameAtMonotonicMs;
+      const secondFirstMicrophoneAtMonotonicMs = secondTiming.firstMicrophoneFrameAtMonotonicMs;
+      const secondFirstSpeakerAtMonotonicMs = secondTiming.firstSpeakerFrameAtMonotonicMs;
+      const secondResponseCreatedAtMonotonicMs = secondTiming.providerResponseCreatedAtMonotonicMs;
+      const secondProviderDoneAtMonotonicMs =
+        providerResponseDoneAtMonotonicMs[providerResponseBaseline + 1];
+      const secondDownlinkDoneAtMonotonicMs =
+        downlinkResponseCompletedAtMonotonicMs[downlinkResponseBaseline];
+      if (
+        firstSpeakerAtMonotonicMs === undefined ||
+        secondFirstMicrophoneAtMonotonicMs === undefined ||
+        secondFirstSpeakerAtMonotonicMs === undefined ||
+        secondResponseCreatedAtMonotonicMs === undefined ||
+        secondProviderDoneAtMonotonicMs === undefined ||
+        secondDownlinkDoneAtMonotonicMs === undefined
+      ) {
+        throw new Error("The interruption proof ended without a complete two-epoch timing ledger.");
+      }
+      const metricDelta = (name: string) =>
+        numericMetric(finalMetrics, name) - numericMetric(sequenceBaseline, name);
+      const interruptionEvidence = {
+        frames: {
+          microphone: expectedMicrophoneFrames,
+          speaker: expectedSpeakerFrames,
+          speakerCompleted: metricDelta("playback_completed"),
+          speakerFlushed: metricDelta("playback_flushed"),
+        },
+        interruption: {
+          deviceRpcMs: interruptionDeviceRpcMs,
+          firstAudiblePrefixMs: interruptionRequestedAtMonotonicMs - firstSpeakerAtMonotonicMs,
+          providerStatus: interruptedOutcome.status,
+          speakerFramesBeforeInterrupt: firstReplyFramesAtInterruption,
+        },
+        latencyMs: {
+          firstPttHeld: firstPttStoppedAtMonotonicMs - firstPttStartedAtMonotonicMs,
+          firstPttStopToFirstSpeaker: firstSpeakerAtMonotonicMs - firstPttStoppedAtMonotonicMs,
+          secondPttStartToFirstMicrophone:
+            secondFirstMicrophoneAtMonotonicMs - deviceInterruptionAcceptedAtMonotonicMs,
+          secondPttStopToDownlinkComplete:
+            secondDownlinkDoneAtMonotonicMs - secondPttStoppedAtMonotonicMs,
+          secondPttStopToFirstSpeaker:
+            secondFirstSpeakerAtMonotonicMs - secondPttStoppedAtMonotonicMs,
+          secondPttStopToProviderDone:
+            secondProviderDoneAtMonotonicMs - secondPttStoppedAtMonotonicMs,
+          secondPttStopToResponseCreated:
+            secondResponseCreatedAtMonotonicMs - secondPttStoppedAtMonotonicMs,
+        },
+        provider: {
+          fresh: freshOutcome,
+          interrupted: interruptedOutcome,
+        },
+        resources: {
+          baseline: sequenceBaseline,
+          final: finalMetrics,
+          secondHeld: secondHeldUplinkMetrics,
+        },
+      };
+      conversationRecorder?.recordEvent("autonomous-interruption.completed", interruptionEvidence);
+      console.log(`voice_interruption_evidence=${JSON.stringify(interruptionEvidence)}`);
+      console.log(
+        `voice_frame_conservation mode=interruption microphone=${expectedMicrophoneFrames} ` +
+          `speaker=${expectedSpeakerFrames} completed=${metricDelta("playback_completed")} ` +
+          `flushed=${metricDelta("playback_flushed")} device=exact`,
+      );
+      activeAutonomousTurn = undefined;
+    }
+
+    const remoteTurnCount = options.remoteInterruptionProof
+      ? 0
+      : recordsAutonomousVoiceConversation
+        ? (options.remoteVoiceTurns ?? 1)
+        : 1;
+    for (let turn = 1; turn <= remoteTurnCount; turn += 1) {
+      /*
+       * Re-baseline every turn only after the previous response drained. One
+       * end-of-run delta would let a clean later reply compensate for a dropped
+       * earlier reply; per-turn conservation makes the first divergence the
+       * durable failure boundary while the provider session remains shared.
+       */
+      const remotePlaybackBaseline = structuredClone(
+        latestCapabilityMetrics ?? firstCapabilityMetrics,
+      );
+      const remoteMicrophoneFrameBaseline = microphoneUplinkFramesObserved;
+      const remoteSpeakerFrameBaseline = speakerDownlinkFramesObserved;
+      const remoteProviderResponseTarget = providerResponsesDone + 1;
+      const remoteDownlinkResponseTarget = downlinkResponsesCompleted + 1;
+      const turnStartedAtMonotonicMs = performance.now();
+      const turnTiming: AutonomousVoiceTurnTiming = { turn };
+      activeAutonomousTurn = recordsAutonomousVoiceConversation ? turnTiming : undefined;
+      conversationRecorder?.recordEvent("autonomous-turn.started", {
+        baseline: remotePlaybackBaseline,
+        turn,
+      });
+
+      const remoteStartedLog = serialMonitor
+        ? runtimeProbe.waitForDeviceEvent("pushToTalk.started", "remote")
         : undefined;
-      stopped = await runtimeProbe.race(mounted.device.pushToTalk.stop());
-      if (remoteStoppedLog) {
+      const started = await runtimeProbe.race(mounted.device.pushToTalk.start());
+      if (!started) {
+        throw new Error(`Remote push-to-talk start was not accepted for turn ${turn}.`);
+      }
+      if (remoteStartedLog) {
         await runtimeProbe.race(
           withTimeout(
-            remoteStoppedLog,
+            remoteStartedLog,
             5_000,
-            "The device accepted remote push-to-talk stop but did not process its semantic event.",
+            "The device accepted remote push-to-talk start but did not process its semantic event.",
           ),
         );
       }
-      if (options.voice && !(await server.inputStopped())) {
-        throw new Error("The PCM proxy did not accept the push-to-talk stop event.");
+      if (options.voice && !(await server.inputStarted())) {
+        throw new Error(`The PCM proxy did not accept push-to-talk start for turn ${turn}.`);
       }
-    } finally {
-      if (!stopped) {
-        await mounted.device.pushToTalk.stop();
+      const pttStartedAtMonotonicMs = performance.now();
+      console.log(`remote_event=pushToTalk.started accepted=true turn=${turn}`);
+
+      let pttStoppedAtMonotonicMs: number | undefined;
+      let stopped = false;
+      try {
+        if (options.voice) {
+          const phrase =
+            environment.ITERATE_KIT_VOICE_PHRASE ??
+            autonomousVoicePrompts[turn - 1] ??
+            `This is conversation turn ${turn} of ${remoteTurnCount}. Reply with the turn number and one cheerful word.`;
+          conversationRecorder?.recordEvent("autonomous-turn.prompt", { phrase, turn });
+          console.log(`voice_prompt_injection_started source=macos-say turn=${turn}`);
+          await executeFile(environment.ITERATE_KIT_SAY ?? "/usr/bin/say", [phrase]);
+          console.log(`voice_prompt_injection_complete turn=${turn}`);
+          const firstHeldUplinkMetrics = await runtimeProbe.race(
+            withTimeout(
+              runtimeProbe.waitForMetrics("capability", (metrics) =>
+                deviceUplinkStreaming(remotePlaybackBaseline, metrics),
+              ),
+              5_000,
+              `Microphone frames did not reach Grok while turn ${turn} remained held.`,
+            ),
+          );
+          const continuingHeldUplinkMetrics = await runtimeProbe.race(
+            withTimeout(
+              runtimeProbe.waitForMetrics("capability", (metrics) =>
+                deviceUplinkStreaming(firstHeldUplinkMetrics, metrics),
+              ),
+              5_000,
+              `Microphone frames stopped reaching Grok before turn ${turn} was released.`,
+            ),
+          );
+          console.log(
+            `capability_uplink_while_held turn=${turn} ` +
+              `metrics=${JSON.stringify(continuingHeldUplinkMetrics)}`,
+          );
+        }
+        await delay(options.remoteHoldMs);
+        const remoteStoppedLog = serialMonitor
+          ? runtimeProbe.waitForDeviceEvent("pushToTalk.stopped", "remote")
+          : undefined;
+        stopped = await runtimeProbe.race(mounted.device.pushToTalk.stop());
+        if (remoteStoppedLog) {
+          await runtimeProbe.race(
+            withTimeout(
+              remoteStoppedLog,
+              5_000,
+              "The device accepted remote push-to-talk stop but did not process its semantic event.",
+            ),
+          );
+        }
+        if (options.voice && !(await server.inputStopped())) {
+          throw new Error(`The PCM proxy did not accept push-to-talk stop for turn ${turn}.`);
+        }
+        pttStoppedAtMonotonicMs = performance.now();
+      } finally {
+        if (!stopped) {
+          await mounted.device.pushToTalk.stop();
+        }
       }
-    }
-    if (!stopped) {
-      throw new Error("Remote push-to-talk stop was not accepted.");
-    }
-    console.log("remote_event=pushToTalk.stopped accepted=true");
-    const firstUptime = numericMetric(firstCapabilityMetrics, "uptime_ms");
-    const remoteCapabilityMetrics = await runtimeProbe.race(
-      withTimeout(
-        runtimeProbe.waitForMetrics(
-          "capability",
-          (metrics) =>
-            numericMetric(metrics, "uptime_ms") > firstUptime &&
-            hasCapabilityResourceEvidence(metrics),
-        ),
-        5_000,
-        "Timed out waiting for post-remote Cap'n Web metrics.",
-      ),
-    );
-    console.log(`capability_runtime_metrics=${JSON.stringify(remoteCapabilityMetrics)}`);
-    if (serialMonitor) {
-      const [remoteSystemMetrics, remoteControlMetrics] = await runtimeProbe.race(
+      if (!stopped || pttStoppedAtMonotonicMs === undefined) {
+        throw new Error(`Remote push-to-talk stop was not accepted for turn ${turn}.`);
+      }
+      console.log(`remote_event=pushToTalk.stopped accepted=true turn=${turn}`);
+
+      const baselineUptime = numericMetric(remotePlaybackBaseline, "uptime_ms");
+      const remoteCapabilityMetrics = await runtimeProbe.race(
         withTimeout(
-          Promise.all([
-            runtimeProbe.waitForMetrics(
-              "system",
-              (metrics) => metrics.control_transport === "ready" && hasResourceEvidence(metrics),
-            ),
-            runtimeProbe.waitForMetrics(
-              "control",
-              (metrics) => numericMetric(metrics, "events_processed") >= 2,
-            ),
-          ]),
+          runtimeProbe.waitForMetrics(
+            "capability",
+            (metrics) =>
+              numericMetric(metrics, "uptime_ms") > baselineUptime &&
+              hasCapabilityResourceEvidence(metrics),
+          ),
           5_000,
-          "Timed out waiting for healthy post-remote runtime metrics.",
+          `Timed out waiting for post-turn-${turn} Cap'n Web metrics.`,
         ),
       );
       console.log(
-        `runtime_metrics=${JSON.stringify({
-          control: remoteControlMetrics,
-          system: remoteSystemMetrics,
-        })}`,
-      );
-    }
-    if (options.voice) {
-      const capabilityVoiceMetrics = runtimeProbe.waitForMetrics("capability", (metrics) =>
-        deviceVoiceRoundTripCompleted(firstCapabilityMetrics, metrics),
+        `capability_runtime_metrics turn=${turn} metrics=${JSON.stringify(remoteCapabilityMetrics)}`,
       );
       if (serialMonitor) {
-        const [pcmMetrics, remoteVoiceMetrics] = await runtimeProbe.race(
+        const [remoteSystemMetrics, remoteControlMetrics] = await runtimeProbe.race(
           withTimeout(
             Promise.all([
-              providerResponseDone.promise,
+              runtimeProbe.waitForMetrics(
+                "system",
+                (metrics) => metrics.control_transport === "ready" && hasResourceEvidence(metrics),
+              ),
+              runtimeProbe.waitForMetrics(
+                "control",
+                (metrics) => numericMetric(metrics, "events_processed") >= turn * 2,
+              ),
+            ]),
+            5_000,
+            `Timed out waiting for healthy post-turn-${turn} runtime metrics.`,
+          ),
+        );
+        console.log(
+          `runtime_metrics=${JSON.stringify({
+            control: remoteControlMetrics,
+            system: remoteSystemMetrics,
+            turn,
+          })}`,
+        );
+      }
+      if (!options.voice) continue;
+
+      /*
+       * Do not arm the metric predicate until both provider response.done and
+       * the ordered PCM EOS have crossed userspace. An earlier implementation
+       * captured a metrics sample after the first 12 frames, then paired that
+       * stale sample with a later response.done and declared a 46-frame reply
+       * successful even though the device flushed the remaining 34.
+       */
+      await waitForVoiceProgress({
+        downlinkTarget: remoteDownlinkResponseTarget,
+        message: `Timed out waiting for Grok to finish remote turn ${turn}.`,
+        providerTarget: remoteProviderResponseTarget,
+      });
+      const expectedMicrophoneFrames =
+        microphoneUplinkFramesObserved - remoteMicrophoneFrameBaseline;
+      const expectedSpeakerFrames = speakerDownlinkFramesObserved - remoteSpeakerFrameBaseline;
+      if (expectedMicrophoneFrames <= 0) {
+        throw new Error(`Turn ${turn} completed without a microphone PCM frame reaching Grok.`);
+      }
+      if (expectedSpeakerFrames <= 0) {
+        throw new Error(`Grok completed turn ${turn} without sending a PCM frame to the Stick.`);
+      }
+      const capabilityVoiceMetrics = runtimeProbe.waitForMetrics("capability", (metrics) =>
+        deviceVoiceTurnCompleted(remotePlaybackBaseline, metrics, {
+          microphoneFrames: expectedMicrophoneFrames,
+          speakerFrames: expectedSpeakerFrames,
+        }),
+      );
+      let remoteVoiceMetrics: DeviceRuntimeMetrics;
+      if (serialMonitor) {
+        const [pcmMetrics, metrics] = await runtimeProbe.race(
+          withTimeout(
+            Promise.all([
               runtimeProbe.waitForMetrics(
                 "pcm",
                 (metrics) =>
@@ -1028,27 +2168,96 @@ export async function runDeviceE2e(
                   numericMetric(metrics, "playback_submitted") > 0,
               ),
               capabilityVoiceMetrics,
-            ]).then(([, serialMetrics, metrics]) => [serialMetrics, metrics] as const),
+            ]).then(([serialMetrics, metrics]) => [serialMetrics, metrics] as const),
             voiceResponseTimeoutMs,
-            "Timed out waiting for Grok audio to reach the Stick speaker.",
+            `Timed out waiting for exact turn-${turn} frame conservation through the Stick.`,
           ),
         );
-        console.log(`pcm_runtime_metrics=${JSON.stringify(pcmMetrics)}`);
-        console.log(`capability_voice_metrics=${JSON.stringify(remoteVoiceMetrics)}`);
+        remoteVoiceMetrics = metrics;
+        console.log(`pcm_runtime_metrics turn=${turn} metrics=${JSON.stringify(pcmMetrics)}`);
       } else {
-        const remoteVoiceMetrics = await runtimeProbe.race(
+        remoteVoiceMetrics = await runtimeProbe.race(
           withTimeout(
-            Promise.all([providerResponseDone.promise, capabilityVoiceMetrics]).then(
-              ([, metrics]) => metrics,
-            ),
+            capabilityVoiceMetrics,
             voiceResponseTimeoutMs,
-            "Timed out waiting for Grok audio to be consumed by the Stick speaker.",
+            `Timed out waiting for exact turn-${turn} frame conservation through the Stick.`,
           ),
         );
-        console.log(`capability_voice_metrics=${JSON.stringify(remoteVoiceMetrics)}`);
       }
       console.log(
-        "device_voice_pipeline_observed provider=grok evidence=capability-metrics acoustic=external",
+        `capability_voice_metrics turn=${turn} metrics=${JSON.stringify(remoteVoiceMetrics)}`,
+      );
+      autonomousFinalVoiceMetrics = remoteVoiceMetrics;
+
+      const providerDoneAtMonotonicMs =
+        providerResponseDoneAtMonotonicMs[remoteProviderResponseTarget - 1];
+      const downlinkDoneAtMonotonicMs =
+        downlinkResponseCompletedAtMonotonicMs[remoteDownlinkResponseTarget - 1];
+      const firstMicrophoneFrameAtMonotonicMs = turnTiming.firstMicrophoneFrameAtMonotonicMs;
+      const firstSpeakerFrameAtMonotonicMs = turnTiming.firstSpeakerFrameAtMonotonicMs;
+      const providerResponseCreatedAtMonotonicMs = turnTiming.providerResponseCreatedAtMonotonicMs;
+      if (
+        providerDoneAtMonotonicMs === undefined ||
+        downlinkDoneAtMonotonicMs === undefined ||
+        firstMicrophoneFrameAtMonotonicMs === undefined ||
+        firstSpeakerFrameAtMonotonicMs === undefined ||
+        providerResponseCreatedAtMonotonicMs === undefined
+      ) {
+        throw new Error(`Turn ${turn} ended without a complete provider/audio timing ledger.`);
+      }
+      const turnCompletedAtMonotonicMs = performance.now();
+      const turnEvidence = {
+        frames: {
+          microphone: expectedMicrophoneFrames,
+          speaker: expectedSpeakerFrames,
+        },
+        latencyMs: {
+          pttStartToFirstMicrophone: firstMicrophoneFrameAtMonotonicMs - pttStartedAtMonotonicMs,
+          pttStopToDownlinkComplete: downlinkDoneAtMonotonicMs - pttStoppedAtMonotonicMs,
+          pttStopToFirstSpeaker: firstSpeakerFrameAtMonotonicMs - pttStoppedAtMonotonicMs,
+          pttStopToPlaybackConserved: turnCompletedAtMonotonicMs - pttStoppedAtMonotonicMs,
+          pttStopToProviderDone: providerDoneAtMonotonicMs - pttStoppedAtMonotonicMs,
+          pttStopToResponseCreated: providerResponseCreatedAtMonotonicMs - pttStoppedAtMonotonicMs,
+          total: turnCompletedAtMonotonicMs - turnStartedAtMonotonicMs,
+        },
+        resources: {
+          baseline: {
+            cpuPermille: numericMetric(remotePlaybackBaseline, "cpu_permille"),
+            freeHeapBytes: numericMetric(remotePlaybackBaseline, "heap"),
+            freeInternalHeapBytes: numericMetric(remotePlaybackBaseline, "internal"),
+            minimumFreeHeapBytes: numericMetric(remotePlaybackBaseline, "min_heap"),
+            minimumFreeInternalHeapBytes: numericMetric(remotePlaybackBaseline, "min_internal"),
+          },
+          final: {
+            cpuPermille: numericMetric(remoteVoiceMetrics, "cpu_permille"),
+            freeHeapBytes: numericMetric(remoteVoiceMetrics, "heap"),
+            freeInternalHeapBytes: numericMetric(remoteVoiceMetrics, "internal"),
+            minimumFreeHeapBytes: numericMetric(remoteVoiceMetrics, "min_heap"),
+            minimumFreeInternalHeapBytes: numericMetric(remoteVoiceMetrics, "min_internal"),
+          },
+          maximumTransportAcceptAgeMs: numericMetric(
+            remoteVoiceMetrics,
+            "uplink_maximum_transport_accept_age_ms",
+          ),
+          playbackHighWaterFrames: numericMetric(remoteVoiceMetrics, "playback_high_water"),
+          uplinkHighWaterFrames: numericMetric(remoteVoiceMetrics, "uplink_high_water"),
+        },
+        turn,
+      };
+      conversationRecorder?.recordEvent("autonomous-turn.completed", turnEvidence);
+      console.log(`voice_turn_evidence=${JSON.stringify(turnEvidence)}`);
+      console.log(
+        `voice_frame_conservation turn=${turn} microphone=${expectedMicrophoneFrames} ` +
+          `speaker=${expectedSpeakerFrames} device=exact`,
+      );
+      activeAutonomousTurn = undefined;
+    }
+    if (options.voice) {
+      console.log(
+        `device_voice_pipeline_observed provider=grok ` +
+          `mode=${options.remoteInterruptionProof ? "interruption" : "sequential"} ` +
+          `turns=${options.remoteInterruptionProof ? 2 : remoteTurnCount} ` +
+          "evidence=capability-metrics+pcm-recording+provider-lifecycle acoustic=recorded",
       );
     }
 
@@ -1087,18 +2296,274 @@ export async function runDeviceE2e(
           system: physicalSystemMetrics,
         })}`,
       );
-      console.log("device_e2e_passed remote=true physical=true");
+      console.log(
+        recordsAutonomousVoiceConversation
+          ? "device_remote_operations_completed remote=true physical=true"
+          : "device_e2e_passed remote=true physical=true",
+      );
     } else {
-      console.log("device_e2e_passed remote=true physical=skipped");
+      console.log(
+        recordsAutonomousVoiceConversation
+          ? "device_remote_operations_completed remote=true physical=skipped"
+          : "device_e2e_passed remote=true physical=skipped",
+      );
     }
+    autonomousRunPassed = recordsAutonomousVoiceConversation;
+  } catch (error) {
+    terminalRunError = error;
+    throw error;
   } finally {
+    let autonomousFinalizationError: unknown;
+    const retainAutonomousFinalizationError = (error: unknown, message: string) => {
+      autonomousFinalizationError =
+        autonomousFinalizationError === undefined
+          ? error
+          : new AggregateError([autonomousFinalizationError, error], message);
+    };
+    if (recordsAutonomousVoiceConversation) {
+      if (conversationRecorder && autonomousRunPassed) {
+        conversationRecorder.recordEvent("autonomous-conversation.completed", {
+          mode: options.remoteInterruptionProof ? "interruption" : "sequential",
+          providerResponsesDone,
+          providerResponseOutcomes,
+          speakerDownlinkFramesObserved,
+        });
+      }
+      if (autonomousAcousticCapture) {
+        try {
+          if (autonomousRunPassed) await delay(acousticCaptureTailMs);
+          await Promise.all(acousticMarkerTasks);
+          autonomousAcousticRecording = await autonomousAcousticCapture.stop();
+          activeAcousticCapture = undefined;
+          console.log(
+            `conversation_acoustic_capture=${JSON.stringify({
+              artifactPath: autonomousAcousticRecording.artifactPath,
+              capturedByteLength: autonomousAcousticRecording.capturedByteLength,
+              capturedSampleCount: autonomousAcousticRecording.capturedSampleCount,
+              captureProvenance: autonomousAcousticRecording.captureProvenance,
+              sampleRateHz: autonomousAcousticRecording.sampleRateHz,
+            })}`,
+          );
+        } catch (error) {
+          retainAutonomousFinalizationError(
+            error,
+            "The autonomous voice run and its acoustic recorder both failed.",
+          );
+        }
+      }
+      if (autonomousNetworkMonitor) {
+        try {
+          autonomousNetworkCapture = await autonomousNetworkMonitor.capture();
+          if (autonomousNetworkMeasurement) {
+            const measurement = await autonomousNetworkMeasurement;
+            autonomousNetworkCapture.dnsAndConnect = {
+              connect: measurement.connect,
+              coverage: { ...autonomousNetworkCapture.audioInterval },
+              dns: measurement.dns,
+              kind: "measured",
+            };
+          }
+        } catch (error) {
+          retainAutonomousFinalizationError(
+            error,
+            "The autonomous voice run and its terminal network capture both failed.",
+          );
+        }
+      }
+      let recording: PcmConversationRecordingSummary | undefined;
+      if (conversationRecorder && !conversationRecorderClosed) {
+        try {
+          recording = await conversationRecorder.close();
+          conversationRecorderClosed = true;
+          console.log(`pcm_conversation_recording=${JSON.stringify(recording)}`);
+          if (!recording.complete) {
+            retainAutonomousFinalizationError(
+              new Error(`PCM conversation recording was incomplete: ${recording.failure}.`),
+              "The autonomous voice run and its PCM recorder both failed.",
+            );
+          }
+        } catch (error) {
+          retainAutonomousFinalizationError(
+            error,
+            "The autonomous voice run and its PCM recorder both failed.",
+          );
+        }
+      }
+      const autonomousNetworkTerminalMetrics =
+        autonomousFinalVoiceMetrics ?? latestCapabilityMetrics;
+      if (
+        autonomousNetworkCapture &&
+        autonomousNetworkArtifactPath &&
+        autonomousNetworkBaseline &&
+        autonomousNetworkTerminalMetrics
+      ) {
+        try {
+          const failure = terminalRunError ?? autonomousFinalizationError;
+          const progress = physicalNetworkProgress(
+            autonomousNetworkBaseline,
+            autonomousNetworkTerminalMetrics,
+          );
+          const artifact = buildPhysicalNetworkRunArtifact({
+            ...autonomousNetworkCapture,
+            audio: {
+              failure:
+                failure === undefined
+                  ? null
+                  : failure instanceof Error
+                    ? failure.message
+                    : String(failure),
+              passed:
+                autonomousRunPassed &&
+                failure === undefined &&
+                recording?.complete === true &&
+                autonomousAcousticRecording !== undefined,
+            },
+            pcmEvidence: options.directLanHost
+              ? {
+                  bridgeEvidence: snapshotPhysicalNetworkBridgeEvidence({
+                    closeEvents: bridgeCloseEvents,
+                    historyTruncated: bridgeHistoryTruncated,
+                    openEvents: bridgeOpenEvents,
+                  }),
+                  kind: "local-bridge",
+                  progress,
+                }
+              : {
+                  /*
+                   * Captun terminates the outer TCP/WebSocket connection, so
+                   * the local fetch adapter cannot truthfully invent a device
+                   * remote address or socket-open event. The device's v3
+                   * diagnostics independently sample the real PCM generation;
+                   * use that explicit evidence kind and keep local PCM byte
+                   * progress as the orthogonal conservation witness.
+                   */
+                  kind: "device-observed",
+                  progress,
+                },
+          });
+          await writePhysicalNetworkRunArtifact(autonomousNetworkArtifactPath, artifact);
+          console.log(
+            `physical_network_validity=${JSON.stringify({
+              artifactPath: autonomousNetworkArtifactPath,
+              classification: artifact.classification,
+              reasons: artifact.network.reasons,
+              verdict: artifact.network.verdict,
+            })}`,
+          );
+          if (terminalRunError === undefined && artifact.classification !== "valid") {
+            retainAutonomousFinalizationError(
+              new Error(
+                `Autonomous voice completed, but its network evidence was ` +
+                  `${artifact.classification}. See ${autonomousNetworkArtifactPath}.`,
+              ),
+              "The autonomous voice evidence failed more than once.",
+            );
+          } else if (
+            terminalRunError === undefined &&
+            autonomousFinalizationError === undefined &&
+            artifact.classification === "valid"
+          ) {
+            console.log(
+              `device_e2e_passed remote=true ` +
+                `physical=${options.exitAfterRemoteProof ? "skipped" : "true"} ` +
+                `mode=${options.remoteInterruptionProof ? "interruption" : "sequential"} ` +
+                `turns=${options.remoteInterruptionProof ? 2 : (options.remoteVoiceTurns ?? 1)} ` +
+                `network=valid recording=${recording?.outputDirectory} ` +
+                `acoustic=${autonomousAcousticRecording?.artifactPath}`,
+            );
+          }
+        } catch (error) {
+          retainAutonomousFinalizationError(
+            error,
+            "The autonomous voice run and its network artifact both failed.",
+          );
+        }
+      } else if (terminalRunError === undefined) {
+        retainAutonomousFinalizationError(
+          new Error("The autonomous voice run ended without complete network evidence."),
+          "The autonomous voice evidence failed more than once.",
+        );
+      }
+    }
     serialMonitor?.[Symbol.dispose]();
+    /*
+     * End the mount observer before closing the transport that owns its
+     * ProvisionTarget. Closing the server first looks exactly like an
+     * unexpected remote revocation, so the postmortem observer waits 25
+     * seconds for a replacement and prints a false reconnect error after an
+     * otherwise clean run. Peer disposal gives the observer the explicit
+     * `peer-disposed` terminal reason; the following transport teardown still
+     * closes the physical sockets, but it can no longer rewrite intentional
+     * harness shutdown into failure telemetry.
+     */
+    peer[Symbol.dispose]();
     tunnel?.[Symbol.dispose]();
     server[Symbol.dispose]();
     await directLanServer?.close();
     deterministicProvider?.[Symbol.dispose]();
-    peer[Symbol.dispose]();
+    if (conversationRecorder && !conversationRecorderClosed) {
+      try {
+        const recording = await conversationRecorder.close();
+        console.log(`pcm_conversation_recording_preserved=${JSON.stringify(recording)}`);
+      } catch (error) {
+        console.error("Unable to finalize the PCM conversation recording.", error);
+      }
+    }
+    if (terminalRunError === undefined && autonomousFinalizationError !== undefined) {
+      throw autonomousFinalizationError;
+    }
   }
+}
+
+async function createPhysicalNetworkArtifactPath(options: {
+  acousticArtifactPath: string | undefined;
+  outputRoot: string | undefined;
+}) {
+  if (!options.outputRoot && options.acousticArtifactPath) {
+    return join(dirname(options.acousticArtifactPath), "physical-network-validity.json");
+  }
+  const outputRoot = options.outputRoot ?? tmpdir();
+  await mkdir(outputRoot, { recursive: true });
+  const directory = await mkdtemp(join(outputRoot, "iterate-kit-network-"));
+  return join(directory, "physical-network-validity.json");
+}
+
+function normalizeSocketHost(remoteAddress: string) {
+  /*
+   * Node may render an IPv4 peer accepted by a dual-stack socket as an
+   * IPv4-mapped IPv6 literal. `/sbin/ping` needs the underlying station
+   * address, while retaining the original bridge event in the artifact keeps
+   * the transport provenance intact.
+   */
+  return remoteAddress.startsWith("::ffff:")
+    ? remoteAddress.slice("::ffff:".length)
+    : remoteAddress;
+}
+
+function physicalNetworkProgress(
+  baseline: DeviceRuntimeMetrics,
+  current: DeviceRuntimeMetrics | undefined,
+) {
+  const increasedFrames = (name: string) => {
+    const before = numericMetric(baseline, name);
+    const after = current ? numericMetric(current, name) : -1;
+    return before < 0 || after < before ? 0 : after - before;
+  };
+  return {
+    deviceToWorkerBytes: increasedFrames("uplink_sent") * pcmFrameBytes,
+    workerToDeviceBytes: increasedFrames("downlink_accepted") * pcmFrameBytes,
+  };
+}
+
+function snapshotPhysicalNetworkBridgeEvidence(
+  evidence: PhysicalNetworkBridgeEvidence,
+): PhysicalNetworkBridgeEvidence {
+  /*
+   * The server callbacks continue through outer teardown. Clone at the audio
+   * boundary so a normal post-proof close can never be rewritten into an
+   * in-window disconnect after the classifier has run.
+   */
+  return structuredClone(evidence);
 }
 
 async function readExistingConfigurationWhenNeeded(
@@ -1214,7 +2679,9 @@ export class DeviceRuntimeProbe {
   }
 
   observeCapabilityMetrics(value: unknown) {
-    this.#observe(parseKitMetricsCallback(value));
+    const observation = parseKitMetricsCallback(value);
+    this.#observe(observation);
+    return observation.kind === "metrics" ? observation.values : undefined;
   }
 
   observePlaybackMetrics(value: unknown) {

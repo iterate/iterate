@@ -1,0 +1,133 @@
+{
+  "assessment": {
+    "acceptance": "failed",
+    "normalizedMicrophoneTranscript": "the deploy iterate stick voice path is working the deploy iterate stick voice path is working",
+    "normalizedProviderTranscript": "the deploy iterate stick voice path is working",
+    "passed": false,
+    "reasons": [
+      "The independent microphone transcript did not match Grok's completed output transcript."
+    ],
+    "responseToBaselineMaximumRmsRatio": 6.106643961986723
+  },
+  "fixedThresholdAssessment": {
+    "activeThresholdRms": 120,
+    "activeWindowCount": 0,
+    "passed": false,
+    "reasons": ["The causal response contained 0 active 20 ms windows; expected at least 4."]
+  },
+  "microphoneStt": {
+    "durationSeconds": 9.627,
+    "rawEvents": [
+      "{\"type\":\"transcript.created\",\"id\":\"9015a577-6079-498e-b760-0e93981635bf\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"The deploy\",\"words\":[{\"text\":\"The\",\"start\":0.831,\"end\":0.892},{\"text\":\"deploy\",\"start\":0.932,\"end\":1.378}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":1.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"iterate stick voice path\",\"words\":[{\"text\":\"iterate\",\"start\":1.52,\"end\":1.926},{\"text\":\"stick\",\"start\":2.027,\"end\":2.25},{\"text\":\"voice\",\"start\":2.351,\"end\":2.615},{\"text\":\"path\",\"start\":2.676,\"end\":3.0}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":3.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"is working.\",\"words\":[{\"text\":\"is\",\"start\":3.081,\"end\":3.162},{\"text\":\"working.\",\"start\":3.243,\"end\":3.689}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":4.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"The deploy iterate\",\"words\":[{\"text\":\"The\",\"start\":5.128,\"end\":5.209},{\"text\":\"deploy\",\"start\":5.23,\"end\":5.696},{\"text\":\"iterate\",\"start\":5.797,\"end\":5.98}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":6.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"stick voice path is\",\"words\":[{\"text\":\"stick\",\"start\":6.324,\"end\":6.547},{\"text\":\"voice\",\"start\":6.689,\"end\":6.953},{\"text\":\"path\",\"start\":7.014,\"end\":7.318},{\"text\":\"is\",\"start\":7.318,\"end\":7.378}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":7.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"working.\",\"words\":[{\"text\":\"working.\",\"start\":7.601,\"end\":8.047}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":9.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"The deploy iterate stick voice path is working. The deploy iterate stick voice path is working.\",\"words\":[{\"text\":\"The\",\"start\":0.821,\"end\":0.901},{\"text\":\"deploy\",\"start\":0.941,\"end\":1.341},{\"text\":\"iterate\",\"start\":1.521,\"end\":1.941},{\"text\":\"stick\",\"start\":2.021,\"end\":2.262},{\"text\":\"voice\",\"start\":2.342,\"end\":2.622},{\"text\":\"path\",\"start\":2.662,\"end\":2.982},{\"text\":\"is\",\"start\":3.082,\"end\":3.162},{\"text\":\"working.\",\"start\":3.242,\"end\":3.683},{\"text\":\"The\",\"start\":5.124,\"end\":5.204},{\"text\":\"deploy\",\"start\":5.224,\"end\":5.664},{\"text\":\"iterate\",\"start\":5.844,\"end\":6.264},{\"text\":\"stick\",\"start\":6.264,\"end\":6.565},{\"text\":\"voice\",\"start\":6.665,\"end\":6.965},{\"text\":\"path\",\"start\":7.005,\"end\":7.305},{\"text\":\"is\",\"start\":7.425,\"end\":7.505},{\"text\":\"working.\",\"start\":7.585,\"end\":8.046}],\"is_final\":true,\"speech_final\":true,\"start\":0.0,\"duration\":9.627,\"language\":\"en\"}",
+      "{\"type\":\"transcript.done\",\"text\":\"\",\"words\":[],\"duration\":9.627}"
+    ],
+    "text": "The deploy iterate stick voice path is working. The deploy iterate stick voice path is working.",
+    "words": [
+      {
+        "text": "The",
+        "start": 0.821,
+        "end": 0.901
+      },
+      {
+        "text": "deploy",
+        "start": 0.941,
+        "end": 1.341
+      },
+      {
+        "text": "iterate",
+        "start": 1.521,
+        "end": 1.941
+      },
+      {
+        "text": "stick",
+        "start": 2.021,
+        "end": 2.262
+      },
+      {
+        "text": "voice",
+        "start": 2.342,
+        "end": 2.622
+      },
+      {
+        "text": "path",
+        "start": 2.662,
+        "end": 2.982
+      },
+      {
+        "text": "is",
+        "start": 3.082,
+        "end": 3.162
+      },
+      {
+        "text": "working.",
+        "start": 3.242,
+        "end": 3.683
+      },
+      {
+        "text": "The",
+        "start": 5.124,
+        "end": 5.204
+      },
+      {
+        "text": "deploy",
+        "start": 5.224,
+        "end": 5.664
+      },
+      {
+        "text": "iterate",
+        "start": 5.844,
+        "end": 6.264
+      },
+      {
+        "text": "stick",
+        "start": 6.264,
+        "end": 6.565
+      },
+      {
+        "text": "voice",
+        "start": 6.665,
+        "end": 6.965
+      },
+      {
+        "text": "path",
+        "start": 7.005,
+        "end": 7.305
+      },
+      {
+        "text": "is",
+        "start": 7.425,
+        "end": 7.505
+      },
+      {
+        "text": "working.",
+        "start": 7.585,
+        "end": 8.046
+      }
+    ]
+  },
+  "providerOutputTranscript": "The deploy iterate stick voice path is working.",
+  "relativeEnergy": {
+    "analysis": {
+      "activeWindowCount": 61,
+      "clippedSampleCount": 0,
+      "maximumRms": 42.73969173964642,
+      "p50Rms": 5.081727888556542,
+      "p95Rms": 23.297196719777254,
+      "p99Rms": 32.768061177514504,
+      "sampleCount": 462080,
+      "windowCount": 482,
+      "windowDurationMs": 20
+    },
+    "ambientMultiplier": 2.5,
+    "thresholdRms": 17.497209598961774
+  },
+  "schemaVersion": 1,
+  "transcriptionError": null
+}

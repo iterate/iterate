@@ -1,0 +1,18 @@
+{
+  "text": " You asked me to remember the code word lantern.",
+  "segments": [
+    {
+      "id": 0,
+      "seek": 0,
+      "start": 0.0,
+      "end": 2.9,
+      "text": " You asked me to remember the code word lantern.",
+      "tokens": [50365, 509, 2351, 385, 281, 1604, 264, 3089, 1349, 34031, 13, 50510],
+      "temperature": 0,
+      "avg_logprob": -0.30426865357619065,
+      "compression_ratio": 0.8867924528301887,
+      "no_speech_prob": 5.0509454257996467e-11
+    }
+  ],
+  "language": "en"
+}

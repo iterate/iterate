@@ -220,6 +220,100 @@ TEST_CASE(
 }
 
 /*
+ * The two-byte RFC 6455 header is not guaranteed to occupy one TLS read. A
+ * scheduler preemption, record boundary, or ordinary packet loss can expose
+ * byte one now and byte two on the next zero-timeout owner pass. Stock IDF's
+ * exact-size helper consumes byte one, converts the intervening no-progress
+ * result to `-1`, and forgets that byte. Our outer connection must then tear
+ * down both its parser and Cap'n Web/PCM generation because framing trust is
+ * genuinely gone. That was observed physically as synchronized control and
+ * PCM reconnects with `lastTransportErrno == -1` while Wi-Fi remained healthy.
+ *
+ * The lower parser therefore owns the partial header just as it already owns
+ * `bytes_remaining` for a partial payload. IDLE must preserve it, and the next
+ * pass must produce the original frame byte-for-byte. A test that merely maps
+ * `-1` to IDLE in the outer wrapper would pass over corrupted framing, so this
+ * test exercises the real IDF parser through recovery as well.
+ */
+TEST_CASE(
+    "zero header progress retains the current frame",
+    "[iterate][websocket_transport][reconnect]") {
+  websocket_fixture fixture({
+    upgrade_response(),
+    std::string{static_cast<char>(0x82)},
+    "",
+    std::string{static_cast<char>(0x04)},
+    "Test",
+  });
+  std::array<char, 4> payload{};
+
+  REQUIRE(esp_transport_read(
+      fixture.websocket.get(),
+      payload.data(),
+      static_cast<int>(payload.size()),
+      0) == 0);
+  REQUIRE(esp_transport_ws_get_read_opcode(
+      fixture.websocket.get()) == WS_TRANSPORT_OPCODES_NONE);
+
+  REQUIRE(esp_transport_read(
+      fixture.websocket.get(),
+      payload.data(),
+      static_cast<int>(payload.size()),
+      0) == static_cast<int>(payload.size()));
+  REQUIRE(std::string(payload.data(), payload.size()) ==
+      "Test");
+  REQUIRE(esp_transport_ws_get_read_opcode(
+      fixture.websocket.get()) == WS_TRANSPORT_OPCODES_BINARY);
+  REQUIRE(esp_transport_ws_get_read_payload_len(
+      fixture.websocket.get()) == static_cast<int>(payload.size()));
+  REQUIRE(esp_transport_ws_get_fin_flag(
+      fixture.websocket.get()));
+}
+
+/*
+ * Device PCM uses 640-byte frames, whose wire header includes the 16-bit
+ * extended length. Retaining only the two-byte base header would make the
+ * four-byte production header look safe in small fixtures while still losing
+ * framing whenever the extended length straddles TLS progress. Exercise the
+ * exact audio-frame size and stall after the first extended-length byte.
+ */
+TEST_CASE(
+    "zero progress inside a PCM extended header retains the frame",
+    "[iterate][websocket_transport][reconnect][pcm]") {
+  const std::string pcm_payload(640, 'P');
+  websocket_fixture fixture({
+    upgrade_response(),
+    std::string{
+      static_cast<char>(0x82),
+      static_cast<char>(0x7e),
+    },
+    std::string{static_cast<char>(0x02)},
+    "",
+    std::string{static_cast<char>(0x80)},
+    pcm_payload,
+  });
+  std::array<char, 640> payload{};
+
+  REQUIRE(esp_transport_read(
+      fixture.websocket.get(),
+      payload.data(),
+      static_cast<int>(payload.size()),
+      0) == 0);
+  REQUIRE(esp_transport_ws_get_read_opcode(
+      fixture.websocket.get()) == WS_TRANSPORT_OPCODES_NONE);
+
+  REQUIRE(esp_transport_read(
+      fixture.websocket.get(),
+      payload.data(),
+      static_cast<int>(payload.size()),
+      0) == static_cast<int>(payload.size()));
+  REQUIRE(std::string(payload.data(), payload.size()) ==
+      pcm_payload);
+  REQUIRE(esp_transport_ws_get_read_payload_len(
+      fixture.websocket.get()) == static_cast<int>(payload.size()));
+}
+
+/*
  * Finite PCM playback ends with the exact RFC 6455 bytes `82 00`: a final
  * empty BINARY frame. Its zero-byte payload is numerically identical to a
  * nonblocking read that made no progress, so the lower ESP-IDF parser must

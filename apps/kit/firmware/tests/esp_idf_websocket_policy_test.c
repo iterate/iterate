@@ -41,13 +41,10 @@ static void progress_gets_a_fair_but_zero_delay_followup(void) {
 /*
  * These are relationship tests rather than a duplicate table of preferred
  * numbers. A future tuner may change individual values for measured hardware,
- * but must not create an internally impossible policy: the barrier needs room
- * inside its window and the window needs room inside the freshness deadline.
- *
- * Independent "reasonable-looking" constants were rejected because their
- * interaction can let opaque lwIP/Wi-Fi backlog outlive the application sender
- * and become delayed speech after recovery. The realtime transport owns these
- * bounds as one policy, so any tuning change must preserve their ordering.
+ * but no-progress must remain inside total frame-send duration and captured
+ * speech must expire before a single trickling send can occupy the lane for its
+ * complete allowance. PONG is intentionally not part of these relationships:
+ * this hop cannot issue application-delivery credit.
  */
 static void latency_and_recovery_deadlines_remain_coherent(void) {
   assert(
@@ -64,41 +61,6 @@ static void latency_and_recovery_deadlines_remain_coherent(void) {
   assert(
       ITERATE_KIT_ESP_IDF_PCM_CAPTURE_MAX_AGE_MS <
       ITERATE_KIT_ESP_IDF_PCM_FRAME_MAX_SEND_DURATION_MS);
-  assert(
-      ITERATE_KIT_ESP_IDF_PCM_PEER_BARRIER_INTERVAL_FRAMES >
-      0);
-  assert(
-      ITERATE_KIT_ESP_IDF_PCM_PEER_BARRIER_INTERVAL_FRAMES <=
-      ITERATE_KIT_ESP_IDF_PCM_PEER_MAX_UNCONFIRMED_FRAMES);
-  assert(
-      ITERATE_KIT_ESP_IDF_PCM_PEER_MAX_UNCONFIRMED_FRAMES *
-          20 <=
-      ITERATE_KIT_ESP_IDF_PCM_CAPTURE_MAX_AGE_MS);
-  assert(
-      ITERATE_KIT_ESP_IDF_PCM_PEER_MAX_BARRIER_DELAY_MS <
-      ITERATE_KIT_ESP_IDF_PCM_PEER_MAX_CONFIRMATION_AGE_MS);
-  assert(
-      ITERATE_KIT_ESP_IDF_PCM_PEER_MAX_CONFIRMATION_AGE_MS <
-      ITERATE_KIT_ESP_IDF_PCM_CAPTURE_MAX_AGE_MS);
-  /*
-   * This guards a different incident from the active-audio deadline above.
-   * A silent half-open connection has no microphone frames with which to
-   * create a delivery barrier, so it needs an application-level heartbeat.
-   * We require a low-frequency probe (rather than continuously waking Wi-Fi)
-   * and a bounded total outage (rather than trusting TCP keepalive, which can
-   * prove only the transport peer and may take hours on embedded defaults).
-   *
-   * The lower socket is nonblocking. Benign TLS scheduling jitter is therefore
-   * expressed as measured no-progress time in the portable conductor, not as
-   * a second opaque timeout that can retain a frame after this policy expires.
-   */
-  assert(
-      ITERATE_KIT_ESP_IDF_PCM_IDLE_PEER_PROBE_INTERVAL_MS >=
-      1000);
-  assert(
-      ITERATE_KIT_ESP_IDF_PCM_IDLE_PEER_PROBE_INTERVAL_MS +
-          ITERATE_KIT_ESP_IDF_PCM_IDLE_PEER_PROBE_TIMEOUT_MS <=
-      5000);
   assert(
       ITERATE_KIT_ESP_IDF_WEBSOCKET_RETRY_INITIAL_MS <= 500);
   assert(

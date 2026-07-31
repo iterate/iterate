@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "provider": "openai",
+  "model": "gpt-4o-transcribe",
+  "source": "acoustic-room.wav",
+  "sourceProvenance": "MacBook Pro Microphone / BuiltInMicrophoneDevice / host-resolved CoreAudio identity",
+  "expectedGrokTranscript": "Exactly, the recorded network valid voice test passed.",
+  "transcript": "Exactly, the recorded network valid voice test passed.",
+  "assessment": {
+    "kind": "exact-normalized-match",
+    "passed": true
+  },
+  "usage": {
+    "type": "tokens",
+    "totalTokens": 125,
+    "inputTokens": 113,
+    "outputTokens": 12
+  }
+}

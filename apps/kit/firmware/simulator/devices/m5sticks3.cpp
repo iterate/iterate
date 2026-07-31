@@ -32,6 +32,7 @@ constexpr std::size_t subscriptionCapacity = 2U;
  */
 constexpr std::size_t screenUrlCapacity = 513U;
 constexpr std::size_t eventCapacity = 8U;
+constexpr std::size_t eventNotificationCapacity = 8U;
 
 struct Simulation {
   iterate::kit::simulator::CommonHardware common;
@@ -43,6 +44,8 @@ struct Simulation {
       [ITERATE_KIT_METRICS_DIAGNOSTICS_EXPRESSION_CAPACITY]{};
   iterate_kit_metrics_subscription subscriptions[subscriptionCapacity]{};
   iterate_kit_device_event eventStorage[eventCapacity]{};
+  iterate_kit_device_event_notification
+      eventNotifications[eventNotificationCapacity]{};
   iterate_kit_m5sticks3 m5sticks3{};
   iterate_kit_device profile{};
 
@@ -369,7 +372,9 @@ capnweb_status initialize(
   simulation.common.nowMilliseconds =
       simulation.common.startedMilliseconds;
   const iterate_kit_m5sticks3_options options{
-    {&simulation.common, iterate::kit::simulator::renderPng},
+    {&simulation.common,
+     iterate::kit::simulator::renderPng,
+     iterate::kit::simulator::changeColour},
     simulation.screenUrlScratch,
     sizeof(simulation.screenUrlScratch),
     {
@@ -384,6 +389,7 @@ capnweb_status initialize(
       25U,
       simulation.diagnosticsExpression,
       sizeof(simulation.diagnosticsExpression),
+      nullptr,
     },
     {
       ITERATE_KIT_AUDIO_PUSH_TO_TALK,
@@ -406,7 +412,18 @@ capnweb_status initialize(
     },
     simulation.eventStorage,
     eventCapacity,
+    {
+      session,
+      simulation.eventNotifications,
+      eventNotificationCapacity,
+      nullptr,
+    },
     {nullptr, nullptr},
+    /*
+     * Match the production target's reviewed eight-message control burst even
+     * though the host stdio transport itself has no small mailbox.
+     */
+    2U,
   };
   const capnweb_status status =
       iterate_kit_m5sticks3_init(&simulation.m5sticks3, &options);

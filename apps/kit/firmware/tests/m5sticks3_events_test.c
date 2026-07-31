@@ -28,6 +28,8 @@ enum {
   OUTPUT_CAPACITY = 64,
   EVENT_CAPACITY = 4,
   OBSERVED_CAPACITY = 8,
+  CAPTURE_CAPACITY = 32,
+  MESSAGE_CAPACITY = 1024,
 };
 
 struct fixture {
@@ -37,28 +39,73 @@ struct fixture {
   struct capnweb_export exports[CALL_CAPACITY];
   struct capnweb_import imports[CALL_CAPACITY];
   char output_buffer[OUTPUT_CAPACITY];
+  char captured[CAPTURE_CAPACITY][MESSAGE_CAPACITY];
+  size_t captured_lengths[CAPTURE_CAPACITY];
+  size_t captured_count;
+  bool message_open;
   char screen_url[64];
   struct iterate_kit_metrics_subscription subscription;
   struct iterate_kit_device_event event_storage[EVENT_CAPACITY];
+  struct iterate_kit_device_event_notification
+      event_notifications[EVENT_CAPACITY];
   struct iterate_kit_device_event observed[OBSERVED_CAPACITY];
   enum iterate_kit_status observed_results[OBSERVED_CAPACITY];
   size_t observed_count;
   size_t start_capture_count;
   size_t stop_capture_count;
   size_t capture_poll_count;
+  size_t screen_colour_count;
+  int last_screen_colour;
   struct iterate_kit_m5sticks3 device;
 };
 
-static enum capnweb_status discard_text(
+static enum capnweb_status capture_text(
     void *context,
     enum capnweb_text_fragment_kind kind,
     const char *data,
     size_t length) {
-  (void)context;
-  (void)kind;
-  (void)data;
-  (void)length;
-  return CAPNWEB_OK;
+  struct fixture *fixture = context;
+  size_t *captured_length;
+  if (kind == CAPNWEB_TEXT_BEGIN) {
+    if (fixture->message_open ||
+        fixture->captured_count >= CAPTURE_CAPACITY) {
+      return CAPNWEB_E_STATE;
+    }
+    fixture->message_open = true;
+    fixture->captured_lengths[fixture->captured_count] = 0U;
+    return CAPNWEB_OK;
+  }
+  if (kind == CAPNWEB_TEXT_DATA) {
+    if (!fixture->message_open ||
+        data == NULL ||
+        length == 0U) {
+      return CAPNWEB_E_STATE;
+    }
+    captured_length =
+        &fixture->captured_lengths[fixture->captured_count];
+    if (length >= MESSAGE_CAPACITY ||
+        *captured_length >= MESSAGE_CAPACITY - length) {
+      return CAPNWEB_E_LIMIT;
+    }
+    memcpy(
+        fixture->captured[fixture->captured_count] + *captured_length,
+        data,
+        length);
+    *captured_length += length;
+    return CAPNWEB_OK;
+  }
+  if (kind == CAPNWEB_TEXT_END) {
+    if (!fixture->message_open) {
+      return CAPNWEB_E_STATE;
+    }
+    captured_length =
+        &fixture->captured_lengths[fixture->captured_count];
+    fixture->captured[fixture->captured_count][*captured_length] = '\0';
+    ++fixture->captured_count;
+    fixture->message_open = false;
+    return CAPNWEB_OK;
+  }
+  return CAPNWEB_E_INVALID_ARGUMENT;
 }
 
 static enum iterate_kit_status render_png(
@@ -66,6 +113,14 @@ static enum iterate_kit_status render_png(
   (void)context;
   (void)url;
   (void)length;
+  return ITERATE_KIT_OK;
+}
+
+static enum iterate_kit_status change_colour(
+    void *context, enum iterate_kit_screen_colour colour) {
+  struct fixture *fixture = context;
+  ++fixture->screen_colour_count;
+  fixture->last_screen_colour = colour;
   return ITERATE_KIT_OK;
 }
 
@@ -143,7 +198,7 @@ static void fixture_init(struct fixture *fixture) {
   struct capnweb_session_options session_options;
   memset(fixture, 0, sizeof(*fixture));
   device_options = (struct iterate_kit_m5sticks3_options){
-    .screen = {fixture, render_png},
+    .screen = {fixture, render_png, change_colour},
     .screen_url_scratch = fixture->screen_url,
     .screen_url_scratch_size = sizeof(fixture->screen_url),
     .metrics = {
@@ -154,6 +209,7 @@ static void fixture_init(struct fixture *fixture) {
       1000U,
       NULL,
       0U,
+      NULL,
     },
     .audio = {
       ITERATE_KIT_AUDIO_PUSH_TO_TALK,
@@ -176,17 +232,24 @@ static void fixture_init(struct fixture *fixture) {
     },
     .event_storage = fixture->event_storage,
     .event_capacity = EVENT_CAPACITY,
+    .event_stream = {
+      &fixture->session,
+      fixture->event_notifications,
+      EVENT_CAPACITY,
+      NULL,
+    },
     .event_observer = {
       fixture,
       observe_event,
     },
+    .maximum_in_flight_callbacks = 2U,
   };
   assert(
       iterate_kit_m5sticks3_init(
           &fixture->device, &device_options) == CAPNWEB_OK);
   session_options = (struct capnweb_session_options){
     iterate_kit_m5sticks3_capability(&fixture->device),
-    discard_text,
+    capture_text,
     fixture,
     fixture->pending_calls,
     CALL_CAPACITY,
@@ -212,6 +275,181 @@ static void receive(struct fixture *fixture, const char *message) {
 }
 
 /*
+ * `changeColour` is intentionally a tiny scalar capability: it proves that a
+ * production OS mount can invoke real hardware without involving image fetch,
+ * heap allocation, or the high-volume PCM lane. Both accepted literals and a
+ * rejected third value pin the public union instead of relying on a permissive
+ * string-to-colour conversion in the display driver.
+ */
+static void changes_only_the_two_public_screen_colours(void) {
+  struct fixture fixture;
+  fixture_init(&fixture);
+
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"changeColour\"],[\"red\"]]]");
+  receive(&fixture, "[\"pull\",1]");
+  assert(fixture.screen_colour_count == 1U);
+  assert(fixture.last_screen_colour == 0);
+  assert(strcmp(fixture.captured[0], "[\"resolve\",1,true]") == 0);
+
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"changeColour\"],[\"green\"]]]");
+  receive(&fixture, "[\"pull\",2]");
+  assert(fixture.screen_colour_count == 2U);
+  assert(fixture.last_screen_colour == 1);
+
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"changeColour\"],[\"blue\"]]]");
+  receive(&fixture, "[\"pull\",3]");
+  assert(fixture.screen_colour_count == 2U);
+  assert(strstr(fixture.captured[2], "expected red or green") != NULL);
+
+  capnweb_session_close(&fixture.session);
+  iterate_kit_peer_session_ended(&fixture.device.peer);
+  assert(
+      iterate_kit_m5sticks3_close(&fixture.device).status ==
+      ITERATE_KIT_POLL_OK);
+}
+
+/*
+ * A userspace `/pcm` generation owns the device-event callback that gives
+ * microphone frames their push-to-talk meaning. The prior Worker generation
+ * can disappear without closing the separate long-lived device control
+ * socket, so waiting only for Cap'n Web session teardown leaves its idle
+ * callback in the one-subscriber slot. Production then rejected every
+ * reconnect with HTTP 503 while the physical button was already held.
+ *
+ * A fresh subscription is therefore replacement of the one logical userspace
+ * owner, not fanout. This test deliberately leaves the first callback idle,
+ * replaces it on the same control session, and proves the old import is
+ * released before only the new callback receives a current-state snapshot.
+ * Replacing an in-flight callback remains forbidden because its completion
+ * still points at this stream and could otherwise mutate the new owner.
+ */
+static void fresh_subscription_replaces_idle_pcm_generation(void) {
+  struct fixture fixture;
+  size_t captured_before_delivery;
+  fixture_init(&fixture);
+
+  assert(
+      iterate_kit_m5sticks3_publish_conversation(
+          &fixture.device,
+          true,
+          ITERATE_KIT_DEVICE_EVENT_SOURCE_PHYSICAL) ==
+      ITERATE_KIT_OK);
+  assert(
+      iterate_kit_m5sticks3_poll(&fixture.device, 0U).status ==
+      ITERATE_KIT_POLL_OK);
+
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"subscribeToEvents\"],"
+      "[[\"export\",-1]]]]");
+  receive(&fixture, "[\"pull\",1]");
+  assert(fixture.device.event_stream.occupied);
+  assert(fixture.device.event_stream.callback.id == -1);
+  assert(fixture.device.event_stream.queue_count == 1U);
+
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"subscribeToEvents\"],"
+      "[[\"export\",-2]]]]");
+  receive(&fixture, "[\"pull\",2]");
+
+  assert(fixture.device.event_stream.occupied);
+  assert(fixture.device.event_stream.callback.id == -2);
+  assert(fixture.device.event_stream.queue_count == 1U);
+  assert(fixture.captured_count == 3U);
+  assert(strcmp(fixture.captured[1], "[\"release\",-1,1]") == 0);
+  assert(strcmp(fixture.captured[2], "[\"resolve\",2,null]") == 0);
+
+  captured_before_delivery = fixture.captured_count;
+  assert(
+      iterate_kit_m5sticks3_poll(&fixture.device, 1U).status ==
+      ITERATE_KIT_POLL_OK);
+  assert(fixture.captured_count == captured_before_delivery + 2U);
+  assert(
+      strstr(
+          fixture.captured[captured_before_delivery],
+          "[\"pipeline\",-2,[]") != NULL);
+  assert(
+      strstr(
+          fixture.captured[captured_before_delivery],
+          "\"active\":false") != NULL);
+  assert(
+      strstr(
+          fixture.captured[captured_before_delivery],
+          "\"type\":\"pushToTalk.stopped\"") != NULL);
+  assert(
+      strstr(
+          fixture.captured[captured_before_delivery],
+          "\"snapshot\":true") != NULL);
+  assert(
+      strstr(
+          fixture.captured[captured_before_delivery],
+          "[\"pipeline\",-1,[]") == NULL);
+
+  capnweb_session_close(&fixture.session);
+  iterate_kit_peer_session_ended(&fixture.device.peer);
+  assert(
+      iterate_kit_m5sticks3_close(&fixture.device).status ==
+      ITERATE_KIT_POLL_OK);
+}
+
+/*
+ * An event callback remains borrowed by Cap'n Web until its resolution
+ * arrives. A reconnect racing that window must receive bounded backpressure,
+ * not steal the slot: the old completion stores only a stream pointer and
+ * would otherwise clear the replacement callback when it resolves. This
+ * synthetic race protects the ownership half of the replacement policy while
+ * the idle-replacement test above protects recovery.
+ */
+static void in_flight_event_callback_cannot_be_replaced(void) {
+  struct fixture fixture;
+  size_t captured_before_replacement;
+  fixture_init(&fixture);
+
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"subscribeToEvents\"],"
+      "[[\"export\",-1]]]]");
+  receive(&fixture, "[\"pull\",1]");
+  assert(
+      iterate_kit_m5sticks3_poll(&fixture.device, 0U).status ==
+      ITERATE_KIT_POLL_OK);
+  assert(fixture.device.event_stream.call_in_flight);
+  captured_before_replacement = fixture.captured_count;
+
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"subscribeToEvents\"],"
+      "[[\"export\",-2]]]]");
+  receive(&fixture, "[\"pull\",2]");
+
+  assert(fixture.device.event_stream.occupied);
+  assert(fixture.device.event_stream.call_in_flight);
+  assert(fixture.device.event_stream.callback.id == -1);
+  assert(fixture.captured_count == captured_before_replacement + 2U);
+  assert(
+      strcmp(
+          fixture.captured[captured_before_replacement],
+          "[\"release\",-2,1]") == 0);
+  assert(
+      strstr(
+          fixture.captured[captured_before_replacement + 1U],
+          "device event subscription limit reached") != NULL);
+
+  capnweb_session_close(&fixture.session);
+  iterate_kit_peer_session_ended(&fixture.device.peer);
+  assert(
+      iterate_kit_m5sticks3_close(&fixture.device).status ==
+      ITERATE_KIT_POLL_OK);
+}
+
+/*
  * A button edge and a remote Cap'n Web call must mean the same thing without
  * either callback touching the microphone driver inline. Direct work in the
  * GPIO/dispatch path was rejected because driver latency or reentrancy would
@@ -219,13 +457,13 @@ static void receive(struct fixture *fixture, const char *message) {
  * publish, the device owner applies transitions during poll, provenance is
  * retained for diagnostics, and explicit close—not session loss—owns teardown.
  */
-static void remote_and_physical_inputs_share_one_deferred_event_path(void) {
+static void remote_and_physical_conversation_controls_share_one_event_path(void) {
   struct fixture fixture;
   struct iterate_kit_device_event_queue_metrics metrics;
   fixture_init(&fixture);
 
   assert(
-      iterate_kit_m5sticks3_publish_push_to_talk(
+      iterate_kit_m5sticks3_publish_conversation(
           &fixture.device,
           true,
           ITERATE_KIT_DEVICE_EVENT_SOURCE_PHYSICAL) ==
@@ -235,33 +473,37 @@ static void remote_and_physical_inputs_share_one_deferred_event_path(void) {
   assert(
       iterate_kit_m5sticks3_poll(&fixture.device, 0U).status ==
       ITERATE_KIT_POLL_OK);
-  assert(iterate_kit_m5sticks3_is_capturing(&fixture.device));
-  assert(fixture.start_capture_count == 1U);
+  assert(iterate_kit_m5sticks3_is_conversation_active(&fixture.device));
+  assert(!iterate_kit_m5sticks3_is_capturing(&fixture.device));
+  assert(fixture.start_capture_count == 0U);
 
   receive(
       &fixture,
-      "[\"push\",[\"pipeline\",0,[\"pushToTalk\",\"stop\"],[]]]");
+      "[\"push\",[\"pipeline\",0,[\"conversation\",\"hangUp\"],[]]]");
   receive(&fixture, "[\"pull\",1]");
-  assert(iterate_kit_m5sticks3_is_capturing(&fixture.device));
+  assert(iterate_kit_m5sticks3_is_conversation_active(&fixture.device));
+  assert(!iterate_kit_m5sticks3_is_capturing(&fixture.device));
   assert(fixture.stop_capture_count == 0U);
   assert(
       iterate_kit_m5sticks3_poll(&fixture.device, 1U).status ==
       ITERATE_KIT_POLL_OK);
+  assert(!iterate_kit_m5sticks3_is_conversation_active(&fixture.device));
   assert(!iterate_kit_m5sticks3_is_capturing(&fixture.device));
-  assert(fixture.stop_capture_count == 1U);
+  assert(fixture.stop_capture_count == 0U);
 
   receive(
       &fixture,
-      "[\"push\",[\"pipeline\",0,[\"pushToTalk\",\"start\"],[]]]");
+      "[\"push\",[\"pipeline\",0,[\"conversation\",\"start\"],[]]]");
   receive(&fixture, "[\"pull\",2]");
   assert(
       iterate_kit_m5sticks3_poll(&fixture.device, 2U).status ==
       ITERATE_KIT_POLL_OK);
-  assert(iterate_kit_m5sticks3_is_capturing(&fixture.device));
-  assert(fixture.start_capture_count == 2U);
+  assert(iterate_kit_m5sticks3_is_conversation_active(&fixture.device));
+  assert(!iterate_kit_m5sticks3_is_capturing(&fixture.device));
+  assert(fixture.start_capture_count == 0U);
 
   assert(
-      iterate_kit_m5sticks3_publish_push_to_talk(
+      iterate_kit_m5sticks3_publish_conversation(
           &fixture.device,
           false,
           ITERATE_KIT_DEVICE_EVENT_SOURCE_PHYSICAL) ==
@@ -269,8 +511,9 @@ static void remote_and_physical_inputs_share_one_deferred_event_path(void) {
   assert(
       iterate_kit_m5sticks3_poll(&fixture.device, 3U).status ==
       ITERATE_KIT_POLL_OK);
+  assert(!iterate_kit_m5sticks3_is_conversation_active(&fixture.device));
   assert(!iterate_kit_m5sticks3_is_capturing(&fixture.device));
-  assert(fixture.stop_capture_count == 2U);
+  assert(fixture.stop_capture_count == 0U);
 
   assert(fixture.observed_count == 4U);
   assert(
@@ -304,7 +547,124 @@ static void remote_and_physical_inputs_share_one_deferred_event_path(void) {
       ITERATE_KIT_POLL_OK);
 }
 
+/*
+ * OS deliberately represents a flattened live mount as one
+ * `invokeCapability({path,args})` call. This is not an alternate device API:
+ * it is the adapter that prevents the host from awaiting an intermediate
+ * Cap'n Web path proxy and accidentally calling `conversation` without
+ * `start`.
+ * Keep this production-shaped frame in the native suite because the direct
+ * simulator path `device.conversation.start()` cannot expose that integration
+ * mismatch. The adapter must still feed the same deferred event path; doing
+ * microphone work inline here would violate the PCM-priority design.
+ */
+static void flattened_host_invocation_reaches_the_static_method_table(void) {
+  struct fixture fixture;
+  fixture_init(&fixture);
+
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"invokeCapability\"],"
+      "[{\"args\":[[]],\"flattenNestedPath\":true,"
+      "\"path\":[[\"conversation\",\"start\"]]}]]]");
+  receive(&fixture, "[\"pull\",1]");
+
+  assert(!iterate_kit_m5sticks3_is_capturing(&fixture.device));
+  assert(fixture.start_capture_count == 0U);
+  assert(
+      iterate_kit_m5sticks3_poll(&fixture.device, 0U).status ==
+      ITERATE_KIT_POLL_OK);
+  assert(iterate_kit_m5sticks3_is_conversation_active(&fixture.device));
+  assert(!iterate_kit_m5sticks3_is_capturing(&fixture.device));
+  assert(fixture.start_capture_count == 0U);
+  assert(fixture.observed_count == 1U);
+  assert(
+      fixture.observed[0].source ==
+      ITERATE_KIT_DEVICE_EVENT_SOURCE_REMOTE);
+
+  capnweb_session_close(&fixture.session);
+  iterate_kit_peer_session_ended(&fixture.device.peer);
+  assert(
+      iterate_kit_m5sticks3_close(&fixture.device).status ==
+      ITERATE_KIT_POLL_OK);
+}
+
+/*
+ * A call and a microphone turn are deliberately different state machines.
+ * The top button (or conversation capability) owns the expensive `/pcm`
+ * lifetime, while the front button (or pushToTalk capability) alone owns the
+ * microphone. Collapsing these states previously turned provider VAD on and
+ * made every call capture continuously, which violated the product decision
+ * and made echo handling unavoidable.
+ *
+ * This test also pins the awkward but safety-critical edges: a PTT press
+ * outside a call is rejected without opening the mic, and hanging up while the
+ * front button is held must synchronously stop capture before the socket owner
+ * is allowed to tear the conversation down.
+ */
+static void conversation_lifetime_contains_manual_push_to_talk_turns(void) {
+  struct fixture fixture;
+  fixture_init(&fixture);
+
+  assert(
+      iterate_kit_m5sticks3_publish_push_to_talk(
+          &fixture.device,
+          true,
+          ITERATE_KIT_DEVICE_EVENT_SOURCE_PHYSICAL) ==
+      ITERATE_KIT_OK);
+  assert(
+      iterate_kit_m5sticks3_poll(&fixture.device, 0U).status ==
+      ITERATE_KIT_POLL_DRIVER_ERROR);
+  assert(!iterate_kit_m5sticks3_is_conversation_active(&fixture.device));
+  assert(!iterate_kit_m5sticks3_is_capturing(&fixture.device));
+
+  assert(
+      iterate_kit_m5sticks3_publish_conversation(
+          &fixture.device,
+          true,
+          ITERATE_KIT_DEVICE_EVENT_SOURCE_PHYSICAL) ==
+      ITERATE_KIT_OK);
+  assert(
+      iterate_kit_m5sticks3_poll(&fixture.device, 1U).status ==
+      ITERATE_KIT_POLL_OK);
+  assert(iterate_kit_m5sticks3_is_conversation_active(&fixture.device));
+  assert(!iterate_kit_m5sticks3_is_capturing(&fixture.device));
+  assert(fixture.start_capture_count == 0U);
+
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"pushToTalk\",\"start\"],[]]]");
+  receive(&fixture, "[\"pull\",1]");
+  assert(
+      iterate_kit_m5sticks3_poll(&fixture.device, 2U).status ==
+      ITERATE_KIT_POLL_OK);
+  assert(iterate_kit_m5sticks3_is_capturing(&fixture.device));
+  assert(fixture.start_capture_count == 1U);
+
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"conversation\",\"hangUp\"],[]]]");
+  receive(&fixture, "[\"pull\",2]");
+  assert(
+      iterate_kit_m5sticks3_poll(&fixture.device, 3U).status ==
+      ITERATE_KIT_POLL_OK);
+  assert(!iterate_kit_m5sticks3_is_conversation_active(&fixture.device));
+  assert(!iterate_kit_m5sticks3_is_capturing(&fixture.device));
+  assert(fixture.stop_capture_count == 1U);
+
+  capnweb_session_close(&fixture.session);
+  iterate_kit_peer_session_ended(&fixture.device.peer);
+  assert(
+      iterate_kit_m5sticks3_close(&fixture.device).status ==
+      ITERATE_KIT_POLL_OK);
+}
+
 int main(void) {
-  remote_and_physical_inputs_share_one_deferred_event_path();
+  changes_only_the_two_public_screen_colours();
+  conversation_lifetime_contains_manual_push_to_talk_turns();
+  remote_and_physical_conversation_controls_share_one_event_path();
+  flattened_host_invocation_reaches_the_static_method_table();
+  fresh_subscription_replaces_idle_pcm_generation();
+  in_flight_event_callback_cannot_be_replaced();
   return 0;
 }

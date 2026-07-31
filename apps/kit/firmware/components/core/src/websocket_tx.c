@@ -10,16 +10,15 @@
 /*
  * All PCM and control bytes for one socket pass through this single-owner
  * state machine. That is what makes RFC 6455 ordering testable: a partially
- * written data frame cannot be interleaved with PING/PONG/CLOSE, but the next
+ * written data frame cannot be interleaved with PONG/CLOSE, but the next
  * frame chosen at a boundary must respect protocol urgency.
  *
  * We retain one active materialized frame plus two coalescing control
- * obligations. One slot is for local delivery/liveness PING or CLOSE; the
- * other is the mandatory reply to the peer's latest PING. A single shared slot
- * can deadlock liveness when our PING is parked during EAGAIN. An unbounded
- * control queue preserves obsolete keepalives and consumes RAM during exactly
- * the network fault where memory must stay fixed. CLOSE supersedes unsent work;
- * reply PONG precedes local PING; neither may interrupt an active frame.
+ * obligations. One slot is for CLOSE; the other is the mandatory reply to the
+ * peer's latest PING. An unbounded control queue consumes RAM during exactly
+ * the network fault where memory must stay fixed. CLOSE supersedes an unsent
+ * PONG; neither control frame may interrupt an active data frame. There is no
+ * client PING path because hop-level echo cannot prove provider receipt.
  *
  * Every public operation performs at most one raw nonblocking write and never
  * allocates, sleeps, retries, or logs. The conductor owns repeated scheduling
@@ -67,7 +66,6 @@ static bool data_opcode(
 static bool control_opcode(
     enum iterate_kit_websocket_opcode opcode) {
   return opcode == ITERATE_KIT_WEBSOCKET_CLOSE ||
-      opcode == ITERATE_KIT_WEBSOCKET_PING ||
       opcode == ITERATE_KIT_WEBSOCKET_PONG;
 }
 
@@ -94,9 +92,9 @@ static void publish_pending_wire_bytes(
     pending =
         tx->frame.frame_size - tx->frame.frame_offset;
   }
-  if (tx->control_pending) {
+  if (tx->close_pending) {
     pending += ITERATE_KIT_WEBSOCKET_CLIENT_FRAME_BYTES(
-        tx->pending_control_payload_size);
+        tx->pending_close_payload_size);
   }
   if (tx->reply_pong_pending) {
     pending += ITERATE_KIT_WEBSOCKET_CLIENT_FRAME_BYTES(
@@ -115,10 +113,9 @@ void iterate_kit_websocket_tx_reset(
   }
   iterate_kit_websocket_frame_writer_reset(&tx->frame);
   clear_active(tx);
-  tx->pending_control_opcode = ITERATE_KIT_WEBSOCKET_PONG;
-  tx->pending_control_payload_size = 0U;
+  tx->pending_close_payload_size = 0U;
   tx->pending_reply_pong_payload_size = 0U;
-  tx->control_pending = false;
+  tx->close_pending = false;
   tx->reply_pong_pending = false;
   publish_pending_wire_bytes(tx);
 }
@@ -232,7 +229,7 @@ iterate_kit_websocket_tx_send(
       ITERATE_KIT_WEBSOCKET_TX_ACTIVE_CONTROL ||
       (tx->active_kind ==
            ITERATE_KIT_WEBSOCKET_TX_ACTIVE_NONE &&
-       (tx->control_pending || tx->reply_pong_pending))) {
+       (tx->close_pending || tx->reply_pong_pending))) {
     return ITERATE_KIT_WEBSOCKET_TX_DEFERRED;
   }
   if (tx->active_kind ==
@@ -274,18 +271,15 @@ enum iterate_kit_status iterate_kit_websocket_tx_queue_control(
   }
 
   /*
-   * Once CLOSE owns either the active frame or the local-policy slot, adding
-   * liveness traffic cannot improve the connection. Rejecting it also makes
-   * shutdown's boundedness explicit to callers instead of silently retaining
-   * work which can never be useful.
+   * Once CLOSE owns either the active frame or pending slot, a later PONG
+   * cannot make the generation useful again. Reject it so shutdown remains a
+   * bounded terminal transition.
    */
   if ((tx->active_kind ==
            ITERATE_KIT_WEBSOCKET_TX_ACTIVE_CONTROL &&
        tx->active_control_opcode ==
            ITERATE_KIT_WEBSOCKET_CLOSE) ||
-      (tx->control_pending &&
-       tx->pending_control_opcode ==
-           ITERATE_KIT_WEBSOCKET_CLOSE &&
+      (tx->close_pending &&
        opcode != ITERATE_KIT_WEBSOCKET_CLOSE)) {
     return ITERATE_KIT_BACKPRESSURE;
   }
@@ -308,22 +302,17 @@ enum iterate_kit_status iterate_kit_websocket_tx_queue_control(
    * frame after bytes have reached the stream—the RFC 6455 frame must remain
    * contiguous—but the close will be selected immediately afterward.
    */
-  if (opcode == ITERATE_KIT_WEBSOCKET_CLOSE) {
-    tx->reply_pong_pending = false;
-    tx->pending_reply_pong_payload_size = 0U;
-  } else if (tx->control_pending) {
-    return ITERATE_KIT_BACKPRESSURE;
-  }
+  tx->reply_pong_pending = false;
+  tx->pending_reply_pong_payload_size = 0U;
 
   if (payload_size > 0U) {
     memcpy(
-        tx->pending_control_payload,
+        tx->pending_close_payload,
         payload,
         payload_size);
   }
-  tx->pending_control_opcode = opcode;
-  tx->pending_control_payload_size = payload_size;
-  tx->control_pending = true;
+  tx->pending_close_payload_size = payload_size;
+  tx->close_pending = true;
   publish_pending_wire_bytes(tx);
   return ITERATE_KIT_OK;
 }
@@ -342,31 +331,27 @@ iterate_kit_websocket_tx_poll_control(
       ITERATE_KIT_WEBSOCKET_TX_ACTIVE_CONTROL) {
     return flush_active(tx);
   }
-  if (!tx->control_pending && !tx->reply_pong_pending) {
+  if (!tx->close_pending && !tx->reply_pong_pending) {
     return ITERATE_KIT_WEBSOCKET_TX_IDLE;
   }
 
   /*
-   * A queued CLOSE is the only work allowed to discard a reply PONG. In every
-   * live connection, reply PONG precedes our own PING: the former is a
-   * protocol obligation with a peer-owned deadline, whereas the latter is a
-   * probe whose deadline we control.
+   * A queued CLOSE is the only work allowed to discard a reply PONG. Once
+   * shutdown is requested, replying to an earlier keepalive cannot restore the
+   * generation and would only delay its bounded close transition.
    */
   const bool send_reply_pong =
-      tx->reply_pong_pending &&
-      !(tx->control_pending &&
-        tx->pending_control_opcode ==
-            ITERATE_KIT_WEBSOCKET_CLOSE);
+      tx->reply_pong_pending && !tx->close_pending;
   const enum iterate_kit_websocket_opcode opcode =
       send_reply_pong
       ? ITERATE_KIT_WEBSOCKET_PONG
-      : tx->pending_control_opcode;
+      : ITERATE_KIT_WEBSOCKET_CLOSE;
   const uint8_t *payload = send_reply_pong
       ? tx->pending_reply_pong_payload
-      : tx->pending_control_payload;
+      : tx->pending_close_payload;
   const size_t payload_size = send_reply_pong
       ? tx->pending_reply_pong_payload_size
-      : tx->pending_control_payload_size;
+      : tx->pending_close_payload_size;
 
   if (begin_frame(
           tx,
@@ -382,8 +367,8 @@ iterate_kit_websocket_tx_poll_control(
     tx->reply_pong_pending = false;
     tx->pending_reply_pong_payload_size = 0U;
   } else {
-    tx->control_pending = false;
-    tx->pending_control_payload_size = 0U;
+    tx->close_pending = false;
+    tx->pending_close_payload_size = 0U;
   }
   publish_pending_wire_bytes(tx);
   return flush_active(tx);

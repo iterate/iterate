@@ -36,7 +36,7 @@ const ringDiagnosticsSchema = z.strictObject({
  * contract.
  */
 const controlDiagnosticsSchema = z.strictObject({
-  schemaVersion: z.literal(2),
+  schemaVersion: z.literal(3),
   producedAtMs: z.number().int().nonnegative().safe(),
   control: z.strictObject({
     websocketStartAttempts: uint32,
@@ -69,6 +69,19 @@ const controlDiagnosticsSchema = z.strictObject({
     outboxDiscarded: uint32,
     inbox: ringDiagnosticsSchema,
     outbox: ringDiagnosticsSchema,
+  }),
+  /*
+   * RSSI is optional because ESP-IDF can fail the instantaneous AP-info query
+   * while the transport still reports association. Keeping the field absent
+   * preserves provenance; coercing failure into a number would manufacture
+   * evidence during exactly the reconnect window this snapshot diagnoses.
+   */
+  network: z.strictObject({
+    wifiConnected: z.boolean(),
+    wifiRssiDbm: int32.optional(),
+    pcmWebsocketConnections: uint32,
+    pcmWebsocketDisconnects: uint32,
+    pcmWebsocketErrors: uint32,
   }),
 });
 

@@ -1,0 +1,18 @@
+{
+  "text": " 1. Interruption successful.",
+  "segments": [
+    {
+      "id": 0,
+      "seek": 0,
+      "start": 0.0,
+      "end": 2.0,
+      "text": " 1. Interruption successful.",
+      "tokens": [50365, 502, 13, 5751, 11266, 4406, 13, 50465],
+      "temperature": 0,
+      "avg_logprob": -0.5492387347751193,
+      "compression_ratio": 0.7714285714285715,
+      "no_speech_prob": 1.3558961895962507e-12
+    }
+  ],
+  "language": "en"
+}

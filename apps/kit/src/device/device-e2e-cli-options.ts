@@ -11,10 +11,14 @@ export interface DeviceE2eCliOptions {
   gateway: string;
   grokPlaybackOnly: boolean;
   mountTimeoutMs: number;
+  networkDeviceHost?: string;
   playbackDurationMs: number;
   playbackEndurance: boolean;
   playbackRecoveryProof: boolean;
+  physicalVoiceTurns?: number;
   remoteHoldMs: number;
+  remoteInterruptionProof: boolean;
+  remoteVoiceTurns?: number;
   tunnelName?: string;
   voice: boolean;
 }
@@ -44,6 +48,9 @@ export function parseDeviceE2eCliOptions(
   let flash = true;
   let grokPlaybackOnly = false;
   let mountTimeoutMs = 90_000;
+  let networkDeviceHost = environment.ITERATE_KIT_NETWORK_DEVICE_HOST?.trim()
+    ? normalizeHost(environment.ITERATE_KIT_NETWORK_DEVICE_HOST, "network device host")
+    : undefined;
   let deterministicPlayback: DeviceE2eCliOptions["deterministicPlayback"];
   let deviceClockedStartupFrames: number | undefined;
   let directLanHost = environment.ITERATE_KIT_DIRECT_LAN_HOST?.trim() || undefined;
@@ -54,13 +61,19 @@ export function parseDeviceE2eCliOptions(
   let playbackDurationMs = 3_000;
   let playbackEndurance = false;
   let playbackRecoveryProof = false;
+  let physicalVoiceTurns: number | undefined;
   let remoteHoldMs = 500;
+  let remoteInterruptionProof = false;
+  let remoteVoiceTurns: number | undefined;
   let tunnelName = environment.CAPTUN_TUNNEL_NAME?.trim() || undefined;
   let voice = false;
   let sawVoice = false;
   let sawControlChurnHz = false;
   let sawMountTimeout = false;
+  let sawNetworkDeviceHost = false;
+  let sawPhysicalVoiceTurns = false;
   let sawRemoteHold = false;
+  let sawRemoteVoiceTurns = false;
   let sawToneDuration = false;
   let sawTunnelName = false;
   let sawDirectLanHost = false;
@@ -79,7 +92,7 @@ export function parseDeviceE2eCliOptions(
       if (sawDirectLanHost) {
         throw new Error("Option --direct-lan-host was provided more than once.");
       }
-      directLanHost = normalizeDirectLanHost(takeValue(args, ++index, option));
+      directLanHost = normalizeHost(takeValue(args, ++index, option), "direct LAN host");
       sawDirectLanHost = true;
       continue;
     }
@@ -136,6 +149,42 @@ export function parseDeviceE2eCliOptions(
       if (sawVoice) throw new Error("Option --voice was provided more than once.");
       voice = true;
       sawVoice = true;
+      continue;
+    }
+    if (option === "--physical-voice-turns") {
+      if (sawPhysicalVoiceTurns) {
+        throw new Error("Option --physical-voice-turns was provided more than once.");
+      }
+      physicalVoiceTurns = parseBoundedInteger(
+        takeValue(args, ++index, option),
+        "physical voice turns",
+        1,
+        20,
+      );
+      voice = true;
+      sawPhysicalVoiceTurns = true;
+      continue;
+    }
+    if (option === "--remote-voice-turns") {
+      if (sawRemoteVoiceTurns) {
+        throw new Error("Option --remote-voice-turns was provided more than once.");
+      }
+      remoteVoiceTurns = parseBoundedInteger(
+        takeValue(args, ++index, option),
+        "remote voice turns",
+        1,
+        20,
+      );
+      voice = true;
+      sawRemoteVoiceTurns = true;
+      continue;
+    }
+    if (option === "--remote-interruption-proof") {
+      if (remoteInterruptionProof) {
+        throw new Error("Option --remote-interruption-proof was provided more than once.");
+      }
+      remoteInterruptionProof = true;
+      voice = true;
       continue;
     }
     if (option === "--grok-playback-only") {
@@ -227,6 +276,14 @@ export function parseDeviceE2eCliOptions(
       sawRemoteHold = true;
       continue;
     }
+    if (option === "--network-device-host") {
+      if (sawNetworkDeviceHost) {
+        throw new Error("Option --network-device-host was provided more than once.");
+      }
+      networkDeviceHost = normalizeHost(takeValue(args, ++index, option), "network device host");
+      sawNetworkDeviceHost = true;
+      continue;
+    }
     if (option === "--tunnel-name") {
       if (sawTunnelName) {
         throw new Error("Option --tunnel-name was provided more than once.");
@@ -243,6 +300,9 @@ export function parseDeviceE2eCliOptions(
 
   const selectedVoiceProofCount =
     Number(sawVoice) +
+    Number(sawPhysicalVoiceTurns) +
+    Number(sawRemoteVoiceTurns) +
+    Number(remoteInterruptionProof) +
     Number(grokPlaybackOnly) +
     Number(deterministicPlayback !== undefined) +
     Number(playbackEndurance);
@@ -270,6 +330,16 @@ export function parseDeviceE2eCliOptions(
   if (directLanPort !== undefined && !directLanHost) {
     throw new Error("--direct-lan-port requires --direct-lan-host.");
   }
+  if (
+    (remoteVoiceTurns !== undefined || remoteInterruptionProof) &&
+    !directLanHost &&
+    !networkDeviceHost
+  ) {
+    throw new Error(
+      "A tunneled remote conversation or interruption proof requires " +
+        "--network-device-host for network attribution.",
+    );
+  }
   if (deviceClockedStartupFrames !== undefined && downlinkDeliveryMode !== "device-clocked") {
     throw new Error("--device-clocked-startup-frames requires --device-clocked-downlink.");
   }
@@ -290,10 +360,14 @@ export function parseDeviceE2eCliOptions(
     gateway: normalizeGateway(environment.CAPTUN_GATEWAY?.trim() || "https://tunnels.iterate.com"),
     grokPlaybackOnly,
     mountTimeoutMs,
+    networkDeviceHost,
     playbackDurationMs,
     playbackEndurance,
     playbackRecoveryProof,
+    physicalVoiceTurns,
     remoteHoldMs,
+    remoteInterruptionProof,
+    remoteVoiceTurns,
     tunnelName,
     voice,
   };
@@ -315,7 +389,7 @@ function parseTcpPort(value: string) {
   return port;
 }
 
-function normalizeDirectLanHost(value: string) {
+function normalizeHost(value: string, label: string) {
   const candidate = value.trim();
   if (
     !candidate ||
@@ -323,18 +397,16 @@ function normalizeDirectLanHost(value: string) {
     candidate.includes("/") ||
     candidate.includes(":")
   ) {
-    throw new Error(
-      "The direct LAN host must be a hostname or IPv4 address without a scheme or port.",
-    );
+    throw new Error(`The ${label} must be a hostname or IPv4 address without a scheme or port.`);
   }
   let url: URL;
   try {
     url = new URL(`http://${candidate}`);
   } catch {
-    throw new Error("The direct LAN host must be a valid hostname or IPv4 address.");
+    throw new Error(`The ${label} must be a valid hostname or IPv4 address.`);
   }
   if (!url.hostname || url.port || url.pathname !== "/" || url.search || url.hash) {
-    throw new Error("The direct LAN host must be a hostname or IPv4 address without a path.");
+    throw new Error(`The ${label} must be a hostname or IPv4 address without a path.`);
   }
   return url.hostname;
 }

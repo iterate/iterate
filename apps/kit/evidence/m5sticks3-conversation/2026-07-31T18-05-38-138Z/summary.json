@@ -1,0 +1,21 @@
+{
+  "complete": true,
+  "failure": null,
+  "frameBytes": 640,
+  "microphone": {
+    "bytes": 1370880,
+    "frames": 2142,
+    "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/m5sticks3-conversation/2026-07-31T18-05-38-138Z/microphone-uplink.pcm16le",
+    "sha256": "5cd9d64cef50529b4e89f689bb8eacf496fb2b1ea964454134d0c6848f45663e"
+  },
+  "outputDirectory": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/m5sticks3-conversation/2026-07-31T18-05-38-138Z",
+  "producedAt": "2026-07-31T18:07:09.349Z",
+  "sampleRateHz": 16000,
+  "speaker": {
+    "bytes": 645120,
+    "frames": 1008,
+    "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/m5sticks3-conversation/2026-07-31T18-05-38-138Z/speaker-downlink.pcm16le",
+    "sha256": "dfb9b448fbf8a81aba0fa87c47056c1de91cc5243db1c1196b4e749335831fd5"
+  },
+  "timelinePath": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/m5sticks3-conversation/2026-07-31T18-05-38-138Z/timeline.jsonl"
+}

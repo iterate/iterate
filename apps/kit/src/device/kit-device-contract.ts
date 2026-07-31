@@ -73,14 +73,13 @@ export interface KitAudioMetrics {
    *
    * These views are not additive. A partially written PCM frame is retained in
    * the application ring while its masked copy occupies the WebSocket writer,
-   * so those two values can overlap by one frame. `peerUnconfirmed` starts at
-   * complete local acceptance and is a conservative PCM-only bound; control
-   * PING bytes are represented by `websocketTransmitter`, not by that bound.
+   * so those two values can overlap by one frame. Opaque lower transports are
+   * deliberately labelled capacity-only or unavailable; a WebSocket PONG is
+   * not promoted into a fictional peer-delivery queue measurement.
    */
   buffers?: {
     uplinkApplication: KitBufferMetrics;
     websocketTransmitter: KitBufferMetrics;
-    peerUnconfirmed: KitBufferMetrics;
     lwipSend: KitBufferMetrics;
     tlsEgress: KitBufferMetrics;
     wifiEgress: KitBufferMetrics;
@@ -205,7 +204,7 @@ export interface KitControlRingDiagnostics {
 }
 
 export interface KitControlDiagnostics {
-  schemaVersion: 2;
+  schemaVersion: 3;
   producedAtMs: number;
   control: {
     websocketStartAttempts: number;
@@ -235,6 +234,21 @@ export interface KitControlDiagnostics {
     inbox: KitControlRingDiagnostics;
     outbox: KitControlRingDiagnostics;
   };
+  /*
+   * This remains separate from `control`: station association and the PCM
+   * socket are data-plane/network evidence, while `control` is the established
+   * Cap'n Web reconnect postmortem contract.
+   *
+   * A missing wifiRssiDbm means the device could not obtain a current AP-info
+   * observation. Consumers must not substitute zero or carry a prior sample.
+   */
+  network: {
+    wifiConnected: boolean;
+    wifiRssiDbm?: number;
+    pcmWebsocketConnections: number;
+    pcmWebsocketDisconnects: number;
+    pcmWebsocketErrors: number;
+  };
 }
 
 export interface KitDeviceDescription {
@@ -242,8 +256,20 @@ export interface KitDeviceDescription {
   children: Record<string, string>;
 }
 
+export interface KitDeviceEvent {
+  active: boolean;
+  coalescedNotifications: number;
+  result: number;
+  schemaVersion: 1;
+  sequence: number;
+  snapshot: boolean;
+  source: "physical" | "remote" | "system";
+  type: "conversation.ended" | "conversation.started" | "pushToTalk.started" | "pushToTalk.stopped";
+}
+
 export interface KitDevice {
   __describe(): Promise<KitDeviceDescription>;
+  changeColour(colour: "red" | "green"): Promise<boolean>;
   getDiagnostics(): Promise<KitControlDiagnostics>;
   subscribeToMetrics(callback: (metrics: KitMetrics) => void): Promise<void>;
   renderOnScreen(input: { url: string }): Promise<boolean>;

@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { RpcSession, type RpcStub, type RpcTransport } from "@iterate-com/capnweb";
 import { beforeAll, expect, test } from "vitest";
 import { encodeDeviceConfiguration, type DeviceConfiguration } from "../firmware/config-image.ts";
-import type { KitPlaybackMetrics } from "./kit-device-contract.ts";
+import type { KitDeviceEvent, KitPlaybackMetrics } from "./kit-device-contract.ts";
 import type { M5StickS3 } from "./m5sticks3-contract.ts";
 import type { StackChan, StackChanMetrics } from "./stackchan-contract.ts";
 
@@ -164,6 +164,13 @@ class M5StickS3SimulatorFixture {
   }
 }
 
+// This hook configures and compiles two native simulator binaries. On an idle
+// machine that currently takes about 6.5 seconds, but the full Vitest run also
+// starts the macOS audio fixture and other native builds in parallel. A generic
+// 10-second hook limit therefore made the suite report a product failure when
+// the compiler merely lost CPU time. Keep the setup bounded, but give the build
+// a deliberate budget large enough for that expected contention; a genuinely
+// wedged build still fails rather than silently hanging the test run.
 beforeAll(() => {
   mkdirSync(buildDirectory, { recursive: true });
   for (const args of [
@@ -185,7 +192,7 @@ beforeAll(() => {
       throw new Error(`cmake ${args.join(" ")} failed:\n${result.stdout}\n${result.stderr}`);
     }
   }
-});
+}, 30_000);
 
 test("drains coalesced Cap'n Web frames from one transport read", async () => {
   const transport = new SimulatorTransport();
@@ -213,6 +220,7 @@ test("the firmware decoder accepts the exact configuration image emitted by Type
     },
     iterate: {
       baseUrl: "https://os.iterate.com",
+      pcmBaseUrl: "https://kit--voice-lab.iterate.app",
       projectId: "prj_voice_lab",
       projectApiKey: "itxk_secret",
     },
@@ -229,6 +237,7 @@ test("the firmware decoder accepts the exact configuration image emitted by Type
     configuration.wifi.ssid,
     configuration.wifi.password,
     configuration.iterate.baseUrl,
+    configuration.iterate.pcmBaseUrl,
     configuration.iterate.projectId,
     configuration.iterate.projectApiKey,
   ]);
@@ -268,7 +277,13 @@ test("the M5StickS3 profile describes screen, metrics, and push-to-talk events",
   const { m5sticks3 } = fixture;
   const description = await m5sticks3.__describe();
   expect(description.children).toEqual({
+    changeColour: expect.any(String),
+    conversation: {
+      hangUp: expect.any(String),
+      start: expect.any(String),
+    },
     getDiagnostics: expect.any(String),
+    subscribeToEvents: expect.any(String),
     subscribeToMetrics: expect.any(String),
     subscribeToPlaybackMetrics: expect.any(String),
     renderOnScreen: expect.any(String),
@@ -300,6 +315,13 @@ test("the M5StickS3 button drives bounded push-to-talk without a mic queue", asy
 
   await expect(m5sticks3.__test.audioMode()).resolves.toBe(0);
   await expect(m5sticks3.__test.notePlaybackStarted()).resolves.toBe(0);
+  /*
+   * The front button is deliberately inert outside a call. Open the call via
+   * the public capability before injecting the physical PTT edge; this mirrors
+   * the top-button-first contract and prevents a stale test from normalizing a
+   * microphone that streams while `/pcm` is absent.
+   */
+  await expect(m5sticks3.conversation.start()).resolves.toBe(true);
   await expect(m5sticks3.__test.pressButton()).resolves.toBe(0);
   await expect(m5sticks3.__test.captureStartCount()).resolves.toBe(1);
   await expect(m5sticks3.__test.playbackStopCount()).resolves.toBe(1);
@@ -319,6 +341,7 @@ test("remote push-to-talk calls enter the same deferred event processor", async 
   await using fixture = new M5StickS3SimulatorFixture();
   const { m5sticks3 } = fixture;
 
+  await expect(m5sticks3.conversation.start()).resolves.toBe(true);
   await expect(m5sticks3.pushToTalk.start()).resolves.toBe(true);
   await expectEventually(async () => {
     expect(await m5sticks3.__test.captureStartCount()).toBe(1);
@@ -329,10 +352,155 @@ test("remote push-to-talk calls enter the same deferred event processor", async 
   });
 });
 
+test("the front PTT button cannot open the microphone outside a conversation", async () => {
+  await using fixture = new M5StickS3SimulatorFixture();
+  const { m5sticks3 } = fixture;
+
+  /*
+   * PTT is deliberately not an implicit call-start shortcut. If a stray front
+   * press could start capture while the top-button-owned `/pcm` generation was
+   * absent, those fresh microphone frames would either accumulate locally or
+   * be discarded without a provider. The event remains accepted into the
+   * observable dispatcher, but its state transition is rejected and the mic
+   * driver must remain untouched.
+   */
+  await expect(m5sticks3.__test.pressButton()).resolves.toBe(0);
+  await expectEventually(async () => {
+    expect(await m5sticks3.__test.captureStartCount()).toBe(0);
+  });
+  await expect(m5sticks3.__test.submitCapture()).resolves.toBe(-6);
+});
+
+test("physical button state crosses the public Cap'n Web event subscription", async () => {
+  await using fixture = new M5StickS3SimulatorFixture();
+  const { m5sticks3 } = fixture;
+  const events: KitDeviceEvent[] = [];
+
+  /*
+   * The PCM socket intentionally carries samples only. Without this callback,
+   * a physical hold starts capture on-device but userspace never learns where
+   * the manual Grok turn begins or ends; remote test calls can therefore pass
+   * while the real button is unusable. The initial snapshot makes a control
+   * reconnect while the button is held recoverable, and the sequence gives
+   * userspace a durable way to reject a silently coalesced edge.
+   */
+  await m5sticks3.subscribeToEvents((event) => events.push(event));
+  await expectEventually(() => {
+    expect(events).toEqual([
+      {
+        active: false,
+        coalescedNotifications: 0,
+        result: 0,
+        schemaVersion: 1,
+        sequence: 0,
+        snapshot: true,
+        source: "system",
+        type: "pushToTalk.stopped",
+      },
+    ]);
+  });
+
+  await expect(m5sticks3.conversation.start()).resolves.toBe(true);
+  await expect(m5sticks3.__test.pressButton()).resolves.toBe(0);
+  await expect(m5sticks3.__test.releaseButton()).resolves.toBe(0);
+  await expectEventually(() => {
+    expect(events.slice(1)).toEqual([
+      {
+        active: false,
+        coalescedNotifications: 0,
+        result: 0,
+        schemaVersion: 1,
+        sequence: 1,
+        snapshot: false,
+        source: "remote",
+        type: "conversation.started",
+      },
+      {
+        active: true,
+        coalescedNotifications: 0,
+        result: 0,
+        schemaVersion: 1,
+        sequence: 2,
+        snapshot: false,
+        source: "physical",
+        type: "pushToTalk.started",
+      },
+      {
+        active: false,
+        coalescedNotifications: 0,
+        result: 0,
+        schemaVersion: 1,
+        sequence: 3,
+        snapshot: false,
+        source: "physical",
+        type: "pushToTalk.stopped",
+      },
+    ]);
+  });
+});
+
+test("event delivery waits behind the bounded shared callback budget", async () => {
+  await using fixture = new M5StickS3SimulatorFixture();
+  const { m5sticks3 } = fixture;
+  const generalStarted = Promise.withResolvers<void>();
+  const playbackStarted = Promise.withResolvers<void>();
+  const generalRelease = Promise.withResolvers<void>();
+  const playbackRelease = Promise.withResolvers<void>();
+  const firstEvent = Promise.withResolvers<KitDeviceEvent>();
+  let eventDeliveries = 0;
+
+  /*
+   * Every remote callback is two outgoing Cap'n Web messages (push + pull) and
+   * can later return two incoming messages (resolve + release). The target's
+   * eight-slot control rings were physically sized for two such callbacks plus
+   * one bounded RPC burst. A third concurrent callback is therefore not merely
+   * "unlikely": it is a valid public subscription combination that can
+   * terminally overflow the control generation.
+   *
+   * Hold both metrics callbacks unresolved to consume that reviewed budget,
+   * then subscribe to device events. The snapshot must remain pending without
+   * blocking unrelated RPC. Releasing one callback must admit the event
+   * immediately; growing the rings would spend another 32 KiB of internal RAM
+   * on the Stick while still leaving concurrency conceptually unbounded.
+   */
+  await m5sticks3.subscribeToMetrics(async () => {
+    generalStarted.resolve();
+    await generalRelease.promise;
+  });
+  await m5sticks3.subscribeToPlaybackMetrics(async () => {
+    playbackStarted.resolve();
+    await playbackRelease.promise;
+  });
+
+  try {
+    await Promise.all([generalStarted.promise, playbackStarted.promise]);
+    await m5sticks3.subscribeToEvents((event) => {
+      eventDeliveries++;
+      firstEvent.resolve(event);
+    });
+
+    await expect(m5sticks3.__test.audioMode()).resolves.toBe(0);
+    expect(eventDeliveries).toBe(0);
+
+    generalRelease.resolve();
+    await expect(firstEvent.promise).resolves.toMatchObject({
+      active: false,
+      sequence: 0,
+      snapshot: true,
+      source: "system",
+      type: "pushToTalk.stopped",
+    });
+  } finally {
+    generalRelease.resolve();
+    playbackRelease.resolve();
+  }
+});
+
 test("closing the M5StickS3 profile stops capture exactly once", async () => {
   await using fixture = new M5StickS3SimulatorFixture();
   const { m5sticks3 } = fixture;
 
+  await expect(m5sticks3.conversation.start()).resolves.toBe(true);
   await expect(m5sticks3.__test.pressButton()).resolves.toBe(0);
   await expect(m5sticks3.__test.captureStartCount()).resolves.toBe(1);
   await expect(m5sticks3.__test.closeProfile()).resolves.toBe(0);
@@ -446,7 +614,13 @@ test("getDiagnostics carries one retained control snapshot through the C peer", 
       websocketDisconnects: 0,
       websocketErrors: 0,
     },
-    schemaVersion: 2,
+    network: {
+      wifiConnected: false,
+      pcmWebsocketConnections: 0,
+      pcmWebsocketDisconnects: 0,
+      pcmWebsocketErrors: 0,
+    },
+    schemaVersion: 3,
   });
 });
 
@@ -469,7 +643,7 @@ test("sequential retained diagnostic replies do not exhaust the C Cap'n Web sess
    */
   for (let cycle = 0; cycle < 512; cycle++) {
     const diagnostics = await m5sticks3.getDiagnostics();
-    expect(diagnostics.schemaVersion).toBe(2);
+    expect(diagnostics.schemaVersion).toBe(3);
   }
 });
 
@@ -544,6 +718,8 @@ test("reports static working memory and host CPU cost", () => {
   expect(profile.m5sticks3DirectDmaRuntimeBytes).toBeTypeOf("number");
   expect(profile.m5sticks3PcmLanePayloadBytes).toBeTypeOf("number");
   expect(profile.m5sticks3AudioTaskStackBytes).toBeTypeOf("number");
+  expect(profile.m5sticks3EventNotificationStorageBytes).toBeTypeOf("number");
+  expect(profile.m5sticks3CallbackBudgetBytes).toBeTypeOf("number");
   expect(profile.m5sticks3EventStorageBytes).toBeTypeOf("number");
   expect(profile.metricSubscriptionBytes).toBeTypeOf("number");
   expect(profile.protocolWorkingSetBytes).toBeTypeOf("number");
@@ -581,7 +757,8 @@ test("reports static working memory and host CPU cost", () => {
     (profile.protocolWorkingSetBytes as number) +
       (profile.m5sticks3ProfileBytes as number) +
       (profile.m5sticks3PlatformBytes as number) +
-      (profile.m5sticks3EventStorageBytes as number),
+      (profile.m5sticks3EventStorageBytes as number) +
+      (profile.m5sticks3EventNotificationStorageBytes as number),
   );
   expect(profile.stackchanProfileWorkingSetBytes).toBeLessThanOrEqual(6_000);
   // This ceiling covers only the explicitly summed control plane plus capture.

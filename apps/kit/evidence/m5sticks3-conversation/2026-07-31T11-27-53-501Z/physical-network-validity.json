@@ -1,0 +1,2540 @@
+{
+  "audio": {
+    "failure": "PCM proxy failure: invalid-provider-pcm-message",
+    "passed": false
+  },
+  "classification": "network-invalid",
+  "createdAt": "2026-07-31T11:28:33.067Z",
+  "diagnostics": [
+    {
+      "completedAtMonotonicMs": 21886.217625,
+      "diagnostics": {
+        "schemaVersion": 3,
+        "producedAtMs": 19640,
+        "control": {
+          "websocketStartAttempts": 1,
+          "websocketConnections": 1,
+          "websocketDisconnects": 0,
+          "websocketErrors": 0,
+          "wifiDisconnects": 2,
+          "protocolFailures": 0,
+          "receiveFailures": 0,
+          "sendFailures": 0,
+          "lastWifiDisconnectReason": 205,
+          "lastErrorGeneration": 0,
+          "lastErrorType": 0,
+          "lastTlsError": 0,
+          "lastTlsStackError": 0,
+          "lastTransportErrno": 0,
+          "lastHandshakeStatusCode": 0,
+          "lastCloseStatusCode": 0,
+          "protocolFailureGeneration": 0,
+          "lastApplicationCapnwebGeneration": 0,
+          "lastApplicationCapnwebStatus": 0,
+          "lastControlReceiveStatus": 0,
+          "messagesSent": 32,
+          "messagesDiscarded": 0,
+          "inboxDiscarded": 0,
+          "outboxDiscarded": 0,
+          "inbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 22,
+            "messagesConsumed": 18,
+            "producerBackpressure": 0,
+            "highWaterSlots": 4,
+            "currentSlots": 4
+          },
+          "outbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 32,
+            "messagesConsumed": 32,
+            "producerBackpressure": 0,
+            "highWaterSlots": 2,
+            "currentSlots": 0
+          }
+        },
+        "network": {
+          "wifiConnected": true,
+          "wifiRssiDbm": -41,
+          "pcmWebsocketConnections": 1,
+          "pcmWebsocketDisconnects": 0,
+          "pcmWebsocketErrors": 0
+        }
+      },
+      "outcome": "success",
+      "startedAtMonotonicMs": 21843.32575
+    },
+    {
+      "completedAtMonotonicMs": 22881.021084,
+      "diagnostics": {
+        "schemaVersion": 3,
+        "producedAtMs": 20634,
+        "control": {
+          "websocketStartAttempts": 1,
+          "websocketConnections": 1,
+          "websocketDisconnects": 0,
+          "websocketErrors": 0,
+          "wifiDisconnects": 2,
+          "protocolFailures": 0,
+          "receiveFailures": 0,
+          "sendFailures": 0,
+          "lastWifiDisconnectReason": 205,
+          "lastErrorGeneration": 0,
+          "lastErrorType": 0,
+          "lastTlsError": 0,
+          "lastTlsStackError": 0,
+          "lastTransportErrno": 0,
+          "lastHandshakeStatusCode": 0,
+          "lastCloseStatusCode": 0,
+          "protocolFailureGeneration": 0,
+          "lastApplicationCapnwebGeneration": 0,
+          "lastApplicationCapnwebStatus": 0,
+          "lastControlReceiveStatus": 0,
+          "messagesSent": 43,
+          "messagesDiscarded": 0,
+          "inboxDiscarded": 0,
+          "outboxDiscarded": 0,
+          "inbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 29,
+            "messagesConsumed": 27,
+            "producerBackpressure": 0,
+            "highWaterSlots": 4,
+            "currentSlots": 2
+          },
+          "outbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 43,
+            "messagesConsumed": 43,
+            "producerBackpressure": 0,
+            "highWaterSlots": 2,
+            "currentSlots": 0
+          }
+        },
+        "network": {
+          "wifiConnected": true,
+          "wifiRssiDbm": -40,
+          "pcmWebsocketConnections": 1,
+          "pcmWebsocketDisconnects": 0,
+          "pcmWebsocketErrors": 0
+        }
+      },
+      "outcome": "success",
+      "startedAtMonotonicMs": 22848.089167
+    },
+    {
+      "completedAtMonotonicMs": 23886.267334,
+      "diagnostics": {
+        "schemaVersion": 3,
+        "producedAtMs": 21643,
+        "control": {
+          "websocketStartAttempts": 1,
+          "websocketConnections": 1,
+          "websocketDisconnects": 0,
+          "websocketErrors": 0,
+          "wifiDisconnects": 2,
+          "protocolFailures": 0,
+          "receiveFailures": 0,
+          "sendFailures": 0,
+          "lastWifiDisconnectReason": 205,
+          "lastErrorGeneration": 0,
+          "lastErrorType": 0,
+          "lastTlsError": 0,
+          "lastTlsStackError": 0,
+          "lastTransportErrno": 0,
+          "lastHandshakeStatusCode": 0,
+          "lastCloseStatusCode": 0,
+          "protocolFailureGeneration": 0,
+          "lastApplicationCapnwebGeneration": 0,
+          "lastApplicationCapnwebStatus": 0,
+          "lastControlReceiveStatus": 0,
+          "messagesSent": 50,
+          "messagesDiscarded": 0,
+          "inboxDiscarded": 0,
+          "outboxDiscarded": 0,
+          "inbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 34,
+            "messagesConsumed": 32,
+            "producerBackpressure": 0,
+            "highWaterSlots": 4,
+            "currentSlots": 2
+          },
+          "outbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 50,
+            "messagesConsumed": 50,
+            "producerBackpressure": 0,
+            "highWaterSlots": 2,
+            "currentSlots": 0
+          }
+        },
+        "network": {
+          "wifiConnected": true,
+          "wifiRssiDbm": -39,
+          "pcmWebsocketConnections": 1,
+          "pcmWebsocketDisconnects": 0,
+          "pcmWebsocketErrors": 0
+        }
+      },
+      "outcome": "success",
+      "startedAtMonotonicMs": 23852.738334
+    },
+    {
+      "completedAtMonotonicMs": 24889.073209,
+      "diagnostics": {
+        "schemaVersion": 3,
+        "producedAtMs": 22641,
+        "control": {
+          "websocketStartAttempts": 1,
+          "websocketConnections": 1,
+          "websocketDisconnects": 0,
+          "websocketErrors": 0,
+          "wifiDisconnects": 2,
+          "protocolFailures": 0,
+          "receiveFailures": 0,
+          "sendFailures": 0,
+          "lastWifiDisconnectReason": 205,
+          "lastErrorGeneration": 0,
+          "lastErrorType": 0,
+          "lastTlsError": 0,
+          "lastTlsStackError": 0,
+          "lastTransportErrno": 0,
+          "lastHandshakeStatusCode": 0,
+          "lastCloseStatusCode": 0,
+          "protocolFailureGeneration": 0,
+          "lastApplicationCapnwebGeneration": 0,
+          "lastApplicationCapnwebStatus": 0,
+          "lastControlReceiveStatus": 0,
+          "messagesSent": 57,
+          "messagesDiscarded": 0,
+          "inboxDiscarded": 0,
+          "outboxDiscarded": 0,
+          "inbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 39,
+            "messagesConsumed": 37,
+            "producerBackpressure": 0,
+            "highWaterSlots": 4,
+            "currentSlots": 2
+          },
+          "outbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 57,
+            "messagesConsumed": 57,
+            "producerBackpressure": 0,
+            "highWaterSlots": 2,
+            "currentSlots": 0
+          }
+        },
+        "network": {
+          "wifiConnected": true,
+          "wifiRssiDbm": -43,
+          "pcmWebsocketConnections": 1,
+          "pcmWebsocketDisconnects": 0,
+          "pcmWebsocketErrors": 0
+        }
+      },
+      "outcome": "success",
+      "startedAtMonotonicMs": 24847.53825
+    },
+    {
+      "completedAtMonotonicMs": 25879.026875,
+      "diagnostics": {
+        "schemaVersion": 3,
+        "producedAtMs": 23634,
+        "control": {
+          "websocketStartAttempts": 1,
+          "websocketConnections": 1,
+          "websocketDisconnects": 0,
+          "websocketErrors": 0,
+          "wifiDisconnects": 2,
+          "protocolFailures": 0,
+          "receiveFailures": 0,
+          "sendFailures": 0,
+          "lastWifiDisconnectReason": 205,
+          "lastErrorGeneration": 0,
+          "lastErrorType": 0,
+          "lastTlsError": 0,
+          "lastTlsStackError": 0,
+          "lastTransportErrno": 0,
+          "lastHandshakeStatusCode": 0,
+          "lastCloseStatusCode": 0,
+          "protocolFailureGeneration": 0,
+          "lastApplicationCapnwebGeneration": 0,
+          "lastApplicationCapnwebStatus": 0,
+          "lastControlReceiveStatus": 0,
+          "messagesSent": 64,
+          "messagesDiscarded": 0,
+          "inboxDiscarded": 0,
+          "outboxDiscarded": 0,
+          "inbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 44,
+            "messagesConsumed": 42,
+            "producerBackpressure": 0,
+            "highWaterSlots": 4,
+            "currentSlots": 2
+          },
+          "outbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 64,
+            "messagesConsumed": 64,
+            "producerBackpressure": 0,
+            "highWaterSlots": 2,
+            "currentSlots": 0
+          }
+        },
+        "network": {
+          "wifiConnected": true,
+          "wifiRssiDbm": -44,
+          "pcmWebsocketConnections": 1,
+          "pcmWebsocketDisconnects": 0,
+          "pcmWebsocketErrors": 0
+        }
+      },
+      "outcome": "success",
+      "startedAtMonotonicMs": 25845.654917
+    },
+    {
+      "completedAtMonotonicMs": 26890.909042,
+      "diagnostics": {
+        "schemaVersion": 3,
+        "producedAtMs": 24648,
+        "control": {
+          "websocketStartAttempts": 1,
+          "websocketConnections": 1,
+          "websocketDisconnects": 0,
+          "websocketErrors": 0,
+          "wifiDisconnects": 2,
+          "protocolFailures": 0,
+          "receiveFailures": 0,
+          "sendFailures": 0,
+          "lastWifiDisconnectReason": 205,
+          "lastErrorGeneration": 0,
+          "lastErrorType": 0,
+          "lastTlsError": 0,
+          "lastTlsStackError": 0,
+          "lastTransportErrno": 0,
+          "lastHandshakeStatusCode": 0,
+          "lastCloseStatusCode": 0,
+          "protocolFailureGeneration": 0,
+          "lastApplicationCapnwebGeneration": 0,
+          "lastApplicationCapnwebStatus": 0,
+          "lastControlReceiveStatus": 0,
+          "messagesSent": 71,
+          "messagesDiscarded": 0,
+          "inboxDiscarded": 0,
+          "outboxDiscarded": 0,
+          "inbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 49,
+            "messagesConsumed": 47,
+            "producerBackpressure": 0,
+            "highWaterSlots": 4,
+            "currentSlots": 2
+          },
+          "outbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 71,
+            "messagesConsumed": 71,
+            "producerBackpressure": 0,
+            "highWaterSlots": 2,
+            "currentSlots": 0
+          }
+        },
+        "network": {
+          "wifiConnected": true,
+          "wifiRssiDbm": -42,
+          "pcmWebsocketConnections": 1,
+          "pcmWebsocketDisconnects": 0,
+          "pcmWebsocketErrors": 0
+        }
+      },
+      "outcome": "success",
+      "startedAtMonotonicMs": 26846.083625
+    },
+    {
+      "completedAtMonotonicMs": 27907.595917,
+      "diagnostics": {
+        "schemaVersion": 3,
+        "producedAtMs": 25652,
+        "control": {
+          "websocketStartAttempts": 1,
+          "websocketConnections": 1,
+          "websocketDisconnects": 0,
+          "websocketErrors": 0,
+          "wifiDisconnects": 2,
+          "protocolFailures": 0,
+          "receiveFailures": 0,
+          "sendFailures": 0,
+          "lastWifiDisconnectReason": 205,
+          "lastErrorGeneration": 0,
+          "lastErrorType": 0,
+          "lastTlsError": 0,
+          "lastTlsStackError": 0,
+          "lastTransportErrno": 0,
+          "lastHandshakeStatusCode": 0,
+          "lastCloseStatusCode": 0,
+          "protocolFailureGeneration": 0,
+          "lastApplicationCapnwebGeneration": 0,
+          "lastApplicationCapnwebStatus": 0,
+          "lastControlReceiveStatus": 0,
+          "messagesSent": 78,
+          "messagesDiscarded": 0,
+          "inboxDiscarded": 0,
+          "outboxDiscarded": 0,
+          "inbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 54,
+            "messagesConsumed": 52,
+            "producerBackpressure": 0,
+            "highWaterSlots": 4,
+            "currentSlots": 2
+          },
+          "outbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 78,
+            "messagesConsumed": 78,
+            "producerBackpressure": 0,
+            "highWaterSlots": 2,
+            "currentSlots": 0
+          }
+        },
+        "network": {
+          "wifiConnected": true,
+          "wifiRssiDbm": -39,
+          "pcmWebsocketConnections": 1,
+          "pcmWebsocketDisconnects": 0,
+          "pcmWebsocketErrors": 0
+        }
+      },
+      "outcome": "success",
+      "startedAtMonotonicMs": 27846.591959
+    },
+    {
+      "completedAtMonotonicMs": 28902.155459,
+      "diagnostics": {
+        "schemaVersion": 3,
+        "producedAtMs": 26654,
+        "control": {
+          "websocketStartAttempts": 1,
+          "websocketConnections": 1,
+          "websocketDisconnects": 0,
+          "websocketErrors": 0,
+          "wifiDisconnects": 2,
+          "protocolFailures": 0,
+          "receiveFailures": 0,
+          "sendFailures": 0,
+          "lastWifiDisconnectReason": 205,
+          "lastErrorGeneration": 0,
+          "lastErrorType": 0,
+          "lastTlsError": 0,
+          "lastTlsStackError": 0,
+          "lastTransportErrno": 0,
+          "lastHandshakeStatusCode": 0,
+          "lastCloseStatusCode": 0,
+          "protocolFailureGeneration": 0,
+          "lastApplicationCapnwebGeneration": 0,
+          "lastApplicationCapnwebStatus": 0,
+          "lastControlReceiveStatus": 0,
+          "messagesSent": 85,
+          "messagesDiscarded": 0,
+          "inboxDiscarded": 0,
+          "outboxDiscarded": 0,
+          "inbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 59,
+            "messagesConsumed": 57,
+            "producerBackpressure": 0,
+            "highWaterSlots": 4,
+            "currentSlots": 2
+          },
+          "outbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 85,
+            "messagesConsumed": 85,
+            "producerBackpressure": 0,
+            "highWaterSlots": 2,
+            "currentSlots": 0
+          }
+        },
+        "network": {
+          "wifiConnected": true,
+          "wifiRssiDbm": -34,
+          "pcmWebsocketConnections": 1,
+          "pcmWebsocketDisconnects": 0,
+          "pcmWebsocketErrors": 0
+        }
+      },
+      "outcome": "success",
+      "startedAtMonotonicMs": 28844.115792
+    },
+    {
+      "completedAtMonotonicMs": 29883.136875,
+      "diagnostics": {
+        "schemaVersion": 3,
+        "producedAtMs": 27639,
+        "control": {
+          "websocketStartAttempts": 1,
+          "websocketConnections": 1,
+          "websocketDisconnects": 0,
+          "websocketErrors": 0,
+          "wifiDisconnects": 2,
+          "protocolFailures": 0,
+          "receiveFailures": 0,
+          "sendFailures": 0,
+          "lastWifiDisconnectReason": 205,
+          "lastErrorGeneration": 0,
+          "lastErrorType": 0,
+          "lastTlsError": 0,
+          "lastTlsStackError": 0,
+          "lastTransportErrno": 0,
+          "lastHandshakeStatusCode": 0,
+          "lastCloseStatusCode": 0,
+          "protocolFailureGeneration": 0,
+          "lastApplicationCapnwebGeneration": 0,
+          "lastApplicationCapnwebStatus": 0,
+          "lastControlReceiveStatus": 0,
+          "messagesSent": 92,
+          "messagesDiscarded": 0,
+          "inboxDiscarded": 0,
+          "outboxDiscarded": 0,
+          "inbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 64,
+            "messagesConsumed": 62,
+            "producerBackpressure": 0,
+            "highWaterSlots": 4,
+            "currentSlots": 2
+          },
+          "outbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 92,
+            "messagesConsumed": 92,
+            "producerBackpressure": 0,
+            "highWaterSlots": 2,
+            "currentSlots": 0
+          }
+        },
+        "network": {
+          "wifiConnected": true,
+          "wifiRssiDbm": -35,
+          "pcmWebsocketConnections": 1,
+          "pcmWebsocketDisconnects": 0,
+          "pcmWebsocketErrors": 0
+        }
+      },
+      "outcome": "success",
+      "startedAtMonotonicMs": 29849.710292
+    },
+    {
+      "completedAtMonotonicMs": 30879.470792,
+      "diagnostics": {
+        "schemaVersion": 3,
+        "producedAtMs": 28634,
+        "control": {
+          "websocketStartAttempts": 1,
+          "websocketConnections": 1,
+          "websocketDisconnects": 0,
+          "websocketErrors": 0,
+          "wifiDisconnects": 2,
+          "protocolFailures": 0,
+          "receiveFailures": 0,
+          "sendFailures": 0,
+          "lastWifiDisconnectReason": 205,
+          "lastErrorGeneration": 0,
+          "lastErrorType": 0,
+          "lastTlsError": 0,
+          "lastTlsStackError": 0,
+          "lastTransportErrno": 0,
+          "lastHandshakeStatusCode": 0,
+          "lastCloseStatusCode": 0,
+          "protocolFailureGeneration": 0,
+          "lastApplicationCapnwebGeneration": 0,
+          "lastApplicationCapnwebStatus": 0,
+          "lastControlReceiveStatus": 0,
+          "messagesSent": 99,
+          "messagesDiscarded": 0,
+          "inboxDiscarded": 0,
+          "outboxDiscarded": 0,
+          "inbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 69,
+            "messagesConsumed": 67,
+            "producerBackpressure": 0,
+            "highWaterSlots": 4,
+            "currentSlots": 2
+          },
+          "outbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 99,
+            "messagesConsumed": 99,
+            "producerBackpressure": 0,
+            "highWaterSlots": 2,
+            "currentSlots": 0
+          }
+        },
+        "network": {
+          "wifiConnected": true,
+          "wifiRssiDbm": -36,
+          "pcmWebsocketConnections": 1,
+          "pcmWebsocketDisconnects": 0,
+          "pcmWebsocketErrors": 0
+        }
+      },
+      "outcome": "success",
+      "startedAtMonotonicMs": 30844.495209
+    },
+    {
+      "completedAtMonotonicMs": 31877.591959,
+      "diagnostics": {
+        "schemaVersion": 3,
+        "producedAtMs": 29634,
+        "control": {
+          "websocketStartAttempts": 1,
+          "websocketConnections": 1,
+          "websocketDisconnects": 0,
+          "websocketErrors": 0,
+          "wifiDisconnects": 2,
+          "protocolFailures": 0,
+          "receiveFailures": 0,
+          "sendFailures": 0,
+          "lastWifiDisconnectReason": 205,
+          "lastErrorGeneration": 0,
+          "lastErrorType": 0,
+          "lastTlsError": 0,
+          "lastTlsStackError": 0,
+          "lastTransportErrno": 0,
+          "lastHandshakeStatusCode": 0,
+          "lastCloseStatusCode": 0,
+          "protocolFailureGeneration": 0,
+          "lastApplicationCapnwebGeneration": 0,
+          "lastApplicationCapnwebStatus": 0,
+          "lastControlReceiveStatus": 0,
+          "messagesSent": 109,
+          "messagesDiscarded": 0,
+          "inboxDiscarded": 0,
+          "outboxDiscarded": 0,
+          "inbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 75,
+            "messagesConsumed": 73,
+            "producerBackpressure": 0,
+            "highWaterSlots": 4,
+            "currentSlots": 2
+          },
+          "outbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 109,
+            "messagesConsumed": 109,
+            "producerBackpressure": 0,
+            "highWaterSlots": 2,
+            "currentSlots": 0
+          }
+        },
+        "network": {
+          "wifiConnected": true,
+          "wifiRssiDbm": -42,
+          "pcmWebsocketConnections": 1,
+          "pcmWebsocketDisconnects": 0,
+          "pcmWebsocketErrors": 0
+        }
+      },
+      "outcome": "success",
+      "startedAtMonotonicMs": 31845.2985
+    },
+    {
+      "completedAtMonotonicMs": 32890.981834,
+      "diagnostics": {
+        "schemaVersion": 3,
+        "producedAtMs": 30649,
+        "control": {
+          "websocketStartAttempts": 1,
+          "websocketConnections": 1,
+          "websocketDisconnects": 0,
+          "websocketErrors": 0,
+          "wifiDisconnects": 2,
+          "protocolFailures": 0,
+          "receiveFailures": 0,
+          "sendFailures": 0,
+          "lastWifiDisconnectReason": 205,
+          "lastErrorGeneration": 0,
+          "lastErrorType": 0,
+          "lastTlsError": 0,
+          "lastTlsStackError": 0,
+          "lastTransportErrno": 0,
+          "lastHandshakeStatusCode": 0,
+          "lastCloseStatusCode": 0,
+          "protocolFailureGeneration": 0,
+          "lastApplicationCapnwebGeneration": 0,
+          "lastApplicationCapnwebStatus": 0,
+          "lastControlReceiveStatus": 0,
+          "messagesSent": 116,
+          "messagesDiscarded": 0,
+          "inboxDiscarded": 0,
+          "outboxDiscarded": 0,
+          "inbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 80,
+            "messagesConsumed": 78,
+            "producerBackpressure": 0,
+            "highWaterSlots": 4,
+            "currentSlots": 2
+          },
+          "outbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 116,
+            "messagesConsumed": 116,
+            "producerBackpressure": 0,
+            "highWaterSlots": 2,
+            "currentSlots": 0
+          }
+        },
+        "network": {
+          "wifiConnected": true,
+          "wifiRssiDbm": -40,
+          "pcmWebsocketConnections": 1,
+          "pcmWebsocketDisconnects": 0,
+          "pcmWebsocketErrors": 0
+        }
+      },
+      "outcome": "success",
+      "startedAtMonotonicMs": 32848.653709
+    },
+    {
+      "completedAtMonotonicMs": 33882.584,
+      "diagnostics": {
+        "schemaVersion": 3,
+        "producedAtMs": 31639,
+        "control": {
+          "websocketStartAttempts": 1,
+          "websocketConnections": 1,
+          "websocketDisconnects": 0,
+          "websocketErrors": 0,
+          "wifiDisconnects": 2,
+          "protocolFailures": 0,
+          "receiveFailures": 0,
+          "sendFailures": 0,
+          "lastWifiDisconnectReason": 205,
+          "lastErrorGeneration": 0,
+          "lastErrorType": 0,
+          "lastTlsError": 0,
+          "lastTlsStackError": 0,
+          "lastTransportErrno": 0,
+          "lastHandshakeStatusCode": 0,
+          "lastCloseStatusCode": 0,
+          "protocolFailureGeneration": 0,
+          "lastApplicationCapnwebGeneration": 0,
+          "lastApplicationCapnwebStatus": 0,
+          "lastControlReceiveStatus": 0,
+          "messagesSent": 123,
+          "messagesDiscarded": 0,
+          "inboxDiscarded": 0,
+          "outboxDiscarded": 0,
+          "inbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 85,
+            "messagesConsumed": 83,
+            "producerBackpressure": 0,
+            "highWaterSlots": 4,
+            "currentSlots": 2
+          },
+          "outbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 123,
+            "messagesConsumed": 123,
+            "producerBackpressure": 0,
+            "highWaterSlots": 2,
+            "currentSlots": 0
+          }
+        },
+        "network": {
+          "wifiConnected": true,
+          "wifiRssiDbm": -39,
+          "pcmWebsocketConnections": 1,
+          "pcmWebsocketDisconnects": 0,
+          "pcmWebsocketErrors": 0
+        }
+      },
+      "outcome": "success",
+      "startedAtMonotonicMs": 33848.185792
+    },
+    {
+      "completedAtMonotonicMs": 34891.396584,
+      "diagnostics": {
+        "schemaVersion": 3,
+        "producedAtMs": 32644,
+        "control": {
+          "websocketStartAttempts": 1,
+          "websocketConnections": 1,
+          "websocketDisconnects": 0,
+          "websocketErrors": 0,
+          "wifiDisconnects": 2,
+          "protocolFailures": 0,
+          "receiveFailures": 0,
+          "sendFailures": 0,
+          "lastWifiDisconnectReason": 205,
+          "lastErrorGeneration": 0,
+          "lastErrorType": 0,
+          "lastTlsError": 0,
+          "lastTlsStackError": 0,
+          "lastTransportErrno": 0,
+          "lastHandshakeStatusCode": 0,
+          "lastCloseStatusCode": 0,
+          "protocolFailureGeneration": 0,
+          "lastApplicationCapnwebGeneration": 0,
+          "lastApplicationCapnwebStatus": 0,
+          "lastControlReceiveStatus": 0,
+          "messagesSent": 133,
+          "messagesDiscarded": 0,
+          "inboxDiscarded": 0,
+          "outboxDiscarded": 0,
+          "inbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 91,
+            "messagesConsumed": 89,
+            "producerBackpressure": 0,
+            "highWaterSlots": 4,
+            "currentSlots": 2
+          },
+          "outbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 133,
+            "messagesConsumed": 133,
+            "producerBackpressure": 0,
+            "highWaterSlots": 2,
+            "currentSlots": 0
+          }
+        },
+        "network": {
+          "wifiConnected": true,
+          "wifiRssiDbm": -36,
+          "pcmWebsocketConnections": 1,
+          "pcmWebsocketDisconnects": 0,
+          "pcmWebsocketErrors": 0
+        }
+      },
+      "outcome": "success",
+      "startedAtMonotonicMs": 34850.675167
+    },
+    {
+      "completedAtMonotonicMs": 35889.511125,
+      "diagnostics": {
+        "schemaVersion": 3,
+        "producedAtMs": 33644,
+        "control": {
+          "websocketStartAttempts": 1,
+          "websocketConnections": 1,
+          "websocketDisconnects": 0,
+          "websocketErrors": 0,
+          "wifiDisconnects": 2,
+          "protocolFailures": 0,
+          "receiveFailures": 0,
+          "sendFailures": 0,
+          "lastWifiDisconnectReason": 205,
+          "lastErrorGeneration": 0,
+          "lastErrorType": 0,
+          "lastTlsError": 0,
+          "lastTlsStackError": 0,
+          "lastTransportErrno": 0,
+          "lastHandshakeStatusCode": 0,
+          "lastCloseStatusCode": 0,
+          "protocolFailureGeneration": 0,
+          "lastApplicationCapnwebGeneration": 0,
+          "lastApplicationCapnwebStatus": 0,
+          "lastControlReceiveStatus": 0,
+          "messagesSent": 140,
+          "messagesDiscarded": 0,
+          "inboxDiscarded": 0,
+          "outboxDiscarded": 0,
+          "inbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 96,
+            "messagesConsumed": 94,
+            "producerBackpressure": 0,
+            "highWaterSlots": 4,
+            "currentSlots": 2
+          },
+          "outbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 140,
+            "messagesConsumed": 140,
+            "producerBackpressure": 0,
+            "highWaterSlots": 2,
+            "currentSlots": 0
+          }
+        },
+        "network": {
+          "wifiConnected": true,
+          "wifiRssiDbm": -35,
+          "pcmWebsocketConnections": 1,
+          "pcmWebsocketDisconnects": 0,
+          "pcmWebsocketErrors": 0
+        }
+      },
+      "outcome": "success",
+      "startedAtMonotonicMs": 35849.735584
+    },
+    {
+      "completedAtMonotonicMs": 36877.738667,
+      "diagnostics": {
+        "schemaVersion": 3,
+        "producedAtMs": 34634,
+        "control": {
+          "websocketStartAttempts": 1,
+          "websocketConnections": 1,
+          "websocketDisconnects": 0,
+          "websocketErrors": 0,
+          "wifiDisconnects": 2,
+          "protocolFailures": 0,
+          "receiveFailures": 0,
+          "sendFailures": 0,
+          "lastWifiDisconnectReason": 205,
+          "lastErrorGeneration": 0,
+          "lastErrorType": 0,
+          "lastTlsError": 0,
+          "lastTlsStackError": 0,
+          "lastTransportErrno": 0,
+          "lastHandshakeStatusCode": 0,
+          "lastCloseStatusCode": 0,
+          "protocolFailureGeneration": 0,
+          "lastApplicationCapnwebGeneration": 0,
+          "lastApplicationCapnwebStatus": 0,
+          "lastControlReceiveStatus": 0,
+          "messagesSent": 147,
+          "messagesDiscarded": 0,
+          "inboxDiscarded": 0,
+          "outboxDiscarded": 0,
+          "inbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 101,
+            "messagesConsumed": 99,
+            "producerBackpressure": 0,
+            "highWaterSlots": 4,
+            "currentSlots": 2
+          },
+          "outbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 147,
+            "messagesConsumed": 147,
+            "producerBackpressure": 0,
+            "highWaterSlots": 2,
+            "currentSlots": 0
+          }
+        },
+        "network": {
+          "wifiConnected": true,
+          "wifiRssiDbm": -36,
+          "pcmWebsocketConnections": 1,
+          "pcmWebsocketDisconnects": 0,
+          "pcmWebsocketErrors": 0
+        }
+      },
+      "outcome": "success",
+      "startedAtMonotonicMs": 36849.608334
+    },
+    {
+      "completedAtMonotonicMs": 37894.732542,
+      "diagnostics": {
+        "schemaVersion": 3,
+        "producedAtMs": 35650,
+        "control": {
+          "websocketStartAttempts": 1,
+          "websocketConnections": 1,
+          "websocketDisconnects": 0,
+          "websocketErrors": 0,
+          "wifiDisconnects": 2,
+          "protocolFailures": 0,
+          "receiveFailures": 0,
+          "sendFailures": 0,
+          "lastWifiDisconnectReason": 205,
+          "lastErrorGeneration": 0,
+          "lastErrorType": 0,
+          "lastTlsError": 0,
+          "lastTlsStackError": 0,
+          "lastTransportErrno": 0,
+          "lastHandshakeStatusCode": 0,
+          "lastCloseStatusCode": 0,
+          "protocolFailureGeneration": 0,
+          "lastApplicationCapnwebGeneration": 0,
+          "lastApplicationCapnwebStatus": 0,
+          "lastControlReceiveStatus": 0,
+          "messagesSent": 157,
+          "messagesDiscarded": 0,
+          "inboxDiscarded": 0,
+          "outboxDiscarded": 0,
+          "inbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 107,
+            "messagesConsumed": 105,
+            "producerBackpressure": 0,
+            "highWaterSlots": 4,
+            "currentSlots": 2
+          },
+          "outbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 157,
+            "messagesConsumed": 157,
+            "producerBackpressure": 0,
+            "highWaterSlots": 2,
+            "currentSlots": 0
+          }
+        },
+        "network": {
+          "wifiConnected": true,
+          "wifiRssiDbm": -36,
+          "pcmWebsocketConnections": 1,
+          "pcmWebsocketDisconnects": 0,
+          "pcmWebsocketErrors": 0
+        }
+      },
+      "outcome": "success",
+      "startedAtMonotonicMs": 37852.735084
+    },
+    {
+      "completedAtMonotonicMs": 38884.224625,
+      "diagnostics": {
+        "schemaVersion": 3,
+        "producedAtMs": 36639,
+        "control": {
+          "websocketStartAttempts": 1,
+          "websocketConnections": 1,
+          "websocketDisconnects": 0,
+          "websocketErrors": 0,
+          "wifiDisconnects": 2,
+          "protocolFailures": 0,
+          "receiveFailures": 0,
+          "sendFailures": 0,
+          "lastWifiDisconnectReason": 205,
+          "lastErrorGeneration": 0,
+          "lastErrorType": 0,
+          "lastTlsError": 0,
+          "lastTlsStackError": 0,
+          "lastTransportErrno": 0,
+          "lastHandshakeStatusCode": 0,
+          "lastCloseStatusCode": 0,
+          "protocolFailureGeneration": 0,
+          "lastApplicationCapnwebGeneration": 0,
+          "lastApplicationCapnwebStatus": 0,
+          "lastControlReceiveStatus": 0,
+          "messagesSent": 164,
+          "messagesDiscarded": 0,
+          "inboxDiscarded": 0,
+          "outboxDiscarded": 0,
+          "inbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 112,
+            "messagesConsumed": 110,
+            "producerBackpressure": 0,
+            "highWaterSlots": 4,
+            "currentSlots": 2
+          },
+          "outbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 164,
+            "messagesConsumed": 164,
+            "producerBackpressure": 0,
+            "highWaterSlots": 2,
+            "currentSlots": 0
+          }
+        },
+        "network": {
+          "wifiConnected": true,
+          "wifiRssiDbm": -35,
+          "pcmWebsocketConnections": 1,
+          "pcmWebsocketDisconnects": 0,
+          "pcmWebsocketErrors": 0
+        }
+      },
+      "outcome": "success",
+      "startedAtMonotonicMs": 38844.040917
+    },
+    {
+      "completedAtMonotonicMs": 39872.083417,
+      "diagnostics": {
+        "schemaVersion": 3,
+        "producedAtMs": 37628,
+        "control": {
+          "websocketStartAttempts": 1,
+          "websocketConnections": 1,
+          "websocketDisconnects": 0,
+          "websocketErrors": 0,
+          "wifiDisconnects": 2,
+          "protocolFailures": 0,
+          "receiveFailures": 0,
+          "sendFailures": 0,
+          "lastWifiDisconnectReason": 205,
+          "lastErrorGeneration": 0,
+          "lastErrorType": 0,
+          "lastTlsError": 0,
+          "lastTlsStackError": 0,
+          "lastTransportErrno": 0,
+          "lastHandshakeStatusCode": 0,
+          "lastCloseStatusCode": 0,
+          "protocolFailureGeneration": 0,
+          "lastApplicationCapnwebGeneration": 0,
+          "lastApplicationCapnwebStatus": 0,
+          "lastControlReceiveStatus": 0,
+          "messagesSent": 174,
+          "messagesDiscarded": 0,
+          "inboxDiscarded": 0,
+          "outboxDiscarded": 0,
+          "inbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 118,
+            "messagesConsumed": 116,
+            "producerBackpressure": 0,
+            "highWaterSlots": 4,
+            "currentSlots": 2
+          },
+          "outbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 174,
+            "messagesConsumed": 174,
+            "producerBackpressure": 0,
+            "highWaterSlots": 2,
+            "currentSlots": 0
+          }
+        },
+        "network": {
+          "wifiConnected": true,
+          "wifiRssiDbm": -39,
+          "pcmWebsocketConnections": 1,
+          "pcmWebsocketDisconnects": 0,
+          "pcmWebsocketErrors": 0
+        }
+      },
+      "outcome": "success",
+      "startedAtMonotonicMs": 39844.496125
+    },
+    {
+      "completedAtMonotonicMs": 40438.900209,
+      "diagnostics": {
+        "schemaVersion": 3,
+        "producedAtMs": 38197,
+        "control": {
+          "websocketStartAttempts": 1,
+          "websocketConnections": 1,
+          "websocketDisconnects": 0,
+          "websocketErrors": 0,
+          "wifiDisconnects": 2,
+          "protocolFailures": 0,
+          "receiveFailures": 0,
+          "sendFailures": 0,
+          "lastWifiDisconnectReason": 205,
+          "lastErrorGeneration": 0,
+          "lastErrorType": 0,
+          "lastTlsError": 0,
+          "lastTlsStackError": 0,
+          "lastTransportErrno": 0,
+          "lastHandshakeStatusCode": 0,
+          "lastCloseStatusCode": 0,
+          "protocolFailureGeneration": 0,
+          "lastApplicationCapnwebGeneration": 0,
+          "lastApplicationCapnwebStatus": 0,
+          "lastControlReceiveStatus": 0,
+          "messagesSent": 175,
+          "messagesDiscarded": 0,
+          "inboxDiscarded": 0,
+          "outboxDiscarded": 0,
+          "inbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 121,
+            "messagesConsumed": 119,
+            "producerBackpressure": 0,
+            "highWaterSlots": 4,
+            "currentSlots": 2
+          },
+          "outbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 175,
+            "messagesConsumed": 175,
+            "producerBackpressure": 0,
+            "highWaterSlots": 2,
+            "currentSlots": 0
+          }
+        },
+        "network": {
+          "wifiConnected": true,
+          "wifiRssiDbm": -41,
+          "pcmWebsocketConnections": 1,
+          "pcmWebsocketDisconnects": 1,
+          "pcmWebsocketErrors": 0
+        }
+      },
+      "outcome": "success",
+      "startedAtMonotonicMs": 40414.705542
+    }
+  ],
+  "network": {
+    "evidence": {
+      "audioInterval": {
+        "completedAtMonotonicMs": 40438.945,
+        "startedAtMonotonicMs": 21842.124459
+      },
+      "deviceNetwork": {
+        "coverage": {
+          "completedAtMonotonicMs": 40438.945,
+          "startedAtMonotonicMs": 21842.124459
+        },
+        "expectedSampleCount": 20,
+        "minimumRssiDbm": -75,
+        "samples": [
+          {
+            "capturedAtMonotonicMs": 21886.217625,
+            "linkUp": true,
+            "rssiDbm": -41,
+            "wifiDisconnectCount": 2
+          },
+          {
+            "capturedAtMonotonicMs": 22881.021084,
+            "linkUp": true,
+            "rssiDbm": -40,
+            "wifiDisconnectCount": 2
+          },
+          {
+            "capturedAtMonotonicMs": 23886.267334,
+            "linkUp": true,
+            "rssiDbm": -39,
+            "wifiDisconnectCount": 2
+          },
+          {
+            "capturedAtMonotonicMs": 24889.073209,
+            "linkUp": true,
+            "rssiDbm": -43,
+            "wifiDisconnectCount": 2
+          },
+          {
+            "capturedAtMonotonicMs": 25879.026875,
+            "linkUp": true,
+            "rssiDbm": -44,
+            "wifiDisconnectCount": 2
+          },
+          {
+            "capturedAtMonotonicMs": 26890.909042,
+            "linkUp": true,
+            "rssiDbm": -42,
+            "wifiDisconnectCount": 2
+          },
+          {
+            "capturedAtMonotonicMs": 27907.595917,
+            "linkUp": true,
+            "rssiDbm": -39,
+            "wifiDisconnectCount": 2
+          },
+          {
+            "capturedAtMonotonicMs": 28902.155459,
+            "linkUp": true,
+            "rssiDbm": -34,
+            "wifiDisconnectCount": 2
+          },
+          {
+            "capturedAtMonotonicMs": 29883.136875,
+            "linkUp": true,
+            "rssiDbm": -35,
+            "wifiDisconnectCount": 2
+          },
+          {
+            "capturedAtMonotonicMs": 30879.470792,
+            "linkUp": true,
+            "rssiDbm": -36,
+            "wifiDisconnectCount": 2
+          },
+          {
+            "capturedAtMonotonicMs": 31877.591959,
+            "linkUp": true,
+            "rssiDbm": -42,
+            "wifiDisconnectCount": 2
+          },
+          {
+            "capturedAtMonotonicMs": 32890.981834,
+            "linkUp": true,
+            "rssiDbm": -40,
+            "wifiDisconnectCount": 2
+          },
+          {
+            "capturedAtMonotonicMs": 33882.584,
+            "linkUp": true,
+            "rssiDbm": -39,
+            "wifiDisconnectCount": 2
+          },
+          {
+            "capturedAtMonotonicMs": 34891.396584,
+            "linkUp": true,
+            "rssiDbm": -36,
+            "wifiDisconnectCount": 2
+          },
+          {
+            "capturedAtMonotonicMs": 35889.511125,
+            "linkUp": true,
+            "rssiDbm": -35,
+            "wifiDisconnectCount": 2
+          },
+          {
+            "capturedAtMonotonicMs": 36877.738667,
+            "linkUp": true,
+            "rssiDbm": -36,
+            "wifiDisconnectCount": 2
+          },
+          {
+            "capturedAtMonotonicMs": 37894.732542,
+            "linkUp": true,
+            "rssiDbm": -36,
+            "wifiDisconnectCount": 2
+          },
+          {
+            "capturedAtMonotonicMs": 38884.224625,
+            "linkUp": true,
+            "rssiDbm": -35,
+            "wifiDisconnectCount": 2
+          },
+          {
+            "capturedAtMonotonicMs": 39872.083417,
+            "linkUp": true,
+            "rssiDbm": -39,
+            "wifiDisconnectCount": 2
+          },
+          {
+            "capturedAtMonotonicMs": 40438.900209,
+            "linkUp": true,
+            "rssiDbm": -41,
+            "wifiDisconnectCount": 2
+          }
+        ]
+      },
+      "dnsAndConnect": {
+        "kind": "not-applicable",
+        "reason": "direct-lan"
+      },
+      "hostReachability": {
+        "device": {
+          "coverage": {
+            "completedAtMonotonicMs": 40438.945,
+            "startedAtMonotonicMs": 21842.124459
+          },
+          "expectedSampleCount": 19,
+          "maximumHealthyRttMs": 100,
+          "maximumHealthySampleGapMs": 1500,
+          "samples": [
+            {
+              "completedAtMonotonicMs": 21860.546542,
+              "outcome": "reply",
+              "rttMs": 16.42,
+              "scheduledAtMonotonicMs": 21842.168709
+            },
+            {
+              "completedAtMonotonicMs": 22854.043084,
+              "outcome": "reply",
+              "rttMs": 5.752,
+              "scheduledAtMonotonicMs": 22842.787834
+            },
+            {
+              "completedAtMonotonicMs": 23856.982667,
+              "outcome": "reply",
+              "rttMs": 5.551,
+              "scheduledAtMonotonicMs": 23843.4985
+            },
+            {
+              "completedAtMonotonicMs": 24863.660167,
+              "outcome": "reply",
+              "rttMs": 14.978,
+              "scheduledAtMonotonicMs": 24843.588917
+            },
+            {
+              "completedAtMonotonicMs": 25850.260792,
+              "outcome": "reply",
+              "rttMs": 4.534,
+              "scheduledAtMonotonicMs": 25842.027625
+            },
+            {
+              "completedAtMonotonicMs": 26855.777584,
+              "outcome": "reply",
+              "rttMs": 8.502,
+              "scheduledAtMonotonicMs": 26842.452209
+            },
+            {
+              "completedAtMonotonicMs": 27867.075167,
+              "outcome": "reply",
+              "rttMs": 18.884,
+              "scheduledAtMonotonicMs": 27842.651417
+            },
+            {
+              "completedAtMonotonicMs": 28864.949334,
+              "outcome": "reply",
+              "rttMs": 19.923,
+              "scheduledAtMonotonicMs": 28842.88175
+            },
+            {
+              "completedAtMonotonicMs": 29856.756,
+              "outcome": "reply",
+              "rttMs": 5.416,
+              "scheduledAtMonotonicMs": 29843.896292
+            },
+            {
+              "completedAtMonotonicMs": 30853.517584,
+              "outcome": "reply",
+              "rttMs": 7.17,
+              "scheduledAtMonotonicMs": 30841.66
+            },
+            {
+              "completedAtMonotonicMs": 31855.00525,
+              "outcome": "reply",
+              "rttMs": 7.804,
+              "scheduledAtMonotonicMs": 31842.063334
+            },
+            {
+              "completedAtMonotonicMs": 32855.895625,
+              "outcome": "reply",
+              "rttMs": 7.271,
+              "scheduledAtMonotonicMs": 32843.280667
+            },
+            {
+              "completedAtMonotonicMs": 33855.85025,
+              "outcome": "reply",
+              "rttMs": 6.269,
+              "scheduledAtMonotonicMs": 33842.717209
+            },
+            {
+              "completedAtMonotonicMs": 34855.299375,
+              "outcome": "reply",
+              "rttMs": 4.588,
+              "scheduledAtMonotonicMs": 34843.111584
+            },
+            {
+              "completedAtMonotonicMs": 35857.809334,
+              "outcome": "reply",
+              "rttMs": 6.065,
+              "scheduledAtMonotonicMs": 35843.97375
+            },
+            {
+              "completedAtMonotonicMs": 36858.435125,
+              "outcome": "reply",
+              "rttMs": 5.464,
+              "scheduledAtMonotonicMs": 36843.989417
+            },
+            {
+              "completedAtMonotonicMs": 37861.598292,
+              "outcome": "reply",
+              "rttMs": 9.337,
+              "scheduledAtMonotonicMs": 37842.624
+            },
+            {
+              "completedAtMonotonicMs": 38850.101625,
+              "outcome": "reply",
+              "rttMs": 4.697,
+              "scheduledAtMonotonicMs": 38841.183917
+            },
+            {
+              "completedAtMonotonicMs": 39850.749084,
+              "outcome": "reply",
+              "rttMs": 4.937,
+              "scheduledAtMonotonicMs": 39842.883
+            }
+          ]
+        },
+        "router": {
+          "coverage": {
+            "completedAtMonotonicMs": 40438.945,
+            "startedAtMonotonicMs": 21842.124459
+          },
+          "expectedSampleCount": 19,
+          "maximumHealthyRttMs": 50,
+          "maximumHealthySampleGapMs": 1500,
+          "samples": [
+            {
+              "completedAtMonotonicMs": 21862.813709,
+              "outcome": "reply",
+              "rttMs": 18.561,
+              "scheduledAtMonotonicMs": 21842.168709
+            },
+            {
+              "completedAtMonotonicMs": 22852.299167,
+              "outcome": "reply",
+              "rttMs": 3.82,
+              "scheduledAtMonotonicMs": 22842.787834
+            },
+            {
+              "completedAtMonotonicMs": 23855.91075,
+              "outcome": "reply",
+              "rttMs": 2.847,
+              "scheduledAtMonotonicMs": 23843.4985
+            },
+            {
+              "completedAtMonotonicMs": 24862.04075,
+              "outcome": "reply",
+              "rttMs": 12.873,
+              "scheduledAtMonotonicMs": 24843.588917
+            },
+            {
+              "completedAtMonotonicMs": 25849.583209,
+              "outcome": "reply",
+              "rttMs": 2.882,
+              "scheduledAtMonotonicMs": 25842.027625
+            },
+            {
+              "completedAtMonotonicMs": 26854.882375,
+              "outcome": "reply",
+              "rttMs": 6.68,
+              "scheduledAtMonotonicMs": 26842.452209
+            },
+            {
+              "completedAtMonotonicMs": 27865.189459,
+              "outcome": "reply",
+              "rttMs": 16.389,
+              "scheduledAtMonotonicMs": 27842.651417
+            },
+            {
+              "completedAtMonotonicMs": 28863.25175,
+              "outcome": "reply",
+              "rttMs": 17.985,
+              "scheduledAtMonotonicMs": 28842.88175
+            },
+            {
+              "completedAtMonotonicMs": 29855.717667,
+              "outcome": "reply",
+              "rttMs": 3.383,
+              "scheduledAtMonotonicMs": 29843.896292
+            },
+            {
+              "completedAtMonotonicMs": 30849.80925,
+              "outcome": "reply",
+              "rttMs": 3.545,
+              "scheduledAtMonotonicMs": 30841.66
+            },
+            {
+              "completedAtMonotonicMs": 31853.75025,
+              "outcome": "reply",
+              "rttMs": 6.522,
+              "scheduledAtMonotonicMs": 31842.063334
+            },
+            {
+              "completedAtMonotonicMs": 32853.784875,
+              "outcome": "reply",
+              "rttMs": 4.609,
+              "scheduledAtMonotonicMs": 32843.280667
+            },
+            {
+              "completedAtMonotonicMs": 33853.742292,
+              "outcome": "reply",
+              "rttMs": 4.033,
+              "scheduledAtMonotonicMs": 33842.717209
+            },
+            {
+              "completedAtMonotonicMs": 34855.903792,
+              "outcome": "reply",
+              "rttMs": 3.541,
+              "scheduledAtMonotonicMs": 34843.111584
+            },
+            {
+              "completedAtMonotonicMs": 35857.269459,
+              "outcome": "reply",
+              "rttMs": 2.968,
+              "scheduledAtMonotonicMs": 35843.97375
+            },
+            {
+              "completedAtMonotonicMs": 36857.961584,
+              "outcome": "reply",
+              "rttMs": 4.425,
+              "scheduledAtMonotonicMs": 36843.989417
+            },
+            {
+              "completedAtMonotonicMs": 37860.0215,
+              "outcome": "reply",
+              "rttMs": 6.146,
+              "scheduledAtMonotonicMs": 37842.624
+            },
+            {
+              "completedAtMonotonicMs": 38849.5295,
+              "outcome": "reply",
+              "rttMs": 3.743,
+              "scheduledAtMonotonicMs": 38841.183917
+            },
+            {
+              "completedAtMonotonicMs": 39849.47425,
+              "outcome": "reply",
+              "rttMs": 3.288,
+              "scheduledAtMonotonicMs": 39842.883
+            }
+          ]
+        },
+        "worker": {
+          "coverage": {
+            "completedAtMonotonicMs": 40438.945,
+            "startedAtMonotonicMs": 21842.124459
+          },
+          "expectedSampleCount": 19,
+          "maximumHealthyRttMs": 100,
+          "maximumHealthySampleGapMs": 1500,
+          "samples": [
+            {
+              "completedAtMonotonicMs": 21844.719042,
+              "outcome": "reply",
+              "rttMs": 0.094,
+              "scheduledAtMonotonicMs": 21842.168709
+            },
+            {
+              "completedAtMonotonicMs": 22849.823625,
+              "outcome": "reply",
+              "rttMs": 0.151,
+              "scheduledAtMonotonicMs": 22842.787834
+            },
+            {
+              "completedAtMonotonicMs": 23855.176959,
+              "outcome": "reply",
+              "rttMs": 0.148,
+              "scheduledAtMonotonicMs": 23843.4985
+            },
+            {
+              "completedAtMonotonicMs": 24849.609917,
+              "outcome": "reply",
+              "rttMs": 0.14,
+              "scheduledAtMonotonicMs": 24843.588917
+            },
+            {
+              "completedAtMonotonicMs": 25847.662292,
+              "outcome": "reply",
+              "rttMs": 0.091,
+              "scheduledAtMonotonicMs": 25842.027625
+            },
+            {
+              "completedAtMonotonicMs": 26849.386792,
+              "outcome": "reply",
+              "rttMs": 0.105,
+              "scheduledAtMonotonicMs": 26842.452209
+            },
+            {
+              "completedAtMonotonicMs": 27849.5305,
+              "outcome": "reply",
+              "rttMs": 0.196,
+              "scheduledAtMonotonicMs": 27842.651417
+            },
+            {
+              "completedAtMonotonicMs": 28845.528209,
+              "outcome": "reply",
+              "rttMs": 0.133,
+              "scheduledAtMonotonicMs": 28842.88175
+            },
+            {
+              "completedAtMonotonicMs": 29853.661209,
+              "outcome": "reply",
+              "rttMs": 0.213,
+              "scheduledAtMonotonicMs": 29843.896292
+            },
+            {
+              "completedAtMonotonicMs": 30847.020042,
+              "outcome": "reply",
+              "rttMs": 0.174,
+              "scheduledAtMonotonicMs": 30841.66
+            },
+            {
+              "completedAtMonotonicMs": 31848.25375,
+              "outcome": "reply",
+              "rttMs": 0.15,
+              "scheduledAtMonotonicMs": 31842.063334
+            },
+            {
+              "completedAtMonotonicMs": 32851.718,
+              "outcome": "reply",
+              "rttMs": 0.125,
+              "scheduledAtMonotonicMs": 32843.280667
+            },
+            {
+              "completedAtMonotonicMs": 33851.050625,
+              "outcome": "reply",
+              "rttMs": 0.216,
+              "scheduledAtMonotonicMs": 33842.717209
+            },
+            {
+              "completedAtMonotonicMs": 34855.263,
+              "outcome": "reply",
+              "rttMs": 0.372,
+              "scheduledAtMonotonicMs": 34843.111584
+            },
+            {
+              "completedAtMonotonicMs": 35856.658,
+              "outcome": "reply",
+              "rttMs": 0.225,
+              "scheduledAtMonotonicMs": 35843.97375
+            },
+            {
+              "completedAtMonotonicMs": 36855.66225,
+              "outcome": "reply",
+              "rttMs": 0.215,
+              "scheduledAtMonotonicMs": 36843.989417
+            },
+            {
+              "completedAtMonotonicMs": 37855.964334,
+              "outcome": "reply",
+              "rttMs": 0.115,
+              "scheduledAtMonotonicMs": 37842.624
+            },
+            {
+              "completedAtMonotonicMs": 38847.026375,
+              "outcome": "reply",
+              "rttMs": 0.16,
+              "scheduledAtMonotonicMs": 38841.183917
+            },
+            {
+              "completedAtMonotonicMs": 39846.520084,
+              "outcome": "reply",
+              "rttMs": 0.095,
+              "scheduledAtMonotonicMs": 39842.883
+            }
+          ]
+        }
+      },
+      "socketCounters": {
+        "control": {
+          "coverage": {
+            "completedAtMonotonicMs": 40438.945,
+            "startedAtMonotonicMs": 21842.124459
+          },
+          "expectedSampleCount": 20,
+          "samples": [
+            {
+              "capturedAtMonotonicMs": 21886.217625,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            },
+            {
+              "capturedAtMonotonicMs": 22881.021084,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            },
+            {
+              "capturedAtMonotonicMs": 23886.267334,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            },
+            {
+              "capturedAtMonotonicMs": 24889.073209,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            },
+            {
+              "capturedAtMonotonicMs": 25879.026875,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            },
+            {
+              "capturedAtMonotonicMs": 26890.909042,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            },
+            {
+              "capturedAtMonotonicMs": 27907.595917,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            },
+            {
+              "capturedAtMonotonicMs": 28902.155459,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            },
+            {
+              "capturedAtMonotonicMs": 29883.136875,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            },
+            {
+              "capturedAtMonotonicMs": 30879.470792,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            },
+            {
+              "capturedAtMonotonicMs": 31877.591959,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            },
+            {
+              "capturedAtMonotonicMs": 32890.981834,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            },
+            {
+              "capturedAtMonotonicMs": 33882.584,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            },
+            {
+              "capturedAtMonotonicMs": 34891.396584,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            },
+            {
+              "capturedAtMonotonicMs": 35889.511125,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            },
+            {
+              "capturedAtMonotonicMs": 36877.738667,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            },
+            {
+              "capturedAtMonotonicMs": 37894.732542,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            },
+            {
+              "capturedAtMonotonicMs": 38884.224625,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            },
+            {
+              "capturedAtMonotonicMs": 39872.083417,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            },
+            {
+              "capturedAtMonotonicMs": 40438.900209,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            }
+          ]
+        },
+        "pcm": {
+          "coverage": {
+            "completedAtMonotonicMs": 40438.945,
+            "startedAtMonotonicMs": 21842.124459
+          },
+          "expectedSampleCount": 20,
+          "samples": [
+            {
+              "capturedAtMonotonicMs": 21886.217625,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            },
+            {
+              "capturedAtMonotonicMs": 22881.021084,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            },
+            {
+              "capturedAtMonotonicMs": 23886.267334,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            },
+            {
+              "capturedAtMonotonicMs": 24889.073209,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            },
+            {
+              "capturedAtMonotonicMs": 25879.026875,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            },
+            {
+              "capturedAtMonotonicMs": 26890.909042,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            },
+            {
+              "capturedAtMonotonicMs": 27907.595917,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            },
+            {
+              "capturedAtMonotonicMs": 28902.155459,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            },
+            {
+              "capturedAtMonotonicMs": 29883.136875,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            },
+            {
+              "capturedAtMonotonicMs": 30879.470792,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            },
+            {
+              "capturedAtMonotonicMs": 31877.591959,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            },
+            {
+              "capturedAtMonotonicMs": 32890.981834,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            },
+            {
+              "capturedAtMonotonicMs": 33882.584,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            },
+            {
+              "capturedAtMonotonicMs": 34891.396584,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            },
+            {
+              "capturedAtMonotonicMs": 35889.511125,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            },
+            {
+              "capturedAtMonotonicMs": 36877.738667,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            },
+            {
+              "capturedAtMonotonicMs": 37894.732542,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            },
+            {
+              "capturedAtMonotonicMs": 38884.224625,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            },
+            {
+              "capturedAtMonotonicMs": 39872.083417,
+              "connected": true,
+              "disconnectCount": 0,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            },
+            {
+              "capturedAtMonotonicMs": 40438.900209,
+              "connected": false,
+              "disconnectCount": 1,
+              "reconnectCount": 1,
+              "transportErrorCount": 0
+            }
+          ]
+        }
+      },
+      "terminalPcmSocket": {
+        "coverage": {
+          "completedAtMonotonicMs": 40438.945,
+          "startedAtMonotonicMs": 21842.124459
+        },
+        "disconnectCount": 1,
+        "receivedBytes": 0,
+        "reconnectCount": 0,
+        "sentBytes": 0,
+        "stateAtIntervalEnd": "closed",
+        "transportErrorCount": 1
+      }
+    },
+    "reasons": [
+      {
+        "code": "pcm-socket-disconnected",
+        "message": "pcm socket was disconnected at 40438.900209 ms."
+      },
+      {
+        "code": "pcm-socket-disconnect",
+        "message": "pcm socket disconnect count increased from 0 to 1."
+      },
+      {
+        "code": "terminal-pcm-socket-closed",
+        "message": "Terminal PCM socket state was closed."
+      },
+      {
+        "code": "terminal-pcm-socket-disconnect",
+        "message": "Terminal PCM socket recorded 1 disconnect incident(s)."
+      },
+      {
+        "code": "terminal-pcm-socket-transport-error",
+        "message": "Terminal PCM socket recorded 1 transport error incident(s)."
+      },
+      {
+        "code": "terminal-pcm-no-progress",
+        "message": "Terminal PCM socket aggregate contains no byte progress."
+      }
+    ],
+    "verdict": "network-invalid"
+  },
+  "rawPcmEvidence": {
+    "bridgeEvidence": {
+      "closeEvents": [
+        {
+          "closedAtMonotonicMs": 40403.660959,
+          "metrics": {
+            "closeCode": 4002,
+            "closeReason": "invalid-provider-pcm-message",
+            "controlMessageTrace": [],
+            "deviceSocketCloseDisposition": "webSocketClose",
+            "deviceSocketMaximumBufferedBytes": 0,
+            "deviceSocketMaximumPayloadBytesInFlight": 4480,
+            "deviceSocketMaximumSendCallbackLatencyMs": 1.4400000000023283,
+            "deviceSocketMaximumSendCallbacksInFlight": 7,
+            "deviceSocketOldestSendCallbackAgeMsAtClose": 0,
+            "deviceSocketPayloadBytesInFlightAtClose": 0,
+            "deviceSocketSendCallbacksInFlightAtClose": 0,
+            "deviceToWorkerBytes": 139520,
+            "deviceToWorkerMessages": 218,
+            "elapsedMs": 20320.622625,
+            "endpoint": "/pcm",
+            "maximumBufferedBytes": 5120,
+            "protocol": "iterate.kit.pcm.v1",
+            "workerToDeviceBytes": 261760,
+            "workerToDeviceMaximumInterarrivalMs": 5265.890625,
+            "workerToDeviceMessages": 412
+          }
+        }
+      ],
+      "historyTruncated": false,
+      "openEvents": [
+        {
+          "endpoint": "/api",
+          "protocol": "",
+          "remoteAddress": "192.168.0.21",
+          "remotePort": 63450,
+          "startedAtMonotonicMs": 19264.313959
+        },
+        {
+          "endpoint": "/pcm",
+          "protocol": "iterate.kit.pcm.v1",
+          "remoteAddress": "192.168.0.21",
+          "remotePort": 63451,
+          "startedAtMonotonicMs": 20083.004584
+        }
+      ]
+    },
+    "kind": "local-bridge",
+    "progress": {
+      "deviceToWorkerBytes": 0,
+      "workerToDeviceBytes": 0
+    }
+  },
+  "rawReachabilitySamples": [
+    {
+      "outcome": "reply",
+      "rttMs": 16.42,
+      "completedAtMonotonicMs": 21860.546542,
+      "host": "192.168.0.21",
+      "startedAtMonotonicMs": 21842.168709,
+      "target": "device"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 18.561,
+      "completedAtMonotonicMs": 21862.813709,
+      "host": "192.168.0.1",
+      "startedAtMonotonicMs": 21842.168709,
+      "target": "router"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 0.094,
+      "completedAtMonotonicMs": 21844.719042,
+      "host": "192.168.0.169",
+      "startedAtMonotonicMs": 21842.168709,
+      "target": "worker"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 5.752,
+      "completedAtMonotonicMs": 22854.043084,
+      "host": "192.168.0.21",
+      "startedAtMonotonicMs": 22842.787834,
+      "target": "device"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 3.82,
+      "completedAtMonotonicMs": 22852.299167,
+      "host": "192.168.0.1",
+      "startedAtMonotonicMs": 22842.787834,
+      "target": "router"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 0.151,
+      "completedAtMonotonicMs": 22849.823625,
+      "host": "192.168.0.169",
+      "startedAtMonotonicMs": 22842.787834,
+      "target": "worker"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 5.551,
+      "completedAtMonotonicMs": 23856.982667,
+      "host": "192.168.0.21",
+      "startedAtMonotonicMs": 23843.4985,
+      "target": "device"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 2.847,
+      "completedAtMonotonicMs": 23855.91075,
+      "host": "192.168.0.1",
+      "startedAtMonotonicMs": 23843.4985,
+      "target": "router"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 0.148,
+      "completedAtMonotonicMs": 23855.176959,
+      "host": "192.168.0.169",
+      "startedAtMonotonicMs": 23843.4985,
+      "target": "worker"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 14.978,
+      "completedAtMonotonicMs": 24863.660167,
+      "host": "192.168.0.21",
+      "startedAtMonotonicMs": 24843.588917,
+      "target": "device"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 12.873,
+      "completedAtMonotonicMs": 24862.04075,
+      "host": "192.168.0.1",
+      "startedAtMonotonicMs": 24843.588917,
+      "target": "router"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 0.14,
+      "completedAtMonotonicMs": 24849.609917,
+      "host": "192.168.0.169",
+      "startedAtMonotonicMs": 24843.588917,
+      "target": "worker"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 4.534,
+      "completedAtMonotonicMs": 25850.260792,
+      "host": "192.168.0.21",
+      "startedAtMonotonicMs": 25842.027625,
+      "target": "device"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 2.882,
+      "completedAtMonotonicMs": 25849.583209,
+      "host": "192.168.0.1",
+      "startedAtMonotonicMs": 25842.027625,
+      "target": "router"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 0.091,
+      "completedAtMonotonicMs": 25847.662292,
+      "host": "192.168.0.169",
+      "startedAtMonotonicMs": 25842.027625,
+      "target": "worker"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 8.502,
+      "completedAtMonotonicMs": 26855.777584,
+      "host": "192.168.0.21",
+      "startedAtMonotonicMs": 26842.452209,
+      "target": "device"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 6.68,
+      "completedAtMonotonicMs": 26854.882375,
+      "host": "192.168.0.1",
+      "startedAtMonotonicMs": 26842.452209,
+      "target": "router"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 0.105,
+      "completedAtMonotonicMs": 26849.386792,
+      "host": "192.168.0.169",
+      "startedAtMonotonicMs": 26842.452209,
+      "target": "worker"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 18.884,
+      "completedAtMonotonicMs": 27867.075167,
+      "host": "192.168.0.21",
+      "startedAtMonotonicMs": 27842.651417,
+      "target": "device"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 16.389,
+      "completedAtMonotonicMs": 27865.189459,
+      "host": "192.168.0.1",
+      "startedAtMonotonicMs": 27842.651417,
+      "target": "router"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 0.196,
+      "completedAtMonotonicMs": 27849.5305,
+      "host": "192.168.0.169",
+      "startedAtMonotonicMs": 27842.651417,
+      "target": "worker"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 19.923,
+      "completedAtMonotonicMs": 28864.949334,
+      "host": "192.168.0.21",
+      "startedAtMonotonicMs": 28842.88175,
+      "target": "device"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 17.985,
+      "completedAtMonotonicMs": 28863.25175,
+      "host": "192.168.0.1",
+      "startedAtMonotonicMs": 28842.88175,
+      "target": "router"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 0.133,
+      "completedAtMonotonicMs": 28845.528209,
+      "host": "192.168.0.169",
+      "startedAtMonotonicMs": 28842.88175,
+      "target": "worker"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 5.416,
+      "completedAtMonotonicMs": 29856.756,
+      "host": "192.168.0.21",
+      "startedAtMonotonicMs": 29843.896292,
+      "target": "device"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 3.383,
+      "completedAtMonotonicMs": 29855.717667,
+      "host": "192.168.0.1",
+      "startedAtMonotonicMs": 29843.896292,
+      "target": "router"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 0.213,
+      "completedAtMonotonicMs": 29853.661209,
+      "host": "192.168.0.169",
+      "startedAtMonotonicMs": 29843.896292,
+      "target": "worker"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 7.17,
+      "completedAtMonotonicMs": 30853.517584,
+      "host": "192.168.0.21",
+      "startedAtMonotonicMs": 30841.66,
+      "target": "device"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 3.545,
+      "completedAtMonotonicMs": 30849.80925,
+      "host": "192.168.0.1",
+      "startedAtMonotonicMs": 30841.66,
+      "target": "router"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 0.174,
+      "completedAtMonotonicMs": 30847.020042,
+      "host": "192.168.0.169",
+      "startedAtMonotonicMs": 30841.66,
+      "target": "worker"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 7.804,
+      "completedAtMonotonicMs": 31855.00525,
+      "host": "192.168.0.21",
+      "startedAtMonotonicMs": 31842.063334,
+      "target": "device"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 6.522,
+      "completedAtMonotonicMs": 31853.75025,
+      "host": "192.168.0.1",
+      "startedAtMonotonicMs": 31842.063334,
+      "target": "router"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 0.15,
+      "completedAtMonotonicMs": 31848.25375,
+      "host": "192.168.0.169",
+      "startedAtMonotonicMs": 31842.063334,
+      "target": "worker"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 7.271,
+      "completedAtMonotonicMs": 32855.895625,
+      "host": "192.168.0.21",
+      "startedAtMonotonicMs": 32843.280667,
+      "target": "device"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 4.609,
+      "completedAtMonotonicMs": 32853.784875,
+      "host": "192.168.0.1",
+      "startedAtMonotonicMs": 32843.280667,
+      "target": "router"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 0.125,
+      "completedAtMonotonicMs": 32851.718,
+      "host": "192.168.0.169",
+      "startedAtMonotonicMs": 32843.280667,
+      "target": "worker"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 6.269,
+      "completedAtMonotonicMs": 33855.85025,
+      "host": "192.168.0.21",
+      "startedAtMonotonicMs": 33842.717209,
+      "target": "device"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 4.033,
+      "completedAtMonotonicMs": 33853.742292,
+      "host": "192.168.0.1",
+      "startedAtMonotonicMs": 33842.717209,
+      "target": "router"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 0.216,
+      "completedAtMonotonicMs": 33851.050625,
+      "host": "192.168.0.169",
+      "startedAtMonotonicMs": 33842.717209,
+      "target": "worker"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 4.588,
+      "completedAtMonotonicMs": 34855.299375,
+      "host": "192.168.0.21",
+      "startedAtMonotonicMs": 34843.111584,
+      "target": "device"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 3.541,
+      "completedAtMonotonicMs": 34855.903792,
+      "host": "192.168.0.1",
+      "startedAtMonotonicMs": 34843.111584,
+      "target": "router"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 0.372,
+      "completedAtMonotonicMs": 34855.263,
+      "host": "192.168.0.169",
+      "startedAtMonotonicMs": 34843.111584,
+      "target": "worker"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 6.065,
+      "completedAtMonotonicMs": 35857.809334,
+      "host": "192.168.0.21",
+      "startedAtMonotonicMs": 35843.97375,
+      "target": "device"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 2.968,
+      "completedAtMonotonicMs": 35857.269459,
+      "host": "192.168.0.1",
+      "startedAtMonotonicMs": 35843.97375,
+      "target": "router"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 0.225,
+      "completedAtMonotonicMs": 35856.658,
+      "host": "192.168.0.169",
+      "startedAtMonotonicMs": 35843.97375,
+      "target": "worker"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 5.464,
+      "completedAtMonotonicMs": 36858.435125,
+      "host": "192.168.0.21",
+      "startedAtMonotonicMs": 36843.989417,
+      "target": "device"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 4.425,
+      "completedAtMonotonicMs": 36857.961584,
+      "host": "192.168.0.1",
+      "startedAtMonotonicMs": 36843.989417,
+      "target": "router"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 0.215,
+      "completedAtMonotonicMs": 36855.66225,
+      "host": "192.168.0.169",
+      "startedAtMonotonicMs": 36843.989417,
+      "target": "worker"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 9.337,
+      "completedAtMonotonicMs": 37861.598292,
+      "host": "192.168.0.21",
+      "startedAtMonotonicMs": 37842.624,
+      "target": "device"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 6.146,
+      "completedAtMonotonicMs": 37860.0215,
+      "host": "192.168.0.1",
+      "startedAtMonotonicMs": 37842.624,
+      "target": "router"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 0.115,
+      "completedAtMonotonicMs": 37855.964334,
+      "host": "192.168.0.169",
+      "startedAtMonotonicMs": 37842.624,
+      "target": "worker"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 4.697,
+      "completedAtMonotonicMs": 38850.101625,
+      "host": "192.168.0.21",
+      "startedAtMonotonicMs": 38841.183917,
+      "target": "device"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 3.743,
+      "completedAtMonotonicMs": 38849.5295,
+      "host": "192.168.0.1",
+      "startedAtMonotonicMs": 38841.183917,
+      "target": "router"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 0.16,
+      "completedAtMonotonicMs": 38847.026375,
+      "host": "192.168.0.169",
+      "startedAtMonotonicMs": 38841.183917,
+      "target": "worker"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 4.937,
+      "completedAtMonotonicMs": 39850.749084,
+      "host": "192.168.0.21",
+      "startedAtMonotonicMs": 39842.883,
+      "target": "device"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 3.288,
+      "completedAtMonotonicMs": 39849.47425,
+      "host": "192.168.0.1",
+      "startedAtMonotonicMs": 39842.883,
+      "target": "router"
+    },
+    {
+      "outcome": "reply",
+      "rttMs": 0.095,
+      "completedAtMonotonicMs": 39846.520084,
+      "host": "192.168.0.169",
+      "startedAtMonotonicMs": 39842.883,
+      "target": "worker"
+    }
+  ],
+  "schemaVersion": 2
+}

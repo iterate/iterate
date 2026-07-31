@@ -1,6 +1,9 @@
 idf_component_register(
   SRCS
+    "src/callback_budget.c"
+    "src/conversation.c"
     "src/camera.c"
+    "src/device_event_stream.c"
     "src/leds.c"
     "src/metrics.c"
     "src/push_to_talk.c"

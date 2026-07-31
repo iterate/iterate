@@ -1,0 +1,23 @@
+{
+  "text": " Hi there, lantern.",
+  "segments": [
+    {
+      "id": 0,
+      "seek": 0,
+      "start": 0.0,
+      "end": 2.12,
+      "text": " Hi there, lantern.",
+      "tokens": [50365, 2421, 456, 11, 34031, 13, 50475],
+      "temperature": 0,
+      "avg_logprob": -0.8247032165527344,
+      "compression_ratio": 0.6923076923076923,
+      "no_speech_prob": 2.3444954311280242e-11,
+      "words": [
+        { "word": " Hi", "start": 0.0, "end": 1.08, "probability": 0.87255859375 },
+        { "word": " there,", "start": 1.08, "end": 1.46, "probability": 0.90625 },
+        { "word": " lantern.", "start": 1.66, "end": 2.12, "probability": 0.50048828125 }
+      ]
+    }
+  ],
+  "language": "en"
+}

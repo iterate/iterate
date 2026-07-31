@@ -1,15 +1,16 @@
 import { newWebSocketRpcSession, type RpcStub } from "@iterate-com/capnweb";
 import { createWebSocketResponse, WebSocketPair } from "captun";
-import type { M5StickS3 } from "./m5sticks3-contract.ts";
-import type { LocalDevicePeer } from "./local-device-peer.ts";
 import {
   DevicePcmProxy,
   type DevicePcmDownlinkDeliveryMode,
   type DevicePcmInputMode,
   type DevicePcmSessionDescriptor,
   type DevicePcmSocketClose,
+  type PcmFrameObservation,
   type ProviderVoiceEvent,
 } from "../voice/device-pcm-proxy.ts";
+import type { LocalDevicePeer } from "./local-device-peer.ts";
+import type { M5StickS3 } from "./m5sticks3-contract.ts";
 
 interface PeerConnection {
   readonly remoteMain: RpcStub<M5StickS3>;
@@ -18,9 +19,12 @@ interface PeerConnection {
 
 export interface LocalDevicePeerServerOptions {
   connectVoiceProvider?(session: DevicePcmSessionDescriptor): Promise<WebSocket>;
+  pcmDeviceClockedInitialBurstFrames?: number;
   pcmDownlinkDeliveryMode?: DevicePcmDownlinkDeliveryMode;
   pcmMinimumDownlinkStartupFrames?: number;
   onVoiceFailure?(reason: string): void;
+  onDownlinkResponseComplete?(observedAtMonotonicMs: number): void;
+  onPcmFrame?(frame: PcmFrameObservation): void;
   onVoiceSocketClose?(close: DevicePcmSocketClose): void;
   onPcmSessionReady?(session: DevicePcmSessionDescriptor): void;
   onVoiceProviderEvent?(event: ProviderVoiceEvent): void;
@@ -41,10 +45,13 @@ export class LocalDevicePeerServer implements Disposable {
         authenticate: (projectId, token) =>
           this.#peer.acceptsProjectBearerCredentials(projectId, token),
         connectProvider: options.connectVoiceProvider,
+        deviceClockedInitialBurstFrames: options.pcmDeviceClockedInitialBurstFrames,
         downlinkDeliveryMode: options.pcmDownlinkDeliveryMode,
         frameBytes: options.pcmFrameBytes ?? 640,
         minimumDownlinkStartupFrames: options.pcmMinimumDownlinkStartupFrames,
         onFailure: options.onVoiceFailure,
+        onDownlinkResponseComplete: options.onDownlinkResponseComplete,
+        onPcmFrame: options.onPcmFrame,
         onProviderEvent: options.onVoiceProviderEvent,
         onSessionReady: options.onPcmSessionReady,
         onSocketClose: options.onVoiceSocketClose,

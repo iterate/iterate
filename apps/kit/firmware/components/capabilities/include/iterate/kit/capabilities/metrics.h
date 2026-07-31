@@ -1,6 +1,7 @@
 #ifndef ITERATE_KIT_CAPABILITIES_METRICS_H
 #define ITERATE_KIT_CAPABILITIES_METRICS_H
 
+#include "iterate/kit/capabilities/callback_budget.h"
 #include "iterate/kit/buffer_metrics.h"
 #include "iterate/kit/peer.h"
 #include "iterate/kit/status.h"
@@ -171,6 +172,24 @@ struct iterate_kit_control_diagnostics_sample {
     uint32_t high_water_slots;
     uint32_t current_slots;
   } control_inbox, control_outbox;
+  /*
+   * This is deliberately a sibling of the control object on the wire. Control
+   * reconnect evidence has an established schema and meaning; adding audio or
+   * radio state inside it would make every consumer reinterpret that object.
+   *
+   * `wifi_connected` comes from the transport's current association state.
+   * RSSI is a separate optional observation because querying AP info can fail
+   * during a roam even while the transport has not yet observed a disconnect.
+   * Never use wifi_rssi_dbm unless has_wifi_rssi_dbm is true.
+   */
+  struct {
+    bool wifi_connected;
+    bool has_wifi_rssi_dbm;
+    int32_t wifi_rssi_dbm;
+    uint32_t pcm_websocket_connections;
+    uint32_t pcm_websocket_disconnects;
+    uint32_t pcm_websocket_errors;
+  } network;
 };
 
 /**
@@ -243,14 +262,13 @@ struct iterate_kit_metrics_sample {
     /*
      * Buffer depth without evidence strength is actively misleading: zero can
      * mean empty, not exposed, or merely not sampled. Drivers opt in only after
-     * populating all six egress layers, so an older device cannot accidentally
+     * populating every egress layer, so an older device cannot accidentally
      * publish zero-initialized fields as exact observations.
      */
     bool has_buffers;
     struct {
       struct iterate_kit_buffer_metrics uplink_application;
       struct iterate_kit_buffer_metrics websocket_transmitter;
-      struct iterate_kit_buffer_metrics peer_unconfirmed;
       struct iterate_kit_buffer_metrics lwip_send;
       struct iterate_kit_buffer_metrics tls_egress;
       struct iterate_kit_buffer_metrics wifi_egress;
@@ -295,6 +313,7 @@ struct iterate_kit_metrics_subscription {
   struct capnweb_remote_capability callback;
   bool occupied;
   bool call_in_flight;
+  bool callback_budget_reserved;
   bool release_pending;
   enum iterate_kit_metrics_view view;
 };
@@ -321,6 +340,12 @@ struct iterate_kit_metrics_options {
    */
   char *diagnostics_expression_buffer;
   size_t diagnostics_expression_capacity;
+  /*
+   * Optional shared device-level callback admission. NULL preserves the
+   * standalone module's subscriber-local bounds; constrained device profiles
+   * should share one budget with every other callback-producing module.
+   */
+  struct iterate_kit_callback_budget *callback_budget;
 };
 
 /*
@@ -328,7 +353,14 @@ struct iterate_kit_metrics_options {
  * deliberate schema headroom. Keeping the requirement public lets resource
  * profiles account for the exact static RAM cost at compile time.
  */
-#define ITERATE_KIT_METRICS_DIAGNOSTICS_EXPRESSION_CAPACITY 1280U
+/*
+ * Schema v3's worst-width control and network objects occupy less than 1472
+ * bytes. A 1536-byte fixed tier preserves 64 bytes of deliberate schema
+ * headroom while costing one retained buffer per mounted device—not one slot
+ * in every control ring. The maximum-width serializer regression is the
+ * authority for changing this value.
+ */
+#define ITERATE_KIT_METRICS_DIAGNOSTICS_EXPRESSION_CAPACITY 1536U
 
 /**
  * Allocation-free subscription scheduler. Polling samples once per interval

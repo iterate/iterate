@@ -35,6 +35,17 @@ iterate_kit_status renderPng(
   return ITERATE_KIT_OK;
 }
 
+iterate_kit_status changeColour(
+    void *context, iterate_kit_screen_colour colour) {
+  if (colour != ITERATE_KIT_SCREEN_RED &&
+      colour != ITERATE_KIT_SCREEN_GREEN) {
+    return ITERATE_KIT_INVALID_ARGUMENT;
+  }
+  auto &hardware = *static_cast<CommonHardware *>(context);
+  hardware.screenColour = colour;
+  return ITERATE_KIT_OK;
+}
+
 iterate_kit_status sampleMetrics(
     void *context, iterate_kit_metrics_sample *sample) {
   if (sample == nullptr) return ITERATE_KIT_INVALID_ARGUMENT;
@@ -110,8 +121,15 @@ iterate_kit_status sampleMetrics(
    * values are never cited as evidence about physical network reliability.
    */
   sample->has_control_diagnostics = true;
-  sample->control_diagnostics.schema_version = 2U;
+  sample->control_diagnostics.schema_version = 3U;
   sample->control_diagnostics.produced_at_ms = sample->uptime_ms;
+  /*
+   * The host simulator has neither an ESP station nor a PCM WebSocket. Publish
+   * explicit disconnected/zero lifecycle facts while leaving RSSI absent;
+   * inventing a plausible signal value would let a host-only run masquerade as
+   * physical radio evidence.
+   */
+  sample->control_diagnostics.network.wifi_connected = false;
   return ITERATE_KIT_OK;
 }
 

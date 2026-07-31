@@ -1,0 +1,67 @@
+{
+  "text": " Hey man, how are you doing? Cool, now it's turn two. Yeah, that's really great of you, thank you.",
+  "segments": [
+    {
+      "id": 0,
+      "seek": 0,
+      "start": 0.0,
+      "end": 1.28,
+      "text": " Hey man, how are you doing?",
+      "tokens": [50365, 1911, 587, 11, 577, 366, 291, 884, 30, 50465],
+      "temperature": 0,
+      "avg_logprob": -0.25825702122279576,
+      "compression_ratio": 1.0777777777777777,
+      "no_speech_prob": 2.632264198276779e-12,
+      "words": [
+        { "word": " Hey", "start": 0.0, "end": 0.42, "probability": 0.67041015625 },
+        { "word": " man,", "start": 0.42, "end": 0.66, "probability": 0.8212890625 },
+        { "word": " how", "start": 0.78, "end": 0.86, "probability": 0.986328125 },
+        { "word": " are", "start": 0.86, "end": 0.98, "probability": 0.8212890625 },
+        { "word": " you", "start": 0.98, "end": 1.04, "probability": 0.9951171875 },
+        { "word": " doing?", "start": 1.04, "end": 1.28, "probability": 0.98193359375 }
+      ]
+    },
+    {
+      "id": 1,
+      "seek": 0,
+      "start": 1.88,
+      "end": 3.72,
+      "text": " Cool, now it's turn two.",
+      "tokens": [50465, 8561, 11, 586, 309, 311, 1261, 732, 13, 50565],
+      "temperature": 0,
+      "avg_logprob": -0.25825702122279576,
+      "compression_ratio": 1.0777777777777777,
+      "no_speech_prob": 2.632264198276779e-12,
+      "words": [
+        { "word": " Cool,", "start": 1.88, "end": 2.28, "probability": 0.5283203125 },
+        { "word": " now", "start": 2.98, "end": 3.12, "probability": 0.96044921875 },
+        { "word": " it's", "start": 3.12, "end": 3.32, "probability": 0.9638671875 },
+        { "word": " turn", "start": 3.32, "end": 3.48, "probability": 0.97509765625 },
+        { "word": " two.", "start": 3.48, "end": 3.72, "probability": 0.6181640625 }
+      ]
+    },
+    {
+      "id": 2,
+      "seek": 0,
+      "start": 4.4,
+      "end": 6.38,
+      "text": " Yeah, that's really great of you, thank you.",
+      "tokens": [50565, 865, 11, 300, 311, 534, 869, 295, 291, 11, 1309, 291, 13, 50715],
+      "temperature": 0,
+      "avg_logprob": -0.25825702122279576,
+      "compression_ratio": 1.0777777777777777,
+      "no_speech_prob": 2.632264198276779e-12,
+      "words": [
+        { "word": " Yeah,", "start": 4.4, "end": 4.46, "probability": 0.83935546875 },
+        { "word": " that's", "start": 4.6, "end": 4.8, "probability": 0.9951171875 },
+        { "word": " really", "start": 4.8, "end": 5.08, "probability": 0.99267578125 },
+        { "word": " great", "start": 5.08, "end": 5.52, "probability": 0.9970703125 },
+        { "word": " of", "start": 5.52, "end": 5.8, "probability": 0.9951171875 },
+        { "word": " you,", "start": 5.8, "end": 5.94, "probability": 0.99951171875 },
+        { "word": " thank", "start": 6.08, "end": 6.2, "probability": 0.99267578125 },
+        { "word": " you.", "start": 6.2, "end": 6.38, "probability": 0.99609375 }
+      ]
+    }
+  ],
+  "language": "en"
+}

@@ -1502,6 +1502,8 @@ void iterate_kit_esp_idf_itx_transport_metrics(
    * never delay audio or reconnect work, and per-counter monotonic evidence is
    * sufficient even when adjacent values come from slightly different moments.
    */
+  metrics->wifi_connected =
+      atomic_load_u32(&transport->wifi_connected) != 0U;
   metrics->wifi_connect_attempts =
       atomic_load_u32(&transport->wifi_connect_attempts);
   metrics->wifi_disconnects =

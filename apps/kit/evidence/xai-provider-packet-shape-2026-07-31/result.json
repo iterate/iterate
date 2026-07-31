@@ -1,0 +1,55 @@
+{
+  "binaryMessages": [
+    {
+      "byteLength": 7830,
+      "receivedAtMonotonicMs": 1020.678125
+    },
+    {
+      "byteLength": 20552,
+      "receivedAtMonotonicMs": 1259.1277919999998
+    },
+    {
+      "byteLength": 14680,
+      "receivedAtMonotonicMs": 1260.488875
+    },
+    {
+      "byteLength": 18596,
+      "receivedAtMonotonicMs": 1377.576458
+    },
+    {
+      "byteLength": 73400,
+      "receivedAtMonotonicMs": 1660.402333
+    },
+    {
+      "byteLength": 9788,
+      "receivedAtMonotonicMs": 1800.41075
+    },
+    {
+      "byteLength": 3376,
+      "receivedAtMonotonicMs": 1800.518833
+    }
+  ],
+  "completedAtUtc": "2026-07-31T11:32:48.141Z",
+  "maximumBinaryMessageBytes": 73400,
+  "oddBinaryMessageCount": 0,
+  "providerEventTypes": [
+    "session.created",
+    "conversation.created",
+    "ping",
+    "session.updated",
+    "conversation.item.added",
+    "response.created",
+    "response.output_item.added",
+    "conversation.item.added",
+    "response.content_part.added",
+    "response.output_audio_transcript.delta",
+    "response.output_audio_transcript.delta",
+    "response.output_audio_transcript.done",
+    "response.content_part.done",
+    "response.output_audio.done",
+    "response.output_item.done",
+    "response.done"
+  ],
+  "schemaVersion": 1,
+  "totalBinaryBytes": 148222
+}

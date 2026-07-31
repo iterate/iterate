@@ -120,13 +120,17 @@ static enum capnweb_status begin_provide(
     CAPNWEB_EXPRESSION_STRING,
     {.string = {"live", sizeof("live") - 1U}},
   };
+  static const struct capnweb_expression flatten_nested_paths = {
+    CAPNWEB_EXPRESSION_BOOLEAN,
+    {.boolean = true},
+  };
   struct capnweb_expression
       path_items[ITERATE_KIT_ITX_MOUNT_PATH_CAPACITY];
   struct capnweb_expression path;
   struct capnweb_expression capability;
   struct capnweb_expression instructions;
   struct capnweb_expression types;
-  struct capnweb_object_field fields[5];
+  struct capnweb_object_field fields[6];
   struct capnweb_expression argument;
   size_t field_count = 0U;
   size_t index;
@@ -166,6 +170,19 @@ static enum capnweb_status begin_provide(
   fields[field_count++] = (struct capnweb_object_field){
     {"capability", sizeof("capability") - 1U},
     &capability,
+  };
+  /*
+   * An exported Cap'n Web capability is a path-building proxy, not a material
+   * JavaScript object tree. The capability host's ordinary nested replay
+   * awaits each intermediate member; awaiting `pushToTalk` would therefore
+   * issue an incomplete remote call before it ever reaches `start`. Ask the
+   * host to preserve the complete dotted path as one invocation envelope. The
+   * peer unwraps that envelope allocation-free into its existing static method
+   * table, so this compatibility boundary adds no queue or realtime work.
+   */
+  fields[field_count++] = (struct capnweb_object_field){
+    {"flattenNestedPaths", sizeof("flattenNestedPaths") - 1U},
+    &flatten_nested_paths,
   };
   if (mount->options.instructions != NULL) {
     instructions = (struct capnweb_expression){

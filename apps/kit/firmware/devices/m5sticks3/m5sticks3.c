@@ -4,8 +4,8 @@
 
 /*
  * This file is a composition root, not an M5 hardware driver. It chooses which
- * reusable capabilities describe an M5StickS3 and funnels both the main button
- * and remote push-to-talk calls through one bounded event queue. The actual
+ * reusable capabilities describe an M5StickS3 and funnels both physical
+ * buttons and remote lifecycle calls through one bounded event queue. The actual
  * GPIO/I2S/display/network implementation stays in the platform layer, where
  * task priority and board revisions can differ without forking the capability
  * contract.
@@ -17,18 +17,25 @@
  */
 static const char description[] =
     "{\"instructions\":\"An Iterate M5StickS3 with health metrics, a small "
-    "screen, push-to-talk button, microphone, and speaker. Hold the main "
-    "button to send audio on the separate bounded PCM socket.\",\"children\":{"
+    "screen, call-toggle button, manual push-to-talk button, microphone, and "
+    "speaker. Toggle a call with the top button, then hold the front button "
+    "only while speaking.\","
+    "\"children\":{"
     "\"subscribeToMetrics\":\"Call a callback immediately and once per "
     "configured interval with bounded runtime metrics.\","
     "\"subscribeToPlaybackMetrics\":\"Call a callback immediately and once "
     "per configured interval with raw playback timing, loss, buffer, stack, "
     "heap, and CPU evidence for endurance diagnostics.\","
+    "\"subscribeToEvents\":\"Call one callback with the current push-to-talk "
+    "snapshot and each later processed call or talk transition.\","
     "\"getDiagnostics\":\"Return one retained control-transport incident "
     "snapshot. This remains available after a WebSocket reconnect.\","
     "\"renderOnScreen\":\"Download and render a PNG from {url}.\","
-    "\"pushToTalk\":{\"start\":\"Queue a push-to-talk start event.\","
-    "\"stop\":\"Queue a push-to-talk stop event.\"}}}";
+    "\"changeColour\":\"Fill the screen with red or green.\","
+    "\"conversation\":{\"start\":\"Open the PCM conversation.\","
+    "\"hangUp\":\"End the current conversation.\"},"
+    "\"pushToTalk\":{\"start\":\"Start one manual microphone turn.\","
+    "\"stop\":\"Commit the current microphone turn.\"}}}";
 
 const struct iterate_kit_device_manifest iterate_kit_m5sticks3_manifest = {
   "m5sticks3",
@@ -50,13 +57,69 @@ static enum iterate_kit_status handle_event(
      * exact same capture state machine.
      */
     case ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STARTED:
+      /*
+       * A stray front-button press must not power the mic or fill a
+       * disconnected PCM lane. The failed event remains observable, so this
+       * is a modeled rejection rather than a silently ignored GPIO edge.
+       */
+      if (!device->conversation_active) {
+        return ITERATE_KIT_STATE_ERROR;
+      }
       return iterate_kit_audio_push_to_talk(&device->audio, true);
     case ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STOPPED:
+      /*
+       * Stop is safe and idempotent outside a call. This closes the ordinary
+       * race where hang-up and the physical release are queued together.
+       */
       return iterate_kit_audio_push_to_talk(&device->audio, false);
+    case ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED:
+      device->conversation_active = true;
+      return ITERATE_KIT_OK;
+    case ITERATE_KIT_DEVICE_EVENT_CONVERSATION_ENDED: {
+      enum iterate_kit_status status =
+          iterate_kit_audio_push_to_talk(&device->audio, false);
+      if (status == ITERATE_KIT_OK) {
+        /*
+         * Hang-up is also a playback generation boundary. Waiting for the
+         * network task to close before flushing the speaker can leave already
+         * accepted Grok audio audible after the call indicator says idle.
+         */
+        status = iterate_kit_audio_interrupt_playback(&device->audio);
+      }
+      if (status == ITERATE_KIT_OK) {
+        device->conversation_active = false;
+      }
+      return status;
+    }
     case ITERATE_KIT_DEVICE_EVENT_TYPE_COUNT:
       return ITERATE_KIT_INVALID_ARGUMENT;
   }
   return ITERATE_KIT_INVALID_ARGUMENT;
+}
+
+static void observe_event(
+    void *context,
+    const struct iterate_kit_device_event *event,
+    enum iterate_kit_status result) {
+  struct iterate_kit_m5sticks3 *device = context;
+  enum iterate_kit_status stream_status;
+  if (device == NULL || event == NULL) {
+    return;
+  }
+  /*
+   * Audio state has already changed when this observer runs. A saturated
+   * control subscriber must therefore never roll back capture or delay the
+   * button owner; the stream keeps the newest state and exposes the sequence
+   * gap. The optional platform observer remains a diagnostic mirror of the
+   * original local result, not a second behavior path.
+   */
+  stream_status = iterate_kit_device_event_stream_observe(
+      &device->event_stream, event, result);
+  (void)stream_status;
+  if (device->event_observer.observe != NULL) {
+    device->event_observer.observe(
+        device->event_observer.context, event, result);
+  }
 }
 
 enum capnweb_status iterate_kit_m5sticks3_init(
@@ -64,10 +127,24 @@ enum capnweb_status iterate_kit_m5sticks3_init(
     const struct iterate_kit_m5sticks3_options *options) {
   struct iterate_kit_peer_options peer_options;
   struct iterate_kit_device_event_queue_options event_options;
+  struct iterate_kit_metrics_options metrics_options;
+  struct iterate_kit_device_event_stream_options
+      event_stream_options;
   if (device == NULL || options == NULL) {
     return CAPNWEB_E_INVALID_ARGUMENT;
   }
   memset(device, 0, sizeof(*device));
+  if (iterate_kit_callback_budget_init(
+          &device->callback_budget,
+          options->maximum_in_flight_callbacks) !=
+      ITERATE_KIT_OK) {
+    return CAPNWEB_E_INVALID_ARGUMENT;
+  }
+  metrics_options = options->metrics;
+  metrics_options.callback_budget = &device->callback_budget;
+  event_stream_options = options->event_stream;
+  event_stream_options.callback_budget =
+      &device->callback_budget;
   /*
    * Initialization is transactional at the composition boundary: no peer is
    * exposed until every required module accepts its borrowed storage/driver.
@@ -80,11 +157,15 @@ enum capnweb_status iterate_kit_m5sticks3_init(
           options->screen_url_scratch,
           options->screen_url_scratch_size) != ITERATE_KIT_OK ||
       iterate_kit_metrics_init(
-          &device->metrics, &options->metrics) != ITERATE_KIT_OK ||
+          &device->metrics, &metrics_options) != ITERATE_KIT_OK ||
       iterate_kit_audio_controller_init(
-          &device->audio, &options->audio) != ITERATE_KIT_OK) {
+          &device->audio, &options->audio) != ITERATE_KIT_OK ||
+      iterate_kit_device_event_stream_init(
+          &device->event_stream,
+          &event_stream_options) != ITERATE_KIT_OK) {
     return CAPNWEB_E_INVALID_ARGUMENT;
   }
+  device->event_observer = options->event_observer;
   event_options = (struct iterate_kit_device_event_queue_options){
     .storage = options->event_storage,
     .capacity = options->event_capacity,
@@ -92,23 +173,39 @@ enum capnweb_status iterate_kit_m5sticks3_init(
       .context = device,
       .handle = handle_event,
     },
-    .observer = options->event_observer,
+    .observer = {
+      .context = device,
+      .observe = observe_event,
+    },
   };
   if (iterate_kit_device_event_queue_init(
           &device->events, &event_options) != ITERATE_KIT_OK ||
+      iterate_kit_conversation_init(
+          &device->conversation, &device->events) != ITERATE_KIT_OK ||
       iterate_kit_push_to_talk_init(
           &device->push_to_talk, &device->events) != ITERATE_KIT_OK) {
     return CAPNWEB_E_INVALID_ARGUMENT;
   }
 
-  device->modules[0] = iterate_kit_metrics_module(&device->metrics);
-  device->modules[1] = iterate_kit_screen_module(&device->screen);
-  device->modules[2] =
+  /*
+   * Event state is latency-sensitive control for the PCM lane, whereas
+   * metrics are latest-state observations. Poll events first so a button edge
+   * claims a shared callback slot before a due metrics fanout; metrics use any
+   * remaining slot or skip to a later sample without building history.
+   */
+  device->modules[0] =
+      iterate_kit_device_event_stream_module(
+          &device->event_stream);
+  device->modules[1] = iterate_kit_metrics_module(&device->metrics);
+  device->modules[2] = iterate_kit_screen_module(&device->screen);
+  device->modules[3] =
+      iterate_kit_conversation_module(&device->conversation);
+  device->modules[4] =
       iterate_kit_push_to_talk_module(&device->push_to_talk);
-  device->modules[3] = iterate_kit_audio_module(&device->audio);
+  device->modules[5] = iterate_kit_audio_module(&device->audio);
   /*
    * A flat module table is sufficient: modules themselves publish the desired
-   * method paths (for example pushToTalk.start). Building a heap capability
+   * method paths (for example conversation.start). Building a heap capability
    * tree per device would duplicate routing state and make profile RAM grow
    * with descriptive nesting.
    */
@@ -171,6 +268,26 @@ struct iterate_kit_device iterate_kit_m5sticks3_device(
     close_device,
   };
   return runtime;
+}
+
+enum iterate_kit_status iterate_kit_m5sticks3_publish_conversation(
+    struct iterate_kit_m5sticks3 *device,
+    bool active,
+    enum iterate_kit_device_event_source source) {
+  if (device == NULL) {
+    return ITERATE_KIT_INVALID_ARGUMENT;
+  }
+  return iterate_kit_device_event_publish(
+      &device->events,
+      active
+          ? ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED
+          : ITERATE_KIT_DEVICE_EVENT_CONVERSATION_ENDED,
+      source);
+}
+
+bool iterate_kit_m5sticks3_is_conversation_active(
+    const struct iterate_kit_m5sticks3 *device) {
+  return device != NULL && device->conversation_active;
 }
 
 enum iterate_kit_status iterate_kit_m5sticks3_publish_push_to_talk(

@@ -171,15 +171,15 @@ describe("firmware architecture boundaries", () => {
   test("the M5StickS3 control mailboxes cover one maximum owner-loop burst", () => {
     /*
      * The physical 20 Hz diagnostics run exposed a profile-level deadlock:
-     * one metrics tick can synchronously emit push+pull for each of the two
-     * subscribers, then the same owner loop can process four inbound pulls
+     * the shared callback budget can synchronously emit push+pull for each of
+     * two admitted calls, then the same owner loop can process four inbound pulls
      * whose resolutions also need outbox slots. With only four slots, a valid
      * getDiagnostics pull arrived while the metrics fanout occupied the whole
      * ring; Cap'n Web correctly treated its failed send as terminal, but the
      * remote promise had no response to settle.
      *
      * The matching inbox bound was learned from the next physical failure.
-     * One callback tick can return resolve+release for each subscription while
+     * Two callback calls can each return resolve+release while
      * one bounded remote call contributes push+pull and the preceding call's
      * release. Those seven messages are causally valid even though the harness
      * permits only one diagnostics call in flight. A four-slot inbox therefore
@@ -203,13 +203,13 @@ describe("firmware architecture boundaries", () => {
     const controlOutboxSlotCount = constant("controlOutboxSlotCount");
     const controlMessagesPerPoll = constant("controlMessagesPerPoll");
     const controlRemoteCallLifecycleMessages = constant("controlRemoteCallLifecycleMessages");
-    const subscriptionCapacity = constant("subscriptionCapacity");
+    const callbackConcurrency = constant("callbackConcurrency");
 
     expect(controlInboxSlotCount).toBeGreaterThanOrEqual(
-      subscriptionCapacity * 2 + controlRemoteCallLifecycleMessages,
+      callbackConcurrency * 2 + controlRemoteCallLifecycleMessages,
     );
     expect(controlOutboxSlotCount).toBeGreaterThanOrEqual(
-      subscriptionCapacity * 2 + controlMessagesPerPoll,
+      callbackConcurrency * 2 + controlMessagesPerPoll,
     );
   });
 
@@ -339,6 +339,78 @@ describe("firmware architecture boundaries", () => {
     );
   });
 
+  test("an intentional generation flush is not reported as a downlink fault", () => {
+    const targetSource = readFileSync(
+      resolve(firmwareDirectory, "targets/m5sticks3/main/main.cpp"),
+      "utf8",
+    );
+    const sample = sourceSection(
+      targetSource,
+      "iterate_kit_status sampleRuntimeMetrics(",
+      "#undef COPY_PLAYBACK_METRIC",
+    );
+
+    /*
+     * Button barge-in deliberately destroys the old assistant generation.
+     * `generationFramesFlushed` already retains that exact expected outcome;
+     * also folding lane-generation discards into `downlink.dropped` makes the
+     * same healthy interruption look like an unexplained transport fault.
+     * Keep fault telemetry for producer backpressure and the explicit flush
+     * ledger for obsolete conversational state.
+     */
+    expect(sample).toContain(
+      "sample->audio.downlink.dropped = saturatingMetricValue(pcm.lane.downlink.producer_backpressure);",
+    );
+    expect(sample).not.toMatch(/audio\.downlink\.dropped[\s\S]{0,160}downlink_frames_discarded/u);
+    expect(sample).toContain("playback.generationFramesFlushed");
+  });
+
+  test("PCM arriving during half-duplex capture remains in the interruption ledger", () => {
+    const ownerSource = readFileSync(
+      resolve(firmwareDirectory, "platforms/iterate_m5unified/m5sticks3_direct_audio.cpp"),
+      "utf8",
+    );
+    const ownerHeader = readFileSync(
+      resolve(
+        firmwareDirectory,
+        "platforms/iterate_m5unified/include/iterate/kit/platforms/m5sticks3_direct_audio.hpp",
+      ),
+      "utf8",
+    );
+    const taskLoop = sourceSection(
+      ownerSource,
+      "void M5StickS3DirectAudioOwner::taskLoop()",
+      "M5StickS3DirectAudioOwner::executeGenerationFenceCommand(",
+    );
+    const generationFence = sourceSection(
+      ownerSource,
+      "M5StickS3DirectAudioOwner::executeGenerationFenceCommand(",
+      "M5StickS3DirectAudioOwner::executeLifecycleCommand(",
+    );
+    const snapshot = sourceSection(
+      ownerSource,
+      "M5StickS3DirectAudioOwner::executeLifecycleCommand(",
+      "M5StickS3DirectAudioOwner::runBoundedCommand(",
+    );
+
+    /*
+     * The device flushes first and only then can its physical PTT event reach
+     * userspace to cancel Grok. Frames crossing that causal gap are expected
+     * obsolete speech: the priority owner continuously discards them, but the
+     * same frames still belong in exact played-or-flushed conservation. A raw
+     * lane counter cannot be merged later because explicit stop/generation
+     * fences already include their lane frames and would be double-counted.
+     */
+    expect(ownerHeader).toContain("BoundedEventCounter suspendedFramesFlushed_{}");
+    expect(taskLoop).toMatch(
+      /iterate_kit_pcm_lane_discard_downlink\([\s\S]*suspendedFramesFlushed_\.add\(discarded\)/u,
+    );
+    expect(generationFence).toMatch(
+      /iterate_kit_pcm_lane_discard_downlink\([\s\S]*suspendedFramesFlushed_\.add\(discarded\)/u,
+    );
+    expect(snapshot).toContain("suspendedFramesFlushed_.value()");
+  });
+
   test("a newly connected PCM socket drops microphone audio captured during its handshake", () => {
     const pcmTransportSource = readFileSync(
       resolve(firmwareDirectory, "platforms/iterate_esp_idf/pcm_transport.c"),
@@ -364,13 +436,16 @@ describe("firmware architecture boundaries", () => {
     );
   });
 
-  test("local PCM socket acceptance remains bounded until the peer proves ordered delivery", () => {
+  test("PCM freshness never depends on hop-level PONG delivery credit", () => {
     /*
-     * ESP-IDF can accept bytes into TLS/lwIP while the radio is stalled. Merely
-     * checking the application ring would let those old frames escape after
-     * recovery. This architecture seam ensures the real platform—not only the
-     * portable unit fixture—feeds sender acceptance events into the peer guard,
-     * services pongs, and resets proof state with every socket generation.
+     * A previous design stopped accepting fresh microphone frames after eight
+     * local sends until a client PING received a PONG. Captun terminates that
+     * control exchange at its public gateway, so the PONG proved neither that
+     * this userspace bridge nor Grok had received audio. Long-held PTT could
+     * therefore stall behind an acknowledgement that had no end-to-end
+     * meaning. Freshness is bounded by ring capacity, frame age, write-progress
+     * deadlines, and generation purge instead. RFC 6455 still requires the
+     * device to answer a server PING, but that reply must alter no PCM policy.
      */
     const pcmTransportHeader = readFileSync(
       resolve(
@@ -391,6 +466,14 @@ describe("firmware architecture boundaries", () => {
       resolve(firmwareDirectory, "components/core/src/pcm_uplink_conductor.c"),
       "utf8",
     );
+    const websocketConnectionSource = readFileSync(
+      resolve(firmwareDirectory, "platforms/iterate_esp_idf/websocket_connection.c"),
+      "utf8",
+    );
+    const websocketTxSource = readFileSync(
+      resolve(firmwareDirectory, "components/core/src/websocket_tx.c"),
+      "utf8",
+    );
     /*
      * Return type is part of the conductor API and may legitimately evolve.
      * The old `static void` marker silently produced an empty slice when the
@@ -406,17 +489,22 @@ describe("firmware architecture boundaries", () => {
 
     expect(pcmTransportHeader).toContain('#include "iterate/kit/pcm_uplink_conductor.h"');
     expect(pcmTransportHeader).toMatch(/struct iterate_kit_pcm_uplink_conductor\s+uplink/u);
-    expect(conductorHeader).toContain('#include "iterate/kit/pcm_peer_delivery_guard.h"');
-    expect(conductorHeader).toMatch(/struct iterate_kit_pcm_peer_delivery_guard\s+peer_delivery/u);
-    expect(pcmTransportSource).toMatch(
-      /ITERATE_KIT_WEBSOCKET_PONG[\s\S]*iterate_kit_pcm_uplink_conductor_receive_pong/u,
-    );
     expect(sendUplink).toContain("iterate_kit_pcm_uplink_conductor_poll");
     expect(conductorSource).toMatch(
-      /iterate_kit_pcm_peer_delivery_guard_poll[\s\S]*iterate_kit_pcm_uplink_sender_poll/u,
+      /iterate_kit_websocket_tx_poll_control[\s\S]*iterate_kit_pcm_uplink_sender_poll/u,
     );
     expect(conductorSource).toContain("struct iterate_kit_pcm_uplink_sender_event event");
-    expect(conductorSource).toContain("iterate_kit_pcm_peer_delivery_guard_record_accept");
+    expect(
+      existsSync(resolve(firmwareDirectory, "components/core/src/pcm_peer_delivery_guard.c")),
+    ).toBe(false);
+    expect(sourceWithoutComments(conductorHeader)).not.toContain("peer_delivery");
+    expect(sourceWithoutComments(pcmTransportSource)).not.toContain(
+      "iterate_kit_pcm_uplink_conductor_receive_pong",
+    );
+    expect(sourceWithoutComments(websocketTxSource)).not.toContain("ITERATE_KIT_WEBSOCKET_PING");
+    expect(websocketConnectionSource).toMatch(
+      /ITERATE_KIT_WEBSOCKET_PING[\s\S]*iterate_kit_websocket_tx_queue_control\([\s\S]*ITERATE_KIT_WEBSOCKET_PONG/u,
+    );
   });
 
   test("received PCM wakes the playback owner instead of waiting for a polling tick", () => {
@@ -505,7 +593,13 @@ describe("firmware architecture boundaries", () => {
      * may serialize behind the library's default recursive lock and must never
      * purchase responsiveness by racing TLS internals.
      */
-    expect(mainSdkConfig).toContain("# CONFIG_ESP_WS_CLIENT_SEPARATE_TX_LOCK is not set");
+    /*
+     * ESP-IDF 5.4 does not expose this option for the component version in the
+     * Stick build. Writing an explicit "# ... is not set" line therefore
+     * produces an unknown-symbol warning rather than strengthening the
+     * contract. The useful invariant is simply that nobody opts in if a later
+     * IDF version introduces the option.
+     */
     expect(mainSdkConfig).not.toContain("CONFIG_ESP_WS_CLIENT_SEPARATE_TX_LOCK=y");
   });
 
@@ -559,6 +653,38 @@ describe("firmware architecture boundaries", () => {
       targetSource.indexOf("iterate_kit_esp_idf_pcm_transport_start("),
     );
     expect(stopCaptureFunction).toContain("audioOwner_.resumeAfterCapture()");
+  });
+
+  test("the Stick direct path limits speaker power at the codec rather than per PCM frame", () => {
+    const ownerSource = readFileSync(
+      resolve(firmwareDirectory, "platforms/iterate_m5unified/m5sticks3_direct_audio.cpp"),
+      "utf8",
+    );
+    const configureCodecFunction = sourceSection(
+      ownerSource,
+      "M5StickS3AudioBoardOps::configureCodec()",
+      "M5StickS3DirectAudioOwner::begin(",
+    );
+
+    /*
+     * Direct I2S deliberately bypasses M5Unified's mixer and its default
+     * software attenuation. Leaving the copied ES8311 register at 0 dB made a
+     * 75%-scale deterministic tone trip the physical Stick's brownout
+     * detector after 43 frames. Attenuating once in the codec keeps arbitrary
+     * provider PCM inside the board's power envelope without spending one
+     * multiply, branch, scratch buffer, or extra cycle on every audio sample.
+     *
+     * Espressif documents register 0x32 as half-decibel steps with 0xBF equal
+     * to 0 dB. Pin the named 36-step (-18 dB) policy and its use in the actual
+     * register sequence. A future volume control may make this configurable,
+     * but it must retain a board-safe ceiling rather than restoring raw 0 dB.
+     */
+    expect(ownerSource).toContain("es8311SafeDacAttenuationHalfDbSteps = 36U");
+    expect(ownerSource).toMatch(
+      /es8311SafeDacVolume\s*=\s*es8311ZeroDbVolume\s*-\s*es8311SafeDacAttenuationHalfDbSteps/u,
+    );
+    expect(configureCodecFunction).toContain("{0x32U, es8311SafeDacVolume}");
+    expect(configureCodecFunction).not.toContain("{0x32U, 0xbfU}");
   });
 
   test("generation fences cannot be overwritten by lifecycle or metrics commands", () => {

@@ -1,0 +1,205 @@
+{
+  "arms": [
+    {
+      "arm": "baseline",
+      "close": {
+        "atUtc": "2026-07-31T10:24:13.071Z",
+        "code": 1000,
+        "elapsedMs": 45144,
+        "reason": "experiment arm complete",
+        "initiatedByExperiment": true
+      },
+      "events": [
+        {
+          "atUtc": "2026-07-31T10:23:28.374Z",
+          "elapsedMs": 447,
+          "type": "open"
+        },
+        {
+          "atUtc": "2026-07-31T10:23:28.451Z",
+          "elapsedMs": 524,
+          "type": "session.created"
+        },
+        {
+          "atUtc": "2026-07-31T10:23:28.451Z",
+          "elapsedMs": 524,
+          "type": "conversation.created"
+        },
+        {
+          "atUtc": "2026-07-31T10:23:28.451Z",
+          "elapsedMs": 524,
+          "type": "ping",
+          "payload": {
+            "type": "ping",
+            "event_id": "d63449b1-b578-437f-8e76-6c7e86706d4f",
+            "timestamp": 1785493408391,
+            "previous_item_id": null
+          }
+        },
+        {
+          "atUtc": "2026-07-31T10:23:28.590Z",
+          "elapsedMs": 663,
+          "type": "session.updated"
+        },
+        {
+          "atUtc": "2026-07-31T10:23:38.446Z",
+          "elapsedMs": 10519,
+          "type": "ping",
+          "payload": {
+            "type": "ping",
+            "event_id": "83bec5e1-4a34-4ff9-a140-b8936e48eefe",
+            "timestamp": 1785493418391,
+            "previous_item_id": null
+          }
+        },
+        {
+          "atUtc": "2026-07-31T10:23:48.446Z",
+          "elapsedMs": 20519,
+          "type": "ping",
+          "payload": {
+            "type": "ping",
+            "event_id": "95c882c7-2b72-4978-8ffe-3fd4cda3896e",
+            "timestamp": 1785493428391,
+            "previous_item_id": null
+          }
+        },
+        {
+          "atUtc": "2026-07-31T10:23:58.446Z",
+          "elapsedMs": 30520,
+          "type": "ping",
+          "payload": {
+            "type": "ping",
+            "event_id": "472dff15-9dd8-42a4-8a44-f08a3f75f221",
+            "timestamp": 1785493438391,
+            "previous_item_id": null
+          }
+        },
+        {
+          "atUtc": "2026-07-31T10:24:08.447Z",
+          "elapsedMs": 40520,
+          "type": "ping",
+          "payload": {
+            "type": "ping",
+            "event_id": "2a30034a-8aae-493d-80e0-a62b1b50580e",
+            "timestamp": 1785493448391,
+            "previous_item_id": null
+          }
+        }
+      ],
+      "firstPing": {
+        "type": "ping",
+        "event_id": "d63449b1-b578-437f-8e76-6c7e86706d4f",
+        "timestamp": 1785493408391,
+        "previous_item_id": null
+      },
+      "openedAtUtc": "2026-07-31T10:23:27.927Z",
+      "pingsReceived": 5,
+      "pongsSent": 0
+    },
+    {
+      "arm": "pong",
+      "close": {
+        "atUtc": "2026-07-31T10:24:58.670Z",
+        "code": 1000,
+        "elapsedMs": 45153,
+        "reason": "experiment arm complete",
+        "initiatedByExperiment": true
+      },
+      "events": [
+        {
+          "atUtc": "2026-07-31T10:24:13.951Z",
+          "elapsedMs": 434,
+          "type": "open"
+        },
+        {
+          "atUtc": "2026-07-31T10:24:14.029Z",
+          "elapsedMs": 512,
+          "type": "session.created"
+        },
+        {
+          "atUtc": "2026-07-31T10:24:14.029Z",
+          "elapsedMs": 512,
+          "type": "conversation.created"
+        },
+        {
+          "atUtc": "2026-07-31T10:24:14.029Z",
+          "elapsedMs": 512,
+          "type": "ping",
+          "payload": {
+            "type": "ping",
+            "event_id": "d9015ff3-97e1-422a-aa0c-530f48d711be",
+            "timestamp": 1785493453968,
+            "previous_item_id": null
+          }
+        },
+        {
+          "atUtc": "2026-07-31T10:24:14.178Z",
+          "elapsedMs": 661,
+          "type": "session.updated"
+        },
+        {
+          "atUtc": "2026-07-31T10:24:24.024Z",
+          "elapsedMs": 10507,
+          "type": "ping",
+          "payload": {
+            "type": "ping",
+            "event_id": "b4a638b6-ec51-4295-86d1-56d1e1f69ab1",
+            "timestamp": 1785493463968,
+            "previous_item_id": null
+          }
+        },
+        {
+          "atUtc": "2026-07-31T10:24:34.028Z",
+          "elapsedMs": 20511,
+          "type": "ping",
+          "payload": {
+            "type": "ping",
+            "event_id": "849e1bcd-34a5-4932-885a-325744c6bb73",
+            "timestamp": 1785493473969,
+            "previous_item_id": null
+          }
+        },
+        {
+          "atUtc": "2026-07-31T10:24:44.024Z",
+          "elapsedMs": 30507,
+          "type": "ping",
+          "payload": {
+            "type": "ping",
+            "event_id": "d3a236c6-89a7-4524-a29e-9fbf52633248",
+            "timestamp": 1785493483970,
+            "previous_item_id": null
+          }
+        },
+        {
+          "atUtc": "2026-07-31T10:24:54.027Z",
+          "elapsedMs": 40509,
+          "type": "ping",
+          "payload": {
+            "type": "ping",
+            "event_id": "58b5ea69-bf58-4395-b4aa-a32b838c0bdf",
+            "timestamp": 1785493493971,
+            "previous_item_id": null
+          }
+        }
+      ],
+      "firstPing": {
+        "type": "ping",
+        "event_id": "d9015ff3-97e1-422a-aa0c-530f48d711be",
+        "timestamp": 1785493453968,
+        "previous_item_id": null
+      },
+      "openedAtUtc": "2026-07-31T10:24:13.517Z",
+      "pingsReceived": 5,
+      "pongsSent": 5
+    }
+  ],
+  "completedAtUtc": "2026-07-31T10:24:58.670Z",
+  "constraints": {
+    "armLimitMs": 45000,
+    "incomingPingTimestampField": "timestamp",
+    "identicalSessionUpdate": true,
+    "separateEphemeralClientSecretPerArm": true
+  },
+  "model": "grok-voice-think-fast-2.0",
+  "schemaVersion": 1
+}

@@ -1,0 +1,30 @@
+{
+  "text": " Why did the engineer break up with their partner? Too many variables in the relationship.",
+  "segments": [
+    {
+      "id": 0,
+      "seek": 0,
+      "start": 0.0,
+      "end": 2.84,
+      "text": " Why did the engineer break up with their partner?",
+      "tokens": [50365, 1545, 630, 264, 11403, 1821, 493, 365, 641, 4975, 30, 50507],
+      "temperature": 0,
+      "avg_logprob": -0.16385093602267178,
+      "compression_ratio": 1.0853658536585367,
+      "no_speech_prob": 1.2890594841552527e-11
+    },
+    {
+      "id": 1,
+      "seek": 0,
+      "start": 3.42,
+      "end": 5.34,
+      "text": " Too many variables in the relationship.",
+      "tokens": [50536, 11395, 867, 9102, 294, 264, 2480, 13, 50632],
+      "temperature": 0,
+      "avg_logprob": -0.16385093602267178,
+      "compression_ratio": 1.0853658536585367,
+      "no_speech_prob": 1.2890594841552527e-11
+    }
+  ],
+  "language": "en"
+}

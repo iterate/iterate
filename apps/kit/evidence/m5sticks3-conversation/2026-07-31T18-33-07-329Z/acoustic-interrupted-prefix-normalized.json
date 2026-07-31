@@ -1,0 +1,18 @@
+{
+  "text": " One.",
+  "segments": [
+    {
+      "id": 0,
+      "seek": 0,
+      "start": 0.0,
+      "end": 0.7000000000000001,
+      "text": " One.",
+      "tokens": [50365, 1485, 13, 50400],
+      "temperature": 0,
+      "avg_logprob": -0.8337371826171875,
+      "compression_ratio": 0.3333333333333333,
+      "no_speech_prob": 3.7506345251792084e-11
+    }
+  ],
+  "language": "en"
+}

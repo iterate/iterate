@@ -39,9 +39,17 @@ static void decodes_the_typescript_golden_image(void) {
   CHECK(strcmp(
       configuration.os_base_url,
       "https://os.iterate.com") == 0);
+  /*
+   * Images flashed before the lane split do not carry tag 6. Falling back to
+   * the OS origin preserves local single-server rigs while every new
+   * production image pins the userspace PCM origin explicitly.
+   */
+  CHECK(strcmp(
+      configuration.pcm_base_url,
+      "https://os.iterate.com") == 0);
   CHECK(strcmp(configuration.project_id, "prj_voice_lab") == 0);
   CHECK(strcmp(configuration.project_api_key, "itxk_secret") == 0);
-  CHECK(sizeof(configuration) <= 424U);
+  CHECK(sizeof(configuration) <= 553U);
 }
 
 /*

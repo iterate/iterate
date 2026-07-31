@@ -29,6 +29,18 @@ enum {
    */
   ITERATE_KIT_ESP_IDF_WEBSOCKET_HOST_CAPACITY = 129,
   ITERATE_KIT_ESP_IDF_WEBSOCKET_PATH_CAPACITY = 160,
+  /*
+   * open() performs synchronous certificate verification on its caller. A
+   * production M5StickS3 trace proved that 3072 bytes crosses the stack canary
+   * inside mbedTLS P-384 verification even though every ws:// host test passed.
+   * Both control and PCM owners therefore reserve the same conservative 8 KiB
+   * TLS envelope. This is static, visible RAM rather than an allocator gamble;
+   * once clean physical runs report the minimum-ever headroom, that evidence
+   * may justify a smaller shared value. Giving the two callers different
+   * budgets was rejected because it only postpones the same crash until the
+   * second production socket opens.
+   */
+  ITERATE_KIT_ESP_IDF_WEBSOCKET_TLS_OWNER_STACK_BYTES = 8192,
 };
 
 /**

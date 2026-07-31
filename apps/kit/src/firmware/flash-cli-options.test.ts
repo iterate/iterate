@@ -19,6 +19,8 @@ describe("parseLocalFlashCliOptions", () => {
         "prj_voice_lab",
         "--base-url",
         "os.iterate.com",
+        "--pcm-base-url",
+        "kit--voice-lab.iterate.app",
         "--build-directory",
         ".build/custom",
         "--dry-run",
@@ -34,6 +36,7 @@ describe("parseLocalFlashCliOptions", () => {
         wifi: { ssid: "studio", password: "wifi-secret" },
         iterate: {
           baseUrl: "https://os.iterate.com",
+          pcmBaseUrl: "https://kit--voice-lab.iterate.app",
           projectId: "prj_voice_lab",
           projectApiKey: "itxk_secret",
         },

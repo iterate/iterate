@@ -7,7 +7,7 @@ import {
 
 function fixture(): KitControlDiagnostics {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     producedAtMs: 100_139,
     control: {
       websocketStartAttempts: 2,
@@ -51,6 +51,13 @@ function fixture(): KitControlDiagnostics {
         currentSlots: 0,
       },
     },
+    network: {
+      wifiConnected: true,
+      wifiRssiDbm: -67,
+      pcmWebsocketConnections: 4,
+      pcmWebsocketDisconnects: 3,
+      pcmWebsocketErrors: 1,
+    },
   };
 }
 
@@ -68,7 +75,7 @@ describe("Kit control diagnostics", () => {
     const previous = fixture();
     const value = {
       ...previous,
-      schemaVersion: 2,
+      schemaVersion: 3,
       control: {
         ...previous.control,
         protocolFailureGeneration: 7,
@@ -114,6 +121,34 @@ describe("Kit control diagnostics", () => {
       lastCloseStatusCode: 0,
     });
     expect(kitControlWebsocketErrorTypeName(parsed.control.lastErrorType)).toBe("pongTimeout");
+  });
+
+  test("keeps association separate from optional measured RSSI", () => {
+    /*
+     * Association is owned by the transport, while ESP-IDF's AP-info query may
+     * transiently fail during a roam. Omitting only RSSI preserves that
+     * distinction; defaulting it to zero or retaining an older number would
+     * manufacture strong-signal evidence during the outage under diagnosis.
+     */
+    const value = fixture();
+    delete value.network.wifiRssiDbm;
+
+    expect(parseKitControlDiagnostics(value)).toEqual(value);
+    expect(value.network).toMatchObject({
+      wifiConnected: true,
+      pcmWebsocketConnections: 4,
+      pcmWebsocketDisconnects: 3,
+      pcmWebsocketErrors: 1,
+    });
+  });
+
+  test("rejects malformed RSSI instead of accepting a sentinel-like value", () => {
+    const value = fixture() as unknown as {
+      network: Record<string, unknown>;
+    };
+    value.network.wifiRssiDbm = -0x8000_0001;
+
+    expect(() => parseKitControlDiagnostics(value)).toThrow(/wifiRssiDbm/u);
   });
 
   test("rejects an unknown ESP error category instead of guessing its meaning", () => {

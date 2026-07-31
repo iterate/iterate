@@ -8,6 +8,8 @@ const projectDirectory = resolve(appDirectory, "firmware/tests/esp_idf_tcp_trans
 const incidentTests = [
   "upgrade spillover is visible without later socket traffic",
   "zero payload progress retains the current frame",
+  "zero header progress retains the current frame",
+  "zero progress inside a PCM extended header retains the frame",
 ];
 const oneFailedTestSummary = /test cases:\s+1\s+\|\s+0 passed\s+\|\s+1 failed/;
 

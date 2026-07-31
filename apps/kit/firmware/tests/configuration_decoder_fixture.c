@@ -30,10 +30,11 @@ int main(void) {
   }
 
   printf(
-      "%s\n%s\n%s\n%s\n%s\n",
+      "%s\n%s\n%s\n%s\n%s\n%s\n",
       configuration.wifi_ssid,
       configuration.wifi_password,
       configuration.os_base_url,
+      configuration.pcm_base_url,
       configuration.project_id,
       configuration.project_api_key);
   return 0;

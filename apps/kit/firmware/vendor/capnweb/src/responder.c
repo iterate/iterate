@@ -8,7 +8,7 @@
 static enum capnweb_status get_deferred_pending(
     struct capnweb_responder responder,
     struct capnweb_pending_call **result) {
-  struct capnweb_pending_call *pending;
+  struct capnweb_pending_call *pending = NULL;
   if (responder.session == NULL || result == NULL) {
     return CAPNWEB_E_INVALID_ARGUMENT;
   }
@@ -48,7 +48,7 @@ static enum capnweb_status finish_responder(
 
 enum capnweb_status capnweb_responder_set_null(
     struct capnweb_responder responder) {
-  struct capnweb_pending_call *pending;
+  struct capnweb_pending_call *pending = NULL;
   enum capnweb_status status = get_deferred_pending(responder, &pending);
   if (status != CAPNWEB_OK) {
     return status;
@@ -59,7 +59,7 @@ enum capnweb_status capnweb_responder_set_null(
 
 enum capnweb_status capnweb_responder_set_boolean(
     struct capnweb_responder responder, bool value) {
-  struct capnweb_pending_call *pending;
+  struct capnweb_pending_call *pending = NULL;
   enum capnweb_status status = get_deferred_pending(responder, &pending);
   if (status != CAPNWEB_OK) {
     return status;
@@ -72,7 +72,7 @@ enum capnweb_status capnweb_responder_set_boolean(
 
 enum capnweb_status capnweb_responder_set_int64(
     struct capnweb_responder responder, int64_t value) {
-  struct capnweb_pending_call *pending;
+  struct capnweb_pending_call *pending = NULL;
   enum capnweb_status status = get_deferred_pending(responder, &pending);
   if (status != CAPNWEB_OK) {
     return status;
@@ -89,7 +89,7 @@ enum capnweb_status capnweb_responder_set_borrowed_expression(
     size_t length,
     capnweb_release_fn release,
     void *context) {
-  struct capnweb_pending_call *pending;
+  struct capnweb_pending_call *pending = NULL;
   enum capnweb_status status = get_deferred_pending(responder, &pending);
   if (status != CAPNWEB_OK) {
     return status;
@@ -104,7 +104,7 @@ enum capnweb_status capnweb_responder_set_borrowed_expression(
 enum capnweb_status capnweb_responder_set_capability(
     struct capnweb_responder responder,
     struct capnweb_capability capability) {
-  struct capnweb_pending_call *pending;
+  struct capnweb_pending_call *pending = NULL;
   enum capnweb_status status = get_deferred_pending(responder, &pending);
   if (status != CAPNWEB_OK) {
     return status;
@@ -121,7 +121,7 @@ enum capnweb_status capnweb_responder_set_bytes(
     size_t length,
     capnweb_release_fn release,
     void *context) {
-  struct capnweb_pending_call *pending;
+  struct capnweb_pending_call *pending = NULL;
   enum capnweb_status status = get_deferred_pending(responder, &pending);
   if (status != CAPNWEB_OK) {
     return status;
@@ -137,7 +137,7 @@ enum capnweb_status capnweb_responder_set_error(
     struct capnweb_responder responder,
     const char *type,
     const char *message) {
-  struct capnweb_pending_call *pending;
+  struct capnweb_pending_call *pending = NULL;
   enum capnweb_status status = get_deferred_pending(responder, &pending);
   if (status != CAPNWEB_OK) {
     return status;

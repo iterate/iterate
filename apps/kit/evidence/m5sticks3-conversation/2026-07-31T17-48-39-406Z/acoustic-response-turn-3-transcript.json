@@ -1,0 +1,38 @@
+{
+  "text": " Why did the engineer break up with their partner? Too many variables in the relationship.",
+  "segments": [
+    {
+      "id": 0,
+      "seek": 0,
+      "start": 0.0,
+      "end": 5.66,
+      "text": " Why did the engineer break up with their partner? Too many variables in the relationship.",
+      "tokens": [
+        50365, 1545, 630, 264, 11403, 1821, 493, 365, 641, 4975, 30, 11395, 867, 9102, 294, 264,
+        2480, 13, 50665
+      ],
+      "temperature": 0,
+      "avg_logprob": -0.3066741466522217,
+      "compression_ratio": 1.0853658536585367,
+      "no_speech_prob": 4.328616631799065e-11,
+      "words": [
+        { "word": " Why", "start": 0.0, "end": 1.1, "probability": 0.7080078125 },
+        { "word": " did", "start": 1.1, "end": 1.28, "probability": 0.994140625 },
+        { "word": " the", "start": 1.28, "end": 1.42, "probability": 0.9853515625 },
+        { "word": " engineer", "start": 1.42, "end": 1.86, "probability": 0.92578125 },
+        { "word": " break", "start": 1.86, "end": 2.36, "probability": 0.93505859375 },
+        { "word": " up", "start": 2.36, "end": 2.5, "probability": 0.98095703125 },
+        { "word": " with", "start": 2.5, "end": 2.68, "probability": 0.9951171875 },
+        { "word": " their", "start": 2.68, "end": 2.84, "probability": 0.96728515625 },
+        { "word": " partner?", "start": 2.84, "end": 3.3, "probability": 0.99560546875 },
+        { "word": " Too", "start": 3.62, "end": 4.02, "probability": 0.955078125 },
+        { "word": " many", "start": 4.02, "end": 4.28, "probability": 0.998046875 },
+        { "word": " variables", "start": 4.28, "end": 4.9, "probability": 0.99169921875 },
+        { "word": " in", "start": 4.9, "end": 5.18, "probability": 0.984375 },
+        { "word": " the", "start": 5.18, "end": 5.3, "probability": 0.9873046875 },
+        { "word": " relationship.", "start": 5.3, "end": 5.66, "probability": 0.96044921875 }
+      ]
+    }
+  ],
+  "language": "en"
+}

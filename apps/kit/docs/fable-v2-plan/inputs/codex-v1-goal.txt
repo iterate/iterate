@@ -1,0 +1,25 @@
+your goal just got a whole lot more ambitious . you can structure the work however you want, but by the end of the night you need to make it
+so
+- the CLI script and k.iterate.com website can deploy firmware to BOTH the stackchan and s3 stick
+- the firmwares should share as much code as possible with each other
+- stackchan should provide functionality to control the LEDs, show image on screen, capture webcame image and control servos, and start/end pcm audio
+stream. audio stream should use grok model in VAD and just stream raw audio. AEC MUST provably work
+- for the stick s3, the only provided capability should be to show an image and start/end pcm stream. use push-to-talk and not VAD. no AEC / duplex.
+- for both devices, longer sessions should continue to work and not accumulate delays or whatever
+- use rendered sprites like in the ~/src/github.com/iterate/stackchan experiments - we want to have pluggable algorithsm that turn the pcm stream into
+- both devices should have a capability to stream metrics and diagnostics etc through capnweb
+- IMPORTANT: for debugging in situations where the device can't reach our mothership, it'd be good to expose the SAME capability capnweb rpc target
+(but the C version) at some internal API endpoint, where we run a lil webserver. the reason i mention this is because it affects how the capnweb c
+client is written. just like the original capnweb, it should beyond a very thin top layer of the implementation not care which side "initiated" the
+conversation
+- the animated avatars should show clearly when they are "listening"
+- research how home assistant voice preview edition and waveshare esp32 s3 amoled touch work so we can make sure that most of the code we work can be
+used there
+- grok model to always use the today-released voice 2.0 thinking fast or whatever it's called
+THEN
+- both devices with the firmware must be able to connect to a real apps/os preview deployment with
+  - a userspace worker.ts that has the /pcm endpoint that proxies through to grok
+  - a grok api key loaded as secret into the project
+we should then be able to prove that we can e.g. ask a normal ai agent on that project in the preview deployment to e.g. control the servos of
+itx.kit.get("/kit/stackchan") or something. oh and when flashing the firmware, one input should be the "kit path" obvs
+frequently use claude fable xhigh cli to double check your work and ensure you're not in a local maximum trap.

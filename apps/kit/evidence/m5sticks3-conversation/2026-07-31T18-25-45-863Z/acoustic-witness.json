@@ -1,0 +1,69 @@
+{
+  "text": " Recite the numbers 1 through 20 slowly, with a short pause between each number. Do not stop early. The previous answer was interrupted. Reply exactly. Interruption successful.",
+  "segments": [
+    {
+      "id": 0,
+      "seek": 0,
+      "start": 0.0,
+      "end": 6.26,
+      "text": " Recite the numbers 1 through 20 slowly, with a short pause between each number.",
+      "tokens": [
+        50365, 9647, 642, 264, 3547, 502, 807, 945, 5692, 11, 365, 257, 2099, 10465, 1296, 1184,
+        1230, 13, 50678
+      ],
+      "temperature": 0,
+      "avg_logprob": -0.28254393313793424,
+      "compression_ratio": 1.3059701492537314,
+      "no_speech_prob": 5.2568779190798054e-11
+    },
+    {
+      "id": 1,
+      "seek": 0,
+      "start": 6.6000000000000005,
+      "end": 7.66,
+      "text": " Do not stop early.",
+      "tokens": [50695, 1144, 406, 1590, 2440, 13, 50748],
+      "temperature": 0,
+      "avg_logprob": -0.28254393313793424,
+      "compression_ratio": 1.3059701492537314,
+      "no_speech_prob": 5.2568779190798054e-11
+    },
+    {
+      "id": 2,
+      "seek": 0,
+      "start": 9.66,
+      "end": 12.040000000000001,
+      "text": " The previous answer was interrupted.",
+      "tokens": [50848, 440, 3894, 1867, 390, 30329, 13, 50967],
+      "temperature": 0,
+      "avg_logprob": -0.28254393313793424,
+      "compression_ratio": 1.3059701492537314,
+      "no_speech_prob": 5.2568779190798054e-11
+    },
+    {
+      "id": 3,
+      "seek": 0,
+      "start": 12.52,
+      "end": 13.4,
+      "text": " Reply exactly.",
+      "tokens": [50991, 3696, 356, 2293, 13, 51035],
+      "temperature": 0,
+      "avg_logprob": -0.28254393313793424,
+      "compression_ratio": 1.3059701492537314,
+      "no_speech_prob": 5.2568779190798054e-11
+    },
+    {
+      "id": 4,
+      "seek": 0,
+      "start": 13.84,
+      "end": 15.1,
+      "text": " Interruption successful.",
+      "tokens": [51057, 5751, 11266, 4406, 13, 51120],
+      "temperature": 0,
+      "avg_logprob": -0.28254393313793424,
+      "compression_ratio": 1.3059701492537314,
+      "no_speech_prob": 5.2568779190798054e-11
+    }
+  ],
+  "language": "en"
+}

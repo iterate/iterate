@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "completedAtUtc": "2026-07-31T11:54:00Z",
+  "device": {
+    "kind": "m5sticks3",
+    "macAddress": "70:04:1d:d5:45:88",
+    "address": "192.168.0.21",
+    "usbPort": "/dev/cu.usbmodem11201"
+  },
+  "userspace": {
+    "kind": "local-fetch-handler",
+    "address": "192.168.0.169:58685",
+    "capabilityPath": "kit.m5sticks3",
+    "pcmPath": "/pcm"
+  },
+  "provider": {
+    "model": "grok-voice-think-fast-2.0",
+    "inputTranscript": "Please say one short sentence confirming the autonomous device test is working.",
+    "outputTranscript": "The autonomous device test is working.",
+    "outputAudioSeconds": 2.55
+  },
+  "frameConservation": {
+    "frameBytes": 640,
+    "microphoneFramesSent": 278,
+    "speakerFramesObservedByUserspace": 128,
+    "speakerFramesAcceptedByDevice": 128,
+    "speakerFramesSubmitted": 128,
+    "speakerFramesCompleted": 128,
+    "speakerFramesDropped": 0,
+    "speakerFramesFlushed": 0,
+    "speakerFailures": 0,
+    "protocolFailures": 0
+  },
+  "deviceMetrics": {
+    "downlinkHighWaterFrames": 5,
+    "playbackHighWaterFrames": 4,
+    "uplinkHighWaterFrames": 1,
+    "maximumUplinkTransportAcceptAgeMs": 1,
+    "minimumFreeInternalHeapBytes": 105503,
+    "observedCpuPermille": 231
+  },
+  "bridgeMetrics": {
+    "closeCode": 1000,
+    "closeReason": "PCM proxy session stopped.",
+    "deviceToWorkerBytes": 177920,
+    "deviceToWorkerMessages": 278,
+    "workerToDeviceBytes": 81920,
+    "workerToDeviceMessagesIncludingEos": 129,
+    "workerToDeviceMaximumInterarrivalMs": 90.661042,
+    "maximumPayloadBytesInFlight": 5120,
+    "maximumSendCallbacksInFlight": 8,
+    "maximumSendCallbackLatencyMs": 2.286375
+  },
+  "verdict": {
+    "digitalFrameConservation": "passed",
+    "providerRoundTrip": "passed",
+    "networkClassification": "indeterminate",
+    "acousticClassification": "pending-human-confirmation",
+    "overall": "sub-gate-passed"
+  }
+}

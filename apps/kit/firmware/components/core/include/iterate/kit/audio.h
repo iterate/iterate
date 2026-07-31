@@ -131,7 +131,7 @@ enum iterate_kit_status iterate_kit_audio_interrupt_playback(
     struct iterate_kit_audio_controller *controller);
 
 enum iterate_kit_status iterate_kit_audio_push_to_talk(
-    struct iterate_kit_audio_controller *controller, bool pressed);
+    struct iterate_kit_audio_controller *controller, bool active);
 
 /**
  * Borrows samples only when ITERATE_KIT_OK is returned. While the prior frame

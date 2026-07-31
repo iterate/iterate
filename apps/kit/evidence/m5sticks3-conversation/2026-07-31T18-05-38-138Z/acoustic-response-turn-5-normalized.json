@@ -1,0 +1,18 @@
+{
+  "text": " Lantern engineers light up the world with innovation.",
+  "segments": [
+    {
+      "id": 0,
+      "seek": 0,
+      "start": 0.0,
+      "end": 5.0,
+      "text": " Lantern engineers light up the world with innovation.",
+      "tokens": [50365, 17482, 2231, 11955, 1442, 493, 264, 1002, 365, 8504, 13, 50615],
+      "temperature": 0,
+      "avg_logprob": -0.3567247757544884,
+      "compression_ratio": 0.9137931034482759,
+      "no_speech_prob": 5.905968075703427e-11
+    }
+  ],
+  "language": "en"
+}

@@ -247,7 +247,9 @@ capnweb_status initialize(
    * one-second cadence or an ESP CPU-budget recommendation.
    */
   const iterate_kit_stackchan_options options{
-    {&simulation.common, iterate::kit::simulator::renderPng},
+    {&simulation.common,
+     iterate::kit::simulator::renderPng,
+     iterate::kit::simulator::changeColour},
     simulation.screenUrlScratch,
     sizeof(simulation.screenUrlScratch),
     {&simulation, moveServos},
@@ -262,6 +264,7 @@ capnweb_status initialize(
       25U,
       simulation.diagnosticsExpression,
       sizeof(simulation.diagnosticsExpression),
+      nullptr,
     },
   };
   const capnweb_status status =

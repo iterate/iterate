@@ -4,7 +4,10 @@ import {
   assessDeviceRuntimeMetrics,
   devicePlaybackCompleted,
   devicePlaybackFramesCompleted,
+  devicePlaybackResponseCompleted,
+  deviceInterruptedVoiceSequenceCompleted,
   deviceUplinkStreaming,
+  deviceVoiceTurnCompleted,
   deviceVoiceRoundTripCompleted,
   deviceTransportsReady,
   parseKitMetricsCallback,
@@ -18,12 +21,6 @@ const validKitAudioMetrics = {
       current: 0,
       evidence: "capacityOnly",
       highWater: 0,
-    },
-    peerUnconfirmed: {
-      capacity: 20_736,
-      current: 1_296,
-      evidence: "derivedBound",
-      highWater: 2_592,
     },
     tlsEgress: {
       capacity: 0,
@@ -124,10 +121,6 @@ describe("device runtime log", () => {
         buffer_lwip_send_current_bytes: 0,
         buffer_lwip_send_evidence: "capacityOnly",
         buffer_lwip_send_high_water_bytes: 0,
-        buffer_peer_unconfirmed_capacity_bytes: 20_736,
-        buffer_peer_unconfirmed_current_bytes: 1_296,
-        buffer_peer_unconfirmed_evidence: "derivedBound",
-        buffer_peer_unconfirmed_high_water_bytes: 2_592,
         buffer_tls_egress_capacity_bytes: 0,
         buffer_tls_egress_current_bytes: 0,
         buffer_tls_egress_evidence: "unavailable",
@@ -418,6 +411,185 @@ describe("device runtime log", () => {
         3,
       ),
     ).toBe(true);
+  });
+
+  test("does not mistake flushed Grok frames for a completed response", () => {
+    /*
+     * A physical reply accepted 46 frames, played 12, flushed 34 after an
+     * underrun, and returned both queues to zero. The old exploratory gate
+     * considered that success because each progress counter merely increased.
+     * A production response is complete only when the exact host-observed
+     * frame count is conserved through receive, submit, and completion with no
+     * loss/reset counters changing.
+     */
+    const before = {
+      downlink_accepted: 100,
+      downlink_current: 0,
+      downlink_dropped: 3,
+      downlink_failures: 2,
+      playback_completed: 90,
+      playback_current: 0,
+      playback_failures: 1,
+      playback_flushed: 4,
+      playback_submitted: 90,
+    };
+    const clean = {
+      ...before,
+      downlink_accepted: 146,
+      playback_completed: 136,
+      playback_submitted: 136,
+    };
+    expect(devicePlaybackResponseCompleted(before, clean, 46)).toBe(true);
+    expect(
+      devicePlaybackResponseCompleted(
+        before,
+        {
+          ...clean,
+          playback_completed: 102,
+          playback_flushed: 38,
+          playback_submitted: 102,
+        },
+        46,
+      ),
+    ).toBe(false);
+    expect(
+      devicePlaybackResponseCompleted(
+        before,
+        {
+          ...clean,
+          downlink_dropped: 4,
+        },
+        46,
+      ),
+    ).toBe(false);
+    expect(devicePlaybackResponseCompleted(before, clean, 45)).toBe(false);
+  });
+
+  test("conserves both directions of one repeated voice turn without hiding an uplink reset", () => {
+    /*
+     * A multi-turn run cannot infer microphone health from “some frames moved”.
+     * The device may discard an old uplink generation, recover, and still
+     * produce a perfectly audible reply. That is useful recovery behaviour but
+     * invalid evidence for a no-drift conversational turn, so the exact host
+     * observations and every loss/restart counter must agree.
+     */
+    const before = {
+      audio_dropped: 2,
+      audio_failures: 1,
+      downlink_accepted: 100,
+      downlink_current: 0,
+      downlink_dropped: 3,
+      downlink_failures: 2,
+      playback_completed: 90,
+      playback_current: 0,
+      playback_failures: 1,
+      playback_flushed: 4,
+      playback_submitted: 90,
+      uplink_current: 0,
+      uplink_dropped: 5,
+      uplink_failures: 6,
+      uplink_restart_incidents: 7,
+      uplink_sent: 200,
+    };
+    const clean = {
+      ...before,
+      downlink_accepted: 146,
+      playback_completed: 136,
+      playback_submitted: 136,
+      uplink_sent: 320,
+    };
+
+    expect(
+      deviceVoiceTurnCompleted(before, clean, {
+        microphoneFrames: 120,
+        speakerFrames: 46,
+      }),
+    ).toBe(true);
+    expect(
+      deviceVoiceTurnCompleted(before, clean, {
+        microphoneFrames: 119,
+        speakerFrames: 46,
+      }),
+    ).toBe(false);
+    expect(
+      deviceVoiceTurnCompleted(
+        before,
+        { ...clean, uplink_restart_incidents: 8 },
+        { microphoneFrames: 120, speakerFrames: 46 },
+      ),
+    ).toBe(false);
+    expect(
+      deviceVoiceTurnCompleted(
+        before,
+        { ...clean, uplink_current: 1 },
+        { microphoneFrames: 120, speakerFrames: 46 },
+      ),
+    ).toBe(false);
+  });
+
+  test("conserves an intentional interruption as played plus explicitly flushed speech", () => {
+    /*
+     * An interruption is the one path where stale assistant PCM is supposed
+     * to disappear. Calling it an ordinary drop would trip the global health
+     * policy; ignoring it would let arbitrary loss pass. The exact ledger is
+     * stronger: every userspace-observed speaker frame must be either completed
+     * by I2S or named by the generation-flush counter, with no fault counter,
+     * restart, or residual queue movement hidden beside it.
+     */
+    const before = {
+      audio_dropped: 0,
+      audio_failures: 0,
+      downlink_accepted: 100,
+      downlink_current: 0,
+      downlink_dropped: 0,
+      downlink_failures: 0,
+      playback_completed: 90,
+      playback_current: 0,
+      playback_failures: 0,
+      playback_flushed: 0,
+      playback_submitted: 90,
+      uplink_current: 0,
+      uplink_dropped: 0,
+      uplink_failures: 0,
+      uplink_restart_incidents: 0,
+      uplink_sent: 200,
+    };
+    const cleanInterruption = {
+      ...before,
+      downlink_accepted: 180,
+      playback_completed: 162,
+      playback_flushed: 8,
+      playback_submitted: 168,
+      uplink_sent: 320,
+    };
+
+    expect(
+      deviceInterruptedVoiceSequenceCompleted(before, cleanInterruption, {
+        microphoneFrames: 120,
+        speakerFrames: 80,
+      }),
+    ).toBe(true);
+    expect(
+      deviceInterruptedVoiceSequenceCompleted(
+        before,
+        { ...cleanInterruption, playback_completed: 161 },
+        { microphoneFrames: 120, speakerFrames: 80 },
+      ),
+    ).toBe(false);
+    expect(
+      deviceInterruptedVoiceSequenceCompleted(
+        before,
+        { ...cleanInterruption, downlink_dropped: 1 },
+        { microphoneFrames: 120, speakerFrames: 80 },
+      ),
+    ).toBe(false);
+    expect(
+      deviceInterruptedVoiceSequenceCompleted(
+        before,
+        { ...cleanInterruption, playback_flushed: 0, playback_completed: 170 },
+        { microphoneFrames: 120, speakerFrames: 80 },
+      ),
+    ).toBe(false);
   });
 
   test("requires the independent PCM socket before a voice capture proof", () => {

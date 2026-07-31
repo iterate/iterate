@@ -1,0 +1,13 @@
+{
+  "model": "gpt-4o-transcribe",
+  "producedAt": "2026-07-31T12:20:24Z",
+  "provider": "OpenAI audio transcriptions API",
+  "source": "acoustic-room.wav",
+  "sourceSha256": "5513342f8b9901b24488897573577b83a6895e44146fea5478a9882e5aa7b988",
+  "text": "The unattended stick voice test passed with clear continuous playback.",
+  "usage": {
+    "audioTokens": 154,
+    "outputTokens": 13,
+    "totalTokens": 167
+  }
+}

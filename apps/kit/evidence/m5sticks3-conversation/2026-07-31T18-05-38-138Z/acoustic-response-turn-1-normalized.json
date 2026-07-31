@@ -1,0 +1,18 @@
+{
+  "text": " Hello there.",
+  "segments": [
+    {
+      "id": 0,
+      "seek": 0,
+      "start": 0.0,
+      "end": 2.0,
+      "text": " Hello there.",
+      "tokens": [50365, 2425, 456, 13, 50465],
+      "temperature": 0,
+      "avg_logprob": -0.6106264591217041,
+      "compression_ratio": 0.6,
+      "no_speech_prob": 1.4045761949355029e-11
+    }
+  ],
+  "language": "en"
+}

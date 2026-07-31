@@ -35,10 +35,14 @@ describe("device E2E CLI options", () => {
       downlinkDeliveryMode: "host-paced",
       deviceClockedStartupFrames: undefined,
       mountTimeoutMs: 90_000,
+      networkDeviceHost: undefined,
       playbackDurationMs: 3_000,
       playbackEndurance: false,
       playbackRecoveryProof: false,
+      physicalVoiceTurns: undefined,
       remoteHoldMs: 500,
+      remoteInterruptionProof: false,
+      remoteVoiceTurns: undefined,
       tunnelName: undefined,
       voice: false,
     });
@@ -162,11 +166,15 @@ describe("device E2E CLI options", () => {
       downlinkDeliveryMode: "host-paced",
       deviceClockedStartupFrames: undefined,
       mountTimeoutMs: 120_000,
+      networkDeviceHost: undefined,
       deterministicPlayback: undefined,
       playbackDurationMs: 3_000,
       playbackEndurance: false,
       playbackRecoveryProof: false,
+      physicalVoiceTurns: undefined,
       remoteHoldMs: 250,
+      remoteInterruptionProof: false,
+      remoteVoiceTurns: undefined,
       tunnelName: "stick-e2e",
       voice: true,
     });
@@ -300,6 +308,98 @@ describe("device E2E CLI options", () => {
     expect(parseDeviceE2eCliOptions(["--remote-hold-ms", "60000"], {})).toMatchObject({
       remoteHoldMs: 60_000,
     });
+  });
+
+  test("selects a bounded physical multi-turn Grok conversation", () => {
+    /*
+     * A physical conversation is not the old remote-start proof followed by
+     * passive button observation. Every held/released edge must drive the
+     * userspace PCM session, and a finite turn count gives unattended hardware
+     * tests an unambiguous completion boundary.
+     */
+    expect(
+      parseDeviceE2eCliOptions(
+        ["--physical-voice-turns", "3", "--port", "/dev/cu.usbmodem101"],
+        {},
+      ),
+    ).toMatchObject({
+      flashArgs: ["--port", "/dev/cu.usbmodem101"],
+      physicalVoiceTurns: 3,
+      voice: true,
+    });
+    expect(() => parseDeviceE2eCliOptions(["--physical-voice-turns", "0"], {})).toThrow(
+      "physical voice turns",
+    );
+    expect(() => parseDeviceE2eCliOptions(["--physical-voice-turns", "2", "--voice"], {})).toThrow(
+      "Choose exactly one voice proof",
+    );
+  });
+
+  test("selects a bounded unattended multi-turn conversation with tunnel attribution", () => {
+    /*
+     * The operator may be away for the landing run. Repeating the old one-turn
+     * command in separate processes would reconnect Grok, discard conversation
+     * state, and make heap/frame drift invisible across turns. This mode must
+     * keep one userspace/device session while giving the tunnel classifier the
+     * Stick's LAN address which Captun intentionally hides.
+     */
+    expect(
+      parseDeviceE2eCliOptions(
+        [
+          "--remote-voice-turns",
+          "3",
+          "--network-device-host",
+          "192.168.1.210",
+          "--exit-after-remote-proof",
+          "--port",
+          "/dev/cu.usbmodem101",
+        ],
+        {},
+      ),
+    ).toMatchObject({
+      exitAfterRemoteProof: true,
+      flashArgs: ["--port", "/dev/cu.usbmodem101"],
+      networkDeviceHost: "192.168.1.210",
+      remoteVoiceTurns: 3,
+      voice: true,
+    });
+    expect(() => parseDeviceE2eCliOptions(["--remote-voice-turns", "0"], {})).toThrow(
+      "remote voice turns",
+    );
+    expect(() => parseDeviceE2eCliOptions(["--remote-voice-turns", "2", "--voice"], {})).toThrow(
+      "Choose exactly one voice proof",
+    );
+  });
+
+  test("selects an autonomous real-provider interruption proof with tunnel attribution", () => {
+    /*
+     * Barge-in is not equivalent to another ordinary voice turn: the first
+     * reply must be deliberately cut off, its stale suffix classified, and a
+     * second microphone epoch must receive a fresh reply. Give that destructive
+     * transition its own mode so an operator cannot accidentally weaken the
+     * exact-conservation rules of the ordinary multi-turn proof.
+     */
+    expect(
+      parseDeviceE2eCliOptions(
+        [
+          "--remote-interruption-proof",
+          "--network-device-host",
+          "192.168.1.210",
+          "--exit-after-remote-proof",
+        ],
+        {},
+      ),
+    ).toMatchObject({
+      networkDeviceHost: "192.168.1.210",
+      remoteInterruptionProof: true,
+      voice: true,
+    });
+    expect(() =>
+      parseDeviceE2eCliOptions(["--remote-interruption-proof", "--remote-voice-turns", "2"], {}),
+    ).toThrow("Choose exactly one voice proof");
+    expect(() => parseDeviceE2eCliOptions(["--remote-interruption-proof"], {})).toThrow(
+      "network-device-host",
+    );
   });
 
   test("keeps diagnostic control load bounded and attached to a deterministic proof", () => {

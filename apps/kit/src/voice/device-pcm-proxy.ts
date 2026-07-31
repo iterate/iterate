@@ -5,21 +5,28 @@ import { nextPcmFrameDeadline } from "./pcm-frame-pacer.ts";
 export const ITERATE_KIT_PCM_SUBPROTOCOL = "iterate.kit.pcm.v1";
 const projectBearerProtocolPrefix = "iterate-bearer.";
 /*
- * This is a realtime jitter allowance, not a speech archive. Eight 20 ms
- * frames absorb ordinary scheduler/radio variation while capping application
- * backlog at 160 ms. A larger default used to retain ten seconds of audio,
- * which made network recovery audibly replay history. Crossing this bound
- * closes the generation so a reconnect can resume with current speech.
+ * Grok can synthesize a short response much faster than a speaker can consume
+ * it: a measured 1.59-second response arrived in 235 ms, including one 20,552
+ * byte WebSocket message. The userspace proxy must therefore retain generated
+ * response audio independently of the much smaller device startup lead.
+ *
+ * Eight seconds is a bounded response reservoir, not permission to replay stale
+ * conversation after an outage. Interruption clears it immediately, transport
+ * failure destroys the generation, and overflow is terminal and observable.
+ * Keeping this memory in userspace also avoids charging the ESP for provider
+ * packetization. A future provider/device credit protocol can replace this
+ * finite reservoir without changing the PCM frame contract.
  */
-const defaultMaximumDownlinkFrames = 8;
+const defaultMaximumDownlinkFrames = 400;
 /*
  * Provider message boundaries are not device playout boundaries. In
  * particular, the physical endurance source delivers 1,000 bytes every
  * 31.25 ms while the device consumes 640 bytes every 20 ms. Starting on the
  * first complete frame makes the pacer repeatedly run dry even though average
- * rates are identical. Three complete frames are a 60 ms startup reservoir,
- * not a growing FIFO: the same eight-frame/160 ms hard cap still applies and
- * any post-start underrun destroys the generation instead of shifting speech.
+ * rates are identical. Three complete frames are the conservative 60 ms
+ * default. Device-clocked hardware may explicitly choose a larger userspace
+ * source watermark while retaining a smaller device lead; both remain inside
+ * the fixed response reservoir and interruption still discards them together.
  */
 const defaultMinimumDownlinkStartupFrames = 3;
 /*
@@ -42,6 +49,19 @@ const ProviderEvent = z.looseObject({
 export interface ProviderVoiceEvent {
   raw: string;
   type: string;
+}
+
+export interface PcmFrameObservation {
+  /*
+   * These are the two application wire boundaries, not claims about capture
+   * or playout time. Uplink means the provider socket accepted the exact
+   * device frame; downlink means the device socket accepted the exact padded
+   * frame. A recorder must still correlate device metrics to prove when the
+   * samples were captured or became audible.
+   */
+  bytes: Uint8Array;
+  direction: "microphone-uplink" | "speaker-downlink";
+  observedAtMonotonicMs: number;
 }
 
 export interface DevicePcmSocketClose {
@@ -70,12 +90,24 @@ export interface DevicePcmProxyOptions {
   authenticate(projectId: string, bearerToken: string): boolean;
   connectProvider(session: DevicePcmSessionDescriptor): Promise<WebSocket>;
   /*
+   * Source readiness and device lead are separate budgets. This value is the
+   * number of already-generated frames sent immediately when device-clocked
+   * playout begins. It is constrained by the device's bounded receive path and
+   * must not exceed `minimumDownlinkStartupFrames`.
+   *
+   * The remaining source frames stay in userspace and cross the device socket
+   * one per media deadline. Raising the source watermark can therefore absorb
+   * provider packet jitter without increasing ESP RAM or its audible lead.
+   */
+  deviceClockedInitialBurstFrames?: number;
+  /*
    * The speaker's I²S peripheral is the only clock that ultimately determines
-   * when samples become audible. `device-clocked` therefore forwards each
-   * bounded provider burst immediately and lets the firmware's freshness-
-   * bounded ring absorb ordinary network timing variation. `host-paced`
-   * retains the older comparison path, where a second JavaScript timer emits
-   * one frame per nominal media interval.
+   * when samples become audible. `device-clocked` primes a bounded lead on the
+   * device, then replenishes it at the nominal media rate so provider bursts
+   * cannot be mistaken for device capacity. The JavaScript deadline limits
+   * ingress into the device; it does not claim to schedule audible samples.
+   * `host-paced` retains the older comparison path, which starts with only one
+   * frame and therefore provides no device-side scheduler-jitter reserve.
    *
    * Keeping this choice explicit is useful while physical tests compare both
    * models. It must not become an implicit fallback: changing clocks changes
@@ -86,9 +118,28 @@ export interface DevicePcmProxyOptions {
   frameDurationMs?: number;
   maximumBufferedBytes?: number;
   maximumDownlinkQueuedBytes?: number;
+  /*
+   * Provider WebSocket message boundaries are arbitrary transport batching,
+   * not playout or freshness boundaries. This optional stricter guard may be
+   * lower than the response reservoir, but never larger: a message that
+   * cannot fit in an empty reservoir has no admissible state.
+   */
   maximumProviderMessageBytes?: number;
+  /*
+   * This is the userspace source watermark, not the number of frames dumped to
+   * the device. A completed response may start below it because `response.done`
+   * proves there is no future source packet to wait for.
+   */
   minimumDownlinkStartupFrames?: number;
   onFailure?(reason: string): void;
+  onDownlinkResponseComplete?(observedAtMonotonicMs: number): void;
+  /*
+   * Diagnostic observers run only after the corresponding WebSocket send has
+   * accepted a frame. They receive a borrowed view and must copy synchronously
+   * if retaining it. Throwing disables the observer and reports one visible
+   * failure; it never tears down or delays the realtime lane.
+   */
+  onPcmFrame?(frame: PcmFrameObservation): void;
   onProviderEvent?(event: ProviderVoiceEvent): void;
   onSessionReady?(session: DevicePcmSessionDescriptor): void;
   /*
@@ -112,6 +163,9 @@ export function projectBearerSubprotocol(token: string) {
 }
 
 export class DevicePcmProxy implements Disposable {
+  readonly #deviceClockedInitialBurstFrames: number;
+  readonly #maximumDownlinkQueuedBytes: number;
+  readonly #minimumDownlinkStartupFrames: number;
   readonly #options: DevicePcmProxyOptions;
   readonly #sessions = new Map<string, DevicePcmProxySession>();
   #disposed = false;
@@ -144,15 +198,50 @@ export class DevicePcmProxy implements Disposable {
     ) {
       throw new Error("PCM downlink startup must contain a positive whole number of frames.");
     }
+    if (
+      options.deviceClockedInitialBurstFrames !== undefined &&
+      (!Number.isSafeInteger(options.deviceClockedInitialBurstFrames) ||
+        options.deviceClockedInitialBurstFrames <= 0)
+    ) {
+      throw new Error("PCM device-clocked initial burst must contain whole positive frames.");
+    }
+    if (
+      options.deviceClockedInitialBurstFrames !== undefined &&
+      options.downlinkDeliveryMode !== "device-clocked"
+    ) {
+      throw new Error("PCM device-clocked initial burst requires device-clocked delivery.");
+    }
     const maximumDownlinkQueuedBytes =
       options.maximumDownlinkQueuedBytes ?? options.frameBytes * defaultMaximumDownlinkFrames;
     if (
-      options.minimumDownlinkStartupFrames !== undefined &&
-      options.minimumDownlinkStartupFrames >
-        Math.floor(maximumDownlinkQueuedBytes / options.frameBytes)
+      options.maximumProviderMessageBytes !== undefined &&
+      (!Number.isSafeInteger(options.maximumProviderMessageBytes) ||
+        options.maximumProviderMessageBytes < 2 ||
+        options.maximumProviderMessageBytes > maximumDownlinkQueuedBytes)
+    ) {
+      throw new Error("A provider PCM message limit must fit inside the bounded downlink queue.");
+    }
+    const minimumDownlinkStartupFrames =
+      options.minimumDownlinkStartupFrames ??
+      Math.min(
+        defaultMinimumDownlinkStartupFrames,
+        Math.floor(maximumDownlinkQueuedBytes / options.frameBytes),
+      );
+    if (
+      minimumDownlinkStartupFrames > Math.floor(maximumDownlinkQueuedBytes / options.frameBytes)
     ) {
       throw new Error("PCM downlink startup must fit inside the bounded downlink queue.");
     }
+    const deviceClockedInitialBurstFrames =
+      options.deviceClockedInitialBurstFrames ?? minimumDownlinkStartupFrames;
+    if (deviceClockedInitialBurstFrames > minimumDownlinkStartupFrames) {
+      throw new Error(
+        "PCM device-clocked initial burst must not exceed the source startup reservoir.",
+      );
+    }
+    this.#deviceClockedInitialBurstFrames = deviceClockedInitialBurstFrames;
+    this.#maximumDownlinkQueuedBytes = maximumDownlinkQueuedBytes;
+    this.#minimumDownlinkStartupFrames = minimumDownlinkStartupFrames;
     this.#options = options;
   }
 
@@ -219,31 +308,34 @@ export class DevicePcmProxy implements Disposable {
     const proxySocket = pair[0];
     const deviceSocket = pair[1];
     proxySocket.accept();
-    const maximumDownlinkQueuedBytes =
-      this.#options.maximumDownlinkQueuedBytes ??
-      this.#options.frameBytes * defaultMaximumDownlinkFrames;
-    const minimumDownlinkStartupFrames =
-      this.#options.minimumDownlinkStartupFrames ??
-      Math.min(
-        defaultMinimumDownlinkStartupFrames,
-        Math.floor(maximumDownlinkQueuedBytes / this.#options.frameBytes),
-      );
     const session = new DevicePcmProxySession({
       device: proxySocket,
+      deviceClockedInitialBurstBytes:
+        this.#options.frameBytes * this.#deviceClockedInitialBurstFrames,
       downlinkDeliveryMode: this.#options.downlinkDeliveryMode ?? "host-paced",
       frameBytes: this.#options.frameBytes,
       frameDurationMs: this.#options.frameDurationMs ?? 20,
       inputMode: descriptor.inputMode,
       maximumBufferedBytes: this.#options.maximumBufferedBytes ?? this.#options.frameBytes * 8,
-      maximumProviderMessageBytes: this.#options.maximumProviderMessageBytes ?? 64 * 1024,
-      maximumDownlinkQueuedBytes,
-      minimumDownlinkStartupBytes: this.#options.frameBytes * minimumDownlinkStartupFrames,
+      /*
+       * The response reservoir is already the explicit memory/freshness
+       * bound. A second, smaller magic number cut a real 73,400-byte Grok
+       * message mid-sentence even though the complete packet fit safely here.
+       * Defaulting to the same bound removes that false protocol constraint
+       * without allocating a byte more or admitting an unbounded backlog.
+       */
+      maximumProviderMessageBytes:
+        this.#options.maximumProviderMessageBytes ?? this.#maximumDownlinkQueuedBytes,
+      maximumDownlinkQueuedBytes: this.#maximumDownlinkQueuedBytes,
+      minimumDownlinkStartupBytes: this.#options.frameBytes * this.#minimumDownlinkStartupFrames,
       onClose: (closed) => {
         if (this.#sessions.get(descriptor.id) === closed) {
           this.#sessions.delete(descriptor.id);
         }
       },
       onFailure: this.#options.onFailure,
+      onDownlinkResponseComplete: this.#options.onDownlinkResponseComplete,
+      onPcmFrame: this.#options.onPcmFrame,
       onProviderEvent: this.#options.onProviderEvent,
       onSocketClose: this.#options.onSocketClose,
       provider,
@@ -280,6 +372,7 @@ export class DevicePcmProxy implements Disposable {
 
 interface DevicePcmProxySessionOptions {
   device: WebSocket;
+  deviceClockedInitialBurstBytes: number;
   downlinkDeliveryMode: DevicePcmDownlinkDeliveryMode;
   frameBytes: number;
   frameDurationMs: number;
@@ -290,6 +383,8 @@ interface DevicePcmProxySessionOptions {
   minimumDownlinkStartupBytes: number;
   onClose(session: DevicePcmProxySession): void;
   onFailure?: DevicePcmProxyOptions["onFailure"];
+  onDownlinkResponseComplete?: DevicePcmProxyOptions["onDownlinkResponseComplete"];
+  onPcmFrame?: DevicePcmProxyOptions["onPcmFrame"];
   onProviderEvent?: DevicePcmProxyOptions["onProviderEvent"];
   onSocketClose?: DevicePcmProxyOptions["onSocketClose"];
   provider: WebSocket;
@@ -297,6 +392,7 @@ interface DevicePcmProxySessionOptions {
 
 class DevicePcmProxySession implements Disposable {
   readonly #device: WebSocket;
+  readonly #deviceClockedInitialBurstBytes: number;
   readonly #downlinkDeliveryMode: DevicePcmDownlinkDeliveryMode;
   readonly #downlinkQueue: Uint8Array;
   readonly #frameBytes: number;
@@ -307,6 +403,8 @@ class DevicePcmProxySession implements Disposable {
   readonly #minimumDownlinkStartupBytes: number;
   readonly #onClose: DevicePcmProxySessionOptions["onClose"];
   readonly #onFailure: DevicePcmProxySessionOptions["onFailure"];
+  readonly #onDownlinkResponseComplete: DevicePcmProxySessionOptions["onDownlinkResponseComplete"];
+  readonly #onPcmFrame: DevicePcmProxySessionOptions["onPcmFrame"];
   readonly #onProviderEvent: DevicePcmProxySessionOptions["onProviderEvent"];
   readonly #onSocketClose: DevicePcmProxySessionOptions["onSocketClose"];
   readonly #provider: WebSocket;
@@ -327,6 +425,7 @@ class DevicePcmProxySession implements Disposable {
   #downlinkWriteOffset = 0;
   #nextDownlinkAt = 0;
   #inputActive = false;
+  #pcmObserverFailed = false;
   #responseActive = false;
   #responseRequested = false;
   #suppressDownlink = false;
@@ -335,6 +434,7 @@ class DevicePcmProxySession implements Disposable {
 
   constructor(options: DevicePcmProxySessionOptions) {
     this.#device = options.device;
+    this.#deviceClockedInitialBurstBytes = options.deviceClockedInitialBurstBytes;
     this.#downlinkDeliveryMode = options.downlinkDeliveryMode;
     this.#downlinkQueue = new Uint8Array(options.maximumDownlinkQueuedBytes);
     this.#frameBytes = options.frameBytes;
@@ -345,6 +445,8 @@ class DevicePcmProxySession implements Disposable {
     this.#minimumDownlinkStartupBytes = options.minimumDownlinkStartupBytes;
     this.#onClose = options.onClose;
     this.#onFailure = options.onFailure;
+    this.#onDownlinkResponseComplete = options.onDownlinkResponseComplete;
+    this.#onPcmFrame = options.onPcmFrame;
     this.#onProviderEvent = options.onProviderEvent;
     this.#onSocketClose = options.onSocketClose;
     this.#provider = options.provider;
@@ -496,7 +598,9 @@ class DevicePcmProxySession implements Disposable {
     }
     if (!this.#send(this.#provider, bytes)) {
       this.#fail("provider-egress-backpressure", applicationCloseCode.backpressure);
+      return;
     }
+    this.#observePcmFrame("microphone-uplink", bytes);
   }
 
   #acceptProviderMessage(data: unknown) {
@@ -514,13 +618,18 @@ class DevicePcmProxySession implements Disposable {
       this.#relayProviderBytes(bytes);
       return;
     }
-    if (
-      !(data instanceof Blob) ||
-      data.size === 0 ||
-      data.size > this.#maximumProviderMessageBytes ||
-      data.size % 2 !== 0
-    ) {
+    if (!(data instanceof Blob) || data.size === 0 || data.size % 2 !== 0) {
       this.#fail("invalid-provider-pcm-message", applicationCloseCode.protocolError);
+      return;
+    }
+    if (data.size > this.#maximumProviderMessageBytes) {
+      /*
+       * Oversized but otherwise valid PCM is a bounded-resource outcome, not
+       * malformed protocol. Keeping that distinction in the close reason is
+       * what lets a physical run attribute a capacity miss without blaming
+       * xAI's codec or silently weakening the memory limit.
+       */
+      this.#fail("provider-pcm-message-budget-exceeded", applicationCloseCode.backpressure);
       return;
     }
     let conversion: Promise<void>;
@@ -591,12 +700,12 @@ class DevicePcmProxySession implements Disposable {
   }
 
   #relayProviderBytes(bytes: Uint8Array) {
-    if (
-      bytes.byteLength === 0 ||
-      bytes.byteLength > this.#maximumProviderMessageBytes ||
-      bytes.byteLength % 2 !== 0
-    ) {
+    if (bytes.byteLength === 0 || bytes.byteLength % 2 !== 0) {
       this.#fail("invalid-provider-pcm-message", applicationCloseCode.protocolError);
+      return;
+    }
+    if (bytes.byteLength > this.#maximumProviderMessageBytes) {
+      this.#fail("provider-pcm-message-budget-exceeded", applicationCloseCode.backpressure);
       return;
     }
     if (this.#suppressDownlink) return;
@@ -648,10 +757,38 @@ class DevicePcmProxySession implements Disposable {
         return;
       }
       this.#downlinkStarted = true;
-      this.#nextDownlinkAt = performance.now();
+      if (this.#downlinkDeliveryMode === "device-clocked") {
+        /*
+         * Prime a finite hardware lead, not the whole provider message. Grok
+         * packet boundaries have no timing meaning and can contain hundreds of
+         * milliseconds of samples. Dumping one such packet synchronously into
+         * WebSocket/TCP would recreate an opaque backlog below this queue and
+         * can overflow the Stick before I2S consumes its first descriptor.
+         *
+         * The userspace source watermark can be materially larger than this
+         * device lead. Conflating them would force us to choose between
+         * provider-jitter tolerance and overflowing the Stick's receive path.
+         * A completed shorter response is the sole exception; its final
+         * partial frame is padded by sendQueuedDownlinkFrame(), exactly as in
+         * host-paced mode.
+         */
+        const startupFrameCount = Math.ceil(
+          Math.min(this.#downlinkQueuedBytes, this.#deviceClockedInitialBurstBytes) /
+            this.#frameBytes,
+        );
+        for (let frame = 0; frame < startupFrameCount; frame += 1) {
+          if (!this.#sendQueuedDownlinkFrame()) {
+            this.#fail("device-egress-backpressure", applicationCloseCode.backpressure);
+            return;
+          }
+        }
+        this.#nextDownlinkAt = performance.now() + this.#frameDurationMs;
+      } else {
+        this.#nextDownlinkAt = performance.now();
+      }
     }
     if (this.#downlinkDeliveryMode === "device-clocked") {
-      this.#drainDeviceClockedDownlink();
+      this.#scheduleDeviceClockedDownlink();
       return;
     }
     const hasCompleteFrame = this.#downlinkQueuedBytes >= this.#frameBytes;
@@ -705,32 +842,55 @@ class DevicePcmProxySession implements Disposable {
   }
 
   /*
-   * Drain only the already-admitted bounded queue. The loop cannot monopolise
-   * the Worker: its maximum work is fixed by `maximumDownlinkQueuedBytes`
-   * (eight frames by default), and provider admission fails closed before that
-   * bound can be exceeded.
+   * Once primed, send at most one frame per deadline. This is flow shaping at
+   * the userspace/device boundary, not a second claim about playout time: I2S
+   * still consumes the already-queued lead on its own clock, and firmware
+   * metrics remain authoritative for receive-to-audible delay and underrun.
    *
-   * Crucially, an empty queue is not a host-side playout underrun in this mode.
-   * The device retains and consumes the startup reserve on its hardware clock;
-   * the next provider burst is forwarded when it arrives. The firmware owns
-   * the definitive late/drop/reset policy because only it can observe the I²S
-   * descriptor deadline.
+   * If provider ingress temporarily runs dry, do not invent a host underrun or
+   * shift a retained FIFO. The device consumes its finite lead and applies its
+   * own freshness/reset policy. A later provider packet resumes from the old
+   * deadline (immediately if overdue) without a catch-up burst.
    */
-  #drainDeviceClockedDownlink() {
-    while (
-      !this.#closed &&
-      !this.#suppressDownlink &&
-      (this.#downlinkQueuedBytes >= this.#frameBytes ||
-        (this.#downlinkResponseDone && this.#downlinkQueuedBytes > 0))
-    ) {
-      if (!this.#sendQueuedDownlinkFrame()) {
-        this.#fail("device-egress-backpressure", applicationCloseCode.backpressure);
-        return;
+  #scheduleDeviceClockedDownlink() {
+    const hasCompleteFrame = this.#downlinkQueuedBytes >= this.#frameBytes;
+    const hasFinalPartialFrame = this.#downlinkResponseDone && this.#downlinkQueuedBytes > 0;
+    if (!hasCompleteFrame && !hasFinalPartialFrame) {
+      if (this.#downlinkResponseDone && this.#downlinkQueuedBytes === 0) {
+        this.#sendDownlinkEndOfStream();
       }
+      return;
     }
+    const delay = Math.max(0, this.#nextDownlinkAt - performance.now());
+    this.#downlinkTimer = setTimeout(() => {
+      this.#downlinkTimer = undefined;
+      this.#sendNextDeviceClockedDownlinkFrame();
+    }, delay);
+  }
+
+  #sendNextDeviceClockedDownlinkFrame() {
+    if (this.#closed || this.#suppressDownlink) return;
+    const hasCompleteFrame = this.#downlinkQueuedBytes >= this.#frameBytes;
+    const hasFinalPartialFrame = this.#downlinkResponseDone && this.#downlinkQueuedBytes > 0;
+    if (!hasCompleteFrame && !hasFinalPartialFrame) {
+      if (this.#downlinkResponseDone && this.#downlinkQueuedBytes === 0) {
+        this.#sendDownlinkEndOfStream();
+      }
+      return;
+    }
+    if (!this.#sendQueuedDownlinkFrame()) {
+      this.#fail("device-egress-backpressure", applicationCloseCode.backpressure);
+      return;
+    }
+    this.#nextDownlinkAt = nextPcmFrameDeadline(
+      this.#nextDownlinkAt,
+      performance.now(),
+      this.#frameDurationMs,
+    );
     if (this.#downlinkResponseDone && this.#downlinkQueuedBytes === 0) {
-      this.#sendDownlinkEndOfStream();
+      if (!this.#sendDownlinkEndOfStream()) return;
     }
+    this.#scheduleDownlink();
   }
 
   /*
@@ -771,7 +931,28 @@ class DevicePcmProxySession implements Disposable {
     this.#downlinkReadOffset =
       (this.#downlinkReadOffset + copiedBytes) % this.#downlinkQueue.byteLength;
     this.#downlinkQueuedBytes -= copiedBytes;
-    return this.#send(this.#device, downlinkFrame);
+    const sent = this.#send(this.#device, downlinkFrame);
+    if (sent) this.#observePcmFrame("speaker-downlink", downlinkFrame);
+    return sent;
+  }
+
+  #observePcmFrame(direction: PcmFrameObservation["direction"], bytes: Uint8Array) {
+    if (!this.#onPcmFrame || this.#pcmObserverFailed) return;
+    try {
+      this.#onPcmFrame({
+        bytes,
+        direction,
+        observedAtMonotonicMs: performance.now(),
+      });
+    } catch {
+      /*
+       * Evidence collection must never become an audio transport dependency.
+       * Disable a broken observer after one report so a disk/diagnostic bug
+       * cannot create per-frame exception load or disconnect a healthy call.
+       */
+      this.#pcmObserverFailed = true;
+      this.#onFailure?.("pcm-frame-observer-failed");
+    }
   }
 
   #sendDownlinkEndOfStream() {
@@ -782,6 +963,7 @@ class DevicePcmProxySession implements Disposable {
     this.#downlinkResponseDone = false;
     this.#downlinkStarted = false;
     this.#nextDownlinkAt = 0;
+    this.#onDownlinkResponseComplete?.(performance.now());
     return true;
   }
 

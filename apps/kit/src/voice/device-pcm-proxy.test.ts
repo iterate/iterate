@@ -1,5 +1,5 @@
-import { WebSocketPair } from "captun";
 import { createHash } from "node:crypto";
+import { WebSocketPair } from "captun";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { DeterministicPcmToneProvider } from "./deterministic-pcm-tone-provider.ts";
 import {
@@ -7,6 +7,7 @@ import {
   ITERATE_KIT_PCM_SUBPROTOCOL,
   projectBearerSubprotocol,
   type DevicePcmSocketClose,
+  type PcmFrameObservation,
   type ProviderVoiceEvent,
 } from "./device-pcm-proxy.ts";
 
@@ -123,12 +124,15 @@ describe("device PCM proxy", () => {
 
   function createProxy(options?: {
     closes?: DevicePcmSocketClose[];
+    deviceClockedInitialBurstFrames?: number;
+    downlinkCompletions?: number[];
     downlinkDeliveryMode?: "device-clocked" | "host-paced";
     events?: ProviderVoiceEvent[];
     failures?: string[];
     inputMode?: "push-to-talk" | "server-vad";
     maximumDownlinkQueuedBytes?: number;
     minimumDownlinkStartupFrames?: number;
+    pcmFrames?: PcmFrameObservation[];
     provider?: SocketPairFixture;
     readySessions?: string[];
   }) {
@@ -139,6 +143,7 @@ describe("device PCM proxy", () => {
         return candidateProjectId === projectId && candidateToken === projectToken;
       },
       connectProvider: async () => provider.server,
+      deviceClockedInitialBurstFrames: options?.deviceClockedInitialBurstFrames,
       downlinkDeliveryMode: options?.downlinkDeliveryMode,
       frameBytes,
       maximumDownlinkQueuedBytes: options?.maximumDownlinkQueuedBytes,
@@ -148,13 +153,65 @@ describe("device PCM proxy", () => {
         inputMode: options?.inputMode ?? "server-vad",
       }),
       onFailure: (reason) => options?.failures?.push(reason),
+      onDownlinkResponseComplete: (observedAt) => options?.downlinkCompletions?.push(observedAt),
       onProviderEvent: (event) => options?.events?.push(event),
+      onPcmFrame: (frame) =>
+        options?.pcmFrames?.push({
+          ...frame,
+          bytes: frame.bytes.slice(),
+        }),
       onSessionReady: (session) => options?.readySessions?.push(session.id),
       onSocketClose: (close) => options?.closes?.push(close),
     });
     proxies.push(proxy);
     return { provider, proxy };
   }
+
+  test("observes the exact PCM accepted at both userspace wire boundaries", async () => {
+    /*
+     * A nearby room microphone can prove audibility, but it cannot tell us
+     * whether corruption entered before Grok or after Grok. The local
+     * userspace harness therefore needs a non-blocking tee at the two public
+     * PCM boundaries: bytes accepted for provider uplink and bytes accepted
+     * for device downlink. The observer receives owned copies in this test so
+     * later ring-buffer reuse cannot make a retained artifact lie.
+     */
+    const pcmFrames: PcmFrameObservation[] = [];
+    const downlinkCompletions: number[] = [];
+    const { provider, proxy } = createProxy({
+      downlinkCompletions,
+      minimumDownlinkStartupFrames: 1,
+      pcmFrames,
+    });
+    const response = await proxy.fetch(pcmRequest());
+    const device = (response as Response & { webSocket?: AcceptingWebSocket }).webSocket;
+    if (!device) throw new Error("missing device WebSocket");
+    device.accept();
+    sockets.push(device);
+
+    const microphoneFrame = new Uint8Array(frameBytes).fill(0x31);
+    const speakerFrame = new Uint8Array(frameBytes).fill(0x72);
+    device.send(microphoneFrame);
+    provider.client.send(speakerFrame);
+    provider.client.send(JSON.stringify({ type: "response.done" }));
+
+    await vi.waitFor(() => {
+      expect(pcmFrames).toHaveLength(2);
+      expect(downlinkCompletions).toHaveLength(1);
+    });
+    expect(pcmFrames).toEqual([
+      {
+        bytes: microphoneFrame,
+        direction: "microphone-uplink",
+        observedAtMonotonicMs: expect.any(Number),
+      },
+      {
+        bytes: speakerFrame,
+        direction: "speaker-downlink",
+        observedAtMonotonicMs: expect.any(Number),
+      },
+    ]);
+  });
 
   test("rejects missing or invalid project bearer credentials before provider egress", async () => {
     let connectionAttempts = 0;
@@ -642,23 +699,28 @@ describe("device PCM proxy", () => {
     expect(receivedAt.at(-1)).toBe(200);
   });
 
-  test("establishes an explicit device-clocked startup lead without growing the queue", async () => {
+  test("separates the userspace source reservoir from the device startup lead", async () => {
     /*
-     * Four hardware descriptors consume the first four frames immediately.
-     * Starting after the proxy's default three-frame watermark consequently
-     * leaves no replenished application reserve on the physical Stick. Seven
-     * frames are a deliberately narrow discriminator: the initial burst can
-     * populate four DMA descriptors and leave three frames / 60 ms in the
-     * device's already-bounded ring. It does not change the eight-frame /
-     * 160 ms maximum, and every later provider burst still drains immediately.
+     * A physical Grok cue exposed a 203.28 ms gap between provider packets.
+     * The old implementation used the same eight-frame value both as the
+     * source-jitter watermark and as the immediate burst sent to the Stick, so
+     * there was no way to cover that gap without overflowing the device's
+     * eight-frame realtime budget.
+     *
+     * The larger 32-frame / 640 ms reservoir belongs in userspace, where it is
+     * bounded by the existing response allocation. The Stick still receives
+     * exactly eight frames initially and one frame per media deadline. This
+     * keeps ESP RAM and device latency fixed while provider packetization can
+     * no longer starve a healthy speaker lane.
      */
     vi.useFakeTimers();
     const failures: string[] = [];
     const { provider, proxy } = createProxy({
+      deviceClockedInitialBurstFrames: 8,
       downlinkDeliveryMode: "device-clocked",
       failures,
-      maximumDownlinkQueuedBytes: frameBytes * 8,
-      minimumDownlinkStartupFrames: 7,
+      maximumDownlinkQueuedBytes: frameBytes * 64,
+      minimumDownlinkStartupFrames: 32,
     });
     const response = await proxy.fetch(pcmRequest());
     const device = (response as Response & { webSocket?: AcceptingWebSocket }).webSocket;
@@ -672,19 +734,254 @@ describe("device PCM proxy", () => {
       if (bytes.byteLength > 0) frameFirstBytes.push(bytes[0] ?? 0);
     });
 
-    for (let frame = 1; frame <= 6; frame += 1) {
+    for (let frame = 1; frame <= 31; frame += 1) {
       provider.client.send(new Uint8Array(frameBytes).fill(frame));
     }
     await vi.advanceTimersByTimeAsync(0);
     expect(frameFirstBytes).toEqual([]);
 
-    provider.client.send(new Uint8Array(frameBytes).fill(7));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(frameFirstBytes).toEqual([1, 2, 3, 4, 5, 6, 7]);
-
-    provider.client.send(new Uint8Array(frameBytes).fill(8));
+    provider.client.send(new Uint8Array(frameBytes).fill(32));
     await vi.advanceTimersByTimeAsync(0);
     expect(frameFirstBytes).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+
+    await vi.advanceTimersByTimeAsync(203);
+    expect(frameFirstBytes).toEqual(Array.from({ length: 18 }, (_, index) => index + 1));
+    expect(failures).toEqual([]);
+
+    provider.client.send(new Uint8Array(frameBytes).fill(33));
+    await vi.advanceTimersByTimeAsync(17);
+    expect(frameFirstBytes).toEqual(Array.from({ length: 19 }, (_, index) => index + 1));
+    expect(failures).toEqual([]);
+  });
+
+  test("starts a completed short response without waiting for the source reservoir", async () => {
+    /*
+     * A large source reservoir must not turn a short acknowledgement into
+     * 640 ms of avoidable silence. `response.done` proves that no additional
+     * source bytes are coming, so a finite short response may prime only the
+     * frames it actually contains and then emit its ordered end marker.
+     */
+    vi.useFakeTimers();
+    const failures: string[] = [];
+    const { provider, proxy } = createProxy({
+      deviceClockedInitialBurstFrames: 8,
+      downlinkDeliveryMode: "device-clocked",
+      failures,
+      minimumDownlinkStartupFrames: 32,
+    });
+    const response = await proxy.fetch(pcmRequest());
+    const device = (response as Response & { webSocket?: AcceptingWebSocket }).webSocket;
+    if (!device) throw new Error("missing device WebSocket");
+    device.accept();
+    sockets.push(device);
+
+    const received: Uint8Array[] = [];
+    device.addEventListener("message", (event) => {
+      received.push(new Uint8Array(event.data as ArrayBufferLike));
+    });
+    provider.client.send(new Uint8Array(frameBytes * 5 + 100).fill(41));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(received).toEqual([]);
+
+    provider.client.send(JSON.stringify({ type: "response.done" }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    const pcmFrames = received.filter((frame) => frame.byteLength > 0);
+    expect(pcmFrames).toHaveLength(6);
+    expect(pcmFrames.at(-1)?.subarray(0, 100)).toEqual(new Uint8Array(100).fill(41));
+    expect(pcmFrames.at(-1)?.subarray(100)).toEqual(new Uint8Array(frameBytes - 100));
+    expect(received.filter((frame) => frame.byteLength === 0)).toHaveLength(1);
+    expect(failures).toEqual([]);
+  });
+
+  test("rejects a device startup burst larger than its source watermark", () => {
+    /*
+     * Letting the immediate device burst exceed the source watermark silently
+     * collapses the two independent budgets again: the proxy could begin with
+     * fewer source frames than the requested hardware lead. Rejecting this at
+     * construction keeps every accepted configuration mechanically coherent.
+     */
+    expect(
+      () =>
+        new DevicePcmProxy({
+          authenticate: () => true,
+          connectProvider: async () => socketPair().server,
+          deviceClockedInitialBurstFrames: 9,
+          downlinkDeliveryMode: "device-clocked",
+          frameBytes,
+          minimumDownlinkStartupFrames: 8,
+        }),
+    ).toThrow("device-clocked initial burst must not exceed the source startup reservoir");
+  });
+
+  test("paces real Grok packet bursts through the device-clocked PCM seam", async () => {
+    /*
+     * A live grok-voice-think-fast-2.0 probe returned a 1.59-second spoken
+     * response as five messages of 7,830, 20,552, 9,788, 8,808, and 3,910
+     * bytes within 235 ms. Those are provider packet boundaries, not 20 ms
+     * playout deadlines. Rejecting the first message because it exceeds the
+     * device's short startup lead makes a healthy provider look like realtime
+     * backlog; forwarding all five immediately merely moves that backlog into
+     * the Stick and its TCP buffers.
+     *
+     * The public provider-to-device WebSocket seam must instead prime exactly
+     * the configured seven-frame hardware lead, pace the remaining complete
+     * frames, preserve bytes across every odd packet boundary, and pad only
+     * the final response tail. This literal packet trace is independent of the
+     * rechunking implementation and reproduces the physical failure which sent
+     * zero response frames to the Stick.
+     */
+    vi.useFakeTimers();
+    const failures: string[] = [];
+    const { provider, proxy } = createProxy({
+      downlinkDeliveryMode: "device-clocked",
+      failures,
+      minimumDownlinkStartupFrames: 7,
+    });
+    const response = await proxy.fetch(pcmRequest());
+    const device = (response as Response & { webSocket?: AcceptingWebSocket }).webSocket;
+    if (!device) throw new Error("missing device WebSocket");
+    device.accept();
+    sockets.push(device);
+
+    const messages = [7_830, 20_552, 9_788, 8_808, 3_910].map((byteLength, messageIndex) =>
+      new Uint8Array(byteLength).fill(messageIndex + 1),
+    );
+    const received: Uint8Array[] = [];
+    device.addEventListener("message", (event) => {
+      received.push(new Uint8Array(event.data as ArrayBufferLike));
+    });
+
+    for (const message of messages) provider.client.send(message);
+    provider.client.send(JSON.stringify({ type: "response.done" }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(received.slice(0, 7).map((frame) => frame.byteLength)).toEqual(
+      Array.from({ length: 7 }, () => frameBytes),
+    );
+    expect(failures).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    const pcmFrames = received.filter((frame) => frame.byteLength > 0);
+    const endMarkers = received.filter((frame) => frame.byteLength === 0);
+    const expectedBytes = Buffer.concat(messages.map((message) => Buffer.from(message)));
+    const actualBytes = Buffer.concat(pcmFrames.map((frame) => Buffer.from(frame)));
+    expect(pcmFrames).toHaveLength(Math.ceil(expectedBytes.byteLength / frameBytes));
+    expect(actualBytes.subarray(0, expectedBytes.byteLength)).toEqual(expectedBytes);
+    expect(actualBytes.subarray(expectedBytes.byteLength).every((byte) => byte === 0)).toBe(true);
+    expect(endMarkers).toHaveLength(1);
+    expect(failures).toEqual([]);
+  });
+
+  test("accepts a real Grok packet larger than the former arbitrary message cap", async () => {
+    /*
+     * The longer physical joke run was cut off after "Why don't scie-" even
+     * though the Stick, LAN, and paced downlink were healthy. A direct replay
+     * of that exact prompt then measured one 73,400-byte Grok binary message.
+     * Provider packetization has no realtime meaning: this message fits the
+     * existing bounded userspace reservoir and therefore
+     * must be rechunked through it, not rejected by an unrelated 64 KiB cap.
+     *
+     * The queue remains the hard memory and freshness bound. This test does
+     * not permit a packet larger than the reservoir or relax odd-byte PCM
+     * validation; it prevents those distinct policies from being conflated.
+     */
+    vi.useFakeTimers();
+    const failures: string[] = [];
+    const { provider, proxy } = createProxy({
+      downlinkDeliveryMode: "device-clocked",
+      failures,
+      minimumDownlinkStartupFrames: 7,
+    });
+    const response = await proxy.fetch(pcmRequest());
+    const device = (response as Response & { webSocket?: AcceptingWebSocket }).webSocket;
+    if (!device) throw new Error("missing device WebSocket");
+    device.accept();
+    sockets.push(device);
+
+    const providerMessage = new Uint8Array(73_400);
+    for (let index = 0; index < providerMessage.byteLength; index += 1) {
+      providerMessage[index] = index % 251;
+    }
+    const received: Uint8Array[] = [];
+    device.addEventListener("message", (event) => {
+      received.push(new Uint8Array(event.data as ArrayBufferLike));
+    });
+
+    provider.client.send(providerMessage);
+    provider.client.send(JSON.stringify({ type: "response.done" }));
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    const pcmFrames = received.filter((frame) => frame.byteLength > 0);
+    const actualBytes = Buffer.concat(pcmFrames.map((frame) => Buffer.from(frame)));
+    expect(actualBytes.subarray(0, providerMessage.byteLength)).toEqual(
+      Buffer.from(providerMessage),
+    );
+    expect(received.filter((frame) => frame.byteLength === 0)).toHaveLength(1);
+    expect(failures).toEqual([]);
+  });
+
+  test("retains one complete observed Grok response burst within the userspace budget", async () => {
+    /*
+     * Fixing the former 64 KiB per-message guard exposed the next independent
+     * limit: the exact joke response which crossed that guard contained
+     * 148,222 bytes across seven messages. xAI produced those 4.63 seconds of
+     * PCM in under one second, so a 128,000-byte reservoir could accept the
+     * largest individual message yet still disconnect halfway through the
+     * response as the following messages arrived.
+     *
+     * WebSocket receive events offer no useful application backpressure once
+     * a binary message has been delivered. The smallest honest MVP contract is
+     * therefore one explicit, bounded userspace response budget large enough
+     * for the production trace, while the ESP keeps only its short realtime
+     * lead. Interruption still destroys this reservoir immediately; this test
+     * permits neither stale replay nor an unbounded conversation queue.
+     */
+    vi.useFakeTimers();
+    const failures: string[] = [];
+    const { provider, proxy } = createProxy({
+      downlinkDeliveryMode: "device-clocked",
+      failures,
+      minimumDownlinkStartupFrames: 8,
+    });
+    const response = await proxy.fetch(pcmRequest());
+    const device = (response as Response & { webSocket?: AcceptingWebSocket }).webSocket;
+    if (!device) throw new Error("missing device WebSocket");
+    device.accept();
+    sockets.push(device);
+
+    const messages = [7_830, 20_552, 14_680, 18_596, 73_400, 9_788, 3_376].map(
+      (byteLength, messageIndex) => {
+        const message = new Uint8Array(byteLength);
+        for (let index = 0; index < message.byteLength; index += 1) {
+          message[index] = (index + messageIndex * 31) % 251;
+        }
+        return message;
+      },
+    );
+    const received: Uint8Array[] = [];
+    device.addEventListener("message", (event) => {
+      received.push(new Uint8Array(event.data as ArrayBufferLike));
+    });
+
+    /*
+     * Delivery cadence is intentionally the worst legal case. The production
+     * timings are evidence, not a provider promise, and JS cannot make later
+     * callbacks wait for the speaker clock. A reservoir advertised as a
+     * complete-response budget must admit the same bytes even if the runtime
+     * dispatches their already-generated messages in one task turn.
+     */
+    for (const message of messages) provider.client.send(message);
+    provider.client.send(JSON.stringify({ type: "response.done" }));
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    const pcmFrames = received.filter((frame) => frame.byteLength > 0);
+    const expectedBytes = Buffer.concat(messages.map((message) => Buffer.from(message)));
+    const actualBytes = Buffer.concat(pcmFrames.map((frame) => Buffer.from(frame)));
+    expect(actualBytes.subarray(0, expectedBytes.byteLength)).toEqual(expectedBytes);
+    expect(actualBytes.subarray(expectedBytes.byteLength).every((byte) => byte === 0)).toBe(true);
+    expect(received.filter((frame) => frame.byteLength === 0)).toHaveLength(1);
     expect(failures).toEqual([]);
   });
 
@@ -694,9 +991,12 @@ describe("device PCM proxy", () => {
    * Eight frames are the explicit 160 ms jitter allowance; the ninth must end
    * this PCM generation visibly so reconnect starts from current speech.
    */
-  test("rejects provider audio beyond the default realtime jitter budget", async () => {
+  test("rejects provider audio beyond a configured realtime response budget", async () => {
     const failures: string[] = [];
-    const { provider, proxy } = createProxy({ failures });
+    const { provider, proxy } = createProxy({
+      failures,
+      maximumDownlinkQueuedBytes: frameBytes * 8,
+    });
     const response = await proxy.fetch(pcmRequest());
     const device = (response as Response & { webSocket?: AcceptingWebSocket }).webSocket;
     if (!device) throw new Error("missing device WebSocket");
@@ -706,7 +1006,7 @@ describe("device PCM proxy", () => {
     provider.client.send(new Uint8Array(frameBytes * 9).fill(1));
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(failures).toContain("device-downlink-queue-overflow");
+    expect(failures).toContain("provider-pcm-message-budget-exceeded");
   });
 
   /*
@@ -763,7 +1063,7 @@ describe("device PCM proxy", () => {
     provider.client.send(new Uint8Array(frameBytes * 3));
     await new Promise((resolve) => setTimeout(resolve, 1));
 
-    expect(failures).toContain("device-downlink-queue-overflow");
+    expect(failures).toContain("provider-pcm-message-budget-exceeded");
   });
 
   test("closes both lanes on text uplink or a non-frame-sized device message", async () => {

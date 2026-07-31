@@ -2,6 +2,7 @@
 #define ITERATE_KIT_SIMULATOR_HARDWARE_HPP
 
 #include "iterate/kit/capabilities/metrics.h"
+#include "iterate/kit/capabilities/screen.h"
 #include "iterate/kit/status.h"
 
 #include <cstddef>
@@ -48,6 +49,7 @@ struct CommonHardware {
    * rendering correctness.
    */
   std::uint32_t renderUrlHash = 0U;
+  iterate_kit_screen_colour screenColour = ITERATE_KIT_SCREEN_RED;
 };
 
 /*
@@ -58,6 +60,8 @@ struct CommonHardware {
  */
 iterate_kit_status renderPng(
     void *context, const char *url, std::size_t urlLength);
+iterate_kit_status changeColour(
+    void *context, iterate_kit_screen_colour colour);
 iterate_kit_status sampleMetrics(
     void *context, iterate_kit_metrics_sample *sample);
 

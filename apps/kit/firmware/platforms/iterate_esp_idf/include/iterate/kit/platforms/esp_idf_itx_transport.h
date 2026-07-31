@@ -44,12 +44,15 @@ enum {
   /*
    * ESP-IDF defines StackType_t as uint8_t on its supported embedded ports,
    * so its FreeRTOS stack-depth APIs and this buffer are byte-sized. The task
-   * stack is statically reserved to make the connection's RAM cost visible;
+   * stack is statically reserved to make the connection's RAM cost visible.
+   * Its size is shared with the lower WebSocket/TLS boundary because the
+   * synchronous handshake, not control-message processing, sets the peak.
    * 512 bytes of retained headroom is the fail-closed floor below which another
    * TLS/WebSocket start is unsafe. Control messages are capped at 2 KiB so one
    * fragmented RPC cannot create an unbounded reassembly allocation.
    */
-  ITERATE_KIT_ESP_IDF_NETWORK_TASK_STACK_BYTES = 3072,
+  ITERATE_KIT_ESP_IDF_NETWORK_TASK_STACK_BYTES =
+      ITERATE_KIT_ESP_IDF_WEBSOCKET_TLS_OWNER_STACK_BYTES,
   ITERATE_KIT_ESP_IDF_NETWORK_TASK_MINIMUM_HEADROOM_BYTES = 512,
   ITERATE_KIT_ESP_IDF_CONTROL_MESSAGE_CAPACITY = 2048,
 };
@@ -103,6 +106,12 @@ struct iterate_kit_esp_idf_itx_transport_options {
  * visibility into opaque TLS, lwIP, or Wi-Fi buffering.
  */
 struct iterate_kit_esp_idf_itx_transport_metrics {
+  /*
+   * Association is a current lifecycle fact, not derivable from cumulative
+   * connect/disconnect counters or WebSocket state. Expose the transport's
+   * existing atomic flag so a diagnostics sample does not race or guess.
+   */
+  bool wifi_connected;
   uint32_t wifi_connect_attempts;
   uint32_t wifi_disconnects;
   uint32_t websocket_connections;

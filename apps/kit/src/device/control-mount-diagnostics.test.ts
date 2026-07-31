@@ -9,7 +9,7 @@ import {
 
 function diagnostics(): KitControlDiagnostics {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     producedAtMs: 100_139,
     control: {
       websocketStartAttempts: 2,
@@ -52,6 +52,13 @@ function diagnostics(): KitControlDiagnostics {
         highWaterSlots: 8,
         currentSlots: 0,
       },
+    },
+    network: {
+      wifiConnected: true,
+      wifiRssiDbm: -67,
+      pcmWebsocketConnections: 2,
+      pcmWebsocketDisconnects: 1,
+      pcmWebsocketErrors: 0,
     },
   };
 }

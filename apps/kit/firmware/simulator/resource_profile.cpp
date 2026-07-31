@@ -53,6 +53,7 @@ constexpr std::size_t output_capacity = 128U;
 constexpr std::size_t subscription_capacity = 2U;
 constexpr std::size_t screen_url_capacity = 64U;
 constexpr std::size_t m5sticks3_event_capacity = 8U;
+constexpr std::size_t m5sticks3_event_notification_capacity = 8U;
 
 /*
  * These empty seams deliberately model only portable template-owned metadata.
@@ -157,6 +158,11 @@ iterate_kit_status render_png(
    * constant-time. This profile measures portable protocol/capability overhead,
    * not guessed display, LED, camera, or metrics driver costs.
    */
+  return ITERATE_KIT_OK;
+}
+
+iterate_kit_status change_colour(
+    void *, iterate_kit_screen_colour) {
   return ITERATE_KIT_OK;
 }
 
@@ -298,7 +304,7 @@ int main() {
    * explicitly creates one.
    */
   const iterate_kit_stackchan_options stackchan_options{
-    {&hardware, render_png},
+    {&hardware, render_png, change_colour},
     screen_url_scratch,
     sizeof(screen_url_scratch),
     {&hardware, move_servos},
@@ -313,6 +319,7 @@ int main() {
       1'000U,
       nullptr,
       0U,
+      nullptr,
     },
   };
   if (iterate_kit_stackchan_init(
@@ -440,7 +447,9 @@ int main() {
       common_working_set_bytes +
       sizeof(iterate_kit_m5sticks3) +
       m5sticks3_platform_bytes +
-      m5sticks3_event_capacity * sizeof(iterate_kit_device_event);
+      m5sticks3_event_capacity * sizeof(iterate_kit_device_event) +
+      m5sticks3_event_notification_capacity *
+          sizeof(iterate_kit_device_event_notification);
 
   constexpr std::size_t m5sticks3_direct_backend_host_abi_bytes =
       sizeof(ProfileDirectBackend);
@@ -553,6 +562,11 @@ int main() {
       << m5sticks3_audio_task_stack_bytes
       << ",\"m5sticks3EventStorageBytes\":"
       << m5sticks3_event_capacity * sizeof(iterate_kit_device_event)
+      << ",\"m5sticks3EventNotificationStorageBytes\":"
+      << m5sticks3_event_notification_capacity *
+             sizeof(iterate_kit_device_event_notification)
+      << ",\"m5sticks3CallbackBudgetBytes\":"
+      << sizeof(iterate_kit_callback_budget)
       << ",\"metricSubscriptionBytes\":" << sizeof(subscriptions[0])
       << ",\"protocolWorkingSetBytes\":" << common_working_set_bytes
       << ",\"stackchanProfileWorkingSetBytes\":"

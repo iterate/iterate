@@ -176,6 +176,10 @@ const char *iterate_kit_device_event_type_name(
       return "pushToTalk.started";
     case ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STOPPED:
       return "pushToTalk.stopped";
+    case ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED:
+      return "conversation.started";
+    case ITERATE_KIT_DEVICE_EVENT_CONVERSATION_ENDED:
+      return "conversation.ended";
     case ITERATE_KIT_DEVICE_EVENT_TYPE_COUNT:
       return "unknown";
   }

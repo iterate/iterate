@@ -1,0 +1,18 @@
+{
+  "text": " 3, 2, 1, lantern.",
+  "segments": [
+    {
+      "id": 0,
+      "seek": 0,
+      "start": 0.0,
+      "end": 2.7800000000000002,
+      "text": " 3, 2, 1, lantern.",
+      "tokens": [50365, 805, 11, 568, 11, 502, 11, 34031, 13, 50504],
+      "temperature": 0,
+      "avg_logprob": -0.37514556537974963,
+      "compression_ratio": 0.68,
+      "no_speech_prob": 3.445460583506588e-11
+    }
+  ],
+  "language": "en"
+}

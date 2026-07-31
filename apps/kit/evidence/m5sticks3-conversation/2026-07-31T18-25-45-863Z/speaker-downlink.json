@@ -1,0 +1,30 @@
+{
+  "text": " 1. Interruption successful.",
+  "segments": [
+    {
+      "id": 0,
+      "seek": 0,
+      "start": 0.0,
+      "end": 0.56,
+      "text": " 1.",
+      "tokens": [50365, 502, 13, 50393],
+      "temperature": 0,
+      "avg_logprob": -0.561238635670055,
+      "compression_ratio": 0.7714285714285715,
+      "no_speech_prob": 5.832680258915923e-13
+    },
+    {
+      "id": 1,
+      "seek": 0,
+      "start": 0.66,
+      "end": 2.22,
+      "text": " Interruption successful.",
+      "tokens": [50398, 5751, 11266, 4406, 13, 50476],
+      "temperature": 0,
+      "avg_logprob": -0.561238635670055,
+      "compression_ratio": 0.7714285714285715,
+      "no_speech_prob": 5.832680258915923e-13
+    }
+  ],
+  "language": "en"
+}

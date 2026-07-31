@@ -5,6 +5,7 @@
   "type": "module",
   "description": "A tiny browser-based installer for Iterate voice devices.",
   "scripts": {
+    "audio:transcribe": "tsx ./scripts/transcribe-pcm16.ts",
     "dev": "vite dev",
     "build": "pnpm firmware:sync && vite build && tsc --noEmit",
     "device:e2e": "tsx ./scripts/device-e2e.ts",

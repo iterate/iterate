@@ -6,6 +6,7 @@ export const DEVICE_CONFIGURATION_LIMITS = {
   wifiSsidBytes: 32,
   wifiPasswordBytes: 64,
   osBaseUrlBytes: 128,
+  pcmBaseUrlBytes: 128,
   projectIdBytes: 64,
   projectApiKeyBytes: 128,
 } as const;
@@ -18,6 +19,7 @@ export interface DeviceConfiguration {
   };
   iterate: {
     baseUrl: string;
+    pcmBaseUrl: string;
     projectId: string;
     projectApiKey: string;
   };
@@ -29,6 +31,7 @@ const enum ConfigurationField {
   OsBaseUrl = 3,
   ProjectId = 4,
   ProjectApiKey = 5,
+  PcmBaseUrl = 6,
 }
 
 const configurationFieldNames = new Map<ConfigurationField, string>([
@@ -37,6 +40,7 @@ const configurationFieldNames = new Map<ConfigurationField, string>([
   [ConfigurationField.OsBaseUrl, "OS base URL"],
   [ConfigurationField.ProjectId, "Iterate project ID"],
   [ConfigurationField.ProjectApiKey, "Iterate project API key"],
+  [ConfigurationField.PcmBaseUrl, "PCM userspace base URL"],
 ]);
 
 export function normalizeOsBaseUrl(value: string) {
@@ -79,6 +83,7 @@ export function encodeDeviceConfiguration(
   }
 
   const baseUrl = normalizeOsBaseUrl(configuration.iterate.baseUrl);
+  const pcmBaseUrl = normalizeOsBaseUrl(configuration.iterate.pcmBaseUrl);
   const fields = [
     encodeConfigurationField(
       ConfigurationField.WifiSsid,
@@ -113,6 +118,13 @@ export function encodeDeviceConfiguration(
       configuration.iterate.projectApiKey,
       DEVICE_CONFIGURATION_LIMITS.projectApiKeyBytes,
       "Iterate project API key",
+      false,
+    ),
+    encodeConfigurationField(
+      ConfigurationField.PcmBaseUrl,
+      pcmBaseUrl,
+      DEVICE_CONFIGURATION_LIMITS.pcmBaseUrlBytes,
+      "PCM userspace base URL",
       false,
     ),
   ];
@@ -199,13 +211,15 @@ export function decodeDeviceConfiguration(image: Uint8Array): DeviceConfiguratio
   }
 
   for (const [tag, fieldName] of configurationFieldNames) {
-    if (!fields.has(tag)) {
+    if (tag !== ConfigurationField.PcmBaseUrl && !fields.has(tag)) {
       throw new Error(`Device configuration is missing the ${fieldName} field.`);
     }
   }
   const baseUrl = normalizeOsBaseUrl(
     requiredConfigurationField(fields, ConfigurationField.OsBaseUrl),
   );
+  /* Older ITERKIT1 images predate the direct userspace PCM lane. */
+  const pcmBaseUrl = normalizeOsBaseUrl(fields.get(ConfigurationField.PcmBaseUrl) ?? baseUrl);
   const projectId = requiredConfigurationField(fields, ConfigurationField.ProjectId);
   if (!/^prj_[A-Za-z0-9_-]+$/.test(projectId)) {
     throw new Error("Device configuration Iterate project ID is invalid.");
@@ -219,6 +233,7 @@ export function decodeDeviceConfiguration(image: Uint8Array): DeviceConfiguratio
     },
     iterate: {
       baseUrl,
+      pcmBaseUrl,
       projectId,
       projectApiKey: requiredConfigurationField(fields, ConfigurationField.ProjectApiKey),
     },

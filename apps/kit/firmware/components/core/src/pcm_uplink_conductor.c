@@ -8,14 +8,13 @@
  * independently useful abstractions meet:
  *
  *   microphone SPSC ring -> retained-frame sender -> WebSocket transmitter
- *                                                   ^
- *                                  peer-delivery Ping/Pong guard
  *
  * Leaving these calls in an ESP-IDF task looked small, but it made their order
  * an untested platform convention. That order is the realtime guarantee. A
- * control frame must not be starved by a send burst; a partially-written PCM
- * frame must still finish atomically; and any recoverable restart must purge
- * both the application epoch and connection-bound transmit bytes.
+ * mandatory control reply must not be starved by a send burst; a
+ * partially-written PCM frame must still finish atomically; and any
+ * recoverable restart must purge both the application epoch and
+ * connection-bound transmit bytes.
  *
  * No second PCM queue is introduced here. The sender retains a read-acquired
  * ring slot during short writes, and the WebSocket transmitter owns its one
@@ -139,8 +138,6 @@ enum iterate_kit_status iterate_kit_pcm_uplink_conductor_init(
     const struct iterate_kit_pcm_uplink_conductor_options
         *options) {
   struct iterate_kit_pcm_uplink_sender_options sender_options;
-  struct iterate_kit_pcm_peer_delivery_guard_options
-      peer_delivery_options;
   enum iterate_kit_status status;
   if (conductor == NULL ||
       options == NULL ||
@@ -176,28 +173,6 @@ enum iterate_kit_status iterate_kit_pcm_uplink_conductor_init(
     return status;
   }
 
-  peer_delivery_options =
-      (struct iterate_kit_pcm_peer_delivery_guard_options){
-        .tx = options->tx,
-        .barrier_interval_frames =
-            options->barrier_interval_frames,
-        .maximum_unconfirmed_frames =
-            options->maximum_unconfirmed_frames,
-        .maximum_barrier_delay_ms =
-            options->maximum_barrier_delay_ms,
-        .maximum_confirmation_age_ms =
-            options->maximum_confirmation_age_ms,
-        .idle_peer_probe_interval_ms =
-            options->idle_peer_probe_interval_ms,
-        .idle_peer_probe_timeout_ms =
-            options->idle_peer_probe_timeout_ms,
-      };
-  status = iterate_kit_pcm_peer_delivery_guard_init(
-      &conductor->peer_delivery, &peer_delivery_options);
-  if (status != ITERATE_KIT_OK) {
-    memset(conductor, 0, sizeof(*conductor));
-    return status;
-  }
   conductor->initialized = true;
   return ITERATE_KIT_OK;
 }
@@ -242,12 +217,7 @@ iterate_kit_pcm_uplink_conductor_abandon_generation(
   status = iterate_kit_pcm_uplink_sender_discard_pending(
       &conductor->sender, discarded_frames);
   iterate_kit_websocket_tx_reset(conductor->tx);
-  if (conductor->generation_active) {
-    iterate_kit_pcm_peer_delivery_guard_reset(
-        &conductor->peer_delivery,
-        conductor->connection_generation);
-    conductor->generation_active = false;
-  }
+  conductor->generation_active = false;
   return status;
 }
 
@@ -279,8 +249,6 @@ iterate_kit_pcm_uplink_conductor_begin_generation(
     return status;
   }
   conductor->connection_generation = connection_generation;
-  iterate_kit_pcm_peer_delivery_guard_reset(
-      &conductor->peer_delivery, connection_generation);
   conductor->generation_active = true;
   return ITERATE_KIT_OK;
 }
@@ -327,19 +295,17 @@ iterate_kit_pcm_uplink_conductor_poll(
        step < conductor->maximum_work_steps;
        ++step) {
     enum iterate_kit_websocket_tx_result control_result;
-    enum iterate_kit_pcm_peer_delivery_poll_result
-        delivery_result;
     enum iterate_kit_pcm_uplink_sender_poll_result
         sender_result;
     struct iterate_kit_pcm_uplink_sender_event event;
     bool data_frame_active;
 
     /*
-     * Peer PONG replies, delivery barriers, and CLOSE all have deadlines or
-     * ordering meaning. Service one control write before considering fresh PCM
-     * in every round. A partially-written data frame is the sole exception:
-     * RFC 6455 forbids interleaving another frame into it, so the sender must
-     * finish that bounded frame before the queued control can own the wire.
+     * PONG replies and CLOSE have RFC ordering meaning. Service one control
+     * write before considering fresh PCM in every round. A partially-written
+     * data frame is the sole exception: RFC 6455 forbids interleaving another
+     * frame into it, so the sender must finish that bounded frame before the
+     * queued control can own the wire.
      */
     control_result =
         iterate_kit_websocket_tx_poll_control(conductor->tx);
@@ -355,33 +321,6 @@ iterate_kit_pcm_uplink_conductor_poll(
           ITERATE_KIT_PCM_UPLINK_CONDUCTOR_FAILED);
     }
 
-    /*
-     * A control frame is protocol progress, not evidence that buffered audio
-     * is still fresh. In particular, a delivery PING can sit behind a full TCP
-     * send buffer for far longer than our confirmation-age budget. Poll the
-     * guard after every single bounded raw write—even when that write made
-     * progress or would block—so TCP retransmission policy can never suspend
-     * the much shorter conversational-latency deadline.
-     *
-     * We considered a separate control-write retry counter, but attempt counts
-     * vary with tick rate and scheduler load. The age of the oldest unproved
-     * microphone frame is the requirement we actually need to enforce.
-     */
-    delivery_result =
-        iterate_kit_pcm_peer_delivery_guard_poll(
-            &conductor->peer_delivery, policy_now_ms);
-    if (delivery_result ==
-        ITERATE_KIT_PCM_PEER_DELIVERY_RESTART) {
-      return finish_generation(
-          conductor,
-          ITERATE_KIT_PCM_UPLINK_CONDUCTOR_RESTART);
-    }
-    if (delivery_result ==
-        ITERATE_KIT_PCM_PEER_DELIVERY_FAILED) {
-      return finish_generation(
-          conductor,
-          ITERATE_KIT_PCM_UPLINK_CONDUCTOR_FAILED);
-    }
     if (control_result == ITERATE_KIT_WEBSOCKET_TX_SENT ||
         control_result ==
             ITERATE_KIT_WEBSOCKET_TX_PROGRESS) {
@@ -404,54 +343,16 @@ iterate_kit_pcm_uplink_conductor_poll(
           ? ITERATE_KIT_PCM_UPLINK_CONDUCTOR_PROGRESS
           : ITERATE_KIT_PCM_UPLINK_CONDUCTOR_DEFERRED;
     }
-    if (delivery_result ==
-        ITERATE_KIT_PCM_PEER_DELIVERY_BARRIER_QUEUED) {
-      /*
-       * Queueing is itself progress, but the next round performs the actual
-       * write under the same bounded budget. If data is currently partial, the
-       * next round will finish it; afterward the barrier necessarily precedes
-       * every later PCM frame.
-       */
-      made_progress = true;
-      continue;
-    }
-    if (delivery_result ==
-            ITERATE_KIT_PCM_PEER_DELIVERY_PAUSED &&
-        !data_frame_active) {
-      return made_progress
-          ? ITERATE_KIT_PCM_UPLINK_CONDUCTOR_PROGRESS
-          : ITERATE_KIT_PCM_UPLINK_CONDUCTOR_DEFERRED;
-    }
-    if (delivery_result !=
-            ITERATE_KIT_PCM_PEER_DELIVERY_READY &&
-        delivery_result !=
-            ITERATE_KIT_PCM_PEER_DELIVERY_PAUSED) {
-      return finish_generation(
-          conductor,
-          ITERATE_KIT_PCM_UPLINK_CONDUCTOR_FAILED);
-    }
-
     sender_result = iterate_kit_pcm_uplink_sender_poll(
         &conductor->sender, policy_now_ms, &event);
     if (sender_result == ITERATE_KIT_PCM_UPLINK_SENDER_SENT) {
       /*
-       * Only a complete WebSocket application frame joins the peer-proof
-       * window. Partial byte progress cannot be counted as a frame parsed by
-       * the other endpoint. Advancing the local policy floor to the normalized
-       * acceptance boundary also prevents this same pass's cached clock from
-       * appearing older than the producer timestamp on the next guard poll.
-       *
-       * BACKPRESSURE here is a local invariant failure, not recoverable radio
-       * pressure. This single owner polls the guard before each sender call,
-       * and no other task can add to the unconfirmed window, so READY has
-       * reserved exactly one acceptance. Treating disagreement as a reconnect
-       * would hide state-machine corruption behind ordinary Wi-Fi telemetry.
+       * Advance the local policy floor to the sender's normalized acceptance
+       * boundary. The producer can publish a capture timestamp just after the
+       * owner sampled its clock; without this floor the next same-sample pass
+       * would make a fresh frame look as if time moved backwards.
        */
-      if (!event.transport_accepted ||
-          iterate_kit_pcm_peer_delivery_guard_record_accept(
-              &conductor->peer_delivery,
-              event.capture_completed_at_ms) !=
-              ITERATE_KIT_OK) {
+      if (!event.transport_accepted) {
         return finish_generation(
             conductor,
             ITERATE_KIT_PCM_UPLINK_CONDUCTOR_FAILED);
@@ -521,46 +422,6 @@ iterate_kit_pcm_uplink_conductor_poll(
       : ITERATE_KIT_PCM_UPLINK_CONDUCTOR_DEFERRED;
 }
 
-enum iterate_kit_status
-iterate_kit_pcm_uplink_conductor_receive_pong(
-    struct iterate_kit_pcm_uplink_conductor *conductor,
-    const void *payload,
-    size_t payload_size,
-    uint64_t sampled_now_ms) {
-  enum iterate_kit_status status;
-  uint64_t policy_now_ms;
-  uint32_t discarded_frames;
-  if (conductor == NULL ||
-      !conductor->initialized ||
-      (payload == NULL && payload_size > 0U)) {
-    return ITERATE_KIT_INVALID_ARGUMENT;
-  }
-  if (!conductor->generation_active) {
-    return ITERATE_KIT_STATE_ERROR;
-  }
-  if (!normalize_policy_time(
-          conductor, sampled_now_ms, &policy_now_ms)) {
-    (void)iterate_kit_pcm_uplink_conductor_abandon_generation(
-        conductor, &discarded_frames);
-    return ITERATE_KIT_STATE_ERROR;
-  }
-  status = iterate_kit_pcm_peer_delivery_guard_receive_pong(
-      &conductor->peer_delivery,
-      payload,
-      payload_size,
-      policy_now_ms);
-  if (status == ITERATE_KIT_STATE_ERROR) {
-    /*
-     * A matching pong can expose impossible local prefix state. Preserve the
-     * classification for the platform while closing the local epoch so no
-     * further PCM is admitted on a proof state we no longer trust.
-     */
-    (void)iterate_kit_pcm_uplink_conductor_abandon_generation(
-        conductor, &discarded_frames);
-  }
-  return status;
-}
-
 void iterate_kit_pcm_uplink_conductor_metrics(
     const struct iterate_kit_pcm_uplink_conductor *conductor,
     struct iterate_kit_pcm_uplink_conductor_metrics *metrics) {
@@ -573,8 +434,6 @@ void iterate_kit_pcm_uplink_conductor_metrics(
   }
   iterate_kit_pcm_uplink_sender_metrics(
       &conductor->sender, &metrics->sender);
-  iterate_kit_pcm_peer_delivery_guard_metrics(
-      &conductor->peer_delivery, &metrics->peer_delivery);
   metrics->policy_time_normalizations =
       atomic_load_u32(
           &conductor->policy_time_normalizations);

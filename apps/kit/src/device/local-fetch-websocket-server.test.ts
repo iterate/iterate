@@ -1,9 +1,10 @@
-import { WebSocketPair, createWebSocketResponse } from "captun";
 import { Socket } from "node:net";
+import { WebSocketPair, createWebSocketResponse } from "captun";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import WebSocket from "ws";
 import {
   LocalFetchWebSocketServer,
+  type LocalFetchWebSocketBridgeOpenEvent,
   type LocalFetchWebSocketBridgeMetrics,
 } from "./local-fetch-websocket-server.ts";
 
@@ -15,6 +16,62 @@ afterEach(async () => {
 });
 
 describe("local fetch WebSocket server", () => {
+  test("reports the connecting device address once before /pcm traffic", async () => {
+    /*
+     * The physical harness needs the address of the device which actually
+     * opened PCM, rather than an address guessed from USB inventory or a
+     * separate network probe. Observe the real TCP upgrade boundary and pin
+     * ordering: discovery must complete before the first frame is handed to
+     * the Workers-shaped endpoint.
+     */
+    const events: string[] = [];
+    const opened: LocalFetchWebSocketBridgeOpenEvent[] = [];
+    const firstTraffic = Promise.withResolvers<void>();
+    const earliestStart = performance.now();
+    const server = await LocalFetchWebSocketServer.listen({
+      fetch() {
+        const pair = new WebSocketPair();
+        pair[0].accept();
+        pair[0].addEventListener(
+          "message",
+          () => {
+            events.push("traffic");
+            firstTraffic.resolve();
+          },
+          { once: true },
+        );
+        return createWebSocketResponse(pair[1], {
+          protocol: "iterate.kit.pcm.v1",
+        });
+      },
+      host: "127.0.0.1",
+      onBridgeOpened(event) {
+        opened.push(event);
+        events.push("opened");
+      },
+    });
+    servers.push(server);
+
+    const socket = new WebSocket(`${server.webSocketOrigin}/pcm`, ["iterate.kit.pcm.v1"]);
+    await onceOpen(socket);
+    const latestStart = performance.now();
+    socket.send(Uint8Array.of(1));
+    await firstTraffic.promise;
+
+    expect(opened).toHaveLength(1);
+    expect(opened[0]).toMatchObject({
+      endpoint: "/pcm",
+      protocol: "iterate.kit.pcm.v1",
+      remoteAddress: "127.0.0.1",
+      remotePort: expect.any(Number),
+    });
+    expect(opened[0]!.remotePort).toBeGreaterThan(0);
+    expect(opened[0]!.startedAtMonotonicMs).toBeGreaterThanOrEqual(earliestStart);
+    expect(opened[0]!.startedAtMonotonicMs).toBeLessThanOrEqual(latestStart);
+    expect(events).toEqual(["opened", "traffic"]);
+    socket.close(1000, "open observed");
+  });
+
   test("bridges a Workers-style socket directly onto a LAN TCP listener", async () => {
     /*
      * The physical harness previously had only Captun's message-by-message
@@ -61,15 +118,18 @@ describe("local fetch WebSocket server", () => {
      * playback could prove a different system. Preserve the fetch response as
      * the HTTP upgrade rejection rather than accepting and closing later.
      */
+    const opened: LocalFetchWebSocketBridgeOpenEvent[] = [];
     const server = await LocalFetchWebSocketServer.listen({
       fetch: () => new Response("invalid bearer", { status: 401 }),
       host: "127.0.0.1",
+      onBridgeOpened: (event) => opened.push(event),
     });
     servers.push(server);
 
     const response = await rejectedUpgrade(new WebSocket(`${server.webSocketOrigin}/pcm`));
     expect(response.statusCode).toBe(401);
     expect(await readResponseBody(response)).toBe("invalid bearer");
+    expect(opened).toEqual([]);
   });
 
   test("admits eight PCM payloads and rejects the ninth by media bytes, not frame overhead", async () => {

@@ -1,7 +1,11 @@
 cmake_minimum_required(VERSION 3.16)
 
 list(APPEND EXTRA_COMPONENT_DIRS
-  "${CMAKE_CURRENT_LIST_DIR}/../../platforms/iterate_esp_idf/idf_overrides"
+  # Board-specific IDF overrides are not a global component bundle. Loading
+  # the sibling CoreS3 BSP override here makes an M5Stick build depend on a
+  # managed component it intentionally does not install. Select only the TCP
+  # transport override this target actually audits and uses.
+  "${CMAKE_CURRENT_LIST_DIR}/../../platforms/iterate_esp_idf/idf_overrides/tcp_transport"
   "${CMAKE_CURRENT_LIST_DIR}/../../idf-components/capnweb"
   "${CMAKE_CURRENT_LIST_DIR}/../../components/core"
   "${CMAKE_CURRENT_LIST_DIR}/../../components/capabilities"

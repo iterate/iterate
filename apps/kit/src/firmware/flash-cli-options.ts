@@ -17,6 +17,7 @@ export function parseLocalFlashCliOptions(
 ): LocalFlashCliOptions {
   const values: {
     baseUrl?: string;
+    pcmBaseUrl?: string;
     buildDirectory?: string;
     port?: string;
     projectId?: string;
@@ -40,6 +41,9 @@ export function parseLocalFlashCliOptions(
     switch (option) {
       case "--base-url":
         setOnce(values, "baseUrl", value, option);
+        break;
+      case "--pcm-base-url":
+        setOnce(values, "pcmBaseUrl", value, option);
         break;
       case "--build-directory":
         setOnce(values, "buildDirectory", value, option);
@@ -98,6 +102,13 @@ export function parseLocalFlashCliOptions(
         baseUrl: normalizeOsBaseUrl(
           values.baseUrl ?? environment.ITERATE_KIT_OS_BASE_URL ?? "https://os.iterate.com",
         ),
+        pcmBaseUrl: normalizeOsBaseUrl(
+          values.pcmBaseUrl ??
+            environment.ITERATE_KIT_PCM_BASE_URL ??
+            values.baseUrl ??
+            environment.ITERATE_KIT_OS_BASE_URL ??
+            "https://os.iterate.com",
+        ),
         projectId: requiredProjectId,
         projectApiKey: requiredProjectApiKey,
       },
@@ -117,6 +128,7 @@ function present(value: string | undefined) {
 function setOnce<
   Key extends keyof {
     baseUrl?: string;
+    pcmBaseUrl?: string;
     buildDirectory?: string;
     port?: string;
     projectId?: string;
@@ -125,6 +137,7 @@ function setOnce<
 >(
   values: {
     baseUrl?: string;
+    pcmBaseUrl?: string;
     buildDirectory?: string;
     port?: string;
     projectId?: string;

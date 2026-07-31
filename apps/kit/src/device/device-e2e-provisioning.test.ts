@@ -10,6 +10,7 @@ const storedConfiguration: DeviceConfiguration = {
   },
   iterate: {
     baseUrl: "https://stable-device-tunnel.example",
+    pcmBaseUrl: "https://stable-device-tunnel.example",
     projectId: "prj_stored_physical_device",
     projectApiKey: "itxk_stored_physical_device_secret",
   },

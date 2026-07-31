@@ -194,6 +194,17 @@ static void mounts_and_retains_only_the_provision_handle(void) {
       fixture.captured[7],
       "\"type\":\"live\",\"path\":[[\"kit\",\"m5sticks3\"]],"
       "\"capability\":[\"export\",-1]") != NULL);
+  /*
+   * The production capability host cannot replay a nested Cap'n Web proxy as
+   * though it were an ordinary JavaScript object: awaiting the intermediate
+   * `pushToTalk` member prematurely invokes that incomplete path. The device
+   * therefore opts into the host's one-call flattened boundary. Omitting this
+   * field previously left top-level diagnostics working while every nested
+   * capability failed only after a real production mount.
+   */
+  assert(strstr(
+      fixture.captured[7],
+      "\"flattenNestedPaths\":true") != NULL);
   assert(strstr(
       fixture.captured[7],
       "\"instructions\":\"M5StickS3 test device\"") != NULL);

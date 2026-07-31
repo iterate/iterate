@@ -12,6 +12,37 @@
  * explicit bounded copy so queueing policy cannot hide in this generic layer.
  */
 static const char *const render_path[] = {"renderOnScreen"};
+static const char *const change_colour_path[] = {"changeColour"};
+
+static enum capnweb_status change_colour(
+    void *context,
+    const struct capnweb_call *call,
+    struct capnweb_reply *reply) {
+  struct iterate_kit_screen *screen = context;
+  struct capnweb_value value = {0};
+  enum iterate_kit_screen_colour colour;
+  enum iterate_kit_status status;
+  if (call == NULL ||
+      !call->has_arguments ||
+      !capnweb_value_array_at(&call->arguments, 0U, &value)) {
+    return capnweb_reply_set_error(
+        reply, "TypeError", "expected red or green");
+  }
+  if (capnweb_value_string_equals(&value, "red")) {
+    colour = ITERATE_KIT_SCREEN_RED;
+  } else if (capnweb_value_string_equals(&value, "green")) {
+    colour = ITERATE_KIT_SCREEN_GREEN;
+  } else {
+    return capnweb_reply_set_error(
+        reply, "TypeError", "expected red or green");
+  }
+  status = screen->driver.change_colour(
+      screen->driver.context, colour);
+  if (status != ITERATE_KIT_OK) {
+    return iterate_kit_reply_status(reply, status);
+  }
+  return capnweb_reply_set_boolean(reply, true);
+}
 
 static enum capnweb_status render(
     void *context,
@@ -50,6 +81,7 @@ enum iterate_kit_status iterate_kit_screen_init(
   if (screen == NULL ||
       driver == NULL ||
       driver->render_png == NULL ||
+      driver->change_colour == NULL ||
       url_scratch == NULL ||
       url_scratch_size < 2U) {
     return ITERATE_KIT_INVALID_ARGUMENT;
@@ -65,6 +97,7 @@ struct iterate_kit_module iterate_kit_screen_module(
     struct iterate_kit_screen *screen) {
   static const struct iterate_kit_method methods[] = {
     {render_path, 1U, render},
+    {change_colour_path, 1U, change_colour},
   };
   const struct iterate_kit_module module = {
     .methods = methods,

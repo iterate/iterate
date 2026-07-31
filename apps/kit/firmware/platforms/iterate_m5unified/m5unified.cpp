@@ -81,7 +81,8 @@ bool M5UnifiedHalfDuplex::begin() {
   M5.Display.setTextSize(1);
   M5.Display.setCursor(8, 8);
   M5.Display.println("Iterate Kit / M5StickS3");
-  M5.Display.println("Hold BtnA to talk");
+  M5.Display.println("Top: call on/off");
+  M5.Display.println("Front: hold to talk");
   startedMicroseconds_ = esp_timer_get_time();
   if (iterate_kit_cpu_usage_meter_init(
           &cpuUsage_, CONFIG_FREERTOS_NUMBER_OF_CORES) !=
@@ -116,6 +117,13 @@ void M5UnifiedHalfDuplex::update() {
     buttonPressed_ = false;
     buttonChangePending_ = true;
   }
+  if (M5.BtnB.wasPressed()) {
+    /*
+     * BtnB is the StickS3 top button. Only its debounced press matters for a
+     * toggle; retaining releases would make an ordinary click two actions.
+     */
+    buttonBPressPending_ = true;
+  }
 }
 
 bool M5UnifiedHalfDuplex::takeButtonAChange(bool *pressed) {
@@ -125,8 +133,14 @@ bool M5UnifiedHalfDuplex::takeButtonAChange(bool *pressed) {
   return true;
 }
 
+bool M5UnifiedHalfDuplex::takeButtonBPress() {
+  if (!buttonBPressPending_) return false;
+  buttonBPressPending_ = false;
+  return true;
+}
+
 iterate_kit_screen_driver M5UnifiedHalfDuplex::screenDriver() {
-  return {this, renderPngUrl};
+  return {this, renderPngUrl, changeColour};
 }
 
 iterate_kit_metrics_driver M5UnifiedHalfDuplex::metricsDriver() {
@@ -238,6 +252,27 @@ iterate_kit_status M5UnifiedHalfDuplex::renderPngUrl(
    */
   platform.showStatus("PNG fetch not connected", 0U, 0U);
   return ITERATE_KIT_UNAVAILABLE;
+}
+
+iterate_kit_status M5UnifiedHalfDuplex::changeColour(
+    void *context, iterate_kit_screen_colour colour) {
+  auto &platform = *static_cast<M5UnifiedHalfDuplex *>(context);
+  (void)platform;
+  std::uint32_t displayColour;
+  if (colour == ITERATE_KIT_SCREEN_RED) {
+    displayColour = TFT_RED;
+  } else if (colour == ITERATE_KIT_SCREEN_GREEN) {
+    displayColour = TFT_GREEN;
+  } else {
+    return ITERATE_KIT_INVALID_ARGUMENT;
+  }
+  /*
+   * A full-screen fill is synchronous and allocation-free. It is deliberately
+   * a control-path proof, not an animation primitive: callers must not drive
+   * it at frame rate while realtime audio is active.
+   */
+  M5.Display.fillScreen(displayColour);
+  return ITERATE_KIT_OK;
 }
 
 iterate_kit_status M5UnifiedHalfDuplex::sampleMetrics(

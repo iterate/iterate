@@ -214,7 +214,6 @@ const kitBufferMetricsSchema = z.object({
 });
 const kitAudioBuffersSchema = z.object({
   lwipSend: kitBufferMetricsSchema,
-  peerUnconfirmed: kitBufferMetricsSchema,
   tlsEgress: kitBufferMetricsSchema,
   uplinkApplication: kitBufferMetricsSchema,
   websocketTransmitter: kitBufferMetricsSchema,
@@ -271,7 +270,6 @@ export function parseKitMetricsCallback(value: unknown): DeviceRuntimeLogObserva
         "buffer_websocket_transmitter",
         parsedBuffers.data.websocketTransmitter,
       );
-      appendKitBufferMetrics(values, "buffer_peer_unconfirmed", parsedBuffers.data.peerUnconfirmed);
       appendKitBufferMetrics(values, "buffer_lwip_send", parsedBuffers.data.lwipSend);
       appendKitBufferMetrics(values, "buffer_tls_egress", parsedBuffers.data.tlsEgress);
       appendKitBufferMetrics(values, "buffer_wifi_egress", parsedBuffers.data.wifiEgress);
@@ -319,6 +317,128 @@ export function devicePlaybackCompleted(before: DeviceRuntimeMetrics, after: Dev
     metricIncreased(before, after, "downlink_accepted") &&
     metricIncreased(before, after, "playback_submitted") &&
     metricIncreased(before, after, "playback_completed") &&
+    after.downlink_current === 0 &&
+    after.playback_current === 0
+  );
+}
+
+/**
+ * Exact conservation gate for one provider response whose frame count was
+ * observed at the userspace-to-device WebSocket boundary.
+ *
+ * Queue depth returning to zero is ambiguous: it can mean every frame became
+ * audible, or that an underrun/reset discarded the remainder. The physical
+ * Stick produced the latter state after playing 12 of 46 accepted frames, and
+ * the former exploratory predicate accepted it. This gate couples the host's
+ * exact sent-frame count to device receive, submit, and completion counters
+ * while requiring every relevant loss/reset counter to remain unchanged.
+ */
+export function devicePlaybackResponseCompleted(
+  before: DeviceRuntimeMetrics,
+  after: DeviceRuntimeMetrics,
+  expectedFrames: number,
+) {
+  if (!Number.isSafeInteger(expectedFrames) || expectedFrames <= 0) {
+    return false;
+  }
+  return (
+    metricChangedByExactly(before, after, "downlink_accepted", expectedFrames) &&
+    metricChangedByExactly(before, after, "playback_submitted", expectedFrames) &&
+    metricChangedByExactly(before, after, "playback_completed", expectedFrames) &&
+    metricChangedByExactly(before, after, "downlink_dropped", 0) &&
+    metricChangedByExactly(before, after, "downlink_failures", 0) &&
+    metricChangedByExactly(before, after, "playback_flushed", 0) &&
+    metricChangedByExactly(before, after, "playback_failures", 0) &&
+    after.downlink_current === 0 &&
+    after.playback_current === 0
+  );
+}
+
+/**
+ * Exact two-direction conservation gate for one conversational PTT turn.
+ *
+ * A later audible response does not prove that the current microphone interval
+ * stayed realtime: firmware can discard a stale uplink generation, reconnect,
+ * and still receive a fresh downlink. That recovery is intentionally useful in
+ * the product, but accepting it inside a no-drift endurance turn would hide the
+ * very accumulating-delay failure the physical rig is meant to detect. Match
+ * the host-observed provider sends exactly and require every device loss/
+ * restart counter to remain unchanged, while delegating the independently
+ * strict speaker accounting to `devicePlaybackResponseCompleted`.
+ */
+export function deviceVoiceTurnCompleted(
+  before: DeviceRuntimeMetrics,
+  after: DeviceRuntimeMetrics,
+  expected: { microphoneFrames: number; speakerFrames: number },
+) {
+  if (!Number.isSafeInteger(expected.microphoneFrames) || expected.microphoneFrames <= 0) {
+    return false;
+  }
+  return (
+    devicePlaybackResponseCompleted(before, after, expected.speakerFrames) &&
+    metricChangedByExactly(before, after, "uplink_sent", expected.microphoneFrames) &&
+    metricChangedByExactly(before, after, "audio_dropped", 0) &&
+    metricChangedByExactly(before, after, "audio_failures", 0) &&
+    metricChangedByExactly(before, after, "uplink_dropped", 0) &&
+    metricChangedByExactly(before, after, "uplink_failures", 0) &&
+    metricChangedByExactly(before, after, "uplink_restart_incidents", 0) &&
+    after.uplink_current === 0
+  );
+}
+
+/**
+ * Exact two-direction ledger for a two-epoch barge-in sequence.
+ *
+ * Ordinary turns forbid every flush. Barge-in has the opposite semantic
+ * requirement: obsolete assistant audio must stop, but only that named loss
+ * is acceptable. Every speaker frame observed leaving userspace must therefore
+ * end in exactly one of two buckets—physically completed or generation-flushed.
+ * Transport drops, failures, microphone loss, and generation restarts remain
+ * forbidden, and both realtime queues must be empty before the proof closes.
+ */
+export function deviceInterruptedVoiceSequenceCompleted(
+  before: DeviceRuntimeMetrics,
+  after: DeviceRuntimeMetrics,
+  expected: { microphoneFrames: number; speakerFrames: number },
+) {
+  if (
+    !Number.isSafeInteger(expected.microphoneFrames) ||
+    expected.microphoneFrames <= 0 ||
+    !Number.isSafeInteger(expected.speakerFrames) ||
+    expected.speakerFrames <= 0
+  ) {
+    return false;
+  }
+  const delta = (name: string) => {
+    const beforeValue = before[name];
+    const afterValue = after[name];
+    return typeof beforeValue === "number" && typeof afterValue === "number"
+      ? afterValue - beforeValue
+      : undefined;
+  };
+  const accepted = delta("downlink_accepted");
+  const submitted = delta("playback_submitted");
+  const completed = delta("playback_completed");
+  const flushed = delta("playback_flushed");
+  return (
+    accepted === expected.speakerFrames &&
+    submitted !== undefined &&
+    completed !== undefined &&
+    flushed !== undefined &&
+    flushed > 0 &&
+    completed + flushed === accepted &&
+    submitted >= completed &&
+    submitted <= accepted &&
+    metricChangedByExactly(before, after, "uplink_sent", expected.microphoneFrames) &&
+    metricChangedByExactly(before, after, "audio_dropped", 0) &&
+    metricChangedByExactly(before, after, "audio_failures", 0) &&
+    metricChangedByExactly(before, after, "uplink_dropped", 0) &&
+    metricChangedByExactly(before, after, "uplink_failures", 0) &&
+    metricChangedByExactly(before, after, "uplink_restart_incidents", 0) &&
+    metricChangedByExactly(before, after, "downlink_dropped", 0) &&
+    metricChangedByExactly(before, after, "downlink_failures", 0) &&
+    metricChangedByExactly(before, after, "playback_failures", 0) &&
+    after.uplink_current === 0 &&
     after.downlink_current === 0 &&
     after.playback_current === 0
   );
@@ -576,5 +696,20 @@ function metricIncreasedByAtLeast(
     typeof beforeValue === "number" &&
     typeof afterValue === "number" &&
     afterValue - beforeValue >= minimumIncrease
+  );
+}
+
+function metricChangedByExactly(
+  before: DeviceRuntimeMetrics,
+  after: DeviceRuntimeMetrics,
+  name: string,
+  expectedChange: number,
+) {
+  const beforeValue = before[name];
+  const afterValue = after[name];
+  return (
+    typeof beforeValue === "number" &&
+    typeof afterValue === "number" &&
+    afterValue - beforeValue === expectedChange
   );
 }

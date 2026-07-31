@@ -19,6 +19,28 @@ constexpr std::uint8_t es8311Address = 0x18U;
 constexpr std::uint8_t m5pm1Address = 0x6eU;
 constexpr std::uint32_t boardI2cFrequency = 100'000U;
 
+/*
+ * The direct path hands provider PCM to I2S without M5Unified's software
+ * mixer. That omission is desirable for deadline predictability, but copying
+ * M5Unified's codec setup verbatim also copied its 0 dB DAC setting while
+ * silently discarding the mixer's normal attenuation. A 75%-scale physical
+ * tone then drew enough speaker power to trip the board's brownout detector.
+ *
+ * Espressif defines ES8311 register 0x32 as 0.5 dB per step with 0xBF equal to
+ * 0 dB. Apply a fixed -18 dB ceiling at the codec: arbitrary Grok/test PCM is
+ * reduced before the power amplifier, while the realtime owner pays no
+ * per-sample multiplication, branch, allocation, or extra memory traffic.
+ * This is a board power policy, not a test-tone workaround. A future user
+ * volume control may attenuate further but must not exceed this safe ceiling
+ * without a new physical power proof.
+ */
+constexpr std::uint8_t es8311ZeroDbVolume = 0xbfU;
+constexpr std::uint8_t
+    es8311SafeDacAttenuationHalfDbSteps = 36U;
+constexpr std::uint8_t es8311SafeDacVolume =
+    es8311ZeroDbVolume - es8311SafeDacAttenuationHalfDbSteps;
+static_assert(es8311SafeDacVolume == 0x9bU);
+
 iterate_kit_status statusFromEspError(esp_err_t error) {
   switch (error) {
     case ESP_OK:
@@ -323,7 +345,7 @@ M5StickS3AudioBoardOps::configureCodec() {
     {0x0dU, 0x01U},
     {0x12U, 0x00U},
     {0x13U, 0x10U},
-    {0x32U, 0xbfU},
+    {0x32U, es8311SafeDacVolume},
     {0x37U, 0x08U},
   };
 
@@ -549,8 +571,20 @@ void M5StickS3DirectAudioOwner::taskLoop() {
       prebufferDeadline_.observe(0U, false);
       std::uint32_t discarded = 0U;
       if (lane_ != nullptr) {
-        (void)iterate_kit_pcm_lane_discard_downlink(
+        const auto discardStatus =
+            iterate_kit_pcm_lane_discard_downlink(
             lane_, &discarded);
+        if (discardStatus == ITERATE_KIT_OK) {
+          suspendedFramesFlushed_.add(discarded);
+        } else {
+          /*
+           * A malformed consumer state is not an expected interruption. Keep
+           * capture isolated from playback, but publish the fault so the
+           * application cannot report this generation as healthy.
+           */
+          publishedStatus_.store(
+              discardStatus, std::memory_order_release);
+        }
       }
       sampleStackHighWater();
       continue;
@@ -604,6 +638,7 @@ M5StickS3DirectAudioOwner::executeGenerationFenceCommand(
             iterate_kit_pcm_lane_discard_downlink(
                 lane_, &discarded);
         if (discardStatus == ITERATE_KIT_OK) {
+          suspendedFramesFlushed_.add(discarded);
           currentGeneration_ = generation;
         }
         return discardStatus;
@@ -668,6 +703,21 @@ M5StickS3DirectAudioOwner::executeLifecycleCommand(
 
     case LifecycleCommand::snapshotMetrics:
       metricsSnapshot_ = playback_.metrics();
+      {
+        /*
+         * Reuse the same saturating value type as every other owner counter.
+         * Adding the raw lane-discard total here would double-count frames
+         * already classified by stop()/flushGeneration(); only the suspended
+         * causal-gap counter is disjoint from the playback policy ledger.
+         */
+        BoundedEventCounter allGenerationFramesFlushed{};
+        allGenerationFramesFlushed.add(
+            metricsSnapshot_.generationFramesFlushed);
+        allGenerationFramesFlushed.add(
+            suspendedFramesFlushed_.value());
+        metricsSnapshot_.generationFramesFlushed =
+            allGenerationFramesFlushed.value();
+      }
       return ITERATE_KIT_OK;
   }
   return ITERATE_KIT_STATE_ERROR;

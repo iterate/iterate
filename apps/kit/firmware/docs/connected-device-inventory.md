@@ -24,6 +24,13 @@ source /Users/jonastemplestein/esp/esp-idf/export.sh >/dev/null 2>&1
 python -m serial.tools.list_ports -v
 ```
 
+Listing ports is non-disruptive; opening the M5StickS3 native USB serial port
+is not. On 2026-07-31, opening its port at 115200 reset the running firmware
+with ROM reason `USB_UART_CHIP_RESET` even after the host explicitly disabled
+both DTR and RTS. Treat every serial monitor/open as a device reset and never
+use it to inspect a live outage: it destroys the pre-reset transport state that
+the diagnosis needs. Resolving the port by USB metadata remains safe.
+
 `system_profiler SPUSBDataType -json` can corroborate serial and location
 information on macOS, but `serial.tools.list_ports` is preferred because it
 also reports the `/dev/cu.*` path needed by ESP-IDF tools.

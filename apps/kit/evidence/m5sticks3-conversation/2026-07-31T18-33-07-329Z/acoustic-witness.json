@@ -1,0 +1,35 @@
+{
+  "text": " Recite the numbers 1 through 20 slowly, with a short pause between each number. Do not stop early. The previous answer was interrupted. Reply exactly. Interruption successful.",
+  "segments": [
+    {
+      "id": 0,
+      "seek": 0,
+      "start": 0.0,
+      "end": 7.46,
+      "text": " Recite the numbers 1 through 20 slowly, with a short pause between each number. Do not stop early.",
+      "tokens": [
+        50365, 9647, 642, 264, 3547, 502, 807, 945, 5692, 11, 365, 257, 2099, 10465, 1296, 1184,
+        1230, 13, 1144, 406, 1590, 2440, 13, 50738
+      ],
+      "temperature": 0,
+      "avg_logprob": -0.24424283097429975,
+      "compression_ratio": 1.3059701492537314,
+      "no_speech_prob": 2.3183920061509156e-11
+    },
+    {
+      "id": 1,
+      "seek": 0,
+      "start": 9.46,
+      "end": 14.8,
+      "text": " The previous answer was interrupted. Reply exactly. Interruption successful.",
+      "tokens": [
+        50838, 440, 3894, 1867, 390, 30329, 13, 3696, 356, 2293, 13, 5751, 11266, 4406, 13, 51105
+      ],
+      "temperature": 0,
+      "avg_logprob": -0.24424283097429975,
+      "compression_ratio": 1.3059701492537314,
+      "no_speech_prob": 2.3183920061509156e-11
+    }
+  ],
+  "language": "en"
+}

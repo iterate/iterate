@@ -135,6 +135,18 @@ const defaultReadChunkBytes = 64 * 1_024;
 const amplitudeHistogramBins = 4_096;
 const amplitudeStepHistogramMaximumDecibels = 96;
 const amplitudeStepEdgeContextWindows = 2;
+/*
+ * Correlation first becomes "active" while the physical speaker/room response
+ * can still be settling, and likewise remains active briefly into ring-down.
+ * Those bounded edges are already represented by duration/missing-tone
+ * measurements; treating their changing transfer function as a transport
+ * phase jump produced a repeatable false failure on otherwise continuous Stick
+ * playback. Trim two half-window steps (5 ms with the default configuration)
+ * at each active-run edge while retaining the unchanged 0.1 rad threshold for
+ * every interior comparison. A duplicated or skipped 20 ms frame therefore
+ * remains well inside the inspected region.
+ */
+const phaseStepEdgeContextWindows = 2;
 const phaseHistogramBins = 8_192;
 
 /**
@@ -704,9 +716,11 @@ class FirstToneAnalysisPass {
     amplitudeHistogramBins,
   );
   readonly #amplitudeRecent: StableToneWindow[] = [];
+  readonly #phasePendingSteps: number[] = [];
   readonly #phaseSteps = new BoundedHistogram(-Math.PI, Math.PI, phaseHistogramBins);
   readonly #phaseStepWindowCount: number;
   readonly #recent: StableToneWindow[] = [];
+  #phaseActiveRunWindowCount = 0;
   #activeAmplitudeMean = 0;
   #activeAmplitudeM2 = 0;
   #activeRunCount = 0;
@@ -739,10 +753,7 @@ class FirstToneAnalysisPass {
       this.#maximumAmplitudeStepDecibels = Math.max(this.#maximumAmplitudeStepDecibels, step);
     }
 
-    this.#recent.push(window);
-    if (this.#recent.length > this.#phaseStepWindowCount + 1) {
-      this.#recent.shift();
-    }
+    this.#observePhaseStep(window);
 
     if (!window.active) {
       if (this.#firstActiveIndex !== undefined) {
@@ -771,12 +782,37 @@ class FirstToneAnalysisPass {
     const amplitudeDelta = window.amplitude - this.#activeAmplitudeMean;
     this.#activeAmplitudeMean += amplitudeDelta / this.#activeWindowCount;
     this.#activeAmplitudeM2 += amplitudeDelta * (window.amplitude - this.#activeAmplitudeMean);
+  }
 
+  #observePhaseStep(window: StableToneWindow) {
+    if (!window.active) {
+      /*
+       * Pending values are precisely the trailing edge context. Discarding
+       * them on the first inactive window keeps the streaming artifact pass
+       * equivalent to the bounded run scan used by the in-memory analyzer.
+       */
+      this.#recent.length = 0;
+      this.#phasePendingSteps.length = 0;
+      this.#phaseActiveRunWindowCount = 0;
+      return;
+    }
+
+    this.#phaseActiveRunWindowCount += 1;
+    this.#recent.push(window);
+    if (this.#recent.length > this.#phaseStepWindowCount + 1) {
+      this.#recent.shift();
+    }
     if (
-      this.#recent.length === this.#phaseStepWindowCount + 1 &&
-      this.#recent.every((recentWindow) => recentWindow.active)
+      this.#phaseActiveRunWindowCount <
+        this.#phaseStepWindowCount + 1 + phaseStepEdgeContextWindows ||
+      this.#recent.length !== this.#phaseStepWindowCount + 1
     ) {
-      this.#phaseSteps.observe(wrapRadians(window.phaseRadians - this.#recent[0]!.phaseRadians));
+      return;
+    }
+
+    this.#phasePendingSteps.push(wrapRadians(window.phaseRadians - this.#recent[0]!.phaseRadians));
+    if (this.#phasePendingSteps.length > phaseStepEdgeContextWindows) {
+      this.#phaseSteps.observe(this.#phasePendingSteps.shift()!);
     }
   }
 
@@ -804,9 +840,11 @@ class FirstToneAnalysisPass {
 
 class PhaseContinuityPass {
   readonly #baselineRadians: number;
+  readonly #pendingErrors: number[] = [];
   readonly #phaseStepWindowCount: number;
   readonly #recent: StableToneWindow[] = [];
   readonly #thresholdRadians: number;
+  #activeRunWindowCount = 0;
   discontinuityCount = 0;
   maximumErrorRadians = 0;
 
@@ -817,20 +855,33 @@ class PhaseContinuityPass {
   }
 
   observe(window: StableToneWindow) {
+    if (!window.active) {
+      this.#recent.length = 0;
+      this.#pendingErrors.length = 0;
+      this.#activeRunWindowCount = 0;
+      return;
+    }
+
+    this.#activeRunWindowCount += 1;
     this.#recent.push(window);
     if (this.#recent.length > this.#phaseStepWindowCount + 1) {
       this.#recent.shift();
     }
     if (
-      this.#recent.length !== this.#phaseStepWindowCount + 1 ||
-      !this.#recent.every((recentWindow) => recentWindow.active)
+      this.#activeRunWindowCount < this.#phaseStepWindowCount + 1 + phaseStepEdgeContextWindows ||
+      this.#recent.length !== this.#phaseStepWindowCount + 1
     ) {
       return;
     }
     const step = wrapRadians(window.phaseRadians - this.#recent[0]!.phaseRadians);
     const error = Math.abs(wrapRadians(step - this.#baselineRadians));
-    this.maximumErrorRadians = Math.max(this.maximumErrorRadians, error);
-    if (error > this.#thresholdRadians) {
+    this.#pendingErrors.push(error);
+    if (this.#pendingErrors.length <= phaseStepEdgeContextWindows) {
+      return;
+    }
+    const interiorError = this.#pendingErrors.shift()!;
+    this.maximumErrorRadians = Math.max(this.maximumErrorRadians, interiorError);
+    if (interiorError > this.#thresholdRadians) {
       this.discontinuityCount += 1;
     }
   }
@@ -1053,18 +1104,26 @@ function measurePhaseContinuity(
   discontinuityThresholdRadians: number,
 ) {
   const steps: number[] = [];
-  for (let index = spanWindows; index < windows.length; index += 1) {
-    let entireSpanActive = true;
-    for (let spanIndex = index - spanWindows; spanIndex <= index; spanIndex += 1) {
-      if (!active[spanIndex]) {
-        entireSpanActive = false;
-        break;
-      }
+  let runStart = 0;
+  while (runStart < windows.length) {
+    if (!active[runStart]) {
+      runStart += 1;
+      continue;
     }
-    if (!entireSpanActive) continue;
-    steps.push(
-      wrapRadians(windows[index]!.phaseRadians - windows[index - spanWindows]!.phaseRadians),
-    );
+    let runEnd = runStart + 1;
+    while (runEnd < windows.length && active[runEnd]) {
+      runEnd += 1;
+    }
+    for (
+      let index = runStart + spanWindows + phaseStepEdgeContextWindows;
+      index < runEnd - phaseStepEdgeContextWindows;
+      index += 1
+    ) {
+      steps.push(
+        wrapRadians(windows[index]!.phaseRadians - windows[index - spanWindows]!.phaseRadians),
+      );
+    }
+    runStart = runEnd;
   }
   const medianStepRadians = median(steps);
   let discontinuityCount = 0;

@@ -88,6 +88,7 @@ static void fixture_init(struct fixture *fixture) {
     .wifi_ssid = "host-test-network",
     .wifi_password = "host-test-password",
     .os_base_url = "https://example.invalid",
+    .pcm_base_url = "https://voice.example.invalid",
     .project_id = "prj_host_test",
     .project_api_key = "itxk_host_test",
   };
@@ -115,6 +116,14 @@ static void fixture_init(struct fixture *fixture) {
   };
   CHECK(iterate_kit_esp_idf_pcm_transport_prepare(
       &fixture->transport, &options) == ITERATE_KIT_OK);
+  /*
+   * The Cap'n Web origin above is deliberately different. If this assertion
+   * regresses, production silently routes audio through OS or requires the
+   * userspace worker to proxy the control upgrade again.
+   */
+  CHECK(strcmp(
+      fixture->transport.websocket_url,
+      "wss://voice.example.invalid/pcm") == 0);
 }
 
 static bool wait_for_generation(
@@ -164,23 +173,6 @@ static bool wait_for_downlink_publications(
      * the actual happens-before condition the consumer relies on.
      */
     if (metrics.lane.downlink.messages_published >= expected) {
-      return true;
-    }
-    pause_one_millisecond();
-  }
-  return false;
-}
-
-static bool wait_for_idle_peer_probes(
-    struct fixture *fixture, uint32_t expected) {
-  const int64_t deadline =
-      monotonic_milliseconds() + WAIT_TIMEOUT_MS;
-  while (monotonic_milliseconds() < deadline) {
-    struct iterate_kit_esp_idf_pcm_transport_metrics metrics;
-    iterate_kit_esp_idf_pcm_transport_metrics(
-        &fixture->transport, &metrics);
-    if (metrics.peer_delivery.idle_peer_probes_queued ==
-        expected) {
       return true;
     }
     pause_one_millisecond();
@@ -452,78 +444,78 @@ static void ordered_item_loss_forces_a_fresh_socket_generation(void) {
 }
 
 /*
- * The portable peer-delivery guard already proves its state transitions with
- * a synthetic clock. That is insufficient for the physical failure we are
- * chasing: both device WebSockets stopped progressing, and a perfectly
- * correct guard is useless if the ESP task loop never services its RESTART
- * verdict or never destroys the old transport generation.
- *
- * Keep the upgraded socket silent and advance only the fake monotonic clock.
- * The real production task must put one ordered PING on generation one, time
- * it out, close that generation, and publish generation two without waiting
- * for microphone traffic or a server downlink. No sleep-based three-second
- * test is needed; wall time drives the pthread scheduler while the explicit
- * policy clock drives the deadline.
+ * The PCM socket uses the same synchronous DNS/TCP/TLS/WebSocket open path as
+ * the control socket. It therefore needs the same pre-metric handshake
+ * envelope even though steady-state PCM work is deliberately tiny. Keeping a
+ * smaller audio task would merely move the production stack-canary crash from
+ * capability mount to the next connection and falsely look like an audio bug.
  */
-static void silent_peer_timeout_replaces_the_platform_socket_generation(void) {
+static void production_tls_handshake_has_a_safe_stack_envelope(void) {
+  CHECK(
+      ITERATE_KIT_ESP_IDF_PCM_NETWORK_TASK_STACK_BYTES >=
+      8192U);
+}
+
+/*
+ * The top-button hang-up runs on the same owner loop that services Cap'n Web,
+ * metrics, and button edges. A synchronous join can wait behind the transport's
+ * ten-second DNS/TLS open timeout, freezing all of those unrelated controls.
+ * Requesting teardown must therefore be constant-time; later owner polls reap
+ * the static task, and only the legacy close helper may wait during shutdown.
+ */
+static void conversation_stop_is_requested_without_blocking_the_owner(void) {
   struct fixture fixture;
-  struct iterate_kit_esp_idf_pcm_transport_metrics metrics;
+  enum iterate_kit_status status;
+  int64_t requested_at_ms;
+  int64_t request_elapsed_ms;
+  const int64_t deadline =
+      monotonic_milliseconds() + WAIT_TIMEOUT_MS;
 
   fixture_init(&fixture);
-  iterate_kit_fake_monotonic_clock_reset();
-  fixture.generation_barrier_ready = true;
   CHECK(iterate_kit_esp_idf_pcm_transport_start(
       &fixture.transport) == ITERATE_KIT_OK);
   CHECK(wait_for_generation(&fixture, 1U));
-  CHECK(iterate_kit_esp_idf_pcm_transport_poll(
+
+  requested_at_ms = monotonic_milliseconds();
+  CHECK(iterate_kit_esp_idf_pcm_transport_request_stop(
       &fixture.transport) == ITERATE_KIT_OK);
+  request_elapsed_ms = monotonic_milliseconds() - requested_at_ms;
+  CHECK(request_elapsed_ms < 20);
   CHECK(fixture.transport.state ==
-      ITERATE_KIT_ESP_IDF_PCM_READY);
+      ITERATE_KIT_ESP_IDF_PCM_STOPPING);
+
+  do {
+    status = iterate_kit_esp_idf_pcm_transport_finish_stop(
+        &fixture.transport);
+    if (status == ITERATE_KIT_UNAVAILABLE) pause_one_millisecond();
+  } while (status == ITERATE_KIT_UNAVAILABLE &&
+           monotonic_milliseconds() < deadline);
+  CHECK(status == ITERATE_KIT_OK);
+  CHECK(fixture.transport.state ==
+      ITERATE_KIT_ESP_IDF_PCM_STOPPED);
+  CHECK(!fixture.transport.started);
 
   /*
-   * Establish the fresh generation's silence baseline before jumping to the
-   * interval. Otherwise the first post-jump poll would correctly treat that
-   * later instant as time zero and no probe would yet be due.
+   * FreeRTOS reclaims a deleted static task immediately. The pthread-backed
+   * host scheduler models that reclamation explicitly with a join between
+   * lifecycles before allowing the same static slot to be created again.
    */
-  iterate_kit_esp_idf_pcm_transport_notify_uplink(
-      &fixture.transport);
-  pause_one_millisecond();
-  iterate_kit_fake_monotonic_clock_advance_ms(
-      ITERATE_KIT_ESP_IDF_PCM_IDLE_PEER_PROBE_INTERVAL_MS);
-  iterate_kit_esp_idf_pcm_transport_notify_uplink(
-      &fixture.transport);
-  CHECK(wait_for_idle_peer_probes(&fixture, 1U));
+  CHECK(iterate_kit_fake_platform_finish() == ESP_OK);
 
-  iterate_kit_fake_monotonic_clock_advance_ms(
-      ITERATE_KIT_ESP_IDF_PCM_IDLE_PEER_PROBE_TIMEOUT_MS);
-  iterate_kit_esp_idf_pcm_transport_notify_uplink(
-      &fixture.transport);
-  CHECK(wait_for_generation(&fixture, 2U));
-
-  iterate_kit_esp_idf_pcm_transport_metrics(
-      &fixture.transport, &metrics);
-  CHECK(metrics.websocket_connections == 2U);
-  CHECK(metrics.websocket_disconnects == 1U);
-  CHECK(metrics.websocket_errors == 0U);
-  CHECK(metrics.protocol_failures == 0U);
-  CHECK(metrics.peer_delivery.idle_peer_probes_queued == 1U);
-  CHECK(metrics.peer_delivery.idle_peer_probes_confirmed == 0U);
-  CHECK(metrics.peer_delivery.idle_peer_probe_timeouts == 1U);
-
-  CHECK(iterate_kit_esp_idf_pcm_transport_poll(
+  /* One static transport object must support the next top-button call. */
+  CHECK(iterate_kit_esp_idf_pcm_transport_start(
       &fixture.transport) == ITERATE_KIT_OK);
-  CHECK(fixture.transport.state ==
-      ITERATE_KIT_ESP_IDF_PCM_READY);
+  CHECK(wait_for_generation(&fixture, 2U));
   CHECK(iterate_kit_esp_idf_pcm_transport_stop(
       &fixture.transport) == ITERATE_KIT_OK);
   CHECK(iterate_kit_fake_platform_finish() == ESP_OK);
-  iterate_kit_fake_monotonic_clock_reset();
 }
 
 int main(void) {
+  production_tls_handshake_has_a_safe_stack_envelope();
+  conversation_stop_is_requested_without_blocking_the_owner();
   fresh_downlink_waits_for_generation_acceptance();
   content_and_eos_remain_ordered_across_the_transport_task();
   ordered_item_loss_forces_a_fresh_socket_generation();
-  silent_peer_timeout_replaces_the_platform_socket_generation();
   return 0;
 }

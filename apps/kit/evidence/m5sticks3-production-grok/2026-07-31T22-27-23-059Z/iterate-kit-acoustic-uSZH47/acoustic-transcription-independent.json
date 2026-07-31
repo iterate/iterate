@@ -1,0 +1,64 @@
+{
+  "input": "evidence/m5sticks3-production-grok/2026-07-31T22-27-23-059Z/iterate-kit-acoustic-uSZH47/microphone.pcm16le",
+  "interval": {
+    "endSample": 1071104,
+    "startSample": 797440
+  },
+  "result": {
+    "durationSeconds": 5.701,
+    "rawEvents": [
+      "{\"type\":\"transcript.created\",\"id\":\"2dbf5708-0b55-4ff2-8dd3-56cf932ecd52\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":1.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":3.0}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":4.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"The deploy iterator stick voice path is working.\",\"words\":[{\"text\":\"The\",\"start\":1.566,\"end\":1.646},{\"text\":\"deploy\",\"start\":1.686,\"end\":2.148},{\"text\":\"iterator\",\"start\":2.309,\"end\":2.79},{\"text\":\"stick\",\"start\":2.851,\"end\":3.092},{\"text\":\"voice\",\"start\":3.192,\"end\":3.473},{\"text\":\"path\",\"start\":3.513,\"end\":3.834},{\"text\":\"is\",\"start\":3.955,\"end\":4.035},{\"text\":\"working.\",\"start\":4.135,\"end\":4.597}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":5.701}",
+      "{\"type\":\"transcript.partial\",\"text\":\"The deploy iterator stick voice path is working.\",\"words\":[{\"text\":\"The\",\"start\":1.566,\"end\":1.646},{\"text\":\"deploy\",\"start\":1.686,\"end\":2.148},{\"text\":\"iterator\",\"start\":2.309,\"end\":2.79},{\"text\":\"stick\",\"start\":2.851,\"end\":3.092},{\"text\":\"voice\",\"start\":3.192,\"end\":3.473},{\"text\":\"path\",\"start\":3.513,\"end\":3.834},{\"text\":\"is\",\"start\":3.955,\"end\":4.035},{\"text\":\"working.\",\"start\":4.135,\"end\":4.597}],\"is_final\":true,\"speech_final\":true,\"start\":0.0,\"duration\":5.701}",
+      "{\"type\":\"transcript.done\",\"text\":\"\",\"words\":[],\"duration\":5.701}"
+    ],
+    "text": "The deploy iterator stick voice path is working.",
+    "words": [
+      {
+        "text": "The",
+        "start": 1.566,
+        "end": 1.646
+      },
+      {
+        "text": "deploy",
+        "start": 1.686,
+        "end": 2.148
+      },
+      {
+        "text": "iterator",
+        "start": 2.309,
+        "end": 2.79
+      },
+      {
+        "text": "stick",
+        "start": 2.851,
+        "end": 3.092
+      },
+      {
+        "text": "voice",
+        "start": 3.192,
+        "end": 3.473
+      },
+      {
+        "text": "path",
+        "start": 3.513,
+        "end": 3.834
+      },
+      {
+        "text": "is",
+        "start": 3.955,
+        "end": 4.035
+      },
+      {
+        "text": "working.",
+        "start": 4.135,
+        "end": 4.597
+      }
+    ]
+  },
+  "sampleRateHz": 48000,
+  "schemaVersion": 1
+}

@@ -26,11 +26,14 @@ enum {
   /*
    * ESP-IDF task depths and StackType_t are byte-based on supported ESP32
    * targets. The stack is static so failure is known at prepare/start and
-   * runtime heap fragmentation cannot take audio offline. The 512-byte floor is
-   * a fatal pre-connect guard, not proof that 6144 is optimal; device endurance
-   * metrics must justify tightening it.
+   * runtime heap fragmentation cannot take audio offline. Synchronous TLS
+   * verification defines the shared owner size; steady-state PCM work does not
+   * get a smaller stack because the same task must first survive open(). The
+   * 512-byte floor is a fatal pre-connect guard, not proof that the shared size
+   * is optimal; device endurance metrics must justify tightening it.
    */
-  ITERATE_KIT_ESP_IDF_PCM_NETWORK_TASK_STACK_BYTES = 6144,
+  ITERATE_KIT_ESP_IDF_PCM_NETWORK_TASK_STACK_BYTES =
+      ITERATE_KIT_ESP_IDF_WEBSOCKET_TLS_OWNER_STACK_BYTES,
   ITERATE_KIT_ESP_IDF_PCM_NETWORK_TASK_MINIMUM_HEADROOM_BYTES = 512,
   ITERATE_KIT_ESP_IDF_PCM_AUTH_HEADERS_CAPACITY =
       ITERATE_KIT_PROJECT_API_KEY_CAPACITY +
@@ -42,6 +45,7 @@ enum iterate_kit_esp_idf_pcm_transport_state {
   ITERATE_KIT_ESP_IDF_PCM_CONNECTING,
   ITERATE_KIT_ESP_IDF_PCM_READY,
   ITERATE_KIT_ESP_IDF_PCM_FAILED,
+  ITERATE_KIT_ESP_IDF_PCM_STOPPING,
   ITERATE_KIT_ESP_IDF_PCM_STOPPED,
 };
 
@@ -90,6 +94,11 @@ struct iterate_kit_esp_idf_pcm_transport_metrics {
   uint32_t websocket_raw_write_deferrals;
   uint32_t websocket_receive_calls;
   uint32_t websocket_receive_chunks;
+  /*
+   * Exact RFC control frames parsed on this WebSocket hop. They are useful
+   * protocol/liveness observations only: neither counter proves that the
+   * userspace proxy or voice provider received a PCM frame.
+   */
   uint32_t websocket_pings_received;
   uint32_t websocket_pongs_received;
   uint32_t websocket_control_backpressure;
@@ -123,13 +132,6 @@ struct iterate_kit_esp_idf_pcm_transport_metrics {
   uint32_t network_task_max_work_cycles;
   int32_t last_platform_error;
   /*
-   * This is the conservative cross-layer backlog bound. It complements the
-   * exact application-ring metrics below; ESP-IDF does not expose exact live
-   * occupancy for every TLS/lwIP/Wi-Fi queue.
-   */
-  struct iterate_kit_pcm_peer_delivery_guard_metrics
-      peer_delivery;
-  /*
    * The egress chain is intentionally complete, including explicit
    * UNAVAILABLE entries. Omitting an opaque layer would let dashboards mistake
    * "not measured" for "empty".
@@ -137,7 +139,6 @@ struct iterate_kit_esp_idf_pcm_transport_metrics {
   struct {
     struct iterate_kit_buffer_metrics uplink_application;
     struct iterate_kit_buffer_metrics websocket_transmitter;
-    struct iterate_kit_buffer_metrics peer_unconfirmed;
     struct iterate_kit_buffer_metrics lwip_send;
     struct iterate_kit_buffer_metrics tls_egress;
     struct iterate_kit_buffer_metrics wifi_egress;
@@ -152,9 +153,10 @@ struct iterate_kit_esp_idf_pcm_transport_metrics {
  *
  * The network task is the sole owner of the WebSocket and portable uplink
  * conductor. The main task only reads atomic metrics and reconciles public
- * state. The conductor contains the sender/peer-proof composition so the exact
- * partial-write and Ping/Pong ordering is host-testable rather than an
- * ESP-specific convention. One owner still means no transmit mutex is needed.
+ * state. The conductor contains sender/control ordering so the exact
+ * partial-write and mandatory PONG behavior is host-testable rather than an
+ * ESP-specific convention. PONG never gates PCM admission. One owner still
+ * means no transmit mutex is needed.
  *
  * The object is intentionally large and caller-owned: it contains one exact
  * receive frame, one masked transmit frame, and a static task stack. There is
@@ -245,6 +247,19 @@ void iterate_kit_esp_idf_pcm_transport_notify_uplink(
 void iterate_kit_esp_idf_pcm_transport_request_restart(
     struct iterate_kit_esp_idf_pcm_transport *transport);
 
+/**
+ * Revokes socket admission and wakes the network owner without waiting for a
+ * possibly-blocked DNS/TLS operation. The application must subsequently call
+ * finish_stop() until it returns OK before starting this transport again.
+ */
+enum iterate_kit_status iterate_kit_esp_idf_pcm_transport_request_stop(
+    struct iterate_kit_esp_idf_pcm_transport *transport);
+
+/** Nonblocking static-task reap; UNAVAILABLE means the owner is still exiting. */
+enum iterate_kit_status iterate_kit_esp_idf_pcm_transport_finish_stop(
+    struct iterate_kit_esp_idf_pcm_transport *transport);
+
+/** Blocking shutdown helper for process teardown, not an interactive button. */
 enum iterate_kit_status iterate_kit_esp_idf_pcm_transport_stop(
     struct iterate_kit_esp_idf_pcm_transport *transport);
 

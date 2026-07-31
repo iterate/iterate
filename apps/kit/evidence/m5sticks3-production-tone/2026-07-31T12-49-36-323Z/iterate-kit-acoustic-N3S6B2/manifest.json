@@ -1,0 +1,455 @@
+{
+  "acoustic": {
+    "analysis": {
+      "activeWindowCount": 781,
+      "amplitudeCoefficientOfVariation": 0.017229545926707543,
+      "amplitudeStepP99Decibels": 0.10546875,
+      "maximumAmplitudeStepDecibels": 0.19010200453155907,
+      "excludedCoherentWindowCount": 0,
+      "expectedDurationMs": 2000,
+      "gapCount": 0,
+      "longestInternalGapMs": 0,
+      "maximumBufferedAudioBytes": 66016,
+      "maximumPhaseStepErrorRadians": 0.032249582172453994,
+      "medianToneAmplitude": 1272,
+      "medianPhaseStepRadians": -0.0003834951969712286,
+      "missingToneMs": 45,
+      "observedEndMs": 19387.5,
+      "observedSpanMs": 1955,
+      "observedStartMs": 17432.5,
+      "phaseDiscontinuityCount": 0,
+      "phaseDiscontinuityThresholdRadians": 0.1,
+      "phaseStepSpanMs": 5,
+      "sampleRateHz": 48000,
+      "toneFrequencyHz": 1000,
+      "toneWindowRatio": 1,
+      "totalDurationMs": 19498.666666666668,
+      "windowDurationMs": 5,
+      "windowStepMs": 2.5
+    },
+    "assessment": {
+      "passed": true,
+      "reasons": []
+    },
+    "capture": {
+      "artifactPath": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/m5sticks3-production-tone/2026-07-31T12-49-36-323Z/iterate-kit-acoustic-N3S6B2/microphone.pcm16le",
+      "capturedByteLength": 1871872,
+      "capturedSampleCount": 935936,
+      "sampleRateHz": 48000,
+      "captureProvenance": {
+        "input": {
+          "avFoundationSpecifier": ":0",
+          "displayName": "MacBook Pro Microphone",
+          "stableId": "BuiltInMicrophoneDevice",
+          "verification": "host-resolved-coreaudio-uid"
+        },
+        "processing": {
+          "activeMicrophoneMode": "standard",
+          "preferredMicrophoneMode": "standard",
+          "verification": "host-resolved-avfoundation-microphone-mode"
+        },
+        "recorder": {
+          "arguments": [
+            "-q",
+            "-t",
+            "coreaudio",
+            "MacBook Pro Microphone",
+            "-t",
+            "raw",
+            "-L",
+            "-c",
+            "1",
+            "-r",
+            "48000",
+            "-b",
+            "16",
+            "-e",
+            "signed-integer",
+            "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/m5sticks3-production-tone/2026-07-31T12-49-36-323Z/iterate-kit-acoustic-N3S6B2/microphone.pcm16le"
+          ],
+          "executable": "/opt/homebrew/bin/sox",
+          "version": "/opt/homebrew/bin/sox:      SoX v"
+        }
+      }
+    },
+    "marker": {
+      "artifactPath": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/m5sticks3-production-tone/2026-07-31T12-49-36-323Z/iterate-kit-acoustic-N3S6B2/microphone.pcm16le",
+      "capturedByteLength": 73728,
+      "capturedSampleCount": 36864,
+      "sampleRateHz": 48000
+    },
+    "retainedArtifact": {
+      "byteLength": 1871872,
+      "maximumBufferedAudioBytes": 65536,
+      "sha256": "0139d0f1f2bfae97c5d1a5d9a4430ad573f7255cd2b65123cb0eda77af881d1e"
+    }
+  },
+  "createdAt": "2026-07-31T12:49:59.220Z",
+  "device": {
+    "host": "192.168.0.21",
+    "mountPath": ["kit", "m5sticks3"]
+  },
+  "network": {
+    "artifactPath": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/m5sticks3-production-tone/2026-07-31T12-49-36-323Z/iterate-kit-acoustic-N3S6B2/network.json",
+    "classification": "network-invalid",
+    "reasons": [
+      {
+        "code": "pcm-socket-disconnected",
+        "message": "pcm socket was disconnected at 46451.847209 ms."
+      },
+      {
+        "code": "pcm-socket-disconnect",
+        "message": "pcm socket disconnect count increased from 3 to 4."
+      },
+      {
+        "code": "pcm-socket-transport-error",
+        "message": "pcm socket transport error count increased from 3 to 4."
+      },
+      {
+        "code": "pcm-socket-disconnected",
+        "message": "pcm socket was disconnected at 46879.367917 ms."
+      },
+      {
+        "code": "pcm-socket-disconnect",
+        "message": "pcm socket disconnect count increased from 3 to 4."
+      },
+      {
+        "code": "pcm-socket-transport-error",
+        "message": "pcm socket transport error count increased from 3 to 4."
+      },
+      {
+        "code": "pcm-socket-reconnect",
+        "message": "pcm socket reconnect count increased from 4 to 5."
+      },
+      {
+        "code": "pcm-socket-disconnect",
+        "message": "pcm socket disconnect count increased from 3 to 4."
+      },
+      {
+        "code": "pcm-socket-transport-error",
+        "message": "pcm socket transport error count increased from 3 to 4."
+      },
+      {
+        "code": "pcm-socket-disconnected",
+        "message": "pcm socket was disconnected at 50841.274084 ms."
+      },
+      {
+        "code": "pcm-socket-reconnect",
+        "message": "pcm socket reconnect count increased from 4 to 5."
+      },
+      {
+        "code": "pcm-socket-disconnect",
+        "message": "pcm socket disconnect count increased from 3 to 5."
+      },
+      {
+        "code": "pcm-socket-transport-error",
+        "message": "pcm socket transport error count increased from 3 to 5."
+      },
+      {
+        "code": "pcm-socket-disconnected",
+        "message": "pcm socket was disconnected at 51869.363792 ms."
+      },
+      {
+        "code": "pcm-socket-reconnect",
+        "message": "pcm socket reconnect count increased from 4 to 5."
+      },
+      {
+        "code": "pcm-socket-disconnect",
+        "message": "pcm socket disconnect count increased from 3 to 5."
+      },
+      {
+        "code": "pcm-socket-transport-error",
+        "message": "pcm socket transport error count increased from 3 to 5."
+      },
+      {
+        "code": "pcm-socket-reconnect",
+        "message": "pcm socket reconnect count increased from 4 to 6."
+      },
+      {
+        "code": "pcm-socket-disconnect",
+        "message": "pcm socket disconnect count increased from 3 to 5."
+      },
+      {
+        "code": "pcm-socket-transport-error",
+        "message": "pcm socket transport error count increased from 3 to 5."
+      },
+      {
+        "code": "pcm-socket-disconnected",
+        "message": "pcm socket was disconnected at 55519.986459 ms."
+      },
+      {
+        "code": "pcm-socket-reconnect",
+        "message": "pcm socket reconnect count increased from 4 to 6."
+      },
+      {
+        "code": "pcm-socket-disconnect",
+        "message": "pcm socket disconnect count increased from 3 to 6."
+      },
+      {
+        "code": "pcm-socket-transport-error",
+        "message": "pcm socket transport error count increased from 3 to 6."
+      },
+      {
+        "code": "pcm-socket-disconnected",
+        "message": "pcm socket was disconnected at 55879.991417 ms."
+      },
+      {
+        "code": "pcm-socket-reconnect",
+        "message": "pcm socket reconnect count increased from 4 to 6."
+      },
+      {
+        "code": "pcm-socket-disconnect",
+        "message": "pcm socket disconnect count increased from 3 to 6."
+      },
+      {
+        "code": "pcm-socket-transport-error",
+        "message": "pcm socket transport error count increased from 3 to 6."
+      },
+      {
+        "code": "pcm-socket-reconnect",
+        "message": "pcm socket reconnect count increased from 4 to 7."
+      },
+      {
+        "code": "pcm-socket-disconnect",
+        "message": "pcm socket disconnect count increased from 3 to 6."
+      },
+      {
+        "code": "pcm-socket-transport-error",
+        "message": "pcm socket transport error count increased from 3 to 6."
+      },
+      {
+        "code": "pcm-socket-disconnected",
+        "message": "pcm socket was disconnected at 59853.267209 ms."
+      },
+      {
+        "code": "pcm-socket-reconnect",
+        "message": "pcm socket reconnect count increased from 4 to 7."
+      },
+      {
+        "code": "pcm-socket-disconnect",
+        "message": "pcm socket disconnect count increased from 3 to 7."
+      },
+      {
+        "code": "pcm-socket-transport-error",
+        "message": "pcm socket transport error count increased from 3 to 7."
+      },
+      {
+        "code": "pcm-socket-reconnect",
+        "message": "pcm socket reconnect count increased from 4 to 8."
+      },
+      {
+        "code": "pcm-socket-disconnect",
+        "message": "pcm socket disconnect count increased from 3 to 7."
+      },
+      {
+        "code": "pcm-socket-transport-error",
+        "message": "pcm socket transport error count increased from 3 to 7."
+      },
+      {
+        "code": "pcm-socket-reconnect",
+        "message": "pcm socket reconnect count increased from 4 to 8."
+      },
+      {
+        "code": "pcm-socket-disconnect",
+        "message": "pcm socket disconnect count increased from 3 to 7."
+      },
+      {
+        "code": "pcm-socket-transport-error",
+        "message": "pcm socket transport error count increased from 3 to 7."
+      },
+      {
+        "code": "pcm-socket-reconnect",
+        "message": "pcm socket reconnect count increased from 4 to 8."
+      },
+      {
+        "code": "pcm-socket-disconnect",
+        "message": "pcm socket disconnect count increased from 3 to 7."
+      },
+      {
+        "code": "pcm-socket-transport-error",
+        "message": "pcm socket transport error count increased from 3 to 7."
+      },
+      {
+        "code": "pcm-socket-reconnect",
+        "message": "pcm socket reconnect count increased from 4 to 8."
+      },
+      {
+        "code": "pcm-socket-disconnect",
+        "message": "pcm socket disconnect count increased from 3 to 7."
+      },
+      {
+        "code": "pcm-socket-transport-error",
+        "message": "pcm socket transport error count increased from 3 to 7."
+      },
+      {
+        "code": "terminal-pcm-socket-reconnect",
+        "message": "Terminal PCM socket recorded 4 reconnect incident(s)."
+      },
+      {
+        "code": "terminal-pcm-socket-disconnect",
+        "message": "Terminal PCM socket recorded 4 disconnect incident(s)."
+      },
+      {
+        "code": "terminal-pcm-socket-transport-error",
+        "message": "Terminal PCM socket recorded 4 transport error incident(s)."
+      }
+    ]
+  },
+  "passed": false,
+  "playback": {
+    "assessment": {
+      "deltas": {
+        "downlinkAccepted": 110,
+        "endOfStreamMarkersConsumed": 1,
+        "endOfStreamResponses": 1,
+        "playbackCompleted": 100,
+        "playbackSubmitted": 106
+      },
+      "passed": false,
+      "reasons": [
+        "downlink accepted 110 frames; expected exactly 100",
+        "playback submitted 106 frames; expected exactly 100",
+        "Playback proof counter policy failed: playback_generation_frames_flushed delta 6 exceeds 0."
+      ]
+    },
+    "baseline": {
+      "schemaVersion": 5,
+      "sequence": 2,
+      "producedAtMs": 40228,
+      "downlinkAccepted": 5,
+      "playback": {
+        "submitted": 5,
+        "completed": 0,
+        "generationFramesFlushed": 5,
+        "freshnessFramesDropped": 0,
+        "partialPrebufferFramesDropped": 0,
+        "underrunFramesFlushed": 0,
+        "underrunIncidents": 0,
+        "underrunSilenceFramesSubmitted": 0,
+        "underrunSilenceFramesCompleted": 0,
+        "underrunSilenceFramesRetired": 0,
+        "underrunLateFramesDropped": 0,
+        "dmaDeadlineMissIncidents": 0,
+        "freshnessIncidents": 0,
+        "partialPrebufferIncidents": 0,
+        "endOfStreamMarkersConsumed": 0,
+        "endOfStreamResponses": 0,
+        "endOfStreamSilenceDescriptors": 0,
+        "endOfStreamPaddingDescriptorsCompleted": 0,
+        "driverQueueOverflowIncidents": 0,
+        "driverFailures": 0,
+        "driverStopFailures": 0,
+        "fatalFramesFlushed": 0,
+        "writeBackpressureIncidents": 0,
+        "writeBackpressureDestructiveResets": 0,
+        "writeBackpressureFramesDropped": 0,
+        "invalidFrames": 0,
+        "stateErrors": 0,
+        "ownerClockRegressions": 0,
+        "receiveToDmaStartSamples": 0,
+        "maximumReceiveToDmaStartMs": 0,
+        "downlinkInterarrivalSamples": 3,
+        "maximumDownlinkInterarrivalMs": 0,
+        "maximumEofToSuccessfulRefillUs": 0,
+        "maximumWriteCallDurationUs": 0,
+        "minimumReuseLeadAtSuccessfulRefillUs": 0
+      },
+      "runtime": {
+        "audioOwnerStackHeadroomBytes": 6652,
+        "mainStackHeadroomBytes": 2792,
+        "controlNetworkStackHeadroomBytes": 4584,
+        "pcmNetworkStackHeadroomBytes": 4464,
+        "freeInternalHeapBytes": 56011,
+        "minimumFreeInternalHeapBytes": 32703,
+        "freeDmaHeapBytes": 56011,
+        "minimumFreeDmaHeapBytes": 32703,
+        "largestFreeInternalHeapBlockBytes": 31744,
+        "largestFreeDmaBlockBytes": 31744,
+        "generationFenceAcknowledgementTimeouts": 0,
+        "lifecycleAcknowledgementTimeouts": 0,
+        "controlNetworkStackExhaustions": 0,
+        "pcmNetworkStackExhaustions": 0,
+        "pcmReceiveCalls": 372,
+        "pcmReceiveChunks": 5,
+        "controlNetworkMaximumWorkCycles": 605356515,
+        "pcmNetworkMaximumWorkCycles": 580744935,
+        "cpuPermille": 96
+      }
+    },
+    "terminal": {
+      "schemaVersion": 5,
+      "sequence": 30,
+      "producedAtMs": 60540,
+      "downlinkAccepted": 115,
+      "playback": {
+        "submitted": 111,
+        "completed": 100,
+        "generationFramesFlushed": 11,
+        "freshnessFramesDropped": 0,
+        "partialPrebufferFramesDropped": 0,
+        "underrunFramesFlushed": 0,
+        "underrunIncidents": 0,
+        "underrunSilenceFramesSubmitted": 0,
+        "underrunSilenceFramesCompleted": 0,
+        "underrunSilenceFramesRetired": 0,
+        "underrunLateFramesDropped": 0,
+        "dmaDeadlineMissIncidents": 0,
+        "freshnessIncidents": 0,
+        "partialPrebufferIncidents": 0,
+        "endOfStreamMarkersConsumed": 1,
+        "endOfStreamResponses": 1,
+        "endOfStreamSilenceDescriptors": 3,
+        "endOfStreamPaddingDescriptorsCompleted": 0,
+        "driverQueueOverflowIncidents": 0,
+        "driverFailures": 0,
+        "driverStopFailures": 0,
+        "fatalFramesFlushed": 0,
+        "writeBackpressureIncidents": 0,
+        "writeBackpressureDestructiveResets": 0,
+        "writeBackpressureFramesDropped": 0,
+        "invalidFrames": 0,
+        "stateErrors": 0,
+        "ownerClockRegressions": 0,
+        "receiveToDmaStartSamples": 100,
+        "maximumReceiveToDmaStartMs": 147,
+        "downlinkInterarrivalSamples": 109,
+        "maximumDownlinkInterarrivalMs": 60,
+        "maximumEofToSuccessfulRefillUs": 587,
+        "maximumWriteCallDurationUs": 94,
+        "minimumReuseLeadAtSuccessfulRefillUs": 59413
+      },
+      "runtime": {
+        "audioOwnerStackHeadroomBytes": 6652,
+        "mainStackHeadroomBytes": 2552,
+        "controlNetworkStackHeadroomBytes": 4584,
+        "pcmNetworkStackHeadroomBytes": 4464,
+        "freeInternalHeapBytes": 55923,
+        "minimumFreeInternalHeapBytes": 28015,
+        "freeDmaHeapBytes": 55923,
+        "minimumFreeDmaHeapBytes": 28015,
+        "largestFreeInternalHeapBlockBytes": 31744,
+        "largestFreeDmaBlockBytes": 31744,
+        "generationFenceAcknowledgementTimeouts": 0,
+        "lifecycleAcknowledgementTimeouts": 0,
+        "controlNetworkStackExhaustions": 0,
+        "pcmNetworkStackExhaustions": 0,
+        "pcmReceiveCalls": 1517,
+        "pcmReceiveChunks": 115,
+        "controlNetworkMaximumWorkCycles": 605356515,
+        "pcmNetworkMaximumWorkCycles": 646840926,
+        "cpuPermille": 276
+      }
+    }
+  },
+  "project": {
+    "baseUrl": "https://os.iterate.com",
+    "id": "prj_65441737530642949cadaf7fe399368b",
+    "slug": "kit-stick-vertical-proof",
+    "workerHost": "kit--kit-stick-vertical-proof.iterate.app"
+  },
+  "remoteEvents": {
+    "started": true,
+    "stopped": true
+  },
+  "schemaVersion": 1
+}

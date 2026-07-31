@@ -288,6 +288,56 @@ describe("acoustic tone analysis", () => {
     ).toEqual({ passed: true, reasons: [] });
   });
 
+  test("does not mistake the bounded speaker-onset transient for an internal phase jump", async () => {
+    /*
+     * A physical codec does not reach its steady acoustic transfer function on
+     * the exact sample where correlation first calls the tone present. The
+     * production Stick recordings showed the only >0.1 rad phase observation
+     * at the very first eligible comparison, with the remaining ~1.95 s
+     * continuous. Model that bounded onset settling as a one-sample phase
+     * offset during the first half-window.
+     *
+     * Ignoring a small correlation-edge context is not a relaxed continuity
+     * threshold: the whole-frame-duplicate tests below still inject their jump
+     * in the interior and must remain red. Both analysis implementations are
+     * covered because production uses the bounded-memory artifact reader.
+     */
+    const leadMs = 200;
+    const samples = renderRecording({ durationMs: 2_000, leadMs });
+    const toneStartSample = (leadMs * sampleRateHz) / 1_000;
+    const settlingSamples = (2.5 * sampleRateHz) / 1_000;
+    for (let relativeIndex = 0; relativeIndex < settlingSamples; relativeIndex += 1) {
+      const absoluteIndex = toneStartSample + relativeIndex;
+      const noise = ((absoluteIndex * 7919) % 97) - 48;
+      samples[absoluteIndex] = Math.round(
+        12_000 * Math.sin((2 * Math.PI * frequencyHz * (relativeIndex + 1)) / sampleRateHz) + noise,
+      );
+    }
+
+    const analysis = analyzeAcousticTonePcm16({
+      expectedDurationMs: 2_000,
+      frequencyHz,
+      samples,
+      sampleRateHz,
+    });
+    expect(analysis.maximumPhaseStepErrorRadians).toBeLessThan(0.1);
+    expect(analysis.phaseDiscontinuityCount).toBe(0);
+
+    const fixture = await writePcm16Artifact(samples);
+    try {
+      const artifactAnalysis = await analyzeAcousticTonePcm16Artifact({
+        artifactPath: fixture.artifactPath,
+        expectedDurationMs: 2_000,
+        frequencyHz,
+        sampleRateHz,
+      });
+      expect(artifactAnalysis.maximumPhaseStepErrorRadians).toBeLessThan(0.1);
+      expect(artifactAnalysis.phaseDiscontinuityCount).toBe(0);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
   test("reports a jiggly internal hole even when the total tone later resumes", () => {
     const analysis = analyzeAcousticTonePcm16({
       expectedDurationMs: 2_000,

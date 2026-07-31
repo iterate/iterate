@@ -1,0 +1,18 @@
+{
+  "text": " Keep innovating with joy, engineer.",
+  "segments": [
+    {
+      "id": 0,
+      "seek": 0,
+      "start": 0.0,
+      "end": 2.34,
+      "text": " Keep innovating with joy, engineer.",
+      "tokens": [50365, 5527, 5083, 990, 365, 6258, 11, 11403, 13, 50482],
+      "temperature": 0,
+      "avg_logprob": -0.33042482896284625,
+      "compression_ratio": 0.813953488372093,
+      "no_speech_prob": 1.796661777686559e-11
+    }
+  ],
+  "language": "en"
+}

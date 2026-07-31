@@ -1,7 +1,12 @@
 # Iterate Kit physical-device voice goal
 
-Status: active; direction recorded 2026-07-29, first M5StickS3 physical
-control and Grok voice proofs passed 2026-07-30.
+Status: active; direction recorded 2026-07-29. The M5StickS3 local and deployed
+userspace vertical slices passed on 2026-07-31: separate Cap'n Web and PCM
+sockets, mounted capability, metrics subscription, Grok-driven display colour
+tool, raw provider-event stream, exact frame accounting, and physically
+transcribed returned speech are all retained. The ordered StackChan → Home
+Assistant portability slices remain, as do physical-button provenance and the
+deferred deployed-worker kill/remount lifecycle.
 
 This is the goal document for the initial Iterate Kit devices. The first
 implementation tranche remains StackChan plus M5StickS3, but the physical
@@ -21,7 +26,43 @@ drawn from them are tracked in
 That ledger is part of the acceptance evidence: findings are not considered
 handled merely because they appeared in an agent transcript.
 
-## 2026-07-31 execution addendum
+## 2026-07-31 deployed-slice addendum
+
+The immediate production-worker gate is now achieved in project
+`kit-stick-voice-e2e-20260731`. The evidence and its honest split between a
+clean network-valid run and the best current-code but weak-RSSI run are recorded
+in [`m5sticks3-vertical-slice-landing-2026-07-31.md`](./m5sticks3-vertical-slice-landing-2026-07-31.md).
+Every non-PCM Grok WebSocket frame is available durably as an ordinary Iterate
+stream event under `/devices/m5sticks3`; the harness reads that stream back and
+proves exact sequence continuity, transcripts, response lifecycle, and tool
+call/result correlation. Posting is bounded and cannot queue behind the audio
+lane.
+
+The next active order is now:
+
+1. checkpoint and remotely back up the complete Stick worktree;
+2. StackChan through the shared core, with real full-duplex audio,
+   interruption, and measured AEC; then
+3. Home Assistant Voice Preview Edition through the same userspace/capability
+   architecture.
+
+Face/avatar rendering and broad four-device polish remain deferred until those
+audio slices work.
+
+## 2026-07-31 execution addendum (historical local landing decision)
+
+The active landing route is the local userspace `/api` + `/pcm` bridge exposed
+through `tunnels.iterate.com`, not the deployed dynamic-worker lifecycle. It
+must autonomously prove a short and then progressively longer real
+`grok-voice-think-fast-2.0` conversation on the physical M5StickS3, using
+remote Cap'n Web PTT plus nearby acoustic prompt injection while the operator
+is away. Each retained run requires per-turn timing and transcripts, raw PCM
+and acoustic artifacts, exact frame/resource accounting, and an automatic
+interval-aligned network verdict. Deployed installation, `.kill()`/remount,
+and preview/production lifecycle proof are explicitly deferred until this
+conversation is solid. The subsequent hardware order remains StackChan (real
+full-duplex, interruption, measured AEC) and then Home Assistant Voice Preview
+Edition; avatar rendering does not precede those slices.
 
 The following concrete tasks are part of this still-active goal, not a separate
 cleanup project:
@@ -42,6 +83,20 @@ cleanup project:
 - [ ] Continue the existing proof autonomously: turn every new physical defect
       into a red test, retain exact acoustic/resource evidence, apply only bounded
       simplifications supported by that evidence, and do not merge.
+
+The achieved unattended Stick slice and its explicit remaining boundaries are
+recorded in
+[`m5sticks3-vertical-slice-landing-2026-07-31.md`](./m5sticks3-vertical-slice-landing-2026-07-31.md).
+Its retained eight-turn conversation is under
+`apps/kit/evidence/m5sticks3-conversation/2026-07-31T18-05-38-138Z/`; its
+fresh-flash interruption/recovery proof is under
+`apps/kit/evidence/m5sticks3-conversation/2026-07-31T18-33-07-329Z/`. Both use
+remote Cap'n Web PTT events, not a human button press, and therefore let the
+next work proceed while the operator is away without mislabelling
+physical-button provenance as complete. The next active hardware slice is now
+StackChan full-duplex audio, interruption, and measured AEC through the same
+userspace and portable protocol core, followed by Home Assistant Voice Preview
+Edition.
 
 ## Outcome
 
@@ -629,3 +684,7 @@ Answer:
 > You should basically discover all these and take yourself some notes on how to discover them. Also if I ever re-plug the USB hub, how to re-find them, what their MAC addresses are, or whatever, like all that stuff.
 
 > And then we should really push towards a point where you ought to be able to actually flash custom firmware on all of these devices and continue pursuing your goal one by one. You actually want them to be able to speak to the GROK Voice API, the new version that launched yesterday or today, the Voice 2.0 Real Thinking Fast, whatever.
+
+### Hardware sequencing continuation
+
+> One sequencing addition, without derailing the narrowed Stick landing plan: once the M5StickS3 userspace /pcm deterministic-return and real-Grok vertical slice works, prove the same shared core and userspace path on StackChan with as little device-specific divergence as possible. Inspect the local source checkout at /Users/jonastemplestein/src/github.com/iterate/stackchan first: it contained substantially working audio and AEC code, so reuse or adapt its measured DSP/hardware insights while avoiding its known accumulating-delay/queueing behavior. StackChan acceptance should include real full-duplex audio, interruption, and measured AEC—not just compilation. After that, bring up Home Assistant Voice Preview Edition through the shared architecture as the next hardware portability proof. Do not spend time on face/avatar rendering until everything else in these slices works, including the Home Assistant Voice Preview Edition audio/capability path. Record this order durably, keep the immediate Stick vertical slice first, consume this message, and continue the persistent goal.

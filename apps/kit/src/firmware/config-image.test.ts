@@ -12,6 +12,7 @@ const configuration: DeviceConfiguration = {
   wifi: { ssid: "studio", password: "correct horse battery staple" },
   iterate: {
     baseUrl: "https://os.iterate.com",
+    pcmBaseUrl: "https://kit--voice-lab.iterate.app",
     projectId: "prj_voice_lab",
     projectApiKey: "itxk_secret",
   },
@@ -28,6 +29,15 @@ describe("normalizeOsBaseUrl", () => {
 
   it("rejects paths so the device cannot silently dial the wrong endpoint", () => {
     expect(() => normalizeOsBaseUrl("https://os.iterate.com/not-os")).toThrow("must be an origin");
+  });
+});
+
+describe("separate transport origins", () => {
+  it("round-trips a userspace PCM origin independently from the OS Cap'n Web origin", () => {
+    const decoded = decodeDeviceConfiguration(encodeDeviceConfiguration(configuration, 512));
+
+    expect(decoded.iterate.baseUrl).toBe("https://os.iterate.com");
+    expect(decoded.iterate.pcmBaseUrl).toBe("https://kit--voice-lab.iterate.app");
   });
 });
 

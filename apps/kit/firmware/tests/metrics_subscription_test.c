@@ -53,6 +53,9 @@ struct fixture {
   bool include_buffers;
   bool include_control_diagnostics;
   bool invalid_buffer_evidence;
+  bool wifi_connected;
+  bool has_wifi_rssi_dbm;
+  int32_t wifi_rssi_dbm;
 };
 
 static enum capnweb_status capture_fragment(
@@ -225,18 +228,10 @@ static enum iterate_kit_status sample_metrics(
       fixture->maximum_metrics ? UINT32_MAX : 46U;
   sample->audio.buffers.websocket_transmitter.capacity_bytes =
       fixture->maximum_metrics ? UINT32_MAX : 47U;
-  sample->audio.buffers.peer_unconfirmed.evidence =
-      ITERATE_KIT_BUFFER_DERIVED_BOUND;
-  sample->audio.buffers.peer_unconfirmed.current_bytes =
-      fixture->maximum_metrics ? UINT32_MAX : 48U;
-  sample->audio.buffers.peer_unconfirmed.high_water_bytes =
-      fixture->maximum_metrics ? UINT32_MAX : 49U;
-  sample->audio.buffers.peer_unconfirmed.capacity_bytes =
-      fixture->maximum_metrics ? UINT32_MAX : 50U;
   sample->audio.buffers.lwip_send.evidence =
       ITERATE_KIT_BUFFER_CAPACITY_ONLY;
   sample->audio.buffers.lwip_send.capacity_bytes =
-      fixture->maximum_metrics ? UINT32_MAX : 51U;
+      fixture->maximum_metrics ? UINT32_MAX : 48U;
   sample->audio.buffers.tls_egress.evidence =
       ITERATE_KIT_BUFFER_UNAVAILABLE;
   sample->audio.buffers.wifi_egress.evidence =
@@ -252,8 +247,6 @@ static enum iterate_kit_status sample_metrics(
     sample->audio.buffers.uplink_application =
         maximum_observed_buffer;
     sample->audio.buffers.websocket_transmitter =
-        maximum_observed_buffer;
-    sample->audio.buffers.peer_unconfirmed =
         maximum_observed_buffer;
     sample->audio.buffers.lwip_send = maximum_observed_buffer;
     sample->audio.buffers.tls_egress = maximum_observed_buffer;
@@ -336,7 +329,7 @@ static enum iterate_kit_status sample_metrics(
       fixture->maximum_metrics ? UINT32_MAX : 72U;
   sample->has_control_diagnostics =
       fixture->include_control_diagnostics;
-  sample->control_diagnostics.schema_version = 2U;
+  sample->control_diagnostics.schema_version = 3U;
   sample->control_diagnostics.produced_at_ms = uptime;
   sample->control_diagnostics.websocket_start_attempts =
       fixture->maximum_metrics ? UINT32_MAX : 73U;
@@ -409,6 +402,24 @@ static enum iterate_kit_status sample_metrics(
       fixture->maximum_metrics ? UINT32_MAX : 8U;
   sample->control_diagnostics.control_outbox.current_slots =
       fixture->maximum_metrics ? UINT32_MAX : 1U;
+  /*
+   * A failed AP-info lookup must be distinguishable from both an actual
+   * 0 dBm measurement and a stale prior reading. Keep fixture presence and
+   * storage independent so the omission test exercises that distinction
+   * through the real retained Cap'n Web reply.
+   */
+  sample->control_diagnostics.network.wifi_connected =
+      fixture->wifi_connected;
+  sample->control_diagnostics.network.has_wifi_rssi_dbm =
+      fixture->has_wifi_rssi_dbm;
+  sample->control_diagnostics.network.wifi_rssi_dbm =
+      fixture->wifi_rssi_dbm;
+  sample->control_diagnostics.network.pcm_websocket_connections =
+      fixture->maximum_metrics ? UINT32_MAX : 92U;
+  sample->control_diagnostics.network.pcm_websocket_disconnects =
+      fixture->maximum_metrics ? UINT32_MAX : 93U;
+  sample->control_diagnostics.network.pcm_websocket_errors =
+      fixture->maximum_metrics ? UINT32_MAX : 94U;
   return ITERATE_KIT_OK;
 }
 
@@ -441,6 +452,7 @@ static void fixture_init_with_subscription_count(
     1000U,
     fixture->diagnostics_expression,
     sizeof(fixture->diagnostics_expression),
+    NULL,
   };
   assert(
       iterate_kit_metrics_init(
@@ -885,6 +897,9 @@ static void control_diagnostics_are_available_as_a_one_shot_snapshot(void) {
   fixture_init(&fixture);
   fixture.include_control_diagnostics = true;
   fixture.dispatch_method_index = 2U;
+  fixture.wifi_connected = true;
+  fixture.has_wifi_rssi_dbm = true;
+  fixture.wifi_rssi_dbm = -67;
 
   assert(fixture.module.method_count == 3U);
   assert(
@@ -899,7 +914,7 @@ static void control_diagnostics_are_available_as_a_one_shot_snapshot(void) {
   assert(
       strstr(
           fixture.captured[0],
-          "\"schemaVersion\":2,\"producedAtMs\":1,"
+          "\"schemaVersion\":3,\"producedAtMs\":1,"
           "\"control\":{\"websocketStartAttempts\":73,"
           "\"websocketConnections\":74,\"websocketDisconnects\":75,"
           "\"websocketErrors\":76,\"wifiDisconnects\":77,"
@@ -920,7 +935,11 @@ static void control_diagnostics_are_available_as_a_one_shot_snapshot(void) {
           "\"highWaterSlots\":3,\"currentSlots\":0},"
           "\"outbox\":{\"capacitySlots\":8,\"messagesPublished\":91,"
           "\"messagesConsumed\":90,\"producerBackpressure\":1,"
-          "\"highWaterSlots\":8,\"currentSlots\":1}}") != NULL);
+          "\"highWaterSlots\":8,\"currentSlots\":1}},"
+          "\"network\":{\"wifiConnected\":true,\"wifiRssiDbm\":-67,"
+          "\"pcmWebsocketConnections\":92,"
+          "\"pcmWebsocketDisconnects\":93,"
+          "\"pcmWebsocketErrors\":94}") != NULL);
   /*
    * The eight-slot physical run still lost a resolution after 21 seconds.
    * These retained counters are the minimum evidence needed to tell a full
@@ -934,6 +953,38 @@ static void control_diagnostics_are_available_as_a_one_shot_snapshot(void) {
           fixture.captured[0],
           "\"lastApplicationCapnwebStatus\":-4") != NULL);
   assert(fixture.captured_lengths[0] < MESSAGE_CAPACITY);
+
+  capnweb_session_close(&fixture.session);
+  fixture.module.session_ended(fixture.module.context);
+}
+
+/*
+ * Station association and AP measurement are related but not interchangeable:
+ * ESP-IDF may report a connection while an instantaneous AP-info lookup fails
+ * during a roam. The one-shot snapshot must therefore carry current connection
+ * state while omitting RSSI whose provenance is unavailable. A sentinel would
+ * be numerically plausible and could poison later outage analysis.
+ */
+static void network_diagnostics_omit_unobserved_wifi_rssi(void) {
+  struct fixture fixture;
+  fixture_init(&fixture);
+  fixture.include_control_diagnostics = true;
+  fixture.dispatch_method_index = 2U;
+  fixture.wifi_connected = true;
+  fixture.wifi_rssi_dbm = -21;
+
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"getDiagnostics\"],[]]]");
+  receive(&fixture, "[\"pull\",1]");
+  assert(
+      strstr(
+          fixture.captured[0],
+          "\"network\":{\"wifiConnected\":true,"
+          "\"pcmWebsocketConnections\":92,"
+          "\"pcmWebsocketDisconnects\":93,"
+          "\"pcmWebsocketErrors\":94}") != NULL);
+  assert(strstr(fixture.captured[0], "wifiRssiDbm") == NULL);
 
   capnweb_session_close(&fixture.session);
   fixture.module.session_ended(fixture.module.context);
@@ -988,14 +1039,17 @@ static void maximum_control_diagnostics_fit_the_static_reply_budget(void) {
   fixture.include_control_diagnostics = true;
   fixture.maximum_metrics = true;
   fixture.dispatch_method_index = 2U;
+  fixture.wifi_connected = true;
+  fixture.has_wifi_rssi_dbm = true;
+  fixture.wifi_rssi_dbm = INT32_MIN;
 
   receive(
       &fixture,
       "[\"push\",[\"pipeline\",0,[\"getDiagnostics\"],[]]]");
   receive(&fixture, "[\"pull\",1]");
   assert(
-      strlen(fixture.diagnostics_expression) <
-      sizeof(fixture.diagnostics_expression));
+      strlen(fixture.diagnostics_expression) <=
+      sizeof(fixture.diagnostics_expression) - 64U);
   assert(
       strstr(
           fixture.captured[0],
@@ -1004,6 +1058,14 @@ static void maximum_control_diagnostics_fit_the_static_reply_budget(void) {
       strstr(
           fixture.captured[0],
           "\"lastTlsStackError\":-2147483648") != NULL);
+  assert(
+      strstr(
+          fixture.captured[0],
+          "\"network\":{\"wifiConnected\":true,"
+          "\"wifiRssiDbm\":-2147483648,"
+          "\"pcmWebsocketConnections\":4294967295,"
+          "\"pcmWebsocketDisconnects\":4294967295,"
+          "\"pcmWebsocketErrors\":4294967295}") != NULL);
 
   capnweb_session_close(&fixture.session);
   fixture.module.session_ended(fixture.module.context);
@@ -1013,8 +1075,10 @@ static void maximum_control_diagnostics_fit_the_static_reply_budget(void) {
  * A dashboard that sees `current: 0` without knowing how it was measured
  * will call an opaque TLS or Wi-Fi queue empty and hide delayed speech. Exercise
  * the real callback serializer with all four evidence classes so the public
- * API preserves the difference between exact occupancy, a conservative bound,
- * configured capacity, and no trustworthy observation.
+ * API preserves the difference between exact occupancy, configured capacity,
+ * and no trustworthy observation. A WebSocket PONG is deliberately not used
+ * to synthesize a lower-layer PCM depth because it cannot observe proxy or
+ * provider queues.
  */
 static void buffer_metrics_preserve_the_strength_of_their_evidence(void) {
   struct fixture fixture;
@@ -1037,10 +1101,8 @@ static void buffer_metrics_preserve_the_strength_of_their_evidence(void) {
           "\"current\":42,\"highWater\":43,\"capacity\":44},"
           "\"websocketTransmitter\":{\"evidence\":\"observed\","
           "\"current\":45,\"highWater\":46,\"capacity\":47},"
-          "\"peerUnconfirmed\":{\"evidence\":\"derivedBound\","
-          "\"current\":48,\"highWater\":49,\"capacity\":50},"
           "\"lwipSend\":{\"evidence\":\"capacityOnly\","
-          "\"current\":0,\"highWater\":0,\"capacity\":51},"
+          "\"current\":0,\"highWater\":0,\"capacity\":48},"
           "\"tlsEgress\":{\"evidence\":\"unavailable\","
           "\"current\":0,\"highWater\":0,\"capacity\":0},"
           "\"wifiEgress\":{\"evidence\":\"unavailable\","
@@ -1088,6 +1150,7 @@ int main(void) {
   playback_metrics_use_a_bounded_dedicated_view();
   metrics_fanout_and_inbound_resolutions_fit_one_owner_burst();
   control_diagnostics_are_available_as_a_one_shot_snapshot();
+  network_diagnostics_omit_unobserved_wifi_rssi();
   control_diagnostics_do_not_overwrite_an_unpulled_snapshot();
   maximum_control_diagnostics_fit_the_static_reply_budget();
   buffer_metrics_preserve_the_strength_of_their_evidence();

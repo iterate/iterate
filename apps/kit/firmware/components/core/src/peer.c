@@ -24,6 +24,7 @@
  */
 
 static const char *const describe_path[] = {"__describe"};
+static const char *const invoke_capability_path[] = {"invokeCapability"};
 
 static bool same_path(
     const struct iterate_kit_method *left,
@@ -107,19 +108,12 @@ static bool valid_modules(
   return true;
 }
 
-static enum capnweb_status dispatch(
-    void *context,
+static enum capnweb_status dispatch_static_path(
+    struct iterate_kit_peer *peer,
     const struct capnweb_call *call,
     struct capnweb_reply *reply) {
-  struct iterate_kit_peer *peer = context;
   size_t module_index;
   size_t method_index;
-  if (peer == NULL ||
-      !peer->initialized ||
-      call == NULL ||
-      reply == NULL) {
-    return CAPNWEB_E_INVALID_ARGUMENT;
-  }
   if (capnweb_call_path_equals(call, describe_path, 1U)) {
     return capnweb_reply_set_borrowed_expression(
         reply,
@@ -147,6 +141,87 @@ static enum capnweb_status dispatch(
   }
   return capnweb_reply_set_error(
       reply, "TypeError", "unknown device capability");
+}
+
+/*
+ * A flattened OS live mount crosses one generic JavaScript capability host
+ * before it reaches this peer. That host preserves the complete nested method
+ * route as data:
+ *
+ *   invokeCapability({ path: ["pushToTalk", "start"], args: [] })
+ *
+ * Reconstructing a borrowed capnweb_call view lets the normal generated method
+ * table remain the only dispatcher. Copying strings into a second routing
+ * format or materializing a fake object tree was rejected: both add memory and
+ * can drift from direct Cap'n Web calls. All views below point into the current
+ * immutable receive message and cannot escape this synchronous dispatch.
+ */
+static enum capnweb_status dispatch_flattened(
+    struct iterate_kit_peer *peer,
+    const struct capnweb_call *call,
+    struct capnweb_reply *reply) {
+  struct capnweb_value envelope;
+  struct capnweb_value path;
+  struct capnweb_value arguments;
+  struct capnweb_value flatten_nested_path;
+  bool flatten = false;
+  struct capnweb_call nested_call;
+
+  if (!call->has_arguments ||
+      capnweb_value_array_size(&call->arguments) != 1U ||
+      !capnweb_value_array_at(&call->arguments, 0U, &envelope) ||
+      capnweb_value_get_type(&envelope) != CAPNWEB_JSON_OBJECT ||
+      !capnweb_value_object_get(&envelope, "path", &path) ||
+      !capnweb_value_get_expression_array(&path, &path) ||
+      capnweb_value_array_size(&path) == 0U ||
+      !capnweb_value_object_get(&envelope, "args", &arguments) ||
+      !capnweb_value_get_expression_array(
+          &arguments, &arguments)) {
+    return capnweb_reply_set_error(
+        reply, "TypeError", "invalid invokeCapability envelope");
+  }
+  /*
+   * The flag is optional in the public host type, but if present it must state
+   * the semantics this adapter implements. Silently accepting false or a
+   * malformed value would make a caller believe member replay occurred.
+   */
+  if (capnweb_value_object_get(
+          &envelope, "flattenNestedPath", &flatten_nested_path) &&
+      (!capnweb_value_get_boolean(&flatten_nested_path, &flatten) ||
+       !flatten)) {
+    return capnweb_reply_set_error(
+        reply, "TypeError", "invalid invokeCapability flattenNestedPath");
+  }
+
+  nested_call = (struct capnweb_call){
+    .path = path,
+    .arguments = arguments,
+    .has_arguments = true,
+    .responder = call->responder,
+  };
+  /*
+   * Call the static router rather than the outer adapter so a hostile nested
+   * `["invokeCapability"]` route cannot recursively unwrap envelopes.
+   */
+  return dispatch_static_path(peer, &nested_call, reply);
+}
+
+static enum capnweb_status dispatch(
+    void *context,
+    const struct capnweb_call *call,
+    struct capnweb_reply *reply) {
+  struct iterate_kit_peer *peer = context;
+  if (peer == NULL ||
+      !peer->initialized ||
+      call == NULL ||
+      reply == NULL) {
+    return CAPNWEB_E_INVALID_ARGUMENT;
+  }
+  if (capnweb_call_path_equals(
+          call, invoke_capability_path, 1U)) {
+    return dispatch_flattened(peer, call, reply);
+  }
+  return dispatch_static_path(peer, call, reply);
 }
 
 enum capnweb_status iterate_kit_peer_init(

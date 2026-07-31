@@ -255,6 +255,20 @@ bool capnweb_value_array_at(
   return true;
 }
 
+bool capnweb_value_get_expression_array(
+    const struct capnweb_value *value,
+    struct capnweb_value *elements) {
+  struct capnweb_value inner;
+  if (elements == NULL ||
+      capnweb_value_array_size(value) != 1U ||
+      !capnweb_value_array_at(value, 0U, &inner) ||
+      capnweb_value_get_type(&inner) != CAPNWEB_JSON_ARRAY) {
+    return false;
+  }
+  *elements = inner;
+  return true;
+}
+
 bool capnweb_value_object_get(
     const struct capnweb_value *value,
     const char *key,

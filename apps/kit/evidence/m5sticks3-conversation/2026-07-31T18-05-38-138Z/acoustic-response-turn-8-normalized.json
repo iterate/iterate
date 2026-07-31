@@ -1,0 +1,18 @@
+{
+  "text": " Lantern, goodbye.",
+  "segments": [
+    {
+      "id": 0,
+      "seek": 0,
+      "start": 0.0,
+      "end": 1.44,
+      "text": " Lantern, goodbye.",
+      "tokens": [50365, 17482, 2231, 11, 12084, 13, 50437],
+      "temperature": 0,
+      "avg_logprob": -0.5587000846862793,
+      "compression_ratio": 0.68,
+      "no_speech_prob": 3.404471496382122e-11
+    }
+  ],
+  "language": "en"
+}

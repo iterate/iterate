@@ -103,6 +103,7 @@ function KitPage() {
           wifi: { ssid: wifiSsid, password: wifiPassword },
           iterate: {
             baseUrl: normalizeOsBaseUrl(search.host || DEFAULT_OS_BASE_HOST),
+            pcmBaseUrl: normalizeOsBaseUrl(search.pcmHost || search.host || DEFAULT_OS_BASE_HOST),
             projectId: search.project,
             projectApiKey,
           },
@@ -113,7 +114,7 @@ function KitPage() {
         error: error instanceof Error ? error.message : "OS base host is invalid.",
       };
     }
-  }, [projectApiKey, search.host, search.project, wifiPassword, wifiSsid]);
+  }, [projectApiKey, search.host, search.pcmHost, search.project, wifiPassword, wifiSsid]);
 
   return (
     <div className="grid w-full gap-10 lg:grid-cols-[minmax(0,0.8fr)_minmax(28rem,1.2fr)] lg:gap-16">

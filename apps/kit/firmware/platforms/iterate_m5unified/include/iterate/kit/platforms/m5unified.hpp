@@ -68,6 +68,14 @@ class M5UnifiedHalfDuplex {
    * archival button-event queue.
    */
   bool takeButtonAChange(bool *pressed);
+  /**
+   * Consumes one BtnB press used as a call-lifecycle toggle.
+   *
+   * A release is deliberately not exposed: mapping both edges to a toggle
+   * would open and immediately close every call, while retaining full level
+   * state would add no information to this one-shot control.
+   */
+  bool takeButtonBPress();
 
   /* Lightweight driver views borrow this object for its entire lifetime. */
   iterate_kit_screen_driver screenDriver();
@@ -112,6 +120,8 @@ class M5UnifiedHalfDuplex {
 
   static iterate_kit_status renderPngUrl(
       void *context, const char *url, std::size_t urlLength);
+  static iterate_kit_status changeColour(
+      void *context, iterate_kit_screen_colour colour);
   static iterate_kit_status sampleMetrics(
       void *context, iterate_kit_metrics_sample *sample);
   static iterate_kit_status startCapture(void *context);
@@ -135,6 +145,7 @@ class M5UnifiedHalfDuplex {
   std::int64_t startedMicroseconds_ = 0;
   bool buttonPressed_ = false;
   bool buttonChangePending_ = false;
+  bool buttonBPressPending_ = false;
   bool microphoneActive_ = false;
 };
 

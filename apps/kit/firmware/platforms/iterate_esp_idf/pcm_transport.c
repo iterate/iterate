@@ -26,8 +26,8 @@
  * block high-volume audio in either direction.
  *
  * The outer schedule is receive -> bounded uplink -> receive. This gives
- * speaker data and PONG/PING control two opportunities around each send quantum
- * without allowing a permanently writable uplink to monopolize the core. A
+ * speaker data and mandatory PONG replies two opportunities around each send
+ * quantum without allowing a permanently writable uplink to monopolize the core. A
  * producer notification bypasses the idle tick; a PROGRESS result takes a
  * zero-timeout follow-up pass. Every raw socket operation below is nonblocking
  * once the initial DNS/TCP/TLS/upgrade completes.
@@ -206,10 +206,10 @@ static bool mark_socket_connected(
   }
   /*
    * Begin the portable generation before publishing `socket_connected`. This
-   * purges speech captured during reconnect, resets every locally-owned old
-   * socket byte, and installs the new pong namespace as one tested operation.
-   * Publishing first would let diagnostics—or a later refactor of this owner—
-   * observe a ready socket whose proof state still belongs to its predecessor.
+   * purges speech captured during reconnect and resets every locally-owned old
+   * socket byte as one tested operation. Publishing first would let
+   * diagnostics—or a later refactor of this owner—observe a ready socket whose
+   * sender state still belongs to its predecessor.
    */
   status =
       iterate_kit_pcm_uplink_conductor_begin_generation(
@@ -404,34 +404,12 @@ static void receive_downlink(
     }
     if (result ==
         ITERATE_KIT_ESP_IDF_WEBSOCKET_RECEIVE_CONTROL) {
-      if (chunk.opcode ==
-          (uint8_t)ITERATE_KIT_WEBSOCKET_PONG) {
-        const enum iterate_kit_status pong_status =
-            iterate_kit_pcm_uplink_conductor_receive_pong(
-                &transport->uplink,
-                chunk.bytes,
-                chunk.byte_count,
-                now_ms);
-        /*
-         * A stale or unsolicited pong is normal protocol noise and proves
-         * nothing, so it is counted by the guard but is not a generic failure.
-         * Any other rejection means our single-owner ordering invariant was
-         * violated; reconnect cannot repair local state corruption.
-         */
-        if (pong_status != ITERATE_KIT_OK &&
-            pong_status != ITERATE_KIT_UNAVAILABLE) {
-          remember_platform_error(
-              transport, ESP_ERR_INVALID_STATE);
-          latch_fatal_failure(transport);
-          return;
-        }
-      }
       /*
-       * Receiving PING has queued a mandatory PONG; receiving a matching PONG
-       * may have reopened PCM admission. Return to the outer scheduler now so
-       * the portable conductor services that control boundary before another
-       * receive burst. Continuing through eight inbound chunks first would add
-       * avoidable response latency under a busy peer.
+       * Receiving PING has queued a mandatory PONG. Return to the outer
+       * scheduler so the conductor services that RFC obligation before another
+       * receive burst. A received PONG is counted by the connection as an
+       * honest hop-level diagnostic but changes no PCM state: it cannot prove
+       * userspace-proxy or provider delivery.
        */
       return;
     }
@@ -593,7 +571,6 @@ static void network_task(void *context) {
       &websocket_retry,
       ITERATE_KIT_ESP_IDF_WEBSOCKET_RETRY_INITIAL_MS,
       ITERATE_KIT_ESP_IDF_WEBSOCKET_RETRY_MAX_MS);
-  atomic_store_u32(&transport->network_task_running, 1U);
 
   while (atomic_load_u32(&transport->network_task_running)) {
     /*
@@ -742,7 +719,7 @@ enum iterate_kit_status iterate_kit_esp_idf_pcm_transport_prepare(
   transport->options = *options;
   configuration_error =
       iterate_kit_configuration_build_pcm_websocket_url(
-          options->configuration->os_base_url,
+          options->configuration->pcm_base_url,
           transport->websocket_url,
           sizeof(transport->websocket_url));
   if (configuration_error != ITERATE_KIT_CONFIGURATION_OK ||
@@ -773,10 +750,10 @@ enum iterate_kit_status iterate_kit_esp_idf_pcm_transport_prepare(
     return status;
   }
   /*
-   * The ESP layer supplies only fixed buffers, tuning policy, and the raw
-   * WebSocket byte stream. All ordering between sender, control frames, peer
-   * confirmation, and epoch purge lives in the portable conductor exercised by
-   * the deterministic host fault harness.
+   * The ESP layer supplies only fixed buffers, freshness tuning, and the raw
+   * WebSocket byte stream. All ordering between sender, mandatory control
+   * replies, and epoch purge lives in the portable conductor exercised by the
+   * deterministic host fault harness.
    */
   uplink_options =
       (struct iterate_kit_pcm_uplink_conductor_options){
@@ -788,27 +765,6 @@ enum iterate_kit_status iterate_kit_esp_idf_pcm_transport_prepare(
             ITERATE_KIT_ESP_IDF_PCM_FRAME_MAX_SEND_DURATION_MS,
         .maximum_capture_age_ms =
             ITERATE_KIT_ESP_IDF_PCM_CAPTURE_MAX_AGE_MS,
-        .barrier_interval_frames =
-            ITERATE_KIT_ESP_IDF_PCM_PEER_BARRIER_INTERVAL_FRAMES,
-        .maximum_unconfirmed_frames =
-            ITERATE_KIT_ESP_IDF_PCM_PEER_MAX_UNCONFIRMED_FRAMES,
-        .maximum_barrier_delay_ms =
-            ITERATE_KIT_ESP_IDF_PCM_PEER_MAX_BARRIER_DELAY_MS,
-        .maximum_confirmation_age_ms =
-            ITERATE_KIT_ESP_IDF_PCM_PEER_MAX_CONFIRMATION_AGE_MS,
-        /*
-         * Audio barriers make peer liveness observable while push-to-talk is
-         * active. These separate idle bounds cover the equally important case
-         * where an apparently connected socket has carried no microphone
-         * frames. Keeping the policy in the conductor means host fault tests
-         * exercise the same state transition; implementing a second ESP-only
-         * keepalive loop here was rejected because two owners could race for
-         * the WebSocket control slot and disagree about when to reconnect.
-         */
-        .idle_peer_probe_interval_ms =
-            ITERATE_KIT_ESP_IDF_PCM_IDLE_PEER_PROBE_INTERVAL_MS,
-        .idle_peer_probe_timeout_ms =
-            ITERATE_KIT_ESP_IDF_PCM_IDLE_PEER_PROBE_TIMEOUT_MS,
         .maximum_work_steps = NETWORK_UPLINK_WORK_STEPS,
       };
   status = iterate_kit_pcm_uplink_conductor_init(
@@ -955,6 +911,32 @@ enum iterate_kit_status iterate_kit_esp_idf_pcm_transport_stop(
   TickType_t waited = 0U;
   TickType_t delay = pdMS_TO_TICKS(10U);
   TickType_t timeout = pdMS_TO_TICKS(STOP_TIMEOUT_MS);
+  enum iterate_kit_status status;
+  status = iterate_kit_esp_idf_pcm_transport_request_stop(
+      transport);
+  if (status != ITERATE_KIT_OK) {
+    return status;
+  }
+  if (transport->state == ITERATE_KIT_ESP_IDF_PCM_STOPPED) {
+    return ITERATE_KIT_OK;
+  }
+  if (delay == 0U) {
+    delay = 1U;
+  }
+  while ((status =
+              iterate_kit_esp_idf_pcm_transport_finish_stop(
+                  transport)) == ITERATE_KIT_UNAVAILABLE &&
+         waited < timeout) {
+    vTaskDelay(delay);
+    waited += delay;
+  }
+  return status == ITERATE_KIT_UNAVAILABLE
+      ? ITERATE_KIT_IO_ERROR
+      : status;
+}
+
+enum iterate_kit_status iterate_kit_esp_idf_pcm_transport_request_stop(
+    struct iterate_kit_esp_idf_pcm_transport *transport) {
   if (transport == NULL || !transport->initialized) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
@@ -962,19 +944,30 @@ enum iterate_kit_status iterate_kit_esp_idf_pcm_transport_stop(
     transport->state = ITERATE_KIT_ESP_IDF_PCM_STOPPED;
     return ITERATE_KIT_OK;
   }
-  if (delay == 0U) {
-    delay = 1U;
+  if (transport->state == ITERATE_KIT_ESP_IDF_PCM_STOPPING) {
+    return ITERATE_KIT_OK;
   }
   atomic_store_u32(&transport->network_task_running, 0U);
   mark_socket_disconnected(transport);
   wake_network_task(transport);
-  while (!atomic_load_u32(&transport->network_task_exited) &&
-         waited < timeout) {
-    vTaskDelay(delay);
-    waited += delay;
+  transport->state = ITERATE_KIT_ESP_IDF_PCM_STOPPING;
+  return ITERATE_KIT_OK;
+}
+
+enum iterate_kit_status iterate_kit_esp_idf_pcm_transport_finish_stop(
+    struct iterate_kit_esp_idf_pcm_transport *transport) {
+  if (transport == NULL || !transport->initialized) {
+    return ITERATE_KIT_INVALID_ARGUMENT;
+  }
+  if (!transport->started) {
+    transport->state = ITERATE_KIT_ESP_IDF_PCM_STOPPED;
+    return ITERATE_KIT_OK;
+  }
+  if (transport->state != ITERATE_KIT_ESP_IDF_PCM_STOPPING) {
+    return ITERATE_KIT_STATE_ERROR;
   }
   if (!atomic_load_u32(&transport->network_task_exited)) {
-    return ITERATE_KIT_IO_ERROR;
+    return ITERATE_KIT_UNAVAILABLE;
   }
   transport->network_task = NULL;
   transport->started = false;
@@ -1083,7 +1076,6 @@ void iterate_kit_esp_idf_pcm_transport_metrics(
   }
   metrics->last_platform_error = __atomic_load_n(
       &transport->last_platform_error, __ATOMIC_ACQUIRE);
-  metrics->peer_delivery = uplink.peer_delivery;
   iterate_kit_pcm_lane_metrics(
       transport->options.lane, &metrics->lane);
 
@@ -1097,11 +1089,10 @@ void iterate_kit_esp_idf_pcm_transport_metrics(
    * These layers are diagnostic views, not additive buckets. During a partial
    * write, the sender deliberately retains the ring slot while the transmitter
    * owns a masked copy, so summing them double-counts at most one PCM frame.
-   * The peer value begins only after a complete frame leaves both local views
-   * and is deliberately an upper bound: a pong may prove that fewer PCM bytes
-   * remain below us, but never that more remain. Delivery/liveness PING bytes
-   * are not included in that PCM-derived bound; their exact local pending bytes
-   * are included only in websocket_transmitter.
+   * ESP-IDF does not expose exact live occupancy for TLS/lwIP/Wi-Fi, so those
+   * layers remain explicitly capacity-only or unavailable below. We rejected
+   * deriving a lower-layer PCM depth from PONG: it proves ordered parsing only
+   * at this WebSocket hop and says nothing about proxy/provider queues.
    */
   metrics->buffers.uplink_application =
       (struct iterate_kit_buffer_metrics){
@@ -1124,22 +1115,6 @@ void iterate_kit_esp_idf_pcm_transport_metrics(
         .high_water_bytes =
             websocket.tx.maximum_pending_wire_bytes,
         .capacity_bytes = websocket.tx.capacity_wire_bytes,
-      };
-  metrics->buffers.peer_unconfirmed =
-      (struct iterate_kit_buffer_metrics){
-        .evidence = ITERATE_KIT_BUFFER_DERIVED_BOUND,
-        .current_bytes = saturating_bytes(
-            metrics->peer_delivery.unconfirmed_frames,
-            ITERATE_KIT_WEBSOCKET_CLIENT_FRAME_BYTES(
-                ITERATE_KIT_PCM_V1_FRAME_BYTES)),
-        .high_water_bytes = saturating_bytes(
-            metrics->peer_delivery.maximum_unconfirmed_frames,
-            ITERATE_KIT_WEBSOCKET_CLIENT_FRAME_BYTES(
-                ITERATE_KIT_PCM_V1_FRAME_BYTES)),
-        .capacity_bytes = saturating_bytes(
-            ITERATE_KIT_ESP_IDF_PCM_PEER_MAX_UNCONFIRMED_FRAMES,
-            ITERATE_KIT_WEBSOCKET_CLIENT_FRAME_BYTES(
-                ITERATE_KIT_PCM_V1_FRAME_BYTES)),
       };
   /*
    * `SO_SNDBUF` is not implemented by this ESP-IDF/lwIP configuration, and
@@ -1174,6 +1149,8 @@ const char *iterate_kit_esp_idf_pcm_transport_state_name(
       return "ready";
     case ITERATE_KIT_ESP_IDF_PCM_FAILED:
       return "failed";
+    case ITERATE_KIT_ESP_IDF_PCM_STOPPING:
+      return "stopping";
     case ITERATE_KIT_ESP_IDF_PCM_STOPPED:
       return "stopped";
   }
