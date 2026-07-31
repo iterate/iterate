@@ -69,8 +69,8 @@ const htmlRes = await fetch(`${CP}/__ingress?host=${encodeURIComponent(HOST)}&pa
 });
 const html = await htmlRes.text();
 ok(
-  html.includes(projectId) && html.includes("project config worker"),
-  "the project's default app renders via the runner",
+  html.includes(projectId) && html.includes("PUBLIC"),
+  "the project's default (public) app renders via the runner",
 );
 
 console.log(`\n${fail === 0 ? "ALL PASS" : "SOME FAILED"} — ${pass} passed, ${fail} failed`);
