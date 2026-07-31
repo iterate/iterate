@@ -83,8 +83,10 @@ binding.
 | 4 separate account     | ✅ (any mode)    | ✅ (same AS) | ✅                     | ✅      | ✅ HTTP dial proven (cross-account shape) |
 
 Proofs (all deployed): `prove.mjs` 13/13 (login/OAuth/CIMD/MCP/org+project@authorize/API key),
-`prove-api.mjs` 4/4 (capnweb /api), `prove-twoworker.mjs` 7/7 (host→project resolve → HTTP dial →
-confined config worker). 24 assertions, green on live workers.dev.
+`prove-api.mjs` 4/4 (capnweb /api), `prove-twoworker.mjs` 7/7 (host→project resolve → dial → confined
+config worker), `prove-apps.mjs` 7/7 (public app to everyone; private app to a member, redirect-to-login
+for anon + non-member, via `itx.auth.gate`). **31 assertions, green on live workers.dev.** The dial now
+runs over the **same-account `env.RUNNER` service binding** (with the cross-account HTTP dial as fallback).
 
 ## What's left (follow-ups, not blockers)
 

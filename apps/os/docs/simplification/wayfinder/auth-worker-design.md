@@ -233,6 +233,42 @@ to hand straight back. Modes the app selects:
 - **bring-your-own** — the app does its own auth (Clerk, etc.); `itx.auth` stays out of the way.
 
 This is the _userspace face_ of §2's `gate()`/`verifyToken()`: the control plane's forward-auth, dialable
-from project code. To think through: how the choice is expressed (declarative config on the app vs an
-explicit `itx.auth.fetch` call at the top of the handler) and how it reads in each topology
-(hosted / self-host / wide-open). Related: [[auth-worker-design]] §2, §3.
+from project code. Related: [[auth-worker-design]] §2, §3.
+
+### 11a. BUILT + PROVEN — public/private apps via `itx.auth.gate` (2026-07-31)
+
+Implemented and proven deployed (`prove-apps.mjs` 7/7). The mechanism, end to end:
+
+1. **The control plane stamps membership at dial time.** On ingress it resolves the caller (session/API
+   key), then `stampFor(actor, projectId)` computes `directory.access` → a **StampedCaller**
+   `{ actor, email, member, role }`, JSON-stamped into the `x-iterate-caller` header. The control plane
+   **overwrites** this header (a browser can't inject it), so `member` is trustworthy downstream.
+2. **The project worker exposes `itx.auth`.** A private app calls
+   `env.ITX.auth.gate(callerHeader, cpOrigin, url)` → `{ authorized: true }` (proceed) or
+   `{ authorized: false, loginUrl }` (redirect the browser to the control plane's `/login?next=…`).
+3. **The config worker decides.** Public app (the default) ignores auth; a private app (here: the `admin`
+   app / any `/admin` path) calls `gate` first and returns the login redirect verbatim when not authorized.
+   This is the "partial fetch" — the app chooses; the capability owns the policy + the login response.
+
+**Three app policies** (as designed): **public** (no gate), **project-members-only** (`gate` →
+`member`), **bring-your-own** (`itx.auth` unused; the app runs Clerk/etc.).
+
+**Two implementation findings worth remembering:**
+
+- **`gate` takes/returns primitives, not `Request`/`Response`.** Over Workers RPC, `fetch` is a **reserved
+  method name**, and `Request`/`Response` don't reliably cross the loopback. So the ergonomic "partial
+  fetch" is a small value-returning call the config worker turns into a `Response`. (The user's earlier
+  `itx.auth.fetch(request)` sketch runs into the reserved name; `itx.auth.gate(...)` is the working shape.)
+- **Dispatch to the config worker with `redirect:"manual"`.** A login `302` the config worker _returns_
+  must pass to the browser verbatim; the default `redirect:"follow"` on the loader dispatch **follows** it
+  back into the worker (re-entering on the `Location`), which silently served the private page. `manual`
+  fixes it.
+
+**Trust model (documented for the reviewers):** the membership decision reads the stamped `x-iterate-caller`.
+A browser can't forge it (control plane overwrites on ingress). A malicious _config worker_ could pass a
+fake caller to `gate` — but that's the project owner's own code choosing whether to gate its own app, not a
+privilege escalation (the real capabilities — streams/secrets — are scoped by the unforgeable `projectId`
+prop, not by this header). Cross-host cookie note: on real deployments the control-plane login and the
+project host share a base domain so the session cookie spans both; on `*.workers.dev` they don't, so the
+proof drives ingress through the control-plane origin (which holds the cookie) — the redirect-to-login
+path is what's proven, not the post-login cookie hand-off.
