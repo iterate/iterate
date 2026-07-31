@@ -4,3 +4,4 @@ export { bench } from "./bench.ts";
 export { bridge } from "./bridge.ts";
 export { client } from "./client.ts";
 export { direct } from "./direct.ts";
+export { matrix } from "./matrix.ts";

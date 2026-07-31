@@ -117,6 +117,9 @@ export async function client(options: ClientOptions) {
       "voicelab/call-accepted",
     ],
     quietMs: 4000,
+    // Before call-accepted there is legitimately no traffic; afterwards pings
+    // guarantee a batch at least every 2s.
+    trafficExpected: () => accepted,
     onEvents: (events) => {
       impair.rx(() => {
         const now = Date.now();
