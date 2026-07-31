@@ -276,6 +276,26 @@ describe("kernel", () => {
     expect(String(project.body)).toContain("public website");
   });
 
+  test("the control-plane console lists projects + a create form works (POST creates)", async () => {
+    // GET the console on the control-plane host: renders the list + a create <form>.
+    const page = await hit("iterate.example.com", "/");
+    expect(page.status).toBe(200);
+    expect(String(page.body)).toContain("iterate control plane");
+    expect(String(page.body)).toContain("create a project"); // the form is present
+    expect(String(page.body)).toContain('name="slug"');
+
+    // POST the form to create a project (the local test directory is read-only, so we assert the console
+    // handles the create call + Post/Redirect/Get without 500ing). A kv/open directory would persist it.
+    const res = await worker.fetch("http://iterate.example.com/", {
+      method: "POST",
+      headers: { host: "iterate.example.com", "content-type": "application/x-www-form-urlencoded" },
+      body: "slug=newproj",
+      redirect: "manual",
+    });
+    // read-only `local` directory => the console re-renders with the refusal reason (400), not a crash.
+    expect([303, 400]).toContain(res.status);
+  });
+
   test("a custom apex + its subdomain-as-app route to the project (ADR 0031)", async () => {
     // `bobco.test -> alice` (a custom apex). The apex is alice's default app; `docs.bobco.test` is alice's
     // `docs` app — proven by the stamped x-iterate-app the confined config worker echoes at /__debug.

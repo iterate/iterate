@@ -546,7 +546,7 @@ export default {
       // Any other path on the reserved control-plane host is the console (create/list projects) — NOT a
       // project named after the host label. (Only reached when controlPlaneHost is explicitly set.)
       if (cfg.controlPlaneHost && url.hostname === cfg.controlPlaneHost) {
-        return serveControlPlane(url.hostname);
+        return serveControlPlane(request, cfg, env);
       }
     }
 
@@ -577,20 +577,77 @@ export default {
   },
 };
 
-// The reserved control-plane host's console (ADR 0031). A deployment-wide surface (create/list projects),
-// NOT a project. `/api` + `/mcp` already answer on this host; this is the human landing. Minimal for now —
-// the full control-plane web app (create/list via the /api tree) is the "console" in the two-web-apps
-// split. The point proven here: this host OVERRIDES slug interpretation.
-function serveControlPlane(host: string): Response {
+// The reserved control-plane host's CONSOLE (ADR 0031 + the two-web-apps "console"): a deployment-wide
+// surface to LIST projects and CREATE one. Server-rendered directly from the directory (no separate app,
+// no client JS) — the same directory `/api` + `/mcp` use. GET renders the list + a create form; POST
+// (the form) creates a project then redirects back. This is the human twin of the `/api`/`/mcp`
+// list/create surface; a richer console can replace it later, but this is the "basic list + form" we need.
+const esc = (s: string) =>
+  s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
+
+async function serveControlPlane(request: Request, cfg: AppConfig, env: Env): Promise<Response> {
+  const url = new URL(request.url);
+  const directory = directoryFor(cfg, env);
+  const caller = await resolveAmbientCaller(request, cfg, env);
+  const base = cfg.hostBase ?? url.hostname; // projects live at `<slug>.<base>`
+
+  // POST = the create form. Read the slug, create via the directory, redirect back (Post/Redirect/Get).
+  if (request.method === "POST") {
+    const form = await request.formData();
+    const slug = String(form.get("slug") ?? "").trim();
+    const organizationSlug = String(form.get("organizationSlug") ?? "").trim() || undefined;
+    if (slug) {
+      const result = await directory.create(caller, { slug, organizationSlug });
+      if (!result.ok)
+        return html(consolePage(base, await safeList(directory, caller), result.reason), 400);
+    }
+    return new Response(null, { status: 303, headers: { location: "/" } });
+  }
+
+  return html(consolePage(base, await safeList(directory, caller)));
+}
+
+// List defensively — some providers (e.g. `open`) return [] or need membership; never 500 the console.
+async function safeList(directory: Directory, caller: Caller): Promise<string[]> {
+  try {
+    return await directory.list(caller);
+  } catch {
+    return [];
+  }
+}
+
+function consolePage(base: string, projects: string[], error?: string): string {
+  const rows = projects.length
+    ? projects
+        .map(
+          (slug) =>
+            `<li><b>${esc(slug)}</b> — ` +
+            `<a href="https://${esc(slug)}.${esc(base)}/">site</a> · ` +
+            `<a href="https://dashboard--${esc(slug)}.${esc(base)}/">dashboard</a></li>`,
+        )
+        .join("")
+    : `<li><i>no projects yet — create one below</i></li>`;
+  return (
+    `<h1>iterate control plane</h1>` +
+    `<p><small>Projects live at <code>&lt;slug&gt;.${esc(base)}</code>. This is the console; ` +
+    `<code>/api</code> (capnweb) and <code>/mcp</code> (MCP) expose the same list/create.</small></p>` +
+    (error ? `<p style="color:#c00">⚠ ${esc(error)}</p>` : ``) +
+    `<h2>projects</h2><ul>${rows}</ul>` +
+    `<h2>create a project</h2>` +
+    `<form method="POST" style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">` +
+    `<input name="slug" placeholder="slug (e.g. acme)" required ` +
+    `style="padding:.4rem;font:inherit;flex:1;min-width:12rem">` +
+    `<input name="organizationSlug" placeholder="org (auth directory only)" ` +
+    `style="padding:.4rem;font:inherit;flex:1;min-width:12rem">` +
+    `<button type="submit" style="padding:.4rem .8rem;font:inherit">create</button></form>`
+  );
+}
+
+function html(body: string, status = 200): Response {
   return new Response(
     `<!doctype html><meta charset=utf-8><title>iterate control plane</title>` +
-      `<body style="font:16px system-ui;max-width:40rem;margin:3rem auto">` +
-      `<h1>iterate control plane</h1>` +
-      `<p>This is the <b>control plane</b> at <code>${host}</code> — the deployment-wide console, not a ` +
-      `project. Create/list projects via <code>/api</code> (capnweb) or <code>/mcp</code> (MCP).</p>` +
-      `<p><small>Projects live at <code>&lt;slug&gt;.${host.split(".").slice(1).join(".")}</code>; ` +
-      `custom domains route via the control-plane routing table.</small></p>`,
-    { headers: { "content-type": "text/html; charset=utf-8" } },
+      `<body style="font:16px system-ui;max-width:44rem;margin:3rem auto;line-height:1.5">${body}`,
+    { status, headers: { "content-type": "text/html; charset=utf-8" } },
   );
 }
 
