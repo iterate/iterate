@@ -48,6 +48,7 @@ interface RunRow {
   rttP50?: number;
   underruns?: number;
   underrunMs?: number;
+  spkFramesLost?: number;
   reconnects?: number;
   appendErrors?: number;
   transcriptOk?: boolean;
@@ -191,9 +192,9 @@ export async function matrix(options: MatrixOptions) {
   // Per-cell aggregate table.
   const lines: string[] = [];
   lines.push(
-    "| variant | network | runs ok | ttfa ms (med) | stop→audio ms | 1-way p50/p90 | rtt p50 | underruns | reconnects | transcript |",
+    "| variant | network | runs ok | ttfa ms (med) | stop→audio ms | 1-way p50/p90 | rtt p50 | underruns | lost | reconnects | transcript |",
   );
-  lines.push("|---|---|---|---|---|---|---|---|---|---|");
+  lines.push("|---|---|---|---|---|---|---|---|---|---|---|");
   for (const variant of variants) {
     for (const impairment of impairments) {
       const cell = rows.filter((r) => r.variant === variant && r.impairment === impairment);
@@ -206,7 +207,7 @@ export async function matrix(options: MatrixOptions) {
         return String(percentiles(values).p50);
       };
       lines.push(
-        `| ${variant} | ${impairment} | ${ok.length}/${cell.length} | ${med((r) => r.ttfaMs)} | ${med((r) => r.stopToFirstMs)} | ${med((r) => r.oneWayP50)}/${med((r) => r.oneWayP90)} | ${med((r) => r.rttP50)} | ${ok.reduce((a, r) => a + (r.underruns ?? 0), 0)} | ${ok.reduce((a, r) => a + (r.reconnects ?? 0), 0)} | ${ok.filter((r) => r.transcriptOk).length}/${ok.length} |`,
+        `| ${variant} | ${impairment} | ${ok.length}/${cell.length} | ${med((r) => r.ttfaMs)} | ${med((r) => r.stopToFirstMs)} | ${med((r) => r.oneWayP50)}/${med((r) => r.oneWayP90)} | ${med((r) => r.rttP50)} | ${ok.reduce((a, r) => a + (r.underruns ?? 0), 0)} | ${ok.reduce((a, r) => a + (r.spkFramesLost ?? 0), 0)} | ${ok.reduce((a, r) => a + (r.reconnects ?? 0), 0)} | ${ok.filter((r) => r.transcriptOk).length}/${ok.length} |`,
       );
     }
   }
@@ -254,6 +255,7 @@ async function executeRun(
     pingRttMs?: { p50?: number };
   };
   const playout = (summary.playout ?? {}) as { underruns?: number; underrunMs?: number };
+  const spkFramesLost = typeof summary.spkFramesLost === "number" ? summary.spkFramesLost : 0;
   const connection = (summary.connection ?? {}) as {
     watchdogReopens?: number;
     proactiveRecycles?: number;
@@ -270,6 +272,7 @@ async function executeRun(
     rttP50: latency.pingRttMs?.p50,
     underruns: playout.underruns ?? 0,
     underrunMs: playout.underrunMs ?? 0,
+    spkFramesLost,
     reconnects: (connection.watchdogReopens ?? 0) + (connection.proactiveRecycles ?? 0),
     appendErrors: typeof summary.appendErrors === "number" ? summary.appendErrors : 0,
     transcriptOk:

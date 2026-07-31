@@ -87,6 +87,8 @@ export async function client(options: ClientOptions) {
   const clockOffsets: number[] = [];
   let spkFrames = 0;
   let spkBytes = 0;
+  let spkFramesLost = 0; // seq gaps = ephemeral frames appended while no connection was live
+  let lastSpkSeq = -1;
   let micFramesSent = 0;
   let turnsDone = 0;
   let appendErrors = 0;
@@ -136,6 +138,9 @@ export async function client(options: ClientOptions) {
               break;
             case "voicelab/spk-frame": {
               spkFrames++;
+              const seq = payload.seq as number;
+              if (lastSpkSeq >= 0 && seq > lastSpkSeq + 1) spkFramesLost += seq - lastSpkSeq - 1;
+              lastSpkSeq = Math.max(lastSpkSeq, seq);
               const pcm = Buffer.from(payload.pcm as string, "base64");
               spkBytes += pcm.length;
               if (marks.firstSpkFrame === undefined) {
@@ -333,6 +338,7 @@ export async function client(options: ClientOptions) {
     },
     micFramesSent,
     spkFrames,
+    spkFramesLost,
     spkSeconds: +(spkBytes / BYTES_PER_SEC).toFixed(2),
     latency: {
       utteranceEndToFirstSpkFrameMs:
