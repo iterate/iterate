@@ -8,6 +8,23 @@ not deleted.
 
 ---
 
+## 0032 — One always-deployed auth worker = login + session + directory + OAuth AS (supersedes 0003, 0004)
+
+Stop reinventing `wall` + `directory` in the kernel. **Always deploy one small auth worker** (hosted AND
+self-host); its config says how login works (wide-open · email-entry · behind-Cloudflare-Access). It is:
+(a) a **forward-auth "partial fetch"** for browser pages (no session ⇒ return its login form, the caller
+returns it verbatim); (b) the **OAuth 2.1 Authorization Server** for MCP clients (MCP `2025-11-25`: `/mcp`
+is a Resource Server that 401s with `WWW-Authenticate … resource_metadata`; client discovers the AS and
+does authcode+PKCE-S256+`resource`; client identity via **CIMD** — a URL `client_id`, **no DCR/`/register`**);
+(c) the **device-grant AS** (RFC 8628) for embedded devices; and (d) **the directory** (users → orgs →
+projects → devices). All four share ONE login UI + ONE session + ONE directory — the human step of every
+flow (`/authorize` consent, device `/verify`, app page) reuses the same login + the project picker (ADR
+0029). This **deletes** `auth-wall.ts` + `directory.ts`'s provider switch + `AppConfig.wall`/`directory`
+from the kernel (fewer concepts, hosted==self-host in shape) and **resolves the "Access doesn't scale"
+concern** (Access becomes one login mode, not the wall). A clean-room microcosm of `apps/auth`. Full design
+
+- spec citations + build plan: wayfinder/auth-worker-design.md. _(Jonas.)_
+
 ## 0031 — Self-host burns ONE hostname: a reserved control-plane host overrides slug interpretation
 
 Full self-host should need only **one** domain, not two. The ingress adds a **reserved control-plane
