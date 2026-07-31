@@ -41,10 +41,87 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     return this.#docsApp.rpc;
   }
 
+  /**
+   * STANDING AGENT CONTEXT — the pattern to copy for any always-on knowledge.
+   *
+   * Every agent in this project carries the config repo's AGENTS.md as a
+   * keyed context item: appended at agent birth, and re-synced to EVERY
+   * agent whenever a config-repo commit lands. Covered keyed context is
+   * append-only (an agent that already ran keeps old occurrences until
+   * compaction), so the sync appends ONLY on a real change — it reads each
+   * agent's current slot first, and a deleted AGENTS.md supersedes with a
+   * tombstone rather than lingering forever. The idempotency key is unique
+   * per TRANSITION (content hash + the occurrence it replaces): redeliveries
+   * dedupe, reverting to earlier content still supersedes, and an edited
+   * wrapper can never reuse a key with a different body.
+   * dont-trigger-request means this never wakes an agent by itself. This
+   * content rides every LLM request of every agent — keep AGENTS.md lean.
+   * (Known narrow race: an agent born while a commit's fan-out is running
+   * can end up one version behind until the next AGENTS.md change.)
+   */
+  async #syncAgentsMdContext(agentPaths: string[]): Promise<void> {
+    if (agentPaths.length === 0) return;
+    const itx = await this.itx;
+    const file = await itx.repo.readFile({ path: "AGENTS.md" });
+    const content =
+      file === null
+        ? "(AGENTS.md was deleted from /repos/config — no standing project notes.)"
+        : `Project AGENTS.md (auto-injected from /repos/config/AGENTS.md — commit updates there to teach every agent):\n\n${file.content}`;
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(content));
+    const hash = [...new Uint8Array(digest).slice(0, 8)]
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+    const results = await Promise.allSettled(
+      agentPaths.map(async (path) => {
+        const agent = itx.agents.get(path);
+        const snapshot = await agent.processor.snapshot();
+        const slot = snapshot.state.contextItems.findLast(
+          (item) => item.payload.key === "config/agents-md",
+        );
+        if (slot?.payload.content === content) return;
+        await agent.append({
+          type: "events.iterate.com/agents/context-added",
+          idempotencyKey: `iterate/config/agents-md:${hash}:after-${slot?.offset ?? 0}`,
+          payload: {
+            content,
+            key: "config/agents-md",
+            llmRequestPolicy: { behaviour: "dont-trigger-request" },
+            // SYSTEM role on purpose: compaction keeps keyed system facts
+            // (collapsed to the latest occurrence) — a developer item would
+            // be dropped at the first compaction, and the unchanged-content
+            // re-sync would then dedupe against the birth append forever.
+            role: "system",
+          },
+        });
+      }),
+    );
+    // Attempt every agent before failing: the batch is redelivered
+    // at-least-once on a throw, and the per-transition keys turn retries of
+    // the agents that DID land into no-ops.
+    const failed = results.find((result) => result.status === "rejected");
+    if (failed !== undefined && failed.status === "rejected") throw failed.reason;
+  }
+
   // The base class delivers committed events on ANY stream here at least once and in
   // per-stream order.
   protected override async processEvent(event: StreamEvent): Promise<void> {
     switch (event.type) {
+      case "events.iterate.com/agent/created": {
+        // The birth event on the agent's own stream (copies carry
+        // source.copiedFrom and must not re-target the collection stream).
+        if (event.source?.copiedFrom !== undefined) break;
+        await this.#syncAgentsMdContext([event.path]);
+        break;
+      }
+      case "events.iterate.com/repo/commit-completed": {
+        // Any config-repo commit MAY have changed AGENTS.md — the sync's
+        // read-compare step turns the ones that didn't into no-ops.
+        if (event.path !== "/repos/config") break;
+        const itx = await this.itx;
+        const agents = await itx.agents.list();
+        await this.#syncAgentsMdContext(agents.map((agent) => agent.path));
+        break;
+      }
       case "events.iterate.com/project/heartbeat-triggered": {
         if (event.path !== "/") break;
         console.log("Project heartbeat fired", { scheduleKey: event.payload?.scheduleKey });

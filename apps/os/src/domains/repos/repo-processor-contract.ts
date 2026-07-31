@@ -408,7 +408,13 @@ function repoCreateRequestSchema() {
           .string()
           .trim()
           .min(1)
-          .meta({ description: "The named GitHub connection (App installation) minting tokens." }),
+          .optional()
+          .meta({
+            description:
+              "Optional named GitHub connection (App installation) to link after the import — " +
+              "enables webhook ingestion and sync. Omit for a plain public clone (Artifacts " +
+              "clones public repos unauthenticated; link later with linkGithub).",
+          }),
         depth: z.number().int().positive().optional().meta({
           description:
             "Shallow-import depth; omit to let Cloudflare Artifacts import the full history.",
@@ -419,7 +425,7 @@ function repoCreateRequestSchema() {
       .meta({
         description:
           "Have Cloudflare Artifacts clone the public GitHub repository directly (no transfer " +
-          "through the Worker), then link it.",
+          "through the Worker), then link it when a connection is given.",
       }),
   ]);
 }

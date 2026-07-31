@@ -22,8 +22,17 @@ import { authorColor, authorLabel } from "../lib/collab-redline.ts";
 import { whoami } from "../lib/use-checkout.ts";
 import { useTaskCommit } from "../lib/use-task-commit.ts";
 import { projectBoard } from "../lib/board-engine.ts";
-import { taskPathInFolder, unclaimedPath, type BoardTask, type RowField } from "../lib/board-model.ts";
-import { DEFAULT_REPO_PATH, normalizeRepoPath } from "../lib/checkout-shared.ts";
+import {
+  taskPathInFolder,
+  unclaimedPath,
+  type BoardTask,
+  type RowField,
+} from "../lib/board-model.ts";
+import {
+  DEFAULT_REPO_PATH,
+  checkoutWorkspacePath,
+  normalizeRepoPath,
+} from "../lib/checkout-shared.ts";
 import {
   columnsForTasks,
   fallbackCommitMessage,
@@ -183,7 +192,6 @@ function WorkspaceBoardPage() {
     },
     [isTaken],
   );
-
 
   /** The open file's LIVE editor api — null when absent or when its session
    * died (ended/disconnected/over-cap): a dead view still renders text, but
@@ -453,11 +461,17 @@ function WorkspaceBoardPage() {
       const target = claimPath(desired);
       renamingRef.current = true;
       try {
-        await current.renameTask(path, target, source, (final) => final, () => {
-          // A sheet still showing the source (commit keeps it open) follows
-          // the moved file; a closed sheet stays closed.
-          if (searchTaskRef.current === path) patchSearch({ task: target });
-        });
+        await current.renameTask(
+          path,
+          target,
+          source,
+          (final) => final,
+          () => {
+            // A sheet still showing the source (commit keeps it open) follows
+            // the moved file; a closed sheet stays closed.
+            if (searchTaskRef.current === path) patchSearch({ task: target });
+          },
+        );
       } finally {
         renamingRef.current = false;
       }
@@ -605,7 +619,7 @@ function WorkspaceBoardPage() {
       )}
       <StreamEventsSheet
         open={eventsOpen}
-        streamPath={`/workspaces/tasks/${checkoutId}~${repoPath.replace(/^\/+/, "").replaceAll("/", "--")}`}
+        streamPath={checkoutWorkspacePath(checkoutId, repoPath)}
         subscribe={board.subscribeEvents}
         onClose={() => setEventsOpen(false)}
       />

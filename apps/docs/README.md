@@ -5,10 +5,12 @@ source editor. It is a normal Cloudflare TanStack Start app styled with
 Tailwind and the shared Iterate UI package.
 
 There is deliberately no file browser and no task or commit workflow. A URL
-addresses one existing workspace and one existing file:
+addresses one existing workspace and one existing file. A relative `path`
+resolves against the workspace's own stream path; an absolute `path` must be a
+fully qualified stream path (e.g. `/repos/config/docs/plan.md`):
 
 ```text
-https://docs--<project>.iterate.app/?workspace=/workspaces/agents/<agent>&path=/reviews/plan.md
+https://docs--<project>.iterate.app/?workspace=/workspaces/agents/<agent>&path=review.md
 ```
 
 The default project worker exposes the Docs connector as
@@ -18,7 +20,7 @@ production, preview, or localhost link instead of assembling a hostname:
 ```ts
 const url = await itx.worker.docs.link({
   workspace: "/workspaces/agents/reviewer",
-  path: "/reviews/plan.md",
+  path: "review.md",
 });
 await itx.chat.sendMessage(`[Review the plan](${url})`);
 ```

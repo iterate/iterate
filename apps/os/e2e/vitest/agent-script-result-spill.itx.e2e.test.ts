@@ -28,22 +28,10 @@ test(
     );
     using agent = handle.agent(AGENT_PATH);
     using itx = handle.itx();
+    // Agent creation explicitly births the agent's own workspace, and the
+    // spill is pure private scratch under that workspace's own path — no repo
+    // is involved, so nothing needs to be seeded or cloned first.
     await measurePhase("create agent", "fixture", () => agent.create());
-
-    // The spill writes into the agent's workspace, whose first use clones the
-    // project repo — and the repo seeds asynchronously after project creation.
-    // Wait for the seed BEFORE synthesizing the completion event: a spill that
-    // fails falls back to inline truncation and the rendered input is
-    // idempotency-keyed, so there is no second chance for that event.
-    await measurePhase("wait for project repo seed", "dependency", () =>
-      waitForCondition(
-        async () => {
-          const read = await itx.repo.readFile({ path: "package.json" }).catch(() => null);
-          return read !== null;
-        },
-        { description: "project repo to be seeded", intervalMs: 1_000, timeoutMs: 60_000 },
-      ),
-    );
 
     // 2MB: well past the 30k-char context limit and safely past the workspace's
     // ~1.5MB inline threshold, so this proves the R2 spillover lane end to end
@@ -91,8 +79,11 @@ test(
       ),
     );
 
+    // The notice names the FULLY-QUALIFIED path: spill files live under the
+    // agent's own workspace directory (its stream path under /workspaces),
+    // where private scratch is writable and never committable.
     const referencedPath = /saved in your workspace at "([^"]+)"/.exec(content)?.[1];
-    expect(referencedPath).toBe("/script-results/agent-output-1.json");
+    expect(referencedPath).toBe(`/workspaces${AGENT_PATH}/script-results/agent-output-1.json`);
     // The recipe the model is told to run next turn names the same file.
     expect(content).toContain(`itx.workspace.readFile(${JSON.stringify(referencedPath)})`);
     // The inline preview stayed bounded — full result only in the file.

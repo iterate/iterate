@@ -1,8 +1,11 @@
 import { DurableObjectNameCodec, normalizePath } from "../durable-object-names.ts";
-import { CONFIG_REPO_PATH } from "../repos/paths.ts";
 import { buildHostedProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
-import { resolveAbsolutePath } from "./paths.ts";
-import { WorkspaceProcessorContract, type WorkspaceMount } from "./workspace-processor-contract.ts";
+import { isCanonicalRepoPath, resolveAbsolutePath } from "./paths.ts";
+import {
+  WorkspaceProcessorContract,
+  type WorkspaceMount,
+  type WorkspaceMountOverlay,
+} from "./workspace-processor-contract.ts";
 
 // A placeholder projectId used only to round-trip the PATH through the codec.
 // Its value never leaves this module — real workspace names carry the caller's
@@ -55,13 +58,38 @@ export function normalizeWorkspacePath(path: string): string {
 }
 
 /**
- * The mount table every workspace is born with unless the caller passes its
- * own: the project's config repo at the workspace root, committable — which
- * makes a fresh workspace behave exactly like the old single-parent overlay
- * (reads fall through to the config repo's main, `git.commit` lands there).
+ * The EFFECTIVE mount table: every project repo mounted at its own `/repos/**`
+ * stream path (commit-to-main), with the workspace's stored overlays merged
+ * per mount point on top. Mount path = repo path VERBATIM — the workspace
+ * filesystem is a view of the project's one path namespace, so `/repos/config`
+ * in every workspace is the repo at stream path `/repos/config`.
+ *
+ * A partial overlay at a derived path deviates just those fields (e.g.
+ * `{ policy: "read-only" }` on a big imported repo); a complete overlay
+ * mounts a repo at any extra path. A partial overlay at a NON-derived path
+ * never forms a complete mount and is dropped here — tolerantly, because this
+ * also runs under reduced state; the configure door rejects such patches
+ * loudly before they can be appended.
  */
-function defaultWorkspaceMounts(): Record<string, WorkspaceMount> {
-  return { "/": { policy: "commit-to-main", repoPath: CONFIG_REPO_PATH } };
+export function effectiveWorkspaceMounts(
+  repoPaths: readonly string[],
+  overlays: Record<string, WorkspaceMountOverlay>,
+): Record<string, WorkspaceMount> {
+  const mounts: Record<string, WorkspaceMount> = {};
+  for (const path of repoPaths) {
+    if (!isCanonicalRepoPath(path)) continue;
+    mounts[path] = { policy: "commit-to-main", repoPath: path };
+  }
+  for (const [path, overlay] of Object.entries(overlays)) {
+    // "/" is never a mount — the workspace root is the project namespace.
+    // The doors reject it, but a raw-appended (or pre-derivation legacy)
+    // overlay must not revive a root mount in the live table either.
+    if (path === "/") continue;
+    const merged = { ...mounts[path], ...overlay };
+    if (merged.policy === undefined || merged.repoPath === undefined) continue;
+    mounts[path] = { policy: merged.policy, repoPath: merged.repoPath };
+  }
+  return mounts;
 }
 
 /**
@@ -78,6 +106,11 @@ export function normalizeWorkspaceMountKeys<
   const normalized: Record<string, Value> = {};
   for (const [key, value] of Object.entries(mounts)) {
     const path = resolveAbsolutePath(key);
+    if (path === "/") {
+      throw new Error(
+        `mount path "/" is not allowed — the workspace root is the project namespace; repos mount at their own /repos/** paths`,
+      );
+    }
     if (path.split("/").includes(".git")) {
       throw new Error(`mount path "${key}" contains a reserved .git segment`);
     }
@@ -98,15 +131,16 @@ export function normalizeWorkspaceMountKeys<
 }
 
 /**
- * The complete atomic workspace birth batch: the `workspace/created` birth
- * certificate, an optional initial `workspace/configured` patch merged over
- * the default mount table, and the processor subscription. The created and
- * configured keys contain identity only: identical retries dedupe, while a
- * retry with a different initial table fails through the stream's
+ * The complete atomic workspace birth batch: the `workspace/created`
+ * existence marker, an optional initial `workspace/configured` overlay patch
+ * (deviations from the derived table — every project repo at its own
+ * /repos/** path), and the processor subscription. The created and configured
+ * keys contain identity only: identical retries dedupe, while a retry with a
+ * different initial overlay fails through the stream's
  * same-key-different-body check.
  */
 export function workspaceCreationEvents(input: {
-  mounts?: Record<string, WorkspaceMount>;
+  mounts?: Record<string, WorkspaceMountOverlay>;
   path: string;
   projectId: string;
 }) {
@@ -116,12 +150,11 @@ export function workspaceCreationEvents(input: {
       : WorkspaceProcessorContract.stateSchema.shape.config.parse({
           mounts: normalizeWorkspaceMountKeys(input.mounts),
         }).mounts;
-  const defaultMounts = defaultWorkspaceMounts();
   return [
     WorkspaceProcessorContract.buildEvent({
       type: "events.iterate.com/workspace/created",
       idempotencyKey: `workspace-created:${input.projectId}:${input.path}`,
-      payload: { config: { mounts: defaultMounts } },
+      payload: {},
     }),
     ...(desiredMounts === undefined
       ? []

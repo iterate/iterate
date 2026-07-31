@@ -14,11 +14,11 @@ describe("filterPublishablePaths", () => {
     expect(await filterPublishablePaths(withFiles(files))).toEqual(["/a.txt", "/b/c.txt"]);
   });
 
-  test("a `*` .gitignore hides its whole directory, including itself (the spill dir)", async () => {
+  test("a `*` .gitignore hides its whole directory, including itself", async () => {
     const files = {
       "/notes.md": "",
-      "/script-results/.gitignore": "*\n",
-      "/script-results/agent-output-1.json": "{}",
+      "/generated/.gitignore": "*\n",
+      "/generated/bundle.json": "{}",
     };
     expect(await filterPublishablePaths(withFiles(files))).toEqual(["/notes.md"]);
   });

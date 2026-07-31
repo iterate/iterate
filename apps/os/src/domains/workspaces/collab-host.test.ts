@@ -203,7 +203,7 @@ describe("collab host", () => {
 
     // Commit: the fence settles, commits, and stamps as one job.
     await host.commitBarrier(
-      async () => ({ mount: "/" }),
+      async () => ({ mount: "/repos/config" }),
       () => true,
     );
     const after = await host.changes(PATH);
@@ -380,7 +380,7 @@ describe("collab host", () => {
         // A keystroke races the commit: accepted after the settle, before the
         // stamp — the fence must stamp the settled state, not the new head.
         await pushOne(host, { epoch: opened.epoch, version: 1 }, "late ", SEED.length + 10, 1);
-        return { mount: "/" };
+        return { mount: "/repos/config" };
       },
       () => true,
     );
@@ -513,7 +513,7 @@ describe("commit stamping after prior settles", () => {
     await pushOne(host, opened, "hi ", SEED.length);
     await host.reconcile(); // an earlier barrier settles it — session is clean now
     await host.commitBarrier(
-      async () => ({ mount: "/" }),
+      async () => ({ mount: "/repos/config" }),
       () => true,
     );
     // The commit contained the flushed text, so the redline must reset.
@@ -634,7 +634,7 @@ describe("clean-session commit stamping", () => {
     // The barrier flushes dirty A first (parked); B's mid-loop push lands
     // while the loop is suspended, BEFORE B's clean-branch report runs.
     const fence = host.commitBarrier(
-      async () => ({ mount: "/" }),
+      async () => ({ mount: "/repos/config" }),
       () => true,
     );
     await Promise.resolve();

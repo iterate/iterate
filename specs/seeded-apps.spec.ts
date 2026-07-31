@@ -143,7 +143,12 @@ test("review a workspace document in the seeded Docs app", async ({ baseURL, pag
   });
 
   const workspacePath = "/workspaces/agents/reviewer";
-  const documentPath = "/reviews/launch-review.md";
+  // Relative on purpose, twice over: workspace writes resolve relative paths
+  // against the workspace's own directory (the only writable home for private
+  // files — absolute paths outside it and the /repos/** mounts are rejected),
+  // and the Docs app resolves a relative `path` param against the `workspace`
+  // param the same way.
+  const documentPath = "reviews/launch-review.md";
   using itx = await connectAdminItx(baseURL!);
   using project = itx.projects.get(slug);
   using workspace = project.workspaces.get(workspacePath);

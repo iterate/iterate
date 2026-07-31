@@ -15,6 +15,13 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "such as `GithubAiLinter`, `GuestbookApp`, and `TodoApp`; project-owned app source\n" +
       "lives under `apps/`, and the packaged linter reads editable policy from `rules/`.\n" +
       "\n" +
+      "The seeded repo also contains `AGENTS.md` (born with this file's content, then\n" +
+      "independent): `worker.ts` injects `AGENTS.md`'s contents into every agent's\n" +
+      "context automatically (at agent birth and again on every config-repo commit —\n" +
+      "see `#syncAgentsMdContext`). Write stable project facts into `AGENTS.md` and\n" +
+      "every agent learns them; keep it lean, because it rides every LLM request of\n" +
+      "every agent.\n" +
+      "\n" +
       "## Project lifecycle hooks\n" +
       "\n" +
       "The `processEvent` switch in `worker.ts` exposes the lifecycle events. Each\n" +
@@ -103,6 +110,13 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "default project worker (`fetch` plus `processEvent`). It declares packaged apps\n" +
       "such as `GithubAiLinter`, `GuestbookApp`, and `TodoApp`; project-owned app source\n" +
       "lives under `apps/`, and the packaged linter reads editable policy from `rules/`.\n" +
+      "\n" +
+      "The seeded repo also contains `AGENTS.md` (born with this file's content, then\n" +
+      "independent): `worker.ts` injects `AGENTS.md`'s contents into every agent's\n" +
+      "context automatically (at agent birth and again on every config-repo commit —\n" +
+      "see `#syncAgentsMdContext`). Write stable project facts into `AGENTS.md` and\n" +
+      "every agent learns them; keep it lean, because it rides every LLM request of\n" +
+      "every agent.\n" +
       "\n" +
       "## Project lifecycle hooks\n" +
       "\n" +
@@ -321,10 +335,87 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    return this.#docsApp.rpc;\n" +
       "  }\n" +
       "\n" +
+      "  /**\n" +
+      "   * STANDING AGENT CONTEXT — the pattern to copy for any always-on knowledge.\n" +
+      "   *\n" +
+      "   * Every agent in this project carries the config repo's AGENTS.md as a\n" +
+      "   * keyed context item: appended at agent birth, and re-synced to EVERY\n" +
+      "   * agent whenever a config-repo commit lands. Covered keyed context is\n" +
+      "   * append-only (an agent that already ran keeps old occurrences until\n" +
+      "   * compaction), so the sync appends ONLY on a real change — it reads each\n" +
+      "   * agent's current slot first, and a deleted AGENTS.md supersedes with a\n" +
+      "   * tombstone rather than lingering forever. The idempotency key is unique\n" +
+      "   * per TRANSITION (content hash + the occurrence it replaces): redeliveries\n" +
+      "   * dedupe, reverting to earlier content still supersedes, and an edited\n" +
+      "   * wrapper can never reuse a key with a different body.\n" +
+      "   * dont-trigger-request means this never wakes an agent by itself. This\n" +
+      "   * content rides every LLM request of every agent — keep AGENTS.md lean.\n" +
+      "   * (Known narrow race: an agent born while a commit's fan-out is running\n" +
+      "   * can end up one version behind until the next AGENTS.md change.)\n" +
+      "   */\n" +
+      "  async #syncAgentsMdContext(agentPaths: string[]): Promise<void> {\n" +
+      "    if (agentPaths.length === 0) return;\n" +
+      "    const itx = await this.itx;\n" +
+      "    const file = await itx.repo.readFile({ path: \"AGENTS.md\" });\n" +
+      "    const content =\n" +
+      "      file === null\n" +
+      "        ? \"(AGENTS.md was deleted from /repos/config — no standing project notes.)\"\n" +
+      "        : `Project AGENTS.md (auto-injected from /repos/config/AGENTS.md — commit updates there to teach every agent):\\n\\n${file.content}`;\n" +
+      "    const digest = await crypto.subtle.digest(\"SHA-256\", new TextEncoder().encode(content));\n" +
+      "    const hash = [...new Uint8Array(digest).slice(0, 8)]\n" +
+      "      .map((byte) => byte.toString(16).padStart(2, \"0\"))\n" +
+      "      .join(\"\");\n" +
+      "    const results = await Promise.allSettled(\n" +
+      "      agentPaths.map(async (path) => {\n" +
+      "        const agent = itx.agents.get(path);\n" +
+      "        const snapshot = await agent.processor.snapshot();\n" +
+      "        const slot = snapshot.state.contextItems.findLast(\n" +
+      "          (item) => item.payload.key === \"config/agents-md\",\n" +
+      "        );\n" +
+      "        if (slot?.payload.content === content) return;\n" +
+      "        await agent.append({\n" +
+      "          type: \"events.iterate.com/agents/context-added\",\n" +
+      "          idempotencyKey: `iterate/config/agents-md:${hash}:after-${slot?.offset ?? 0}`,\n" +
+      "          payload: {\n" +
+      "            content,\n" +
+      "            key: \"config/agents-md\",\n" +
+      "            llmRequestPolicy: { behaviour: \"dont-trigger-request\" },\n" +
+      "            // SYSTEM role on purpose: compaction keeps keyed system facts\n" +
+      "            // (collapsed to the latest occurrence) — a developer item would\n" +
+      "            // be dropped at the first compaction, and the unchanged-content\n" +
+      "            // re-sync would then dedupe against the birth append forever.\n" +
+      "            role: \"system\",\n" +
+      "          },\n" +
+      "        });\n" +
+      "      }),\n" +
+      "    );\n" +
+      "    // Attempt every agent before failing: the batch is redelivered\n" +
+      "    // at-least-once on a throw, and the per-transition keys turn retries of\n" +
+      "    // the agents that DID land into no-ops.\n" +
+      "    const failed = results.find((result) => result.status === \"rejected\");\n" +
+      "    if (failed !== undefined && failed.status === \"rejected\") throw failed.reason;\n" +
+      "  }\n" +
+      "\n" +
       "  // The base class delivers committed events on ANY stream here at least once and in\n" +
       "  // per-stream order.\n" +
       "  protected override async processEvent(event: StreamEvent): Promise<void> {\n" +
       "    switch (event.type) {\n" +
+      "      case \"events.iterate.com/agent/created\": {\n" +
+      "        // The birth event on the agent's own stream (copies carry\n" +
+      "        // source.copiedFrom and must not re-target the collection stream).\n" +
+      "        if (event.source?.copiedFrom !== undefined) break;\n" +
+      "        await this.#syncAgentsMdContext([event.path]);\n" +
+      "        break;\n" +
+      "      }\n" +
+      "      case \"events.iterate.com/repo/commit-completed\": {\n" +
+      "        // Any config-repo commit MAY have changed AGENTS.md — the sync's\n" +
+      "        // read-compare step turns the ones that didn't into no-ops.\n" +
+      "        if (event.path !== \"/repos/config\") break;\n" +
+      "        const itx = await this.itx;\n" +
+      "        const agents = await itx.agents.list();\n" +
+      "        await this.#syncAgentsMdContext(agents.map((agent) => agent.path));\n" +
+      "        break;\n" +
+      "      }\n" +
       "      case \"events.iterate.com/project/heartbeat-triggered\": {\n" +
       "        if (event.path !== \"/\") break;\n" +
       "        console.log(\"Project heartbeat fired\", { scheduleKey: event.payload?.scheduleKey });\n" +

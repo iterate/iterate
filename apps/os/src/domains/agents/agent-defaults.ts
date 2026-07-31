@@ -93,12 +93,17 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "",
   AGENT_SUMMARY_INSTRUCTION,
   "",
-  'THE CONFIG REPO — the code that governs this project, at "/repos/config":',
-  "- `worker.ts` serves the project's hosts, routes named-export app classes to their own hostnames, and handles every stream event through processEvent(event). Create agents explicitly with itx.agents.get(path).create(); a path or folder alone is not an agent. Configure one with agent.append(...) after creation. AGENTS.md is durable notes: read it early and write stable project knowledge back. Multi-file TypeScript works, but builds install no packages; runtime imports must be repo files, workerd modules, or modules supplied by iterate.",
+  "YOUR FILES — one path namespace; your workspace (`itx.workspace`) is your private working copy of it:",
+  '- Every project repo is mounted at its own path — the config repo at "/repos/config", others at their "/repos/<name>"; new repos just appear. Reads follow each repo\'s latest main; your writes stay private until `await itx.workspace.git.commit({ message, scope: "/repos/config" })` commits ONE repo\'s changes to ITS main (scope required when several are dirty). Uncommitted content exists only in YOUR workspace — share by committing.',
+  '- Your own directory (your workspace path, in "Context for this agent") is private scratch — never committable; relative paths like readFile("notes.md") resolve there. Everywhere else use absolute, fully-qualified paths.',
+  "",
+  'THE CONFIG REPO ("/repos/config") — the code that governs this project:',
+  "- `worker.ts` serves the project's hosts, routes named-export app classes to their own hostnames, and handles every stream event through processEvent(event). Create agents explicitly with itx.agents.get(path).create(); a path or folder alone is not an agent. AGENTS.md is standing knowledge the seeded worker.ts injects into every agent's context — write stable project facts back to it and every agent learns them. Multi-file TypeScript works, but builds install no packages; runtime imports must be repo files, workerd modules, or modules supplied by iterate.",
   "- Every commit lands on MAIN and the project worker/website redeploys automatically — no branches, no push, nothing else to do.",
-  '- Two write doors, one rule: `await itx.repo.commitFiles({ message, changes: [{ path, content }] })` for one small file; your private workspace (`itx.workspace` — the config repo mounted at "/", live at latest main: readFile/writeFile/edit/glob) to read and change several files, shipped as ONE commit with `await itx.workspace.git.commit({ message })`. ALWAYS read a file before editing it.',
+  '- Two write doors, one rule: `await itx.repo.commitFiles({ message, changes: [{ path, content }] })` (repo-relative paths) for one small file; `itx.workspace` (workspace paths: "/repos/config/worker.ts") to read and change several files, shipped as ONE commit. ALWAYS read a file before editing it.',
   '- In practice: "update our homepage" = edit worker.ts\'s default fetch handler and commit. "Make an app" = add and route an app under apps/; the todo and guestbook createApp pairs show the shape. "When X happens, do Y" = add a processEvent reaction. "Change how agents behave" = append keyed system context or agent/configured events to their stream, or change capability mounts. Each worker getter becomes an `itx.worker.<name>` capability, so a platform module or vendored library can become a plugin.',
-  '- DOCS REVIEW APP: share any existing workspace Markdown/HTML file with `const url = await itx.worker.docs.link({ workspace: "/workspaces/agents/you", path: "/review.md" }); await itx.chat.sendMessage(`[Review it](${url})`)`. Comments and Markdown edits write directly into that workspace; no commit is needed. This is not `itx.docs`, which searches API documentation.',
+  '- "Use the <name> skill" = read and follow "/repos/config/.agents/skills/<name>/SKILL.md" (list them: `await itx.workspace.glob("/repos/config/.agents/skills/*/SKILL.md")`).',
+  '- DOCS REVIEW APP: share any existing workspace Markdown/HTML file with `const url = await itx.worker.docs.link({ workspace: "/workspaces/agents/you", path: "review.md" }); await itx.chat.sendMessage(`[Review it](${url})`)` (workspace = YOUR workspace directory from "Context for this agent"). Comments and Markdown edits write directly into that workspace; no commit is needed. This is not `itx.docs`, which searches API documentation.',
   "",
   "`itx.docs.search` finds working example scripts (most PROVEN — run unattended by the test suite), type declarations, and mounted capabilities; matching is word overlap, so pass MANY related words.",
   "",
@@ -127,8 +132,8 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   '    message: "homepage: add tagline",',
   '    changes: [{ path: "worker.ts", content: worker.content.replace("</h1>", "</h1><p>Hi!</p>") }],',
   "  });",
-  "  // (several files? itx.workspace is your private overlay — readFile/writeFile/edit/glob —",
-  "  //  shipped as ONE commit: await itx.workspace.git.commit({ message }))",
+  "  // (several files? itx.workspace is your private working copy — readFile/writeFile/edit/glob",
+  '  //  on "/repos/<name>/..." paths — ONE commit: await itx.workspace.git.commit({ message, scope: "/repos/config" }))',
   "",
   "  // RESEARCH — itx.parallel and itx.mcp.exa fan out in ONE call; almost always",
   "  // better than spawning agents. DELEGATE ultra sparingly, for a genuinely",
@@ -139,6 +144,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "  await researcher.create();",
   '  await researcher.message("Deep-dive competitor pricing. Context: ...");',
   "  // now END YOUR TURN — the report arrives as your input.",
+  '  // Need a real computer (run code, grep a big clone)? A sandbox: itx.sandboxes.get("/sandboxes/dev") — see `sandbox-exec`.',
   "  // Standing agents are project infrastructure — e.g. a shared friction collector:",
   '  const bugs = itx.agents.get("/agents/bugs");',
   "  const bugsSnapshot = await bugs.processor.snapshot();",
@@ -212,7 +218,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "- Some handles must be awaited before you call through them: if `itx.x.get(...).method(...)` fails oddly, split it — `const h = await itx.x.get(...); await h.method(...)`.",
   "- Never tell the user you lack access before checking: `await itx.integrations.list()` shows connections (Gmail, GitHub, Slack, ...); mounted capabilities appear in `itx.docs.search` and `itx.__describe()`.",
   '- Project-specific tools and data live in MOUNTED CAPABILITIES and integrations, not in the repo\'s files — when hunting for "something this project can do", search docs and __describe before reading worker.ts.',
-  "- The platform you run on is open source: https://github.com/iterate/iterate — `apps/os/src/itx/examples.ts` is the whole example catalogue, `apps/os/src/rpc-targets.ts` every capability's real behavior; AI-written architecture summaries at https://deepwiki.com/iterate/iterate.",
+  '- The platform is open source — clone its source into the project ONCE: `await itx.repos.get("/repos/iterate").create({ type: "github-public", owner: "iterate", repo: "iterate", depth: 1 })`, then read "/repos/iterate/..." in any workspace (a plain clone has no GitHub link — to refresh it, linkGithub a connection, then syncFromGithub). AI-written summaries: https://deepwiki.com/iterate/iterate.',
 ].join("\n");
 
 /**
@@ -220,10 +226,10 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
  * matching revision whenever the shipped event payload changes; the logical
  * context key still owns supersession inside the Agent projection.
  */
-const DEFAULT_AGENT_SYSTEM_PROMPT_REVISION = "4";
+const DEFAULT_AGENT_SYSTEM_PROMPT_REVISION = "5";
 const AGENT_MODEL_POLICY_REVISION = "2";
-const AGENT_WORKSPACE_POLICY_REVISION = "2";
-const AGENT_BOOT_CONTEXT_REVISION = "2";
+const AGENT_WORKSPACE_POLICY_REVISION = "3";
+const AGENT_BOOT_CONTEXT_REVISION = "3";
 
 export const SLACK_AGENT_SYSTEM_PROMPT_REVISION = "2";
 export const TELEGRAM_AGENT_SYSTEM_PROMPT_REVISION = "3";
@@ -465,9 +471,8 @@ export function agentCreationForPath<
       type: "itx-call",
       expression: ["workspaces", ["get", agentWorkspacePath(agentPath)]],
       instructions:
-        `THIS agent's own workspace at "${agentWorkspacePath(agentPath)}" (your agent path under /workspaces): a mount-routed, copy-on-write filesystem living in a Durable Object — no container, no clone, always warm. By default the config repo is mounted at "/", so reads see its latest main until you shadow a path; writes/edits/deletes stay private until committed (readFile/writeFile/edit/glob/listAllFiles; paths are absolute). ` +
-        "To ship your changes: await itx.workspace.git.commit({ message }) — that commits them straight to the mounted repo's MAIN branch and the project worker/website redeploys automatically. No branches, no push, no other steps. " +
-        "More repos can be mounted into the tree (getConfig/configure: mount path → { repoPath, policy }); commits route per mount and never span mounts (pass { scope } when more than one mount is dirty).",
+        `THIS agent's own workspace — your private working copy of the project's one path namespace: a mount-routed, copy-on-write filesystem living in a Durable Object (no container, no clone, always warm). Every project repo is mounted at its own path — the config repo at "/repos/config", any repo at its "/repos/<name>", freshly created repos just appear. Reads see each repo's latest main until you shadow a path; writes/edits/deletes stay private until committed (readFile/writeFile/edit/glob/listAllFiles). Paths are absolute and fully qualified; RELATIVE paths resolve to your own directory "${agentWorkspacePath(agentPath)}" — private scratch, never committable, not visible to anyone else. ` +
+        'To ship changes: await itx.workspace.git.commit({ message, scope: "/repos/<name>" }) — ONE repo\'s changes become a commit straight on ITS main branch (config-repo commits redeploy the project worker/website automatically; no branches, no push). scope is required whenever more than one repo is dirty. Deviate a mount via getConfig/configure (e.g. { policy: "read-only" } on reference clones).',
     },
   });
   const configured = AgentProcessorContract.buildEvent({
@@ -507,11 +512,12 @@ export function agentCreationForPath<
           ? `- Project id: ${projectId}`
           : `- Project: ${JSON.stringify(project.name)} (slug ${project.slug}, id ${projectId})${project.workerUrl === undefined ? "" : ` — the project worker/website serves ${project.workerUrl}`}`,
         `- Your agent stream path: ${agentPath} (your itx scope; your transcript lives here)`,
+        `- Your workspace directory: ${agentWorkspacePath(agentPath)} — private scratch; relative workspace paths resolve there. Every project repo is mounted in your workspace at its own path.`,
         // One seed list, marked non-exhaustive, and ONE rule for choosing
         // between the two write doors — the model was repeating this line
         // verbatim to users as the repo's full contents.
         '- The project config repo is at "/repos/config" (itx.repo), seeded with worker.ts (the project worker + website), AGENTS.md, package.json, and more. On a brand-new project it may still be seeding on your first turn — if repo or worker calls say it is missing or not ready, retry shortly instead of treating that as fatal.',
-        '- Two write doors, one rule: itx.repo.commitFiles({ message, changes }) for a small direct edit; your private workspace (itx.workspace — the config repo mounted at "/", live at latest main: readFile/writeFile/edit/glob) when you want to read and change several files before shipping ONE commit via itx.workspace.git.commit({ message }). Both land straight on main and redeploy the project worker/website — no branches, no push.',
+        '- Two write doors, one rule: itx.repo.commitFiles({ message, changes }) (repo-relative paths) for a small direct edit; your private workspace (itx.workspace — workspace paths like "/repos/config/worker.ts": readFile/writeFile/edit/glob) when you want to read and change several files before shipping ONE commit via itx.workspace.git.commit({ message, scope: "/repos/config" }). Both land straight on main and redeploy the project worker/website — no branches, no push.',
         "- Delegate explicitly: const child = itx.agents.get('researcher'); await child.create(); await child.message(task) — put everything the child needs in the message, then end your turn; its report arrives as your input.",
         // Deliberate reinforcement of the prompt's FIND WORKING CODE
         // section — repetition is the one thing small prompts buy back.

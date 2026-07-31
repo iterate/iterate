@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   agentWorkspacePath,
+  effectiveWorkspaceMounts,
   normalizeWorkspaceMountKeys,
   normalizeWorkspacePath,
   workspaceCreationEvents,
@@ -14,7 +15,7 @@ describe("workspaceCreationEvents", () => {
       projectId: "prj_test",
     });
     const retryWithDifferentConfig = workspaceCreationEvents({
-      mounts: { "/": { policy: "read-only", repoPath: "/repos/config" } },
+      mounts: { "/cfg": { policy: "commit-to-main", repoPath: "/repos/config" } },
       path: "/workspaces/example",
       projectId: "prj_test",
     });
@@ -27,12 +28,84 @@ describe("workspaceCreationEvents", () => {
     expect(first.map((event) => event.idempotencyKey)).toEqual(
       retryWithDifferentConfig.map((event) => event.idempotencyKey),
     );
+    // created is a pure existence marker — mounts are not birth facts.
+    expect(first[0]?.payload).toEqual({});
     expect(first[1]?.payload).toEqual({
       config: {
         mounts: {
           "/cfg": { policy: "read-only", repoPath: "/repos/config" },
         },
       },
+    });
+  });
+
+  test("omits the configured patch entirely when no initial overlay is supplied", () => {
+    const events = workspaceCreationEvents({
+      path: "/workspaces/example",
+      projectId: "prj_test",
+    });
+    expect(events.map((event) => event.type)).toEqual([
+      "events.iterate.com/workspace/created",
+      "events.iterate.com/stream/subscription-configured",
+    ]);
+    expect(events[0]?.payload).toEqual({});
+  });
+});
+
+describe("effectiveWorkspaceMounts", () => {
+  test("derives every canonical repo path as its own commit-to-main mount", () => {
+    expect(effectiveWorkspaceMounts(["/repos/config", "/repos/iterate"], {})).toEqual({
+      "/repos/config": { policy: "commit-to-main", repoPath: "/repos/config" },
+      "/repos/iterate": { policy: "commit-to-main", repoPath: "/repos/iterate" },
+    });
+  });
+
+  test("a partial overlay at a derived path deviates just those fields", () => {
+    expect(
+      effectiveWorkspaceMounts(["/repos/big", "/repos/config"], {
+        "/repos/big": { policy: "read-only" },
+      }),
+    ).toEqual({
+      "/repos/big": { policy: "read-only", repoPath: "/repos/big" },
+      "/repos/config": { policy: "commit-to-main", repoPath: "/repos/config" },
+    });
+  });
+
+  test("a complete overlay mounts a repo at an extra path", () => {
+    expect(
+      effectiveWorkspaceMounts(["/repos/config"], {
+        "/vendor": { policy: "read-only", repoPath: "/repos/vendor" },
+      }),
+    ).toEqual({
+      "/repos/config": { policy: "commit-to-main", repoPath: "/repos/config" },
+      "/vendor": { policy: "read-only", repoPath: "/repos/vendor" },
+    });
+  });
+
+  test("non-canonical repo paths never derive a mount", () => {
+    expect(effectiveWorkspaceMounts(["/repos/", "/secrets/a", "/repos/a/../b"], {})).toEqual({});
+  });
+
+  test("an incomplete overlay at a non-derived path is dropped, not thrown", () => {
+    // This also runs under reduced state, where a raw append may have stored
+    // any partial deviation — the configure door is the loud gate.
+    expect(
+      effectiveWorkspaceMounts(["/repos/config"], { "/new": { policy: "read-only" } }),
+    ).toEqual({
+      "/repos/config": { policy: "commit-to-main", repoPath: "/repos/config" },
+    });
+  });
+
+  test('a complete "/" overlay never revives a root mount', () => {
+    // The doors reject "/", but a raw-appended (or legacy) overlay reduces
+    // tolerantly — the derivation must still keep the root out of the live
+    // table, or the abolished root mount returns through the back door.
+    expect(
+      effectiveWorkspaceMounts(["/repos/config"], {
+        "/": { policy: "commit-to-main", repoPath: "/repos/config" },
+      }),
+    ).toEqual({
+      "/repos/config": { policy: "commit-to-main", repoPath: "/repos/config" },
     });
   });
 });
@@ -77,6 +150,12 @@ describe("normalizeWorkspaceMountKeys", () => {
     ).toEqual({ "/config": { policy: "commit-to-main", repoPath: "/repos/config" } });
   });
 
+  test('rejects the "/" mount point — the workspace root is the project namespace', () => {
+    expect(() =>
+      normalizeWorkspaceMountKeys({ "/": { policy: "commit-to-main", repoPath: "/repos/config" } }),
+    ).toThrow(/mount path "\/" is not allowed/);
+  });
+
   test("rejects .git segments, colliding spellings, and non-repo repoPaths", () => {
     expect(() =>
       normalizeWorkspaceMountKeys({ "/a/.git": { policy: "read-only", repoPath: "/repos/a" } }),
@@ -92,7 +171,7 @@ describe("normalizeWorkspaceMountKeys", () => {
     ).toThrow(/must name a \/repos\/\*\* stream/);
   });
 
-  test("passes null (unmount) and repoPath-less patch values through", () => {
+  test("passes null (clear) and repoPath-less patch values through", () => {
     expect(normalizeWorkspaceMountKeys({ "/a": null })).toEqual({ "/a": null });
     expect(normalizeWorkspaceMountKeys({ "/a": { policy: "read-only" } })).toEqual({
       "/a": { policy: "read-only" },

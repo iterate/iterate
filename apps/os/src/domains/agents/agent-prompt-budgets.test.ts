@@ -34,7 +34,12 @@ const CHARS_PER_TOKEN = 4;
 // 3600 → 3800 (2026-07-18): summary became an event-first lifecycle with
 // mandatory first-turn title, second-turn activity, and final-turn waiting.
 // Three short code patterns keep the lifecycle concrete.
-const DEFAULT_PROMPT_TOKEN_CEILING = 3_800;
+// 3800 → 4100 (2026-07-30): the workspace became a private working copy of
+// the project's one path namespace (every repo mounted at its /repos/** path,
+// scratch under the workspace's own path) — an explicit product ask that
+// rewrote every path the prompt teaches and added three one-line teaches:
+// clone-your-own-source, skills discovery, and scoped commits.
+const DEFAULT_PROMPT_TOKEN_CEILING = 4_100;
 
 const AGENT_PROMPTS: Record<string, string> = {
   default: DEFAULT_AGENT_SYSTEM_PROMPT,
@@ -65,7 +70,7 @@ test(`the default prompt stays under ${DEFAULT_PROMPT_TOKEN_CEILING} tokens`, ()
 
 test("the default prompt teaches agents to share workspace files through Docs", () => {
   expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain(
-    'itx.worker.docs.link({ workspace: "/workspaces/agents/you", path: "/review.md" })',
+    'itx.worker.docs.link({ workspace: "/workspaces/agents/you", path: "review.md" })',
   );
   expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("Comments and Markdown edits write directly");
   expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain(

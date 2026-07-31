@@ -15,7 +15,7 @@ export function DeepLinkEmptyState() {
         <div className="mt-5 rounded-lg border bg-muted/30 p-3 font-mono text-xs leading-relaxed text-muted-foreground">
           ?workspace=/workspaces/agents/reviewer
           <br />
-          &amp;path=/reviews/launch-plan.md
+          &amp;path=review.md
         </div>
       </div>
     </main>
