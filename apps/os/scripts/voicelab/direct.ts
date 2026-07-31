@@ -36,11 +36,13 @@ export interface DirectOptions {
   say2AfterMs?: number;
   /** Simulated bad network at the client's transport touchpoints (same syntax as `client`). */
   impair?: string;
+  /** WebSocket endpoint override — point at a proxy speaking the Grok realtime protocol. */
+  url?: string;
 }
 
 export async function direct(options: DirectOptions = {}) {
-  const apiKey = process.env.XAI_API_KEY?.trim();
-  if (!apiKey) throw new Error("XAI_API_KEY is required.");
+  const apiKey = process.env.XAI_API_KEY?.trim() ?? "";
+  if (!apiKey && !options.url) throw new Error("XAI_API_KEY is required (or pass --url).");
   const turnsTarget = options.turns ?? (options.mic ? 0 : options.say2 ? 2 : 1);
   const impair = createImpairment(parseImpairSpec(options.impair));
   if (impair.describe) console.error(`direct: impairment ${impair.describe}`);
@@ -60,6 +62,7 @@ export async function direct(options: DirectOptions = {}) {
   const mic = new MicSource(syntheticPcmPath ? { syntheticPcmPath } : {});
   const grok = new GrokClient({
     apiKey,
+    ...(options.url ? { url: options.url } : {}),
     ...(options.model ? { model: options.model } : {}),
     ...(options.voice ? { voice: options.voice } : {}),
     reasoningEffort: options.effort === "high" ? "high" : "none",
@@ -165,7 +168,8 @@ export async function direct(options: DirectOptions = {}) {
 
   const utteranceEnd = mic.utteranceEnds[0] ?? mic.utteranceEndAt;
   const summary = {
-    role: "direct",
+    role: options.url ? "ws-proxy" : "direct",
+    ...(options.url ? { url: options.url } : {}),
     model: grok.options.model,
     config: {
       effort: grok.options.reasoningEffort,

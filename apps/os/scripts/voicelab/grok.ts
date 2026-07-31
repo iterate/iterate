@@ -11,6 +11,8 @@ export const DEFAULT_GROK_MODEL = "grok-voice-think-fast-2.0";
 /** Options for {@link GrokClient}. */
 export interface GrokClientOptions {
   apiKey: string;
+  /** WebSocket endpoint override (a proxy speaking the Grok realtime protocol). */
+  url?: string;
   model?: string;
   voice?: string;
   instructions?: string;
@@ -28,7 +30,10 @@ export interface GrokClientOptions {
  * (every parsed JSON event), `close`, `error`.
  */
 export class GrokClient extends EventEmitter {
-  readonly options: Required<Omit<GrokClientOptions, "apiKey">> & { apiKey: string };
+  readonly options: Required<Omit<GrokClientOptions, "apiKey" | "url">> & {
+    apiKey: string;
+    url?: string;
+  };
   ready = false;
   private ws: WebSocket | undefined;
 
@@ -51,8 +56,9 @@ export class GrokClient extends EventEmitter {
 
   connect(): this {
     const o = this.options;
-    this.ws = new WebSocket(`wss://api.x.ai/v1/realtime?model=${o.model}`, {
-      headers: { Authorization: `Bearer ${o.apiKey}` },
+    const url = o.url ?? `wss://api.x.ai/v1/realtime?model=${o.model}`;
+    this.ws = new WebSocket(url, {
+      headers: o.apiKey === "" ? {} : { Authorization: `Bearer ${o.apiKey}` },
       perMessageDeflate: false,
     });
     this.ws.on("open", () => {
