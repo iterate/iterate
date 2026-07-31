@@ -282,6 +282,7 @@ describe("Cloudflare control plane", () => {
   });
 
   it("does not re-delete Workers already absent during a later Artifact batch", async () => {
+    const onProgress = vi.fn();
     const fetch = vi.fn<typeof globalThis.fetch>((request, init) => {
       const url = new URL(String(request));
       const method = request instanceof Request ? request.method : init?.method;
@@ -302,6 +303,7 @@ describe("Cloudflare control plane", () => {
       makeCloudflareControlPlane({
         accountId: "account-id",
         apiToken: "api-token",
+        onProgress,
       }).destroyWranglerResources({
         workerNames: ["worker-one", "worker-two"],
         osWorkerName: "os",
@@ -313,6 +315,13 @@ describe("Cloudflare control plane", () => {
         new URL(String(request)).pathname.includes("/workers/scripts/worker-"),
       ),
     ).toHaveLength(0);
+    expect(onProgress).toHaveBeenCalledWith({
+      id: "wrangler-workers",
+      type: "Wrangler Workers",
+      status: "deleted",
+      message:
+        "Deleted 0 Workers; verified all 2 Workers and their Durable Object namespaces absent.",
+    });
   });
 
   it("cursor-paginates Artifact repos and deletes each one exactly once", async () => {

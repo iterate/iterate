@@ -401,6 +401,7 @@ export function makeCloudflareControlPlane(input: {
             }
           }
           const workerNames = new Set(workers.flatMap(({ id }) => (id ? [id] : [])));
+          let deletedWorkers = 0;
 
           // Keep Worker teardown sequential because this endpoint is
           // rate-limited per API user.
@@ -413,6 +414,7 @@ export function makeCloudflareControlPlane(input: {
               message: `Deleting ${index + 1}/${destroyInput.workerNames.length}: ${workerName}.`,
             });
             yield* destroyWorker(workerName, namespaceClasses, workerNames.has(workerName));
+            deletedWorkers += 1;
           }
 
           const targets = new Set(destroyInput.workerNames);
@@ -455,7 +457,7 @@ export function makeCloudflareControlPlane(input: {
             id: "wrangler-workers",
             type: "Wrangler Workers",
             status: "deleted",
-            message: `Deleted ${destroyInput.workerNames.length} Workers and their Durable Object namespaces.`,
+            message: `Deleted ${deletedWorkers} Workers; verified all ${destroyInput.workerNames.length} Workers and their Durable Object namespaces absent.`,
           });
 
           return destroyInput.osWorkerName === undefined
