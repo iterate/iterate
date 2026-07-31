@@ -15,7 +15,7 @@ import { app } from "./app.ts";
 import { sha256hex } from "./hash.ts";
 import { mcpHandler } from "./mcp.ts";
 
-export default new OAuthProvider<Env>({
+const provider = new OAuthProvider<Env>({
   apiRoute: "/mcp", // the ONLY OAuth-protected boundary
   apiHandler: mcpHandler,
   defaultHandler: app, // login + session + /authorize consent + console + CIMD test-client doc
@@ -42,3 +42,20 @@ export default new OAuthProvider<Env>({
     };
   },
 });
+
+// WIDE-OPEN topology (LOGIN_MODE=open, the Raspberry-Pi floor): the box has no OAuth, so `/mcp` must be
+// TOKENLESS — we short-circuit before the provider's apiRoute would 401, running the MCP server with the
+// single anonymous identity. Every other mode goes through the provider unchanged.
+export default {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    if ((env.LOGIN_MODE ?? "email") === "open" && new URL(request.url).pathname === "/mcp") {
+      (ctx as ExecutionContext & { props: unknown }).props = {
+        sub: "user_anonymous",
+        email: "anonymous",
+        grants: [],
+      };
+      return mcpHandler.fetch(request, env, ctx);
+    }
+    return provider.fetch(request, env, ctx);
+  },
+};
