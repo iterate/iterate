@@ -108,7 +108,10 @@ export async function openResilientConnection(
       current = next;
       currentBatches = 0;
       lastBatchAt = Date.now();
-      if (lastSeenOffset < 0) lastSeenOffset = next.streamMaxOffset;
+      // NOTE: handle.streamMaxOffset is typed but does not materialize as a
+      // number across the wire — never use it. The offset cursor advances
+      // only from delivered events; until the first one, reopens start at
+      // head (correct for ephemeral traffic).
       previous?.close();
     } catch (error) {
       note(`reopen failed: ${error instanceof Error ? error.message : String(error)}`);

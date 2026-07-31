@@ -11,6 +11,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path_ from "node:path";
 import process from "node:process";
+import WebSocket from "ws";
 import { MicSource, PlayoutBuffer, percentiles, BYTES_PER_SEC } from "./audio.ts";
 import { connectProject, type VoicelabConnectOptions } from "./connect.ts";
 import { createImpairment, parseImpairSpec } from "./impair.ts";
@@ -44,6 +45,12 @@ export interface ClientOptions extends VoicelabConnectOptions {
   say2AfterMs?: number;
   /** Simulated bad network at the client's transport touchpoints, e.g. "tx=40,rx=40,jitter=60,stallEveryMs=7000,stallMs=400". */
   impair?: string;
+  /**
+   * Worker-bridge mode: wss URL of the project's voice app
+   * (wss://voice--<slug>.<base>/). Opens the anchor socket that starts the
+   * userspace VoiceBridge DO instead of relying on a running node bridge.
+   */
+  workerUrl?: string;
 }
 
 export async function client(options: ClientOptions) {
@@ -218,9 +225,33 @@ export async function client(options: ClientOptions) {
       ...(options.model ? { model: options.model } : {}),
       ...(options.voice ? { voice: options.voice } : {}),
       effort: options.effort === "high" ? "high" : "none",
+      bridge: options.workerUrl ? "worker" : "node",
     },
   });
   console.error(`client: call-requested on ${streamPath} (callId=${callId})`);
+
+  // Worker-bridge mode: the anchor socket starts (and keeps alive) the
+  // userspace VoiceBridge DO. It carries no audio.
+  let anchor: WebSocket | null = null;
+  let anchorPingTimer: NodeJS.Timeout | null = null;
+  if (options.workerUrl) {
+    const anchorUrl = new URL(options.workerUrl);
+    anchorUrl.searchParams.set("mode", "bridge");
+    anchorUrl.searchParams.set("path", streamPath);
+    anchorUrl.searchParams.set("callId", callId);
+    anchorUrl.searchParams.set("effort", options.effort === "high" ? "high" : "none");
+    if (options.model) anchorUrl.searchParams.set("model", options.model);
+    if (options.voice) anchorUrl.searchParams.set("voice", options.voice);
+    anchor = new WebSocket(anchorUrl.toString());
+    anchor.on("open", () => console.error("client: worker anchor socket connected"));
+    anchor.on("close", (code: number) => console.error(`client: worker anchor closed (${code})`));
+    anchor.on("error", (error: Error) =>
+      console.error(`client: worker anchor error: ${error.message}`),
+    );
+    anchorPingTimer = setInterval(() => {
+      if (anchor?.readyState === WebSocket.OPEN) anchor.send("ka");
+    }, 20_000);
+  }
 
   const acceptDeadline = Date.now() + 20_000;
   while (!accepted) {
@@ -271,10 +302,12 @@ export async function client(options: ClientOptions) {
 
   await finished;
   clearInterval(pingTimer);
+  if (anchorPingTimer) clearInterval(anchorPingTimer);
   mic.stop();
   playout.stop();
   fireAppend({ type: "voicelab/call-ended", payload: { callId, reason: "client done" } });
   await new Promise((resolve) => setTimeout(resolve, 300));
+  anchor?.close();
   connection.close();
 
   const utteranceEnd = mic.utteranceEnds[0] ?? mic.utteranceEndAt;
@@ -286,6 +319,7 @@ export async function client(options: ClientOptions) {
       framesPerAppend,
       effort: options.effort === "high" ? "high" : "none",
       synthetic: !options.mic,
+      bridge: options.workerUrl ? "worker" : "node",
       ...(impair.describe === null ? {} : { impairment: impair.describe }),
     },
     micFramesSent,
