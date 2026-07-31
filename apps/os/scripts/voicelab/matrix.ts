@@ -52,6 +52,7 @@ interface RunRow {
   appendErrors?: number;
   transcriptOk?: boolean;
   bargeReactionMs?: number | null;
+  userTranscript?: string;
 }
 
 export async function matrix(options: MatrixOptions) {
@@ -275,5 +276,6 @@ async function executeRun(
       typeof userTranscript === "string" &&
       /capital of france|count.*(thirty|30)|two plus two/i.test(userTranscript),
     bargeReactionMs: bargeIn?.reactionMs ?? null,
+    userTranscript: typeof userTranscript === "string" ? userTranscript.slice(0, 120) : undefined,
   };
 }
