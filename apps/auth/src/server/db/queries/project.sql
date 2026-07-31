@@ -21,13 +21,17 @@ WHERE id = :id
 LIMIT 1;
 
 /** @name getProjectAccessForUser */
+-- Anchored on the USER, not the project: admin-lane projects (created through
+-- the deployment admin secret) have no directory row at all, and a platform
+-- admin's role must still be visible for them — anchoring on project made
+-- every such project invisible to project-app auth for everyone.
 SELECT u.role AS userRole,
   CASE WHEN m.id IS NULL THEN 0 ELSE 1 END AS hasMembership
-FROM project p
-JOIN user u ON u.id = :userId
+FROM user u
+LEFT JOIN project p ON p.id = :projectId
 LEFT JOIN member m ON m.organizationId = p.organization_id
   AND m.userId = u.id
-WHERE p.id = :projectId
+WHERE u.id = :userId
 LIMIT 1;
 
 /** @name getProjectWithOrganizationBySlug */

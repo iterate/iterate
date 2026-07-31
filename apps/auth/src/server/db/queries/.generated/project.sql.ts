@@ -87,17 +87,17 @@ export namespace getProjectById {
 const getProjectAccessForUserSql = `
 SELECT u.role AS userRole,
   CASE WHEN m.id IS NULL THEN 0 ELSE 1 END AS hasMembership
-FROM project p
-JOIN user u ON u.id = ?
+FROM user u
+LEFT JOIN project p ON p.id = ?
 LEFT JOIN member m ON m.organizationId = p.organization_id
   AND m.userId = u.id
-WHERE p.id = ?
+WHERE u.id = ?
 LIMIT 1;
 `.trim();
 const getProjectAccessForUserQuery = (params: getProjectAccessForUser.Params) => ({
   name: "getProjectAccessForUser",
   sql: getProjectAccessForUserSql,
-  args: [params.userId, params.projectId],
+  args: [params.projectId, params.userId],
 });
 
 export const getProjectAccessForUser = Object.assign(
@@ -115,8 +115,8 @@ export const getProjectAccessForUser = Object.assign(
 
 export namespace getProjectAccessForUser {
   export type Params = {
-    userId: string;
     projectId: string;
+    userId: string;
   };
   export type Result = {
     userRole?: string;

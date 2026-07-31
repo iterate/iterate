@@ -250,9 +250,22 @@ describe("private auth project directory", () => {
       { projectId: "prj_banana", userId: "usr_jonas" },
       fakeDb((query) => {
         assert.equal(query.name, "getProjectAccessForUser");
-        assert.deepEqual(query.args, ["usr_jonas", "prj_banana"]);
+        assert.deepEqual(query.args, ["prj_banana", "usr_jonas"]);
         return [{ userRole: "admin", hasMembership: 0 }];
       }),
+    );
+
+    assert.equal(canAccess, true);
+  });
+
+  it("lets platform admins access admin-lane projects that have no directory row", async () => {
+    // The access query anchors on the USER row: a project created through the
+    // deployment admin secret never registers in this directory, and before
+    // the reanchoring that made it invisible to project-app auth for
+    // EVERYONE — the admin role must carry regardless of a project row.
+    const canAccess = await userCanAccessProject(
+      { projectId: "prj_created_via_admin_api", userId: "usr_jonas" },
+      fakeDb(() => [{ userRole: "admin", hasMembership: 0 }]),
     );
 
     assert.equal(canAccess, true);
