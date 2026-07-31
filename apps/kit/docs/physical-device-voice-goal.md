@@ -80,6 +80,12 @@ cleanup project:
       `origin/backup/c-capabilities-full-checkpoint-20260730T2345Z` at
       `a0c54771d7b92991387eef7644234c57e0529440`. It is explicitly a backup, not
       a finished-code claim.
+- [x] Make a second complete checkpoint after landing the deployed Stick
+      slice. All tracked changes and untracked evidence/build files were
+      committed as `9f89dd87e57f06622162404eec3e2b519da92f95` and the remote ref
+      `origin/backup/c-capabilities-stick-production-20260731` was verified on
+      2026-08-01. This remains a recovery checkpoint, not a merge or a claim
+      that the StackChan/Home Assistant slices are finished.
 - [ ] Continue the existing proof autonomously: turn every new physical defect
       into a red test, retain exact acoustic/resource evidence, apply only bounded
       simplifications supported by that evidence, and do not merge.

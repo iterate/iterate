@@ -492,3 +492,6 @@ audio order.
 - Complete remote recovery checkpoint:
   `origin/backup/c-capabilities-full-checkpoint-20260730T2345Z` at
   `a0c54771d7b92991387eef7644234c57e0529440`
+- Complete deployed-slice recovery checkpoint:
+  `origin/backup/c-capabilities-stick-production-20260731`; verified content
+  commit `9f89dd87e57f06622162404eec3e2b519da92f95`
