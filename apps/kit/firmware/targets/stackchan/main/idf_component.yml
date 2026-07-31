@@ -3,5 +3,10 @@ dependencies:
     version: ">=5.4,<5.5"
   espressif/m5stack_core_s3:
     version: "==3.0.2"
+    # Component Manager resolves this relative to this manifest before IDF's
+    # managed-component discovery. The explicit source choice prevents a clean
+    # build from silently compiling the pristine registry BSP and dropping the
+    # Iterate DMA/AEC seam merely because component enumeration order changed.
+    override_path: ../../../platforms/iterate_esp_idf/idf_overrides/espressif__m5stack_core_s3
   espressif/esp-sr:
     version: "==2.4.7"
