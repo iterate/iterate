@@ -157,9 +157,9 @@ The main code movement is:
   one typed Distilled teardown module, and the required container bootstrap;
 - use only the generated root lockfile.
 
-The PR's roughly +4.8k net headline is mostly generated dependency metadata:
+The PR's roughly +5.3k net headline is mostly generated dependency metadata:
 the root lock accounts for +2,658 net lines. Excluding the lock and this task
-record, application, workflow, and documentation changes are +1,819 net while
+record, application, workflow, and documentation changes are +2,219 net while
 replacing the old reset/recovery system and adding the lifecycle API plus
 dashboard.
 
@@ -311,6 +311,33 @@ state for the same operation ID, never a transport status, error substring,
 resource failure, old restart record, or lease abort, and the existing
 100-operation ceiling still bounds it.
 
+A subsequent production-shaped drain crossed both clients' original one-hour
+bearer lifetime without interruption. The original process opened manager
+batch eleven after the boundary, then renewed its exact Semaphore token at
+00:55:24Z and extended the lease to 03:55:24Z. Semaphore telemetry recorded
+29/29 HTTP 200 responses and no non-200 response during that first hour. This
+proves the per-connection/per-request minting in the real lifecycle path in
+addition to its time-advanced unit test.
+
+The same run completed the historical `preview_7` drain in 9,135.4s
+(2h32m15s), including 25 full bounded operations and a final 458-repository
+operation. Exact-token renewal remained uninterrupted through the final phase,
+the final renewal and release both succeeded, and manager lifecycle settled
+`empty`. Full-run env-manager telemetry contained 25,464 HTTP 202, 551 HTTP
+200, and 418 HTTP 404 outbound spans, with zero 401/403/409/429/5xx. The 404s
+were the fully explained behavior of the then-deployed build rechecking eight
+already deleted Workers before each Artifact batch. Final code inventories
+Workers and namespaces first and skips those calls. Semaphore recorded 67 HTTP
+200 and no other response or error event.
+
+There was one error event at the start of that run: Cloudflare moved the
+Durable Object from the previous Worker version at 23:55:24Z, trace
+`ac29b9c4022492480a7a9c3596195cb4`. The manager durably classified the exact
+operation as `restarted while destroying`; the caller re-inventoried under the
+same live lease and continued. There were no later error events. This is the
+single modeled restart continuation described above, not a generic transport
+retry.
+
 ## Proof and rollout
 
 Use reserved `preview_18` and `preview_19` as disposable proof stages:
@@ -395,6 +422,63 @@ Final lifecycle-review proof on reserved `preview_18` and PR-owned
   rows to the canonical seventeen claimable rows. `preview_18` and
   `preview_19` remain compiled, disposable env-manager proof stages but are
   physically absent from Semaphore, not merely filtered during acquisition.
+
+Post-review manager build `7a7f9136-e909-41a0-af5a-f01318ba5eea` deployed and
+passed its health smoke. On that build:
+
+- `preview_18` again proved its local manifest absent while remote destroy was
+  still active, then settled `empty` in 13.97s after the deployment handoff.
+  The immediate first call had failed explicitly in 4.29s while Cloudflare
+  moved the named Durable Object to the new Worker version; it retained no
+  manifest and was not normalized as lifecycle success.
+- Fresh Alchemy creation took 6.19s. The exact no-op apply took 1.68s and
+  retained byte-identical SHA-256
+  `5b94bb5466fa3c2627ae148976aab950d03f71029da7bd133be08735ac95ec8f`
+  plus identical D1/KV IDs. A whole-environment check then correctly named the
+  eight absent Wrangler Workers because this reserved-slot step intentionally
+  provisioned only the Alchemy stack; full Worker-inclusive proof belongs to
+  preview CI.
+- Destroy after that create took 12.33s and a repeat-empty destroy took 11.09s.
+  Both settled `empty` and the local manifest remained absent.
+- The repeat-empty run exposed inaccurate progress wording: it verified eight
+  Workers absent without deleting them but reported all eight deleted. Final
+  code now counts actual deletions and reports both that count and the
+  verified-absent total; its regression test asserts zero Worker delete calls
+  and the exact progress record.
+
+The final manager build `41cfe873-ff55-4901-ac52-d998536b221b` then deployed
+and passed its health smoke. Reserved `preview_19` supplied an independent
+historical-leak proof:
+
+- The local manifest was absent while teardown ran. Six full bounded
+  1,000-repository operations plus a final 751-repository operation deleted
+  6,751 Artifact repositories. The same CLI invocation then destroyed the
+  canonical Alchemy stack and settled lifecycle `empty` in 2,332.98s
+  (38m52.98s).
+- The first repeat started 22 seconds after Worker upload, while Cloudflare was
+  still moving the named Durable Object: telemetry contained both old
+  `7a7f9136…` and new `41cfe873…` versions. It succeeded in 11.62s but retained
+  the old progress wording, so it is not claimed as final-code proof.
+- At 102 seconds after upload, the repeat ran entirely on `41cfe873…`, took
+  11.72s, and correctly reported `Deleted 0 Workers; verified all 8 Workers
+  and their Durable Object namespaces absent.` Canonical state remained
+  `empty`, its Artifact inventory was empty, and the local manifest remained
+  absent.
+- A separate authenticated Cloudflare API audit found zero matching Workers,
+  Durable Object namespaces, container applications, old D1/KV/R2 identities,
+  or Artifact repositories.
+- The exact final window, 2026-07-31 03:12:40–03:13:15Z in account
+  `376ef7ed81b0573f93524de763666c15`, contained 51 env-manager telemetry
+  events (47 `otel`, four `cloudflare-workers`), all `info` and all on version
+  `41cfe873…`. Every one of 18 HTTP response spans was 200; there were no
+  error events or 4xx/5xx. Trace `3c385cf79613d8982d14a3ec5db3d97d`
+  contained the 9.77s environment operation with 44 spans and no missing
+  parents. Its native Durable Object `GET` outlived Cloudflare's 12ms
+  `durable_object_subrequest` handoff span; that parent represents the
+  dispatch, not the WebSocket operation lifetime, and no application semantic
+  span contract was violated. The two `canceled` and two
+  `responseStreamDisconnected` presentations are the duplicated normal
+  Cap'n Web client-close outcomes and remained outside the error signal.
 
 ## Acceptance criteria
 
