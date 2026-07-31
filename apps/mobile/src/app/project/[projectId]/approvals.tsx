@@ -584,9 +584,16 @@ function ThreadContextLine({
       }
       return threadContextForScriptRun(events, { executionId });
     },
-    staleTime: Infinity,
+    // Cache forever only once the fold window is CLOSED (the run's settle
+    // event was in view) — then the result, status or null, is immutable.
+    // Before that it is provisional: agents Promise.all their status append
+    // with the work itself, so a held approval can render this card before
+    // the status lands; a forever-cached premature null would never heal.
+    staleTime: (query) => (query.state.data?.settled ? Infinity : 5_000),
+    refetchInterval: (query) => (query.state.data?.settled ? false : 5_000),
   });
-  if (!context.data) return null;
+  const status = context.data?.status;
+  if (!status) return null;
   return (
     <Pressable
       accessibilityRole="link"
@@ -600,7 +607,7 @@ function ThreadContextLine({
     >
       <Text style={styles.threadContextText}>
         <Text style={styles.threadContextName}>{streamPath.replace(/^\/agents\//, "")}</Text>
-        {` · ${[context.data.title, context.data.activity].filter(Boolean).join(" — ")}`}
+        {` · ${[status.title, status.activity].filter(Boolean).join(" — ")}`}
       </Text>
     </Pressable>
   );

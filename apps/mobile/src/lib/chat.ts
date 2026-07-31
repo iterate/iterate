@@ -71,13 +71,22 @@ export const SCRIPT_RUN_SETTLED_TYPE = "events.iterate.com/capability-host/scrip
  * just before its held fetch counts (it lands AFTER the run-requested
  * offset); a later turn's status (after this run settled) does not; an
  * unsettled run has no upper bound — whatever status it is writing is still
- * its own. Null when no status field was ever set: statusless threads get no
+ * its own. A null status means no field was ever set: statusless runs get no
  * context line at all, deliberately.
+ *
+ * `settled` is the caller's caching contract: once the run's own settle
+ * event is in view the fold window is closed and the result — status OR
+ * null — is immutable. Until then the result is provisional: agents
+ * Promise.all the status append with the work itself, so a held approval
+ * can be observed (and this fold computed) before the status lands.
  */
 export function threadContextForScriptRun(
   events: StreamEvent[],
   run: { executionId: string },
-): { title: string | null; activity: string | null } | null {
+): {
+  settled: boolean;
+  status: { title: string | null; activity: string | null } | null;
+} {
   // StreamEvent.payload is over-the-wire JSON (`any`): the event-type
   // discriminator selects the vocabulary, but TypeScript cannot narrow
   // payload from `type`, so both reads below cast to the field subset they
@@ -104,7 +113,10 @@ export function threadContextForScriptRun(
       activity = payload.activity || null;
     }
   }
-  return title !== null || activity !== null ? { title, activity } : null;
+  return {
+    settled: settle !== undefined,
+    status: title !== null || activity !== null ? { title, activity } : null,
+  };
 }
 
 /**

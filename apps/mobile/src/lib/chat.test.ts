@@ -70,8 +70,8 @@ test("setStatus then a held fetch: the status shows while the run is still parke
     { executionId: "run-a" },
   );
   expect(context).toEqual({
-    title: "Refund sweep",
-    activity: "Emailing customers about refunds",
+    settled: false,
+    status: { title: "Refund sweep", activity: "Emailing customers about refunds" },
   });
 });
 
@@ -84,7 +84,7 @@ test("another run's settlement does not bound this run's fold", () => {
     ],
     { executionId: "run-a" },
   );
-  expect(context).toMatchObject({ title: "Refund sweep" });
+  expect(context).toMatchObject({ settled: false, status: { title: "Refund sweep" } });
 });
 
 test("a later turn's status is not this run's context — the run's settlement bounds the fold", () => {
@@ -97,7 +97,10 @@ test("a later turn's status is not this run's context — the run's settlement b
     ],
     { executionId: "run-a" },
   );
-  expect(context).toEqual({ title: "Refund sweep", activity: "Emailing customers" });
+  expect(context).toEqual({
+    settled: true,
+    status: { title: "Refund sweep", activity: "Emailing customers" },
+  });
 });
 
 test("status fields fold independently: an activity-only update keeps the standing title", () => {
@@ -108,9 +111,8 @@ test("status fields fold independently: an activity-only update keeps the standi
     ],
     { executionId: "run-a" },
   );
-  expect(context).toEqual({
-    title: "Refund sweep",
-    activity: "Emailing customers about refunds",
+  expect(context).toMatchObject({
+    status: { title: "Refund sweep", activity: "Emailing customers about refunds" },
   });
 });
 
@@ -122,17 +124,28 @@ test("an explicit null clears a status field, matching the summary vocabulary", 
     ],
     { executionId: "run-a" },
   );
-  expect(context).toEqual({ title: null, activity: "Starting work" });
+  expect(context).toMatchObject({ status: { title: null, activity: "Starting work" } });
 });
 
-test("no status means no context — messages are not a fallback; empty thread too", () => {
+test("a null status is provisional until the run settles, immutable after", () => {
+  // The caching race the settled flag exists for: an agent Promise.alls its
+  // status append with the work, so the fold can run before the status
+  // lands. Unsettled + no status = provisional (retry later); the same
+  // statusless thread AFTER settlement = immutable null (cache forever).
+  const statusless = [userMessage(1, "add a healthcheck endpoint"), assistantMessage(3, "On it.")];
+  expect(threadContextForScriptRun(statusless, { executionId: "run-a" })).toEqual({
+    settled: false,
+    status: null,
+  });
+  expect(threadContextForScriptRun([], { executionId: "run-a" })).toEqual({
+    settled: false,
+    status: null,
+  });
   expect(
-    threadContextForScriptRun(
-      [userMessage(1, "add a healthcheck endpoint"), assistantMessage(3, "On it.")],
-      { executionId: "run-a" },
-    ),
-  ).toEqual(null);
-  expect(threadContextForScriptRun([], { executionId: "run-a" })).toEqual(null);
+    threadContextForScriptRun([...statusless, scriptRunSettled(9, "run-a")], {
+      executionId: "run-a",
+    }),
+  ).toEqual({ settled: true, status: null });
 });
 
 test("mobile agent paths follow the web slug convention under the mobile channel", () => {
