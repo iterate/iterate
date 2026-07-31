@@ -9,7 +9,7 @@ import type { Env, Handler, LoginMode } from "./env.ts";
 import { Os } from "./api.ts";
 import { directory } from "./directory.ts";
 import { sha256hex } from "./hash.ts";
-import { dialProjectWorker, resolveHost } from "./ingress.ts";
+import { dialProjectWorker, resolveHost, stampFor } from "./ingress.ts";
 import { clearSessionCookie, currentSession, setSessionCookie, type Session } from "./session.ts";
 
 const esc = (s: string) =>
@@ -261,9 +261,9 @@ export const app: Handler = {
       if (!host) return new Response("missing ?host\n", { status: 400 });
       const resolved = await resolveHost(host, env);
       if (!resolved) return new Response(`no project for host '${host}'\n`, { status: 404 });
-      const caller = session
-        ? { credentials: [{ format: "session", issuer: "control-plane", email: session.email }] }
-        : { credentials: [] };
+      const actor = session?.sub ?? "user_anonymous";
+      const email = session?.email ?? "anonymous";
+      const caller = await stampFor(actor, email, resolved.projectId, env);
       return dialProjectWorker(
         env,
         resolved.projectId,

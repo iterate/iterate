@@ -1,28 +1,52 @@
 // The per-project CONFIG WORKER source — the "project config worker", the dynamic worker the project
-// worker loads into a confined Worker-Loader sandbox. It serves the project's own apps. It sees ONLY the
-// ITX binding (the confinement) — no raw bindings, no secrets. This is a minimal but real version
-// (whoami via ITX + echo of the stamped caller/app); the kernel's fuller config worker (egress, secrets,
-// streams) is already proven there and folds in later.
+// worker loads into a confined Worker-Loader sandbox. It serves the project's own apps, PUBLIC or PRIVATE:
+//   • the DEFAULT app ("") is PUBLIC — anyone, no login.
+//   • the "admin" app is PRIVATE — it calls `env.ITX.auth.fetch(request)` (the forward-auth "partial
+//     fetch"): a non-null Response means "not authorized, return this" (the login redirect); null means
+//     "authorized, proceed". This is the userspace face of the control plane's session gateway (design §11).
+// The config worker sees ONLY the ITX binding (the confinement).
 export const CONFIG_WORKER_SOURCE = /* js */ `
 const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+const page = (title, body) => new Response(
+  '<!doctype html><meta charset=utf-8><title>' + esc(title) + '</title>' +
+  '<body style="font:16px system-ui;max-width:40rem;margin:3rem auto">' + body,
+  { headers: { "content-type": "text/html; charset=utf-8" } },
+);
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    const caller = JSON.parse(request.headers.get("x-iterate-caller") ?? "null");
     const app = request.headers.get("x-iterate-app") ?? "";
-    const who = await env.ITX.whoami(); // the ONE capability surface — proves confinement + identity
+    const who = await env.ITX.whoami();
+
+    const isPrivate = app === "admin" || url.pathname.startsWith("/admin");
+    if (isPrivate) {
+      // FORWARD-AUTH: ask the auth capability whether this caller may proceed. Not authorized => return the
+      // login redirect (or a 401). We pass primitives (Request/Response don't cross the RPC loopback).
+      const g = await env.ITX.auth.gate(
+        request.headers.get("x-iterate-caller"),
+        request.headers.get("x-iterate-cp-origin"),
+        request.url,
+      );
+      if (!g.authorized) {
+        return g.loginUrl
+          ? new Response(null, { status: 302, headers: { location: g.loginUrl } })
+          : new Response("unauthorized\\n", { status: 401 });
+      }
+    }
 
     if (url.pathname === "/__debug") {
-      return Response.json({ projectId: who.projectId, app, caller, seenBindings: Object.keys(env).sort() });
+      return Response.json({
+        projectId: who.projectId,
+        app,
+        private: isPrivate,
+        caller: JSON.parse(request.headers.get("x-iterate-caller") ?? "null"),
+        seenBindings: Object.keys(env).sort(),
+      });
     }
-    return new Response(
-      '<!doctype html><meta charset=utf-8><title>' + esc(who.projectId) + '</title>' +
-      '<body style="font:16px system-ui;max-width:40rem;margin:3rem auto">' +
-      '<h1>' + esc(who.projectId) + '</h1>' +
-      '<p>Served by the <b>project config worker</b>, loaded by the project worker, ' +
-      'for the project the control plane resolved. app=<b>' + esc(app || "(default)") + '</b>.</p>' +
-      '<p><small>caller: ' + esc(JSON.stringify(caller)) + '</small></p>',
-      { headers: { "content-type": "text/html; charset=utf-8" } },
+    return page(
+      who.projectId,
+      '<h1>' + esc(who.projectId) + (isPrivate ? ' · admin' : '') + '</h1>' +
+      '<p>' + (isPrivate ? 'PRIVATE app — you are an authorized member.' : 'PUBLIC app — anyone can see this.') + '</p>',
     );
   },
 };

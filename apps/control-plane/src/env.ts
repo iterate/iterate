@@ -20,10 +20,21 @@ export interface Env {
   LOGIN_MODE?: LoginMode;
   /** Header carrying the verified email when LOGIN_MODE=access (e.g. `cf-access-authenticated-user-email`). */
   ACCESS_EMAIL_HEADER?: string;
-  /** The project worker's base URL — where resolved project ingress is dialed (topology: HTTP dial). */
+  /** The project worker's base URL — where resolved project ingress is dialed (cross-account HTTP dial). */
   PROJECT_WORKER_URL?: string;
   /** Shared secret presented to the project worker on the HTTP dial (must match its RUNNER_DIAL_SECRET). */
   RUNNER_DIAL_SECRET?: string;
+  /** Same-account service binding to the project worker's ProjectRunner (the preferred dial when present). */
+  RUNNER?: {
+    serve(
+      request: Request,
+      projectId: string,
+      app: string,
+      callerHeader: string,
+    ): Promise<Response>;
+  };
+  /** This control plane's own origin — handed to the project worker so private apps can redirect to login. */
+  CONTROL_PLANE_ORIGIN?: string;
   /** Injected by the provider — the OAuth helper surface (parseAuthRequest / completeAuthorization / …). */
   OAUTH_PROVIDER: OAuthHelpers;
 }

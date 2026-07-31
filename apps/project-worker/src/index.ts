@@ -9,7 +9,7 @@
 // Service bindings don't cross Cloudflare accounts, so the HTTP path is what makes "project worker in a
 // SEPARATE account" work (topology 4).
 
-import { WorkerEntrypoint } from "cloudflare:workers";
+import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 import { CONFIG_WORKER_SOURCE } from "./config-worker.ts";
 
 interface Env {
@@ -22,6 +22,14 @@ type ProjectProps = { projectId: string };
 
 const CALLER_HEADER = "x-iterate-caller";
 const APP_HEADER = "x-iterate-app";
+
+/** The stamped caller the control plane put on the request (unforgeable by the browser). */
+interface StampedCaller {
+  actor: string;
+  email: string;
+  member: boolean;
+  role: string | null;
+}
 
 // A stable hash of the config-worker source => the loader cache key changes when the source changes.
 function hashSource(s: string): string {
@@ -52,14 +60,47 @@ async function serveConfigWorker(
   const headers = new Headers(request.headers);
   headers.set(CALLER_HEADER, callerHeader);
   headers.set(APP_HEADER, app);
-  return worker.getEntrypoint().fetch(new Request(request, { headers }));
+  // cp-origin rides through unchanged (set by the caller: the HTTP /serve or the service-binding dial).
+  // redirect:"manual" — a redirect the config worker RETURNS (e.g. itx.auth's login 302) must pass back to
+  // the browser verbatim, NOT be followed by this dispatch (which would re-enter the worker on the Location).
+  return worker.getEntrypoint().fetch(new Request(request, { headers, redirect: "manual" }));
 }
 
-// The per-project ITX capability surface (env.ITX + globalOutbound inside the sandbox). Minimal here
-// (whoami); the kernel's fuller ProjectCapabilities (streams/secrets/ai + egress) folds in later.
+/** What itx.auth.gate returns: authorized (proceed), or not (with a login URL to redirect to). */
+interface Gate {
+  authorized: boolean;
+  loginUrl?: string;
+}
+
+// itx.auth — the userspace forward-auth gate (design §11). A private app calls `env.ITX.auth.gate(...)`
+// with the request's stamped caller header + cp-origin + url; it returns `{ authorized }` (proceed) or
+// `{ authorized:false, loginUrl }` (redirect the browser to log in). We pass/return PRIMITIVES, not a
+// Request/Response: over Workers RPC, `fetch` is a reserved method name and Request/Response are not
+// reliably serializable across the loopback — so the ergonomic "partial fetch" is expressed as a small
+// value-returning call the config worker turns into a Response. The membership decision reads the STAMPED
+// caller (`x-iterate-caller`, member/role) the control plane overwrites on ingress — a browser can't forge
+// it. The config worker passing its own request's headers is fine: it's the owner's code gating its own app.
+export class ProjectAuth extends RpcTarget {
+  gate(callerHeader: string | null, cpOrigin: string | null, requestUrl: string): Gate {
+    const caller = callerHeader ? (JSON.parse(callerHeader) as StampedCaller) : null;
+    if (caller?.member === true) return { authorized: true };
+    if (cpOrigin) {
+      const login = new URL("/login", cpOrigin);
+      login.searchParams.set("next", requestUrl);
+      return { authorized: false, loginUrl: login.toString() };
+    }
+    return { authorized: false };
+  }
+}
+
+// The per-project ITX capability surface (env.ITX + globalOutbound inside the sandbox). whoami + auth;
+// the kernel's fuller ProjectCapabilities (streams/secrets/ai + egress) folds in behind the same shape.
 export class ProjectEntrypoint extends WorkerEntrypoint<Env, ProjectProps> {
   whoami(): ProjectProps {
     return this.ctx.props;
+  }
+  get auth(): ProjectAuth {
+    return new ProjectAuth();
   }
   async fetch(request: Request): Promise<Response> {
     return fetch(request); // globalOutbound must be a real Fetcher.fetch; pass-through for now.
