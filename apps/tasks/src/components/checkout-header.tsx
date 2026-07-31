@@ -23,9 +23,21 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/compone
 import { ProjectLabelContext } from "../lib/project-label.ts";
 import type { RowField } from "../lib/board-model.ts";
 
-/** project › repo › board — the header's orientation line. `label` is the
- * board id for the app's own boards, the workspace path for a lens. */
-export function CheckoutBreadcrumbs({ repoPath, label }: { repoPath?: string; label?: string }) {
+/**
+ * The header's orientation line, in HIERARCHY order: project › which
+ * WORKSPACE this lens renders › which view (tasks) › the base path the view
+ * is scoped to (the repo mount). Repos are mounted inside every workspace,
+ * so the workspace always comes first.
+ */
+export function CheckoutBreadcrumbs({
+  workspace,
+  rootPath,
+}: {
+  /** The workspace path this lens renders (first level of the hierarchy). */
+  workspace?: string;
+  /** The base path the view is scoped to (e.g. "/repos/config"), if any. */
+  rootPath?: string;
+}) {
   const projectLabel = useContext(ProjectLabelContext);
   return (
     <Breadcrumb className="min-w-0">
@@ -33,17 +45,19 @@ export function CheckoutBreadcrumbs({ repoPath, label }: { repoPath?: string; la
         <BreadcrumbItem>
           <BreadcrumbLink render={<Link to="/" />}>{projectLabel}</BreadcrumbLink>
         </BreadcrumbItem>
-        {repoPath === undefined ? null : (
+        {workspace === undefined ? null : (
           <>
             <BreadcrumbSeparator />
-            <BreadcrumbItem className="font-mono">{repoPath}</BreadcrumbItem>
+            <BreadcrumbItem className="truncate font-mono">{workspace}</BreadcrumbItem>
+            <BreadcrumbSeparator />
+            <BreadcrumbItem>tasks</BreadcrumbItem>
           </>
         )}
-        {label === undefined ? null : (
+        {rootPath === undefined ? null : (
           <>
             <BreadcrumbSeparator />
             <BreadcrumbItem>
-              <BreadcrumbPage className="truncate font-mono">{label}</BreadcrumbPage>
+              <BreadcrumbPage className="truncate font-mono">{rootPath}</BreadcrumbPage>
             </BreadcrumbItem>
           </>
         )}

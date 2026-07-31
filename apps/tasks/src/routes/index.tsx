@@ -11,10 +11,10 @@ import { CheckoutBreadcrumbs } from "../components/checkout-header.tsx";
 export const Route = createFileRoute("/")({ component: Home });
 
 /**
- * Home is the workspace picker: repos as cards, each listing its board
- * workspaces newest-first with a prominent "New board" call to action, and
- * below them every OTHER workspace in the project (agents', mostly) — each
- * openable as a guest lens. Nothing actionable renders until the lists are
+ * Home is the WORKSPACE picker — the first level of the hierarchy. One flat
+ * list of every workspace (the app's own boards with their repo scope,
+ * agents' workspaces as guest lenses), then per-repo cards for starting a
+ * new board workspace. Nothing actionable renders until the lists are
  * actually known — a spinner, never a premature empty state.
  */
 function Home() {
@@ -44,7 +44,6 @@ function Home() {
     });
   };
 
-  const others = workspaces.filter((entry) => entry.board === null);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -61,13 +60,73 @@ function Home() {
         <div className="min-h-0 flex-1 overflow-auto bg-muted/30">
           <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-6 py-10">
             <div>
-              <h1 className="text-xl font-semibold tracking-tight">Task boards</h1>
+              <h1 className="text-xl font-semibold tracking-tight">Workspaces</h1>
               <p className="mt-1 text-sm text-muted-foreground">
-                A board is a shared workspace over a repo&rsquo;s task files — everyone on its
-                link edits together, live. Committing publishes the changes to the repo&rsquo;s
-                main branch.
+                Pick a workspace first — every repo is mounted inside it, and the tasks view is a
+                lens over one repo&rsquo;s task files. Your own board workspaces commit to the
+                repo&rsquo;s main; agents&rsquo; workspaces open as guest lenses (read, comment,
+                edit — publishing stays the owner&rsquo;s act).
               </p>
             </div>
+            {workspaces.length === 0 ? null : (
+              <section className="rounded-xl border bg-background shadow-xs">
+                <div className="flex items-center gap-2.5 border-b px-5 py-4">
+                  <TelescopeIcon aria-hidden className="size-5 text-muted-foreground" />
+                  <h2 className="truncate text-sm font-semibold">All workspaces</h2>
+                </div>
+                <ul className="divide-y">
+                  {workspaces.map((entry) => (
+                    <li key={entry.path}>
+                      {entry.board === null ? (
+                        <Link
+                          to="/w"
+                          search={{
+                            group: "folder",
+                            q: "",
+                            repo: "",
+                            task: "",
+                            workspace: entry.path,
+                          }}
+                          className="flex items-center justify-between gap-3 px-5 py-3 transition-colors hover:bg-muted/50"
+                        >
+                          <span className="truncate font-mono text-sm">{entry.path}</span>
+                          <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+                            <ClockIcon aria-hidden className="size-3.5" />
+                            {relativeTimeLong(entry.createdAt)}
+                          </span>
+                        </Link>
+                      ) : (
+                        <Link
+                          to="/w/$checkoutId"
+                          params={{ checkoutId: entry.board.checkoutId }}
+                          search={{
+                            group: "folder",
+                            q: "",
+                            repo: entry.board.repoPath,
+                            task: "",
+                          }}
+                          className="flex items-center justify-between gap-3 px-5 py-3 transition-colors hover:bg-muted/50"
+                        >
+                          <span className="truncate font-mono text-sm">
+                            /workspaces/tasks/{entry.board.checkoutId}
+                          </span>
+                          <span className="flex shrink-0 items-center gap-3 text-xs text-muted-foreground">
+                            <span className="font-mono">{entry.board.repoPath}</span>
+                            <span className="flex items-center gap-1.5">
+                              <ClockIcon aria-hidden className="size-3.5" />
+                              {relativeTimeLong(entry.createdAt)}
+                            </span>
+                          </span>
+                        </Link>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+            <h2 className="mt-2 text-sm font-semibold text-muted-foreground">
+              Start a new board workspace
+            </h2>
             {repos.map((repoPath) => {
               const entries = workspaces.filter((entry) => entry.board?.repoPath === repoPath);
               return (
@@ -116,43 +175,6 @@ function Home() {
                 </section>
               );
             })}
-            {others.length === 0 ? null : (
-              <section className="rounded-xl border bg-background shadow-xs">
-                <div className="flex items-center gap-2.5 border-b px-5 py-4">
-                  <TelescopeIcon aria-hidden className="size-5 text-muted-foreground" />
-                  <div className="min-w-0">
-                    <h2 className="truncate text-sm font-semibold">Other workspaces</h2>
-                    <p className="text-xs text-muted-foreground">
-                      Agents&rsquo; (and other) workspaces — open one as a guest lens: read,
-                      comment, and edit; publishing stays the owner&rsquo;s act.
-                    </p>
-                  </div>
-                </div>
-                <ul className="divide-y">
-                  {others.map((entry) => (
-                    <li key={entry.path}>
-                      <Link
-                        to="/w"
-                        search={{
-                          group: "folder",
-                          q: "",
-                          repo: "",
-                          task: "",
-                          workspace: entry.path,
-                        }}
-                        className="flex items-center justify-between gap-3 px-5 py-3 transition-colors hover:bg-muted/50"
-                      >
-                        <span className="truncate font-mono text-sm">{entry.path}</span>
-                        <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
-                          <ClockIcon aria-hidden className="size-3.5" />
-                          {relativeTimeLong(entry.createdAt)}
-                        </span>
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            )}
           </div>
         </div>
       )}

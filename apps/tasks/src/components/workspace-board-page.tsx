@@ -523,8 +523,12 @@ export function WorkspaceBoardPage({
       <header className="flex h-11 shrink-0 items-center gap-2 border-b bg-background px-3">
         <SidebarTrigger className="-ml-1 md:hidden" />
         <CheckoutBreadcrumbs
-          repoPath={repoPath}
-          label={address.checkoutId ?? workspacePath.replace(/^\/workspaces\//, "")}
+          workspace={
+            address.checkoutId !== null
+              ? `/workspaces/tasks/${address.checkoutId}`
+              : workspacePath
+          }
+          rootPath={repoPath}
         />
         {guest && (
           <span

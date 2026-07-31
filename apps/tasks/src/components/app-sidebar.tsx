@@ -1,6 +1,6 @@
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { ChevronsLeft, FolderGit2Icon, PlusIcon, TelescopeIcon } from "lucide-react";
+import { ChevronsLeft, PlusIcon, TelescopeIcon } from "lucide-react";
 import { IterateLogo } from "@iterate-com/ui/components/iterate-logo";
 import {
   Sidebar,
@@ -18,19 +18,20 @@ import {
   useSidebar,
 } from "@iterate-com/ui/components/sidebar";
 import { DEFAULT_REPO_PATH, newCheckoutId } from "../lib/checkout-shared.ts";
-import { listRepos, listWorkspaces } from "../lib/project-rpc.ts";
+import { listWorkspaces } from "../lib/project-rpc.ts";
 import type { WorkspaceListEntry } from "../lib/tasks-api.ts";
 import { CloseMobileSidebarOnNavigate } from "~/components/close-mobile-sidebar-on-navigate.tsx";
 
 /**
- * The two-stage navigation: repos are the top-level hierarchy, board
- * workspaces the second, with every OTHER workspace in the project (agents',
- * mostly) in a trailing group as guest lenses. Repos come from the project's
- * catalog; workspaces from the platform's stream catalog. The currently open
- * board is merged in optimistically so a brand-new one appears before its
- * workspace exists. Composition follows the apps/os AppSidebar (shadcn
- * sidebar blocks 07/08): logo header, icon collapse, footer collapse
- * button, rail.
+ * WORKSPACE-FIRST navigation: the workspace is the first level of the
+ * hierarchy (repos are mounts inside every workspace), so the sidebar is one
+ * flat workspace list from the platform's stream catalog — the app's own
+ * boards labeled by their /workspaces/tasks/ naming with their repo scope as
+ * a trailing chip, agents' workspaces openable as guest lenses. The
+ * currently open board is merged in optimistically so a brand-new one
+ * appears before its workspace exists. Composition follows the apps/os
+ * AppSidebar (shadcn sidebar blocks 07/08): logo header, icon collapse,
+ * footer collapse button, rail.
  */
 export function AppSidebar() {
   const navigate = useNavigate();
@@ -40,50 +41,51 @@ export function AppSidebar() {
   const activeRepoPath = (search.repo ?? "") || DEFAULT_REPO_PATH;
   const activeWorkspacePath = search.workspace ?? "";
 
-  const [repos, setRepos] = useState<string[]>([]);
   const [workspaces, setWorkspaces] = useState<WorkspaceListEntry[]>([]);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    void Promise.allSettled([listRepos(), listWorkspaces()]).then(([repoResult, listResult]) => {
-      if (cancelled) return;
-      if (repoResult.status === "fulfilled") setRepos(repoResult.value);
-      if (listResult.status === "fulfilled") setWorkspaces(listResult.value);
-      setLoaded(true);
-    });
+    void listWorkspaces().then(
+      (list) => {
+        if (cancelled) return;
+        setWorkspaces(list);
+        setLoaded(true);
+      },
+      () => {
+        if (!cancelled) setLoaded(true);
+      },
+    );
     return () => {
       cancelled = true;
     };
     // Re-ask on navigation so fresh boards and workspaces show up.
   }, [location.pathname]);
 
-  const groups = useMemo(() => {
-    const byRepo = new Map<string, { checkoutId: string; createdAt: string }[]>();
-    for (const repo of repos) byRepo.set(repo, []);
-    for (const entry of workspaces) {
-      if (entry.board === null) continue;
-      const list = byRepo.get(entry.board.repoPath) ?? [];
-      list.push({ checkoutId: entry.board.checkoutId, createdAt: entry.createdAt });
-      byRepo.set(entry.board.repoPath, list);
-    }
+  // WORKSPACE-FIRST: one flat list — the workspace is the first level of the
+  // hierarchy; a board's repo is the base path its tasks view is scoped to.
+  const entries = useMemo(() => {
+    const list = workspaces.map((entry) => ({
+      key: entry.path,
+      label: entry.board === null ? entry.path : `/workspaces/tasks/${entry.board.checkoutId}`,
+      board: entry.board,
+      createdAt: entry.createdAt,
+    }));
     // The open board may be seconds old — show it even before its workspace
     // was created server-side.
-    if (activeCheckoutId !== "") {
-      const list = byRepo.get(activeRepoPath) ?? [];
-      if (!list.some((entry) => entry.checkoutId === activeCheckoutId)) {
-        list.unshift({ checkoutId: activeCheckoutId, createdAt: "" });
-      }
-      byRepo.set(activeRepoPath, list);
+    if (
+      activeCheckoutId !== "" &&
+      !list.some((entry) => entry.board?.checkoutId === activeCheckoutId)
+    ) {
+      list.unshift({
+        key: `active:${activeCheckoutId}`,
+        label: `/workspaces/tasks/${activeCheckoutId}`,
+        board: { checkoutId: activeCheckoutId, repoPath: activeRepoPath },
+        createdAt: "",
+      });
     }
-    return [...byRepo.entries()].sort(([left], [right]) => {
-      if (left === DEFAULT_REPO_PATH) return -1;
-      if (right === DEFAULT_REPO_PATH) return 1;
-      return left.localeCompare(right);
-    });
-  }, [repos, workspaces, activeCheckoutId, activeRepoPath]);
-
-  const others = useMemo(() => workspaces.filter((entry) => entry.board === null), [workspaces]);
+    return list;
+  }, [workspaces, activeCheckoutId, activeRepoPath]);
 
   const openNewBoard = (repoPath: string) => {
     void navigate({
@@ -118,93 +120,79 @@ export function AppSidebar() {
           </SidebarMenu>
         </SidebarHeader>
         <SidebarContent>
-          {groups.map(([repoPath, entries]) => (
-            <SidebarGroup key={repoPath} className="group-data-[collapsible=icon]:hidden">
-              <SidebarGroupLabel className="gap-1.5">
-                <FolderGit2Icon className="size-3.5" aria-hidden />
-                <span className="truncate font-mono">{repoPath.replace(/^\/repos\//, "")}</span>
-              </SidebarGroupLabel>
-              <SidebarGroupAction
-                title={`New board on ${repoPath}`}
-                onClick={() => openNewBoard(repoPath)}
-              >
-                <PlusIcon aria-hidden />
-                <span className="sr-only">New board</span>
-              </SidebarGroupAction>
-              <SidebarGroupContent>
-                <SidebarMenu>
-                  {entries.length === 0 ? (
-                    <SidebarMenuItem>
-                      <span className="block px-2 py-1 text-xs text-sidebar-foreground/50 group-data-[collapsible=icon]:hidden">
-                        {loaded ? "no boards yet" : "loading…"}
-                      </span>
-                    </SidebarMenuItem>
-                  ) : (
-                    entries.map((entry) => (
-                      <SidebarMenuItem key={entry.checkoutId}>
-                        <SidebarMenuButton
-                          isActive={
-                            entry.checkoutId === activeCheckoutId && repoPath === activeRepoPath
-                          }
-                          tooltip={entry.checkoutId}
-                          render={
+          <SidebarGroup className="group-data-[collapsible=icon]:hidden">
+            <SidebarGroupLabel className="gap-1.5">
+              <TelescopeIcon className="size-3.5" aria-hidden />
+              <span className="truncate">workspaces</span>
+            </SidebarGroupLabel>
+            <SidebarGroupAction
+              title={`New board workspace on ${DEFAULT_REPO_PATH}`}
+              onClick={() => openNewBoard(DEFAULT_REPO_PATH)}
+            >
+              <PlusIcon aria-hidden />
+              <span className="sr-only">New board workspace</span>
+            </SidebarGroupAction>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {entries.length === 0 ? (
+                  <SidebarMenuItem>
+                    <span className="block px-2 py-1 text-xs text-sidebar-foreground/50 group-data-[collapsible=icon]:hidden">
+                      {loaded ? "no workspaces yet" : "loading…"}
+                    </span>
+                  </SidebarMenuItem>
+                ) : (
+                  entries.map((entry) => (
+                    <SidebarMenuItem key={entry.key}>
+                      <SidebarMenuButton
+                        isActive={
+                          entry.board === null
+                            ? entry.label === activeWorkspacePath
+                            : entry.board.checkoutId === activeCheckoutId
+                        }
+                        tooltip={entry.label}
+                        render={
+                          entry.board === null ? (
+                            <Link
+                              to="/w"
+                              search={{
+                                group: "folder",
+                                q: "",
+                                repo: "",
+                                task: "",
+                                workspace: entry.label,
+                              }}
+                            />
+                          ) : (
                             <Link
                               to="/w/$checkoutId"
-                              params={{ checkoutId: entry.checkoutId }}
-                              search={{ group: "folder", q: "", repo: repoPath, task: "" }}
+                              params={{ checkoutId: entry.board.checkoutId }}
+                              search={{
+                                group: "folder",
+                                q: "",
+                                repo: entry.board.repoPath,
+                                task: "",
+                              }}
                             />
-                          }
-                        >
-                          <span className="truncate font-mono text-xs">{entry.checkoutId}</span>
-                          {entry.createdAt !== "" ? (
-                            <span className="ml-auto shrink-0 text-[10px] tabular-nums text-sidebar-foreground/50">
-                              {relativeTime(entry.createdAt)}
-                            </span>
-                          ) : null}
-                        </SidebarMenuButton>
-                      </SidebarMenuItem>
-                    ))
-                  )}
-                </SidebarMenu>
-              </SidebarGroupContent>
-            </SidebarGroup>
-          ))}
-          {others.length === 0 ? null : (
-            <SidebarGroup className="group-data-[collapsible=icon]:hidden">
-              <SidebarGroupLabel className="gap-1.5">
-                <TelescopeIcon className="size-3.5" aria-hidden />
-                <span className="truncate">workspaces</span>
-              </SidebarGroupLabel>
-              <SidebarGroupContent>
-                <SidebarMenu>
-                  {others.map((entry) => (
-                    <SidebarMenuItem key={entry.path}>
-                      <SidebarMenuButton
-                        isActive={entry.path === activeWorkspacePath}
-                        tooltip={entry.path}
-                        render={
-                          <Link
-                            to="/w"
-                            search={{
-                              group: "folder",
-                              q: "",
-                              repo: "",
-                              task: "",
-                              workspace: entry.path,
-                            }}
-                          />
+                          )
                         }
                       >
-                        <span className="truncate font-mono text-xs">
-                          {entry.path.replace(/^\/workspaces\//, "")}
-                        </span>
+                        <span className="truncate font-mono text-xs">{entry.label}</span>
+                        {entry.board !== null ? (
+                          <span className="ml-auto shrink-0 font-mono text-[10px] text-sidebar-foreground/50">
+                            {entry.board.repoPath.replace(/^\/repos\//, "")}
+                          </span>
+                        ) : entry.createdAt !== "" ? (
+                          <span className="ml-auto shrink-0 text-[10px] tabular-nums text-sidebar-foreground/50">
+                            {relativeTime(entry.createdAt)}
+                          </span>
+                        ) : null}
                       </SidebarMenuButton>
                     </SidebarMenuItem>
-                  ))}
-                </SidebarMenu>
-              </SidebarGroupContent>
-            </SidebarGroup>
-          )}
+                  ))
+                )}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
         </SidebarContent>
         <SidebarFooter>
           <AppSidebarCollapseButton />
