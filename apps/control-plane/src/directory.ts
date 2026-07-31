@@ -54,9 +54,12 @@ export function directory(db: D1Database) {
       return { id: row.id, email: row.email };
     },
 
-    /** Create an org (minted org_ id + a globally-unique slug) and make the creator its owner. */
-    async createOrg(userId: string, name: string, slug: string): Promise<Org> {
-      const org = await createOrg(client, { id: newOrgId(), name, slug: slugify(slug) });
+    /** Create an org (minted org_ id + a collision-proof slug) and make the creator its owner. The slug is
+     *  suffixed with the id tail so two orgs of the same name never collide on the unique constraint. */
+    async createOrg(userId: string, name: string): Promise<Org> {
+      const id = newOrgId();
+      const slug = `${slugify(name).slice(0, 32) || "org"}-${id.slice(-6)}`;
+      const org = await createOrg(client, { id, name, slug });
       await addOrgMember(client, { orgId: org.id, userId, role: "owner" });
       return { id: org.id, name: org.name, slug: org.slug, role: "owner" };
     },
@@ -74,7 +77,10 @@ export function directory(db: D1Database) {
      */
     async createProject(orgId: string, slug: string): Promise<Project> {
       const s = slugify(slug);
-      await createProject(client, { id: newProjectId(), slug: s, orgId }); // ON CONFLICT(slug) DO NOTHING
+      if (!s) throw new Error("project slug is empty or invalid");
+      // ON CONFLICT(slug) DO NOTHING (no RETURNING — a conflict yields 0 rows, so we re-select to cover
+      // both "just created" and "already existed" without a throw).
+      await createProject(client, { id: newProjectId(), slug: s, orgId });
       const p = (await getProjectBySlug(client, { slug: s }))[0];
       if (!p) throw new Error(`failed to create project '${s}'`);
       if (p.orgId !== orgId) throw new Error(`project slug '${s}' is already taken`);
@@ -82,24 +88,27 @@ export function directory(db: D1Database) {
     },
 
     /**
-     * Emerge with an org + project in one shot — the "create org + project during MCP /authorize" flow
-     * (ADR 0029). The org's slug is the project slug (globally unique, so the org slug is unique too).
+     * Emerge with an org + project — the "create a project during MCP /authorize" flow (ADR 0029). REUSES
+     * the caller's existing org when they have one (so a user doesn't accrue a throwaway org per project);
+     * creates one named `orgName` only on first use. The single create-a-project path (all surfaces route
+     * here). Not atomic across org/member/project — acceptable for the POC; a real deploy wraps it in a D1
+     * batch. See the review-response doc.
      */
     async emerge(
       userId: string,
       orgName: string,
       slug: string,
     ): Promise<{ org: Org; project: Project }> {
-      const s = slugify(slug);
-      const org = await dir.createOrg(userId, orgName, s);
-      const project = await dir.createProject(org.id, s);
+      const existing = (await dir.listOrgs(userId))[0];
+      const org = existing ?? (await dir.createOrg(userId, orgName));
+      const project = await dir.createProject(org.id, slug);
       return { org, project };
     },
 
     /** Ensure the user has at least one org; returns their first (creating a personal one if none). */
     async ensureOrg(userId: string, email: string): Promise<Org> {
       const orgs = await dir.listOrgs(userId);
-      return orgs[0] ?? dir.createOrg(userId, `${email}'s org`, slugify(email));
+      return orgs[0] ?? dir.createOrg(userId, `${email}'s org`);
     },
 
     /** Projects the user can reach (member of the owning org), with their role. */

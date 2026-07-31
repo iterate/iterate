@@ -9,6 +9,7 @@ import type { Env, Handler, LoginMode } from "./env.ts";
 import { Os } from "./api.ts";
 import { directory } from "./directory.ts";
 import { sha256hex } from "./hash.ts";
+import { slugify } from "./ids.ts";
 import { dialProjectWorker, resolveHost, stampFor } from "./ingress.ts";
 import { clearSessionCookie, currentSession, setSessionCookie, type Session } from "./session.ts";
 
@@ -19,12 +20,17 @@ const esc = (s: string) =>
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
 
-const slugify = (s: string) =>
-  s
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9-]/g, "-")
-    .replace(/^-+|-+$/g, "");
+/** Post-login redirect target, hardened against open redirects: only SAME-ORIGIN. Resolving `next` against
+ *  our origin turns `http://evil.com` and protocol-relative `//evil.com` into a foreign origin → rejected
+ *  to "/". A same-origin absolute URL (e.g. the /authorize URL) collapses to its path+query. */
+function safeNext(next: string, origin: string): string {
+  try {
+    const u = new URL(next, origin);
+    return u.origin === origin ? u.pathname + u.search : "/";
+  } catch {
+    return "/";
+  }
+}
 
 function page(title: string, body: string, headers: HeadersInit = {}): Response {
   const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -217,10 +223,7 @@ export const app: Handler = {
       );
       return new Response(null, {
         status: 302,
-        headers: {
-          location: next.startsWith("/") || next.startsWith("http") ? next : "/",
-          "set-cookie": cookie,
-        },
+        headers: { location: safeNext(next, url.origin), "set-cookie": cookie },
       });
     }
 
@@ -302,6 +305,13 @@ export const app: Handler = {
       const form = await request.formData();
       const projectId = String(form.get("projectId") ?? "").trim();
       const label = String(form.get("label") ?? "cli").trim() || "cli";
+      // A key may only be scoped to a project the minter can actually reach — otherwise a user could assert
+      // a grant for a project they're not a member of. (Enforcement of these grants at read time is still a
+      // known gap — see the review-response doc; today a key inherits its owner's directory authority.)
+      if (projectId) {
+        const access = await dir.access(session.sub, projectId);
+        if (!access.ok) return new Response(`not a member of '${projectId}'\n`, { status: 403 });
+      }
       const raw = `key_${crypto.randomUUID().replaceAll("-", "")}`;
       await dir.createApiKey(
         await sha256hex(raw),

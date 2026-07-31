@@ -67,7 +67,12 @@ export async function verifySession(token: string, secret: string): Promise<Sess
   }
   if (!ok) return null;
   try {
-    return JSON.parse(dec.decode(unb64url(payload))) as Session;
+    const session = JSON.parse(dec.decode(unb64url(payload))) as Session;
+    // Shape + server-side expiry: the signed token is otherwise valid forever (Max-Age is only a browser
+    // hint), so a captured token could be replayed indefinitely. Reject anything past MAX_AGE.
+    if (typeof session?.sub !== "string" || typeof session?.iat !== "number") return null;
+    if (Math.floor(Date.now() / 1000) - session.iat > MAX_AGE) return null;
+    return session;
   } catch {
     return null;
   }

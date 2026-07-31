@@ -20,10 +20,27 @@ interface Env {
 
 type ProjectProps = { projectId: string };
 
+// The dial contract — header names shared with the control plane's ingress.ts (keep in sync; a shared
+// package is the eventual home). CALLER/APP/CP_ORIGIN are handed INTO the sandbox (trusted, set by us);
+// DIAL_SECRET/PROJECT_ID/PATH are the runner ENVELOPE and must NEVER reach the sandbox.
 const CALLER_HEADER = "x-iterate-caller";
 const APP_HEADER = "x-iterate-app";
+// `x-iterate-cp-origin` (trusted, rides into the sandbox) is read by the config worker for the login URL.
+const DIAL_SECRET_HEADER = "x-iterate-dial-secret";
+const PROJECT_ID_HEADER = "x-iterate-project-id";
+const PATH_HEADER = "x-iterate-path";
+// Envelope + credential headers stripped before the confined config worker sees the request. The dial
+// secret especially: leaking it to untrusted project code would let it impersonate the control plane.
+const STRIP_INTO_SANDBOX = [
+  DIAL_SECRET_HEADER,
+  PROJECT_ID_HEADER,
+  PATH_HEADER,
+  "cookie",
+  "authorization",
+];
 
-/** The stamped caller the control plane put on the request (unforgeable by the browser). */
+/** The stamped caller the control plane put on the request (unforgeable by the browser). Mirrors
+ *  control-plane/src/ingress.ts StampedCaller — keep the two in sync. */
 interface StampedCaller {
   actor: string;
   email: string;
@@ -58,9 +75,10 @@ async function serveConfigWorker(
     globalOutbound: projectEntry,
   }));
   const headers = new Headers(request.headers);
-  headers.set(CALLER_HEADER, callerHeader);
+  for (const h of STRIP_INTO_SANDBOX) headers.delete(h); // envelope + credentials never enter the sandbox
+  headers.set(CALLER_HEADER, callerHeader); // trusted, set by us
   headers.set(APP_HEADER, app);
-  // cp-origin rides through unchanged (set by the caller: the HTTP /serve or the service-binding dial).
+  // cp-origin rides through unchanged (set by the trusted caller: HTTP /serve or the service-binding dial).
   // redirect:"manual" — a redirect the config worker RETURNS (e.g. itx.auth's login 302) must pass back to
   // the browser verbatim, NOT be followed by this dispatch (which would re-enter the worker on the Location).
   return worker.getEntrypoint().fetch(new Request(request, { headers, redirect: "manual" }));
@@ -76,10 +94,17 @@ interface Gate {
 // with the request's stamped caller header + cp-origin + url; it returns `{ authorized }` (proceed) or
 // `{ authorized:false, loginUrl }` (redirect the browser to log in). We pass/return PRIMITIVES, not a
 // Request/Response: over Workers RPC, `fetch` is a reserved method name and Request/Response are not
-// reliably serializable across the loopback — so the ergonomic "partial fetch" is expressed as a small
-// value-returning call the config worker turns into a Response. The membership decision reads the STAMPED
-// caller (`x-iterate-caller`, member/role) the control plane overwrites on ingress — a browser can't forge
-// it. The config worker passing its own request's headers is fine: it's the owner's code gating its own app.
+// reliably serializable across the loopback — so the ergonomic "partial fetch" is a small value-returning
+// call the config worker turns into a Response.
+//
+// TRUST MODEL (reviewed): gate authorizes on `caller.member`, read from the `x-iterate-caller` the config
+// worker passes. Two facts make that safe TODAY: (a) the control plane builds a FRESH header set on the
+// dial (ingress.ts) and never forwards the browser's inbound x-iterate-* — so a browser cannot forge
+// membership; (b) the config worker here is our FIXED template, which faithfully forwards the header we
+// stamped. LATENT RISK: when arbitrary *userspace* code is loaded as the config worker, it could pass a
+// forged `{member:true}` and self-authorize. Before that lands, private-app enforcement must move to the
+// runner (which holds the trusted per-request caller) instead of this sandbox-initiated call. Tracked in
+// the review-response doc.
 export class ProjectAuth extends RpcTarget {
   gate(callerHeader: string | null, cpOrigin: string | null, requestUrl: string): Gate {
     const caller = callerHeader ? (JSON.parse(callerHeader) as StampedCaller) : null;
@@ -103,7 +128,10 @@ export class ProjectEntrypoint extends WorkerEntrypoint<Env, ProjectProps> {
     return new ProjectAuth();
   }
   async fetch(request: Request): Promise<Response> {
-    return fetch(request); // globalOutbound must be a real Fetcher.fetch; pass-through for now.
+    // globalOutbound: a real Fetcher.fetch. TODO(egress): today this is an UNRESTRICTED pass-through to the
+    // internet — the kernel's two-level egress door (secret substitution, origin-pinning) must land here
+    // before untrusted multi-tenant use; until then the "confinement" is capability-scoping, not egress.
+    return fetch(request);
   }
 }
 
@@ -118,26 +146,37 @@ export class ProjectRunner extends WorkerEntrypoint<Env> {
   }
 }
 
+/** Constant-time string compare — avoids leaking the secret via response timing. */
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
 export default {
   // Cross-account dial: POST /serve with the shared secret + x-iterate-project-id / -app / -caller headers.
+  // NB: ingress is GET-only for now (the dial conveys no method/body) — same for both transports.
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname !== "/serve")
       return new Response("project worker: POST /serve\n", { status: 404 });
 
     const secret = env.RUNNER_DIAL_SECRET;
-    const presented = request.headers.get("x-iterate-dial-secret");
-    if (!secret || presented !== secret) return new Response("forbidden\n", { status: 403 });
+    const presented = request.headers.get(DIAL_SECRET_HEADER);
+    if (!secret || !presented || !timingSafeEqual(presented, secret)) {
+      return new Response("forbidden\n", { status: 403 });
+    }
 
-    const projectId = request.headers.get("x-iterate-project-id");
-    if (!projectId) return new Response("missing x-iterate-project-id\n", { status: 400 });
-    const app = request.headers.get("x-iterate-app") ?? "";
+    const projectId = request.headers.get(PROJECT_ID_HEADER);
+    if (!projectId) return new Response(`missing ${PROJECT_ID_HEADER}\n`, { status: 400 });
+    const app = request.headers.get(APP_HEADER) ?? "";
     const callerHeader = request.headers.get(CALLER_HEADER) ?? "null";
 
     const makeEntry = (ctx as unknown as RunnerExports).exports.ProjectEntrypoint;
-    // Serve against a clean "/" request so the config worker's own routing (e.g. /__debug) is addressable
-    // via a forwarded path header, not the /serve envelope.
-    const inner = new Request(url.origin + (request.headers.get("x-iterate-path") ?? "/"), {
+    // Serve against a clean request at the forwarded path (the config worker's own routing, e.g. /__debug),
+    // NOT the /serve envelope. serveConfigWorker strips the envelope + credentials before the sandbox.
+    const inner = new Request(url.origin + (request.headers.get(PATH_HEADER) ?? "/"), {
       method: "GET",
       headers: request.headers,
     });

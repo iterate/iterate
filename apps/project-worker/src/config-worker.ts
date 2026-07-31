@@ -1,9 +1,9 @@
 // The per-project CONFIG WORKER source — the "project config worker", the dynamic worker the project
 // worker loads into a confined Worker-Loader sandbox. It serves the project's own apps, PUBLIC or PRIVATE:
 //   • the DEFAULT app ("") is PUBLIC — anyone, no login.
-//   • the "admin" app is PRIVATE — it calls `env.ITX.auth.fetch(request)` (the forward-auth "partial
-//     fetch"): a non-null Response means "not authorized, return this" (the login redirect); null means
-//     "authorized, proceed". This is the userspace face of the control plane's session gateway (design §11).
+//   • the "admin" app is PRIVATE — it calls `env.ITX.auth.gate(callerHeader, cpOrigin, url)` (forward-auth):
+//     `{ authorized:false, loginUrl }` means "not a member — redirect to login"; `{ authorized:true }`
+//     means proceed. This is the userspace face of the control plane's session gateway (design §11a).
 // The config worker sees ONLY the ITX binding (the confinement).
 export const CONFIG_WORKER_SOURCE = /* js */ `
 const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);

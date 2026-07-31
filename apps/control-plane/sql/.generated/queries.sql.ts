@@ -150,8 +150,7 @@ export namespace listOrgsForUser {
 
 const createProjectSql = `
 INSERT INTO projects (id, slug, org_id) VALUES (?, ?, ?)
-ON CONFLICT(slug) DO NOTHING
-RETURNING id, slug, org_id;
+ON CONFLICT(slug) DO NOTHING;
 `.trim();
 const createProjectQuery = (params: createProject.Params) => ({
   name: "createProject",
@@ -159,37 +158,15 @@ const createProjectQuery = (params: createProject.Params) => ({
   args: [params.id, params.slug, params.orgId],
 });
 
-function createProjectMapResult(row: createProject.RawResult): createProject.Result {
-  return {
-    id: row.id,
-    slug: row.slug,
-    orgId: row.org_id,
-  };
-}
-
 export const createProject = Object.assign(
-  async function createProject(
-    client: Client,
-    params: createProject.Params,
-  ): Promise<createProject.Result> {
-    const rows = await client.all<createProject.RawResult>(createProjectQuery(params));
-    return createProjectMapResult(rows[0]!);
+  async function createProject(client: Client, params: createProject.Params) {
+    return client.run(createProjectQuery(params));
   },
-  { sql: createProjectSql, query: createProjectQuery, mapResult: createProjectMapResult },
+  { sql: createProjectSql, query: createProjectQuery },
 );
 
 export namespace createProject {
   export type Params = {
-    id: string;
-    slug: string;
-    orgId: string;
-  };
-  export type RawResult = {
-    id: string;
-    slug: string;
-    org_id: string;
-  };
-  export type Result = {
     id: string;
     slug: string;
     orgId: string;

@@ -7,7 +7,7 @@
 -- a first-class flow rather than a bolt-on.
 
 create table users (
-  id text primary key,            -- user:<lowercased-email>
+  id text primary key,            -- user_<lowercased-email> (colon-free: OAuth tokens split on ':')
   email text not null unique,
   created_at text not null default current_timestamp
 );
@@ -56,3 +56,4 @@ create table api_keys (
 create index idx_org_members_user on org_members (user_id, org_id);
 create index idx_projects_org on projects (org_id);
 create index idx_routes_project on routes (project_id);
+create index idx_api_keys_user on api_keys (user_id, created_at);

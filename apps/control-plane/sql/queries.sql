@@ -33,8 +33,7 @@ ORDER BY o.name ASC;
 
 /** @name createProject */
 INSERT INTO projects (id, slug, org_id) VALUES (:id, :slug, :orgId)
-ON CONFLICT(slug) DO NOTHING
-RETURNING id, slug, org_id;
+ON CONFLICT(slug) DO NOTHING;
 
 /** @name getProjectBySlug */
 SELECT id, slug, org_id FROM projects WHERE slug = :slug;

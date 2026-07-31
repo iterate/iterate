@@ -11,7 +11,8 @@ export const slugify = (s: string) =>
 
 const hex32 = () => crypto.randomUUID().replaceAll("-", "");
 
-/** `prj_<32hex>` — auth is the only authority that mints project ids (apps/auth). */
+/** `prj_<32hex>` — the control plane (this worker) is the directory authority that mints project ids
+ *  (mirroring apps/auth's `prj_` scheme). */
 export const newProjectId = () => `prj_${hex32()}`;
 
 /** `org_<32hex>`. */
