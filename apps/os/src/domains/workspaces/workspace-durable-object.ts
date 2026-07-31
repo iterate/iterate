@@ -546,8 +546,13 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
 
   async glob(pattern: string): Promise<string[]> {
     // listAllFiles runs the birth assertion (same error, no duplicate round).
-    // A relative pattern globs this workspace's own directory.
-    const resolved = pattern.startsWith("/") ? pattern : `${this.#name.path}/${pattern}`;
+    // A relative pattern globs this workspace's own directory; `.`/`..`
+    // segments collapse exactly like the file doors' paths do (glob magic
+    // like `**` and `*.md` never contains a slash, so it survives the
+    // resolve untouched).
+    const resolved = resolveAbsolutePath(
+      pattern.startsWith("/") ? pattern : `${this.#name.path}/${pattern}`,
+    );
     const all = await this.listAllFiles();
     return all.filter((path) => minimatch(path, resolved, { dot: true }));
   }
