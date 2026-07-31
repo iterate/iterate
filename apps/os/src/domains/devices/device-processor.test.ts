@@ -63,11 +63,14 @@ function notificationRequested(overrides?: {
 /** A copied approval-batch intent: the TOP-LEVEL approvalRequestEventOffset is
  * what makes it grace-delayed and claimable (the destination union is just
  * where a tap navigates). */
-function approvalIntentRequested(overrides?: { expiresAt?: number }): DeviceEventInput {
+function approvalIntentRequested(overrides?: {
+  approvalRequestEventOffset?: number;
+  expiresAt?: number;
+}): DeviceEventInput {
   return {
     type: "events.iterate.com/notification/requested",
     payload: {
-      approvalRequestEventOffset: 17,
+      approvalRequestEventOffset: overrides?.approvalRequestEventOffset ?? 17,
       audience: { kind: "project" },
       body: "POST api.stripe.com is waiting for approval.",
       destination: { kind: "agent-chat", path: "/agents/demo" },
@@ -160,7 +163,7 @@ function makeDeviceHarness(substrate?: HarnessSubstrate) {
     graceAlarms,
     rootEvents: () => harness.stream.network!.eventsAt("/"),
     checkReceipts: () => harness.processor().checkReceipts(harness.state()),
-    releaseApprovalGraces: () => harness.processor().releaseApprovalGraces(harness.state()),
+    releaseApprovalGraces: () => harness.processor().releaseApprovalGraces(() => harness.state()),
   };
 }
 
@@ -552,6 +555,42 @@ describe("DeviceProcessor approval-push suppression", () => {
     expect(h.sent).toHaveLength(1);
     expect(h.events(TICKET)).toHaveLength(1);
     expect(h.graceAlarms).toEqual([]);
+  });
+
+  it("re-arms the grace alarm from CURRENT state: an obligation opened mid-release is not stranded", async () => {
+    const h = makeDeviceHarness();
+    const dialing = Promise.withResolvers<void>();
+    const expoAnswer = Promise.withResolvers<{ status: "ok"; ticketId: string }>();
+    h.gateway.send = () => {
+      dialing.resolve();
+      return expoAnswer.promise;
+    };
+    await h.play(["append", DEVICE_CREATED, approvalIntentRequested()], ["advanceTime", 1_500]);
+
+    // The grace alarm fires and starts the first batch's send; the Expo dial
+    // parks so a SECOND batch's intent can land mid-release — its delivery
+    // arms the grace slice for the new in-grace obligation.
+    const releasing = h.releaseApprovalGraces();
+    await dialing.promise;
+    await h.append(approvalIntentRequested({ approvalRequestEventOffset: 23 }));
+    const secondGraceUntil = h.clock.now + h.state().config.approvalGraceMs;
+    expect(h.graceAlarms.at(-1)).toBe(secondGraceUntil);
+
+    expoAnswer.resolve({ status: "ok", ticketId: "ticket-first" });
+    await releasing;
+    // The release's final repoint must derive from CURRENT state, not its
+    // entry snapshot: a snapshot-derived null here would wipe the newer
+    // obligation's alarm, and with no event ever marking a grace expiry,
+    // nothing would wake that send again.
+    expect(h.graceAlarms.at(-1)).toBe(secondGraceUntil);
+
+    await h.settle();
+    // Offset 3 is the first send's attempt-started evidence, so the second
+    // intent landed at offset 4 — still requested, waiting out its grace.
+    expect(h.state().notifications).toMatchObject({
+      "2": { status: "ticketed" },
+      "4": { status: "requested" },
+    });
   });
 });
 

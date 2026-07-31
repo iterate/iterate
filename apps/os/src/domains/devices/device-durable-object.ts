@@ -92,7 +92,7 @@ export class DeviceDurableObject extends DurableObject<Env> {
     try {
       await this.#registry.catchUp(DeviceProcessorContract.slug);
       await this.#deviceProcessor.checkReceipts(this.#reads.currentState);
-      await this.#deviceProcessor.releaseApprovalGraces(this.#reads.currentState);
+      await this.#deviceProcessor.releaseApprovalGraces(() => this.#reads.currentState);
       await this.#registry.catchUp(DeviceProcessorContract.slug);
     } catch (error) {
       // Cloudflare retries a throwing alarm only a bounded number of times; a

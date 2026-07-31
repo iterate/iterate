@@ -29,11 +29,16 @@ export function InThreadApprovalCard({
   // went out is a harmless no-op — so failures are ignored (the push simply
   // goes out, the designed fallback). useQuery fires it once per batch per
   // mount; the idempotency key makes any refire a stream-level no-op. Only a
-  // foregrounded app may claim — a backgrounded render is not the user
-  // looking (on web, AppState.currentState is always "active").
+  // foregrounded app may claim — the queryFn WAITS for the foreground rather
+  // than gating on a one-shot `enabled` read, so a card mounted while the
+  // app is backgrounded still claims the moment the user comes back (the
+  // card is still on screen then — navigation can't happen backgrounded).
+  // On web, AppState.currentState is always "active", so the wait is a
+  // no-op there.
   useQuery({
     queryKey: ["approval-presented", projectId, batch.offset],
     queryFn: async () => {
+      await appForegrounded();
       const project = await getProjectItx(baseUrl, projectId);
       await project.streams.get("/").append({
         type: EVENT.presented,
@@ -42,7 +47,6 @@ export function InThreadApprovalCard({
       });
       return true;
     },
-    enabled: AppState.currentState === "active",
     staleTime: Infinity,
     retry: false,
   });
@@ -149,3 +153,20 @@ const styles = StyleSheet.create({
   approveText: { color: colors.background, fontSize: 14, fontWeight: "600" },
   error: { color: colors.danger, fontSize: 12, marginTop: spacing.xs },
 });
+
+/**
+ * Resolves once the app is foregrounded — immediately when it already is
+ * (always, on web). One-shot: the listener removes itself on the first
+ * "active" transition, so an abandoned wait leaks nothing beyond a single
+ * subscription for the app's backgrounded lifetime.
+ */
+function appForegrounded(): Promise<void> {
+  if (AppState.currentState === "active") return Promise.resolve();
+  return new Promise((resolve) => {
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state !== "active") return;
+      subscription.remove();
+      resolve();
+    });
+  });
+}

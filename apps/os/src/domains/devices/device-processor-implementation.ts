@@ -193,18 +193,7 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
     // never come, and a grace expiry appends NO event — so point the DO's
     // grace alarm slice at the earliest pending expiry; its firing calls
     // releaseApprovalGraces below.
-    const nextGraceExpiry = Object.values(state.notifications)
-      .filter(
-        (notification) =>
-          notification.status === "requested" &&
-          notification.approvalRequestEventOffset !== undefined &&
-          notification.presentedAt === undefined,
-      )
-      .reduce<number | null>((earliest, notification) => {
-        const at = notification.requestedAt + state.config.approvalGraceMs;
-        if (at <= this.deps.now()) return earliest;
-        return earliest === null || at < earliest ? at : earliest;
-      }, null);
+    const nextGraceExpiry = this.#nextGraceExpiry(state);
     if (settlements.length > 0 || nextReceiptCheck !== null || nextGraceExpiry !== null) {
       runInBackground(async () => {
         if (settlements.length > 0) {
@@ -488,30 +477,36 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
 
   /**
    * Send every approval obligation whose grace window elapsed unclaimed —
-   * called by the device Durable Object's grace alarm with the current state,
-   * never from delivery: a grace expiry appends NO event, so no delivery pass
-   * would otherwise run the send. The rules mirror the at-head pass exactly:
-   * claimed obligations are skipped (the delivery pass that reduced the claim
-   * settles them `suppressed`), an expired one settles expired, a missing
-   * credential waits for the at-head device-unavailable sweep, the live-set
-   * guards against double dials, and obligations still inside grace re-arm
-   * the alarm. Errors propagate to the DO, which re-arms a retry alarm.
+   * called by the device Durable Object's grace alarm, never from delivery: a
+   * grace expiry appends NO event, so no delivery pass would otherwise run
+   * the send. The rules mirror the at-head pass exactly: claimed obligations
+   * are skipped (the delivery pass that reduced the claim settles them
+   * `suppressed`), an expired one settles expired, a missing credential waits
+   * for the at-head device-unavailable sweep, the live-set guards against
+   * double dials, and obligations still inside grace re-arm the alarm.
+   * Errors propagate to the DO, which re-arms a retry alarm.
+   *
+   * `readState` (not a snapshot): the sends await network, and deliveries
+   * interleave with those awaits — a newer intent can open (and arm the
+   * slice for) an in-grace obligation an entry snapshot never saw, and the
+   * final repoint below would wipe that arm with `null`, stranding the push
+   * (no event ever comes to recover a lapsed grace). Deriving the re-arm
+   * from CURRENT state after the sends closes that window.
+   * `checkReceipts`' final repoint has the same theoretical exposure, but at
+   * worst it delays a receipt POLL (each poll re-arms and the retention
+   * sweep still bounds it) — never a user-facing push — so it keeps its
+   * simpler snapshot shape.
    */
-  async releaseApprovalGraces(state: DeviceProcessorState): Promise<void> {
+  async releaseApprovalGraces(readState: () => DeviceProcessorState): Promise<void> {
+    const state = readState();
     const now = this.deps.now();
-    let nextGraceExpiry: number | null = null;
     for (const [offset, notification] of Object.entries(state.notifications)) {
       if (
         notification.status !== "requested" ||
         notification.approvalRequestEventOffset === undefined ||
-        notification.presentedAt !== undefined
+        notification.presentedAt !== undefined ||
+        now < notification.requestedAt + state.config.approvalGraceMs
       ) {
-        continue;
-      }
-      const graceUntil = notification.requestedAt + state.config.approvalGraceMs;
-      if (now < graceUntil) {
-        nextGraceExpiry =
-          nextGraceExpiry === null ? graceUntil : Math.min(nextGraceExpiry, graceUntil);
         continue;
       }
       const requestOffset = Number(offset);
@@ -543,7 +538,30 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
         requestOffset,
       });
     }
-    await this.deps.repointApprovalGraceAlarm(nextGraceExpiry);
+    await this.deps.repointApprovalGraceAlarm(this.#nextGraceExpiry(readState()));
+  }
+
+  /**
+   * The earliest pending grace expiry among unclaimed approval obligations
+   * still inside their window, or null when none — what the grace alarm
+   * slice points at. One derivation shared by the at-head pass and
+   * releaseApprovalGraces, so the alarm can never disagree with the send
+   * gate about what is owed.
+   */
+  #nextGraceExpiry(state: DeviceProcessorState): number | null {
+    const now = this.deps.now();
+    return Object.values(state.notifications)
+      .filter(
+        (notification) =>
+          notification.status === "requested" &&
+          notification.approvalRequestEventOffset !== undefined &&
+          notification.presentedAt === undefined,
+      )
+      .reduce<number | null>((earliest, notification) => {
+        const at = notification.requestedAt + state.config.approvalGraceMs;
+        if (at <= now) return earliest;
+        return earliest === null || at < earliest ? at : earliest;
+      }, null);
   }
 
   /**

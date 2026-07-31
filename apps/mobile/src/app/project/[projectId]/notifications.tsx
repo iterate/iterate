@@ -119,7 +119,7 @@ export default function NotificationsScreen() {
 }
 
 /** Same-day rows show the time; older ones the date — enough for a flat list. */
-function formatRequestedAt(iso: string): string {
+function formatRequestedAt(iso: string) {
   const at = new Date(iso);
   const now = new Date();
   return at.toDateString() === now.toDateString()

@@ -56,6 +56,14 @@ export function deriveDeviceNotifications(events: readonly StreamEvent[]): Devic
       event.type === "events.iterate.com/device/notification-requested" ||
       event.type === "events.iterate.com/notification/requested"
     ) {
+      // The event TYPE is the shape guarantee: the device processor's
+      // contract (apps/os/src/domains/devices/device-processor-contract.ts)
+      // schema-validates both request doors before they ever commit. The
+      // cast names only the fields this view reads — with runtime fallbacks
+      // anyway, so a malformed row degrades instead of crashing the list.
+      // Same cast-plus-guards boundary approvals.ts uses; importing the real
+      // zod contract would drag the OS processor machinery into the app
+      // bundle for shapes the server already enforced.
       const payload = event.payload as {
         title?: string;
         body?: string;
@@ -71,6 +79,10 @@ export function deriveDeviceNotifications(events: readonly StreamEvent[]): Devic
       });
       continue;
     }
+    // Every remaining consumed type (attempt-started / ticket-observed /
+    // settled) carries a contract-validated `requestOffset` pointing back at
+    // its obligation; the cast is optional-typed and the typeof guard drops
+    // anything that still fails it rather than trusting the assertion.
     const requestOffset = (event.payload as { requestOffset?: number }).requestOffset;
     if (typeof requestOffset !== "number") continue;
     const row = rows.get(requestOffset);
@@ -80,6 +92,10 @@ export function deriveDeviceNotifications(events: readonly StreamEvent[]): Devic
     } else if (event.type === "events.iterate.com/device/notification-ticket-observed") {
       row.status = { kind: "sent", label: "Sent" };
     } else if (event.type === "events.iterate.com/device/notification-settled") {
+      // Optional-typed cast on purpose: settledStatus switches on the
+      // outcome's `kind` discriminator and answers "Delivery unknown" for
+      // anything unrecognized, so an outcome added by a NEWER server renders
+      // as a row instead of breaking the reduce.
       row.status = settledStatus((event.payload as { outcome?: { kind?: string } }).outcome);
     }
   }
