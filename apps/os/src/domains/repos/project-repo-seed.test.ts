@@ -3,8 +3,9 @@ import { projectRepoSeedFiles, templateIterateRepoPkgSpecs } from "./project-rep
 import { PROJECT_REPO_INITIAL_FILES } from "./config-repo-template.generated.ts";
 
 const TEMPLATE_DOCS_SPEC = "https://pkg.pr.new/iterate/iterate/@iterate-com/docs@main";
+const TEMPLATE_TASKS_SPEC = "https://pkg.pr.new/iterate/iterate/@iterate-com/tasks@main";
 const TEMPLATE_ITERATE_SPEC = "https://pkg.pr.new/iterate/iterate/iterate@main";
-const TEMPLATE_PACKAGE_SPECS = [TEMPLATE_DOCS_SPEC, TEMPLATE_ITERATE_SPEC];
+const TEMPLATE_PACKAGE_SPECS = [TEMPLATE_DOCS_SPEC, TEMPLATE_TASKS_SPEC, TEMPLATE_ITERATE_SPEC];
 
 test("no knobs seed the template verbatim", () => {
   expect(projectRepoSeedFiles({})).toBe(PROJECT_REPO_INITIAL_FILES);
@@ -12,9 +13,11 @@ test("no knobs seed the template verbatim", () => {
 
 test("the seed keeps the root worker and hosted app proxies", () => {
   const worker = projectRepoSeedFiles({}).find((file) => file.path === "worker.ts");
+  expect(worker?.content).toContain('from "@iterate-com/tasks"');
   expect(worker?.content).toContain('if (app === "tasks")');
-  expect(worker?.content).toContain('itx.kv.get("tasks-app-origin")');
-  expect(worker?.content).toContain('"tasks.iterate.workers.dev"');
+  expect(worker?.content).toContain('originOverrideKvKey: "tasks-app-origin"');
+  expect(worker?.content).toContain('"https://tasks.iterate.workers.dev"');
+  expect(worker?.content).toContain("return this.#tasksApp.fetch(req)");
   expect(worker?.content).toContain('from "@iterate-com/docs"');
   expect(worker?.content).toContain('if (app === "docs")');
   expect(worker?.content).toContain('originOverrideKvKey: "docs-app-origin"');

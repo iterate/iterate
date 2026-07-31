@@ -28,19 +28,23 @@ export const Route = createFileRoute("/w/")({
 function BoardLensPage() {
   const search = Route.useSearch();
   const navigate = useNavigate({ from: Route.fullPath });
-  const repoPath = normalizeRepoPath(search.repo) ?? DEFAULT_REPO_PATH;
+  // No silent fallback here: a deep link with a repo the board rejects must
+  // say so, not quietly land the visitor on the default mount.
+  const repoPath = normalizeRepoPath(search.repo);
   const patchSearch = useCallback(
     (patch: Partial<BoardSearch>) =>
       void navigate({ replace: true, search: (current) => ({ ...current, ...patch }) }),
     [navigate],
   );
-  if (!search.workspace.startsWith("/workspaces/")) {
+  if (!search.workspace.startsWith("/workspaces/") || repoPath === null) {
     return (
       <main className="mx-auto max-w-md p-8 text-sm text-muted-foreground">
-        <h1 className="mb-2 text-base font-semibold text-foreground">No workspace addressed</h1>
+        <h1 className="mb-2 text-base font-semibold text-foreground">
+          {repoPath === null ? "Bad repo in this link" : "No workspace addressed"}
+        </h1>
         <p>
-          This form of the board needs a <code>?workspace=/workspaces/…</code> deep link (the kind
-          agents mint via <code>tasks.link</code>).{" "}
+          This form of the board needs a <code>?workspace=/workspaces/…</code> deep link with a
+          valid <code>?repo=/repos/…</code> (the kind agents mint via <code>tasks.link</code>).{" "}
           <Link className="underline underline-offset-2" to="/">
             Pick a workspace
           </Link>{" "}

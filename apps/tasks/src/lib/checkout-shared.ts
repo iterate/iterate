@@ -40,10 +40,12 @@ export function checkoutWorkspacePath(checkoutId: string, repoPath: string): str
 }
 
 /**
- * Inverse of checkoutWorkspacePath, hash-verified: the slug alone is not
- * injective, so the reconstructed repo path must reproduce the embedded
- * hash. Returns null for anything that is not a board workspace path (an
- * agent workspace, a slug whose repo had "--" in a segment name, ...).
+ * Inverse of checkoutWorkspacePath, hash-verified. The slug alone is not
+ * injective ("--" is both the path separator and a legal repo-name
+ * substring), so every reading of the slug is enumerated — bounded — and
+ * the embedded hash picks the real one. Returns null for anything that is
+ * not a board workspace path (an agent workspace, a foreign name under the
+ * tasks namespace, ...).
  */
 export function parseBoardWorkspacePath(
   path: string,
@@ -53,9 +55,20 @@ export function parseBoardWorkspacePath(
   );
   if (match === null) return null;
   const [, checkoutId, slug, hash] = match;
-  const repoPath = `/${slug!.replaceAll("--", "/")}`;
-  if (fnv1a32Hex(repoPath) !== hash || normalizeRepoPath(repoPath) === null) return null;
-  return { checkoutId: checkoutId!, repoPath };
+  const parts = slug!.split("--");
+  // 2^6 candidate readings is plenty for real repo names; anything wilder
+  // is not a path this app minted.
+  if (parts.length < 2 || parts.length > 7) return null;
+  for (let mask = 0; mask < 1 << (parts.length - 1); mask++) {
+    let repoPath = `/${parts[0]}`;
+    for (let index = 1; index < parts.length; index++) {
+      repoPath += (mask & (1 << (index - 1))) === 0 ? `/${parts[index]}` : `--${parts[index]}`;
+    }
+    if (fnv1a32Hex(repoPath) === hash && normalizeRepoPath(repoPath) !== null) {
+      return { checkoutId: checkoutId!, repoPath };
+    }
+  }
+  return null;
 }
 
 /**
@@ -73,12 +86,16 @@ export type BoardAddress = {
 
 /**
  * Publishing is the workspace owner's act: the tasks app owns only its own
- * /workspaces/tasks/ naming (boards, shared by every project member). A lens
- * on any other workspace — an agent's, mid-thought — is a guest: read,
- * comment, edit, but never Commit or Discard-all.
+ * /workspaces/tasks/ naming (boards, shared by every project member), and a
+ * board workspace ENCODES its one repo — so ownership requires the path to
+ * parse as a board AND the lens to be scoped to that board's own repo. A
+ * lens on anything else (an agent's workspace mid-thought, an unparseable
+ * tasks-namespace path, a board opened against a different mount) is a
+ * guest: read, comment, edit, but never Commit or Discard-all.
  */
-export function isGuestWorkspacePath(workspacePath: string): boolean {
-  return !workspacePath.startsWith("/workspaces/tasks/");
+export function isGuestWorkspacePath(workspacePath: string, repoPath: string): boolean {
+  const board = parseBoardWorkspacePath(workspacePath);
+  return board === null || board.repoPath !== repoPath;
 }
 
 /** 32-bit FNV-1a as 8 lowercase hex chars. */

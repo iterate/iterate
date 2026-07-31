@@ -42,7 +42,6 @@
   },
   "devDependencies": {
     "@codemirror/state": "^6.7.1",
-    "@codemirror/view": "^6.43.6",
     "@cloudflare/vite-plugin": "catalog:cloudflare",
     "@cloudflare/workers-types": "catalog:cloudflare",
     "@dnd-kit/react": "^0.5.0",

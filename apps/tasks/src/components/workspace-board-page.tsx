@@ -102,7 +102,7 @@ export function WorkspaceBoardPage({
   patchSearch: (patch: Partial<BoardSearch>) => void;
 }) {
   const { repoPath, workspacePath } = address;
-  const guest = isGuestWorkspacePath(workspacePath);
+  const guest = isGuestWorkspacePath(workspacePath, repoPath);
   const board = useWorkspaceBoard(address);
   // Auto-commit defaults OFF on the workspace board: every commit advances
   // the redline baseline, and a 60s autosave would wipe "what everyone did"
@@ -382,12 +382,11 @@ export function WorkspaceBoardPage({
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "c" || event.metaKey || event.ctrlKey || event.altKey) return;
-      const target = event.target as HTMLElement | null;
       if (
-        target !== null &&
-        (target.isContentEditable ||
-          ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) ||
-          target.closest(".cm-editor") !== null)
+        event.target instanceof HTMLElement &&
+        (event.target.isContentEditable ||
+          ["INPUT", "TEXTAREA", "SELECT"].includes(event.target.tagName) ||
+          event.target.closest(".cm-editor") !== null)
       ) {
         return;
       }

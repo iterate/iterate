@@ -23,6 +23,7 @@ import {
   DEFAULT_REPO_PATH,
   checkoutWorkspacePath,
   isCheckoutId,
+  isGuestWorkspacePath,
   normalizeRepoPath,
   parseBoardWorkspacePath,
 } from "./lib/checkout-shared.ts";
@@ -317,13 +318,15 @@ class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
 
   /**
    * Publishing is the workspace OWNER's act. The tasks app owns only its own
-   * /workspaces/tasks/ naming (boards, shared by every project member); a
-   * lens on any other workspace is a guest — it reads, comments, and edits,
-   * but a commit would publish the mount's ENTIRE dirty set (the owning
-   * agent's uncommitted work included), so the owner acts are refused here.
+   * /workspaces/tasks/ naming (boards, shared by every project member), and
+   * a board workspace ENCODES its one repo — so owner acts additionally
+   * require this capability to be scoped to that repo. Everything else is a
+   * guest lens: it reads, comments, and edits, but a commit would publish a
+   * mount's ENTIRE dirty set (the owning agent's uncommitted work included),
+   * so the owner acts are refused here.
    */
   #assertOwnerAct(operation: string): void {
-    if (!this.#workspacePath.startsWith("/workspaces/tasks/")) {
+    if (isGuestWorkspacePath(this.#workspacePath, this.#repoPath)) {
       throw new Error(
         `${operation} is the workspace owner's act — this board is a guest lens on ${this.#workspacePath}; ask the workspace's owner (its agent) to publish`,
       );

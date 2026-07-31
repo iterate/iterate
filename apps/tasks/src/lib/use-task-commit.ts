@@ -2,8 +2,8 @@ import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react"
 import type { TaskChangeSummary } from "../state.ts";
 import { fallbackCommitMessage } from "../tasks-model.ts";
 
-/** The slice of the server api this hook needs — board sessions and checkout clients both fit. */
-export type CommitMessageApi = {
+/** The slice of the server api this hook needs. */
+type CommitMessageApi = {
   generateCommitMessage(input: { changes: TaskChangeSummary[] }): Promise<string>;
 };
 

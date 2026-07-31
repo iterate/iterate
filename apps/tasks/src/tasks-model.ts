@@ -200,23 +200,6 @@ export function fallbackCommitMessage(changes: readonly TaskChangeSummary[]): st
   return body === "" ? "Update tasks" : `${body[0]!.toUpperCase()}${body.slice(1)}`;
 }
 
-/** Prompt payload for `ai.run` commit-message generation. */
-export function taskCommitMessagePrompt(changes: readonly TaskChangeSummary[]): {
-  system: string;
-  user: string;
-} {
-  const lines = changes.map((change) => {
-    const verb =
-      change.status === "added" ? "Added" : change.status === "deleted" ? "Deleted" : "Edited";
-    return `- ${verb}: ${change.title} (${change.path})`;
-  });
-  return {
-    system:
-      "You write short git commit messages for a task board. Reply with one line only, imperative mood, no quotes, no trailing period, max 72 characters.",
-    user: `Write a commit message for these task changes:\n${lines.join("\n")}`,
-  };
-}
-
 /**
  * The four canonical columns in board order, then any custom states as
  * trailing columns. Assignment goes by normalized state, so `backlog` cards

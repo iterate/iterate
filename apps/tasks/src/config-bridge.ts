@@ -103,10 +103,16 @@ export function requireWorkspacePath(value: string): string {
   return requireCanonicalPath(value, "workspace path");
 }
 
-/** A board's repo path is a fully qualified /repos/** mount path. */
+/** A board's repo path is a fully qualified /repos/** mount path — the SAME
+ * rule the board applies on open (normalizeRepoPath), so a minted link can
+ * never carry a repo the route would reject. */
 export function requireRepoPath(value: string): string {
   const path = requireCanonicalPath(value, "repo path");
-  if (!path.startsWith("/repos/") || path.split("/").length < 3) {
+  const segments = path.startsWith("/repos/") ? path.slice(1).split("/") : [];
+  if (
+    segments.length < 2 ||
+    segments.some((segment) => !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(segment))
+  ) {
     throw new Error(`repo path must name a repo under "/repos/": ${JSON.stringify(value)}`);
   }
   return path;
