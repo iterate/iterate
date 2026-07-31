@@ -21,6 +21,10 @@ minimumReleaseAgeExclude:
   # OpenTUI is exact-pinned in its two consumers. Allow deliberate same-day
   # upgrades without weakening the age gate for the rest of the dependency graph.
   - '@opentui/*'
+  # env-manager deliberately follows the exact Alchemy v2 prerelease and its
+  # same-day Distilled Cloudflare provider set.
+  - alchemy
+  - '@distilled.cloud/*'
   - miniflare
   - wrangler
   - workerd

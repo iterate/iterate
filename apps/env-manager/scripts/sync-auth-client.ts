@@ -1,14 +1,14 @@
 /**
- * Provision env-manager's production Auth relying-party credentials.
+ * Provision Cloudflare Access's production Auth relying-party credentials.
  *
  * Run through Auth's production Doppler config:
  *
  *   doppler run --project auth --config prd -- \
  *     pnpm --dir apps/env-manager sync-auth-client
  *
- * The Auth database creates or adopts the client through ensureClient, the
- * resulting credentials are written to env-manager/prd, and the same client
- * is mirrored into auth/prd's deploy-time OAuth seed.
+ * The Auth database creates or adopts the client through ensureClient. Its
+ * credentials are written to env-manager/prd for access.alchemy.ts and mirrored
+ * into auth/prd's deploy-time OAuth seed.
  */
 import { execFileSync, spawnSync } from "node:child_process";
 import { createAuthContractClient } from "@iterate-com/auth-contract";
@@ -35,9 +35,9 @@ if (!serviceToken) {
   );
 }
 
-const referenceId = "env-manager:prd:web";
-const clientName = "Environment manager prd web";
-const redirectURIs = [`${envManagerEnv.baseUrl}/api/iterate-auth/callback`];
+const referenceId = "cloudflare-access:iterate-dev-preview";
+const clientName = "Cloudflare Access (iterate dev/preview)";
+const redirectURIs = [`https://${envManagerEnv.accessTeamDomain}/cdn-cgi/access/callback`];
 const authClient = createAuthContractClient({
   baseUrl: envManagerEnv.authBaseUrl,
   serviceToken,
@@ -49,20 +49,20 @@ const client = await authClient.internal.oauth.ensureClient({
   existingClientId: getDopplerSecret(
     "env-manager",
     envManagerEnv.dopplerConfig,
-    "APP_CONFIG_ITERATE_AUTH__CLIENT_ID",
+    "CLOUDFLARE_ACCESS_OIDC_CLIENT_ID",
   ),
   existingClientSecret: getDopplerSecret(
     "env-manager",
     envManagerEnv.dopplerConfig,
-    "APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET",
+    "CLOUDFLARE_ACCESS_OIDC_CLIENT_SECRET",
   ),
 });
 
 setDopplerSecrets("env-manager", envManagerEnv.dopplerConfig, {
-  APP_CONFIG_ITERATE_AUTH__CLIENT_ID: client.clientId,
-  APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET: client.clientSecret,
+  CLOUDFLARE_ACCESS_OIDC_CLIENT_ID: client.clientId,
+  CLOUDFLARE_ACCESS_OIDC_CLIENT_SECRET: client.clientSecret,
 });
-console.log(`env-manager/prd OAuth client ensured (${client.clientId})`);
+console.log(`Cloudflare Access OAuth client ensured (${client.clientId})`);
 
 upsertAuthSeedOAuthClient({
   clientId: client.clientId,

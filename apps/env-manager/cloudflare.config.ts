@@ -17,18 +17,13 @@ export default defineWorker({
     "nodejs_compat_populate_process_env",
     "global_fetch_strictly_public",
   ],
+  workersDev: false,
   domains: [new URL(envManagerEnv.baseUrl).hostname],
   assets: {
     notFoundHandling: "single-page-application",
     runWorkerFirst: ["/api/*"],
   },
   env: {
-    APP_CONFIG_BASE_URL: bindings.text(envManagerEnv.baseUrl),
-    APP_CONFIG_ITERATE_AUTH__ISSUER: bindings.text(`${envManagerEnv.authBaseUrl}/api/auth`),
-    APP_CONFIG_ITERATE_AUTH__RESOURCE: bindings.text(envManagerEnv.baseUrl),
-    APP_CONFIG_ITERATE_AUTH__CLIENT_ID: bindings.secret(),
-    APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET: bindings.secret(),
-    APP_CONFIG_ITERATE_AUTH__JWKS: bindings.secret(),
     ENVIRONMENTS: bindings.durableObject({
       workerName: envManagerEnv.workerName,
       exportName: "EnvironmentDurableObject",

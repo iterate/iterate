@@ -1,12 +1,19 @@
 import * as Credentials from "@distilled.cloud/cloudflare/Credentials";
 import * as Apply from "alchemy/Apply";
 import { Cli, type CLIService } from "alchemy/Cli/Cli";
-import * as Cloudflare from "alchemy/Cloudflare";
+import type {
+  CloudflareEnvironment as CloudflareEnvironmentRequirement,
+  Providers as CloudflareProviders,
+} from "alchemy/Cloudflare";
+import { Database, ProviderLive as DatabaseProviderLive } from "alchemy/Cloudflare/D1";
+import { Namespace, ProviderLive as NamespaceProviderLive } from "alchemy/Cloudflare/KV";
+import { Bucket, ProviderLive as BucketProviderLive } from "alchemy/Cloudflare/R2";
 import * as Plan from "alchemy/Plan";
 import * as Provider from "alchemy/Provider";
 import * as Stack from "alchemy/Stack";
 import { Stage } from "alchemy/Stage";
 import type * as Config from "effect/Config";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
@@ -18,29 +25,41 @@ import { makeSqliteAlchemyState } from "./sqlite-state.ts";
 
 export const ENVIRONMENT_STACK_NAME = "IterateDataResources";
 
+const EnvironmentProviders = Provider.ProviderCollection<CloudflareProviders>()("Cloudflare");
+
+const CloudflareEnvironment = Context.Service<
+  CloudflareEnvironmentRequirement,
+  Effect.Effect<{
+    type: "apiToken";
+    apiToken: Redacted.Redacted<string>;
+    accountId: string;
+    source: { type: "env" };
+  }>
+>()("Cloudflare::CloudflareEnvironment");
+
 function makeProviders(input: { accountId: string; apiToken: string }) {
   const providerServices = Layer.mergeAll(
-    Cloudflare.D1.DatabaseProvider(),
-    Cloudflare.KV.NamespaceProvider(),
-    Cloudflare.R2.BucketProvider(),
+    DatabaseProviderLive(),
+    NamespaceProviderLive(),
+    BucketProviderLive(),
   );
   const cloudflareApi = Layer.mergeAll(
     Credentials.fromApiToken({ apiToken: input.apiToken }),
     FetchHttpClient.layer,
     Layer.succeed(
-      Cloudflare.CloudflareEnvironment,
+      CloudflareEnvironment,
       Effect.succeed({
         type: "apiToken",
         apiToken: Redacted.make(input.apiToken),
         accountId: input.accountId,
         source: { type: "env" },
-      } satisfies Effect.Success<(typeof Cloudflare.CloudflareEnvironment)["Service"]>),
+      }),
     ),
   );
 
   return Layer.effect(
-    Cloudflare.Providers,
-    Provider.collection([Cloudflare.D1.Database, Cloudflare.KV.Namespace, Cloudflare.R2.Bucket]),
+    EnvironmentProviders,
+    Provider.collection([Database, Namespace, Bucket]),
   ).pipe(Layer.provideMerge(providerServices), Layer.provideMerge(cloudflareApi), Layer.orDie);
 }
 

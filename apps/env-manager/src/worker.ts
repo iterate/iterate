@@ -1,11 +1,7 @@
 import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
-import { withAuthenticationResponseHeaders } from "@iterate-com/auth/server";
-import { createEnvManagerIterateAuth, resolveRequestPrincipal } from "./auth.ts";
-import { parseConfig } from "./config.ts";
 import { EnvironmentDurableObject } from "./environment-durable-object.ts";
 import { Env } from "./env.ts";
 import { isCompiledEnvironmentStage } from "./environments.ts";
-import type { RequestContext } from "./request-context.ts";
 
 export { EnvironmentDurableObject };
 
@@ -15,37 +11,27 @@ export default createServerEntry({
   async fetch(request) {
     const url = new URL(request.url);
     const match = ENVIRONMENT_API.exec(url.pathname);
-    const config = parseConfig(Env);
 
     if (match !== null) {
       const stage = decodeURIComponent(match[1]);
       if (!isCompiledEnvironmentStage(stage)) {
         return new Response("Unknown environment.", { status: 404 });
       }
-      const auth = createEnvManagerIterateAuth(config);
-      const resolved = await resolveRequestPrincipal({ auth, headers: request.headers });
-      if (resolved.principal?.isAdmin !== true) {
-        return withAuthenticationResponseHeaders(
-          new Response("Iterate admin authentication required.", { status: 401 }),
-          resolved.responseHeaders,
-        );
-      }
       const headers = new Headers(request.headers);
-      // Always overwrite this internal assertion so an external caller cannot
-      // promote a bearer token into the browser-only production destroy lane.
-      headers.set("x-iterate-env-manager-browser-session", resolved.session === null ? "0" : "1");
-      const response = await Env.ENVIRONMENTS.getByName(stage).fetch(
-        new Request(request, { headers }),
+      // Access is the public authorization boundary. This assertion only
+      // distinguishes a human Access session from a service token for the
+      // browser-only production-destroy guard.
+      headers.set(
+        "x-iterate-env-manager-browser-session",
+        request.headers.has("cf-access-authenticated-user-email") ? "1" : "0",
       );
-      return withAuthenticationResponseHeaders(response, resolved.responseHeaders);
+      return await Env.ENVIRONMENTS.getByName(stage).fetch(new Request(request, { headers }));
     }
 
     if (url.pathname === "/api/health") {
       return new Response("ok", { headers: { "content-type": "text/plain" } });
     }
 
-    return handler.fetch(request, {
-      context: { config, rawRequest: request } satisfies RequestContext,
-    });
+    return handler.fetch(request);
   },
 });

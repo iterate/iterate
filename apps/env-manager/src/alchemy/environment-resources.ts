@@ -1,4 +1,6 @@
-import * as Cloudflare from "alchemy/Cloudflare";
+import { Database } from "alchemy/Cloudflare/D1";
+import { Namespace } from "alchemy/Cloudflare/KV";
+import { Bucket } from "alchemy/Cloudflare/R2";
 import type { InputProps } from "alchemy/Input";
 import * as Effect from "effect/Effect";
 import type { CompiledEnvironment } from "../environments.ts";
@@ -10,7 +12,7 @@ import type { AlchemyResources } from "../state.ts";
 export const makeEnvironmentResources = (environment: CompiledEnvironment) =>
   Effect.gen(function* () {
     const physicalStage = environment.stage.replaceAll("_", "-");
-    const authDb = yield* Cloudflare.D1.Database("AuthDatabase", {
+    const authDb = yield* Database("AuthDatabase", {
       name: `iterate-${physicalStage}-auth`,
     });
 
@@ -23,16 +25,16 @@ export const makeEnvironmentResources = (environment: CompiledEnvironment) =>
     }
 
     const isPreview = environment.stage.startsWith("preview_");
-    const projectDirectory = yield* Cloudflare.KV.Namespace("ProjectDirectory", {
+    const projectDirectory = yield* Namespace("ProjectDirectory", {
       title: `iterate-${physicalStage}-project-directory`,
     });
-    const workerBuildCache = yield* Cloudflare.KV.Namespace("WorkerBuildCache", {
+    const workerBuildCache = yield* Namespace("WorkerBuildCache", {
       title: `iterate-${physicalStage}-worker-build-cache`,
     });
-    const semaphoreDb = yield* Cloudflare.D1.Database("SemaphoreDatabase", {
+    const semaphoreDb = yield* Database("SemaphoreDatabase", {
       name: `iterate-${physicalStage}-semaphore`,
     });
-    const files = yield* Cloudflare.R2.Bucket("Files", {
+    const files = yield* Bucket("Files", {
       name: `iterate-${physicalStage}-files`,
       lifecycleRules: isPreview
         ? [
@@ -43,7 +45,7 @@ export const makeEnvironmentResources = (environment: CompiledEnvironment) =>
           ]
         : [],
     });
-    const sandboxes = yield* Cloudflare.R2.Bucket("Sandboxes", {
+    const sandboxes = yield* Bucket("Sandboxes", {
       name: `iterate-${physicalStage}-sandboxes`,
       lifecycleRules: [
         {

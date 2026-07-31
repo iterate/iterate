@@ -1,81 +1,49 @@
-import { NodeServices } from "@effect/platform-node";
 import WebSocket from "ws";
 import { newWebSocketRpcSession, type RpcStub } from "iterate/sdk/capnweb";
-import * as ChildProcess from "effect/unstable/process/ChildProcess";
-import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner";
-import * as Effect from "effect/Effect";
 import { z } from "zod";
 import { envManagerEnv } from "../../../envs.ts";
-import { mintForgedAccessToken } from "../../../scripts/auth/forge-token.ts";
+import { loadDopplerSecrets } from "../../../scripts/lib/env-context.ts";
 import { destroyEnvironmentInBatches } from "../src/destroy-environment-client.ts";
 import { isCompiledEnvironmentStage } from "../src/environments.ts";
 import { EnvironmentState, type EnvironmentApi, type EnvironmentStage } from "../src/state.ts";
 
-const DopplerSecrets = z.looseObject({
-  AUTH_FORGE_ES256_PRIVATE_JWK: z.string().optional(),
+const AccessCredentials = z.object({
+  CLOUDFLARE_ACCESS_CLIENT_ID: z.string().trim().min(1),
+  CLOUDFLARE_ACCESS_CLIENT_SECRET: z.string().trim().min(1),
 });
 
-const loadDopplerSecrets = Effect.fn("envManager.loadDopplerSecrets")(function* (
-  project: string,
-  config: string,
-) {
-  const spawner = yield* ChildProcessSpawner;
-  const output = yield* spawner.string(
-    ChildProcess.make(
-      "doppler",
-      [
-        "secrets",
-        "download",
-        "--no-file",
-        "--format",
-        "json",
-        "--project",
-        project,
-        "--config",
-        config,
-      ],
-      { stdin: "inherit", stderr: "inherit" },
-    ),
-  );
-  return yield* Effect.try({
-    try: () => DopplerSecrets.parse(JSON.parse(output)),
-    catch: (cause) =>
-      new Error(`Doppler returned invalid secrets for ${project}/${config}.`, { cause }),
-  });
-});
+let accessCredentials: z.output<typeof AccessCredentials> | undefined;
+let accessCookie: Promise<string> | undefined;
 
-let dopplerForgeKey: Promise<string | undefined> | undefined;
-
-function loadDopplerForgeKey(): Promise<string | undefined> {
-  dopplerForgeKey ??= Effect.runPromise(
-    loadDopplerSecrets("_shared", envManagerEnv.dopplerConfig).pipe(
-      Effect.map(({ AUTH_FORGE_ES256_PRIVATE_JWK }) => AUTH_FORGE_ES256_PRIVATE_JWK),
-      Effect.provide(NodeServices.layer),
-      Effect.scoped,
-    ),
-  );
-  return dopplerForgeKey;
+function managerAccessCredentials() {
+  return (accessCredentials ??= AccessCredentials.parse(
+    process.env.CLOUDFLARE_ACCESS_CLIENT_ID
+      ? process.env
+      : loadDopplerSecrets("env-manager", envManagerEnv.dopplerConfig),
+  ));
 }
 
-async function managerBearerToken(): Promise<string> {
-  const explicit = process.env.ENV_MANAGER_API_TOKEN?.trim();
-  if (explicit) return explicit;
-
-  const forgeKey =
-    process.env.AUTH_FORGE_ES256_PRIVATE_JWK?.trim() ?? (await loadDopplerForgeKey());
-  if (forgeKey === undefined) {
-    throw new Error(
-      "Environment-manager authentication requires ENV_MANAGER_API_TOKEN or " +
-        "AUTH_FORGE_ES256_PRIVATE_JWK.",
-    );
-  }
-  return await mintForgedAccessToken({
-    forgePrivateJwk: forgeKey,
-    issuer: `${envManagerEnv.authBaseUrl}/api/auth`,
-    audience: new URL(envManagerEnv.baseUrl).origin,
-    email: "env-manager-cli@iterate.com",
-    admin: true,
-  });
+function managerAccessCookie(): Promise<string> {
+  return (accessCookie ??= (async () => {
+    const credentials = managerAccessCredentials();
+    const response = await fetch(new URL("/api/health", envManagerEnv.baseUrl), {
+      headers: {
+        "CF-Access-Client-Id": credentials.CLOUDFLARE_ACCESS_CLIENT_ID,
+        "CF-Access-Client-Secret": credentials.CLOUDFLARE_ACCESS_CLIENT_SECRET,
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`Cloudflare Access authentication failed with HTTP ${response.status}.`);
+    }
+    const cookie = response.headers
+      .getSetCookie()
+      .find((value) => value.startsWith("CF_Authorization="))
+      ?.split(";", 1)[0];
+    if (cookie === undefined) {
+      throw new Error("Cloudflare Access did not return an authorization cookie.");
+    }
+    return cookie;
+  })());
 }
 
 export function environmentStage(value: string): EnvironmentStage {
@@ -93,7 +61,7 @@ async function connect(stage: EnvironmentStage): Promise<{
   endpoint.protocol = endpoint.protocol === "https:" ? "wss:" : "ws:";
   const socket = new WebSocket(endpoint, {
     handshakeTimeout: 15_000,
-    headers: { authorization: `Bearer ${await managerBearerToken()}` },
+    headers: { Cookie: await managerAccessCookie() },
   });
   await new Promise<void>((resolve, reject) => {
     const cleanup = () => {

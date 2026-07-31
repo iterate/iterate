@@ -20,6 +20,8 @@
     "types": ["@cloudflare/workers-types", "node", "vite/client"]
   },
   "include": [
+    "access.alchemy.ts",
+    "cloudflare.config.ts",
     "scripts/**/*.ts",
     "src/**/*.ts",
     "src/**/*.tsx",

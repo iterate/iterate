@@ -15,6 +15,8 @@ export interface SmokeProbe {
   /** Which HTTP statuses count as healthy for this probe. */
   ok: (status: number) => boolean;
   label: string;
+  /** Authentication or routing headers required by the deployed endpoint. */
+  headers?: Record<string, string>;
 }
 
 /**
@@ -97,7 +99,7 @@ export async function deployApp<E extends DeployableEnv>(input: {
     ctx: EnvContext<E>,
     secretValues: Record<string, string>,
   ) => string[] | undefined;
-  smokes: (env: E) => SmokeProbe[];
+  smokes: (env: E, ctx: EnvContext<E>) => SmokeProbe[];
 }) {
   const ctx = await resolveEnvContext({
     envs: input.envs,
@@ -159,8 +161,8 @@ export async function deployApp<E extends DeployableEnv>(input: {
     extraDeployArgs: extraDeployArgs.length > 0 ? extraDeployArgs : undefined,
   });
 
-  for (const probe of input.smokes(ctx.env)) {
-    await smoke(probe.url, probe.ok, probe.label);
+  for (const probe of input.smokes(ctx.env, ctx)) {
+    await smoke(probe.url, probe.ok, probe.label, probe.headers);
   }
   await input.afterDeploy?.(ctx, secretValues);
 

@@ -8,6 +8,7 @@
   },
   "scripts": {
     "build": "vite build && tsc --noEmit",
+    "access:deploy": "alchemy deploy ./access.alchemy.ts --stage prd --yes",
     "cli": "tsx ./scripts/cli.ts",
     "deploy": "tsx ./scripts/deploy.ts",
     "dev": "vite dev",
@@ -17,13 +18,12 @@
   },
   "dependencies": {
     "@distilled.cloud/cloudflare": "0.30.2",
-    "@iterate-com/auth": "workspace:*",
     "@iterate-com/auth-contract": "workspace:*",
     "@iterate-com/shared": "workspace:*",
     "@iterate-com/ui": "workspace:*",
     "@tanstack/react-router": "1.170.15",
     "@tanstack/react-start": "1.168.25",
-    "alchemy": "https://pkg.ing/alchemy/cd6671e297375282104ba81ec6dcb6347ab7a0fd",
+    "alchemy": "2.0.0-beta.66",
     "capnweb": "npm:@iterate-com/capnweb@^0.10.0",
     "effect": "4.0.0-beta.102",
     "iterate": "workspace:*",
