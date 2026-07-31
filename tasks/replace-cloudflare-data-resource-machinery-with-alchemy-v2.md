@@ -76,9 +76,9 @@ It is explicit, idempotent, and ordered:
 4. Destroy the Alchemy stack and remove its generated manifest.
 
 `dev_global` runs the same path for its single Auth Worker and Auth D1.
-Production destroy is dashboard-only and the Worker requires a production
-Iterate Auth browser session, so forge-signed CI bearer tokens cannot invoke
-the destructive lane.
+Production destroy is dashboard-only and requires a human Cloudflare Access
+session. The Access service token used by automation cannot invoke the
+destructive lane.
 
 This replaces the parked-worker/tombstone reset, adoption guards, retired
 queue/secret migrations, per-app erasers, and the reset-before-destroy
@@ -99,25 +99,20 @@ exports.
 
 ## Version choices
 
-The prototype uses unmodified upstream Alchemy commit
-[`cd6671e297…`](https://github.com/alchemy-run/alchemy/commit/cd6671e297375282104ba81ec6dcb6347ab7a0fd).
-It includes two destroy fixes missing from published `2.0.0-beta.65`:
+The implementation uses unmodified, published Alchemy `2.0.0-beta.66`. The
+release contains the two destroy fixes that were missing from
+`2.0.0-beta.65`:
 
 - [`663d4670`](https://github.com/alchemy-run/alchemy/commit/663d4670)
   removes persisted stack output after complete destroy;
 - [`cd6671e2`](https://github.com/alchemy-run/alchemy/commit/cd6671e297375282104ba81ec6dcb6347ab7a0fd)
   aggregates sibling deletion failures.
 
-There is no local patch. The exact-SHA `pkg.ing` package is built by
-[Alchemy's own main-branch package workflow](https://github.com/alchemy-run/alchemy/blob/cd6671e297375282104ba81ec6dcb6347ab7a0fd/.github/workflows/pr-package.yml)
-from that upstream commit. That workflow deliberately retains commit tags
-after PR closure so existing install URLs continue to resolve. A direct pnpm
-Git-subdirectory dependency was also tested and rejected: Alchemy's source
-package depends on monorepo `workspace:*` packages and does not commit its
-built `lib` exports, so consuming Git directly would require custom
-build/package machinery. Keep the retained upstream artifact until npm's
-`next` release includes the fixes; the package URL does not have a separate
-SRI, but it is not a local fork or an expiring PR artifact.
+There is no local patch, exact-SHA package, nested package, or second lockfile.
+Alchemy, Effect `4.0.0-beta.102`, and Distilled `0.30.2` resolve through the
+normal root workspace and generated `pnpm-lock.yaml`. The root
+`minimumReleaseAgeExclude` narrowly permits the deliberately exact Alchemy
+prerelease and its Distilled provider set.
 
 `apps/env-manager` is a normal root workspace and uses the repository's one
 root `pnpm-lock.yaml`. There is no nested workspace or Alchemy lockfile. The
@@ -125,14 +120,12 @@ large positive raw diff is mostly pnpm's generated resolution changes from
 adding Alchemy, Effect 4, TanStack Start, and their build tooling to that shared
 dependency graph.
 
-Latest Alchemy main adds Worker-side capabilities that do not improve the
-D1/KV/R2 boundary, and its newer commit package was not available from
-`pkg.ing` when checked. Alchemy's current root Cloudflare export also brings
-Node/Bun compatibility imports into a Worker bundle; the provider and
-credential services needed here have no granular public package export. Keep
-`nodejs_compat`, prove the actual deployed bundle, and remove it when Alchemy
-publishes a Worker-safe granular entry point rather than carrying a local
-packaging patch.
+Alchemy's root `alchemy/Cloudflare` export includes every provider and pulled
+Node/workerd tooling into the Worker bundle. Beta.66 already publishes
+granular provider exports, so the runtime imports only `Cloudflare/D1`,
+`Cloudflare/KV`, and `Cloudflare/R2` and constructs the corresponding provider
+collection. Wrangler accepted the resulting bundle; no Alchemy packaging
+patch or runtime shim is required.
 
 Wrangler's experimental provisioning remains create-only. Verified against
 Wrangler 4.116.0 and workers-sdk main on 2026-07-30, the newest typed
@@ -157,9 +150,9 @@ The main code movement is:
   one typed Distilled teardown module, and the required container bootstrap;
 - use only the generated root lockfile.
 
-The PR's roughly +5.3k net headline is mostly generated dependency metadata:
-the root lock accounts for +2,658 net lines. Excluding the lock and this task
-record, application, workflow, and documentation changes are +2,219 net while
+The PR's +5,182 net headline is mostly generated dependency metadata: the root
+lock accounts for +2,650 net lines and this task record is 552 lines. Excluding
+both, application, workflow, and documentation changes are +1,980 net while
 replacing the old reset/recovery system and adding the lifecycle API plus
 dashboard.
 
@@ -504,6 +497,42 @@ historical-leak proof:
   `responseStreamDisconnected` presentations are the duplicated normal
   Cap'n Web client-close outcomes and remained outside the error signal.
 
+### Cloudflare Access and published-Alchemy follow-up
+
+The manager's application-level Iterate Auth integration was deleted.
+Cloudflare Access now protects its only public hostname and uses production
+Auth as the OIDC identity provider. The Worker remains an ordinary Wrangler
+deployment; a separate five-resource Alchemy stack owns only the Access
+application, OIDC provider, admin policy, CLI service-token policy, and service
+token. The existing Auth OAuth seed/sync dance creates the one static relying
+party after a database reset. The CLI exchanges its Access service token once
+for a `CF_Authorization` cookie because Access does not accept the raw service
+token headers on a WebSocket upgrade.
+
+Live proof on published Alchemy `2.0.0-beta.66`:
+
+- a clean Access apply created all five resources and stored the generated
+  service credential without printing it; a second apply reported five no-ops
+  and skipped the credential action;
+- unauthenticated health redirected to Access, service-token health returned
+  200, and the Access-authenticated Cap'n Web CLI connected successfully;
+- ordinary Wrangler deploy produced Worker version
+  `0943d36c-0b25-48e5-90b0-d3f3ccc43e98`, with `workers.dev` disabled and
+  only the custom Access-protected hostname;
+- `preview_18` fresh create, canonical check, and complete destroy took 5.58s,
+  3.01s, and 14.30s end to end (3.606s, 1.168s, and 12.06s inside the manager)
+  and finished with canonical lifecycle `empty`;
+- the exact operation traces
+  [`2031c068…`](https://dash.cloudflare.com/376ef7ed81b0573f93524de763666c15/observability/traces/2031c068056ba36c4936f5cc524a8116),
+  [`f0d96caf…`](https://dash.cloudflare.com/376ef7ed81b0573f93524de763666c15/observability/traces/f0d96caf55315ffb8ce9907a4d79dd9c),
+  and
+  [`1f79f4d9…`](https://dash.cloudflare.com/376ef7ed81b0573f93524de763666c15/observability/traces/1f79f4d9d4c6757915817bb7cd117322)
+  contain 97, 16, and 89 info spans. There were no error events or
+  401/403/409/429/5xx responses. The create trace's six 404 responses are the
+  provider's explicitly typed greenfield R2 bucket/CORS observations; the
+  eight `canceled` Worker events are the stateless/DO pairs emitted when the
+  four completed WebSocket sessions close.
+
 ## Acceptance criteria
 
 - [x] No Alchemy patch, application-level adoption/import, dual-read, or legacy
@@ -518,7 +547,6 @@ historical-leak proof:
 - [ ] Live create, repeat apply, full Worker deploy/smoke, repeated
       destroy/recreate, and post-destroy absence proven on the final code.
 - [ ] Preview e2e proven by CI on the final pushed revision.
-- [x] Alchemy comes from its retained, upstream-built exact-commit package;
-      direct Git consumption and the older npm prerelease were rejected with
-      documented reasons.
+- [x] Alchemy `2.0.0-beta.66`, Effect 4, and Distilled resolve from the root
+      workspace lock without a patch, exact-SHA package, or nested lockfile.
 - [ ] All-environment destructive rollout receives explicit human approval.
