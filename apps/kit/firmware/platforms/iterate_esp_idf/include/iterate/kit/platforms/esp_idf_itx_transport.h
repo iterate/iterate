@@ -12,8 +12,10 @@
 
 #include "iterate/kit/configuration.h"
 #include "iterate/kit/itx_connection.h"
+#include "iterate/kit/platforms/esp_idf_websocket_connection.h"
 #include "iterate/kit/spsc_ring.h"
 #include "iterate/kit/status.h"
+#include "iterate/kit/websocket_frame_writer.h"
 #include "iterate/kit/websocket_text.h"
 
 #include <stdbool.h>
@@ -22,7 +24,6 @@
 
 #include "esp_event.h"
 #include "esp_netif.h"
-#include "esp_websocket_client.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -75,12 +76,11 @@ enum iterate_kit_esp_idf_itx_transport_state {
 /**
  * Caller-owned dependencies and the two explicit task handoff queues.
  *
- * ESP-IDF's WebSocket callback task is the sole inbox producer; the
- * application task is its sole consumer. The application task is the sole
- * outbox producer; the network task is its sole consumer. Every callback may
- * only validate/copy bounded input and publish flags before returning on
- * backpressure—it must never invoke device code, Cap'n Web, socket sends, or
- * blocking work.
+ * The explicit network task is the sole inbox producer and outbox consumer;
+ * the application task owns the opposite sides. No hidden WebSocket callback
+ * task exists. The network owner performs bounded nonblocking receive/write
+ * steps and may only validate/copy messages—it never invokes device code or
+ * Cap'n Web.
  *
  * All pointers must outlive stop(). The rings must already be initialized, and
  * each is permanently dedicated to this transport's stated SPSC ownership.
@@ -110,6 +110,7 @@ struct iterate_kit_esp_idf_itx_transport_metrics {
   uint32_t websocket_disconnects;
   uint32_t websocket_errors;
   uint32_t protocol_failures;
+  uint32_t protocol_failure_generation;
   uint32_t control_messages_sent;
   uint32_t control_messages_discarded;
   uint32_t control_inbox_discarded;
@@ -122,15 +123,40 @@ struct iterate_kit_esp_idf_itx_transport_metrics {
   uint32_t network_task_max_work_cycles;
   int32_t last_platform_error;
   int32_t last_control_receive_status;
+  /*
+   * Retained application-owner Cap'n Web failure. `last_capnweb_status` on the
+   * transport describes the current generation and correctly returns to OK
+   * after a remount; this pair instead survives that remount so a replacement
+   * capability can explain why its predecessor was abandoned.
+   */
+  uint32_t last_application_capnweb_generation;
+  int32_t last_application_capnweb_status;
   int32_t last_wifi_disconnect_reason;
+  /*
+   * Historical managed-client detail retained in the public diagnostics shape
+   * while device/proxy schemas migrate. The taskless lower transport cannot
+   * obtain the managed client's event-only TLS/HTTP tuple, so those fields
+   * remain zero. `last_websocket_transport_errno` and `last_platform_error`
+   * retain the lower adapter's actual causal code instead of manufacturing a
+   * value for an unavailable domain.
+   */
+  uint32_t last_websocket_error_generation;
+  int32_t last_websocket_error_type;
+  int32_t last_websocket_tls_error;
+  int32_t last_websocket_tls_stack_error;
+  int32_t last_websocket_transport_errno;
+  int32_t last_websocket_handshake_status_code;
+  int32_t last_websocket_close_status_code;
+  uint32_t control_inbox_capacity_slots;
+  uint32_t control_outbox_capacity_slots;
   struct iterate_kit_spsc_ring_metrics control_inbox;
   struct iterate_kit_spsc_ring_metrics control_outbox;
 };
 
 /**
- * ESP-IDF transport state. WebSocket callbacks only copy into the fixed SPSC
- * inbox and publish flags; the network task is the sole socket writer; the
- * application task is the sole Cap'n Web session owner.
+ * ESP-IDF transport state. The network task alone owns the taskless WebSocket,
+ * copies complete bounded messages into the SPSC inbox, and consumes the SPSC
+ * outbox. The application task alone owns the Cap'n Web session.
  *
  * socket_generation is the connection epoch. The application publishes
  * accepted_socket_generation only after discarding old fragments and opening
@@ -158,12 +184,31 @@ struct iterate_kit_esp_idf_itx_transport {
   /* Fragment assemblers are each accessed only by their ring's SPSC owners. */
   struct iterate_kit_websocket_text_inbox control_inbox;
   struct iterate_kit_websocket_text_outbox control_outbox;
-  /* Platform resources are created by start() and destroyed only after exit. */
+  /*
+   * The taskless connection embeds exactly one receive chunk and one masked
+   * transmit frame. Keeping these buffers visible in sizeof(transport) makes
+   * the control plane's permanent RAM cost auditable and prevents reconnect
+   * pressure from growing a heap queue.
+   */
   char websocket_url[ITERATE_KIT_ITX_WEBSOCKET_URL_CAPACITY];
+  uint8_t websocket_receive_storage[
+      ITERATE_KIT_ESP_IDF_CONTROL_MESSAGE_CAPACITY];
+  uint8_t websocket_transmit_storage[
+      ITERATE_KIT_WEBSOCKET_CLIENT_FRAME_BYTES(
+          ITERATE_KIT_ESP_IDF_CONTROL_MESSAGE_CAPACITY)];
+  struct iterate_kit_esp_idf_websocket_connection websocket;
+  /*
+   * A resumable write borrows the outbox head until the complete RFC 6455 frame
+   * has reached the lower transport. Retaining the acquisition prevents the
+   * producer from reusing that slot while a short write still references it.
+   */
+  const void *control_send_message;
+  size_t control_send_length;
+  bool control_send_acquired;
+  /* Platform resources are created by start() and destroyed only after exit. */
   esp_netif_t *station;
   esp_event_handler_instance_t wifi_event_handler;
   esp_event_handler_instance_t ip_event_handler;
-  esp_websocket_client_handle_t websocket;
   StaticTask_t network_task_storage;
   StackType_t
       network_task_stack[ITERATE_KIT_ESP_IDF_NETWORK_TASK_STACK_BYTES];
@@ -175,6 +220,14 @@ struct iterate_kit_esp_idf_itx_transport {
    * opens, so "terminal" would falsely imply a device-lifetime latch.
    */
   enum capnweb_status last_capnweb_status;
+  /*
+   * Unlike `last_capnweb_status`, these application-task-owned fields are not
+   * cleared when a new generation opens. The metrics sampler runs on that same
+   * owner, while the public metrics accessor uses atomic scalar loads so
+   * off-task diagnostic snapshots remain race-free after the incident settles.
+   */
+  uint32_t last_application_capnweb_generation;
+  int32_t last_application_capnweb_status;
   /*
    * Cross-task state. Acquire/release ordering publishes lifecycle flags; the
    * diagnostic counters need atomicity but do not publish other memory.
@@ -217,6 +270,19 @@ struct iterate_kit_esp_idf_itx_transport {
    */
   int32_t last_control_receive_status;
   int32_t last_wifi_disconnect_reason;
+  /*
+   * These latest-incident fields deliberately survive a successful reconnect.
+   * The event-only managed-client subfields remain for schema compatibility as
+   * described above; the direct adapter publishes its actual errno through
+   * last_websocket_transport_errno.
+   */
+  uint32_t last_websocket_error_generation;
+  int32_t last_websocket_error_type;
+  int32_t last_websocket_tls_error;
+  int32_t last_websocket_tls_stack_error;
+  int32_t last_websocket_transport_errno;
+  int32_t last_websocket_handshake_status_code;
+  int32_t last_websocket_close_status_code;
   /* Application-task-only generation and lifecycle bookkeeping. */
   uint32_t handled_socket_generation;
   bool owns_default_event_loop;

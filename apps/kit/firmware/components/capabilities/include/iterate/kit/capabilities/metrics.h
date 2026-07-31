@@ -71,6 +71,8 @@ struct iterate_kit_playback_metrics_sample {
     uint32_t receive_to_dma_start_samples;
     uint32_t last_receive_to_dma_start_ms;
     uint32_t maximum_receive_to_dma_start_ms;
+    uint32_t downlink_interarrival_samples;
+    uint32_t maximum_downlink_interarrival_ms;
     uint32_t completion_timing_samples;
     uint32_t last_eof_to_owner_us;
     uint32_t maximum_eof_to_owner_us;
@@ -101,9 +103,74 @@ struct iterate_kit_playback_metrics_sample {
     uint32_t lifecycle_acknowledgement_timeouts;
     uint32_t control_network_stack_exhaustions;
     uint32_t pcm_network_stack_exhaustions;
+    /*
+     * These are cumulative stages of the one PCM socket receive path, not
+     * sampled queue depths. `pcm_receive_calls` advances immediately before a
+     * nonblocking lower-transport read; `pcm_receive_chunks` advances only
+     * when that read yields bytes. Comparing both with `downlink_accepted`
+     * distinguishes task starvation, socket starvation, and a partial
+     * WebSocket message without adding clocks, buffers, or work to the
+     * realtime path.
+     */
+    uint32_t pcm_receive_calls;
+    uint32_t pcm_receive_chunks;
     uint32_t control_network_max_work_cycles;
     uint32_t pcm_network_max_work_cycles;
   } runtime;
+};
+
+/**
+ * Latest classified control-transport incident retained across reconnect.
+ *
+ * A metrics callback belongs to the Cap'n Web session that carried it, so the
+ * callback itself disappears at exactly the moment these fields matter. The
+ * replacement session can request this fixed latest-state snapshot without a
+ * log queue or retained history. `last_websocket_error_generation` tells the
+ * host whether the incident belongs to the socket epoch that just disappeared;
+ * the remaining integer domains deliberately mirror ESP-IDF rather than
+ * inventing a lossy common error code in the capability layer.
+ */
+struct iterate_kit_control_diagnostics_sample {
+  uint32_t schema_version;
+  int64_t produced_at_ms;
+  uint32_t websocket_start_attempts;
+  uint32_t websocket_connections;
+  uint32_t websocket_disconnects;
+  uint32_t websocket_errors;
+  uint32_t wifi_disconnects;
+  uint32_t protocol_failures;
+  uint32_t control_receive_failures;
+  uint32_t control_send_failures;
+  int32_t last_wifi_disconnect_reason;
+  uint32_t last_websocket_error_generation;
+  int32_t last_websocket_error_type;
+  int32_t last_websocket_tls_error;
+  int32_t last_websocket_tls_stack_error;
+  int32_t last_websocket_transport_errno;
+  int32_t last_websocket_handshake_status_code;
+  int32_t last_websocket_close_status_code;
+  /*
+   * `protocol_failure_generation` is the newest rejected socket epoch from
+   * either callback ingress or the application owner. The application pair
+   * retains the exact Cap'n Web result from owner-side parsing/serialization;
+   * callback-side frame assembly keeps its independent receive status.
+   */
+  uint32_t protocol_failure_generation;
+  uint32_t last_application_capnweb_generation;
+  int32_t last_application_capnweb_status;
+  int32_t last_control_receive_status;
+  uint32_t control_messages_sent;
+  uint32_t control_messages_discarded;
+  uint32_t control_inbox_discarded;
+  uint32_t control_outbox_discarded;
+  struct {
+    uint32_t capacity_slots;
+    uint32_t messages_published;
+    uint32_t messages_consumed;
+    uint32_t producer_backpressure;
+    uint32_t high_water_slots;
+    uint32_t current_slots;
+  } control_inbox, control_outbox;
 };
 
 /**
@@ -191,6 +258,8 @@ struct iterate_kit_metrics_sample {
   } audio;
   bool has_playback_detail;
   struct iterate_kit_playback_metrics_sample playback_detail;
+  bool has_control_diagnostics;
+  struct iterate_kit_control_diagnostics_sample control_diagnostics;
 };
 
 struct iterate_kit_metrics_driver {
@@ -242,7 +311,24 @@ struct iterate_kit_metrics_options {
   size_t subscription_count;
   /* Monotonic milliseconds; zero is rejected to prevent a busy poll loop. */
   uint64_t interval_ms;
+  /*
+   * getDiagnostics() returns a dynamic object through Cap'n Web's borrowed
+   * expression reply. The protocol may retain that reply until a later pull,
+   * so stack storage is invalid and heap allocation would make failure
+   * diagnosis depend on the resource under investigation. The device profile
+   * therefore owns one explicit fixed buffer. Supplying NULL/zero leaves the
+   * optional one-shot endpoint unavailable.
+   */
+  char *diagnostics_expression_buffer;
+  size_t diagnostics_expression_capacity;
 };
+
+/*
+ * This includes the longest legal decimal rendering of every field plus
+ * deliberate schema headroom. Keeping the requirement public lets resource
+ * profiles account for the exact static RAM cost at compile time.
+ */
+#define ITERATE_KIT_METRICS_DIAGNOSTICS_EXPRESSION_CAPACITY 1280U
 
 /**
  * Allocation-free subscription scheduler. Polling samples once per interval
@@ -255,6 +341,7 @@ struct iterate_kit_metrics {
   struct iterate_kit_metrics_options options;
   uint64_t next_sample_at_ms;
   struct iterate_kit_poll_result pending_result;
+  bool diagnostics_reply_in_flight;
   bool initialized;
 };
 

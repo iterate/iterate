@@ -13,7 +13,6 @@ idf_component_register(
     esp-tls
     esp_timer
     esp_wifi
-    esp_websocket_client
     http_parser
     lwip
     mbedtls

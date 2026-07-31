@@ -42,8 +42,7 @@ static void progress_gets_a_fair_but_zero_delay_followup(void) {
  * These are relationship tests rather than a duplicate table of preferred
  * numbers. A future tuner may change individual values for measured hardware,
  * but must not create an internally impossible policy: the barrier needs room
- * inside its window, the window needs room inside the freshness deadline, and
- * expected TLS jitter must not cause immediate reconnect churn.
+ * inside its window and the window needs room inside the freshness deadline.
  *
  * Independent "reasonable-looking" constants were rejected because their
  * interaction can let opaque lwIP/Wi-Fi backlog outlive the application sender
@@ -51,8 +50,6 @@ static void progress_gets_a_fair_but_zero_delay_followup(void) {
  * bounds as one policy, so any tuning change must preserve their ordering.
  */
 static void latency_and_recovery_deadlines_remain_coherent(void) {
-  assert(
-      ITERATE_KIT_ESP_IDF_WEBSOCKET_SEND_TIMEOUT_MS >= 250);
   assert(
       ITERATE_KIT_ESP_IDF_PCM_SEND_NO_PROGRESS_TIMEOUT_MS >=
       150);
@@ -91,17 +88,13 @@ static void latency_and_recovery_deadlines_remain_coherent(void) {
    * and a bounded total outage (rather than trusting TCP keepalive, which can
    * prove only the transport peer and may take hours on embedded defaults).
    *
-   * The timeout also permits at least one configured WebSocket send timeout.
-   * Otherwise benign TLS scheduling jitter could make the liveness mechanism
-   * manufacture reconnect churn—the opposite of the recovery it is meant to
-   * provide.
+   * The lower socket is nonblocking. Benign TLS scheduling jitter is therefore
+   * expressed as measured no-progress time in the portable conductor, not as
+   * a second opaque timeout that can retain a frame after this policy expires.
    */
   assert(
       ITERATE_KIT_ESP_IDF_PCM_IDLE_PEER_PROBE_INTERVAL_MS >=
       1000);
-  assert(
-      ITERATE_KIT_ESP_IDF_PCM_IDLE_PEER_PROBE_TIMEOUT_MS >=
-      ITERATE_KIT_ESP_IDF_WEBSOCKET_SEND_TIMEOUT_MS);
   assert(
       ITERATE_KIT_ESP_IDF_PCM_IDLE_PEER_PROBE_INTERVAL_MS +
           ITERATE_KIT_ESP_IDF_PCM_IDLE_PEER_PROBE_TIMEOUT_MS <=

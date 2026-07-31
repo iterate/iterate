@@ -2,6 +2,7 @@
 #include "fake_esp_idf_platform.h"
 #include "iterate/kit/pcm_lane.h"
 #include "iterate/kit/platforms/esp_idf_pcm_transport.h"
+#include "iterate/kit/platforms/esp_idf_websocket_policy.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -146,6 +147,47 @@ static bool wait_for_deliveries(uint32_t expected) {
   return false;
 }
 
+static bool wait_for_downlink_publications(
+    struct fixture *fixture, uint32_t expected) {
+  const int64_t deadline =
+      monotonic_milliseconds() + WAIT_TIMEOUT_MS;
+  while (monotonic_milliseconds() < deadline) {
+    struct iterate_kit_esp_idf_pcm_transport_metrics metrics;
+    iterate_kit_esp_idf_pcm_transport_metrics(
+        &fixture->transport, &metrics);
+    /*
+     * The socket fake increments `deliveries` when it hands a chunk to
+     * production. The transport still has to validate and publish that chunk
+     * into the cross-task lane. Waiting on the fake counter and immediately
+     * reading the lane raced those two operations about once in thirty stress
+     * runs. Synchronize on the production publication counter instead: that is
+     * the actual happens-before condition the consumer relies on.
+     */
+    if (metrics.lane.downlink.messages_published >= expected) {
+      return true;
+    }
+    pause_one_millisecond();
+  }
+  return false;
+}
+
+static bool wait_for_idle_peer_probes(
+    struct fixture *fixture, uint32_t expected) {
+  const int64_t deadline =
+      monotonic_milliseconds() + WAIT_TIMEOUT_MS;
+  while (monotonic_milliseconds() < deadline) {
+    struct iterate_kit_esp_idf_pcm_transport_metrics metrics;
+    iterate_kit_esp_idf_pcm_transport_metrics(
+        &fixture->transport, &metrics);
+    if (metrics.peer_delivery.idle_peer_probes_queued ==
+        expected) {
+      return true;
+    }
+    pause_one_millisecond();
+  }
+  return false;
+}
+
 /*
  * ESP-IDF can finish the socket upgrade on the network task before the
  * application task has discarded the prior generation's playback frames. If
@@ -211,6 +253,14 @@ static void fresh_downlink_waits_for_generation_acceptance(void) {
    * turn radio bursts into acoustic deadline misses.
    */
   CHECK(iterate_kit_fake_network_task_core_id() == 0);
+  /*
+   * Separate sockets do not imply separate service when both owners compete on
+   * Core 0 at the same priority. A control overload on hardware first stranded
+   * one RPC resolution and then stopped PCM receive progress. PCM networking
+   * therefore needs one explicit scheduling class above ordinary capability
+   * traffic, while remaining well below ESP-IDF's radio/TCP system tasks.
+   */
+  CHECK(iterate_kit_fake_network_task_priority() == 6U);
   CHECK(wait_for_generation(&fixture, 1U));
   CHECK(!fixture.downlink.write_acquired);
 
@@ -248,7 +298,12 @@ static void fresh_downlink_waits_for_generation_acceptance(void) {
   CHECK(fixture.transport.accepted_socket_generation == 1U);
   CHECK(fixture.transport.state ==
       ITERATE_KIT_ESP_IDF_PCM_READY);
-  CHECK(wait_for_deliveries(1U));
+  /*
+   * One stale complete message was published before start; the fresh network
+   * message is publication two even though generation fencing discarded the
+   * first.
+   */
+  CHECK(wait_for_downlink_publications(&fixture, 2U));
   CHECK(iterate_kit_pcm_lane_downlink_acquire(
       &fixture.lane,
       &received,
@@ -302,7 +357,7 @@ static void content_and_eos_remain_ordered_across_the_transport_task(void) {
       &fixture.transport) == ITERATE_KIT_OK);
   CHECK(fixture.transport.state ==
       ITERATE_KIT_ESP_IDF_PCM_READY);
-  CHECK(wait_for_deliveries(2U));
+  CHECK(wait_for_downlink_publications(&fixture, 2U));
 
   CHECK(iterate_kit_pcm_lane_downlink_acquire_at(
       &fixture.lane,
@@ -396,9 +451,79 @@ static void ordered_item_loss_forces_a_fresh_socket_generation(void) {
   CHECK(iterate_kit_fake_platform_finish() == ESP_OK);
 }
 
+/*
+ * The portable peer-delivery guard already proves its state transitions with
+ * a synthetic clock. That is insufficient for the physical failure we are
+ * chasing: both device WebSockets stopped progressing, and a perfectly
+ * correct guard is useless if the ESP task loop never services its RESTART
+ * verdict or never destroys the old transport generation.
+ *
+ * Keep the upgraded socket silent and advance only the fake monotonic clock.
+ * The real production task must put one ordered PING on generation one, time
+ * it out, close that generation, and publish generation two without waiting
+ * for microphone traffic or a server downlink. No sleep-based three-second
+ * test is needed; wall time drives the pthread scheduler while the explicit
+ * policy clock drives the deadline.
+ */
+static void silent_peer_timeout_replaces_the_platform_socket_generation(void) {
+  struct fixture fixture;
+  struct iterate_kit_esp_idf_pcm_transport_metrics metrics;
+
+  fixture_init(&fixture);
+  iterate_kit_fake_monotonic_clock_reset();
+  fixture.generation_barrier_ready = true;
+  CHECK(iterate_kit_esp_idf_pcm_transport_start(
+      &fixture.transport) == ITERATE_KIT_OK);
+  CHECK(wait_for_generation(&fixture, 1U));
+  CHECK(iterate_kit_esp_idf_pcm_transport_poll(
+      &fixture.transport) == ITERATE_KIT_OK);
+  CHECK(fixture.transport.state ==
+      ITERATE_KIT_ESP_IDF_PCM_READY);
+
+  /*
+   * Establish the fresh generation's silence baseline before jumping to the
+   * interval. Otherwise the first post-jump poll would correctly treat that
+   * later instant as time zero and no probe would yet be due.
+   */
+  iterate_kit_esp_idf_pcm_transport_notify_uplink(
+      &fixture.transport);
+  pause_one_millisecond();
+  iterate_kit_fake_monotonic_clock_advance_ms(
+      ITERATE_KIT_ESP_IDF_PCM_IDLE_PEER_PROBE_INTERVAL_MS);
+  iterate_kit_esp_idf_pcm_transport_notify_uplink(
+      &fixture.transport);
+  CHECK(wait_for_idle_peer_probes(&fixture, 1U));
+
+  iterate_kit_fake_monotonic_clock_advance_ms(
+      ITERATE_KIT_ESP_IDF_PCM_IDLE_PEER_PROBE_TIMEOUT_MS);
+  iterate_kit_esp_idf_pcm_transport_notify_uplink(
+      &fixture.transport);
+  CHECK(wait_for_generation(&fixture, 2U));
+
+  iterate_kit_esp_idf_pcm_transport_metrics(
+      &fixture.transport, &metrics);
+  CHECK(metrics.websocket_connections == 2U);
+  CHECK(metrics.websocket_disconnects == 1U);
+  CHECK(metrics.websocket_errors == 0U);
+  CHECK(metrics.protocol_failures == 0U);
+  CHECK(metrics.peer_delivery.idle_peer_probes_queued == 1U);
+  CHECK(metrics.peer_delivery.idle_peer_probes_confirmed == 0U);
+  CHECK(metrics.peer_delivery.idle_peer_probe_timeouts == 1U);
+
+  CHECK(iterate_kit_esp_idf_pcm_transport_poll(
+      &fixture.transport) == ITERATE_KIT_OK);
+  CHECK(fixture.transport.state ==
+      ITERATE_KIT_ESP_IDF_PCM_READY);
+  CHECK(iterate_kit_esp_idf_pcm_transport_stop(
+      &fixture.transport) == ITERATE_KIT_OK);
+  CHECK(iterate_kit_fake_platform_finish() == ESP_OK);
+  iterate_kit_fake_monotonic_clock_reset();
+}
+
 int main(void) {
   fresh_downlink_waits_for_generation_acceptance();
   content_and_eos_remain_ordered_across_the_transport_task();
   ordered_item_loss_forces_a_fresh_socket_generation();
+  silent_peer_timeout_replaces_the_platform_socket_generation();
   return 0;
 }

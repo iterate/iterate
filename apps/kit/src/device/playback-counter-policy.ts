@@ -19,7 +19,10 @@ export interface PlaybackCounterPolicyViolation {
 export type PlaybackCounterPolicyAssessment =
   | { kind: "healthy" }
   | {
+      baseline: Readonly<Record<string, unknown>>;
+      current: Readonly<Record<string, unknown>>;
       kind: "failure";
+      maximumDeltas: Readonly<Record<string, number>>;
       reason: string;
       violations: PlaybackCounterPolicyViolation[];
     };
@@ -106,7 +109,18 @@ export function assessPlaybackCounterPolicy(options: {
 
   if (violations.length === 0) return { kind: "healthy" };
   return {
+    /*
+     * A violation list is sufficient to stop the run but insufficient to
+     * diagnose it: the coherent callback also contains timing maxima, queue
+     * depths, heap, CPU, and stack evidence that may never recur. Snapshot all
+     * three policy inputs now so the existing JSON terminal log preserves that
+     * exact incident. These are host-side objects with scalar values; no
+     * device memory or wire schema is added.
+     */
+    baseline: { ...options.baseline },
+    current: { ...options.current },
     kind: "failure",
+    maximumDeltas: { ...options.maximumDeltas },
     reason: `Playback proof counter policy failed: ${violations
       .map(describeViolation)
       .join("; ")}.`,

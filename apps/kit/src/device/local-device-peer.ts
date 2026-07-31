@@ -6,6 +6,14 @@ export type DeviceDisconnectReason = "peer-disposed" | "replaced" | "revoked";
 export interface MountedM5StickS3 {
   readonly device: RpcStub<M5StickS3>;
   readonly disconnected: Promise<DeviceDisconnectReason>;
+  /**
+   * Monotonic process-local Cap'n Web mount generation.
+   *
+   * This identifies a retained device stub, not a firmware boot or PCM socket
+   * generation. A reconnect receives a new value even when the same physical
+   * board and PCM session remain alive.
+   */
+  readonly generation: number;
   readonly path: readonly string[];
 }
 
@@ -53,14 +61,17 @@ class ActiveMount implements MountedM5StickS3 {
   #active = true;
   readonly device: RpcStub<M5StickS3>;
   readonly disconnected = this.#disconnected.promise;
+  readonly generation: number;
   readonly path: readonly string[];
 
   constructor(
     device: RpcStub<M5StickS3>,
+    generation: number,
     path: readonly string[],
     onClose: (mount: ActiveMount) => void,
   ) {
     this.device = device;
+    this.generation = generation;
     this.path = path;
     this.#onClose = onClose;
   }
@@ -170,6 +181,7 @@ export class LocalDevicePeer implements Disposable {
   readonly #projectId: string;
   readonly #projectSecret: string;
   #activeMount?: ActiveMount;
+  #mountGeneration = 0;
   #nextMount: Deferred<MountedM5StickS3> = Promise.withResolvers<MountedM5StickS3>();
   #disposed = false;
 
@@ -207,6 +219,24 @@ export class LocalDevicePeer implements Disposable {
   waitForMount(): Promise<MountedM5StickS3> {
     this.#assertNotDisposed();
     return this.#activeMount ? Promise.resolve(this.#activeMount) : this.#nextMount.promise;
+  }
+
+  waitForMountAfter(generation: number): Promise<MountedM5StickS3> {
+    this.#assertNotDisposed();
+    if (!Number.isSafeInteger(generation) || generation < 0) {
+      throw new TypeError("The prior device mount generation must be a non-negative safe integer.");
+    }
+    if (this.#activeMount && this.#activeMount.generation > generation) {
+      /*
+       * The close observer that notices a dead generation runs in a microtask;
+       * the replacement RPC can already have mounted by then. Returning the
+       * retained current stub closes that race without keeping mount history.
+       */
+      return Promise.resolve(this.#activeMount);
+    }
+    return this.#nextMount.promise.then((mount) =>
+      mount.generation > generation ? mount : this.waitForMountAfter(generation),
+    );
   }
 
   assertCredentials(input: unknown) {
@@ -253,6 +283,16 @@ export class LocalDevicePeer implements Disposable {
     ) {
       throw new TypeError("The live capability must be a retained Cap'n Web device stub.");
     }
+    if (this.#mountGeneration === Number.MAX_SAFE_INTEGER) {
+      /*
+       * Generation comparison is the reconnect evidence boundary. Wrapping or
+       * rounding would let an ancient observer mistake a later mount for the
+       * one it already consumed, so fail before replacing the healthy current
+       * mount. Exhausting this counter would require centuries of reconnects.
+       */
+      throw new Error("The local device mount generation is exhausted.");
+    }
+    const generation = this.#mountGeneration + 1;
 
     /*
      * Runtime checks above establish Cap'n Web's branded RpcTarget and dup()
@@ -261,12 +301,13 @@ export class LocalDevicePeer implements Disposable {
      */
     const retainedDevice = (capability as unknown as RpcStub<M5StickS3>).dup();
     this.#activeMount?.close("replaced");
-    const mount = new ActiveMount(retainedDevice, this.#mountPath, (closedMount) => {
+    const mount = new ActiveMount(retainedDevice, generation, this.#mountPath, (closedMount) => {
       if (this.#activeMount === closedMount) {
         this.#activeMount = undefined;
         this.#nextMount = Promise.withResolvers<MountedM5StickS3>();
       }
     });
+    this.#mountGeneration = generation;
     this.#activeMount = mount;
     this.#nextMount.resolve(mount);
     return mount;

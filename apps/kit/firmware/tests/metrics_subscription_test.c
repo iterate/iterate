@@ -13,6 +13,7 @@ enum {
   OUTPUT_CAPACITY = 64,
   CAPTURE_CAPACITY = 16,
   MESSAGE_CAPACITY = 2048,
+  MAXIMUM_OWNER_LOOP_CONTROL_BURST = 8,
 };
 
 static void test_assert(
@@ -39,14 +40,18 @@ struct fixture {
   char output_buffer[OUTPUT_CAPACITY];
   char captured[CAPTURE_CAPACITY][MESSAGE_CAPACITY];
   size_t captured_lengths[CAPTURE_CAPACITY];
+  size_t capture_limit;
   size_t captured_count;
   bool message_open;
   struct iterate_kit_metrics metrics;
-  struct iterate_kit_metrics_subscription subscription;
+  struct iterate_kit_metrics_subscription subscriptions[2];
+  char diagnostics_expression
+      [ITERATE_KIT_METRICS_DIAGNOSTICS_EXPRESSION_CAPACITY];
   struct iterate_kit_module module;
   size_t dispatch_method_index;
   bool maximum_metrics;
   bool include_buffers;
+  bool include_control_diagnostics;
   bool invalid_buffer_evidence;
 };
 
@@ -59,7 +64,7 @@ static enum capnweb_status capture_fragment(
   size_t *captured_length;
   if (kind == CAPNWEB_TEXT_BEGIN) {
     if (fixture->message_open ||
-        fixture->captured_count >= CAPTURE_CAPACITY) {
+        fixture->captured_count >= fixture->capture_limit) {
       return CAPNWEB_E_STATE;
     }
     fixture->message_open = true;
@@ -170,6 +175,8 @@ static enum iterate_kit_status sample_metrics(
     },
     false,
     {0},
+    false,
+    {0},
   };
   sample->audio.uplink.send_deferrals =
       fixture->maximum_metrics ? maximum_counter : 29U;
@@ -257,7 +264,7 @@ static enum iterate_kit_status sample_metrics(
         (enum iterate_kit_buffer_metric_evidence)99;
   }
   sample->has_playback_detail = true;
-  sample->playback_detail.schema_version = 3U;
+  sample->playback_detail.schema_version = 5U;
   sample->playback_detail.sequence =
       fixture->maximum_metrics ? UINT32_MAX : 52U;
   sample->playback_detail.produced_at_ms =
@@ -290,6 +297,14 @@ static enum iterate_kit_status sample_metrics(
   sample->playback_detail.playback
       .successful_refill_timing_samples =
       fixture->maximum_metrics ? UINT32_MAX : 63U;
+  sample->playback_detail.playback.receive_to_dma_start_samples =
+      fixture->maximum_metrics ? UINT32_MAX : 64U;
+  sample->playback_detail.playback.maximum_receive_to_dma_start_ms =
+      fixture->maximum_metrics ? UINT32_MAX : 65U;
+  sample->playback_detail.playback.downlink_interarrival_samples =
+      fixture->maximum_metrics ? UINT32_MAX : 66U;
+  sample->playback_detail.playback.maximum_downlink_interarrival_ms =
+      fixture->maximum_metrics ? UINT32_MAX : 67U;
   sample->playback_detail.playback
       .maximum_eof_to_successful_refill_us =
       fixture->maximum_metrics ? UINT32_MAX : 61U;
@@ -311,10 +326,89 @@ static enum iterate_kit_status sample_metrics(
   sample->playback_detail.runtime
       .lifecycle_acknowledgement_timeouts =
       fixture->maximum_metrics ? UINT32_MAX : 68U;
-  sample->playback_detail.runtime.control_network_max_work_cycles =
+  sample->playback_detail.runtime.pcm_receive_calls =
       fixture->maximum_metrics ? UINT32_MAX : 69U;
-  sample->playback_detail.runtime.pcm_network_max_work_cycles =
+  sample->playback_detail.runtime.pcm_receive_chunks =
       fixture->maximum_metrics ? UINT32_MAX : 70U;
+  sample->playback_detail.runtime.control_network_max_work_cycles =
+      fixture->maximum_metrics ? UINT32_MAX : 71U;
+  sample->playback_detail.runtime.pcm_network_max_work_cycles =
+      fixture->maximum_metrics ? UINT32_MAX : 72U;
+  sample->has_control_diagnostics =
+      fixture->include_control_diagnostics;
+  sample->control_diagnostics.schema_version = 2U;
+  sample->control_diagnostics.produced_at_ms = uptime;
+  sample->control_diagnostics.websocket_start_attempts =
+      fixture->maximum_metrics ? UINT32_MAX : 73U;
+  sample->control_diagnostics.websocket_connections =
+      fixture->maximum_metrics ? UINT32_MAX : 74U;
+  sample->control_diagnostics.websocket_disconnects =
+      fixture->maximum_metrics ? UINT32_MAX : 75U;
+  sample->control_diagnostics.websocket_errors =
+      fixture->maximum_metrics ? UINT32_MAX : 76U;
+  sample->control_diagnostics.wifi_disconnects =
+      fixture->maximum_metrics ? UINT32_MAX : 77U;
+  sample->control_diagnostics.protocol_failures =
+      fixture->maximum_metrics ? UINT32_MAX : 78U;
+  sample->control_diagnostics.control_receive_failures =
+      fixture->maximum_metrics ? UINT32_MAX : 79U;
+  sample->control_diagnostics.control_send_failures =
+      fixture->maximum_metrics ? UINT32_MAX : 80U;
+  sample->control_diagnostics.last_wifi_disconnect_reason =
+      fixture->maximum_metrics ? INT32_MIN : 81;
+  sample->control_diagnostics.last_websocket_error_generation =
+      fixture->maximum_metrics ? UINT32_MAX : 82U;
+  sample->control_diagnostics.last_websocket_error_type = 2;
+  sample->control_diagnostics.last_websocket_tls_error =
+      fixture->maximum_metrics ? INT32_MIN : 83;
+  sample->control_diagnostics.last_websocket_tls_stack_error =
+      fixture->maximum_metrics ? INT32_MIN : -84;
+  sample->control_diagnostics.last_websocket_transport_errno =
+      fixture->maximum_metrics ? INT32_MIN : 85;
+  sample->control_diagnostics.last_websocket_handshake_status_code =
+      fixture->maximum_metrics ? INT32_MIN : 429;
+  sample->control_diagnostics.last_websocket_close_status_code =
+      fixture->maximum_metrics ? INT32_MIN : 4008;
+  sample->control_diagnostics.protocol_failure_generation =
+      fixture->maximum_metrics ? UINT32_MAX : 83U;
+  sample->control_diagnostics.last_application_capnweb_generation =
+      fixture->maximum_metrics ? UINT32_MAX : 84U;
+  sample->control_diagnostics.last_application_capnweb_status =
+      fixture->maximum_metrics ? INT32_MIN : CAPNWEB_E_TRANSPORT;
+  sample->control_diagnostics.last_control_receive_status =
+      fixture->maximum_metrics ? INT32_MIN : CAPNWEB_OK;
+  sample->control_diagnostics.control_messages_sent =
+      fixture->maximum_metrics ? UINT32_MAX : 85U;
+  sample->control_diagnostics.control_messages_discarded =
+      fixture->maximum_metrics ? UINT32_MAX : 86U;
+  sample->control_diagnostics.control_inbox_discarded =
+      fixture->maximum_metrics ? UINT32_MAX : 87U;
+  sample->control_diagnostics.control_outbox_discarded =
+      fixture->maximum_metrics ? UINT32_MAX : 88U;
+  sample->control_diagnostics.control_inbox.capacity_slots =
+      fixture->maximum_metrics ? UINT32_MAX : 4U;
+  sample->control_diagnostics.control_inbox.messages_published =
+      fixture->maximum_metrics ? UINT32_MAX : 89U;
+  sample->control_diagnostics.control_inbox.messages_consumed =
+      fixture->maximum_metrics ? UINT32_MAX : 90U;
+  sample->control_diagnostics.control_inbox.producer_backpressure =
+      fixture->maximum_metrics ? UINT32_MAX : 0U;
+  sample->control_diagnostics.control_inbox.high_water_slots =
+      fixture->maximum_metrics ? UINT32_MAX : 3U;
+  sample->control_diagnostics.control_inbox.current_slots =
+      fixture->maximum_metrics ? UINT32_MAX : 0U;
+  sample->control_diagnostics.control_outbox.capacity_slots =
+      fixture->maximum_metrics ? UINT32_MAX : 8U;
+  sample->control_diagnostics.control_outbox.messages_published =
+      fixture->maximum_metrics ? UINT32_MAX : 91U;
+  sample->control_diagnostics.control_outbox.messages_consumed =
+      fixture->maximum_metrics ? UINT32_MAX : 90U;
+  sample->control_diagnostics.control_outbox.producer_backpressure =
+      fixture->maximum_metrics ? UINT32_MAX : 1U;
+  sample->control_diagnostics.control_outbox.high_water_slots =
+      fixture->maximum_metrics ? UINT32_MAX : 8U;
+  sample->control_diagnostics.control_outbox.current_slots =
+      fixture->maximum_metrics ? UINT32_MAX : 1U;
   return ITERATE_KIT_OK;
 }
 
@@ -327,17 +421,26 @@ static enum capnweb_status dispatch(
       fixture->module.context, call, reply);
 }
 
-static void fixture_init(struct fixture *fixture) {
+static void fixture_init_with_subscription_count(
+    struct fixture *fixture, size_t subscription_count) {
   struct iterate_kit_metrics_options metrics_options;
   struct capnweb_session_options session_options;
   memset(fixture, 0, sizeof(*fixture));
+  fixture->capture_limit = CAPTURE_CAPACITY;
+  assert(
+      subscription_count > 0U &&
+      subscription_count <=
+          sizeof(fixture->subscriptions) /
+              sizeof(fixture->subscriptions[0]));
 
   metrics_options = (struct iterate_kit_metrics_options){
     &fixture->session,
     {fixture, sample_metrics},
-    &fixture->subscription,
-    1U,
+    fixture->subscriptions,
+    subscription_count,
     1000U,
+    fixture->diagnostics_expression,
+    sizeof(fixture->diagnostics_expression),
   };
   assert(
       iterate_kit_metrics_init(
@@ -364,6 +467,10 @@ static void fixture_init(struct fixture *fixture) {
       capnweb_session_init(
           &fixture->session, &session_options) ==
       CAPNWEB_OK);
+}
+
+static void fixture_init(struct fixture *fixture) {
+  fixture_init_with_subscription_count(fixture, 1U);
 }
 
 static void receive(struct fixture *fixture, const char *message) {
@@ -442,15 +549,15 @@ static void session_end_discards_callbacks_before_session_reuse(void) {
       "[\"push\",[\"pipeline\",0,[\"subscribeToMetrics\"],"
       "[[\"export\",-41]]]]");
   receive(&fixture, "[\"pull\",1]");
-  assert(fixture.subscription.occupied);
+  assert(fixture.subscriptions[0].occupied);
 
   capnweb_session_close(&fixture.session);
   assert(fixture.module.session_ended != NULL);
   fixture.module.session_ended(fixture.module.context);
-  assert(!fixture.subscription.occupied);
-  assert(!fixture.subscription.call_in_flight);
-  assert(!fixture.subscription.release_pending);
-  assert(fixture.subscription.owner == &fixture.metrics);
+  assert(!fixture.subscriptions[0].occupied);
+  assert(!fixture.subscriptions[0].call_in_flight);
+  assert(!fixture.subscriptions[0].release_pending);
+  assert(fixture.subscriptions[0].owner == &fixture.metrics);
 
   session_options = (struct capnweb_session_options){
     {dispatch, &fixture, NULL},
@@ -476,8 +583,8 @@ static void session_end_discards_callbacks_before_session_reuse(void) {
       "[\"push\",[\"pipeline\",0,[\"subscribeToMetrics\"],"
       "[[\"export\",-42]]]]");
   receive(&fixture, "[\"pull\",1]");
-  assert(fixture.subscription.occupied);
-  assert(fixture.subscription.callback.id == -42);
+  assert(fixture.subscriptions[0].occupied);
+  assert(fixture.subscriptions[0].callback.id == -42);
   capnweb_session_close(&fixture.session);
   fixture.module.session_ended(fixture.module.context);
 }
@@ -586,7 +693,7 @@ static void playback_metrics_use_a_bounded_dedicated_view(void) {
   fixture.maximum_metrics = true;
   fixture.dispatch_method_index = 1U;
 
-  assert(fixture.module.method_count == 2U);
+  assert(fixture.module.method_count == 3U);
   assert(
       strcmp(
           fixture.module.methods[1].path[0],
@@ -603,14 +710,17 @@ static void playback_metrics_use_a_bounded_dedicated_view(void) {
   assert(
       strstr(
           fixture.captured[1],
-          "\"schemaVersion\":3,"
+          "\"schemaVersion\":5,"
           "\"sequence\":4294967295,"
           "\"producedAtMs\":9223372036854775807,"
           "\"downlinkAccepted\":4294967295") != NULL);
   assert(
       strstr(
           fixture.captured[1],
-          "\"successfulRefillTimingSamples\":4294967295") != NULL);
+          "\"receiveToDmaStartSamples\":4294967295,"
+          "\"maximumReceiveToDmaStartMs\":4294967295,"
+          "\"downlinkInterarrivalSamples\":4294967295,"
+          "\"maximumDownlinkInterarrivalMs\":4294967295") != NULL);
   assert(
       strstr(
           fixture.captured[1],
@@ -631,6 +741,24 @@ static void playback_metrics_use_a_bounded_dedicated_view(void) {
           fixture.captured[1],
           "\"minimumReuseLeadAtSuccessfulRefillUs\":4294967295") !=
       NULL);
+  /*
+   * The fixed-size view spends its wire budget on causal maxima. The three
+   * latest-sample values remain available inside firmware but are deliberately
+   * not serialized: a one-second callback can miss the incident that matters,
+   * whereas the lifetime maximum/minimum cannot.
+   */
+  assert(
+      strstr(
+          fixture.captured[1],
+          "\"lastEofToSuccessfulRefillUs\"") == NULL);
+  assert(
+      strstr(
+          fixture.captured[1],
+          "\"lastWriteCallDurationUs\"") == NULL);
+  assert(
+      strstr(
+          fixture.captured[1],
+          "\"lastReuseLeadAtSuccessfulRefillUs\"") == NULL);
   assert(
       strstr(
           fixture.captured[1],
@@ -645,9 +773,237 @@ static void playback_metrics_use_a_bounded_dedicated_view(void) {
   assert(
       strstr(
           fixture.captured[1],
+          "\"pcmReceiveCalls\":4294967295,"
+          "\"pcmReceiveChunks\":4294967295") != NULL);
+  /*
+   * These counters already exist at the ESP transport boundary. Publishing
+   * them must stay a passive snapshot: their diagnostic value comes from
+   * comparing cumulative stages after a stall, not from adding a telemetry
+   * queue or serial logging to the high-volume PCM task.
+   */
+  assert(
+      strstr(
+          fixture.captured[1],
           "\"controlNetworkMaximumWorkCycles\":4294967295,"
           "\"pcmNetworkMaximumWorkCycles\":4294967295") != NULL);
   assert(fixture.captured_lengths[1] <= MESSAGE_CAPACITY - 64U);
+
+  capnweb_session_close(&fixture.session);
+  fixture.module.session_ended(fixture.module.context);
+}
+
+/*
+ * The M5StickS3 owner loop polls metrics before consuming at most four inbound
+ * Cap'n Web messages. Two ready subscriptions each serialize one push and one
+ * pull, so that first phase can publish four messages. Four already-dispatched
+ * calls can then present their pulls in the next inbox burst, requiring four
+ * resolutions before the asynchronous network owner is guaranteed to run.
+ *
+ * The physical 20 Hz diagnostics run hit the old four-slot profile exactly:
+ * metrics messages occupied the outbox, getDiagnostics pull 60 received no
+ * resolution, yet later subscription traffic proved the socket was alive.
+ * Model the real protocol sequence with a sink that refuses a ninth message.
+ * Eight is a one-owner-pass reserve, not a retry queue; failure to serialize
+ * within it must remain a visible terminal generation error.
+ */
+static void metrics_fanout_and_inbound_resolutions_fit_one_owner_burst(
+    void) {
+  struct fixture fixture;
+  struct iterate_kit_poll_result poll_result;
+  fixture_init_with_subscription_count(&fixture, 2U);
+
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"subscribeToMetrics\"],"
+      "[[\"export\",-1]]]]");
+  receive(&fixture, "[\"pull\",1]");
+  receive(&fixture, "[\"release\",1,1]");
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"subscribeToPlaybackMetrics\"],"
+      "[[\"export\",-2]]]]");
+  receive(&fixture, "[\"pull\",2]");
+  receive(&fixture, "[\"release\",2,1]");
+
+  fixture.include_control_diagnostics = true;
+  fixture.dispatch_method_index = 2U;
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"getDiagnostics\"],[]]]");
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"getDiagnostics\"],[]]]");
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"getDiagnostics\"],[]]]");
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"getDiagnostics\"],[]]]");
+
+  /*
+   * The capture sink represents an empty profiled outbox at the start of this
+   * owner pass. Earlier subscription acknowledgements were already consumed
+   * by the peer and have no bearing on this burst's storage obligation.
+   */
+  fixture.captured_count = 0U;
+  fixture.capture_limit = MAXIMUM_OWNER_LOOP_CONTROL_BURST;
+  poll_result = fixture.module.poll(fixture.module.context, 0U);
+  assert(poll_result.status == ITERATE_KIT_POLL_OK);
+  assert(fixture.captured_count == 4U);
+
+  receive(&fixture, "[\"pull\",3]");
+  receive(&fixture, "[\"pull\",4]");
+  receive(&fixture, "[\"pull\",5]");
+  receive(&fixture, "[\"pull\",6]");
+  assert(fixture.captured_count == MAXIMUM_OWNER_LOOP_CONTROL_BURST);
+  assert(
+      capnweb_session_get_state(&fixture.session) ==
+      CAPNWEB_SESSION_OPEN);
+  assert(
+      strstr(
+          fixture.captured[4],
+          "\"control\":{\"websocketStartAttempts\":73") != NULL);
+  assert(
+      strstr(
+          fixture.captured[7],
+          "control diagnostics snapshot already in flight") != NULL);
+
+  capnweb_session_close(&fixture.session);
+  fixture.module.session_ended(fixture.module.context);
+}
+
+/*
+ * A reconnect is exactly when a recurring Cap'n Web callback disappears, so
+ * transport failure evidence cannot live only in the dead subscription. The
+ * replacement generation needs one bounded, allocation-free snapshot of the
+ * SDK's latest classified incident. This is intentionally a request/response,
+ * not a third every-second stream: an idle device pays no recurring wire or
+ * CPU cost, and the host cannot build a stale diagnostics backlog.
+ */
+static void control_diagnostics_are_available_as_a_one_shot_snapshot(void) {
+  struct fixture fixture;
+  fixture_init(&fixture);
+  fixture.include_control_diagnostics = true;
+  fixture.dispatch_method_index = 2U;
+
+  assert(fixture.module.method_count == 3U);
+  assert(
+      strcmp(
+          fixture.module.methods[2].path[0],
+          "getDiagnostics") == 0);
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"getDiagnostics\"],[]]]");
+  receive(&fixture, "[\"pull\",1]");
+  assert(fixture.captured_count == 1U);
+  assert(
+      strstr(
+          fixture.captured[0],
+          "\"schemaVersion\":2,\"producedAtMs\":1,"
+          "\"control\":{\"websocketStartAttempts\":73,"
+          "\"websocketConnections\":74,\"websocketDisconnects\":75,"
+          "\"websocketErrors\":76,\"wifiDisconnects\":77,"
+          "\"protocolFailures\":78,\"receiveFailures\":79,"
+          "\"sendFailures\":80,\"lastWifiDisconnectReason\":81,"
+          "\"lastErrorGeneration\":82,\"lastErrorType\":2,"
+          "\"lastTlsError\":83,\"lastTlsStackError\":-84,"
+          "\"lastTransportErrno\":85,\"lastHandshakeStatusCode\":429,"
+          "\"lastCloseStatusCode\":4008,"
+          "\"protocolFailureGeneration\":83,"
+          "\"lastApplicationCapnwebGeneration\":84,"
+          "\"lastApplicationCapnwebStatus\":-4,"
+          "\"lastControlReceiveStatus\":0,\"messagesSent\":85,"
+          "\"messagesDiscarded\":86,\"inboxDiscarded\":87,"
+          "\"outboxDiscarded\":88,"
+          "\"inbox\":{\"capacitySlots\":4,\"messagesPublished\":89,"
+          "\"messagesConsumed\":90,\"producerBackpressure\":0,"
+          "\"highWaterSlots\":3,\"currentSlots\":0},"
+          "\"outbox\":{\"capacitySlots\":8,\"messagesPublished\":91,"
+          "\"messagesConsumed\":90,\"producerBackpressure\":1,"
+          "\"highWaterSlots\":8,\"currentSlots\":1}}") != NULL);
+  /*
+   * The eight-slot physical run still lost a resolution after 21 seconds.
+   * These retained counters are the minimum evidence needed to tell a full
+   * application outbox from callback ingress or a host/protocol correlation
+   * defect. They must cross the real borrowed Cap'n Web reply; a serial-only
+   * counter would disappear when the rig intentionally avoids attaching a
+   * timing-perturbing monitor.
+   */
+  assert(
+      strstr(
+          fixture.captured[0],
+          "\"lastApplicationCapnwebStatus\":-4") != NULL);
+  assert(fixture.captured_lengths[0] < MESSAGE_CAPACITY);
+
+  capnweb_session_close(&fixture.session);
+  fixture.module.session_ended(fixture.module.context);
+}
+
+/*
+ * A borrowed Cap'n Web reply may remain pending between push and pull. A
+ * second request during that interval must be rejected rather than rewrite the
+ * first request's only retained buffer. This regression is the difference
+ * between a bounded one-slot diagnostic and subtly returning the wrong socket
+ * incident to one of two concurrent operators.
+ */
+static void control_diagnostics_do_not_overwrite_an_unpulled_snapshot(void) {
+  struct fixture fixture;
+  fixture_init(&fixture);
+  fixture.include_control_diagnostics = true;
+  fixture.dispatch_method_index = 2U;
+
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"getDiagnostics\"],[]]]");
+  assert(fixture.metrics.diagnostics_reply_in_flight);
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"getDiagnostics\"],[]]]");
+  receive(&fixture, "[\"pull\",2]");
+  assert(
+      strstr(
+          fixture.captured[0],
+          "control diagnostics snapshot already in flight") != NULL);
+  assert(fixture.metrics.diagnostics_reply_in_flight);
+
+  receive(&fixture, "[\"pull\",1]");
+  assert(
+      strstr(fixture.captured[1], "\"lastErrorGeneration\":82") !=
+      NULL);
+  assert(!fixture.metrics.diagnostics_reply_in_flight);
+
+  capnweb_session_close(&fixture.session);
+  fixture.module.session_ended(fixture.module.context);
+}
+
+/*
+ * Long endurance is precisely when counters reach their widest rendering.
+ * Exercise the legal public integer domains through the real retained reply so
+ * a later field addition cannot make diagnostics truncate only after the
+ * control socket has already failed.
+ */
+static void maximum_control_diagnostics_fit_the_static_reply_budget(void) {
+  struct fixture fixture;
+  fixture_init(&fixture);
+  fixture.include_control_diagnostics = true;
+  fixture.maximum_metrics = true;
+  fixture.dispatch_method_index = 2U;
+
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"getDiagnostics\"],[]]]");
+  receive(&fixture, "[\"pull\",1]");
+  assert(
+      strlen(fixture.diagnostics_expression) <
+      sizeof(fixture.diagnostics_expression));
+  assert(
+      strstr(
+          fixture.captured[0],
+          "\"websocketStartAttempts\":4294967295") != NULL);
+  assert(
+      strstr(
+          fixture.captured[0],
+          "\"lastTlsStackError\":-2147483648") != NULL);
 
   capnweb_session_close(&fixture.session);
   fixture.module.session_ended(fixture.module.context);
@@ -730,6 +1086,10 @@ int main(void) {
   audio_metrics_fit_one_control_message();
   maximum_audio_counters_fit_one_control_message();
   playback_metrics_use_a_bounded_dedicated_view();
+  metrics_fanout_and_inbound_resolutions_fit_one_owner_burst();
+  control_diagnostics_are_available_as_a_one_shot_snapshot();
+  control_diagnostics_do_not_overwrite_an_unpulled_snapshot();
+  maximum_control_diagnostics_fit_the_static_reply_budget();
   buffer_metrics_preserve_the_strength_of_their_evidence();
   invalid_buffer_evidence_is_a_visible_driver_error();
   return 0;

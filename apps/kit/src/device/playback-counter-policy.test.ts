@@ -30,7 +30,30 @@ describe("playback counter policy", () => {
         },
       }),
     ).toEqual({
+      /*
+       * The violated counter list explains why the gate fired, but a
+       * stochastic physical failure is not diagnosable without the coherent
+       * timing, heap, stack, queue, and transport values from that same
+       * callback. Keeping the full inputs on the failure object makes the
+       * existing runner log a self-contained incident instead of forcing an
+       * unreproducible rerun.
+       */
+      baseline: {
+        playback_dma_deadline_miss_incidents: 4,
+        playback_underrun_frames_flushed: 2,
+        playback_underrun_incidents: 2,
+      },
+      current: {
+        playback_dma_deadline_miss_incidents: 5,
+        playback_underrun_frames_flushed: 3,
+        playback_underrun_incidents: 3,
+      },
       kind: "failure",
+      maximumDeltas: {
+        playback_dma_deadline_miss_incidents: 0,
+        playback_underrun_frames_flushed: 0,
+        playback_underrun_incidents: 0,
+      },
       reason:
         "Playback proof counter policy failed: playback_dma_deadline_miss_incidents delta 1 exceeds 0; " +
         "playback_underrun_frames_flushed delta 1 exceeds 0; " +

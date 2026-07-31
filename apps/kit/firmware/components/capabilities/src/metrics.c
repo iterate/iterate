@@ -2,7 +2,9 @@
 
 #include "rpc_internal.h"
 
+#include <inttypes.h>
 #include <limits.h>
+#include <stdio.h>
 #include <string.h>
 
 /*
@@ -20,6 +22,7 @@ static const char *const subscribe_path[] = {"subscribeToMetrics"};
 static const char *const subscribe_playback_path[] = {
   "subscribeToPlaybackMetrics",
 };
+static const char *const get_diagnostics_path[] = {"getDiagnostics"};
 
 static struct iterate_kit_poll_result poll_ok(void) {
   const struct iterate_kit_poll_result result = {
@@ -90,7 +93,7 @@ _Static_assert(
 
 enum {
   PLAYBACK_VIEW_PLAYBACK_FIELD_COUNT = 35,
-  PLAYBACK_VIEW_RUNTIME_FIELD_COUNT = 17,
+  PLAYBACK_VIEW_RUNTIME_FIELD_COUNT = 19,
 };
 
 struct playback_metrics_expression_workspace {
@@ -729,22 +732,23 @@ static bool build_playback_metrics_expression(
   SET_PLAYBACK_INTEGER(
       "ownerClockRegressions", owner_clock_regressions);
   SET_PLAYBACK_INTEGER(
-      "successfulRefillTimingSamples",
-      successful_refill_timing_samples);
+      "receiveToDmaStartSamples",
+      receive_to_dma_start_samples);
   SET_PLAYBACK_INTEGER(
-      "lastEofToSuccessfulRefillUs",
-      last_eof_to_successful_refill_us);
+      "maximumReceiveToDmaStartMs",
+      maximum_receive_to_dma_start_ms);
+  SET_PLAYBACK_INTEGER(
+      "downlinkInterarrivalSamples",
+      downlink_interarrival_samples);
+  SET_PLAYBACK_INTEGER(
+      "maximumDownlinkInterarrivalMs",
+      maximum_downlink_interarrival_ms);
   SET_PLAYBACK_INTEGER(
       "maximumEofToSuccessfulRefillUs",
       maximum_eof_to_successful_refill_us);
   SET_PLAYBACK_INTEGER(
-      "lastWriteCallDurationUs", last_write_call_duration_us);
-  SET_PLAYBACK_INTEGER(
       "maximumWriteCallDurationUs",
       maximum_write_call_duration_us);
-  SET_PLAYBACK_INTEGER(
-      "lastReuseLeadAtSuccessfulRefillUs",
-      last_reuse_lead_at_successful_refill_us);
   SET_PLAYBACK_INTEGER(
       "minimumReuseLeadAtSuccessfulRefillUs",
       minimum_reuse_lead_at_successful_refill_us);
@@ -802,6 +806,10 @@ static bool build_playback_metrics_expression(
   SET_RUNTIME_INTEGER(
       "pcmNetworkStackExhaustions",
       pcm_network_stack_exhaustions);
+  SET_RUNTIME_INTEGER(
+      "pcmReceiveCalls", pcm_receive_calls);
+  SET_RUNTIME_INTEGER(
+      "pcmReceiveChunks", pcm_receive_chunks);
   SET_RUNTIME_INTEGER(
       "controlNetworkMaximumWorkCycles",
       control_network_max_work_cycles);
@@ -937,6 +945,172 @@ static enum capnweb_status subscribe_playback(
     struct capnweb_reply *reply) {
   return subscribe_view(
       context, call, reply, ITERATE_KIT_METRICS_PLAYBACK);
+}
+
+static void diagnostics_reply_released(void *context) {
+  struct iterate_kit_metrics *metrics = context;
+  if (metrics != NULL) {
+    /*
+     * Cap'n Web calls this only after the pending resolution no longer borrows
+     * the caller-owned buffer (including session teardown). Until then a
+     * second request must not overwrite the first request's evidence.
+     */
+    metrics->diagnostics_reply_in_flight = false;
+  }
+}
+
+static enum capnweb_status get_diagnostics(
+    void *context,
+    const struct capnweb_call *call,
+    struct capnweb_reply *reply) {
+  struct iterate_kit_metrics *metrics = context;
+  struct iterate_kit_metrics_sample sample = {0};
+  const struct iterate_kit_control_diagnostics_sample *diagnostics;
+  enum iterate_kit_status sample_status;
+  enum capnweb_status reply_status;
+  int length;
+  if (metrics == NULL || call == NULL || reply == NULL) {
+    return CAPNWEB_E_INVALID_ARGUMENT;
+  }
+  if (!call->has_arguments ||
+      capnweb_value_array_size(&call->arguments) != 0U) {
+    return capnweb_reply_set_error(
+        reply, "TypeError", "getDiagnostics expects no arguments");
+  }
+  if (metrics->options.diagnostics_expression_buffer == NULL ||
+      metrics->options.diagnostics_expression_capacity <
+          ITERATE_KIT_METRICS_DIAGNOSTICS_EXPRESSION_CAPACITY) {
+    return capnweb_reply_set_error(
+        reply, "Error", "control diagnostics unavailable");
+  }
+  if (metrics->diagnostics_reply_in_flight) {
+    /*
+     * One retained reply is the complete RAM budget for this rare recovery
+     * path. Rejection is preferable to overwriting a response that a remote
+     * peer has not pulled yet or allocating an unbounded per-call history.
+     */
+    return capnweb_reply_set_error(
+        reply, "Error", "control diagnostics snapshot already in flight");
+  }
+
+  sample_status = metrics->options.driver.sample(
+      metrics->options.driver.context, &sample);
+  if (sample_status != ITERATE_KIT_OK) {
+    return capnweb_reply_set_error(
+        reply, "Error", "control diagnostics sampling failed");
+  }
+  diagnostics = &sample.control_diagnostics;
+  if (!sample.has_control_diagnostics ||
+      diagnostics->schema_version == 0U) {
+    /*
+     * Zero-filled optional state must never look like a healthy transport.
+     * Profiles opt in only after wiring the platform's real retained fields.
+     */
+    return capnweb_reply_set_error(
+        reply, "Error", "control diagnostics unavailable");
+  }
+
+  length = snprintf(
+      metrics->options.diagnostics_expression_buffer,
+      metrics->options.diagnostics_expression_capacity,
+      "{\"schemaVersion\":%" PRIu32
+      ",\"producedAtMs\":%" PRId64
+      ",\"control\":{\"websocketStartAttempts\":%" PRIu32
+      ",\"websocketConnections\":%" PRIu32
+      ",\"websocketDisconnects\":%" PRIu32
+      ",\"websocketErrors\":%" PRIu32
+      ",\"wifiDisconnects\":%" PRIu32
+      ",\"protocolFailures\":%" PRIu32
+      ",\"receiveFailures\":%" PRIu32
+      ",\"sendFailures\":%" PRIu32
+      ",\"lastWifiDisconnectReason\":%" PRId32
+      ",\"lastErrorGeneration\":%" PRIu32
+      ",\"lastErrorType\":%" PRId32
+      ",\"lastTlsError\":%" PRId32
+      ",\"lastTlsStackError\":%" PRId32
+      ",\"lastTransportErrno\":%" PRId32
+      ",\"lastHandshakeStatusCode\":%" PRId32
+      ",\"lastCloseStatusCode\":%" PRId32
+      ",\"protocolFailureGeneration\":%" PRIu32
+      ",\"lastApplicationCapnwebGeneration\":%" PRIu32
+      ",\"lastApplicationCapnwebStatus\":%" PRId32
+      ",\"lastControlReceiveStatus\":%" PRId32
+      ",\"messagesSent\":%" PRIu32
+      ",\"messagesDiscarded\":%" PRIu32
+      ",\"inboxDiscarded\":%" PRIu32
+      ",\"outboxDiscarded\":%" PRIu32
+      ",\"inbox\":{\"capacitySlots\":%" PRIu32
+      ",\"messagesPublished\":%" PRIu32
+      ",\"messagesConsumed\":%" PRIu32
+      ",\"producerBackpressure\":%" PRIu32
+      ",\"highWaterSlots\":%" PRIu32
+      ",\"currentSlots\":%" PRIu32 "}"
+      ",\"outbox\":{\"capacitySlots\":%" PRIu32
+      ",\"messagesPublished\":%" PRIu32
+      ",\"messagesConsumed\":%" PRIu32
+      ",\"producerBackpressure\":%" PRIu32
+      ",\"highWaterSlots\":%" PRIu32
+      ",\"currentSlots\":%" PRIu32 "}}}",
+      diagnostics->schema_version,
+      diagnostics->produced_at_ms,
+      diagnostics->websocket_start_attempts,
+      diagnostics->websocket_connections,
+      diagnostics->websocket_disconnects,
+      diagnostics->websocket_errors,
+      diagnostics->wifi_disconnects,
+      diagnostics->protocol_failures,
+      diagnostics->control_receive_failures,
+      diagnostics->control_send_failures,
+      diagnostics->last_wifi_disconnect_reason,
+      diagnostics->last_websocket_error_generation,
+      diagnostics->last_websocket_error_type,
+      diagnostics->last_websocket_tls_error,
+      diagnostics->last_websocket_tls_stack_error,
+      diagnostics->last_websocket_transport_errno,
+      diagnostics->last_websocket_handshake_status_code,
+      diagnostics->last_websocket_close_status_code,
+      diagnostics->protocol_failure_generation,
+      diagnostics->last_application_capnweb_generation,
+      diagnostics->last_application_capnweb_status,
+      diagnostics->last_control_receive_status,
+      diagnostics->control_messages_sent,
+      diagnostics->control_messages_discarded,
+      diagnostics->control_inbox_discarded,
+      diagnostics->control_outbox_discarded,
+      diagnostics->control_inbox.capacity_slots,
+      diagnostics->control_inbox.messages_published,
+      diagnostics->control_inbox.messages_consumed,
+      diagnostics->control_inbox.producer_backpressure,
+      diagnostics->control_inbox.high_water_slots,
+      diagnostics->control_inbox.current_slots,
+      diagnostics->control_outbox.capacity_slots,
+      diagnostics->control_outbox.messages_published,
+      diagnostics->control_outbox.messages_consumed,
+      diagnostics->control_outbox.producer_backpressure,
+      diagnostics->control_outbox.high_water_slots,
+      diagnostics->control_outbox.current_slots);
+  if (length <= 0 ||
+      (size_t)length >=
+          metrics->options.diagnostics_expression_capacity) {
+    /*
+     * This is a firmware/schema defect, not a partial snapshot. snprintf's
+     * truncation is deliberately rejected before Cap'n Web can retain it.
+     */
+    return capnweb_reply_set_error(
+        reply, "Error", "control diagnostics snapshot exceeded its budget");
+  }
+
+  metrics->diagnostics_reply_in_flight = true;
+  reply_status = capnweb_reply_set_borrowed_expression(
+      reply,
+      metrics->options.diagnostics_expression_buffer,
+      (size_t)length,
+      diagnostics_reply_released,
+      metrics);
+  if (reply_status != CAPNWEB_OK) {
+    metrics->diagnostics_reply_in_flight = false;
+  }
+  return reply_status;
 }
 
 static void delivery_complete(
@@ -1162,6 +1336,12 @@ static void session_ended(void *context) {
    */
   metrics->next_sample_at_ms = 0U;
   metrics->pending_result = poll_ok();
+  /*
+   * capnweb_session_close() releases borrowed replies before the transport
+   * invokes this lifecycle hook. Reset defensively so a freshly initialized
+   * session cannot inherit a stale busy latch even if it ended without a pull.
+   */
+  metrics->diagnostics_reply_in_flight = false;
 }
 
 enum iterate_kit_status iterate_kit_metrics_init(
@@ -1174,7 +1354,12 @@ enum iterate_kit_status iterate_kit_metrics_init(
       options->driver.sample == NULL ||
       options->subscriptions == NULL ||
       options->subscription_count == 0U ||
-      options->interval_ms == 0U) {
+      options->interval_ms == 0U ||
+      ((options->diagnostics_expression_buffer == NULL) !=
+       (options->diagnostics_expression_capacity == 0U)) ||
+      (options->diagnostics_expression_buffer != NULL &&
+       options->diagnostics_expression_capacity <
+           ITERATE_KIT_METRICS_DIAGNOSTICS_EXPRESSION_CAPACITY)) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
   memset(metrics, 0, sizeof(*metrics));
@@ -1196,6 +1381,7 @@ struct iterate_kit_module iterate_kit_metrics_module(
   static const struct iterate_kit_method methods[] = {
     {subscribe_path, 1U, subscribe},
     {subscribe_playback_path, 1U, subscribe_playback},
+    {get_diagnostics_path, 1U, get_diagnostics},
   };
   const struct iterate_kit_module module = {
     .methods = methods,

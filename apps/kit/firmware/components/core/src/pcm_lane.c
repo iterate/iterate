@@ -87,6 +87,20 @@ static void atomic_saturating_add(
       __ATOMIC_RELAXED));
 }
 
+static void atomic_record_maximum(
+    uint32_t *value, uint32_t observation) {
+  uint32_t current = atomic_load_relaxed(value);
+  while (observation > current &&
+         !__atomic_compare_exchange_n(
+             value,
+             &current,
+             observation,
+             false,
+             __ATOMIC_RELAXED,
+             __ATOMIC_RELAXED)) {
+  }
+}
+
 static bool valid_lane(const struct iterate_kit_pcm_lane *lane) {
   return lane != NULL &&
       lane->initialized &&
@@ -144,7 +158,59 @@ static void cancel_downlink_fragment(
   (void)iterate_kit_spsc_ring_write_cancel(lane->downlink);
   lane->downlink_fragment_destination = NULL;
   lane->downlink_fragment_received = 0U;
+  lane->downlink_fragment_received_at_ms = 0U;
   lane->downlink_fragment_active = false;
+}
+
+static void reset_downlink_interarrival_baseline(
+    struct iterate_kit_pcm_lane *lane) {
+  lane->downlink_previous_frame_received_at_ms = 0U;
+  lane->downlink_previous_frame_received_at_valid = false;
+}
+
+static void note_downlink_frame_received(
+    struct iterate_kit_pcm_lane *lane,
+    uint64_t received_at_ms) {
+  uint64_t interval_ms;
+  uint32_t bounded_interval_ms;
+
+  /*
+   * The untimestamped compatibility entry point supplies zero. Mixing that
+   * synthetic value with real device timestamps would create either a giant
+   * first interval or a clock regression, so it explicitly breaks the local
+   * baseline and contributes no sample.
+   */
+  if (received_at_ms == 0U) {
+    reset_downlink_interarrival_baseline(lane);
+    return;
+  }
+  if (lane->downlink_previous_frame_received_at_valid) {
+    if (received_at_ms <
+        lane->downlink_previous_frame_received_at_ms) {
+      /*
+       * ESP's monotonic timer should not regress. Still bound and classify the
+       * impossible observation rather than underflowing into an enormous gap
+       * that would misdiagnose Wi-Fi jitter.
+       */
+      atomic_saturating_increment(
+          &lane->downlink_interarrival_clock_regressions);
+    } else {
+      interval_ms =
+          received_at_ms -
+          lane->downlink_previous_frame_received_at_ms;
+      bounded_interval_ms =
+          interval_ms > UINT32_MAX
+          ? UINT32_MAX
+          : (uint32_t)interval_ms;
+      atomic_saturating_increment(
+          &lane->downlink_interarrival_samples);
+      atomic_record_maximum(
+          &lane->downlink_maximum_interarrival_ms,
+          bounded_interval_ms);
+    }
+  }
+  lane->downlink_previous_frame_received_at_ms = received_at_ms;
+  lane->downlink_previous_frame_received_at_valid = true;
 }
 
 enum iterate_kit_status iterate_kit_pcm_lane_init(
@@ -342,6 +408,7 @@ enum iterate_kit_status iterate_kit_pcm_lane_receive_downlink_at(
     }
     atomic_saturating_increment(
         &lane->downlink_end_markers_accepted);
+    reset_downlink_interarrival_baseline(lane);
     return ITERATE_KIT_OK;
   }
   if (message_bytes != ITERATE_KIT_PCM_V1_FRAME_BYTES ||
@@ -379,6 +446,7 @@ enum iterate_kit_status iterate_kit_pcm_lane_receive_downlink_at(
     slot->received_at_ms = received_at_ms;
     lane->downlink_fragment_destination = slot->frame;
     lane->downlink_fragment_received = 0U;
+    lane->downlink_fragment_received_at_ms = received_at_ms;
     lane->downlink_fragment_active = true;
   } else if (!lane->downlink_fragment_active ||
              fragment_offset !=
@@ -398,15 +466,20 @@ enum iterate_kit_status iterate_kit_pcm_lane_receive_downlink_at(
     return ITERATE_KIT_UNAVAILABLE;
   }
 
+  const uint64_t completed_received_at_ms =
+      lane->downlink_fragment_received_at_ms;
   status = iterate_kit_spsc_ring_write_publish(
       lane->downlink,
       sizeof(struct iterate_kit_pcm_downlink_slot));
   lane->downlink_fragment_destination = NULL;
   lane->downlink_fragment_received = 0U;
+  lane->downlink_fragment_received_at_ms = 0U;
   lane->downlink_fragment_active = false;
   if (status != ITERATE_KIT_OK) {
     return status;
   }
+  note_downlink_frame_received(
+      lane, completed_received_at_ms);
   atomic_saturating_increment(
       &lane->downlink_frames_accepted);
   return ITERATE_KIT_OK;
@@ -491,6 +564,11 @@ iterate_kit_pcm_lane_reset_downlink_producer(
     atomic_saturating_increment(
         &lane->downlink_generation_fragment_resets);
   }
+  /*
+   * Even a generation change with no partial frame separates response clocks.
+   * Retaining the old baseline would report reconnect time as media jitter.
+   */
+  reset_downlink_interarrival_baseline(lane);
   return ITERATE_KIT_OK;
 }
 
@@ -606,4 +684,13 @@ void iterate_kit_pcm_lane_metrics(
   metrics->downlink_generation_fragment_resets =
       atomic_load_relaxed(
           &lane->downlink_generation_fragment_resets);
+  metrics->downlink_interarrival_samples =
+      atomic_load_relaxed(
+          &lane->downlink_interarrival_samples);
+  metrics->downlink_maximum_interarrival_ms =
+      atomic_load_relaxed(
+          &lane->downlink_maximum_interarrival_ms);
+  metrics->downlink_interarrival_clock_regressions =
+      atomic_load_relaxed(
+          &lane->downlink_interarrival_clock_regressions);
 }

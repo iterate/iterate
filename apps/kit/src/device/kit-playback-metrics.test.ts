@@ -4,7 +4,7 @@ import { flattenKitPlaybackMetrics, parseKitPlaybackMetrics } from "./kit-playba
 
 function fixture(): KitPlaybackMetrics {
   return {
-    schemaVersion: 3,
+    schemaVersion: 5,
     sequence: 7,
     producedAtMs: 12_345,
     downlinkAccepted: 8,
@@ -37,12 +37,12 @@ function fixture(): KitPlaybackMetrics {
       invalidFrames: 34,
       stateErrors: 35,
       ownerClockRegressions: 36,
-      successfulRefillTimingSamples: 37,
-      lastEofToSuccessfulRefillUs: 38,
+      receiveToDmaStartSamples: 37,
+      maximumReceiveToDmaStartMs: 38,
+      downlinkInterarrivalSamples: 39,
+      maximumDownlinkInterarrivalMs: 40,
       maximumEofToSuccessfulRefillUs: 39,
-      lastWriteCallDurationUs: 40,
       maximumWriteCallDurationUs: 41,
-      lastReuseLeadAtSuccessfulRefillUs: 42,
       minimumReuseLeadAtSuccessfulRefillUs: 43,
     },
     runtime: {
@@ -61,8 +61,10 @@ function fixture(): KitPlaybackMetrics {
       lifecycleAcknowledgementTimeouts: 52,
       controlNetworkStackExhaustions: 53,
       pcmNetworkStackExhaustions: 54,
-      controlNetworkMaximumWorkCycles: 55,
-      pcmNetworkMaximumWorkCycles: 56,
+      pcmReceiveCalls: 55,
+      pcmReceiveChunks: 56,
+      controlNetworkMaximumWorkCycles: 57,
+      pcmNetworkMaximumWorkCycles: 58,
     },
   };
 }
@@ -94,14 +96,20 @@ describe("Kit detailed playback metrics", () => {
       playback_underrun_silence_frames_completed: 17,
       playback_underrun_silence_frames_retired: 18,
       playback_underrun_late_frames_dropped: 19,
+      playback_receive_to_dma_start_samples: 37,
+      playback_maximum_receive_to_dma_start_ms: 38,
+      playback_downlink_interarrival_samples: 39,
+      playback_maximum_downlink_interarrival_ms: 40,
       playback_minimum_reuse_lead_at_successful_refill_us: 43,
       audio_owner_stack_headroom_bytes: 40,
       control_network_stack_headroom_bytes: 42,
       pcm_network_stack_headroom_bytes: 43,
       control_stack_headroom_bytes: 42,
       network_stack_headroom_bytes: 42,
-      control_network_maximum_work_cycles: 55,
-      pcm_network_maximum_work_cycles: 56,
+      pcm_receive_calls: 55,
+      pcm_receive_chunks: 56,
+      control_network_maximum_work_cycles: 57,
+      pcm_network_maximum_work_cycles: 58,
     });
   });
 

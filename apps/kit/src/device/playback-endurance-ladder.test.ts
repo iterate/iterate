@@ -94,6 +94,7 @@ function passingObservation(
         amplitudeCoefficientOfVariation: 0.01,
         amplitudeStepP99Decibels: 0.1,
         maximumAmplitudeStepDecibels: 0.1,
+        excludedCoherentWindowCount: 0,
         expectedDurationMs: durationMs,
         gapCount: 0,
         longestInternalGapMs: 0,

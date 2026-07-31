@@ -110,7 +110,7 @@ export interface KitMetrics {
  * form grouped avoids repeated prefixes and permanent device RAM growth.
  */
 export interface KitPlaybackMetrics {
-  schemaVersion: 3;
+  schemaVersion: 5;
   sequence: number;
   producedAtMs: number;
   downlinkAccepted: number;
@@ -143,12 +143,12 @@ export interface KitPlaybackMetrics {
     invalidFrames: number;
     stateErrors: number;
     ownerClockRegressions: number;
-    successfulRefillTimingSamples: number;
-    lastEofToSuccessfulRefillUs: number;
+    receiveToDmaStartSamples: number;
+    maximumReceiveToDmaStartMs: number;
+    downlinkInterarrivalSamples: number;
+    maximumDownlinkInterarrivalMs: number;
     maximumEofToSuccessfulRefillUs: number;
-    lastWriteCallDurationUs: number;
     maximumWriteCallDurationUs: number;
-    lastReuseLeadAtSuccessfulRefillUs: number;
     minimumReuseLeadAtSuccessfulRefillUs: number;
   };
   runtime: {
@@ -167,8 +167,73 @@ export interface KitPlaybackMetrics {
     lifecycleAcknowledgementTimeouts: number;
     controlNetworkStackExhaustions: number;
     pcmNetworkStackExhaustions: number;
+    /**
+     * Cumulative calls into and positive-byte chunks from the PCM socket
+     * receive path. Compare their deltas with downlinkAccepted: this separates
+     * a task that did not run, a socket with no bytes ready, and raw bytes that
+     * did not yet complete another WebSocket message.
+     */
+    pcmReceiveCalls: number;
+    pcmReceiveChunks: number;
     controlNetworkMaximumWorkCycles: number;
     pcmNetworkMaximumWorkCycles: number;
+  };
+}
+
+/**
+ * Raw ESP WebSocket error categories. Keep the numeric SDK value on the wire
+ * and map it only for display: the accompanying TLS, errno, handshake, and
+ * close fields live in different domains and must not be collapsed into one
+ * generic JavaScript exception.
+ */
+export type KitControlWebsocketErrorType = 0 | 1 | 2 | 3 | 4;
+
+/**
+ * Exact `capnweb_status` integer domain from the C peer. Keep it numeric on
+ * the recovery endpoint so diagnostics cannot accidentally conflate a local
+ * bounded-transport failure with an ESP-IDF error code.
+ */
+export type KitCapnwebStatus = 0 | -1 | -2 | -3 | -4 | -5 | -6 | -7 | -8 | -9;
+
+export interface KitControlRingDiagnostics {
+  capacitySlots: number;
+  messagesPublished: number;
+  messagesConsumed: number;
+  producerBackpressure: number;
+  highWaterSlots: number;
+  currentSlots: number;
+}
+
+export interface KitControlDiagnostics {
+  schemaVersion: 2;
+  producedAtMs: number;
+  control: {
+    websocketStartAttempts: number;
+    websocketConnections: number;
+    websocketDisconnects: number;
+    websocketErrors: number;
+    wifiDisconnects: number;
+    protocolFailures: number;
+    receiveFailures: number;
+    sendFailures: number;
+    lastWifiDisconnectReason: number;
+    lastErrorGeneration: number;
+    lastErrorType: KitControlWebsocketErrorType;
+    lastTlsError: number;
+    lastTlsStackError: number;
+    lastTransportErrno: number;
+    lastHandshakeStatusCode: number;
+    lastCloseStatusCode: number;
+    protocolFailureGeneration: number;
+    lastApplicationCapnwebGeneration: number;
+    lastApplicationCapnwebStatus: KitCapnwebStatus;
+    lastControlReceiveStatus: KitCapnwebStatus;
+    messagesSent: number;
+    messagesDiscarded: number;
+    inboxDiscarded: number;
+    outboxDiscarded: number;
+    inbox: KitControlRingDiagnostics;
+    outbox: KitControlRingDiagnostics;
   };
 }
 
@@ -179,6 +244,7 @@ export interface KitDeviceDescription {
 
 export interface KitDevice {
   __describe(): Promise<KitDeviceDescription>;
+  getDiagnostics(): Promise<KitControlDiagnostics>;
   subscribeToMetrics(callback: (metrics: KitMetrics) => void): Promise<void>;
   renderOnScreen(input: { url: string }): Promise<boolean>;
 }

@@ -38,12 +38,12 @@ const playbackFieldNames = [
   "invalidFrames",
   "stateErrors",
   "ownerClockRegressions",
-  "successfulRefillTimingSamples",
-  "lastEofToSuccessfulRefillUs",
+  "receiveToDmaStartSamples",
+  "maximumReceiveToDmaStartMs",
+  "downlinkInterarrivalSamples",
+  "maximumDownlinkInterarrivalMs",
   "maximumEofToSuccessfulRefillUs",
-  "lastWriteCallDurationUs",
   "maximumWriteCallDurationUs",
-  "lastReuseLeadAtSuccessfulRefillUs",
   "minimumReuseLeadAtSuccessfulRefillUs",
 ] as const satisfies readonly (keyof KitPlaybackMetrics["playback"])[];
 
@@ -62,6 +62,8 @@ const runtimeUnsignedFieldNames = [
   "lifecycleAcknowledgementTimeouts",
   "controlNetworkStackExhaustions",
   "pcmNetworkStackExhaustions",
+  "pcmReceiveCalls",
+  "pcmReceiveChunks",
   "controlNetworkMaximumWorkCycles",
   "pcmNetworkMaximumWorkCycles",
 ] as const satisfies readonly (keyof KitPlaybackMetrics["runtime"])[];
@@ -77,7 +79,7 @@ function requiredNumericShape<const Name extends string>(
 }
 
 const playbackMetricsSchema = z.strictObject({
-  schemaVersion: z.literal(3),
+  schemaVersion: z.literal(5),
   sequence: uint32,
   producedAtMs: monotonicMilliseconds,
   downlinkAccepted: uint32,

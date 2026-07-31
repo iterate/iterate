@@ -59,6 +59,8 @@ export interface DevicePcmSocketClose {
 
 export type DevicePcmInputMode = "push-to-talk" | "server-vad";
 
+export type DevicePcmDownlinkDeliveryMode = "device-clocked" | "host-paced";
+
 export interface DevicePcmSessionDescriptor {
   id: string;
   inputMode: DevicePcmInputMode;
@@ -67,6 +69,19 @@ export interface DevicePcmSessionDescriptor {
 export interface DevicePcmProxyOptions {
   authenticate(projectId: string, bearerToken: string): boolean;
   connectProvider(session: DevicePcmSessionDescriptor): Promise<WebSocket>;
+  /*
+   * The speaker's I²S peripheral is the only clock that ultimately determines
+   * when samples become audible. `device-clocked` therefore forwards each
+   * bounded provider burst immediately and lets the firmware's freshness-
+   * bounded ring absorb ordinary network timing variation. `host-paced`
+   * retains the older comparison path, where a second JavaScript timer emits
+   * one frame per nominal media interval.
+   *
+   * Keeping this choice explicit is useful while physical tests compare both
+   * models. It must not become an implicit fallback: changing clocks changes
+   * latency, underrun classification, and where queue bounds are enforced.
+   */
+  downlinkDeliveryMode?: DevicePcmDownlinkDeliveryMode;
   frameBytes: number;
   frameDurationMs?: number;
   maximumBufferedBytes?: number;
@@ -215,6 +230,7 @@ export class DevicePcmProxy implements Disposable {
       );
     const session = new DevicePcmProxySession({
       device: proxySocket,
+      downlinkDeliveryMode: this.#options.downlinkDeliveryMode ?? "host-paced",
       frameBytes: this.#options.frameBytes,
       frameDurationMs: this.#options.frameDurationMs ?? 20,
       inputMode: descriptor.inputMode,
@@ -264,6 +280,7 @@ export class DevicePcmProxy implements Disposable {
 
 interface DevicePcmProxySessionOptions {
   device: WebSocket;
+  downlinkDeliveryMode: DevicePcmDownlinkDeliveryMode;
   frameBytes: number;
   frameDurationMs: number;
   inputMode: DevicePcmInputMode;
@@ -280,7 +297,7 @@ interface DevicePcmProxySessionOptions {
 
 class DevicePcmProxySession implements Disposable {
   readonly #device: WebSocket;
-  readonly #downlinkFrame: Uint8Array;
+  readonly #downlinkDeliveryMode: DevicePcmDownlinkDeliveryMode;
   readonly #downlinkQueue: Uint8Array;
   readonly #frameBytes: number;
   readonly #frameDurationMs: number;
@@ -318,7 +335,7 @@ class DevicePcmProxySession implements Disposable {
 
   constructor(options: DevicePcmProxySessionOptions) {
     this.#device = options.device;
-    this.#downlinkFrame = new Uint8Array(options.frameBytes);
+    this.#downlinkDeliveryMode = options.downlinkDeliveryMode;
     this.#downlinkQueue = new Uint8Array(options.maximumDownlinkQueuedBytes);
     this.#frameBytes = options.frameBytes;
     this.#frameDurationMs = options.frameDurationMs;
@@ -633,6 +650,10 @@ class DevicePcmProxySession implements Disposable {
       this.#downlinkStarted = true;
       this.#nextDownlinkAt = performance.now();
     }
+    if (this.#downlinkDeliveryMode === "device-clocked") {
+      this.#drainDeviceClockedDownlink();
+      return;
+    }
     const hasCompleteFrame = this.#downlinkQueuedBytes >= this.#frameBytes;
     const hasFinalPartialFrame = this.#downlinkResponseDone && this.#downlinkQueuedBytes > 0;
     if (!hasCompleteFrame && !hasFinalPartialFrame) {
@@ -668,29 +689,7 @@ class DevicePcmProxySession implements Disposable {
       }
       return;
     }
-    const copiedBytes = Math.min(this.#frameBytes, this.#downlinkQueuedBytes);
-    this.#downlinkFrame.fill(0);
-    const firstCopyBytes = Math.min(
-      copiedBytes,
-      this.#downlinkQueue.byteLength - this.#downlinkReadOffset,
-    );
-    this.#downlinkFrame.set(
-      this.#downlinkQueue.subarray(
-        this.#downlinkReadOffset,
-        this.#downlinkReadOffset + firstCopyBytes,
-      ),
-      0,
-    );
-    if (firstCopyBytes < copiedBytes) {
-      this.#downlinkFrame.set(
-        this.#downlinkQueue.subarray(0, copiedBytes - firstCopyBytes),
-        firstCopyBytes,
-      );
-    }
-    this.#downlinkReadOffset =
-      (this.#downlinkReadOffset + copiedBytes) % this.#downlinkQueue.byteLength;
-    this.#downlinkQueuedBytes -= copiedBytes;
-    if (!this.#send(this.#device, this.#downlinkFrame)) {
+    if (!this.#sendQueuedDownlinkFrame()) {
       this.#fail("device-egress-backpressure", applicationCloseCode.backpressure);
       return;
     }
@@ -703,6 +702,76 @@ class DevicePcmProxySession implements Disposable {
       if (!this.#sendDownlinkEndOfStream()) return;
     }
     this.#scheduleDownlink();
+  }
+
+  /*
+   * Drain only the already-admitted bounded queue. The loop cannot monopolise
+   * the Worker: its maximum work is fixed by `maximumDownlinkQueuedBytes`
+   * (eight frames by default), and provider admission fails closed before that
+   * bound can be exceeded.
+   *
+   * Crucially, an empty queue is not a host-side playout underrun in this mode.
+   * The device retains and consumes the startup reserve on its hardware clock;
+   * the next provider burst is forwarded when it arrives. The firmware owns
+   * the definitive late/drop/reset policy because only it can observe the I²S
+   * descriptor deadline.
+   */
+  #drainDeviceClockedDownlink() {
+    while (
+      !this.#closed &&
+      !this.#suppressDownlink &&
+      (this.#downlinkQueuedBytes >= this.#frameBytes ||
+        (this.#downlinkResponseDone && this.#downlinkQueuedBytes > 0))
+    ) {
+      if (!this.#sendQueuedDownlinkFrame()) {
+        this.#fail("device-egress-backpressure", applicationCloseCode.backpressure);
+        return;
+      }
+    }
+    if (this.#downlinkResponseDone && this.#downlinkQueuedBytes === 0) {
+      this.#sendDownlinkEndOfStream();
+    }
+  }
+
+  /*
+   * Copy before sending because the ring may wrap and because the final source
+   * message may be shorter than one device frame. The output frame is
+   * deliberately owned and never mutated after `send()`: Workers WebSockets
+   * snapshot typed arrays, but standards-shaped local peers may retain the
+   * view until an asynchronous message event. Reusing one scratch frame would
+   * make a burst of speech arrive as repeated copies of its final 20 ms.
+   *
+   * This allocation occurs in the userspace proxy, not on the ESP realtime
+   * path. Its rate is one bounded allocation per actual wire frame; the
+   * WebSocket transport must retain equivalent bytes in either case.
+   */
+  #sendQueuedDownlinkFrame() {
+    const copiedBytes = Math.min(this.#frameBytes, this.#downlinkQueuedBytes);
+    if (copiedBytes === 0) {
+      return false;
+    }
+    const downlinkFrame = new Uint8Array(this.#frameBytes);
+    const firstCopyBytes = Math.min(
+      copiedBytes,
+      this.#downlinkQueue.byteLength - this.#downlinkReadOffset,
+    );
+    downlinkFrame.set(
+      this.#downlinkQueue.subarray(
+        this.#downlinkReadOffset,
+        this.#downlinkReadOffset + firstCopyBytes,
+      ),
+      0,
+    );
+    if (firstCopyBytes < copiedBytes) {
+      downlinkFrame.set(
+        this.#downlinkQueue.subarray(0, copiedBytes - firstCopyBytes),
+        firstCopyBytes,
+      );
+    }
+    this.#downlinkReadOffset =
+      (this.#downlinkReadOffset + copiedBytes) % this.#downlinkQueue.byteLength;
+    this.#downlinkQueuedBytes -= copiedBytes;
+    return this.#send(this.#device, downlinkFrame);
   }
 
   #sendDownlinkEndOfStream() {

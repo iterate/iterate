@@ -18,6 +18,7 @@ struct iterate_kit_fake_task {
   void *context;
   uint32_t notifications;
   uint32_t returned;
+  unsigned int priority;
   int core_id;
   bool pause_requested;
   bool paused;
@@ -41,6 +42,7 @@ static struct iterate_kit_fake_task network_task;
 static struct iterate_kit_fake_websocket_client websocket_client;
 static uint32_t defer_connected;
 static uint32_t short_next_send;
+static int64_t monotonic_clock_offset_us;
 
 static void add_milliseconds(
     struct timespec *deadline, TickType_t milliseconds) {
@@ -310,7 +312,28 @@ int64_t esp_timer_get_time(void) {
   struct timespec now;
   (void)clock_gettime(CLOCK_MONOTONIC, &now);
   return (int64_t)now.tv_sec * 1000000 +
-      (int64_t)now.tv_nsec / 1000;
+      (int64_t)now.tv_nsec / 1000 +
+      __atomic_load_n(
+          &monotonic_clock_offset_us, __ATOMIC_ACQUIRE);
+}
+
+void iterate_kit_fake_monotonic_clock_reset(void) {
+  __atomic_store_n(
+      &monotonic_clock_offset_us, 0, __ATOMIC_RELEASE);
+}
+
+void iterate_kit_fake_monotonic_clock_advance_ms(
+    uint32_t milliseconds) {
+  /*
+   * uint32 milliseconds fits safely when widened before multiplying. Use an
+   * atomic add because the test thread moves time while the production
+   * network task samples it; a plain fake global would introduce a host-only
+   * data race that says nothing about ESP behavior.
+   */
+  (void)__atomic_fetch_add(
+      &monotonic_clock_offset_us,
+      (int64_t)milliseconds * 1000,
+      __ATOMIC_ACQ_REL);
 }
 
 TaskHandle_t xTaskCreateStaticPinnedToCore(
@@ -337,6 +360,7 @@ TaskHandle_t xTaskCreateStaticPinnedToCore(
   }
   network_task.function = function;
   network_task.context = context;
+  network_task.priority = priority;
   network_task.core_id = core_id;
   network_task.created = true;
   if (pthread_create(
@@ -354,6 +378,10 @@ TaskHandle_t xTaskCreateStaticPinnedToCore(
 
 int iterate_kit_fake_network_task_core_id(void) {
   return network_task.created ? network_task.core_id : -1;
+}
+
+unsigned int iterate_kit_fake_network_task_priority(void) {
+  return network_task.created ? network_task.priority : 0U;
 }
 
 void xTaskNotifyGive(TaskHandle_t task) {
@@ -444,8 +472,9 @@ void vTaskDelete(TaskHandle_t task) {
   (void)task;
 }
 
-esp_err_t iterate_kit_fake_websocket_emit_text(
+esp_err_t iterate_kit_fake_websocket_emit_frame(
     esp_websocket_client_handle_t client,
+    int opcode,
     const char *data,
     size_t data_length,
     size_t payload_length,
@@ -465,9 +494,9 @@ esp_err_t iterate_kit_fake_websocket_emit_text(
     .data_len = (int)data_length,
     .payload_len = (int)payload_length,
     .payload_offset = (int)payload_offset,
-    .op_code = 1,
+    .op_code = opcode,
     .fin = fin,
-    .error_handle = {ESP_OK},
+    .error_handle = {.esp_tls_last_esp_err = ESP_OK},
   };
   client->event_handler(
       client->event_context,
@@ -475,6 +504,23 @@ esp_err_t iterate_kit_fake_websocket_emit_text(
       WEBSOCKET_EVENT_DATA,
       &event);
   return ESP_OK;
+}
+
+esp_err_t iterate_kit_fake_websocket_emit_text(
+    esp_websocket_client_handle_t client,
+    const char *data,
+    size_t data_length,
+    size_t payload_length,
+    size_t payload_offset,
+    bool fin) {
+  return iterate_kit_fake_websocket_emit_frame(
+      client,
+      1,
+      data,
+      data_length,
+      payload_length,
+      payload_offset,
+      fin);
 }
 
 void iterate_kit_fake_websocket_defer_connected(
@@ -511,6 +557,37 @@ esp_err_t iterate_kit_fake_websocket_emit_connected(
       client->event_context,
       "WEBSOCKET_EVENT",
       WEBSOCKET_EVENT_CONNECTED,
+      &event);
+  return ESP_OK;
+}
+
+esp_err_t iterate_kit_fake_websocket_emit_error(
+    esp_websocket_client_handle_t client,
+    esp_websocket_error_type_t error_type,
+    esp_err_t tls_error,
+    int tls_stack_error,
+    int transport_errno,
+    int handshake_status_code,
+    int close_status_code) {
+  esp_websocket_event_data_t event = {
+    .error_handle = {
+      .esp_tls_last_esp_err = tls_error,
+      .esp_tls_stack_err = tls_stack_error,
+      .error_type = error_type,
+      .esp_ws_handshake_status_code = handshake_status_code,
+      .esp_transport_sock_errno = transport_errno,
+    },
+    .close_status_code = close_status_code,
+  };
+  if (client == NULL ||
+      __atomic_load_n(&client->started, __ATOMIC_ACQUIRE) == 0U ||
+      client->event_handler == NULL) {
+    return ESP_FAIL;
+  }
+  client->event_handler(
+      client->event_context,
+      "WEBSOCKET_EVENT",
+      WEBSOCKET_EVENT_ERROR,
       &event);
   return ESP_OK;
 }

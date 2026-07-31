@@ -152,6 +152,43 @@ describe("local device Cap'n Web peer", () => {
     expect(current.peer.activeMount).toBeUndefined();
   });
 
+  test("retains a replacement mount even when the observer starts after the reconnect", async () => {
+    /*
+     * A physical M5StickS3 recovered its Cap'n Web socket while a long PCM run
+     * was still healthy. The old harness held only the first device stub, so
+     * every later diagnostic callback vanished and the real control failure
+     * degraded into a generic provider timeout. A reconnect can complete
+     * before an async close observer runs; generation-aware lookup therefore
+     * has to return an already-mounted replacement as well as await a future
+     * one. This protects causal evidence without retaining RPC traffic or
+     * adding a device-side queue.
+     */
+    const current = fixture();
+    await using session = await current.authenticate();
+    await using project = await session.projects.get(projectId);
+    await using firstProvision = await project.provideCapability({
+      capability: new TestM5StickS3Target(current.deviceEvents),
+      path: [...mountPath],
+      type: "live",
+    });
+    const first = await current.peer.waitForMount();
+    expect(first.generation).toBe(1);
+
+    await using secondProvision = await project.provideCapability({
+      capability: new TestM5StickS3Target(current.deviceEvents),
+      path: [...mountPath],
+      type: "live",
+    });
+    await expect(first.disconnected).resolves.toBe("replaced");
+
+    const replacement = await current.peer.waitForMountAfter(first.generation);
+    expect(replacement.generation).toBe(2);
+    expect(current.peer.activeMount).toBe(replacement);
+    await expect(replacement.device.__describe()).resolves.toMatchObject({
+      instructions: "Local M5StickS3 test target.",
+    });
+  });
+
   test("rejects credential, project, and mount-contract drift explicitly", async () => {
     const current = fixture();
     await expect(

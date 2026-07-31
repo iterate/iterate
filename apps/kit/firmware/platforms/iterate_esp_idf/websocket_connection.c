@@ -263,8 +263,6 @@ iterate_kit_esp_idf_websocket_connection_prepare(
   if (connection == NULL ||
       options == NULL ||
       options->url == NULL ||
-      options->subprotocol == NULL ||
-      options->headers == NULL ||
       options->receive_storage == NULL ||
       options->receive_storage_capacity == 0U ||
       options->receive_storage_capacity > (size_t)INT_MAX ||

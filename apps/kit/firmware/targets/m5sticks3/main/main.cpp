@@ -61,6 +61,8 @@ constexpr std::size_t importCapacity = 8U;
 constexpr std::size_t tokenCapacity = 64U;
 constexpr std::size_t outputCapacity = 128U;
 constexpr std::size_t subscriptionCapacity = 2U;
+constexpr std::size_t diagnosticsExpressionCapacity =
+    ITERATE_KIT_METRICS_DIAGNOSTICS_EXPRESSION_CAPACITY;
 /*
  * One NUL beyond this target's 512-byte URL limit lets the screen capability
  * copy and validate without heap allocation or truncation.
@@ -73,15 +75,32 @@ constexpr std::size_t screenUrlCapacity = 513U;
  */
 constexpr std::size_t eventCapacity = 8U;
 /*
- * Four 2 KiB slots in each direction bound complete Cap'n Web message handoff.
- * This is control-plane burst capacity, not a PCM queue, and the poll/send
- * limits cap one pass at four messages even if producers refill slots while
- * the consumer runs.
+ * Control traffic is asymmetric in ownership, but both directions need one
+ * measured burst of reserve. The outbox needs eight because metrics are polled
+ * before inbound RPC: two subscriptions may each emit one push plus one pull,
+ * after which the same pass may consume four inbound pulls whose resolutions
+ * also need storage. The previous four-slot outbox failed that valid overlap
+ * on hardware even though both WebSocket directions stayed live.
+ *
+ * The inbox also needs eight. A subscription callback returns resolve+release,
+ * so two subscribers can contribute four incoming messages at the same tick.
+ * One strictly single-flight remote call can concurrently contribute its push
+ * and pull plus the prior call's release. The physical 20 Hz rig filled the
+ * old four-slot inbox after 51.7 seconds and correctly—but unnecessarily—
+ * replaced the Cap'n Web generation. Eight is the smallest power of two that
+ * contains this seven-message causal burst.
+ *
+ * This spends about 5 KiB of measured internal RAM to tolerate bounded
+ * scheduling/network coalescing; it does not accumulate control history.
+ * Pressure beyond this reviewed burst remains an explicit terminal generation
+ * error instead of an unbounded retry queue.
  */
-constexpr std::size_t controlSlotCount = 4U;
+constexpr std::size_t controlInboxSlotCount = 8U;
+constexpr std::size_t controlOutboxSlotCount = 8U;
 constexpr std::size_t controlSlotCapacity =
     ITERATE_KIT_ESP_IDF_CONTROL_MESSAGE_CAPACITY;
 constexpr std::size_t controlMessagesPerPoll = 4U;
+constexpr std::size_t controlRemoteCallLifecycleMessages = 3U;
 /*
  * The wire frame is the storage unit everywhere. Partial/sample-sized slots
  * would require an extra assembler and make buffer-depth latency ambiguous.
@@ -135,8 +154,31 @@ static_assert(
             0U,
     "PCM capacities must contain complete protocol frames");
 static_assert(
-    (controlSlotCount & (controlSlotCount - 1U)) == 0U,
-    "SPSC slot count must be a power of two");
+    (controlInboxSlotCount & (controlInboxSlotCount - 1U)) == 0U &&
+        (controlOutboxSlotCount &
+         (controlOutboxSlotCount - 1U)) == 0U,
+    "SPSC control slot counts must be powers of two");
+static_assert(
+    controlInboxSlotCount >=
+        subscriptionCapacity * 2U +
+            controlRemoteCallLifecycleMessages,
+    /*
+     * Each subscription response contributes resolve+release, while the one
+     * allowed remote call contributes push+pull plus the previous release.
+     * This is a causal burst bound, not a throughput estimate: average control
+     * rate can be low while TCP/task scheduling delivers these together.
+     */
+    "control inbox must cover one maximum peer burst");
+static_assert(
+    controlOutboxSlotCount >=
+        subscriptionCapacity * 2U + controlMessagesPerPoll,
+    /*
+     * A due callback owns a push and pull until the peer resolves it. Reserve
+     * those messages before admitting the configured maximum inbound work, so
+     * an RPC resolution can never be stranded behind the metrics fanout that
+     * preceded it in the same application-owner pass.
+     */
+    "control outbox must cover one maximum owner-loop burst");
 static_assert(
     (pcmUplinkSlotCount & (pcmUplinkSlotCount - 1U)) == 0U,
     "PCM uplink slot count must be a power of two");
@@ -157,6 +199,13 @@ struct Runtime {
   capnweb_json_token tokens[tokenCapacity]{};
   char outputBuffer[outputCapacity]{};
   char screenUrlScratch[screenUrlCapacity]{};
+  /*
+   * A one-shot diagnostics reply can outlive the stack frame that sampled it
+   * while Cap'n Web waits for the remote pull. Keep exactly one profile-owned
+   * expression buffer: reconnect investigation stays allocation-free, while a
+   * concurrent request is rejected instead of cloning retained state.
+   */
+  char diagnosticsExpression[diagnosticsExpressionCapacity]{};
   iterate_kit_metrics_subscription
       subscriptions[subscriptionCapacity]{};
   iterate_kit_device_event eventStorage[eventCapacity]{};
@@ -168,11 +217,11 @@ struct Runtime {
   iterate_kit_spsc_ring controlInboxRing{};
   iterate_kit_spsc_ring controlOutboxRing{};
   std::uint8_t
-      controlInboxStorage[controlSlotCount][controlSlotCapacity]{};
+      controlInboxStorage[controlInboxSlotCount][controlSlotCapacity]{};
   std::uint8_t
-      controlOutboxStorage[controlSlotCount][controlSlotCapacity]{};
-  std::size_t controlInboxLengths[controlSlotCount]{};
-  std::size_t controlOutboxLengths[controlSlotCount]{};
+      controlOutboxStorage[controlOutboxSlotCount][controlSlotCapacity]{};
+  std::size_t controlInboxLengths[controlInboxSlotCount]{};
+  std::size_t controlOutboxLengths[controlOutboxSlotCount]{};
   /*
    * The capture/application producer and PCM-network consumer own uplink; the
    * inverse pair own downlink. Align downlink bytes for the int16_t pointer
@@ -542,7 +591,7 @@ iterate_kit_status sampleRuntimeMetrics(
    */
   auto &detail = sample->playback_detail;
   sample->has_playback_detail = true;
-  detail.schema_version = 3U;
+  detail.schema_version = 5U;
   if (state.playbackMetricsSequence <
       std::numeric_limits<std::uint32_t>::max()) {
     ++state.playbackMetricsSequence;
@@ -551,6 +600,12 @@ iterate_kit_status sampleRuntimeMetrics(
   detail.produced_at_ms = sample->uptime_ms;
   detail.downlink_accepted =
       saturatingMetricValue(pcm.lane.downlink_frames_accepted);
+  detail.playback.downlink_interarrival_samples =
+      saturatingMetricValue(
+          pcm.lane.downlink_interarrival_samples);
+  detail.playback.maximum_downlink_interarrival_ms =
+      saturatingMetricValue(
+          pcm.lane.downlink_maximum_interarrival_ms);
 
 #define COPY_PLAYBACK_METRIC(target_name, source_name)                    \
   detail.playback.target_name =                                          \
@@ -615,8 +670,16 @@ iterate_kit_status sampleRuntimeMetrics(
       writeBackpressureFramesDropped);
   COPY_PLAYBACK_METRIC(invalid_frames, invalidFrames);
   COPY_PLAYBACK_METRIC(state_errors, stateErrors);
-  COPY_PLAYBACK_METRIC(
-      owner_clock_regressions, ownerClockRegressions);
+  /*
+   * Both timestamps in the public timing view use the same monotonic ESP
+   * clock. A regression at either the network producer or the I2S owner makes
+   * its corresponding latency maximum untrustworthy, so expose their
+   * saturating sum through the existing fatal acceptance counter instead of
+   * leaving the new ingress classifier as device-private state.
+   */
+  detail.playback.owner_clock_regressions = addMetricValue(
+      saturatingMetricValue(playback.ownerClockRegressions),
+      pcm.lane.downlink_interarrival_clock_regressions);
   COPY_PLAYBACK_METRIC(
       current_content_frames, currentContentFrames);
   COPY_PLAYBACK_METRIC(
@@ -706,10 +769,101 @@ iterate_kit_status sampleRuntimeMetrics(
       control.network_task_stack_exhaustions;
   detail.runtime.pcm_network_stack_exhaustions =
       pcm.network_task_stack_exhaustions;
+  /*
+   * Reuse the transport's existing atomics rather than timing or logging the
+   * network loop. Their deltas form a passive causal ladder: task read
+   * attempts, positive raw chunks, then complete frames in downlinkAccepted.
+   * Instrumenting each iteration with another clock read would make the probe
+   * itself part of the scheduling problem we are trying to explain.
+   */
+  detail.runtime.pcm_receive_calls =
+      pcm.websocket_receive_calls;
+  detail.runtime.pcm_receive_chunks =
+      pcm.websocket_receive_chunks;
   detail.runtime.control_network_max_work_cycles =
       control.network_task_max_work_cycles;
   detail.runtime.pcm_network_max_work_cycles =
       pcm.network_task_max_work_cycles;
+
+  /*
+   * The recurring callbacks die with the failed control WebSocket. Preserve
+   * the ESP transport's fixed latest incident in this same synchronous sample
+   * so the replacement Cap'n Web generation can ask what killed its
+   * predecessor. None of these reads add logging or work to the audio task.
+   */
+  auto &diagnostics = sample->control_diagnostics;
+  sample->has_control_diagnostics = true;
+  diagnostics.schema_version = 2U;
+  diagnostics.produced_at_ms = sample->uptime_ms;
+  diagnostics.websocket_start_attempts =
+      control.websocket_start_attempts;
+  diagnostics.websocket_connections =
+      control.websocket_connections;
+  diagnostics.websocket_disconnects =
+      control.websocket_disconnects;
+  diagnostics.websocket_errors = control.websocket_errors;
+  diagnostics.wifi_disconnects = control.wifi_disconnects;
+  diagnostics.protocol_failures = control.protocol_failures;
+  diagnostics.control_receive_failures =
+      control.control_receive_failures;
+  diagnostics.control_send_failures =
+      control.control_send_failures;
+  diagnostics.last_wifi_disconnect_reason =
+      control.last_wifi_disconnect_reason;
+  diagnostics.last_websocket_error_generation =
+      control.last_websocket_error_generation;
+  diagnostics.last_websocket_error_type =
+      control.last_websocket_error_type;
+  diagnostics.last_websocket_tls_error =
+      control.last_websocket_tls_error;
+  diagnostics.last_websocket_tls_stack_error =
+      control.last_websocket_tls_stack_error;
+  diagnostics.last_websocket_transport_errno =
+      control.last_websocket_transport_errno;
+  diagnostics.last_websocket_handshake_status_code =
+      control.last_websocket_handshake_status_code;
+  diagnostics.last_websocket_close_status_code =
+      control.last_websocket_close_status_code;
+  diagnostics.protocol_failure_generation =
+      control.protocol_failure_generation;
+  diagnostics.last_application_capnweb_generation =
+      control.last_application_capnweb_generation;
+  diagnostics.last_application_capnweb_status =
+      control.last_application_capnweb_status;
+  diagnostics.last_control_receive_status =
+      control.last_control_receive_status;
+  diagnostics.control_messages_sent =
+      control.control_messages_sent;
+  diagnostics.control_messages_discarded =
+      control.control_messages_discarded;
+  diagnostics.control_inbox_discarded =
+      control.control_inbox_discarded;
+  diagnostics.control_outbox_discarded =
+      control.control_outbox_discarded;
+  diagnostics.control_inbox.capacity_slots =
+      control.control_inbox_capacity_slots;
+  diagnostics.control_inbox.messages_published =
+      control.control_inbox.messages_published;
+  diagnostics.control_inbox.messages_consumed =
+      control.control_inbox.messages_consumed;
+  diagnostics.control_inbox.producer_backpressure =
+      control.control_inbox.producer_backpressure;
+  diagnostics.control_inbox.high_water_slots =
+      control.control_inbox.high_water_slots;
+  diagnostics.control_inbox.current_slots =
+      control.control_inbox.current_slots;
+  diagnostics.control_outbox.capacity_slots =
+      control.control_outbox_capacity_slots;
+  diagnostics.control_outbox.messages_published =
+      control.control_outbox.messages_published;
+  diagnostics.control_outbox.messages_consumed =
+      control.control_outbox.messages_consumed;
+  diagnostics.control_outbox.producer_backpressure =
+      control.control_outbox.producer_backpressure;
+  diagnostics.control_outbox.high_water_slots =
+      control.control_outbox.high_water_slots;
+  diagnostics.control_outbox.current_slots =
+      control.control_outbox.current_slots;
   return ITERATE_KIT_OK;
 }
 
@@ -753,13 +907,13 @@ bool initialiseRings(Runtime &state) {
              &state.controlInboxRing,
              state.controlInboxStorage,
              controlSlotCapacity,
-             controlSlotCount,
+             controlInboxSlotCount,
              state.controlInboxLengths) == ITERATE_KIT_OK &&
       iterate_kit_spsc_ring_init(
              &state.controlOutboxRing,
              state.controlOutboxStorage,
              controlSlotCapacity,
-             controlSlotCount,
+             controlOutboxSlotCount,
              state.controlOutboxLengths) == ITERATE_KIT_OK &&
       iterate_kit_spsc_ring_init(
              &state.pcmUplinkRing,
@@ -801,6 +955,8 @@ bool initialiseDevice(Runtime &state) {
       state.subscriptions,
       subscriptionCapacity,
       1000U,
+      state.diagnosticsExpression,
+      sizeof(state.diagnosticsExpression),
     },
     {
       ITERATE_KIT_AUDIO_PUSH_TO_TALK,

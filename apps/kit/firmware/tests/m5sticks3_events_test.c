@@ -152,6 +152,8 @@ static void fixture_init(struct fixture *fixture) {
       &fixture->subscription,
       1U,
       1000U,
+      NULL,
+      0U,
     },
     .audio = {
       ITERATE_KIT_AUDIO_PUSH_TO_TALK,

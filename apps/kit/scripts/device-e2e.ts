@@ -15,10 +15,19 @@ import {
   createDualCarrierPrbs31Challenge,
 } from "../src/device/acoustic-prbs31-challenge.ts";
 import {
+  assessBoundedCapabilityChurn,
+  BoundedCapabilityChurn,
+  type BoundedCapabilityChurnSummary,
+} from "../src/device/bounded-capability-churn.ts";
+import {
   deviceE2eUsesGrokProvider,
   parseDeviceE2eCliOptions,
 } from "../src/device/device-e2e-cli-options.ts";
 import { resolveDeviceE2eProvisioning } from "../src/device/device-e2e-provisioning.ts";
+import {
+  observeControlMountOutcome,
+  settleControlMountOutcome,
+} from "../src/device/control-mount-diagnostics.ts";
 import {
   DeviceRuntimeMetricsContinuity,
   assessDeviceRuntimeMetrics,
@@ -41,6 +50,7 @@ import {
   flattenKitPlaybackMetrics,
   parseKitPlaybackMetrics,
 } from "../src/device/kit-playback-metrics.ts";
+import { parseKitControlDiagnostics } from "../src/device/kit-control-diagnostics.ts";
 import { MacOsPcm16Capture } from "../src/device/macos-pcm16-capture.ts";
 import { assessPlaybackCounterPolicy } from "../src/device/playback-counter-policy.ts";
 import { assessPlaybackRecoveryAcoustics } from "../src/device/playback-recovery-acoustic-policy.ts";
@@ -72,6 +82,14 @@ const pcmFrameDurationMs = 20;
 const deterministicToneFrequencyHz = 997;
 const acousticCaptureTailMs = 500;
 const voiceResponseTimeoutMs = 30_000;
+
+interface AcousticCaptureMarker {
+  capturedSampleCount: number;
+  hostMonotonicMs: number;
+  phase: string;
+  sampleRateHz: number;
+}
+
 const usage = `Usage:
   pnpm device:e2e -- --port /dev/cu.usbmodem101 --wifi-ssid <name> \\
     --build-directory firmware/targets/m5sticks3/build [options]
@@ -80,6 +98,11 @@ Harness options:
   --tunnel-name <name>          Optional stable tunnels.iterate.com subdomain
   --direct-lan-host <host>      Bind directly to this Mac LAN host; bypass Captun
   --direct-lan-port <port>      Stable LAN port, permitting verified --no-flash retries
+  --device-clocked-downlink     Forward bounded PCM bursts; let device I²S own playout cadence
+  --device-clocked-startup-frames <1..8>
+                                Named startup lead; only with device-clocked delivery
+  --control-churn-hz <1..100>   During deterministic playback, run bounded real
+                                Cap'n Web getDiagnostics calls at this rate
   --mount-timeout-ms <ms>       Boot and mount deadline (default: 90000)
   --remote-hold-ms <ms>         Remote push-to-talk hold (default: 500)
   --voice                       Route Stick PCM through real Grok and inject a spoken prompt
@@ -205,22 +228,22 @@ export async function runDeviceE2e(
           })
         : undefined;
   let activeAcousticCapture: MacOsPcm16Capture | undefined;
-  const acousticMarkerTasks = new Set<Promise<void>>();
+  const acousticMarkerTasks = new Set<Promise<AcousticCaptureMarker | undefined>>();
   const recordAcousticMarker = (phase: string) => {
     const capture = activeAcousticCapture;
-    if (!capture) return Promise.resolve();
+    if (!capture) return Promise.resolve(undefined);
     const hostMonotonicMs = performance.now();
     const task = capture
       .inspectProgress()
       .then((progress) => {
-        console.log(
-          `acoustic_capture_marker=${JSON.stringify({
-            capturedSampleCount: progress.capturedSampleCount,
-            hostMonotonicMs,
-            phase,
-            sampleRateHz: progress.sampleRateHz,
-          })}`,
-        );
+        const marker = {
+          capturedSampleCount: progress.capturedSampleCount,
+          hostMonotonicMs,
+          phase,
+          sampleRateHz: progress.sampleRateHz,
+        };
+        console.log(`acoustic_capture_marker=${JSON.stringify(marker)}`);
+        return marker;
       })
       .catch((error) => {
         runtimeProbe.fail(
@@ -230,6 +253,7 @@ export async function runDeviceE2e(
             }`,
           ),
         );
+        return undefined;
       })
       .finally(() => acousticMarkerTasks.delete(task));
     acousticMarkerTasks.add(task);
@@ -284,8 +308,10 @@ export async function runDeviceE2e(
             providerResponseDone.resolve();
           }
         },
+        pcmDownlinkDeliveryMode: options.downlinkDeliveryMode,
         pcmFrameBytes,
         pcmInputMode: "push-to-talk",
+        pcmMinimumDownlinkStartupFrames: options.deviceClockedStartupFrames,
       }
     : undefined;
   const server = new LocalDevicePeerServer(peer, voiceServerOptions);
@@ -305,6 +331,15 @@ export async function runDeviceE2e(
       directLanServer = await LocalFetchWebSocketServer.listen({
         fetch: (request) => server.fetch(request),
         host: options.directLanHost,
+        /*
+         * This is one terminal aggregate per socket generation, not a PCM-frame
+         * log. It lets a retained endurance artifact distinguish proxy pacing
+         * from host TCP backpressure while keeping memory and console work
+         * independent of playback duration.
+         */
+        onBridgeClosed: (metrics) => {
+          console.log(`direct_lan_bridge_metrics=${JSON.stringify(metrics)}`);
+        },
         port: options.directLanPort,
       });
       peerBaseUrl = directLanServer.baseUrl;
@@ -368,6 +403,49 @@ export async function runDeviceE2e(
         "Timed out waiting for the M5StickS3 to authenticate and mount.",
       ),
     );
+    /*
+     * Recurring metric callbacks belong to this exact Cap'n Web generation.
+     * If it is replaced, the new generation is useful only as a bounded
+     * diagnostic reader: an unexplained reconnect still fails the endurance
+     * run instead of silently resubscribing and hiding the outage.
+     */
+    const controlMountOutcome = observeControlMountOutcome({
+      mount: mounted,
+      peer,
+    });
+    void controlMountOutcome
+      .then((outcome) => {
+        if (outcome.kind !== "replaced") return;
+        console.error(
+          `control_reconnect_diagnostics=${JSON.stringify({
+            ...outcome,
+            diagnostics: outcome.diagnostics,
+          })}`,
+        );
+        runtimeProbe.fail(
+          new Error(
+            `Control Cap'n Web mount generation ${outcome.previousGeneration} ` +
+              `was unexpectedly replaced by generation ${outcome.replacementGeneration}; ` +
+              `ESP WebSocket error=${outcome.errorTypeName} ` +
+              `(${outcome.diagnostics.control.lastErrorType}).`,
+          ),
+        );
+      })
+      .catch((error: unknown) => {
+        console.error(
+          `control_reconnect_diagnostics_error=${JSON.stringify({
+            generation: mounted.generation,
+            message: error instanceof Error ? error.message : String(error),
+          })}`,
+        );
+        runtimeProbe.fail(
+          new Error(
+            `Control Cap'n Web mount generation ${mounted.generation} was replaced, ` +
+              "but retained transport diagnostics could not be recovered.",
+            { cause: error },
+          ),
+        );
+      });
     const description = await mounted.device.__describe();
     console.log(
       `device_mounted path=${mounted.path.join(".")} capabilities=${Object.keys(description.children).join(",")}`,
@@ -483,9 +561,82 @@ export async function runDeviceE2e(
           })
         : undefined;
       let acousticCaptureFinished = false;
+      let controlChurnSummary: BoundedCapabilityChurnSummary | undefined;
       let recoveryProofAssessment:
         | Extract<PlaybackRecoveryProofAssessment, { kind: "healthy" }>
         | undefined;
+      const controlChurn =
+        options.controlChurnHz === undefined
+          ? undefined
+          : new BoundedCapabilityChurn({
+              cyclesPerSecond: options.controlChurnHz,
+              /*
+               * Four nominal periods lets a cycle span ordinary control-task
+               * scheduling jitter, while one second remains a hard bound at
+               * high rates. A stuck Cap'n Web promise must not extend a
+               * physical audio run indefinitely.
+               */
+              operationTimeoutMs: Math.max(1_000, Math.ceil(4_000 / options.controlChurnHz)),
+              onFailure: (error) => {
+                const failure = new Error(
+                  `Bounded control capability churn failed: ${error.message}`,
+                  { cause: error },
+                );
+                /*
+                 * BoundedCapabilityChurn has already stopped scheduling here,
+                 * so no stale RPC backlog can grow. Keep only the surrounding
+                 * server/device session alive long enough for the transport's
+                 * bounded reconnect to expose its fixed latest-state snapshot.
+                 * The original load failure remains terminal regardless of
+                 * whether diagnostics arrive.
+                 */
+                void settleControlMountOutcome({
+                  outcome: controlMountOutcome,
+                }).then((settlement) => {
+                  console.error(
+                    `control_failure_diagnostic_grace=${JSON.stringify(
+                      settlement.kind === "observation-failed"
+                        ? {
+                            kind: settlement.kind,
+                            message:
+                              settlement.error instanceof Error
+                                ? settlement.error.message
+                                : String(settlement.error),
+                          }
+                        : settlement,
+                    )}`,
+                  );
+                  runtimeProbe.fail(failure);
+                });
+              },
+              /*
+               * One work unit has one unambiguous completion boundary: a real
+               * getDiagnostics call that samples and serializes fresh fixed-
+               * buffer device state. Repeating static __describe() here made
+               * a timeout impossible to attribute and doubled a synthetic
+               * workload that production does not need. Description dispatch
+               * belongs in its own benchmark; this runner admits only one
+               * diagnostics operation so slowdown is reported as skipped load
+               * rather than an RPC backlog competing with fresh PCM.
+               */
+              operation: async () => {
+                parseKitControlDiagnostics(await mounted.device.getDiagnostics());
+              },
+            });
+      const stopControlChurn = async (judgeAppliedLoad: boolean) => {
+        if (!controlChurn) return;
+        const summary = await controlChurn.stop();
+        if (!controlChurnSummary) {
+          controlChurnSummary = summary;
+          console.log(`control_capability_churn_summary=${JSON.stringify(summary)}`);
+        }
+        if (!judgeAppliedLoad) return;
+        const assessment = assessBoundedCapabilityChurn(summary, 0.9);
+        console.log(`control_capability_churn_assessment=${JSON.stringify(assessment)}`);
+        if (assessment.kind === "failure") {
+          throw new Error(`Control capability load was not applied: ${assessment.reason}`);
+        }
+      };
       const prompt =
         environment.ITERATE_KIT_VOICE_PHRASE ??
         "Say exactly: Grok audio is playing directly on the Iterate device.";
@@ -512,6 +663,13 @@ export async function runDeviceE2e(
         }
       }
       try {
+        if (controlChurn) {
+          controlChurn.start();
+          console.log(
+            `control_capability_churn_started work_unit=getDiagnostics ` +
+              `cycles_per_second=${options.controlChurnHz}`,
+          );
+        }
         console.log(
           `voice_prompt_injection_started source=${provider}` +
             (expectedPlaybackFrames === undefined
@@ -519,7 +677,12 @@ export async function runDeviceE2e(
               : ` duration_ms=${options.playbackDurationMs} ` +
                 `expected_frames=${expectedPlaybackFrames}`),
         );
-        await recordAcousticMarker("provider.request.before");
+        const providerRequestMarker = await recordAcousticMarker("provider.request.before");
+        if (acousticCapture && providerRequestMarker === undefined) {
+          throw new Error(
+            "The acoustic capture was active but its provider-request marker was unavailable.",
+          );
+        }
         if (!(await server.requestVoiceText(prompt))) {
           throw new Error("The PCM proxy did not accept the direct provider turn.");
         }
@@ -591,6 +754,12 @@ export async function runDeviceE2e(
           );
         }
         await recordAcousticMarker("device.playback.completed");
+        /*
+         * Stop at physical queue completion, before the recorder's quiet tail.
+         * The summary therefore describes only work that actually competed
+         * with downlink playback, not easier post-audio cleanup traffic.
+         */
+        await stopControlChurn(true);
         console.log(`capability_playback_metrics=${JSON.stringify(playbackMetrics)}`);
         if (acousticCapture) {
           /*
@@ -627,6 +796,19 @@ export async function runDeviceE2e(
               })()
             : await (async () => {
                 const analysis = await analyzeAcousticTonePcm16Artifact({
+                  /*
+                   * A full-level carrier fragment at file offset zero has
+                   * appeared after back-to-back CoreAudio captures. Samples
+                   * cannot distinguish it from this response. The marker was
+                   * recorded before requesting this response, so it supplies
+                   * the causal lower bound without selecting a convenient
+                   * waveform episode or masking any later outage.
+                   */
+                  analysisStartMs:
+                    providerRequestMarker === undefined
+                      ? undefined
+                      : (providerRequestMarker.capturedSampleCount * 1_000) /
+                        providerRequestMarker.sampleRateHz,
                   artifactPath: recording.artifactPath,
                   expectedDurationMs: options.playbackDurationMs,
                   frequencyHz: deterministicToneFrequencyHz,
@@ -693,6 +875,13 @@ export async function runDeviceE2e(
         );
         return;
       } finally {
+        if (controlChurn && !controlChurnSummary) {
+          try {
+            await stopControlChurn(false);
+          } catch (error) {
+            console.error("Unable to finalize bounded control capability churn.", error);
+          }
+        }
         if (acousticCapture && !acousticCaptureFinished) {
           try {
             await Promise.all(acousticMarkerTasks);
@@ -965,13 +1154,43 @@ interface ObservationWaiter {
   resolve(observation: DeviceRuntimeLogObservation): void;
 }
 
-class DeviceRuntimeProbe {
+interface PcmClosePlaybackDiagnosticSnapshot {
+  sequence: number;
+  producedAtMs: number;
+  downlinkAccepted: number;
+  playbackSubmitted: number;
+  playbackCompleted: number;
+  pcmReceiveCalls: number;
+  pcmReceiveChunks: number;
+}
+
+interface PendingUnexpectedPcmClose {
+  baseline: PcmClosePlaybackDiagnosticSnapshot | undefined;
+  close: DevicePcmSocketClose;
+  error: Error;
+  startedAtMonotonicMs: number;
+  timeout: NodeJS.Timeout;
+}
+
+/*
+ * The control capability samples once per second, but a callback can already
+ * be in flight when the PCM socket closes. Six seconds is deliberately a
+ * diagnostics-only ceiling: it spans one delayed callback and a reconnect
+ * attempt seen in physical runs without ever retaining PCM or converting the
+ * failed generation into a pass. The timer is the bounded explanation when
+ * the independent control plane is itself unavailable.
+ */
+const pcmCloseFollowupMetricsTimeoutMs = 6_000;
+
+export class DeviceRuntimeProbe {
   readonly #continuity = new DeviceRuntimeMetricsContinuity();
   readonly #failure: Promise<never>;
   readonly #history: DeviceRuntimeLogObservation[] = [];
   readonly #waiters = new Set<ObservationWaiter>();
   #failureReason: Error | undefined;
   #lastPcmDiagnostic: string | undefined;
+  #latestPcmClosePlaybackDiagnostic: PcmClosePlaybackDiagnosticSnapshot | undefined;
+  #pendingUnexpectedPcmClose: PendingUnexpectedPcmClose | undefined;
   #playbackCounterPolicy:
     | {
         baseline: DeviceRuntimeMetrics;
@@ -1001,16 +1220,27 @@ class DeviceRuntimeProbe {
   observePlaybackMetrics(value: unknown) {
     try {
       const parsed = parseKitPlaybackMetrics(value);
+      const values = {
+        ...flattenKitPlaybackMetrics(parsed),
+        playback_metrics_produced_at_ms: parsed.producedAtMs,
+        playback_metrics_sequence: parsed.sequence,
+        playback_metrics_schema_version: parsed.schemaVersion,
+      };
+      this.#latestPcmClosePlaybackDiagnostic = {
+        sequence: parsed.sequence,
+        producedAtMs: parsed.producedAtMs,
+        downlinkAccepted: parsed.downlinkAccepted,
+        playbackSubmitted: parsed.playback.submitted,
+        playbackCompleted: parsed.playback.completed,
+        pcmReceiveCalls: parsed.runtime.pcmReceiveCalls,
+        pcmReceiveChunks: parsed.runtime.pcmReceiveChunks,
+      };
       this.#observe({
         family: "playback-detail",
         kind: "metrics",
-        values: {
-          ...flattenKitPlaybackMetrics(parsed),
-          playback_metrics_produced_at_ms: parsed.producedAtMs,
-          playback_metrics_sequence: parsed.sequence,
-          playback_metrics_schema_version: parsed.schemaVersion,
-        },
+        values,
       });
+      this.#completeUnexpectedPcmCloseDiagnostic(this.#latestPcmClosePlaybackDiagnostic);
     } catch (error) {
       this.fail(
         new Error("Malformed detailed playback metrics callback.", {
@@ -1023,14 +1253,72 @@ class DeviceRuntimeProbe {
   observePcmSocketClose(close: DevicePcmSocketClose) {
     console.log(`pcm_socket_close=${JSON.stringify(close)}`);
     if (close.classification === "unexpected") {
-      this.fail(
-        new Error(
-          `PCM ${close.origin} socket closed unexpectedly with code ${close.code}: ${
-            close.reason || "(no reason)"
-          }.`,
-        ),
+      if (this.#pendingUnexpectedPcmClose) return;
+      const error = new Error(
+        `PCM ${close.origin} socket closed unexpectedly with code ${close.code}: ${
+          close.reason || "(no reason)"
+        }.`,
       );
+      const startedAtMonotonicMs = performance.now();
+      const timeout = setTimeout(() => {
+        const pending = this.#pendingUnexpectedPcmClose;
+        if (!pending) return;
+        this.#pendingUnexpectedPcmClose = undefined;
+        console.error(
+          `pcm_socket_close_followup_timeout=${JSON.stringify({
+            baseline: pending.baseline ?? null,
+            close: pending.close,
+            waitedMs: performance.now() - pending.startedAtMonotonicMs,
+          })}`,
+        );
+        this.fail(pending.error);
+      }, pcmCloseFollowupMetricsTimeoutMs);
+      this.#pendingUnexpectedPcmClose = {
+        baseline: this.#latestPcmClosePlaybackDiagnostic,
+        close,
+        error,
+        startedAtMonotonicMs,
+        timeout,
+      };
     }
+  }
+
+  #completeUnexpectedPcmCloseDiagnostic(current: PcmClosePlaybackDiagnosticSnapshot) {
+    const pending = this.#pendingUnexpectedPcmClose;
+    if (!pending) return;
+    if (
+      pending.baseline &&
+      current.sequence === pending.baseline.sequence &&
+      current.producedAtMs === pending.baseline.producedAtMs
+    ) {
+      /*
+       * A callback already queued before the close may be delivered twice by a
+       * host adapter. It contains no post-close evidence, so keep waiting
+       * rather than reporting zero deltas as if the device had been observed.
+       */
+      return;
+    }
+    clearTimeout(pending.timeout);
+    this.#pendingUnexpectedPcmClose = undefined;
+    const baseline = pending.baseline;
+    console.log(
+      `pcm_socket_close_followup_metrics=${JSON.stringify({
+        baseline: baseline ?? null,
+        close: pending.close,
+        current,
+        deltas: baseline
+          ? {
+              downlinkAccepted: current.downlinkAccepted - baseline.downlinkAccepted,
+              pcmReceiveCalls: current.pcmReceiveCalls - baseline.pcmReceiveCalls,
+              pcmReceiveChunks: current.pcmReceiveChunks - baseline.pcmReceiveChunks,
+              playbackCompleted: current.playbackCompleted - baseline.playbackCompleted,
+              playbackSubmitted: current.playbackSubmitted - baseline.playbackSubmitted,
+            }
+          : null,
+        waitedMs: performance.now() - pending.startedAtMonotonicMs,
+      })}`,
+    );
+    this.fail(pending.error);
   }
 
   armPlaybackCounterPolicy(

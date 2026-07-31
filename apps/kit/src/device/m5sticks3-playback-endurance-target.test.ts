@@ -87,10 +87,10 @@ function requiredMetricValues(overrides: Record<string, number | string> = {}) {
     playback_freshness_incidents: 0,
     playback_generation_frames_flushed: 0,
     playback_invalid_frames: 0,
-    playback_last_eof_to_successful_refill_us: 1_100,
-    playback_last_reuse_lead_at_successful_refill_us: 18_700,
-    playback_last_write_call_duration_us: 100,
+    playback_downlink_interarrival_samples: 1,
+    playback_maximum_downlink_interarrival_ms: 20,
     playback_maximum_eof_to_successful_refill_us: 1_200,
+    playback_maximum_receive_to_dma_start_ms: 60,
     playback_maximum_write_call_duration_us: 120,
     playback_minimum_reuse_lead_at_successful_refill_us: 18_600,
     playback_owner_clock_regressions: 0,
@@ -98,7 +98,7 @@ function requiredMetricValues(overrides: Record<string, number | string> = {}) {
     playback_partial_prebuffer_incidents: 0,
     playback_state_errors: 0,
     playback_submitted: 0,
-    playback_successful_refill_timing_samples: 1,
+    playback_receive_to_dma_start_samples: 1,
     playback_underrun_late_frames_dropped: 0,
     playback_underrun_frames_flushed: 0,
     playback_underrun_incidents: 0,
@@ -145,6 +145,7 @@ function stageObservation(
         amplitudeCoefficientOfVariation: 0.01,
         amplitudeStepP99Decibels: 0.1,
         maximumAmplitudeStepDecibels: 0.1,
+        excludedCoherentWindowCount: 0,
         expectedDurationMs: durationMs,
         gapCount: 0,
         longestInternalGapMs: 0,
@@ -476,17 +477,17 @@ describe("M5StickS3 playback endurance target", () => {
     });
     expect(m5StickS3PlaybackEnduranceAcceptancePolicy.thresholds.metricMaximumValues).toMatchObject(
       {
-        playback_last_eof_to_successful_refill_us: 10_000,
-        playback_last_write_call_duration_us: 5_000,
+        playback_maximum_downlink_interarrival_ms: 40,
         playback_maximum_eof_to_successful_refill_us: 10_000,
+        playback_maximum_receive_to_dma_start_ms: 120,
         playback_maximum_write_call_duration_us: 5_000,
       },
     );
     expect(m5StickS3PlaybackEnduranceAcceptancePolicy.thresholds.metricMinimumValues).toMatchObject(
       {
-        playback_last_reuse_lead_at_successful_refill_us: 1_000,
         playback_minimum_reuse_lead_at_successful_refill_us: 1_000,
-        playback_successful_refill_timing_samples: 1,
+        playback_downlink_interarrival_samples: 1,
+        playback_receive_to_dma_start_samples: 1,
       },
     );
     expect(m5StickS3PlaybackEnduranceRequiredMetrics).not.toContain(

@@ -123,6 +123,7 @@ describe("device PCM proxy", () => {
 
   function createProxy(options?: {
     closes?: DevicePcmSocketClose[];
+    downlinkDeliveryMode?: "device-clocked" | "host-paced";
     events?: ProviderVoiceEvent[];
     failures?: string[];
     inputMode?: "push-to-talk" | "server-vad";
@@ -138,6 +139,7 @@ describe("device PCM proxy", () => {
         return candidateProjectId === projectId && candidateToken === projectToken;
       },
       connectProvider: async () => provider.server,
+      downlinkDeliveryMode: options?.downlinkDeliveryMode,
       frameBytes,
       maximumDownlinkQueuedBytes: options?.maximumDownlinkQueuedBytes,
       minimumDownlinkStartupFrames: options?.minimumDownlinkStartupFrames,
@@ -580,6 +582,110 @@ describe("device PCM proxy", () => {
 
     await vi.advanceTimersByTimeAsync(20);
     expect(failures).toEqual(["provider-downlink-source-underrun"]);
+  });
+
+  test("lets the device clock consume bounded provider bursts without a second media timer", async () => {
+    /*
+     * The physical schema-4 discriminator measured only a 22.8 ms gap at the
+     * host bridge but a 70 ms complete-frame gap at the Stick. A host timer
+     * that releases exactly one frame every 20 ms consequently keeps the
+     * device ring at depth zero or one: none of the nominal 80 ms startup
+     * reserve is replenished after ordinary clock drift consumes it.
+     *
+     * In device-clocked mode, the proxy remains a bounded rechunker and lets
+     * the provider's naturally bursty chunks refill the device-side ring.
+     * There is deliberately no host "source underrun" timer. A provider pause
+     * is classified at the actual playout boundary by the device, which owns
+     * freshness and recovery, instead of destroying the socket one hop early.
+     *
+     * This test also guards the tempting unbounded implementation: the loop
+     * may release only bytes already admitted by the existing fixed-capacity
+     * queue, and later bytes must preserve exact order.
+     */
+    vi.useFakeTimers();
+    const failures: string[] = [];
+    const { provider, proxy } = createProxy({
+      downlinkDeliveryMode: "device-clocked",
+      failures,
+    });
+    const response = await proxy.fetch(pcmRequest());
+    const device = (response as Response & { webSocket?: AcceptingWebSocket }).webSocket;
+    if (!device) throw new Error("missing device WebSocket");
+    device.accept();
+    sockets.push(device);
+
+    const frames: Uint8Array[] = [];
+    const receivedAt: number[] = [];
+    device.addEventListener("message", (event) => {
+      const bytes = new Uint8Array(event.data as ArrayBufferLike);
+      if (bytes.byteLength === 0) return;
+      frames.push(bytes);
+      receivedAt.push(performance.now());
+    });
+
+    const startup = new Uint8Array(frameBytes * 3);
+    startup.fill(1, 0, frameBytes);
+    startup.fill(2, frameBytes, frameBytes * 2);
+    startup.fill(3, frameBytes * 2);
+    provider.client.send(startup);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(frames.map((frame) => frame[0])).toEqual([1, 2, 3]);
+    expect(new Set(receivedAt)).toEqual(new Set([0]));
+
+    await vi.advanceTimersByTimeAsync(200);
+    expect(failures).toEqual([]);
+
+    provider.client.send(new Uint8Array(frameBytes).fill(4));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(frames.map((frame) => frame[0])).toEqual([1, 2, 3, 4]);
+    expect(receivedAt.at(-1)).toBe(200);
+  });
+
+  test("establishes an explicit device-clocked startup lead without growing the queue", async () => {
+    /*
+     * Four hardware descriptors consume the first four frames immediately.
+     * Starting after the proxy's default three-frame watermark consequently
+     * leaves no replenished application reserve on the physical Stick. Seven
+     * frames are a deliberately narrow discriminator: the initial burst can
+     * populate four DMA descriptors and leave three frames / 60 ms in the
+     * device's already-bounded ring. It does not change the eight-frame /
+     * 160 ms maximum, and every later provider burst still drains immediately.
+     */
+    vi.useFakeTimers();
+    const failures: string[] = [];
+    const { provider, proxy } = createProxy({
+      downlinkDeliveryMode: "device-clocked",
+      failures,
+      maximumDownlinkQueuedBytes: frameBytes * 8,
+      minimumDownlinkStartupFrames: 7,
+    });
+    const response = await proxy.fetch(pcmRequest());
+    const device = (response as Response & { webSocket?: AcceptingWebSocket }).webSocket;
+    if (!device) throw new Error("missing device WebSocket");
+    device.accept();
+    sockets.push(device);
+
+    const frameFirstBytes: number[] = [];
+    device.addEventListener("message", (event) => {
+      const bytes = new Uint8Array(event.data as ArrayBufferLike);
+      if (bytes.byteLength > 0) frameFirstBytes.push(bytes[0] ?? 0);
+    });
+
+    for (let frame = 1; frame <= 6; frame += 1) {
+      provider.client.send(new Uint8Array(frameBytes).fill(frame));
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    expect(frameFirstBytes).toEqual([]);
+
+    provider.client.send(new Uint8Array(frameBytes).fill(7));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(frameFirstBytes).toEqual([1, 2, 3, 4, 5, 6, 7]);
+
+    provider.client.send(new Uint8Array(frameBytes).fill(8));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(frameFirstBytes).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(failures).toEqual([]);
   });
 
   /*

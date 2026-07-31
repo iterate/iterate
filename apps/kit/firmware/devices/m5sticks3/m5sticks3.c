@@ -24,6 +24,8 @@ static const char description[] =
     "\"subscribeToPlaybackMetrics\":\"Call a callback immediately and once "
     "per configured interval with raw playback timing, loss, buffer, stack, "
     "heap, and CPU evidence for endurance diagnostics.\","
+    "\"getDiagnostics\":\"Return one retained control-transport incident "
+    "snapshot. This remains available after a WebSocket reconnect.\","
     "\"renderOnScreen\":\"Download and render a PNG from {url}.\","
     "\"pushToTalk\":{\"start\":\"Queue a push-to-talk start event.\","
     "\"stop\":\"Queue a push-to-talk stop event.\"}}}";

@@ -1,9 +1,13 @@
 import { STATUS_CODES, createServer, type IncomingMessage } from "node:http";
+import type { Socket } from "node:net";
+import { performance } from "node:perf_hooks";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, type RawData, type WebSocket as NodeWebSocket } from "ws";
 
 const selectedProtocol = Symbol("iterate-kit-selected-websocket-protocol");
 const defaultMaximumBufferedBytes = 8 * 640;
+const maximumControlMessageTraceEntries = 64;
+const maximumControlMessageTraceParseBytes = 8 * 1024;
 const maximumHttpBodyBytes = 1024 * 1024;
 
 interface UpgradeRequest extends IncomingMessage {
@@ -17,7 +21,58 @@ interface FetchHandler {
 export interface LocalFetchWebSocketServerOptions extends FetchHandler {
   host: string;
   maximumBufferedBytes?: number;
+  onBridgeClosed?: (metrics: LocalFetchWebSocketBridgeMetrics) => void;
   port?: number;
+}
+
+/**
+ * Fixed-size evidence from one device-facing TCP WebSocket generation.
+ *
+ * These values deliberately describe the extra LAN adapter layer, not the
+ * Workers-shaped peer behind it. Retaining one record per PCM frame would make
+ * the diagnostic harness itself an endurance-memory leak, so the bridge keeps
+ * only counts, maxima, and the terminal cause.
+ */
+export interface LocalFetchWebSocketBridgeMetrics {
+  closeCode: number;
+  closeReason: string;
+  controlMessageTrace: LocalFetchWebSocketControlMessageTraceEntry[];
+  deviceSocketCloseDisposition: "alreadyClosed" | "tcpReset" | "webSocketClose";
+  /*
+   * `bufferedAmount` is useful runtime evidence but includes WebSocket frame
+   * bytes. Payload-in-flight is the media-age bound: eight 640-byte payloads
+   * mean 160 ms of speech regardless of how `ws` encoded their headers.
+   */
+  deviceSocketMaximumBufferedBytes: number;
+  deviceSocketMaximumPayloadBytesInFlight: number;
+  deviceSocketMaximumSendCallbackLatencyMs: number;
+  deviceSocketMaximumSendCallbacksInFlight: number;
+  /*
+   * A completed callback latency cannot describe sends still pending at the
+   * moment of failure. The oldest age closes that observability hole without
+   * retaining one timestamp per high-rate frame.
+   */
+  deviceSocketOldestSendCallbackAgeMsAtClose: number;
+  deviceSocketPayloadBytesInFlightAtClose: number;
+  deviceSocketSendCallbacksInFlightAtClose: number;
+  deviceToWorkerBytes: number;
+  deviceToWorkerMessages: number;
+  elapsedMs: number;
+  endpoint: string;
+  maximumBufferedBytes: number;
+  protocol: string;
+  workerToDeviceBytes: number;
+  workerToDeviceMaximumInterarrivalMs: number;
+  workerToDeviceMessages: number;
+}
+
+export interface LocalFetchWebSocketControlMessageTraceEntry {
+  command: "abort" | "binary" | "invalid" | "pull" | "push" | "reject" | "release" | "resolve";
+  direction: "deviceToWorker" | "workerToDevice";
+  elapsedMs: number;
+  id: number | null;
+  method: string;
+  payloadBytes: number;
 }
 
 /**
@@ -32,14 +87,17 @@ export interface LocalFetchWebSocketServerOptions extends FetchHandler {
  *
  * There is no application message queue. Each binary payload is copied once
  * at the runtime boundary because both the Kit proxy and `ws` are allowed to
- * reuse caller-owned buffers after `send()` returns. If the runtime's own
- * bounded `bufferedAmount` exceeds the configured allowance, both endpoints
- * are closed rather than retaining stale speech.
+ * reuse caller-owned buffers after `send()` returns. The bridge accounts
+ * payload bytes until each `ws.send()` callback finishes and refuses the
+ * message that would exceed the configured allowance. `bufferedAmount` is
+ * retained as wire/runtime evidence, but cannot enforce a media budget because
+ * it also includes variable WebSocket framing.
  */
 export class LocalFetchWebSocketServer {
   readonly #fetch: FetchHandler["fetch"];
   readonly #httpServer;
   readonly #maximumBufferedBytes: number;
+  readonly #onBridgeClosed: LocalFetchWebSocketServerOptions["onBridgeClosed"];
   readonly #sockets = new Set<NodeWebSocket>();
   readonly #webSocketServer: WebSocketServer;
   readonly baseUrl: string;
@@ -51,6 +109,7 @@ export class LocalFetchWebSocketServer {
     fetch: FetchHandler["fetch"];
     httpServer: ReturnType<typeof createServer>;
     maximumBufferedBytes: number;
+    onBridgeClosed: LocalFetchWebSocketServerOptions["onBridgeClosed"];
     webSocketServer: WebSocketServer;
   }) {
     this.baseUrl = options.baseUrl;
@@ -58,6 +117,7 @@ export class LocalFetchWebSocketServer {
     this.#fetch = options.fetch;
     this.#httpServer = options.httpServer;
     this.#maximumBufferedBytes = options.maximumBufferedBytes;
+    this.#onBridgeClosed = options.onBridgeClosed;
     this.#webSocketServer = options.webSocketServer;
   }
 
@@ -115,6 +175,7 @@ export class LocalFetchWebSocketServer {
       fetch: options.fetch,
       httpServer,
       maximumBufferedBytes,
+      onBridgeClosed: options.onBridgeClosed,
       webSocketServer,
     });
     httpServer.on("upgrade", (request, socket, head) => {
@@ -159,16 +220,23 @@ export class LocalFetchWebSocketServer {
       const protocol = response.headers.get("sec-websocket-protocol");
       if (protocol) (request as UpgradeRequest)[selectedProtocol] = protocol;
       /*
-       * Node types the upgrade stream as the generic Duplex contract even
-       * though the HTTP server supplies a net.Socket. Disable Nagle when that
-       * concrete capability is present; a runtime without it remains correct
-       * and is simply unable to offer the low-latency optimization.
+       * This listener belongs to `node:http.createServer`, not an HTTPS or
+       * user-supplied server. Node therefore creates the upgrade stream as a
+       * net.Socket even though @types/node exposes the more general Duplex
+       * listener contract. Retain that concrete socket: only
+       * `resetAndDestroy()` promises a TCP RST that discards kernel-accepted
+       * stale speech. WebSocket.terminate() merely calls destroy().
        */
-      if ("setNoDelay" in socket && typeof socket.setNoDelay === "function") {
-        socket.setNoDelay(true);
-      }
+      const tcpSocket = socket as Socket;
+      tcpSocket.setNoDelay(true);
       this.#webSocketServer.handleUpgrade(request, socket, head, (nodeSocket) => {
-        this.#bridge(nodeSocket, workerSocket);
+        this.#bridge(
+          nodeSocket,
+          tcpSocket,
+          workerSocket,
+          new URL(request.url ?? "/", this.baseUrl).pathname,
+          protocol ?? "",
+        );
       });
     } catch (error) {
       const response = new Response(error instanceof Error ? error.message : "Upgrade failed.", {
@@ -178,21 +246,80 @@ export class LocalFetchWebSocketServer {
     }
   }
 
-  #bridge(nodeSocket: NodeWebSocket, workerSocket: WebSocket) {
+  #bridge(
+    nodeSocket: NodeWebSocket,
+    tcpSocket: Socket,
+    workerSocket: WebSocket,
+    endpoint: string,
+    protocol: string,
+  ) {
     nodeSocket.binaryType = "arraybuffer";
     this.#sockets.add(nodeSocket);
     let closed = false;
+    const startedAt = performance.now();
+    let deviceSocketMaximumBufferedBytes = 0;
+    let deviceSocketMaximumPayloadBytesInFlight = 0;
+    let deviceSocketMaximumSendCallbackLatencyMs = 0;
+    let deviceSocketMaximumSendCallbacksInFlight = 0;
+    let deviceSocketOldestSendStartedAt: number | undefined;
+    let deviceSocketPayloadBytesInFlight = 0;
+    let deviceSocketSendCallbacksInFlight = 0;
+    let deviceToWorkerBytes = 0;
+    let deviceToWorkerMessages = 0;
+    let lastWorkerToDeviceMessageAt: number | undefined;
+    const controlMessageTrace: LocalFetchWebSocketControlMessageTraceEntry[] = [];
+    let workerToDeviceBytes = 0;
+    let workerToDeviceMaximumInterarrivalMs = 0;
+    let workerToDeviceMessages = 0;
     const closeBoth = (code = 1000, reason = "") => {
       if (closed) return;
       closed = true;
       this.#sockets.delete(nodeSocket);
-      closeNodeSocket(nodeSocket, code, reason);
+      const deviceSocketCloseDisposition = closeNodeSocket(nodeSocket, tcpSocket, code, reason);
       closeWorkerSocket(workerSocket, code, reason);
+      this.#onBridgeClosed?.({
+        closeCode: code,
+        closeReason: reason,
+        controlMessageTrace: [...controlMessageTrace],
+        deviceSocketCloseDisposition,
+        deviceSocketMaximumBufferedBytes,
+        deviceSocketMaximumPayloadBytesInFlight,
+        deviceSocketMaximumSendCallbackLatencyMs,
+        deviceSocketMaximumSendCallbacksInFlight,
+        deviceSocketOldestSendCallbackAgeMsAtClose:
+          deviceSocketOldestSendStartedAt === undefined
+            ? 0
+            : performance.now() - deviceSocketOldestSendStartedAt,
+        deviceSocketPayloadBytesInFlightAtClose: deviceSocketPayloadBytesInFlight,
+        deviceSocketSendCallbacksInFlightAtClose: deviceSocketSendCallbacksInFlight,
+        deviceToWorkerBytes,
+        deviceToWorkerMessages,
+        elapsedMs: performance.now() - startedAt,
+        endpoint,
+        maximumBufferedBytes: this.#maximumBufferedBytes,
+        protocol,
+        workerToDeviceBytes,
+        workerToDeviceMaximumInterarrivalMs,
+        workerToDeviceMessages,
+      });
     };
     nodeSocket.on("message", (data, isBinary) => {
       if (closed) return;
       try {
-        workerSocket.send(isBinary ? copyRawData(data) : rawDataText(data));
+        const payload = isBinary ? copyRawData(data) : rawDataText(data);
+        const payloadBytes =
+          typeof payload === "string" ? Buffer.byteLength(payload) : payload.byteLength;
+        deviceToWorkerMessages += 1;
+        deviceToWorkerBytes += payloadBytes;
+        recordControlMessageTrace({
+          direction: "deviceToWorker",
+          elapsedMs: performance.now() - startedAt,
+          endpoint,
+          payload,
+          payloadBytes,
+          trace: controlMessageTrace,
+        });
+        workerSocket.send(payload);
       } catch {
         closeBoth(1011, "LAN bridge receive failed.");
       }
@@ -205,21 +332,108 @@ export class LocalFetchWebSocketServer {
     });
     workerSocket.addEventListener("message", (event) => {
       if (closed) return;
-      if (nodeSocket.bufferedAmount > this.#maximumBufferedBytes) {
-        closeBoth(4013, "LAN bridge backpressure.");
-        return;
+      const messageReceivedAt = performance.now();
+      if (lastWorkerToDeviceMessageAt !== undefined) {
+        workerToDeviceMaximumInterarrivalMs = Math.max(
+          workerToDeviceMaximumInterarrivalMs,
+          messageReceivedAt - lastWorkerToDeviceMessageAt,
+        );
       }
+      lastWorkerToDeviceMessageAt = messageReceivedAt;
+      deviceSocketMaximumBufferedBytes = Math.max(
+        deviceSocketMaximumBufferedBytes,
+        nodeSocket.bufferedAmount,
+      );
       try {
+        let payload: string | Uint8Array;
         if (typeof event.data === "string") {
-          nodeSocket.send(event.data);
+          payload = event.data;
+        } else {
+          const bytes = synchronousBinaryCopy(event.data);
+          if (!bytes) {
+            closeBoth(4002, "LAN bridge received unsupported binary data.");
+            return;
+          }
+          payload = bytes;
+        }
+        const payloadBytes =
+          typeof payload === "string" ? Buffer.byteLength(payload) : payload.byteLength;
+        recordControlMessageTrace({
+          direction: "workerToDevice",
+          elapsedMs: messageReceivedAt - startedAt,
+          endpoint,
+          payload,
+          payloadBytes,
+          trace: controlMessageTrace,
+        });
+        /*
+         * Check the next payload, not `ws.bufferedAmount` from the preceding
+         * frame. The old comparison stopped a physical run at 5,152 bytes:
+         * eight 640-byte payloads plus eight four-byte headers. That close
+         * happened at a meaningful 160 ms media backlog, but its aggregate
+         * made the incident look like a 32-byte off-by-one. Payload accounting
+         * expresses the actual freshness invariant and rejects the ninth frame
+         * before it can enter another opaque queue.
+         */
+        if (payloadBytes > this.#maximumBufferedBytes - deviceSocketPayloadBytesInFlight) {
+          closeBoth(4013, "LAN bridge backpressure.");
           return;
         }
-        const bytes = synchronousBinaryCopy(event.data);
-        if (!bytes) {
-          closeBoth(4002, "LAN bridge received unsupported binary data.");
-          return;
+        workerToDeviceMessages += 1;
+        workerToDeviceBytes += payloadBytes;
+        const sendStartedAt = performance.now();
+        if (deviceSocketSendCallbacksInFlight === 0) {
+          deviceSocketOldestSendStartedAt = sendStartedAt;
         }
-        nodeSocket.send(bytes, { binary: true });
+        deviceSocketPayloadBytesInFlight += payloadBytes;
+        deviceSocketMaximumPayloadBytesInFlight = Math.max(
+          deviceSocketMaximumPayloadBytesInFlight,
+          deviceSocketPayloadBytesInFlight,
+        );
+        deviceSocketSendCallbacksInFlight += 1;
+        deviceSocketMaximumSendCallbacksInFlight = Math.max(
+          deviceSocketMaximumSendCallbacksInFlight,
+          deviceSocketSendCallbacksInFlight,
+        );
+        let sendFinished = false;
+        const finishSend = (error?: Error) => {
+          /*
+           * `ws.send()` normally completes asynchronously, but it may throw
+           * before accepting a frame if lifecycle state changes between our
+           * message check and this call. Release the exact same ledger in both
+           * paths; otherwise a synchronous failure would be reported as media
+           * retained by a socket that never owned it.
+           */
+          if (sendFinished) return;
+          sendFinished = true;
+          deviceSocketPayloadBytesInFlight -= payloadBytes;
+          deviceSocketSendCallbacksInFlight -= 1;
+          if (deviceSocketSendCallbacksInFlight === 0) {
+            deviceSocketOldestSendStartedAt = undefined;
+          }
+          deviceSocketMaximumSendCallbackLatencyMs = Math.max(
+            deviceSocketMaximumSendCallbackLatencyMs,
+            performance.now() - sendStartedAt,
+          );
+          if (error) closeBoth(1011, "LAN bridge send failed.");
+        };
+        try {
+          nodeSocket.send(payload, { binary: typeof payload !== "string" }, finishSend);
+        } catch (error) {
+          finishSend();
+          throw error;
+        }
+        /*
+         * `ws.bufferedAmount` is the bytes still retained by its Sender plus
+         * Node's writable stream, not the kernel's complete TCP history. Read
+         * it immediately after send as well as before the next frame so a
+         * single large jump remains visible even if close races the next
+         * provider event.
+         */
+        deviceSocketMaximumBufferedBytes = Math.max(
+          deviceSocketMaximumBufferedBytes,
+          nodeSocket.bufferedAmount,
+        );
       } catch {
         closeBoth(1011, "LAN bridge send failed.");
       }
@@ -280,6 +494,96 @@ export class LocalFetchWebSocketServer {
   }
 }
 
+function recordControlMessageTrace(options: {
+  direction: LocalFetchWebSocketControlMessageTraceEntry["direction"];
+  elapsedMs: number;
+  endpoint: string;
+  payload: string | Uint8Array;
+  payloadBytes: number;
+  trace: LocalFetchWebSocketControlMessageTraceEntry[];
+}) {
+  /*
+   * This chronology diagnoses only the low-rate Cap'n Web control lane. JSON
+   * parsing every PCM frame would make the observer compete with the realtime
+   * path it is intended to explain.
+   *
+   * Never retain an envelope or its arguments. Project credentials and method
+   * arguments are legal Cap'n Web values. The fixed entry count bounds
+   * endurance memory, the parse-size ceiling bounds transient diagnostic work,
+   * and command/method allow-lists prevent arbitrary strings from becoming an
+   * accidental secret log. Sixty-four terminal envelopes cover several full
+   * push/pull/resolve/release exchanges while keeping the failure evidence
+   * small enough to print atomically.
+   */
+  if (options.endpoint !== "/api") return;
+  const metadata = summarizeControlMessage(options.payload, options.payloadBytes);
+  if (options.trace.length === maximumControlMessageTraceEntries) options.trace.shift();
+  options.trace.push({
+    ...metadata,
+    direction: options.direction,
+    elapsedMs: options.elapsedMs,
+    payloadBytes: options.payloadBytes,
+  });
+}
+
+function summarizeControlMessage(
+  payload: string | Uint8Array,
+  payloadBytes: number,
+): Pick<LocalFetchWebSocketControlMessageTraceEntry, "command" | "id" | "method"> {
+  if (typeof payload !== "string") {
+    return { command: "binary", id: null, method: "" };
+  }
+  if (payloadBytes > maximumControlMessageTraceParseBytes) {
+    return { command: "invalid", id: null, method: "" };
+  }
+  try {
+    const message: unknown = JSON.parse(payload);
+    if (!Array.isArray(message)) return { command: "invalid", id: null, method: "" };
+    const rawCommand = message[0];
+    if (!isControlCommand(rawCommand)) {
+      return { command: "invalid", id: null, method: "" };
+    }
+    const id =
+      rawCommand !== "push" && Number.isSafeInteger(message[1]) ? (message[1] as number) : null;
+    return {
+      command: rawCommand,
+      id,
+      method: rawCommand === "push" ? safePushedMethod(message[1]) : "",
+    };
+  } catch {
+    return { command: "invalid", id: null, method: "" };
+  }
+}
+
+function isControlCommand(
+  value: unknown,
+): value is Exclude<LocalFetchWebSocketControlMessageTraceEntry["command"], "binary" | "invalid"> {
+  return (
+    value === "abort" ||
+    value === "pull" ||
+    value === "push" ||
+    value === "reject" ||
+    value === "release" ||
+    value === "resolve"
+  );
+}
+
+function safePushedMethod(expression: unknown) {
+  if (!Array.isArray(expression) || expression[0] !== "pipeline") return "";
+  const path = expression[2];
+  if (!Array.isArray(path) || path.length === 0) return "";
+  const method = path.at(-1);
+  /*
+   * Method names are useful causal metadata, but they are still peer input.
+   * Restrict them to the identifier vocabulary used by Kit capabilities so a
+   * deliberately unusual property name cannot smuggle an argument or token
+   * into durable diagnostics.
+   */
+  return typeof method === "string" && /^[A-Za-z_$][A-Za-z0-9_$-]{0,63}$/u.test(method)
+    ? method
+    : "";
+}
+
 async function readBoundedHttpBody(request: IncomingMessage, maximumBytes: number) {
   const chunks: Buffer[] = [];
   let totalBytes = 0;
@@ -314,13 +618,29 @@ function rawDataText(data: RawData) {
   return data.toString("utf8");
 }
 
-function closeNodeSocket(socket: NodeWebSocket, code: number, reason: string) {
-  if (socket.readyState === socket.CLOSED || socket.readyState === socket.CLOSING) return;
+function closeNodeSocket(socket: NodeWebSocket, tcpSocket: Socket, code: number, reason: string) {
+  /*
+   * 4013 means the realtime media freshness bound was crossed. A graceful
+   * WebSocket close would sit behind any PCM already accepted by the kernel,
+   * allowing seconds of obsolete conversation to reach the device after the
+   * path recovers. TCP reset is deliberately less polite: its product
+   * contract is that this connection generation, including opaque kernel
+   * backlog, becomes undeliverable before a fresh generation can start.
+   */
+  if (code === 4013) {
+    if (tcpSocket.destroyed) return "alreadyClosed";
+    tcpSocket.resetAndDestroy();
+    return "tcpReset";
+  }
+  if (socket.readyState === socket.CLOSED || socket.readyState === socket.CLOSING) {
+    return "alreadyClosed";
+  }
   if (code === 1000 || (code >= 3000 && code <= 4999)) {
     socket.close(code, reason);
   } else {
     socket.close();
   }
+  return "webSocketClose";
 }
 
 function closeWorkerSocket(socket: WebSocket, code: number, reason: string) {

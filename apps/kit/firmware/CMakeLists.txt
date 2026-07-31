@@ -853,6 +853,7 @@ add_test(
 
 add_executable(iterate-kit-esp-idf-itx-transport-test
   tests/esp_idf_itx_transport_test.c
+  tests/fakes/fake_esp_idf_control_websocket.c
   tests/fakes/fake_esp_idf_platform.c
   platforms/iterate_esp_idf/itx_transport.c
 )

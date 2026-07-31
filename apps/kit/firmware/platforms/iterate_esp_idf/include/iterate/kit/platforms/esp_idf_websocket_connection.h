@@ -71,10 +71,10 @@ struct iterate_kit_esp_idf_websocket_chunk {
 /**
  * Caller-owned lifetime and storage for a connection.
  *
- * url is consumed during prepare() and may then be released. Subprotocol and
- * headers are borrowed again by open(), so those two strings must outlive the
- * connection. The receive and transmit workspaces are also borrowed for the
- * whole lifecycle.
+ * url is consumed during prepare() and may then be released. A non-NULL
+ * subprotocol or headers string is borrowed again by open() and must outlive
+ * the connection; NULL means that optional upgrade field is absent. The
+ * receive and transmit workspaces are also borrowed for the whole lifecycle.
  * Their explicit capacities are this adapter's complete application-level
  * parser/writer workspace budget; ESP-IDF's TLS/lwIP allocations remain opaque
  * and must be measured separately. This abstraction does not allocate a second

@@ -4,6 +4,7 @@ import type { M5StickS3 } from "./m5sticks3-contract.ts";
 import type { LocalDevicePeer } from "./local-device-peer.ts";
 import {
   DevicePcmProxy,
+  type DevicePcmDownlinkDeliveryMode,
   type DevicePcmInputMode,
   type DevicePcmSessionDescriptor,
   type DevicePcmSocketClose,
@@ -17,6 +18,8 @@ interface PeerConnection {
 
 export interface LocalDevicePeerServerOptions {
   connectVoiceProvider?(session: DevicePcmSessionDescriptor): Promise<WebSocket>;
+  pcmDownlinkDeliveryMode?: DevicePcmDownlinkDeliveryMode;
+  pcmMinimumDownlinkStartupFrames?: number;
   onVoiceFailure?(reason: string): void;
   onVoiceSocketClose?(close: DevicePcmSocketClose): void;
   onPcmSessionReady?(session: DevicePcmSessionDescriptor): void;
@@ -38,7 +41,9 @@ export class LocalDevicePeerServer implements Disposable {
         authenticate: (projectId, token) =>
           this.#peer.acceptsProjectBearerCredentials(projectId, token),
         connectProvider: options.connectVoiceProvider,
+        downlinkDeliveryMode: options.pcmDownlinkDeliveryMode,
         frameBytes: options.pcmFrameBytes ?? 640,
+        minimumDownlinkStartupFrames: options.pcmMinimumDownlinkStartupFrames,
         onFailure: options.onVoiceFailure,
         onProviderEvent: options.onVoiceProviderEvent,
         onSessionReady: options.onPcmSessionReady,

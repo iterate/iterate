@@ -5,7 +5,6 @@
 #include <limits.h>
 #include <string.h>
 
-#include "esp_crt_bundle.h"
 #include "esp_cpu.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
@@ -16,8 +15,8 @@
  *
  * Three execution contexts are intentionally separated:
  *
- *   - ESP-IDF Wi-Fi/WebSocket callbacks validate and copy inbound fragments;
- *   - one static network task owns reconnect policy and all socket sends;
+ *   - ESP-IDF Wi-Fi callbacks publish only station lifecycle flags;
+ *   - one static network task owns the WebSocket, reconnect policy, and I/O;
  *   - the application task alone parses Cap'n Web and invokes device code.
  *
  * The two SPSC rings are the only message handoff. This avoids locks and keeps
@@ -54,15 +53,23 @@ enum {
   WIFI_RETRY_MAX_MS = 30000,
   /* A connect callback must arrive before another attempt becomes eligible. */
   WIFI_CONNECT_WATCHDOG_MS = 30000,
-  /* ESP-IDF's WebSocket worker has a separate, explicit stack budget. */
-  WEBSOCKET_TASK_STACK_BYTES = 4096,
+  /*
+   * Eight lower reads can consume a maximally fragmented 2 KiB control frame
+   * without letting a permanently readable socket monopolize core zero.
+   * Capacity remains fixed in the inbox; this is only a per-pass CPU budget.
+   */
+  NETWORK_RECEIVE_BURST = 8,
   /*
    * At most four complete control messages are written per network pass. This
    * amortizes wakeups while giving capability bursts a hard per-pass bound.
    */
   NETWORK_SEND_BURST = 4,
-  /* Shutdown is bounded; a wedged owner keeps its resources rather than UAF. */
-  STOP_TIMEOUT_MS = 3000,
+  /*
+   * The sole blocking socket operation is the ten-second open handshake.
+   * Shutdown must outlast that documented bound; a timeout still leaves owned
+   * resources intact rather than force-deleting a task inside TLS.
+   */
+  STOP_TIMEOUT_MS = 12000,
   /*
    * Capability traffic can perform TLS and reconnect bookkeeping, so it shares
    * core 0 with the other network owners rather than core 1 with the 20 ms I2S
@@ -240,6 +247,28 @@ static void discard_control_inbox(
   }
 }
 
+static void abandon_acquired_control_send(
+    struct iterate_kit_esp_idf_itx_transport *transport) {
+  if (!transport->control_send_acquired) {
+    return;
+  }
+  /*
+   * The direct writer may retain an encoded suffix after a short lower write.
+   * Closing the socket resets that writer before this slot can be offered to a
+   * new generation. Release exactly once here so the producer may reuse the
+   * ring without mistaking an abandoned session message for successful egress.
+   */
+  (void)iterate_kit_spsc_ring_read_release(
+      transport->options.control_outbox);
+  transport->control_send_message = NULL;
+  transport->control_send_length = 0U;
+  transport->control_send_acquired = false;
+  atomic_saturating_increment(
+      &transport->control_messages_discarded);
+  atomic_saturating_increment(
+      &transport->control_outbox_discarded);
+}
+
 static void discard_control_outbox(
     struct iterate_kit_esp_idf_itx_transport *transport) {
   /*
@@ -250,6 +279,7 @@ static void discard_control_outbox(
    */
   const void *data;
   size_t length;
+  abandon_acquired_control_send(transport);
   while (iterate_kit_spsc_ring_read_acquire(
              transport->options.control_outbox,
              &data,
@@ -302,6 +332,42 @@ static void record_protocol_failure(
     atomic_saturating_increment(&transport->protocol_failures);
   }
   request_restart(transport);
+}
+
+static void remember_application_capnweb_failure(
+    struct iterate_kit_esp_idf_itx_transport *transport,
+    uint32_t generation,
+    enum capnweb_status status) {
+  if (status == CAPNWEB_OK) {
+    return;
+  }
+  if (generation <=
+      atomic_load_u32(
+          &transport->last_application_capnweb_generation)) {
+    /*
+     * Session teardown can encounter a second transport error after the first
+     * parser/serializer failure has already condemned this generation. The
+     * first failure is causal; overwriting it with cleanup fallout would make
+     * a token-limit or full-outbox incident look like a generic close error.
+     * A newer socket epoch may replace the retained latest incident.
+     */
+    return;
+  }
+  /*
+   * A healthy replacement must reset the current session status, but it must
+   * not erase the reason its predecessor died. Store the status before the
+   * generation publication: after the release/acquire edge, a later snapshot
+   * of this settled incident cannot observe a new generation with an old
+   * status. These writes occur only on the application owner and never in the
+   * PCM or audio tasks.
+   */
+  __atomic_store_n(
+      &transport->last_application_capnweb_status,
+      (int32_t)status,
+      __ATOMIC_RELEASE);
+  atomic_store_u32(
+      &transport->last_application_capnweb_generation,
+      generation);
 }
 
 static void mark_socket_disconnected(
@@ -371,11 +437,10 @@ static void fail_receive(
       status,
       __ATOMIC_RELEASE);
   /*
-   * ESP-IDF serializes CONNECTED/DATA callbacks for one client, and stop()
-   * quiesces that dispatcher before a replacement client generation starts.
-   * Therefore the live generation belongs this DATA callback. If the platform
-   * is later replaced by a multi-dispatch worker, generation must travel with
-   * each queued callback instead of retaining this lookup.
+   * The sole network owner is also the only producer of inbound control
+   * messages, so the current generation is stable for this observation. If a
+   * future platform introduces another socket task, generation must travel
+   * with each queued chunk instead of reintroducing an implicit lookup race.
    */
   record_protocol_failure(
       transport,
@@ -400,101 +465,147 @@ static void fail_receive_fatal(
   latch_fatal_failure(transport);
 }
 
-static void receive_websocket_data(
-    struct iterate_kit_esp_idf_itx_transport *transport,
-    const esp_websocket_event_data_t *event) {
-  enum capnweb_status status;
-  if (event == NULL ||
-      event->data_len < 0 ||
-      event->payload_len < 0 ||
-      event->payload_offset < 0 ||
-      event->payload_offset > event->payload_len ||
-      event->data_len >
-          event->payload_len - event->payload_offset ||
-      (event->data_ptr == NULL && event->data_len > 0)) {
-    fail_receive(transport, CAPNWEB_E_INVALID_MESSAGE);
-    return;
+static bool mark_socket_connected(
+    struct iterate_kit_esp_idf_itx_transport *transport) {
+  const uint32_t generation =
+      atomic_load_u32(&transport->socket_generation);
+  if (atomic_load_u32(&transport->socket_connected)) {
+    return false;
   }
+  if (generation == UINT32_MAX) {
+    /*
+     * Generation zero is the never-connected sentinel and values are compared
+     * exactly across tasks. Wrapping would make an ancient epoch look new, so
+     * exhaustion is a fatal local limit even though the socket just opened.
+     */
+    fail_receive_fatal(transport, CAPNWEB_E_LIMIT);
+    return false;
+  }
+  atomic_store_u32(
+      &transport->socket_generation, generation + 1U);
   /*
-   * ESP-IDF may fragment one text message across callbacks. The portable inbox
-   * validates offset/length/opcode continuity and publishes only a complete
-   * bounded message to the SPSC ring. Backpressure is a protocol incident here:
-   * dropping an arbitrary fragment would destroy framing, so the session is
-   * failed loudly instead of continuing with partial JSON.
+   * Publish the incremented generation before connected. The application can
+   * therefore never accept a connected flag paired with the prior session.
    */
-  status = iterate_kit_websocket_text_inbox_feed(
-      &transport->control_inbox,
-      (uint8_t)event->op_code,
-      event->fin,
-      (size_t)event->payload_len,
-      (size_t)event->payload_offset,
-      event->data_ptr,
-      (size_t)event->data_len);
-  if (status != CAPNWEB_OK) {
-    fail_receive(transport, (int32_t)status);
-    return;
-  }
+  atomic_store_u32(&transport->socket_connected, 1U);
+  atomic_saturating_increment(
+      &transport->websocket_connections);
+  return true;
 }
 
-static void websocket_event(
-    void *context,
-    esp_event_base_t base,
-    int32_t event_id,
-    void *event_data) {
-  struct iterate_kit_esp_idf_itx_transport *transport = context;
-  const esp_websocket_event_data_t *event = event_data;
-  (void)base;
-  if (event_id == WEBSOCKET_EVENT_CONNECTED) {
-    const uint32_t generation =
-        atomic_load_u32(&transport->socket_generation);
-    if (atomic_load_u32(&transport->socket_connected)) {
-      return;
-    }
-    if (generation == UINT32_MAX) {
-      /*
-       * Generation zero is the never-connected sentinel and values are compared
-       * for exact equality across tasks. Wrapping would make an ancient epoch
-       * indistinguishable from a new one, so exhaustion is a fatal limit.
-       */
-      fail_receive_fatal(transport, CAPNWEB_E_LIMIT);
-      return;
-    }
-    atomic_store_u32(
-        &transport->socket_generation, generation + 1U);
-    /*
-     * Publish the incremented generation before connected. The application can
-     * therefore never accept a connected flag paired with the prior session's
-     * epoch.
-     */
-    atomic_store_u32(&transport->socket_connected, 1U);
-    atomic_saturating_increment(
-        &transport->websocket_connections);
-    return;
+static void remember_websocket_error(
+    struct iterate_kit_esp_idf_itx_transport *transport,
+    int32_t error) {
+  /*
+   * The lower taskless adapter exposes the errno/result at the point it loses
+   * framing trust. It cannot expose the managed client's callback-only TLS and
+   * HTTP tuple, so preserve the real domain and leave unavailable fields zero.
+   */
+  atomic_saturating_increment(&transport->websocket_errors);
+  atomic_store_u32(
+      &transport->last_websocket_error_generation,
+      atomic_load_u32(&transport->socket_generation));
+  __atomic_store_n(
+      &transport->last_websocket_transport_errno,
+      error,
+      __ATOMIC_RELEASE);
+  remember_platform_error(transport, (esp_err_t)error);
+}
+
+static bool service_websocket_control(
+    struct iterate_kit_esp_idf_itx_transport *transport) {
+  const enum iterate_kit_websocket_tx_result result =
+      iterate_kit_esp_idf_websocket_connection_service_control(
+          &transport->websocket);
+  if (result == ITERATE_KIT_WEBSOCKET_TX_IDLE ||
+      result == ITERATE_KIT_WEBSOCKET_TX_SENT ||
+      result == ITERATE_KIT_WEBSOCKET_TX_PROGRESS ||
+      result == ITERATE_KIT_WEBSOCKET_TX_DEFERRED) {
+    return true;
   }
-  if (event_id == WEBSOCKET_EVENT_DISCONNECTED ||
-      event_id == WEBSOCKET_EVENT_CLOSED ||
-      event_id == WEBSOCKET_EVENT_FINISH) {
+  remember_websocket_error(
+      transport, transport->websocket.last_error);
+  mark_socket_disconnected(transport);
+  request_restart(transport);
+  return false;
+}
+
+static void receive_control_messages(
+    struct iterate_kit_esp_idf_itx_transport *transport) {
+  unsigned int received;
+  for (received = 0U;
+       received < NETWORK_RECEIVE_BURST &&
+       atomic_load_u32(&transport->socket_connected);
+       ++received) {
+    struct iterate_kit_esp_idf_websocket_chunk chunk;
+    const enum iterate_kit_esp_idf_websocket_receive_result result =
+        iterate_kit_esp_idf_websocket_connection_receive(
+            &transport->websocket, 0, &chunk);
+    if (result ==
+        ITERATE_KIT_ESP_IDF_WEBSOCKET_RECEIVE_IDLE) {
+      return;
+    }
+    if (result ==
+        ITERATE_KIT_ESP_IDF_WEBSOCKET_RECEIVE_DATA) {
+      const enum capnweb_status status =
+          iterate_kit_websocket_text_inbox_feed(
+              &transport->control_inbox,
+              chunk.opcode,
+              chunk.final,
+              chunk.payload_size,
+              chunk.payload_offset,
+              (const char *)chunk.bytes,
+              chunk.byte_count);
+      if (status != CAPNWEB_OK) {
+        /*
+         * Dropping one fragment and continuing would splice later JSON onto a
+         * stale prefix. The whole generation is replaced instead, with the
+         * exact Cap'n Web classification retained for diagnostics.
+         */
+        fail_receive(transport, (int32_t)status);
+        return;
+      }
+      continue;
+    }
+    if (result ==
+        ITERATE_KIT_ESP_IDF_WEBSOCKET_RECEIVE_CONTROL) {
+      continue;
+    }
+    if (result ==
+        ITERATE_KIT_ESP_IDF_WEBSOCKET_RECEIVE_PEER_CLOSE) {
+      /*
+       * Give the queued CLOSE response one bounded write attempt before the
+       * next owner pass tears the socket down. Peer close is lifecycle, not an
+       * unexplained transport error.
+       */
+      (void)service_websocket_control(transport);
+      mark_socket_disconnected(transport);
+      request_restart(transport);
+      return;
+    }
+    if (result ==
+        ITERATE_KIT_ESP_IDF_WEBSOCKET_RECEIVE_DROPPED) {
+      fail_receive(transport, CAPNWEB_E_UNSUPPORTED);
+      return;
+    }
+    if (result ==
+        ITERATE_KIT_ESP_IDF_WEBSOCKET_RECEIVE_PROTOCOL_FAILURE) {
+      remember_websocket_error(
+          transport, transport->websocket.last_error);
+      fail_receive(transport, CAPNWEB_E_INVALID_MESSAGE);
+      return;
+    }
+    remember_websocket_error(
+        transport, transport->websocket.last_error);
     mark_socket_disconnected(transport);
     request_restart(transport);
     return;
-  }
-  if (event_id == WEBSOCKET_EVENT_ERROR) {
-    atomic_saturating_increment(&transport->websocket_errors);
-    if (event != NULL) {
-      remember_platform_error(
-          transport,
-          event->error_handle.esp_tls_last_esp_err);
-    }
-    return;
-  }
-  if (event_id == WEBSOCKET_EVENT_DATA) {
-    receive_websocket_data(transport, event);
   }
 }
 
 static void send_control_messages(
     struct iterate_kit_esp_idf_itx_transport *transport) {
-  unsigned int sent;
+  unsigned int work_steps;
   if (atomic_load_u32(&transport->socket_generation) !=
       atomic_load_u32(
           &transport->accepted_socket_generation)) {
@@ -506,52 +617,91 @@ static void send_control_messages(
     discard_control_outbox(transport);
     return;
   }
-  for (sent = 0U; sent < NETWORK_SEND_BURST; ++sent) {
-    const void *message;
-    size_t length;
-    int result;
+  for (work_steps = 0U;
+       work_steps < NETWORK_SEND_BURST;
+       ++work_steps) {
+    enum iterate_kit_websocket_tx_result result;
     if (!atomic_load_u32(&transport->socket_connected)) {
       return;
     }
-    if (iterate_kit_spsc_ring_read_acquire(
-            transport->options.control_outbox,
-            &message,
-            &length) != ITERATE_KIT_OK) {
+    if (!transport->control_send_acquired) {
+      if (iterate_kit_spsc_ring_read_acquire(
+              transport->options.control_outbox,
+              &transport->control_send_message,
+              &transport->control_send_length) !=
+          ITERATE_KIT_OK) {
+        return;
+      }
+      transport->control_send_acquired = true;
+    }
+    result = iterate_kit_esp_idf_websocket_connection_send(
+        &transport->websocket,
+        ITERATE_KIT_WEBSOCKET_TEXT,
+        transport->control_send_message,
+        transport->control_send_length);
+    if (result == ITERATE_KIT_WEBSOCKET_TX_SENT) {
+      (void)iterate_kit_spsc_ring_read_release(
+          transport->options.control_outbox);
+      transport->control_send_message = NULL;
+      transport->control_send_length = 0U;
+      transport->control_send_acquired = false;
+      atomic_saturating_increment(
+          &transport->control_messages_sent);
+      continue;
+    }
+    if (result == ITERATE_KIT_WEBSOCKET_TX_PROGRESS) {
+      /*
+       * A short write is ordinary nonblocking progress. Keep both the writer
+       * cursor and ring head, then spend at most the remaining work budget on
+       * its suffix; no second frame or duplicate RPC is manufactured.
+       */
+      continue;
+    }
+    if (result == ITERATE_KIT_WEBSOCKET_TX_DEFERRED) {
       return;
     }
-    if (length > (size_t)INT_MAX) {
-      result = -1;
-    } else {
-      TickType_t timeout = pdMS_TO_TICKS(
-          ITERATE_KIT_ESP_IDF_WEBSOCKET_SEND_TIMEOUT_MS);
-      if (timeout == 0U) {
-        timeout = 1U;
-      }
-      result = esp_websocket_client_send_text(
-          transport->websocket,
-          message,
-          (int)length,
-          timeout);
-    }
-    (void)iterate_kit_spsc_ring_read_release(
-        transport->options.control_outbox);
-    if (result != (int)length) {
+    {
       /*
-       * Release rather than retry the message. ESP-IDF does not expose how much
-       * of a failed send reached the peer; replay could duplicate a method
-       * call, while retaining it across reconnect would violate session
-       * generation. The explicit failure counter plus restart preserves the
-       * explanation.
+       * A failed frame may have a prefix below TLS. Retrying the logical
+       * Cap'n Web message could duplicate a method call; carrying it into a new
+       * generation would reuse session references. Abandon it visibly, close
+       * the opaque byte stream, and let the remounted session reconstruct only
+       * fresh work.
        */
       atomic_saturating_increment(
           &transport->control_send_failures);
-      remember_platform_error(transport, ESP_FAIL);
+      remember_websocket_error(
+          transport, transport->websocket.last_error);
+      abandon_acquired_control_send(transport);
+      mark_socket_disconnected(transport);
       request_restart(transport);
       return;
     }
-    atomic_saturating_increment(
-        &transport->control_messages_sent);
   }
+}
+
+static void stop_websocket(
+    struct iterate_kit_esp_idf_itx_transport *transport,
+    bool *websocket_open) {
+  if (!*websocket_open &&
+      transport->websocket.parent == NULL &&
+      transport->websocket.websocket == NULL) {
+    abandon_acquired_control_send(transport);
+    return;
+  }
+  mark_socket_disconnected(transport);
+  /*
+   * Reset the resumable writer and destroy the lower stream before releasing
+   * any borrowed outbox head. That order proves no retained encoded suffix can
+   * observe a slot after its producer is allowed to reuse it. Unlike
+   * the former managed-client stop, this close has no private task to join with
+   * an unbounded wait.
+   */
+  iterate_kit_esp_idf_websocket_connection_close(
+      &transport->websocket);
+  abandon_acquired_control_send(transport);
+  *websocket_open = false;
+  atomic_store_u32(&transport->websocket_started, 0U);
 }
 
 static void network_task(void *context) {
@@ -648,30 +798,16 @@ static void network_task(void *context) {
     if (!wifi_connected && websocket_started) {
       /*
        * A WebSocket cannot remain a valid Cap'n Web generation without its
-       * station lease. Stop it eagerly so its client task cannot queue
-       * callbacks that look fresh after Wi-Fi returns.
+       * station lease. Close it eagerly so no opaque TCP/TLS suffix can look
+       * fresh after Wi-Fi returns.
        */
-      mark_socket_disconnected(transport);
-      const esp_err_t error =
-          esp_websocket_client_stop(transport->websocket);
-      if (error != ESP_OK) {
-        remember_platform_error(transport, error);
-      }
-      websocket_started = false;
-      atomic_store_u32(&transport->websocket_started, 0U);
+      stop_websocket(transport, &websocket_started);
     }
 
     if (atomic_exchange_u32(
             &transport->restart_requested, 0U) &&
         websocket_started) {
-      mark_socket_disconnected(transport);
-      const esp_err_t error =
-          esp_websocket_client_stop(transport->websocket);
-      if (error != ESP_OK) {
-        remember_platform_error(transport, error);
-      }
-      websocket_started = false;
-      atomic_store_u32(&transport->websocket_started, 0U);
+      stop_websocket(transport, &websocket_started);
       iterate_kit_retry_gate_defer(
           &websocket_retry, now_us);
     }
@@ -682,7 +818,7 @@ static void network_task(void *context) {
         !websocket_started &&
         iterate_kit_retry_gate_ready(
             &websocket_retry, now_us)) {
-      esp_err_t error;
+      enum iterate_kit_status status;
       if (task_stack_headroom_bytes(NULL) <
           ITERATE_KIT_ESP_IDF_NETWORK_TASK_MINIMUM_HEADROOM_BYTES) {
         /*
@@ -698,22 +834,49 @@ static void network_task(void *context) {
       }
       atomic_saturating_increment(
           &transport->websocket_start_attempts);
-      error = esp_websocket_client_start(transport->websocket);
-      if (error == ESP_OK) {
+      status =
+          iterate_kit_esp_idf_websocket_connection_open(
+              &transport->websocket,
+              WEBSOCKET_CONNECT_TIMEOUT_MS);
+      /*
+       * DNS/TCP/TLS/upgrade may consume the entire setup bound. Retry policy
+       * must use the clock after that operation, not a stale pre-handshake
+       * sample that can make the next deadline immediately eligible.
+       */
+      now_us = esp_timer_get_time();
+      if (status == ITERATE_KIT_OK &&
+          mark_socket_connected(transport)) {
         websocket_started = true;
-        atomic_store_u32(
-            &transport->websocket_started, 1U);
+        atomic_store_u32(&transport->websocket_started, 1U);
       } else {
-        remember_platform_error(transport, error);
-        iterate_kit_retry_gate_defer(
-            &websocket_retry, now_us);
+        if (status == ITERATE_KIT_OK) {
+          remember_platform_error(
+              transport, ESP_ERR_INVALID_STATE);
+          latch_fatal_failure(transport);
+        } else {
+          remember_websocket_error(
+              transport, transport->websocket.last_error);
+          iterate_kit_retry_gate_defer(
+              &websocket_retry, now_us);
+        }
+        iterate_kit_esp_idf_websocket_connection_close(
+            &transport->websocket);
       }
     }
 
     if (!atomic_load_u32(&transport->socket_connected)) {
       discard_control_outbox(transport);
     } else {
+      receive_control_messages(transport);
+      if (atomic_load_u32(&transport->socket_connected)) {
+        (void)service_websocket_control(transport);
+      }
+    }
+    if (atomic_load_u32(&transport->socket_connected)) {
       send_control_messages(transport);
+      if (atomic_load_u32(&transport->socket_connected)) {
+        (void)service_websocket_control(transport);
+      }
     }
     const uint32_t work_cycles =
         esp_cpu_get_cycle_count() - work_started_at;
@@ -732,15 +895,7 @@ static void network_task(void *context) {
         work_cycles);
   }
 
-  if (websocket_started) {
-    mark_socket_disconnected(transport);
-    const esp_err_t error =
-        esp_websocket_client_stop(transport->websocket);
-    if (error != ESP_OK) {
-      remember_platform_error(transport, error);
-    }
-    atomic_store_u32(&transport->websocket_started, 0U);
-  }
+  stop_websocket(transport, &websocket_started);
   discard_control_outbox(transport);
   /*
    * Publish exited only after the task has stopped socket I/O and released its
@@ -755,6 +910,9 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_prepare(
     struct iterate_kit_esp_idf_itx_transport *transport,
     const struct iterate_kit_esp_idf_itx_transport_options *options) {
   enum iterate_kit_configuration_error configuration_error;
+  enum iterate_kit_status status;
+  struct iterate_kit_esp_idf_websocket_connection_options
+      websocket_options;
   if (transport == NULL ||
       options == NULL ||
       options->configuration == NULL ||
@@ -792,6 +950,34 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_prepare(
           options->control_outbox) != CAPNWEB_OK) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
+  websocket_options =
+      (struct
+       iterate_kit_esp_idf_websocket_connection_options){
+        .url = transport->websocket_url,
+        /*
+         * Authentication and mounting are Cap'n Web messages on this endpoint,
+         * not HTTP upgrade credentials. NULL avoids inventing an empty
+         * Sec-WebSocket-Protocol header or allocating empty header strings in
+         * the ESP lower transport.
+         */
+        .subprotocol = NULL,
+        .headers = NULL,
+        .receive_storage =
+            transport->websocket_receive_storage,
+        .receive_storage_capacity =
+            sizeof(transport->websocket_receive_storage),
+        .transmit_storage =
+            transport->websocket_transmit_storage,
+        .transmit_storage_capacity =
+            sizeof(transport->websocket_transmit_storage),
+      };
+  status =
+      iterate_kit_esp_idf_websocket_connection_prepare(
+          &transport->websocket, &websocket_options);
+  if (status != ITERATE_KIT_OK) {
+    memset(transport, 0, sizeof(*transport));
+    return status;
+  }
   transport->state = ITERATE_KIT_ESP_IDF_ITX_IDLE;
   transport->last_capnweb_status = CAPNWEB_OK;
   transport->initialized = true;
@@ -826,7 +1012,6 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_start(
   wifi_init_config_t wifi_initialization =
       WIFI_INIT_CONFIG_DEFAULT();
   wifi_config_t wifi_configuration = {0};
-  esp_websocket_client_config_t websocket_configuration = {0};
   esp_err_t error;
   size_t ssid_length;
   size_t password_length;
@@ -946,64 +1131,13 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_start(
     return ITERATE_KIT_IO_ERROR;
   }
 
-  websocket_configuration.uri = transport->websocket_url;
-  websocket_configuration.user_context = transport;
-  websocket_configuration.task_core_id_set = false;
-  websocket_configuration.task_prio = 5;
-  websocket_configuration.task_name = "iterate-ws";
-  websocket_configuration.task_stack =
-      WEBSOCKET_TASK_STACK_BYTES;
-  websocket_configuration.buffer_size =
-      ITERATE_KIT_ESP_IDF_CONTROL_MESSAGE_CAPACITY;
-  websocket_configuration.disable_auto_reconnect = true;
-  websocket_configuration.enable_close_reconnect = false;
-  /*
-   * ESP-IDF auto-reconnect is disabled because it cannot apply our generation
-   * barrier or account for discarded session messages. The network task owns
-   * one bounded retry policy, making every reconnect observable and preventing
-   * two independent retry loops from amplifying an outage.
-   */
-  websocket_configuration.reconnect_timeout_ms =
-      ITERATE_KIT_ESP_IDF_WEBSOCKET_RETRY_INITIAL_MS;
-  websocket_configuration.network_timeout_ms =
-      WEBSOCKET_CONNECT_TIMEOUT_MS;
-  websocket_configuration.ping_interval_sec = 10U;
-  websocket_configuration.pingpong_timeout_sec = 15;
-  websocket_configuration.keep_alive_enable = true;
-  websocket_configuration.keep_alive_idle = 10;
-  websocket_configuration.keep_alive_interval = 5;
-  websocket_configuration.keep_alive_count = 3;
-  websocket_configuration.crt_bundle_attach =
-      esp_crt_bundle_attach;
-  /*
-   * WebSocket ping/pong and TCP keepalive detect a dead control peer, not Cap'n
-   * Web request delivery and not voice-provider receipt. Their deliberately
-   * modest cadence limits idle radio/CPU cost; generation/session logic handles
-   * semantic recovery after a disconnect.
-   */
-  transport->websocket =
-      esp_websocket_client_init(&websocket_configuration);
-  if (transport->websocket == NULL) {
-    remember_platform_error(transport, ESP_ERR_NO_MEM);
-    return ITERATE_KIT_IO_ERROR;
-  }
-  error = esp_websocket_register_events(
-      transport->websocket,
-      WEBSOCKET_EVENT_ANY,
-      websocket_event,
-      transport);
-  if (error != ESP_OK) {
-    remember_platform_error(transport, error);
-    return ITERATE_KIT_IO_ERROR;
-  }
-
   atomic_store_u32(&transport->network_task_running, 1U);
   transport->network_task = xTaskCreateStaticPinnedToCore(
       network_task,
       "iterate-net",
       ITERATE_KIT_ESP_IDF_NETWORK_TASK_STACK_BYTES,
       transport,
-      5U,
+      ITERATE_KIT_ESP_IDF_CONTROL_NETWORK_TASK_PRIORITY,
       transport->network_task_stack,
       &transport->network_task_storage,
       NETWORK_TASK_CORE);
@@ -1130,6 +1264,8 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_poll(
     }
     if (status != CAPNWEB_OK) {
       transport->last_capnweb_status = status;
+      remember_application_capnweb_failure(
+          transport, socket_generation, status);
       transport->state =
           ITERATE_KIT_ESP_IDF_ITX_FAILED;
       /*
@@ -1152,6 +1288,8 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_poll(
         transport->options.connection);
     if (status != CAPNWEB_OK) {
       transport->last_capnweb_status = status;
+      remember_application_capnweb_failure(
+          transport, socket_generation, status);
       transport->state =
           ITERATE_KIT_ESP_IDF_ITX_FAILED;
       /*
@@ -1189,6 +1327,10 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_poll(
      */
     if (status != CAPNWEB_OK) {
       transport->last_capnweb_status = status;
+      remember_application_capnweb_failure(
+          transport,
+          transport->handled_socket_generation,
+          status);
       transport->state =
           ITERATE_KIT_ESP_IDF_ITX_FAILED;
       record_protocol_failure(
@@ -1234,6 +1376,10 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_poll(
     case ITERATE_KIT_ITX_CONNECTION_FAILED:
       transport->last_capnweb_status =
           transport->options.connection->capnweb_status;
+      remember_application_capnweb_failure(
+          transport,
+          transport->handled_socket_generation,
+          transport->last_capnweb_status);
       transport->state =
           ITERATE_KIT_ESP_IDF_ITX_FAILED;
       record_protocol_failure(
@@ -1252,6 +1398,10 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_poll(
    * would spin forever while concealing the impossible transition.
    */
   transport->last_capnweb_status = CAPNWEB_E_STATE;
+  remember_application_capnweb_failure(
+      transport,
+      transport->handled_socket_generation,
+      transport->last_capnweb_status);
   transport->state = ITERATE_KIT_ESP_IDF_ITX_FAILED;
   latch_fatal_failure(transport);
   return ITERATE_KIT_STATE_ERROR;
@@ -1308,11 +1458,11 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_stop(
       transport->options.connection);
   (void)iterate_kit_itx_connection_close(
       transport->options.connection);
-  (void)esp_websocket_client_destroy(transport->websocket);
   /*
-   * Destroy in reverse ownership order after the network task's exited
-   * publication. Delete the default event loop only if this transport created
-   * it; another component may legitimately own an already-existing loop.
+   * The network owner already destroyed the taskless lower connection before
+   * publishing exited. Delete the remaining shared platform resources only
+   * after that publication; another component may legitimately own an
+   * already-existing default event loop.
    */
   (void)esp_event_handler_instance_unregister(
       IP_EVENT,
@@ -1367,6 +1517,9 @@ void iterate_kit_esp_idf_itx_transport_metrics(
       atomic_load_u32(&transport->websocket_errors);
   metrics->protocol_failures =
       atomic_load_u32(&transport->protocol_failures);
+  metrics->protocol_failure_generation =
+      atomic_load_u32(
+          &transport->protocol_failure_generation);
   metrics->control_messages_sent =
       atomic_load_u32(&transport->control_messages_sent);
   metrics->control_messages_discarded =
@@ -1397,9 +1550,48 @@ void iterate_kit_esp_idf_itx_transport_metrics(
   metrics->last_control_receive_status = __atomic_load_n(
       &transport->last_control_receive_status,
       __ATOMIC_ACQUIRE);
+  metrics->last_application_capnweb_generation =
+      atomic_load_u32(
+          &transport->last_application_capnweb_generation);
+  metrics->last_application_capnweb_status =
+      __atomic_load_n(
+          &transport->last_application_capnweb_status,
+          __ATOMIC_ACQUIRE);
   metrics->last_wifi_disconnect_reason = __atomic_load_n(
       &transport->last_wifi_disconnect_reason,
       __ATOMIC_ACQUIRE);
+  metrics->last_websocket_error_generation =
+      atomic_load_u32(
+          &transport->last_websocket_error_generation);
+  metrics->last_websocket_error_type = __atomic_load_n(
+      &transport->last_websocket_error_type,
+      __ATOMIC_ACQUIRE);
+  metrics->last_websocket_tls_error = __atomic_load_n(
+      &transport->last_websocket_tls_error,
+      __ATOMIC_ACQUIRE);
+  metrics->last_websocket_tls_stack_error = __atomic_load_n(
+      &transport->last_websocket_tls_stack_error,
+      __ATOMIC_ACQUIRE);
+  metrics->last_websocket_transport_errno = __atomic_load_n(
+      &transport->last_websocket_transport_errno,
+      __ATOMIC_ACQUIRE);
+  metrics->last_websocket_handshake_status_code =
+      __atomic_load_n(
+          &transport->last_websocket_handshake_status_code,
+          __ATOMIC_ACQUIRE);
+  metrics->last_websocket_close_status_code =
+      __atomic_load_n(
+          &transport->last_websocket_close_status_code,
+          __ATOMIC_ACQUIRE);
+  /*
+   * spsc_ring_init() already constrains slot_count below UINT32_MAX / 2. The
+   * capacities are immutable after prepare(), so these casts are exact and add
+   * no queue traversal or lock to diagnostics.
+   */
+  metrics->control_inbox_capacity_slots =
+      (uint32_t)transport->options.control_inbox->slot_count;
+  metrics->control_outbox_capacity_slots =
+      (uint32_t)transport->options.control_outbox->slot_count;
   iterate_kit_spsc_ring_metrics(
       transport->options.control_inbox,
       &metrics->control_inbox);

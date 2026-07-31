@@ -94,6 +94,11 @@ function renderRecording(options: {
     intervalMs: number;
     lowGain: number;
   };
+  coherentLeakageRuns?: {
+    endMs: number;
+    gain: number;
+    startMs: number;
+  }[];
   durationMs: number;
   frequencyHz?: number;
   gap?: { endMs: number; startMs: number };
@@ -140,7 +145,19 @@ function renderRecording(options: {
           noise,
       );
     } else {
-      samples[index] = noise;
+      const recordingTimeMs = (index * 1_000) / sampleRateHz;
+      const leakage = options.coherentLeakageRuns?.find(
+        (run) => recordingTimeMs >= run.startMs && recordingTimeMs < run.endMs,
+      );
+      samples[index] =
+        leakage === undefined
+          ? noise
+          : Math.round(
+              leakage.gain *
+                12_000 *
+                Math.sin((2 * Math.PI * renderedFrequencyHz * index) / sampleRateHz) +
+                noise,
+            );
     }
   }
   return samples;
@@ -299,6 +316,141 @@ describe("acoustic tone analysis", () => {
     expect(analysis.missingToneMs).toBeGreaterThanOrEqual(30);
     expect(assessment.passed).toBe(false);
     expect(assessment.reasons.join(" ")).toContain("internal gap");
+  });
+
+  test("does not join weak coherent boundary leakage to the played tone", async () => {
+    /*
+     * A nearby Mac microphone can hear a short, quiet copy of the carrier
+     * before or after the actual speaker episode: codec startup leakage,
+     * room echo, and recorder processing are all plausible sources. Merely
+     * requiring frequency coherence makes those islands look like playback
+     * and turns harmless capture lead-in into a fictitious internal outage.
+     *
+     * Level remains useful for rejecting ring-down, but it cannot reject a
+     * full-level buffer replay from an earlier capture. Selecting the longest
+     * run would make a same-level tone that resumes after a real outage look
+     * healthy. The marker-anchored tests below therefore protect the separate
+     * positional boundary while this fixture protects the level boundary.
+     */
+    const samples = renderRecording({
+      coherentLeakageRuns: [
+        { endMs: 15, gain: 0.15, startMs: 0 },
+        { endMs: 2_775, gain: 0.15, startMs: 2_700 },
+      ],
+      durationMs: 2_000,
+      leadMs: 500,
+      trailMs: 500,
+    });
+    const fixture = await writePcm16Artifact(samples);
+    try {
+      const analysis = await analyzeAcousticTonePcm16Artifact({
+        artifactPath: fixture.artifactPath,
+        expectedDurationMs: 2_000,
+        frequencyHz,
+        sampleRateHz,
+      });
+
+      expect(analysis.observedStartMs).toBeCloseTo(500, -1);
+      expect(analysis.longestInternalGapMs).toBe(0);
+      expect(
+        assessAcousticToneAnalysis(analysis, {
+          maximumAmplitudeStepDecibels: 1.5,
+          maximumAmplitudeStepP99Decibels: 1.5,
+          maximumDurationErrorMs: 20,
+          maximumInternalGapMs: 0,
+          maximumMissingToneMs: 20,
+          maximumPhaseStepErrorRadians: 0.1,
+        }),
+      ).toEqual({ passed: true, reasons: [] });
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  test("excludes full-level coherent audio before the capture marker", async () => {
+    /*
+     * CoreAudio has physically replayed roughly one stale HAL buffer at the
+     * start of consecutive captures. In retained runs that buffer can contain
+     * the same carrier at full playback level, so neither coherence nor a
+     * relative amplitude floor can distinguish it from this run's device.
+     *
+     * The provider-request capture marker is different: it is recorded before
+     * a new response is requested, so playback from that response is
+     * impossible before that file position. The analyzer must exclude that
+     * region without silently erasing it from diagnostics.
+     */
+    const fixture = await writePcm16Artifact(
+      renderRecording({
+        coherentLeakageRuns: [{ endMs: 11, gain: 1, startMs: 0 }],
+        durationMs: 2_000,
+        leadMs: 500,
+        trailMs: 500,
+      }),
+    );
+    try {
+      const analysis = await analyzeAcousticTonePcm16Artifact({
+        analysisStartMs: 341,
+        artifactPath: fixture.artifactPath,
+        expectedDurationMs: 2_000,
+        frequencyHz,
+        sampleRateHz,
+      });
+
+      expect(analysis.observedStartMs).toBeCloseTo(500, -1);
+      expect(analysis.longestInternalGapMs).toBe(0);
+      expect(analysis.excludedCoherentWindowCount).toBeGreaterThan(0);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  test("does not let a capture marker hide a real mid-stream outage", () => {
+    /*
+     * A positional anchor is safe only if it changes the attribution boundary,
+     * not the waveform policy inside that boundary. This is deliberately the
+     * same stale full-level head followed by a real 300 ms device outage. A
+     * longest-episode heuristic would be tempted to select one healthy half;
+     * the external marker must leave the internal outage intact.
+     */
+    const analysis = analyzeAcousticTonePcm16({
+      analysisStartMs: 341,
+      expectedDurationMs: 2_000,
+      frequencyHz,
+      samples: renderRecording({
+        coherentLeakageRuns: [{ endMs: 11, gain: 1, startMs: 0 }],
+        durationMs: 2_000,
+        gap: { endMs: 1_150, startMs: 850 },
+        leadMs: 500,
+        trailMs: 500,
+      }),
+      sampleRateHz,
+    });
+
+    expect(analysis.longestInternalGapMs).toBeGreaterThanOrEqual(290);
+  });
+
+  test("keeps coherent pre-onset audio visible when it occurs after the marker", () => {
+    /*
+     * The marker is a statement of physical possibility, not a generic
+     * pre-roll cleanser. Coherent audio after the request may be a genuine
+     * stale device frame or an unintended codec start, so the quiet interval
+     * between it and normal playback must remain an attributable gap.
+     */
+    const analysis = analyzeAcousticTonePcm16({
+      analysisStartMs: 341,
+      expectedDurationMs: 2_000,
+      frequencyHz,
+      samples: renderRecording({
+        coherentLeakageRuns: [{ endMs: 375, gain: 1, startMs: 360 }],
+        durationMs: 2_000,
+        leadMs: 500,
+        trailMs: 500,
+      }),
+      sampleRateHz,
+    });
+
+    expect(analysis.observedStartMs).toBeCloseTo(360, -1);
+    expect(analysis.longestInternalGapMs).toBeGreaterThanOrEqual(110);
   });
 
   test("rejects sustained gain jiggle even when tone presence and phase stay perfect", async () => {

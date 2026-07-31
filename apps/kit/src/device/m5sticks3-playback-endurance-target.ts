@@ -140,9 +140,20 @@ export const m5StickS3PlaybackEnduranceAcceptancePolicy = deepFreeze({
       playback_underrun_silence_frames_completed: 0,
       playback_underrun_silence_frames_retired: 0,
       playback_underrun_silence_frames_submitted: 0,
-      playback_last_eof_to_successful_refill_us: 10_000,
-      playback_last_write_call_duration_us: 5_000,
+      /*
+       * The PCM proxy emits 20 ms frames and direct I2S has 60 ms of physical
+       * reuse lead. A 40 ms device-ingress gap leaves one frame of margin; a
+       * larger lifetime maximum is diagnostic evidence that bytes stalled
+       * after the host bridge even if the host's own send cadence was clean.
+       */
+      playback_maximum_downlink_interarrival_ms: 40,
       playback_maximum_eof_to_successful_refill_us: 10_000,
+      /*
+       * Receive-to-DMA-start includes the intentional four-descriptor startup
+       * reserve. Bound it generously enough for that reserve while still
+       * rejecting a hidden stale queue that grows across a conversation.
+       */
+      playback_maximum_receive_to_dma_start_ms: 120,
       playback_maximum_write_call_duration_us: 5_000,
       playback_write_backpressure_destructive_resets: 0,
       playback_write_backpressure_frames_dropped: 0,
@@ -158,9 +169,9 @@ export const m5StickS3PlaybackEnduranceAcceptancePolicy = deepFreeze({
       minimum_free_dma_heap_bytes: 16 * 1_024,
       minimum_free_internal_heap_bytes: 32 * 1_024,
       network_stack_headroom_bytes: 1_024,
-      playback_last_reuse_lead_at_successful_refill_us: 1_000,
       playback_minimum_reuse_lead_at_successful_refill_us: 1_000,
-      playback_successful_refill_timing_samples: 1,
+      playback_downlink_interarrival_samples: 1,
+      playback_receive_to_dma_start_samples: 1,
     },
     metricsCadence: {
       expectedIntervalMs: metricsExpectedIntervalMs,
@@ -222,10 +233,10 @@ export const m5StickS3PlaybackEnduranceRequiredMetrics = Object.freeze([
   "playback_freshness_incidents",
   "playback_generation_frames_flushed",
   "playback_invalid_frames",
-  "playback_last_eof_to_successful_refill_us",
-  "playback_last_reuse_lead_at_successful_refill_us",
-  "playback_last_write_call_duration_us",
+  "playback_downlink_interarrival_samples",
+  "playback_maximum_downlink_interarrival_ms",
   "playback_maximum_eof_to_successful_refill_us",
+  "playback_maximum_receive_to_dma_start_ms",
   "playback_maximum_write_call_duration_us",
   "playback_minimum_reuse_lead_at_successful_refill_us",
   "playback_owner_clock_regressions",
@@ -233,7 +244,7 @@ export const m5StickS3PlaybackEnduranceRequiredMetrics = Object.freeze([
   "playback_partial_prebuffer_incidents",
   "playback_state_errors",
   "playback_submitted",
-  "playback_successful_refill_timing_samples",
+  "playback_receive_to_dma_start_samples",
   "playback_underrun_late_frames_dropped",
   "playback_underrun_frames_flushed",
   "playback_underrun_incidents",
@@ -266,7 +277,8 @@ const saturatingMetricNames = new Set<string>([
   "playback_partial_prebuffer_incidents",
   "playback_state_errors",
   "playback_submitted",
-  "playback_successful_refill_timing_samples",
+  "playback_downlink_interarrival_samples",
+  "playback_receive_to_dma_start_samples",
   "playback_underrun_late_frames_dropped",
   "playback_underrun_frames_flushed",
   "playback_underrun_incidents",

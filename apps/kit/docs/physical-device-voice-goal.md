@@ -21,6 +21,28 @@ drawn from them are tracked in
 That ledger is part of the acceptance evidence: findings are not considered
 handled merely because they appeared in an agent transcript.
 
+## 2026-07-31 execution addendum
+
+The following concrete tasks are part of this still-active goal, not a separate
+cleanup project:
+
+- [x] Maintain a durable statement of the realtime audio problem classes,
+      constraints, failure modes, implemented mechanisms, and physical evidence in
+      [`audio-streaming-problem-and-evidence-2026-07-30.md`](./audio-streaming-problem-and-evidence-2026-07-30.md).
+- [x] Run an independent Fable Max source/docs/prior-art trawl, retain its
+      output durably, and reconcile recommendations rather than applying them
+      blindly. The current source-level disposition is
+      [`fable-esp32-offdevice-rig-prior-art-2026-07-31.md`](./fable-esp32-offdevice-rig-prior-art-2026-07-31.md);
+      focused receive-stall research has its own linked report and reconciliation.
+- [x] Make and remotely verify a complete Git-visible recovery checkpoint
+      before continuing invasive device work. The checkpoint is
+      `origin/backup/c-capabilities-full-checkpoint-20260730T2345Z` at
+      `a0c54771d7b92991387eef7644234c57e0529440`. It is explicitly a backup, not
+      a finished-code claim.
+- [ ] Continue the existing proof autonomously: turn every new physical defect
+      into a red test, retain exact acoustic/resource evidence, apply only bounded
+      simplifications supported by that evidence, and do not merge.
+
 ## Outcome
 
 Build a library and a production-shaped proof, not two unrelated demos:

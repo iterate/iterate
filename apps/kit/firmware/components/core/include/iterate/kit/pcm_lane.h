@@ -32,6 +32,9 @@ struct iterate_kit_pcm_lane_metrics {
   uint32_t downlink_malformed_frames;
   uint32_t downlink_frames_discarded;
   uint32_t downlink_generation_fragment_resets;
+  uint32_t downlink_interarrival_samples;
+  uint32_t downlink_maximum_interarrival_ms;
+  uint32_t downlink_interarrival_clock_regressions;
 };
 
 /**
@@ -90,8 +93,14 @@ struct iterate_kit_pcm_lane {
   uint32_t downlink_malformed_frames;
   uint32_t downlink_frames_discarded;
   uint32_t downlink_generation_fragment_resets;
+  uint32_t downlink_interarrival_samples;
+  uint32_t downlink_maximum_interarrival_ms;
+  uint32_t downlink_interarrival_clock_regressions;
+  uint64_t downlink_previous_frame_received_at_ms;
+  uint64_t downlink_fragment_received_at_ms;
   uint8_t *downlink_fragment_destination;
   size_t downlink_fragment_received;
+  bool downlink_previous_frame_received_at_valid;
   bool downlink_fragment_active;
   bool initialized;
 };

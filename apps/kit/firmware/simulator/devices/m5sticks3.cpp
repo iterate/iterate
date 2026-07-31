@@ -39,6 +39,8 @@ struct Simulation {
   /* All buffers and profile state are embedded so the production allocation-
    * free lifetime contract remains intact in the host process. */
   char screenUrlScratch[screenUrlCapacity]{};
+  char diagnosticsExpression
+      [ITERATE_KIT_METRICS_DIAGNOSTICS_EXPRESSION_CAPACITY]{};
   iterate_kit_metrics_subscription subscriptions[subscriptionCapacity]{};
   iterate_kit_device_event eventStorage[eventCapacity]{};
   iterate_kit_m5sticks3 m5sticks3{};
@@ -380,6 +382,8 @@ capnweb_status initialize(
        * product's eventual one-second metrics period or an ESP CPU budget.
        */
       25U,
+      simulation.diagnosticsExpression,
+      sizeof(simulation.diagnosticsExpression),
     },
     {
       ITERATE_KIT_AUDIO_PUSH_TO_TALK,

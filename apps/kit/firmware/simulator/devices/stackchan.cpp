@@ -67,6 +67,8 @@ struct Simulation {
   /* All following storage is caller-owned for the full profile lifetime,
    * matching the allocation-free device contract. */
   char screenUrlScratch[screenUrlCapacity]{};
+  char diagnosticsExpression
+      [ITERATE_KIT_METRICS_DIAGNOSTICS_EXPRESSION_CAPACITY]{};
   iterate_kit_metrics_subscription subscriptions[subscriptionCapacity]{};
   iterate_kit_stackchan stackchan{};
   iterate_kit_device profile{};
@@ -258,6 +260,8 @@ capnweb_status initialize(
       simulation.subscriptions,
       subscriptionCapacity,
       25U,
+      simulation.diagnosticsExpression,
+      sizeof(simulation.diagnosticsExpression),
     },
   };
   const capnweb_status status =

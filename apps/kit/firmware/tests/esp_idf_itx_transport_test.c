@@ -1,7 +1,9 @@
+#include "fake_esp_idf_control_websocket.h"
 #include "fake_esp_idf_platform.h"
 #include "iterate/kit/peer.h"
 #include "iterate/kit/platforms/esp_idf_itx_transport.h"
 
+#include <errno.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -152,6 +154,13 @@ static void fixture_init(struct fixture *fixture) {
   assert(
       iterate_kit_esp_idf_itx_transport_start(
           &fixture->transport) == ITERATE_KIT_OK);
+  /*
+   * The control owner deliberately stays below the PCM socket owner. This
+   * assertion is paired with the PCM transport test so a refactor cannot erase
+   * audio precedence by giving both independent sockets the same scheduler
+   * class again.
+   */
+  assert(iterate_kit_fake_network_task_priority() == 5U);
 }
 
 static int64_t monotonic_milliseconds(void) {
@@ -266,17 +275,23 @@ static bool wait_for_fatal_failure(struct fixture *fixture) {
   return false;
 }
 
-static bool wait_for_websocket_start_without_generation(
+static bool wait_for_fake_input_empty(
     struct fixture *fixture) {
   const int64_t deadline =
       monotonic_milliseconds() + TEST_TIMEOUT_MS;
   while (monotonic_milliseconds() < deadline) {
-    if (__atomic_load_n(
-            &fixture->transport.websocket_started,
-            __ATOMIC_ACQUIRE) != 0U &&
-        __atomic_load_n(
-            &fixture->transport.socket_generation,
-            __ATOMIC_ACQUIRE) == 0U) {
+    (void)iterate_kit_esp_idf_itx_transport_poll(
+        &fixture->transport, RING_SLOT_COUNT);
+    if (iterate_kit_fake_control_websocket_pending_items() ==
+        0U) {
+      /*
+       * receive() releases the fake item immediately before production
+       * classifies it. One additional scheduler turn and application poll
+       * crosses that narrow boundary without assuming a callback exists.
+       */
+      pause_one_millisecond();
+      (void)iterate_kit_esp_idf_itx_transport_poll(
+          &fixture->transport, RING_SLOT_COUNT);
       return true;
     }
     pause_one_millisecond();
@@ -286,7 +301,10 @@ static bool wait_for_websocket_start_without_generation(
 
 static void emit_message(
     struct fixture *fixture, const char *message) {
-  enum iterate_kit_status status;
+  enum iterate_kit_status status = ITERATE_KIT_OK;
+  struct iterate_kit_spsc_ring_metrics before;
+  const int64_t deadline =
+      monotonic_milliseconds() + TEST_TIMEOUT_MS;
   /*
    * A resolve is causally downstream of the corresponding request. Let the
    * network owner consume that request before synthesizing its reply; otherwise
@@ -294,16 +312,37 @@ static void emit_message(
    * their bytes have left the device and fill the deliberately small outbox.
    */
   assert(wait_for_outbox_empty(fixture));
+  iterate_kit_spsc_ring_metrics(&fixture->inbox, &before);
   assert(
-      iterate_kit_fake_websocket_emit_text(
-          fixture->transport.websocket,
+      iterate_kit_fake_control_websocket_queue_text(
+          &fixture->transport.websocket,
           message,
           strlen(message),
           strlen(message),
           0U,
-          true) == ESP_OK);
-  status = iterate_kit_esp_idf_itx_transport_poll(
-      &fixture->transport, RING_SLOT_COUNT);
+          true) == ITERATE_KIT_OK);
+  /*
+   * The taskless design deliberately has no callback that can make injection
+   * synchronous. Drive the real application poll until the network owner has
+   * published this complete message and the application has consumed it.
+   * Waiting only for the fake script to empty has a race between receive()
+   * returning and the production inbox publication.
+   */
+  for (;;) {
+    struct iterate_kit_spsc_ring_metrics current;
+    status = iterate_kit_esp_idf_itx_transport_poll(
+        &fixture->transport, RING_SLOT_COUNT);
+    iterate_kit_spsc_ring_metrics(
+        &fixture->inbox, &current);
+    if (status != ITERATE_KIT_OK ||
+        (current.messages_published >
+             before.messages_published &&
+         current.current_slots == 0U)) {
+      break;
+    }
+    assert(monotonic_milliseconds() < deadline);
+    pause_one_millisecond();
+  }
   if (status != ITERATE_KIT_OK) {
     fprintf(
         stderr,
@@ -320,6 +359,9 @@ static void emit_message(
 
 static void emit_message_expect_generation_failure(
     struct fixture *fixture, const char *message) {
+  enum iterate_kit_status status = ITERATE_KIT_OK;
+  const int64_t deadline =
+      monotonic_milliseconds() + TEST_TIMEOUT_MS;
   /*
    * Protocol rejection is an expected result of this helper, not an ignored
    * error. Requiring the exact transport/state outcome keeps a future parser
@@ -328,17 +370,24 @@ static void emit_message_expect_generation_failure(
    */
   assert(wait_for_outbox_empty(fixture));
   assert(
-      iterate_kit_fake_websocket_emit_text(
-          fixture->transport.websocket,
+      iterate_kit_fake_control_websocket_queue_text(
+          &fixture->transport.websocket,
           message,
           strlen(message),
           strlen(message),
           0U,
-          true) == ESP_OK);
-  assert(
-      iterate_kit_esp_idf_itx_transport_poll(
-          &fixture->transport,
-          RING_SLOT_COUNT) == ITERATE_KIT_STATE_ERROR);
+          true) == ITERATE_KIT_OK);
+  while (status == ITERATE_KIT_OK &&
+         fixture->transport.state !=
+             ITERATE_KIT_ESP_IDF_ITX_FAILED) {
+    assert(monotonic_milliseconds() < deadline);
+    status = iterate_kit_esp_idf_itx_transport_poll(
+        &fixture->transport, RING_SLOT_COUNT);
+    if (status == ITERATE_KIT_OK) {
+      pause_one_millisecond();
+    }
+  }
+  assert(status == ITERATE_KIT_STATE_ERROR);
   assert(
       fixture->transport.state ==
       ITERATE_KIT_ESP_IDF_ITX_FAILED);
@@ -393,21 +442,21 @@ static void poison_generation_with_oversized_message(
    * test fake metadata, not the real bounded assembler reaching its capacity.
    */
   assert(
-      iterate_kit_fake_websocket_emit_text(
-          fixture->transport.websocket,
+      iterate_kit_fake_control_websocket_queue_text(
+          &fixture->transport.websocket,
           first_chunk,
           sizeof(first_chunk),
           MESSAGE_CAPACITY + 1U,
           0U,
-          true) == ESP_OK);
+          true) == ITERATE_KIT_OK);
   assert(
-      iterate_kit_fake_websocket_emit_text(
-          fixture->transport.websocket,
+      iterate_kit_fake_control_websocket_queue_text(
+          &fixture->transport.websocket,
           &final_byte,
           1U,
           MESSAGE_CAPACITY + 1U,
           MESSAGE_CAPACITY,
-          true) == ESP_OK);
+          true) == ITERATE_KIT_OK);
 }
 
 /*
@@ -462,6 +511,41 @@ static void oversized_message_recovers_on_a_fresh_generation(void) {
 }
 
 /*
+ * The taskless adapter cannot see the managed client's callback-only TLS/HTTP
+ * tuple, but it does own the lower transport's exact errno. That is preferable
+ * to keeping a richer API whose unbounded private-task join prevents recovery.
+ * The real code must retain this available cause and its generation across a
+ * successful remount, while leaving unavailable legacy domains honestly zero.
+ */
+static void direct_receive_error_retains_errno_across_reconnect(void) {
+  struct iterate_kit_esp_idf_itx_transport_metrics metrics;
+  struct fixture fixture;
+  fixture_init(&fixture);
+
+  assert(wait_for_socket_generation(&fixture, 1U));
+  resolve_mount(&fixture, 10);
+  assert(
+      iterate_kit_fake_control_websocket_queue_disconnect(
+          &fixture.transport.websocket,
+          ETIMEDOUT) == ITERATE_KIT_OK);
+  assert(wait_for_socket_generation(&fixture, 2U));
+  resolve_mount(&fixture, 20);
+
+  iterate_kit_esp_idf_itx_transport_metrics(
+      &fixture.transport, &metrics);
+  assert(metrics.websocket_errors == 1U);
+  assert(metrics.last_websocket_error_generation == 1U);
+  assert(metrics.last_websocket_error_type == 0);
+  assert(metrics.last_websocket_tls_error == 0);
+  assert(metrics.last_websocket_tls_stack_error == 0);
+  assert(metrics.last_websocket_transport_errno == ETIMEDOUT);
+  assert(metrics.last_websocket_handshake_status_code == 0);
+  assert(metrics.last_websocket_close_status_code == 0);
+  assert(metrics.last_platform_error == ETIMEDOUT);
+  fixture_finish(&fixture);
+}
+
+/*
  * A WebSocket CONNECTED callback proves only a transport handshake. If that
  * reset retry history, a peer that rejects every mount could sustain four TLS
  * handshakes per second forever. Only a generation that reaches READY earns a
@@ -509,12 +593,12 @@ static void pre_ready_failures_retain_exponential_retry_pacing(void) {
 }
 
 /*
- * ESP-IDF can deliver several terminal callbacks before the network owner acts
- * on the first wakeup. Those are evidence about one poisoned socket, not
- * several incidents: overcounting would make rates topology/scheduling
- * dependent and could drive an outer health policy into a false failure.
+ * With one socket owner there are no callbacks racing teardown. Several peer
+ * chunks may already be readable, but processing stops on the first boundary
+ * violation and close discards the rest of that byte stream. The incident is
+ * therefore counted once, independent of how much old input the peer queued.
  */
-static void repeated_callback_failures_count_once_per_generation(void) {
+static void queued_failures_count_once_per_generation(void) {
   static const char trailing_byte = ']';
   struct iterate_kit_esp_idf_itx_transport_metrics metrics;
   struct fixture fixture;
@@ -526,22 +610,21 @@ static void repeated_callback_failures_count_once_per_generation(void) {
 
   poison_generation_with_oversized_message(&fixture);
   /*
-   * The assembler is already terminal. Feeding one further callback exercises
-   * the idempotent generation publication while the paused socket owner cannot
-   * yet stop the client underneath the test thread.
+   * Queue one more frame while the sole owner is paused. Unlike the old
+   * callback fake, this must not mutate transport diagnostics concurrently.
    */
   assert(
-      iterate_kit_fake_websocket_emit_text(
-          fixture.transport.websocket,
+      iterate_kit_fake_control_websocket_queue_text(
+          &fixture.transport.websocket,
           &trailing_byte,
           1U,
           1U,
           0U,
-          true) == ESP_OK);
+          true) == ITERATE_KIT_OK);
   iterate_kit_esp_idf_itx_transport_metrics(
       &fixture.transport, &metrics);
-  assert(metrics.control_receive_failures == 2U);
-  assert(metrics.protocol_failures == 1U);
+  assert(metrics.control_receive_failures == 0U);
+  assert(metrics.protocol_failures == 0U);
 
   assert(iterate_kit_fake_network_task_resume() == ESP_OK);
   assert(wait_for_socket_generation(&fixture, 2U));
@@ -549,51 +632,100 @@ static void repeated_callback_failures_count_once_per_generation(void) {
   iterate_kit_esp_idf_itx_transport_metrics(
       &fixture.transport, &metrics);
   assert(metrics.protocol_failures == 1U);
+  assert(metrics.control_receive_failures == 1U);
   fixture_finish(&fixture);
 }
 
 /*
- * Production ESP-IDF dispatches CONNECTED asynchronously from its WebSocket
- * task. A synchronous fake would hide the valid interval in which client_start
- * has succeeded but no generation exists yet; polling there must remain
- * nonblocking and must not open a Cap'n Web session against generation zero.
- * Delivering CONNECTED from this test thread also exercises the same
- * generation-before-connected publication consumed by the application task.
+ * Direct open and generation publication belong to the same network owner.
+ * There is no callback-created "started but generation zero" interval for the
+ * application to reconcile. Pin the resulting invariant so a future wrapper
+ * cannot quietly reintroduce a second lifecycle owner.
  */
-static void asynchronous_connected_callback_opens_one_clean_generation(void) {
+static void taskless_open_publishes_one_clean_generation(void) {
   struct fixture fixture;
-  iterate_kit_fake_websocket_defer_connected(true);
   fixture_init(&fixture);
 
-  assert(
-      wait_for_websocket_start_without_generation(
-          &fixture));
-  assert(
-      iterate_kit_esp_idf_itx_transport_poll(
-          &fixture.transport,
-          RING_SLOT_COUNT) == ITERATE_KIT_OK);
-  assert(!fixture.connection.session_open);
-  assert(
-      fixture.transport.state ==
-      ITERATE_KIT_ESP_IDF_ITX_WEBSOCKET_CONNECTING);
-
-  assert(
-      iterate_kit_fake_websocket_emit_connected(
-          fixture.transport.websocket) == ESP_OK);
-  iterate_kit_fake_websocket_defer_connected(false);
   assert(wait_for_socket_generation(&fixture, 1U));
+  assert(
+      __atomic_load_n(
+          &fixture.transport.websocket_started,
+          __ATOMIC_ACQUIRE) == 1U);
+  assert(
+      __atomic_load_n(
+          &fixture.transport.socket_connected,
+          __ATOMIC_ACQUIRE) == 1U);
+  assert(
+      __atomic_load_n(
+          &fixture.transport.socket_generation,
+          __ATOMIC_ACQUIRE) == 1U);
   resolve_mount(&fixture, 10);
   fixture_finish(&fixture);
 }
 
 /*
- * ESP-IDF's whole-message API does not reveal whether a short write reached
- * the peer. Retrying that serialized Cap'n Web call could duplicate an RPC;
- * retaining it across generations would reuse session-scoped references. The
- * only safe response is visible loss plus a clean remount, with no stale
- * outbox backlog and no permanent device failure.
+ * PING/PONG/CLOSE belong to the WebSocket transport, not to Cap'n Web. Letting
+ * a keepalive PONG reach the bounded text assembler poisons an otherwise
+ * healthy generation on a timer, producing the kind of periodic unexplained
+ * reconnect that an endurance test must reject.
+ *
+ * The fake sends both directions of keepalive traffic because a server may
+ * originate PING while the client originates PING and receives PONG. Neither
+ * is an application message, neither may alter the mounted session, and
+ * buffering them for the application task was rejected because it would add
+ * work while still giving Cap'n Web bytes it cannot interpret.
  */
-static void short_control_send_discards_and_remounts(void) {
+static void websocket_control_frames_do_not_poison_capnweb_session(void) {
+  static const char ping_payload[] = "health";
+  struct iterate_kit_esp_idf_itx_transport_metrics metrics;
+  struct fixture fixture;
+  fixture_init(&fixture);
+
+  assert(wait_for_socket_generation(&fixture, 1U));
+  resolve_mount(&fixture, 10);
+  assert(
+      iterate_kit_fake_control_websocket_queue_frame(
+          &fixture.transport.websocket,
+          0x0a,
+          NULL,
+          0U,
+          0U,
+          0U,
+          true) == ITERATE_KIT_OK);
+  assert(
+      iterate_kit_fake_control_websocket_queue_frame(
+          &fixture.transport.websocket,
+          0x09,
+          ping_payload,
+          sizeof(ping_payload) - 1U,
+          sizeof(ping_payload) - 1U,
+          0U,
+          true) == ITERATE_KIT_OK);
+  assert(
+      wait_for_fake_input_empty(&fixture));
+  assert(
+      fixture.transport.state ==
+      ITERATE_KIT_ESP_IDF_ITX_READY);
+  assert(fixture.connection.session_open);
+  assert(
+      fixture.transport.handled_socket_generation == 1U);
+
+  iterate_kit_esp_idf_itx_transport_metrics(
+      &fixture.transport, &metrics);
+  assert(metrics.protocol_failures == 0U);
+  assert(metrics.control_receive_failures == 0U);
+  assert(metrics.websocket_connections == 1U);
+  fixture_finish(&fixture);
+}
+
+/*
+ * A nonblocking lower write may accept only a prefix. The portable writer owns
+ * the exact encoded cursor, while the transport retains the SPSC head until
+ * completion. That lets it resume without duplicating the RPC or remounting;
+ * treating ordinary progress as failure was a limitation of the removed
+ * whole-message API.
+ */
+static void short_control_send_resumes_without_remount(void) {
   static const char message[] = "[]";
   struct iterate_kit_esp_idf_itx_transport_metrics metrics;
   struct fixture fixture;
@@ -602,7 +734,7 @@ static void short_control_send_discards_and_remounts(void) {
   assert(wait_for_socket_generation(&fixture, 1U));
   resolve_mount(&fixture, 10);
   assert(wait_for_outbox_empty(&fixture));
-  iterate_kit_fake_websocket_short_next_send();
+  iterate_kit_fake_control_websocket_short_next_write();
   assert(
       iterate_kit_esp_idf_itx_transport_send_text(
           &fixture.transport,
@@ -622,32 +754,31 @@ static void short_control_send_discards_and_remounts(void) {
           NULL,
           0U) == CAPNWEB_OK);
 
-  assert(wait_for_socket_generation(&fixture, 2U));
-  resolve_mount(&fixture, 20);
+  assert(wait_for_outbox_empty(&fixture));
   iterate_kit_esp_idf_itx_transport_metrics(
       &fixture.transport, &metrics);
-  assert(metrics.control_send_failures == 1U);
+  assert(metrics.control_send_failures == 0U);
   assert(metrics.protocol_failures == 0U);
-  assert(metrics.websocket_connections == 2U);
+  assert(metrics.websocket_connections == 1U);
   fixture_finish(&fixture);
 }
 
 /*
- * Destroying the WebSocket client while the static owner task can still access
- * it is a production use-after-free, not something a pthread fake may repair
- * by secretly joining that task. The fake must reject the wrong ownership
- * order and preserve the client so the normal cooperative stop still works.
+ * Explicit restart is the production-shaped proof for the physical failure:
+ * the one owner closes its taskless socket and remounts. There is no private
+ * worker to join and therefore no fake destroy operation that could conceal an
+ * unbounded SDK wait.
  */
-static void websocket_destroy_rejects_a_live_transport_task(void) {
+static void explicit_restart_closes_and_remounts(void) {
   struct fixture fixture;
   fixture_init(&fixture);
   assert(wait_for_socket_generation(&fixture, 1U));
   resolve_mount(&fixture, 10);
 
-  assert(
-      esp_websocket_client_destroy(
-          fixture.transport.websocket) ==
-      ESP_ERR_INVALID_STATE);
+  iterate_kit_esp_idf_itx_transport_request_restart(
+      &fixture.transport);
+  assert(wait_for_socket_generation(&fixture, 2U));
+  resolve_mount(&fixture, 20);
   fixture_finish(&fixture);
 }
 
@@ -744,6 +875,18 @@ static void token_budget_overflow_recovers_on_a_fresh_generation(void) {
   assert(metrics.protocol_failures == 1U);
   assert(metrics.control_receive_failures == 0U);
   assert(metrics.websocket_connections == 2U);
+  /*
+   * `last_capnweb_status` correctly returns to OK after generation two opens,
+   * but that current-state field erased the only reason generation one died.
+   * Retain the application-owner incident separately so getDiagnostics on the
+   * replacement can prove a parser/resource failure instead of attributing it
+   * to Wi-Fi or the callback-side frame assembler.
+   */
+  assert(
+      metrics.last_application_capnweb_generation == 1U);
+  assert(
+      metrics.last_application_capnweb_status ==
+      CAPNWEB_E_LIMIT);
   fixture_finish(&fixture);
 }
 
@@ -800,11 +943,13 @@ static void socket_generation_exhaustion_is_fatal_and_bounded(void) {
 
 int main(void) {
   oversized_message_recovers_on_a_fresh_generation();
+  direct_receive_error_retains_errno_across_reconnect();
   pre_ready_failures_retain_exponential_retry_pacing();
-  repeated_callback_failures_count_once_per_generation();
-  asynchronous_connected_callback_opens_one_clean_generation();
-  short_control_send_discards_and_remounts();
-  websocket_destroy_rejects_a_live_transport_task();
+  queued_failures_count_once_per_generation();
+  taskless_open_publishes_one_clean_generation();
+  websocket_control_frames_do_not_poison_capnweb_session();
+  short_control_send_resumes_without_remount();
+  explicit_restart_closes_and_remounts();
   mount_rejection_recovers_on_a_fresh_generation();
   token_budget_overflow_recovers_on_a_fresh_generation();
   socket_generation_exhaustion_is_fatal_and_bounded();

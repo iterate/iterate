@@ -268,6 +268,7 @@ test("the M5StickS3 profile describes screen, metrics, and push-to-talk events",
   const { m5sticks3 } = fixture;
   const description = await m5sticks3.__describe();
   expect(description.children).toEqual({
+    getDiagnostics: expect.any(String),
     subscribeToMetrics: expect.any(String),
     subscribeToPlaybackMetrics: expect.any(String),
     renderOnScreen: expect.any(String),
@@ -408,12 +409,68 @@ test("subscribeToPlaybackMetrics carries the bounded detailed C view end to end"
       audioOwnerStackHeadroomBytes: 4_000,
       controlNetworkMaximumWorkCycles: 31_000,
       freeDmaHeapBytes: 96_000,
+      /*
+       * A complete-frame counter alone cannot explain the physical Stick
+       * incident where the host stopped making progress after exactly eight
+       * frames. These two cumulative receive stages let the retained callback
+       * distinguish a descheduled PCM task (neither moves), a task repeatedly
+       * finding no socket bytes (calls move, chunks do not), and raw WebSocket
+       * progress that never assembles another PCM message (both move while
+       * downlinkAccepted does not).
+       */
+      pcmReceiveCalls: 71,
+      pcmReceiveChunks: 61,
       pcmNetworkMaximumWorkCycles: 29_000,
     },
-    schemaVersion: 3,
+    schemaVersion: 5,
     sequence: 1,
   });
   expect(metrics.producedAtMs).toBeGreaterThanOrEqual(0);
+});
+
+test("getDiagnostics carries one retained control snapshot through the C peer", async () => {
+  await using fixture = new M5StickS3SimulatorFixture();
+  const { m5sticks3 } = fixture;
+
+  /*
+   * The host asks this only after a control reconnect, when the ordinary
+   * callback from the dead session is unavailable. Running the real C
+   * request/reply path catches borrowed-buffer lifetime mistakes that a plain
+   * TypeScript fixture cannot; zero incidents are the simulator's honest
+   * no-ESP-network state, not physical reliability evidence.
+   */
+  await expect(m5sticks3.getDiagnostics()).resolves.toMatchObject({
+    control: {
+      lastErrorGeneration: 0,
+      lastErrorType: 0,
+      websocketDisconnects: 0,
+      websocketErrors: 0,
+    },
+    schemaVersion: 2,
+  });
+});
+
+test("sequential retained diagnostic replies do not exhaust the C Cap'n Web session", async () => {
+  await using fixture = new M5StickS3SimulatorFixture();
+  const { m5sticks3 } = fixture;
+
+  /*
+   * A physical 20 Hz control-load run stopped resolving getDiagnostics after
+   * roughly 170 successful cycles. The method borrows one fixed JSON buffer
+   * until Cap'n Web has serialized the reply, and every request also consumes
+   * a pending-call ID. Either lifetime being leaked would make queue tuning
+   * appear to help merely by changing when a finite table fills.
+   *
+   * Run well past the physical failure point through the real TypeScript
+   * RpcSession and C peer. This is intentionally sequential: it isolates
+   * resource reclamation from deliberate concurrency/backpressure tests. A
+   * separate loaded-scheduler regression is still required if this stays
+   * green.
+   */
+  for (let cycle = 0; cycle < 512; cycle++) {
+    const diagnostics = await m5sticks3.getDiagnostics();
+    expect(diagnostics.schemaVersion).toBe(2);
+  }
 });
 
 test("invalid device arguments are per-call errors and leave the session healthy", async () => {

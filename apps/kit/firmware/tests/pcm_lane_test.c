@@ -405,6 +405,89 @@ static void generation_reset_abandons_a_partial_producer_slot(void) {
 }
 
 /*
+ * A clean host bridge does not prove that the ESP network task delivered PCM
+ * to the application on time. lwIP, Wi-Fi, the WebSocket client, or task
+ * scheduling can still hold bytes after the bridge's send callback. Measure
+ * the interval at the first device-owned PCM boundary so an acoustic underrun
+ * can be attributed to ingress or to the later I2S owner path.
+ *
+ * EOS and a socket-generation reset deliberately break continuity. Including
+ * either quiet/reconnect interval would manufacture a huge "network jitter"
+ * sample unrelated to one response. The maximum remains lifetime evidence,
+ * while the private previous-frame baseline restarts for the next response.
+ */
+static void downlink_interarrival_is_bounded_by_response_generation(void) {
+  struct lane_fixture fixture;
+  struct iterate_kit_pcm_lane_metrics metrics;
+  uint8_t frame[ITERATE_KIT_PCM_V1_FRAME_BYTES] = {0};
+  const void *borrowed = NULL;
+  size_t borrowed_size = 0U;
+  uint64_t received_at_ms = 0U;
+  fixture_init(&fixture);
+
+#define RECEIVE_AND_RELEASE(timestamp_ms)                                  \
+  do {                                                                     \
+    CHECK(iterate_kit_pcm_lane_receive_downlink_at(                         \
+        &fixture.lane,                                                      \
+        ITERATE_KIT_PCM_MESSAGE_BINARY,                                     \
+        true,                                                               \
+        sizeof(frame),                                                      \
+        0U,                                                                 \
+        frame,                                                              \
+        sizeof(frame),                                                      \
+        (timestamp_ms)) == ITERATE_KIT_OK);                                 \
+    CHECK(iterate_kit_pcm_lane_downlink_acquire_at(                         \
+        &fixture.lane,                                                      \
+        &borrowed,                                                          \
+        &borrowed_size,                                                     \
+        &received_at_ms) == ITERATE_KIT_OK);                                \
+    CHECK(borrowed_size == sizeof(frame));                                  \
+    CHECK(received_at_ms == (timestamp_ms));                                \
+    CHECK(iterate_kit_pcm_lane_downlink_release(                            \
+        &fixture.lane) == ITERATE_KIT_OK);                                  \
+  } while (0)
+
+  RECEIVE_AND_RELEASE(UINT64_C(1000));
+  RECEIVE_AND_RELEASE(UINT64_C(1020));
+  RECEIVE_AND_RELEASE(UINT64_C(1105));
+
+  iterate_kit_pcm_lane_metrics(&fixture.lane, &metrics);
+  CHECK(metrics.downlink_interarrival_samples == 2U);
+  CHECK(metrics.downlink_maximum_interarrival_ms == 85U);
+
+  CHECK(iterate_kit_pcm_lane_receive_downlink_at(
+      &fixture.lane,
+      ITERATE_KIT_PCM_MESSAGE_BINARY,
+      true,
+      0U,
+      0U,
+      NULL,
+      0U,
+      UINT64_C(1110)) == ITERATE_KIT_OK);
+  CHECK(iterate_kit_pcm_lane_downlink_acquire_at(
+      &fixture.lane,
+      &borrowed,
+      &borrowed_size,
+      &received_at_ms) == ITERATE_KIT_OK);
+  CHECK(borrowed == NULL);
+  CHECK(borrowed_size == 0U);
+  CHECK(iterate_kit_pcm_lane_downlink_release(
+      &fixture.lane) == ITERATE_KIT_OK);
+
+  RECEIVE_AND_RELEASE(UINT64_C(5000));
+  RECEIVE_AND_RELEASE(UINT64_C(5020));
+  CHECK(iterate_kit_pcm_lane_reset_downlink_producer(
+      &fixture.lane) == ITERATE_KIT_OK);
+  RECEIVE_AND_RELEASE(UINT64_C(9000));
+  RECEIVE_AND_RELEASE(UINT64_C(9025));
+
+  iterate_kit_pcm_lane_metrics(&fixture.lane, &metrics);
+  CHECK(metrics.downlink_interarrival_samples == 4U);
+  CHECK(metrics.downlink_maximum_interarrival_ms == 85U);
+#undef RECEIVE_AND_RELEASE
+}
+
+/*
  * The PCM socket deliberately accepts one narrow contract: complete binary
  * messages of the negotiated shape. Silently coercing text, fragmented
  * WebSocket messages, or wrong lengths would turn protocol faults into noise
@@ -563,6 +646,7 @@ int main(void) {
   every_two_chunk_split_reassembles_exactly_once();
   malformed_fragment_sequence_releases_the_ring_slot();
   generation_reset_abandons_a_partial_producer_slot();
+  downlink_interarrival_is_bounded_by_response_generation();
   invalid_downlink_outcomes_are_exclusive_and_observable();
   full_queues_drop_new_frames_without_growing_latency();
   interruption_discards_every_queued_downlink_frame();

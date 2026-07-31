@@ -168,6 +168,51 @@ describe("firmware architecture boundaries", () => {
     expect(networkOwner).toContain("discard_control_outbox(transport)");
   });
 
+  test("the M5StickS3 control mailboxes cover one maximum owner-loop burst", () => {
+    /*
+     * The physical 20 Hz diagnostics run exposed a profile-level deadlock:
+     * one metrics tick can synchronously emit push+pull for each of the two
+     * subscribers, then the same owner loop can process four inbound pulls
+     * whose resolutions also need outbox slots. With only four slots, a valid
+     * getDiagnostics pull arrived while the metrics fanout occupied the whole
+     * ring; Cap'n Web correctly treated its failed send as terminal, but the
+     * remote promise had no response to settle.
+     *
+     * The matching inbox bound was learned from the next physical failure.
+     * One callback tick can return resolve+release for each subscription while
+     * one bounded remote call contributes push+pull and the preceding call's
+     * release. Those seven messages are causally valid even though the harness
+     * permits only one diagnostics call in flight. A four-slot inbox therefore
+     * replaced a healthy generation after 51.7 seconds; that was burst loss,
+     * not evidence that the peer had created unbounded concurrent work.
+     *
+     * These are burst reserves, not permission to accumulate control history.
+     * The sole network consumer remains nonblocking and a delay beyond one
+     * profiled producer pass still becomes an explicit generation failure.
+     */
+    const source = readFileSync(
+      resolve(firmwareDirectory, "targets/m5sticks3/main/main.cpp"),
+      "utf8",
+    );
+    const constant = (name: string) => {
+      const match = new RegExp(`constexpr std::size_t ${name} =\\s*(\\d+)U;`, "u").exec(source);
+      if (!match) throw new Error(`Could not read M5StickS3 profile constant ${name}.`);
+      return Number(match[1]);
+    };
+    const controlInboxSlotCount = constant("controlInboxSlotCount");
+    const controlOutboxSlotCount = constant("controlOutboxSlotCount");
+    const controlMessagesPerPoll = constant("controlMessagesPerPoll");
+    const controlRemoteCallLifecycleMessages = constant("controlRemoteCallLifecycleMessages");
+    const subscriptionCapacity = constant("subscriptionCapacity");
+
+    expect(controlInboxSlotCount).toBeGreaterThanOrEqual(
+      subscriptionCapacity * 2 + controlRemoteCallLifecycleMessages,
+    );
+    expect(controlOutboxSlotCount).toBeGreaterThanOrEqual(
+      subscriptionCapacity * 2 + controlMessagesPerPoll,
+    );
+  });
+
   test("the ESP PCM transport is a separate socket and never owns Wi-Fi", () => {
     const pcmTransportHeader = readFileSync(
       resolve(
@@ -201,6 +246,43 @@ describe("firmware architecture boundaries", () => {
     expect(websocketConnectionSource).not.toMatch(
       /\besp_wifi_(?:init|start|stop|connect|disconnect)\b/u,
     );
+  });
+
+  test("the Cap'n Web owner uses the bounded taskless WebSocket transport", () => {
+    const controlHeader = readFileSync(
+      resolve(
+        firmwareDirectory,
+        "platforms/iterate_esp_idf/include/iterate/kit/platforms/esp_idf_itx_transport.h",
+      ),
+      "utf8",
+    );
+    const controlSource = readFileSync(
+      resolve(firmwareDirectory, "platforms/iterate_esp_idf/itx_transport.c"),
+      "utf8",
+    );
+
+    /*
+     * A physical station outage proved that the managed ESP WebSocket client
+     * can make our supposedly bounded recovery path wait forever. Its stop()
+     * joins a private worker with portMAX_DELAY; after Wi-Fi and ICMP recovered,
+     * neither capability nor PCM remounted because the control owner remained
+     * inside that hidden join. A host fake that returns from stop immediately
+     * cannot reproduce that ownership failure.
+     *
+     * The control plane already has one explicit static network owner, and PCM
+     * already proves the lower esp_transport_ws wrapper. Reusing that taskless
+     * connection removes the second owner, the unbounded join, and one hidden
+     * task stack. This source-level tripwire exists because "stop is bounded"
+     * cannot be established by a timing test against a cooperative fake.
+     */
+    expect(controlHeader).toContain(
+      '#include "iterate/kit/platforms/esp_idf_websocket_connection.h"',
+    );
+    expect(controlHeader).not.toContain("esp_websocket_client");
+    expect(controlSource).toContain("iterate_kit_esp_idf_websocket_connection_open");
+    expect(controlSource).toContain("iterate_kit_esp_idf_websocket_connection_receive");
+    expect(controlSource).not.toContain("esp_websocket_client");
+    expect(controlSource).not.toContain("WEBSOCKET_TASK_STACK_BYTES");
   });
 
   test("ESP WebSocket diagnostics are atomic across the network and metrics tasks", () => {

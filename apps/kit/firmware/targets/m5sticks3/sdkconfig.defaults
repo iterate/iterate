@@ -15,7 +15,6 @@ CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
 # The control client may serialize TX/RX; racing one non-threaded mbedTLS
 # context under separate locks is undefined and cannot buy audio latency
 # because PCM already owns an independent socket.
-# CONFIG_ESP_WS_CLIENT_SEPARATE_TX_LOCK is not set
 # EOF metadata and owner wakeups must not be deferred by flash/cache stalls.
 CONFIG_I2S_ISR_IRAM_SAFE=y
 CONFIG_FREERTOS_WATCHPOINT_END_OF_STACK=y

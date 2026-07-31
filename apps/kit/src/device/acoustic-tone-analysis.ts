@@ -1,9 +1,21 @@
 import { open, stat } from "node:fs/promises";
 
 export interface AcousticToneAnalysisOptions {
+  /**
+   * Capture-file time after which playback from this response is physically
+   * impossible. Windows crossing or following this boundary are excluded.
+   */
+  analysisEndMs?: number;
+  /**
+   * Capture-file time before which playback from this response is physically
+   * impossible. This must come from an external event marker, never from
+   * choosing whichever waveform episode looks healthiest.
+   */
+  analysisStartMs?: number;
   expectedDurationMs: number;
   frequencyHz: number;
   minimumCoherence?: number;
+  minimumRelativeToneAmplitude?: number;
   minimumToneAmplitude?: number;
   phaseDiscontinuityThresholdRadians?: number;
   samples: Int16Array;
@@ -12,10 +24,22 @@ export interface AcousticToneAnalysisOptions {
 }
 
 export interface AcousticToneArtifactAnalysisOptions {
+  /**
+   * Capture-file time after which playback from this response is physically
+   * impossible. Windows crossing or following this boundary are excluded.
+   */
+  analysisEndMs?: number;
+  /**
+   * Capture-file time before which playback from this response is physically
+   * impossible. This must come from an external event marker, never from
+   * choosing whichever waveform episode looks healthiest.
+   */
+  analysisStartMs?: number;
   artifactPath: string;
   expectedDurationMs: number;
   frequencyHz: number;
   minimumCoherence?: number;
+  minimumRelativeToneAmplitude?: number;
   minimumToneAmplitude?: number;
   phaseDiscontinuityThresholdRadians?: number;
   readChunkBytes?: number;
@@ -28,6 +52,12 @@ export interface AcousticToneAnalysis {
   amplitudeCoefficientOfVariation: number;
   maximumAmplitudeStepDecibels: number;
   amplitudeStepP99Decibels: number;
+  /**
+   * Stable, level-qualified carrier windows outside the externally supplied
+   * analysis interval. They do not describe this response's playback, but
+   * retaining their count makes recorder warm-start replay observable.
+   */
+  excludedCoherentWindowCount: number;
   expectedDurationMs: number;
   gapCount: number;
   longestInternalGapMs: number;
@@ -97,6 +127,7 @@ interface StableToneWindow extends IndexedToneWindow {
  */
 const defaultWindowDurationMs = 5;
 const defaultMinimumToneAmplitude = 128;
+const defaultMinimumRelativeToneAmplitude = 0.25;
 const defaultMinimumCoherence = 0.7;
 const defaultPhaseDiscontinuityThresholdRadians = 0.1;
 const minimumStableRunWindows = 2;
@@ -169,9 +200,50 @@ export function analyzeAcousticTonePcm16(
    * holes remain holes; this operation only removes isolated false positives
    * before and after the device's actual output.
    */
-  const stableActive = retainStableRuns(
+  const absoluteMinimumToneAmplitude = options.minimumToneAmplitude ?? defaultMinimumToneAmplitude;
+  const initialStableActive = retainStableRuns(
     windows.map((window) => window.active),
     minimumStableRunWindows,
+  );
+  /*
+   * Coherence alone cannot distinguish full playback from a quiet coherent
+   * copy in the room before or after the speaker episode. Use the median of
+   * all initially stable candidates as a robust level reference, then apply a
+   * deliberately generous -12 dB floor. Crucially, this is not "pick the
+   * longest run": two same-level episodes separated by an outage survive the
+   * level gate and the outage is still reported.
+   */
+  const inAnalysisRange = windows.map((_, index) =>
+    isWindowInsideAnalysisRange(index, windowStepMs, windowDurationMs, options),
+  );
+  const effectiveMinimumToneAmplitude = deriveEffectiveMinimumToneAmplitude(
+    median(
+      windows
+        .filter((_, index) => initialStableActive[index] && inAnalysisRange[index])
+        .map((window) => window.amplitude),
+    ),
+    absoluteMinimumToneAmplitude,
+    options.minimumRelativeToneAmplitude ?? defaultMinimumRelativeToneAmplitude,
+  );
+  const coherentActive = retainStableRuns(
+    windows.map(
+      (window, index) =>
+        initialStableActive[index] === true && window.amplitude >= effectiveMinimumToneAmplitude,
+    ),
+    minimumStableRunWindows,
+  );
+  /*
+   * A same-frequency, same-level fragment cannot be classified from samples
+   * alone. The event marker gives us the missing causal boundary. Apply it
+   * only after coherence and level classification so excluded carrier energy
+   * remains a visible capture-hygiene diagnostic.
+   */
+  const excludedCoherentWindowCount = coherentActive.reduce(
+    (count, active, index) => count + (active && !inAnalysisRange[index] ? 1 : 0),
+    0,
+  );
+  const stableActive = coherentActive.map(
+    (active, index) => active && inAnalysisRange[index] === true,
   );
   const firstActive = stableActive.indexOf(true);
   const lastActive = stableActive.lastIndexOf(true);
@@ -195,6 +267,7 @@ export function analyzeAcousticTonePcm16(
     amplitudeCoefficientOfVariation: coefficientOfVariation(activeAmplitudes),
     amplitudeStepP99Decibels: percentile(amplitudeStepsDecibels, 0.99),
     maximumAmplitudeStepDecibels: Math.max(0, ...amplitudeStepsDecibels),
+    excludedCoherentWindowCount,
     expectedDurationMs: options.expectedDurationMs,
     gapCount: gapMetrics.count,
     longestInternalGapMs: gapMetrics.longestWindows * windowStepMs,
@@ -224,10 +297,12 @@ export function analyzeAcousticTonePcm16(
  *
  * Endurance duration must be a time cost, never a resident-memory cost. The
  * reader therefore owns exactly one caller-sized byte buffer and one
- * correlation window. It scans the artifact twice: pass one finds the robust
- * median phase step, while pass two measures deviations from that baseline.
- * Two bounded passes are preferable to retaining every phase step or letting
- * early samples define a baseline that an isolated glitch can poison.
+ * correlation window. It scans the artifact three times: a cheap calibration
+ * pass finds the robust playback level, the analysis pass finds the robust
+ * median phase step, and the final pass measures deviations from that
+ * baseline. Bounded rereads are preferable to retaining duration-sized phase
+ * or amplitude arrays, and endurance artifacts are files precisely so this
+ * CPU-for-memory trade remains safe and explicit.
  */
 export async function analyzeAcousticTonePcm16Artifact(
   options: AcousticToneArtifactAnalysisOptions,
@@ -276,9 +351,33 @@ export async function analyzeAcousticTonePcm16Artifact(
   });
 
   try {
-    const firstPass = new FirstToneAnalysisPass(phaseStepWindowCount);
+    const amplitudeReference = new ToneAmplitudeReferencePass();
     for await (const window of retainStableArtifactRuns(reader.windows())) {
-      firstPass.observe(window);
+      if (isWindowInsideAnalysisRange(window.index, windowStepMs, windowDurationMs, options)) {
+        amplitudeReference.observe(window);
+      }
+    }
+    const effectiveMinimumToneAmplitude = deriveEffectiveMinimumToneAmplitude(
+      amplitudeReference.median(),
+      options.minimumToneAmplitude ?? defaultMinimumToneAmplitude,
+      options.minimumRelativeToneAmplitude ?? defaultMinimumRelativeToneAmplitude,
+    );
+
+    const firstPass = new FirstToneAnalysisPass(phaseStepWindowCount);
+    let excludedCoherentWindowCount = 0;
+    for await (const window of retainStableArtifactRuns(
+      reader.windows(effectiveMinimumToneAmplitude),
+    )) {
+      const inRange = isWindowInsideAnalysisRange(
+        window.index,
+        windowStepMs,
+        windowDurationMs,
+        options,
+      );
+      if (window.active && !inRange) {
+        excludedCoherentWindowCount += 1;
+      }
+      firstPass.observe(constrainWindowToAnalysisRange(window, inRange));
     }
     const firstPassResult = firstPass.finish();
 
@@ -292,8 +391,15 @@ export async function analyzeAcousticTonePcm16Artifact(
       firstPassResult.medianPhaseStepRadians,
       options.phaseDiscontinuityThresholdRadians ?? defaultPhaseDiscontinuityThresholdRadians,
     );
-    for await (const window of retainStableArtifactRuns(reader.windows())) {
-      phaseMetrics.observe(window);
+    for await (const window of retainStableArtifactRuns(
+      reader.windows(effectiveMinimumToneAmplitude),
+    )) {
+      phaseMetrics.observe(
+        constrainWindowToAnalysisRange(
+          window,
+          isWindowInsideAnalysisRange(window.index, windowStepMs, windowDurationMs, options),
+        ),
+      );
     }
 
     const observedSpanWindows =
@@ -311,6 +417,7 @@ export async function analyzeAcousticTonePcm16Artifact(
       amplitudeCoefficientOfVariation: firstPassResult.amplitudeCoefficientOfVariation,
       amplitudeStepP99Decibels: firstPassResult.amplitudeStepP99Decibels,
       maximumAmplitudeStepDecibels: firstPassResult.maximumAmplitudeStepDecibels,
+      excludedCoherentWindowCount,
       expectedDurationMs: options.expectedDurationMs,
       gapCount: firstPassResult.gapCount,
       longestInternalGapMs: firstPassResult.longestInternalGapWindows * windowStepMs,
@@ -389,7 +496,9 @@ class ArtifactToneWindowReader {
     this.#windowStepSamples = options.windowStepSamples;
   }
 
-  async *windows(): AsyncGenerator<IndexedToneWindow> {
+  async *windows(
+    minimumToneAmplitude = this.#minimumToneAmplitude,
+  ): AsyncGenerator<IndexedToneWindow> {
     const handle = await this.#handle;
     let artifactOffset = 0;
     let sampleCount = 0;
@@ -420,7 +529,7 @@ class ArtifactToneWindowReader {
             windowStart,
             this.#sampleRateHz,
             this.#frequencyHz,
-            this.#minimumToneAmplitude,
+            minimumToneAmplitude,
             this.#minimumCoherence,
           ),
           index: windowIndex,
@@ -563,6 +672,27 @@ class BoundedHistogram {
       return this.#minimum + (index + 0.5) * binWidth;
     }
     throw new Error("The bounded histogram lost an observed value.");
+  }
+}
+
+/**
+ * Finds a duration-independent level reference without retaining windows.
+ *
+ * The calibration pass sees only already-stable coherent candidates. Its
+ * bounded histogram makes a long endurance run cost more reads and CPU but no
+ * more heap, which is the important harness invariant.
+ */
+class ToneAmplitudeReferencePass {
+  readonly #amplitudes = new BoundedHistogram(0, 65_536, amplitudeHistogramBins);
+
+  observe(window: StableToneWindow) {
+    if (window.active) {
+      this.#amplitudes.observe(window.amplitude);
+    }
+  }
+
+  median() {
+    return this.#amplitudes.median();
   }
 }
 
@@ -983,6 +1113,47 @@ function percentile(values: readonly number[], fraction: number) {
   return sorted[Math.ceil(sorted.length * fraction) - 1]!;
 }
 
+function deriveEffectiveMinimumToneAmplitude(
+  referenceAmplitude: number,
+  absoluteMinimumToneAmplitude: number,
+  minimumRelativeToneAmplitude: number,
+) {
+  return Math.max(absoluteMinimumToneAmplitude, referenceAmplitude * minimumRelativeToneAmplitude);
+}
+
+function isWindowInsideAnalysisRange(
+  windowIndex: number,
+  windowStepMs: number,
+  windowDurationMs: number,
+  options: Pick<
+    AcousticToneAnalysisOptions | AcousticToneArtifactAnalysisOptions,
+    "analysisEndMs" | "analysisStartMs"
+  >,
+) {
+  const windowStartMs = windowIndex * windowStepMs;
+  const windowEndMs = windowStartMs + windowDurationMs;
+  /*
+   * Only wholly contained windows are attributable to the response. A marker
+   * is quantized and can bisect one correlation window; discarding at most one
+   * window at each edge is safer than letting samples known to precede the
+   * request manufacture an onset. This trims at most one 5 ms window under
+   * the default configuration, well inside the explicit duration tolerance.
+   */
+  return (
+    (options.analysisStartMs === undefined || windowStartMs >= options.analysisStartMs) &&
+    (options.analysisEndMs === undefined || windowEndMs <= options.analysisEndMs)
+  );
+}
+
+function constrainWindowToAnalysisRange(window: StableToneWindow, inRange: boolean) {
+  /*
+   * Preserve the original amplitude and phase for diagnostics; only the
+   * attribution bit changes. Reusing already-inactive/in-range objects also
+   * avoids allocating once per window in the normal endurance path.
+   */
+  return window.active && !inRange ? { ...window, active: false } : window;
+}
+
 function validateOptions(options: AcousticToneAnalysisOptions) {
   validateAnalysisConfiguration(options);
   if (options.samples.length === 0) {
@@ -993,6 +1164,25 @@ function validateOptions(options: AcousticToneAnalysisOptions) {
 function validateAnalysisConfiguration(
   options: AcousticToneAnalysisOptions | AcousticToneArtifactAnalysisOptions,
 ) {
+  if (
+    options.analysisStartMs !== undefined &&
+    (!Number.isFinite(options.analysisStartMs) || options.analysisStartMs < 0)
+  ) {
+    throw new Error("The acoustic analysis start must be a finite nonnegative time.");
+  }
+  if (
+    options.analysisEndMs !== undefined &&
+    (!Number.isFinite(options.analysisEndMs) || options.analysisEndMs <= 0)
+  ) {
+    throw new Error("The acoustic analysis end must be a finite positive time.");
+  }
+  if (
+    options.analysisStartMs !== undefined &&
+    options.analysisEndMs !== undefined &&
+    options.analysisEndMs <= options.analysisStartMs
+  ) {
+    throw new Error("The acoustic analysis end must follow its start.");
+  }
   if (!Number.isSafeInteger(options.sampleRateHz) || options.sampleRateHz <= 0) {
     throw new Error("The acoustic sample rate must be a positive integer.");
   }
@@ -1013,6 +1203,15 @@ function validateAnalysisConfiguration(
   const minimumToneAmplitude = options.minimumToneAmplitude ?? defaultMinimumToneAmplitude;
   if (!Number.isFinite(minimumToneAmplitude) || minimumToneAmplitude < 0) {
     throw new Error("The minimum acoustic tone amplitude must be nonnegative.");
+  }
+  const minimumRelativeToneAmplitude =
+    options.minimumRelativeToneAmplitude ?? defaultMinimumRelativeToneAmplitude;
+  if (
+    !Number.isFinite(minimumRelativeToneAmplitude) ||
+    minimumRelativeToneAmplitude < 0 ||
+    minimumRelativeToneAmplitude > 1
+  ) {
+    throw new Error("The minimum relative acoustic tone amplitude must be in [0, 1].");
   }
   const minimumCoherence = options.minimumCoherence ?? defaultMinimumCoherence;
   if (!Number.isFinite(minimumCoherence) || minimumCoherence <= 0 || minimumCoherence > 1) {

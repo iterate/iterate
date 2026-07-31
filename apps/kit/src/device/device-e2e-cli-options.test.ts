@@ -16,6 +16,7 @@ describe("device E2E CLI options", () => {
         {},
       ),
     ).toEqual({
+      controlChurnHz: undefined,
       deterministicPlayback: undefined,
       exitAfterRemoteProof: false,
       flash: true,
@@ -31,6 +32,8 @@ describe("device E2E CLI options", () => {
       grokPlaybackOnly: false,
       directLanHost: undefined,
       directLanPort: undefined,
+      downlinkDeliveryMode: "host-paced",
+      deviceClockedStartupFrames: undefined,
       mountTimeoutMs: 90_000,
       playbackDurationMs: 3_000,
       playbackEndurance: false,
@@ -148,6 +151,7 @@ describe("device E2E CLI options", () => {
         { CAPTUN_GATEWAY: "https://gateway.invalid" },
       ),
     ).toEqual({
+      controlChurnHz: undefined,
       exitAfterRemoteProof: true,
       flash: false,
       flashArgs: ["--port", "/dev/cu.usbmodem101"],
@@ -155,6 +159,8 @@ describe("device E2E CLI options", () => {
       grokPlaybackOnly: true,
       directLanHost: undefined,
       directLanPort: undefined,
+      downlinkDeliveryMode: "host-paced",
+      deviceClockedStartupFrames: undefined,
       mountTimeoutMs: 120_000,
       deterministicPlayback: undefined,
       playbackDurationMs: 3_000,
@@ -233,10 +239,97 @@ describe("device E2E CLI options", () => {
     ).toThrow("TCP port");
   });
 
+  test("selects device-clocked PCM delivery without forwarding it to the flasher", () => {
+    /*
+     * This switch exists to compare one architectural variable on identical
+     * hardware: whether the userspace proxy or the device's I²S peripheral
+     * clocks downlink delivery. Accidentally forwarding it to the firmware
+     * flasher would either reject the run or make the comparison depend on a
+     * different flash/configuration path.
+     */
+    expect(
+      parseDeviceE2eCliOptions(
+        [
+          "--device-clocked-downlink",
+          "--device-clocked-startup-frames",
+          "7",
+          "--tone-playback-only",
+          "--port",
+          "/dev/cu.usbmodem101",
+        ],
+        {},
+      ),
+    ).toMatchObject({
+      deviceClockedStartupFrames: 7,
+      downlinkDeliveryMode: "device-clocked",
+      flashArgs: ["--port", "/dev/cu.usbmodem101"],
+    });
+  });
+
+  test("keeps the startup-lead experiment named, bounded, and device-clocked", () => {
+    /*
+     * This is a physical discriminator, not a generic instruction to buffer
+     * more speech. Requiring the device-clocked mode prevents the same number
+     * from silently changing the older JavaScript-paced comparison. The
+     * eight-frame/160 ms queue remains the hard outer bound.
+     */
+    expect(() => parseDeviceE2eCliOptions(["--device-clocked-startup-frames", "7"], {})).toThrow(
+      "requires --device-clocked-downlink",
+    );
+    expect(() =>
+      parseDeviceE2eCliOptions(
+        ["--device-clocked-downlink", "--device-clocked-startup-frames", "9"],
+        {},
+      ),
+    ).toThrow("device-clocked startup");
+    expect(() =>
+      parseDeviceE2eCliOptions(
+        [
+          "--device-clocked-downlink",
+          "--device-clocked-startup-frames",
+          "7",
+          "--device-clocked-startup-frames",
+          "6",
+        ],
+        {},
+      ),
+    ).toThrow("provided more than once");
+  });
+
   test("allows a long push-to-talk hold for continuous-streaming endurance proofs", () => {
     expect(parseDeviceE2eCliOptions(["--remote-hold-ms", "60000"], {})).toMatchObject({
       remoteHoldMs: 60_000,
     });
+  });
+
+  test("keeps diagnostic control load bounded and attached to a deterministic proof", () => {
+    /*
+     * This knob exists to compete with PCM using real Cap'n Web/network work.
+     * It must not become a free-running traffic generator in ordinary device
+     * sessions, and its explicit rate is part of the retained physical
+     * evidence rather than an unrepeatable “some load was running” claim.
+     */
+    expect(
+      parseDeviceE2eCliOptions(
+        ["--tone-playback-only", "--control-churn-hz", "20", "--port", "/dev/cu.usbmodem101"],
+        {},
+      ),
+    ).toMatchObject({
+      controlChurnHz: 20,
+      flashArgs: ["--port", "/dev/cu.usbmodem101"],
+    });
+    expect(() => parseDeviceE2eCliOptions(["--control-churn-hz", "20"], {})).toThrow(
+      "requires deterministic playback",
+    );
+    expect(() =>
+      parseDeviceE2eCliOptions(["--tone-playback-only", "--control-churn-hz", "0"], {}),
+    ).toThrow("control churn frequency");
+    expect(() =>
+      parseDeviceE2eCliOptions(
+        ["--tone-playback-only", "--control-churn-hz", "20", "--control-churn-hz", "20"],
+        {},
+      ),
+    ).toThrow("provided more than once");
   });
 
   test("makes bounded recovery an explicit deterministic diagnostic rather than weakening endurance", () => {

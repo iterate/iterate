@@ -311,6 +311,8 @@ int main() {
       subscriptions,
       subscription_capacity,
       1'000U,
+      nullptr,
+      0U,
     },
   };
   if (iterate_kit_stackchan_init(

@@ -28,6 +28,7 @@ enum {
   ESP_FAIL = -1,
   ESP_ERR_NO_MEM = 0x101,
   ESP_ERR_INVALID_STATE = 0x103,
+  ESP_ERR_TIMEOUT = 0x107,
   ESP_ERR_INVALID_RESPONSE = 0x108,
   ESP_ERR_NVS_NO_FREE_PAGES = 0x110d,
   ESP_ERR_NVS_NEW_VERSION_FOUND = 0x1110,
@@ -155,6 +156,14 @@ typedef struct esp_websocket_client_config {
   esp_err_t (*crt_bundle_attach)(void *configuration);
 } esp_websocket_client_config_t;
 
+typedef enum {
+  WEBSOCKET_ERROR_TYPE_NONE = 0,
+  WEBSOCKET_ERROR_TYPE_TCP_TRANSPORT,
+  WEBSOCKET_ERROR_TYPE_PONG_TIMEOUT,
+  WEBSOCKET_ERROR_TYPE_HANDSHAKE,
+  WEBSOCKET_ERROR_TYPE_SERVER_CLOSE,
+} esp_websocket_error_type_t;
+
 typedef struct esp_websocket_event_data {
   const char *data_ptr;
   int data_len;
@@ -164,7 +173,13 @@ typedef struct esp_websocket_event_data {
   bool fin;
   struct {
     esp_err_t esp_tls_last_esp_err;
+    int esp_tls_stack_err;
+    int esp_tls_cert_verify_flags;
+    esp_websocket_error_type_t error_type;
+    int esp_ws_handshake_status_code;
+    int esp_transport_sock_errno;
   } error_handle;
+  int close_status_code;
 } esp_websocket_event_data_t;
 
 enum {
@@ -199,6 +214,20 @@ esp_err_t esp_websocket_client_destroy(
 esp_err_t esp_crt_bundle_attach(void *configuration);
 uint32_t esp_cpu_get_cycle_count(void);
 int64_t esp_timer_get_time(void);
+
+/*
+ * Advance only the ESP monotonic policy clock, never the host scheduler clock.
+ *
+ * The production transport has multi-second freshness/liveness deadlines.
+ * Sleeping for those durations would make fault tests slow and flaky, while
+ * replacing the whole task loop with a synchronous fake would stop testing
+ * the composition we care about. These helpers let a test move an explicit
+ * deadline forward and then wake the real host-thread stand-in for the
+ * FreeRTOS task.
+ */
+void iterate_kit_fake_monotonic_clock_reset(void);
+void iterate_kit_fake_monotonic_clock_advance_ms(
+    uint32_t milliseconds);
 
 typedef uint32_t TickType_t;
 typedef uint8_t StackType_t;
@@ -240,11 +269,24 @@ void vTaskDelay(TickType_t ticks);
 void vTaskDelete(TaskHandle_t task);
 
 /**
- * Delivers one complete or partial text frame through the registered ESP-IDF
- * callback. `payload_length` may exceed `data_length`; this mirrors ESP-IDF's
- * first fragment metadata and lets tests reject an oversized message without
+ * Delivers one complete or partial WebSocket frame through the registered
+ * ESP-IDF callback. The real managed client dispatches DATA for control opcodes
+ * before it performs its own PING/PONG/CLOSE handling, so accepting an opcode
+ * here is necessary to reproduce that otherwise surprising callback contract.
+ * `payload_length` may exceed `data_length`; this mirrors ESP-IDF's first
+ * fragment metadata and lets tests reject an oversized message without
  * allocating an oversized host buffer.
  */
+esp_err_t iterate_kit_fake_websocket_emit_frame(
+    esp_websocket_client_handle_t client,
+    int opcode,
+    const char *data,
+    size_t data_length,
+    size_t payload_length,
+    size_t payload_offset,
+    bool fin);
+
+/** Convenience wrapper for the application text frames used by most tests. */
 esp_err_t iterate_kit_fake_websocket_emit_text(
     esp_websocket_client_handle_t client,
     const char *data,
@@ -262,6 +304,20 @@ void iterate_kit_fake_websocket_defer_connected(bool enabled);
 esp_err_t iterate_kit_fake_websocket_emit_connected(
     esp_websocket_client_handle_t client);
 
+/**
+ * Delivers the managed client's complete ERROR tuple without interpreting it.
+ * Distinct sentinel values let tests prove production copies each SDK domain
+ * rather than accidentally aliasing adjacent fields or manufacturing ESP_FAIL.
+ */
+esp_err_t iterate_kit_fake_websocket_emit_error(
+    esp_websocket_client_handle_t client,
+    esp_websocket_error_type_t error_type,
+    esp_err_t tls_error,
+    int tls_stack_error,
+    int transport_errno,
+    int handshake_status_code,
+    int close_status_code);
+
 /** Makes exactly the next text send return one byte short. */
 void iterate_kit_fake_websocket_short_next_send(void);
 
@@ -275,6 +331,9 @@ esp_err_t iterate_kit_fake_network_task_resume(void);
 
 /** Returns the affinity requested for the currently created fake task. */
 int iterate_kit_fake_network_task_core_id(void);
+
+/** Returns the FreeRTOS priority requested for the created fake task. */
+unsigned int iterate_kit_fake_network_task_priority(void);
 
 /**
  * Joins and releases the host thread after production stop() has proved its

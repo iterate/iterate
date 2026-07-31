@@ -1,7 +1,10 @@
 export interface DeviceE2eCliOptions {
+  controlChurnHz?: number;
   deterministicPlayback: "prbs31" | "tone" | undefined;
+  deviceClockedStartupFrames?: number;
   directLanHost?: string;
   directLanPort?: number;
+  downlinkDeliveryMode: "device-clocked" | "host-paced";
   exitAfterRemoteProof: boolean;
   flash: boolean;
   flashArgs: string[];
@@ -36,15 +39,18 @@ export function parseDeviceE2eCliOptions(
   environment: Readonly<Record<string, string | undefined>>,
 ): DeviceE2eCliOptions {
   const flashArgs: string[] = [];
+  let controlChurnHz: number | undefined;
   let exitAfterRemoteProof = false;
   let flash = true;
   let grokPlaybackOnly = false;
   let mountTimeoutMs = 90_000;
   let deterministicPlayback: DeviceE2eCliOptions["deterministicPlayback"];
+  let deviceClockedStartupFrames: number | undefined;
   let directLanHost = environment.ITERATE_KIT_DIRECT_LAN_HOST?.trim() || undefined;
   let directLanPort = environment.ITERATE_KIT_DIRECT_LAN_PORT
     ? parseTcpPort(environment.ITERATE_KIT_DIRECT_LAN_PORT)
     : undefined;
+  let downlinkDeliveryMode: DeviceE2eCliOptions["downlinkDeliveryMode"] = "host-paced";
   let playbackDurationMs = 3_000;
   let playbackEndurance = false;
   let playbackRecoveryProof = false;
@@ -52,12 +58,15 @@ export function parseDeviceE2eCliOptions(
   let tunnelName = environment.CAPTUN_TUNNEL_NAME?.trim() || undefined;
   let voice = false;
   let sawVoice = false;
+  let sawControlChurnHz = false;
   let sawMountTimeout = false;
   let sawRemoteHold = false;
   let sawToneDuration = false;
   let sawTunnelName = false;
   let sawDirectLanHost = false;
   let sawDirectLanPort = false;
+  let sawDownlinkDeliveryMode = false;
+  let sawDeviceClockedStartupFrames = false;
 
   for (let index = 0; index < args.length; index += 1) {
     const option = args[index]!;
@@ -80,6 +89,40 @@ export function parseDeviceE2eCliOptions(
       }
       directLanPort = parseTcpPort(takeValue(args, ++index, option));
       sawDirectLanPort = true;
+      continue;
+    }
+    if (option === "--device-clocked-downlink") {
+      if (sawDownlinkDeliveryMode) {
+        throw new Error("Option --device-clocked-downlink was provided more than once.");
+      }
+      downlinkDeliveryMode = "device-clocked";
+      sawDownlinkDeliveryMode = true;
+      continue;
+    }
+    if (option === "--device-clocked-startup-frames") {
+      if (sawDeviceClockedStartupFrames) {
+        throw new Error("Option --device-clocked-startup-frames was provided more than once.");
+      }
+      /*
+       * This is intentionally bounded by the existing eight-frame media
+       * budget. It is an experiment in when a generation becomes playable,
+       * not a second knob that can quietly retain more old conversation.
+       */
+      deviceClockedStartupFrames = parseBoundedInteger(
+        takeValue(args, ++index, option),
+        "device-clocked startup frames",
+        1,
+        8,
+      );
+      sawDeviceClockedStartupFrames = true;
+      continue;
+    }
+    if (option === "--control-churn-hz") {
+      if (sawControlChurnHz) {
+        throw new Error("Option --control-churn-hz was provided more than once.");
+      }
+      controlChurnHz = parseControlChurnHz(takeValue(args, ++index, option));
+      sawControlChurnHz = true;
       continue;
     }
     if (option === "--exit-after-remote-proof") {
@@ -227,11 +270,20 @@ export function parseDeviceE2eCliOptions(
   if (directLanPort !== undefined && !directLanHost) {
     throw new Error("--direct-lan-port requires --direct-lan-host.");
   }
+  if (deviceClockedStartupFrames !== undefined && downlinkDeliveryMode !== "device-clocked") {
+    throw new Error("--device-clocked-startup-frames requires --device-clocked-downlink.");
+  }
+  if (controlChurnHz !== undefined && !deterministicPlayback) {
+    throw new Error("--control-churn-hz requires deterministic playback.");
+  }
 
   return {
+    controlChurnHz,
     deterministicPlayback,
+    deviceClockedStartupFrames,
     directLanHost,
     directLanPort,
+    downlinkDeliveryMode,
     exitAfterRemoteProof,
     flash,
     flashArgs,
@@ -245,6 +297,14 @@ export function parseDeviceE2eCliOptions(
     tunnelName,
     voice,
   };
+}
+
+function parseControlChurnHz(value: string) {
+  const frequency = Number(value);
+  if (!Number.isSafeInteger(frequency) || frequency < 1 || frequency > 100) {
+    throw new Error("The control churn frequency must be an integer from 1 through 100 hertz.");
+  }
+  return frequency;
 }
 
 function parseTcpPort(value: string) {

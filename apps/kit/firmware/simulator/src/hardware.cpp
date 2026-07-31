@@ -71,12 +71,16 @@ iterate_kit_status sampleMetrics(
    */
   sample->has_playback_detail = true;
   auto &detail = sample->playback_detail;
-  detail.schema_version = 3U;
+  detail.schema_version = 5U;
   detail.sequence = ++hardware.metricsSequence;
   detail.produced_at_ms = sample->uptime_ms;
   detail.downlink_accepted = 12U;
   detail.playback.submitted = 11U;
   detail.playback.completed = 10U;
+  detail.playback.receive_to_dma_start_samples = 10U;
+  detail.playback.maximum_receive_to_dma_start_ms = 82U;
+  detail.playback.downlink_interarrival_samples = 11U;
+  detail.playback.maximum_downlink_interarrival_ms = 22U;
   detail.playback.successful_refill_timing_samples = 9U;
   detail.playback.last_eof_to_successful_refill_us = 1'100U;
   detail.playback.maximum_eof_to_successful_refill_us = 1'200U;
@@ -95,8 +99,19 @@ iterate_kit_status sampleMetrics(
   detail.runtime.largest_free_internal_heap_block_bytes = 96'000U;
   detail.runtime.largest_free_dma_block_bytes = 48'000U;
   detail.runtime.cpu_permille = 73;
+  detail.runtime.pcm_receive_calls = 71U;
+  detail.runtime.pcm_receive_chunks = 61U;
   detail.runtime.control_network_max_work_cycles = 31'000U;
   detail.runtime.pcm_network_max_work_cycles = 29'000U;
+  /*
+   * The stdio simulator has no ESP WebSocket or Wi-Fi layers, but it still
+   * implements the same one-shot schema so host code can prove capability and
+   * parsing semantics. All incident counters remain honestly zero; these
+   * values are never cited as evidence about physical network reliability.
+   */
+  sample->has_control_diagnostics = true;
+  sample->control_diagnostics.schema_version = 2U;
+  sample->control_diagnostics.produced_at_ms = sample->uptime_ms;
   return ITERATE_KIT_OK;
 }
 

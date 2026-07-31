@@ -4,9 +4,8 @@
 #include "iterate/kit/pcm_uplink_conductor.h"
 
 /**
- * Shared control/PCM socket policy. A normal TLS write may exceed one 20 ms
- * audio interval, while reconnects must start promptly and then back off to a
- * bounded rate when the endpoint remains unavailable.
+ * Shared control/PCM socket policy. Reconnects must start promptly and then
+ * back off to a bounded rate when the endpoint remains unavailable.
  *
  * The peer-delivery constants form one coupled latency budget:
  *
@@ -35,7 +34,22 @@
  * trigger recovery before the sender's outer freshness guard.
  */
 enum {
-  ITERATE_KIT_ESP_IDF_WEBSOCKET_SEND_TIMEOUT_MS = 250,
+  /*
+   * Both application-owned network tasks run on Core 0, but they must not have
+   * equal service precedence. The physical loaded-playback rig observed a
+   * control failure followed by complete PCM receive starvation even though
+   * the sockets and application queues were independent. Giving PCM one
+   * FreeRTOS level above control makes the intended lane priority real without
+   * competing with ESP-IDF's much higher-priority Wi-Fi/TCP system tasks.
+   *
+   * The one-level difference is deliberate: PCM still blocks/yields whenever
+   * no byte work is available, so control remains responsive, and we avoid
+   * treating priority as a substitute for bounded work quanta. Raising this
+   * toward the radio or I2S owner priorities was rejected because an erroneous
+   * busy loop could then starve the very system services audio depends on.
+   */
+  ITERATE_KIT_ESP_IDF_CONTROL_NETWORK_TASK_PRIORITY = 5,
+  ITERATE_KIT_ESP_IDF_PCM_NETWORK_TASK_PRIORITY = 6,
   ITERATE_KIT_ESP_IDF_PCM_SEND_NO_PROGRESS_TIMEOUT_MS = 500,
   ITERATE_KIT_ESP_IDF_PCM_FRAME_MAX_SEND_DURATION_MS = 1000,
   ITERATE_KIT_ESP_IDF_PCM_CAPTURE_MAX_AGE_MS = 250,
@@ -48,6 +62,12 @@ enum {
   ITERATE_KIT_ESP_IDF_WEBSOCKET_RETRY_INITIAL_MS = 250,
   ITERATE_KIT_ESP_IDF_WEBSOCKET_RETRY_MAX_MS = 30000,
 };
+
+typedef char iterate_kit_pcm_network_preempts_control[
+    ITERATE_KIT_ESP_IDF_PCM_NETWORK_TASK_PRIORITY >
+            ITERATE_KIT_ESP_IDF_CONTROL_NETWORK_TASK_PRIORITY
+        ? 1
+        : -1];
 
 /*
  * These are compile-time proofs, not duplicated tuning preferences. A device
@@ -74,17 +94,13 @@ typedef char iterate_kit_confirmation_precedes_capture_expiry[
         ? 1
         : -1];
 /*
- * The idle probe timeout must leave at least one complete socket-send timeout
- * for ordinary TLS jitter. Its total failure bound stays under five seconds so
- * silence cannot turn an application-dead connection into a long first-turn
- * outage. These compile-time checks deliberately constrain relationships, not
- * the exact tunable values exercised by the host test.
+ * The idle probe's total failure bound stays under five seconds so silence
+ * cannot turn an application-dead connection into a long first-turn outage.
+ * The direct WebSocket adapter is nonblocking, so there is deliberately no
+ * lower "send timeout" to order against this deadline. Reintroducing one would
+ * let opaque transport code retain stale audio outside the measured sender
+ * policy.
  */
-typedef char iterate_kit_idle_probe_allows_one_send_timeout[
-    ITERATE_KIT_ESP_IDF_PCM_IDLE_PEER_PROBE_TIMEOUT_MS >=
-            ITERATE_KIT_ESP_IDF_WEBSOCKET_SEND_TIMEOUT_MS
-        ? 1
-        : -1];
 typedef char iterate_kit_idle_peer_failure_is_bounded[
     ITERATE_KIT_ESP_IDF_PCM_IDLE_PEER_PROBE_INTERVAL_MS +
                 ITERATE_KIT_ESP_IDF_PCM_IDLE_PEER_PROBE_TIMEOUT_MS <=

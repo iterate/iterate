@@ -836,7 +836,7 @@ enum iterate_kit_status iterate_kit_esp_idf_pcm_transport_start(
       "iterate-pcm-net",
       ITERATE_KIT_ESP_IDF_PCM_NETWORK_TASK_STACK_BYTES,
       transport,
-      5U,
+      ITERATE_KIT_ESP_IDF_PCM_NETWORK_TASK_PRIORITY,
       transport->network_task_stack,
       &transport->network_task_storage,
       NETWORK_TASK_CORE);
