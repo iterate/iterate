@@ -21,11 +21,9 @@ import { WORKER_BUILDING_HEADER } from "../workers/worker-fetch-dispatch.ts";
 import { WORKER_SERVE_HEADER } from "../workers/worker-serve-info.ts";
 import { internalStreamId } from "../streams/stream-delivery-utils.ts";
 import type { ProjectCustomDomainDeps } from "./custom-domains.ts";
-import { buildApprovalMessage, evaluateDecision } from "./egress-approvals.ts";
 import {
   parseProjectCreationTerminal,
   ProjectProcessorContract,
-  type HumanApprovalRequestedPayload,
   type ProjectProcessorState,
 } from "./project-processor-contract.ts";
 
@@ -410,83 +408,9 @@ export class ProjectProcessor extends StreamProcessor<
         });
         break;
       }
-      case "events.iterate.com/project/human-approval-decided": {
-        // THE APPROVAL-OUTCOME RELAY. The egress door resolves a decided
-        // batch's parked fetches — but only while their awaiter is still
-        // alive. A script that returned before the human answered (the
-        // model's choice, a crash, an expiry) leaves nobody listening: the
-        // release/refusal happens and no event ever reaches the agent
-        // thread, whose `waitingFor` then never clears. So the decision
-        // itself is delivered as developer context to the originating agent
-        // stream — every project stream lives in this DO, so `appendTo`
-        // reaches it directly. Blocked: a per-event consequence — the
-        // decided event is delivered once, and losing this append is
-        // exactly the stranded-thread bug.
-        const decided = event.payload;
-        const humanApprovalKeys = state.humanApprovalKeys;
-        blockProcessorWhile(async () => {
-          const requested = await this.stream.getEvent({
-            offset: decided.approvalRequestEventOffset,
-          });
-          if (requested?.type !== "events.iterate.com/project/human-approval-requested") return;
-          const parsed = ProjectProcessorContract.events[
-            "events.iterate.com/project/human-approval-requested"
-          ].payloadSchema.safeParse(requested.payload);
-          if (!parsed.success) return;
-          const batch = parsed.data;
-          const streamContext = batch.streamContext;
-          // Only script runs on agent threads have a conversation to inform;
-          // scope holds (CLI/manual egress) have no waiting agent.
-          if (streamContext?.kind !== "script-execution") return;
-          if (!streamContext.streamPath.startsWith("/agents/")) return;
-          // Mirror the door's acceptance policy: a malformed or unsigned
-          // decision released nothing, so relaying it would tell the agent
-          // about an approval that never happened.
-          if (decided.verdicts.length !== batch.requests.length) return;
-          const verdict = await evaluateDecision({
-            decision: decided,
-            keys: humanApprovalKeys,
-            message: buildApprovalMessage({
-              projectId: this.deps.itx.projectId,
-              approvalRequestEventOffset: decided.approvalRequestEventOffset,
-              requests: batch.requests,
-              verdicts: decided.verdicts,
-            }),
-          });
-          if (!verdict.accepted) return;
-          await args.appendTo(streamContext.streamPath, {
-            type: "events.iterate.com/agents/context-added",
-            idempotencyKey: this.idempotencyKey("approval-outcome", event),
-            payload: {
-              role: "developer",
-              content: approvalOutcomeContent({ batch, decided }),
-              // Non-script actor on a developer item: the agent processor's
-              // waiting-clear treats this as an external wake, so a parked
-              // `waitingFor: external_event` thread resumes.
-              actor: { type: "integration", name: "egress-approvals" },
-              llmRequestPolicy: { behaviour: "after-current-request" },
-              refs: [
-                {
-                  type: "event",
-                  streamPath: this.path,
-                  offset: decided.approvalRequestEventOffset,
-                  eventType: "events.iterate.com/project/human-approval-requested",
-                },
-                {
-                  type: "event",
-                  streamPath: this.path,
-                  offset: event.offset,
-                  eventType: "events.iterate.com/project/human-approval-decided",
-                },
-              ],
-            },
-          });
-        });
-        break;
-      }
       // created/heartbeat-triggered/onboarding-completed/notification facts,
-      // catalog facts, egress rules and key events: no platform side effect.
-      // The project worker handles userspace lifecycle events.
+      // catalog facts, egress rules and approval events: no platform side
+      // effect. The project worker handles userspace lifecycle events.
     }
   }
 
@@ -857,39 +781,6 @@ function upsertCustomDomain<
     domain,
   ].sort((a, b) => a.hostname.localeCompare(b.hostname));
   return { ...state, customDomains: next };
-}
-
-/**
- * The compact decision summary an agent thread receives: rule, per-request
- * verdicts (method + host — the headline, not the full URL), and the human's
- * rejection reason when one was given.
- */
-function approvalOutcomeContent(input: {
-  batch: HumanApprovalRequestedPayload;
-  decided: {
-    decidedBy: "human" | "expiry";
-    reason?: string;
-    verdicts: ("approve" | "reject")[];
-  };
-}): string {
-  const { batch, decided } = input;
-  const header =
-    decided.decidedBy === "human"
-      ? `A human decided the held egress request batch for rule "${batch.ruleKey}":`
-      : `The held egress request batch for rule "${batch.ruleKey}" expired with no human decision — all requests were auto-rejected:`;
-  const lines = batch.requests.map((request, index) => {
-    const host = ((): string => {
-      try {
-        return new URL(request.url).host;
-      } catch {
-        return request.url;
-      }
-    })();
-    const verdict = decided.verdicts[index] === "approve" ? "approved" : "rejected";
-    return `- ${request.method} ${host}: ${verdict}`;
-  });
-  const reason = decided.reason === undefined ? [] : [`Rejection reason: ${decided.reason}`];
-  return [header, ...lines, ...reason].join("\n");
 }
 
 /** The directory record fallback when the project directory has no entry yet. */

@@ -24,7 +24,6 @@ import { RepoProcessorContract } from "../repos/repo-processor-contract.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
 import { SecretProcessorContract } from "../secrets/secret-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
-import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
 import { SchedulerProcessorContract } from "../scheduler/scheduler-processor-contract.ts";
 import { DeviceProcessorContract } from "../devices/device-processor-contract.ts";
 import { NotificationLifecycleContract } from "../notifications/notification-lifecycle-contract.ts";
@@ -39,8 +38,7 @@ export const ProjectProcessorContract = defineProcessorContract({
     "Project root: runs the project/create-requested → project/created bootstrap saga, births " +
     "the sibling processors every project gets (root capability host, primary scheduler, config " +
     "repo, email router, notification facet), catalogs the project's streams and domain objects, " +
-    "manages custom-domain routing, holds the egress-approval policy, and relays approval " +
-    "decisions back to the agent thread whose script run parked the batch.",
+    "manages custom-domain routing, and holds the egress-approval policy.",
   stateSchema: z.object({
     createRequest: projectCreationPayloadSchema().nullable().default(null).meta({
       description:
@@ -465,7 +463,6 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/project/human-approval-key-added",
     "events.iterate.com/project/human-approval-key-revoked",
     "events.iterate.com/project/human-approval-requested",
-    "events.iterate.com/project/human-approval-decided",
     "events.iterate.com/project/custom-domain-add-requested",
     "events.iterate.com/project/custom-domain-configured",
     "events.iterate.com/project/custom-domain-provision-failed",
@@ -496,12 +493,8 @@ export const ProjectProcessorContract = defineProcessorContract({
     SchedulerProcessorContract,
     DeviceProcessorContract,
     NotificationLifecycleContract,
-    AgentProcessorContract,
   ],
   emits: [
-    // The approval-outcome relay: a decided batch with script-execution
-    // provenance on an agent stream gets its verdicts delivered there.
-    "events.iterate.com/agents/context-added",
     // Seeded onto /integrations/email at project birth (the creator's email
     // becomes the sender allowlist's first entry).
     "events.iterate.com/email/sender-allowed",
