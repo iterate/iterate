@@ -209,7 +209,14 @@ EXT_RAM_BSS_ATTR static uint8_t
 EXT_RAM_BSS_ATTR static uint8_t
     outbox_storage_psram[CONTROL_OUTBOX_SLOTS][CONTROL_OUTBOX_SLOT_CAPACITY];
 
-#define STREAM_PATH "/voicelab/dev-waveshare"
+/*
+ * A fresh path. The previous one accumulated durable events (dev-stats every
+ * 5s, plus every call lifecycle event) until its Durable Object took ~1s per
+ * append — measured against a fresh stream's 72ms. Every handshake step is
+ * one append, so the device took 20s to come up and calls felt glacial.
+ * dev-stats is ephemeral now, so this path stays fast.
+ */
+#define STREAM_PATH "/voicelab/device"
 #define CALL_ID "wsdev"
 #define GREETING "Hi, I am your Iterate device. What can I do for you?"
 
@@ -698,7 +705,7 @@ static void append_stats(uint64_t now) {
   length = snprintf(
       runtime.stats_buffer,
       sizeof(runtime.stats_buffer),
-      "[{\"type\":\"voicelab/dev-stats\",\"payload\":{"
+      "[{\"type\":\"voicelab/dev-stats\",\"ephemeral\":true,\"payload\":{"
       "\"seq\":%" PRIu32 ",\"t\":%" PRIu64
       ",\"framesSent\":%" PRIu32 ",\"frameFailures\":%" PRIu32
       ",\"micCaptured\":%" PRIu32 ",\"micDropped\":%" PRIu32

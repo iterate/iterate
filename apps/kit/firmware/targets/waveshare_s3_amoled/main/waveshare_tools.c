@@ -50,7 +50,12 @@ enum {
    * One chunk plus its ["bytes","..."] envelope has to fit a single control
    * message: 2400 raw bytes is 3200 base64 characters.
    */
-  SCREENSHOT_CHUNK_BYTES = 2400,
+  /*
+   * 6000 raw bytes = 8000 base64 characters, which still fits one 8 KiB
+   * control message. At 2400 a screenshot cost 35 round trips and dominated
+   * every test that took one; at 6000 it is 14.
+   */
+  SCREENSHOT_CHUNK_BYTES = 6000,
   SCREENSHOT_CHUNKS =
       (WAVESHARE_SNAPSHOT_BYTES + SCREENSHOT_CHUNK_BYTES - 1) /
       SCREENSHOT_CHUNK_BYTES,

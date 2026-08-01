@@ -52,6 +52,10 @@ bool waveshare_buttons_init(void) {
     ESP_LOGE(tag, "boot button config failed");
     return false;
   }
+  /*
+   * One expander handle, created once. Reading it is I2C on a shared bus, so
+   * the read is treated as advisory: see the fail-released path in poll().
+   */
   buttons.expander = bsp_io_expander_init();
   if (buttons.expander == NULL) {
     ESP_LOGW(tag, "no expander: push-to-talk button unavailable");

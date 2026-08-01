@@ -514,19 +514,17 @@ bool waveshare_display_init(void) {
       ESP_LOGE(tag, "lvgl display registration failed");
       return false;
     }
-    {
-      esp_lcd_touch_handle_t touch = NULL;
-      const bsp_touch_config_t touch_config = {0};
-      if (bsp_touch_new(&touch_config, &touch) == ESP_OK && touch != NULL) {
-        const lvgl_port_touch_cfg_t touch_port = {
-          .disp = lv_display_get_default(),
-          .handle = touch,
-        };
-        (void)lvgl_port_add_touch(&touch_port);
-      } else {
-        ESP_LOGW(tag, "touch controller not found; screen is display-only");
-      }
-    }
+    /*
+     * Touch is deliberately NOT registered.
+     *
+     * Nothing in this UI is touchable — both controls are physical buttons —
+     * and the FT3168 sleeps between touches, NACKing every register read
+     * while it does. esp_lvgl_port polls it with an INFINITE I2C timeout, on
+     * the bus the codec, the PMIC and the talk button share, and it holds the
+     * bus lock while it spins. That is a multi-second stall landing on
+     * whatever else needs I2C, which is how a boot that should take five
+     * seconds took twenty.
+     */
   }
   (void)bsp_display_brightness_set(90);
 
@@ -559,6 +557,11 @@ bool waveshare_display_init(void) {
     ESP_LOGE(tag, "lvgl lock failed");
     return false;
   }
+  lv_display_add_event_cb(
+      lv_display_get_default(),
+      align_invalidated_area,
+      LV_EVENT_INVALIDATE_AREA,
+      NULL);
   build_ui();
   ui.dirty = true;
   refresh_ui();
