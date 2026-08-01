@@ -130,6 +130,16 @@ export class VoiceBridge extends IterateDurableObject {
       return new Response("bridge mode requires ?path=", { status: 400 });
     }
     const callId = url.searchParams.get("callId") ?? crypto.randomUUID().slice(0, 8);
+    /*
+     * Identity for THIS bridge instance. Superseding within one Durable
+     * Object instance is not enough: a redeploy or an eviction leaves the
+     * previous isolate holding a live Grok socket and a live subscription,
+     * and both then answer the same turn — the listener hears two voices and
+     * the device's buffer sees twice the audio it can play. A bridge that
+     * observes a call-accepted for its own callId from a DIFFERENT bridge
+     * stands down, so the newest one always wins wherever it is running.
+     */
+    const bridgeId = crypto.randomUUID().slice(0, 8);
     const effort = url.searchParams.get("effort") === "high" ? "high" : "none";
     const voice = url.searchParams.get("voice") ?? "eve";
     const instructions =
@@ -186,6 +196,11 @@ export class VoiceBridge extends IterateDurableObject {
             await stream.append(...batch);
           } catch {
             appendErrors++;
+            // Losing a batch atomically can swallow response.created or
+            // response.done and leave the device's transcript accumulator
+            // dirty. Retry once, at the head, so ordering survives.
+            if (appendErrors < 50) outbound.unshift(...batch);
+            await new Promise((resolve) => setTimeout(resolve, 50));
           }
         }
       } finally {
@@ -210,7 +225,31 @@ export class VoiceBridge extends IterateDurableObject {
      * So the schedule is absolute, not an interval: frame N is due at
      * start + N*20ms. A late tick catches up instead of compounding, and the
      * device's buffer holds jitter rather than a growing backlog.
+     *
+     * But exactly-realtime with no head start gives the device NO cushion:
+     * its buffer hovers at the prefill mark and any jitter empties it, which
+     * costs a re-prime. Measured that way: 45 underruns in 3099 frames, each
+     * inserting 160 ms of silence — about 7 s of stutter per minute, which is
+     * precisely the "choppy audio" being reported.
+     *
+     * So the first BURST_MS of a response goes out as fast as the wire takes
+     * it, and the realtime schedule starts after it. It is sized against the
+     * device's internal-RAM ring (900 ms) with room for jitter on top —
+     * bursting more than the consumer can hold just drops frames on arrival. That buys a standing
+     * cushion of that size, once per response, which absorbs jitter without
+     * accumulating over the answer the way a rate multiplier does.
      */
+    const BURST_MS = 450;
+    /** Barge-in discards pending audio; everything else keeps its place. */
+    const dropQueuedAudio = () => {
+      for (let index = paceQueue.length - 1; index >= 0; index--) {
+        if (paceQueue[index]?.type === "voicelab/spk-frame") {
+          paceQueue.splice(index, 1);
+        }
+      }
+      paceStartedAt = 0;
+      pacedFrames = 0;
+    };
     const pacing = url.searchParams.get("pace") === "1";
     const paceQueue: Parameters<typeof stream.append>[0][] = [];
     let paceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -220,8 +259,9 @@ export class VoiceBridge extends IterateDurableObject {
       if (paceTimer !== null) return;
       if (paceQueue.length === 0) return;
       if (paceStartedAt === 0) {
-        // First frames of a response go immediately: that is the device's
-        // prefill, and delaying it is pure added latency.
+        // First frames of a RESPONSE go immediately: that is the device's
+        // prefill, and delaying it is pure added latency. Anchored once per
+        // response, not once per drain — see tick().
         paceStartedAt = Date.now();
         pacedFrames = 0;
       }
@@ -229,13 +269,23 @@ export class VoiceBridge extends IterateDurableObject {
         paceTimer = null;
         const slice = paceQueue.splice(0, 5);
         if (slice.length === 0) {
-          paceStartedAt = 0;
+          /*
+           * Queue momentarily dry — Grok generates in chunks, so this happens
+           * repeatedly WITHIN one answer. The schedule must NOT reset here:
+           * doing so handed every chunk a fresh opening burst, so a long
+           * answer was delivered far faster than realtime and overran the
+           * device's buffer (measured: 127 dropped frames in one answer,
+           * heard as choppiness). The anchor belongs to the response, and is
+           * cleared by response.created / response.done.
+           */
           return;
         }
         fireAppend(...slice);
         pacedFrames += slice.length;
-        // Absolute deadline: frame N is due at start + N*20ms.
-        const due = paceStartedAt + pacedFrames * 20;
+        // Absolute deadline, with the opening burst delivered immediately:
+        // frame N is due at start + max(0, N - burstFrames) * 20ms.
+        const burstFrames = BURST_MS / 20;
+        const due = paceStartedAt + Math.max(0, pacedFrames - burstFrames) * 20;
         paceTimer = setTimeout(tick, Math.max(0, due - Date.now()));
       };
       tick();
@@ -311,16 +361,19 @@ export class VoiceBridge extends IterateDurableObject {
       if (grokEvent.type === "session.updated") {
         fireAppend({
           type: "voicelab/call-accepted",
-          payload: { callId, bridge: detached ? "worker-detached" : "worker", model },
+          payload: {
+            bridge: detached ? "worker-detached" : "worker",
+            bridgeId,
+            callId,
+            model,
+          },
         });
-        if (greeting !== null && greeting !== "") {
-          upstream.send(
-            JSON.stringify({
-              type: "response.create",
-              response: { instructions: `Say exactly this and nothing else: ${greeting}` },
-            }),
-          );
-        }
+        /*
+         * No greeting. A device that starts talking the moment a call opens
+         * collides with a user who is already speaking — and with manual
+         * turns there is no VAD to sort that out, so the opening turn was
+         * routinely mangled. It waits to be spoken to.
+         */
         markReady({ ok: true });
         return;
       }
@@ -328,7 +381,12 @@ export class VoiceBridge extends IterateDurableObject {
         appendSpkPcm(new Uint8Array(base64ToBytes(grokEvent.delta)), tGrok);
         return;
       }
-      if (grokEvent.type === "response.created") responseActive = true;
+      if (grokEvent.type === "response.created") {
+        responseActive = true;
+        // New response: a fresh burst allowance and a fresh realtime anchor.
+        paceStartedAt = 0;
+        pacedFrames = 0;
+      }
       if (grokEvent.type === "response.done") responseActive = false;
       if (grokEvent.type === "input_audio_buffer.speech_started") {
         // Barge-in: everything still queued is answer the user talked over.
@@ -400,8 +458,7 @@ export class VoiceBridge extends IterateDurableObject {
             lastActivityAt = Date.now();
             const text = typeof payload.text === "string" ? payload.text.trim() : "";
             if (text.length === 0 || text.length > 4096) break;
-            paceQueue.length = 0;
-            paceStartedAt = 0;
+            dropQueuedAudio();
             if (responseActive) {
               upstream.send(JSON.stringify({ type: "response.cancel" }));
               responseActive = false;
@@ -423,8 +480,7 @@ export class VoiceBridge extends IterateDurableObject {
             lastActivityAt = Date.now();
             if (payload.action === "start") {
               // Everything queued is answer the user just talked over.
-              paceQueue.length = 0;
-              paceStartedAt = 0;
+              dropQueuedAudio();
               if (responseActive) {
                 upstream.send(JSON.stringify({ type: "response.cancel" }));
                 responseActive = false;
@@ -441,6 +497,12 @@ export class VoiceBridge extends IterateDurableObject {
               ephemeral: true,
               payload: { id: payload.id, t0: payload.t0, t1: Date.now() },
             });
+            break;
+          case "voicelab/call-accepted":
+            // Another bridge has taken this call over; stand down quietly.
+            if (payload.callId === callId && payload.bridgeId !== bridgeId) {
+              teardown("superseded by a newer bridge", true);
+            }
             break;
           case "voicelab/call-ended":
             if (payload.callId === callId) teardown("call-ended event");
@@ -467,6 +529,7 @@ export class VoiceBridge extends IterateDurableObject {
             "voicelab/turn",
             "voicelab/say",
             "voicelab/call-ended",
+            "voicelab/call-accepted",
           ],
           processEventBatch: (batch) => handleEvents(batch.events),
           ...(lastSeenOffset >= 0 ? { replayAfterOffset: lastSeenOffset } : {}),
@@ -512,6 +575,7 @@ export class VoiceBridge extends IterateDurableObject {
         fireAppend({
           type: "voicelab/call-ended",
           payload: {
+            bridgeId,
             callId,
             reason: `worker bridge: ${reason} (appendErrors=${appendErrors}, reconnects=${reconnects})`,
           },
