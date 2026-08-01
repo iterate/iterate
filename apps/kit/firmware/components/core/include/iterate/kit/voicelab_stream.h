@@ -28,7 +28,15 @@ enum {
    * holds that eight-event array; with the push envelope it must stay inside
    * one 8 KiB transport message.
    */
-  ITERATE_KIT_VOICELAB_MAX_FRAMES_PER_APPEND = 8,
+  ITERATE_KIT_VOICELAB_MAX_FRAMES_PER_APPEND = 6,
+  /*
+   * Each frame costs at most ~980 characters here: ~125 of JSON envelope
+   * (type, callId, a 10-digit sequence, a 20-digit timestamp) plus 854 of
+   * base64. Eight frames needed ~7.8 KiB against a 7600-byte buffer, so
+   * base64_encode ran out of room and the whole append was abandoned — with
+   * the microphone silently disconnected, because that path returns before
+   * the failure counter. Six frames (120 ms) is 5.9 KiB, with real margin.
+   */
   ITERATE_KIT_VOICELAB_ARGS_CAPACITY = 7600,
   /* Base64 scratch for one inbound speaker frame (854 chars + padding slack). */
   ITERATE_KIT_VOICELAB_B64_CAPACITY = 1200,

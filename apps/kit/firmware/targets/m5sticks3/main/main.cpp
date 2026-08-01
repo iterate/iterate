@@ -1242,6 +1242,7 @@ bool initialiseConnection(Runtime &state) {
       pcmTransportOptions{};
   pcmTransportOptions.configuration = &state.configuration;
   pcmTransportOptions.device_id = "m5sticks3";
+  pcmTransportOptions.audio_mode = ITERATE_KIT_AUDIO_PUSH_TO_TALK;
   pcmTransportOptions.lane = &state.pcmLane;
   pcmTransportOptions.downlink_generation_barrier =
       downlinkGenerationBarrier;

@@ -293,14 +293,30 @@ static bool valid_device_id(const char *value) {
   return cursor[-1] != '-';
 }
 
+static const char *audio_mode_header_value(
+    enum iterate_kit_audio_mode mode) {
+  switch (mode) {
+    case ITERATE_KIT_AUDIO_PUSH_TO_TALK:
+      return "push-to-talk";
+    case ITERATE_KIT_AUDIO_FULL_DUPLEX_AEC:
+      return "full-duplex-aec";
+    case ITERATE_KIT_AUDIO_NONE:
+    default:
+      return NULL;
+  }
+}
+
 static bool build_auth_headers(
     struct iterate_kit_esp_idf_pcm_transport *transport) {
   const struct iterate_kit_configuration *configuration =
       transport->options.configuration;
+  const char *audio_mode = audio_mode_header_value(
+      transport->options.audio_mode);
   int written;
   if (!valid_header_token(configuration->project_id) ||
       !valid_header_token(configuration->project_api_key) ||
-      !valid_device_id(transport->options.device_id)) {
+      !valid_device_id(transport->options.device_id) ||
+      audio_mode == NULL) {
     return false;
   }
   written = snprintf(
@@ -308,10 +324,12 @@ static bool build_auth_headers(
       sizeof(transport->auth_headers),
       "Authorization: Bearer %s\r\n"
       "X-Iterate-Project-ID: %s\r\n"
-      "X-Iterate-Kit-Device-ID: %s\r\n",
+      "X-Iterate-Kit-Device-ID: %s\r\n"
+      "X-Iterate-Kit-Audio-Mode: %s\r\n",
       configuration->project_api_key,
       configuration->project_id,
-      transport->options.device_id);
+      transport->options.device_id,
+      audio_mode);
   return written > 0 &&
       (size_t)written < sizeof(transport->auth_headers);
 }
@@ -738,6 +756,7 @@ enum iterate_kit_status iterate_kit_esp_idf_pcm_transport_prepare(
       options == NULL ||
       options->configuration == NULL ||
       !valid_device_id(options->device_id) ||
+      audio_mode_header_value(options->audio_mode) == NULL ||
       options->lane == NULL ||
       options->downlink_generation_barrier == NULL ||
       !options->lane->initialized) {

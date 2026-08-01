@@ -6,6 +6,7 @@
 #endif
 
 #include "iterate/kit/buffer_metrics.h"
+#include "iterate/kit/audio.h"
 #include "iterate/kit/configuration.h"
 #include "iterate/kit/pcm_lane.h"
 #include "iterate/kit/pcm_uplink_conductor.h"
@@ -45,7 +46,7 @@ enum {
   ITERATE_KIT_ESP_IDF_PCM_AUTH_HEADERS_CAPACITY =
       ITERATE_KIT_PROJECT_API_KEY_CAPACITY +
       ITERATE_KIT_PROJECT_ID_CAPACITY +
-      ITERATE_KIT_ESP_IDF_PCM_DEVICE_ID_CAPACITY + 96,
+      ITERATE_KIT_ESP_IDF_PCM_DEVICE_ID_CAPACITY + 144,
 };
 
 enum iterate_kit_esp_idf_pcm_transport_state {
@@ -72,6 +73,12 @@ struct iterate_kit_esp_idf_pcm_transport_options {
    * header is copied into transport-owned storage.
    */
   const char *device_id;
+  /*
+   * Authenticated socket-generation policy, not a device-name heuristic.
+   * Userspace uses this to choose manual commits versus provider server VAD;
+   * the firmware must keep it identical to its local capture-gate policy.
+   */
+  enum iterate_kit_audio_mode audio_mode;
   struct iterate_kit_pcm_lane *lane;
   /*
    * A socket generation is not safe merely because the application ring was

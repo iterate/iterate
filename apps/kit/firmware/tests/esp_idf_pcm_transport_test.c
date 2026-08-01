@@ -81,8 +81,16 @@ static enum iterate_kit_status generation_barrier(
 }
 
 static void fixture_init_for_device(
-    struct fixture *fixture, const char *device_id) {
+    struct fixture *fixture,
+    const char *device_id,
+    enum iterate_kit_audio_mode audio_mode) {
   struct iterate_kit_esp_idf_pcm_transport_options options;
+  const char *audio_mode_header =
+      audio_mode == ITERATE_KIT_AUDIO_PUSH_TO_TALK
+          ? "push-to-talk"
+          : "full-duplex-aec";
+  char expected_headers[
+      ITERATE_KIT_ESP_IDF_PCM_AUTH_HEADERS_CAPACITY];
   memset(fixture, 0, sizeof(*fixture));
   iterate_kit_fake_pcm_websocket_reset();
   fixture->configuration = (struct iterate_kit_configuration){
@@ -112,6 +120,7 @@ static void fixture_init_for_device(
   options = (struct iterate_kit_esp_idf_pcm_transport_options){
     .configuration = &fixture->configuration,
     .device_id = device_id,
+    .audio_mode = audio_mode,
     .lane = &fixture->lane,
     .downlink_generation_barrier = generation_barrier,
     .downlink_generation_barrier_context = fixture,
@@ -126,15 +135,25 @@ static void fixture_init_for_device(
   CHECK(strcmp(
       fixture->transport.websocket_url,
       "wss://voice.example.invalid/pcm") == 0);
-  CHECK(strcmp(
-      fixture->transport.auth_headers,
+  CHECK(snprintf(
+      expected_headers,
+      sizeof(expected_headers),
       "Authorization: Bearer itxk_host_test\r\n"
       "X-Iterate-Project-ID: prj_host_test\r\n"
-      "X-Iterate-Kit-Device-ID: stackchan\r\n") == 0);
+      "X-Iterate-Kit-Device-ID: %s\r\n"
+      "X-Iterate-Kit-Audio-Mode: %s\r\n",
+      device_id,
+      audio_mode_header) > 0);
+  CHECK(strcmp(
+      fixture->transport.auth_headers,
+      expected_headers) == 0);
 }
 
 static void fixture_init(struct fixture *fixture) {
-  fixture_init_for_device(fixture, "stackchan");
+  fixture_init_for_device(
+      fixture,
+      "stackchan",
+      ITERATE_KIT_AUDIO_FULL_DUPLEX_AEC);
 }
 
 /*
@@ -189,6 +208,7 @@ static void device_identity_is_required_and_namespace_safe(void) {
     options = (struct iterate_kit_esp_idf_pcm_transport_options){
       .configuration = &fixture.configuration,
       .device_id = invalid_ids[index],
+      .audio_mode = ITERATE_KIT_AUDIO_FULL_DUPLEX_AEC,
       .lane = &fixture.lane,
       .downlink_generation_barrier = generation_barrier,
       .downlink_generation_barrier_context = &fixture,
@@ -197,6 +217,47 @@ static void device_identity_is_required_and_namespace_safe(void) {
         &fixture.transport, &options) ==
         ITERATE_KIT_INVALID_ARGUMENT);
   }
+
+  {
+    const struct iterate_kit_esp_idf_pcm_transport_options options = {
+      .configuration = &fixture.configuration,
+      .device_id = "stackchan",
+      .audio_mode = ITERATE_KIT_AUDIO_NONE,
+      .lane = &fixture.lane,
+      .downlink_generation_barrier = generation_barrier,
+      .downlink_generation_barrier_context = &fixture,
+    };
+    CHECK(iterate_kit_esp_idf_pcm_transport_prepare(
+        &fixture.transport, &options) ==
+        ITERATE_KIT_INVALID_ARGUMENT);
+  }
+}
+
+/*
+ * Userspace must select manual commits for the Stick and provider-owned VAD
+ * for StackChan without branching on a device slug. Authenticating the mode
+ * in the same upgrade as the project/device identity makes that policy
+ * production-shaped and immutable for the socket generation. Prove both wire
+ * spellings here: accepting an unknown enum or omitting this header would
+ * otherwise make the firmware and worker disagree silently about END frames.
+ */
+static void audio_turn_policy_is_part_of_the_authenticated_upgrade(void) {
+  struct fixture fixture;
+  fixture_init_for_device(
+      &fixture,
+      "m5sticks3",
+      ITERATE_KIT_AUDIO_PUSH_TO_TALK);
+  CHECK(strstr(
+      fixture.transport.auth_headers,
+      "X-Iterate-Kit-Audio-Mode: push-to-talk\r\n") != NULL);
+
+  fixture_init_for_device(
+      &fixture,
+      "stackchan",
+      ITERATE_KIT_AUDIO_FULL_DUPLEX_AEC);
+  CHECK(strstr(
+      fixture.transport.auth_headers,
+      "X-Iterate-Kit-Audio-Mode: full-duplex-aec\r\n") != NULL);
 }
 
 static bool wait_for_generation(
@@ -586,6 +647,7 @@ static void conversation_stop_is_requested_without_blocking_the_owner(void) {
 
 int main(void) {
   device_identity_is_required_and_namespace_safe();
+  audio_turn_policy_is_part_of_the_authenticated_upgrade();
   production_tls_handshake_has_a_safe_stack_envelope();
   conversation_stop_is_requested_without_blocking_the_owner();
   fresh_downlink_waits_for_generation_acceptance();

@@ -46,7 +46,8 @@ static void reset_playback(void *context) {
 
 static void initialize(
     struct iterate_kit_audio_intent_reconciler *reconciler,
-    struct fake_owner *owner) {
+    struct fake_owner *owner,
+    enum iterate_kit_audio_mode mode) {
   const struct iterate_kit_audio_intent_ops ops = {
     owner,
     request_uplink,
@@ -54,7 +55,7 @@ static void initialize(
   };
   memset(owner, 0, sizeof(*owner));
   assert(
-      iterate_kit_audio_intent_reconciler_init(reconciler, &ops) ==
+      iterate_kit_audio_intent_reconciler_init(reconciler, mode, &ops) ==
       ITERATE_KIT_OK);
 }
 
@@ -78,7 +79,8 @@ static void handle(
 static void a_short_turn_coalesces_to_the_safe_final_state(void) {
   struct iterate_kit_audio_intent_reconciler reconciler;
   struct fake_owner owner;
-  initialize(&reconciler, &owner);
+  initialize(
+      &reconciler, &owner, ITERATE_KIT_AUDIO_PUSH_TO_TALK);
 
   handle(&reconciler, ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STARTED);
   handle(&reconciler, ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STOPPED);
@@ -98,7 +100,8 @@ static void a_backpressured_stop_is_retried_until_accepted(void) {
   struct iterate_kit_audio_intent_reconciler reconciler;
   struct iterate_kit_audio_intent_metrics metrics;
   struct fake_owner owner;
-  initialize(&reconciler, &owner);
+  initialize(
+      &reconciler, &owner, ITERATE_KIT_AUDIO_PUSH_TO_TALK);
   owner.results[0] = ITERATE_KIT_OK;
   owner.results[1] = ITERATE_KIT_BACKPRESSURE;
   owner.results[2] = ITERATE_KIT_OK;
@@ -137,7 +140,8 @@ static void terminal_owner_failure_is_not_an_unbounded_retry_loop(void) {
     (uint8_t)ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STARTED,
     (uint8_t)ITERATE_KIT_DEVICE_EVENT_SOURCE_REMOTE,
   };
-  initialize(&reconciler, &owner);
+  initialize(
+      &reconciler, &owner, ITERATE_KIT_AUDIO_PUSH_TO_TALK);
   owner.results[0] = ITERATE_KIT_IO_ERROR;
   owner.result_count = 1U;
 
@@ -154,9 +158,56 @@ static void terminal_owner_failure_is_not_an_unbounded_retry_loop(void) {
       ITERATE_KIT_IO_ERROR);
 }
 
+/*
+ * StackChan and HAVPE keep local AEC running and give Grok's server VAD one
+ * continuous microphone sequence for the lifetime of a conversation. If the
+ * reconciler remained implicitly PTT-shaped, conversation start would leave
+ * the publication gate closed forever; if it accepted a stray PTT event, it
+ * could also inject a false provider boundary. The audio mode must therefore
+ * select the policy once, while both modes continue to share one bounded
+ * lower-owner command path and one destructive hang-up reset.
+ */
+static void full_duplex_conversation_controls_one_continuous_publication(void) {
+  struct iterate_kit_audio_intent_reconciler reconciler;
+  struct iterate_kit_audio_intent_metrics metrics;
+  struct fake_owner owner;
+  const struct iterate_kit_device_event stray_ptt = {
+    (uint8_t)ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STARTED,
+    (uint8_t)ITERATE_KIT_DEVICE_EVENT_SOURCE_REMOTE,
+  };
+  initialize(
+      &reconciler, &owner, ITERATE_KIT_AUDIO_FULL_DUPLEX_AEC);
+
+  handle(&reconciler, ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED);
+  assert(owner.reset_count == 0U);
+  assert(iterate_kit_audio_intent_reconciler_poll(&reconciler) == ITERATE_KIT_OK);
+  assert(owner.request_count == 1U);
+  assert(owner.requested[0]);
+
+  assert(
+      iterate_kit_audio_intent_reconciler_handle(
+          &reconciler, &stray_ptt) == ITERATE_KIT_INVALID_ARGUMENT);
+  assert(owner.reset_count == 0U);
+  assert(iterate_kit_audio_intent_reconciler_poll(&reconciler) == ITERATE_KIT_OK);
+  assert(owner.request_count == 1U);
+
+  handle(&reconciler, ITERATE_KIT_DEVICE_EVENT_CONVERSATION_ENDED);
+  assert(owner.reset_count == 1U);
+  assert(iterate_kit_audio_intent_reconciler_poll(&reconciler) == ITERATE_KIT_OK);
+  assert(owner.request_count == 2U);
+  assert(!owner.requested[1]);
+
+  iterate_kit_audio_intent_reconciler_metrics(&reconciler, &metrics);
+  assert(metrics.intent_edges == 2U);
+  assert(metrics.commands_accepted == 2U);
+  assert(metrics.playback_resets == 1U);
+  assert(!metrics.desired_uplink_active);
+}
+
 int main(void) {
   a_short_turn_coalesces_to_the_safe_final_state();
   a_backpressured_stop_is_retried_until_accepted();
   terminal_owner_failure_is_not_an_unbounded_retry_loop();
+  full_duplex_conversation_controls_one_continuous_publication();
   return 0;
 }

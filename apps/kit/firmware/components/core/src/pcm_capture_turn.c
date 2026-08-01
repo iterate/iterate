@@ -50,7 +50,11 @@ enum iterate_kit_status iterate_kit_pcm_capture_turn_init(
     const struct iterate_kit_pcm_capture_turn_options *options) {
   enum iterate_kit_status status;
   if (turn == NULL || options == NULL ||
-      options->lane == NULL || !options->lane->initialized) {
+      options->lane == NULL || !options->lane->initialized ||
+      (options->stop_boundary !=
+           ITERATE_KIT_PCM_CAPTURE_STOP_EMIT_END_MARKER &&
+       options->stop_boundary !=
+           ITERATE_KIT_PCM_CAPTURE_STOP_SUPPRESS_END_MARKER)) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
 
@@ -133,6 +137,20 @@ static enum iterate_kit_status apply_command(
       &turn->consumer_active, active_value);
   atomic_saturating_increment(&turn->transitions_applied);
   if (active) {
+    return ITERATE_KIT_OK;
+  }
+
+  if (turn->options.stop_boundary ==
+      ITERATE_KIT_PCM_CAPTURE_STOP_SUPPRESS_END_MARKER) {
+    /*
+     * Server-side VAD consumes one continuous sequence of microphone frames.
+     * Publishing the manual marker here would ask userspace to commit a turn
+     * that the provider already owns. Closing at the existing sole-producer
+     * boundary retains exact frame ordering and avoids a parallel audio path;
+     * the counter makes the deliberate absence distinguishable from loss.
+     */
+    atomic_saturating_increment(
+        &turn->end_markers_suppressed);
     return ITERATE_KIT_OK;
   }
 
@@ -282,6 +300,7 @@ void iterate_kit_pcm_capture_turn_metrics(
   COPY_ATOMIC_METRIC(frame_backpressure);
   COPY_ATOMIC_METRIC(frame_failures);
   COPY_ATOMIC_METRIC(end_markers_accepted);
+  COPY_ATOMIC_METRIC(end_markers_suppressed);
   COPY_ATOMIC_METRIC(end_marker_backpressure);
   COPY_ATOMIC_METRIC(end_marker_failures);
 #undef COPY_ATOMIC_METRIC

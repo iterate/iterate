@@ -17,7 +17,9 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "esp_lcd_touch.h"
 #include "bsp/esp-bsp.h"
+#include "bsp/touch.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -60,7 +62,6 @@ static lv_obj_t *screen_root;
 static lv_obj_t *state_label;
 static lv_obj_t *status_label;
 static lv_obj_t *transcript_label;
-static lv_obj_t *hint_label;
 static lv_obj_t *top_button_label;
 static lv_obj_t *bottom_button_label;
 /* Snapshot staging: full-resolution RGB565 in PSRAM, reused per capture. */
@@ -256,13 +257,6 @@ static void build_ui(void) {
   lv_obj_set_style_text_font(bottom_button_label, &lv_font_montserrat_14, 0);
   lv_obj_align(bottom_button_label, LV_ALIGN_BOTTOM_RIGHT, 0, -24);
 
-  hint_label = lv_label_create(screen_root);
-  lv_label_set_long_mode(hint_label, LV_LABEL_LONG_WRAP);
-  lv_obj_set_width(hint_label, WAVESHARE_DISPLAY_WIDTH - 32);
-  lv_label_set_text(hint_label, "");
-  lv_obj_set_style_text_color(hint_label, lv_color_hex(0x8a8f98), 0);
-  lv_obj_set_style_text_font(hint_label, &lv_font_montserrat_16, 0);
-  lv_obj_align(hint_label, LV_ALIGN_BOTTOM_LEFT, 0, 0);
 }
 
 static void refresh_ui(void) {
@@ -301,24 +295,51 @@ static void refresh_ui(void) {
   }
   xSemaphoreGive(ui.lock);
 
-  lv_obj_set_style_bg_color(screen_root, lv_color_hex(background), 0);
-  lv_label_set_text(state_label, state_text(state));
-  lv_obj_set_style_text_color(state_label, lv_color_hex(state_colour(state)), 0);
-  lv_label_set_text(status_label, status);
-  lv_label_set_text(transcript_label, transcript);
-  /* The buttons are physical; the screen only says what they do. */
-  lv_label_set_text(
-      hint_label,
-      talk_held ? "release to send"
-      : call_active ? "hold the lower button to talk"
-      : call_requested ? "starting…"
-                       : "press the upper button to call");
-  lv_label_set_text(top_button_label, call_requested ? "end call  >" : "call  >");
-  lv_obj_set_style_text_color(
-      bottom_button_label,
-      lv_color_hex(talk_held ? 0x4ade80 : call_active ? 0xe8eaed : 0x8a8f98),
-      0);
-  lv_label_set_text(bottom_button_label, talk_held ? "talking  >" : "talk  >");
+  /*
+   * Only touch a widget whose value actually changed. A style setter
+   * invalidates its object even when the value is identical, and setting the
+   * screen's background colour invalidates the WHOLE screen — so re-applying
+   * everything each tick meant a full-screen repaint on every update. At 20
+   * lines per flush that is 23 transactions against a queue of 10, and the
+   * excess fails; a failed flush never reports completion, so LVGL waits for
+   * it forever and the panel freezes on the last good frame. That is exactly
+   * the "stuck on connecting" symptom.
+   */
+  {
+    static uint32_t shown_background = 0xffffffffU;
+    static enum waveshare_ui_state shown_state = (enum waveshare_ui_state)-1;
+    static bool shown_talk_held;
+    static bool shown_call_active;
+    static bool shown_call_requested;
+
+    if (background != shown_background) {
+      shown_background = background;
+      lv_obj_set_style_bg_color(screen_root, lv_color_hex(background), 0);
+    }
+    if (state != shown_state) {
+      shown_state = state;
+      lv_label_set_text(state_label, state_text(state));
+      lv_obj_set_style_text_color(
+          state_label, lv_color_hex(state_colour(state)), 0);
+    }
+    /* lv_label_set_text already skips identical text. */
+    lv_label_set_text(status_label, status);
+    lv_label_set_text(transcript_label, transcript);
+    lv_label_set_text(
+        top_button_label, call_requested ? "end call  >" : "call  >");
+    lv_label_set_text(
+        bottom_button_label, talk_held ? "talking  >" : "talk  >");
+    if (talk_held != shown_talk_held || call_active != shown_call_active ||
+        call_requested != shown_call_requested) {
+      shown_talk_held = talk_held;
+      shown_call_active = call_active;
+      shown_call_requested = call_requested;
+      lv_obj_set_style_text_color(
+          bottom_button_label,
+          lv_color_hex(talk_held ? 0x4ade80 : call_active ? 0xe8eaed : 0x8a8f98),
+          0);
+    }
+  }
 }
 
 /*
@@ -403,24 +424,71 @@ bool waveshare_display_init(void) {
 
   release_board_resets();
   /*
-   * Not bsp_display_start(): its defaults put the LVGL draw buffers in PSRAM
-   * and leave the LVGL task unpinned. PSRAM buffers make every flush do a
-   * synchronous bounce-buffer memcpy into internal DMA memory on the LVGL
-   * task, and an unpinned LVGL task migrates onto the audio core mid-flush.
-   * Both show up as audio latency, not as a display fault.
+   * Deliberately NOT bsp_display_start(): that path registers this QSPI panel
+   * through lvgl_port_add_disp_rgb(), which calls
+   * esp_lcd_rgb_panel_register_event_callbacks() on a handle that is actually
+   * a 64-byte sh8601_panel_t — five pointer stores past the end of the
+   * allocation, corrupting the heap the SPI driver allocates from. It also
+   * discards the caller's buffer flags (its private init takes no arguments),
+   * leaving the draw buffer in PSRAM, which makes every flush allocate a
+   * full-size internal bounce buffer and fail with "spi transmit (queue)
+   * color failed" once that heap is tight. A failed flush leaves stale pixels
+   * on the panel, which is what superimposed text is.
+   *
+   * This is the shape every working port of this board uses.
    */
   {
-    bsp_display_cfg_t cfg = {
-      .lvgl_port_cfg = ESP_LVGL_PORT_INIT_CONFIG(),
-      .buffer_size = BSP_LCD_H_RES * LVGL_BUFFER_HEIGHT,
-      .double_buffer = true,
-      .flags = {.buff_dma = true, .buff_spiram = false},
+    esp_lcd_panel_handle_t panel = NULL;
+    esp_lcd_panel_io_handle_t panel_io = NULL;
+    const bsp_display_config_t panel_config = {0};
+    const lvgl_port_cfg_t port_config = {
+      .task_priority = 2,
+      .task_stack = 8192,
+      .task_affinity = 1, /* core 1 with the audio tasks, but below them */
+      .task_max_sleep_ms = 500,
+      .timer_period_ms = 5,
     };
-    cfg.lvgl_port_cfg.task_affinity = 0; /* core 0: core 1 is the audio core */
-    cfg.lvgl_port_cfg.task_priority = 3;
-    if (bsp_display_start_with_config(&cfg) == NULL) {
-      ESP_LOGE(tag, "bsp display start failed");
+    lvgl_port_display_cfg_t display_config;
+
+    if (bsp_display_new(&panel_config, &panel, &panel_io) != ESP_OK) {
+      ESP_LOGE(tag, "panel bring-up failed");
       return false;
+    }
+    if (lvgl_port_init(&port_config) != ESP_OK) {
+      ESP_LOGE(tag, "lvgl port init failed");
+      return false;
+    }
+    memset(&display_config, 0, sizeof(display_config));
+    display_config.io_handle = panel_io;
+    display_config.panel_handle = panel;
+    /* 20 lines: 14720 bytes, comfortably inside the internal DMA heap, and a
+     * whole-screen repaint is 23 flushes against a 10-deep queue only if the
+     * driver has to bounce — which it no longer does. */
+    display_config.buffer_size = BSP_LCD_H_RES * 20;
+    display_config.double_buffer = false;
+    display_config.hres = BSP_LCD_H_RES;
+    display_config.vres = BSP_LCD_V_RES;
+    display_config.color_format = LV_COLOR_FORMAT_RGB565;
+    display_config.flags.buff_dma = true;
+    display_config.flags.buff_spiram = false;
+    display_config.flags.sw_rotate = false;
+    display_config.flags.swap_bytes = true;
+    if (lvgl_port_add_disp(&display_config) == NULL) {
+      ESP_LOGE(tag, "lvgl display registration failed");
+      return false;
+    }
+    {
+      esp_lcd_touch_handle_t touch = NULL;
+      const bsp_touch_config_t touch_config = {0};
+      if (bsp_touch_new(&touch_config, &touch) == ESP_OK && touch != NULL) {
+        const lvgl_port_touch_cfg_t touch_port = {
+          .disp = lv_display_get_default(),
+          .handle = touch,
+        };
+        (void)lvgl_port_add_touch(&touch_port);
+      } else {
+        ESP_LOGW(tag, "touch controller not found; screen is display-only");
+      }
     }
   }
   (void)bsp_display_brightness_set(90);
@@ -452,15 +520,9 @@ bool waveshare_display_init(void) {
     ESP_LOGE(tag, "lvgl lock failed");
     return false;
   }
-  lv_display_add_event_cb(
-      lv_display_get_default(),
-      align_invalidated_area,
-      LV_EVENT_INVALIDATE_AREA,
-      NULL);
   build_ui();
   ui.dirty = true;
   refresh_ui();
-  lv_obj_invalidate(lv_screen_active()); /* paint the whole panel once */
   (void)lv_timer_create(refresh_timer, REFRESH_PERIOD_MS, NULL);
   bsp_display_unlock();
 

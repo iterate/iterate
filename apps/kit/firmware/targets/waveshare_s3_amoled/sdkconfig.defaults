@@ -34,41 +34,44 @@ CONFIG_LV_MEM_SIZE_KILOBYTES=24
 # PSRAM draw buffer of our own (LVGL's pool is far too small for a frame).
 CONFIG_LV_USE_SNAPSHOT=y
 
-# The BSP's default 100-line LVGL buffer (73 KiB) is allocated with
-# MALLOC_CAP_DEFAULT, so it can land in PSRAM — and then every flush needs an
-# equally large internal bounce buffer for SPI DMA, which this build cannot
-# afford next to Wi-Fi ("spi transmit (queue) color failed"). 24 lines makes
-# the bounce cheap either way.
-CONFIG_BSP_DISPLAY_LVGL_BUF_HEIGHT=24
+# The panel IO queue is 10 transactions deep (SH8601_PANEL_IO_QSPI_CONFIG), so
+# a repaint must not need more than 10 flushes: at 448 rows that is at least
+# 45 lines per buffer. 24 lines needed 23 flushes, the excess failed, and a
+# failed flush never reports completion — LVGL then waits for it forever and
+# the panel freezes on the last good frame. 64 lines is 7 flushes for a full
+# screen, with margin.
+CONFIG_BSP_DISPLAY_LVGL_BUF_HEIGHT=64
 
 # The app task is the SOLE consumer of the control inbox and therefore the
-# speaker's producer: it decodes base64 PCM and pushes it to the playback
-# buffer within a 20ms budget. At the default priority 1 on core 0 it sat
-# behind Wi-Fi (23), lwIP (18), the event loop (20), the WebSocket task (5)
-# and LVGL (4) — so the downlink was serviced only when nothing else wanted
-# the CPU, which is precisely when inbound audio peaks. Priority 6 on core 1
-# puts it on the audio core, above LVGL and the recorder, below the two
-# dedicated audio tasks.
-CONFIG_ESP_MAIN_TASK_PRIORITY=6
-CONFIG_ESP_MAIN_TASK_AFFINITY_CPU1=y
+# speaker's producer. It belongs on the NETWORK core, next to Wi-Fi and lwIP,
+# so inbound bytes are decoded where they land; the audio tasks own core 1.
+# Its priority cannot be set here (there is no ESP_MAIN_TASK_PRIORITY symbol
+# — believing otherwise left it at 1 for a long time); app_main raises its
+# own priority instead.
 
 # The I2S EOF ISR must not be deferred by a flash/cache stall; the M5StickS3
 # sets this for the same reason.
-CONFIG_I2S_ISR_IRAM_SAFE=y
 
 # 1ms ticks: pdMS_TO_TICKS(5) rounds to 0 at 100Hz, so the app loop's delay
 # silently became a 10ms tick and halved the inbox drain rate.
-CONFIG_FREERTOS_HZ=1000
 
 # Every console write is duplicated to the USB-Serial-JTAG secondary console,
 # which spins for up to 50ms when a host is attached but not draining.
-CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
 
 # Pin lwIP to core 0 so core 1 is genuinely the audio core; unpinned it
 # round-robins against the playback task at the same priority.
-CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0=y
 
-# Execute in place from PSRAM: without it, a flash write SUSPENDS ALL TASKS
-# and busy-waits the other core for up to 600ms per sector erase, which no
-# amount of DMA or task tuning survives.
-CONFIG_SPIRAM_XIP_FROM_PSRAM=y
+# Match what every reference design for this board runs. The defaults left
+# this SoC at half speed on every axis at once: 160MHz CPU, 40MHz PSRAM, DIO
+# flash, a 16KB instruction cache with 32-byte lines — while also executing
+# code out of that same 40MHz PSRAM bus that the audio buffers ride.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
+CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
+
+# Keep internal DMA memory available for Wi-Fi and the SPI drivers. The LCD
+# path allocates a full-size internal bounce buffer per flush when its draw
+# buffer is in PSRAM, and exhausting this heap is what fails a flush.
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=98304

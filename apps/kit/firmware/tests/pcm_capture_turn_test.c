@@ -35,7 +35,9 @@ static void notify_uplink(void *context) {
   ++fixture->uplink_notifications;
 }
 
-static void fixture_init(struct fixture *fixture) {
+static void fixture_init_with_stop_boundary(
+    struct fixture *fixture,
+    enum iterate_kit_pcm_capture_stop_boundary stop_boundary) {
   memset(fixture, 0, sizeof(*fixture));
   CHECK(iterate_kit_spsc_ring_init(
             &fixture->uplink,
@@ -55,11 +57,17 @@ static void fixture_init(struct fixture *fixture) {
             &fixture->downlink) == ITERATE_KIT_OK);
   const struct iterate_kit_pcm_capture_turn_options options = {
       .lane = &fixture->lane,
+      .stop_boundary = stop_boundary,
       .notify_uplink = notify_uplink,
       .notify_uplink_context = fixture,
   };
   CHECK(iterate_kit_pcm_capture_turn_init(
             &fixture->turn, &options) == ITERATE_KIT_OK);
+}
+
+static void fixture_init(struct fixture *fixture) {
+  fixture_init_with_stop_boundary(
+      fixture, ITERATE_KIT_PCM_CAPTURE_STOP_EMIT_END_MARKER);
 }
 
 static void fill_frame(int16_t *frame, int16_t seed) {
@@ -369,12 +377,72 @@ static void saturated_audio_budget_still_closes_with_end_marker(void) {
   CHECK(fixture.uplink_notifications == LANE_SLOT_COUNT + 1U);
 }
 
+/*
+ * A server-VAD provider owns speech boundaries: every microphone frame is
+ * forwarded as soon as AEC produces it, and stopping the device conversation
+ * merely closes publication. Reusing the manual-PTT stop unmodified would put
+ * a zero-length END marker on the wire; userspace could then commit a phantom
+ * manual turn or reject an otherwise healthy connection. The same bounded
+ * gate therefore needs an explicit continuous policy that closes immediately,
+ * accounts for the suppressed boundary, and adds no second PCM queue.
+ */
+static void continuous_capture_stop_never_emits_a_manual_end_marker(void) {
+  struct fixture fixture;
+  int16_t frame[ITERATE_KIT_PCM_V1_SAMPLES_PER_FRAME];
+  struct iterate_kit_pcm_capture_turn_metrics metrics;
+  const void *borrowed = NULL;
+  size_t borrowed_bytes = 0U;
+  uint64_t captured_at_ms = 0U;
+  fill_frame(frame, 1200);
+  fixture_init_with_stop_boundary(
+      &fixture, ITERATE_KIT_PCM_CAPTURE_STOP_SUPPRESS_END_MARKER);
+
+  CHECK(iterate_kit_pcm_capture_turn_request(
+            &fixture.turn, true) == ITERATE_KIT_OK);
+  CHECK(iterate_kit_pcm_capture_turn_poll(
+            &fixture.turn, 10U) == ITERATE_KIT_OK);
+  CHECK(iterate_kit_pcm_capture_turn_submit(
+            &fixture.turn,
+            frame,
+            ITERATE_KIT_PCM_V1_SAMPLES_PER_FRAME,
+            ITERATE_KIT_PCM_V1_SAMPLE_RATE_HZ,
+            20000U) == ITERATE_KIT_OK);
+  CHECK(iterate_kit_pcm_capture_turn_request(
+            &fixture.turn, false) == ITERATE_KIT_OK);
+  CHECK(iterate_kit_pcm_capture_turn_poll(
+            &fixture.turn, 20U) == ITERATE_KIT_OK);
+
+  CHECK(iterate_kit_pcm_lane_uplink_acquire(
+            &fixture.lane,
+            &borrowed,
+            &borrowed_bytes,
+            &captured_at_ms) == ITERATE_KIT_OK);
+  CHECK(borrowed != NULL);
+  CHECK(borrowed_bytes == ITERATE_KIT_PCM_V1_FRAME_BYTES);
+  CHECK(captured_at_ms == 20U);
+  CHECK(iterate_kit_pcm_lane_uplink_release(
+            &fixture.lane) == ITERATE_KIT_OK);
+  CHECK(iterate_kit_pcm_lane_uplink_acquire(
+            &fixture.lane,
+            &borrowed,
+            &borrowed_bytes,
+            &captured_at_ms) == ITERATE_KIT_UNAVAILABLE);
+
+  iterate_kit_pcm_capture_turn_metrics(&fixture.turn, &metrics);
+  CHECK(!metrics.active);
+  CHECK(metrics.frames_accepted == 1U);
+  CHECK(metrics.end_markers_accepted == 0U);
+  CHECK(metrics.end_markers_suppressed == 1U);
+  CHECK(fixture.uplink_notifications == 1U);
+}
+
 int main(void) {
   inactive_aec_never_builds_a_pcm_backlog();
   start_frame_stop_preserves_wire_order();
   rapid_edges_are_ordered_and_saturation_is_recoverable();
   backpressured_stop_is_retried_and_closes_the_gate();
   saturated_audio_budget_still_closes_with_end_marker();
+  continuous_capture_stop_never_emits_a_manual_end_marker();
   puts("pcm capture turn tests passed");
   return 0;
 }

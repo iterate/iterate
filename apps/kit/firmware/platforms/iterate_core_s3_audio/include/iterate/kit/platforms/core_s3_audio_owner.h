@@ -2,6 +2,7 @@
 #define ITERATE_KIT_PLATFORMS_CORE_S3_AUDIO_OWNER_H
 
 #include "iterate/kit/aec_capture_bridge.h"
+#include "iterate/kit/audio.h"
 #include "iterate/kit/pcm_capture_turn.h"
 #include "iterate/kit/pcm_clock_playback.h"
 #include "iterate/kit/pcm_generation_fence.h"
@@ -24,6 +25,13 @@ extern "C" {
 
 struct iterate_kit_core_s3_audio_owner_options {
   struct iterate_kit_pcm_lane *lane;
+  /*
+   * Selects only the publication boundary around the continuously running AEC
+   * graph. PTT emits an ordered END marker on release; full-duplex AEC closes
+   * without one because server VAD owns speech boundaries. Device identity is
+   * intentionally absent so every CoreS3 profile exercises the same policy.
+   */
+  enum iterate_kit_audio_mode audio_mode;
   uint32_t maximum_downlink_frame_age_ms;
   size_t maximum_lane_items_per_dma_chunk;
   int speaker_volume_percent;

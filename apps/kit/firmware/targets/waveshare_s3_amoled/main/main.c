@@ -121,6 +121,14 @@ enum {
 /* PSRAM-resident: 256 KiB would crowd internal RAM out of TLS headroom. */
 EXT_RAM_BSS_ATTR static uint8_t
     inbox_storage_psram[CONTROL_INBOX_SLOTS][CONTROL_INBOX_SLOT_CAPACITY];
+/*
+ * PSRAM too. 8 x 8 KiB of internal .bss is memory the TLS handshake and the
+ * SPI drivers need — with it in internal RAM, mbedtls_ssl_setup failed with
+ * MBEDTLS_ERR_SSL_ALLOC_FAILED and the device could not connect at all. The
+ * outbox is never a DMA target: lwIP copies on send.
+ */
+EXT_RAM_BSS_ATTR static uint8_t
+    outbox_storage_psram[CONTROL_OUTBOX_SLOTS][CONTROL_OUTBOX_SLOT_CAPACITY];
 
 #define STREAM_PATH "/voicelab/dev-waveshare"
 #define CALL_ID "wsdev"
@@ -140,7 +148,6 @@ static struct {
   char output_buffer[OUTPUT_CAPACITY];
   struct iterate_kit_spsc_ring control_inbox;
   struct iterate_kit_spsc_ring control_outbox;
-  uint8_t outbox_storage[CONTROL_OUTBOX_SLOTS][CONTROL_OUTBOX_SLOT_CAPACITY];
   size_t inbox_lengths[CONTROL_INBOX_SLOTS];
   size_t outbox_lengths[CONTROL_OUTBOX_SLOTS];
   struct iterate_kit_esp_idf_itx_transport transport;
@@ -383,7 +390,7 @@ static bool initialise_rings(void) {
              runtime.inbox_lengths) == ITERATE_KIT_OK &&
       iterate_kit_spsc_ring_init(
              &runtime.control_outbox,
-             runtime.outbox_storage,
+             outbox_storage_psram,
              CONTROL_OUTBOX_SLOT_CAPACITY,
              CONTROL_OUTBOX_SLOTS,
              runtime.outbox_lengths) == ITERATE_KIT_OK;
@@ -499,6 +506,17 @@ static void append_stats(uint64_t now) {
 }
 
 void app_main(void) {
+  /*
+   * The app task is the sole consumer of the control inbox and therefore the
+   * producer of every speaker frame: it parses the delivery batch, base64
+   * decodes the PCM and pushes it to the playback buffer, all inside a 20ms
+   * budget. FreeRTOS starts it at priority 1 — below the WebSocket task, the
+   * recorder and the timer service — and there is no Kconfig symbol to
+   * change that (ESP_MAIN_TASK_PRIORITY does not exist; believing it did
+   * left this at 1 through several rounds of "priority fixes"). So it raises
+   * itself, above everything on this core except Wi-Fi, lwIP and the timers.
+   */
+  vTaskPrioritySet(NULL, 10);
   const struct iterate_kit_esp_configuration_result configuration_result =
       iterate_kit_esp_read_configuration(&runtime.configuration);
   if (configuration_result.status != ITERATE_KIT_ESP_CONFIGURATION_OK) {
@@ -553,13 +571,13 @@ void app_main(void) {
     return;
   }
   (void)xTaskCreatePinnedToCore(
-      capture_task, "vl-capture", 4096, NULL, 18, NULL, 1);
+      capture_task, "vl-capture", 4096, NULL, 8, NULL, 1);
   (void)xTaskCreatePinnedToCore(
-      playback_task, "vl-playback", 4096, NULL, 19, NULL, 1);
+      playback_task, "vl-playback", 4096, NULL, 9, NULL, 1);
   /*
-   * Below the app task (priority 1), which is the sole consumer of the
-   * control inbox and therefore the speaker's producer. At priority 2 the
-   * card's multi-hundred-millisecond erases preempted the downlink.
+   * Below everything. The audio tasks block inside the I2S driver almost all
+   * the time, so 8/9 is as effective as 18/19 was and no longer out-ranks
+   * lwIP — an arrangement that could starve the socket feeding playback.
    */
   (void)xTaskCreatePinnedToCore(
       recorder_task, "vl-recorder", 4096, NULL, 1, NULL, 0);

@@ -888,6 +888,8 @@ static bool valid_options(
     const struct iterate_kit_core_s3_audio_owner_options *options) {
   return options != NULL &&
       options->lane != NULL && options->lane->initialized &&
+      (options->audio_mode == ITERATE_KIT_AUDIO_PUSH_TO_TALK ||
+       options->audio_mode == ITERATE_KIT_AUDIO_FULL_DUPLEX_AEC) &&
       options->maximum_downlink_frame_age_ms > 0U &&
       options->maximum_lane_items_per_dma_chunk > 0U &&
       options->speaker_volume_percent >= 0 &&
@@ -936,6 +938,10 @@ esp_err_t iterate_kit_core_s3_audio_owner_start(
   const struct iterate_kit_pcm_capture_turn_options
       capture_turn_options = {
         .lane = owner.lane,
+        .stop_boundary =
+            options->audio_mode == ITERATE_KIT_AUDIO_FULL_DUPLEX_AEC
+                ? ITERATE_KIT_PCM_CAPTURE_STOP_SUPPRESS_END_MARKER
+                : ITERATE_KIT_PCM_CAPTURE_STOP_EMIT_END_MARKER,
         .notify_uplink = options->notify_uplink,
         .notify_uplink_context = options->notify_uplink_context,
       };

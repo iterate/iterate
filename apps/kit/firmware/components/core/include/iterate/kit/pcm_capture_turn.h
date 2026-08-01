@@ -25,8 +25,23 @@ enum {
 
 typedef void (*iterate_kit_pcm_capture_turn_notify_fn)(void *context);
 
+/**
+ * Wire meaning of a publication stop.
+ *
+ * Manual PTT needs an ordered zero-length marker so userspace can commit the
+ * just-finished turn. A continuous AEC stream connected to server-side VAD
+ * must not invent that boundary: the provider, not the device, decides when
+ * speech ends. Zero is deliberately the manual policy so older designated
+ * initializers fail safe rather than silently removing PTT turn commits.
+ */
+enum iterate_kit_pcm_capture_stop_boundary {
+  ITERATE_KIT_PCM_CAPTURE_STOP_EMIT_END_MARKER = 0,
+  ITERATE_KIT_PCM_CAPTURE_STOP_SUPPRESS_END_MARKER,
+};
+
 struct iterate_kit_pcm_capture_turn_options {
   struct iterate_kit_pcm_lane *lane;
+  enum iterate_kit_pcm_capture_stop_boundary stop_boundary;
 
   /*
    * Optional nonblocking edge notification for the PCM connection owner.
@@ -50,6 +65,7 @@ struct iterate_kit_pcm_capture_turn_metrics {
   uint32_t frame_backpressure;
   uint32_t frame_failures;
   uint32_t end_markers_accepted;
+  uint32_t end_markers_suppressed;
   uint32_t end_marker_backpressure;
   uint32_t end_marker_failures;
   bool requested_active;
@@ -57,13 +73,15 @@ struct iterate_kit_pcm_capture_turn_metrics {
 };
 
 /**
- * Allocation-free manual-PTT publication boundary for continuous capture.
+ * Allocation-free publication boundary for continuous capture.
  *
  * Some full-duplex boards must keep microphone/reference capture and AEC
  * running while PTT is idle. This object gates only publication: the control
  * owner enqueues ordered start/stop commands, while the AEC task consumes them
- * and remains the sole producer of the PCM uplink ring. Consequently a stop
- * marker cannot overtake a frame already accepted by that same producer.
+ * and remains the sole producer of the PCM uplink ring. Consequently a manual
+ * stop marker cannot overtake a frame already accepted by that same producer.
+ * In server-VAD mode the same edge closes publication without a marker; that
+ * policy is explicit and counted rather than inferred from device identity.
  * Idle clean frames are discarded immediately and explicitly; they never
  * become a delayed backlog and are not reported as network errors.
  *
@@ -96,6 +114,7 @@ struct iterate_kit_pcm_capture_turn {
   uint32_t frame_backpressure;
   uint32_t frame_failures;
   uint32_t end_markers_accepted;
+  uint32_t end_markers_suppressed;
   uint32_t end_marker_backpressure;
   uint32_t end_marker_failures;
   uint32_t producer_requested_active;
@@ -108,7 +127,7 @@ enum iterate_kit_status iterate_kit_pcm_capture_turn_init(
     const struct iterate_kit_pcm_capture_turn_options *options);
 
 /**
- * Enqueues one desired PTT edge from the cooperative control owner.
+ * Enqueues one desired publication edge from the cooperative control owner.
  *
  * Repeating the producer's latest requested state is idempotent. Success means
  * only that the fixed command queue accepted the edge; active publication
@@ -122,10 +141,12 @@ enum iterate_kit_status iterate_kit_pcm_capture_turn_request(
 /**
  * Applies every currently queued command on the sole PCM producer task.
  *
- * A transition to inactive publishes the zero-length end-of-turn marker after
- * all complete frames previously accepted by submit(). Returns UNAVAILABLE if
- * no command existed, OK after a successful bounded drain, or the exact marker
- * publication failure after consuming the responsible stop command.
+ * Under EMIT_END_MARKER, a transition to inactive publishes the zero-length
+ * end-of-turn marker after all complete frames previously accepted by
+ * submit(). Under SUPPRESS_END_MARKER it only closes the gate and accounts for
+ * the deliberately absent boundary. Returns UNAVAILABLE if no command existed,
+ * OK after a successful bounded drain, or the exact marker publication failure
+ * after consuming the responsible stop command.
  */
 enum iterate_kit_status iterate_kit_pcm_capture_turn_poll(
     struct iterate_kit_pcm_capture_turn *turn, uint64_t now_ms);

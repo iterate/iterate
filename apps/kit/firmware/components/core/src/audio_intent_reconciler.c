@@ -11,14 +11,18 @@ static void increment(uint32_t *value) {
 
 enum iterate_kit_status iterate_kit_audio_intent_reconciler_init(
     struct iterate_kit_audio_intent_reconciler *reconciler,
+    enum iterate_kit_audio_mode mode,
     const struct iterate_kit_audio_intent_ops *ops) {
   if (reconciler == NULL || ops == NULL ||
+      (mode != ITERATE_KIT_AUDIO_PUSH_TO_TALK &&
+       mode != ITERATE_KIT_AUDIO_FULL_DUPLEX_AEC) ||
       ops->request_uplink_active == NULL ||
       ops->request_playback_reset == NULL) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
   memset(reconciler, 0, sizeof(*reconciler));
   reconciler->ops = *ops;
+  reconciler->mode = mode;
   reconciler->failure = ITERATE_KIT_OK;
   reconciler->initialized = true;
   return ITERATE_KIT_OK;
@@ -39,13 +43,31 @@ enum iterate_kit_status iterate_kit_audio_intent_reconciler_handle(
 
   switch ((enum iterate_kit_device_event_type)event->type) {
     case ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED:
+      if (reconciler->mode ==
+          ITERATE_KIT_AUDIO_FULL_DUPLEX_AEC) {
+        /*
+         * The AEC owner is already processing aligned microphone/reference
+         * audio. This edge opens only clean-frame publication; server VAD
+         * then receives a live sequence without a manual turn boundary.
+         */
+        requests_uplink = true;
+        uplink_active = true;
+      }
       break;
     case ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STARTED:
+      if (reconciler->mode !=
+          ITERATE_KIT_AUDIO_PUSH_TO_TALK) {
+        return ITERATE_KIT_INVALID_ARGUMENT;
+      }
       requests_uplink = true;
       uplink_active = true;
       resets_playback = true;
       break;
     case ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STOPPED:
+      if (reconciler->mode !=
+          ITERATE_KIT_AUDIO_PUSH_TO_TALK) {
+        return ITERATE_KIT_INVALID_ARGUMENT;
+      }
       requests_uplink = true;
       break;
     case ITERATE_KIT_DEVICE_EVENT_CONVERSATION_ENDED:

@@ -955,6 +955,7 @@ enum capnweb_status iterate_kit_voicelab_append_frames(
         captured_at_ms);
     if (written < 0 ||
         (size_t)written >= sizeof(voicelab->args_buffer) - offset) {
+      ++voicelab->frame_send_failures;
       return CAPNWEB_E_LIMIT;
     }
     offset += (size_t)written;
@@ -964,10 +965,14 @@ enum capnweb_status iterate_kit_voicelab_append_frames(
         voicelab->args_buffer + offset,
         sizeof(voicelab->args_buffer) - offset - sizeof("\"}}]"));
     if (encoded_length == 0U) {
+      /* The args buffer could not hold this batch — count it, or the
+       * microphone goes quiet with every counter reading zero. */
+      ++voicelab->frame_send_failures;
       return CAPNWEB_E_LIMIT;
     }
     offset += encoded_length;
     if (offset + 4U >= sizeof(voicelab->args_buffer)) {
+      ++voicelab->frame_send_failures;
       return CAPNWEB_E_LIMIT;
     }
     memcpy(voicelab->args_buffer + offset, "\"}}", 3U);

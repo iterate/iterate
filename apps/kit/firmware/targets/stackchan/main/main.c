@@ -546,7 +546,9 @@ static bool initialise_device(struct stackchan_runtime *state) {
     .request_playback_reset = request_playback_reset,
   };
   if (iterate_kit_audio_intent_reconciler_init(
-          &state->audio_intent, &audio_ops) != ITERATE_KIT_OK) {
+          &state->audio_intent,
+          ITERATE_KIT_AUDIO_FULL_DUPLEX_AEC,
+          &audio_ops) != ITERATE_KIT_OK) {
     return false;
   }
   control_driver = (struct iterate_kit_stackchan_control_driver){
@@ -582,6 +584,7 @@ static bool initialise_connections(struct stackchan_runtime *state) {
   memset(&pcm_options, 0, sizeof(pcm_options));
   pcm_options.configuration = &state->configuration;
   pcm_options.device_id = "stackchan";
+  pcm_options.audio_mode = ITERATE_KIT_AUDIO_FULL_DUPLEX_AEC;
   pcm_options.lane = &state->pcm_lane;
   pcm_options.downlink_generation_barrier =
       iterate_kit_core_s3_audio_owner_downlink_generation_barrier;
@@ -741,6 +744,7 @@ void app_main(void) {
 
   memset(&audio_options, 0, sizeof(audio_options));
   audio_options.lane = &runtime.pcm_lane;
+  audio_options.audio_mode = ITERATE_KIT_AUDIO_FULL_DUPLEX_AEC;
   audio_options.maximum_downlink_frame_age_ms =
       STACKCHAN_MAXIMUM_DOWNLINK_FRAME_AGE_MS;
   audio_options.maximum_lane_items_per_dma_chunk = 4U;
