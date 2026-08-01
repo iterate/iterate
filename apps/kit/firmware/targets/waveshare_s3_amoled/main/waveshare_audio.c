@@ -1,6 +1,21 @@
 /*
  * Waveshare ESP32-S3 Touch AMOLED 1.8 audio bring-up (ES8311, full duplex).
  *
+ * STATUS: playback is PROVEN on hardware (Grok answers play through the
+ * speaker). CAPTURE IS NOT: `esp_codec_dev_read` returns broadband noise
+ * (RMS ~-9 dBFS, crest ~3, clipping, spectrogram flat to 8 kHz) whose level
+ * does NOT respond to `set_in_gain` (30 dB and 6 dB measure the same), so
+ * the samples are not the ADC's signal path. Ruled out already: pin map
+ * (identical to Waveshare's own BSP — MCLK 16 / BCLK 9 / WS 45 / DOUT 8 /
+ * DIN 10 / PA 46), mono Philips slots, MCLK x256, 16 kHz coefficient entry,
+ * AXP2101 rails incl. ALDO1, the pre-construction soft reset, and one-vs-two
+ * codec-dev handles. Next probes, in order: dump ES8311 regs 0x00-0x45 after
+ * open and diff against the driver's expected init; scope BCLK/WS/DIN to see
+ * whether the codec drives DIN at all; try `digital_mic = true` in case this
+ * SKU carries a PDM mic; confirm the board revision (the stock image reports
+ * project `phone_s3_box_3`, which is an ESP-Brookesia demo name, not a
+ * hardware id).
+ *
  * Recipe distilled from the board's xiaozhi-esp32 port (the authoritative
  * open implementation for this hardware) and the Waveshare BSP:
  *  - I2C0 on SDA 15 / SCL 14; ES8311 at 0x18 (7-bit), AXP2101 at 0x34.
@@ -39,7 +54,15 @@ enum {
 };
 
 static i2c_master_bus_handle_t i2c_bus;
-static esp_codec_dev_handle_t codec_dev;
+/*
+ * Separate IN and OUT esp_codec_dev handles over their own ES8311 instances,
+ * mirroring Waveshare's own BSP (bsp_audio_codec_speaker_init /
+ * bsp_audio_codec_microphone_init). A single IN_OUT handle brings the codec
+ * up with a working speaker but a microphone that returns gain-independent
+ * broadband noise on this board.
+ */
+static esp_codec_dev_handle_t speaker_dev;
+static esp_codec_dev_handle_t microphone_dev;
 
 static bool axp2101_write(
     i2c_master_dev_handle_t device, uint8_t reg, uint8_t value) {
@@ -180,18 +203,25 @@ bool waveshare_audio_init(void) {
       .invert_sclk = false,
       .hw_gain = {.pa_voltage = 5.0f, .codec_dac_voltage = 3.3f},
     };
-    const audio_codec_if_t *codec_interface = es8311_codec_new(&codec_config);
-    if (codec_interface == NULL) {
+    const audio_codec_if_t *speaker_codec = es8311_codec_new(&codec_config);
+    const audio_codec_if_t *microphone_codec = es8311_codec_new(&codec_config);
+    if (speaker_codec == NULL || microphone_codec == NULL) {
       ESP_LOGE(tag, "ES8311 probe failed");
       return false;
     }
-    esp_codec_dev_cfg_t dev_config = {
-      .dev_type = ESP_CODEC_DEV_TYPE_IN_OUT,
-      .codec_if = codec_interface,
+    esp_codec_dev_cfg_t speaker_config = {
+      .dev_type = ESP_CODEC_DEV_TYPE_OUT,
+      .codec_if = speaker_codec,
       .data_if = data_interface,
     };
-    codec_dev = esp_codec_dev_new(&dev_config);
-    if (codec_dev == NULL) {
+    esp_codec_dev_cfg_t microphone_config = {
+      .dev_type = ESP_CODEC_DEV_TYPE_IN,
+      .codec_if = microphone_codec,
+      .data_if = data_interface,
+    };
+    speaker_dev = esp_codec_dev_new(&speaker_config);
+    microphone_dev = esp_codec_dev_new(&microphone_config);
+    if (speaker_dev == NULL || microphone_dev == NULL) {
       ESP_LOGE(tag, "esp_codec_dev creation failed");
       return false;
     }
@@ -205,27 +235,31 @@ bool waveshare_audio_init(void) {
       .sample_rate = WAVESHARE_AUDIO_SAMPLE_RATE_HZ,
       .mclk_multiple = 0, /* 0 -> x256, matching the I2S clock */
     };
-    if (esp_codec_dev_open(codec_dev, &sample_info) != ESP_CODEC_DEV_OK) {
+    if (esp_codec_dev_open(speaker_dev, &sample_info) != ESP_CODEC_DEV_OK ||
+        esp_codec_dev_open(microphone_dev, &sample_info) !=
+            ESP_CODEC_DEV_OK) {
       ESP_LOGE(tag, "codec open failed");
       return false;
     }
-    (void)esp_codec_dev_set_in_gain(codec_dev, 30.0f);
-    (void)esp_codec_dev_set_out_vol(codec_dev, 80);
+    /* xiaozhi uses 30 dB with their AFE front end; retune here first if the
+     * mic sounds wrong. */
+    (void)esp_codec_dev_set_in_gain(microphone_dev, 24.0f);
+    (void)esp_codec_dev_set_out_vol(speaker_dev, 80);
   }
   ESP_LOGI(tag, "ES8311 duplex audio ready at 16 kHz");
   return true;
 }
 
 bool waveshare_audio_read(int16_t *destination, size_t samples) {
-  return codec_dev != NULL &&
+  return microphone_dev != NULL &&
       esp_codec_dev_read(
-          codec_dev, destination, samples * sizeof(int16_t)) ==
+          microphone_dev, destination, samples * sizeof(int16_t)) ==
       ESP_CODEC_DEV_OK;
 }
 
 bool waveshare_audio_write(const int16_t *pcm, size_t samples) {
-  return codec_dev != NULL &&
+  return speaker_dev != NULL &&
       esp_codec_dev_write(
-          codec_dev, (void *)(uintptr_t)pcm, samples * sizeof(int16_t)) ==
+          speaker_dev, (void *)(uintptr_t)pcm, samples * sizeof(int16_t)) ==
       ESP_CODEC_DEV_OK;
 }
