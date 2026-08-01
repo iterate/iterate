@@ -183,6 +183,8 @@ export default function RepoScreen() {
                   dom={{ scrollEnabled: false, style: { flex: 1 } }}
                   editable
                   onChange={async (content) => store.updateSelected(content)}
+                  // The workspace has no native fallback to swap away from.
+                  onReady={async () => {}}
                   path={repoState.selectedPath}
                   value={repoState.selectedBuffer?.current || ""}
                 />

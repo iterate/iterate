@@ -19,6 +19,11 @@ type Props = {
   dom?: import("expo/dom").DOMProps;
   editable: boolean;
   onChange: (content: string) => Promise<void>;
+  /** Fired once the EditorView has mounted INSIDE the webview — the positive
+   * signal that the DOM bundle actually loaded (progressive-enhancement
+   * consumers keep their native fallback until it arrives). Marshaled across
+   * the expo/dom bridge like `onChange`, hence async. */
+  onReady: () => Promise<void>;
   path: string;
   value: string;
 };
@@ -58,6 +63,7 @@ export default class CodeEditor extends Component<Props> {
         }),
       ],
     });
+    this.props.onReady().catch((error) => console.error("CodeMirror ready signal failed", error));
   }
 
   componentDidUpdate(previous: Props) {
