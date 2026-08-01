@@ -418,6 +418,85 @@ static void pending_wire_bytes_track_partial_data_and_control(
   CHECK(metrics.maximum_pending_wire_bytes == 17U);
 }
 
+/*
+ * Application freshness may invalidate a PCM frame while the socket remains
+ * healthy. Cancellation is legal only before raw_write accepts the first byte,
+ * and it must not erase a PONG already owed to the peer. This test protects
+ * both halves of that boundary: retaining the data would replay stale speech;
+ * resetting the whole transmitter would silently violate WebSocket control
+ * semantics.
+ */
+static void unwritten_data_can_be_cancelled_without_losing_pong(
+    void) {
+  static const uint8_t pcm[] = {0x11U, 0x22U};
+  static const uint8_t ping[] = {0x77U};
+  uint8_t storage[
+      ITERATE_KIT_WEBSOCKET_CLIENT_FRAME_BYTES(sizeof(pcm))];
+  uint8_t next_random = 1U;
+  struct fake_raw_writer raw = {
+    .maximum_write = sizeof(raw.bytes),
+    .writes_to_defer = 1U,
+  };
+  struct iterate_kit_websocket_tx tx;
+
+  initialize(
+      &tx,
+      storage,
+      sizeof(storage),
+      &raw,
+      &next_random);
+  CHECK(iterate_kit_websocket_tx_send(
+      &tx,
+      ITERATE_KIT_WEBSOCKET_BINARY,
+      pcm,
+      sizeof(pcm)) == ITERATE_KIT_WEBSOCKET_TX_DEFERRED);
+  CHECK(iterate_kit_websocket_tx_queue_control(
+      &tx,
+      ITERATE_KIT_WEBSOCKET_PONG,
+      ping,
+      sizeof(ping)) == ITERATE_KIT_OK);
+  CHECK(iterate_kit_websocket_tx_cancel_unwritten_data(&tx) ==
+      ITERATE_KIT_WEBSOCKET_TX_DATA_CANCELLED);
+  CHECK(iterate_kit_websocket_tx_poll_control(&tx) ==
+      ITERATE_KIT_WEBSOCKET_TX_SENT);
+  CHECK(raw.byte_count ==
+      ITERATE_KIT_WEBSOCKET_CLIENT_FRAME_BYTES(sizeof(ping)));
+}
+
+/*
+ * One accepted byte commits the RFC 6455 header to this connection. Allowing
+ * a freshness purge to reset at that point would make the peer parse the next
+ * frame as the abandoned frame's suffix. The caller must therefore reconnect,
+ * even though doing so is slower than the zero-byte cancellation above.
+ */
+static void partially_written_data_cannot_be_cancelled(void) {
+  static const uint8_t pcm[] = {0x33U, 0x44U};
+  uint8_t storage[
+      ITERATE_KIT_WEBSOCKET_CLIENT_FRAME_BYTES(sizeof(pcm))];
+  uint8_t next_random = 1U;
+  struct fake_raw_writer raw = {
+    .maximum_write = 1U,
+  };
+  struct iterate_kit_websocket_tx tx;
+
+  initialize(
+      &tx,
+      storage,
+      sizeof(storage),
+      &raw,
+      &next_random);
+  CHECK(iterate_kit_websocket_tx_send(
+      &tx,
+      ITERATE_KIT_WEBSOCKET_BINARY,
+      pcm,
+      sizeof(pcm)) == ITERATE_KIT_WEBSOCKET_TX_PROGRESS);
+  CHECK(raw.byte_count == 1U);
+  CHECK(iterate_kit_websocket_tx_cancel_unwritten_data(&tx) ==
+      ITERATE_KIT_WEBSOCKET_TX_DATA_PARTIALLY_WRITTEN);
+  CHECK(tx.active_kind == ITERATE_KIT_WEBSOCKET_TX_ACTIVE_DATA);
+  CHECK(tx.frame.frame_offset == 1U);
+}
+
 int main(void) {
   partial_writes_and_would_block_resume_one_frame();
   pong_waits_until_the_pcm_frame_boundary();
@@ -425,5 +504,7 @@ int main(void) {
   close_replaces_a_pending_pong();
   close_waits_behind_an_active_control_frame();
   pending_wire_bytes_track_partial_data_and_control();
+  unwritten_data_can_be_cancelled_without_losing_pong();
+  partially_written_data_cannot_be_cancelled();
   return 0;
 }

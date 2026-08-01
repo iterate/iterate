@@ -140,6 +140,8 @@ class M5StickS3DirectAudioOwner {
   void notifyDownlinkReady();
 
   RealtimePlaybackPumpResult takePumpResult();
+  /** Lock-free state projection for low-cost product UI reconciliation. */
+  RealtimePlaybackState playbackState() const;
   RealtimePlaybackMetrics playbackMetrics();
   std::uint32_t stackHighWaterBytes() const;
   std::uint32_t
@@ -200,6 +202,7 @@ class M5StickS3DirectAudioOwner {
   iterate_kit_status stopAndDiscard();
   void publishPumpResult(
       RealtimePlaybackPumpResult result);
+  void publishPlaybackState();
   void sampleStackHighWater();
 
   M5StickS3DirectI2sOps i2s_{};
@@ -252,6 +255,8 @@ class M5StickS3DirectAudioOwner {
   std::atomic<std::int32_t> publishedStatus_{
       ITERATE_KIT_UNAVAILABLE};
   std::atomic<std::uint32_t> publishedEdges_{0U};
+  std::atomic<std::uint8_t> publishedPlaybackState_{
+      static_cast<std::uint8_t>(RealtimePlaybackState::stopped)};
   std::atomic<std::uint32_t> stackHighWaterBytes_{0U};
   RealtimePlaybackMetrics metricsSnapshot_{};
   std::uint32_t currentGeneration_ = 0U;

@@ -4,6 +4,7 @@
 #include "iterate/kit/audio.h"
 #include "iterate/kit/capabilities/metrics.h"
 #include "iterate/kit/capabilities/screen.h"
+#include "iterate/kit/capabilities/screen_capture.h"
 #include "iterate/kit/cpu_usage.h"
 #include "iterate/kit/platforms/bounded_capture.hpp"
 #include "iterate/kit/platforms/realtime_playback.hpp"
@@ -14,6 +15,28 @@
 namespace iterate::kit::platforms {
 
 class M5StickS3DirectAudioOwner;
+
+/**
+ * Small product-facing state vocabulary for the Stick's built-in display.
+ *
+ * These are deliberately user states, not a dump of ESP-IDF transport enums.
+ * The target reconciles control, PCM, capture, and speaker state into one of
+ * these values; the board adapter only renders it. That separation prevents a
+ * screen string from becoming a second call state machine while still keeping
+ * button-specific copy out of the portable device core.
+ */
+enum class M5StickS3CallUiState : std::uint8_t {
+  booting = 0U,
+  controlConnecting,
+  ready,
+  callConnecting,
+  callReady,
+  listening,
+  waitingForReply,
+  speaking,
+  endingCall,
+  callFailed,
+};
 
 /**
  * M5StickS3 hardware adapter with an explicitly half-duplex audio policy.
@@ -79,6 +102,7 @@ class M5UnifiedHalfDuplex {
 
   /* Lightweight driver views borrow this object for its entire lifetime. */
   iterate_kit_screen_driver screenDriver();
+  iterate_kit_screen_capture_driver screenCaptureDriver();
   iterate_kit_metrics_driver metricsDriver();
   iterate_kit_audio_hardware audioHardware();
   iterate_kit_audio_capture_driver audioCaptureDriver();
@@ -89,6 +113,7 @@ class M5UnifiedHalfDuplex {
    */
   RealtimePlaybackPumpResult pollPlayback();
   RealtimePlaybackMetrics playbackMetrics();
+  RealtimePlaybackState playbackState() const;
   /** Constant-space wake hint used by the PCM network callback. */
   void notifyPlaybackReady();
   /**
@@ -108,6 +133,12 @@ class M5UnifiedHalfDuplex {
       const char *status,
       std::uint64_t capturedFrames,
       std::uint64_t droppedFrames);
+  /**
+   * Repaints only on a semantic transition (or a background-colour change).
+   * Calling this from every application-owner pass is therefore cheap and
+   * cannot turn the 10 ms control cadence into continuous display/SPI work.
+   */
+  void showCallUi(M5StickS3CallUiState state);
 
  private:
   using Capture = BoundedCapture<captureSampleCount, captureSampleRate>;
@@ -122,6 +153,9 @@ class M5UnifiedHalfDuplex {
       void *context, const char *url, std::size_t urlLength);
   static iterate_kit_status changeColour(
       void *context, iterate_kit_screen_colour colour);
+  static iterate_kit_status captureScreen(
+      void *context, iterate_kit_captured_screen *capture);
+  static void releaseCapturedScreen(void *context);
   static iterate_kit_status sampleMetrics(
       void *context, iterate_kit_metrics_sample *sample);
   static iterate_kit_status startCapture(void *context);
@@ -132,6 +166,7 @@ class M5UnifiedHalfDuplex {
       void *context,
       iterate_kit_audio_capture_submit_fn submit,
       void *submitContext);
+  void renderCallUi(bool force);
 
   /*
    * Capture buffers remain inline because M5Unified retains their pointers.
@@ -147,6 +182,11 @@ class M5UnifiedHalfDuplex {
   bool buttonChangePending_ = false;
   bool buttonBPressPending_ = false;
   bool microphoneActive_ = false;
+  void *capturedScreenPng_ = nullptr;
+  std::uint32_t backgroundColour_ = 0U;
+  M5StickS3CallUiState callUiState_ =
+      M5StickS3CallUiState::booting;
+  bool callUiDrawn_ = false;
 };
 
 }  // namespace iterate::kit::platforms

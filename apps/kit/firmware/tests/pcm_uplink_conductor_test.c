@@ -446,7 +446,9 @@ static void mandatory_pong_waits_for_partial_pcm_then_preempts_later_audio(
  * A connected TCP/TLS handle may remain permanently unwritable. Retaining the
  * oldest speech until the platform's multi-minute TCP timeout would create a
  * stale burst after recovery. The sender's elapsed no-byte-progress deadline,
- * not PONG, must replace the generation and purge the entire application epoch.
+ * not PONG, must purge the entire application epoch. Because the raw writer
+ * accepted no byte, the same connection remains structurally valid and avoids
+ * paying a new DNS/TCP/TLS handshake for an application-freshness decision.
  */
 static void no_send_progress_purges_the_whole_microphone_epoch(void) {
   struct fixture fixture;
@@ -462,8 +464,8 @@ static void no_send_progress_purges_the_whole_microphone_epoch(void) {
       ITERATE_KIT_PCM_UPLINK_CONDUCTOR_DEFERRED);
   CHECK(iterate_kit_pcm_uplink_conductor_poll(
             &fixture.conductor, 60U) ==
-      ITERATE_KIT_PCM_UPLINK_CONDUCTOR_RESTART);
-  CHECK(!fixture.conductor.generation_active);
+      ITERATE_KIT_PCM_UPLINK_CONDUCTOR_PROGRESS);
+  CHECK(fixture.conductor.generation_active);
   iterate_kit_pcm_uplink_conductor_metrics(
       &fixture.conductor, &metrics);
   CHECK(metrics.sender.no_progress_timeout_restarts == 1U);
@@ -471,6 +473,59 @@ static void no_send_progress_purges_the_whole_microphone_epoch(void) {
   CHECK(metrics.sender.last_restart_frames_discarded == 2U);
   CHECK(metrics.sender.last_restart_reason ==
       ITERATE_KIT_PCM_UPLINK_RESTART_NO_PROGRESS_TIMEOUT);
+  CHECK(metrics.in_place_freshness_recoveries == 1U);
+  CHECK(metrics.socket_restarts == 0U);
+}
+
+/*
+ * A release marker may already be queued when a long WAN stall expires the
+ * oldest audio frame. Purging that marker together with stale PCM leaves the
+ * still-connected userspace session waiting for a boundary which can never
+ * arrive; production correctly closes it after its bounded timeout. The clean
+ * zero-byte WebSocket recovery must therefore drop audio only up to the marker
+ * and send that marker next. This does not claim the discarded audio reached
+ * Grok—it merely terminates the incomplete turn explicitly so the same call
+ * remains usable instead of paying a reconnect or wedging indefinitely.
+ */
+static void in_place_freshness_purge_preserves_end_marker(void) {
+  struct fixture fixture;
+  struct iterate_kit_pcm_uplink_conductor_metrics metrics;
+  struct parsed_frame frame;
+  size_t offset = 0U;
+  fixture_init(&fixture);
+  fixture.conductor.maximum_work_steps = 1U;
+  fixture.raw.writes_to_defer = UINT32_MAX;
+  begin_generation(&fixture, 1U);
+  submit_frame(&fixture, 0x59U, 0U);
+  submit_frame(&fixture, 0x5aU, 20U);
+  CHECK(iterate_kit_pcm_lane_submit_uplink_end_marker_at(
+            &fixture.lane, 21U) == ITERATE_KIT_OK);
+
+  CHECK(iterate_kit_pcm_uplink_conductor_poll(
+            &fixture.conductor, 20U) ==
+      ITERATE_KIT_PCM_UPLINK_CONDUCTOR_DEFERRED);
+  CHECK(iterate_kit_pcm_uplink_conductor_poll(
+            &fixture.conductor, 60U) ==
+      ITERATE_KIT_PCM_UPLINK_CONDUCTOR_PROGRESS);
+  CHECK(fixture.conductor.generation_active);
+  CHECK(fixture.raw.byte_count == 0U);
+
+  fixture.raw.writes_to_defer = 0U;
+  CHECK(iterate_kit_pcm_uplink_conductor_poll(
+            &fixture.conductor, 60U) ==
+      ITERATE_KIT_PCM_UPLINK_CONDUCTOR_PROGRESS);
+  CHECK(parse_frame(&fixture.raw, &offset, &frame));
+  CHECK(frame.opcode == ITERATE_KIT_WEBSOCKET_BINARY);
+  CHECK(frame.payload_size == 0U);
+  CHECK(!parse_frame(&fixture.raw, &offset, &frame));
+
+  iterate_kit_pcm_uplink_conductor_metrics(
+      &fixture.conductor, &metrics);
+  CHECK(metrics.sender.frames_discarded == 2U);
+  CHECK(metrics.sender.end_markers_discarded == 0U);
+  CHECK(metrics.sender.end_markers_sent == 1U);
+  CHECK(metrics.in_place_freshness_recoveries == 1U);
+  CHECK(metrics.socket_restarts == 0U);
 }
 
 /*
@@ -506,13 +561,16 @@ static void trickling_socket_cannot_hold_one_frame_forever(void) {
   CHECK(metrics.sender.frames_discarded == 1U);
   CHECK(metrics.sender.last_restart_reason ==
       ITERATE_KIT_PCM_UPLINK_RESTART_FRAME_SEND_TIMEOUT);
+  CHECK(metrics.in_place_freshness_recoveries == 0U);
+  CHECK(metrics.socket_restarts == 1U);
 }
 
 /*
  * A current socket must not transmit a frame which already spent its complete
  * freshness budget in the application ring. Age is checked before the first
  * raw write and expiration purges every queued frame, so recovery begins with
- * live speech rather than catching up on history.
+ * live speech rather than catching up on history. No wire state exists in
+ * this case, therefore reconnecting would add latency without buying safety.
  */
 static void capture_age_expiry_purges_queued_history_before_send(void) {
   struct fixture fixture;
@@ -524,7 +582,8 @@ static void capture_age_expiry_purges_queued_history_before_send(void) {
 
   CHECK(iterate_kit_pcm_uplink_conductor_poll(
             &fixture.conductor, 200U) ==
-      ITERATE_KIT_PCM_UPLINK_CONDUCTOR_RESTART);
+      ITERATE_KIT_PCM_UPLINK_CONDUCTOR_PROGRESS);
+  CHECK(fixture.conductor.generation_active);
   CHECK(fixture.raw.byte_count == 0U);
   iterate_kit_pcm_uplink_conductor_metrics(
       &fixture.conductor, &metrics);
@@ -532,6 +591,8 @@ static void capture_age_expiry_purges_queued_history_before_send(void) {
   CHECK(metrics.sender.frames_discarded == 2U);
   CHECK(metrics.sender.last_restart_reason ==
       ITERATE_KIT_PCM_UPLINK_RESTART_CAPTURE_STALE);
+  CHECK(metrics.in_place_freshness_recoveries == 1U);
+  CHECK(metrics.socket_restarts == 0U);
 }
 
 /*
@@ -633,8 +694,10 @@ static void generation_change_destroys_a_partial_old_frame(void) {
 /*
  * During a long PTT, producer overflow is an explicit epoch-reset request: the
  * SPSC producer cannot mutate the consumer's retained partial frame. The
- * conductor must replace the socket and purge all eight older frames, not keep
- * a catch-up FIFO whose contents become audible after network recovery.
+ * conductor must replace the socket and purge all seven accepted older audio
+ * frames, not keep a catch-up FIFO whose contents become audible after network
+ * recovery. The eighth physical slot is reserved for the ordered PTT end
+ * marker and therefore cannot disguise audio saturation.
  */
 static void producer_epoch_reset_mid_partial_frame_replaces_socket(
     void) {
@@ -651,7 +714,7 @@ static void producer_epoch_reset_mid_partial_frame_replaces_socket(
       ITERATE_KIT_PCM_UPLINK_CONDUCTOR_PROGRESS);
 
   for (frame_index = 1U;
-       frame_index < SLOT_COUNT;
+       frame_index < SLOT_COUNT - 1U;
        ++frame_index) {
     submit_frame(
         &fixture,
@@ -668,9 +731,77 @@ static void producer_epoch_reset_mid_partial_frame_replaces_socket(
   iterate_kit_pcm_uplink_conductor_metrics(
       &fixture.conductor, &metrics);
   CHECK(metrics.sender.producer_backpressure_restarts == 1U);
-  CHECK(metrics.sender.frames_discarded == SLOT_COUNT);
+  CHECK(metrics.sender.frames_discarded == SLOT_COUNT - 1U);
   CHECK(metrics.sender.last_restart_frames_discarded ==
-      SLOT_COUNT);
+      SLOT_COUNT - 1U);
+}
+
+/*
+ * A full microphone ring means the oldest captured speech is no longer a
+ * realtime utterance, but it does not by itself mean the WebSocket is broken.
+ * In the production failure that motivated this regression, the next masked
+ * frame had been materialised locally while the nonblocking TLS writer had
+ * accepted zero bytes. Reconnecting DNS/TCP/TLS at that clean RFC 6455 frame
+ * boundary turned a bounded 640 ms radio stall into several seconds of dead
+ * conversation.
+ *
+ * The safe alternative is deliberately narrow: cancel the entirely local
+ * frame, purge the stale microphone epoch, and retain the socket. The sibling
+ * partial-frame test above remains mandatory because even one accepted header
+ * byte makes cancellation corrupt the WebSocket stream. Once capacity
+ * returns, only newly captured audio may cross the same generation.
+ */
+static void producer_epoch_reset_before_first_wire_byte_keeps_socket(
+    void) {
+  struct fixture fixture;
+  struct iterate_kit_pcm_uplink_conductor_metrics metrics;
+  struct parsed_frame frame;
+  size_t offset = 0U;
+  uint32_t frame_index;
+  fixture_init(&fixture);
+  fixture.raw.writes_to_defer = UINT32_MAX;
+  fixture.conductor.maximum_work_steps = 1U;
+  begin_generation(&fixture, 1U);
+  submit_frame(&fixture, 0xd0U, 0U);
+  CHECK(iterate_kit_pcm_uplink_conductor_poll(
+            &fixture.conductor, 0U) ==
+      ITERATE_KIT_PCM_UPLINK_CONDUCTOR_DEFERRED);
+  CHECK(fixture.tx.active_kind ==
+      ITERATE_KIT_WEBSOCKET_TX_ACTIVE_DATA);
+  CHECK(fixture.tx.frame.frame_offset == 0U);
+
+  for (frame_index = 1U;
+       frame_index < SLOT_COUNT - 1U;
+       ++frame_index) {
+    submit_frame(
+        &fixture,
+        (uint8_t)(0xd0U + frame_index),
+        (uint64_t)frame_index * 20U);
+  }
+  CHECK(try_submit_frame(&fixture, 0xefU, 160U) ==
+      ITERATE_KIT_BACKPRESSURE);
+  CHECK(iterate_kit_pcm_uplink_conductor_poll(
+            &fixture.conductor, 160U) ==
+      ITERATE_KIT_PCM_UPLINK_CONDUCTOR_PROGRESS);
+  CHECK(fixture.conductor.generation_active);
+  CHECK(fixture.tx.active_kind ==
+      ITERATE_KIT_WEBSOCKET_TX_ACTIVE_NONE);
+  CHECK(fixture.raw.byte_count == 0U);
+
+  fixture.raw.writes_to_defer = 0U;
+  submit_frame(&fixture, 0xf1U, 180U);
+  CHECK(iterate_kit_pcm_uplink_conductor_poll(
+            &fixture.conductor, 180U) ==
+      ITERATE_KIT_PCM_UPLINK_CONDUCTOR_PROGRESS);
+  CHECK(parse_frame(&fixture.raw, &offset, &frame));
+  CHECK(frame.opcode == ITERATE_KIT_WEBSOCKET_BINARY);
+  CHECK(frame.payload[0] == 0xf1U);
+  CHECK(!parse_frame(&fixture.raw, &offset, &frame));
+  iterate_kit_pcm_uplink_conductor_metrics(
+      &fixture.conductor, &metrics);
+  CHECK(metrics.sender.producer_backpressure_restarts == 1U);
+  CHECK(metrics.sender.frames_discarded == SLOT_COUNT - 1U);
+  CHECK(metrics.sender.frames_sent == 1U);
 }
 
 static uint32_t next_fault_choice(uint32_t *state) {
@@ -800,12 +931,14 @@ int main(void) {
   true_owner_clock_regression_is_not_normalized();
   mandatory_pong_waits_for_partial_pcm_then_preempts_later_audio();
   no_send_progress_purges_the_whole_microphone_epoch();
+  in_place_freshness_purge_preserves_end_marker();
   trickling_socket_cannot_hold_one_frame_forever();
   capture_age_expiry_purges_queued_history_before_send();
   invalid_raw_writer_result_is_failed_not_restart();
   disconnect_purges_the_whole_microphone_epoch();
   generation_change_destroys_a_partial_old_frame();
   producer_epoch_reset_mid_partial_frame_replaces_socket();
+  producer_epoch_reset_before_first_wire_byte_keeps_socket();
   legal_tunnel_faults_never_latch_local_failure();
   return 0;
 }

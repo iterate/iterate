@@ -4,8 +4,10 @@
  * what the screen looks like:
  *
  *   await itx.kit.waveshare.setBackground("#1e293b")   // or "navy"
- *   await itx.kit.waveshare.startCall()
- *   await itx.kit.waveshare.hangUp()
+ *   await itx.kit.waveshare.conversation.start()
+ *   await itx.kit.waveshare.pushToTalk.start()   // hold
+ *   await itx.kit.waveshare.pushToTalk.stop()    // release: commits the turn
+ *   await itx.kit.waveshare.conversation.hangUp()
  *   const meta = await itx.kit.waveshare.takeScreenshot()
  *   const part = await itx.kit.waveshare.readScreenshotChunk(0)  // Uint8Array
  *
@@ -28,8 +30,11 @@
 #include "waveshare_display.h"
 
 static const char *const set_background_path[] = {"setBackground"};
-static const char *const start_call_path[] = {"startCall"};
-static const char *const hang_up_path[] = {"hangUp"};
+/* Same vocabulary as the M5StickS3's capability, so one agent drives both. */
+static const char *const start_call_path[] = {"conversation", "start"};
+static const char *const hang_up_path[] = {"conversation", "hangUp"};
+static const char *const talk_start_path[] = {"pushToTalk", "start"};
+static const char *const talk_stop_path[] = {"pushToTalk", "stop"};
 static const char *const take_screenshot_path[] = {"takeScreenshot"};
 static const char *const read_screenshot_chunk_path[] = {"readScreenshotChunk"};
 
@@ -151,7 +156,33 @@ static enum capnweb_status hang_up(
     struct capnweb_reply *reply) {
   (void)context;
   (void)call;
+  waveshare_display_hold_talk(false);
   waveshare_display_request_call(false);
+  return capnweb_reply_set_boolean(reply, true);
+}
+
+/*
+ * Push-to-talk over RPC lands on the same held flag the PWR button and the
+ * on-screen button set, so a remote turn is indistinguishable from a local
+ * one — which is what makes the device testable without hands.
+ */
+static enum capnweb_status talk_start(
+    void *context,
+    const struct capnweb_call *call,
+    struct capnweb_reply *reply) {
+  (void)context;
+  (void)call;
+  waveshare_display_hold_talk(true);
+  return capnweb_reply_set_boolean(reply, true);
+}
+
+static enum capnweb_status talk_stop(
+    void *context,
+    const struct capnweb_call *call,
+    struct capnweb_reply *reply) {
+  (void)context;
+  (void)call;
+  waveshare_display_hold_talk(false);
   return capnweb_reply_set_boolean(reply, true);
 }
 
@@ -218,8 +249,10 @@ static enum capnweb_status read_screenshot_chunk(
 struct iterate_kit_module waveshare_tools_module(void) {
   static const struct iterate_kit_method methods[] = {
     {set_background_path, 1U, set_background},
-    {start_call_path, 1U, start_call},
-    {hang_up_path, 1U, hang_up},
+    {start_call_path, 2U, start_call},
+    {hang_up_path, 2U, hang_up},
+    {talk_start_path, 2U, talk_start},
+    {talk_stop_path, 2U, talk_stop},
     {take_screenshot_path, 1U, take_screenshot},
     {read_screenshot_chunk_path, 1U, read_screenshot_chunk},
   };

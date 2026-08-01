@@ -125,7 +125,16 @@ struct iterate_kit_esp_idf_pcm_transport_metrics {
   uint32_t uplink_send_failures;
   uint32_t uplink_consecutive_send_deferrals;
   uint32_t uplink_maximum_consecutive_send_deferrals;
+  /*
+   * A freshness incident may either cancel a wholly-local WebSocket frame or
+   * replace the connection after a partial write/disconnect. Publishing both
+   * outcomes prevents a dashboard from calling every stale-audio purge a TLS
+   * reconnect merely because the lower sender historically used "restart"
+   * for its request name.
+   */
   uint32_t uplink_restart_incidents;
+  uint32_t uplink_in_place_freshness_recoveries;
+  uint32_t uplink_socket_restarts;
   uint32_t uplink_producer_backpressure_restarts;
   uint32_t uplink_transport_disconnect_restarts;
   uint32_t uplink_no_progress_timeout_restarts;

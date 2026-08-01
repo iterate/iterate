@@ -6,6 +6,7 @@
 #include "iterate/kit/capabilities/metrics.h"
 #include "iterate/kit/capabilities/push_to_talk.h"
 #include "iterate/kit/capabilities/screen.h"
+#include "iterate/kit/capabilities/screen_capture.h"
 #include "iterate/kit/device_events.h"
 #include "iterate/kit/device.h"
 #include "iterate/kit/peer.h"
@@ -20,7 +21,7 @@ enum {
    * per poll so a burst of physical/remote edges cannot starve Cap'n Web or
    * audio progress; remaining accepted events stay in the bounded queue.
    */
-  ITERATE_KIT_M5STICKS3_MODULE_COUNT = 6,
+  ITERATE_KIT_M5STICKS3_MODULE_COUNT = 7,
   ITERATE_KIT_M5STICKS3_EVENTS_PER_POLL = 4,
 };
 
@@ -38,6 +39,8 @@ struct iterate_kit_m5sticks3_options {
   struct iterate_kit_screen_driver screen;
   char *screen_url_scratch;
   size_t screen_url_scratch_size;
+  struct iterate_kit_screen_capture_driver screen_capture;
+  size_t maximum_screen_capture_bytes;
   struct iterate_kit_metrics_options metrics;
   struct iterate_kit_audio_options audio;
   struct iterate_kit_device_event *event_storage;
@@ -60,6 +63,7 @@ struct iterate_kit_m5sticks3 {
   struct iterate_kit_peer peer;
   struct iterate_kit_module modules[ITERATE_KIT_M5STICKS3_MODULE_COUNT];
   struct iterate_kit_screen screen;
+  struct iterate_kit_screen_capture screen_capture;
   struct iterate_kit_metrics metrics;
   struct iterate_kit_audio_controller audio;
   struct iterate_kit_device_event_queue events;

@@ -58,6 +58,7 @@ add_library(iterate-kit-capabilities STATIC
   components/capabilities/src/push_to_talk.c
   components/capabilities/src/rpc_internal.c
   components/capabilities/src/screen.c
+  components/capabilities/src/screen_capture.c
   components/capabilities/src/servos.c
 )
 target_include_directories(iterate-kit-capabilities PUBLIC

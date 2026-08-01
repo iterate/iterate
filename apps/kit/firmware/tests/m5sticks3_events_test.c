@@ -124,6 +124,18 @@ static enum iterate_kit_status change_colour(
   return ITERATE_KIT_OK;
 }
 
+static enum iterate_kit_status capture_screen(
+    void *context, struct iterate_kit_captured_screen *capture) {
+  static const uint8_t encoded_pixel = 0x89U;
+  (void)context;
+  if (capture == NULL) {
+    return ITERATE_KIT_INVALID_ARGUMENT;
+  }
+  *capture = (struct iterate_kit_captured_screen){
+    &encoded_pixel, 1U, NULL, NULL};
+  return ITERATE_KIT_OK;
+}
+
 static enum iterate_kit_status sample_metrics(
     void *context, struct iterate_kit_metrics_sample *sample) {
   (void)context;
@@ -201,6 +213,8 @@ static void fixture_init(struct fixture *fixture) {
     .screen = {fixture, render_png, change_colour},
     .screen_url_scratch = fixture->screen_url,
     .screen_url_scratch_size = sizeof(fixture->screen_url),
+    .screen_capture = {fixture, capture_screen},
+    .maximum_screen_capture_bytes = 1U,
     .metrics = {
       &fixture->session,
       {fixture, sample_metrics},

@@ -99,8 +99,8 @@ struct metrics_expression_workspace {
   struct capnweb_expression capture_values[3];
   struct capnweb_object_field capture_fields[3];
   struct capnweb_expression capture_object;
-  struct capnweb_expression uplink_values[19];
-  struct capnweb_object_field uplink_fields[19];
+  struct capnweb_expression uplink_values[21];
+  struct capnweb_object_field uplink_fields[21];
   struct capnweb_expression uplink_object;
   struct capnweb_expression downlink_values[5];
   struct capnweb_object_field downlink_fields[5];
@@ -424,60 +424,72 @@ static bool build_audio_expression(
   set_integer_field(
       &workspace->uplink_values[9],
       &workspace->uplink_fields[9],
+      "inPlaceFreshnessRecoveries",
+      sizeof("inPlaceFreshnessRecoveries") - 1U,
+      sample->audio.uplink.in_place_freshness_recoveries);
+  set_integer_field(
+      &workspace->uplink_values[10],
+      &workspace->uplink_fields[10],
+      "socketRestarts",
+      sizeof("socketRestarts") - 1U,
+      sample->audio.uplink.socket_restarts);
+  set_integer_field(
+      &workspace->uplink_values[11],
+      &workspace->uplink_fields[11],
       "producerBackpressureRestarts",
       sizeof("producerBackpressureRestarts") - 1U,
       sample->audio.uplink.producer_backpressure_restarts);
   set_integer_field(
-      &workspace->uplink_values[10],
-      &workspace->uplink_fields[10],
+      &workspace->uplink_values[12],
+      &workspace->uplink_fields[12],
       "transportDisconnectRestarts",
       sizeof("transportDisconnectRestarts") - 1U,
       sample->audio.uplink.transport_disconnect_restarts);
   set_integer_field(
-      &workspace->uplink_values[11],
-      &workspace->uplink_fields[11],
+      &workspace->uplink_values[13],
+      &workspace->uplink_fields[13],
       "noProgressTimeoutRestarts",
       sizeof("noProgressTimeoutRestarts") - 1U,
       sample->audio.uplink.no_progress_timeout_restarts);
   set_integer_field(
-      &workspace->uplink_values[12],
-      &workspace->uplink_fields[12],
+      &workspace->uplink_values[14],
+      &workspace->uplink_fields[14],
       "frameSendTimeoutRestarts",
       sizeof("frameSendTimeoutRestarts") - 1U,
       sample->audio.uplink.frame_send_timeout_restarts);
   set_integer_field(
-      &workspace->uplink_values[13],
-      &workspace->uplink_fields[13],
+      &workspace->uplink_values[15],
+      &workspace->uplink_fields[15],
       "captureStaleRestarts",
       sizeof("captureStaleRestarts") - 1U,
       sample->audio.uplink.capture_stale_restarts);
   set_integer_field(
-      &workspace->uplink_values[14],
-      &workspace->uplink_fields[14],
+      &workspace->uplink_values[16],
+      &workspace->uplink_fields[16],
       "lastTransportAcceptAgeMs",
       sizeof("lastTransportAcceptAgeMs") - 1U,
       sample->audio.uplink.last_transport_accept_age_ms);
   set_integer_field(
-      &workspace->uplink_values[15],
-      &workspace->uplink_fields[15],
+      &workspace->uplink_values[17],
+      &workspace->uplink_fields[17],
       "maximumTransportAcceptAgeMs",
       sizeof("maximumTransportAcceptAgeMs") - 1U,
       sample->audio.uplink.maximum_transport_accept_age_ms);
   set_integer_field(
-      &workspace->uplink_values[16],
-      &workspace->uplink_fields[16],
+      &workspace->uplink_values[18],
+      &workspace->uplink_fields[18],
       "lastRestartOldestCaptureAgeMs",
       sizeof("lastRestartOldestCaptureAgeMs") - 1U,
       sample->audio.uplink.last_restart_oldest_capture_age_ms);
   set_string_field(
-      &workspace->uplink_values[17],
-      &workspace->uplink_fields[17],
+      &workspace->uplink_values[19],
+      &workspace->uplink_fields[19],
       "lastRestartReason",
       sizeof("lastRestartReason") - 1U,
       sample->audio.uplink.last_restart_reason);
   set_integer_field(
-      &workspace->uplink_values[18],
-      &workspace->uplink_fields[18],
+      &workspace->uplink_values[20],
+      &workspace->uplink_fields[20],
       "lastRestartFramesDiscarded",
       sizeof("lastRestartFramesDiscarded") - 1U,
       sample->audio.uplink.last_restart_frames_discarded);

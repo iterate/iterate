@@ -169,6 +169,47 @@ static void uplink_end_marker_follows_the_final_capture_frame(void) {
 }
 
 /*
+ * The ordered PTT-release marker is correctness data, not optional telemetry.
+ * Under WAN backpressure the microphone can otherwise occupy every ring slot
+ * immediately before capture stops; the release callback then has nowhere to
+ * put its marker and userspace must time out an apparently endless turn. A
+ * separate marker allocation would add another cross-core ordering mechanism,
+ * while overwriting old audio would violate SPSC ownership. Reserve the final
+ * existing slot instead: current audio is rejected observably at the same
+ * bounded-backlog boundary, and the one producer can still append the marker
+ * behind every frame it successfully published.
+ */
+static void uplink_reserves_one_slot_for_turn_end_marker(void) {
+  struct lane_fixture fixture;
+  struct iterate_kit_pcm_lane_metrics metrics;
+  uint8_t frame[ITERATE_KIT_PCM_V1_FRAME_BYTES];
+  size_t index;
+  fixture_init(&fixture);
+
+  for (index = 0U; index < SLOT_COUNT - 1U; ++index) {
+    fill_frame(frame, (uint8_t)(0x80U + index));
+    CHECK(iterate_kit_pcm_lane_submit_uplink_at(
+        &fixture.lane,
+        frame,
+        sizeof(frame),
+        index) == ITERATE_KIT_OK);
+  }
+  CHECK(iterate_kit_pcm_lane_submit_uplink_at(
+      &fixture.lane,
+      frame,
+      sizeof(frame),
+      SLOT_COUNT) == ITERATE_KIT_BACKPRESSURE);
+  CHECK(iterate_kit_pcm_lane_submit_uplink_end_marker_at(
+      &fixture.lane, SLOT_COUNT + 1U) == ITERATE_KIT_OK);
+
+  iterate_kit_pcm_lane_metrics(&fixture.lane, &metrics);
+  CHECK(metrics.uplink_frames_accepted == SLOT_COUNT - 1U);
+  CHECK(metrics.uplink_end_markers_accepted == 1U);
+  CHECK(metrics.uplink.current_slots == SLOT_COUNT);
+  CHECK(metrics.uplink.high_water_slots == SLOT_COUNT);
+}
+
+/*
  * Speaker playback must receive exactly the binary frame sent by the server,
  * independent of the WebSocket callback buffer's lifetime. Passing that
  * callback pointer through is cheaper but becomes use-after-reuse as soon as
@@ -609,9 +650,12 @@ static void invalid_downlink_outcomes_are_exclusive_and_observable(void) {
  * When either audio owner is starved, preserving every new frame would require
  * unbounded memory and would replay old conversation after recovery. The lane
  * instead has a fixed capacity and reports backpressure so the outer recovery
- * policy can reset an epoch. Filling both directions proves there is no hidden
- * overflow allocation or overwrite: depth stops at capacity, old borrowed
- * data remains intact, and saturation is visible in metrics.
+ * policy can reset an epoch. Uplink audio deliberately stops one slot before
+ * physical capacity because an ordered PTT end marker must remain publishable;
+ * downlink audio may use every slot. Filling both directions proves there is
+ * no hidden overflow allocation or overwrite: depth stops at its declared
+ * bound, old borrowed data remains intact, and saturation is visible in
+ * metrics.
  */
 static void full_queues_drop_new_frames_without_growing_latency(void) {
   struct lane_fixture fixture;
@@ -622,11 +666,13 @@ static void full_queues_drop_new_frames_without_growing_latency(void) {
 
   for (index = 0U; index < SLOT_COUNT; ++index) {
     fill_frame(frame, (uint8_t)index);
-    CHECK(iterate_kit_pcm_lane_submit_uplink_at(
-        &fixture.lane,
-        frame,
-        sizeof(frame),
-        index) == ITERATE_KIT_OK);
+    if (index < SLOT_COUNT - 1U) {
+      CHECK(iterate_kit_pcm_lane_submit_uplink_at(
+          &fixture.lane,
+          frame,
+          sizeof(frame),
+          index) == ITERATE_KIT_OK);
+    }
     CHECK(iterate_kit_pcm_lane_receive_downlink(
         &fixture.lane,
         ITERATE_KIT_PCM_MESSAGE_BINARY,
@@ -652,13 +698,13 @@ static void full_queues_drop_new_frames_without_growing_latency(void) {
       sizeof(frame)) == ITERATE_KIT_BACKPRESSURE);
 
   iterate_kit_pcm_lane_metrics(&fixture.lane, &metrics);
-  CHECK(metrics.uplink_frames_accepted == SLOT_COUNT);
+  CHECK(metrics.uplink_frames_accepted == SLOT_COUNT - 1U);
   CHECK(metrics.downlink_frames_accepted == SLOT_COUNT);
   CHECK(metrics.uplink.producer_backpressure == 1U);
   CHECK(metrics.downlink.producer_backpressure == 1U);
-  CHECK(metrics.uplink.current_slots == SLOT_COUNT);
+  CHECK(metrics.uplink.current_slots == SLOT_COUNT - 1U);
   CHECK(metrics.downlink.current_slots == SLOT_COUNT);
-  CHECK(metrics.uplink.high_water_slots == SLOT_COUNT);
+  CHECK(metrics.uplink.high_water_slots == SLOT_COUNT - 1U);
   CHECK(metrics.downlink.high_water_slots == SLOT_COUNT);
 }
 
@@ -700,6 +746,7 @@ static void interruption_discards_every_queued_downlink_frame(void) {
 int main(void) {
   exact_uplink_frame_emerges_once();
   uplink_end_marker_follows_the_final_capture_frame();
+  uplink_reserves_one_slot_for_turn_end_marker();
   exact_binary_downlink_frame_emerges_once();
   zero_length_end_marker_follows_the_final_frame();
   every_two_chunk_split_reassembles_exactly_once();

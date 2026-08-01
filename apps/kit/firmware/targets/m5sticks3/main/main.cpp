@@ -91,6 +91,14 @@ constexpr std::size_t diagnosticsExpressionCapacity =
  */
 constexpr std::size_t screenUrlCapacity = 513U;
 /*
+ * Cap'n Web represents byte arrays as base64 inside one control message. The
+ * 2.8 KiB PNG ceiling leaves 256 bytes for the RPC envelope within the fixed
+ * 4 KiB transport slot. The retained call UI compresses well below this bound;
+ * a future arbitrary-image surface should use a chunked/blob lane rather than
+ * permanently multiplying every internal control ring for rare screenshots.
+ */
+constexpr std::size_t maximumScreenCaptureBytes = 2'800U;
+/*
  * Physical and remote device events share one bounded queue. Eight absorbs a
  * short control burst while the main task services audio; overflow remains a
  * visible device error rather than an unbounded lifecycle backlog.
@@ -188,6 +196,10 @@ static_assert(
         (controlOutboxSlotCount &
          (controlOutboxSlotCount - 1U)) == 0U,
     "SPSC control slot counts must be powers of two");
+static_assert(
+    ((maximumScreenCaptureBytes + 2U) / 3U) * 4U + 256U <=
+        controlSlotCapacity,
+    "a screen capture reply must fit one bounded control message");
 static_assert(
     controlInboxSlotCount >=
         callbackConcurrency * 2U +
@@ -314,9 +326,59 @@ struct Runtime {
   std::uint32_t playbackMetricsSequence = 0U;
   bool pcmTransportStarted = false;
   bool pcmTransportStartAttemptedForConversation = false;
+  /*
+   * "Waiting for AI" is a conversational fact which neither the transport nor
+   * I2S state can infer: the playback owner is deliberately pre-buffer-ready
+   * before a person has spoken. The event observer sets this only after a
+   * successfully processed PTT release and clears it on the next turn/call or
+   * first returned speech. One bit avoids inventing a second event queue.
+   */
+  bool turnAwaitingReply = false;
 };
 
 Runtime runtime;
+
+iterate::kit::platforms::M5StickS3CallUiState
+selectCallUiState(Runtime &state) {
+  using iterate::kit::platforms::M5StickS3CallUiState;
+  using iterate::kit::platforms::RealtimePlaybackState;
+
+  const bool conversationActive =
+      iterate_kit_m5sticks3_is_conversation_active(&state.device);
+  if (!conversationActive) {
+    if (state.pcmTransportStarted &&
+        state.pcmTransport.state ==
+            ITERATE_KIT_ESP_IDF_PCM_STOPPING) {
+      return M5StickS3CallUiState::endingCall;
+    }
+    return state.transport.state == ITERATE_KIT_ESP_IDF_ITX_READY
+        ? M5StickS3CallUiState::ready
+        : M5StickS3CallUiState::controlConnecting;
+  }
+
+  if (state.pcmTransport.state ==
+          ITERATE_KIT_ESP_IDF_PCM_FAILED ||
+      state.platform.playbackState() ==
+          RealtimePlaybackState::failed) {
+    return M5StickS3CallUiState::callFailed;
+  }
+  if (iterate_kit_m5sticks3_is_capturing(&state.device)) {
+    return M5StickS3CallUiState::listening;
+  }
+  if (!state.pcmTransportStarted ||
+      state.pcmTransport.state !=
+          ITERATE_KIT_ESP_IDF_PCM_READY) {
+    return M5StickS3CallUiState::callConnecting;
+  }
+  if (state.platform.playbackState() ==
+      RealtimePlaybackState::playing) {
+    return M5StickS3CallUiState::speaking;
+  }
+  if (state.turnAwaitingReply) {
+    return M5StickS3CallUiState::waitingForReply;
+  }
+  return M5StickS3CallUiState::callReady;
+}
 
 iterate_kit_status downlinkGenerationBarrier(
     void *context,
@@ -560,6 +622,11 @@ iterate_kit_status sampleRuntimeMetrics(
           pcm.uplink_maximum_consecutive_send_deferrals);
   sample->audio.uplink.restart_incidents =
       saturatingMetricValue(pcm.uplink_restart_incidents);
+  sample->audio.uplink.in_place_freshness_recoveries =
+      saturatingMetricValue(
+          pcm.uplink_in_place_freshness_recoveries);
+  sample->audio.uplink.socket_restarts =
+      saturatingMetricValue(pcm.uplink_socket_restarts);
   sample->audio.uplink.producer_backpressure_restarts =
       saturatingMetricValue(
           pcm.uplink_producer_backpressure_restarts);
@@ -968,9 +1035,10 @@ iterate_kit_status sampleRuntimeMetrics(
 }
 
 void observeDeviceEvent(
-    void *,
+    void *context,
     const iterate_kit_device_event *event,
     iterate_kit_status result) {
+  auto &state = *static_cast<Runtime *>(context);
   /*
    * Physical and remotely injected actions pass through the same device event
    * dispatcher before reaching this observer. Logging both source and result
@@ -985,6 +1053,28 @@ void observeDeviceEvent(
       iterate_kit_device_event_source_name(
           static_cast<iterate_kit_device_event_source>(event->source)),
       static_cast<int>(result));
+  if (result != ITERATE_KIT_OK) return;
+
+  /*
+   * Update the display's one-bit turn intent only after the shared dispatcher
+   * accepted the physical/remote action. Updating on a raw GPIO edge would let
+   * an event-queue or hardware failure paint a state the audio controller never
+   * entered. This observer is already the post-dispatch convergence point for
+   * both sources, so it adds no alternate control path.
+   */
+  switch (static_cast<iterate_kit_device_event_type>(event->type)) {
+    case ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STOPPED:
+      state.turnAwaitingReply = true;
+      break;
+    case ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STARTED:
+    case ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED:
+    case ITERATE_KIT_DEVICE_EVENT_CONVERSATION_ENDED:
+      state.turnAwaitingReply = false;
+      break;
+    case ITERATE_KIT_DEVICE_EVENT_TYPE_COUNT:
+      /* Publishers validate this sentinel; retain fail-closed exhaustiveness. */
+      break;
+  }
 }
 
 void deviceSessionEnded(void *context) {
@@ -1046,6 +1136,8 @@ bool initialiseDevice(Runtime &state) {
     state.platform.screenDriver(),
     state.screenUrlScratch,
     sizeof(state.screenUrlScratch),
+    state.platform.screenCaptureDriver(),
+    maximumScreenCaptureBytes,
     {
       &state.connection.session,
       {
@@ -1468,6 +1560,7 @@ extern "C" void app_main(void) {
     }
     runtime.lastPlaybackStatus = playbackPoll.status;
     if (playbackPoll.playbackStarted) {
+      runtime.turnAwaitingReply = false;
       const iterate_kit_status playbackStatus =
           iterate_kit_m5sticks3_note_playback_started(
               &runtime.device);
@@ -1478,6 +1571,14 @@ extern "C" void app_main(void) {
             static_cast<int>(playbackStatus));
       }
     }
+
+    /*
+     * This call is intentionally unconditional while its implementation is
+     * transition-gated. The view therefore follows remote and physical events,
+     * reconnects, and audio-owner edges without scattering display writes
+     * through those paths or continuously stealing time from audio.
+     */
+    runtime.platform.showCallUi(selectCallUiState(runtime));
 
     (void)ulTaskNotifyTake(pdFALSE, mainLoopDelayTicks);
     /*

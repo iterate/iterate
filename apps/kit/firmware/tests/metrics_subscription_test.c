@@ -155,6 +155,8 @@ static enum iterate_kit_status sample_metrics(
         0,
         0,
         0,
+        0,
+        0,
         NULL,
         0,
       },
@@ -191,6 +193,10 @@ static enum iterate_kit_status sample_metrics(
       fixture->maximum_metrics ? maximum_counter : 31U;
   sample->audio.uplink.restart_incidents =
       fixture->maximum_metrics ? maximum_counter : 32U;
+  sample->audio.uplink.in_place_freshness_recoveries =
+      fixture->maximum_metrics ? maximum_counter : 42U;
+  sample->audio.uplink.socket_restarts =
+      fixture->maximum_metrics ? maximum_counter : 43U;
   sample->audio.uplink.producer_backpressure_restarts =
       fixture->maximum_metrics ? maximum_counter : 33U;
   sample->audio.uplink.transport_disconnect_restarts =
@@ -633,6 +639,8 @@ static void audio_metrics_fit_one_control_message(void) {
           "\"consecutiveSendDeferrals\":30,"
           "\"maximumConsecutiveSendDeferrals\":31,\"failures\":16,"
           "\"restartIncidents\":32,"
+          "\"inPlaceFreshnessRecoveries\":42,"
+          "\"socketRestarts\":43,"
           "\"producerBackpressureRestarts\":33,"
           "\"transportDisconnectRestarts\":34,"
           "\"noProgressTimeoutRestarts\":35,"

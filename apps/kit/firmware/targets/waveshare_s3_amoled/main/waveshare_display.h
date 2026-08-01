@@ -54,6 +54,14 @@ void waveshare_display_set_call_active(bool active);
 /** Same intent as pressing the button; drives the startCall/hangUp tools. */
 void waveshare_display_request_call(bool requested);
 
+/**
+ * True while a turn is being spoken. The on-screen talk button and the
+ * pushToTalk tool both set this; the physical PWR button is ORed with it, so
+ * remote and local control take turns through one flag.
+ */
+bool waveshare_display_talk_held(void);
+void waveshare_display_hold_talk(bool held);
+
 enum {
   /* Screenshots ship at half scale: legible, and 1/4 of the bytes. */
   WAVESHARE_SNAPSHOT_WIDTH = WAVESHARE_DISPLAY_WIDTH / 2,

@@ -345,9 +345,10 @@ static void trickle_progress_cannot_turn_old_speech_into_new_speech(
  * Under severe scheduling or memory pressure, a fixed ring must fail closed as
  * a realtime buffer rather than act like a lossless queue. Overwriting slots
  * would corrupt ownership; waiting for space would block the microphone; and
- * draining FIFO would emit stale speech. This scenario fills the actual static
- * storage, proves overflow requests an observable epoch reset, then verifies
- * the next current frame is the only one transmitted.
+ * draining FIFO would emit stale speech. This scenario fills the audio budget
+ * (one less than physical storage because the ordered end marker owns the last
+ * slot), proves overflow requests an observable epoch reset, then verifies the
+ * next current frame is the only one transmitted.
  */
 static void full_static_ring_resets_instead_of_accumulating_delay(
     void) {
@@ -357,19 +358,21 @@ static void full_static_ring_resets_instead_of_accumulating_delay(
   uint32_t sequence;
   rig_init(&rig);
 
-  for (sequence = 1U; sequence <= PCM_SLOT_COUNT; ++sequence) {
+  for (sequence = 1U;
+       sequence < PCM_SLOT_COUNT;
+       ++sequence) {
     rig.now_ms = (uint64_t)(sequence - 1U) * 20U;
     capture_frame(&rig, sequence);
   }
-  rig.now_ms = (uint64_t)PCM_SLOT_COUNT * 20U;
+  rig.now_ms = (uint64_t)(PCM_SLOT_COUNT - 1U) * 20U;
   CHECK(offer_capture_frame(
-      &rig, PCM_SLOT_COUNT + 1U) ==
+      &rig, PCM_SLOT_COUNT) ==
       ITERATE_KIT_BACKPRESSURE);
   CHECK(poll_network(&rig) ==
       ITERATE_KIT_PCM_UPLINK_SENDER_RESTART);
 
   rig.now_ms += 20U;
-  capture_frame(&rig, PCM_SLOT_COUNT + 2U);
+  capture_frame(&rig, PCM_SLOT_COUNT + 1U);
   CHECK(poll_network(&rig) ==
       ITERATE_KIT_PCM_UPLINK_SENDER_SENT);
 
@@ -378,15 +381,15 @@ static void full_static_ring_resets_instead_of_accumulating_delay(
   iterate_kit_pcm_lane_metrics(&rig.lane, &lane_metrics);
   CHECK(rig.link.accepted_count == 1U);
   CHECK(rig.link.accepted_sequences[0] ==
-      PCM_SLOT_COUNT + 2U);
-  CHECK(sender_metrics.frames_discarded == PCM_SLOT_COUNT);
+      PCM_SLOT_COUNT + 1U);
+  CHECK(sender_metrics.frames_discarded == PCM_SLOT_COUNT - 1U);
   CHECK(sender_metrics.producer_backpressure_restarts == 1U);
   CHECK(sender_metrics.capture_stale_restarts == 0U);
   CHECK(sender_metrics.send_failures == 0U);
   CHECK(lane_metrics.uplink.producer_backpressure == 1U);
   CHECK(lane_metrics.uplink_epoch_reset_requests == 1U);
   CHECK(lane_metrics.uplink.current_slots == 0U);
-  CHECK(lane_metrics.uplink.high_water_slots == PCM_SLOT_COUNT);
+  CHECK(lane_metrics.uplink.high_water_slots == PCM_SLOT_COUNT - 1U);
   check_every_accepted_frame_was_fresh(&rig);
 }
 

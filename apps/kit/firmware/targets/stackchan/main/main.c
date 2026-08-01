@@ -270,6 +270,10 @@ static enum iterate_kit_status sample_runtime_metrics(
   sample->audio.uplink.maximum_consecutive_send_deferrals =
       pcm.uplink_maximum_consecutive_send_deferrals;
   sample->audio.uplink.restart_incidents = pcm.uplink_restart_incidents;
+  sample->audio.uplink.in_place_freshness_recoveries =
+      pcm.uplink_in_place_freshness_recoveries;
+  sample->audio.uplink.socket_restarts =
+      pcm.uplink_socket_restarts;
   sample->audio.uplink.producer_backpressure_restarts =
       pcm.uplink_producer_backpressure_restarts;
   sample->audio.uplink.transport_disconnect_restarts =

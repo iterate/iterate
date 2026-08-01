@@ -989,7 +989,8 @@ enum capnweb_status iterate_kit_voicelab_start_call(
   length = snprintf(
       voicelab->args_buffer,
       sizeof(voicelab->args_buffer),
-      "[{\"path\":\"%s\",\"callId\":\"%s\",\"pace\":true%s%s%s}]",
+      "[{\"path\":\"%s\",\"callId\":\"%s\",\"pace\":true,"
+      "\"turns\":\"manual\"%s%s%s}]",
       voicelab->options.stream_path,
       voicelab->options.call_id,
       greeting != NULL ? ",\"greet\":\"" : "",
@@ -1033,6 +1034,36 @@ enum capnweb_status iterate_kit_voicelab_end_call(
     return CAPNWEB_E_LIMIT;
   }
   voicelab->call_active = false;
+  return capnweb_session_call_oneway_path(
+      voicelab->options.session,
+      voicelab->stream_capability,
+      append_path,
+      1U,
+      voicelab->args_buffer,
+      (size_t)length);
+}
+
+enum capnweb_status iterate_kit_voicelab_mark_turn(
+    struct iterate_kit_voicelab *voicelab,
+    enum iterate_kit_voicelab_turn turn) {
+  int length;
+  if (voicelab == NULL) {
+    return CAPNWEB_E_INVALID_ARGUMENT;
+  }
+  if (voicelab->state != ITERATE_KIT_VOICELAB_READY) {
+    return CAPNWEB_E_STATE;
+  }
+  length = snprintf(
+      voicelab->args_buffer,
+      sizeof(voicelab->args_buffer),
+      "[{\"type\":\"voicelab/turn\",\"ephemeral\":true,\"payload\":{"
+      "\"callId\":\"%s\",\"action\":\"%s\",\"t\":%" PRIu64 "}}]",
+      voicelab->options.call_id,
+      turn == ITERATE_KIT_VOICELAB_TURN_START ? "start" : "commit",
+      voicelab->options.now_ms(voicelab->options.clock_context));
+  if (length < 0 || (size_t)length >= sizeof(voicelab->args_buffer)) {
+    return CAPNWEB_E_LIMIT;
+  }
   return capnweb_session_call_oneway_path(
       voicelab->options.session,
       voicelab->stream_capability,

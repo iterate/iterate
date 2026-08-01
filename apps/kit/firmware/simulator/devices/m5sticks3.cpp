@@ -68,6 +68,7 @@ struct Simulation {
   std::uint64_t playbackStopCount = 0U;
   std::uint64_t playbackFlushCount = 0U;
   std::uint64_t interruptionCount = 0U;
+  std::uint64_t screenshotReleaseCount = 0U;
   std::uint64_t captureStartedEventCount = 0U;
   std::uint64_t captureEndedEventCount = 0U;
 
@@ -78,6 +79,39 @@ struct Simulation {
    */
   bool profileClosed = false;
 };
+
+/*
+ * A complete one-pixel RGBA PNG keeps the host proof deterministic and tiny.
+ * The simulator is validating capability dispatch and byte ownership, not
+ * pretending to model the Stick's physical panel or M5GFX encoder.
+ */
+constexpr std::uint8_t screenshotPng[] = {
+  0x89U, 0x50U, 0x4eU, 0x47U, 0x0dU, 0x0aU, 0x1aU, 0x0aU,
+  0x00U, 0x00U, 0x00U, 0x0dU, 0x49U, 0x48U, 0x44U, 0x52U,
+  0x00U, 0x00U, 0x00U, 0x01U, 0x00U, 0x00U, 0x00U, 0x01U,
+  0x08U, 0x06U, 0x00U, 0x00U, 0x00U, 0x1fU, 0x15U, 0xc4U,
+  0x89U, 0x00U, 0x00U, 0x00U, 0x0dU, 0x49U, 0x44U, 0x41U,
+  0x54U, 0x08U, 0xd7U, 0x63U, 0xf8U, 0xcfU, 0xc0U, 0xf0U,
+  0x1fU, 0x00U, 0x05U, 0x00U, 0x01U, 0xffU, 0x89U, 0x99U,
+  0x3dU, 0x1dU, 0x00U, 0x00U, 0x00U, 0x00U, 0x49U, 0x45U,
+  0x4eU, 0x44U, 0xaeU, 0x42U, 0x60U, 0x82U,
+};
+
+void releaseScreenshot(void *context) {
+  ++static_cast<Simulation *>(context)->screenshotReleaseCount;
+}
+
+iterate_kit_status captureScreen(
+    void *context, iterate_kit_captured_screen *capture) {
+  if (capture == nullptr) return ITERATE_KIT_INVALID_ARGUMENT;
+  *capture = {
+    screenshotPng,
+    sizeof(screenshotPng),
+    releaseScreenshot,
+    context,
+  };
+  return ITERATE_KIT_OK;
+}
 
 /*
  * Driver callbacks count requests without introducing fake device state
@@ -294,6 +328,10 @@ capnweb_status dispatch(
   if (pathEquals(call, "__test", "interruptionCount")) {
     return capnweb_reply_set_int64(reply, simulation.interruptionCount);
   }
+  if (pathEquals(call, "__test", "screenshotReleaseCount")) {
+    return capnweb_reply_set_int64(
+        reply, simulation.screenshotReleaseCount);
+  }
   if (pathEquals(call, "__test", "closeProfile")) {
     /*
      * Closing while capture or a send is active exposes cleanup races that a
@@ -377,6 +415,8 @@ capnweb_status initialize(
      iterate::kit::simulator::changeColour},
     simulation.screenUrlScratch,
     sizeof(simulation.screenUrlScratch),
+    {&simulation, captureScreen},
+    2'800U,
     {
       session,
       {&simulation.common, iterate::kit::simulator::sampleMetrics},

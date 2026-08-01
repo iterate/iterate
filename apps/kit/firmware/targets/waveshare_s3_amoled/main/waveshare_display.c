@@ -50,6 +50,7 @@ static struct {
   uint32_t background;
   bool call_requested;
   bool call_active;
+  bool talk_held;
   bool dirty;
 } ui = {
   .background = 0x101820,
@@ -61,6 +62,8 @@ static lv_obj_t *status_label;
 static lv_obj_t *transcript_label;
 static lv_obj_t *call_button;
 static lv_obj_t *call_button_label;
+static lv_obj_t *talk_button;
+static lv_obj_t *talk_button_label;
 /* Snapshot staging: full-resolution RGB565 in PSRAM, reused per capture. */
 static lv_draw_buf_t snapshot_buf;
 static uint8_t *snapshot_pixels;
@@ -124,6 +127,23 @@ static void request_call_locked(void *argument) {
 
 void waveshare_display_request_call(bool requested) {
   publish(request_call_locked, &requested);
+}
+
+static void hold_talk_locked(void *argument) {
+  ui.talk_held = *(bool *)argument;
+}
+
+void waveshare_display_hold_talk(bool held) {
+  publish(hold_talk_locked, &held);
+}
+
+bool waveshare_display_talk_held(void) {
+  bool held;
+  if (ui.lock == NULL) return false;
+  xSemaphoreTake(ui.lock, portMAX_DELAY);
+  held = ui.talk_held;
+  xSemaphoreGive(ui.lock);
+  return held;
 }
 
 struct transcript_update {
@@ -192,6 +212,18 @@ static void call_button_pressed(lv_event_t *event) {
   (void)event;
   xSemaphoreTake(ui.lock, portMAX_DELAY);
   ui.call_requested = !ui.call_requested;
+  if (!ui.call_requested) ui.talk_held = false;
+  ui.dirty = true;
+  xSemaphoreGive(ui.lock);
+}
+
+/* Held, not clicked: the screen mirrors what the PWR button does. */
+static void talk_button_event(lv_event_t *event) {
+  const lv_event_code_t code = lv_event_get_code(event);
+  const bool held = code == LV_EVENT_PRESSED;
+  if (code != LV_EVENT_PRESSED && code != LV_EVENT_RELEASED) return;
+  xSemaphoreTake(ui.lock, portMAX_DELAY);
+  ui.talk_held = held && ui.call_requested;
   ui.dirty = true;
   xSemaphoreGive(ui.lock);
 }
@@ -228,8 +260,18 @@ static void build_ui(void) {
   lv_obj_set_style_text_font(transcript_label, &lv_font_montserrat_16, 0);
   lv_obj_align(transcript_label, LV_ALIGN_TOP_LEFT, 0, 100);
 
+  talk_button = lv_button_create(screen_root);
+  lv_obj_set_size(talk_button, WAVESHARE_DISPLAY_WIDTH - 32, 96);
+  lv_obj_align(talk_button, LV_ALIGN_BOTTOM_MID, 0, -80);
+  lv_obj_add_event_cb(talk_button, talk_button_event, LV_EVENT_PRESSED, NULL);
+  lv_obj_add_event_cb(talk_button, talk_button_event, LV_EVENT_RELEASED, NULL);
+  talk_button_label = lv_label_create(talk_button);
+  lv_label_set_text(talk_button_label, "hold to talk");
+  lv_obj_set_style_text_font(talk_button_label, &lv_font_montserrat_20, 0);
+  lv_obj_center(talk_button_label);
+
   call_button = lv_button_create(screen_root);
-  lv_obj_set_size(call_button, WAVESHARE_DISPLAY_WIDTH - 32, 72);
+  lv_obj_set_size(call_button, WAVESHARE_DISPLAY_WIDTH - 32, 64);
   lv_obj_align(call_button, LV_ALIGN_BOTTOM_MID, 0, 0);
   lv_obj_add_event_cb(call_button, call_button_pressed, LV_EVENT_CLICKED, NULL);
   call_button_label = lv_label_create(call_button);
@@ -244,6 +286,7 @@ static void refresh_ui(void) {
   uint32_t background;
   bool call_requested;
   bool call_active;
+  bool talk_held;
   char status[STATUS_CHARS];
   size_t offset = 0U;
   size_t index;
@@ -258,6 +301,7 @@ static void refresh_ui(void) {
   background = ui.background;
   call_requested = ui.call_requested;
   call_active = ui.call_active;
+  talk_held = ui.talk_held;
   memcpy(status, ui.status, sizeof(status));
   transcript[0] = '\0';
   for (index = 0U; index < ui.line_count; ++index) {
@@ -284,6 +328,14 @@ static void refresh_ui(void) {
       0);
   lv_obj_set_style_border_width(call_button, call_active ? 2 : 0, 0);
   lv_obj_set_style_border_color(call_button, lv_color_hex(0x4ade80), 0);
+  lv_label_set_text(talk_button_label, talk_held ? "listening…" : "hold to talk");
+  lv_obj_set_style_bg_color(
+      talk_button, lv_color_hex(talk_held ? 0x16a34a : 0x334155), 0);
+  if (call_active) {
+    lv_obj_clear_flag(talk_button, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_obj_add_flag(talk_button, LV_OBJ_FLAG_HIDDEN);
+  }
 }
 
 static void refresh_timer(lv_timer_t *timer) {

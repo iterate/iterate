@@ -9,6 +9,7 @@ idf_component_register(
     "src/push_to_talk.c"
     "src/rpc_internal.c"
     "src/screen.c"
+    "src/screen_capture.c"
     "src/servos.c"
   INCLUDE_DIRS "include"
   PRIV_INCLUDE_DIRS "src"

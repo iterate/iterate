@@ -18,10 +18,11 @@
  * worker holds the Grok session detached. No laptop bridge, no second
  * connection.
  *
- * Echo control: this board has no hardware AEC reference, so the mic lane
- * sends silence while the speaker is active (plus a short tail). Voice
- * barge-in during playback is therefore off in this build — a server-side
- * AEC or an ES7210-class board lifts that.
+ * Turn taking is MANUAL, like the M5StickS3: no VAD anywhere. BOOT toggles
+ * the call, PWR is held while speaking. Nothing is sent from the microphone
+ * unless PWR is down, which is also the whole echo story on a board with no
+ * AEC reference — the speaker is never live into an open microphone, and
+ * pressing PWR cancels an answer in flight instead of talking over it.
  *
  * Observability is the stream itself (durable voicelab/dev-stats every 5s);
  * opening the USB console resets the board.
@@ -55,6 +56,7 @@
 #include "iterate/kit/spsc_ring.h"
 #include "iterate/kit/voicelab_stream.h"
 #include "waveshare_audio.h"
+#include "waveshare_buttons.h"
 #include "waveshare_display.h"
 #include "waveshare_tools.h"
 
@@ -96,15 +98,6 @@ enum {
   /* 1 MiB of PSRAM speaker staging ≈ 32 s of audio — Grok bursts whole
    * answers; barge-in flushes this, underrun never should. */
   SPEAKER_BUFFER_BYTES = 1024 * 1024,
-  /*
-   * Mic stays silenced this long after the last speaker byte drains. The
-   * codec's DMA holds ~90 ms beyond the last write and the room adds its
-   * own tail, so a short gate lets the board answer itself: measured at
-   * 400 ms, Grok transcribed its own playback ("Yes, Rome is correct.")
-   * and replied to it. This board has no hardware AEC reference, so the
-   * gate is the only echo control available here.
-   */
-  ECHO_TAIL_MS = 900,
   STATS_INTERVAL_MS = 5000,
   PING_INTERVAL_MS = 5000,
 };
@@ -151,19 +144,29 @@ static struct {
   uint32_t speaker_frames_played;
   uint32_t speaker_overflow_drops;
   uint32_t barge_in_flushes;
+  bool talking;
 } runtime;
 
 /* What `itx.kit.waveshare` looks like to whoever holds the capability. */
 static const char peer_description[] =
     "{\"instructions\":\"An Iterate voice device: a 368x448 AMOLED showing "
-    "the call state and live transcript, a touch button that starts and ends "
-    "calls, a microphone and a speaker.\","
+    "the call state and live transcript, two physical buttons (BOOT toggles "
+    "the call, PWR is held to speak), a microphone and a speaker. Turn "
+    "taking is manual: hold to talk, release to get an answer.\","
     "\"children\":{"
     "\"setBackground\":\"Fill the screen background with a colour — hex "
     "(#1e293b) or a name (navy, teal, iterate).\","
-    "\"startCall\":\"Start a voice call, exactly as pressing the on-screen "
-    "button does.\","
-    "\"hangUp\":\"End the current call.\"}}";
+    "\"takeScreenshot\":\"Capture the screen; returns {width,height,"
+    "format,bytes,chunkSize,chunks} and readScreenshotChunk(i) returns each "
+    "chunk as bytes.\","
+    "\"readScreenshotChunk\":\"Read chunk i of the last takeScreenshot.\","
+    "\"conversation\":{\"start\":\"Start a voice call — the same intent as "
+    "the BOOT button.\","
+    "\"hangUp\":\"End the current call.\"},"
+    "\"pushToTalk\":{\"start\":\"Begin a spoken turn — the same intent as "
+    "holding PWR. Cancels any answer in flight.\","
+    "\"stop\":\"End the turn: commits what was said and asks for the "
+    "answer.\"}}}";
 
 /*
  * A Cap'n Web session's capability ids die with it. Appending through a
@@ -206,6 +209,8 @@ static void on_control(
     void *context, enum iterate_kit_voicelab_control control) {
   (void)context;
   if (control == ITERATE_KIT_VOICELAB_CONTROL_SPEECH_STARTED) {
+    /* With manual turns this only fires if something re-enables VAD, but
+     * flushing playback on it is still the right response. */
     /* Barge-in: tell the playback task to skip everything queued so far.
      * The buffer itself is only reset by its reader; a racing writer would
      * corrupt it. */
@@ -214,7 +219,9 @@ static void on_control(
     ++runtime.barge_in_flushes;
     waveshare_display_set_state(WAVESHARE_UI_LISTENING);
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_RESPONSE_DONE) {
-    waveshare_display_set_state(WAVESHARE_UI_LISTENING);
+    /* The answer is complete: back to waiting for the next turn. */
+    waveshare_display_set_state(WAVESHARE_UI_IDLE);
+    waveshare_display_set_status("hold PWR to talk");
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_CALL_ENDED) {
     /* The bridge hung up (its idle timeout, Grok closing, or our own
      * hangup echoing back) — the button must agree with reality. */
@@ -292,14 +299,6 @@ static void capture_task(void *argument) {
       ++runtime.mic_frames_dropped;
     }
   }
-}
-
-static bool speaker_is_active(uint64_t now) {
-  if (xStreamBufferBytesAvailable(runtime.speaker_buffer) > 0U) {
-    return true;
-  }
-  return runtime.speaker_last_write_ms != 0U &&
-      now - runtime.speaker_last_write_ms < ECHO_TAIL_MS;
 }
 
 /* --- boot wiring ----------------------------------------------------------- */
@@ -449,6 +448,7 @@ void app_main(void) {
     ESP_LOGE(tag, "audio bring-up failed");
     return;
   }
+  (void)waveshare_buttons_init();
   waveshare_display_set_state(WAVESHARE_UI_CONNECTING);
   waveshare_display_set_status("connecting to iterate");
   ESP_LOGI(
@@ -491,6 +491,10 @@ void app_main(void) {
 
   for (;;) {
     (void)iterate_kit_esp_idf_itx_transport_poll(&runtime.transport, 4U);
+    waveshare_buttons_poll();
+    if (waveshare_buttons_take_call_press()) {
+      waveshare_display_request_call(!waveshare_display_call_requested());
+    }
 
     if (runtime.transport.state != runtime.last_transport_state) {
       ESP_LOGI(
@@ -615,12 +619,15 @@ void app_main(void) {
       static bool call_active_shown;
 
       /*
-       * The button IS the call model: pressing it asks this project's own
-       * userspace worker to open the Grok session (one RPC on the socket we
-       * already hold), pressing it again appends the durable call-ended the
-       * worker is subscribed to. Nothing off-device participates.
+       * One intent path for both sources: a physical button edge and an RPC
+       * call land on the same two flags, so remote and local control cannot
+       * disagree about what the device is doing (the M5StickS3 does the same
+       * through its device-event queue).
        */
       const bool wants_call = waveshare_display_call_requested();
+      const bool wants_talk = wants_call &&
+          (waveshare_buttons_talk_held() || waveshare_display_talk_held());
+
       if (wants_call && !runtime.voicelab.call_active &&
           !runtime.voicelab.call_pending && outbox_free >= 5U &&
           now >= next_call_attempt_at) {
@@ -639,13 +646,39 @@ void app_main(void) {
         call_active_shown = runtime.voicelab.call_active;
         waveshare_display_set_call_active(call_active_shown);
         if (call_active_shown) {
-          waveshare_display_set_state(WAVESHARE_UI_LISTENING);
-          waveshare_display_set_status("call live");
+          waveshare_display_set_state(WAVESHARE_UI_IDLE);
+          waveshare_display_set_status("hold PWR to talk");
         }
       }
 
-      /* Mic frames are only worth sending while a call is up. */
-      if (runtime.voicelab.call_active && now >= drain_window_at &&
+      /*
+       * Turn edges. Pressing talk cancels whatever is playing — locally by
+       * dropping the queued speaker audio, and at the bridge by asking it to
+       * cancel the response — so the microphone never opens into a live
+       * speaker. Releasing commits the turn and asks for the answer.
+       */
+      if (wants_talk != runtime.talking && runtime.voicelab.call_active &&
+          outbox_free >= 5U) {
+        runtime.talking = wants_talk;
+        if (wants_talk) {
+          runtime.speaker_discard_bytes =
+              (uint32_t)xStreamBufferBytesAvailable(runtime.speaker_buffer);
+          (void)xQueueReset(runtime.mic_queue); /* drop pre-press room noise */
+          runtime.frame_sequence = 0U;
+          (void)iterate_kit_voicelab_mark_turn(
+              &runtime.voicelab, ITERATE_KIT_VOICELAB_TURN_START);
+          waveshare_display_set_state(WAVESHARE_UI_LISTENING);
+          waveshare_display_set_status("listening");
+        } else {
+          (void)iterate_kit_voicelab_mark_turn(
+              &runtime.voicelab, ITERATE_KIT_VOICELAB_TURN_COMMIT);
+          waveshare_display_set_state(WAVESHARE_UI_SPEAKING);
+          waveshare_display_set_status("thinking");
+        }
+      }
+
+      /* The microphone is only on the wire while the talk button is down. */
+      if (runtime.talking && now >= drain_window_at &&
           uxQueueMessagesWaiting(runtime.mic_queue) >= 4U) {
         drain_window_at =
             (drain_window_at == 0U || now - drain_window_at > 400U)
@@ -658,10 +691,6 @@ void app_main(void) {
             (void)xQueueReceive(runtime.mic_queue, &frame_storage[index], 0);
             frame_pointers[index] =
                 (const uint8_t *)frame_storage[index].samples;
-          }
-          if (speaker_is_active(now)) {
-            memset(frame_storage, 0, sizeof(frame_storage));
-            runtime.mic_frames_gated += 4U;
           }
           (void)iterate_kit_voicelab_append_frames(
               &runtime.voicelab,

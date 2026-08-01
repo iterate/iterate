@@ -428,6 +428,12 @@ M5StickS3DirectAudioOwner::takePumpResult() {
     (edges & playbackStartedEdge) != 0U};
 }
 
+RealtimePlaybackState
+M5StickS3DirectAudioOwner::playbackState() const {
+  return static_cast<RealtimePlaybackState>(
+      publishedPlaybackState_.load(std::memory_order_acquire));
+}
+
 RealtimePlaybackMetrics
 M5StickS3DirectAudioOwner::playbackMetrics() {
   /*
@@ -556,6 +562,7 @@ void M5StickS3DirectAudioOwner::taskLoop() {
               generationFence.command,
               generationFence.generation,
               generationFence.connected);
+      publishPlaybackState();
       generationFenceMailbox_.complete(commandResult);
     }
 
@@ -563,6 +570,7 @@ void M5StickS3DirectAudioOwner::taskLoop() {
     if (lifecycleMailbox_.take(&lifecycle)) {
       const auto commandResult =
           executeLifecycleCommand(lifecycle.command);
+      publishPlaybackState();
       lifecycleMailbox_.complete(commandResult);
       (void)xSemaphoreGive(commandComplete_);
     }
@@ -611,6 +619,7 @@ void M5StickS3DirectAudioOwner::taskLoop() {
                 RealtimePlaybackState::buffering &&
             metrics.currentContentFrames > 0U);
     publishPumpResult(result);
+    publishPlaybackState();
     sampleStackHighWater();
   }
 }
@@ -816,6 +825,18 @@ void M5StickS3DirectAudioOwner::publishPumpResult(
     publishedEdges_.fetch_or(
         edges, std::memory_order_release);
   }
+}
+
+void M5StickS3DirectAudioOwner::publishPlaybackState() {
+  /*
+   * UI needs only the current four-value state, not a synchronous copy of the
+   * full metrics ledger. Publishing this byte at the same sole-owner boundary
+   * avoids a 10 ms screen loop repeatedly rendezvousing with the priority-19
+   * task. No frame, timestamp, or transition history is carried here.
+   */
+  publishedPlaybackState_.store(
+      static_cast<std::uint8_t>(playback_.metrics().state),
+      std::memory_order_release);
 }
 
 void M5StickS3DirectAudioOwner::sampleStackHighWater() {

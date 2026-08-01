@@ -343,7 +343,7 @@ static void producer_backpressure_purges_before_an_old_frame_is_sent(
   fixture.fake.outcomes[0] =
       ITERATE_KIT_PCM_UPLINK_SEND_COMPLETE;
   fixture.fake.outcome_count = 1U;
-  for (index = 0U; index < SLOT_COUNT; ++index) {
+  for (index = 0U; index < SLOT_COUNT - 1U; ++index) {
     submit_frame(&fixture, (uint8_t)(81U + index));
   }
 
@@ -360,13 +360,13 @@ static void producer_backpressure_purges_before_an_old_frame_is_sent(
   iterate_kit_pcm_lane_metrics(&fixture.lane, &lane_metrics);
   CHECK(fixture.fake.calls == 0U);
   CHECK(metrics.frames_sent == 0U);
-  CHECK(metrics.frames_discarded == SLOT_COUNT);
+  CHECK(metrics.frames_discarded == SLOT_COUNT - 1U);
   CHECK(metrics.send_failures == 0U);
   CHECK(metrics.restart_incidents == 1U);
   CHECK(metrics.producer_backpressure_restarts == 1U);
   CHECK(metrics.last_restart_reason ==
       ITERATE_KIT_PCM_UPLINK_RESTART_PRODUCER_BACKPRESSURE);
-  CHECK(metrics.last_restart_frames_discarded == SLOT_COUNT);
+  CHECK(metrics.last_restart_frames_discarded == SLOT_COUNT - 1U);
   CHECK(lane_metrics.uplink.current_slots == 0U);
   CHECK(lane_metrics.uplink.producer_backpressure == 1U);
 }
@@ -417,7 +417,7 @@ static void disconnected_drain_consumes_a_prior_overflow_request(
   uint32_t discarded = 0U;
   size_t index;
   fixture_init(&fixture);
-  for (index = 0U; index < SLOT_COUNT; ++index) {
+  for (index = 0U; index < SLOT_COUNT - 1U; ++index) {
     submit_frame(&fixture, (uint8_t)(121U + index));
   }
   CHECK(iterate_kit_pcm_lane_submit_uplink_at(
@@ -428,14 +428,14 @@ static void disconnected_drain_consumes_a_prior_overflow_request(
 
   CHECK(iterate_kit_pcm_uplink_sender_discard_pending(
       &fixture.sender, &discarded) == ITERATE_KIT_OK);
-  CHECK(discarded == SLOT_COUNT);
+  CHECK(discarded == SLOT_COUNT - 1U);
   CHECK(poll_at(&fixture, 100U) ==
       ITERATE_KIT_PCM_UPLINK_SENDER_IDLE);
 
   iterate_kit_pcm_uplink_sender_metrics(
       &fixture.sender, &metrics);
   CHECK(metrics.restart_incidents == 0U);
-  CHECK(metrics.frames_discarded == SLOT_COUNT);
+  CHECK(metrics.frames_discarded == SLOT_COUNT - 1U);
 }
 
 /*

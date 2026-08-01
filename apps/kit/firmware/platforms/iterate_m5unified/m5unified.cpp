@@ -8,6 +8,7 @@
 #pragma GCC diagnostic pop
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 
 #include "esp_heap_caps.h"
@@ -18,6 +19,17 @@
 #include "freertos/task.h"
 
 namespace iterate::kit::platforms {
+
+/*
+ * M5GFX chooses the input colour encoding from the C++ argument type. The
+ * retained UI colour is uint32_t, so it must contain RGB888—not the familiar
+ * 16-bit TFT_* RGB565 constants. Passing TFT_RED through this field produced
+ * green on the physical panel; swapping the constants merely produced blue.
+ * Explicit RGB888 values make the type/encoding boundary unambiguous while
+ * leaving the portable red/green capability semantic unchanged.
+ */
+static constexpr std::uint32_t m5StickS3PhysicalRed = 0xFF0000U;
+static constexpr std::uint32_t m5StickS3PhysicalGreen = 0x00FF00U;
 
 /*
  * FreeRTOS exposes idle runtime per core, while product telemetry wants one
@@ -76,13 +88,8 @@ bool M5UnifiedHalfDuplex::begin() {
    */
   M5.Display.setRotation(1);
   M5.Display.setBrightness(96);
-  M5.Display.fillScreen(TFT_BLACK);
-  M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
-  M5.Display.setTextSize(1);
-  M5.Display.setCursor(8, 8);
-  M5.Display.println("Iterate Kit / M5StickS3");
-  M5.Display.println("Top: call on/off");
-  M5.Display.println("Front: hold to talk");
+  backgroundColour_ = TFT_BLACK;
+  renderCallUi(true);
   startedMicroseconds_ = esp_timer_get_time();
   if (iterate_kit_cpu_usage_meter_init(
           &cpuUsage_, CONFIG_FREERTOS_NUMBER_OF_CORES) !=
@@ -143,6 +150,11 @@ iterate_kit_screen_driver M5UnifiedHalfDuplex::screenDriver() {
   return {this, renderPngUrl, changeColour};
 }
 
+iterate_kit_screen_capture_driver
+M5UnifiedHalfDuplex::screenCaptureDriver() {
+  return {this, captureScreen};
+}
+
 iterate_kit_metrics_driver M5UnifiedHalfDuplex::metricsDriver() {
   return {this, sampleMetrics};
 }
@@ -194,6 +206,11 @@ M5UnifiedHalfDuplex::playbackMetrics() {
   return audioOwner_.playbackMetrics();
 }
 
+RealtimePlaybackState
+M5UnifiedHalfDuplex::playbackState() const {
+  return audioOwner_.playbackState();
+}
+
 void M5UnifiedHalfDuplex::notifyPlaybackReady() {
   audioOwner_.notifyDownlinkReady();
 }
@@ -216,6 +233,7 @@ void M5UnifiedHalfDuplex::showStatus(
       M5.Display.width(),
       M5.Display.height() - 38,
       TFT_BLACK);
+  callUiDrawn_ = false;
   /*
    * This synchronous display path is only for coarse status/bring-up and makes
    * no realtime guarantee. It must not be called from capture, socket, or
@@ -234,6 +252,103 @@ void M5UnifiedHalfDuplex::showStatus(
   M5.Display.printf(
       "Heap: %lu KB\n",
       static_cast<unsigned long>(esp_get_free_heap_size() / 1024U));
+}
+
+void M5UnifiedHalfDuplex::showCallUi(
+    M5StickS3CallUiState state) {
+  if (callUiDrawn_ && state == callUiState_) return;
+  callUiState_ = state;
+  /*
+   * The latch describes whether the *current state* has reached the panel; it
+   * is not a generic "the screen has rendered once" bit. Clear it at the same
+   * time as changing the retained model. Otherwise renderCallUi(false) sees a
+   * clean view and suppresses every lifecycle repaint after BOOTING even while
+   * the sockets and audio state machine continue normally in the background.
+   */
+  callUiDrawn_ = false;
+  renderCallUi(false);
+}
+
+void M5UnifiedHalfDuplex::renderCallUi(bool force) {
+  if (callUiDrawn_ && !force) return;
+
+  const char *headline = "BOOTING";
+  const char *instruction = "Connecting to Iterate...";
+  const char *secondary = "";
+  switch (callUiState_) {
+    case M5StickS3CallUiState::booting:
+      break;
+    case M5StickS3CallUiState::controlConnecting:
+      headline = "CONNECTING";
+      instruction = "Waiting for Iterate...";
+      secondary = "Keep the Stick powered";
+      break;
+    case M5StickS3CallUiState::ready:
+      headline = "READY";
+      instruction = "TOP: start call";
+      secondary = "Then hold FRONT to talk";
+      break;
+    case M5StickS3CallUiState::callConnecting:
+      headline = "STARTING CALL";
+      instruction = "Connecting voice...";
+      secondary = "TOP: cancel";
+      break;
+    case M5StickS3CallUiState::callReady:
+      headline = "CALL CONNECTED";
+      instruction = "Hold FRONT to talk";
+      secondary = "TOP: hang up";
+      break;
+    case M5StickS3CallUiState::listening:
+      headline = "LISTENING";
+      instruction = "Release FRONT to send";
+      secondary = "TOP: hang up";
+      break;
+    case M5StickS3CallUiState::waitingForReply:
+      headline = "THINKING";
+      instruction = "Waiting for AI...";
+      secondary = "Hold FRONT to talk again";
+      break;
+    case M5StickS3CallUiState::speaking:
+      headline = "AI SPEAKING";
+      instruction = "Hold FRONT to interrupt";
+      secondary = "TOP: hang up";
+      break;
+    case M5StickS3CallUiState::endingCall:
+      headline = "ENDING CALL";
+      instruction = "Closing voice...";
+      secondary = "Please wait";
+      break;
+    case M5StickS3CallUiState::callFailed:
+      headline = "CALL ERROR";
+      instruction = "TOP: end call";
+      secondary = "TOP again to retry";
+      break;
+  }
+
+  /*
+   * The display is an application-owner peripheral. One transition redraw is
+   * acceptable; continuous refresh is not, because it would steal scheduling
+   * time and SPI bandwidth for no new information. Grouping the fill and text
+   * in one write transaction also avoids visible half-painted states. The
+   * priority-19 I2S owner remains independent and is never called from here.
+   */
+  M5.Display.startWrite();
+  M5.Display.fillScreen(backgroundColour_);
+  M5.Display.setTextWrap(false);
+  M5.Display.setTextColor(TFT_WHITE, backgroundColour_);
+  M5.Display.setTextSize(1);
+  M5.Display.setCursor(8, 8);
+  M5.Display.println("ITERATE VOICE");
+  M5.Display.setTextSize(2);
+  M5.Display.setCursor(8, 28);
+  M5.Display.println(headline);
+  M5.Display.setTextSize(1);
+  M5.Display.setCursor(8, 65);
+  M5.Display.println(instruction);
+  M5.Display.setCursor(8, 84);
+  M5.Display.println(secondary);
+  M5.Display.endWrite();
+  callUiDrawn_ = true;
 }
 
 iterate_kit_status M5UnifiedHalfDuplex::renderPngUrl(
@@ -257,22 +372,80 @@ iterate_kit_status M5UnifiedHalfDuplex::renderPngUrl(
 iterate_kit_status M5UnifiedHalfDuplex::changeColour(
     void *context, iterate_kit_screen_colour colour) {
   auto &platform = *static_cast<M5UnifiedHalfDuplex *>(context);
-  (void)platform;
   std::uint32_t displayColour;
   if (colour == ITERATE_KIT_SCREEN_RED) {
-    displayColour = TFT_RED;
+    displayColour = m5StickS3PhysicalRed;
   } else if (colour == ITERATE_KIT_SCREEN_GREEN) {
-    displayColour = TFT_GREEN;
+    displayColour = m5StickS3PhysicalGreen;
   } else {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
   /*
-   * A full-screen fill is synchronous and allocation-free. It is deliberately
-   * a control-path proof, not an animation primitive: callers must not drive
-   * it at frame rate while realtime audio is active.
+   * Background colour is a layer of the call UI rather than ownership of the
+   * entire panel. Repainting through the same renderer keeps the device usable
+   * after a Grok tool call; a bare fill previously erased every instruction.
+   * The call is still synchronous/allocation-free and deliberately unsuitable
+   * for frame-rate animation while realtime audio is active.
    */
-  M5.Display.fillScreen(displayColour);
+  platform.backgroundColour_ = displayColour;
+  platform.renderCallUi(true);
   return ITERATE_KIT_OK;
+}
+
+iterate_kit_status M5UnifiedHalfDuplex::captureScreen(
+    void *context, iterate_kit_captured_screen *capture) {
+  auto &platform = *static_cast<M5UnifiedHalfDuplex *>(context);
+  if (capture == nullptr) return ITERATE_KIT_INVALID_ARGUMENT;
+  *capture = {};
+  if (platform.capturedScreenPng_ != nullptr) {
+    /*
+     * There is one encoder result owner, not a screenshot queue. Cap'n Web
+     * releases it after serialization; a concurrent request gets explicit
+     * backpressure instead of doubling peak PSRAM or returning stale pixels.
+     */
+    return ITERATE_KIT_BACKPRESSURE;
+  }
+  if (platform.microphoneActive_) {
+    /*
+     * M5Unified microphone capture is pumped by this same application owner.
+     * PNG compression here would pause that pump and turn a diagnostics call
+     * into delayed speech. An open but currently silent call is allowed; an
+     * actively held push-to-talk turn is not.
+     */
+    return ITERATE_KIT_BACKPRESSURE;
+  }
+
+  M5.Display.waitDisplay();
+  std::size_t pngLength = 0U;
+  platform.capturedScreenPng_ = M5.Display.createPng(
+      &pngLength,
+      0,
+      0,
+      M5.Display.width(),
+      M5.Display.height());
+  if (platform.capturedScreenPng_ == nullptr || pngLength == 0U) {
+    platform.capturedScreenPng_ = nullptr;
+    return ITERATE_KIT_UNAVAILABLE;
+  }
+  *capture = {
+    static_cast<const std::uint8_t *>(platform.capturedScreenPng_),
+    pngLength,
+    releaseCapturedScreen,
+    &platform,
+  };
+  return ITERATE_KIT_OK;
+}
+
+void M5UnifiedHalfDuplex::releaseCapturedScreen(void *context) {
+  auto &platform = *static_cast<M5UnifiedHalfDuplex *>(context);
+  /*
+   * M5GFX's PNG encoder allocates through miniz (PSRAM when configured) and
+   * documents ordinary free-compatible release. Clearing before free makes a
+   * re-entrant failure unable to observe an apparently live second owner.
+   */
+  void *const encoded = platform.capturedScreenPng_;
+  platform.capturedScreenPng_ = nullptr;
+  std::free(encoded);
 }
 
 iterate_kit_status M5UnifiedHalfDuplex::sampleMetrics(

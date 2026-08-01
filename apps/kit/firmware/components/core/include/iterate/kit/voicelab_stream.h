@@ -236,6 +236,25 @@ enum capnweb_status iterate_kit_voicelab_start_call(
 enum capnweb_status iterate_kit_voicelab_end_call(
     struct iterate_kit_voicelab *voicelab, const char *reason);
 
+/** The two edges of one push-to-talk turn. */
+enum iterate_kit_voicelab_turn {
+  /** Button down: cancel any answer in flight and start listening. */
+  ITERATE_KIT_VOICELAB_TURN_START = 0,
+  /** Button up: commit what was said and ask for the answer. */
+  ITERATE_KIT_VOICELAB_TURN_COMMIT,
+};
+
+/**
+ * Mark a turn edge. With manual turn detection there is no VAD anywhere —
+ * the device decides when speech starts and stops, and the bridge translates
+ * these into the provider's commit/response controls. One-way: a lost edge is
+ * recoverable by pressing again, and blocking the audio lane on an
+ * acknowledgement would be worse.
+ */
+enum capnweb_status iterate_kit_voicelab_mark_turn(
+    struct iterate_kit_voicelab *voicelab,
+    enum iterate_kit_voicelab_turn turn);
+
 /**
  * Pulled append of a tiny durable voicelab/ping event. The resolution echo
  * is small (no PCM), so it is safe inside the bounded inbox and token

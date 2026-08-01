@@ -232,6 +232,8 @@ struct iterate_kit_metrics_sample {
       uint32_t consecutive_send_deferrals;
       uint32_t maximum_consecutive_send_deferrals;
       uint32_t restart_incidents;
+      uint32_t in_place_freshness_recoveries;
+      uint32_t socket_restarts;
       uint32_t producer_backpressure_restarts;
       uint32_t transport_disconnect_restarts;
       uint32_t no_progress_timeout_restarts;

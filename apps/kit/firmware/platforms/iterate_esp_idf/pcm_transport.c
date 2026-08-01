@@ -507,7 +507,8 @@ static void report_uplink_recovery(
       log_tag,
       "pcm_uplink_recovery incidents=%u reason=%s discarded=%u "
       "queue_depth=%u queue_high_water=%u reset_requests=%u "
-      "oldest_capture_age_ms=%u",
+      "oldest_capture_age_ms=%u in_place_recoveries=%u "
+      "socket_restarts=%u",
       (unsigned int)uplink.sender.restart_incidents,
       iterate_kit_pcm_uplink_restart_reason_name(
           uplink.sender.last_restart_reason),
@@ -517,7 +518,9 @@ static void report_uplink_recovery(
       (unsigned int)lane.uplink.high_water_slots,
       (unsigned int)lane.uplink_epoch_reset_requests,
       (unsigned int)
-          uplink.sender.last_restart_oldest_capture_age_ms);
+          uplink.sender.last_restart_oldest_capture_age_ms,
+      (unsigned int)uplink.in_place_freshness_recoveries,
+      (unsigned int)uplink.socket_restarts);
   transport->reported_uplink_restart_incidents =
       uplink.sender.restart_incidents;
 }
@@ -1055,6 +1058,9 @@ void iterate_kit_esp_idf_pcm_transport_metrics(
       uplink.sender.maximum_consecutive_send_deferrals;
   metrics->uplink_restart_incidents =
       uplink.sender.restart_incidents;
+  metrics->uplink_in_place_freshness_recoveries =
+      uplink.in_place_freshness_recoveries;
+  metrics->uplink_socket_restarts = uplink.socket_restarts;
   metrics->uplink_producer_backpressure_restarts =
       uplink.sender.producer_backpressure_restarts;
   metrics->uplink_transport_disconnect_restarts =

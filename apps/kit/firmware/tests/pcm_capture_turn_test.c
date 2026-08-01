@@ -314,13 +314,15 @@ static void backpressured_stop_is_retried_and_closes_the_gate(void) {
 }
 
 /*
- * If a network stall fills the microphone lane at release, silently losing
- * the end marker would leave userspace waiting on an ambiguous half-turn.
- * The lane's destructive epoch-reset request is the recovery contract. The
- * gate must surface the backpressure, remain inactive, and wake the transport
- * so it can purge/reconnect rather than queue more stale speech.
+ * If a network stall consumes the audio budget at release, silently losing
+ * the end marker would leave userspace waiting on an ambiguous half-turn. The
+ * lane therefore reserves one physical slot from audio. The rejected eighth
+ * audio frame still requests a destructive freshness purge, but the capture
+ * owner must then publish the marker into that reserved slot and close its
+ * gate. The transport can discard the seven stale frames while retaining the
+ * already-ordered marker on a still-clean WebSocket frame boundary.
  */
-static void full_lane_cannot_silently_lose_the_end_marker(void) {
+static void saturated_audio_budget_still_closes_with_end_marker(void) {
   struct fixture fixture;
   int16_t frame[ITERATE_KIT_PCM_V1_SAMPLES_PER_FRAME];
   struct iterate_kit_pcm_capture_turn_metrics metrics;
@@ -332,7 +334,9 @@ static void full_lane_cannot_silently_lose_the_end_marker(void) {
   CHECK(iterate_kit_pcm_capture_turn_poll(
             &fixture.turn, 10U) == ITERATE_KIT_OK);
 
-  for (uint32_t index = 0U; index < LANE_SLOT_COUNT; ++index) {
+  for (uint32_t index = 0U;
+       index < LANE_SLOT_COUNT - 1U;
+       ++index) {
     CHECK(iterate_kit_pcm_capture_turn_submit(
               &fixture.turn,
               frame,
@@ -340,10 +344,17 @@ static void full_lane_cannot_silently_lose_the_end_marker(void) {
               ITERATE_KIT_PCM_V1_SAMPLE_RATE_HZ,
               (uint64_t)(index + 1U) * 20000U) == ITERATE_KIT_OK);
   }
+  CHECK(iterate_kit_pcm_capture_turn_submit(
+            &fixture.turn,
+            frame,
+            ITERATE_KIT_PCM_V1_SAMPLES_PER_FRAME,
+            ITERATE_KIT_PCM_V1_SAMPLE_RATE_HZ,
+            (uint64_t)LANE_SLOT_COUNT * 20000U) ==
+      ITERATE_KIT_BACKPRESSURE);
   CHECK(iterate_kit_pcm_capture_turn_request(
             &fixture.turn, false) == ITERATE_KIT_OK);
   CHECK(iterate_kit_pcm_capture_turn_poll(
-            &fixture.turn, 200U) == ITERATE_KIT_BACKPRESSURE);
+            &fixture.turn, 200U) == ITERATE_KIT_OK);
   CHECK(iterate_kit_pcm_lane_take_uplink_epoch_reset_request(
             &fixture.lane, &reset_requested) == ITERATE_KIT_OK);
   CHECK(reset_requested);
@@ -351,8 +362,10 @@ static void full_lane_cannot_silently_lose_the_end_marker(void) {
   iterate_kit_pcm_capture_turn_metrics(
       &fixture.turn, &metrics);
   CHECK(!metrics.active);
-  CHECK(metrics.end_marker_backpressure == 1U);
-  CHECK(metrics.frames_accepted == LANE_SLOT_COUNT);
+  CHECK(metrics.frame_backpressure == 1U);
+  CHECK(metrics.end_markers_accepted == 1U);
+  CHECK(metrics.end_marker_backpressure == 0U);
+  CHECK(metrics.frames_accepted == LANE_SLOT_COUNT - 1U);
   CHECK(fixture.uplink_notifications == LANE_SLOT_COUNT + 1U);
 }
 
@@ -361,7 +374,7 @@ int main(void) {
   start_frame_stop_preserves_wire_order();
   rapid_edges_are_ordered_and_saturation_is_recoverable();
   backpressured_stop_is_retried_and_closes_the_gate();
-  full_lane_cannot_silently_lose_the_end_marker();
+  saturated_audio_budget_still_closes_with_end_marker();
   puts("pcm capture turn tests passed");
   return 0;
 }
