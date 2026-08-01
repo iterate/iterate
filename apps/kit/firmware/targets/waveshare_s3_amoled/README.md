@@ -39,7 +39,19 @@ const part = await itx.kit.waveshare.readScreenshotChunk(0); // bytes
 await itx.kit.waveshare.recording.status(); // {card,recording,written,onDisk}
 await itx.kit.waveshare.recording.size("mic.pcm");
 await itx.kit.waveshare.recording.read("mic.pcm", 0); // bytes
+
+await itx.kit.waveshare.setVolume(85); // 0-100; 100 audibly distorts, see below
+await itx.kit.waveshare.setMicGain(30); // dB, 0-48
 ```
+
+## The device can measure its own audio
+
+Because it can play a tone and record with its own microphone, its analog
+chain is measurable without ears or a scope: append `voicelab/spk-frame`
+events carrying a sine, hold `pushToTalk`, then pull `mic.pcm` back and
+compare harmonics to the fundamental. That is how the volume ceiling below
+was found, and how "is this static or a dropout?" stops being a matter of
+opinion. `pnpm cli voicelab device --action tone` sends the tone.
 
 ## Every call is recorded
 
@@ -101,6 +113,21 @@ pnpm cli voicelab device --action screenshot --project prj_… --out screen.png
   are snapped outwards.
 - **FatFs only writes a directory entry on sync**, so `stat` of a file that is
   still open reports the size it had when created: zero. Readers sync first.
+- **The BSP's `bsp_display_start()` is unusable on this panel.** It registers
+  the QSPI panel through `lvgl_port_add_disp_rgb()`, which writes five
+  pointers past the end of a 64-byte `sh8601_panel_t` — into the heap the SPI
+  driver allocates from — and it silently discards the buffer flags you pass
+  it, leaving the draw buffer in PSRAM so every flush needs a full-size
+  internal bounce allocation. Bring the panel up with `bsp_display_new` +
+  `lvgl_port_add_disp` and DMA-capable internal buffers.
+- **`CONFIG_ESP_MAIN_TASK_PRIORITY` does not exist.** The app task is fixed at
+  priority 1; if it matters, call `vTaskPrioritySet` at the top of
+  `app_main`.
+- **One ES8311 instance, one `IN_OUT` handle.** Two `esp_codec_dev` handles
+  over one I2S data interface means the second `open()` disables both
+  channels and rewrites the slot config the first just set — which reads as
+  broadband noise on the microphone and invites a bogus `no_dac_ref`
+  workaround.
 
 ## The outbound message rate is the budget, not bandwidth
 
@@ -114,6 +141,21 @@ Now 8 frames (160 ms) per append is 12.5 messages/s, and the drain window
 advances only on a batch that actually went out — the 640 ms mic queue absorbs
 the wait. Measured after: a 3 s hold captures 3.20 s.
 
+## Volume: full scale is not the loudest useful setting
+
+Measured by acoustic loopback, 440 Hz, second harmonic relative to the
+fundamental:
+
+| volume | 2nd harmonic |                                            |
+| ------ | ------------ | ------------------------------------------ |
+| 100    | −16.8 dB     | distorting — and still distorting with the |
+|        |              | mic at 6 dB and 13 dB below clipping, so   |
+|        |              | it is the amplifier, not mic saturation    |
+| 60     | −34.9 dB     | clean                                      |
+
+So "turn it all the way up" makes this speaker worse rather than louder. The
+default is 85; `setVolume` tunes it live.
+
 ## Known limits
 
 - No AEC. Push-to-talk is what makes that fine; a continuously open microphone
@@ -121,3 +163,6 @@ the wait. Measured after: a 3 s hold captures 3.20 s.
 - One call per stream. Starting a second supersedes the first — before that
   fix two bridges answered every turn and their audio interleaved.
 - Long filenames are off in the FatFs config, so recording names are 8.3.
+- A released turn waits up to 1.5 s for the uplink to drain before
+  committing. If it times out the call log says "tail dropped" rather than
+  truncating the utterance silently.
