@@ -57,7 +57,7 @@ export class VoiceBridge extends IterateDurableObject {
    * Every one of them then saw the same voicelab/turn commit and answered it,
    * which is heard as the assistant replying two or three times to one turn.
    */
-  #endActiveCall: ((reason: string) => void) | null = null;
+  #endActiveCall: ((reason: string, superseded?: boolean) => void) | null = null;
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
@@ -69,7 +69,7 @@ export class VoiceBridge extends IterateDurableObject {
     const model = url.searchParams.get("model") ?? "grok-voice-think-fast-2.0";
 
     if (this.#endActiveCall !== null) {
-      this.#endActiveCall("superseded by a new call on this stream");
+      this.#endActiveCall("superseded by a new call on this stream", true);
       this.#endActiveCall = null;
     }
     const upstreamResponse = await fetch(`https://api.x.ai/v1/realtime?model=${model}`, {
@@ -441,18 +441,25 @@ export class VoiceBridge extends IterateDurableObject {
       if (now - lastBatchAt > 5000) void reopen();
     }, 500);
 
-    const teardown = (reason: string) => {
+    const teardown = (reason: string, superseded = false) => {
       if (closedDown) return;
       closedDown = true;
       clearInterval(watchdog);
       if (paceTimer !== null) clearTimeout(paceTimer);
-      fireAppend({
-        type: "voicelab/call-ended",
-        payload: {
-          callId,
-          reason: `worker bridge: ${reason} (appendErrors=${appendErrors}, reconnects=${reconnects})`,
-        },
-      });
+      /*
+       * A superseded call must NOT announce call-ended: the successor is
+       * taking over the same callId, and the device would read its
+       * predecessor's obituary as "your call ended" and stop sending audio.
+       */
+      if (!superseded) {
+        fireAppend({
+          type: "voicelab/call-ended",
+          payload: {
+            callId,
+            reason: `worker bridge: ${reason} (appendErrors=${appendErrors}, reconnects=${reconnects})`,
+          },
+        });
+      }
       currentConnection?.close();
       try {
         upstream.close();
