@@ -1,30 +1,32 @@
 /*
  * Waveshare ESP32-S3 Touch AMOLED 1.8 audio bring-up (ES8311, full duplex).
  *
- * STATUS: playback is PROVEN on hardware (Grok answers play through the
- * speaker). CAPTURE IS NOT: `esp_codec_dev_read` returns broadband noise
- * (RMS ~-9 dBFS, crest ~3, clipping, spectrogram flat to 8 kHz) whose level
- * does NOT respond to `set_in_gain` (30 dB and 6 dB measure the same), so
- * the samples are not the ADC's signal path. Ruled out already: pin map
- * (identical to Waveshare's own BSP — MCLK 16 / BCLK 9 / WS 45 / DOUT 8 /
- * DIN 10 / PA 46), mono Philips slots, MCLK x256, 16 kHz coefficient entry,
- * AXP2101 rails incl. ALDO1, the pre-construction soft reset, and one-vs-two
- * codec-dev handles. Next probes, in order: dump ES8311 regs 0x00-0x45 after
- * open and diff against the driver's expected init; scope BCLK/WS/DIN to see
- * whether the codec drives DIN at all; try `digital_mic = true` in case this
- * SKU carries a PDM mic; confirm the board revision (the stock image reports
- * project `phone_s3_box_3`, which is an ESP-Brookesia demo name, not a
- * hardware id).
+ * PROVEN on hardware: a spoken question reaches Grok through this microphone
+ * and the answer plays back through this speaker, both over one WebSocket.
  *
- * Recipe distilled from the board's xiaozhi-esp32 port (the authoritative
- * open implementation for this hardware) and the Waveshare BSP:
+ * Recipe distilled from the board's xiaozhi-esp32 port and Waveshare's own
+ * BSP:
  *  - I2C0 on SDA 15 / SCL 14; ES8311 at 0x18 (7-bit), AXP2101 at 0x34.
- *  - AXP2101: DC1 = 3.3 V main rail, ALDO1 = 3.3 V microphone rail — the
- *    mic is dead without the ALDO1 write.
+ *  - AXP2101: DC1 = 3.3 V main rail, ALDO1 = 3.3 V microphone rail.
  *  - One duplex I2S channel pair, master, MCLK x256 (the ES8311 driver's
  *    default divider); esp_codec_dev_open() reconfigures slots to mono.
  *  - PA on GPIO46, handled by the ES8311 driver.
  * No TCA9554 pulse here: that expander reset is panel/touch-only.
+ *
+ * Two settings are load-bearing and easy to get wrong:
+ *  - `no_dac_ref = true` (reg 0x44 = 0x08). The default fills the ADC lane's
+ *    right slot with DAC output as an AEC reference, which a mono capture
+ *    has no use for.
+ *  - PGA 36 dB. At 24 dB a talker a metre away lands at RMS -42 dBFS —
+ *    clean, but too quiet for Grok's server VAD to open a turn.
+ *
+ * Diagnostics kept for the next bring-up: waveshare_audio_dump_registers()
+ * (ADC-path registers after open) and waveshare_audio_probe_din() (is
+ * anything driving the data line). Note when reading captured audio off the
+ * stream: 640 PCM bytes base64-encode to 854 characters, which is NOT a
+ * multiple of 4 — decode each frame separately. Concatenating the strings
+ * first misaligns every frame after the first and yields convincing
+ * broadband "noise" that looks exactly like a dead microphone.
  */
 #include "waveshare_audio.h"
 
