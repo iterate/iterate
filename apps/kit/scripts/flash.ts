@@ -13,6 +13,7 @@ Non-secret options:
   --wifi-ssid <name>        Wi-Fi SSID (or ITERATE_KIT_WIFI_SSID)
   --project-id <prj_...>    Stable Iterate project ID (or ITERATE_KIT_PROJECT_ID)
   --base-url <origin>       OS origin (default: https://os.iterate.com)
+  --pcm-base-url <origin>   Userspace /pcm origin (defaults to --base-url)
   --build-directory <path>  ESP-IDF build (default: .build/m5sticks3)
   --dry-run                 Validate and report the exact plan without flashing
 

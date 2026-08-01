@@ -96,6 +96,8 @@ export interface PcmSessionMetrics {
   providerFunctionCallFailures: number;
   providerFunctionCalls: number;
   providerFunctionCallsPending: number;
+  providerKeepalivePings: number;
+  providerKeepalivePongs: number;
   providerPcmPeakSample: number;
   providerPcmRmsSample: number;
   providerPcmSamples: number;
@@ -167,6 +169,8 @@ export class PcmSessionBridge {
   #providerDisconnects = 0;
   #providerFunctionCallFailures = 0;
   #providerFunctionCalls = 0;
+  #providerKeepalivePings = 0;
+  #providerKeepalivePongs = 0;
   #providerPcmNormalizedSquareSum = 0;
   #providerPcmPeakSample = 0;
   #providerPcmSamples = 0;
@@ -257,6 +261,8 @@ export class PcmSessionBridge {
       providerFunctionCallFailures: this.#providerFunctionCallFailures,
       providerFunctionCalls: this.#providerFunctionCalls,
       providerFunctionCallsPending: this.#providerResponseFunctionCallsPending,
+      providerKeepalivePings: this.#providerKeepalivePings,
+      providerKeepalivePongs: this.#providerKeepalivePongs,
       providerPcmPeakSample: this.#providerPcmPeakSample,
       providerPcmRmsSample:
         this.#providerPcmSamples === 0
@@ -595,6 +601,25 @@ export class PcmSessionBridge {
     this.#providerControlEvents += 1;
     this.#lastProviderEventType = event.type;
     if (event.type === "error") this.#lastProviderError = summarizeProviderError(event);
+    if (event.type === "ping") {
+      this.#providerKeepalivePings += 1;
+      const timestamp = "timestamp" in event ? event.timestamp : undefined;
+      /*
+       * This is xAI's application protocol, not an RFC 6455 ping frame and not
+       * Cap'n Web traffic. Official xAI clients answer it even though the current
+       * public speech-to-speech page does not describe it. Keeping the response
+       * here makes provider liveness independent of both device transports and
+       * preserves the raw ping above for the project event stream. Reflect only the one
+       * bounded numeric nonce defined by xAI's official clients; reflecting an
+       * arbitrary object would turn a control event into unbounded egress.
+       */
+      if (typeof timestamp === "number" && Number.isSafeInteger(timestamp) && timestamp >= 0) {
+        if (this.#sendProviderMessage({ ping_timestamp: timestamp, type: "pong" })) {
+          this.#providerKeepalivePongs += 1;
+        }
+      }
+      return;
+    }
     if (event.type === "response.function_call_arguments.done") {
       this.#handleProviderFunctionCall(provider, event);
       return;

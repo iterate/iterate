@@ -112,6 +112,50 @@ describe("userspace PCM session bridge", () => {
     expect(downlink).toEqual([]);
   });
 
+  test("answers xAI application keepalives while preserving the raw provider event", async () => {
+    /*
+     * xAI's realtime service uses a JSON keepalive in addition to normal
+     * WebSocket ping/pong frames. The official xAI clients copy the incoming
+     * `timestamp` into a `pong.ping_timestamp`. The physical StackChan exposed
+     * that our bridge was silently omitting this provider-protocol response.
+     * A later 1006 still occurred after correct pongs, so this test deliberately
+     * proves only protocol compatibility; it does not misattribute every socket
+     * retirement to a missing pong. This belongs at the provider socket boundary:
+     * neither the device PCM lane nor Cap'n Web should know it exists.
+     */
+    const events: ProviderNonPcmEvent[] = [];
+    const { bridge, device, provider } = createBridge({
+      onProviderEvent: (event) => events.push(event),
+    });
+    const providerCommands = textMessages(provider.client);
+    const deviceCommands = textMessages(device.client);
+    const raw = '{"type":"ping","event_id":"evt_keepalive","timestamp":1785556000123}';
+
+    provider.client.send(raw);
+
+    await vi.waitFor(() =>
+      expect(providerCommands.map((message) => JSON.parse(message) as unknown)).toEqual([
+        { ping_timestamp: 1_785_556_000_123, type: "pong" },
+      ]),
+    );
+    expect(events).toEqual([
+      {
+        event: {
+          event_id: "evt_keepalive",
+          timestamp: 1_785_556_000_123,
+          type: "ping",
+        },
+        raw,
+        type: "ping",
+      },
+    ]);
+    expect(deviceCommands).toEqual([]);
+    expect(bridge.metrics()).toMatchObject({
+      providerKeepalivePings: 1,
+      providerKeepalivePongs: 1,
+    });
+  });
+
   test("relays each microphone frame immediately and preserves rechunked provider audio", async () => {
     const { device, provider } = createBridge();
     const uplink = binaryMessages(provider.client);
