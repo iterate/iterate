@@ -106,12 +106,26 @@ export async function bridge(options: BridgeOptions) {
     });
     client.on("audio", (pcm: Buffer) => {
       const tGrok = Date.now();
-      spkFrames++;
-      fireAppend({
-        type: "voicelab/spk-frame",
-        ephemeral: true,
-        payload: { callId, seq: spkSeq++, t: Date.now(), tGrok, pcm: pcm.toString("base64") },
-      });
+      // Grok ships 0.4-1s frames; re-chunk to 20ms events so constrained
+      // consumers (ESP32 with per-batch delivery caps) can take them. One
+      // atomic append per Grok frame keeps the commit count low; delivery
+      // caps split it per consumer.
+      const events = [];
+      for (let offset = 0; offset < pcm.length; offset += 640) {
+        spkFrames++;
+        events.push({
+          type: "voicelab/spk-frame",
+          ephemeral: true as const,
+          payload: {
+            callId,
+            seq: spkSeq++,
+            t: Date.now(),
+            tGrok,
+            pcm: pcm.subarray(offset, offset + 640).toString("base64"),
+          },
+        });
+      }
+      if (events.length > 0) fireAppend(...events);
     });
     client.on("event", (event: { type: string }) => {
       if (!FORWARDED_GROK_EVENTS.has(event.type)) return;
