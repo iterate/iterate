@@ -309,6 +309,34 @@ export class VoiceBridge extends IterateDurableObject {
             }
             break;
           }
+          case "voicelab/say": {
+            /*
+             * A turn made of text rather than speech: the same commit and
+             * response the microphone path produces, so anything that can
+             * append to this stream can make the device talk — and a long
+             * answer can be provoked on demand for measurement.
+             */
+            lastActivityAt = Date.now();
+            const text = typeof payload.text === "string" ? payload.text.trim() : "";
+            if (text.length === 0 || text.length > 4096) break;
+            paceQueue.length = 0;
+            if (responseActive) {
+              upstream.send(JSON.stringify({ type: "response.cancel" }));
+              responseActive = false;
+            }
+            upstream.send(
+              JSON.stringify({
+                item: {
+                  content: [{ text, type: "input_text" }],
+                  role: "user",
+                  type: "message",
+                },
+                type: "conversation.item.create",
+              }),
+            );
+            upstream.send(JSON.stringify({ type: "response.create" }));
+            break;
+          }
           case "voicelab/turn": {
             lastActivityAt = Date.now();
             if (payload.action === "start") {
@@ -354,6 +382,7 @@ export class VoiceBridge extends IterateDurableObject {
             "voicelab/mic-frame",
             "voicelab/ping",
             "voicelab/turn",
+            "voicelab/say",
             "voicelab/call-ended",
           ],
           processEventBatch: (batch) => handleEvents(batch.events),

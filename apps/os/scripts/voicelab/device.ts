@@ -14,14 +14,16 @@ import { connectProject, type VoicelabConnectOptions } from "./connect.ts";
 
 /** Options for `pnpm cli voicelab device`. */
 export interface DeviceOptions extends VoicelabConnectOptions {
-  /** screenshot | pull | turn | status. */
+  /** screenshot | pull | turn | tone | call | hangup | status. */
   action?: string;
   /** Capability the device mounts itself under (itx.kit.<name>). */
   name?: string;
   /** Where to write output: a PNG for screenshot, a directory for pull. */
   out?: string;
-  /** How long to hold the talk button, for `turn`. */
+  /** How long to hold the talk button (`turn`) or play a tone (`tone`). */
   seconds?: number;
+  /** Stream the device is on; only needed for `tone`. */
+  path?: string;
 }
 
 /** The device's capability surface, as this script uses it. */
@@ -108,6 +110,51 @@ export async function device(options: DeviceOptions) {
     await new Promise((resolve) => setTimeout(resolve, heldMs));
     await capability.pushToTalk.stop();
     console.error("released; the answer follows on the device");
+    return;
+  }
+
+  if (action === "tone") {
+    /*
+     * A known signal down the same path the assistant's voice takes: stream
+     * events -> device inbox -> decode -> speaker buffer -> I2S -> codec. No
+     * call, no provider, no VAD — so anything audible in the result belongs
+     * to the transport or the device, and a recording of the room can be
+     * compared against what was sent sample for sample.
+     */
+    const stream = itx.streams.get(options.path ?? "/voicelab/dev-waveshare");
+    const seconds = options.seconds ?? 20;
+    const frames = Math.round((seconds * 1000) / 20);
+    const samplesPerFrame = 320; // 20ms at 16kHz
+    let phase = 0;
+    const started = Date.now();
+    let sequence = 0;
+    for (let batch = 0; batch * 5 < frames; batch++) {
+      const events = [];
+      for (let index = 0; index < 5 && batch * 5 + index < frames; index++) {
+        const pcm = Buffer.alloc(samplesPerFrame * 2);
+        for (let sample = 0; sample < samplesPerFrame; sample++) {
+          // 440Hz at -6dBFS: loud enough to hear over a room, far from clipping.
+          phase += (2 * Math.PI * 440) / 16_000;
+          pcm.writeInt16LE(Math.round(Math.sin(phase) * 16_384), sample * 2);
+        }
+        events.push({
+          type: "voicelab/spk-frame" as const,
+          ephemeral: true as const,
+          payload: {
+            callId: "tone",
+            pcm: pcm.toString("base64"),
+            seq: sequence++,
+            t: Date.now(),
+          },
+        });
+      }
+      await stream.append(...events);
+      // Realtime pacing: five 20ms frames is 100ms of audio.
+      const due = started + (batch + 1) * 100;
+      const wait = due - Date.now();
+      if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+    }
+    console.error(`sent ${sequence} frames (${(sequence * 20) / 1000}s of 440Hz)`);
     return;
   }
 
