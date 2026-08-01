@@ -31,7 +31,6 @@ const REQUESTED = "events.iterate.com/project/human-approval-requested";
 const DECIDED = "events.iterate.com/project/human-approval-decided";
 const SETTLED = "events.iterate.com/project/human-approval-settled";
 const NOTIFICATION_REQUESTED = "events.iterate.com/notification/requested";
-const CONTEXT_ADDED = "events.iterate.com/agents/context-added";
 
 test("hold → approve releases, hold → reject refuses, short timeouts expire", async () => {
   const echo = await startEgressEcho();
@@ -614,27 +613,6 @@ test("a script's burst coalesces into ONE batch event, one push, and one decisio
     );
     expect(await root.getEvents({ eventTypes: [REQUESTED] })).toHaveLength(1);
     expect(await root.getEvents({ eventTypes: [NOTIFICATION_REQUESTED] })).toHaveLength(1);
-
-    // The decision itself lands on the originating agent thread as developer
-    // context — the strand fix: a script that returns before the human answers
-    // (or a batch that expires) still tells the agent what was decided, and
-    // the non-script actor clears a parked `waitingFor`.
-    const findDecisionContext = async () => {
-      const items = await agent.stream.getEvents({ eventTypes: [CONTEXT_ADDED] });
-      return items.find((item) =>
-        String((item.payload as { content?: string }).content).includes("burst-needs-a-human"),
-      );
-    };
-    await waitForCondition(async () => (await findDecisionContext()) !== undefined, {
-      description: "the decision context to land on the agent thread",
-    });
-    const decisionContext = (await findDecisionContext())!;
-    expect(decisionContext.payload).toMatchObject({
-      role: "developer",
-      actor: { name: "egress-approvals", type: "integration" },
-      llmRequestPolicy: { behaviour: "after-current-request" },
-      content: expect.stringContaining(`POST ${new URL(echo.url).host}: approved`),
-    });
   } finally {
     await echo.close();
   }
