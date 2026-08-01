@@ -893,6 +893,76 @@ describe("useStreamConnection liveness", () => {
     await harness.unmount();
   });
 
+  test("budget rotation carries the live predecessor across a successor transport failure", async () => {
+    const lifecycle: string[] = [];
+    let attempts = 0;
+    let predecessorSocket: FakeWebSocket | undefined;
+    const harness = await mountConnection(
+      () => {
+        attempts += 1;
+        const attempt = attempts;
+        if (attempt === 3) expect(predecessorSocket?.closeCalls).toBe(0);
+        lifecycle.push(`open-${attempt}`);
+        return {
+          ping: () => true,
+          close: () => lifecycle.push(`close-${attempt}`),
+        };
+      },
+      async (handle) => {
+        if (attempts === 2) return new Promise<never>(() => {});
+        return handle;
+      },
+    );
+    predecessorSocket = FakeWebSocket.instances.at(-1)!;
+
+    await harness.act(() => {
+      for (let message = 0; message < 8_000; message += 1) predecessorSocket.fire("message");
+    });
+    const failedSuccessor = FakeWebSocket.instances[1]!;
+    await harness.act(() => failedSuccessor.fire("open"));
+    expect(lifecycle).toEqual(["open-1", "open-2"]);
+
+    await harness.act(() => failedSuccessor.fire("close"));
+    expect(FakeWebSocket.instances).toHaveLength(3);
+    expect(predecessorSocket.closeCalls).toBe(0);
+    expect(lifecycle).toEqual(["open-1", "open-2"]);
+
+    await harness.act(() => FakeWebSocket.instances[2]!.fire("open"));
+    await harness.advance(0);
+    expect(lifecycle).toEqual(["open-1", "open-2", "open-3", "close-1"]);
+    expect(predecessorSocket.closeCalls).toBe(1);
+    expect(harness.status()).toBe("live");
+    await harness.unmount();
+  });
+
+  test("a carried predecessor keeps the rotation's original hard deadline", async () => {
+    let attempts = 0;
+    const harness = await mountConnection(
+      () => ({ ping: () => true, close: vi.fn() }),
+      async (handle) => {
+        attempts += 1;
+        if (attempts >= 2) return new Promise<never>(() => {});
+        return handle;
+      },
+    );
+    const predecessorSocket = FakeWebSocket.instances.at(-1)!;
+
+    await harness.act(() => {
+      for (let message = 0; message < 8_000; message += 1) predecessorSocket.fire("message");
+    });
+    const failedSuccessor = FakeWebSocket.instances[1]!;
+    await harness.act(() => failedSuccessor.fire("open"));
+    await harness.advance(20_000);
+    await harness.act(() => failedSuccessor.fire("close"));
+
+    expect(FakeWebSocket.instances).toHaveLength(3);
+    await harness.advance(9_999);
+    expect(predecessorSocket.closeCalls).toBe(0);
+    await harness.advance(1);
+    expect(predecessorSocket.closeCalls).toBe(1);
+    await harness.unmount();
+  });
+
   test("an open call that never settles times out, reports suspicion, and retries", async () => {
     // A transport can disappear after the server accepted the open but before
     // the handle arrives — no handle means no watchdog, so without the timeout

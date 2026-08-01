@@ -346,12 +346,15 @@ function useReconnectableEffect<Root>(
       if (generation === observedGeneration) return;
       observedGeneration = generation;
 
-      // A newer socket superseded an in-flight setup. The active predecessor,
-      // however, stays live until this candidate has fully opened.
+      // Claim the overlap for the new candidate BEFORE releasing a superseded
+      // candidate's claim. A transport retry can carry the same overlap object
+      // forward; dropping its lease count to zero between candidates would
+      // retire the live predecessor in the handoff itself.
+      const releasePredecessor = retainIterateSessionPredecessor();
       if (candidate !== undefined) disposeCandidate(candidate);
       const run: Run = {
         signal: { disposed: false, replacingActive: active !== undefined },
-        releasePredecessor: retainIterateSessionPredecessor(),
+        releasePredecessor,
       };
       candidate = run;
 

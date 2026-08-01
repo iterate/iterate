@@ -237,6 +237,8 @@ type Generation = {
 };
 
 type TransportOverlap = {
+  /** Current successor attempt carrying this overlap; changes across transport retries. */
+  owner: Generation;
   generation: Generation;
   session: SessionStub;
   leases: number;
@@ -291,17 +293,16 @@ export const subscribeSession = (onChange: () => void) => {
  * transport also has a hard upper bound so a failed consumer cannot leak it.
  */
 export function retainIterateSessionPredecessor(): () => void {
-  const generation = current;
-  const overlap = generation?.overlap;
-  if (generation === undefined || overlap === undefined) return () => {};
+  const overlap = current?.overlap;
+  if (overlap === undefined) return () => {};
   overlap.leases += 1;
   let released = false;
   return () => {
     if (released) return;
     released = true;
-    if (generation.overlap !== overlap) return;
+    if (overlap.owner.overlap !== overlap) return;
     overlap.leases -= 1;
-    if (overlap.leases === 0) finishTransportOverlap(generation);
+    if (overlap.leases === 0) finishTransportOverlap(overlap.owner);
   };
 }
 
@@ -362,7 +363,10 @@ export function connectItx(slug: string): Promise<ProjectStub> {
   return connectIterateSession().then((session) => projectStubFor(session, slug));
 }
 
-function startConnectionAttempt(predecessor?: Generation): Generation {
+function startConnectionAttempt(
+  predecessor?: Generation,
+  transferredOverlap?: TransportOverlap,
+): Generation {
   const target = resolveConnectionTarget();
 
   const id = ++generationCounter;
@@ -379,9 +383,10 @@ function startConnectionAttempt(predecessor?: Generation): Generation {
     liveness: undefined,
     verifying: false,
     predecessor,
-    overlap: undefined,
+    overlap: transferredOverlap,
     failed: false,
   };
+  if (transferredOverlap !== undefined) transferredOverlap.owner = generation;
   current = generation;
   // Keep showing the last session while the new generation connects (invisible
   // reconnect). Before the FIRST session, awaiters must share the stable
@@ -392,11 +397,12 @@ function startConnectionAttempt(predecessor?: Generation): Generation {
     firstConnect = Promise.withResolvers<SessionStub>();
     void firstConnect.promise.catch(() => {});
   }
-  // A proactive successor stays invisible until it authenticates. Publishing
-  // its generation now would make reconnect-aware effects close their live
-  // predecessor connection and wait on the not-yet-ready socket: break before
-  // make. Ordinary recovery has no live predecessor and publishes immediately.
-  if (predecessor === undefined) {
+  // A proactive successor stays invisible until it authenticates. The same is
+  // true when a later attempt inherits an already-published successor's live
+  // overlap. Publishing either generation now would make reconnect-aware effects
+  // close their predecessor callback and wait on the not-yet-ready socket.
+  // Ordinary recovery has no live predecessor and publishes immediately.
+  if (predecessor === undefined && transferredOverlap === undefined) {
     setSnapshot({
       generation: id,
       session: priorSession,
@@ -414,24 +420,27 @@ function startConnectionAttempt(predecessor?: Generation): Generation {
     const retiringSession = snapshot?.session;
     const retiringGeneration = generation.predecessor;
     generation.predecessor = undefined;
-    if (retiringSession !== undefined && retiringGeneration !== undefined) {
+    if (
+      generation.overlap === undefined &&
+      retiringSession !== undefined &&
+      retiringGeneration !== undefined
+    ) {
       generation.overlap = startTransportOverlap(generation, retiringGeneration, retiringSession);
     }
     setSnapshot({ generation: id, session: root, connecting: promise });
     resolve(root);
     firstConnect?.resolve(root);
     firstConnect = undefined;
-    if (retiringSession === undefined) return;
-    if (retiringGeneration === undefined) {
-      // Ordinary reconnect: the predecessor transport is already dead, so its
-      // local import table can be released immediately.
+    if (retiringSession !== undefined && generation.overlap?.session !== retiringSession) {
+      // Ordinary reconnect, or recovery after a just-published successor died:
+      // the snapshot session is dead and is not the live overlap session.
       disposeSession(retiringSession);
-      return;
     }
-    // Proactive budget rotation installed its overlap BEFORE publishing the
-    // snapshot, so reconnect-aware listeners could synchronously lease the old
-    // transport. With no consumer lease it retains the original short grace;
-    // claimed predecessors retire as soon as every successor is established.
+    // Proactive budget rotation installed (or transferred) its overlap BEFORE
+    // publishing the snapshot, so reconnect-aware listeners could synchronously
+    // lease the old transport. With no consumer lease it retains the original
+    // short grace; claimed predecessors retire as soon as every successor is
+    // established. A transferred overlap keeps its original hard deadline.
   };
 
   const beginWebSocketConnection = () => {
@@ -456,8 +465,9 @@ function startConnectionAttempt(predecessor?: Generation): Generation {
       current = undefined;
       consecutiveConnectionFailures += 1;
       reject(new Error("itx WebSocket closed before connecting"));
+      const recovery = takeRecoveryHandoff(generation);
       retireGeneration(generation);
-      startConnectionAttempt(generation.predecessor);
+      startConnectionAttempt(recovery.predecessor, recovery.overlap);
     }, CONNECTION_TIMEOUT_MS);
 
     ws.addEventListener("open", () => {
@@ -586,11 +596,12 @@ function startConnectionAttempt(predecessor?: Generation): Generation {
         // post-establish death is a transient to recover from immediately.
         if (!established) consecutiveConnectionFailures += 1;
         current = undefined;
+        const recovery = takeRecoveryHandoff(generation);
         // With a live session in hand this is the INVISIBLE reconnect
         // (the snapshot keeps showing it); with none it keeps first-load
         // callers on the stable first-connect promise — a paced retry, never
         // a wedge or an error boundary.
-        startConnectionAttempt(generation.predecessor);
+        startConnectionAttempt(recovery.predecessor, recovery.overlap);
       }
       // Once a connection attempt has resolved this is a no-op; a connection attempt that closed BEFORE
       // establishing rejects so imperative `connectIterateSession()` awaiters fail fast.
@@ -638,6 +649,21 @@ function disposeSession(session: SessionStub): void {
   (session as Partial<Disposable>)[Symbol.dispose]?.();
 }
 
+/**
+ * Detach the still-live side of a proactive rotation so a transport retry can
+ * adopt it without firing listeners or resetting its hard overlap deadline.
+ */
+function takeRecoveryHandoff(generation: Generation): {
+  predecessor: Generation | undefined;
+  overlap: TransportOverlap | undefined;
+} {
+  const predecessor = generation.predecessor;
+  const overlap = generation.overlap;
+  generation.predecessor = undefined;
+  generation.overlap = undefined;
+  return { predecessor, overlap };
+}
+
 /** Install the short unclaimed grace and the hard bound for a claimed predecessor. */
 function startTransportOverlap(
   successor: Generation,
@@ -645,6 +671,7 @@ function startTransportOverlap(
   predecessorSession: SessionStub,
 ): TransportOverlap {
   const overlap: TransportOverlap = {
+    owner: successor,
     generation: predecessor,
     session: predecessorSession,
     leases: 0,
@@ -653,13 +680,13 @@ function startTransportOverlap(
   return overlap;
 
   function finishGrace(): void {
-    if (successor.overlap !== overlap) return;
+    if (overlap.owner.overlap !== overlap) return;
     if (overlap.leases === 0) {
-      finishTransportOverlap(successor);
+      finishTransportOverlap(overlap.owner);
       return;
     }
     overlap.timeout = setTimeout(
-      () => finishTransportOverlap(successor),
+      () => finishTransportOverlap(overlap.owner),
       TRANSPORT_ROTATION_MAX_OVERLAP_MS - TRANSPORT_ROTATION_OVERLAP_GRACE_MS,
     );
   }
@@ -754,8 +781,9 @@ async function verifyTransport(generation: Generation): Promise<void> {
 function reconnectIfCurrent(generation: Generation): void {
   if (current !== generation) return;
   current = undefined; // FIRST: the close retireGeneration triggers must not auto-reconnect
+  const recovery = takeRecoveryHandoff(generation);
   retireGeneration(generation);
-  startConnectionAttempt();
+  startConnectionAttempt(recovery.predecessor, recovery.overlap);
 }
 
 /**

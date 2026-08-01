@@ -113,8 +113,9 @@ OS deployments set an explicit 1,000,000-subrequest ceiling, and the
 socket after 8,000 inbound messages. It publishes the successor before retiring
 the predecessor. Reconnect-aware effects lease that predecessor until every
 successor callback is live; failed opens retry without breaking the working
-callback, and a 30-second hard bound prevents a failed consumer from leaking
-the old transport. Consumers without a lease retain a five-second grace.
+callback. If the successor transport itself dies during that setup, its
+replacement inherits the same lease without resetting the 30-second hard bound.
+Consumers without a lease retain a five-second grace.
 Long-lived Node and TUI consumers must use that keeper
 (`configureIterateSession` plus `connectIterateSession`); `iterate/node` is
 deliberately a one-shot dial for bounded scripts and tests.
