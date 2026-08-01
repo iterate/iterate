@@ -153,19 +153,48 @@ What it took, and what each one teaches:
 - **A dead session must hard-reset the stream client**: capability ids die
   with their session, and reusing them poisons the next one.
 
-**Open: microphone capture returns noise, not audio.** Playback is proven;
-`esp_codec_dev_read` yields broadband noise (RMS ~−9 dBFS, crest ~3,
-clipping, flat spectrum to 8 kHz) whose level does not respond to
-`set_in_gain` — so those samples never came from the ADC signal path.
-Ruled out: the pin map (identical to Waveshare's own BSP), mono Philips
-slots, MCLK ×256, the 16 kHz coefficient entry, AXP2101 rails including
-the ALDO1 mic rail, the pre-construction soft reset, and one-vs-two
-codec-dev handles. Ordered next probes are in the header of
-`targets/waveshare_s3_amoled/main/waveshare_audio.c`: dump ES8311 regs
-0x00–0x45 after open and diff against the driver's expected init, scope
-BCLK/WS/DIN, try `digital_mic = true` in case this SKU has a PDM mic, and
-confirm the board revision (the stock image's `phone_s3_box_3` is an
-ESP-Brookesia demo name, not a hardware id).
+### Talking to it
+
+**A spoken conversation with the device works.** Three questions asked out
+loud in the room, over the single socket, with Grok's answers playing from
+the device's own speaker:
+
+| heard from the device's microphone                     | Grok's reply, played on the device   |
+| ------------------------------------------------------ | ------------------------------------ |
+| "What is the capital of Portugal? One short sentence." | "The capital of Portugal is Lisbon." |
+| "And Norway?"                                          | "The capital of Norway is Oslo."     |
+| "And Greece?"                                          | "The capital of Greece is Athens."   |
+
+Zero echo turns, 321 speaker frames played, 0 overflow, 0 decode failures,
+one session throughout. Context carries across turns (an earlier run
+answered "name one famous painter from that country" with Picasso after
+Spain).
+
+Three settings were load-bearing:
+
+- **`no_dac_ref = true`** (ES8311 reg `0x44 = 0x08`). The driver's default
+  fills the ADC lane's right slot with DAC output as an AEC reference — of
+  no use to a mono capture.
+- **Mic PGA 36 dB.** At 24 dB a talker a metre away lands at RMS −42 dBFS:
+  clean, but too quiet to open Grok's server VAD.
+- **Echo gate stamped from playback, not arrival.** Paced delivery finishes
+  arriving seconds before the speaker finishes, so a gate timed from
+  arrival reopened the mic mid-sentence and the board answered itself.
+  Timed from the playback write with a 900 ms tail (codec DMA ~90 ms plus
+  room reverb), turns are clean. This board has no hardware AEC reference,
+  so the gate is the only echo control available — the cost is that voice
+  barge-in during playback is off.
+
+**One diagnostic trap worth knowing, because it cost hours here:** 640 PCM
+bytes base64-encode to 854 characters, which is _not_ a multiple of 4. A
+capture script that joins per-frame base64 strings before decoding
+misaligns every frame after the first and produces convincing broadband
+"noise" — RMS −9 dBFS, gain-independent, flat to 8 kHz — that looks exactly
+like a dead microphone. The same capture decoded per frame showed textbook
+speech (peak −23.6 dBFS, RMS −41.9, crest 8.2, silences −68 dB). Decode
+each frame separately. Two on-device diagnostics are kept for the next
+bring-up: `waveshare_audio_dump_registers()` and
+`waveshare_audio_probe_din()` (whether anything drives the data line).
 
 ## Platform findings & fixes that came out of this
 
@@ -199,9 +228,10 @@ ESP-Brookesia demo name, not a hardware id).
 
 ## Verdict
 
-**Streams can carry realtime voice, including from a $30 microcontroller,
-with the server side entirely in userspace worker.ts** — mic clarity is
-perfect (word-perfect ASR through the whole pipeline), playback is
+**Streams can carry realtime voice, including a full spoken conversation
+with a $30 microcontroller, with the server side entirely in userspace
+worker.ts** — mic clarity is perfect (word-perfect ASR through the whole
+pipeline, from the laptop and from the ESP32's own ES8311), playback is
 underrun-free in every tested condition, and the added latency on healthy
 networks (~100–300ms ttfa, ~40–75ms/direction) is acceptable for a voice
 assistant given Grok's own ~650ms thinking time.
