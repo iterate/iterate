@@ -24,6 +24,8 @@ import {
 import {
   connectDeterministicTone,
   connectGrokRealtimeVoice,
+  GrokCredentialPrewarmer,
+  mintGrokRealtimeCredential,
   type GrokRealtimeVoiceStage,
 } from "./providers.ts";
 import {
@@ -39,9 +41,9 @@ const PREVIOUS_PCM_SESSION_KEY = "kit:previous-pcm-session";
 
 interface PcmSessionStartupTimeline {
   authenticationAndModeReadyAtMs: number | null;
-  credentialDecodedAtMs: number | null;
-  credentialRequestStartedAtMs: number | null;
-  credentialResponseReceivedAtMs: number | null;
+  credentialPrewarmDecodedAtMs: number | null;
+  credentialPrewarmReceivedAtMs: number | null;
+  credentialPrewarmStartedAtMs: number | null;
   deviceLaneAcceptedAtMs: number | null;
   providerConnectStartedAtMs: number | null;
   providerSessionUpdateSentAtMs: number | null;
@@ -58,6 +60,8 @@ interface ActivePcmSession {
   deviceId: string;
   deviceEventSubscriptionAttempts: number;
   deviceEventSubscriptionFailures: number;
+  grokCredentialPrewarmer?: GrokCredentialPrewarmer;
+  lastProviderConnectError: string | null;
   mode: KitVoiceMode;
   providerEvents: ProviderEventStreamJournal;
   providerConnectAttempts: number;
@@ -75,6 +79,8 @@ interface ClosedPcmSessionReport extends PcmSessionMetrics {
   deviceEventSubscriptionAttempts: number;
   deviceEventSubscriptionFailures: number;
   endedAtMs: number;
+  grokCredential: ReturnType<GrokCredentialPrewarmer["metrics"]> | null;
+  lastProviderConnectError: string | null;
   providerEvents: ProviderEventStreamMetrics;
   providerConnectAttempts: number;
   providerConnectFailures: number;
@@ -152,6 +158,8 @@ export class KitVoiceWorker extends IterateDurableObject {
       deviceEventSubscriptionAttempts: active.deviceEventSubscriptionAttempts,
       deviceEventSubscriptionFailures: active.deviceEventSubscriptionFailures,
       endedAtMs: null,
+      grokCredential: active.grokCredentialPrewarmer?.metrics() ?? null,
+      lastProviderConnectError: active.lastProviderConnectError,
       previousSession: this.#readPreviousPcm() ?? null,
       providerEvents: active.providerEvents.metrics(),
       providerConnectAttempts: active.providerConnectAttempts,
@@ -164,9 +172,9 @@ export class KitVoiceWorker extends IterateDurableObject {
   async #handlePcm(request: Request): Promise<Response> {
     const startup: PcmSessionStartupTimeline = {
       authenticationAndModeReadyAtMs: null,
-      credentialDecodedAtMs: null,
-      credentialRequestStartedAtMs: null,
-      credentialResponseReceivedAtMs: null,
+      credentialPrewarmDecodedAtMs: null,
+      credentialPrewarmReceivedAtMs: null,
+      credentialPrewarmStartedAtMs: null,
       deviceLaneAcceptedAtMs: null,
       providerConnectStartedAtMs: null,
       providerSessionUpdateSentAtMs: null,
@@ -286,6 +294,7 @@ export class KitVoiceWorker extends IterateDurableObject {
       deviceMetrics,
       deviceEventSubscriptionAttempts: 0,
       deviceEventSubscriptionFailures: 0,
+      lastProviderConnectError: null,
       mode,
       providerEvents,
       providerConnectAttempts: 0,
@@ -295,6 +304,29 @@ export class KitVoiceWorker extends IterateDurableObject {
       startup,
     };
     this.#activePcm = active;
+    if (mode === "grok") {
+      const prewarmer = new GrokCredentialPrewarmer({
+        mintCredential: async () =>
+          await this.#mintGrokCredential((stage) => {
+            if (this.#activePcm === active) observeGrokStartupStage(active.startup, stage);
+          }),
+        onFailure: (error) => {
+          this.#log("provider-credential-prewarm-failed", "error", {
+            message: errorMessage(error),
+            sessionId,
+          });
+        },
+        runInBackground: (promise) => this.ctx.waitUntil(promise),
+      });
+      active.grokCredentialPrewarmer = prewarmer;
+      /*
+       * The authenticated device lane is deliberately boot-warm. Start the
+       * slow, secret-confined credential request at that same idle boundary,
+       * not on Button B; a measured production mint took 2.67 seconds. The
+       * short-lived value never leaves this userspace Durable Object.
+       */
+      void prewarmer.prewarm().catch(() => undefined);
+    }
     server.addEventListener(
       "close",
       () => {
@@ -302,6 +334,7 @@ export class KitVoiceWorker extends IterateDurableObject {
           this.#rememberClosedPcm(active);
           this.#activePcm = undefined;
         }
+        active.grokCredentialPrewarmer?.[Symbol.dispose]();
         closeProjectSession();
       },
       { once: true },
@@ -333,10 +366,25 @@ export class KitVoiceWorker extends IterateDurableObject {
     });
   }
 
-  async #connectGrok(onStage?: (stage: GrokRealtimeVoiceStage) => void): Promise<WebSocket> {
+  async #mintGrokCredential(onStage?: (stage: GrokRealtimeVoiceStage) => void) {
     using project = await this.env.ITX.get();
-    return await connectGrokRealtimeVoice({
+    return await mintGrokRealtimeCredential({
       fetchCredential: async (request) => await project.egress.fetch(request),
+      onStage,
+    });
+  }
+
+  async #connectGrok(
+    active: ActivePcmSession,
+    onStage?: (stage: GrokRealtimeVoiceStage) => void,
+  ): Promise<WebSocket> {
+    const prewarmer = active.grokCredentialPrewarmer;
+    if (prewarmer === undefined) {
+      throw new Error("The Grok credential prewarmer is unavailable.");
+    }
+    const credential = await prewarmer.take();
+    return await connectGrokRealtimeVoice({
+      credential,
       onStage,
       sampleRateHz: ITERATE_KIT_PCM_SAMPLE_RATE_HZ,
     });
@@ -399,7 +447,7 @@ export class KitVoiceWorker extends IterateDurableObject {
                 frequencyHz: 1_000,
                 sampleRateHz: ITERATE_KIT_PCM_SAMPLE_RATE_HZ,
               })
-            : await this.#connectGrok((stage) => {
+            : await this.#connectGrok(active, (stage) => {
                 if (this.#activePcm === active) observeGrokStartupStage(active.startup, stage);
               });
         if (this.#activePcm !== active || !active.bridge.attachProvider(provider)) {
@@ -417,8 +465,10 @@ export class KitVoiceWorker extends IterateDurableObject {
           reason,
           sessionId: active.sessionId,
         });
+        active.lastProviderConnectError = null;
       } catch (error) {
         active.providerConnectFailures += 1;
+        active.lastProviderConnectError = errorMessage(error);
         this.#log("provider-reconnect-failed", "error", {
           attempt: active.providerConnectAttempts,
           message: errorMessage(error),
@@ -609,6 +659,7 @@ export class KitVoiceWorker extends IterateDurableObject {
     if (active === undefined) return;
     active.bridge.close(code, reason);
     this.#rememberClosedPcm(active);
+    active.grokCredentialPrewarmer?.[Symbol.dispose]();
     active.closeProjectSession();
   }
 
@@ -635,6 +686,8 @@ export class KitVoiceWorker extends IterateDurableObject {
       deviceEventSubscriptionAttempts: active.deviceEventSubscriptionAttempts,
       deviceEventSubscriptionFailures: active.deviceEventSubscriptionFailures,
       endedAtMs: Date.now(),
+      grokCredential: active.grokCredentialPrewarmer?.metrics() ?? null,
+      lastProviderConnectError: active.lastProviderConnectError,
       providerEvents: active.providerEvents.metrics(),
       providerConnectAttempts: active.providerConnectAttempts,
       providerConnectFailures: active.providerConnectFailures,
@@ -685,15 +738,15 @@ function observeGrokStartupStage(
    * is separately counted, while overwriting cold-start timestamps would make
    * a later fast retry erase the reason the user originally waited.
    */
-  if (stage.code === "credential-request-started") {
-    timeline.credentialRequestStartedAtMs ??= stage.atMs;
-  } else if (stage.code === "credential-response-received") {
-    timeline.credentialResponseReceivedAtMs ??= stage.atMs;
-  } else if (stage.code === "credential-decoded") {
-    timeline.credentialDecodedAtMs ??= stage.atMs;
-  } else if (stage.code === "websocket-created") {
+  if (stage.code === "credential-prewarm-started") {
+    timeline.credentialPrewarmStartedAtMs ??= stage.atMs;
+  } else if (stage.code === "credential-prewarm-received") {
+    timeline.credentialPrewarmReceivedAtMs ??= stage.atMs;
+  } else if (stage.code === "credential-prewarm-decoded") {
+    timeline.credentialPrewarmDecodedAtMs ??= stage.atMs;
+  } else if (stage.code === "provider-websocket-created") {
     timeline.providerWebSocketCreatedAtMs ??= stage.atMs;
-  } else if (stage.code === "websocket-opened") {
+  } else if (stage.code === "provider-websocket-opened") {
     timeline.providerWebSocketOpenedAtMs ??= stage.atMs;
   } else {
     timeline.providerSessionUpdateSentAtMs ??= stage.atMs;
@@ -730,6 +783,21 @@ function pcmSessionStartupMetrics(
     providerAttachedAtMs: bridge.providerAttachedAtMs,
     providerAttachedLatencyMs: elapsedFromRequest(bridge.providerAttachedAtMs),
     providerAttachedFromConversationMs: elapsedFromConversation(bridge.providerAttachedAtMs),
+    credentialPrewarmLatencyMs:
+      timeline.credentialPrewarmStartedAtMs === null ||
+      timeline.credentialPrewarmDecodedAtMs === null
+        ? null
+        : Math.max(
+            0,
+            timeline.credentialPrewarmDecodedAtMs - timeline.credentialPrewarmStartedAtMs,
+          ),
+    credentialReadyBeforeConversationMs:
+      timeline.credentialPrewarmDecodedAtMs === null || bridge.conversationStartedAtMs === null
+        ? null
+        : Math.max(0, bridge.conversationStartedAtMs - timeline.credentialPrewarmDecodedAtMs),
+    providerWebSocketOpenFromConversationMs: elapsedFromConversation(
+      timeline.providerWebSocketOpenedAtMs,
+    ),
     providerSessionReadyAtMs: bridge.providerSessionReadyAtMs,
     providerSessionReadyLatencyMs: elapsedFromRequest(bridge.providerSessionReadyAtMs),
     providerSessionReadyFromConversationMs: elapsedFromConversation(

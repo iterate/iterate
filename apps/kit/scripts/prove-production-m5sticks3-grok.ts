@@ -47,6 +47,7 @@ import {
   type RemoteDnsAndTlsConnectMeasurement,
 } from "../src/device/physical-network-reachability.ts";
 import { inspectRetainedPcm16Artifact } from "../src/device/retained-pcm16-artifact.ts";
+import { assessProductionGrokStartupLatency } from "../src/device/production-grok-startup-latency.ts";
 import {
   productionPcmConversationIsIdle,
   productionPcmGenerationProgress,
@@ -94,11 +95,17 @@ interface ProductionPcmMetrics extends PcmSessionMetrics {
   providerEvents: ProviderEventStreamMetrics;
   sessionId: string;
   startup?: {
+    credentialPrewarmLatencyMs: number | null;
+    credentialReadyBeforeConversationMs: number | null;
     deviceUpgradeLatencyMs: number | null;
     firstDevicePcmLatencyMs: number | null;
+    firstDevicePcmFromConversationMs: number | null;
     firstProviderPcmLatencyMs: number | null;
+    firstProviderPcmFromConversationMs: number | null;
     providerAttachedLatencyMs: number | null;
+    providerSessionReadyFromConversationMs: number | null;
     providerSessionReadyLatencyMs: number | null;
+    providerWebSocketOpenFromConversationMs: number | null;
   };
 }
 
@@ -204,10 +211,7 @@ export async function proveProductionM5StickS3Grok(
    * The callback is latest-state only; this bounded host array never adds a
    * queue or history allocation to the device.
    */
-  let baselinePlayback = await waitForStablePlayback(
-    playbackSamples,
-    () => playbackCallbackError,
-  );
+  let baselinePlayback = await waitForStablePlayback(playbackSamples, () => playbackCallbackError);
 
   let capture: MacOsPcm16Capture | undefined;
   let completedCapture: Awaited<ReturnType<MacOsPcm16Capture["stop"]>> | undefined;
@@ -294,10 +298,7 @@ export async function proveProductionM5StickS3Grok(
       );
       preflightDevice = requireLatestWorkerDeviceMetrics(preflightWorker);
       baselineDiagnostics = await readDiagnostics();
-      baselinePlayback = await waitForStablePlayback(
-        playbackSamples,
-        () => playbackCallbackError,
-      );
+      baselinePlayback = await waitForStablePlayback(playbackSamples, () => playbackCallbackError);
       console.log(`pcm_lane=warm_idle session_id=${preflightWorker.sessionId}`);
       remoteConversationStarted =
         (await invoke<boolean>([...devicePath, "conversation", "start"])) === true;
@@ -343,10 +344,7 @@ export async function proveProductionM5StickS3Grok(
     baselineWorker = connectedWorker;
     const connectedDevice = requireLatestWorkerDeviceMetrics(connectedWorker);
     baselineDevice = connectedDevice;
-    baselinePlayback = await waitForStablePlayback(
-      playbackSamples,
-      () => playbackCallbackError,
-    );
+    baselinePlayback = await waitForStablePlayback(playbackSamples, () => playbackCallbackError);
     console.log(
       `pcm_conversation=connected session_id=${connectedWorker.sessionId} ` +
         `device_metric_samples=${connectedWorker.deviceMetrics.samplesReceived} ` +
@@ -1063,6 +1061,10 @@ export async function proveProductionM5StickS3Grok(
   if (!digitalAssessment.passed) {
     runFailure ??= new Error(digitalAssessment.reasons.join("; "));
   }
+  const startupLatencyAssessment = assessProductionGrokStartupLatency(baselineWorker.startup ?? {});
+  if (!startupLatencyAssessment.passed) {
+    runFailure ??= new Error(startupLatencyAssessment.reasons.join("; "));
+  }
 
   const dnsAndConnect = networkMeasurement
     ? await networkMeasurement
@@ -1174,6 +1176,10 @@ export async function proveProductionM5StickS3Grok(
         firstHeld: firstHeldWorker ?? null,
         terminal: terminalWorker,
       },
+    },
+    callStartup: {
+      assessment: startupLatencyAssessment,
+      timing: baselineWorker.startup ?? null,
     },
     model: "grok-voice-think-fast-2.0",
     network: {

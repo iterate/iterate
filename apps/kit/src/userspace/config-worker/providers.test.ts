@@ -3,6 +3,8 @@ import { describe, expect, test, vi } from "vitest";
 import {
   connectDeterministicTone,
   connectGrokRealtimeVoice,
+  GrokCredentialPrewarmer,
+  mintGrokRealtimeCredential,
   type AcceptedSocketPair,
 } from "./providers.ts";
 
@@ -23,36 +25,55 @@ class FakeProviderSocket extends EventTarget {
   constructor(url: string) {
     super();
     this.url = url;
-    queueMicrotask(() => {
-      this.readyState = WebSocket.OPEN;
-      this.dispatchEvent(new Event("open"));
-    });
+  }
+
+  open() {
+    this.readyState = WebSocket.OPEN;
+    this.dispatchEvent(new Event("open"));
   }
 
   close() {
     this.readyState = WebSocket.CLOSED;
+    this.dispatchEvent(new CloseEvent("close", { code: 1000 }));
   }
 
   send(data: unknown) {
+    if (this.readyState !== WebSocket.OPEN) {
+      throw new Error("The provider socket was used before accept().");
+    }
     this.sent.push(data);
   }
 }
 
 describe("userspace PCM providers", () => {
-  test("mints a short-lived Grok credential through project egress and configures native PCM16", async () => {
+  test("prewarms the single-use Grok credential before opening the provider socket", async () => {
     const requests: Request[] = [];
     const startupStages: string[] = [];
-    let socket: FakeProviderSocket | undefined;
-    const provider = await connectGrokRealtimeVoice({
-      createWebSocket(url, protocols) {
-        expect(protocols).toEqual(["xai-client-secret.short-lived"]);
-        socket = new FakeProviderSocket(url);
-        return socket as unknown as WebSocket;
-      },
+    const credential = await mintGrokRealtimeCredential({
       fetchCredential: async (request) => {
         requests.push(request);
-        return Response.json({ expires_at: 123_456, value: "short-lived" });
+        return Response.json({
+          expires_at: Math.ceil(Date.now() / 1_000) + 3_600,
+          value: "prewarmed-client-secret",
+        });
       },
+      onStage: (stage) => startupStages.push(stage.code),
+    });
+
+    const socket = new FakeProviderSocket("wss://api.x.ai/v1/realtime");
+    const provider = await connectGrokRealtimeVoice({
+      createWebSocket: (url, protocols) => {
+        expect(url).toBe("wss://api.x.ai/v1/realtime?model=grok-voice-think-fast-2.0");
+        expect(protocols).toEqual(["xai-client-secret.prewarmed-client-secret"]);
+        queueMicrotask(() => socket.open());
+        /*
+         * The fake implements only the WebSocket surface this provider owns;
+         * the cast keeps unrelated browser event-handler fields out of a
+         * focused protocol test.
+         */
+        return socket as unknown as WebSocket;
+      },
+      credential,
       onStage: (stage) => startupStages.push(stage.code),
       sampleRateHz: 16_000,
     });
@@ -60,19 +81,15 @@ describe("userspace PCM providers", () => {
     expect(provider).toBe(socket);
     expect(requests).toHaveLength(1);
     expect(requests[0]?.url).toBe("https://api.x.ai/v1/realtime/client_secrets");
-    expect(await requests[0]?.json()).toEqual({
-      expires_after: { seconds: 3_600 },
-    });
     expect(requests[0]?.headers.get("authorization")).toBe(
       'Bearer getSecret("/secrets/kit/xai-api-key")',
     );
-    expect(socket?.url).toBe("wss://api.x.ai/v1/realtime?model=grok-voice-think-fast-2.0");
     expect(startupStages).toEqual([
-      "credential-request-started",
-      "credential-response-received",
-      "credential-decoded",
-      "websocket-created",
-      "websocket-opened",
+      "credential-prewarm-started",
+      "credential-prewarm-received",
+      "credential-prewarm-decoded",
+      "provider-websocket-created",
+      "provider-websocket-opened",
       "session-update-sent",
     ]);
     expect(socket?.sent).toContainEqual(
@@ -112,6 +129,82 @@ describe("userspace PCM providers", () => {
         },
       }),
     );
+  });
+
+  test("replenishes the next single-use credential as soon as one is consumed", async () => {
+    /*
+     * xAI returns 401 when the same ephemeral credential is used for a second
+     * WebSocket. The warm slot therefore has consume-and-refill semantics, not
+     * a conventional TTL cache. Starting the refill before the current call
+     * proceeds keeps the next Button-B press off the slow credential path.
+     */
+    let mintCount = 0;
+    const prewarmer = new GrokCredentialPrewarmer({
+      mintCredential: async () => {
+        mintCount += 1;
+        return {
+          expiresAtEpochSeconds: Math.ceil(Date.now() / 1_000) + 3_600,
+          value: `single-use-${mintCount}`,
+        };
+      },
+    });
+
+    await prewarmer.prewarm();
+    expect(prewarmer.metrics()).toMatchObject({ attempts: 1, failures: 0, state: "ready" });
+    const first = await prewarmer.take();
+
+    expect(first.value).toBe("single-use-1");
+    expect(mintCount).toBe(2);
+    await prewarmer.prewarm();
+    expect(prewarmer.metrics()).toMatchObject({ attempts: 2, failures: 0, state: "ready" });
+    prewarmer[Symbol.dispose]();
+  });
+
+  test("rejects a newly minted credential that cannot survive the call edge", async () => {
+    /*
+     * Treating a provider's already-expired value as a cache miss would make
+     * `take()` mint forever under a malformed upstream response. Rejecting at
+     * the trust boundary keeps recovery finite and leaves the failure visible
+     * in prewarmer metrics for a later button press to retry.
+     */
+    await expect(
+      mintGrokRealtimeCredential({
+        fetchCredential: async () =>
+          Response.json({
+            expires_at: Math.floor(Date.now() / 1_000),
+            value: "already-expired",
+          }),
+      }),
+    ).rejects.toThrow("expires too soon");
+  });
+
+  test("reports a failed prewarm and permits one explicit later retry", async () => {
+    let mintCount = 0;
+    const failures: string[] = [];
+    const prewarmer = new GrokCredentialPrewarmer({
+      mintCredential: async () => {
+        mintCount += 1;
+        if (mintCount === 1) throw new Error("egress unavailable");
+        return {
+          expiresAtEpochSeconds: Math.ceil(Date.now() / 1_000) + 3_600,
+          value: "recovered-single-use",
+        };
+      },
+      onFailure: (error) => failures.push(error instanceof Error ? error.message : String(error)),
+    });
+
+    await expect(prewarmer.prewarm()).rejects.toThrow("egress unavailable");
+    expect(prewarmer.metrics()).toMatchObject({
+      attempts: 1,
+      failures: 1,
+      lastError: "egress unavailable",
+      state: "empty",
+    });
+
+    await expect(prewarmer.take()).resolves.toMatchObject({ value: "recovered-single-use" });
+    expect(failures).toEqual(["egress unavailable"]);
+    expect(prewarmer.metrics()).toMatchObject({ attempts: 3, failures: 1, state: "ready" });
+    prewarmer[Symbol.dispose]();
   });
 
   test("streams a known tone at media cadence with constant-sized device frames", async () => {

@@ -10,7 +10,7 @@ interruption runs remain the stronger endurance evidence. Physical-button
 provenance and the deferred deployed-worker kill/remount lifecycle are not
 silently relabelled as complete.
 
-## Call-start latency diagnosis and fix (2026-08-01 09:21 UTC)
+## Call-start latency diagnosis and fixes (through 2026-08-01 10:14 UTC)
 
 The reported five-to-eight-second `Call connecting` interval was real, but it
 was not one indivisible Grok delay. Two independent lifecycle mistakes were
@@ -71,11 +71,78 @@ An immediately preceding digitally clean run remains classified
 `network-invalid` because one worker probe reached 158.994 ms; it was not used
 as the clean acceptance run.
 
-The next honest latency work is the remaining 1.603-second upstream budget,
-not another device reconnect: credential prefetch/caching can remove part of
-the 264 ms only with an explicit expiry policy, and replacing Grok's generated
-opening sentence with cached audio could remove generation time but would
-change the product contract. Neither shortcut has been silently introduced.
+### Variable credential latency and the final call-edge fix
+
+A fresh production reproduction showed why the earlier 264 ms credential
+sample could not be treated as a bound. With the physical `/pcm` lane still
+warm and unchanged, the run retained under
+`apps/kit/evidence/m5sticks3-call-startup-current/2026-08-01T09-49-38-290Z/`
+took **4,006 ms** from conversation start to first device PCM. Of that interval,
+the per-call short-lived xAI credential request alone took **2,670 ms**. The
+remaining measured phases were 435 ms to open xAI's WebSocket, 209 ms to make
+the provider session ready, 560 ms for Grok to produce its first PCM, and
+132 ms to deliver that PCM to the Stick. The run otherwise passed its physical
+speech, exact digital, and network gates; this made the synchronous credential
+request the causal user-visible regression rather than a Wi-Fi or audio guess.
+Its manifest SHA-256 is
+`3ad83b0bfc3768035b2b226999e53a9c24f1111ec62e320a5bdabf0a40c7c9da`.
+
+Two bounded probes ruled out tempting but incorrect shortcuts. A direct xAI
+API-key WebSocket opened from the Mac in 454 ms, but a production userspace
+attempt to return the upgrade through `project.egress.fetch()` never obtained
+a provider socket. That call is a serialized Cap'n Web capability method; it
+does not preserve the native 101/WebSocket semantics available on Iterate's
+platform-owned fetch lane. The retained failure is at
+`apps/kit/evidence/m5sticks3-call-startup-direct-egress/2026-08-01T09-59-56-273Z/`
+(failure SHA-256
+`f3407627a64914cf72460deff9efaebd7a0b770826a6682e5fe9c34fdcb78bc4`).
+Separately, reusing one xAI ephemeral credential opened the first socket in
+448 ms and returned HTTP 401 for the second, proving that it is single-use and
+must not be modelled as a conventional reusable TTL cache.
+
+The deployed userspace worker source object
+`e978728ae228b46265e34aedb79431490bdefa42` now mints exactly one unused
+credential as soon as an authenticated idle device `/pcm` lane registers.
+Button B atomically consumes that credential, opens the provider socket, and
+starts minting the successor in parallel with the current call. An unused
+credential is refreshed before expiry. The long-lived API key remains confined
+to the existing Iterate egress secret substitution, the short-lived value never
+leaves the Durable Object, and no billable provider WebSocket is held open while
+the device is idle. Prewarm attempt/failure/state/expiry metrics and the last
+provider-connect error are exposed in `pcmMetrics()`; failure is observable and
+a later call retries rather than inheriting a poisoned cache entry.
+
+The first production physical run of that design is retained under
+`apps/kit/evidence/m5sticks3-call-startup-prewarmed/2026-08-01T10-13-45-704Z/`.
+Credential preparation took 553 ms but finished **825 ms before** conversation
+start. From Button B, xAI WebSocket open took 430 ms, provider session readiness
+took 629 ms, first provider PCM arrived at 1,264 ms, and first device PCM was
+sent at **1,473 ms**. This is a **2,533 ms / 63.2% reduction** from the fresh
+4,006 ms reproduction, without caching speech or changing the required live
+Grok opening greeting.
+
+The same run completed a real PTT turn and Grok-driven colour tool call. It
+conserved 492 microphone frames and 116/116/116 accepted, submitted, and
+completed turn-response frames, with zero drops, flushes, failures, resets, or
+protocol errors. The aligned network evidence is valid: all links remained up
+at -65 through -62 dBm, DNS took 51.438 ms, TLS connect took 40.075 ms, and no
+PCM socket lifecycle counter advanced. The nearby Mac independently transcribed
+exactly `Production turn one is green.`, matching Grok. The immutable manifest
+nevertheless remains honestly `audio-invalid`: its one-second ambient window
+was noisier than the later response, so the relative-energy oracle failed even
+though the exact transcript and digital ledger succeeded. This run establishes
+the latency/transport result, not a relaxed acoustic-energy threshold. Manifest
+and network SHA-256 values are respectively
+`0081bc711a0f6d308a22fa1bb877d1565d6ad353ff7adb2ccf217f64e61a702b`
+and `202b43412c6104a574c309fbefff538fe704ec5c4ae6770b5495eea77c56fd04`.
+
+Future production proofs now have an explicit **2,500 ms Button-B-to-first-
+device-PCM gate**. That ceiling leaves bounded provider variation around the
+measured 1,473 ms while deterministically rejecting the old 4,006 ms path.
+The regression tests explain why provider connection alone is insufficient:
+the measured boundary includes Grok generation and delivery to the physical
+device. Tightening the ceiling should follow a distribution of clean runs;
+raising it to absorb unexplained delay is forbidden.
 
 ## Production capability UI and live-metrics proof (2026-08-01 09:37 UTC)
 
