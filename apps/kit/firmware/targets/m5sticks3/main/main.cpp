@@ -135,8 +135,21 @@ constexpr std::size_t eventNotificationCapacity = 8U;
  */
 constexpr std::size_t controlInboxSlotCount = 8U;
 constexpr std::size_t controlOutboxSlotCount = 8U;
-constexpr std::size_t controlSlotCapacity =
-    ITERATE_KIT_ESP_IDF_CONTROL_MESSAGE_CAPACITY;
+/*
+ * Slot count and slot width solve different measured problems. Both
+ * directions need eight messages of burst reserve, but only egress carries an
+ * eight-frame, base64 VoiceLab microphone append. Ingress is bounded by the
+ * peer's 2.6 KiB delivery batch plus envelope and therefore fits 4 KiB.
+ *
+ * Using the transport-wide 8 KiB maximum for both directions charged the
+ * eight-slot inbox an impossible extra 32 KiB and made this target overflow
+ * internal DRAM by 8.7 KiB at link time. Keep the rings in internal SRAM—the
+ * network task relies on deterministic cache-independent mailboxes—but size
+ * them for their actual wire shapes instead of moving realtime coordination to
+ * PSRAM or undoing the measured eight-frame egress batching fix.
+ */
+constexpr std::size_t controlInboxSlotCapacity = 4096U;
+constexpr std::size_t controlOutboxSlotCapacity = 8192U;
 constexpr std::size_t controlMessagesPerPoll = 4U;
 constexpr std::size_t controlRemoteCallLifecycleMessages = 3U;
 /*
@@ -198,8 +211,12 @@ static_assert(
     "SPSC control slot counts must be powers of two");
 static_assert(
     ((maximumScreenCaptureBytes + 2U) / 3U) * 4U + 256U <=
-        controlSlotCapacity,
+        controlOutboxSlotCapacity,
     "a screen capture reply must fit one bounded control message");
+static_assert(
+    controlOutboxSlotCapacity <=
+        ITERATE_KIT_ESP_IDF_CONTROL_MESSAGE_CAPACITY,
+    "the target outbox cannot exceed the audited ESP control message maximum");
 static_assert(
     controlInboxSlotCount >=
         callbackConcurrency * 2U +
@@ -274,9 +291,11 @@ struct Runtime {
   iterate_kit_spsc_ring controlInboxRing{};
   iterate_kit_spsc_ring controlOutboxRing{};
   std::uint8_t
-      controlInboxStorage[controlInboxSlotCount][controlSlotCapacity]{};
+      controlInboxStorage[controlInboxSlotCount]
+                           [controlInboxSlotCapacity]{};
   std::uint8_t
-      controlOutboxStorage[controlOutboxSlotCount][controlSlotCapacity]{};
+      controlOutboxStorage[controlOutboxSlotCount]
+                            [controlOutboxSlotCapacity]{};
   std::size_t controlInboxLengths[controlInboxSlotCount]{};
   std::size_t controlOutboxLengths[controlOutboxSlotCount]{};
   /*
@@ -1098,13 +1117,13 @@ bool initialiseRings(Runtime &state) {
   return iterate_kit_spsc_ring_init(
              &state.controlInboxRing,
              state.controlInboxStorage,
-             controlSlotCapacity,
+             controlInboxSlotCapacity,
              controlInboxSlotCount,
              state.controlInboxLengths) == ITERATE_KIT_OK &&
       iterate_kit_spsc_ring_init(
              &state.controlOutboxRing,
              state.controlOutboxStorage,
-             controlSlotCapacity,
+             controlOutboxSlotCapacity,
              controlOutboxSlotCount,
              state.controlOutboxLengths) == ITERATE_KIT_OK &&
       iterate_kit_spsc_ring_init(
