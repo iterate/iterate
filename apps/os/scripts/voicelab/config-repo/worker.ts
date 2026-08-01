@@ -152,10 +152,49 @@ export class VoiceBridge extends IterateDurableObject {
 
     let spkSeq = 0;
     let appendErrors = 0;
+
+    /*
+     * ONE ordered outbound lane.
+     *
+     * This used to be a bare `stream.append(...).catch()` per call — every
+     * append an independent in-flight RPC, so two issued back to back could
+     * commit in either order. Transcript deltas landed transposed (the
+     * observed "<second half><first half>" on the device's screen), and
+     * nothing about audio frame order was guaranteed either.
+     *
+     * Ordering is now structural: at most one append is in flight, and the
+     * next starts only after it resolves. That costs nothing in throughput
+     * because the queue COALESCES — whatever accumulates during a round trip
+     * ships as one atomic multi-event append, so the batch grows exactly as
+     * fast as latency demands. At ~50 ms RTT and 20 events per batch that is
+     * ~400 events/s against the ~50/s this protocol produces.
+     *
+     * The alternative — awaiting each append at the call site — would block
+     * the Grok socket's message handler on a full round trip per event, and
+     * is what this design is avoiding.
+     */
+    const MAX_EVENTS_PER_APPEND = 20;
+    const outbound: Parameters<typeof stream.append> = [];
+    let draining = false;
+    const drainOutbound = async () => {
+      if (draining) return;
+      draining = true;
+      try {
+        while (outbound.length > 0) {
+          const batch = outbound.splice(0, MAX_EVENTS_PER_APPEND);
+          try {
+            await stream.append(...batch);
+          } catch {
+            appendErrors++;
+          }
+        }
+      } finally {
+        draining = false;
+      }
+    };
     const fireAppend = (...events: Parameters<typeof stream.append>) => {
-      stream.append(...events).catch(() => {
-        appendErrors++;
-      });
+      outbound.push(...events);
+      void drainOutbound();
     };
 
     /*
@@ -296,11 +335,29 @@ export class VoiceBridge extends IterateDurableObject {
         paceQueue.length = 0;
       }
       if (FORWARDED_GROK_EVENTS.has(grokEvent.type)) {
-        fireAppend({
-          type: "voicelab/grok-event",
-          ephemeral: true,
+        const event = {
+          type: "voicelab/grok-event" as const,
+          ephemeral: true as const,
           payload: { callId, t: Date.now(), event: grokEvent },
-        });
+        };
+        /*
+         * Transcript and response-lifecycle events ride the SAME paced queue
+         * as the audio they describe, so they keep their position relative
+         * to it. Sending them immediately let response.done overtake the
+         * answer still queued behind it — the device then showed "ready,
+         * hold to talk" while it was still speaking, and the transcript ran
+         * ahead of the voice.
+         *
+         * Barge-in is the deliberate exception: speech_started must reach
+         * the device as fast as the wire allows, because its whole job is to
+         * stop playback. Pacing it would defeat it.
+         */
+        if (pacing && grokEvent.type !== "input_audio_buffer.speech_started") {
+          paceQueue.push(event);
+          pacePump();
+        } else {
+          fireAppend(event);
+        }
       }
     });
 
