@@ -276,8 +276,20 @@ bool waveshare_audio_init(void) {
      * near -30 dBFS with peaks still ~12 dB below clipping.
      */
     (void)esp_codec_dev_set_in_gain(codec_dev, 30.0f);
-    /* Maximum: this speaker is small and the device is used at arm's length. */
-    (void)esp_codec_dev_set_out_vol(codec_dev, 100);
+    /*
+     * As loud as it gets without audible distortion. Measured by acoustic
+     * loopback — play a 440Hz tone, capture it on this board's own
+     * microphone, compare harmonics to fundamental:
+     *
+     *   volume 100 -> 2nd harmonic -16.8 dB   (distorting, even with the
+     *                                          microphone well below clipping)
+     *   volume  60 -> 2nd harmonic -34.9 dB   (clean)
+     *
+     * So full scale overdrives this amp, and "turn it all the way up" was
+     * making the speaker worse rather than louder. 85 keeps the headroom
+     * while staying loud; `itx.kit.waveshare.setVolume(n)` tunes it live.
+     */
+    (void)esp_codec_dev_set_out_vol(codec_dev, 85);
   }
   ESP_LOGI(tag, "ES8311 duplex audio ready at 16 kHz");
   /*
@@ -287,6 +299,18 @@ bool waveshare_audio_init(void) {
    * diagnosing, never on the shipping path.
    */
   return true;
+}
+
+void waveshare_audio_set_volume(int percent) {
+  if (codec_dev == NULL) return;
+  if (percent < 0) percent = 0;
+  if (percent > 100) percent = 100;
+  (void)esp_codec_dev_set_out_vol(codec_dev, percent);
+}
+
+void waveshare_audio_set_mic_gain(float db) {
+  if (codec_dev == NULL) return;
+  (void)esp_codec_dev_set_in_gain(codec_dev, db);
 }
 
 void waveshare_audio_amplifier(bool on) {

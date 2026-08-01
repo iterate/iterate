@@ -27,6 +27,7 @@
 
 #include "capnweb/capnweb.h"
 #include "esp_attr.h"
+#include "waveshare_audio.h"
 #include "waveshare_display.h"
 #include "waveshare_recorder.h"
 
@@ -37,6 +38,8 @@ static const char *const hang_up_path[] = {"conversation", "hangUp"};
 static const char *const talk_start_path[] = {"pushToTalk", "start"};
 static const char *const talk_stop_path[] = {"pushToTalk", "stop"};
 static const char *const take_screenshot_path[] = {"takeScreenshot"};
+static const char *const set_volume_path[] = {"setVolume"};
+static const char *const set_mic_gain_path[] = {"setMicGain"};
 static const char *const recording_status_path[] = {"recording", "status"};
 static const char *const recording_size_path[] = {"recording", "size"};
 static const char *const recording_read_path[] = {"recording", "read"};
@@ -257,6 +260,39 @@ static enum capnweb_status read_screenshot_chunk(
  * size, then read chunks that each fit one control message. No second
  * transport, and nobody has to take the card out.
  */
+static enum capnweb_status set_volume(
+    void *context,
+    const struct capnweb_call *call,
+    struct capnweb_reply *reply) {
+  struct capnweb_value value = {0};
+  int64_t percent = -1;
+  (void)context;
+  if (call == NULL || !call->has_arguments ||
+      !capnweb_value_array_at(&call->arguments, 0U, &value) ||
+      !capnweb_value_get_int64(&value, &percent) || percent < 0 ||
+      percent > 100) {
+    return capnweb_reply_set_error(reply, "RangeError", "expected 0-100");
+  }
+  waveshare_audio_set_volume((int)percent);
+  return capnweb_reply_set_int64(reply, percent);
+}
+
+static enum capnweb_status set_mic_gain(
+    void *context,
+    const struct capnweb_call *call,
+    struct capnweb_reply *reply) {
+  struct capnweb_value value = {0};
+  int64_t db = -1;
+  (void)context;
+  if (call == NULL || !call->has_arguments ||
+      !capnweb_value_array_at(&call->arguments, 0U, &value) ||
+      !capnweb_value_get_int64(&value, &db) || db < 0 || db > 48) {
+    return capnweb_reply_set_error(reply, "RangeError", "expected 0-48 dB");
+  }
+  waveshare_audio_set_mic_gain((float)db);
+  return capnweb_reply_set_int64(reply, db);
+}
+
 static enum capnweb_status recording_status(
     void *context,
     const struct capnweb_call *call,
@@ -343,6 +379,8 @@ struct iterate_kit_module waveshare_tools_module(void) {
     {talk_start_path, 2U, talk_start},
     {talk_stop_path, 2U, talk_stop},
     {take_screenshot_path, 1U, take_screenshot},
+    {set_volume_path, 1U, set_volume},
+    {set_mic_gain_path, 1U, set_mic_gain},
     {recording_status_path, 2U, recording_status},
     {recording_size_path, 2U, recording_size},
     {recording_read_path, 2U, recording_read},

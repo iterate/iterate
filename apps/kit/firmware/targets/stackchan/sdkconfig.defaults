@@ -10,6 +10,7 @@ CONFIG_SPIRAM_MODE_QUAD=y
 CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_SPIRAM_USE_MALLOC=y
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
 # ESP-IDF 5.4 renamed the old SPIRAM option.  This merely permits explicitly
 # selected non-audio tasks to use external stacks; the audio owner keeps every
 # DMA/ISR-visible byte in internal memory and never relies on this blanket.

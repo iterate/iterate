@@ -38,6 +38,12 @@ void waveshare_audio_amplifier(bool on);
 /** Blocking playout of exactly `samples` mono PCM16 samples. */
 bool waveshare_audio_write(const int16_t *pcm, size_t samples);
 
+/** Speaker volume, 0-100. 100 is the DAC at full scale. */
+void waveshare_audio_set_volume(int percent);
+
+/** Microphone PGA in dB; the driver quantises to 6 dB steps. */
+void waveshare_audio_set_mic_gain(float db);
+
 /** The shared I2C0 bus (codec, PMIC, touch). NULL before init. */
 i2c_master_bus_handle_t waveshare_audio_i2c_bus(void);
 

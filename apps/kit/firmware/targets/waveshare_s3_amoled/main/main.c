@@ -202,6 +202,8 @@ static const char peer_description[] =
     "format,bytes,chunkSize,chunks} and readScreenshotChunk(i) returns each "
     "chunk as bytes.\","
     "\"readScreenshotChunk\":\"Read chunk i of the last takeScreenshot.\","
+    "\"setVolume\":\"Speaker volume 0-100.\","
+    "\"setMicGain\":\"Microphone PGA in dB, 0-48.\","
     "\"recording\":{\"size\":\"Bytes of a recorded file from the current "
     "call: mic.pcm and speaker.pcm are 16kHz mono s16le, call.log is text.\","
     "\"read\":\"Read (name, byteOffset) and get the next chunk as bytes.\"},"

@@ -13,6 +13,7 @@
 #include "stackchan_realtime_policy.h"
 
 #include "esp_err.h"
+#include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_system.h"
@@ -115,6 +116,27 @@ _Static_assert(
          (STACKCHAN_CONTROL_OUTBOX_SLOTS - 1U)) == 0U,
     "SPSC control slot counts must be powers of two");
 
+/*
+ * Cap'n Web envelopes are neither DMA buffers nor part of the audio deadline.
+ * Keeping sixteen 8 KiB payload slots inside `stackchan_runtime` consumed
+ * 128 KiB of scarce internal SRAM and left the target unable to link once the
+ * full-duplex AEC path was enabled.  Put only those cold payload bytes in
+ * linker-reserved PSRAM, as the already-proven Stick target does.  Ring
+ * indices and lengths stay internal, and every PCM/AEC/DMA buffer stays
+ * internal or in its platform owner's explicitly reviewed allocation class.
+ *
+ * Static PSRAM is deliberate here: a missing PSRAM configuration becomes a
+ * deterministic boot/link failure instead of a late heap allocation failure
+ * while a call is active.  The 8 KiB wire limit is unchanged, so this is not a
+ * hidden reduction in capability message size.
+ */
+EXT_RAM_BSS_ATTR static uint8_t
+    control_inbox_storage[STACKCHAN_CONTROL_INBOX_SLOTS]
+                           [STACKCHAN_CONTROL_SLOT_CAPACITY];
+EXT_RAM_BSS_ATTR static uint8_t
+    control_outbox_storage[STACKCHAN_CONTROL_OUTBOX_SLOTS]
+                            [STACKCHAN_CONTROL_SLOT_CAPACITY];
+
 struct stackchan_runtime {
   struct iterate_kit_configuration configuration;
   struct iterate_kit_itx_connection connection;
@@ -132,12 +154,6 @@ struct stackchan_runtime {
 
   struct iterate_kit_spsc_ring control_inbox;
   struct iterate_kit_spsc_ring control_outbox;
-  uint8_t control_inbox_storage
-      [STACKCHAN_CONTROL_INBOX_SLOTS]
-      [STACKCHAN_CONTROL_SLOT_CAPACITY];
-  uint8_t control_outbox_storage
-      [STACKCHAN_CONTROL_OUTBOX_SLOTS]
-      [STACKCHAN_CONTROL_SLOT_CAPACITY];
   size_t control_inbox_lengths[STACKCHAN_CONTROL_INBOX_SLOTS];
   size_t control_outbox_lengths[STACKCHAN_CONTROL_OUTBOX_SLOTS];
 
@@ -466,13 +482,13 @@ static void device_session_ended(void *context) {
 static bool initialise_rings(struct stackchan_runtime *state) {
   return iterate_kit_spsc_ring_init(
              &state->control_inbox,
-             state->control_inbox_storage,
+             control_inbox_storage,
              STACKCHAN_CONTROL_SLOT_CAPACITY,
              STACKCHAN_CONTROL_INBOX_SLOTS,
              state->control_inbox_lengths) == ITERATE_KIT_OK &&
       iterate_kit_spsc_ring_init(
              &state->control_outbox,
-             state->control_outbox_storage,
+             control_outbox_storage,
              STACKCHAN_CONTROL_SLOT_CAPACITY,
              STACKCHAN_CONTROL_OUTBOX_SLOTS,
              state->control_outbox_lengths) == ITERATE_KIT_OK &&
@@ -781,8 +797,8 @@ void app_main(void) {
       "runtime ready: static_bytes=%u control_bytes=%u pcm_ring_bytes=%u "
       "device_bytes=%u control_transport_bytes=%u pcm_transport_bytes=%u",
       (unsigned)sizeof(runtime),
-      (unsigned)(sizeof(runtime.control_inbox_storage) +
-                 sizeof(runtime.control_outbox_storage)),
+      (unsigned)(sizeof(control_inbox_storage) +
+                 sizeof(control_outbox_storage)),
       (unsigned)(sizeof(runtime.pcm_uplink_storage) +
                  sizeof(runtime.pcm_downlink_storage)),
       (unsigned)sizeof(runtime.device),
