@@ -120,10 +120,52 @@ Measured on-device against preview-3 (synthesized 440Hz tone as mic):
   non-trivial reply).
 - Gotcha: capability path segments reject hyphens
   ("invalid capability path segment").
-- Not yet done on-device: speaker downlink (`openConnection` callback into
-  the C peer — protocol-symmetric but needs a hand-written capability
-  dispatch and inbox-slot sizing for spk events) and real ES8311
-  mic/speaker bring-up (pin map exists off-repo in the xiaozhi project).
+
+### Downlink and real audio hardware (second pass)
+
+The device now runs **full duplex over the same single socket**: it exports
+a callback capability, opens a live stream connection with the
+constrained-consumer caps below, decodes base64 speaker frames, and plays
+them through the ES8311.
+
+Measured on hardware: **641 speaker frames received, 640 played, 0
+overflow, 0 decode failures, 417 delivery batches, 6408 mic frames
+uplinked, one stable session.**
+
+What it took, and what each one teaches:
+
+- **`maxDeliveryEvents` / `maxDeliveryBytes` / `state: false`** (new
+  platform feature, this PR). A microcontroller reassembles each delivery
+  into a fixed buffer; a coalesced 50-event batch is not survivable. The
+  device opens with 2 events / 2600 bytes / no state.
+- **Empty batches had to stop** (platform fix, this PR). Every append the
+  filter rejected pushed a 0-event batch to every live connection: the
+  device took ~50 useless inbound messages/s from its own mic traffic.
+- **One-way appends cost two messages** (push + release) against a
+  ~25–50 msg/s socket, so mic frames aggregate 4-per-append (80 ms).
+- **Outbox exhaustion is session-fatal** in this peer, so every producer
+  (mic, ping, stats, connection recycle) gates on ring headroom, and the
+  mic queue drops oldest (freshest wins).
+- **`CONTROL_MESSAGE_CAPACITY` 2048 → 4096**: the transport's embedded
+  receive/transmit scratch caps message size independently of ring slot
+  size; a ~2.9 KB aggregated append died in the frame writer as an
+  unexplained generation death.
+- **A dead session must hard-reset the stream client**: capability ids die
+  with their session, and reusing them poisons the next one.
+
+**Open: microphone capture returns noise, not audio.** Playback is proven;
+`esp_codec_dev_read` yields broadband noise (RMS ~−9 dBFS, crest ~3,
+clipping, flat spectrum to 8 kHz) whose level does not respond to
+`set_in_gain` — so those samples never came from the ADC signal path.
+Ruled out: the pin map (identical to Waveshare's own BSP), mono Philips
+slots, MCLK ×256, the 16 kHz coefficient entry, AXP2101 rails including
+the ALDO1 mic rail, the pre-construction soft reset, and one-vs-two
+codec-dev handles. Ordered next probes are in the header of
+`targets/waveshare_s3_amoled/main/waveshare_audio.c`: dump ES8311 regs
+0x00–0x45 after open and diff against the driver's expected init, scope
+BCLK/WS/DIN, try `digital_mic = true` in case this SKU has a PDM mic, and
+confirm the board revision (the stock image's `phone_s3_box_3` is an
+ESP-Brookesia demo name, not a hardware id).
 
 ## Platform findings & fixes that came out of this
 
