@@ -84,8 +84,15 @@ enum {
   /* 1 MiB of PSRAM speaker staging ≈ 32 s of audio — Grok bursts whole
    * answers; barge-in flushes this, underrun never should. */
   SPEAKER_BUFFER_BYTES = 1024 * 1024,
-  /* Mic stays silenced this long after the last speaker byte drains. */
-  ECHO_TAIL_MS = 400,
+  /*
+   * Mic stays silenced this long after the last speaker byte drains. The
+   * codec's DMA holds ~90 ms beyond the last write and the room adds its
+   * own tail, so a short gate lets the board answer itself: measured at
+   * 400 ms, Grok transcribed its own playback ("Yes, Rome is correct.")
+   * and replied to it. This board has no hardware AEC reference, so the
+   * gate is the only echo control available here.
+   */
+  ECHO_TAIL_MS = 900,
   STATS_INTERVAL_MS = 5000,
   PING_INTERVAL_MS = 5000,
 };
@@ -172,7 +179,6 @@ static void on_speaker_pcm(
       pcm_length) {
     ++runtime.speaker_overflow_drops;
   }
-  runtime.speaker_last_write_ms = now_ms(NULL);
 }
 
 static void on_control(
@@ -206,6 +212,12 @@ static void playback_task(void *argument) {
     if (waveshare_audio_write(chunk, received / 2U)) {
       ++runtime.speaker_frames_played;
     }
+    /*
+     * Stamp the echo gate from PLAYBACK, not arrival: paced delivery can
+     * finish arriving seconds before the speaker finishes, and a gate timed
+     * from arrival reopens the microphone while the board is still talking.
+     */
+    runtime.speaker_last_write_ms = now_ms(NULL);
   }
 }
 
