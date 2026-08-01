@@ -34,6 +34,9 @@ bool waveshare_buttons_take_call_long_press(void);
 /** Milliseconds the call button has been held, 0 when it is up. */
 uint32_t waveshare_buttons_call_held_ms(void);
 
+/** I2C reads of the talk button that failed; a stuck button would show here. */
+uint32_t waveshare_buttons_talk_read_failures(void);
+
 /** True while the talk button is held. */
 bool waveshare_buttons_talk_held(void);
 

@@ -183,6 +183,13 @@ struct iterate_kit_voicelab {
    * 600 batches.
    */
   bool recycle_pending;
+  /*
+   * Which bridge owns the live call. Every bridge announces call-ended when
+   * it dies, and they all share one callId — so a stale bridge shutting down
+   * was ending the call that a NEWER bridge was actively serving. The device
+   * honours call-ended only from the bridge whose call-accepted it last saw.
+   */
+  char live_bridge_id[24];
   uint32_t batches_on_connection;
   uint32_t spk_frames_received;
   uint32_t spk_decode_failures;

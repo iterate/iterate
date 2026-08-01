@@ -56,6 +56,12 @@ static struct {
   StreamBufferHandle_t log_queue;
 } recorder;
 
+/* Deferred to the recorder task; see the header. */
+static volatile bool begin_requested;
+static volatile bool end_requested;
+static char pending_call_id[32];
+static char pending_end_reason[64];
+
 static uint64_t now_ms(void) {
   return (uint64_t)(esp_timer_get_time() / 1000);
 }
@@ -112,7 +118,14 @@ bool waveshare_recorder_available(void) {
 }
 
 bool waveshare_recorder_recording(void) {
-  return recorder.log != NULL;
+  /*
+   * A REQUESTED recording counts as recording. Opening the files is deferred
+   * to the recorder task, so reporting "not recording" until it catches up
+   * made the caller — a 5ms poll loop — re-request one every pass. Each
+   * request wiped the directory and reopened every file, so the card was
+   * hammered continuously and the call log was truncated over and over.
+   */
+  return recorder.log != NULL || begin_requested;
 }
 
 void waveshare_recorder_counters(
@@ -152,12 +165,6 @@ static void wipe_directory(void) {
   (void)closedir(directory);
 }
 
-/* Deferred to the recorder task; see the header. */
-static volatile bool begin_requested;
-static volatile bool end_requested;
-static char pending_call_id[32];
-static char pending_end_reason[64];
-
 void waveshare_recorder_begin_call(const char *call_id) {
   if (!recorder.mounted) return;
   snprintf(
@@ -168,6 +175,7 @@ void waveshare_recorder_begin_call(const char *call_id) {
 
 void waveshare_recorder_end_call(const char *reason) {
   if (!recorder.mounted) return;
+  begin_requested = false;
   snprintf(
       pending_end_reason, sizeof(pending_end_reason), "%s",
       reason == NULL ? "?" : reason);

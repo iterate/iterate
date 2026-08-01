@@ -33,6 +33,7 @@ static struct {
   uint64_t call_changed_at_ms;
   uint64_t talk_changed_at_ms;
   bool initialized;
+  uint32_t talk_read_failures;
 } buttons;
 
 static uint64_t now_ms(void) {
@@ -97,6 +98,18 @@ void waveshare_buttons_poll(void) {
     if (esp_io_expander_get_level(
             buttons.expander, EXPANDER_PIN_TALK, &levels) == ESP_OK) {
       talk_down = (levels & EXPANDER_PIN_TALK) != 0U;
+    } else {
+      /*
+       * FAIL RELEASED, never "keep the last value". This read is I2C on a
+       * bus shared with the codec, the touch controller and the PMIC, so it
+       * can and does fail — and retaining the previous state meant a single
+       * failed read while the button was down latched it held FOREVER. The
+       * turn then never ends: the screen sits on "listening" and nothing is
+       * ever sent for an answer. A dropped release costs one repeated press;
+       * a stuck one costs the whole device.
+       */
+      ++buttons.talk_read_failures;
+      talk_down = false;
     }
   }
   if (talk_down != buttons.talk_down &&
@@ -116,6 +129,10 @@ bool waveshare_buttons_take_call_long_press(void) {
   const bool fired = buttons.call_long_press_pending;
   buttons.call_long_press_pending = false;
   return fired;
+}
+
+uint32_t waveshare_buttons_talk_read_failures(void) {
+  return buttons.talk_read_failures;
 }
 
 uint32_t waveshare_buttons_call_held_ms(void) {

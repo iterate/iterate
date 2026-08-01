@@ -178,6 +178,8 @@ enum {
   SPEAKER_CONCEAL_LIMIT_MS = 400,
   /* Backlog beyond which a frame is skipped to catch up. */
   SPEAKER_HIGH_WATER_MS = 650,
+  /* At most one skipped frame per this many played (1 per second of audio). */
+  SPEAKER_CATCHUP_EVERY = 50,
   /*
    * How long the speaker must stay dry before the amplifier is powered down.
    * Long enough that a network hiccup mid-answer never power-cycles it.
@@ -185,6 +187,8 @@ enum {
   SPEAKER_IDLE_POWERDOWN_MS = 1500,
   /* Longest a released turn waits for the uplink before committing anyway. */
   TURN_FLUSH_TIMEOUT_MS = 1500,
+  /* Longest a single spoken turn may run before it is closed regardless. */
+  TURN_MAX_MS = 30000,
   /* Button scan cadence; each scan costs an I2C transaction. */
   BUTTON_POLL_MS = 25,
   STATS_INTERVAL_MS = 5000,
@@ -288,6 +292,7 @@ static struct {
   volatile bool speaker_answer_done;
   uint32_t flush_frames_left;
   uint64_t flush_deadline_ms;
+  uint64_t turn_started_ms;
 } runtime;
 
 /* What `itx.kit.waveshare` looks like to whoever holds the capability. */
@@ -471,6 +476,7 @@ static void playback_task(void *argument) {
    */
   bool priming = true;
   uint32_t drop_debt = 0U;
+  uint32_t next_catchup_at = 0U;
   uint64_t last_write_ms = 0U;
   (void)argument;
   for (;;) {
@@ -544,7 +550,17 @@ static void playback_task(void *argument) {
      * starved, skip when flooded, and count both honestly.
      */
     if ((uint32_t)(xStreamBufferBytesAvailable(runtime.speaker_buffer) / 32U) >
-        (uint32_t)SPEAKER_HIGH_WATER_MS) {
+        (uint32_t)SPEAKER_HIGH_WATER_MS &&
+        runtime.speaker_frames_played >= next_catchup_at) {
+      /*
+       * RATE LIMITED, and that limit is the whole safety of this mechanism.
+       * Skipping freely drains the entire backlog in a few milliseconds —
+       * seconds of speech gone at once, which is exactly "you can barely
+       * hear what it says". One frame per second of audio absorbs ordinary
+       * clock drift (well under 2%) while never removing enough at once to
+       * be heard.
+       */
+      next_catchup_at = runtime.speaker_frames_played + SPEAKER_CATCHUP_EVERY;
       ++runtime.speaker_catchup_frames;
       continue;
     }
@@ -691,7 +707,7 @@ static void append_stats(uint64_t now) {
       ",\"spkOverflow\":%" PRIu32 ",\"spkUnderruns\":%" PRIu32
       ",\"spkConceal\":%" PRIu32 ",\"spkCatchup\":%" PRIu32
       ",\"spkDebtPaid\":%" PRIu32
-      ",\"spkWriteFailures\":%" PRIu32 ",\"spkMarginMaxMs\":%" PRIu32
+      ",\"spkWriteFailures\":%" PRIu32 ",\"talkReadFailures\":%" PRIu32 ",\"spkMarginMaxMs\":%" PRIu32
       ",\"spkBadFrames\":%" PRIu32 ",\"spkSeqGaps\":%" PRIu32
       ",\"spkDecodeFailures\":%" PRIu32 ",\"bargeIns\":%" PRIu32
       ",\"batches\":%" PRIu32 ",\"connGeneration\":%" PRIu32
@@ -722,6 +738,7 @@ static void append_stats(uint64_t now) {
       runtime.speaker_catchup_frames,
       runtime.speaker_debt_paid,
       runtime.speaker_write_failures,
+      waveshare_buttons_talk_read_failures(),
       runtime.speaker_margin_max_ms,
       runtime.speaker_bad_frames,
       runtime.voicelab.spk_seq_gaps,
@@ -855,9 +872,10 @@ void app_main(void) {
   uint64_t next_stats_at = 0;
   uint64_t next_ping_at = 0;
   uint64_t next_button_poll_at = 0;
+  uint64_t talk_idle_since = 0;
 
   for (;;) {
-    (void)iterate_kit_esp_idf_itx_transport_poll(&runtime.transport, 4U);
+    (void)iterate_kit_esp_idf_itx_transport_poll(&runtime.transport, 16U);
     /*
      * The talk button lives on the TCA9554, so every poll is an I2C
      * transaction on the bus the codec and touch controller share. At the
@@ -886,14 +904,35 @@ void app_main(void) {
       } else if (showing_hold) {
         showing_hold = false;
         waveshare_display_set_status(
-            runtime.voicelab.call_active ? "hold the lower button to talk"
-                                         : "press the upper button to call");
+            runtime.voicelab.call_active
+                ? "hold the lower button to talk"
+                : "upper: call   ·   lower: restart");
       }
     }
     if (waveshare_buttons_take_call_press()) {
       const bool wanted = !waveshare_display_call_requested();
       ESP_LOGI(tag, "BOOT pressed: call %s", wanted ? "requested" : "ended");
       waveshare_display_request_call(wanted);
+    }
+    /*
+     * With no call up, the lower button has nothing to talk into — so it
+     * restarts the device instead. Wedging still happens, and reaching for
+     * the power button on this board is awkward.
+     */
+    if (!runtime.voicelab.call_active && waveshare_buttons_talk_held() &&
+        !waveshare_display_call_requested()) {
+      const uint64_t now_for_restart = now_ms(NULL);
+      if (talk_idle_since == 0U) talk_idle_since = now_for_restart;
+      if (now_for_restart - talk_idle_since > 1500U) {
+        ESP_LOGW(tag, "lower button held while idle — restarting");
+        waveshare_display_set_state(WAVESHARE_UI_CONNECTING);
+        waveshare_display_set_status("restarting…");
+        waveshare_recorder_end_call("user restart");
+        DELAY_MS(400);
+        esp_restart();
+      }
+    } else {
+      talk_idle_since = 0U;
     }
     {
       static bool talk_logged;
@@ -1032,6 +1071,26 @@ void app_main(void) {
       }
     }
 
+    /*
+     * The turn's UI state is settled OUTSIDE the session gate below.
+     *
+     * All of this used to live inside "session is READY", so if the session
+     * dropped while the button was held, the release was never processed at
+     * all: the device sat on "listening" forever, nothing was ever committed,
+     * and no answer could arrive. The user's intent and what the screen says
+     * must never depend on the network being up — only the appends do.
+     */
+    if (runtime.talking && !runtime.flushing_turn &&
+        (runtime.voicelab.state != ITERATE_KIT_VOICELAB_READY ||
+         !runtime.voicelab.call_active)) {
+      ESP_LOGW(tag, "turn abandoned: session or call went away");
+      runtime.talking = false;
+      runtime.flushing_turn = false;
+      waveshare_display_hold_talk(false);
+      waveshare_display_set_state(WAVESHARE_UI_IDLE);
+      waveshare_display_set_status("connection lost — press upper to call");
+    }
+
     if (runtime.voicelab.state == ITERATE_KIT_VOICELAB_READY &&
         runtime.transport.state == ITERATE_KIT_ESP_IDF_ITX_READY &&
         runtime.voicelab_generation == runtime.connection.generation) {
@@ -1105,10 +1164,28 @@ void app_main(void) {
        * cancel the response — so the microphone never opens into a live
        * speaker. Releasing commits the turn and asks for the answer.
        */
+      /*
+       * A turn is bounded no matter what. The talk button is read over a
+       * shared I2C bus and the UI can request a turn remotely; either can
+       * fail in a way that leaves the request stuck on. Rather than trust
+       * both, the turn ends itself after a maximum length — nobody speaks
+       * for a minute straight, and a wedged turn is worse than a truncated
+       * one because nothing is ever sent for an answer.
+       */
+      if (runtime.talking && !runtime.flushing_turn &&
+          now - runtime.turn_started_ms > TURN_MAX_MS) {
+        ESP_LOGW(tag, "turn exceeded %ums — ending it", (unsigned)TURN_MAX_MS);
+        waveshare_display_hold_talk(false);
+        runtime.flushing_turn = true;
+        runtime.flush_frames_left = 0U;
+        runtime.flush_deadline_ms = now;
+      }
       if (wants_talk && !runtime.talking && runtime.voicelab.call_active &&
           outbox_free >= 3U) {
         runtime.talking = true;
+        runtime.turn_started_ms = now;
         runtime.flushing_turn = false;
+        ESP_LOGI(tag, "turn start");
         waveshare_recorder_log("turn start");
         runtime.speaker_discard_bytes =
             (uint32_t)xStreamBufferBytesAvailable(runtime.speaker_buffer);
@@ -1149,12 +1226,13 @@ void app_main(void) {
         runtime.flush_deadline_ms = now + TURN_FLUSH_TIMEOUT_MS;
         waveshare_display_set_status("sending");
       }
-      if (runtime.flushing_turn && outbox_free >= 3U &&
+      if (runtime.flushing_turn &&
           (runtime.flush_frames_left == 0U ||
            now >= runtime.flush_deadline_ms)) {
         const bool timed_out = runtime.flush_frames_left > 0U;
         runtime.talking = false;
         runtime.flushing_turn = false;
+        ESP_LOGI(tag, "turn commit%s", timed_out ? " (tail dropped)" : "");
         waveshare_recorder_log(
             "turn commit%s", timed_out ? " (uplink behind; tail dropped)" : "");
         (void)iterate_kit_voicelab_mark_turn(

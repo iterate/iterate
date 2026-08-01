@@ -348,6 +348,16 @@ void M5UnifiedHalfDuplex::renderCallUi(bool force) {
   M5.Display.println(instruction);
   M5.Display.setCursor(8, 84);
   M5.Display.println(secondary);
+  /*
+   * Recovery must remain available even when both application transports or
+   * the main loop are wedged. The StickS3 power key is handled below the
+   * firmware (one click resets; two clicks powers off), so advertising that
+   * physical escape hatch is more reliable than stealing either programmable
+   * call/PTT button for esp_restart(). Keep it as a quiet footer: it must not
+   * displace the state-specific action the user needs during a normal call.
+   */
+  M5.Display.setCursor(8, 112);
+  M5.Display.println("PWR: reboot  PWRx2: off");
   M5.Display.endWrite();
   callUiDrawn_ = true;
 }

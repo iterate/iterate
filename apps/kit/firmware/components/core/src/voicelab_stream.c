@@ -459,6 +459,18 @@ static enum capnweb_status batch_dispatch(
        * reply can be slow or lost, and a call opened by anyone else counts
        * just the same.
        */
+      {
+        struct capnweb_value bridge_value;
+        size_t length = 0U;
+        voicelab->live_bridge_id[0] = '\0';
+        if (capnweb_value_object_get(&payload, "bridgeId", &bridge_value)) {
+          (void)capnweb_value_copy_string(
+              &bridge_value,
+              voicelab->live_bridge_id,
+              sizeof(voicelab->live_bridge_id),
+              &length);
+        }
+      }
       voicelab->call_active = true;
       voicelab->call_pending = false;
       if (voicelab->options.on_control != NULL) {
@@ -467,6 +479,19 @@ static enum capnweb_status batch_dispatch(
             ITERATE_KIT_VOICELAB_CONTROL_CALL_ACCEPTED);
       }
     } else if (capnweb_value_string_equals(&type_value, "voicelab/call-ended")) {
+      /* Only the bridge serving this call may end it. */
+      struct capnweb_value bridge_value;
+      char ended_by[sizeof(voicelab->live_bridge_id)] = {0};
+      size_t length = 0U;
+      if (voicelab->live_bridge_id[0] != '\0' &&
+          capnweb_value_object_get(&payload, "bridgeId", &bridge_value) &&
+          capnweb_value_copy_string(
+              &bridge_value, ended_by, sizeof(ended_by), &length) ==
+              CAPNWEB_OK &&
+          strcmp(ended_by, voicelab->live_bridge_id) != 0) {
+        continue; /* a stale bridge shutting down; not our call */
+      }
+      voicelab->live_bridge_id[0] = '\0';
       voicelab->call_active = false;
       if (voicelab->options.on_control != NULL) {
         voicelab->options.on_control(
