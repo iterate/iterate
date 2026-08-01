@@ -58,6 +58,7 @@ export interface PcmProxyDiagnostic {
     | "provider-closed"
     | "provider-event"
     | "provider-function-call-failed"
+    | "provider-send-failed"
     | "provider-unavailable"
     | "socket-error"
     | "uplink-backpressure"
@@ -89,8 +90,10 @@ export interface PcmSessionMetrics {
     source: "device" | "provider";
   } | null;
   providerAvailable: boolean;
+  providerCommitMessagesSent: number;
   providerConnections: number;
   providerControlEvents: number;
+  providerControlMessagesSent: number;
   providerBufferedBytes: number;
   providerDisconnects: number;
   providerFunctionCallFailures: number;
@@ -102,7 +105,9 @@ export interface PcmSessionMetrics {
   providerPcmRmsSample: number;
   providerPcmSamples: number;
   providerResponseActive: boolean;
+  providerResponseCreateMessagesSent: number;
   providerResponsesCompleted: number;
+  providerSendFailures: number;
   uplinkDroppedBytes: number;
   uplinkEndMarkers: number;
   uplinkEndMarkerTimeouts: number;
@@ -164,8 +169,10 @@ export class PcmSessionBridge {
   #lastProviderEventType: string | null = null;
   #lastSocketClose: PcmSessionMetrics["lastSocketClose"] = null;
   #provider: WebSocket | undefined;
+  #providerCommitMessagesSent = 0;
   #providerConnections = 0;
   #providerControlEvents = 0;
+  #providerControlMessagesSent = 0;
   #providerDisconnects = 0;
   #providerFunctionCallFailures = 0;
   #providerFunctionCalls = 0;
@@ -182,7 +189,9 @@ export class PcmSessionBridge {
   #providerResponseHadPcm = false;
   #providerResponseDone = false;
   #providerResponsePlaybackFinished = false;
+  #providerResponseCreateMessagesSent = 0;
   #providerResponsesCompleted = 0;
+  #providerSendFailures = 0;
   #responseAfterCommitPending = false;
   #responseActive = false;
   #nextDownlinkAt = 0;
@@ -254,8 +263,10 @@ export class PcmSessionBridge {
       lastProviderEventType: this.#lastProviderEventType,
       lastSocketClose: this.#lastSocketClose,
       providerAvailable: this.#provider !== undefined && socketIsOpen(this.#provider),
+      providerCommitMessagesSent: this.#providerCommitMessagesSent,
       providerConnections: this.#providerConnections,
       providerControlEvents: this.#providerControlEvents,
+      providerControlMessagesSent: this.#providerControlMessagesSent,
       providerBufferedBytes: this.#provider ? socketBufferedAmount(this.#provider) : 0,
       providerDisconnects: this.#providerDisconnects,
       providerFunctionCallFailures: this.#providerFunctionCallFailures,
@@ -270,7 +281,9 @@ export class PcmSessionBridge {
           : Math.sqrt(this.#providerPcmNormalizedSquareSum / this.#providerPcmSamples) * 32_768,
       providerPcmSamples: this.#providerPcmSamples,
       providerResponseActive: this.#responseActive,
+      providerResponseCreateMessagesSent: this.#providerResponseCreateMessagesSent,
       providerResponsesCompleted: this.#providerResponsesCompleted,
+      providerSendFailures: this.#providerSendFailures,
       uplinkDroppedBytes: this.#uplinkDroppedBytes,
       uplinkEndMarkers: this.#uplinkEndMarkers,
       uplinkEndMarkerTimeouts: this.#uplinkEndMarkerTimeouts,
@@ -486,7 +499,22 @@ export class PcmSessionBridge {
       );
       return;
     }
-    provider.send(bytes);
+    try {
+      provider.send(bytes);
+    } catch (error) {
+      /*
+       * OPEN is only a sampled socket state; a synchronous send may still be
+       * the first operation to discover a dead provider generation. The live
+       * microphone frame cannot be retried without creating delayed speech,
+       * but that upstream failure says nothing about the independently useful
+       * device socket. Drop this one frame visibly, fence the provider object,
+       * and let the owner establish a fresh upstream generation.
+       */
+      this.#uplinkDroppedBytes += bytes.byteLength;
+      this.#uplinkUnavailableFrames += 1;
+      this.#handleProviderSendFailure(provider, error, "pcm", bytes.byteLength);
+      return;
+    }
     this.#uplinkFrames += 1;
     this.#uplinkFramesInTurn += 1;
   }
@@ -1048,8 +1076,55 @@ export class PcmSessionBridge {
       );
       return false;
     }
-    provider.send(control);
+    try {
+      provider.send(control);
+    } catch (error) {
+      /*
+       * A thrown commit/response send used to escape the WebSocket callback
+       * and could tear down the whole Durable Object incarnation. Recovery is
+       * intentionally generation-scoped: the control is not replayed against
+       * a new Grok input buffer, while the device lane remains available for
+       * the next explicit PTT turn.
+       */
+      this.#handleProviderSendFailure(provider, error, "control", control.length);
+      return false;
+    }
+    this.#providerControlMessagesSent += 1;
+    const type = providerMessageType(message);
+    if (type === "input_audio_buffer.commit") this.#providerCommitMessagesSent += 1;
+    if (type === "response.create") this.#providerResponseCreateMessagesSent += 1;
     return true;
+  }
+
+  #handleProviderSendFailure(
+    provider: WebSocket,
+    error: unknown,
+    lane: "control" | "pcm",
+    droppedBytes: number,
+  ): void {
+    if (this.#provider !== provider) return;
+    this.#providerSendFailures += 1;
+    this.#diagnostic(
+      "provider-send-failed",
+      "error",
+      { lane, message: boundedErrorMessage(error) },
+      droppedBytes,
+    );
+    this.#detachProvider(provider, 1011, "Provider WebSocket send failed.", "socket-error");
+    if (!socketIsOpenOrConnecting(provider)) return;
+    try {
+      provider.close(1011, "Provider WebSocket send failed.");
+    } catch (closeError) {
+      /*
+       * Identity was revoked before cleanup, so this cannot re-admit stale
+       * bytes. Still retain the cleanup failure: an exception here must not
+       * resurrect the original unhandled-callback failure mode invisibly.
+       */
+      this.#diagnostic("provider-send-failed", "error", {
+        lane: "close-after-send-failure",
+        message: boundedErrorMessage(closeError),
+      });
+    }
   }
 
   #detachProvider(
@@ -1097,6 +1172,16 @@ function isProviderEvent(value: unknown): value is { type: string } {
   return (
     typeof value === "object" && value !== null && "type" in value && typeof value.type === "string"
   );
+}
+
+function providerMessageType(value: unknown): string | null {
+  /*
+   * This deliberately inspects only the bounded routing discriminator. The
+   * metrics need to prove that commit and response.create crossed userspace;
+   * retaining whole outbound controls here would duplicate the event journal
+   * and risk making diagnostics memory proportional to provider payloads.
+   */
+  return isProviderEvent(value) ? value.type : null;
 }
 
 function parseProviderFunctionCall(event: { type: string }): ProviderFunctionCall | null {

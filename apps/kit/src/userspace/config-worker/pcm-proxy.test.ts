@@ -278,9 +278,56 @@ describe("userspace PCM session bridge", () => {
     );
     expect(bridge.metrics()).toMatchObject({
       awaitingUplinkEndMarker: false,
+      providerCommitMessagesSent: 1,
+      providerControlMessagesSent: 2,
+      providerResponseCreateMessagesSent: 1,
+      providerSendFailures: 0,
       uplinkEndMarkers: 1,
       uplinkFramesAfterEndMarkerDropped: 0,
     });
+  });
+
+  test("a provider control-send failure preserves the device lane for a fresh upstream", async () => {
+    /*
+     * A WebSocket can still report OPEN when its next synchronous send throws.
+     * On a physical turn that boundary is the commit immediately after the
+     * ordered microphone marker. Letting the exception escape the MessageEvent
+     * or Cap'n Web callback can abort the Durable Object invocation and make
+     * the device observe an unexplained 1006, destroying both independently
+     * recoverable lanes. The provider generation is stale at that point, but
+     * the device socket is not: classify the failed send, request one upstream
+     * replacement, and leave the device connected with no hidden retry queue.
+     */
+    const providerUnavailable = vi.fn();
+    const { bridge, device, diagnostics, provider } = createBridge({
+      onProviderUnavailable: providerUnavailable,
+    });
+    const deviceClose = vi.fn();
+    device.client.addEventListener("close", deviceClose);
+
+    expect(bridge.inputStarted()).toBe(true);
+    device.client.send(new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES).fill(37));
+    device.client.send(new Uint8Array(0));
+    await vi.waitFor(() => expect(bridge.metrics().uplinkEndMarkers).toBe(1));
+    vi.spyOn(provider.server, "send").mockImplementationOnce(() => {
+      throw new Error("provider transport rejected commit");
+    });
+
+    expect(bridge.inputStopped()).toBe(false);
+    await vi.waitFor(() => expect(providerUnavailable).toHaveBeenCalledOnce());
+
+    expect(deviceClose).not.toHaveBeenCalled();
+    expect(bridge.metrics()).toMatchObject({
+      closed: false,
+      providerAvailable: false,
+      providerDisconnects: 1,
+    });
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "provider-send-failed",
+        severity: "error",
+      }),
+    );
   });
 
   test("does not ask Grok to commit an empty manual PTT turn", async () => {
