@@ -101,8 +101,15 @@ enum {
    * under a recording pull concurrent with a call. 128 leaves real headroom.
    */
   CONTROL_INBOX_SLOTS = 128,
-  /* Bigger slots, half as many: the same 64 KiB of internal RAM. */
-  CONTROL_OUTBOX_SLOTS = 8,
+  /*
+   * The uplink sends 6 frames per 120 ms, which is exactly the capture rate —
+   * so it has no margin, and any iteration blocked on outbox headroom puts
+   * it permanently behind (measured: holds over 2 s ended with the queue
+   * still full at the flush deadline). The outbox lives in PSRAM now, so
+   * depth is cheap; 16 slots lets the sender catch up instead of losing the
+   * tail of long utterances.
+   */
+  CONTROL_OUTBOX_SLOTS = 16,
   FRAME_MS = 20,
   FRAME_SAMPLES = WAVESHARE_AUDIO_FRAME_SAMPLES,
   FRAME_BYTES = FRAME_SAMPLES * 2,
@@ -125,6 +132,8 @@ enum {
    * and the DMA's 90 ms is the only tolerance the whole path has.
    */
   SPEAKER_PREFILL_BYTES = 160 * 32,
+  /* Longest a released turn waits for the uplink before committing anyway. */
+  TURN_FLUSH_TIMEOUT_MS = 1500,
   STATS_INTERVAL_MS = 5000,
   /* How long the transport may stay FAILED before the device reboots itself. */
   UNHEALTHY_RESTART_MS = 120000,
@@ -187,6 +196,9 @@ static struct {
   uint32_t speaker_bad_frames;
   uint32_t barge_in_flushes;
   bool talking;
+  /* Release pressed, but the capture queue is not yet on the wire. */
+  bool flushing_turn;
+  uint64_t flush_deadline_ms;
 } runtime;
 
 /* What `itx.kit.waveshare` looks like to whoever holds the capability. */
@@ -841,57 +853,88 @@ void app_main(void) {
        * cancel the response — so the microphone never opens into a live
        * speaker. Releasing commits the turn and asks for the answer.
        */
-      if (wants_talk != runtime.talking && runtime.voicelab.call_active &&
+      if (wants_talk && !runtime.talking && runtime.voicelab.call_active &&
           outbox_free >= 3U) {
-        runtime.talking = wants_talk;
-        waveshare_recorder_log("turn %s", wants_talk ? "start" : "commit");
-        if (wants_talk) {
-          runtime.speaker_discard_bytes =
-              (uint32_t)xStreamBufferBytesAvailable(runtime.speaker_buffer);
-          (void)xQueueReset(runtime.mic_queue); /* drop pre-press room noise */
-          runtime.frame_sequence = 0U;
-          (void)iterate_kit_voicelab_mark_turn(
-              &runtime.voicelab, ITERATE_KIT_VOICELAB_TURN_START);
-          waveshare_display_set_state(WAVESHARE_UI_LISTENING);
-          waveshare_display_set_status("listening — release to send");
-        } else {
-          (void)iterate_kit_voicelab_mark_turn(
-              &runtime.voicelab, ITERATE_KIT_VOICELAB_TURN_COMMIT);
-          waveshare_display_set_state(WAVESHARE_UI_SPEAKING);
-          waveshare_display_set_status("thinking");
-        }
+        runtime.talking = true;
+        runtime.flushing_turn = false;
+        waveshare_recorder_log("turn start");
+        runtime.speaker_discard_bytes =
+            (uint32_t)xStreamBufferBytesAvailable(runtime.speaker_buffer);
+        (void)xQueueReset(runtime.mic_queue); /* drop pre-press room noise */
+        runtime.frame_sequence = 0U;
+        (void)iterate_kit_voicelab_mark_turn(
+            &runtime.voicelab, ITERATE_KIT_VOICELAB_TURN_START);
+        waveshare_display_set_state(WAVESHARE_UI_LISTENING);
+        waveshare_display_set_status("listening — release to send");
+      }
+      /*
+       * Releasing does NOT commit immediately. The capture queue holds up to
+       * 640 ms, and the sender only drains it 6 frames at a time — so
+       * committing on the button edge threw away the tail of every
+       * utterance, which is the last word or two of whatever was said. The
+       * turn stays open until the queue is empty (or a bounded deadline
+       * passes, so a stalled uplink cannot hang the turn forever), and only
+       * then is the commit sent.
+       */
+      if (!wants_talk && runtime.talking && !runtime.flushing_turn) {
+        runtime.flushing_turn = true;
+        runtime.flush_deadline_ms = now + TURN_FLUSH_TIMEOUT_MS;
+        waveshare_display_set_status("sending");
+      }
+      if (runtime.flushing_turn && outbox_free >= 3U &&
+          (uxQueueMessagesWaiting(runtime.mic_queue) == 0U ||
+           now >= runtime.flush_deadline_ms)) {
+        const bool timed_out = uxQueueMessagesWaiting(runtime.mic_queue) > 0U;
+        runtime.talking = false;
+        runtime.flushing_turn = false;
+        waveshare_recorder_log(
+            "turn commit%s", timed_out ? " (uplink behind; tail dropped)" : "");
+        (void)iterate_kit_voicelab_mark_turn(
+            &runtime.voicelab, ITERATE_KIT_VOICELAB_TURN_COMMIT);
+        waveshare_display_set_state(WAVESHARE_UI_SPEAKING);
+        waveshare_display_set_status("thinking");
       }
 
       /* The microphone is only on the wire while the talk button is down. */
-      if (runtime.talking && now >= drain_window_at &&
-          uxQueueMessagesWaiting(runtime.mic_queue) >= MIC_FRAMES_PER_APPEND &&
-          outbox_free >= 3U) {
-        /*
-         * The window only advances on a batch that was actually sent. It
-         * used to advance regardless, so a moment of outbox backpressure
-         * silently dropped that speech instead of sending it a beat later —
-         * the mic queue holds 640ms and is the right place to absorb this.
-         */
-        size_t index;
-        const uint8_t *frame_pointers[MIC_FRAMES_PER_APPEND];
-        drain_window_at =
-            (drain_window_at == 0U ||
-             now - drain_window_at > MIC_FRAMES_PER_APPEND * FRAME_MS * 4U)
-            ? now + MIC_FRAMES_PER_APPEND * FRAME_MS
-            : drain_window_at + MIC_FRAMES_PER_APPEND * FRAME_MS;
-        for (index = 0U; index < MIC_FRAMES_PER_APPEND; ++index) {
-          (void)xQueueReceive(runtime.mic_queue, &frame_storage[index], 0);
-          frame_pointers[index] = (const uint8_t *)frame_storage[index].samples;
+      {
+        const size_t queued = uxQueueMessagesWaiting(runtime.mic_queue);
+        /* A partial batch is only worth sending at the end of a turn. */
+        const size_t needed =
+            runtime.flushing_turn ? 1U : (size_t)MIC_FRAMES_PER_APPEND;
+        if (runtime.talking && now >= drain_window_at && queued >= needed &&
+            outbox_free >= 3U) {
+          const size_t take = queued < (size_t)MIC_FRAMES_PER_APPEND
+              ? queued
+              : (size_t)MIC_FRAMES_PER_APPEND;
+          /*
+           * The window only advances on a batch that was actually sent. It
+           * used to advance regardless, so a moment of outbox backpressure
+           * silently dropped that speech instead of sending it a beat later —
+           * the mic queue holds 640ms and is the right place to absorb this.
+           */
+          const uint8_t *frame_pointers[MIC_FRAMES_PER_APPEND];
+          size_t index;
+          drain_window_at =
+              (drain_window_at == 0U ||
+               now - drain_window_at > MIC_FRAMES_PER_APPEND * FRAME_MS * 4U)
+              ? now + (uint64_t)take * FRAME_MS
+              : drain_window_at + (uint64_t)take * FRAME_MS;
+          for (index = 0U; index < take; ++index) {
+            (void)xQueueReceive(runtime.mic_queue, &frame_storage[index], 0);
+            frame_pointers[index] =
+                (const uint8_t *)frame_storage[index].samples;
+          }
+          (void)iterate_kit_voicelab_append_frames(
+              &runtime.voicelab,
+              frame_pointers,
+              take,
+              sizeof(frame_storage[0].samples),
+              runtime.frame_sequence,
+              now);
+          runtime.frame_sequence += (uint32_t)take;
+          waveshare_recorder_write_mic(
+              frame_storage, take * sizeof(frame_storage[0]));
         }
-        (void)iterate_kit_voicelab_append_frames(
-            &runtime.voicelab,
-            frame_pointers,
-            MIC_FRAMES_PER_APPEND,
-            sizeof(frame_storage[0].samples),
-            runtime.frame_sequence,
-            now);
-        runtime.frame_sequence += MIC_FRAMES_PER_APPEND;
-        waveshare_recorder_write_mic(frame_storage, sizeof(frame_storage));
       }
       if (outbox_free >= 4U &&
           iterate_kit_voicelab_needs_recycle(&runtime.voicelab)) {
